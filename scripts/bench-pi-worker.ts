@@ -16,10 +16,12 @@ const PROVIDER_ID = 'bench-workers-ai';
 
 function verifierFeedback(checks: Awaited<ReturnType<typeof scoreSandbox>>['checks']): string {
   const failed = checks.filter((check) => !check.passed);
+
   const detail = failed.map((check) => [
     `${check.id}: exit ${check.exitCode ?? 'timeout'}`,
     check.output.slice(-1500),
   ].filter(Boolean).join('\n')).join('\n\n');
+
   return [
     'The machine verifier still fails. Fix the implementation, then stop.',
     'Do not edit tests or verification scripts.',
@@ -32,6 +34,7 @@ async function main(): Promise<void> {
   let session: AgentSession | undefined;
   let breachAbort: Promise<void> | undefined;
   let breachAbortError: string | undefined;
+
   const proxy = createBenchInferenceProxy({
     upstreamBaseURL: input.llm.baseURL,
     maxTokens: input.maxTokens,
@@ -50,6 +53,7 @@ async function main(): Promise<void> {
 
   let error: string | undefined;
   let steps = 0;
+
   try {
     const runtime = await ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),
@@ -57,10 +61,13 @@ async function main(): Promise<void> {
       allowModelNetwork: false,
       refreshOnCreate: false,
     });
+
     const catalogModel = runtime.getModel('cloudflare-workers-ai', input.llm.model);
+
     if (!catalogModel) {
       throw new Error(`Pi has no Workers AI catalog entry for ${input.llm.model}`);
     }
+
     runtime.registerProvider(PROVIDER_ID, {
       name: 'Bench Workers AI',
       baseUrl: proxy.baseURL,
@@ -83,6 +90,7 @@ async function main(): Promise<void> {
       }],
     });
     const model = runtime.getModel(PROVIDER_ID, input.llm.model);
+
     if (!model) throw new Error(`Pi failed to register ${PROVIDER_ID}/${input.llm.model}`);
 
     ({ session } = await createAgentSession({
@@ -99,6 +107,7 @@ async function main(): Promise<void> {
       await proxy.settle();
       steps++;
       const remove = input.removeAfterAsk[index];
+
       if (remove) rmSync(join(process.cwd(), remove), { recursive: true, force: true });
     }
 
@@ -108,6 +117,7 @@ async function main(): Promise<void> {
         kinuHome: dirname(input.agentDir),
         dispose() {},
       }, input.repoRoot);
+
       if (!verification.passed) {
         await session.prompt(verifierFeedback(verification.checks));
         steps++;
@@ -123,10 +133,14 @@ async function main(): Promise<void> {
         const abortError = `session abort failed: ${caught instanceof Error ? caught.message : String(caught)}`;
         error = error ? `${error}; ${abortError}` : abortError;
       }
+
       session.dispose();
     }
+
     await proxy.settle();
+
     if (breachAbort) await breachAbort;
+
     if (breachAbortError) {
       error = error ? `${error}; ${breachAbortError}` : breachAbortError;
     }
@@ -134,10 +148,12 @@ async function main(): Promise<void> {
 
   const usage = proxy.usage();
   proxy.stop(true);
+
   if (usage.unmeteredResponses > 0) {
     const usageError = `${usage.unmeteredResponses} successful inference response(s) omitted token usage`;
     error = error ? `${error}; ${usageError}` : usageError;
   }
+
   const out: WorkerOutput = {
     tokens: usage.tokens,
     steps,
@@ -146,6 +162,7 @@ async function main(): Promise<void> {
     peakPromptTokens: usage.peakPromptTokens,
     modelCalls: usage.calls,
   };
+
   if (error) out.error = error;
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
@@ -163,6 +180,7 @@ try {
     budgetBreach: null,
     error: cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
   };
+
   process.stdout.write(`${JSON.stringify(out)}\n`);
   process.exit(1);
 }

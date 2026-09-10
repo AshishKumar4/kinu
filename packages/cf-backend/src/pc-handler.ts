@@ -75,12 +75,15 @@ export interface PcIngressEnv<Id> extends OwnerCapabilityEnv {
  *  ticket exchange: it is refused before parsing, counted off the stream, and
  *  never buffered whole past the limit. */
 const PC_TICKET_BODY_MAX_BYTES = 4 * 1024;
+
 /** Self-imposed budget, not a measured platform number: generous enough for a
  *  daemon retrying against jitter, far below what a guessing attack needs. */
 const PC_KNOCKS_PER_WINDOW = 30;
 
 const USER_ID_PATTERN = /^[a-f0-9]{32}$/;
+
 const DEVICE_TOKEN_PATTERN = /^pdt_[A-Za-z0-9_-]{32,}$/;
+
 const CONNECT_TICKET_PATTERN = /^pct_[A-Za-z0-9_-]{32,}$/;
 
 export async function handlePcRequest<Id>(
@@ -93,9 +96,11 @@ export async function handlePcRequest<Id>(
   if (path === "/pc/connect-ticket") {
     return handlePcConnectTicket(request, env);
   }
+
   if (path === DEVICE_CONNECT_PATH) {
     return handlePcConnect(request, env);
   }
+
   return new Response("Not found", { status: 404 });
 }
 
@@ -111,17 +116,23 @@ async function handlePcConnectTicket<Id>(
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
   const kv = env.AUTH_KV;
   const ns = env.UserDO;
+
   if (!kv || !ns) return json({ error: "device ingress not configured" }, { status: 503 });
+
   if (!(await ingressAdmitted(kv, "ticket", peerIp(request), PC_KNOCKS_PER_WINDOW))) return ingressDenied();
 
   const bounded = await readBounded(request, PC_TICKET_BODY_MAX_BYTES);
+
   if (bounded === "too_large") return json({ error: "request body too large" }, { status: 413 });
+
   if (bounded instanceof KinuError) {
     diagnostics.failure("pc.ticket.body_unreadable", bounded);
+
     return json({ error: "could not read request body" }, { status: 400 });
   }
 
   let parsed: unknown;
+
   try {
     parsed = JSON.parse(new TextDecoder().decode(bounded));
   } catch (cause) {
@@ -129,22 +140,29 @@ async function handlePcConnectTicket<Id>(
       error: renderThrownChain({ cause }),
       bytesRead: bounded.byteLength,
     });
+
     return json({ error: "malformed JSON body" }, { status: 400 });
   }
+
   const body = v.safeParse(TICKET_BODY_SCHEMA, parsed);
+
   if (!body.success || !body.output.user || !body.output.token) {
     return json({ error: "user and token required" }, { status: 400 });
   }
+
   // Shape gates BEFORE idFromName: a malformed identifier never reaches the
   // namespace, so garbage costs zero DO wake-ups.
   if (!USER_ID_PATTERN.test(body.output.user)) return json({ error: "invalid user" }, { status: 400 });
+
   if (!DEVICE_TOKEN_PATTERN.test(body.output.token)) return json({ error: "unauthorized" }, { status: 401 });
 
   const issued = await ns.get(ns.idFromName(body.output.user)).issueDeviceConnectTicket(
     await ownerCaller(env),
     body.output.token,
   );
+
   if (!issued.ok || !issued.ticket || !issued.expiresAt) return json({ error: "unauthorized" }, { status: 401 });
+
   return json({ ticket: issued.ticket, expiresAt: issued.expiresAt });
 }
 
@@ -153,20 +171,27 @@ async function handlePcConnect<Id>(
   env: PcIngressEnv<Id>,
 ): Promise<Response> {
   const upgrade = request.headers.get("Upgrade");
+
   if (upgrade !== "websocket") return new Response("Expected WebSocket", { status: 426 });
 
   const url = new URL(request.url);
   const userId = url.searchParams.get("user");
   const ticket = url.searchParams.get("ticket");
+
   if (!userId || !ticket) {
     return new Response("Missing ?user or ?ticket", { status: 400 });
   }
+
   const kv = env.AUTH_KV;
   const ns = env.UserDO;
+
   if (!kv || !ns) return new Response("Device ingress not configured", { status: 503 });
+
   if (!(await ingressAdmitted(kv, "connect", peerIp(request), PC_KNOCKS_PER_WINDOW))) return ingressDenied();
+
   // Same gates as the ticket rail, same order: shape first, DO choice last.
   if (!USER_ID_PATTERN.test(userId)) return new Response("invalid user", { status: 400 });
+
   if (!CONNECT_TICKET_PATTERN.test(ticket)) return new Response("invalid ticket", { status: 400 });
 
   // A WebSocket cannot cross the DO RPC boundary (not serializable) — but the

@@ -14,6 +14,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import type { UserCaller } from '../src/user/workspace-capability';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const AGENT = 'jarvis';
 
 interface CreateBody {
@@ -31,8 +32,13 @@ interface CreateBody {
 async function postCreate(body: CreateBody): Promise<{ status: number; calls: string[]; configKeys: string[]; error: string | null }> {
   const calls: string[] = [];
   const configKeys: string[] = [];
+
   const userDO = {
-    async getConfig(_caller: UserCaller, key: string) { configKeys.push(key); return null; },
+    async getConfig(_caller: UserCaller, key: string) {
+      configKeys.push(key);
+
+      return null;
+    },
     async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
     async getCredentialBaseURL(_caller: UserCaller) {
       return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
@@ -48,6 +54,7 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
     async releaseWorkspaceReservation() { return true; },
     async removeWorkspace() {},
   };
+
   const orchestrator = {
     async claimOwner(userId: string) { return { owner: userId, capabilityHash: null }; },
     async setInitialDisplayName() {},
@@ -55,9 +62,14 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
     async resetWorkspaceBaseline() {},
     async setModel() {},
     async setReasoningEffort(effort: string) { calls.push(`effort:${effort}`); },
-    async setRole(roleId: string) { calls.push(`role:${roleId}`); return { role: roleId }; },
+    async setRole(roleId: string) {
+      calls.push(`role:${roleId}`);
+
+      return { role: roleId };
+    },
     async beginGenesisTurn() { calls.push('genesis'); },
   };
+
   const env: Partial<Env> = {};
   Object.assign(env, {
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
@@ -73,6 +85,7 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
   // No provider is reachable, so the model menu falls back to the native
   // Workers AI default — which is what a create resolves to in production too.
   globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
+
   try {
     const response = await handleCreateWorkspaceRequest(
       new Request('https://kinu.run/api/user/workspaces', {
@@ -84,7 +97,9 @@ async function postCreate(body: CreateBody): Promise<{ status: number; calls: st
       USER_ID,
       typed.UserDO.get(typed.UserDO.idFromName(USER_ID)),
     );
+
     const error = response.ok ? null : v.parse(v.object({ error: v.string() }), await response.json()).error;
+
     return { status: response.status, calls, configKeys, error };
   } finally {
     globalThis.fetch = originalFetch;

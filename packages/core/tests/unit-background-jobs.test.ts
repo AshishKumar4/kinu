@@ -13,6 +13,7 @@ import { createTestActorsOver } from '@kinu.run/test-utils';
 function newStore() {
   const db = new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
+
   return new BackgroundJobStore(makeSql(db), createTestActorsOver(db).main);
 }
 
@@ -50,6 +51,7 @@ describe('BackgroundJobStore', () => {
     // The dynamic-context roster reads this: `list` would let a settled backlog
     // crowd the still-running work out of the block entirely.
     const s = newStore();
+
     for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'run', workMode: 'build', now: i });
     s.settle('j1', 0, 'ok', 9);
     s.fail('j3', 0, 'boom', 9);
@@ -139,9 +141,11 @@ describe('BackgroundJobStore', () => {
 
   test('resumeOwedIdsInWorkspace names only the jobs whose next attempt is still in the future', () => {
     const s = newStore();
+
     for (const id of ['due', 'waiting', 'never']) {
       s.create({ id, kind: 'agents', workMode: 'build', now: 1 });
     }
+
     s.deferResume('due', 1_000);
     s.deferResume('waiting', 10_000);
 
@@ -206,7 +210,9 @@ describe('serializeJobResult', () => {
     // on it; the helper must degrade to a string that says so and carries the
     // thrown reason, so settle() still records it.
     expect(serializeJobResult(10n)).toMatch(/^unserializable job result: /);
+
     interface CircularValue { self?: CircularValue }
+
     const circular: CircularValue = {};
     circular.self = circular;
     expect(serializeJobResult(circular)).toMatch(/^unserializable job result: /);
@@ -226,22 +232,40 @@ describe('serializeJobResult', () => {
 describe('withBackgroundThreshold', () => {
   test('fast work returns its result inline — no job created', async () => {
     let crossings = 0;
+
     const out = await withBackgroundThreshold('think', async () => 'fast-result', {
       thresholdMs: 1000,
-      onThreshold: () => { crossings++; return { detached: true, jobId: 'jX' }; },
+      onThreshold: () => {
+        crossings++;
+
+        return { detached: true, jobId: 'jX' };
+      },
     });
+
     expect(out).toBe('fast-result');
     expect(crossings).toBe(0);
   });
 
   test('slow work returns a BackgroundHandle + detaches the live promise', async () => {
     const detached: Array<Promise<unknown>> = [];
-    const out = await withBackgroundThreshold('heads', async () => { await delay(80); return 'slow-result'; }, {
+
+    const out = await withBackgroundThreshold('heads', async () => {
+      await delay(80);
+
+      return 'slow-result';
+    }, {
       thresholdMs: 20,
-      onThreshold: (_kind, p) => { detached.push(p); return { detached: true, jobId: 'job-7' }; },
+      onThreshold: (_kind, p) => {
+        detached.push(p);
+
+        return { detached: true, jobId: 'job-7' };
+      },
     });
+
     expect(isBackgroundHandle(out)).toBe(true);
+
     if (isBackgroundHandle(out)) { expect(out.jobId).toBe('job-7'); expect(out.kind).toBe('heads'); }
+
     // The detached promise is the SAME live work and still resolves.
     await expect(detached[0]).resolves.toBe('slow-result');
   });
@@ -249,11 +273,13 @@ describe('withBackgroundThreshold', () => {
   test('a refused detach keeps the same live work foreground-owned through completion', async () => {
     const out = await withBackgroundThreshold('run', async () => {
       await delay(80);
+
       return 'completed after the capacity refusal';
     }, {
       thresholdMs: 20,
       onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
     });
+
     expect(out).toBe('completed after the capacity refusal');
   });
 
@@ -278,9 +304,11 @@ describe('withBackgroundThreshold', () => {
     // No thresholdMs: a caller that does not state a surface gets the one a
     // human is waiting on, never an unbounded inline wait.
     expect(BACKGROUND_POLICY.interactive.detachAfterMs).toBe(30_000);
+
     const out = await withBackgroundThreshold('run', async () => 'inline', {
       onThreshold: () => { throw new Error('should not detach'); },
     });
+
     expect(out).toBe('inline');
   });
 });
@@ -302,25 +330,30 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     const detached: Array<Promise<unknown>> = [];
     let explored = false;
     let exploringAtDetach: boolean | undefined;
+
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       // The spawn is validated fast; the actual exploration is what's slow.
       spawnStarted();
       await delay(80);
       explored = true;
+
       return 'merged fork answer';
     }, {
       onThreshold: (_kind, p) => {
         exploringAtDetach = !explored;
         detached.push(p);
+
         return { detached: true, jobId: 'job-fork-1' };
       },
     });
 
     expect(isBackgroundHandle(out)).toBe(true);
+
     if (isBackgroundHandle(out)) {
       expect(out.jobId).toBe('job-fork-1');
       expect(out.kind).toBe('agents');
     }
+
     // The detach came from the spawn announce while the exploration was still
     // running; the old behaviour rode the 30 s interactive threshold, long after
     // it had settled. An ordering, not a wall-clock bound, so scheduler latency
@@ -332,9 +365,15 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
 
   test('a call that settles WITHOUT ever announcing a spawn returns inline — a validation error never detaches', async () => {
     let crossings = 0;
+
     const out = await withSpawnDetach('agents', async () => 'fast validation error', {
-      onThreshold: () => { crossings++; return { detached: true, jobId: 'unused' }; },
+      onThreshold: () => {
+        crossings++;
+
+        return { detached: true, jobId: 'unused' };
+      },
     });
+
     expect(out).toBe('fast validation error');
     expect(crossings).toBe(0);
   });
@@ -349,10 +388,12 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       spawnStarted();
       await delay(50);
+
       return 'completed after the capacity refusal';
     }, {
       onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
     });
+
     expect(out).toBe('completed after the capacity refusal');
   });
 
@@ -363,16 +404,20 @@ describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, nev
     const out = await withSpawnDetach('agents', async (spawnStarted) => {
       spawnStarted();
       await delay(20);
+
       return 'x';
     }, {
       onThreshold: () => ({ detached: true, jobId: 'job-9' }),
     });
+
     expect(isBackgroundHandle(out)).toBe(true);
+
     if (isBackgroundHandle(out)) {
       expect(out.jobId).toBe('job-9');
       expect(out.message).toMatch(/wake/i);
       expect(out.message.length).toBeLessThan(80);
     }
+
     const rung = Object.values(DELEGATION_RUNGS).join(' ');
     expect(rung).toContain('never poll a backgrounded job or spawn it twice');
   });
@@ -382,6 +427,7 @@ describe('readSpawnStarted — the announce callback the background wrapper arms
   test('reads the callback off the options bag when present', () => {
     let fired = false;
     const announce = () => { fired = true; };
+
     const fn = readSpawnStarted({ [SPAWN_STARTED_OPTION]: announce });
     expect(fn).toBe(announce);
     fn?.();

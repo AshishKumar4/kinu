@@ -27,6 +27,7 @@ const WORKSPACE = 'workspace-exec-device';
  *  off the answer and not inferred from the frame log alone. */
 function daemonOn(frame: DeviceFrame): JsonValue {
   if (frame.method === 'which') return { present: ['node'] };
+
   return { stdout: `ran on ${frame.device ?? 'unknown'}`, stderr: '', exitCode: 0 };
 }
 
@@ -60,6 +61,7 @@ async function twoDaemons(): Promise<Fleet> {
     sandbox: { capability: 'sandboxed', reason: null, gpu: ['/dev/nvidia0'] },
   }, rigId);
   const token = await provisionTestWorkspace(harness, WORKSPACE, 'Exec Device');
+
   return Object.assign(harness, {
     owner,
     workspace: { workspaceToken: token } satisfies UserCaller,
@@ -77,13 +79,17 @@ async function orchestratorOnFleet(fleet: Fleet) {
     agentName: WORKSPACE,
     cliCwd: () => null,
   });
+
   await transport.refreshStatus();
   const harness = orchestratorHarness();
   const router = harness.agent.observeRuntime().executionRouter;
+
   if (!router) throw new Error('the harness runtime has no execution router');
   router.register(createDeviceTunnelExecutor(transport));
+
   // Let the harness activation's DDL land before the RPC writes its row.
   for (let tick = 0; tick < 8; tick++) await joinHarnessFibers();
+
   return harness.agent;
 }
 
@@ -98,6 +104,7 @@ describe('executeInExecutor names its machine', () => {
     const agent = await orchestratorOnFleet(fleet);
 
     const answer = await agent.executeInExecutor('laptop', 'true');
+
     if (!('stdout' in answer)) throw new Error(`expected a tool answer, got ${JSON.stringify(answer)}`);
     // The ask names both machines, and says a name is required.
     expect(answer.stdout).toContain('ashish@mac');
@@ -116,6 +123,7 @@ describe('executeInExecutor names its machine', () => {
     const agent = await orchestratorOnFleet(fleet);
 
     const answer = await agent.executeInExecutor('laptop', 'true', 'mrwhite@rig');
+
     if (!('stdout' in answer)) throw new Error(`expected a tool answer, got ${JSON.stringify(answer)}`);
     expect(answer.stdout).toContain(`ran on ${fleet.rigId}`);
     expect(fleet.consentPrompts).toHaveLength(1);
@@ -137,6 +145,7 @@ describe('executeInExecutor names its machine', () => {
 
     await agent.executeInExecutor('laptop', 'true', 'ashish@mac');
     const answer = await agent.executeInExecutor('laptop', 'true', 'mrwhite@rig');
+
     if (!('stdout' in answer)) throw new Error(`expected a tool answer, got ${JSON.stringify(answer)}`);
     expect(answer.stdout).toContain(`ran on ${fleet.rigId}`);
     // One card per machine, not one shared grant.

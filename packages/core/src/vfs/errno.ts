@@ -61,6 +61,7 @@ export function makeVfsError(code: VfsErrorCode, message: string, path: string):
 export function withVfsErrorHint(err: VfsErrorLike, hint: string): VfsError {
   const prefix = `${err.code}: `;
   const message = err.message.startsWith(prefix) ? err.message.slice(prefix.length) : err.message;
+
   return new VfsError(err.code, `${message} — ${hint}`, err.path);
 }
 

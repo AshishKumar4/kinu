@@ -39,20 +39,31 @@ import { makeKv } from './helpers/kv';
 import type { RecentEventRow } from '../src/orchestrator';
 
 const ORIGIN = 'https://app.example';
+
 /** The deployment secret that mints and verifies a delivery URL. */
 const ROUTE_SECRET = 'ingress-forgery-route-secret-0123456789';
+
 /** The shared secret the sender is supposed to sign a delivery with. */
 const HOOK_SECRET = 'ingress-forgery-hook-secret';
+
 /** The workspace `makeCtx` names, which is also the local part of its address. */
 const WORKSPACE = 'harness-actor';
+
 const EMAIL_DOMAIN = 'agents.example.com';
+
 const AGENT_ADDRESS = `${WORKSPACE}@${EMAIL_DOMAIN}`;
+
 const OWNER_EMAIL = 'owner@example.com';
+
 const ATTACKER_EMAIL = 'attacker@evil.example';
+
 const BODY = '{"deploy":"prod"}';
+
 /** Pinned so the replay window and the dedupe bucket are the same on every run. */
 const PINNED_NOW = new Date('2026-03-01T12:00:00.000Z');
+
 const FIVE_MINUTES_MS = 5 * 60 * 1000;
+
 /** Hex characters of the route capability a delivery path ends in — the width
  *  `webhook-route.ts` mints, so replacing exactly that tail leaves a path whose
  *  shape still matches and whose capability this deployment never issued. */
@@ -62,6 +73,7 @@ const CAPABILITY_HEX_CHARS = 32;
  *  body is `unknown` until something reads it, and WHICH refusal arrived is
  *  half of what these cases are about. */
 const RefusalSchema = v.object({ error: v.string() });
+
 const AcceptedSchema = v.object({
   accepted: v.boolean(), event_id: v.string(), admitted: v.boolean(),
 });
@@ -95,6 +107,7 @@ function workspace(): Workspace {
   const userPlane: RecordedUserPlaneCalls = {
     warmConnections: [], failWarm: null, titles: [], profile: { email: OWNER_EMAIL },
   };
+
   const harness = orchestratorHarness(userPlane);
   harness.agent.declareWebhookRouteSecret(ROUTE_SECRET);
   harness.agent.harnessHoldsCapability('harness-token');
@@ -110,6 +123,7 @@ function workspace(): Workspace {
       idFromName: (name: string) => name,
       get: (name: string) => {
         activations.push(name);
+
         return harness.agent;
       },
     },
@@ -147,8 +161,11 @@ function delivery(path: string, headers: {
   timestamp: string | null;
 }): Request {
   const sent = new Headers({ 'content-type': 'application/json' });
+
   if (headers.signature !== null) sent.set('x-kinu-signature', headers.signature);
+
   if (headers.timestamp !== null) sent.set('x-kinu-timestamp', headers.timestamp);
+
   return new Request(`${ORIGIN}${path}`, { method: 'POST', headers: sent, body: BODY });
 }
 
@@ -179,6 +196,7 @@ function inboundMail(opts: {
   messageId?: string;
 }): ConstructedMail {
   const messageId = opts.messageId ?? '<forgery-1@mail.example.com>';
+
   const raw = [
     `From: ${opts.headerFrom ?? opts.envelopeFrom}`,
     `To: ${AGENT_ADDRESS}`,
@@ -188,7 +206,9 @@ function inboundMail(opts: {
     '',
     'Deploy the release branch to production.',
   ].join('\r\n');
+
   const body = new Response(raw).body;
+
   if (!body) throw new Error('expected a raw message stream');
   const rejections: string[] = [];
   const forwards: string[] = [];
@@ -203,6 +223,7 @@ function inboundMail(opts: {
     forward: async (to: string) => { forwards.push(to); },
     reply: async () => {},
   });
+
   // SAFETY: every member the inbound path reads is constructed by the
   // `Object.assign` above — `from`, `to`, `headers` and `raw`, verified against
   // the bodies of `handleInboundEmail` and `routeInboundEmail` — and the three
@@ -222,9 +243,11 @@ afterAll(() => {
 describe('a webhook delivery nobody could sign reaches no event log', () => {
   async function hooked() {
     const ws = workspace();
+
     const hook = await ws.harness.agent.createDurableWebhook({
       label: 'ci', auth_mode: 'hmac', secret: HOOK_SECRET,
     });
+
     return { ws, hook };
   }
 
@@ -297,6 +320,7 @@ describe('a webhook delivery nobody could sign reaches no event log', () => {
     const { ws, hook } = await hooked();
     const now = Date.now();
     const signature = await signed(now);
+
     const send = () => worker.fetch(
       delivery(hook.url, { signature, timestamp: String(now) }), ws.env, ws.ctx,
     );
@@ -337,6 +361,7 @@ describe('hostile mail reaches no event log', () => {
 
   test("the owner's mail is admitted once, and the edge's redelivery adds no second event", async () => {
     const ws = workspace();
+
     const mail = () => inboundMail({
       envelopeFrom: OWNER_EMAIL, messageId: '<retried@mail.example.com>',
     });

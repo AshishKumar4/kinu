@@ -88,6 +88,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   render() {
     if (!this.state.error) return this.props.children;
+
     return (
       <div className="h-full overflow-y-auto flex items-start justify-center p-6">
         <div className="max-w-2xl w-full text-left space-y-3">

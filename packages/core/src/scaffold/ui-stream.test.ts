@@ -15,6 +15,7 @@ function scriptedRunner(
 ): (emit: ScaffoldEmitFn) => Promise<ScaffoldRunResult> {
   return async (emit) => {
     for (const ev of events) await emit(ev);
+
     return {
       ok: true, doneEmitted: events.some(e => e.type === 'done'),
       emitCount: events.length, events, durationMs: 0, ...result,
@@ -24,7 +25,9 @@ function scriptedRunner(
 
 async function collect(gen: AsyncGenerator<UIMessageChunk>): Promise<UIMessageChunk[]> {
   const out: UIMessageChunk[] = [];
+
   for await (const chunk of gen) out.push(chunk);
+
   return out;
 }
 
@@ -35,6 +38,7 @@ describe('scaffoldEventsToUIStream', () => {
       { type: 'text_delta', text: 'world' },
       { type: 'done' },
     ])));
+
     const types = chunks.map(c => c.type);
     expect(types).toEqual(['start', 'text-start', 'text-delta', 'text-delta', 'text-end', 'finish']);
     expect(chunks[2]).toMatchObject({ type: 'text-delta', delta: 'Hello ' });
@@ -55,6 +59,7 @@ describe('scaffoldEventsToUIStream', () => {
       { type: 'ui_chunk', chunk: { type: 'finish' } },
       { type: 'done' },
     ])));
+
     const types = chunks.map(c => c.type);
     // Exactly one outer start + one finish; inner start/finish stripped.
     expect(types).toEqual(['start', 'text-start', 'text-delta', 'text-end', 'finish']);
@@ -71,6 +76,7 @@ describe('scaffoldEventsToUIStream', () => {
       { type: 'tool_result', toolCallId: 'tc1', result: { stdout: 'a\nb' }, outcome: { success: true } },
       { type: 'done' },
     ])));
+
     const types = chunks.map(c => c.type);
     expect(types).toEqual([
       'start', 'text-start', 'text-delta', 'text-end',
@@ -89,6 +95,7 @@ describe('scaffoldEventsToUIStream', () => {
       { type: 'error', message: 'boom' },
       { type: 'done' },
     ])));
+
     expect(chunks.find(c => c.type === 'error')).toMatchObject({ errorText: 'boom' });
   });
 
@@ -96,6 +103,7 @@ describe('scaffoldEventsToUIStream', () => {
     const chunks = await collect(scaffoldEventsToUIStream(scriptedRunner([
       { type: 'text_delta', text: 'partial' },
     ], { ok: true, doneEmitted: false })));
+
     const types = chunks.map(c => c.type);
     expect(types[0]).toBe('start');
     expect(types[types.length - 1]).toBe('finish');
@@ -107,6 +115,7 @@ describe('scaffoldEventsToUIStream', () => {
       ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: 0,
       error: 'scaffold timeout',
     })));
+
     const types = chunks.map(c => c.type);
     expect(types).toContain('error');
     expect(chunks.find(c => c.type === 'error')).toMatchObject({ errorText: 'scaffold timeout' });
@@ -118,6 +127,7 @@ describe('scaffoldEventsToUIStream', () => {
       scriptedRunner([{ type: 'done' }]),
       { messageId: 'msg-42' },
     ));
+
     expect(chunks[0]).toMatchObject({ type: 'start', messageId: 'msg-42' });
   });
 });

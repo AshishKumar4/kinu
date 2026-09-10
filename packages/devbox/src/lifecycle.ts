@@ -189,6 +189,7 @@ export function openStartBudget(budgetMs: number): StartBudget {
   const openedAt = Date.now();
   let declared = 0;
   const remainingMs = (): number => Math.max(0, budgetMs - (Date.now() - openedAt));
+
   return {
     budgetMs,
     remainingMs,
@@ -196,6 +197,7 @@ export function openStartBudget(budgetMs: number): StartBudget {
     nextAllowanceMs: () => {
       const share = remainingMs() / Math.max(1, declared);
       declared = Math.max(0, declared - 1);
+
       return share;
     },
   };
@@ -254,6 +256,7 @@ async function raceAllowance<T>(
   onLate: (failure: LateStartFailure) => void,
 ): Promise<StepOutcome<T>> {
   let late = false;
+
   // Both arms ANNOTATED rather than asserted: `then`'s inference widens
   // `{ kind: 'done' }` to `{ kind: string }`, and a cast to paper over that
   // would be a caller-selected type standing where a constructed one belongs.
@@ -262,17 +265,21 @@ async function raceAllowance<T>(
     (cause: LateStartFailure['cause']) => {
       if (!late) throw cause;
       onLate({ cause });
+
       // The race already answered `late`, so this branch has no value to
       // produce. It exists so the late failure is reported rather than surfacing
       // as an unhandled rejection.
       return Promise.withResolvers<StepOutcome<T>>().promise;
     },
   );
+
   const { promise: expiry, resolve } = Promise.withResolvers<StepOutcome<T>>();
+
   const timer = setTimeout(() => {
     late = true;
     resolve({ kind: 'late' });
   }, allowanceMs);
+
   try {
     return await Promise.race([started, expiry]);
   } finally {
@@ -314,10 +321,13 @@ async function withContainerStartDeadline<T>(
 ): Promise<T> {
   const budgetMs = budget.remainingMs();
   const raced = await raceAllowance(budgetMs, work, onOverrun);
+
   if (raced.kind === 'late') throw new ContainerStartOverrun(label, budgetMs);
+
   // `raceAllowance` rethrows a real failure rather than reporting it, so the
   // attach's own error reaches the taxonomy unchanged.
   if (raced.kind === 'failed') throw raced.cause;
+
   return raced.value;
 }
 
@@ -368,6 +378,7 @@ export function racedRestoreSteps(budget: StartBudget): RestoreSteps {
     remainingMs: () => budget.remainingMs(),
   };
 }
+
 /**
  * The restore's step policy inside the init gate: the same budget, consulted
  * before each step instead of raced with a timer.
@@ -386,10 +397,12 @@ export function polledRestoreSteps(budget: StartBudget): RestoreSteps {
   const check = (): void => {
     if (budget.remainingMs() <= 0) throw new ContainerStartOverrun('Devbox.attach', budget.budgetMs);
   };
+
   return {
     run: async (work, _onLate) => {
       void _onLate;
       check();
+
       try {
         return { kind: 'done', value: await work() };
       } catch (cause) {
@@ -399,6 +412,7 @@ export function polledRestoreSteps(budget: StartBudget): RestoreSteps {
     attach: async (work, _onOverrun) => {
       void _onOverrun;
       check();
+
       return await work();
     },
     declare: (steps) => budget.declare(steps),
@@ -503,10 +517,13 @@ export function classifyRecovery(thrown: { readonly cause: unknown }): RecoveryC
   for (let value = thrown.cause; ;) {
     if (value instanceof ContainerStartOverrun) return 'abandoned';
     const coded = v.safeParse(CodedFailureSchema, value);
+
     if (coded.success) {
       const held = RECOVERY_BY_SDK_CODE.get(coded.output.code);
+
       if (held !== undefined) return held;
     }
+
     if (!(value instanceof Error) || value.cause === undefined) return 'unclassified';
     value = value.cause;
   }
@@ -568,6 +585,7 @@ export type StoredRecovery =
 export function parseRecoveryRow(stored: StoredValue): StoredRecovery {
   if (stored === undefined) return { kind: 'absent' };
   const parsed = v.safeParse(RecoveryRowSchema, stored);
+
   return parsed.success ? { kind: 'row', row: parsed.output } : { kind: 'malformed' };
 }
 
@@ -593,6 +611,7 @@ export interface RecoveryAdmission {
  */
 export function admissionStep(stored: StoredRecovery): RecoveryAdmission {
   if (stored.kind === 'malformed') return { admit: false, stage: 'replace' };
+
   return { admit: true, stage: stored.kind === 'row' ? stored.row.stage : undefined };
 }
 
@@ -646,16 +665,21 @@ export interface RecoveryDecision {
 export function recoveryStep(input: RecoveryInput): RecoveryDecision {
   if (!input.owned) return { action: 'inert', stage: input.stage };
   const { stage } = input;
+
   if (input.failure === 'exhausted' || input.failure === 'permanent') {
     return { action: 'refuse', stage };
   }
+
   if (input.failure === 'stale-owner') {
     return { action: 'retry', stage };
   }
+
   if (stage === 'replace') return { action: 'refuse', stage };
+
   if (input.failure === 'abandoned' || stage === 'retry') {
     return { action: 'replace', stage: 'replace' };
   }
+
   return { action: 'retry', stage: 'retry' };
 }
 
@@ -700,11 +724,14 @@ export interface QuiesceDecision {
  */
 export function quiesceStep(input: QuiesceInput): QuiesceDecision {
   if (!input.containerRunning) return { action: 'hold', quietSince: undefined };
+
   const idleEnough = input.now - input.lastInteractionAt >= input.idleMs
     && !input.backgroundWork;
+
   if (!idleEnough) return { action: 'hold', quietSince: undefined };
   const quietSince = input.quietSince ?? input.now;
   const confirmed = input.now - quietSince >= input.quietConfirmMs;
+
   return { action: confirmed ? 'quiesce' : 'hold', quietSince };
 }
 
@@ -732,10 +759,14 @@ export interface MountLine {
 export function findMount(procMounts: string, dir: string): MountLine | undefined {
   for (const line of procMounts.split('\n')) {
     const [source, mountpoint, fstype, options] = line.trim().split(/\s+/);
+
     if (source === undefined || mountpoint === undefined || fstype === undefined) continue;
+
     if (mountpoint.replace(/\\040/g, ' ') !== dir) continue;
+
     return { source, fstype, options: options ?? '' };
   }
+
   return undefined;
 }
 
@@ -848,6 +879,7 @@ const HOLDER_TERM_WAIT_MS = 5_000;
 export function releaseWorkdirHoldersCommand(workdir: string): string {
   const quoted = `'${workdir.replaceAll("'", `'\\''`)}'`;
   const termWait = String(Math.ceil(HOLDER_TERM_WAIT_MS / 1_000));
+
   // The parent chain of this shell, walked once through /proc. The comm field
   // can hold spaces and parentheses, so ppid is read AFTER the last `)` rather
   // than by column number — `pid (comm) state ppid …`.
@@ -855,6 +887,7 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
     + 'while [ -n "$a" ] && [ "$a" != 0 ] && [ "$a" != 1 ]; do '
     + `a=$(sed 's/.*) //' /proc/$a/stat 2>/dev/null | cut -d' ' -f2); `
     + 'if [ -n "$a" ]; then mine="$mine$a "; fi; done; ';
+
   // ONE scan, defined once and run twice: before the signals to decide who to
   // signal, and after them to answer who is still holding. A second copy of
   // this walk is a second thing to keep in agreement, and the two runs must
@@ -872,6 +905,7 @@ export function releaseWorkdirHoldersCommand(workdir: string): string {
     + 'if [ "$h" = fd ]; then fdh="$fdh $entry"; elif [ "$h" = cwd ]; then '
     + 'cwdh="$cwdh $entry"; fi; fi; '
     + 'done; }; ';
+
   return `${ancestors}${scan}__devbox_hold; `
     // The pre-signal picture, on stderr, split by what this command is willing
     // to do about each class. Only fd holders that are strangers are signalled.
@@ -900,13 +934,17 @@ export function parseWorkdirHolders(
   stdout: string,
 ): readonly { readonly pid: string; readonly comm: string }[] {
   const trimmed = stdout.trim();
+
   if (trimmed.length === 0 || trimmed === 'none') return [];
   const holders: { readonly pid: string; readonly comm: string }[] = [];
+
   for (const token of trimmed.split(/\s+/)) {
     const [pid, comm] = token.split(':');
+
     if (pid === undefined || pid.length === 0) continue;
     holders.push({ pid, comm: comm ?? 'unknown' });
   }
+
   return holders;
 }
 
@@ -918,11 +956,13 @@ export function parseWorkdirHolders(
  *  second version of it would eventually disagree. */
 export function describeThrown(thrown: { readonly cause: unknown }): string {
   const { cause } = thrown;
+
   if (cause instanceof Error) {
     return cause.cause === undefined
       ? cause.message
       : `${cause.message}: ${describeThrown({ cause: cause.cause })}`;
   }
+
   return String(cause);
 }
 
@@ -959,7 +999,9 @@ export const PORT_TOKEN_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
 export function generatePortToken(random: (n: number) => Uint8Array): string {
   const bytes = random(16);
   let token = '';
+
   for (const byte of bytes) token += PORT_TOKEN_ALPHABET[byte % PORT_TOKEN_ALPHABET.length];
+
   return token;
 }
 
@@ -976,8 +1018,10 @@ export function healthProbeCommand(port: number): string {
  *  guess hands back a URL that answers 502. */
 export function healthProbeSilent(output: string): boolean {
   const [codeStr, exitStr] = output.trim().split('|');
+
   if (exitStr !== undefined && Number.parseInt(exitStr, 10) === 7) return true;
   const code = codeStr === undefined ? Number.NaN : Number.parseInt(codeStr, 10);
+
   return !Number.isFinite(code) || code === 0;
 }
 
@@ -1017,6 +1061,7 @@ export function awaitListenerCommand(port: number, attempts: number, intervalMs:
   // Fractional seconds, because the cadence is expressed in milliseconds and
   // `sleep` in an Alpine image takes a decimal.
   const seconds = (Math.max(1, intervalMs) / 1_000).toFixed(2);
+
   return `answer=; for _ in $(seq 1 ${String(Math.max(1, attempts))}); do `
     + `answer=$(${healthProbeCommand(port)}); `
     + `case "$answer" in *'|0') break ;; *) sleep ${seconds} ;; esac; `
@@ -1050,6 +1095,7 @@ export function restartPlan(
   ports: readonly PortExposureSpec[],
 ): RestartPlan {
   const exposed = new Map(ports.map(spec => [spec.port, spec]));
+
   return {
     start: processes,
     serve: [...exposed.values()].sort((a, b) => a.port - b.port),
@@ -1170,28 +1216,34 @@ export interface ResourceLane {
  */
 export function createResourceLane(): ResourceLane {
   const inFlight = new Set<{ scopes: readonly ResourceScope[]; settled: Promise<void> }>();
+
   const hold = async (scopes: readonly ResourceScope[]): Promise<() => void> => {
     // Loop rather than one pass: waiting for today's conflicts can let a third
     // operation claim an overlapping resource in the meantime, and admitting
     // this one anyway would be the interleaving the lane exists to stop.
     for (;;) {
       const blocking = [...inFlight].filter(entry => scopesOverlap(entry.scopes, scopes));
+
       if (blocking.length === 0) break;
       await Promise.all(blocking.map(entry => entry.settled));
     }
+
     const { promise: settled, resolve } = Promise.withResolvers<void>();
     const entry = { scopes, settled };
     inFlight.add(entry);
+
     return () => {
       inFlight.delete(entry);
       resolve();
     };
   };
+
   return {
     busy: () => inFlight.size !== 0,
     hold,
     async run(scopes, op) {
       const release = await hold(scopes);
+
       try {
         return await op();
       } finally {
@@ -1227,11 +1279,13 @@ export function heldUntilDrained<Chunk>(
   release: () => void,
 ): ReadableStream<Chunk> {
   let released = false;
+
   const done = (): void => {
     if (released) return;
     released = true;
     release();
   };
+
   return stream.pipeThrough(new TransformStream<Chunk, Chunk>({
     flush: done,
     cancel: done,
@@ -1270,9 +1324,11 @@ export function pathScopes(input: {
   // workspace would order against every other. A create changes the membership
   // of the directory it lands in, and of higher ones only when it makes them.
   const claimed = input.ancestors === true ? above : above.slice(0, 1);
+
   if (input.membership === true || input.ancestors === true) {
     for (const directory of claimed) scopes.push({ path: `file:${directory}`, subtree: false });
   }
+
   return scopes;
 }
 
@@ -1280,9 +1336,11 @@ export function pathScopes(input: {
  *  so taking one takes the immediate parent. */
 function ancestors(path: string): readonly string[] {
   const out: string[] = [];
+
   for (let cut = path.lastIndexOf('/'); cut > 0; cut = path.lastIndexOf('/', cut - 1)) {
     out.push(path.slice(0, cut));
   }
+
   return out;
 }
 
@@ -1297,14 +1355,18 @@ function ancestors(path: string): readonly string[] {
 export function canonicalPath(path: string): string {
   const absolute = path.startsWith('/') ? path : `${DEVBOX_WORKDIR}/${path}`;
   const out: string[] = [];
+
   for (const segment of absolute.split('/')) {
     if (segment === '' || segment === '.') continue;
+
     if (segment === '..') {
       out.pop();
       continue;
     }
+
     out.push(segment);
   }
+
   return `/${out.join('/')}`;
 }
 
@@ -1337,23 +1399,29 @@ export interface CheckpointLane {
 export function createCheckpointLane(): CheckpointLane {
   const inFlight: Partial<Record<CheckpointKind, Promise<CheckpointOutcome>>> = {};
   let tail: Promise<unknown> = Promise.resolve();
+
   return {
     busy: () => Object.values(inFlight).some(run => run !== undefined),
     run(kind, op) {
       const pending = inFlight[kind];
+
       if (pending !== undefined) return pending;
       const run = tail.then(() => op());
       inFlight[kind] = run;
+
       const cleaned = (async () => {
         try {
           await run;
         } catch (cause) {
           console.error(`[devbox] ${kind} checkpoint rejected: ${describeThrown({ cause })}`);
         }
+
         if (inFlight[kind] === run) inFlight[kind] = undefined;
       })();
+
       // The next lane entry observes cleanup too; no detached promise remains.
       tail = cleaned;
+
       return run;
     },
   };

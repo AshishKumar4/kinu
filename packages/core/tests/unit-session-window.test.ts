@@ -11,6 +11,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 function newStore(): CompletedTurnStore {
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
+
   return createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
 }
 
@@ -22,6 +23,7 @@ const aTurn = (i: number, extra: Partial<CompletedTurn> = {}): CompletedTurn => 
 describe('SessionWindow — the open window', () => {
   test('turns accumulate in order and are claimed as one batch', () => {
     const win = newStore();
+
     for (let i = 0; i < 3; i++) win.append(aTurn(i), { awaitsFollowup: true, now: 1000 + i });
     expect(win.size()).toBe(3);
 
@@ -39,6 +41,7 @@ describe('SessionWindow — the open window', () => {
 
   test('a claim that is never settled leaves the turns for the next host', () => {
     const win = newStore();
+
     for (let i = 0; i < 3; i++) win.append(aTurn(i), { awaitsFollowup: true, now: 1000 + i });
     // A process that dies mid-pass never calls settle().
     expect(win.claim()!.turns).toHaveLength(3);
@@ -48,6 +51,7 @@ describe('SessionWindow — the open window', () => {
 
   test('a turn appended during a pass belongs to the NEXT window', () => {
     const win = newStore();
+
     for (let i = 0; i < 2; i++) win.append(aTurn(i), { awaitsFollowup: true, now: 1000 + i });
     const claimed = win.claim()!;
     win.append(aTurn(9), { awaitsFollowup: true, now: 1010 });
@@ -58,12 +62,14 @@ describe('SessionWindow — the open window', () => {
 
   test('a turn round-trips with its tool calls and usage intact', () => {
     const win = newStore();
+
     const turn = aTurn(0, {
       toolCalls: [{ name: 'shell', args: { cmd: 'ls' }, result: { stdout: 'a\nb' } }],
       usage: { input: 10, output: 5, cacheRead: 2 },
       hadError: true,
       sessionId: 'conv-1',
     });
+
     win.append(turn, { awaitsFollowup: true });
     expect(win.claim()!.turns).toEqual([turn]);
   });
@@ -149,12 +155,15 @@ describe('SessionWindow — the pending outcome review', () => {
     initCompletedTurnTable(execRaw);
     const actor = createTestActors(sql, execRaw).main;
     const win = createCompletedTurnStore(sql, actor);
+
     for (let i = 0; i < 4; i++) {
       win.append(aTurn(i), { awaitsFollowup: true, now: i });
       win.claim()!.settle();
       const p = win.claimPendingReview();
+
       if (p) win.settleReview(p.rowId);
     }
+
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns
       WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(0);
   });
@@ -167,8 +176,10 @@ describe('SessionWindow — durability past the row', () => {
     const { sql, execRaw } = createTestSql();
     initCompletedTurnTable(execRaw);
     const actor = createTestActors(sql, execRaw).main;
+
     return { sql, actor, win: createCompletedTurnStore(sql, actor) };
   }
+
   const rowCount = (sql: SqlExecutor, actor: ActorHandle): number =>
     sql<{ n: number }>`SELECT COUNT(*) AS n FROM completed_turns
       WHERE actor_id = ${actor.actorId}`[0]?.n ?? 0;

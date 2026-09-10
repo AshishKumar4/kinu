@@ -30,26 +30,33 @@ interface WorkspaceDatabase {
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.byteLength);
     const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
+
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
+
     return bytes;
   }
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
 function openWorkspaceDatabase(): WorkspaceDatabase {
   const database = new Database(':memory:');
   databases.push(database);
+
   return {
     database,
     sql: {
       exec(query: string, ...bindings: SqlValue[]) {
         const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
         const bound = bindings.map(sqlBinding);
+
         if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
         statement.run(...bound);
+
         return [];
       },
     },
@@ -96,10 +103,12 @@ function sdkBox(host: ProgrammaticHost) {
     _rpcExposePort: (port: number) => rpcExposePort(host, port),
     _rpcUnexposePort: (port: number) => rpcUnexposePort(host, port),
   };
+
   const namespace = {
     idFromName: (name: string) => name,
     get: () => stub,
   };
+
   return Nimbus.fromEnv({ NIMBUS_SESSION: namespace }).sandbox('workspace', { root: '/home/user' });
 }
 
@@ -108,11 +117,13 @@ const shell = (shellId: string): NimbusExecOptions => ({ shellId });
 describe('hosted workspace actor shell state', () => {
   test('successive public SDK calls keep cwd over the authoritative VFS bytes', async () => {
     const { database, sql } = openWorkspaceDatabase();
+
     const workspace = await NimbusWorkspace.create({
       sql,
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
       generation: 1,
     });
+
     await workspace.fs.mkdir('/home/user/repo', { recursive: true });
     await workspace.fs.writeFile('/home/user/repo/proof.txt', 'same bytes');
 
@@ -131,17 +142,20 @@ describe('hosted workspace actor shell state', () => {
 
   test('concurrent actor shells serialize their own calls without cwd or env leakage', async () => {
     const { database, sql } = openWorkspaceDatabase();
+
     const workspace = await NimbusWorkspace.create({
       sql,
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
       generation: 1,
     });
+
     await workspace.fs.mkdir('/home/user/alpha', { recursive: true });
     await workspace.fs.mkdir('/home/user/beta', { recursive: true });
     const box = sdkBox(workerHost(workspace, new Map()));
 
     const alpha = shell('subordinate:alpha');
     const beta = shell('head:beta');
+
     const [, alphaPwd] = await Promise.all([
       box.exec('cd /home/user/alpha; export ACTOR=alpha', alpha),
       box.exec('pwd; echo $ACTOR', alpha),
@@ -157,9 +171,11 @@ describe('hosted workspace actor shell state', () => {
 
   test('durable shell state survives worker reconstruction', async () => {
     const { database, sql } = openWorkspaceDatabase();
+
     const transactions = {
       storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() },
     };
+
     const durableState: DurableShellState = new Map();
     const firstWorkspace = await NimbusWorkspace.create({ sql, transactions, generation: 1 });
     await firstWorkspace.fs.mkdir('/home/user/repo', { recursive: true });
@@ -178,30 +194,38 @@ describe('hosted workspace actor shell state', () => {
 describe('hosted workspace preview capabilities', () => {
   test('the public SDK capability reaches the actual worker/core guest route and is revoked on unexpose', async () => {
     const { database, sql } = openWorkspaceDatabase();
+
     const workspace = await NimbusWorkspace.create({
       sql,
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
       generation: 1,
     });
+
     const durableState: DurableShellState = new Map();
     const host = workerHost(workspace, durableState);
     let guestRequest: Request | null = null;
+
     const guest = {
       async handleHttpRequest(request: Request) {
         guestRequest = request;
+
         return new Response('guest response');
       },
     };
+
     const receivedGuestRequest = (): Request => {
       if (!guestRequest) throw new Error('guest route was not invoked');
+
       return guestRequest;
     };
+
     host.portRegistry.bindFacetStub(41, guest);
     host.portRegistry.register(4321, 41);
 
     const box = sdkBox(host);
     const exposed = await box.ports.expose(4321);
     expect(exposed.capability).toMatch(/^[a-f0-9]{24}$/);
+
     if (!exposed.capability) throw new Error('listening port did not receive a capability');
 
     const response = await rpcRouteCapabilityPort(
@@ -219,6 +243,7 @@ describe('hosted workspace preview capabilities', () => {
       }),
       '/private',
     );
+
     expect(response.status).toBe(200);
     const routed = receivedGuestRequest();
     expect(routed.headers.get('authorization')).toBe('Bearer guest-token');
@@ -276,10 +301,12 @@ describe('hosted workspace preview capabilities', () => {
   test('the actual worker route supports Cirrus HMR and generic guest upgrades', async () => {
     const serverSocket = { serializeAttachment() {} };
     const clientSocket = {};
+
     class FakeWebSocketPair {
       0 = clientSocket;
       1 = serverSocket;
     }
+
     Object.defineProperty(globalThis, 'WebSocketPair', {
       configurable: true,
       value: FakeWebSocketPair,
@@ -288,9 +315,11 @@ describe('hosted workspace preview capabilities', () => {
     const { routeCapabilityPort } = await import(
       '../../../node_modules/@nimbus-sh/worker/dist/session/routes.js'
     );
+
     const { routeHostedWebSocket } = await import(
       '../../../node_modules/@nimbus-sh/worker/dist/session/rpc.js'
     );
+
     const portRegistry = new PortRegistry();
     portRegistry.bindFacetStub(41, {
       async handleHttpRequest() { return new Response('guest'); },
@@ -298,10 +327,14 @@ describe('hosted workspace preview capabilities', () => {
     });
     portRegistry.register(4321, 41);
     const capability = portRegistry.get(4321)?.capability;
+
     if (!capability) throw new Error('port capability was not generated');
+
     interface TestSocket { serializeAttachment?: () => void }
+
     const acceptedSockets: TestSocket[] = [];
     let acceptedTags: string[] = [];
+
     const host = {
       portRegistry,
       _viteShimPort: 4321,
@@ -310,6 +343,7 @@ describe('hosted workspace preview capabilities', () => {
         isRunning: true,
         attachHmrClient(socket: TestSocket) {
           acceptedSockets.push(socket);
+
           return 'client-1';
         },
       },
@@ -322,6 +356,7 @@ describe('hosted workspace preview capabilities', () => {
       },
       _cirrusHmrWsClients: null,
     };
+
     const hmr = await routeCapabilityPort(
       host,
       4321,
@@ -331,6 +366,7 @@ describe('hosted workspace preview capabilities', () => {
       }),
       '/__nimbus_hmr',
     );
+
     expect(hmr.status).toBe(101);
     expect(hmr.headers.get('sec-websocket-protocol')).toBe('vite-hmr');
     expect(acceptedSockets).toEqual([serverSocket, serverSocket]);
@@ -345,11 +381,13 @@ describe('hosted workspace preview capabilities', () => {
     )).toMatchObject({ status: 101 });
 
     let peerFacetReached = false;
+
     const peerHost = {
       _hostedProcesses: new Map([['process-key', {
         facet: Promise.resolve({
           async handleWebSocketRequest() {
             peerFacetReached = true;
+
             return new Response(null, { status: 101 });
           },
         }),
@@ -360,6 +398,7 @@ describe('hosted workspace preview capabilities', () => {
       }]]),
       _hostedProcessWaiters: new Map(),
     };
+
     expect(await routeHostedWebSocket(
       peerHost,
       'process-key',

@@ -21,6 +21,7 @@ import {
  *  sentence stays green while every stored row changes shape. Spelled here, a
  *  reword fails this file, which is the point. */
 const STALLED_OPENING = 'Turn stalled:';
+
 const RATE_LIMITED_OPENING = 'Turn ended by provider rate limiting:';
 
 const SSE_HEADERS = { 'content-type': 'text/event-stream' };
@@ -51,18 +52,22 @@ async function driveTurn(
   } = {},
 ) {
   let call = 0;
+
   const server = Bun.serve({
     port: 0,
     async fetch() {
       call += 1;
+
       return call === 1 ? (opts.step1 ?? healthyToolStep)() : step2();
     },
   });
+
   const model = createChatModel({
     kind: 'openai-compat', name: 'openrouter',
     baseURL: `http://localhost:${server.port}/v1`,
     headers: { Authorization: 'Bearer test' }, modelId: 'test-model',
   });
+
   const tools: ToolSet = {
     run: tool({
       description: 'shell',
@@ -70,8 +75,10 @@ async function driveTurn(
       execute: async ({ command }: { command: string }) => `ran: ${command}`,
     }),
   };
+
   const events: ChatEvent[] = [];
   let threw: Error | null = null;
+
   try {
     for await (const ev of runChat({
       model, system: 'sys', history: [{ role: 'user', content: 'go' }],
@@ -87,6 +94,7 @@ async function driveTurn(
   } finally {
     await server.stop(true);
   }
+
   return { events, threw, done: events.find((e) => e.type === 'done') };
 }
 
@@ -109,6 +117,7 @@ describe('dead provider stream fails the turn', () => {
       JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 } }),
       '[DONE]',
     ]), { headers: SSE_HEADERS }));
+
     expect(threw).toBeNull();
     expect(done && done.type === 'done' ? done.text : '').toContain('answer');
   });
@@ -118,6 +127,7 @@ describe('dead provider stream fails the turn', () => {
       JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 20, completion_tokens: 0, total_tokens: 20 } }),
       '[DONE]',
     ]), { headers: SSE_HEADERS }));
+
     expect(threw).toBeNull();
     expect(done?.type).toBe('done');
   });
@@ -168,6 +178,7 @@ describe('a stream has no elapsed deadline', () => {
     const started = Promise.withResolvers<void>();
     const enc = new TextEncoder();
     let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+
     const pending = driveTurn(() => new Response(new ReadableStream({
       start(c) {
         controller = c;
@@ -177,6 +188,7 @@ describe('a stream has no elapsed deadline', () => {
         started.resolve();
       },
     }), { headers: SSE_HEADERS }));
+
     let settled = false;
     const settledPending = pending.finally(() => { settled = true; });
 
@@ -201,6 +213,7 @@ describe('a stream has no elapsed deadline', () => {
     const sawPartial = Promise.withResolvers<void>();
     const enc = new TextEncoder();
     const abort = new AbortController();
+
     const pending = driveTurn(() => new Response(new ReadableStream({
       start(controller) {
         controller.enqueue(enc.encode(sse([
@@ -214,6 +227,7 @@ describe('a stream has no elapsed deadline', () => {
         if (event.type === 'text-delta' && event.delta.includes('partial work')) sawPartial.resolve();
       },
     });
+
     await started.promise;
     await sawPartial.promise;
     abort.abort(new Error('cancelled by user'));

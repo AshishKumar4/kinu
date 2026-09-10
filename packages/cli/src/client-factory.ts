@@ -37,6 +37,7 @@ export async function createAgentClient(
   if (target.mode === 'cloud') {
     rejectLocalLlmFlags(opts);
     const auth = requireAuthConfig();
+
     return new CloudAgentClient({
       origin: auth.origin,
       token: auth.token,
@@ -46,10 +47,12 @@ export async function createAgentClient(
       oneShot: opts.oneShot,
     });
   }
+
   // The one local resolution: the database, and the project directory every
   // peer agent in this virtual workspace shares. Binding the planes to the
   // recorded placement is what stops them following the invocation directory.
   const local = resolveLocalAgent(target.requestedName);
+
   return openLocalAgentClient(local.name, {
     model: opts.model,
     baseUrl: opts.baseUrl,
@@ -69,9 +72,11 @@ function rejectLocalLlmFlags(opts: AgentClientFlags): void {
       '  Change a cloud workspace with: kinu model <workspace> <spec> (or /model in chat).',
     );
   }
+
   if (opts.baseUrl || opts.auth) {
     throw new Error('--base-url and --auth apply to local workspaces only.');
   }
+
   if (opts.noAutoEvolve) {
     throw new Error('--no-auto-evolve applies to local workspaces; cloud turns run under the workspace\'s own evolution settings.');
   }

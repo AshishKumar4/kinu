@@ -28,13 +28,16 @@ export function buildCfWebSearchProvider(
   reportModelCall?: ModelCallSink,
 ): WebSearchProvider {
   const ai = env.AI;
+
   const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
     fetch: globalThis.fetch,
     getAuth: async (key, opts) => {
       const auth = resolveAuth();
+
       return auth ? auth(key, opts) : null;
     },
   };
+
   if (ai) {
     options.htmlToMarkdown = async (html: string, opts?: { url?: string }) => {
       const name = (opts?.url ?? "page") + ".html";
@@ -46,8 +49,10 @@ export function buildCfWebSearchProvider(
       // silently drops a whole producer is the thing that cannot be trusted.
       reportModelCall?.({ source: "platform", usage: {}, modelId: "toMarkdown" });
       const converted = out[0];
+
       return converted?.format === "markdown" ? converted.data : "";
     };
   }
+
   return createDefaultWebSearchProvider(options);
 }

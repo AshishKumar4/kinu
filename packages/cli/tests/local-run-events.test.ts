@@ -13,6 +13,7 @@ import { makeSql } from '@kinu.run/cli-backend';
 import { createTestActor } from '../../core/tests/helpers';
 
 const tempDirs: string[] = [];
+
 const repoRoot = resolve(__dirname, '../../..');
 
 afterEach(() => {
@@ -27,11 +28,13 @@ function readLocal(expression: string): JsonValue {
   mkdirSync(join(home, 'jarvis'), { recursive: true });
   const db = new Database(join(home, 'jarvis', 'agent.db'));
   const execRaw = (ddl: string) => { db.exec(ddl); };
+
   initRunEventTables(execRaw);
   // The reader resolves this store's own main actor, and `run_events` is scoped
   // by it, so the seed registers a real workspace identity rather than only
   // creating the table.
   const actor = createTestActor(makeSql(db), execRaw, 'run-events-workspace', 'jarvis');
+
   const row = (index: number, type: string, extra: JsonObject = {}) => {
     const ts = new Date(1_700_000_000_000 + index * 1000).toISOString();
     const payload = { ...extra, type, eventIndex: index, runId: 'run-1', timestamp: ts };
@@ -39,6 +42,7 @@ function readLocal(expression: string): JsonValue {
       VALUES (?, ?, ?, ?, ?, ?)`)
       .run(actor.actorId, 'run-1', index, type, JSON.stringify(payload), ts);
   };
+
   row(0, 'run_start', { agentId: 'jarvis', caused_by: 'chat', userMessage: 'hi' });
   row(1, 'tool_call_end', { name: 'run', toolCallId: 'tc-1', result: 'ok' });
   row(2, 'run_end', { reason: 'completed' });
@@ -47,6 +51,7 @@ function readLocal(expression: string): JsonValue {
   const script =
     `import * as m from './packages/cli/src/local-inspection.ts';` +
     `console.log(JSON.stringify(${expression}));`;
+
   const proc = Bun.spawnSync({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
@@ -54,7 +59,9 @@ function readLocal(expression: string): JsonValue {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+
   return parseJsonValue(proc.stdout.toString());
 }
 

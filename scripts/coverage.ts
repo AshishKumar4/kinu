@@ -102,11 +102,14 @@ function allBunSuites(): string[] {
  */
 function bunGroups(): SuiteGroup[] {
   const buckets = new Map<string, string[]>();
+
   for (const suite of allBunSuites()) {
     const parts = suite.split('/');
+
     const owner = suite.startsWith('packages/') ? parts[1] ?? 'packages'
       : suite.startsWith('scripts/') ? 'scripts'
         : 'tests';
+
     // ONE exception to owner-grouping, and it is measured rather than stylistic.
     // `bun test --coverage` over all 62 `packages/cli` suites dies with
     // `panic(main thread): Segmentation fault` (exit 139, Bun 1.4.0, reproduced
@@ -119,9 +122,11 @@ function bunGroups(): SuiteGroup[] {
     // survives; the group boundary has no other reason to exist.
     const label = owner === 'cli' && suite.endsWith('.tsx') ? 'cli-tsx' : owner;
     const bucket = buckets.get(label);
+
     if (bucket === undefined) buckets.set(label, [suite]);
     else bucket.push(suite);
   }
+
   return [...buckets.entries()]
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([label, suites]) => ({
@@ -196,6 +201,7 @@ interface UninstrumentedGroup {
  *  disappears while the number keeps moving. */
 function uninstrumentedGroups(): readonly UninstrumentedGroup[] {
   const tracked = trackedTestFiles();
+
   return [
     {
       label: 'anti-slop rule suites (node)',
@@ -226,6 +232,7 @@ interface RunnerOutcome {
 function run(argv: readonly string[], cwd: string): RunnerOutcome {
   const started = performance.now();
   const proc = Bun.spawnSync([...argv], { cwd, stdout: 'inherit', stderr: 'inherit' });
+
   return { seconds: (performance.now() - started) / 1000, ok: proc.exitCode === 0 };
 }
 
@@ -234,6 +241,7 @@ function run(argv: readonly string[], cwd: string): RunnerOutcome {
  *  naive merge would produce a second tree the HTML report cannot place. */
 function reanchor(record: LcovRecord, vitestRoot: string): LcovRecord {
   if (record.file.startsWith('/') || record.file.includes('..')) return record;
+
   return { ...record, file: `${vitestRoot}/${record.file}` };
 }
 
@@ -241,7 +249,9 @@ function reanchor(record: LcovRecord, vitestRoot: string): LcovRecord {
  *  `scripts` / `tests` for the root suites. */
 function packageOf(file: string): string {
   if (file.startsWith('packages/')) return file.split('/')[1] ?? 'packages';
+
   if (file.startsWith('scripts/')) return 'scripts';
+
   return 'tests';
 }
 
@@ -294,6 +304,7 @@ function isRepositoryFile(file: string): boolean {
  *  inlined so the report works from a file:// URL with no server. */
 function renderHtml(records: readonly LcovRecord[], outDir: string): void {
   mkdirSync(outDir, { recursive: true });
+
   const esc = (s: string): string =>
     s.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 
@@ -302,6 +313,7 @@ function renderHtml(records: readonly LcovRecord[], outDir: string): void {
     .sort((a, b) => a.file.localeCompare(b.file))
     .map((record) => {
       const c = tally(record);
+
       return `<tr><td><a href="${encodeURIComponent(record.file)}.html">${esc(record.file)}</a></td>`
         + `<td class="num">${pct(c.linesHit, c.linesFound)}</td>`
         + `<td class="num">${pct(c.functionsHit, c.functionsFound)}</td>`
@@ -336,6 +348,7 @@ ${rows}
   // Per-file source pages with per-line hit markers.
   for (const record of records) {
     const page = filePage(record, esc);
+
     if (page === undefined) continue;
     const target = join(outDir, `${record.file}.html`);
     mkdirSync(resolve(target, '..'), { recursive: true });
@@ -345,20 +358,27 @@ ${rows}
 
 function filePage(record: LcovRecord, esc: (s: string) => string): string | undefined {
   const abs = join(ROOT, record.file);
+
   if (!existsSync(abs)) return undefined;
   const source = readFileSync(abs, 'utf8').split('\n');
   const hits = new Map<number, number>();
+
   for (const da of record.lines.data) hits.set(da.line, da.count);
+
   const body = source
     .map((line, index) => {
       const count = hits.get(index + 1);
+
       const mark = count === undefined
         ? '<span class="n">    </span>'
         : count > 0 ? '<span class="y">' + String(count).padStart(4) + '</span>' : '<span class="m">####</span>';
+
       return `<tr><td class="ln">${index + 1}</td><td class="mk">${mark}</td><td class="src">${esc(line)}</td></tr>`;
     })
     .join('\n');
+
   const c = tally(record);
+
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(record.file)}</title>
 <style>
  body{font-family:ui-monospace,monospace;margin:1rem}
@@ -387,6 +407,7 @@ function writeSummaryJson(
       branches: { hit: t.branchesHit, found: t.branchesFound, pct: t.branchesFound === 0 ? null : Number(((t.branchesHit / t.branchesFound) * 100).toFixed(2)) },
     }))
     .sort((a, b) => a.package.localeCompare(b.package));
+
   const payload = {
     generatedAt: new Date().toISOString(),
     totalWallSeconds: Number(seconds.toFixed(1)),
@@ -394,6 +415,7 @@ function writeSummaryJson(
     runnerGroups: groups.map((g) => ({ label: g.label, suites: g.suites.length })),
     groupsWithoutCoverageData: withoutLcov,
   };
+
   writeFileSync(join(ROOT, 'coverage', 'summary.json'), `${JSON.stringify(payload, null, 2)}\n`);
 }
 
@@ -404,6 +426,7 @@ async function main(): Promise<number> {
   // where the defects live, and a 32-minute suite re-run to test a renderer is
   // how a report stops being tested at all.
   const mergeOnly = process.argv.includes('--merge-only');
+
   if (!mergeOnly) {
     rmSync(join(ROOT, 'coverage'), { recursive: true, force: true });
     mkdirSync(join(ROOT, 'coverage'), { recursive: true });
@@ -415,17 +438,22 @@ async function main(): Promise<number> {
   console.log(mergeOnly
     ? '→ coverage: merge and report only, over the lcov files already on disk\n'
     : '→ coverage over the union of claimed suites\n');
+
   for (const group of groups) {
     if (mergeOnly) {
       if (!existsSync(join(ROOT, group.lcovPath))) {
         failures.push(`${group.label}: no lcov at ${group.lcovPath}`);
       }
+
       continue;
     }
+
     console.log(`── ${group.label}  (${group.suites.length} suites)`);
     const { seconds, ok } = run(group.argv, group.cwd);
     console.log(`   ${ok ? 'ok' : 'FAILED'}  ${group.label}  (${seconds.toFixed(1)}s)\n`);
+
     if (!ok) failures.push(group.label);
+
     if (!existsSync(join(ROOT, group.lcovPath))) {
       // A runner that passes but writes no lcov is a coverage number made of
       // nothing; fail the command rather than merging absence.
@@ -440,12 +468,15 @@ async function main(): Promise<number> {
    *  still shows a percentage from other groups' transitive imports, and that
    *  number read as the package's coverage would be a lie. */
   const withoutLcov: string[] = [];
+
   for (const group of groups) {
     const path = join(ROOT, group.lcovPath);
+
     if (!existsSync(path)) {
       withoutLcov.push(group.label);
       continue;
     }
+
     const records = parseLcov(readFileSync(path, 'utf8')).filter((r) => isRepositoryFile(r.file));
     const vitestRoot = group.vitestRoot;
     const anchored = vitestRoot === undefined ? records : records.map((r) => reanchor(r, vitestRoot));
@@ -453,12 +484,14 @@ async function main(): Promise<number> {
     merged.length = 0;
     merged.push(...mergedRecords);
   }
+
   for (const record of merged) {
     const pkg = packageOf(record.file);
     const t = tally(record);
     const prior = pkgTallies.get(pkg);
     pkgTallies.set(pkg, prior === undefined ? t : mergeTally(prior, t));
   }
+
   // A merged artifact over no file records is a coverage number made of
   // nothing. Every group can pass while writing an empty lcov, so the merge
   // itself is what has to refuse it — the same liveness rule
@@ -477,6 +510,7 @@ async function main(): Promise<number> {
   console.log('│ package                                    │  lines │  funcs  │ branches │  files  │');
   console.log('├────────────────────────────────────────────┼────────┼─────────┼──────────┼─────────┤');
   const total = { linesHit: 0, linesFound: 0, functionsHit: 0, functionsFound: 0, branchesHit: 0, branchesFound: 0, files: 0 };
+
   for (const [pkg, t] of [...pkgTallies.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
     console.log(
       `│ ${pkg.padEnd(42)} │ ${pct(t.linesHit, t.linesFound)} │ ${pct(t.functionsHit, t.functionsFound)} │ ${pct(t.branchesHit, t.branchesFound)} │ ${String(merged.filter((r) => packageOf(r.file) === pkg).length).padStart(7)} │`,
@@ -486,6 +520,7 @@ async function main(): Promise<number> {
     total.branchesHit += t.branchesHit; total.branchesFound += t.branchesFound;
     total.files += merged.filter((r) => packageOf(r.file) === pkg).length;
   }
+
   console.log('├────────────────────────────────────────────┼────────┼─────────┼──────────┼─────────┤');
   console.log(
     `│ ${'TOTAL'.padEnd(42)} │ ${pct(total.linesHit, total.linesFound)} │ ${pct(total.functionsHit, total.functionsFound)} │ ${pct(total.branchesHit, total.branchesFound)} │ ${String(total.files).padStart(7)} │`,
@@ -497,7 +532,9 @@ async function main(): Promise<number> {
     .filter(({ t }) => t.linesFound > 0)
     .sort((a, b) => (a.t.linesHit / a.t.linesFound) - (b.t.linesHit / b.t.linesFound))
     .slice(0, 25);
+
   console.log('25 least-covered source files by line %:');
+
   for (const { record, t } of worst) {
     console.log(
       `  ${pct(t.linesHit, t.linesFound)}  ${String(t.linesFound).padStart(4)} lines  ${record.file}`,
@@ -505,9 +542,11 @@ async function main(): Promise<number> {
   }
 
   console.log('\nnot instrumented (named, never silently absent):');
+
   for (const group of uninstrumented) {
     console.log(`  ${group.label} — ${group.suites.length} suites: ${group.why}`);
   }
+
   if (withoutLcov.length > 0) {
     console.log('\nNO COVERAGE DATA — these groups produced no lcov, so their package rows above');
     console.log('carry only what OTHER groups imported transitively. Do not read those as the');
@@ -521,8 +560,10 @@ async function main(): Promise<number> {
 
   if (failures.length > 0) {
     console.error(`\nFAILED groups: ${failures.join('; ')}`);
+
     return 1;
   }
+
   return 0;
 }
 

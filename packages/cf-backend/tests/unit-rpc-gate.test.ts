@@ -32,12 +32,16 @@ function rpcFrame(method: string, id = 'req-1'): string {
 
 function scopeTag(scopes: string): string {
   const tag = cliScopesConnectionTag(scopes);
+
   if (!tag) throw new Error(`Expected a connection tag for scopes: ${scopes}`);
+
   return tag;
 }
 
 const RpcErrorFrameSchema = v.object({ error: v.string() });
+
 const EXEC_ONLY = [scopeTag('workspace.exec')];
+
 const READ_EXEC = [scopeTag('workspace.read,workspace.exec')];
 
 describe('connect-ticket scope tags', () => {
@@ -103,6 +107,7 @@ describe('rpc gate on scoped connections', () => {
       init: { method: 'POST', body: '{"messages":[]}' },
       type: 'cf_agent_use_chat_request',
     });
+
     expect(rejectOutOfScopeRpc(READ_EXEC, chat)).toBeNull();
     expect(rejectOutOfScopeRpc(READ_EXEC, JSON.stringify({ type: 'cf_agent_chat_request_cancel', id: 'turn-1' }))).toBeNull();
     expect(rejectOutOfScopeRpc(READ_EXEC, new ArrayBuffer(4))).toBeNull();
@@ -254,13 +259,17 @@ describe('the table is the CLI dispatch allowlist, not documentation', () => {
   function cliInvokedNames(): string[] {
     const files = readdirSync(CLI_SRC, { recursive: true, encoding: 'utf8' })
       .filter((file) => file.endsWith('.ts') || file.endsWith('.tsx'));
+
     const names = new Set<string>();
+
     for (const file of files) {
       const src = readFileSync(join(CLI_SRC, file), 'utf8');
+
       for (const call of src.matchAll(/\b\w*[Rr]pc\w*\s*(?:<[^>]*>)?\s*\(([^()]*?)\)/gs)) {
         for (const literal of call[1].matchAll(/'([A-Za-z][A-Za-z0-9_]*)'/g)) names.add(literal[1]);
       }
     }
+
     return [...names];
   }
 

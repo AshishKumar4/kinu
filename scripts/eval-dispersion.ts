@@ -25,14 +25,23 @@ function usage(): never {
 }
 
 const args = process.argv.slice(2);
+
 const files = args.filter((a) => !a.startsWith('--'));
+
 if (files.length !== 2) usage();
+
 const targetIdx = args.indexOf('--target-pp');
+
 const targetPp = targetIdx === -1 ? 20 : Number(args[targetIdx + 1]);
+
 const [fileA, fileB] = files;
+
 if (fileA === undefined || fileB === undefined) usage();
+
 const a = readRunRecord(fileA);
+
 const b = readRunRecord(fileB);
+
 if (a.arm.evolution !== b.arm.evolution || a.arm.settle !== b.arm.settle) {
   console.error(
     'REFUSED: these are different arms, so their difference is an EFFECT and not this '
@@ -44,8 +53,10 @@ if (a.arm.evolution !== b.arm.evolution || a.arm.settle !== b.arm.settle) {
 }
 
 const comparison = compareRuns(a, b);
+
 if (!comparison.comparable) {
   console.error('REFUSED: the two runs are not comparable, so they measure no dispersion:');
+
   for (const r of comparison.refusals) console.error(`  ${r.field}: ${r.detail}`);
   process.exit(1);
 }
@@ -57,17 +68,26 @@ if (!comparison.comparable) {
 // implementation, which is exactly what `packages/core/src/bench/stats.ts` is
 // the one home for.
 const psi = comparison.headline.dispersion;
+
 const tasks = comparison.headline.pairs;
+
 console.log('\n── corpus dispersion (one arm, twice) ──────────────────');
+
 console.log(`runs:      ${a.runId} vs ${b.runId}`);
+
 console.log(`arm:       evolution ${a.arm.evolution ? 'ON' : 'OFF'}, settle ${a.arm.settle}, `
   + `${String(a.arm.tools.length)} tools`);
+
 console.log(`model:     ${a.modelId}`);
+
 console.log(`tasks:     ${String(tasks)} paired, ${String(a.repeats)} repeats each`);
+
 console.log(`differing: ${String(comparison.headline.discordant)} of ${String(tasks)} tasks`);
+
 console.log(`\nMEASURED psi = ${psi.toFixed(4)}  (mean squared per-task difference)`);
 
 const floorPairs = minimumPairsForSignificance();
+
 if (psi === 0) {
   console.log(
     `\nMDE: UNRESOLVABLE. psi = 0 means the two runs of the SAME arm agreed on every one of\n`
@@ -85,4 +105,5 @@ if (psi === 0) {
   console.log(`resolving ${String(targetPp)}pp needs ${String(needed)} tasks; `
     + `the significance floor needs ${String(floorPairs)} DIFFERING pairs.`);
 }
+
 console.log('───────────────────────────────────────────────────────\n');

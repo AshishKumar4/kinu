@@ -110,9 +110,12 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
       });
       this.ready = true;
     }
+
     const main = this.main;
     const scout = this.scout;
+
     if (main === undefined || scout === undefined) throw new Error('the probe workspace was not opened');
+
     return { main, scout };
   }
 
@@ -136,14 +139,18 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
     const actors = this.open();
     const actor = as === 'main' ? actors.main : actors.scout;
     const provider: CodemodeProvider = createDbCodemodeProvider(this.store(actor));
+
     const tool = createCodeTool({
       description: 'probe',
       tools: [provider],
       executor: new KinuSandboxExecutor({ loader: this.env.LOADER, egress: null }),
     });
+
     const execute = tool.execute;
+
     if (execute === undefined) throw new Error('the codemode tool is not callable');
     const answer = await execute({ code }, { toolCallId: 'db-probe', messages: [] });
+
     return {
       answer: JSON.stringify(answer ?? null),
       rows: this.rows(),
@@ -157,7 +164,9 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
   private rows(): readonly { readonly actor: string; readonly key: string }[] {
     const present = this.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${'app_ledger'}`;
+
     if (present.length === 0) return [];
+
     return this.sql<{ actor: string; key: string }>`
       SELECT actor_id AS actor, "key" AS key FROM app_ledger ORDER BY actor_id, "key"`;
   }
@@ -181,19 +190,23 @@ export class DbCapabilityProbeDO extends DurableObject<Cloudflare.Env> {
   async staleActor(): Promise<string> {
     this.open();
     let live = true;
+
     const stale = bindActorHandle(this.sql, {
       actorId: 'actor-gone', workspaceId: 'ws-db-probe', parentActorId: null,
       name: 'gone', storageKey: 'agent:gone',
     }, () => {
       if (!live) throw new Error('actor actor-gone is no longer bound');
     });
+
     const store = this.store(stale);
     store.createTable({
       name: 'ledger', scope: 'actor', columns: [{ name: 'key', type: 'text', primaryKey: true }],
     });
     live = false;
+
     try {
       store.apply({ op: 'insert', table: 'ledger', rows: [{ key: 'after-dismissal' }] });
+
       return 'the write was admitted';
     }
     catch (cause) {

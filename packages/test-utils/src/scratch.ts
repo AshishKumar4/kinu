@@ -105,6 +105,7 @@ export const SCRATCH_ROOT_PREFIX = 'kinu-scratch-';
 
 /** Directories this process minted and still owns. */
 const minted = new Set<string>();
+
 /**
  * Remove everything this run minted, and SAY SO when a removal did not happen.
  *
@@ -120,12 +121,16 @@ const minted = new Set<string>();
 export function releaseScratch(): number {
   let removed = 0;
   const held: string[] = [];
+
   for (const dir of minted) {
     rmSync(dir, { recursive: true, force: true });
+
     if (existsSync(dir)) held.push(dir);
     else removed += 1;
   }
+
   minted.clear();
+
   if (held.length > 0) {
     throw new Error(
       `scratch not released: ${held.join(', ')} survived rmSync, which reports success when `
@@ -133,6 +138,7 @@ export function releaseScratch(): number {
       + 'before the run ends.',
     );
   }
+
   return removed;
 }
 
@@ -159,6 +165,7 @@ export function releaseScratch(): number {
 export function scratchDir(label: string): string {
   const dir = mkdtempSync(join(tmpdir(), `${SCRATCH_ROOT_PREFIX}${label}-`));
   minted.add(dir);
+
   return dir;
 }
 

@@ -57,6 +57,7 @@ export const ROOT_DELEGATION_BUDGET: DelegationBudget = {
  *  reads as the root instead of inflating room past the cap. */
 export function delegationBudgetAtDepth(depth: number): DelegationBudget {
   const safeDepth = Math.max(0, depth);
+
   return { depth: safeDepth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - safeDepth) };
 }
 

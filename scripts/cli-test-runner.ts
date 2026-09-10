@@ -20,17 +20,25 @@ process.env.KINU_SKIP_DAEMON = "1";
 
 // Provide dummy LLM config so resolveLLMConfig() doesn't throw.
 process.env.KINU_BASE_URL = process.env.KINU_BASE_URL ?? "http://localhost:5173/workers-ai/v1";
+
 process.env.KINU_AUTH = process.env.KINU_AUTH ?? "Bearer test";
+
 process.env.KINU_MODEL = process.env.KINU_MODEL ?? "@cf/deepseek-ai/deepseek-v4-pro-0813";
 
 const TEST_ROOT = mkdtempSync(join(tmpdir(), "kinu-cli-e2e-home-"));
+
 process.env.KINU_HOME = TEST_ROOT;
+
 const AGENT_HOME = TEST_ROOT;
+
 const AGENT_NAME = `e2e-cli-${Date.now()}`;
+
 const IMPORT_NAME = `e2e-import-${Date.now()}`;
+
 const EXPORT_DIR = mkdtempSync(join(tmpdir(), "kinu-cli-e2e-"));
 
 let passCount = 0;
+
 let failCount = 0;
 
 function pass(name: string, detail?: string) {
@@ -67,6 +75,7 @@ async function testCreate() {
     await createCommand(AGENT_NAME, { mode: "local", purpose: "E2E test agent for automated testing" });
   } catch (error) {
     fail("kinu create", errorMessage(error));
+
     return;
   }
 
@@ -84,6 +93,7 @@ async function testCreate() {
     if (code === 1) dupFailed = true;
     throw new Error(`process.exit(${String(code)})`);
   };
+
   try {
     await createCommand(AGENT_NAME, { mode: "local", purpose: "dupe" });
   } catch (error) {
@@ -140,6 +150,7 @@ async function testStatus() {
     console.log = origLog;
 
     const lower = output.toLowerCase();
+
     if (lower.includes("purpose") || output.includes(AGENT_NAME) || lower.includes("scaffold")) {
       pass("kinu status", "shows agent info");
     } else if (output.length > 0) {
@@ -165,11 +176,13 @@ async function testExportImport() {
     await exportCommand(AGENT_NAME, { output: exportPath });
   } catch (error) {
     fail("kinu export", errorMessage(error));
+
     return;
   }
 
   if (existsSync(exportPath)) {
     const size = statSync(exportPath).size;
+
     if (size > 0) {
       pass("kinu export", `${size} bytes`);
     } else {
@@ -184,10 +197,12 @@ async function testExportImport() {
     await importCommand(exportPath, { name: IMPORT_NAME });
   } catch (error) {
     fail("kinu import", errorMessage(error));
+
     return;
   }
 
   const importedDb = join(AGENT_HOME, IMPORT_NAME, "agent.db");
+
   if (existsSync(importedDb)) {
     pass("kinu import", `imported as '${IMPORT_NAME}'`);
   } else {
@@ -203,14 +218,17 @@ async function testDbIntegrity() {
 
   if (!existsSync(dbPath)) {
     fail("DB integrity", "agent.db missing");
+
     return;
   }
 
   const db = new Database(dbPath, { readonly: true });
+
   try {
     const tables = db.query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).all();
+
     const tableNames = tables.map(t => t.name);
 
     // `inodes` is the workspace filesystem's own table (Nimbus). The agent's
@@ -231,10 +249,13 @@ async function testDbIntegrity() {
     const soulFile = db.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM inodes WHERE path LIKE '%SOUL.md'",
     ).get();
+
     const mission = db.query<{ mission: string }, []>(
       "SELECT mission FROM workspace_identity LIMIT 1",
     ).get();
+
     const missionText = mission?.mission ?? "";
+
     if ((soulFile?.n ?? 0) > 0 && missionText.includes("E2E test agent")) {
       pass("DB SOUL.md", `file present, mission: "${missionText}"`);
     } else {
@@ -244,6 +265,7 @@ async function testDbIntegrity() {
     const identity = db.query<{ name: string }, []>(
       "SELECT name FROM workspace_identity LIMIT 1",
     ).get();
+
     if (identity?.name === AGENT_NAME) {
       pass("DB workspace_identity", `name: "${identity.name}"`);
     } else {

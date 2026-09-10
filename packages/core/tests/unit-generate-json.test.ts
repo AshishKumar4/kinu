@@ -11,6 +11,7 @@ function modelReturning(text: string, capture?: (options: { maxOutputTokens?: nu
   return new MockLanguageModelV3({
     doGenerate: async (options) => {
       capture?.(options);
+
       return {
         content: [{ type: "text", text }],
         finishReason: { unified: "stop" as const, raw: undefined },

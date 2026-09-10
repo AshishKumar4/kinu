@@ -26,8 +26,10 @@ import { ActorReferenceSchema, sameActorReference, type ActorReference } from '.
 import { SubordinateBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
+
 const ROSTER_COLUMNS =
   'actor_id, name, created_by, status, current_task, created_at, dismissed_at, lifetime, task_event_id, actor_reference, birth_request, delete_requested';
+
 const ROSTER_PROJECTION =
   'name, created_by AS createdBy, status, current_task AS currentTask, '
   + 'created_at AS createdAt, dismissed_at AS dismissedAt, '
@@ -61,6 +63,7 @@ export const SubordinateRosterEntrySchema = v.object({
   lifetime: v.picklist(SUBORDINATE_LIFETIMES),
   taskEventId: v.nullable(v.string()),
 }) satisfies v.GenericSchema<SubordinateRosterEntry>;
+
 const StoredRosterEntrySchema = v.object({
   ...SubordinateRosterEntrySchema.entries, actorReference: v.nullable(v.string()), birth: v.nullable(v.string()),
   deleteRequested: v.pipe(v.union([v.literal(0), v.literal(1)]), v.transform((value) => value === 1)),
@@ -69,6 +72,7 @@ const StoredRosterEntrySchema = v.object({
 function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
   try {
     const stored = v.parse(StoredRosterEntrySchema, row);
+
     return v.parse(SubordinateRosterEntrySchema, {
       ...stored, actorReference: stored.actorReference === null ? null : parseJsonValue(stored.actorReference),
       birth: stored.birth === null ? null : parseJsonValue(stored.birth),
@@ -159,7 +163,9 @@ export class SubordinateRosterStore {
 
   attachActor(name: string, creationId: string, reference: ActorReference): void {
     const row = this.requireExisting(name);
+
     if (row.birth?.creationId !== creationId) throw new KinuError('denied', 'The birth admission no longer owns this roster name.');
+
     if (row.actorReference !== null && !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The roster actor reference is immutable.');
     const child = v.parse(ActorReferenceSchema, reference);
     this.sql.exec('UPDATE actor_subordinates SET actor_reference = ? WHERE actor_id = ? AND name = ?',
@@ -168,6 +174,7 @@ export class SubordinateRosterStore {
 
   finishBirth(name: string, creationId: string): void {
     const row = this.requireExisting(name);
+
     if (row.birth?.creationId !== creationId || row.actorReference === null) throw new KinuError('denied', 'The birth admission cannot complete this roster row.');
     this.sql.exec('UPDATE actor_subordinates SET birth_request = NULL WHERE actor_id = ? AND name = ?',
       this.actorId, name);
@@ -175,23 +182,28 @@ export class SubordinateRosterStore {
 
   pendingBirths(): SubordinateRosterEntry[] {
     this.actor.assertCurrent();
+
     return this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND birth_request IS NOT NULL ORDER BY created_at, name`, this.actorId).toArray().map(parseStoredRosterRow);
   }
 
   hasPendingBirths(): boolean {
     this.actor.assertCurrent();
+
     return this.sql.exec('SELECT name FROM actor_subordinates WHERE actor_id = ? AND birth_request IS NOT NULL LIMIT 1', this.actorId).toArray().length > 0;
   }
 
   requestDeletion(name: string, reference: ActorReference, now: number): void {
     const row = this.requireExisting(name);
+
     if (!row.actorReference || !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The deletion request does not own this roster row.');
     this.sql.exec(`UPDATE actor_subordinates SET status = 'dismissed', dismissed_at = ?, delete_requested = 1 WHERE actor_id = ? AND name = ?`, now, this.actorId, name);
   }
 
   removeActor(name: string, reference: ActorReference): void {
     const row = this.get(name);
+
     if (!row) return;
+
     if (!row.actorReference || !sameActorReference(row.actorReference, reference)) throw new KinuError('denied', 'The deletion cannot remove a replacement actor.');
     this.sql.exec(`DELETE FROM actor_subordinates WHERE actor_id = ? AND name = ?
       AND json_extract(actor_reference, '$.actorId') = ? AND json_extract(actor_reference, '$.workspaceId') = ?
@@ -207,11 +219,13 @@ export class SubordinateRosterStore {
 
   pendingDeletions(): SubordinateRosterEntry[] {
     this.actor.assertCurrent();
+
     return this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND delete_requested = 1 ORDER BY created_at, name`, this.actorId).toArray().map(parseStoredRosterRow);
   }
 
   hasPendingDeletions(): boolean {
     this.actor.assertCurrent();
+
     return this.sql.exec('SELECT name FROM actor_subordinates WHERE actor_id = ? AND delete_requested = 1 LIMIT 1', this.actorId).toArray().length > 0;
   }
   remove(name: string): void {
@@ -221,27 +235,34 @@ export class SubordinateRosterStore {
 
   get(name: string): SubordinateRosterEntry | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? AND name = ?`,
       this.actorId, name,
     ).toArray();
+
     return rows.length === 0 ? null : parseStoredRosterRow(rows[0]);
   }
 
   requireExisting(name: string): SubordinateRosterEntry {
     const entry = this.get(name);
+
     if (!entry) throw new Error(`unknown subordinate "${name}"`);
+
     return entry;
   }
 
   requireActive(name: string): SubordinateRosterEntry {
     const entry = this.requireExisting(name);
+
     if (entry.status === 'dismissed') throw new Error(`subordinate "${name}" is dismissed`);
+
     return entry;
   }
 
   list(): SubordinateRosterEntry[] {
     this.actor.assertCurrent();
+
     return this.sql.exec(
       `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
        WHERE actor_id = ? AND status != 'dismissed' ORDER BY created_at, name`,
@@ -251,6 +272,7 @@ export class SubordinateRosterStore {
 
   listAll(): SubordinateRosterEntry[] {
     this.actor.assertCurrent();
+
     return this.sql.exec(
       `SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? ORDER BY created_at, name`,
       this.actorId,
@@ -263,12 +285,15 @@ export class SubordinateRosterStore {
     const limit = boundedInt(request.limit, 50, 1, 200);
     const after = request.cursor?.after;
     const anchor = after === undefined ? null : this.get(after);
+
     if (after !== undefined && anchor === null) throw new StaleCursorError('subordinate roster', after);
+
     const rows = anchor
       ? this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates
           WHERE actor_id = ? AND (created_at > ? OR (created_at = ? AND name > ?))
           ORDER BY created_at, name LIMIT ?`, this.actorId, anchor.createdAt, anchor.createdAt, anchor.name, limit + 1)
       : this.sql.exec(`SELECT ${ROSTER_PROJECTION} FROM actor_subordinates WHERE actor_id = ? ORDER BY created_at, name LIMIT ?`, this.actorId, limit + 1);
+
     return seekPage(rows.toArray().map(parseStoredRosterRow), limit, (row) => row.name);
   }
 
@@ -300,6 +325,7 @@ export class SubordinateRosterStore {
 
   resumeAfterMessage(name: string): void {
     const entry = this.requireActive(name);
+
     if (entry.status !== 'awaiting_input') return;
     this.sql.exec(
       `UPDATE actor_subordinates SET status = 'working' WHERE actor_id = ? AND name = ?`,
@@ -329,12 +355,15 @@ export class SubordinateRosterStore {
     now: number,
   ): void {
     const entry = this.requireActive(name);
+
     // The SAME predicate the port settles on, so the two paths cannot disagree
     // about which report was the answer.
     if (entry.lifetime === TEMPORARY_LIFETIME && temporaryRunSettles({ status, origin })) {
       this.dismiss(name, now);
+
       return;
     }
+
     const rosterStatus: SubordinateStatus = status === 'completed'
       ? 'idle'
       : status === 'blocked'
@@ -342,6 +371,7 @@ export class SubordinateRosterStore {
         : entry.currentTask
           ? 'working'
           : 'idle';
+
     this.sql.exec(
       `UPDATE actor_subordinates
        SET status = ?,

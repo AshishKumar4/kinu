@@ -55,6 +55,7 @@ import {
 } from './first-run';
 
 const SUITE = 'First-run · codemode-craft';
+
 const CASE = 'codemode-craft' as const;
 
 /**
@@ -67,6 +68,7 @@ const CASE = 'codemode-craft' as const;
  * with no branch or accumulator cannot answer it.
  */
 const INPUT = '4827516390';
+
 /** 4+8+2+7+5+1+6+3+9+0 = 45, computed here, in this file, from the string
  *  above — never read back off the deployment. */
 const ANSWER = [...INPUT].reduce((sum, digit) => sum + Number(digit), 0);
@@ -85,7 +87,9 @@ const ASK = 'Build yourself a small reusable tool that adds up the digits of a n
   + 'Do the arithmetic with the tool rather than in your head.';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
+
 const liveTest = test.skipIf(PLAN === null);
+
 const observations: EvalObservation[] = [];
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
@@ -128,6 +132,7 @@ describe(SUITE, () => {
           // it is the call. The result is searched too, because a program that
           // printed the tool's output names it there.
           const text = JSON.stringify({ args: call.args ?? null, result: call.result ?? null });
+
           return names.some((name) => text.includes(`tools.${name}(`));
         });
 
@@ -168,6 +173,7 @@ describe(SUITE, () => {
               + JSON.stringify(reply.slice(0, 240)),
           },
         ];
+
         return subgoals;
       },
     }, observations);

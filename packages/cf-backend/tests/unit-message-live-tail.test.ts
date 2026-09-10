@@ -17,14 +17,19 @@ type Part = UIMessage['parts'][number];
 
 function tool(id: string, state: ToolUIPart['state']): ToolUIPart {
   const type: `tool-${string}` = 'tool-file';
+
   if (state === 'output-available') return { type, toolCallId: id, state, input: {}, output: null };
+
   if (state === 'output-error') return { type, toolCallId: id, state, input: {}, errorText: 'boom' };
+
   if (state === 'input-available') return { type, toolCallId: id, state, input: {} };
+
   return { type, toolCallId: id, state: 'input-streaming', input: undefined };
 }
 
 const text = (content: string, state?: TextUIPart['state']): TextUIPart =>
   state === undefined ? { type: 'text', text: content } : { type: 'text', text: content, state };
+
 const reasoning = (content: string, state?: ReasoningUIPart['state']): ReasoningUIPart =>
   state === undefined ? { type: 'reasoning', text: content } : { type: 'reasoning', text: content, state };
 
@@ -43,6 +48,7 @@ describe('liveTail', () => {
       tool('a', 'output-available'),
       tool('b', 'output-available'),
     ];
+
     expect(liveTail(parts)).toEqual({ kind: 'thinking' });
   });
 

@@ -86,6 +86,7 @@ export const BOM = '﻿';
 function detectLineEnding(content: string): '\r\n' | '\n' {
   const crlf = content.indexOf('\r\n');
   const lf = content.indexOf('\n');
+
   // crlf === lf - 1 exactly when the first newline is a CRLF pair.
   return crlf !== -1 && lf !== -1 && crlf < lf ? '\r\n' : '\n';
 }
@@ -107,19 +108,25 @@ function toLF(text: string): string {
 function normalizeWithOrigin(original: string) {
   const chars: string[] = [];
   const origin: number[] = [];
+
   for (let i = 0; i < original.length; i++) {
     const ch = original[i]!;
+
     if (ch === '\r') {
       origin.push(i);
       chars.push('\n');
+
       if (original[i + 1] === '\n') i++;
       continue;
     }
+
     origin.push(i);
     chars.push(ch);
   }
+
   // One past the end, so a match's exclusive end index always maps.
   origin.push(original.length);
+
   return { text: chars.join(''), origin };
 }
 
@@ -128,13 +135,17 @@ function normalizeWithOrigin(original: string) {
  *  count exists to refuse. */
 function countOccurrences(haystack: string, needle: string): number {
   let count = 0;
+
   for (let i = haystack.indexOf(needle); i !== -1; i = haystack.indexOf(needle, i + 1)) count++;
+
   return count;
 }
 
 function lineOf(content: string, index: number): number {
   let line = 1;
+
   for (let i = 0; i < index; i++) if (content.charCodeAt(i) === 10) line++;
+
   return line;
 }
 
@@ -142,6 +153,7 @@ function lineOf(content: string, index: number): number {
  *  than starting a phantom one, so `'a\nb\n'` covers two. */
 function lineSpan(text: string): number {
   if (text.length === 0) return 0;
+
   return text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
 }
 
@@ -168,8 +180,10 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   const anchors = edits.map((edit) => ({ oldText: toLF(edit.oldText), newText: toLF(edit.newText) }));
 
   const matches: Array<{ index: number; start: number; length: number; newText: string }> = [];
+
   for (let i = 0; i < anchors.length; i++) {
     const { oldText, newText } = anchors[i]!;
+
     if (oldText.length === 0) {
       return {
         ok: false,
@@ -177,7 +191,9 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
         message: `${at(i, anchors.length)} is empty in ${path}. Give the exact text to replace; use action=write to create or replace the whole file.`,
       };
     }
+
     const occurrences = countOccurrences(base, oldText);
+
     if (occurrences === 0) {
       return {
         ok: false,
@@ -187,6 +203,7 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
           'including indentation and blank lines. Read the file again and copy the text from what it returned.',
       };
     }
+
     if (occurrences > 1) {
       return {
         ok: false,
@@ -196,14 +213,17 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
           'Extend it with the surrounding lines until it is unique, or make one edit per occurrence with distinct context.',
       };
     }
+
     const start = base.indexOf(oldText);
     matches.push({ index: i, start, length: oldText.length, newText });
   }
 
   const ordered = [...matches].sort((a, b) => a.start - b.start);
+
   for (let i = 1; i < ordered.length; i++) {
     const prev = ordered[i - 1]!;
     const cur = ordered[i]!;
+
     if (prev.start + prev.length > cur.start) {
       return {
         ok: false,
@@ -219,11 +239,13 @@ export function applyFileEdits(original: string, edits: readonly FileEdit[], pat
   // span survives exactly as it was. Only the inserted text takes the file's
   // line ending.
   let content = body;
+
   for (let i = ordered.length - 1; i >= 0; i--) {
     const m = ordered[i]!;
     const insert = ending === '\r\n' ? m.newText.replace(/\n/g, '\r\n') : m.newText;
     content = content.slice(0, origin[m.start]!) + insert + content.slice(origin[m.start + m.length]!);
   }
+
   if (content === body) {
     return {
       ok: false,
@@ -278,6 +300,7 @@ export function readFileSlice(
   if (content.length === 0) {
     return { output: `[${opts.path} is empty]`, omitted: 0, first: 1, last: 0, total: 0 };
   }
+
   // A trailing newline ENDS the last line; splitting alone would report a
   // phantom empty line after it, and hand back an offset that reads as "".
   const split = content.split('\n');
@@ -291,27 +314,32 @@ export function readFileSlice(
       omitted: 0, first, last: first - 1, total,
     };
   }
+
   const requestedLast = limit != null ? Math.min(total, first + limit - 1) : total;
   const requested = lines.slice(first - 1, requestedLast);
 
   let kept = 0;
   let chars = 0;
+
   for (const line of requested) {
     // The joining newline costs a character for every line after the first —
     // keyed on the line COUNT, not on the running total, so a leading blank
     // line does not make the next one look free.
     const cost = kept === 0 ? line.length : line.length + 1;
+
     if (chars + cost > opts.maxChars) break;
     chars += cost;
     kept++;
   }
 
   const requestedChars = requested.join('\n').length;
+
   if (kept === 0) {
     // One line, on its own, larger than the whole budget. Show its head and
     // name the way to get the rest: the same workspace.readFile-inside-
     // execute_tools recipe every other oversize payload in Kinu uses.
     const line = requested[0] ?? '';
+
     return {
       output:
         `${line.slice(0, opts.maxChars)}\n\n` +
@@ -324,6 +352,7 @@ export function readFileSlice(
 
   const last = first + kept - 1;
   const shown = requested.slice(0, kept).join('\n');
+
   if (last === total) {
     // Reached the end: reproduce the file's own trailing newline so a whole
     // read is byte-identical to the file.
@@ -331,6 +360,7 @@ export function readFileSlice(
   }
 
   const reason = kept < requested.length ? `the ${opts.maxChars}-char cap` : `limit=${limit}`;
+
   return {
     output:
       `${shown}\n\n[showing lines ${first}-${last} of ${total} in ${opts.path} — ` +

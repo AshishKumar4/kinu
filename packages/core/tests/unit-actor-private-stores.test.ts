@@ -46,6 +46,7 @@ function world(): World {
   const execRaw = makeExecRaw(db);
   initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
   const actors = createTestActors(sql, execRaw);
+
   return {
     db, sql, actors,
     a: actors.main,
@@ -347,6 +348,7 @@ describe('two actors, one database: the head journal', () => {
     const b = new HeadJournal(w.sql, w.b);
     a.insertSpawn(headInput('h0', 'root-1', 'A branch', 100));
     b.insertSpawn(headInput('h0', 'root-1', 'B branch', 100));
+
     for (let seq = 0; seq < 3; seq++) a.appendStep('h0', seq, { text: `a${String(seq)}`, toolCalls: [] });
     b.appendStep('h0', 0, { text: 'b0', toolCalls: [] });
 

@@ -19,6 +19,7 @@ function setup() {
   const execRaw = makeExecRaw(db);
   initSearchTables(execRaw);
   const actor = createTestActors(sql, execRaw).main;
+
   return { db, sql, actor };
 }
 
@@ -62,9 +63,11 @@ describe('UCT selection', () => {
   // covered behaviourally below.
   test('SQLite log() is log₁₀, so log(x)/log(exp(1.0)) is the ln conversion', () => {
     const { db } = setup();
+
     const result = db.query<{ ln10: number }, []>(
       'SELECT log(10.0) / log(exp(1.0)) as ln10',
     ).get();
+
     if (!result) throw new Error('SQLite logarithm query returned no row');
     expect(Math.abs(result.ln10 - 2.302585)).toBeLessThan(0.001);
   });
@@ -163,6 +166,7 @@ describe('UCT log base — observed through selectNode, not re-derived', () => {
         VALUES (${actor.actorId}, 'r', 'exploit', 'root', 't', 0.9, 10000, 'open', 1)`;
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, value, visits, status, depth)
         VALUES (${actor.actorId}, 'r', 'explore', 'root', 't', 0.1, ${exploreVisits}, 'open', 1)`;
+
     return selectNode(sql, actor, 'r', W)!.id;
   }
 
@@ -176,9 +180,11 @@ describe('UCT log base — observed through selectNode, not re-derived', () => {
     // Scanning the public entry point for its actual decision boundary. Under
     // log₁₀ the whole 12..25 band flips to 'exploit'.
     let crossover = 0;
+
     for (let visits = 1; visits <= 200; visits++) {
       if (selectAmongSiblings(visits) === 'exploit') { crossover = visits; break; }
     }
+
     expect(crossover).toBe(26);
   });
 

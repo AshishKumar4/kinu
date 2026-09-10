@@ -21,10 +21,12 @@ const DUMMY_LLM: LLMProviderConfig = {
 function newProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "kinu-test-project-"));
   tempDirs.push(dir);
+
   return dir;
 }
 
 const repoRoot = resolve(__dirname, "../../..");
+
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 
 afterEach(() => {
@@ -56,11 +58,13 @@ async function runCliServed(home: string, args: string[], extraEnv: Record<strin
     stderr: "pipe",
     env: { ...process.env, KINU_HOME: home, ...extraEnv },
   });
+
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+
   return { stdout, stderr, exitCode };
 }
 
@@ -71,6 +75,7 @@ async function createLocalAgent(home: string, name: string): Promise<void> {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "agent.db"));
+
   try {
     await createWorkspace(db, { name, purpose: "Test purpose", llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
@@ -128,19 +133,23 @@ test("a genuinely unreadable workspace names its cause instead of hiding it", ()
   const list = runCli(home, ["list"]);
   expect(list.exitCode).toBe(0);
   expect(list.stdout.toString()).toContain("unreadable:");
+
   // Parse the structured diagnostic and assert its contract fields: the stable
   // dotted event name, classification, cause chain, and workspace.
   // Rendered-line assertions can fail on formatting improvements that preserve
   // those fields.
   const line = list.stderr.toString().trim().split('\n')
     .find((row) => row.includes('workspace.read_failed'));
+
   if (line === undefined) throw new Error(`no workspace.read_failed diagnostic in stderr: ${list.stderr.toString()}`);
+
   const diagnostic = v.parse(v.object({
     event: v.literal('workspace.read_failed'),
     code: v.string(),
     cause: v.string(),
     fields: v.object({ workspace: v.literal('broken-ws') }),
   }), JSON.parse(line));
+
   // The cause must name what the environment said, not just that something failed.
   expect(diagnostic.cause).toContain('not a database');
 });
@@ -198,9 +207,11 @@ describe("CLI inspection commands", () => {
     // Workspace-scoped on purpose: a workspace's model choice must never become
     // every other command's default, so the global config gains no model here.
     const configPath = join(home, "config.json");
+
     const globalModel = existsSync(configPath)
       ? v.parse(v.object({ model: v.optional(v.string()) }), JSON.parse(readFileSync(configPath, "utf8"))).model
       : undefined;
+
     expect(globalModel).toBeUndefined();
   }, CLI_SPAWN_TIMEOUT_MS);
 
@@ -208,9 +219,11 @@ describe("CLI inspection commands", () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-effort-"));
     tempDirs.push(home);
     await createLocalAgent(home, "localtest");
+
     const configured = runCli(home, ["model", "localtest", "fixture-model"], {
       KINU_BASE_URL: "http://localhost:1/v1", KINU_AUTH: "Bearer fixture",
     });
+
     expect(configured.exitCode, configured.stderr.toString()).toBe(0);
 
     const initial = runCli(home, ["effort", "localtest"]);
@@ -220,6 +233,7 @@ describe("CLI inspection commands", () => {
     const set = runCli(home, ["effort", "localtest", "high"]);
     expect(set.exitCode).toBe(0);
     expect(set.stdout.toString()).toContain("set high");
+
     const saved = v.parse(v.object({
       reasoningEffort: v.optional(v.string()),
       localProfile: v.object({
@@ -230,6 +244,7 @@ describe("CLI inspection commands", () => {
         }),
       }),
     }), JSON.parse(readFileSync(join(home, "config.json"), "utf8")));
+
     expect(saved.reasoningEffort).toBeUndefined();
     expect(saved.localProfile.catalog.tiers.default.reasoningEffort).toBe("high");
 
@@ -250,6 +265,7 @@ describe("CLI inspection commands", () => {
     tempDirs.push(home);
     await createLocalAgent(home, "localtest");
     const knownSpec = "workers-ai/@cf/moonshotai/kimi-k2.6";
+
     const llmEnv = {
       KINU_BASE_URL: "http://localhost:1/v1",
       KINU_AUTH: "Bearer x",
@@ -304,11 +320,13 @@ describe("CLI inspection commands", () => {
     expect(run.stdout.toString()).toContain("scheduled");
 
     const db = new Database(join(home, "localtest", "agent.db"), { readonly: true });
+
     try {
       const row = v.parse(
         v.object({ spec: v.string(), nextFireAt: v.number() }),
         db.query("SELECT spec, next_fire_at AS nextFireAt FROM triggers").get(),
       );
+
       expect(row.nextFireAt).toBe(Date.parse(at));
       expect(JSON.parse(row.spec)).not.toHaveProperty("atMs");
     } finally {
@@ -335,8 +353,10 @@ describe("CLI inspection commands", () => {
     // Rows in the shape the producers write them: `buildModelCallEvent` sets
     // `usdFloorTokens` from `priceCall`, and omits it when the price is exact.
     const db = new Database(join(home, "localtest", "agent.db"));
+
     try {
       const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
+
       /** The `model_call` payload fields this read model looks at, so the seed
        *  carries a value contract rather than a bag of unknowns. */
       const rows: Array<{
@@ -358,6 +378,7 @@ describe("CLI inspection commands", () => {
         // carry both rather than whichever one it met first.
         { source: "fast", usage: { input: 500, output: 50 } },
       ];
+
       rows.forEach((payload, i) => {
         db.run("INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts) VALUES (?, ?, ?, 'model_call', ?, ?)", [
           actorId, "workspace", i, JSON.stringify({ ...payload, eventIndex: i, runId: "workspace", timestamp: new Date(i * 1_000).toISOString() }), new Date(i * 1_000).toISOString(),
@@ -369,10 +390,12 @@ describe("CLI inspection commands", () => {
 
     const json = runCli(home, ["spend", "localtest", "--json"]);
     expect([json.exitCode, json.stderr.toString()]).toEqual([0, ""]);
+
     const parsed = v.parse(
       v.object({ total: v.object({ unpricedCalls: v.number(), floorPricedCalls: v.number() }) }),
       JSON.parse(json.stdout.toString()),
     );
+
     // The read model saw exactly one of each, so the prose below has two
     // reasons to state and neither is a formatting accident.
     expect(parsed.total).toEqual({ unpricedCalls: 1, floorPricedCalls: 1 });
@@ -418,6 +441,7 @@ describe("kinu events rendering", () => {
 
   async function eventsAgainstCloud(home: string, result: EventsAnswer) {
     const server = Bun.serve({ port: 0, fetch: () => Response.json({ result }) });
+
     try {
       return await runCliServed(home, ["events", "cloudtest"], {
         KINU_TOKEN: "ptc_test",

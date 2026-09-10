@@ -116,6 +116,7 @@ export function createAgentTracing(deps: {
     isolateGen: deps.isolateGen,
     selfPath: renderSelfPath(deps.selfPath),
   };
+
   let invocations = 0;
 
   return {
@@ -127,6 +128,7 @@ export function createAgentTracing(deps: {
       invocations += 1;
       const ordinal = invocations;
       let live = true;
+
       const handle: TracedInvocation = {
         span<U>(childName: string, childFn: (span: ScopedSpan) => U): U {
           if (!live) {
@@ -137,18 +139,24 @@ export function createAgentTracing(deps: {
                 + 'would claim coverage of time nothing measured',
             );
           }
+
           return deps.tracer.span(childName, attributes, (span) => {
             span.setAttribute(SPAN_ATTR_INVOCATION, ordinal);
+
             return childFn(span);
           });
         },
       };
+
       return deps.tracer.span(`${kind}.${name}`, attributes, (span) => {
         span.setAttribute(SPAN_ATTR_INVOCATION, ordinal);
         const revoke = (): void => { live = false; };
+
         let revokesLater = false;
+
         try {
           const result = fn(handle, span);
+
           if (result instanceof Promise) {
             revokesLater = true;
             // `then(ok, err)` and not `finally`: `finally` derives a promise that
@@ -159,6 +167,7 @@ export function createAgentTracing(deps: {
             // the span from that same rejection.
             void result.then(revoke, revoke);
           }
+
           return result;
         } finally {
           if (!revokesLater) revoke();

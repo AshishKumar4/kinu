@@ -30,6 +30,7 @@ import type { DeviceSocket, DeviceSocketCtx, DeviceSocketHub } from './device-hu
 
 /** WebSocket.OPEN is 1 across every implementation. */
 const WS_OPEN = 1;
+
 const TERMINAL_WS_TAG_PREFIX = 'terminal:';
 
 /**
@@ -45,6 +46,7 @@ const TERMINAL_ATTACH_WINDOW_MS = 30_000;
 /** Why the pane could not attach, in words a person can act on. Each is the
  *  whole message: a device error crosses an RPC boundary as its text. */
 const TERMINAL_SESSION_UNKNOWN = 'that terminal is no longer open; open a new one';
+
 const TERMINAL_ALREADY_ATTACHED = 'that terminal is already open in another tab';
 
 /** What a browser socket carries so a woken object knows what it is holding.
@@ -72,7 +74,9 @@ function terminalTag(session: string): string {
  *  is a device's or the agents SDK's. */
 export function terminalFromSocket(ws: DeviceSocket): { session: string; device: string; workspace: string } | null {
   const attachment = v.safeParse(TerminalAttachmentSchema, ws.deserializeAttachment());
+
   if (!attachment.success) return null;
+
   return {
     session: attachment.output.terminal,
     device: attachment.output.device,
@@ -116,11 +120,13 @@ export class DeviceTerminalHub {
    *  down rather than left running behind a window nobody opened. */
   expired(): { session: string; device: string }[] {
     const stale: { session: string; device: string }[] = [];
+
     for (const [session, pending] of this.unattached) {
       if (this.now() - pending.openedAt <= TERMINAL_ATTACH_WINDOW_MS) continue;
       stale.push({ session, device: pending.device });
       this.unattached.delete(session);
     }
+
     return stale;
   }
 
@@ -132,11 +138,14 @@ export class DeviceTerminalHub {
    */
   attach(session: string, server: DeviceSocket): TerminalHolder {
     const pending = this.unattached.get(session);
+
     if (!pending) throw new Error(TERMINAL_SESSION_UNKNOWN);
+
     if (this.paneSocket(session)) throw new Error(TERMINAL_ALREADY_ATTACHED);
     this.unattached.delete(session);
     this.ctx.acceptWebSocket(server, [terminalTag(session)]);
     server.serializeAttachment({ terminal: session, device: pending.device, workspace: pending.workspace });
+
     return { device: pending.device, workspace: pending.workspace };
   }
 
@@ -145,6 +154,7 @@ export class DeviceTerminalHub {
     for (const ws of this.ctx.getWebSockets(terminalTag(session))) {
       if (ws.readyState === WS_OPEN) return ws;
     }
+
     return null;
   }
 
@@ -158,27 +168,37 @@ export class DeviceTerminalHub {
    */
   fromPane(session: string, device: string, message: string | ArrayBuffer | ArrayBufferView): void {
     const tunnel = this.devices.tunnel(device);
+
     if (!tunnel) {
       this.endPane(session, TERMINAL_SESSION_UNKNOWN);
+
       return;
     }
+
     if (message instanceof ArrayBuffer) {
       tunnel.notify({ type: DEVICE_PTY_INPUT, session, data: base64FromBytes(new Uint8Array(message)) });
+
       return;
     }
+
     if (ArrayBuffer.isView(message)) {
       const bytes = new Uint8Array(message.buffer, message.byteOffset, message.byteLength);
       tunnel.notify({ type: DEVICE_PTY_INPUT, session, data: base64FromBytes(bytes) });
+
       return;
     }
+
     // A frame that is not JSON at all is the one failure this boundary
     // tolerates by name: the socket carries what the browser wrote. It is
     // recorded below as unreadable, with everything else that is not a resize.
     const control = v.safeParse(PaneControlSchema, tolerate(() => JSON.parse(message), 'malformed-input'));
+
     if (!control.success) {
       diagnostics.event('device.terminal_control_unreadable', { workspace: session });
+
       return;
     }
+
     tunnel.notify({
       type: DEVICE_PTY_RESIZE, session, cols: control.output.cols, rows: control.output.rows,
     });
@@ -187,6 +207,7 @@ export class DeviceTerminalHub {
   /** Terminal output, on its way to the pane that is watching it. */
   toPane(session: string, bytes: Uint8Array): void {
     const pane = this.paneSocket(session);
+
     if (!pane) return;
     pane.send(bytes);
   }
@@ -195,6 +216,7 @@ export class DeviceTerminalHub {
    *  terminal whose program is gone has nothing left to carry. */
   paneExit(session: string, exitCode: number): void {
     const pane = this.paneSocket(session);
+
     if (!pane) return;
     pane.send(JSON.stringify({ type: 'exit', exitCode }));
     pane.close(1000, 'the shell ended');
@@ -203,6 +225,7 @@ export class DeviceTerminalHub {
   /** Tell the pane why it has no terminal, then close. */
   endPane(session: string, error: string): void {
     const pane = this.paneSocket(session);
+
     if (!pane) return;
     pane.send(JSON.stringify({ type: 'error', error }));
     pane.close(1000, error);
@@ -217,6 +240,7 @@ export class DeviceTerminalHub {
    */
   paneClosed(session: string, device: string): void {
     const tunnel = this.devices.tunnel(device);
+
     if (!tunnel) return;
     tunnel.notify({ type: DEVICE_PTY_CLOSE, session });
   }
@@ -224,17 +248,21 @@ export class DeviceTerminalHub {
   /** Every live pane socket, for a device whose own socket just dropped. */
   panesForDevice(device: string): string[] {
     const sessions: string[] = [];
+
     for (const ws of this.ctx.getWebSockets()) {
       if (ws.readyState !== WS_OPEN) continue;
       const held = terminalFromSocket(ws);
+
       if (held && held.device === device) sessions.push(held.session);
     }
+
     for (const [session, pending] of this.unattached) {
       if (pending.device === device) {
         sessions.push(session);
         this.unattached.delete(session);
       }
     }
+
     return sessions;
   }
 }
@@ -244,8 +272,10 @@ export class DeviceTerminalHub {
 function base64FromBytes(bytes: Uint8Array): string {
   const CHUNK = 0x8000;
   let text = '';
+
   for (let at = 0; at < bytes.length; at += CHUNK) {
     text += String.fromCharCode(...bytes.subarray(at, at + CHUNK));
   }
+
   return btoa(text);
 }

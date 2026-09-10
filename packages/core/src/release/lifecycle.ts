@@ -32,7 +32,9 @@ export function assertReleaseTransition(
   to: ReleaseStatus,
 ): ReleaseTransitionResult {
   if (from === to) return { ok: true, from, to };
+
   if (ALLOWED.get(from)?.has(to)) return { ok: true, from, to };
+
   return {
     ok: false,
     from,

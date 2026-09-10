@@ -45,34 +45,43 @@ export function findComplementaryPair(
 ): MergePair | null {
   if (pool.length < 2) return null;
   const pairs: MergePair[] = [];
+
   for (let i = 0; i < pool.length; i++) {
     for (let j = i + 1; j < pool.length; j++) {
       const a = pool[i];
       const b = pool[j];
       const aDom: string[] = [];
       const bDom: string[] = [];
+
       for (const id of instanceIds) {
         const sa = a.scores.get(id) ?? 0;
         const sb = b.scores.get(id) ?? 0;
+
         if (sa > sb) aDom.push(id);
         else if (sb > sa) bDom.push(id);
       }
+
       // Each side must win on at least one instance; otherwise one strictly
       // dominates the other (or they're identical).
       if (aDom.length === 0 || bDom.length === 0) continue;
       pairs.push({ a, b, aDominates: aDom, bDominates: bDom });
     }
   }
+
   if (pairs.length === 0) return null;
   // Weight pairs by total complementary surface so distinctly-complementary
   // pairs are preferred over almost-similar ones.
   let total = 0;
+
   for (const p of pairs) total += p.aDominates.length + p.bDominates.length;
   let r = random() * total;
+
   for (const p of pairs) {
     r -= p.aDominates.length + p.bDominates.length;
+
     if (r <= 0) return p;
   }
+
   return pairs[pairs.length - 1];
 }
 
@@ -92,20 +101,27 @@ export function renderMergePrompt<I, E>(opts: {
 }): string {
   const desc = opts.artifactDescription ?? 'candidate artifact';
   const instanceById = new Map(opts.evalSet.map(i => [i.id, i] as const));
+
   const lines = (label: 'A' | 'B', wins: ReadonlyArray<string>): string[] => {
     if (wins.length === 0) return [`${label} wins on: (none)`];
     const out: string[] = [`${label} wins on:`];
+
     for (const id of wins) {
       const inst = instanceById.get(id);
       const inputStr = inst ? renderInput(inst.input) : '(unknown)';
+
       const wText = label === 'A'
         ? `score(A)=${opts.pair.a.scores.get(id)?.toFixed(2) ?? '0'} vs score(B)=${opts.pair.b.scores.get(id)?.toFixed(2) ?? '0'}`
         : `score(B)=${opts.pair.b.scores.get(id)?.toFixed(2) ?? '0'} vs score(A)=${opts.pair.a.scores.get(id)?.toFixed(2) ?? '0'}`;
+
       out.push(`  - ${id}: ${wText}`);
+
       if (inst) out.push(`    input: ${truncate(inputStr, 200)}`);
     }
+
     return out;
   };
+
   return `You are merging two ${desc}s that complement each other — each one
 solves different inputs better. Synthesise a hybrid that keeps the specialties
 of both. Do not naively concatenate; produce a single coherent ${desc} that
@@ -149,6 +165,8 @@ export async function proposeMerge<I, E>(opts: {
     evalSet: opts.evalSet,
     artifactDescription: opts.artifactDescription,
   });
+
   const raw = await opts.reflectionLm(prompt);
+
   return stripMarkdownFences(raw);
 }

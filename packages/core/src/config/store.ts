@@ -20,6 +20,7 @@ import {
 } from '../advisor/review';
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
+
 /** Read a stored role-change policy. Unset or unknown reads as `allow`. */
 export function parseRoleChangePolicy(value: string | null): 'allow' | 'approval' | 'locked' {
   return value === 'approval' || value === 'locked' ? value : 'allow';
@@ -274,6 +275,7 @@ function unitInterval(key: string, value: number): number {
   if (!Number.isFinite(value) || value < 0 || value > 1) {
     throw new Error(`invalid ${key}: ${value} (expected a fraction between 0 and 1)`);
   }
+
   return value;
 }
 
@@ -286,19 +288,24 @@ export function initAgentConfigTable(execRaw: RawSqlExec): void {
 export function createAgentConfigStore(sql: SqlExecutor, actorId: string, authorize: () => void): AgentConfigStore {
   const get = (key: string): string | null => {
     authorize();
+
     const rows = sql<{ value: string }>`
       SELECT value FROM actor_config WHERE actor_id = ${actorId} AND key = ${key} LIMIT 1`;
+
     return rows[0]?.value ?? null;
   };
+
   const set = (key: string, value: string): void => {
     authorize();
     void sql`INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${value})
         ON CONFLICT(actor_id, key) DO UPDATE SET value = excluded.value`;
   };
+
   const remove = (key: string): void => {
     authorize();
     void sql`DELETE FROM actor_config WHERE actor_id = ${actorId} AND key = ${key}`;
   };
+
   /**
    * The role id lives in ONE `role_selection` row as the bare id.
    * An absent or invalid row reads as `general`.
@@ -306,8 +313,10 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
    */
   const readRoleSelection = (): RoleId => {
     const stored = get(AGENT_CONFIG_KEYS.roleSelection);
+
     return stored !== null && isValidRoleId(stored) ? stored : DEFAULT_ROLE_ID;
   };
+
   /** One-statement bump of a monotone counter, returning the new value. Shared
    *  by the two lifetime counters here — closed turn windows, and isolate
    *  generations — because they differ only in their key and a byte-identical
@@ -320,26 +329,33 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
    */
   const increment = (key: string): number => {
     authorize();
+
     const rows = sql<{ value: string }>`
       INSERT INTO actor_config (actor_id, key, value) VALUES (${actorId}, ${key}, ${'1'})
       ON CONFLICT(actor_id, key) DO UPDATE SET value = CASE
         WHEN CAST(actor_config.value AS REAL) > 0 THEN CAST(CAST(actor_config.value AS REAL) AS INTEGER) + 1
         ELSE 1 END
       RETURNING value`;
+
     return Number(rows[0]?.value ?? 1);
   };
+
   /** Reads in the parsed domain, so an unparseable token is not just ignored
    *  on read but dropped on the next write — the row never accretes rubbish a
    *  human has to look at when they go to revoke something. */
   const storedGrants = (): ApprovalGrant[] => {
     const raw = get(AGENT_CONFIG_KEYS.shellApprovalGrants) ?? '';
+
     return raw.split(',').map(parseApprovalGrant).filter((g) => g !== null);
   };
+
   const writeGrants = (grants: readonly ApprovalGrant[]): void => {
     const value = [...new Set(grants.map(formatApprovalGrant))].join(',');
+
     if (value.length === 0) remove(AGENT_CONFIG_KEYS.shellApprovalGrants);
     else set(AGENT_CONFIG_KEYS.shellApprovalGrants, value);
   };
+
   return {
     get,
     set,
@@ -348,13 +364,16 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       authorize();
       const rows = sql<{ key: string; value: string }>`SELECT key, value FROM actor_config WHERE actor_id = ${actorId}`;
       const out: Record<string, string> = {};
+
       for (const r of rows) out[r.key] = r.value;
+
       return out;
     },
     getModel() { return get(AGENT_CONFIG_KEYS.model); },
     setModel(spec) { set(AGENT_CONFIG_KEYS.model, spec); },
     getReasoningEffort() {
       const effort = get(AGENT_CONFIG_KEYS.reasoningEffort);
+
       return isReasoningEffort(effort) ? effort : null;
     },
     setReasoningEffort(effort) {
@@ -363,6 +382,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getCacheRetention() {
       const value = get(AGENT_CONFIG_KEYS.cacheRetention);
+
       return isCacheRetention(value) ? value : DEFAULT_CACHE_RETENTION;
     },
     setCacheRetention(retention) {
@@ -371,7 +391,11 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getDisplayName() { return get(AGENT_CONFIG_KEYS.displayName); },
     setDisplayName(name) { set(AGENT_CONFIG_KEYS.displayName, name); },
-    getNameOrigin() { const v = get(AGENT_CONFIG_KEYS.nameOrigin); return v === 'user' || v === 'auto' ? v : null; },
+    getNameOrigin() {
+      const v = get(AGENT_CONFIG_KEYS.nameOrigin);
+
+      return v === 'user' || v === 'auto' ? v : null;
+    },
     setNameOrigin(origin) { set(AGENT_CONFIG_KEYS.nameOrigin, origin); },
     setDisplayNameOrigin(name, origin) {
       authorize();
@@ -388,6 +412,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getAssignedTier(): TierId | null {
       const stored = get(AGENT_CONFIG_KEYS.assignedTier);
+
       // An unrecognised value reads as unpinned rather than throwing: the
       // honest answer for a tier this build does not know is "no pin", and the
       // role's own tier is a working turn instead of a dead agent.
@@ -396,8 +421,10 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setAssignedTier(tier) {
       if (tier === null) {
         remove(AGENT_CONFIG_KEYS.assignedTier);
+
         return;
       }
+
       if (!isTierId(tier)) throw new Error(`Invalid assigned tier: ${String(tier)}`);
       set(AGENT_CONFIG_KEYS.assignedTier, tier);
     },
@@ -408,16 +435,19 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       if (policy !== 'allow' && policy !== 'approval' && policy !== 'locked') {
         throw new Error(`Invalid role change policy: ${String(policy)}`);
       }
+
       set(AGENT_CONFIG_KEYS.roleChangePolicy, policy);
     },
     getShellApprovalMode(): ShellApprovalMode {
       const v = get(AGENT_CONFIG_KEYS.shellApprovalMode);
+
       return v === 'allow_all' || v === 'deny_all' ? v : 'strict';
     },
     setShellApprovalMode(mode) {
       if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
         throw new Error(`Invalid shell approval mode: ${String(mode)}`);
       }
+
       set(AGENT_CONFIG_KEYS.shellApprovalMode, mode);
     },
     getShellApprovalGrants: storedGrants,
@@ -445,12 +475,14 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     getShadowSampleRate() {
       const v = get(AGENT_CONFIG_KEYS.shadowSampleRate);
       const n = v ? Number(v) : 0.25;
+
       return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.25;
     },
     setShadowSampleRate(rate) { set(AGENT_CONFIG_KEYS.shadowSampleRate, String(unitInterval('shadow_sample_rate', rate))); },
     getScaffoldExploreShare() {
       const v = get(AGENT_CONFIG_KEYS.scaffoldExploreShare);
       const n = v ? Number(v) : 0.2;
+
       return Number.isFinite(n) && n >= 0 && n <= 1 ? n : 0.2;
     },
     setScaffoldExploreShare(share) { set(AGENT_CONFIG_KEYS.scaffoldExploreShare, String(unitInterval('scaffold_explore_share', share))); },
@@ -458,6 +490,7 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     setAdvisorEnabled(enabled) { set(AGENT_CONFIG_KEYS.advisorEnabled, String(enabled)); },
     getAdvisorMinSeverity() {
       const stored = get(AGENT_CONFIG_KEYS.advisorMinSeverity);
+
       return isAdvisorSeverity(stored) ? stored : DEFAULT_ADVISOR_MIN_SEVERITY;
     },
     setAdvisorMinSeverity(severity) {
@@ -466,11 +499,14 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getAlwaysActiveSkills() {
       const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
+
       if (!v) return [];
+
       return v.split(',').map(s => s.trim()).filter(Boolean);
     },
     setAlwaysActiveSkills(names) {
       const v = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
+
       if (v.length === 0) remove(AGENT_CONFIG_KEYS.alwaysActiveSkills);
       else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, v);
     },
@@ -483,8 +519,10 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getAutoGepaEveryNTurns() {
       const raw = get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns);
+
       if (raw == null) return DEFAULT_AUTO_GEPA_EVERY_N_TURNS;
       const n = Math.floor(Number(raw));
+
       return Number.isFinite(n) && n > 0 ? n : 0;
     },
     setAutoGepaEveryNTurns(n) {
@@ -495,13 +533,16 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     },
     getGepaEvalBudget() {
       const raw = get(AGENT_CONFIG_KEYS.gepaEvalBudget);
+
       if (raw == null) return DEFAULT_GEPA_EVAL_BUDGET;
       const n = Number(raw);
+
       return Number.isFinite(n) ? clampGepaEvalBudget(n) : DEFAULT_GEPA_EVAL_BUDGET;
     },
     setGepaEvalBudget(n) { set(AGENT_CONFIG_KEYS.gepaEvalBudget, String(clampGepaEvalBudget(n))); },
     getChangelogSeenAt() {
       const n = Number(get(AGENT_CONFIG_KEYS.changelogSeenAt));
+
       return Number.isFinite(n) && n > 0 ? n : 0;
     },
     setChangelogSeenAt(ms) {
@@ -516,10 +557,13 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
     getMctsOverrides() {
       const positive = (key: string): number | undefined => {
         const raw = get(key);
+
         if (raw == null) return undefined;
         const n = Number(raw);
+
         return Number.isFinite(n) && n > 0 ? n : undefined;
       };
+
       const out: MctsOverrides = {};
       const w = positive(AGENT_CONFIG_KEYS.mctsExplorationWeight);
       const budget = positive(AGENT_CONFIG_KEYS.mctsBudget);
@@ -527,31 +571,43 @@ export function createAgentConfigStore(sql: SqlExecutor, actorId: string, author
       const branches = positive(AGENT_CONFIG_KEYS.mctsBranches);
       const judgeSamples = positive(AGENT_CONFIG_KEYS.mctsJudgeSamples);
       const maxEvalLLMCalls = positive(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls);
+
       if (w !== undefined) out.explorationWeight = w;
+
       if (budget !== undefined) out.budget = Math.floor(budget);
+
       if (maxDepth !== undefined) out.maxDepth = Math.floor(maxDepth);
+
       if (branches !== undefined) out.branches = Math.floor(branches);
+
       if (judgeSamples !== undefined) out.judgeSamples = Math.floor(judgeSamples);
+
       if (maxEvalLLMCalls !== undefined) out.maxEvalLLMCalls = Math.floor(maxEvalLLMCalls);
+
       return out;
     },
     setMctsOverrides(overrides) {
       // Every requested knob is validated before any row is written, so a
       // rejected call leaves the prior overrides untouched.
       const pending: Array<{ key: string; value: string }> = [];
+
       const check = (key: string, value: number | undefined, integer: boolean) => {
         if (value === undefined) return;
+
         if (!Number.isFinite(value) || value <= 0) throw new Error(`invalid MCTS setting for ${key}: ${value}`);
         const stored = integer ? Math.floor(value) : value;
+
         if (stored <= 0) throw new Error(`invalid MCTS setting for ${key}: ${value}`);
         pending.push({ key, value: String(stored) });
       };
+
       check(AGENT_CONFIG_KEYS.mctsExplorationWeight, overrides.explorationWeight, false);
       check(AGENT_CONFIG_KEYS.mctsBudget, overrides.budget, true);
       check(AGENT_CONFIG_KEYS.mctsMaxDepth, overrides.maxDepth, true);
       check(AGENT_CONFIG_KEYS.mctsBranches, overrides.branches, true);
       check(AGENT_CONFIG_KEYS.mctsJudgeSamples, overrides.judgeSamples, true);
       check(AGENT_CONFIG_KEYS.mctsMaxEvalLLMCalls, overrides.maxEvalLLMCalls, true);
+
       for (const { key, value } of pending) set(key, value);
     },
     getEmailNotificationsEnabled() {

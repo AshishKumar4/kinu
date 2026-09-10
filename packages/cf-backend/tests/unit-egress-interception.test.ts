@@ -29,6 +29,7 @@ import {
   createRecordingLogger, setDiagnosticsSink, type RecordedLog,
 } from '@kinu.run/core/obs';
 import { KINU_USER_AGENT, kinuUserAgent, reoriginateRequest } from '../src/lib/http';
+
 // The gate's own resolver of the shipped SDK copy, loaded rather than repeated:
 // `bun run gate:egress-interception` and this test must read one copy, and two
 // copies of Containers are installed at two versions. `require` and not `import`
@@ -52,6 +53,7 @@ const BoundContainers = v.object({ module: v.string(), version: v.string() });
 mockAgentsSdk();
 
 const { ORCHESTRATOR_RPC_SURFACE } = await import('../src/rpc-surface');
+
 const {
   CONTAINER_EVENT_HOST,
   handleContainerEgress, handleContainerEvent, parseEgressParams,
@@ -64,13 +66,17 @@ const root = new URL('../', import.meta.url).pathname;
 function ctx(params: OutboundHandlerContext['params']): OutboundHandlerContext {
   return { containerId: 'container-1', className: 'KinuSandbox', params };
 }
+
 const read = (path: string): string => readFileSync(`${root}${path}`, 'utf8');
 
 const SECRET = ['sk_live_', 'abcdefghij0123456789'].join('');
+
 const PLACEHOLDER = `${EGRESS_PLACEHOLDER_PREFIX}${'Q'.repeat(43)}`;
+
 const BINDING: EgressSecretBinding = {
   id: 'stripe', label: 'Stripe', host: 'api.stripe.com', placeholder: PLACEHOLDER,
 };
+
 const PARAMS: KinuEgressParams = {
   workspaceName: 'kinu-main', ownerUserId: 'user-1', bindings: [BINDING],
 };
@@ -89,6 +95,7 @@ function fakeEnv(resolve: () => EgressInjectionResult): Env {
     },
     CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
   });
+
   // SAFETY: every member the handler reads is constructed by the Object.assign
   // above — `UserDO.idFromName`, `UserDO.get` and `CREDENTIAL_ENCRYPTION_KEY` are
   // the complete set `handleContainerEgress` touches, which its body declares
@@ -105,15 +112,19 @@ interface FetchCapture {
 function captureFetch(response: () => Response): FetchCapture {
   const seen: Request[] = [];
   const original = globalThis.fetch;
+
   const stub: typeof globalThis.fetch = Object.assign(
     async (input: Parameters<typeof globalThis.fetch>[0], init?: Parameters<typeof globalThis.fetch>[1]) => {
       const request = input instanceof Request ? input : new Request(String(input), init);
       seen.push(request);
+
       return response();
     },
     { preconnect: original.preconnect },
   );
+
   globalThis.fetch = stub;
+
   return { seen, restore: () => { globalThis.fetch = original; } };
 }
 
@@ -138,6 +149,7 @@ function execOnlyBox(): KinuSandbox {
 describe('the secret reaches the upstream and comes back scrubbed', () => {
   test('the placeholder becomes the secret on the wire to the bound host', async () => {
     const upstream = captureFetch(() => new Response('ok'));
+
     try {
       const response = await handleContainerEgress(
         new Request('https://api.stripe.com/v1/charges', {
@@ -146,6 +158,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
         PARAMS,
       );
+
       expect(response.status).toBe(200);
       expect(upstream.seen).toHaveLength(1);
       expect(upstream.seen[0]!.headers.get('authorization')).toBe(`Bearer ${SECRET}`);
@@ -164,12 +177,14 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
         headers: { 'www-authenticate': `Bearer error="${SECRET}"`, location: `/retry?k=${SECRET}` },
       },
     ));
+
     try {
       const response = await handleContainerEgress(
         new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
         fakeEnv(() => ({ kind: 'forward', substitutions: [{ placeholder: PLACEHOLDER, secret: SECRET }] })),
         PARAMS,
       );
+
       const body = await response.text();
       expect(body).not.toContain(SECRET);
       expect(body).toContain(PLACEHOLDER);
@@ -185,16 +200,19 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
       fakeEnv(() => ({ kind: 'refuse', status: 403, reason: 'bound to api.stripe.com' })),
       PARAMS,
     );
+
     expect(response.status).toBe(403);
     expect(await response.text()).not.toContain(SECRET);
   });
 
   test('an unconfigured container is refused, never forwarded', async () => {
     const upstream = captureFetch(() => new Response('should not happen'));
+
     try {
       const response = await handleContainerEgress(
         new Request('https://api.stripe.com/'), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), undefined,
       );
+
       expect(response.status).toBe(503);
       expect(upstream.seen).toHaveLength(0);
     } finally { upstream.restore(); }
@@ -202,6 +220,7 @@ describe('the secret reaches the upstream and comes back scrubbed', () => {
 
   test('traffic with no placeholder is forwarded untouched', async () => {
     const upstream = captureFetch(() => new Response('ok'));
+
     try {
       await handleContainerEgress(
         new Request('https://example.com/'),
@@ -222,6 +241,7 @@ describe('what the container is configured with', () => {
       vault: [BINDING, { id: 'prod-db', label: 'Prod DB', host: 'db.internal', placeholder: `${EGRESS_PLACEHOLDER_PREFIX}${'Z'.repeat(43)}` }],
       grants: [{ rule: 'egress-secret:stripe', executor: 'sandbox' }],
     });
+
     expect(params.bindings.map((b) => b.id)).toEqual(['stripe']);
     expect(JSON.stringify(params)).not.toContain('prod-db');
   });
@@ -231,6 +251,7 @@ describe('what the container is configured with', () => {
       workspaceName: 'w', ownerUserId: 'u', vault: [BINDING],
       grants: [{ rule: 'egress-secret:stripe', executor: 'laptop' }],
     });
+
     expect(params.bindings).toEqual([]);
   });
 
@@ -261,7 +282,9 @@ describe('configuration is awaited before the container runs', () => {
   test('the first operation configures once, and concurrent callers share it', async () => {
     let configured = 0;
     let released: () => void = () => {};
+
     const gate = new Promise<void>((resolve) => { released = resolve; });
+
     // `null`: an exec-only box publishes no previews, and the lane refuses to
     // mint one it cannot publish — see `adaptCloudflareSandbox`'s exposePort.
     const handle = adaptCloudflareSandbox(
@@ -269,6 +292,7 @@ describe('configuration is awaited before the container runs', () => {
       async () => { configured += 1; await gate; },
       null,
     );
+
     const both = Promise.all([handle.exec('a'), handle.exec('b')]);
     released();
     expect((await both).map((r) => r.stdout)).toEqual(['done', 'done']);
@@ -277,11 +301,17 @@ describe('configuration is awaited before the container runs', () => {
 
   test('a failed configuration is not cached, so the next call retries', async () => {
     let attempts = 0;
+
     const handle = adaptCloudflareSandbox(
       execOnlyBox(),
-      async () => { attempts += 1; if (attempts === 1) throw new Error('root unreachable'); },
+      async () => {
+        attempts += 1;
+
+        if (attempts === 1) throw new Error('root unreachable');
+      },
       null,
     );
+
     await expect(handle.exec('a')).rejects.toThrow('root unreachable');
     expect((await handle.exec('a')).stdout).toBe('done');
     expect(attempts).toBe(2);
@@ -295,13 +325,31 @@ describe('configuration is awaited before the container runs', () => {
       // moment later — written by the caller, invisible to the caller and to
       // every checkpoint after it.
       const order: string[] = [];
+
       const box: KinuSandbox = Object.create({
         ensureReady: async () => { order.push('ensureReady'); },
-        readFile: async () => { order.push('readFile'); return { content: '' }; },
-        writeFile: async () => { order.push('writeFile'); return undefined; },
-        listFiles: async () => { order.push('listFiles'); return { files: [] }; },
-        deleteFile: async () => { order.push('deleteFile'); return undefined; },
+        readFile: async () => {
+          order.push('readFile');
+
+          return { content: '' };
+        },
+        writeFile: async () => {
+          order.push('writeFile');
+
+          return undefined;
+        },
+        listFiles: async () => {
+          order.push('listFiles');
+
+          return { files: [] };
+        },
+        deleteFile: async () => {
+          order.push('deleteFile');
+
+          return undefined;
+        },
       });
+
       const handle = adaptCloudflareSandbox(box, async () => { order.push('configureEgress'); }, null);
 
       await handle.readFile('/workspace/a');
@@ -393,7 +441,9 @@ describe('a stub is used, never copied', () => {
 async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
   const logger = createRecordingLogger();
   const restore = setDiagnosticsSink(logger);
+
   try { await body(); } finally { restore(); }
+
   return logger.emitted;
 }
 
@@ -408,6 +458,7 @@ function throwingVaultEnv(thrown: { cause: unknown }): Env {
     },
     CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
   });
+
   /* SAFETY: as `fakeEnv` above — `UserDO.idFromName`, `UserDO.get` and
      `CREDENTIAL_ENCRYPTION_KEY` are the complete set the handler reads, and
      every one of them is constructed by the Object.assign above. */
@@ -425,6 +476,7 @@ function throwingEventEnv(thrown: { cause: unknown }): Env {
       get: () => jsrpcStub({ acceptContainerEvent: async () => { throw thrown.cause; } }),
     },
   });
+
   /* SAFETY: `OrchestratorAgent.idFromName` and `.get` are the complete set
      `handleContainerEvent` reaches before the RPC it is here to fail, and both
      are constructed by the Object.assign above. */
@@ -438,6 +490,7 @@ function throwingEventEnv(thrown: { cause: unknown }): Env {
 describe('one User-Agent for everything a container sends', () => {
   test('traffic with no placeholder carries the Kinu identity', async () => {
     const upstream = captureFetch(() => new Response('ok'));
+
     try {
       await handleContainerEgress(
         new Request('https://example.com/', { headers: { 'user-agent': 'curl/8.5.0' } }),
@@ -450,6 +503,7 @@ describe('one User-Agent for everything a container sends', () => {
 
   test('the secret-bearing path carries the same identity — one policy, not two', async () => {
     const upstream = captureFetch(() => new Response('ok'));
+
     try {
       await handleContainerEgress(
         new Request('https://api.stripe.com/v1/charges', {
@@ -464,6 +518,7 @@ describe('one User-Agent for everything a container sends', () => {
 
   test('a container that sends no User-Agent still identifies as Kinu', async () => {
     const upstream = captureFetch(() => new Response('ok'));
+
     try {
       await handleContainerEgress(
         new Request('https://example.com/'),
@@ -493,6 +548,7 @@ describe('one User-Agent for everything a container sends', () => {
 describe('the forwarded body is the container\'s own, not a copy of it', () => {
   test('the request that leaves carries the inbound body object itself', async () => {
     const upstream = captureFetch(() => new Response('ok'));
+
     try {
       // `duplex` is absent from the Workers `RequestInit` type and required by
       // the fetch specification for a stream body — the same intersection
@@ -505,6 +561,7 @@ describe('the forwarded body is the container\'s own, not a copy of it', () => {
         }),
         duplex: 'half',
       };
+
       const inbound = new Request('https://example.com/upload', init);
       const body = inbound.body;
       await handleContainerEgress(
@@ -520,6 +577,7 @@ describe('the forwarded body is the container\'s own, not a copy of it', () => {
       'https://example.com/thing',
       { headers: new Headers(), redirect: 'follow' },
     );
+
     expect(rebuilt.body).toBeNull();
   });
 });
@@ -531,6 +589,7 @@ describe('the forwarded body is the container\'s own, not a copy of it', () => {
 describe('a throw at the boundary becomes a classified answer', () => {
   test('an unreachable vault answers 503 and names the class, not the request', async () => {
     let response: Response | undefined;
+
     const emitted = await recordDiagnostics(async () => {
       response = await handleContainerEgress(
         new Request('https://api.stripe.com/v1/charges', { headers: { authorization: `Bearer ${PLACEHOLDER}` } }),
@@ -538,6 +597,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
         PARAMS,
       );
     });
+
     expect(response?.status).toBe(503);
     const body = await response!.text();
     expect(body).toContain('unavailable');
@@ -553,15 +613,18 @@ describe('a throw at the boundary becomes a classified answer', () => {
 
   test('a deadline on the vault is 504, not 503 — the two imply different retries', async () => {
     const timeout = new DOMException('The operation timed out', 'TimeoutError');
+
     const response = await handleContainerEgress(
       new Request('https://api.stripe.com/'), throwingVaultEnv({ cause: timeout }), PARAMS,
     );
+
     expect(response.status).toBe(504);
   });
 
   test('an upstream that cannot be reached answers 502 with the failure class', async () => {
     const upstream = captureFetch(() => { throw new Error('connection refused'); });
     let response: Response | undefined;
+
     try {
       const emitted = await recordDiagnostics(async () => {
         response = await handleContainerEgress(
@@ -570,6 +633,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
           PARAMS,
         );
       });
+
       expect(response?.status).toBe(502);
       expect(await response!.text()).toContain('example.com');
       expect(emitted).toHaveLength(1);
@@ -585,7 +649,9 @@ describe('a throw at the boundary becomes a classified answer', () => {
     const upstream = captureFetch(() => {
       throw new Error(`Fetch API cannot load: https://api.stripe.com/v1/charges?key=${SECRET}`);
     });
+
     let response: Response | undefined;
+
     try {
       const emitted = await recordDiagnostics(async () => {
         response = await handleContainerEgress(
@@ -594,6 +660,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
           PARAMS,
         );
       });
+
       expect(response?.status).toBe(502);
       expect(await response!.text()).not.toContain(SECRET);
       expect(emitted[0]!.cause).not.toContain(SECRET);
@@ -605,6 +672,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
 
   test('the event channel answers when its workspace object refuses the RPC', async () => {
     let response: Response | undefined;
+
     const emitted = await recordDiagnostics(async () => {
       response = await handleContainerEvent(
         new Request(`https://${CONTAINER_EVENT_HOST}/v1/events`, {
@@ -614,6 +682,7 @@ describe('a throw at the boundary becomes a classified answer', () => {
         PARAMS,
       );
     });
+
     expect(response?.status).toBe(503);
     // The container has to know the event is NOT recorded, or it drops it.
     expect(await response!.text()).toContain('send it again');
@@ -647,10 +716,12 @@ describe('private destinations are refused at the one place requests leave', () 
     ['IPv6 mapped private', 'http://[::ffff:169.254.169.254]/'],
   ])('%s is refused before the vault is asked', async (_label, target) => {
     const upstream = captureFetch(() => new Response('should not happen'));
+
     try {
       const refusal = await handleContainerEgress(
         new Request(target), fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
       );
+
       expect(refusal.status).toBe(403);
       // The classified payload, on the wire in the shared shape.
       expect(await refusal.json()).toMatchObject({ reason: 'denied' });
@@ -666,6 +737,7 @@ describe('private destinations are refused at the one place requests leave', () 
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
       );
     });
+
     expect(emitted[0]!.event).toBe('egress.private_destination');
     expect(emitted[0]!.code).toBe('denied');
     // Host only — no path, no query in the diagnostic — and the seam named, so
@@ -676,11 +748,13 @@ describe('private destinations are refused at the one place requests leave', () 
 
   test('the public control still succeeds end to end', async () => {
     const upstream = captureFetch(() => new Response('ok'));
+
     try {
       const response = await handleContainerEgress(
         new Request('https://example.com/'),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
       );
+
       expect(response.status).toBe(200);
       expect(upstream.seen).toHaveLength(1);
     } finally { upstream.restore(); }
@@ -699,11 +773,13 @@ describe('every redirect hop is judged, not trusted', () => {
     const hop = captureFetch(() => new Response(null, {
       status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data/' },
     }));
+
     try {
       const first = await handleContainerEgress(
         new Request('https://public.example/start'),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
       );
+
       expect(first.status).toBe(302);
       // The request left with redirect manual, so the hop's next request is
       // the CONTAINER's, and it re-enters the handler.
@@ -716,11 +792,13 @@ describe('every redirect hop is judged, not trusted', () => {
     // request to the private Location, and the guard refuses it before the
     // vault call — the refused destination is never contacted.
     const refused = captureFetch(() => new Response('should not happen'));
+
     try {
       const second = await handleContainerEgress(
         new Request('http://169.254.169.254/latest/meta-data/'),
         fakeEnv(() => ({ kind: 'forward', substitutions: [] })), PARAMS,
       );
+
       expect(second.status).toBe(403);
       expect(await second.json()).toMatchObject({ reason: 'denied' });
       expect(refused.seen).toHaveLength(0);

@@ -73,6 +73,7 @@ export function useStreamingBuffer(
   intervalMs = 50,
 ) {
   const controllerRef = useRef<StreamingBufferController | null>(null);
+
   if (!controllerRef.current) controllerRef.current = createStreamingBufferController(setStreamingText, intervalMs);
 
   const start = useCallback(() => {
@@ -94,6 +95,7 @@ export function useStreamingBuffer(
   useEffect(() => {
     const controller = createStreamingBufferController(setStreamingText, intervalMs);
     controllerRef.current = controller;
+
     return () => controller.dispose();
   }, [intervalMs, setStreamingText]);
 

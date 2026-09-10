@@ -24,13 +24,16 @@ function optionsForWorkspaceSwitch(
   mode: 'local' | 'cloud',
 ): ChatCommandOptions {
   const selected: ChatCommandOptions = { ...opts };
+
   if (mode === 'cloud') {
     selected.model = undefined;
     selected.baseUrl = undefined;
     selected.auth = undefined;
   }
+
   return selected;
 }
+
 export async function chatCommand(
   name: string | undefined,
   opts: ChatCommandOptions,
@@ -42,14 +45,19 @@ export async function chatCommand(
       // non-TUI command paths (e.g. the installer's setup prompts).
       const { runHomeTui } = await import('../tui/home-app');
       const action = await runHomeTui(opts);
+
       if (action.type === 'open-agent') await chatCommand(action.name, opts);
+
       return;
     }
+
     const agents = listKnownAgents();
+
     if (agents.length === 0) {
       printError('No workspaces found.', 'Run kinu in a terminal to create one from a mission.');
       process.exit(1);
     }
+
     if (agents.length === 1) {
       name = agents[0]!.name;
     } else {
@@ -58,15 +66,18 @@ export async function chatCommand(
       console.log('');
       const answer = await ask('Workspace #');
       const idx = parseInt(answer, 10) - 1;
+
       if (idx < 0 || idx >= agents.length) {
         printError('Invalid selection.');
         process.exit(1);
       }
+
       name = agents[idx]!.name;
     }
   }
 
   const target = requireAgentTarget(name);
+
   if (target.mode === 'local') ensureLocalDaemonRunning();
   installTurnDiagnostics();
   const client = await createAgentClient(target, opts);
@@ -84,12 +95,15 @@ export async function chatCommand(
       hydrateHistory,
       onWorkspaceSelect: async (selectedName) => {
         const selectedTarget = resolveAgentTarget(selectedName);
+
         // Mid-session, so this throws for the TUI to show rather than exiting.
         if (!agentTargetExists(selectedTarget)) {
           throw new Error(`Workspace "${selectedName}" is no longer available.`);
         }
+
         if (selectedTarget.mode === 'local') ensureLocalDaemonRunning();
         const selectedOptions = optionsForWorkspaceSwitch(opts, selectedTarget.mode);
+
         return createAgentClient(selectedTarget, selectedOptions);
       },
       onNewAgent: async (current) => {
@@ -99,14 +113,18 @@ export async function chatCommand(
           if (!(current instanceof CloudAgentClient)) {
             throw new Error('This cloud session cannot create additional agents.');
           }
+
           const created = await current.createAdditionalAgent();
+
           return {
             ...created,
             kind: 'cloud-additional' as const,
             client: current.openAdditionalAgent(created.name),
           };
         }
+
         const created = await createLocalPeerAgent();
+
         return { name: created.name, displayName: created.displayName ?? '', kind: 'local-peer' as const };
       },
     });

@@ -32,6 +32,7 @@ import { releaseScratch } from '../packages/test-utils/src/scratch';
 import { stripAmbientCredentials } from '../packages/test-utils/src/ambient-env';
 
 const home = mkdtempSync(join(tmpdir(), 'kinu-test-home-'));
+
 process.env.KINU_HOME = home;
 
 // The throwaway home isolates a suite from the developer's CONFIG FILE. This is
@@ -50,6 +51,7 @@ process.env.KINU_HOME = home;
 // should not have to infer why their credential is not in play.
 if (process.env.KINU_EVAL_LIVE !== '1') {
   const ignored = stripAmbientCredentials(process.env);
+
   if (ignored.length > 0) {
     console.warn(`[test-preload] ignoring ambient ${ignored.join(', ')} — a signed-in shell is `
       + 'not an input to a suite; run the eval tier (KINU_EVAL_LIVE=1) to use them');
@@ -106,9 +108,13 @@ for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) {
 // the cost is one readdir plus a stat per entry. It covers the suite-minted
 // `kinu-scratch-*` namespace too, for the same reason and by the same rule.
 const STALE_HOME_MS = 30 * 60 * 1000;
+
 const cutoff = Date.now() - STALE_HOME_MS;
+
 const tmp = tmpdir();
+
 const ABANDONED = ['kinu-test-home-', 'kinu-scratch-'] as const;
+
 for (const name of readdirSync(tmp)) {
   if (!ABANDONED.some((prefix) => name.startsWith(prefix)) || join(tmp, name) === home) continue;
   const path = join(tmp, name);
@@ -116,6 +122,7 @@ for (const name of readdirSync(tmp)) {
   // that. Anything else — a permission fault, a path that is not ours — must
   // surface rather than be swallowed into a silently growing directory.
   const stat = statSync(path, { throwIfNoEntry: false });
+
   if (stat === undefined || stat.mtimeMs >= cutoff) continue;
   rmSync(path, { recursive: true, force: true });
 }

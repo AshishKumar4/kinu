@@ -75,6 +75,7 @@ function redactClone(root: Element): number {
   const targets = root.querySelectorAll<HTMLElement>(
     `[${FEEDBACK_REDACT_ATTR}], [${FEEDBACK_REDACT_ATTR}] *, input[type="password"]`,
   );
+
   for (const node of targets) {
     // The confirmed leak: dist/index.mjs:821 wrote the live value here.
     node.removeAttribute('value');
@@ -101,12 +102,14 @@ function redactClone(root: Element): number {
     node.style.color = 'transparent';
     node.setAttribute(REDACTED_MARKER, '1');
   }
+
   return root.querySelectorAll(`[${REDACTED_MARKER}]`).length;
 }
 
 /** Honour the display's pixel ratio, but never past the pixel bound. */
 function captureScale(width: number, height: number): number {
   const area = Math.max(1, width * height);
+
   return Math.min(window.devicePixelRatio || 1, Math.sqrt(MAX_CAPTURE_PIXELS / area));
 }
 
@@ -123,7 +126,9 @@ function captureScale(width: number, height: number): number {
  */
 function unscrollDocument(root: Element): { transform: string } | undefined {
   const { scrollLeft, scrollTop } = root;
+
   if (scrollLeft === 0 && scrollTop === 0) return undefined;
+
   return { transform: `translate(${String(scrollLeft)}px, ${String(scrollTop)}px)` };
 }
 
@@ -133,7 +138,9 @@ async function encode(canvas: HTMLCanvasElement): Promise<Blob> {
   const encoded = await new Promise<Blob | null>((resolve) => {
     canvas.toBlob(resolve, FEEDBACK_SCREENSHOT_TYPE);
   });
+
   if (encoded === null) throw new Error('the browser could not encode the screenshot as PNG');
+
   return encoded;
 }
 
@@ -195,6 +202,7 @@ export interface Annotation {
  *  annotation belongs to this product rather than to a screenshot tool. */
 function accent(): string {
   const token = getComputedStyle(document.documentElement).getPropertyValue('--c-accent').trim();
+
   return token.length > 0 ? token : '#E0A458';
 }
 
@@ -212,12 +220,14 @@ export function paint(
   context.clearRect(0, 0, size.width, size.height);
   context.drawImage(image, 0, 0, size.width, size.height);
   const stroke = Math.max(2, Math.round(Math.min(size.width, size.height) / 320));
+
   for (const mark of annotations) {
     if (mark.kind === 'hide') {
       context.fillStyle = REDACTION_FILL;
       context.fillRect(mark.x, mark.y, mark.w, mark.h);
       continue;
     }
+
     context.strokeStyle = accent();
     context.lineWidth = stroke;
     context.strokeRect(mark.x + stroke / 2, mark.y + stroke / 2, mark.w - stroke, mark.h - stroke);
@@ -229,13 +239,16 @@ export function paint(
 export async function flatten(capture: Capture, annotations: readonly Annotation[]): Promise<Blob> {
   if (annotations.length === 0) return capture.blob;
   const bitmap = await createImageBitmap(capture.blob);
+
   try {
     const canvas = document.createElement('canvas');
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
     const context = canvas.getContext('2d');
+
     if (context === null) throw new Error('the browser gave no 2D canvas for the annotation');
     paint(context, bitmap, annotations, { width: bitmap.width, height: bitmap.height });
+
     return await encode(canvas);
   } finally {
     bitmap.close();

@@ -28,8 +28,11 @@ export async function handleCreateWorkspaceRequest(
     reasoningEffort: v.optional(v.picklist(['low', 'medium', 'high'])),
     role: v.optional(v.string()),
   }));
+
   if (!body) return err(400, 'Body must be JSON');
+
   if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
+
   // The wire shape and the create input are two types. Passing the parsed body
   // straight through made them one object by structure, so a field either side
   // gained crossed silently in whichever direction: the `role` a `kinu create
@@ -44,21 +47,26 @@ export async function handleCreateWorkspaceRequest(
     reasoningEffort: body.reasoningEffort,
     role: body.role,
   };
+
   try {
     const createOptions = ctx === undefined
       ? {}
       : { waitUntil: (promise: Promise<unknown>) => ctx.waitUntil(promise) };
+
     const entry = await createCloudWorkspaceForUser(
       env, userId, userDO, await ownerCaller(env), input, createOptions,
     );
+
     return json(entry, { status: 201 });
   } catch (e) {
     const message = renderThrownChain({ cause: e });
+
     // workspace-create.ts throws plain Errors; this is the single home for the
     // two answers that are conflicts rather than bad requests — a provider the
     // account cannot serve, and a name an unfinished transfer is still holding.
     const conflict = message.startsWith('Cloudflare Workers AI is not connected')
       || message.startsWith('Workspace name conflict');
+
     return err(conflict ? 409 : 400, message);
   }
 }
@@ -82,8 +90,10 @@ export function notifyWorkspacesCredentialsChanged(
   if (ctx === undefined) {
     throw new Error('Credential fanout requires the request ExecutionContext owner');
   }
+
   ctx.waitUntil((async (): Promise<void> => {
     let workspaces: Array<{ name: string }> | null;
+
     try {
       workspaces = await userDO.listActiveWorkspaces(await ownerCaller(env));
     } catch (cause) {
@@ -94,12 +104,15 @@ export function notifyWorkspacesCredentialsChanged(
       }));
       workspaces = null;
     }
+
     // A roster that could not be read is a fan-out that reaches nobody — the
     // credential write itself already landed, and the next workspace touch
     // reconciles its own copy.
     if (workspaces === null) return;
+
     const settled = await Promise.allSettled(workspaces
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
+
     for (const [index, outcome] of settled.entries()) {
       if (outcome.status === 'fulfilled') continue;
       diagnostics.failure('workspace.credential_notify_failed', toKinuError({

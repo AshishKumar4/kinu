@@ -66,6 +66,7 @@ export const LocalActorProcessBootstrapSchema = v.strictObject({
   reference: ActorReferenceSchema, parent: ActorReferenceSchema, rootDbPath: v.string(),
   parentStoragePath: v.array(v.string()), name: v.string(), storageKey: v.string(),
 });
+
 export type LocalActorProcessBootstrap = v.InferOutput<typeof LocalActorProcessBootstrapSchema>;
 
 /**
@@ -80,21 +81,27 @@ export type LocalActorProcessBootstrap = v.InferOutput<typeof LocalActorProcessB
 export function localActorProcessBootstrap(parent: ActorHandle, binding: LocalActorBinding): LocalActorProcessBootstrap {
   const scope = scopeFor(parent);
   const child = bindings.get(binding);
+
   if (!child || child.directory !== scope.directory || binding.reference.parentActorId !== parent.actorId) throw new KinuError('denied', 'The process bootstrap has a different parent.');
   scope.directory.validate(binding.reference, child.path);
+
   return { reference: binding.reference, parent: { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId },
     rootDbPath: scope.rootDbPath, parentStoragePath: [...scope.path], name: binding.name, storageKey: binding.storageKey };
 }
+
 export function localActorMission(rt: AgentRuntime, exec: SqlExec): string | null {
   if (rt.actor.parentActorId === null) return readMission(rt.storage.sql);
   // The subordinate's OWN descriptor, keyed by its own actor. One workspace
   // database holds every child's, so the handle is what selects whose.
   const identity = new SubordinateIdentityStore(exec, rt.actor).read();
+
   if (!identity) throw new KinuError('missing', 'The subordinate has no mission identity.');
+
   return identity.mission;
 }
 
 const actors = new WeakMap<ActorHandle, LocalActorScope>();
+
 const bindings = new WeakMap<LocalActorBinding, LocalActorScope>();
 
 function databasePath(path: string): string {
@@ -109,11 +116,14 @@ export function requireLocalDatabasePath(db: Database, path: string): void {
 export function openLocalRootActor(db: Database, sql: SqlExecutor): ActorHandle {
   const rows = sql<{ id: string; name: string; owner_user_id: string }>`SELECT id, name, owner_user_id FROM workspace_identity`;
   const identity = rows[0];
+
   if (!identity) throw new KinuError('missing', 'The local workspace has no durable identity.');
+
   if (rows.length !== 1) throw new KinuError('denied', 'The database has more than one workspace identity.');
   const directory = new WorkspaceActorDirectory(sql, { workspaceId: identity.id, ownerUserId: identity.owner_user_id });
   const actor = directory.main();
   actors.set(actor, { directory, workspaceName: identity.name, ownerUserId: identity.owner_user_id, path: [], rootDbPath: databasePath(db.filename) });
+
   return actor;
 }
 
@@ -127,7 +137,9 @@ export function openLocalRootActor(db: Database, sql: SqlExecutor): ActorHandle 
  */
 export function localActorDirectory(root: ActorHandle) {
   const scope = scopeFor(root);
+
   if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns the actor directory.');
+
   return { directory: scope.directory, rootDbPath: scope.rootDbPath };
 }
 
@@ -141,13 +153,16 @@ export function localActorDirectory(root: ActorHandle) {
  */
 export function localActorOwner(actor: ActorHandle) {
   const scope = scopeFor(actor);
+
   return { ownerUserId: scope.ownerUserId, workspaceName: scope.workspaceName };
 }
 
 function scopeFor(actor: ActorHandle): LocalActorScope {
   const scope = actors.get(actor);
+
   if (!scope) throw new KinuError('missing', 'The local actor has no root directory binding.');
   scope.directory.validate(actor, scope.path);
+
   return scope;
 }
 
@@ -157,6 +172,7 @@ function bindScoped(scope: LocalActorScope, reference: ActorReference): LocalAct
   const row = scope.directory.describe(actor);
   const binding = Object.freeze({ reference: Object.freeze(reference), name: row.name, storageKey: row.storageKey, kind: row.kind, createdAt: row.createdAt });
   bindings.set(binding, { ...scope, path });
+
   return binding;
 }
 
@@ -186,7 +202,9 @@ export function adoptLocalActorHandle(
 
 function bindChild(scope: LocalActorScope, reference: ActorReference, name: string): LocalActorBinding {
   const binding = bindScoped(scope, reference);
+
   if (binding.name !== name) throw new KinuError('denied', 'The actor alias does not match its directory record.');
+
   return binding;
 }
 
@@ -209,13 +227,16 @@ export function registerLocalActor(
 ): LocalActorBinding {
   const scope = scopeFor(parent);
   const entry = scope.directory.apply(parent, scope.path, { action: 'register', creationId: input.creationId, name: input.name, kind: input.kind, lifetime: input.lifetime });
+
   return bindChild(scope, entry.reference, input.name);
 }
 
 export function openLocalActor(parent: ActorHandle, name: string): LocalActorBinding {
   const scope = scopeFor(parent);
   const entry = scope.directory.apply(parent, scope.path, { action: 'resolve', name });
+
   if (entry.state !== 'active') throw new KinuError('missing', 'The local actor is retired.');
+
   return bindChild(scope, entry.reference, name);
 }
 
@@ -238,13 +259,16 @@ function registerLocalActorState(parent: ActorHandle, input: { name: string; cre
   const entry = scope.directory.apply(parent, scope.path, { action: 'register', ...input });
   const actor = scope.directory.open(entry.reference.actorId);
   actors.set(actor, { ...scope, path: scope.directory.storagePath(entry.reference) });
+
   return actor;
 }
 
 function requireBinding(binding: LocalActorBinding): LocalActorScope {
   const scope = bindings.get(binding);
+
   if (!scope) throw new KinuError('denied', 'The actor binding was not issued by a local root.');
   scope.directory.validate(binding.reference, scope.path);
+
   return scope;
 }
 
@@ -258,8 +282,10 @@ function requireBinding(binding: LocalActorBinding): LocalActorScope {
 export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): ActorHandle {
   const scope = requireBinding(binding);
   const validate = () => { scope.directory.validate(binding.reference, scope.path); };
+
   const actor = bindActorHandle(sql, { ...binding.reference, name: binding.name, storageKey: binding.storageKey }, validate);
   actors.set(actor, scope);
+
   return actor;
 }
 
@@ -267,6 +293,7 @@ export function bindLocalActor(sql: SqlExecutor, binding: LocalActorBinding): Ac
 export function requireLocalActorWorkspace(origin: ActorHandle, actor: ActorHandle): void {
   const owner = scopeFor(origin);
   const child = scopeFor(actor);
+
   if (owner.directory !== child.directory || origin.workspaceId !== actor.workspaceId) throw new KinuError('denied', 'The actor belongs to a different local workspace.');
 }
 
@@ -274,15 +301,22 @@ const retiring = new WeakMap<WorkspaceActorDirectory, Map<string, Promise<void>>
 
 async function retireLocalCreation(scope: LocalActorScope, caller: ActorReference, parentPath: readonly string[], name: string, reference: ActorReference, cleanup: (storageKey: string) => Promise<void>): Promise<void> {
   let pending = retiring.get(scope.directory);
+
   if (!pending) { pending = new Map(); retiring.set(scope.directory, pending); }
+
   const existing = pending.get(reference.actorId);
+
   if (existing) return await existing;
+
   const work = (async () => {
     const actor = scope.directory.apply(caller, parentPath, { action: 'retire', name, reference });
     await cleanup(actor.storageKey);
+
     if (actor.state !== 'deleted') scope.directory.apply(caller, parentPath, { action: 'release', name, reference });
   })();
+
   pending.set(reference.actorId, work);
+
   try { await work; } finally { if (pending.get(reference.actorId) === work) pending.delete(reference.actorId); }
 }
 
@@ -308,12 +342,15 @@ export function cancelLocalCreation(
   input: { name: string; creationId: string; kind: Exclude<WorkspaceActor['kind'], 'main'>; lifetime: WorkspaceActor['lifetime'] },
 ): ActorReference {
   const scope = scopeFor(parent);
+
   return scope.directory.apply(parent, scope.path, { action: 'cancelCreation', ...input }).reference;
 }
 
 export async function recoverLocalActorRetirements(root: ActorHandle, cleanup: (storagePath: readonly string[]) => Promise<void>): Promise<void> {
   const scope = scopeFor(root);
+
   if (root.parentActorId !== null) throw new KinuError('denied', 'Only the local root owns physical retirement recovery.');
+
   for (const actor of scope.directory.retirements()) {
     await retireLocalCreation(scope, actor.caller, actor.parentPath, actor.name, actor.reference, (key) => cleanup([...actor.parentPath, key]));
   }

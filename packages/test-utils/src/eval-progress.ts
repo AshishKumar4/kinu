@@ -41,12 +41,14 @@ import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 
 const FILE_NAME = 'eval-progress.json';
+
 const SCHEMA = 1;
 
 /** One case's phase. */
 export const CasePhaseSchema = v.picklist([
   'planned', 'started', 'progress', 'settled', 'incomplete',
 ]);
+
 export type CasePhase = v.InferOutput<typeof CasePhaseSchema>;
 
 /** How a case that RAN ended. Deliberately the same three words the run record
@@ -55,6 +57,7 @@ export type CasePhase = v.InferOutput<typeof CasePhaseSchema>;
  *  phase, not an outcome, because a cancelled episode produced no verdict to
  *  classify. */
 export const CaseOutcomeSchema = v.picklist(['scored', 'inert', 'errored']);
+
 export type CaseOutcome = v.InferOutput<typeof CaseOutcomeSchema>;
 
 /** What one case has DONE so far, counted from the episode's own events as they
@@ -125,6 +128,7 @@ export function caseKey(taskId: string, repetition: number): string {
  * by resume planning is checked before it reaches a typed record. */
 function readProgressFile(path: string): ProgressFileV1 | null {
   const parsed = v.safeParse(ProgressFileV1Schema, JSON.parse(readFileSync(path, 'utf8')));
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -142,13 +146,16 @@ export function openEvalProgress(dir: string, signature: string): EvalProgressSt
 
   if (existsSync(path)) {
     const parsed = readProgressFile(path);
+
     if (parsed?.signature === signature) cases = parsed.cases;
     // A mismatched or unreadable file starts fresh: stale state must never be
     // mistaken for this run's progress, and overwriting it loses nothing that
     // this run could have used.
   }
+
   return new EvalProgressStore(path, signature, cases);
 }
+
 /** Find the newest unfinished run directory of this exact shape.
  *
  * Completed runs are evidence and stay immutable; a new invocation starts a new
@@ -163,21 +170,28 @@ export function findResumableEvalDir(
   expectedKeys: ReadonlySet<string>,
 ): string | null {
   if (!existsSync(root)) return null;
+
   const candidates = readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && entry.name.startsWith(prefix))
     .map((entry) => entry.name)
     .sort()
     .reverse();
+
   for (const name of candidates) {
     const dir = join(root, name);
     const path = join(dir, FILE_NAME);
+
     if (!existsSync(path)) continue;
     const parsed = readProgressFile(path);
+
     if (parsed?.signature !== signature) continue;
+
     const complete = [...expectedKeys]
       .every((key) => parsed.cases[key]?.phase === 'settled');
+
     if (!complete) return dir;
   }
+
   return null;
 }
 
@@ -250,6 +264,7 @@ function stateOf(record: CaseRecord | undefined): CaseState {
  */
 export function formatCaseCensus(census: EvalCaseCensus): string {
   const { states } = census;
+
   const lines = [
     `cases ${String(census.total)} declared — `
     + `${String(states.scored.length)} scored, `
@@ -258,17 +273,21 @@ export function formatCaseCensus(census: EvalCaseCensus): string {
     + `${String(states.incomplete.length)} incomplete (operator-cancelled or interrupted), `
     + `${String(states.notRun.length)} not-run`,
   ];
+
   if (!census.complete) {
     lines.push('  INCOMPLETE RUN — this is not a green result.');
+
     if (states.incomplete.length > 0) {
       lines.push('    never settled:    '
         + states.incomplete.map((c) => caseKey(c.taskId, c.repetition)).join(', '));
     }
+
     if (states.notRun.length > 0) {
       lines.push('    never attempted:  '
         + states.notRun.map((c) => caseKey(c.taskId, c.repetition)).join(', '));
     }
   }
+
   return lines.join('\n');
 }
 
@@ -317,14 +336,17 @@ export class EvalProgressStore {
    */
   markPlanned(cases: readonly EvalProgressCase[]): void {
     const updatedAt = new Date().toISOString();
+
     for (const input of cases) {
       const key = caseKey(input.taskId, input.repetition);
+
       if (this.cases[key]) continue;
       this.cases[key] = {
         taskId: input.taskId, repetition: input.repetition, phase: 'planned', updatedAt,
       };
       this.dirty = true;
     }
+
     this.flush();
   }
 
@@ -345,11 +367,13 @@ export class EvalProgressStore {
   markActivity(key: string, delta: Partial<CaseActivity>): void {
     const existing = this.cases[key];
     const base = existing?.activity ?? { turns: 0, toolCalls: 0, modelSteps: 0 };
+
     const activity: CaseActivity = {
       turns: base.turns + (delta.turns ?? 0),
       toolCalls: base.toolCalls + (delta.toolCalls ?? 0),
       modelSteps: base.modelSteps + (delta.modelSteps ?? 0),
     };
+
     const updatedAt = new Date().toISOString();
     this.cases[key] = existing
       ? { ...existing, activity, updatedAt }
@@ -370,13 +394,16 @@ export class EvalProgressStore {
       taskId: taskIdOf(key), repetition: repetitionOf(key),
       phase: 'progress', outcome, output,
     };
+
     const activity = this.cases[key]?.activity;
+
     if (activity) record.activity = activity;
     this.set(key, record);
   }
 
   markSettled(key: string): void {
     const existing = this.cases[key];
+
     // Keep a progress record's output beside the settle stamp: adoption reads
     // `phase === 'settled'`, and nothing needs the bytes again, but the store is
     // also the only surviving copy of the episode if downstream persistence is
@@ -388,10 +415,13 @@ export class EvalProgressStore {
       repetition: repetitionOf(key),
       phase: 'settled',
     };
+
     if (existing?.phase === 'progress' && existing.output !== undefined) {
       record.output = existing.output;
     }
+
     if (existing?.outcome !== undefined) record.outcome = existing.outcome;
+
     if (existing?.activity !== undefined) record.activity = existing.activity;
     this.set(key, record);
   }
@@ -405,7 +435,9 @@ export class EvalProgressStore {
       taskId: taskIdOf(key), repetition: repetitionOf(key),
       phase: 'incomplete', reason,
     };
+
     const activity = this.cases[key]?.activity;
+
     if (activity) record.activity = activity;
     this.set(key, record);
   }
@@ -415,12 +447,14 @@ export class EvalProgressStore {
    *  and a cancelled run must not unwrite completed work. */
   markInFlightIncomplete(reason: string): string[] {
     const marked: string[] = [];
+
     for (const [key, record] of Object.entries(this.cases)) {
       if (record.phase === 'started') {
         this.markIncomplete(key, reason);
         marked.push(key);
       }
     }
+
     return marked;
   }
 
@@ -428,15 +462,20 @@ export class EvalProgressStore {
   plan<T extends EvalProgressCase>(cases: readonly T[]): EvalProgressPlan<T> {
     const todo: T[] = [];
     const adopt: Array<AdoptableEvalCase<T>> = [];
+
     for (const input of cases) {
       const record = this.cases[caseKey(input.taskId, input.repetition)];
+
       if (record?.phase === 'settled') continue;
+
       if (record?.phase === 'progress' && record.output !== undefined) {
         adopt.push({ input, output: record.output });
         continue;
       }
+
       todo.push(input);
     }
+
     return { todo, adopt };
   }
 
@@ -456,9 +495,11 @@ export class EvalProgressStore {
       incomplete: new Array<T>(),
       notRun: new Array<T>(),
     };
+
     for (const input of cases) {
       states[stateOf(this.cases[caseKey(input.taskId, input.repetition)])].push(input);
     }
+
     return {
       total: cases.length,
       complete: states.incomplete.length === 0 && states.notRun.length === 0,
@@ -470,9 +511,11 @@ export class EvalProgressStore {
    *  to call again before handing control to anything that might die. */
   flush(): void {
     if (!this.dirty) return;
+
     const payload: ProgressFileV1 = {
       schema: SCHEMA, signature: this.signature, cases: this.cases,
     };
+
     // Temp + rename: a crash mid-write leaves the previous complete state, not
     // a truncated file that reads as no progress at all.
     const tmp = `${this.path}.tmp`;
@@ -490,10 +533,12 @@ export class EvalProgressStore {
 
 function taskIdOf(key: string): string {
   const cut = key.lastIndexOf('#');
+
   return cut === -1 ? key : key.slice(0, cut);
 }
 
 function repetitionOf(key: string): number {
   const cut = key.lastIndexOf('#');
+
   return cut === -1 ? 0 : Number(key.slice(cut + 1));
 }

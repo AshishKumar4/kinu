@@ -137,19 +137,24 @@ function directWorkersAIFetch(binding: Ai): typeof globalThis.fetch {
   // Assignable without an assertion: the binding really does own this method,
   // and every arm of the union is narrowed below before use.
   const runner: DirectWorkersAIRunner = binding;
+
   return asFetchFunction(async (input, init) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const body = v.parse(JsonObjectSchema, JSON.parse(await request.text()));
     const route = v.parse(ChatCompletionRequestSchema, body);
+
     const options: DirectWorkersAIRunOptions = {
       signal: request.signal,
       returnRawResponse: true,
     };
+
     const affinity = request.headers.get('x-session-affinity');
+
     if (affinity) options.extraHeaders = { 'x-session-affinity': affinity };
 
     const startedAt = Date.now();
     let answer: Response | ReadableStream<Uint8Array> | JsonObject;
+
     try {
       answer = await runner.run(route.model, bindingInputs(body, route), options);
     } catch (caught) {
@@ -158,12 +163,15 @@ function directWorkersAIFetch(binding: Ai): typeof globalThis.fetch {
         cause: caught,
         otherwise: 'io',
       });
+
       // A cancelled call is the caller's own decision, not a provider failure.
       // Reporting it as one would turn every aborted turn into an error frame.
       if (failure.code === 'cancelled') throw caught;
       diagnostics.failure('workers_ai.direct_call_failed', failure, { model: route.model });
+
       return errorResponse(502, renderCauseChain(failure));
     }
+
     return route.stream
       ? streamedResponse(answer, route.model, startedAt)
       : completedResponse(answer, route.model);
@@ -201,7 +209,9 @@ function directWorkersAIFetch(binding: Ai): typeof globalThis.fetch {
 function bindingInputs(body: JsonObject, route: ChatCompletionRequest): JsonObject {
   const inputs: JsonObject = { ...body, stream: route.stream };
   delete inputs.model;
+
   if (route.messages) inputs.messages = route.messages.map(withoutNullContent);
+
   // @ai-sdk/openai-compatible asks for stream usage only when its `includeUsage`
   // config is set, and workers-ai.ts does not set it. A buffered completion
   // always carries usage; a real stream carries it only when asked, so without
@@ -212,6 +222,7 @@ function bindingInputs(body: JsonObject, route: ChatCompletionRequest): JsonObje
   if (route.stream && inputs.stream_options === undefined) {
     inputs.stream_options = { include_usage: true };
   }
+
   return inputs;
 }
 
@@ -225,13 +236,16 @@ async function completedResponse(
   model: string,
 ): Promise<Response> {
   if (answer instanceof Response && !answer.ok) return upstreamRefusal(answer, model);
+
   if (!(answer instanceof Response) && !(answer instanceof ReadableStream)) {
     return openAICompletion(answer, model);
   }
+
   // A `Response` carries the whole completion. A raw body reaches here through
   // the content-type equality quirk of fact 2, never because anything streamed,
   // so reading it whole is what was asked for.
   const text = await (answer instanceof Response ? answer : new Response(answer)).text();
+
   return openAICompletion(v.parse(JsonObjectSchema, JSON.parse(text)), model);
 }
 
@@ -244,11 +258,16 @@ async function streamedResponse(
   if (answer instanceof Response) {
     if (!answer.ok) return upstreamRefusal(answer, model);
     const contentType = answer.headers.get('content-type') ?? '';
+
     if (!answer.body) return unstreamable(model, 'a bodyless response');
+
     if (!contentType.includes('text/event-stream')) return unstreamable(model, contentType);
+
     return sseResponse(answer.body, model, startedAt);
   }
+
   if (answer instanceof ReadableStream) return sseResponse(answer, model, startedAt);
+
   // A parsed object is one whole completion for a request that asked to stream.
   return unstreamable(model, 'a JSON completion');
 }
@@ -267,15 +286,21 @@ async function sseResponse(
 ): Promise<Response> {
   const reader = body.getReader();
   const first = await reader.read();
+
   if (first.done) {
     await reader.cancel();
+
     return unstreamable(model, 'an empty stream');
   }
+
   const head = new TextDecoder().decode(first.value).trimStart();
+
   if (head.startsWith('{') || head.startsWith('[')) {
     await reader.cancel();
+
     return unstreamable(model, 'a JSON completion');
   }
+
   diagnostics.event('workers_ai.direct_stream_first_byte', {
     model,
     ms: Date.now() - startedAt,
@@ -283,14 +308,18 @@ async function sseResponse(
   });
 
   let pending: Uint8Array | undefined = first.value;
+
   const source = new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (pending) {
         controller.enqueue(pending);
         pending = undefined;
+
         return;
       }
+
       const next = await reader.read();
+
       if (next.done) controller.close();
       else controller.enqueue(next.value);
     },
@@ -298,6 +327,7 @@ async function sseResponse(
     // turn stops costing neurons.
     cancel: () => reader.cancel(),
   });
+
   // One pass over the bytes. The translation below already splits every line
   // and parses every `data:` payload, so the cached-usage repair applies inside
   // it as a rule rather than as a second transform doing the same work again.
@@ -352,12 +382,15 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
 
   const frame = (choices: JsonObject[], usage?: JsonObject): Uint8Array => {
     const chunk: JsonObject = { id, object: 'chat.completion.chunk', created, model, choices };
+
     if (usage) chunk.usage = usage;
+
     return encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`);
   };
 
   const finalize = (controller: TransformStreamDefaultController<Uint8Array>): void => {
     if (closed) return;
+
     // The final state leaves in exactly ONE frame. A finish reason that has not
     // gone out yet takes the usage with it. When the upstream already announced
     // one, the usage travels on a chunk with no choice, which is the OpenAI wire
@@ -372,6 +405,7 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
     } else if (owedUsage) {
       controller.enqueue(frame([], owedUsage));
     }
+
     owedUsage = undefined;
     controller.enqueue(encoder.encode('data: [DONE]\n\n'));
     closed = true;
@@ -384,22 +418,29 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
     controller: TransformStreamDefaultController<Uint8Array>,
   ): void => {
     const parsed = v.safeParse(NativeOutputSchema, payload);
+
     if (!parsed.success) {
       failed = true;
       controller.error(new Error(
         `Workers AI ${model} streamed a frame that is neither an OpenAI chunk nor a native output`,
       ));
+
       return;
     }
+
     const output = parsed.output;
+
     if (output.usage) owedUsage = repairCachedUsage(output.usage) ?? output.usage;
     const text = output.response ?? '';
+
     if (text.length > 0) {
       const delta: JsonObject = opened ? { content: text } : { role: 'assistant', content: text };
       opened = true;
       controller.enqueue(frame([{ index: 0, delta, finish_reason: null }]));
     }
+
     const calls = output.tool_calls ?? [];
+
     if (calls.length > 0) {
       const deltas = calls.map((call, offset) => ({
         index: toolCalls + offset,
@@ -407,6 +448,7 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
         type: 'function',
         function: { name: call.name, arguments: toolArguments(call.arguments) },
       }));
+
       toolCalls += calls.length;
       opened = true;
       controller.enqueue(frame([{ index: 0, delta: { tool_calls: deltas }, finish_reason: null }]));
@@ -419,35 +461,45 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
   ): void => {
     if (payload === '[DONE]') {
       finalize(controller);
+
       return;
     }
+
     // A `data:` line that is not a JSON object cannot be forwarded as a chunk
     // and cannot be dropped without losing whatever it said, so it ends the
     // stream loudly.
     const decoded = tolerate<unknown>(() => JSON.parse(payload), 'malformed-input');
     const object = v.safeParse(JsonObjectSchema, decoded);
+
     if (!object.success) {
       failed = true;
       controller.error(new Error(`Workers AI ${model} streamed a data frame that is not a JSON object`));
+
       return;
     }
+
     // Either the frame is not OpenAI-shaped, or it has no live choice — and a
     // frame with no live choice is a usage report and nothing else, whichever
     // dialect spelled it. One path for both: forwarding one would end the
     // response a second time, and the AI SDK's own chunk schema requires
     // `choices`, so the dialect that omits it cannot be forwarded at all.
     const chunk = v.safeParse(ChunkSchema, object.output);
+
     if (!chunk.success || chunk.output.choices.length === 0) {
       translate(object.output, controller);
+
       return;
     }
+
     if (chunk.output.choices.some((choice) => (choice.finish_reason ?? null) !== null)) {
       finished = true;
     }
+
     const usage = chunk.output.usage;
     // This frame reports its own usage, so nothing is owed after it. Its bytes
     // are rebuilt only when the cache repair has a maximum to restore.
     const repaired = usage ? repairCachedUsage(usage) : undefined;
+
     if (usage) owedUsage = undefined;
     const outgoing = repaired ? JSON.stringify({ ...object.output, usage: repaired }) : payload;
     controller.enqueue(encoder.encode(`data: ${outgoing}\n\n`));
@@ -459,6 +511,7 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
   ): void => {
     if (failed) return;
     const field = line.trimEnd();
+
     if (!field.startsWith('data:')) return;
     onData(field.slice('data:'.length).trim(), controller);
   };
@@ -468,11 +521,13 @@ function openAIChunkTransform(model: string): TransformStream<Uint8Array, Uint8A
       buffer += decoder.decode(bytes, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
+
       for (const line of lines) drain(line, controller);
     },
     flush(controller) {
       buffer += decoder.decode();
       drain(buffer, controller);
+
       if (!failed) finalize(controller);
     },
   });
@@ -487,13 +542,17 @@ function openAICompletion(raw: JsonObject, requestedModel: string): Response {
   // Minted once per RESPONSE and used twice: as the completion's own id, and as
   // the response-unique scope of every tool-call id below.
   const responseId = `chatcmpl-${crypto.randomUUID()}`;
+
   const toolCalls = (output.tool_calls ?? []).map((call, index) => ({
     id: toolCallIdFor({ scope: `call-${responseId}`, native: call.id, index }),
     type: 'function',
     function: { name: call.name, arguments: toolArguments(call.arguments) },
   }));
+
   const message: JsonObject = { role: 'assistant', content: output.response ?? '' };
+
   if (toolCalls.length > 0) message.tool_calls = toolCalls;
+
   const completion: JsonObject = {
     id: responseId,
     object: 'chat.completion',
@@ -505,7 +564,9 @@ function openAICompletion(raw: JsonObject, requestedModel: string): Response {
       finish_reason: toolCalls.length > 0 ? 'tool_calls' : 'stop',
     }],
   };
+
   if (output.usage) completion.usage = output.usage;
+
   return jsonResponse(completion);
 }
 
@@ -520,6 +581,7 @@ function toolArguments(value: string | JsonObject): string {
 /** Streaming was requested and the upstream answered something else. */
 function unstreamable(model: string, saw: string): Response {
   diagnostics.event('workers_ai.direct_stream_unsupported', { model, saw });
+
   return errorResponse(502, `Workers AI model ${model} did not stream over the direct binding: `
     + `the upstream answered ${saw}. A streamed request is refused rather than served from a `
     + 'buffered completion.');
@@ -530,14 +592,18 @@ function unstreamable(model: string, saw: string): Response {
 async function upstreamRefusal(response: Response, model: string): Promise<Response> {
   const body = await response.text();
   diagnostics.event('workers_ai.direct_call_refused', { model, status: response.status });
+
   const refusal = errorResponse(
     response.status,
     upstreamMessage(body) ?? `Workers AI refused ${model} with HTTP ${String(response.status)}.`,
   );
+
   // The provider's mandated wait travels with its refusal, so the retry above
   // follows it instead of guessing a backoff.
   const retryAfter = response.headers.get('retry-after');
+
   if (retryAfter !== null) refusal.headers.set('retry-after', retryAfter);
+
   return refusal;
 }
 
@@ -545,11 +611,14 @@ function upstreamMessage(body: string): string | null {
   const decoded = tolerate<unknown>(() => JSON.parse(body), 'malformed-input');
   const parsed = v.safeParse(UpstreamErrorSchema, decoded);
   const head = body.trim();
+
   if (!parsed.success) return head === '' ? null : head;
   const first = parsed.output.errors?.[0];
   const text = parsed.output.description ?? parsed.output.message ?? first?.message;
+
   if (text === undefined) return head === '' ? null : head;
   const code = parsed.output.internalCode ?? first?.code;
+
   return code === undefined ? text : `${String(code)}: ${text}`;
 }
 

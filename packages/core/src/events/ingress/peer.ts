@@ -93,10 +93,12 @@ const PeerBackHolderSchema = v.object({
   ask_id: v.string(),
   mode: WorkModeSchema,
 });
+
 const ReplyBodySchema = v.object({
   in_reply_to: v.string(),
   content: v.optional(JsonValueSchema),
 });
+
 const PeerOutboxMessageSchema = v.object({
   receiver_agent_name: v.string(),
   receiver_user_id: v.string(),
@@ -128,11 +130,13 @@ export async function receivePeerMessage(
   now: number,
 ): Promise<ReceiveResult> {
   const same_owner = await deps.isSameOwner(msg.sender_user_id);
+
   const receiver_grant_present = same_owner
     ? true   // same-owner peers don't need an explicit grant beyond ownership
     : await deps.hasGrant(msg.sender_agent_name, msg.sender_user_id);
 
   const serialized = JSON.stringify(msg.body);
+
   const counted = (admitted: boolean): void => countMsgReceived({
     from: msg.sender_agent_name,
     topic: msg.topic,
@@ -143,6 +147,7 @@ export async function receivePeerMessage(
 
   if (!same_owner && !receiver_grant_present) {
     counted(false);
+
     return { admitted: false, reason: 'no grant from receiver for cross-owner sender' };
   }
 
@@ -158,6 +163,7 @@ export async function receivePeerMessage(
     kinu_mode: msg.mode,
     reply_expected: msg.reply_expected ?? false,
   };
+
   if (bodyPath) Object.assign(payload, { body_path: bodyPath });
 
   try {
@@ -171,11 +177,15 @@ export async function receivePeerMessage(
       },
       now,
     });
+
     counted(admitted);
+
     if (admitted && msg.reply_expected) deps.openPeerBackChannel?.(id, msg);
+
     return { admitted, event_id: id };
   } catch (err) {
     counted(false);
+
     return { admitted: false, reason: renderThrownChain({ cause: err }) };
   }
 }
@@ -187,6 +197,7 @@ export async function receivePeerMessage(
  *  Receiver refusals dead-letter immediately. There is no ceiling constant: a 1h
  *  ceiling cannot bind at 8 attempts, so it would be a bound that cannot fail. */
 const MAX_DELIVERY_ATTEMPTS = 8;
+
 const RETRY_BASE_MS = 5_000;
 
 interface PeerBackHolder {
@@ -256,6 +267,7 @@ export class PeerHub {
   /** The receiving half, behind whatever RPC surface a host exposes. */
   async receive(msg: PeerMessage): Promise<ReceiveResult> {
     const now = this.now();
+
     const result = await receivePeerMessage({
       log: this.deps.log,
       vfs: this.deps.vfs(),
@@ -273,6 +285,7 @@ export class PeerHub {
           ask_id: m.sender_event_id,
           mode: m.mode,
         };
+
         this.deps.replyChannels.open({
           event_id,
           kind: 'peer_back',
@@ -284,6 +297,7 @@ export class PeerHub {
 
     if (result.admitted && result.event_id) {
       const askId = this.resolveAskWaiter(msg);
+
       if (askId) {
         // The awaiting ask() consumed the reply inline — bind the event so the
         // post-turn drain never re-fires it as a fresh programmatic turn.
@@ -292,6 +306,7 @@ export class PeerHub {
         this.deps.onAdmitted();
       }
     }
+
     return result;
   }
 
@@ -301,11 +316,15 @@ export class PeerHub {
   private isReplyToMyAsk(msg: PeerMessage): boolean {
     if (msg.topic !== PEER_REPLY_TOPIC) return false;
     const body = v.safeParse(ReplyBodySchema, msg.body);
+
     if (!body.success) return false;
     const record = this.outbox.status(body.output.in_reply_to);
+
     if (record?.state !== 'sent') return false;
     const ask = v.safeParse(PeerOutboxMessageSchema, record.message);
+
     if (!ask.success) return false;
+
     return ask.output.receiver_agent_name === msg.sender_agent_name
       && ask.output.receiver_user_id === msg.sender_user_id
       && ask.output.reply_expected;
@@ -315,11 +334,14 @@ export class PeerHub {
   private resolveAskWaiter(msg: PeerMessage): string | null {
     if (msg.topic !== PEER_REPLY_TOPIC) return null;
     const body = v.safeParse(ReplyBodySchema, msg.body);
+
     if (!body.success) return null;
     const askId = body.output.in_reply_to;
     const resolve = this.waiters.get(askId);
+
     if (!resolve) return null;
     resolve({ content: body.output.content });
+
     return askId;
   }
 
@@ -330,7 +352,9 @@ export class PeerHub {
     const id = await this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, false);
     await this.dispatchOutbox();
     const row = this.outbox.status(id);
+
     if (row?.state === 'dlq') return { status: 'rejected', reason: row.lastError ?? 'rejected by receiver' };
+
     return { status: row?.state === 'sent' ? 'delivered' : 'queued', message_id: id };
   }
 
@@ -344,32 +368,42 @@ export class PeerHub {
     const wait = this.registerWaiter(askId, input.signal);
     await this.dispatchOutbox();
     const row = this.outbox.status(askId);
+
     if (row?.state === 'dlq') {
       wait.cancel();
+
       return { status: 'rejected', reason: row.lastError ?? 'rejected by receiver' };
     }
+
     const reply = await wait.promise;
+
     if (reply) return { status: 'replied', from: input.agent, reply: reply.content };
+
     if (input.signal?.aborted) {
       throw input.signal.reason instanceof Error
         ? input.signal.reason
         : new Error('peer ask cancelled');
     }
+
     throw new Error('the peer ask waiter resolved without a reply, cancellation, or a dead-letter');
   }
 
   /** Answer a received peer ask through its peer-back reply channel. */
   async reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome> {
     const channel = this.deps.replyChannels.findOpenByEvent(input.eventId, 'peer_back');
+
     if (!channel) {
       return {
         ok: false,
         error: `no open peer reply channel for event ${input.eventId} — already answered, expired, or the sender did not ask for a reply`,
       };
     }
+
     const outcome = await this.deps.replyChannels.reply(channel.id, input.message, this.now());
+
     if (outcome.outcome === 'delivered') return { ok: true };
     const detail = outcome.outcome === 'failed' && outcome.detail ? `: ${outcome.detail}` : '';
+
     return { ok: false, error: `reply not delivered (${outcome.outcome}${detail})` };
   }
 
@@ -377,6 +411,7 @@ export class PeerHub {
    *  asker over the same durable outbox transport. */
   async dispatchPeerBack(channel: ReplyChannelRow, payload: JsonValue): Promise<{ delivered: boolean; detail?: string }> {
     let holder: PeerBackHolder;
+
     try {
       holder = v.parse(PeerBackHolderSchema, parseJsonObject(channel.holder_addr));
     } catch (error) {
@@ -384,11 +419,13 @@ export class PeerHub {
       // a value the operator can act on only if the reason rides with it.
       return { delivered: false, detail: `malformed peer_back holder_addr: ${renderThrownChain({ cause: error })}` };
     }
+
     await this.enqueue(holder.agent_name, holder.user_id, PEER_REPLY_TOPIC, {
       in_reply_to: holder.ask_id,
       content: payload,
     }, holder.mode, false);
     await this.dispatchOutbox();
+
     // Durable handoff: the outbox owns retries from here on.
     return { delivered: true };
   }
@@ -409,6 +446,7 @@ export class PeerHub {
       mode,
       reply_expected: replyExpected,
     }, { now: this.now() });
+
     return id;
   }
 
@@ -427,10 +465,13 @@ export class PeerHub {
    *  a thrown hop is transport trouble and backs off. */
   private async deliverOne(message: PeerOutboxMessage, id: string): Promise<OutboxDisposition> {
     const parsed = v.safeParse(PeerOutboxMessageSchema, message);
+
     if (!parsed.success) {
       return { status: 'poison', reason: 'peer outbox row is missing a valid work mode' };
     }
+
     const queued = parsed.output;
+
     const wire: PeerMessage = {
       sender_event_id: id,
       sender_agent_name: this.deps.selfAgentName(),
@@ -439,8 +480,10 @@ export class PeerHub {
       body: queued.body,
       mode: queued.mode,
     };
+
     if (queued.reply_expected) Object.assign(wire, { reply_expected: true });
     let result: ReceiveResult;
+
     try {
       result = await this.deps.deliver(queued.receiver_agent_name, wire);
     } catch (err) {
@@ -448,9 +491,11 @@ export class PeerHub {
       // Rendered rather than rethrown so the stored `last_error` keeps the chain.
       return { status: 'retry', reason: renderThrownChain({ cause: err }) };
     }
+
     // Admitted now, or deduped by the receiver (a crash redelivery) — sent
     // either way. Anything else is a refusal (e.g. no cross-owner grant).
     if (result.admitted || result.event_id) return { status: 'sent' };
+
     return { status: 'poison', reason: result.reason ?? 'rejected by receiver' };
   }
 
@@ -463,28 +508,37 @@ export class PeerHub {
    *  explicit cancellation, or activation eviction. */
   private registerWaiter(askId: string, signal?: AbortSignal) {
     let cancel!: () => void;
+
     const promise = new Promise<{ content: JsonValue | undefined } | null>((resolve) => {
       let finished = false;
+
       const cleanup = (): boolean => {
         if (finished) return false;
         finished = true;
         this.waiters.delete(askId);
         signal?.removeEventListener('abort', onAbort);
+
         return true;
       };
+
       const onAbort = () => {
         if (cleanup()) resolve(null);
       };
+
       cancel = onAbort;
+
       if (signal?.aborted) {
         onAbort();
+
         return;
       }
+
       signal?.addEventListener('abort', onAbort, { once: true });
       this.waiters.set(askId, (envelope) => {
         if (cleanup()) resolve(envelope);
       });
     });
+
     return { promise, cancel };
   }
 }

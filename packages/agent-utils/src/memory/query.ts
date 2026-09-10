@@ -18,20 +18,28 @@ export interface SanitizeOptions {
 
 export function sanitizeFtsQuery(query: string, options?: SanitizeOptions): string {
 	const useStopWords = options?.stopWords ?? true;
+
 	const tokens = query
 		.replace(/[^\w\s]/g, " ")
 		.split(/\s+/)
 		.filter((t) => {
 			if (!t) return false;
+
 			if (FTS_OPERATORS.has(t.toUpperCase())) return false;
+
 			if (useStopWords && STOP_WORDS.has(t.toLowerCase())) return false;
+
 			return true;
 		});
+
 	if (tokens.length === 0) {
 		const fallback = query.replace(/[^\w\s]/g, " ").split(/\s+/).filter(Boolean);
+
 		if (fallback.length === 0) return '""';
+
 		return fallback.map((t) => `"${t}"`).join(" ");
 	}
+
 	return tokens.map((t) => `"${t}"`).join(" ");
 }
 
@@ -42,6 +50,7 @@ export function sanitizeFtsQuery(query: string, options?: SanitizeOptions): stri
  */
 export function relaxFtsQuery(safeQuery: string): string | null {
 	const tokens = safeQuery.split(" ").filter(Boolean);
+
 	return tokens.length > 1 ? tokens.join(" OR ") : null;
 }
 
@@ -68,15 +77,19 @@ export function fillToCapacity<Row>(
 	idOf: (row: Row) => string,
 ): Row[] {
 	const merged = strict.slice(0, capacity);
+
 	if (merged.length >= capacity) return merged;
 	const seen = new Set(merged.map(idOf));
+
 	for (const row of partial) {
 		if (merged.length >= capacity) break;
 		const id = idOf(row);
+
 		if (seen.has(id)) continue;
 		seen.add(id);
 		merged.push(row);
 	}
+
 	return merged;
 }
 

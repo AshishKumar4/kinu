@@ -50,6 +50,7 @@ export class OrchestratorAgent {
   }
 }
 `;
+
     const found = findUnreachable(new Map([['agent.ts', installer]])).unreachable.map(keyOf);
     expect(found).toEqual([]);
   });
@@ -99,6 +100,7 @@ export class OrchestratorAgent {
       new Map([['agent.ts', AGENT]]),
       new Map([['agent.test.ts', `test('x', () => agent.listDeferredApprovals());`]]),
     );
+
     expect(found.unreachable.map(keyOf)).toEqual([KEY]);
     expect(found.unreachable[0]!.testCallers).toEqual(['agent.test.ts']);
   });
@@ -120,6 +122,7 @@ export class OrchestratorAgent {
       handlers['indexed']();
       // commented()
     `);
+
     // `rpc` itself is a bare identifier callee and is NOT recorded: an RPC is
     // always reached through an object, and counting free calls would let a
     // same-named core function stand in for a caller of the method.

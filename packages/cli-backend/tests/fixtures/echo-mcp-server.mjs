@@ -19,6 +19,7 @@ server.registerTool(
   { description: 'Sleep, then report.', inputSchema: { ms: z.number() } },
   async ({ ms }) => {
     await new Promise((resolve) => setTimeout(resolve, ms));
+
     return { content: [{ type: 'text', text: `slept ${ms}ms` }] };
   },
 );
@@ -28,6 +29,7 @@ server.registerTool(
 // the schema exceed it on their own: the schema is atomic (never truncated),
 // so a tool shaped like this defers whole instead of arriving clamped.
 const OVERSIZED = 'x'.repeat(300_000);
+
 server.registerTool(
   'huge',
   {
@@ -38,9 +40,11 @@ server.registerTool(
 );
 
 await server.connect(new StdioServerTransport());
+
 process.stdin.resume();
 
 const keepAlive = setInterval(() => undefined, 60_000);
+
 process.once('SIGTERM', () => {
   clearInterval(keepAlive);
   process.exit(0);

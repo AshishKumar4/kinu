@@ -225,12 +225,15 @@ export interface BackgroundJobRunnerDeps {
  *  convention every other debug summary line already uses (task.slice(0,60)
  *  for head runs, etc.) — this is a label, not a payload dump. */
 const SearchJobInputSchema = v.object({ task: v.string() });
+
 const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
+
 const ExecuteJobInputSchema = v.object({ code: v.string() });
 
 function describeJobInput<T>(kind: string, input: T): string | undefined {
   if (kind === 'agents') {
     const parsed = v.safeParse(SearchJobInputSchema, input);
+
     if (parsed.success) {
       // `search:`, not `fork:` — the only backgroundable `agents` action is
       // swarm, and this label is rendered into the live-state block the model
@@ -238,17 +241,23 @@ function describeJobInput<T>(kind: string, input: T): string | undefined {
       return `search: ${parsed.output.task.slice(0, 80)}`;
     }
   }
+
   if (kind === 'run') {
     const parsed = v.safeParse(RunJobInputSchema, input);
+
     if (parsed.success) {
       const runtime = parsed.output.runtime ? `${parsed.output.runtime}: ` : '';
+
       return `${runtime}${parsed.output.command.slice(0, 80)}`;
     }
   }
+
   if (kind === 'execute_tools') {
     const parsed = v.safeParse(ExecuteJobInputSchema, input);
+
     if (parsed.success) return parsed.output.code.trim().slice(0, 80);
   }
+
   return undefined;
 }
 
@@ -298,6 +307,7 @@ export class BackgroundJobRunner {
       label: describeJobInput(kind, input),
     });
     this.controllers.set(id, controller);
+
     return id;
   }
 
@@ -311,6 +321,7 @@ export class BackgroundJobRunner {
     controller: AbortController,
   ): string | null {
     const id = `bgjob-${nanoid()}`;
+
     const created = this.deps.store.createRetry({
       sourceId,
       id,
@@ -320,8 +331,10 @@ export class BackgroundJobRunner {
       now: Date.now(),
       label: describeJobInput(kind, input),
     });
+
     if (!created) return null;
     this.controllers.set(id, controller);
+
     return id;
   }
 
@@ -377,13 +390,17 @@ export class BackgroundJobRunner {
     ownership?: DeviceRequestOwnership,
   ): Promise<DetachOutcome> {
     const running = this.liveDetachedCount();
+
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
       this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
+
       return { detached: false, reason: 'too many jobs already running' };
     }
+
     const jobId = this.create(kind, input, mode, controller);
     this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);
     await this.beginDetachedWork(jobId, kind, promise, ownership);
+
     return { detached: true, jobId };
   }
 
@@ -410,7 +427,9 @@ export class BackgroundJobRunner {
   private liveDetachedCount(): number {
     const owed = this.deps.store.resumeOwedIdsInWorkspace(Date.now());
     let idle = 0;
+
     for (const jobId of owed) if (!this.controllers.has(jobId)) idle++;
+
     return this.deps.store.countRunningInWorkspace() - idle;
   }
 
@@ -435,6 +454,7 @@ export class BackgroundJobRunner {
     // and the drain closes the transferred set in the same tick so no id falls
     // between the two (./device-ownership).
     const requestIds = ownership?.drain(jobId) ?? [];
+
     try {
       await this.deps.onDetached?.(jobId, requestIds);
     } catch (err) {
@@ -443,6 +463,7 @@ export class BackgroundJobRunner {
         `${kind} → ${jobId}; external-work transfer was not confirmed — ${renderThrownChain({ cause: err })}`,
       );
     }
+
     this.detach(jobId, kind, promise);
   }
 
@@ -461,11 +482,13 @@ export class BackgroundJobRunner {
    *  concurrent reclaim (evict-recovery) can no longer settle the job (§5.3). */
   private runToSettlement<T>(jobId: string, kind: string, exec: () => Promise<T>): void {
     let driver: Promise<void> | undefined;
+
     const drive = async (): Promise<void> => {
       try {
         await this.deps.fiber(`${BACKGROUND_FIBER_PREFIX}${kind}`, async (ctx) => {
           ctx.stash({ phase: 'running', jobId, kind });
           let settled: boolean;
+
           try {
             await this.settleAndWake(jobId, exec);
             // A fenced executor's terminal write is a no-op (§5.3), so the store —
@@ -488,6 +511,7 @@ export class BackgroundJobRunner {
             );
             settled = this.failUnsettled(jobId, err);
           }
+
           // Only a job that actually reached a terminal status is 'settled'; if even
           // the force-fail could not write, the snapshot stays 'running' so an
           // eviction in this window still hands the job to recover().
@@ -502,6 +526,7 @@ export class BackgroundJobRunner {
           toKinuError({ doing: 'run the durable fiber for a background job', cause, otherwise: 'io' }),
           { jobId, kind },
         );
+
         try {
           if (this.deps.store.get(jobId)?.status === 'running') {
             await this.settleAndWake(jobId, async () => { throw cause; });
@@ -518,6 +543,7 @@ export class BackgroundJobRunner {
         if (driver && this.fiberDrivers.get(jobId) === driver) this.fiberDrivers.delete(jobId);
       }
     };
+
     driver = drive();
     this.fiberDrivers.set(jobId, driver);
   }
@@ -526,8 +552,10 @@ export class BackgroundJobRunner {
    *  or the wake's durable retry breadcrumb fails; runToSettlement owns that. */
   private async settleAndWake<T>(jobId: string, exec: () => Promise<T>): Promise<void> {
     const job = this.deps.store.get(jobId);
+
     if (job === null) throw new Error('Cannot execute a background job with no durable authority record');
     const epoch = job.epoch;
+
     // Three outcomes, because a kind that cannot be re-driven is neither a
     // success nor a crash: it is the LAST word on a job whose work already
     // happened, so it settles with what that work produced rather than with a
@@ -537,22 +565,32 @@ export class BackgroundJobRunner {
       | { readonly kind: 'settled'; readonly result: T }
       | { readonly kind: 'failed'; readonly error: string }
       | { readonly kind: 'bounded'; readonly why: string };
+
     let outcome: Recorded;
+
     try { outcome = { kind: 'settled', result: await runWorkModeInvocation(job.workMode, exec) }; }
     catch (err) {
       outcome = err instanceof JobNotResumable
         ? { kind: 'bounded', why: 'this kind cannot be re-driven from a durable checkpoint' }
         : { kind: 'failed', error: renderThrownChain({ cause: err }) };
     }
+
     this.controllers.delete(jobId);
+
     // A cancelled job was already marked; its promise rejects with the abort,
     // which we must NOT relabel as a generic failure.
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
+
     const record = async (): Promise<void> => {
       // settleBounded is a whole settle path — it decides between the partial and
       // the empty failure, then notifies and wakes — so it is called instead of
       // the writes below, never beside them.
-      if (outcome.kind === 'bounded') { await this.settleBounded(jobId, epoch, outcome.why); return; }
+      if (outcome.kind === 'bounded') {
+        await this.settleBounded(jobId, epoch, outcome.why);
+
+        return;
+      }
+
       if (outcome.kind === 'settled') this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
       else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
       // The lifecycle's OTHER end: start/refuse/cancel/resume already reach
@@ -565,12 +603,15 @@ export class BackgroundJobRunner {
       this.notifySettled(jobId);
       await this.wake(jobId);
     };
+
     // A cancel is confirming this job's external teardown right now, and it will
     // decide the terminal row (see `cancelling`). Hold the outcome for it.
     if (this.cancelling.has(jobId)) {
       this.fenced.set(jobId, record);
+
       return;
     }
+
     await record();
   }
 
@@ -588,6 +629,7 @@ export class BackgroundJobRunner {
     const job = this.deps.store.get(jobId);
     const harvested = job ? await this.harvestOf(job) : { ok: true, value: null } as const;
     const now = Date.now();
+
     if (!harvested.ok) {
       this.deps.store.fail(jobId, epoch, `${EVICTION_INTERRUPT_ERROR} — ${why}, and reading `
         + `what it had produced failed: ${harvested.error}`, now);
@@ -606,6 +648,7 @@ export class BackgroundJobRunner {
       }), now);
       this.deps.logActivity?.('bg_job_bounded', `${jobId} settled partial — ${why}`);
     }
+
     this.notifySettled(jobId);
     await this.wake(jobId);
   }
@@ -619,8 +662,10 @@ export class BackgroundJobRunner {
     { ok: true; value: JsonValue | null } | { ok: false; error: string }
   > {
     const harvest = this.deps.harvest;
+
     if (!harvest) return { ok: true, value: null };
     const input = this.storedInput(job.id);
+
     try {
       return { ok: true, value: await harvest(job.kind, input) };
     } catch (err) {
@@ -629,6 +674,7 @@ export class BackgroundJobRunner {
         toKinuError({ doing: 'read what a bounded-out background job already produced', cause: err, otherwise: 'io' }),
         { jobId: job.id, kind: job.kind },
       );
+
       return { ok: false, error: renderThrownChain({ cause: err }) };
     }
   }
@@ -643,11 +689,14 @@ export class BackgroundJobRunner {
     // A cancel in flight decides this job's terminal row; a force-fail written
     // under it would be exactly the write the fence exists to stop.
     if (this.cancelling.has(jobId)) return false;
+
     try {
       const job = this.deps.store.get(jobId);
+
       if (!job || job.status !== 'running') return true;
       this.deps.store.fail(jobId, job.epoch, renderThrownChain({ cause: err }), Date.now());
       this.notifySettled(jobId);
+
       return true;
     } catch (failErr) {
       diagnostics.failure(
@@ -655,6 +704,7 @@ export class BackgroundJobRunner {
         toKinuError({ doing: 'force-fail a job the settlement path left running', cause: failErr, otherwise: 'io' }),
         { jobId },
       );
+
       return false;
     }
   }
@@ -672,7 +722,9 @@ export class BackgroundJobRunner {
    *  message id, so every re-delivery lands on the row the first one wrote. */
   async wake(jobId: string): Promise<void> {
     const job = this.deps.store.get(jobId);
+
     if (!job) return;
+
     // HOW MANY GENERATIONS IT TOOK, where that is more than one. The count was
     // durable all along and appeared nowhere a reader could see it: the owner watched
     // a job sit `running` through three generations and asked why it would not give up
@@ -680,6 +732,7 @@ export class BackgroundJobRunner {
     const generation = job.resumeAttempts > 0
       ? ` (generation ${String(job.resumeAttempts + 1)} — it was interrupted and re-driven)`
       : '';
+
     const text = job.status === 'completed'
       ? `Background ${job.kind} job ${jobId} completed${generation}. Read the full result with ` +
         `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded. ` +
@@ -699,12 +752,14 @@ export class BackgroundJobRunner {
           `${job.error ? ` (${job.error})` : ''}. Report the failure and what it cost. Do not ` +
           `re-spawn the same work: a search keeps its tree, so a genuine retry continues that ` +
           `one rather than starting another, and an identical spawn is refused.`;
+
     const base = {
       kind: 'background_job',
       text,
       idempotencyKey: backgroundJobWakeTrigger(jobId),
       metadata: { kinuMode: job.workMode, jobId, kind: job.kind, status: job.status },
     } as const satisfies Omit<AgentSignal, 'compensate'>;
+
     // `compensate` is a PROMISE to retry, so it is offered only where one can be
     // kept: with a durable retry plane behind it. A runner without one serves an
     // agent whose lifetime is its spawner's activation, over an in-process queue
@@ -721,11 +776,14 @@ export class BackgroundJobRunner {
   ): ((reason: SignalUndeliveredReason) => void) | null {
     const eventLog = this.deps.eventLog;
     const scheduleDrain = this.deps.scheduleDrain;
+
     if (!eventLog || !scheduleDrain) return null;
+
     return (reason) => {
       if (reason === 'preempted') {
         this.deps.logActivity?.('bg_job_wake_skipped', `${job.id} (${job.status}) — wake preempted; result retained`);
       }
+
       this.publishWakeRetry(eventLog, scheduleDrain, job, text);
     };
   }
@@ -759,6 +817,7 @@ export class BackgroundJobRunner {
       );
       throw err;
     }
+
     try { scheduleDrain(); }
     catch (err) {
       // The retry is already durable; another ingress or activation can drain it.
@@ -787,11 +846,13 @@ export class BackgroundJobRunner {
    */
   async cancel(jobId: string): Promise<boolean> {
     if (this.deps.store.get(jobId)?.status !== 'running') return false;
+
     // A second operator click must not fire a second device cancel over work the
     // first one is still tearing down.
     if (this.cancelling.has(jobId)) return false;
     this.cancelling.add(jobId);
     let refusal: { readonly error: unknown } | undefined;
+
     try {
       // The external owner must confirm first. Marking the job terminal before
       // this call made a failed device cancel unretryable while its work ran.
@@ -803,20 +864,26 @@ export class BackgroundJobRunner {
       // wake, so the job's own settle cannot interleave between the two.
       this.cancelling.delete(jobId);
     }
+
     const held = this.fenced.get(jobId);
     this.fenced.delete(jobId);
+
     if (refusal) {
       diagnostics.failure('jobs.external_cancel_failed', toKinuError({
         doing: 'cancel external work transferred to a background job', cause: refusal.error, otherwise: 'unavailable',
       }), { jobId });
+
       // Refused, so the job goes on running — and if its work finished while the
       // refusal was in flight, that outcome is the job's real story and the
       // agent is still owed it.
       if (held) await held();
+
       return false;
     }
+
     if (!this.settleCancelled(jobId)) return false;
     await this.wake(jobId);
+
     return true;
   }
 
@@ -840,11 +907,13 @@ export class BackgroundJobRunner {
    */
   cancelRunning(): string[] {
     const cancelled: string[] = [];
+
     // Iterated in place: `settleCancelled` deletes the key it just handled, and a
     // Map iterator is specified to tolerate exactly that.
     for (const jobId of this.controllers.keys()) {
       if (this.settleCancelled(jobId)) cancelled.push(jobId);
     }
+
     return cancelled;
   }
 
@@ -852,12 +921,15 @@ export class BackgroundJobRunner {
    *  public verbs above, which differ only in whether the agent is woken. */
   private settleCancelled(jobId: string): boolean {
     const job = this.deps.store.get(jobId);
+
     if (!job || job.status !== 'running') return false;
     this.deps.store.cancel(jobId, job.epoch, Date.now());
     const controller = this.controllers.get(jobId);
+
     if (controller) controller.abort(new Error('cancelled by operator'));
     this.controllers.delete(jobId);
     this.deps.logActivity?.('bg_job_cancelled', jobId);
+
     return true;
   }
 
@@ -871,8 +943,10 @@ export class BackgroundJobRunner {
    *  already settled, cancelled, refused, or waiting for its next attempt. */
   async recover<T>(snapshot: T): Promise<BackgroundJob | null> {
     const parsed = v.safeParse(v.object({ jobId: v.string(), phase: v.literal('running') }), snapshot);
+
     if (!parsed.success) return null;
     const outcome = await this.recoverJob(parsed.output.jobId);
+
     return outcome.state === 'redriven' ? outcome.job : null;
   }
 
@@ -921,11 +995,15 @@ export class BackgroundJobRunner {
    */
   async recoverOrphans(): Promise<readonly BackgroundJob[]> {
     const inFlight = new Set<string>();
+
     for (const jobId of this.deps.store.runningIds()) {
       const outcome = await this.recoverJob(jobId);
+
       if (outcome.state === 'deferred') inFlight.add(jobId);
     }
+
     for (const jobId of this.controllers.keys()) inFlight.add(jobId);
+
     return [...inFlight]
       .map((jobId) => this.deps.store.get(jobId))
       .filter((job): job is BackgroundJob => job !== null && job !== undefined);
@@ -959,11 +1037,15 @@ export class BackgroundJobRunner {
    */
   async recoverDueResumes(): Promise<void> {
     const next = this.deps.store.nextResumeAtInWorkspace();
+
     if (next === null) return;
+
     if (next > Date.now()) {
       await this.deps.scheduleResume?.(next);
+
       return;
     }
+
     await this.recoverOrphans();
   }
 
@@ -1006,17 +1088,26 @@ export class BackgroundJobRunner {
   private async recoverJob(jobId: string): Promise<JobRecoveryOutcome> {
     if (this.controllers.has(jobId)) return { state: 'none' };
     const job = this.deps.store.get(jobId);
+
     if (!job || job.status === 'cancelled') return { state: 'none' };
+
     // Outcome already persisted before the settle checkpoint landed → just deliver
     // the wake that the dead fiber never reached.
-    if (job.status !== 'running') { await this.wake(jobId); return { state: 'none' }; }
+    if (job.status !== 'running') {
+      await this.wake(jobId);
+
+      return { state: 'none' };
+    }
 
     if (this.deps.resume) {
       const now = Date.now();
+
       if (job.resumeAfter !== null && job.resumeAfter > now) {
         return await this.deferRecovery(job, job.resumeAfter);
       }
+
       const claim = this.deps.store.reclaim(jobId, now);
+
       if (!claim) return { state: 'none' }; // lost the race — another activation reclaimed it
       // Armed BEFORE the drive, for the attempt after this one: the eviction that
       // would need this value is the one that stops this line from ever running
@@ -1025,12 +1116,14 @@ export class BackgroundJobRunner {
       this.deps.store.deferResume(jobId, now + recoveryBackoffMs(claim.attempts - 1));
       this.deps.logActivity?.('bg_job_resume', `${job.kind} → ${jobId} (attempt ${claim.attempts}, epoch ${claim.epoch})`);
       this.driveResume(job, this.deps.resume);
+
       return { state: 'redriven', job };
     }
 
     // No resumer: this job's work is gone and nothing will re-run it. It still
     // settles with whatever it produced rather than with the eviction string alone.
     await this.settleBounded(jobId, job.epoch, 'its executor was lost and this kind cannot be re-driven');
+
     return { state: 'none' };
   }
 
@@ -1061,6 +1154,7 @@ export class BackgroundJobRunner {
       + `next attempt in ${String(Math.ceil(delayMs / 1000))}s`,
     );
     await this.deps.scheduleResume?.(at);
+
     return { state: 'deferred', job };
   }
 
@@ -1088,10 +1182,13 @@ export class BackgroundJobRunner {
    *  stored text itself when it was never JSON. */
   private storedInput(jobId: string): JsonValue {
     const raw = this.deps.store.getInput(jobId);
+
     if (raw === null) return null;
+
     try { return parseJsonValue(raw); }
     catch (error) {
       if (classify({ cause: error }) !== 'malformed-input') throw error;
+
       return raw;
     }
   }
@@ -1101,7 +1198,9 @@ export class BackgroundJobRunner {
   private notifySettled(jobId: string): void {
     if (!this.deps.onSettled) return;
     const job = this.deps.store.get(jobId);
+
     if (!job) return;
+
     try { this.deps.onSettled(job); }
     catch (err) {
       diagnostics.failure(

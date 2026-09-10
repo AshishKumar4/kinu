@@ -355,8 +355,10 @@ export interface Floor {
  */
 export function floorMargin(floor: Floor, direction: ObjectiveDirection): number {
   const best = floor.bestKnownHonest;
+
   if (best === 0) return floor.value === 0 ? 0 : Number.NEGATIVE_INFINITY;
   const room = direction === 'minimise' ? best - floor.value : floor.value - best;
+
   return room / Math.abs(best);
 }
 
@@ -509,7 +511,9 @@ export function admitsPublication(
   state: PublicationState, surface: PublicationSurface,
 ): PublicationVerdict {
   if (state.kind === 'open') return { kind: 'admitted' };
+
   if (state.clearedBy !== null) return { kind: 'admitted' };
+
   return { kind: 'refused', surface, breach: state.breach };
 }
 
@@ -574,7 +578,9 @@ export function carrySuppression(
   state: PublicationState, carry: PublishingCarry, suppressedCells: number,
 ): CarrySuppression | null {
   if (state.kind === 'open') return null;
+
   if (state.clearedBy !== null) return null;
+
   return {
     carry,
     breach: state.breach,
@@ -603,7 +609,9 @@ export interface FloorRederivation {
    *  on what evidence. */
   readonly adjudication: string;
   readonly at: number;
-};
+}
+
+;
 
 /** A checkable certificate: a witness plus the predicate it must satisfy. */
 export interface WitnessObjective {
@@ -715,6 +723,7 @@ export interface VectorObjective {
   /** At least two. A front over one dimension is an argmax. */
   readonly components: readonly ScalarObjective[];
 }
+
 /** One declared component of a Pareto comparison. The identifier is an instance
  * name for an instanced objective and a metric name for a vector objective. */
 export interface ParetoAxis {
@@ -738,7 +747,9 @@ export function paretoObjectiveAxes(objective: InstancedObjective | VectorObject
       id: component.metric,
       direction: component.direction,
     }));
+
   const duplicate = axes.find((axis, index) => axes.findIndex((other) => other.id === axis.id) !== index);
+
   return duplicate
     ? { reason: `Pareto objective declares axis "${duplicate.id}" more than once.` }
     : { axes };
@@ -751,16 +762,20 @@ export function validateParetoEvidence(
 ): { readonly evidence: ParetoEvidence } | { readonly reason: string } {
   for (const axis of axes) {
     const value = evidence[axis.id];
+
     if (value === undefined) return { reason: `Pareto evidence is missing declared axis "${axis.id}".` };
+
     if (!Number.isFinite(value)) {
       return { reason: `Pareto evidence for axis "${axis.id}" is non-finite.` };
     }
   }
+
   for (const id of Object.keys(evidence)) {
     if (!axes.some((axis) => axis.id === id)) {
       return { reason: `Pareto evidence names undeclared axis "${id}".` };
     }
   }
+
   return { evidence };
 }
 
@@ -770,15 +785,20 @@ export function dominatesPareto(
   axes: readonly ParetoAxis[], left: ParetoEvidence, right: ParetoEvidence,
 ): boolean {
   let strict = false;
+
   for (const axis of axes) {
     const l = left[axis.id];
     const r = right[axis.id];
+
     if (l === undefined || r === undefined || !Number.isFinite(l) || !Number.isFinite(r)) {
       throw new Error(`cannot compare Pareto evidence on axis "${axis.id}"`);
     }
+
     if (axis.direction === 'maximise' ? l < r : l > r) return false;
+
     if (l !== r) strict = true;
   }
+
   return strict;
 }
 
@@ -789,8 +809,10 @@ export function paretoFront<Candidate extends { readonly evidence: ParetoEvidenc
 ): readonly Candidate[] {
   for (const candidate of candidates) {
     const checked = validateParetoEvidence(axes, candidate.evidence);
+
     if ('reason' in checked) throw new Error(checked.reason);
   }
+
   return candidates.filter((candidate, index) =>
     !candidates.some((other, otherIndex) =>
       otherIndex !== index && dominatesPareto(axes, other.evidence, candidate.evidence)));
@@ -883,12 +905,15 @@ export function normalisedScore(input: {
   readonly scale: ObjectiveScale;
 }): number | null {
   const { direction, scale } = input;
+
   if (scale === 'log' && (input.value <= 0 || input.baseline <= 0 || input.target <= 0)) return null;
   const at = scale === 'log' ? Math.log : (x: number): number => x;
   const [value, baseline, target] = [at(input.value), at(input.baseline), at(input.target)];
   const span = direction === 'minimise' ? baseline - target : target - baseline;
+
   if (!(span > 0)) return null;
   const progress = direction === 'minimise' ? baseline - value : value - baseline;
+
   return Math.min(1, Math.max(0, progress / span));
 }
 
@@ -1005,8 +1030,10 @@ export function measuredHalf(objective: Objective): MeasuredObjective | null {
   if (objective.kind === 'witness') {
     if (!objective.proxy) return null;
     const proxy = measuredHalf(objective.proxy);
+
     return proxy && { ...proxy, witness: objective.check };
   }
+
   // BOTH multi-axis kinds return null, and `instanced` was the one that did not. It
   // carries every field a scalar does, so it fell through this function and was measured
   // as though its `instances` were not there — the refusal below already said "measured
@@ -1014,6 +1041,7 @@ export function measuredHalf(objective: Objective): MeasuredObjective | null {
   // that reduces a declared front to one aggregate number is the accepted-and-ignored
   // axis *Accepted and ignored* refuses, so the objective's own kind is what refuses.
   if (objective.kind === 'vector' || objective.kind === 'instanced') return null;
+
   return {
     metric: objective.metric,
     unit: objective.unit,

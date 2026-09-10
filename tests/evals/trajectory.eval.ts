@@ -107,6 +107,7 @@ import {
 import { DEGENERATE_EVENTS, LEDGER_EVENTS } from './fixtures/public-session-frames';
 
 const SUITE = 'Trajectory Evals';
+
 const REPO_ROOT = join(import.meta.dirname, '../..');
 
 /** Which arm this process is — the same split the four sibling arms declare, so
@@ -122,9 +123,13 @@ const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
  * is on the line above the skip rather than inside a test nobody ran.
  */
 const RESOLUTION = resolvePublicSessionPlan(SUITE, EVAL_MODELS[TIER]);
+
 if (RESOLUTION.kind === 'unavailable') console.warn(`[skip] ${RESOLUTION.remedy}`);
+
 const PLAN: PublicSessionPlan | null = RESOLUTION.kind === 'ready' ? RESOLUTION.plan : null;
+
 if (PLAN !== null) console.warn(`[live] ${SUITE} — ${PLAN.describe}`);
+
 const liveTest = test.skipIf(PLAN === null);
 
 /** The model config in force, read off the plan so the record cannot name a
@@ -194,6 +199,7 @@ interface TrajectoryCase {
 /** The marker a case's artifact must carry verbatim. A fixed string rather than
  *  prose: a subgoal that greps for a paraphrase measures the grep. */
 const ARTIFACT_MARKER = 'KINU_PUBLIC_ARTIFACT_OK';
+
 const STEER_MARKER = 'KINU_STEER_LANDED';
 
 /** The seeded bug the recovery case needs. `add` subtracts, and the test expects
@@ -205,6 +211,7 @@ const BROKEN_SOURCE = [
   '}',
   '',
 ].join('\n');
+
 const BROKEN_TEST = [
   "import { test, expect } from 'bun:test';",
   "import { add } from './broken.ts';",
@@ -212,11 +219,14 @@ const BROKEN_TEST = [
   "test('add sums', () => { expect(add(2, 3)).toBe(5); });",
   '',
 ].join('\n');
+
 const RECOVERY_TEST_COMMAND = 'bun test broken.test.ts';
+
 const RecoveryTestRunSchema = v.object({
   command: v.literal(RECOVERY_TEST_COMMAND),
   runtime: v.optional(v.literal('workspace')),
 });
+
 /**
  * What one public-plane episode may spend. Wider than the local single-turn
  * ceilings because every case here is two turns through a deployed workspace —
@@ -250,6 +260,7 @@ const CASES: readonly TrajectoryCase[] = [
       const calls = promptToolCalls(events, this.turns[1]);
       requireMeasuredToolOutcomes(calls);
       const reads = calls.filter((call) => fileActionOn(call, 'read', 'public-artifact.txt'));
+
       return [
         {
           what: 'artifact',
@@ -293,10 +304,12 @@ const CASES: readonly TrajectoryCase[] = [
       const totals = ledgerTotalsFromEvents(events);
       const steerText = history.some((row) => row.role === 'user' && row.text.includes(STEER_MARKER));
       const listing = history.filter((row) => row.role === 'assistant').at(-1)?.text ?? '';
+
       // The second prompt asks for both filenames; accepting either steer
       // landing does not excuse an inaccurate later listing.
       const listed = wal.trimEnd().split('\n').length === 4
         && listing.includes('steered.txt') && listing.includes('wal.txt');
+
       return [
         {
           what: 'landing',
@@ -339,21 +352,27 @@ const CASES: readonly TrajectoryCase[] = [
     async verify({ session, events, history }) {
       const originalTests = await session.readFile('broken.test.ts', { allowMissing: true });
       const result = await session.execute('workspace', RECOVERY_TEST_COMMAND);
+
       if (result.exitCode === undefined) {
         throw new Error(`${INFRA_FAILURE_MARKER} verification command returned no exit code: ${result.error ?? 'unreported'}`);
       }
+
       const fixed = originalTests === BROKEN_TEST && result.exitCode === 0;
       const firstCalls = promptToolCalls(events, this.turns[0]).filter(isRecoveryTestRun);
       const reruns = promptToolCalls(events, this.turns[1]).filter(isRecoveryTestRun);
       requireMeasuredToolOutcomes(firstCalls);
       requireMeasuredToolOutcomes(reruns);
+
       const failed = firstCalls.filter((call) => call.outcome?.success === false
         && call.outcome.execution !== undefined && call.outcome.execution.exitCode !== 0);
+
       const recovered = failed.some((failure) => reruns.some((later) =>
         compareRunEventOrder(failure, later) < 0 && later.outcome?.success === true));
+
       const answers = history.filter((row) => row.role === 'assistant');
       const first = answers[0]?.text.trim() ?? '';
       const last = answers.at(-1)?.text.trim() ?? '';
+
       return [
         {
           what: 'failure-observed', reached: failed.length > 0,
@@ -388,14 +407,19 @@ const CASES: readonly TrajectoryCase[] = [
     budget: { ...PUBLIC_BUDGET },
     async verify({ session, events }) {
       const found = await session.readFile('found-public.txt', { allowMissing: true });
+
       const saves = promptToolCalls(events, this.turns[0])
         .filter((call) => toolActionOn(call, 'memory', 'save'));
+
       const searches = promptToolCalls(events, this.turns[1])
         .filter((call) => toolActionOn(call, 'memory', 'search'));
+
       requireMeasuredToolOutcomes(saves);
       requireMeasuredToolOutcomes(searches);
+
       const writes = promptToolCalls(events, this.turns[1])
         .filter((call) => fileActionOn(call, 'write', 'found-public.txt'));
+
       return [
         {
           what: 'saved-first-turn',
@@ -429,14 +453,17 @@ const CASES: readonly TrajectoryCase[] = [
     budget: { ...PUBLIC_BUDGET },
     async verify({ session, events }) {
       const status = await session.readFile('status-public.txt', { allowMissing: true });
+
       const adds = promptToolCalls(events, this.turns[0])
         .filter((call) => toolActionOn(call, 'tasks', 'add'));
+
       const second = promptToolCalls(events, this.turns[1]);
       const updates = second.filter((call) => toolActionOn(call, 'tasks', 'update'));
       const lists = second.filter((call) => toolActionOn(call, 'tasks', 'list'));
       requireMeasuredToolOutcomes(adds);
       requireMeasuredToolOutcomes(second.filter((call) => call.name === 'tasks'));
       const writes = second.filter((call) => fileActionOn(call, 'write', 'status-public.txt'));
+
       return [
         {
           what: 'added-first-turn',
@@ -474,6 +501,7 @@ function isToolCallEnd(event: RunEvent): event is Extract<RunEvent, { type: 'too
 function promptToolCalls(events: readonly RunEvent[], prompt: string | undefined): Extract<RunEvent, { type: 'tool_call_end' }>[] {
   if (prompt === undefined) return [];
   const runs = new Set(events.filter((event) => event.type === 'run_start' && event.userMessage === prompt).map((event) => event.runId));
+
   return events.filter(isToolCallEnd).filter((call) => runs.has(call.runId));
 }
 
@@ -484,8 +512,10 @@ function fileActionOn(
 ): boolean {
   if (call.name !== 'file' || call.outcome?.success !== true) return false;
   const args = v.safeParse(FileActionSchema, call.args);
+
   if (!args.success || args.output.action !== action) return false;
   const actual = posix.normalize(args.output.path);
+
   return actual === path || actual === `/${path}`;
 }
 
@@ -499,6 +529,7 @@ function toolActionOn(
 ): boolean {
   if (call.name !== tool || call.outcome?.success !== true) return false;
   const args = v.safeParse(ToolActionSchema, call.args);
+
   return args.success && args.output.action === action;
 }
 
@@ -510,6 +541,7 @@ function isRecoveryTestRun(call: Extract<RunEvent, { type: 'tool_call_end' }>): 
  * a success inferred from harmless-looking output. The attempt/raw ledger remains retained. */
 function requireMeasuredToolOutcomes(calls: readonly Extract<RunEvent, { type: 'tool_call_end' }>[]): void {
   const missing = calls.filter((call) => call.outcome === undefined).length;
+
   if (missing > 0) throw new Error(`producer tool outcomes unmeasured for ${String(missing)}/${String(calls.length)} observed calls`);
 }
 
@@ -547,6 +579,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
   test('every case is multi-turn, uniquely named, and machine-checkable', () => {
     expect(CASES.length).toBeGreaterThanOrEqual(3);
     expect(new Set(DECLARED).size).toBe(DECLARED.length);
+
     for (const entry of CASES) {
       expect(entry.turns.length, `${entry.id} is not multi-turn`).toBeGreaterThanOrEqual(2);
       expect(entry.purpose.length).toBeGreaterThan(20);
@@ -556,6 +589,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       // a ceiling from the run record must never break this guard.
       expect(Object.keys(entry.budget).length, `${entry.id} declares no budget`).toBeGreaterThan(0);
     }
+
     // The mechanisms only a conversation has, each covered by exactly one case:
     // a steer that arrives mid-turn, and a failure that turn two repairs.
     expect(CASES.filter((entry) => entry.steer !== undefined)).toHaveLength(1);
@@ -564,7 +598,9 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
   test('artifact read-back rejects a failed read even when the answer repeats the marker', async () => {
     const entry = CASES.find((candidate) => candidate.id === 'public-file-artifact');
+
     if (!entry) throw new Error('missing artifact case');
+
     const events: RunEvent[] = [
       { type: 'run_start', runId: 'read', eventIndex: 0, timestamp: '2026-09-07T00:00:01Z',
         agentId: 'eval-public', caused_by: 'chat', userMessage: entry.turns[1] },
@@ -577,6 +613,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         name: 'file', toolCallId: 'background-read', args: { action: 'read', path: 'public-artifact.txt' },
         result: ARTIFACT_MARKER, outcome: { success: true } },
     ];
+
     const input = {
       session: { readFile: async () => ARTIFACT_MARKER, execute: async () => ({ exitCode: 0 }) },
       events, steerLanding: null, history: [
@@ -584,25 +621,33 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         { role: 'user', text: entry.turns[1] ?? '' }, { role: 'assistant', text: ARTIFACT_MARKER },
       ],
     };
+
     const failed = await entry.verify(input);
     expect(failed.find((subgoal) => subgoal.what === 'read-back-tool')?.reached).toBe(false);
+
     const corrected = events.map((event): RunEvent => event.type === 'tool_call_end' && event.runId === 'read'
       ? { ...event, error: undefined, result: ARTIFACT_MARKER, outcome: { success: true } } : event);
+
     const read = await entry.verify({ ...input, events: corrected });
     expect(read.every((subgoal) => subgoal.reached)).toBe(true);
+
     const noOutcome = corrected.map((event): RunEvent => {
       if (event.type !== 'tool_call_end') return event;
       const { outcome: _outcome, ...withoutOutcome } = event;
+
       return withoutOutcome;
     });
+
     await expect(entry.verify({ ...input, events: noOutcome })).rejects.toThrow('unmeasured');
     expect(ledgerTotalsFromEvents(noOutcome).toolCalls).toBe(2);
   });
 
   test('a steering answer cannot invent the other file it lists', async () => {
     const entry = CASES.find((candidate) => candidate.id === 'public-steer-correction');
+
     if (!entry) throw new Error('missing steering case');
     let wal = '';
+
     const input = {
       session: {
         readFile: async (path: string) => path === 'notes/wal.txt' ? wal : STEER_MARKER,
@@ -612,6 +657,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         { role: 'user', text: entry.steer ?? '' }, { role: 'assistant', text: 'wal.txt\nsteered.txt' },
       ],
     };
+
     const missing = await entry.verify(input);
     expect(missing.find((subgoal) => subgoal.what === 'listing-truthful')?.reached).toBe(false);
     wal = 'Append changes.\nPersist the log.\nApply the changes.\nReplay after a crash.\n';
@@ -621,17 +667,22 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
   test('recovery grades executable behavior and orders distinct runs rather than their local indices', async () => {
     const entry = CASES.find((candidate) => candidate.id === 'public-failure-recovery');
+
     if (!entry) throw new Error('missing recovery case');
     const root = scratchDir('trajectory-oracle');
+
     const session: Pick<KinuPublicSession, 'readFile' | 'execute'> = {
       readFile: (path) => Bun.file(join(root, path)).text(),
       async execute(_executor, command) {
         const process = Bun.spawn(['bash', '-c', command], { cwd: root, stdout: 'pipe', stderr: 'pipe' });
+
         const [exitCode, stdout, stderr] = await Promise.all([process.exited,
           new Response(process.stdout).text(), new Response(process.stderr).text()]);
+
         return { exitCode, stdout, stderr };
       },
     };
+
     const events: RunEvent[] = [
       { type: 'run_start', runId: 'first', eventIndex: 0, timestamp: '2026-09-07T00:00:01Z',
         agentId: 'eval-public', userMessage: entry.turns[0] },
@@ -644,9 +695,11 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         name: 'run', toolCallId: 'rerun-test', args: { command: 'bun test broken.test.ts' },
         result: '1 pass, 0 fail', outcome: { success: true } },
     ];
+
     const input = { session, events, steerLanding: null, history: [
       { role: 'assistant', text: 'FAIL' }, { role: 'assistant', text: 'PASS' },
     ] };
+
     try {
       await Bun.write(join(root, 'broken.test.ts'), BROKEN_TEST);
       await Bun.write(join(root, 'broken.ts'), BROKEN_SOURCE + '// a + b is not the implementation\n');
@@ -655,8 +708,10 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       await Bun.write(join(root, 'broken.ts'), 'export const add = (a: number, b: number) => a - -b;\n');
       const fixed = await entry.verify(input);
       expect(fixed.every((subgoal) => subgoal.reached)).toBe(true);
+
       const unrelated = events.map((event): RunEvent => event.type === 'tool_call_end'
         ? { ...event, args: { command: event.runId === 'first' ? 'false' : 'true' } } : event);
+
       const notTested = await entry.verify({ ...input, events: unrelated });
       expect(notTested.find((subgoal) => subgoal.what === 'failure-observed')?.reached).toBe(false);
       expect(notTested.find((subgoal) => subgoal.what === 'recovery-took')?.reached).toBe(false);
@@ -669,17 +724,21 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
   test('memory persists across turns only when both turns use the tool', async () => {
     const entry = CASES.find((candidate) => candidate.id === 'public-memory-across-turns');
+
     if (!entry) throw new Error('missing memory case');
+
     const turnRun = (runId: string, turn: number, at: string): RunEvent => ({
       type: 'run_start', runId, eventIndex: 0, timestamp: `2026-09-07T00:00:${at}Z`,
       agentId: 'eval-public', userMessage: entry.turns[turn],
     });
+
     const toolRow = (runId: string, at: string, name: string, action: string, path?: string): RunEvent => ({
       type: 'tool_call_end', runId, eventIndex: 2, timestamp: `2026-09-07T00:00:${at}Z`,
       name, toolCallId: `${runId}-${action}`,
       args: path === undefined ? { action } : { action, path },
       outcome: { success: true },
     });
+
     const events: RunEvent[] = [
       turnRun('save', 0, '01'),
       toolRow('save', '02', 'memory', 'save'),
@@ -687,6 +746,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       toolRow('find', '04', 'memory', 'search'),
       toolRow('find', '05', 'file', 'write', 'found-public.txt'),
     ];
+
     const input = {
       session: {
         readFile: async () => 'BLUEBIRD',
@@ -694,12 +754,15 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       },
       events, steerLanding: null, history: [],
     };
+
     const happy = await entry.verify(input);
     expect(happy.every((subgoal) => subgoal.reached)).toBe(true);
+
     // The note saved but never searched: the second turn's behaviour is
     // missing even though the artifact exists, so only the retrieval half holds.
     const unsearched = events.filter((event) => event.type !== 'tool_call_end'
       || event.runId !== 'find' || event.name !== 'memory');
+
     const partial = await entry.verify({ ...input, events: unsearched });
     expect(partial.find((subgoal) => subgoal.what === 'saved-first-turn')?.reached).toBe(true);
     expect(partial.find((subgoal) => subgoal.what === 'searched-second-turn')?.reached).toBe(false);
@@ -708,17 +771,21 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
   test('a task list transcribed without listing is not evidence', async () => {
     const entry = CASES.find((candidate) => candidate.id === 'public-tasks-across-turns');
+
     if (!entry) throw new Error('missing tasks case');
+
     const turnRun = (runId: string, turn: number, at: string): RunEvent => ({
       type: 'run_start', runId, eventIndex: 0, timestamp: `2026-09-07T00:00:${at}Z`,
       agentId: 'eval-public', userMessage: entry.turns[turn],
     });
+
     const toolRow = (runId: string, at: string, name: string, action: string, path?: string): RunEvent => ({
       type: 'tool_call_end', runId, eventIndex: 2, timestamp: `2026-09-07T00:00:${at}Z`,
       name, toolCallId: `${runId}-${action}`,
       args: path === undefined ? { action } : { action, path },
       outcome: { success: true },
     });
+
     const events: RunEvent[] = [
       turnRun('plan', 0, '01'),
       toolRow('plan', '02', 'tasks', 'add'),
@@ -727,6 +794,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       toolRow('close', '05', 'tasks', 'list'),
       toolRow('close', '06', 'file', 'write', 'status-public.txt'),
     ];
+
     const input = {
       session: {
         readFile: async () => 'public-first:done',
@@ -734,6 +802,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       },
       events, steerLanding: null, history: [],
     };
+
     const happy = await entry.verify(input);
     expect(happy.every((subgoal) => subgoal.reached)).toBe(true);
     // Updated and transcribed but never listed: the agent closed work it never
@@ -796,6 +865,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       taskId: 'public-file-artifact', repetition: 0, outcome: 'scored', scores: [],
       turns: 2, toolCalls: 4, toolNames: ['file', 'run'], tokensIn: 10, tokensOut: 5, ms: 1_000,
     };
+
     const activityOnly = assessAdmissibility(['public-file-artifact'], [covariatesOnly]);
     expect(activityOnly.admissible).toBe(false);
     expect(activityOnly.failures.join(' ')).toContain(TASK_OUTCOME);
@@ -807,12 +877,15 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
       const startedAt = Date.now();
       const plan = PLAN;
       let opened: KinuPublicSession | undefined;
+
       try {
         await withEpisodeEvidence(async () => {
           opened = await plan.open({ subject: entry.id, purpose: entry.purpose });
+
           return opened;
         }, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected' }, async (session, collect) => {
         console.warn(`    [trajectory] ${entry.id} on ${session.describe}`);
+
         // Seeded through the PUBLIC files route — the plane the web file manager
         // writes through and the one the agent's own tools read. Sequential:
         // two writes to one plane are not independent.
@@ -820,7 +893,9 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
         let steerLanding: 'mid-turn' | 'queued' | null = null;
         const [first, ...rest] = entry.turns;
+
         if (first === undefined) throw new Error(`${entry.id} declares no turns`);
+
         if (entry.steer === undefined) {
           await session.prompt(first);
         } else {
@@ -834,6 +909,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
           steerLanding = await session.steer(entry.steer);
           await submission.settled;
         }
+
         for (const turn of rest) await session.prompt(turn);
 
         const { events, history } = await collect();
@@ -850,6 +926,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         const retained = retainEpisodeTranscript(TRANSCRIPTS, entry.id, { events, history, subgoals });
         const outcome = subgoalsOutcome(subgoals, { turns: totals.turns, toolCalls: totals.toolCalls });
         const mechanisms = scorePublicLedger(events);
+
         // Same currency as the local arm: the episode's cost beside whether it
         // solved the case. The error rate is the `tool_outcomes` row in the
         // array above, read off it rather than recomputed.
@@ -859,6 +936,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
           toolErrorRate: measuredToolErrorRate(mechanisms),
           wallMs: Date.now() - startedAt,
         });
+
         // The same cap verdict the local arm carries, over the deployment's own
         // events: an episode the provider cut is scored on a truncated answer,
         // and the public plane is where a cut is easiest to misread as the web
@@ -910,6 +988,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
         // harness failing. Measured: every first-run record with a missed
         // subgoal carried `scored` AND `errored` for the same pairing key.
         const thrown = error instanceof Error ? error : new Error(String(error));
+
         if (!observations.some((o) => o.taskId === entry.id)) {
           observations.push({
             taskId: entry.id, repetition: 0,
@@ -917,6 +996,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
             reason: thrown.message,
           });
         }
+
         throw error;
       } finally {
         // On the public plane this DELETES the workspace, so it is a `finally`

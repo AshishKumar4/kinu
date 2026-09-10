@@ -41,6 +41,7 @@ function recordingFacts(): RecordingFacts {
   const rows = new Map<string, Fact>();
   const forgotten: string[] = [];
   const remembered: string[] = [];
+
   return {
     forgotten,
     remembered,
@@ -54,6 +55,7 @@ function recordingFacts(): RecordingFacts {
         source: opts?.source ?? 'tool',
         lastObservedAt: 0,
       });
+
       return existing ? 'changed' : 'created';
     },
     recall(key) {
@@ -75,6 +77,7 @@ function recordingFacts(): RecordingFacts {
 function memoryTool(facts: FactsStore) {
   const { rt } = createTestRuntime();
   const tools = buildBuiltinTools({ rt, facts });
+
   return {
     execute: toolExecute<MemoryToolProbeInput, JsonValue>(tools.memory),
   };

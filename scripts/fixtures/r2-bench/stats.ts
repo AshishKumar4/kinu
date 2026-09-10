@@ -37,9 +37,11 @@ export const EMPTY_SUMMARY: Summary = {
  */
 export function percentile(sorted: readonly number[], q: number): number {
   if (sorted.length === 0) return 0;
+
   if (sorted.length === 1) return sorted[0]!;
   const rank = Math.ceil(q * sorted.length);
   const index = Math.min(sorted.length - 1, Math.max(0, rank - 1));
+
   return sorted[index]!;
 }
 
@@ -48,10 +50,13 @@ export function summarize(values: readonly number[]): Summary {
   const sorted = [...values].sort((a, b) => a - b);
   const n = sorted.length;
   const mean = sorted.reduce((sum, v) => sum + v, 0) / n;
+
   const variance = n < 2
     ? 0
     : sorted.reduce((sum, v) => sum + (v - mean) * (v - mean), 0) / (n - 1);
+
   const stddev = Math.sqrt(variance);
+
   return {
     n,
     min: sorted[0]!,
@@ -85,6 +90,7 @@ export function isUnstable(summary: Summary): boolean {
  */
 export function throughputMiBs(bytes: number, ms: number): number {
   if (ms <= 0) return 0;
+
   return (bytes / (1024 * 1024)) / (ms / 1000);
 }
 
@@ -94,6 +100,7 @@ export function throughputMiBs(bytes: number, ms: number): number {
  */
 export function slowdown(candidate: number, control: number): number | null {
   if (control <= 0 || candidate <= 0) return null;
+
   return candidate / control;
 }
 
@@ -108,11 +115,13 @@ export function slowdown(candidate: number, control: number): number | null {
  */
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
+
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
@@ -131,6 +140,8 @@ export function randomOffsets(
   const blocks = Math.max(1, Math.floor(fileBytes / blockBytes));
   const next = mulberry32(seed);
   const offsets: number[] = [];
+
   for (let i = 0; i < count; i++) offsets.push(Math.floor(next() * blocks) * blockBytes);
+
   return offsets;
 }

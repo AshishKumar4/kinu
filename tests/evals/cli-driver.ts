@@ -38,6 +38,7 @@ import * as v from 'valibot';
 import type { LLMProviderConfig } from '../../packages/core/src/index';
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
+
 const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
 
 /**
@@ -62,6 +63,7 @@ const CLI_BIN = join(REPO_ROOT, 'packages/cli/bin/cli.ts');
 function childProjectRoot(home: string): string {
   const root = join(home, 'project');
   mkdirSync(root, { recursive: true });
+
   return root;
 }
 
@@ -118,6 +120,7 @@ const AssistantTextSchema = v.looseObject({
   role: v.literal('assistant'),
   text: v.string(),
 });
+
 const ErrorEventSchema = v.looseObject({
   type: v.literal('error'),
   message: v.string(),
@@ -129,10 +132,12 @@ export function cliWorkspaceDbPath(home: string, workspace: string): string {
 
 function childEnv(opts: CliWorkspaceOptions) {
   const auth = opts.llm.headers['Authorization'] ?? opts.llm.headers['authorization'];
+
   if (auth === undefined) {
     throw new Error('the resolved LLM config carries no Authorization header, so the spawned '
       + 'CLI would have no credential and every turn would fail as an auth error');
   }
+
   return {
     PATH: process.env.PATH ?? '',
     HOME: opts.home,
@@ -168,10 +173,12 @@ function childFailure(reason: string, exitCode: number | null, stderr: string): 
  */
 export async function createCliWorkspace(opts: CliWorkspaceOptions): Promise<void> {
   mkdirSync(opts.home, { recursive: true });
+
   if (opts.mcpServers !== undefined) {
     writeFileSync(join(opts.home, 'config.json'),
       `${JSON.stringify({ mcpServers: opts.mcpServers }, null, 2)}\n`);
   }
+
   const proc = Bun.spawn({
     cmd: [process.execPath, CLI_BIN, 'create', opts.workspace,
       '--mode', 'local', '--purpose', opts.purpose, '--no-alias-shim'],
@@ -179,9 +186,11 @@ export async function createCliWorkspace(opts: CliWorkspaceOptions): Promise<voi
     env: childEnv(opts),
     stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
   });
+
   const [exitCode, stdout, stderr] = await Promise.all([
     proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text(),
   ]);
+
   if (exitCode !== 0) {
     throw childFailure(`kinu create ${opts.workspace} failed`, exitCode, `${stdout}\n${stderr}`);
   }
@@ -198,30 +207,38 @@ export async function execCliTask(opts: CliExecOptions): Promise<CliExecOutcome>
   // begin with a dash would otherwise be parsed as a flag.
   const cmd = [process.execPath, CLI_BIN, 'exec',
     '--workspace', opts.workspace, '--json'];
+
   if (opts.noAutoEvolve) cmd.push('--no-auto-evolve');
   cmd.push('--', opts.prompt);
+
   const proc = Bun.spawn({
     cmd,
     cwd: childProjectRoot(opts.home),
     env: childEnv(opts),
     stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
   });
+
   let timedOut = false;
+
   const wall = setTimeout(() => {
     timedOut = true;
     proc.kill('SIGKILL');
   }, opts.timeoutMs);
+
   const [exitCode, stdout, stderr] = await Promise.all([
     proc.exited, new Response(proc.stdout).text(), new Response(proc.stderr).text(),
   ]);
+
   clearTimeout(wall);
 
   const unparsedLines: string[] = [];
   const assistantTexts: string[] = [];
   const errors: string[] = [];
+
   for (const line of stdout.split('\n')) {
     if (line.trim().length === 0) continue;
     let parsed: unknown;
+
     try {
       parsed = JSON.parse(line);
     } catch (error) {
@@ -231,14 +248,19 @@ export async function execCliTask(opts: CliExecOptions): Promise<CliExecOutcome>
       unparsedLines.push(line);
       continue;
     }
+
     const text = v.safeParse(AssistantTextSchema, parsed);
+
     if (text.success) {
       assistantTexts.push(text.output.text);
       continue;
     }
+
     const failure = v.safeParse(ErrorEventSchema, parsed);
+
     if (failure.success) errors.push(failure.output.message);
   }
+
   return {
     exitCode, assistantTexts, errors, unparsedLines, stderr, timedOut,
     dbPath: cliWorkspaceDbPath(opts.home, opts.workspace),

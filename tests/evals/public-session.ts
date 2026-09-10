@@ -132,6 +132,7 @@ const WORKSPACE_EXECUTOR = 'workspace';
  *  the route's own ceiling (`RUN_EVENT_LIMIT_MAX`); asking for more is answered
  *  with 500 anyway, and asking for less only lengthens the walk. */
 const RUN_PAGE = 200;
+
 const EVENT_PAGE = 500;
 
 /** Hosts that can only be a developer's own machine — where possession of the
@@ -191,10 +192,13 @@ export function resolveWebIdentity(
   env: Record<string, string | undefined> = process.env,
 ): PublicWebIdentityResolution {
   const secret = env[PUBLIC_IDENTITY_ENV]?.trim();
+
   if (secret) return { kind: 'ready', identity: { kind: 'secret', secret } };
+
   if (LOOPBACK_HOSTS.includes(new URL(origin).hostname)) {
     return { kind: 'ready', identity: { kind: 'loopback' } };
   }
+
   return {
     kind: 'absent',
     remedy: `${origin} needs the browser plane's own authority and this run has none. The eval `
@@ -268,7 +272,9 @@ export function resolvePublicSessionPlan(
   env: Record<string, string | undefined> = process.env,
 ): PublicSessionResolution {
   const backend = resolveEvalBackend(env);
+
   if (backend.kind === 'refused') throw new Error(`${suite}: ${backend.reason}`);
+
   if (backend.backend !== 'cloud') {
     return {
       kind: 'unavailable',
@@ -282,6 +288,7 @@ export function resolvePublicSessionPlan(
   }
 
   const plan = resolveEvalTarget(suite, model);
+
   if (plan === null) {
     return {
       kind: 'unavailable',
@@ -289,16 +296,21 @@ export function resolvePublicSessionPlan(
         + 'missing on the line above this one. The eval tier supplies them: `bun run evals:cloud`.',
     };
   }
+
   const session = workerSession(plan.llm);
   const verdict = evalTargetVerdict(session.origin);
+
   if (verdict.kind === 'refused') {
     throw new Error(`${suite}: public session target REFUSED — ${verdict.reason}`);
   }
+
   const web = resolveWebIdentity(verdict.origin, env);
+
   if (web.kind === 'absent') return { kind: 'unavailable', remedy: `${suite} — ${web.remedy}` };
 
   const suiteSlug = evalNameSlug(suite);
   const identity = web.identity;
+
   return {
     kind: 'ready',
     plan: {
@@ -423,12 +435,16 @@ const FrameSchema = v.object({
  */
 export function decodeFrame(data: SocketPayload): PublicFrame | null {
   const parsed = decodeSocketJson(data);
+
   if (parsed === undefined) return null;
   const frame = v.safeParse(FrameSchema, parsed);
+
   if (!frame.success) return null;
   const { type, id } = frame.output;
+
   if (type === CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE) {
     if (id === undefined) return { kind: 'other', type };
+
     return {
       kind: 'response',
       frame: {
@@ -440,6 +456,7 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
       },
     };
   }
+
   // A REPLY, told from a request by the field the producer always sets. The
   // agents SDK answers every callable with `success: true|false`
   // (agents/dist/index.js:912-926) and a request carries `method`/`args` and no
@@ -448,6 +465,7 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
   // refused call.
   if (type === 'rpc' && id !== undefined && frame.output.success !== undefined) {
     const detail = v.safeParse(v.string(), frame.output.error);
+
     return {
       kind: 'rpc',
       id,
@@ -457,10 +475,13 @@ export function decodeFrame(data: SocketPayload): PublicFrame | null {
         : (detail.success ? detail.output : 'the workspace RPC failed'),
     };
   }
+
   if (type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && id !== undefined) {
     return { kind: 'resuming', id };
   }
+
   if (type === CHAT_MESSAGE_TYPES.STREAM_RESUME_NONE) return { kind: 'resume-none' };
+
   return { kind: 'other', type };
 }
 
@@ -481,12 +502,15 @@ function decodeSocketJson(data: SocketPayload): JsonValue | undefined {
   const text = v.safeParse(v.string(), data);
   const bytes = v.safeParse(v.instance(Uint8Array), data);
   const buffer = v.safeParse(v.instance(ArrayBuffer), data);
+
   const decoded = text.success
     ? text.output
     : bytes.success
       ? new TextDecoder().decode(bytes.output)
       : buffer.success ? new TextDecoder().decode(buffer.output) : null;
+
   if (decoded === null) return undefined;
+
   return tolerate(() => parseJsonValue(decoded), 'malformed-input');
 }
 
@@ -513,16 +537,21 @@ export interface PublicTurnRecorder {
 export function recordPublicTurn(): PublicTurnRecorder {
   let settled: PublicTurn | null = null;
   const stream = new CloudTurnStream(() => {}, (result) => { settled = result; });
+
   return {
     apply(frame) {
       if (settled !== null) return;
+
       if (frame.error === true) {
         stream.settle(true);
+
         return;
       }
+
       if (frame.body !== undefined && frame.body.trim() !== '') {
         stream.apply(frame.body, frame.replay === true);
       }
+
       if (frame.done === true) stream.settle();
     },
     settled: () => settled,
@@ -550,6 +579,7 @@ export function recordPublicTurn(): PublicTurnRecorder {
  */
 export function scorePublicLedger(events: readonly RunEvent[]): EvalScoreRow[] {
   const store = createTestSql();
+
   try {
     initRunEventTables(store.execRaw);
     // `run_events` is actor-scoped, and these rows come off the wire from a
@@ -557,11 +587,13 @@ export function scorePublicLedger(events: readonly RunEvent[]): EvalScoreRow[] {
     // identity is minted for the replay store, written on every row, and read
     // back by the scorers. The comparison is between the SAME rows either way.
     const actor = testActorHandle(store.sql);
+
     for (const event of events) {
       void store.sql`INSERT OR REPLACE INTO run_events (actor_id, run_id, event_index, type, payload, ts)
         VALUES (${actor.actorId}, ${event.runId}, ${event.eventIndex}, ${event.type},
                 ${JSON.stringify(event)}, ${event.timestamp})`;
     }
+
     return scoreTrajectory(store.sql, actor);
   } finally {
     store.close();
@@ -582,6 +614,7 @@ const WorkspaceEntrySchema = v.object({
   name: v.string(),
   displayName: v.optional(v.string()),
 });
+
 const RunPageSchema = v.variant('status', [
   v.object({
     status: v.literal('more'),
@@ -590,9 +623,13 @@ const RunPageSchema = v.variant('status', [
   }),
   v.object({ status: v.literal('end'), items: v.array(v.object({ runId: v.string() })) }),
 ]);
+
 const RunEventsSchema = v.array(RunEventSchema);
+
 const SetModelSchema = v.object({ spec: v.string() });
+
 const SteerSchema = v.object({ landed: v.picklist(['mid-turn', 'queued']) });
+
 /** The executor's display fields and its producer-owned command refusal.
  * Success omits refusal; historical responses may lack classification. */
 const ExecutorCommandSchema = v.object({
@@ -617,7 +654,9 @@ const DeferredApprovalSchema = v.object({
   executor: v.string(),
   status: v.string(),
 });
+
 const DeferredApprovalsSchema = v.array(DeferredApprovalSchema);
+
 const DecideApprovalsSchema = v.object({ decided: v.array(v.string()) });
 
 /** One parked command, as the queue hands it to the surface that decides it. */
@@ -632,6 +671,7 @@ const CraftedToolSchema = v.object({
   description: v.string(),
   usageCount: v.optional(v.number()),
 });
+
 const ToolDescriptionsSchema = v.object({ crafted: v.array(CraftedToolSchema) });
 
 /** One tool the model built for itself, as the Tools pane lists it. */
@@ -644,10 +684,12 @@ const SlateSummarySchema = v.object({
   bindings: v.array(v.string()),
   port: v.optional(v.number()),
 });
+
 const SlateListingSchema = v.object({
   slates: v.array(SlateSummarySchema),
   problems: v.array(v.object({ id: v.string(), reason: v.string(), error: v.string() })),
 });
+
 export type PublicSlateListing = v.InferOutput<typeof SlateListingSchema>;
 
 /** A preview URL and port, or the refusal that prevented startup. */
@@ -655,6 +697,7 @@ const SlatePreviewSchema = v.variant('ok', [
   v.object({ ok: v.literal(true), value: v.object({ url: v.string(), port: v.number() }) }),
   v.object({ ok: v.literal(false), reason: v.string(), error: v.string() }),
 ]);
+
 export type PublicSlatePreview = v.InferOutput<typeof SlatePreviewSchema>;
 
 /** What `readExecutorFile` answers, exactly as `ExecutorTextFile` declares it
@@ -699,6 +742,7 @@ export interface PublicSubmission {
 
 async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
+
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
     async () => {
@@ -711,10 +755,13 @@ async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicS
           purpose: input.purpose,
         }),
       });
+
       return v.parse(WorkspaceEntrySchema, await readJson(response, 'create a workspace'));
     },
   );
+
   const session = new KinuPublicSession(input, created.name);
+
   try {
     await session.connect();
     await session.pinModel(input.llm.model);
@@ -725,6 +772,7 @@ async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicS
     await session.teardown();
     throw error;
   }
+
   return session;
 }
 
@@ -737,14 +785,18 @@ export function webHeaders(identity: PublicWebIdentity): Record<string, string> 
  *  503 naming a missing binding are different repairs. */
 async function readJson(response: Response, doing: string): Promise<JsonValue> {
   const text = await response.text();
+
   if (!response.ok) {
     throw new Error(`could not ${doing}: ${String(response.status)} ${response.statusText} `
       + `— ${text.slice(0, 400)}`);
   }
+
   const parsed = tolerate(() => parseJsonValue(text), 'malformed-input');
+
   if (parsed === undefined) {
     throw new Error(`could not ${doing}: the response was not JSON — ${text.slice(0, 200)}`);
   }
+
   return parsed;
 }
 
@@ -794,14 +846,18 @@ export class KinuPublicSession {
    */
   async connect(): Promise<void> {
     if (this.socket !== null) return;
+
     const url = new URL(
       `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.workspace)}`,
       this.input.origin,
     );
+
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+
     const socket = new HEADER_WEBSOCKET(url.toString(), {
       headers: webHeaders(this.input.identity),
     });
+
     this.socket = socket;
     socket.addEventListener('message', (event: MessageEvent) => {
       this.handleFrame(event.data);
@@ -831,11 +887,13 @@ export class KinuPublicSession {
    */
   async pinModel(spec: string): Promise<string> {
     const accepted = v.parse(SetModelSchema, await this.rpc('setModel', [spec])).spec;
+
     if (!accepted.includes(spec)) {
       throw new Error(`this workspace answered \`setModel(${spec})\` with ${accepted}, so the `
         + 'deployment substituted a model the run never announced and its cost basis would be '
         + "somebody else's. Check the account's model menu (`/api/user/models`).");
     }
+
     return accepted;
   }
 
@@ -844,10 +902,12 @@ export class KinuPublicSession {
     const socket = this.requireSocket();
     const requestId = this.mintId('turn');
     const recorder = recordPublicTurn();
+
     const settled = new Promise<PublicTurn>((resolve, reject) => {
       this.turns.set(requestId, { recorder, resolve, reject });
       socket.send(encodeChatRequest({ requestId, text }));
     });
+
     return { requestId, settled };
   }
 
@@ -872,6 +932,7 @@ export class KinuPublicSession {
   async steer(text: string): Promise<'mid-turn' | 'queued'> {
     const landed = await infraBoundary(`steerTurn on ${this.input.origin}/${this.workspace}`, () =>
       this.rpc('steerTurn', [text, 'build']));
+
     return v.parse(SteerSchema, landed).landed;
   }
 
@@ -890,6 +951,7 @@ export class KinuPublicSession {
       `executeInExecutor(${executor}) on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('executeInExecutor', [executor, command]),
     );
+
     return v.parse(ExecutorCommandSchema, result);
   }
 
@@ -906,6 +968,7 @@ export class KinuPublicSession {
       `listDeferredApprovals on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('listDeferredApprovals', []),
     );
+
     return v.parse(DeferredApprovalsSchema, rows);
   }
 
@@ -926,6 +989,7 @@ export class KinuPublicSession {
       `decideDeferredApprovals on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('decideDeferredApprovals', [[...ids], decision]),
     );
+
     return v.parse(DecideApprovalsSchema, answer).decided;
   }
 
@@ -937,6 +1001,7 @@ export class KinuPublicSession {
       `getToolDescriptions on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getToolDescriptions', []),
     );
+
     return v.parse(ToolDescriptionsSchema, answer).crafted;
   }
 
@@ -946,6 +1011,7 @@ export class KinuPublicSession {
       'listSlates on ' + this.input.origin + '/' + this.workspace,
       () => this.rpc('listSlates', []),
     );
+
     return v.parse(SlateListingSchema, answer);
   }
 
@@ -955,6 +1021,7 @@ export class KinuPublicSession {
       'previewSlate(' + id + ') on ' + this.input.origin + '/' + this.workspace,
       () => this.rpc('previewSlate', [id]),
     );
+
     return v.parse(SlatePreviewSchema, answer);
   }
 
@@ -964,6 +1031,7 @@ export class KinuPublicSession {
       'getExposedPorts(' + executor + ') on ' + this.input.origin + '/' + this.workspace,
       () => this.rpc('getExposedPorts', [executor]),
     );
+
     return v.parse(v.object({ ports: v.array(v.object({ port: v.number(), url: v.string() })) }), answer).ports;
   }
 
@@ -977,9 +1045,11 @@ export class KinuPublicSession {
           + `${encodeURIComponent(this.workspace)}/get-messages`,
           { headers: webHeaders(this.input.identity) },
         );
+
         return v.parse(HistorySchema, await readJson(response, 'read the chat history'));
       },
     );
+
     return rows.map((row) => ({
       role: row.role,
       text: (row.parts ?? [])
@@ -1002,6 +1072,7 @@ export class KinuPublicSession {
   async runEvents(): Promise<readonly RunEvent[]> {
     const events: RunEvent[] = [];
     let after: string | null = null;
+
     for (;;) {
       // Annotated because the loop reads its own result: `page.next.after` feeds
       // the next iteration, so inference would be circular.
@@ -1011,11 +1082,15 @@ export class KinuPublicSession {
         RunPageSchema,
         'list the workspace runs',
       );
+
       for (const run of page.items) events.push(...await this.runEventsOf(run.runId));
+
       if (page.status === 'end') break;
       after = page.next.after;
     }
+
     events.sort(compareRunEventOrder);
+
     return events;
   }
 
@@ -1038,6 +1113,7 @@ export class KinuPublicSession {
       `readExecutorFile(${executor}) on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('readExecutorFile', [executor, path]),
     );
+
     return v.parse(ViewedFileSchema, answer);
   }
 
@@ -1049,6 +1125,7 @@ export class KinuPublicSession {
       `getActivitySnapshot on ${this.input.origin}/${this.workspace}`,
       () => this.rpc('getActivitySnapshot', []),
     );
+
     return v.parse(ActivitySpendSchema, snapshot).spend;
   }
 
@@ -1058,11 +1135,14 @@ export class KinuPublicSession {
     return infraBoundary(`GET files ${path}`, async () => {
       const response = await fetch(this.filesUrl(path), { headers: webHeaders(this.input.identity) });
       const text = await response.text();
+
       if (response.status === 404 && options.allowMissing) return '';
+
       if (!response.ok) {
         throw new Error(`could not read ${path} over the files route: ${String(response.status)} `
           + `${response.statusText} — ${text.slice(0, 200)}`);
       }
+
       return text;
     });
   }
@@ -1076,6 +1156,7 @@ export class KinuPublicSession {
         headers: { ...webHeaders(this.input.identity), 'content-type': 'application/octet-stream' },
         body: content,
       });
+
       if (!response.ok) {
         throw new Error(`could not write ${path} over the files route: ${String(response.status)} `
           + `${response.statusText} — ${(await response.text()).slice(0, 200)}`);
@@ -1101,6 +1182,7 @@ export class KinuPublicSession {
             `${this.input.origin}/api/user/workspaces/${encodeURIComponent(this.workspace)}`,
             { method: 'DELETE', headers: webHeaders(this.input.identity) },
           );
+
           await readJson(response, `delete the workspace ${this.workspace}`);
         },
       );
@@ -1114,6 +1196,7 @@ export class KinuPublicSession {
   private async runEventsOf(runId: string): Promise<readonly RunEvent[]> {
     const events: RunEvent[] = [];
     let since = 0;
+
     for (;;) {
       const page = await this.getJson(
         `/api/workspaces/${encodeURIComponent(this.workspace)}/runs/`
@@ -1121,6 +1204,7 @@ export class KinuPublicSession {
         RunEventsSchema,
         `read the events of run ${runId}`,
       );
+
       if (page.length === 0) break;
       events.push(...page);
       // The route's `since` is an INCLUSIVE lower bound (recorder.ts:169-171),
@@ -1128,9 +1212,11 @@ export class KinuPublicSession {
       // Advancing by `page.length` instead would re-read a run whose indices
       // are not contiguous, and stall on one whose page ended mid-index.
       const highest = page.reduce((max, event) => Math.max(max, event.eventIndex), since);
+
       if (page.length < EVENT_PAGE) break;
       since = highest + 1;
     }
+
     return events;
   }
 
@@ -1139,6 +1225,7 @@ export class KinuPublicSession {
       const response = await fetch(`${this.input.origin}${path}`, {
         headers: webHeaders(this.input.identity),
       });
+
       return v.parse(schema, await readJson(response, doing));
     });
   }
@@ -1151,6 +1238,7 @@ export class KinuPublicSession {
   private rpc(method: string, args: readonly JsonValue[]): Promise<JsonValue> {
     const socket = this.requireSocket();
     const requestId = this.mintId('rpc');
+
     return new Promise<JsonValue>((resolve, reject) => {
       this.rpcs.set(requestId, { resolve, reject });
       socket.send(encodeRpcRequest({ requestId, method, args }));
@@ -1159,29 +1247,38 @@ export class KinuPublicSession {
 
   private requireSocket(): WebSocket {
     const socket = this.socket;
+
     if (socket === null) {
       throw new Error('this public session has no socket: `connect()` was not called, or the '
         + 'session was already torn down');
     }
+
     return socket;
   }
 
   private mintId(kind: string): string {
     this.nextId += 1;
+
     return `${kind}-${String(this.nextId)}-${Math.random().toString(36).slice(2, 8)}`;
   }
 
   private handleFrame(data: SocketPayload): void {
     const frame = decodeFrame(data);
+
     if (frame === null) return;
+
     if (frame.kind === 'rpc') {
       const pending = this.rpcs.get(frame.id);
+
       if (!pending) return;
       this.rpcs.delete(frame.id);
+
       if (frame.error === null) pending.resolve(frame.result);
       else pending.reject(new Error(frame.error));
+
       return;
     }
+
     if (frame.kind === 'resuming') {
       // The DO holds a stream for a turn this session started: ack it so the
       // buffered chunks are replayed. The accumulator is replay-idempotent, so
@@ -1189,13 +1286,17 @@ export class KinuPublicSession {
       if (this.turns.has(frame.id)) {
         this.socket?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: frame.id }));
       }
+
       return;
     }
+
     if (frame.kind !== 'response') return;
     const turn = this.turns.get(frame.frame.id);
+
     if (!turn) return;
     turn.recorder.apply(frame.frame);
     const done = turn.recorder.settled();
+
     if (done === null) return;
     this.turns.delete(frame.frame.id);
     turn.resolve(done);
@@ -1210,7 +1311,9 @@ export class KinuPublicSession {
     this.turns.clear();
     const rpcs = [...this.rpcs.values()];
     this.rpcs.clear();
+
     for (const turn of turns) turn.reject(new Error(reason));
+
     for (const rpc of rpcs) rpc.reject(new Error(reason));
   }
 }

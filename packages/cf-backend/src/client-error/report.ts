@@ -85,6 +85,7 @@ function renderFailureReport(
     stack: stackFrames(error.stack ?? '', STACK_FRAME).join('\n'),
     componentStack: stackFrames(componentStack, COMPONENT_STACK_FRAME).join('\n'),
   };
+
   return fitClientErrorReport(page.release === null ? report : { ...report, release: page.release });
 }
 
@@ -111,6 +112,7 @@ export async function reportRenderFailure(error: Error, componentStack: string):
     release: await pageDeployedBuildSha(),
     route: routeTemplateOf(location.pathname),
   });
+
   try {
     await fetch(CLIENT_ERROR_ENDPOINT, {
       method: 'POST',

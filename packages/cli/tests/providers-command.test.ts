@@ -6,6 +6,7 @@ import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -24,8 +25,10 @@ function runProviders(
   // Controlled PATH excludes the user's real `claude` so "absent" is honest;
   // /usr/bin + /bin keep `bash`/`env` available for the fake binary's shebang.
   let path = ['/usr/bin', '/bin'].join(delimiter);
+
   if (opts.claude) {
     const loggedIn = opts.claude === 'ready';
+
     // The probe runs `claude --version` then `claude auth status` (JSON stdout).
     const script = [
       '#!/usr/bin/env bash',
@@ -33,6 +36,7 @@ function runProviders(
       `if [ "$1" = "auth" ] && [ "$2" = "status" ]; then echo '{"loggedIn": ${loggedIn}}'; exit 0; fi`,
       'exit 0',
     ].join('\n');
+
     const claudePath = join(binDir, 'claude');
     writeFileSync(claudePath, script);
     chmodSync(claudePath, 0o755);
@@ -40,10 +44,12 @@ function runProviders(
   }
 
   const argv = JSON.stringify(args);
+
   const runner = `
     const { providersCommand } = await import('./packages/cli/src/commands/providers.ts');
     await providersCommand(${argv}[0], ${argv}[1], {});
   `;
+
   const proc = Bun.spawnSync({
     cmd: [process.execPath, '-e', runner],
     cwd: repoRoot,
@@ -58,6 +64,7 @@ function runProviders(
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   return {
     stdout: proc.stdout.toString(),
     stderr: proc.stderr.toString(),
@@ -68,6 +75,7 @@ function runProviders(
 function freshHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'kinu-providers-home-'));
   tempDirs.push(home);
+
   return home;
 }
 
@@ -119,6 +127,7 @@ describe('providers command — the provider revision', () => {
     const parsed = v.safeParse(v.number(), parseJsonObject(
       readFileSync(join(home, 'config.json'), 'utf8'),
     ).providerRevision);
+
     return parsed.success ? parsed.output : 0;
   }
 
@@ -160,6 +169,7 @@ describe('providers command — disconnect', () => {
   function homeWith(config: JsonObject): string {
     const home = freshHome();
     writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+
     return home;
   }
 
@@ -192,6 +202,7 @@ describe('providers command — disconnect', () => {
       model: 'openai/gpt-5.5',
       providers: { codex: { accessToken: 'at' }, openai: { apiKey: 'sk' } },
     });
+
     runProviders(['disconnect', 'codex'], { home });
     expect(readConfig(home).model).toBe('openai/gpt-5.5');
   });

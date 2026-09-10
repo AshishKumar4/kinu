@@ -183,18 +183,26 @@ function ledgerOutcomes(since: number): string[] {
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
+
   return i === -1 ? undefined : process.argv[i + 1];
 }
 
 const workspaceArg = arg('workspace');
+
 if (!workspaceArg) throw new Error('--workspace <name> is required');
+
 const workspace: string = workspaceArg;
+
 const only = arg('only')?.split(',').map((s) => s.trim()).filter(Boolean);
+
 const declared = only ? TASKS.filter((t) => only.includes(t.id)) : TASKS;
+
 if (declared.length === 0) throw new Error(`--only matched no task ids; known: ${TASKS.map((t) => t.id).join(', ')}`);
 
 const root = join(process.env.GRADED_CORPUS_ROOT ?? '/tmp', `graded-corpus-${process.pid}`);
+
 const cliEntry = join(import.meta.dir, '../packages/cli/bin/cli.ts');
+
 /** Read-only: this script measures the ledger, it never writes to it. */
 const db = new Database(agentDbPath(workspace), { readonly: true });
 
@@ -203,9 +211,11 @@ const db = new Database(agentDbPath(workspace), { readonly: true });
 function runTask(task: CorpusTask): TaskResult {
   const dir = join(root, task.id);
   mkdirSync(dir, { recursive: true });
+
   for (const [name, body] of Object.entries(task.seed)) writeFileSync(join(dir, name), body);
 
   const before = db.query<{ n: number }, []>('SELECT COALESCE(MAX(rowid), 0) AS n FROM turn_outcomes').get()?.n ?? 0;
+
   const run = spawnSync(
     'bun',
     ['run', cliEntry, 'exec', '--workspace', workspace, '--json', task.prompt],
@@ -214,19 +224,25 @@ function runTask(task: CorpusTask): TaskResult {
 
   let toolCalls = 0;
   let turns = 0;
+
   for (const line of (run.stdout ?? '').split('\n')) {
     if (!line.startsWith('{')) continue;
     const parsed = v.safeParse(EventSchema, tolerate(() => JSON.parse(line), 'malformed-input'));
+
     if (!parsed.success) continue;
     const event = parsed.output;
+
     if (event.type === 'tool_call') toolCalls++;
+
     if (event.type === 'evolution' && event.message?.startsWith('Turn outcome:')) turns++;
   }
+
   const outcomes = ledgerOutcomes(before);
 
   // Ground truth, out-of-band. The turn's own verdict and this are separate
   // facts and are reported separately; nothing here overwrites the ledger.
   const check = spawnSync('sh', ['-c', task.verify], { cwd: dir, encoding: 'utf8' });
+
   return {
     id: task.id,
     graded: outcomes.length,
@@ -238,6 +254,7 @@ function runTask(task: CorpusTask): TaskResult {
 }
 
 const results: TaskResult[] = [];
+
 for (const task of declared) {
   const result = runTask(task);
   results.push(result);
@@ -250,22 +267,31 @@ for (const task of declared) {
 
 // ── Admissibility, upstream of every number below ────────────────
 const ranIds = results.map((r) => r.id).sort();
+
 const declaredIds = declared.map((t) => t.id).sort();
+
 if (ranIds.join(',') !== declaredIds.join(',')) {
   throw new Error(`measured set != governed set: declared [${declaredIds.join(',')}], ran [${ranIds.join(',')}]`);
 }
+
 const totalGraded = results.reduce((n, r) => n + r.graded, 0);
+
 const totalTools = results.reduce((n, r) => n + r.toolCalls, 0);
+
 if (totalTools === 0) {
   throw new Error('0 tool calls across the whole corpus — no turn acted, so no turn is gradable. '
     + 'This is the C14 shape: check the tasks hand over a writable environment.');
 }
+
 if (totalGraded === 0) {
   throw new Error(`0 graded turns across ${results.length} task(s) despite ${totalTools} tool call(s). `
     + 'executionVerdict graded nothing — the corpus is inert and must not be reported as evidence.');
 }
+
 const negatives = results.flatMap((r) => r.outcomes).filter((o) => o !== 'accepted').length;
+
 const leaked = results.filter((r, i) => declared[i]?.alwaysFails && r.verified);
+
 if (leaked.length > 0) {
   throw new Error(`task(s) that can never pass PASSED verification: ${leaked.map((r) => r.id).join(', ')} — `
     + 'the corpus no longer contains a guaranteed negative and the split can degenerate.');
@@ -273,7 +299,9 @@ if (leaked.length > 0) {
 
 console.log(`\ncorpus: ${results.length} tasks, ${totalGraded} graded turns, ${negatives} negative,`
   + ` ${totalTools} tool calls, ${results.filter((r) => r.verified).length} verified by ground truth`);
+
 if (negatives === 0) {
   console.log('warning: no negative outcomes — buildOutcomeEvalSplit will refuse this ledger (no_negatives)');
 }
+
 if (!process.argv.includes('--keep')) rmSync(root, { recursive: true, force: true });

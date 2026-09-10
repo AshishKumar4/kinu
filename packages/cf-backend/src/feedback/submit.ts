@@ -145,6 +145,7 @@ function refuse(
     noteLength: observed.noteLength,
     annotated: observed.annotated,
   });
+
   return err(status, message);
 }
 
@@ -173,6 +174,7 @@ function pngRefusalFor(fault: PngFault): PngRefusal {
  *  endpoint has a use for, so it reads as absent. */
 function readField(form: FormData, name: string, max: number): string {
   const raw = form.get(name);
+
   return raw === null || raw instanceof Blob ? '' : raw.trim().slice(0, max);
 }
 
@@ -180,6 +182,7 @@ function readField(form: FormData, name: string, max: number): string {
  *  Declared once because each is now reachable from two arms, and two copies of
  *  a refusal drift into two different messages for one refusal. */
 const OVER_REQUEST_LIMIT = `Feedback is limited to ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB. Send the note without the screenshot, or capture a smaller area.`;
+
 const UNREADABLE_FORM = 'Could not read the feedback form.';
 
 /**
@@ -216,6 +219,7 @@ async function parseMultipart(
     headers: { 'content-type': contentType },
     body: bytes,
   });
+
   try {
     return await carrier.formData();
   } catch (cause) {
@@ -243,11 +247,13 @@ async function handleFeedbackSubmission(
   const blank: Observed = {
     route: '', noteLength: 0, screenshotAttempted: false, screenshotBytes: 0, annotated: false,
   };
+
   if (identity === null) {
     return refuse(deps, 401, 'Sign in to send feedback.', 'unauthenticated', blank);
   }
 
   const contentType = request.headers.get('content-type') ?? '';
+
   if (!contentType.toLowerCase().startsWith('multipart/form-data')) {
     return refuse(deps, 415, 'Send feedback as multipart/form-data.', 'bad_content_type', blank);
   }
@@ -255,25 +261,31 @@ async function handleFeedbackSubmission(
   // Before the body is read: a declared length that cannot fit one screenshot
   // plus its fields is refused without buffering it.
   const declared = Number(request.headers.get('content-length') ?? '');
+
   if (Number.isFinite(declared) && declared > FEEDBACK_MAX_REQUEST_BYTES) {
     return refuse(deps, 413, OVER_REQUEST_LIMIT, 'too_large', blank);
   }
 
   const bounded = await readBounded(request, FEEDBACK_MAX_REQUEST_BYTES);
+
   if (bounded === 'too_large') {
     return refuse(deps, 413, OVER_REQUEST_LIMIT, 'too_large', blank);
   }
+
   if (bounded instanceof KinuError) {
     diagnostics.failure('feedback.body_unreadable', bounded);
+
     return refuse(deps, 400, UNREADABLE_FORM, 'malformed', blank);
   }
 
   const form = await parseMultipart(request.url, contentType, bounded);
+
   if (form instanceof KinuError) {
     // Recorded HERE rather than inside the decoder, because the byte count that
     // makes the line worth reading belongs to this frame and a decoder that
     // logged would be deciding what its caller's failure means.
     diagnostics.failure('feedback.body_unparseable', form, { bytes: bounded.byteLength });
+
     return refuse(deps, 400, UNREADABLE_FORM, 'malformed', blank);
   }
 
@@ -281,6 +293,7 @@ async function handleFeedbackSubmission(
   const route = readField(form, FEEDBACK_FIELDS.route, FEEDBACK_MAX_ROUTE_CHARS);
   const workspaceField = readField(form, FEEDBACK_FIELDS.workspace, FEEDBACK_MAX_ROUTE_CHARS);
   const annotated = form.get(FEEDBACK_FIELDS.annotated) === '1';
+
   const observed: Observed = {
     route, noteLength: note.length, screenshotAttempted: false, screenshotBytes: 0, annotated,
   };
@@ -289,9 +302,11 @@ async function handleFeedbackSubmission(
   // A string in the screenshot field means a caller sent something else under
   // that name.
   const shot = part instanceof Blob ? part : null;
+
   if (part !== null && shot === null) {
     return refuse(deps, 415, 'The screenshot must be a PNG file.', 'bad_content_type', observed);
   }
+
   if (shot !== null) {
     // Recorded BEFORE any refusal below it, so a rejection marker states that a
     // screenshot was carried and how big the part was, whatever the arm — the
@@ -316,6 +331,7 @@ async function handleFeedbackSubmission(
   const attribution = workspaceField.length === 0
     ? null
     : await deps.attributeWorkspace(identity.userId, workspaceField);
+
   if (attribution?.kind === 'refused') {
     return refuse(
       deps, 403,
@@ -323,6 +339,7 @@ async function handleFeedbackSubmission(
       'unowned_workspace', observed,
     );
   }
+
   if (attribution?.kind === 'unavailable') {
     // OUR outage, and said as one. The report is refused rather than filed
     // unattributed: a report silently stripped of the workspace it was about is
@@ -332,6 +349,7 @@ async function handleFeedbackSubmission(
       cause: attribution.error,
       otherwise: 'unavailable',
     }), { feedbackRoute: feedbackRouteFamily(route) });
+
     return refuse(
       deps, 503,
       'That workspace could not be confirmed right now. Try again in a moment.',
@@ -353,6 +371,7 @@ async function handleFeedbackSubmission(
     if (shot.type.toLowerCase() !== FEEDBACK_SCREENSHOT_TYPE) {
       return refuse(deps, 415, 'The screenshot must be a PNG.', 'bad_content_type', observed);
     }
+
     if (shot.size > FEEDBACK_MAX_SCREENSHOT_BYTES) {
       return refuse(
         deps, 413,
@@ -360,6 +379,7 @@ async function handleFeedbackSubmission(
         'too_large', observed,
       );
     }
+
     if (deps.store === null) {
       return refuse(
         deps, 503,
@@ -372,12 +392,16 @@ async function handleFeedbackSubmission(
     // a PNG — and the walk that proves it is the same pass that drops every
     // metadata chunk.
     const clean = sanitizePng(new Uint8Array(await shot.arrayBuffer()));
+
     if ('fault' in clean) {
       const { status, reason } = pngRefusalFor(clean.fault);
+
       return refuse(deps, status, `That screenshot could not be read: ${clean.error}`, reason, observed);
     }
+
     observed.screenshotBytes = clean.bytes.length;
     screenshot = { key: `feedback/${identity.userId}/${id}.png`, bytes: clean.bytes };
+
     // A REJECTED PUT IS A LOST REPORT, and `storage_unavailable` is the arm that
     // says so — the same arm an unbound bucket answers with. Uncaught, this was
     // a platform 500 with no marker and no row: the one outcome the rejection
@@ -390,6 +414,7 @@ async function handleFeedbackSubmission(
         cause,
         otherwise: 'unavailable',
       }), { objectKey: screenshot.key, feedbackId: id });
+
       return refuse(
         deps, 503,
         'The screenshot could not be stored. Try again, or send the note on its own.',
@@ -415,6 +440,7 @@ async function handleFeedbackSubmission(
   };
 
   const written = await deps.record(row);
+
   if ('error' in written) {
     // The object is now referenced by nothing, so it is deleted before the
     // request is answered. A failing delete is not a tolerable class — there is
@@ -423,6 +449,7 @@ async function handleFeedbackSubmission(
     // object findable. It must not mask the row failure that caused it, so the
     // answer below is the same either way.
     const store = deps.store;
+
     if (screenshot !== null && store !== null) {
       try {
         await store.delete(screenshot.key);
@@ -434,6 +461,7 @@ async function handleFeedbackSubmission(
         }), { objectKey: screenshot.key, feedbackId: id });
       }
     }
+
     return refuse(deps, 500, 'Feedback could not be saved. Try sending it again.', 'row_write_failed', observed);
   }
 
@@ -447,6 +475,7 @@ async function handleFeedbackSubmission(
     noteLength: note.length,
     annotated,
   });
+
   // `satisfies` rather than an annotation: the success shape is DECLARED beside
   // the wire limits both halves read, and checking the literal against it here
   // is what makes that declaration load-bearing instead of documentation.
@@ -460,6 +489,8 @@ export async function routeFeedback(
   deps: FeedbackDeps,
 ): Promise<Response | null> {
   if (new URL(request.url).pathname !== FEEDBACK_ENDPOINT) return null;
+
   if (request.method !== 'POST') return err(405, 'use POST');
+
   return handleFeedbackSubmission(request, identity, deps);
 }

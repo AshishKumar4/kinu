@@ -178,6 +178,7 @@ export function verifierDigestOf(spec: VerifierSpec, implementation: string): st
  *  not the same claim as a floor of zero. */
 export function floorDigestOf(floor: Floor | null): string | null {
   if (floor === null) return null;
+
   return argumentDigest({
     value: floor.value,
     proof: floor.proof,
@@ -451,6 +452,7 @@ export function recordsUnder(
   actor.assertCurrent();
   const actorId = actor.actorId;
   const { objectiveId, floorDigest } = handle;
+
   const rows = direction === 'minimise'
     ? sql<Row>`SELECT * FROM exploration_records
         WHERE actor_id = ${actorId} AND objective_id = ${objectiveId}
@@ -460,6 +462,7 @@ export function recordsUnder(
         WHERE actor_id = ${actorId} AND objective_id = ${objectiveId}
           AND floor_digest IS ${floorDigest}
         ORDER BY value DESC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`;
+
   return rows.map(decode);
 }
 
@@ -489,6 +492,7 @@ export function recordsInCell(
   const value = seek?.value ?? 0;
   const at = seek?.firstRecordedAt ?? 0;
   const artifact = seek?.artifactDigest ?? '';
+
   const rows = direction === 'minimise'
     ? sql<Row>`SELECT * FROM exploration_records
         WHERE actor_id = ${actorId} AND objective_id = ${objectiveId}
@@ -506,6 +510,7 @@ export function recordsInCell(
                OR (value = ${value} AND (first_recorded_at > ${at}
                    OR (first_recorded_at = ${at} AND artifact_digest > ${artifact}))))
         ORDER BY value DESC, first_recorded_at ASC, artifact_digest ASC LIMIT ${limit}`;
+
   return rows.map(decode);
 }
 
@@ -542,6 +547,7 @@ export function describeObjective(
   sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle,
 ): StoredObjective {
   actor.assertCurrent();
+
   const row = sql<{
     row_count: number; metric: string | null; unit: string | null;
     direction: string | null; scale: string | null; verifier_digest: string | null;
@@ -551,8 +557,11 @@ export function describeObjective(
        FROM exploration_records
        WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
          AND floor_digest IS ${handle.floorDigest}`[0];
+
   if (!row || row.row_count === 0) return { identity: null, rows: 0 };
+
   if (row.metric === null) return { identity: null, rows: row.row_count };
+
   return {
     identity: v.parse(StoredIdentitySchema, {
       metric: row.metric, unit: row.unit, direction: row.direction,
@@ -575,6 +584,7 @@ export function bestInCell(
   sql: SqlExecutor, actor: ActorHandle, scope: CellScope,
 ): ExplorationRecord | null {
   const handle = { ...recordHandleOf(scope), descriptor: scope.descriptor };
+
   return recordsInCell(sql, actor, handle, scope.identity.direction, null, 1)[0] ?? null;
 }
 
@@ -606,6 +616,7 @@ export function cellOccupants(
   sql: SqlExecutor, actor: ActorHandle, scope: CellScope,
 ): readonly ExplorationRecord[] {
   const handle = { ...recordHandleOf(scope), descriptor: scope.descriptor };
+
   return recordsInCell(sql, actor, handle, scope.identity.direction, null, NO_LIMIT);
 }
 
@@ -623,9 +634,11 @@ export function recordExploration(
   input: { readonly publication: PublicationState; readonly write: ExplorationWrite },
 ): RecordVerdict {
   const { write } = input;
+
   if (admitsPublication(input.publication, 'records').kind === 'refused') {
     return { kind: 'refused', cause: 'sealed' };
   }
+
   // AFTER the seal and before anything is read, for the seal's own reason: a
   // breached run must not inspect the store, and neither must a retired actor.
   actor.assertCurrent();
@@ -643,6 +656,7 @@ export function recordExploration(
   const existing = sql<Row>`
     SELECT * FROM exploration_records
     WHERE actor_id = ${actorId} AND record_key = ${recordKey} LIMIT 1`[0];
+
   if (existing && !isBetter(write.value, existing.value, direction)) {
     // The whole rule, and note that a TIE lands here: `isBetter` is strict, a tie
     // carries no signal, and re-recording an unchanged elite moved nothing.
@@ -652,9 +666,11 @@ export function recordExploration(
   const incumbent = bestInCell(sql, actor, {
     identity: write.identity, floor: write.floor, descriptor: write.descriptor,
   });
+
   const measuredJson = write.measured === null ? null : JSON.stringify(write.measured);
 
   const identity = write.identity;
+
   if (existing) {
     // `first_recorded_at` is untouched: it is when this artifact first entered the
     // store, not when it was last measured.
@@ -692,6 +708,7 @@ export function recordExploration(
   }
 
   const displaced = incumbent !== null && isBetter(write.value, incumbent.value, direction);
+
   if (displaced) {
     // Counted on the OTHER rows, which is what the field says: how many times this
     // cell's best has moved since THIS row was written. The row that did the moving
@@ -701,5 +718,6 @@ export function recordExploration(
         AND floor_digest IS ${floorDigest}
         AND descriptor IS ${write.descriptor} AND record_key <> ${recordKey}`;
   }
+
   return { kind: 'recorded', recordKey, displaced };
 }

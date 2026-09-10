@@ -54,12 +54,15 @@ function lastNameToken(name: string): string {
   const tokens = name
     .split(/[_-]+/)
     .flatMap((part) => part.split(/(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])/));
+
   const last = tokens[tokens.length - 1];
+
   return last === undefined ? '' : last.toLowerCase();
 }
 
 function looksLikeSecretField(name: string): boolean {
   for (const p of SECRET_FIELD_PATTERNS) if (p.test(name)) return true;
+
   return SECRET_SUFFIX_TOKENS.has(lastNameToken(name));
 }
 
@@ -75,13 +78,16 @@ function looksLikeSecretField(name: string): boolean {
  */
 export function redactPayload(value: JsonValue): JsonValue {
   if (!isJsonObject(value) && !Array.isArray(value)) return value;
+
   if (Array.isArray(value)) return value.map(redactPayload);
   const redacted: JsonObject = {};
+
   for (const [field, fieldValue] of Object.entries(value)) {
     redacted[field] = looksLikeSecretField(field)
       ? `<redacted:${field}>`
       : redactPayload(fieldValue);
   }
+
   return redacted;
 }
 
@@ -100,10 +106,13 @@ export function applyVisibilityForStorage<T>(
   hmacSecret?: string,
 ): StorageTransform {
   const serializedPayload = JSON.stringify(payload);
+
   if (serializedPayload === undefined) {
     throw new Error('event payload must be JSON-serializable');
   }
+
   const admittedPayload = parseJsonValue(serializedPayload);
+
   switch (policy) {
     case 'full':
       return { stored: admittedPayload };
@@ -114,6 +123,7 @@ export function applyVisibilityForStorage<T>(
     case 'hash': {
       const serialized = JSON.stringify(admittedPayload);
       const digest = createHash('sha256').update(serialized).digest('hex');
+
       return {
         stored: {
           _visibility: 'hash',
@@ -129,8 +139,10 @@ export function applyVisibilityForStorage<T>(
         // Without a secret, hmac collapses to hash. Log via the absence in stored.
         return applyVisibilityForStorage(payload, 'hash');
       }
+
       const serialized = JSON.stringify(admittedPayload);
       const mac = createHmac('sha256', hmacSecret).update(serialized).digest('hex');
+
       return {
         stored: {
           _visibility: 'hmac',
@@ -146,6 +158,7 @@ export function applyVisibilityForStorage<T>(
       // write (e.g. UserDO secret store) BEFORE calling publish.
       const serialized = JSON.stringify(admittedPayload);
       const handle = `opaque:${createHash('sha256').update(serialized).digest('hex').slice(0, 16)}`;
+
       return {
         stored: { _visibility: 'opaque_handle', handle },
         opaque_handles: [{
@@ -160,9 +173,13 @@ export function applyVisibilityForStorage<T>(
 
 function detectContentType(payload: JsonValue): string {
   if (payload === null) return 'null';
+
   if (v.is(v.string(), payload)) return 'text/plain';
+
   if (v.is(v.union([v.number(), v.boolean()]), payload)) return 'primitive';
+
   if (Array.isArray(payload)) return 'array';
+
   return 'object';
 }
 
@@ -210,12 +227,16 @@ function briefWindow(text: string): string {
  */
 export function renderSubordinateHandoff(handoff: SubordinateReportHandoff): string {
   let rendered = '';
+
   for (const field of SUBORDINATE_REPORT_HANDOFF_FIELDS) {
     const entries = handoff[field];
+
     if (entries === undefined || entries.length === 0) continue;
     rendered += `\n${field}:`;
+
     for (const entry of entries) rendered += `\n  - ${entry}`;
   }
+
   return rendered;
 }
 
@@ -235,10 +256,13 @@ export function renderForLLM(event: KinuEvent) {
 function friendlySource(event: KinuEvent): string {
   const parsedPayload = v.safeParse(JsonObjectSchema, event.payload);
   const payload = parsedPayload.success ? parsedPayload.output : {};
+
   const text = (field: string, fallback: string): string => {
     const value = payload[field];
+
     return v.is(v.string(), value) ? value : fallback;
   };
+
   switch (event.ingress) {
     case 'chat_ws':         return 'chat (operator)';
     case 'webhook_hmac':
@@ -246,6 +270,7 @@ function friendlySource(event: KinuEvent): string {
     case 'webhook_mtls': {
       return `webhook (${text('webhook_id', 'unknown')})`;
     }
+
     case 'timer_alarm':     return `schedule (${text('label', 'unlabeled')})`;
     case 'sandbox_cb':
     case 'process_watch':   return `sandbox (${text('command', 'process').slice(0, 40)})`;
@@ -258,6 +283,7 @@ function friendlySource(event: KinuEvent): string {
     case 'email_inbound':   return `email (${text('from', '?')})`;
     case 'mcp_streamable':
       if (event.variant === 'mcp_chat') return `MCP (operator)`;
+
       return `MCP (${text('client_label', 'third party')})`;
     case 'self_emit':       return `your earlier action`;
     case 'reply_request':   return `operator reply`;
@@ -272,23 +298,30 @@ function briefForVariant(event: KinuEvent): string {
     const visibilityPayload = parsed.success ? parsed.output : {};
     const marker = visibilityPayload._visibility;
     const size = visibilityPayload.size;
+
     if (marker === 'hash') {
       const digest = visibilityPayload.sha256;
+
       return `[redacted body: ${v.is(v.string(), digest) ? digest.slice(0, 16) : undefined}... size=${size}]`;
     }
+
     if (marker === 'hmac') {
       return `[opaque body verified by hmac, size=${size}]`;
     }
+
     if (marker === 'opaque_handle') {
       // The payload was replaced with a pointer into a side store the agent
       // cannot reach (applyVisibilityForStorage). Say so — do not invent a
       // read-back API. This line once instructed the model to call
       // `read_external_payload(event_id)`, which existed nowhere.
       const handle = v.is(v.string(), visibilityPayload.handle) ? visibilityPayload.handle : 'unknown';
+
       return `[opaque payload ${handle}: withheld by visibility policy; not readable from this agent]`;
     }
+
     return '[protected payload unavailable: malformed visibility envelope]';
   }
+
   switch (event.variant) {
     case 'chat':
       return event.payload.text.slice(0, 200);
@@ -300,48 +333,64 @@ function briefForVariant(event: KinuEvent): string {
       const p = event.payload;
       const body = JSON.stringify(p.body) ?? 'undefined';
       const full = p.body_path ? ` — full body: ${p.body_path}` : '';
+
       return `${p.http_method} body of ${briefWindow(body)}${full}`;
     }
+
     case 'process_done': {
       const p = event.payload;
+
       return `${p.command.slice(0, 60)} exit=${p.exit_code}${p.stderr_excerpt ? ' stderr: ' + p.stderr_excerpt.slice(0, 100) : ''}`;
     }
+
     case 'timer': {
       const p = event.payload;
+
       return p.label ?? (JSON.stringify(p.user_payload) ?? 'undefined').slice(0, 100);
     }
+
     case 'peer_agent': {
       // Peer messages are delegated tasks/answers — the whole delivery, so an
       // oversize body names where its full text was spilled.
       const p = event.payload;
       const full = p.body_path ? ` — full message: ${p.body_path}` : '';
+
       return `${p.topic}: ${briefWindow(JSON.stringify(p.body) ?? 'undefined')}${full}`;
     }
+
     case 'subordinate_task': {
       // Assignments are the subordinate's whole turn input — chat-scale
       // budget, same as peer messages.
       const p = event.payload;
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
       const inheritedContext = p.inherited_context ? `${p.inherited_context}\n\n` : '';
+
       return `${inheritedContext}${p.kind}: ${briefWindow(p.body)}${deliverable}`;
     }
+
     case 'subordinate_report': {
       const p = event.payload;
       const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
       const full = p.content_path ? ` — full report: ${p.content_path}` : '';
+
       return `${p.status}${task}: ${briefWindow(p.content)}${full}${renderSubordinateHandoff(p)}`;
     }
+
     case 'file_changed':
       return `${event.payload.change} ${event.payload.path}`;
     case 'email': {
       // Same treatment as a peer message: the mail IS the woken turn's input.
       const p = event.payload;
+
       const attachNote = p.attachments?.length > 0
         ? ` [${p.attachments.length} attachment${p.attachments.length === 1 ? '' : 's'}]`
         : '';
+
       const full = p.body_path ? ` — full body: ${p.body_path}` : '';
+
       return `"${p.subject}"${attachNote}: ${briefWindow(p.body_text)}${full}`;
     }
+
     case 'internal':
       return event.payload.kind;
     case 'reply_request':

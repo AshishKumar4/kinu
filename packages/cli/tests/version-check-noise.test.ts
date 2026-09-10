@@ -20,6 +20,7 @@ const configHome = () => {
     accessToken: 'ptc_test',
     updateCheckedAt: 0,
   }, null, 2)}\n`, { mode: 0o600 });
+
   return home;
 };
 
@@ -41,12 +42,15 @@ async function runCheck(home: string, fetchExpr: string): Promise<string> {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+
   if (exitCode !== 0) throw new Error(`script failed (${exitCode}): ${stderr}`);
+
   return stdout.trim();
 }
 
@@ -61,6 +65,7 @@ function parseRun(out: string): { lines: string[]; outcome: string | null } {
 describe('startup update check noise', () => {
   test('an aborted probe prints nothing', async () => {
     const home = configHome();
+
     // The Mac's exact path: headers arrive, then the body stream aborts when
     // the probe's own timeout fires — the AbortError escapes through
     // res.json() inside fetchServedVersion and reaches the catch.
@@ -75,6 +80,7 @@ describe('startup update check noise', () => {
         },
       }), { headers: { 'content-type': 'application/json' } })
     `);
+
     const { lines, outcome } = parseRun(out);
     expect(lines).toEqual([]);
     expect(outcome).toBeNull();
@@ -87,12 +93,14 @@ describe('startup update check noise', () => {
     // read-only directory is the exact write that cannot succeed. That
     // failure is the one the catch must still report.
     chmodSync(home, 0o500);
+
     try {
       const out = await runCheck(home, `
         async () => new Response(JSON.stringify({ version: '9.9.9+x' }), {
           headers: { 'content-type': 'application/json' },
         })
       `);
+
       const { lines } = parseRun(out);
       expect(lines.join('\n')).toContain('Update check failed');
     } finally {

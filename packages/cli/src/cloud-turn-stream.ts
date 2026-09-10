@@ -74,6 +74,7 @@ export class CloudTurnStream {
       durationMs: Date.now() - this.startedAt,
       hadError,
     };
+
     this.emit({ type: 'turn-end', turn: result });
     this.resolve(result);
   }
@@ -81,60 +82,81 @@ export class CloudTurnStream {
   private admit(replay: boolean): boolean {
     if (!replay) {
       this.applied += 1;
+
       return true;
     }
+
     this.replayed += 1;
+
     if (this.replayed <= this.applied) return false;
     this.applied = this.replayed;
+
     return true;
   }
 
   private decode(body: string): void {
     const parsed = tolerate(() => parseJsonValue(body), 'malformed-input');
+
     if (parsed === undefined) return;
     const result = v.safeParse(JsonObjectSchema, parsed);
+
     if (!result.success) return;
     const chunk = result.output;
     const type = v.safeParse(v.string(), chunk.type);
+
     if (!type.success) return;
+
     switch (type.output) {
       case 'text-delta': {
         const delta = jsonString(chunk.delta, '');
+
         if (!delta) return;
         this.text += delta;
         this.emit({ type: 'text-delta', delta });
+
         return;
       }
+
       case 'tool-input-available': {
         const toolName = jsonString(chunk.toolName, 'tool');
         const toolCallId = jsonString(chunk.toolCallId, '');
         const args = asRecord({ value: chunk.input ?? null }, 'input');
         const call = { name: toolName, args, result: undefined };
         this.toolCalls.push(call);
+
         if (toolCallId) this.toolById.set(toolCallId, call);
         this.emit({ type: 'tool-call', toolName, toolCallId, args });
+
         return;
       }
+
       case 'tool-output-available':
       case 'tool-output-error': {
         const toolCallId = jsonString(chunk.toolCallId, '');
         const call = this.toolById.get(toolCallId);
+
         const result = type.output === 'tool-output-error'
           ? jsonErrorMessage(chunk.errorText, 'tool error')
           : stringifyToolOutput(chunk.output ?? null);
+
         const outcome = type.output === 'tool-output-error'
           ? { success: false, reason: null } satisfies ToolOutcome
           : { success: true } satisfies ToolOutcome;
+
         if (call) { call.result = result; call.outcome = outcome; }
+
         this.emit({
           type: 'tool-result', toolName: call?.name ?? 'tool', toolCallId, result,
           ...outcome,
         });
+
         return;
       }
+
       case 'finish-step': {
         this.steps += 1;
         this.emit({ type: 'step-finish', stepIndex: this.steps });
+
         return;
       }
     }
@@ -143,6 +165,7 @@ export class CloudTurnStream {
 
 function stringifyToolOutput(output: JsonValue): string {
   const text = v.safeParse(v.string(), output);
+
   return text.success ? text.output : JSON.stringify(output);
 }
 
@@ -152,11 +175,13 @@ function stringifyToolOutput(output: JsonValue): string {
 export function jsonErrorMessage(value: JsonValue | undefined, fallback: string): string {
   if (value === undefined) return fallback;
   const text = v.safeParse(v.string(), value);
+
   return text.success && text.output ? text.output : String(value);
 }
 
 function jsonString(value: JsonValue | undefined, fallback: string): string {
   if (value === undefined) return fallback;
   const text = v.safeParse(v.string(), value);
+
   return text.success ? text.output : fallback;
 }

@@ -55,15 +55,19 @@ const PROVIDER_REQUEST_LANES =
 export function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.reject(abortCause(signal));
   const { promise, resolve, reject } = Promise.withResolvers<void>();
+
   const timer = setTimeout(() => {
     signal?.removeEventListener('abort', onAbort);
     resolve();
   }, ms);
+
   const onAbort = () => {
     clearTimeout(timer);
     reject(abortCause(signal));
   };
+
   signal?.addEventListener('abort', onAbort, { once: true });
+
   return promise;
 }
 
@@ -119,16 +123,20 @@ export class ProviderPacer {
    */
   async admit(host: string, signal?: AbortSignal): Promise<() => void> {
     const lane = this.laneFor(host);
+
     for (;;) {
       if (signal?.aborted) throw abortCause(signal);
       const cooling = lane.coolUntilMs - this.now();
+
       if (cooling > 0) {
         await this.sleep(cooling, signal);
         continue;
       }
+
       if (lane.active < this.lanes) {
         lane.active += 1;
         let released = false;
+
         return () => {
           if (released) return;
           released = true;
@@ -136,6 +144,7 @@ export class ProviderPacer {
           this.wakeAll(lane);
         };
       }
+
       await this.queueForLane(lane, signal);
     }
   }
@@ -155,6 +164,7 @@ export class ProviderPacer {
     const { promise, resolve } = Promise.withResolvers<void>();
     lane.waiting.push(resolve);
     signal?.addEventListener('abort', () => { resolve(); }, { once: true });
+
     return promise;
   }
 
@@ -174,14 +184,17 @@ export class ProviderPacer {
 
   private laneFor(host: string): HostLane {
     const existing = this.hosts.get(host);
+
     if (existing) return existing;
     const lane: HostLane = { active: 0, waiting: [], coolUntilMs: 0 };
     this.hosts.set(host, lane);
+
     return lane;
   }
 
   private wakeAll(lane: HostLane): void {
     const waiters = lane.waiting.splice(0);
+
     for (const wake of waiters) wake();
   }
 }

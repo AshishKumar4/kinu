@@ -47,38 +47,49 @@ const PersistedEvalIdentitySchema = v.object({
   origin: v.string(),
   accessToken: v.string(),
 });
+
 const persistedPath = `${homedir()}/.config/kinu/eval-session/config.json`;
+
 const identityEnv: NodeJS.ProcessEnv = { ...process.env };
+
 if (!identityEnv[EVAL_IDENTITY_ENV.token] && existsSync(persistedPath)) {
   const permissions = statSync(persistedPath).mode & 0o077;
+
   if (permissions !== 0) {
     console.error(`eval-credentials: REFUSED — ${persistedPath} must be mode 0600`);
     process.exit(1);
   }
+
   const persisted = v.parse(
     PersistedEvalIdentitySchema,
     JSON.parse(readFileSync(persistedPath, 'utf8')),
   );
+
   identityEnv[EVAL_IDENTITY_ENV.origin] = persisted.origin;
   identityEnv[EVAL_IDENTITY_ENV.token] = persisted.accessToken;
 }
 
 const endpoint = refusedEvalEndpoint();
+
 if (endpoint) {
   console.error(`eval-credentials: REFUSED — ${endpoint.variable} names a deployment: ${endpoint.reason}`);
   process.exit(1);
 }
 
 const resolved = resolveEvalIdentity(identityEnv);
+
 if (resolved.kind === 'refused') {
   console.error(`eval-credentials: REFUSED — ${resolved.reason}`);
   process.exit(1);
 }
+
 if (resolved.kind === 'absent') {
   console.error(`eval-credentials: ${resolved.reason}`);
   process.exit(0);
 }
 
 console.error(`eval-credentials: running as ${resolved.identity.describe}`);
+
 console.log(resolved.identity.origin);
+
 console.log(resolved.identity.token);

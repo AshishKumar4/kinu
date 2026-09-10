@@ -18,6 +18,7 @@ function setup() {
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
   const actor = testActorHandle(sql);
+
   return { recorder: new RunEventRecorder(sql, actor), sql, actor };
 }
 
@@ -25,7 +26,9 @@ function setup() {
  *  observed against, since a bound is only visible when it cuts. */
 function seededRun(count: number): RunEventRecorder {
   const { recorder } = setup();
+
   for (let i = 0; i < count; i++) recorder.emit('run-1', { type: 'error', message: `t${i}` });
+
   return recorder;
 }
 
@@ -57,9 +60,11 @@ describe('RunEventRecorder.emit', () => {
     const { recorder, sql, actor } = setup();
     recorder.emit('run-1', { type: 'run_start', agentId: 'a' });
     recorder.emit('run-1', { type: 'error', message: 'x' });
+
     const rows = sql<{ event_index: number; type: string }>`
       SELECT event_index, type FROM run_events
       WHERE actor_id = ${actor.actorId} AND run_id = 'run-1' ORDER BY event_index`;
+
     expect(rows.length).toBe(2);
     expect(rows[0].type).toBe('run_start');
     expect(rows[1].type).toBe('error');
@@ -76,9 +81,11 @@ describe('RunEventRecorder.emit', () => {
     void sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
       VALUES (${actor.actorId}, ${runId}, 2, 'error', ${live}, ${ts})`;
     expect(() => recorder.emit('run-1', { type: 'error', message: 'collide' })).toThrow(/UNIQUE constraint failed: run_events/);
+
     const rows = sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE actor_id = ${actor.actorId} AND run_id = ${runId} AND event_index = 2`;
+
     expect(rows.length).toBe(1);
     expect(rows[0]?.payload).toBe(live);
   });
@@ -87,9 +94,11 @@ describe('RunEventRecorder.emit', () => {
 describe('RunEventRecorder.read', () => {
   test('returns events in eventIndex order', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 5; i++) {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
+
     const out = recorder.read('run-1');
     expect(out.length).toBe(5);
     expect(out.map((e) => e.eventIndex)).toEqual([0, 1, 2, 3, 4]);
@@ -97,9 +106,11 @@ describe('RunEventRecorder.read', () => {
 
   test('honors since lower bound', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 5; i++) {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
+
     const out = recorder.read('run-1', { since: 3 });
     expect(out.length).toBe(2);
     expect(out[0].eventIndex).toBe(3);
@@ -108,9 +119,11 @@ describe('RunEventRecorder.read', () => {
 
   test('honors limit', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 20; i++) {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
+
     expect(recorder.read('run-1', { limit: 5 }).length).toBe(5);
   });
 
@@ -216,6 +229,7 @@ describe('RunEventRecorder.read', () => {
     const events = recorder.read('run-1', { types: ['run_end'] });
     expect(events.length).toBe(1);
     const runEnd = events.find((event) => event.type === 'run_end');
+
     if (!runEnd) throw new Error('expected run_end event');
     expect(runEnd.reason).toBe('error');
     expect(runEnd.error).toBe('Bad Request: content parts must be text or image_url');
@@ -237,12 +251,15 @@ describe('RunEventRecorder.read', () => {
     // that fetches one window and slices returns only the first match.
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'error', message: 'match-0' });
+
     for (let i = 0; i < 100; i++) {
       recorder.emit('run-1', { type: 'turn_start', turnIndex: i });
     }
+
     for (let i = 1; i <= 5; i++) {
       recorder.emit('run-1', { type: 'error', message: `match-${i}` });
     }
+
     const out = recorder.read('run-1', { types: ['error'], limit: 5 });
     expect(out.length).toBe(5);
     expect(out.every((e) => e.type === 'error')).toBe(true);
@@ -254,9 +271,11 @@ describe('RunEventRecorder.read', () => {
     // to the run end and stops with what it found.
     const { recorder } = setup();
     recorder.emit('run-1', { type: 'error', message: 'match-0' });
+
     for (let i = 0; i < 30; i++) {
       recorder.emit('run-1', { type: 'turn_start', turnIndex: i });
     }
+
     recorder.emit('run-1', { type: 'error', message: 'match-1' });
     const out = recorder.read('run-1', { types: ['error'], limit: 10 });
     expect(out.map((e) => e.eventIndex)).toEqual([0, 31]);
@@ -266,9 +285,11 @@ describe('RunEventRecorder.read', () => {
 describe('RunEventRecorder.readSince', () => {
   test('returns events strictly after the given index — for SSE resume', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 5; i++) {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
+
     const after2 = recorder.readSince('run-1', 2);
     expect(after2.length).toBe(2);
     expect(after2[0].eventIndex).toBe(3);
@@ -283,27 +304,33 @@ describe('RunEventRecorder.readSince', () => {
     // `LIMIT -1` in SQLite means no limit, so one negative value turns a tail
     // read into a full read.
     const { recorder } = setup();
+
     for (let i = 0; i < 40; i++) {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
+
     expect(recorder.readSince('run-1', -1, -1).length).toBe(1);
     expect(recorder.readSince('run-1', 0, -9999).length).toBe(1);
   });
 
   test('a non-finite limit means unstated and takes the default', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 600; i++) {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
+
     expect(recorder.readSince('run-1', -1, Number.NaN).length).toBe(500);
     expect(recorder.readSince('run-1', -1, Number.POSITIVE_INFINITY).length).toBe(500);
   });
 
   test('a fractional limit truncates instead of failing the query', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 40; i++) {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
+
     expect(recorder.readSince('run-1', -1, 2.7).length).toBe(2);
   });
 });
@@ -337,25 +364,31 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
     // `LIMIT -1` in SQLite means no limit, so one negative value turns a page
     // read into a full read.
     const { recorder } = setup();
+
     for (let i = 0; i < 5; i++) {
       recorder.emit(`run-${i}`, { type: 'run_start', agentId: 'a' });
     }
+
     expect(recorder.listRunsBefore(null, -1).length).toBe(1);
   });
 
   test('a non-finite count means unstated and takes the default', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 250; i++) {
       recorder.emit(`run-${i}`, { type: 'run_start', agentId: 'a' });
     }
+
     expect(recorder.listRunsBefore(null, Number.NaN).length).toBe(RUN_EVENT_LIMIT_DEFAULT);
   });
 
   test('a fractional count truncates instead of failing the query', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 5; i++) {
       recorder.emit(`run-${i}`, { type: 'run_start', agentId: 'a' });
     }
+
     expect(recorder.listRunsBefore(null, 2.7).length).toBe(2);
   });
 
@@ -367,6 +400,7 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
     // walk could deliver one of them twice and the other never. Written
     // directly, because the recorder cannot be made to collide on purpose.
     const same = '2026-08-17T00:00:00.000Z';
+
     for (const runId of ['run-A', 'run-B', 'run-C']) {
       void sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
         VALUES (${actor.actorId}, ${runId}, 0, 'error', '{}', ${same})`;
@@ -389,9 +423,11 @@ describe('RunEventRecorder.listRunsBefore / runSeq / count', () => {
 
   test('count returns total events per run', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 7; i++) {
       recorder.emit('run-1', { type: 'error', message: `t${i}` });
     }
+
     expect(recorder.count('run-1')).toBe(7);
     expect(recorder.count('no-such')).toBe(0);
   });
@@ -471,10 +507,12 @@ describe('RunEventRecorder.readRecentByType', () => {
     // The distinction that matters for a percentile: a post-filter slice of a
     // fetch window can come back short, or hold the oldest rows instead.
     const { recorder } = setup();
+
     for (let i = 0; i < 10; i++) {
       recorder.emit('run-1', { type: 'turn_start', turnIndex: i });
       recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
     }
+
     const steps = recorder.readRecentByType('step_finish', 3);
     expect(steps).toHaveLength(3);
     expect(steps.map((e) => (e.type === 'step_finish' ? e.stepIndex : -1))).toEqual([7, 8, 9]);
@@ -483,25 +521,31 @@ describe('RunEventRecorder.readRecentByType', () => {
     // `LIMIT -1` in SQLite means no limit, so one negative value turns a
     // sample read into a full read.
     const { recorder } = setup();
+
     for (let i = 0; i < 40; i++) {
       recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
     }
+
     expect(recorder.readRecentByType('step_finish', -1).length).toBe(1);
   });
 
   test('a non-finite limit means unstated and takes the default', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 250; i++) {
       recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
     }
+
     expect(recorder.readRecentByType('step_finish', Number.NaN).length).toBe(200);
   });
 
   test('a fractional limit truncates instead of failing the query', () => {
     const { recorder } = setup();
+
     for (let i = 0; i < 40; i++) {
       recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
     }
+
     expect(recorder.readRecentByType('step_finish', 2.7).length).toBe(2);
   });
 
@@ -534,6 +578,7 @@ describe('RunEventRecorder.readRecentByType', () => {
 describe('RunEventRecorder.spendByProducer', () => {
   test('sums every row in the log, not a window of them', () => {
     const { recorder } = setup();
+
     // Past `readRecentByType`'s 200-row default and past any window a folded
     // read would impose. A total is a sum, and a sum has no sample size.
     for (let i = 0; i < 450; i++) {
@@ -541,6 +586,7 @@ describe('RunEventRecorder.spendByProducer', () => {
         type: 'step_finish', stepIndex: i, usage: { input: 10, output: 1 }, usd: 0.001,
       });
     }
+
     const agent = recorder.spendByProducer().get('agent');
     expect(agent).toMatchObject({ calls: 450, callsWithoutUsage: 0, unpricedCalls: 0 });
     expect(agent?.usage).toEqual({ input: 4_500, output: 450 });
@@ -583,6 +629,7 @@ describe('RunEventRecorder.spendByProducer', () => {
 
   test('every Usage field survives the sum', () => {
     const { recorder } = setup();
+
     // The aggregate reads `payload` with `json_extract`, so a column it forgot
     // would read as a field nobody reported. One call carrying all of them is
     // what makes a forgotten alias fail here instead of on the owner's panel.
@@ -590,6 +637,7 @@ describe('RunEventRecorder.spendByProducer', () => {
       input: 11, output: 7, cacheRead: 5, cacheWrite: 3, cacheWrite1h: 2, reasoning: 1,
       neurons: 0.5,
     };
+
     recorder.emit('run-1', { type: 'step_finish', stepIndex: 0, usage: every, usd: 0.02 });
 
     const agent = recorder.spendByProducer().get('agent');
@@ -636,6 +684,7 @@ describe('RunEventRecorder.spendByProducer', () => {
 describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
   test('counts completed non-plan turns after the boundary, across runs, and only those', () => {
     const { recorder, sql, actor } = setup();
+
     // Twenty-five qualifying completed turns across twenty-five runs — the
     // shape the cadence contract is stated over: one run fires exactly once.
     // The first ten are backdated below an explicit boundary: emit stamps
@@ -643,12 +692,15 @@ describe('completedWorkTurns — the auto-GEPA cadence source query', () => {
     for (let i = 0; i < 10; i++) {
       recorder.emit(`run-a${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });
     }
+
     void sql`UPDATE run_events SET ts = '2026-01-01T00:00:00.000Z'
       WHERE actor_id = ${actor.actorId} AND run_id LIKE 'run-a%'`;
     const boundary = '2026-06-01T00:00:00.000Z';
+
     for (let i = 0; i < 15; i++) {
       recorder.emit(`run-b${i}`, { type: 'turn_end', turnIndex: 0, workMode: 'build' });
     }
+
     // A plan turn answers with a plan; it never ticks the improvement lane.
     recorder.emit('run-plan', { type: 'turn_end', turnIndex: 0, workMode: 'plan' });
     // A turn_end row that carries no mode counts nothing: `json_extract`

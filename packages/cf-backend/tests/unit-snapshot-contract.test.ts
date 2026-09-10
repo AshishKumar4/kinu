@@ -35,7 +35,9 @@ import { parse, walk, type SyntaxNode } from '../../../scripts/syntax';
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate';
 
 const CLIENT = 'packages/cf-backend/src/hooks/use-kinu.ts';
+
 const SERVER = 'packages/cf-backend/src/orchestrator.ts';
+
 const GALLERY = 'packages/cf-backend/src/gallery.tsx';
 
 /** Property names of a named interface, as its own source declares them. */
@@ -44,13 +46,18 @@ function interfaceFields(file: string, name: string): string[] {
   const found: string[] = [];
   walk(parsed.root, (node: SyntaxNode) => {
     const raw = node.raw;
+
     if (raw.type !== 'TSInterfaceDeclaration' || raw.id.name !== name) return;
+
     for (const member of raw.body.body) {
       if (member.type !== 'TSPropertySignature') continue;
+
       if (member.key.type === 'Identifier') found.push(member.key.name);
     }
   });
+
   if (found.length === 0) throw new Error(`${file} no longer declares interface ${name}`);
+
   return found;
 }
 
@@ -60,19 +67,26 @@ function returnedKeys(file: string, method: string): string[] {
   let keys: string[] | null = null;
   walk(parsed.root, (node: SyntaxNode) => {
     const raw = node.raw;
+
     if (raw.type !== 'MethodDefinition') return;
+
     if (raw.key.type !== 'Identifier' || raw.key.name !== method) return;
     walk(node, (inner: SyntaxNode) => {
       const innerRaw = inner.raw;
+
       if (keys !== null) return;
+
       if (innerRaw.type !== 'ReturnStatement') return;
       const returned = innerRaw.argument;
+
       if (returned === null || returned === undefined || returned.type !== 'ObjectExpression') return;
       keys = returned.properties.flatMap((property) =>
         property.type === 'Property' && property.key.type === 'Identifier' ? [property.key.name] : []);
     });
   });
+
   if (keys === null) throw new Error(`${file}'s ${method} no longer returns an object literal`);
+
   return keys;
 }
 
@@ -83,20 +97,29 @@ function stubbedKeys(file: string, container: string, method: string): string[] 
   let keys: string[] | null = null;
   walk(parsed.root, (node: SyntaxNode) => {
     const raw = node.raw;
+
     if (keys !== null) return;
+
     if (raw.type !== 'VariableDeclarator') return;
+
     if (raw.id.type !== 'Identifier' || raw.id.name !== container) return;
     walk(node, (inner: SyntaxNode) => {
       const innerRaw = inner.raw;
+
       if (keys !== null) return;
+
       if (innerRaw.type !== 'Property') return;
+
       if (innerRaw.key.type !== 'Identifier' || innerRaw.key.name !== method) return;
+
       if (innerRaw.value.type !== 'ObjectExpression') return;
       keys = innerRaw.value.properties.flatMap((property) =>
         property.type === 'Property' && property.key.type === 'Identifier' ? [property.key.name] : []);
     });
   });
+
   if (keys === null) throw new Error(`${file}'s ${container} no longer stubs ${method} with an object literal`);
+
   return keys;
 }
 
@@ -109,6 +132,7 @@ const StringLiteralNode = v.object({ type: v.literal('Literal'), value: v.string
 /** The string a node carries when it is a string literal, else null. */
 function literalText(node: SyntaxNode['raw'] | null | undefined): string | null {
   const parsed = v.safeParse(StringLiteralNode, node);
+
   return parsed.success ? parsed.output.value : null;
 }
 
@@ -119,18 +143,25 @@ function guardedSources(file: string, fn: string): string[] {
   let seen = false;
   walk(parsed.root, (node: SyntaxNode) => {
     const raw = node.raw;
+
     if (raw.type !== 'FunctionDeclaration') return;
+
     if (raw.id === null || raw.id === undefined || raw.id.name !== fn) return;
     seen = true;
     walk(node, (inner: SyntaxNode) => {
       const call = inner.raw;
+
       if (call.type !== 'CallExpression') return;
+
       if (call.callee.type !== 'Identifier' || call.callee.name !== 'isSourceCurrent') return;
       const text = literalText(call.arguments[0]);
+
       if (text !== null) found.add(text);
     });
   });
+
   if (!seen) throw new Error(`${file} no longer declares function ${fn}`);
+
   return [...found];
 }
 
@@ -140,16 +171,23 @@ function arrayConstant(file: string, name: string): string[] {
   let values: string[] | null = null;
   walk(parsed.root, (node: SyntaxNode) => {
     const raw = node.raw;
+
     if (values !== null) return;
+
     if (raw.type !== 'VariableDeclarator') return;
+
     if (raw.id.type !== 'Identifier' || raw.id.name !== name) return;
+
     if (raw.init === null || raw.init === undefined || raw.init.type !== 'ArrayExpression') return;
     values = raw.init.elements.flatMap((element) => {
       const text = literalText(element);
+
       return text === null ? [] : [text];
     });
   });
+
   if (values === null) throw new Error(`${file} no longer declares ${name} as an array literal`);
+
   return values;
 }
 

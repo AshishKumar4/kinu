@@ -20,6 +20,7 @@ export async function handleInboundEmail(
     env.EMAIL_DOMAIN,
     async (name) => await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, name),
   );
+
   if (result.outcome === 'dropped') {
     diagnostics.event('email.delivery_dropped', {
       from: message.from,

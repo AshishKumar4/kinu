@@ -109,19 +109,25 @@ function fixtureMetadataSource(file: string, fixture: string): string {
   let source: string | null = null;
   walk(parse(file, text).root, (node: SyntaxNode) => {
     const raw = node.raw;
+
     if (source !== null || raw.type !== 'VariableDeclarator') return;
+
     if (raw.id.type !== 'Identifier' || raw.id.name !== fixture) return;
     walk(node, (inner: SyntaxNode) => {
       if (source !== null || inner.raw.type !== 'ObjectExpression') return;
       const owner = inner.parent?.raw;
+
       if (owner === undefined || owner.type !== 'Property') return;
+
       if (owner.key.type !== 'Identifier' || owner.key.name !== 'metadata') return;
       source = text.slice(inner.start, inner.end);
     });
   });
+
   if (source === null) {
     throw new Error(`${file}'s ${fixture} no longer builds its metadata from an object literal`);
   }
+
   return source;
 }
 
@@ -138,6 +144,7 @@ describe("the gallery's advisor fixture", () => {
       'ADVISOR_SIGNAL_KIND', 'ADVISOR_SEVERITY_METADATA_KEY', 'severity',
       `return (${metadataSource});`,
     );
+
     return v.parse(
       JsonObjectSchema,
       build(ADVISOR_SIGNAL_KIND, ADVISOR_SEVERITY_METADATA_KEY, severity),
@@ -211,6 +218,7 @@ describe('drained event parsing', () => {
       variant: 'subordinate_report',
       payload: { from_subordinate: 'surface-auditor', status: 'progress', task: 'Audit the CLI', content: 'Found 3 gaps', kinu_mode: 'build', sequence_id: 'u-1/a-1' },
     })])!;
+
     expect(parseDrainedEvents(batch.text)).toEqual([{
       variant: 'subordinate_report',
       source: 'subordinate (surface-auditor)',
@@ -231,6 +239,7 @@ describe('drained event parsing', () => {
         },
       }),
     ])!;
+
     const parsed = parseDrainedEvents(batch.text);
     expect(batch.text.startsWith('2 events arrived while you were idle')).toBe(true);
     expect(parsed).toHaveLength(2);
@@ -249,6 +258,7 @@ describe('drained event parsing', () => {
         sequence_id: 'seq-1',
       },
     })])!;
+
     const [parsed] = parseDrainedEvents(batch.text);
     expect(parsed!.replyExpected).toBe(true);
     expect(parsed!.source).toBe('peer agent (atlas)');
@@ -262,6 +272,7 @@ describe('drained event parsing', () => {
       id: 't1', ingress: 'timer_alarm', variant: 'timer',
       payload: { label: 'background-job-wake:job-7', trigger_id: 'x', scheduled_fire_at: 0 },
     })])!;
+
     expect(parseDrainedEvents(batch.text)).toEqual([{
       variant: 'timer',
       source: 'schedule (background-job-wake:job-7)',
@@ -281,6 +292,7 @@ describe('drained event parsing', () => {
         sequence_id: 'seq-1',
       },
     })])!;
+
     const [parsed] = parseDrainedEvents(batch.text);
     expect(parsed!.brief).toBe('Context line one.\nContext line two.\n\ntask: check the CLI');
   });
@@ -306,9 +318,11 @@ describe('the card lifecycle', () => {
     type: 'signal_card', id, state: 'pending',
     metadata: { kinuEvent: 'event_drain' }, text: '1 event arrived', ...over,
   });
+
   const apply = (events: JsonValue[]): readonly SignalCard[] =>
     events.reduce<readonly SignalCard[]>((cards, event) => {
       const parsed = parseSignalCardEvent(event);
+
       return parsed ? applySignalCard(cards, parsed) : cards;
     }, []);
 
@@ -330,6 +344,7 @@ describe('the card lifecycle', () => {
       { type: 'signal_card', id: 's1', state: 'shown' },
       opened('s1', { text: 're-delivered' }),
     ]);
+
     expect(cards).toHaveLength(1);
     expect(cards[0]).toMatchObject({ id: 's1', state: 'pending', text: 're-delivered' });
   });

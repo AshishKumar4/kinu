@@ -29,12 +29,16 @@ import { parseAgentWorkerInput, parseWorkerOutput } from './bench-worker-protoco
 import { buildPilotReport, validatePilotReport } from './bench-pilot';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const scratch: string[] = [];
+
 function tempDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   scratch.push(dir);
+
   return dir;
 }
+
 afterAll(() => {
   for (const dir of scratch) rmSync(dir, { recursive: true, force: true });
 });
@@ -118,6 +122,7 @@ describe('bench worker protocol', () => {
       },
       sessionId: 'task',
     };
+
     expect(parseAgentWorkerInput(JSON.stringify(input)).sessionId).toBe('task');
     expect(() => parseAgentWorkerInput(JSON.stringify({ ...input, extra: true })))
       .toThrow(/invalid agent worker input/);
@@ -128,6 +133,7 @@ describe('bench worker protocol', () => {
 
 describe('stability pilot gate', () => {
   const taskIds = Array.from({ length: 40 }, (_, index) => `task-${index}`);
+
   const taskResults = taskIds.map((taskId, index) => ({
     taskId,
     attempts: 3,
@@ -138,6 +144,7 @@ describe('stability pilot gate', () => {
     errors: 0,
     budgetBreaches: 0,
   }));
+
   const report = {
     schemaVersion: 2,
     kind: 'bench-stability-pilot',
@@ -194,6 +201,7 @@ describe('stability pilot gate', () => {
       providerHash: 'provider', budget: report.budget,
       comparedVariants: ['pi:vanilla', 'agent'] as const,
     };
+
     const withError = report.taskResults.map((result, index) => index === 0 ? { ...result, errors: 1 } : result);
     const withBreach = report.taskResults.map((result, index) => index === 0 ? { ...result, budgetBreaches: 1 } : result);
     expect(() => validatePilotReport({ ...report, errors: 1, taskResults: withError }, expected)).toThrow(/worker error/);
@@ -205,8 +213,10 @@ describe('stability pilot gate', () => {
     const withoutCalls = report.taskResults.map((result, index) => {
       if (index !== 0) return result;
       const { modelCalls: _modelCalls, ...rest } = result;
+
       return rest;
     });
+
     expect(() => validatePilotReport({ ...report, taskResults: withoutCalls }, {
       family: 'defect', manifestHash: 'manifest', model: '@cf/zai-org/glm-5.2',
       providerHash: 'provider', budget: report.budget,
@@ -228,6 +238,7 @@ describe('stability pilot gate', () => {
       peakPromptTokens: 50,
       budgetBreach: null,
     });
+
     const input = {
       family: 'defect' as const,
       manifestHash: 'manifest',
@@ -242,6 +253,7 @@ describe('stability pilot gate', () => {
       seed: 7,
       repeats: 2,
     };
+
     expect(buildPilotReport({ ...input, outcomes: [outcome(0, 0), outcome(1, 4)] }))
       .toMatchObject({
         totalModelCalls: 4, meanModelCalls: 2, maxObservedModelCalls: 4,
@@ -266,6 +278,7 @@ describe('stability pilot gate', () => {
         '--b', 'null',
         '--repeats', '3',
       ], { stdout: 'pipe', stderr: 'pipe' });
+
       expect(result.exitCode).toBe(1);
       expect(result.stderr.toString()).toContain('model-backed runs need --pilot-report');
     }
@@ -289,6 +302,7 @@ describe('parseCommon — repeats and the validation retry budget', () => {
 
   test('defaults to the defect family and refuses a corpus that does not exist', () => {
     expect(opts().family).toBe('defect');
+
     for (const family of BENCH_FAMILIES) expect(opts({ family }).family).toBe(family);
     expect(() => opts({ family: 'nope' })).toThrow(/--family must be one of/);
   });
@@ -311,8 +325,10 @@ describe('artifact retention — a scored run leaves evidence or it does not run
     mkdirSync(join(REPO_ROOT, ARTIFACT_DIRNAME), { recursive: true });
     const dir = mkdtempSync(join(REPO_ROOT, ARTIFACT_DIRNAME, prefix));
     scratch.push(dir);
+
     return dir;
   };
+
   const resolveRoot = (flag: string | undefined, env: string | undefined, runRoot: string): string =>
     resolveArtifactRoot({ flag, env: { BENCH_ARTIFACTS: env }, repoRoot: REPO_ROOT, runRoot });
 
@@ -323,6 +339,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
 
   test('refuses every swept root, because that is how the R3 evidence was lost', () => {
     const runRoot = tempDir('bench-retention-run-');
+
     for (const swept of ['/tmp/kinu-bench', '/var/tmp/kinu-bench', '/dev/shm/kinu-bench', join(tmpdir(), 'x')]) {
       expect(() => resolveRoot(swept, undefined, runRoot)).toThrow(/which is swept/);
       expect(() => resolveRoot(undefined, swept, runRoot)).toThrow(/which is swept/);
@@ -367,9 +384,11 @@ describe('artifact retention — a scored run leaves evidence or it does not run
 
   test('records the commit, the model, the corpus, the task list and every trial', () => {
     const artifactRoot = durableDir('retain-ok-');
+
     const retention = openRunRetention({
       artifactRoot, repoRoot: REPO_ROOT, provenance: provenance(['task-a', 'task-b']),
     });
+
     retention.recordAttempt(attempt('task-a', 'agent', false));
     retention.recordAttempt(attempt('task-a', 'agent-evolving', true));
 
@@ -402,6 +421,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
     const parent = durableDir('retain-readonly-');
     const artifactRoot = join(parent, 'nested');
     chmodSync(parent, 0o500);
+
     try {
       expect(() => openRunRetention({ artifactRoot, repoRoot: REPO_ROOT, provenance: provenance(['task-a']) }))
         .toThrow(/is not writable, so this scored run would leave no evidence/);
@@ -417,6 +437,7 @@ describe('artifact retention — a scored run leaves evidence or it does not run
       '--artifacts', join(tmpdir(), 'kinu-bench-swept'),
       '--limit', '1',
     ], { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' });
+
     expect(result.exitCode).toBe(1);
     expect(result.stderr.toString()).toContain('which is swept');
     // Nothing ran: the refusal is at argument parsing, ahead of the first sandbox.
@@ -492,9 +513,11 @@ describe('validation diagnostics', () => {
     ]);
     expect(stdout.join('\n')).not.toContain('diagnostic-broken');
     expect(stdout.join('\n')).not.toContain('diagnostic-oracle');
+
     for (const diagnosticValue of ['654321', '987654', '765432', '4321', '54321']) {
       expect(stdout.join('\n')).not.toContain(diagnosticValue);
     }
+
     expect(lstatSync(join(runRoot, VALIDATION_DIAGNOSTICS_FILE)).mode & 0o777).toBe(0o600);
     expect(readdirSync(runRoot).some((name) => name.endsWith('.tmp'))).toBe(false);
   });
@@ -537,6 +560,7 @@ describe('sandboxEnv', () => {
   test('strips inherited KINU_* and redirects HOME to the attempt', () => {
     process.env.KINU_HOME = '/real/home/.kinu';
     process.env.KINU_AUTH = 'secret';
+
     try {
       const env = sandboxEnv('/attempt/home');
       expect(env.KINU_HOME).toBe('/attempt/home');
@@ -617,6 +641,7 @@ describe('createAttemptSandbox', () => {
     const sandbox = createAttemptSandbox({ repoRoot: REPO_ROOT, runRoot, attemptId: 'a6', prepare });
     const packages = workspacePackages(REPO_ROOT);
     expect(packages.size).toBeGreaterThan(1);
+
     for (const [name, packageDir] of packages) {
       // Bun hoists workspace links to the ROOT node_modules, so a per-package
       // path ENOENTs instead of catching the leak this is written to catch.
@@ -625,6 +650,7 @@ describe('createAttemptSandbox', () => {
       // link into some other package of the same sandbox.
       expect(resolved).toBe(join(realpathSync(sandbox.dir), relative(REPO_ROOT, packageDir)));
     }
+
     sandbox.dispose();
   });
 
@@ -637,11 +663,13 @@ describe('createAttemptSandbox', () => {
   test('a tree with two workspace scopes has BOTH re-pointed, third-party still shared', () => {
     const donor = tempDir('bench-two-scopes-');
     const manifest = (name: string) => JSON.stringify({ name, main: 'index.js' });
+
     for (const [dir, name] of [['alpha', '@alpha/core'], ['vendored', '@beta/core']]) {
       mkdirSync(join(donor, 'packages', dir), { recursive: true });
       writeFileSync(join(donor, 'packages', dir, 'package.json'), manifest(name));
       writeFileSync(join(donor, 'packages', dir, 'index.js'), 'export const from = "' + dir + '";\n');
     }
+
     writeFileSync(join(donor, 'package.json'), JSON.stringify({ name: 'fixture', workspaces: ['packages/*'] }));
     mkdirSync(join(donor, 'node_modules', 'third-party'), { recursive: true });
     writeFileSync(join(donor, 'node_modules', 'third-party', 'package.json'), manifest('third-party'));
@@ -656,6 +684,7 @@ describe('createAttemptSandbox', () => {
       repoRoot: donor, runRoot: tempDir('bench-two-scopes-run-'), attemptId: 'two-scopes',
       prepare: () => { /* nothing to inject: the copy itself is under test */ },
     });
+
     const root = realpathSync(sandbox.dir);
     expect(realpathSync(join(sandbox.dir, 'node_modules', '@alpha', 'core')))
       .toBe(join(root, 'packages', 'alpha'));
@@ -684,6 +713,7 @@ describe('restoreGuarded — a solver cannot score itself', () => {
   test('reverts an edited test file and deletes one the solver added', () => {
     const pristine = tempDir('bench-pristine-');
     const sandbox = tempDir('bench-dirty-');
+
     for (const root of [pristine, sandbox]) {
       mkdirSync(join(root, 'pkg', 'tests'), { recursive: true });
       mkdirSync(join(root, 'pkg', 'src'), { recursive: true });
@@ -691,6 +721,7 @@ describe('restoreGuarded — a solver cannot score itself', () => {
       writeFileSync(join(root, 'pkg', 'src', 'inline.test.ts'), 'original inline');
       writeFileSync(join(root, 'pkg', 'src', 'code.ts'), 'original code');
     }
+
     // A solver that tampers with the measuring apparatus:
     writeFileSync(join(sandbox, 'pkg', 'tests', 'a.test.ts'), 'expect(true).toBe(true)');
     writeFileSync(join(sandbox, 'pkg', 'src', 'inline.test.ts'), 'neutered');
@@ -709,10 +740,12 @@ describe('restoreGuarded — a solver cannot score itself', () => {
   test('restores a guarded test file the solver deleted outright', () => {
     const pristine = tempDir('bench-p2-');
     const sandbox = tempDir('bench-d2-');
+
     for (const root of [pristine, sandbox]) {
       mkdirSync(join(root, 'pkg', 'tests'), { recursive: true });
       writeFileSync(join(root, 'pkg', 'tests', 'a.test.ts'), 'original');
     }
+
     rmSync(join(sandbox, 'pkg', 'tests'), { recursive: true, force: true });
     restoreGuarded(sandbox, pristine, ['pkg/tests']);
     expect(readFileSync(join(sandbox, 'pkg', 'tests', 'a.test.ts'), 'utf8')).toBe('original');
@@ -752,6 +785,7 @@ describe('loadBenchCorpus', () => {
     expect(corpus.dev.length + corpus.sealed.size).toBe(patches.size);
     expect(corpus.dev.length).toBeGreaterThan(0);
     expect(corpus.sealed.size).toBeGreaterThan(0);
+
     for (const id of all) expect(patches.get(id)).toContain('diff --git');
   });
 
@@ -781,6 +815,7 @@ describe('loadBenchCorpus', () => {
 
   test('every dev task really is dev — the split is derived, not declared', () => {
     const { corpus } = loadBenchCorpus(REPO_ROOT);
+
     for (const t of corpus.dev) expect(splitOf(t.id)).toBe('dev');
   });
 
@@ -802,7 +837,9 @@ describe('loadBenchCorpus', () => {
     const root = tempDir('bench-fixture-');
     mkdirSync(join(root, 'tests', 'bench', 'patches'), { recursive: true });
     writeFileSync(join(root, 'tests', 'bench', 'tasks.jsonl'), `${line}\n`);
+
     if (opts.patch !== undefined) writeFileSync(join(root, 'tests', 'bench', 'patches', 'demo.patch'), opts.patch);
+
     return root;
   }
 
@@ -817,6 +854,7 @@ describe('loadBenchCorpus', () => {
       prompt: 'change it back to return (1 - alpha) * oldScore + alpha * newObs;',
       suite: 'core', editable: ['src/a.ts'],
     });
+
     const root = fixtureRoot(leaky, { patch: '--- a/x\n-  return (1 - alpha) * oldScore + alpha * newObs;\n+  return 0;\n' });
     expect(() => loadBenchCorpus(root)).toThrow(/quotes the fix/);
   });
@@ -854,6 +892,7 @@ describe('the long-horizon corpus', () => {
     expect(corpus.dev.length).toBeGreaterThan(0);
     expect(path.endsWith(join('tests', 'bench', 'longhorizon.jsonl'))).toBe(true);
     expect(new Set([...specs.values()].map((spec) => spec.mode))).toEqual(new Set(['digest', 'continuation']));
+
     for (const task of corpus.dev) expect(splitOf(task.id)).toBe('dev');
   });
 
@@ -881,6 +920,7 @@ describe('the long-horizon corpus', () => {
     const task = corpus.dev[0]!;
     const spec = specs.get(task.id)!;
     const check = task.checks[0]!;
+
     const changed = {
       ...task,
       checks: [{
@@ -891,6 +931,7 @@ describe('the long-horizon corpus', () => {
         ],
       }],
     };
+
     expect(manifestHash([changed])).not.toBe(manifestHash([task]));
   });
 
@@ -902,6 +943,7 @@ describe('the long-horizon corpus', () => {
       id: 'demo', title: 'demo', prompt: 'fix it', editable: ['src/a.ts'], guarded: ['tests'],
       checks: [{ id: 'core-tests', command: ['bun', 'test'] }],
     };
+
     expect(manifestHash([pinned])).toBe('9c132d606537cbef');
   });
 
@@ -909,6 +951,7 @@ describe('the long-horizon corpus', () => {
     const root = tempDir('bench-lh-fixture-');
     mkdirSync(join(root, 'tests', 'bench'), { recursive: true });
     writeFileSync(join(root, 'tests', 'bench', 'longhorizon.jsonl'), `${JSON.stringify(line)}\n`);
+
     return root;
   }
 
@@ -941,15 +984,18 @@ describe('the long-horizon check scores what was actually materialized', () => {
 
   function runCheck(dir: string): number {
     const [, script, encoded] = task.checks[0]!.command;
+
     return Bun.spawnSync(['bun', join(REPO_ROOT, script!), encoded!], { cwd: dir, stdout: 'pipe', stderr: 'pipe' }).exitCode;
   }
 
   test('materializes every part, and the null control fails for want of an answer', () => {
     const dir = tempDir('bench-lh-null-');
     materializeLongHorizon(dir, spec);
+
     for (let part = 1; part <= spec.parts; part++) {
       expect(existsSync(join(dir, `bench-corpus/part-${part}`))).toBe(true);
     }
+
     expect(runCheck(dir)).toBe(1);
   });
 
@@ -995,9 +1041,11 @@ describe('the task corpus stays applicable to HEAD', () => {
     expect(patches.length).toBeGreaterThan(100);
     expect(stalePatches(REPO_ROOT, patches).filter((p) => p.orphan)).toEqual([]);
     const named = new Set(loadBenchCorpus(REPO_ROOT).patches.keys());
+
     const files = readdirSync(join(REPO_ROOT, 'tests', 'bench', 'patches'))
       .filter((f) => f.endsWith('.patch'))
       .map((f) => f.slice(0, -'.patch'.length));
+
     expect(files.filter((id) => !named.has(id))).toEqual([]);
   });
 
@@ -1018,14 +1066,17 @@ describe('the task corpus stays applicable to HEAD', () => {
 
   test('every retired task is recorded, gone, and honestly split', () => {
     const dir = join(import.meta.dir, '..', 'tests', 'bench');
+
     const entries = readFileSync(join(dir, 'retired.jsonl'), 'utf8')
       .split('\n')
       .filter((l) => l.trim() && !l.startsWith('#'))
       .map((l) => v.parse(RetiredEntry, JSON.parse(l)));
+
     expect(entries.length).toBeGreaterThan(0);
     expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
 
     const live = new Set(loadBenchCorpus(join(import.meta.dir, '..')).patches.keys());
+
     for (const e of entries) {
       // A retired id must be absent from the corpus AND leave no orphan patch,
       // or `loadBenchCorpus` would still be carrying it.
@@ -1045,9 +1096,11 @@ describe('the task corpus stays applicable to HEAD', () => {
  */
 describe('panel arms — only the provider list may differ', () => {
   const analyst = { name: 'openai-compat', baseURL: 'http://a', headers: { Authorization: 'x' }, model: 'parent' };
+
   const withEnv = <T>(env: Record<string, string | undefined>, fn: () => T): T => {
     const prior = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
     Object.assign(process.env, env);
+
     try { return fn(); } finally { Object.assign(process.env, prior); }
   };
 
@@ -1059,6 +1112,7 @@ describe('panel arms — only the provider list may differ', () => {
   test('self runs the analyst model in every seat — today\'s inherit-the-parent default', () => {
     const arm = withEnv({ BENCH_PANEL_SIZE: '3' }, () => panelArm('panel:self', analyst));
     expect(arm!.panel).toHaveLength(3);
+
     for (const member of arm!.panel) expect(member.model).toBe('parent');
     // The analyst is held constant across arms, so it is the parent here too.
     expect(arm!.analyst.model).toBe('parent');
@@ -1069,6 +1123,7 @@ describe('panel arms — only the provider list may differ', () => {
       BENCH_PANEL_SIZE: '3',
       BENCH_PANEL: 'http://a|k1|vendor-a;http://b|k2|vendor-b;http://c|k3|vendor-c',
     }, () => panelArm('panel:mixed', analyst));
+
     expect(arm!.panel.map((m) => m.model)).toEqual(['vendor-a', 'vendor-b', 'vendor-c']);
     expect(arm!.analyst.model).toBe('parent');
   });
@@ -1105,6 +1160,7 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
   test('every EvolutionEvent type is classified as evolution by the Python reader', () => {
     const union = /export interface EvolutionEvent \{\s*type:\s*([^;]+);/
       .exec(readSource('packages/core/src/evolution/types.ts'));
+
     expect(union).not.toBeNull();
     const fromCore = [...union![1]!.matchAll(/'([a-z_]+)'/g)].map((m) => m[1]!);
     expect(fromCore.length).toBeGreaterThan(5);
@@ -1113,6 +1169,7 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
     // engine's listener, so they are absent from the union above.
     const session = readSource('packages/cli-backend/src/local-session.ts');
     const direct = ['scaffold_promotion', 'scaffold_rollback'];
+
     for (const name of direct) expect(session).toContain(`'${name}'`);
 
     const python = readSource('bench/clbench/kinu/events.py');
@@ -1135,8 +1192,10 @@ describe('the evolution-event vocabulary does not drift across languages', () =>
       system_prompt_hash: 'packages/cli-backend/src/local-session.ts',
       mcp: 'packages/cf-backend/src/actor-agent.ts',
     };
+
     const block = /EVOLUTION_EVENTS = frozenset\(\{([\s\S]*?)\}\)/
       .exec(readSource('bench/clbench/kinu/events.py'))![1]!;
+
     for (const [notEvolution, emitter] of Object.entries(emitters)) {
       expect(block).not.toContain(`"${notEvolution}"`);
       expect(readSource(emitter)).toContain(`'${notEvolution}'`);

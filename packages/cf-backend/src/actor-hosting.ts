@@ -228,6 +228,7 @@ function hostedActorAgentName(kind: HostedActorHomeKind, id: string): string {
  *  its own — and a branch acquires no plane, so neither has one. */
 function hostedHomeKind(record: WorkspaceActor): HostedActorHomeKind | null {
   if (record.kind === 'main' || record.kind === 'branch') return null;
+
   return record.kind;
 }
 
@@ -249,6 +250,7 @@ function hostedHomeKind(record: WorkspaceActor): HostedActorHomeKind | null {
  *  head's cwd and a subordinate's cannot collide on one id. */
 function hostedActorShellId(record: WorkspaceActor): string {
   if (record.kind === 'main') return `agent:${record.name}`;
+
   return `${record.kind}:${record.storageKey}`;
 }
 
@@ -276,6 +278,7 @@ export async function provisionHostedActorHome(
 ): Promise<NodeWorkspace> {
   const path = seams.directory.storagePath(reference);
   const provision = facetHomeProvisioner(seams.homeHost(), () => { seams.directory.validate(reference, path); });
+
   return await provision(hostedActorAgentName(kind, parseActorKey(record.storageKey).id));
 }
 
@@ -303,8 +306,10 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
 
   const homeFor = (record: WorkspaceActor, reference: ActorReference): Promise<HostedNodeHome> | null => {
     const kind = hostedHomeKind(record);
+
     if (kind === null) return null;
     const held = homes.get(record.actorId);
+
     if (held) return held;
     // The cleanup is INSIDE the provision and rethrows, so the stored promise
     // still rejects for whoever is awaiting it and there is no floating promise
@@ -319,17 +324,22 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
     // name its own promise — which would need the binding before it exists.
     const generation = (homeGeneration.get(record.actorId) ?? 0) + 1;
     homeGeneration.set(record.actorId, generation);
+
     const provisioning = (async (): Promise<HostedNodeHome> => {
       try {
         const home = await provisionHostedActorHome(seams, record, reference, kind);
+
         if (home.isolation !== 'private-home') throw new KinuError('denied', 'A hosted actor requires its own credential.');
+
         return { home: home.home, tmp: home.tmp, cred: home.cred };
       } catch (cause) {
         if (homeGeneration.get(record.actorId) === generation) homes.delete(record.actorId);
         throw cause;
       }
     })();
+
     homes.set(record.actorId, provisioning);
+
     return provisioning;
   };
 
@@ -353,8 +363,10 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
      */
     runtimeFor: async (bound: BoundActor): Promise<AgentRuntime> => {
       const held = runtimes.get(bound.handle);
+
       if (held) return held;
       const home = homeFor(bound.record, bound.reference);
+
       const hooks: CFRuntimeHooks = {
         reportModelCall: (report) => { seams.reportModelCall(report); },
         slate: (operation) => seams.slate(bound.handle, operation),
@@ -386,6 +398,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
           }),
         },
       };
+
       if (home !== null) hooks.workspaceExecution = await home;
       // THE WATCHER THE RUN NAMED, when a run named one. Assigned rather than
       // declared in the literal above for the same reason the home is:
@@ -397,7 +410,9 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       // fills it, so a runtime built past this line unwatched reports that the
       // head changed nothing however much it wrote.
       const writes = seams.chosenWriteObserver(bound.record);
+
       if (writes !== null) hooks.workspaceObserver = writes;
+
       const runtime = createCFRuntime(seams.agent, {
         env: seams.env,
         ctx: seams.ctx,
@@ -413,7 +428,9 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         scaffoldPath: actorScaffoldPath(bound.record),
         capabilityToken: () => seams.capabilityToken(),
       }, hooks);
+
       runtimes.set(bound.handle, runtime);
+
       return runtime;
     },
 
@@ -448,19 +465,25 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
      */
     loopFor: async (bound) => {
       const origin = seams.chosenLoopOrigin(bound.record) ?? defaultLoopOrigin(bound.record.kind);
+
       if (origin.kind !== 'inherit' || bound.record.parentActorId === null || host === null) {
         return { origin, parent: null };
       }
+
       const parentRecord = host.describe(bound.record.parentActorId);
+
       if (parentRecord === null) return { origin, parent: null };
+
       // The root is the only actor with no parent of its own, and it is always
       // reachable: this host lives inside it.
       if (parentRecord.parentActorId === null) return { origin, parent: seams.rootRuntime() };
+
       const live = host.hosted({
         actorId: parentRecord.actorId,
         workspaceId: parentRecord.workspaceId,
         parentActorId: parentRecord.parentActorId,
       });
+
       return { origin, parent: live === null ? null : live.runtime };
     },
 
@@ -489,6 +512,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
      */
     orchestrationFor: (bound): AgentOrchestratorDeps => {
       const { runtime, stores, handle } = bound;
+
       const budget = new MissionGovernor({
         storage: runtime.storage,
         // PER ACTOR, and it is this actor's own fenced handle rather than the
@@ -498,6 +522,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         actor: handle,
         pricing: () => seams.pricing(),
       });
+
       const engine = new EvolutionEngine(runtime, {
         enabled: true,
         // The grading group as ONE unit. A synchronous run inside a Durable
@@ -510,6 +535,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         // reviews. Unbudgeted turns never reach it.
         governor: budget,
       });
+
       const host: BackendHost = {
         broadcast: (event) => { seams.broadcast(handle.actorId, event); },
         enqueueTurn: (input) => seams.enqueueTurn(bound, input),
@@ -521,6 +547,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
         reconcileDurableWake: () => { seams.reconcileDurableWake(); },
         get headRuntime() { return seams.headRuntimeFor(bound); },
       };
+
       return {
         host,
         engine,
@@ -531,7 +558,9 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
           logActivity: (event, detail) => { seams.logActivity(handle.actorId, event, detail); },
           onToolCallEvent: (event) => {
             const runId = activeRunOf(stores);
+
             if (runId === null) return;
+
             try {
               stores.eventRecorder.emit(runId, { type: 'tool_call_end', ...event });
             } catch (cause) {
@@ -542,7 +571,9 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
           },
           onStepEvent: (event) => {
             const runId = activeRunOf(stores);
+
             if (runId === null) return;
+
             try {
               stores.eventRecorder.emit(runId, { type: 'step_finish', ...event });
             } catch (cause) {
@@ -567,11 +598,14 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
      */
     discardBytes: async (record: WorkspaceActor): Promise<void> => {
       const kind = hostedHomeKind(record);
+
       if (kind !== null) {
         await facetHomeReleaser(seams.homeHost())(hostedActorAgentName(kind, parseActorKey(record.storageKey).id));
       }
+
       homes.delete(record.actorId);
       const box = seams.workspaceBox(hostedActorShellId(record));
+
       // A hired-but-idle actor never materialized its state subtree: wiping it
       // is still a wipe, not an error — dismissal without a first turn is
       // ordinary — so absence is swallowed and anything else travels.
@@ -589,7 +623,9 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
       }
     },
   };
+
   host = createActorHost(deps);
+
   return host;
 }
 
@@ -647,7 +683,9 @@ export function actorRetirementFor(input: ActorRetirementRequest): ActorRetireme
   const retirement: ActorRetirement = {
     reference: input.reference, name: input.name, destroy: !input.keepHistory,
   };
+
   if (input.observed === undefined) return retirement;
+
   return { ...retirement, observed: input.observed };
 }
 

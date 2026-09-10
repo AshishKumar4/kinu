@@ -34,11 +34,15 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime } from './helpers';
 
 const EVAL_SIZE = 8;
+
 const TARGET_ID = 'state/output-format';
 
 const target = findPromptSectionTarget(TARGET_ID);
+
 if (!target) throw new Error(`${TARGET_ID} is not registered`);
+
 const INCUMBENT = target.source;
+
 /** Same byte count as the incumbent, so the size rule is not what this file is
  *  about — it has its own suite. */
 const CANDIDATE = `${INCUMBENT.slice(0, -6)}ASKED.`;
@@ -51,10 +55,13 @@ const config: ScaffoldControl['config'] = {
 
 function promptText(prompt: LanguageModelV3Prompt): string {
   const text: string[] = [];
+
   for (const message of prompt) {
     if (!Array.isArray(message.content)) { text.push(message.content); continue; }
+
     for (const part of message.content) if (part.type === 'text') text.push(part.text);
   }
+
   return text.join('\n');
 }
 
@@ -75,10 +82,12 @@ interface ScriptedControl {
 function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => number): ScriptedControl {
   const reflectionPrompts: string[] = [];
   const judgePrompts: string[] = [];
+
   const usage = {
     inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 7, text: 7, reasoning: undefined },
   };
+
   return {
     reflectionPrompts,
     judgePrompts,
@@ -92,6 +101,7 @@ function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => nu
         modelId: 'fake-reflection',
         doGenerate: async (options) => {
           reflectionPrompts.push(promptText(options.prompt));
+
           return {
             content: [{ type: 'text' as const, text: CANDIDATE }],
             finishReason: { unified: 'stop' as const, raw: undefined },
@@ -102,6 +112,7 @@ function scriptedControl(rt: AgentRuntime, judgeScore: (candidate: string) => nu
       }),
       judge: async ({ prompt, schema }) => {
         judgePrompts.push(prompt);
+
         // The candidate wording appears verbatim in the scoring prompt, which
         // is how the judge is told what it is grading.
         return v.parse(schema, {
@@ -119,10 +130,12 @@ function evolvableRuntime(): AgentRuntime {
   initTurnOutcomeTables(rt.storage.execRaw);
   initGepaTables(rt.storage.execRaw);
   initPromptSectionTables(rt.storage.execRaw);
+
   return rt;
 }
 
 const failureTask = (i: number) => `failure #${i}: the reply buried the answer in JSON`;
+
 const guardTask = (i: number) => `guard #${i}: list the files under docs`;
 
 function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number }): void {
@@ -133,6 +146,7 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
       followup: 'just tell me in prose', now: 1_000 + i,
     });
   }
+
   for (let i = 0; i < counts.guards; i++) {
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: `ok-${String(i)}`, outcome: 'accepted', confidence: 1, source: 'classifier',
@@ -154,6 +168,7 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
  */
 function seedAdvisorNotes(rt: AgentRuntime, count: number): void {
   const engine = new EvolutionEngine(rt);
+
   for (let i = 0; i < count; i++) {
     const turnId = `adv-${String(i)}`;
     void rt.storage.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
@@ -177,14 +192,18 @@ function seedAdvisorNotes(rt: AgentRuntime, count: number): void {
  */
 async function lanePass(control: ScaffoldControl) {
   const step = await advancePromptSectionLane(control);
+
   if (step.step !== 'pass') throw new Error(`the lane took ${String(step.step)}, not a pass`);
+
   return { ...step.pass, sectionId: step.sectionId };
 }
 
 /** Same, for the lane's other move: the trials a pending candidate is owed. */
 async function laneTrials(control: ScaffoldControl) {
   const step = await advancePromptSectionLane(control);
+
   if (step.step !== 'trials') throw new Error(`the lane took ${String(step.step)}, not trials`);
+
   return { ...step.trials, sectionId: step.sectionId };
 }
 
@@ -231,6 +250,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     const rt = evolvableRuntime();
     seedRotationPast(rt, TARGET_ID);
     seedAdvisorNotes(rt, 3);
+
     const { control, judgePrompts, reflectionPrompts } = scriptedControl(
       rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2),
     );
@@ -249,11 +269,13 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     // be teaching the judge a fact the record does not hold.
     const negativeScoring = judgePrompts.filter((prompt) => prompt.includes("Reviewer's note"));
     expect(negativeScoring.length).toBeGreaterThan(0);
+
     for (const prompt of negativeScoring) {
       expect(prompt).toContain('no user ever graded it');
       expect(prompt).not.toContain('the user had to correct it');
       expect(prompt).toContain('agents was reachable');
     }
+
     // The class reaches the scoring evidence, which is the whole reason the
     // writer stamps it.
     expect(reflectionPrompts.join('\n')).toContain('a capability it had and did not use');
@@ -283,6 +305,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     const rt = evolvableRuntime();
     seedRotationPast(rt, TARGET_ID);
     seedLedger(rt, { failures: 6, guards: 4 });
+
     const { control, reflectionPrompts, judgePrompts } = scriptedControl(
       rt, (candidate) => (candidate === CANDIDATE ? 0.9 : 0.2),
     );
@@ -297,6 +320,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
 
     // Scored on the ledger, by a judge reading the prose — not by a rollout.
     expect(judgePrompts.length).toBeGreaterThan(0);
+
     for (const prompt of judgePrompts) expect(prompt).toContain(`Section: ${TARGET_ID}`);
     // Selection rested on held-out instances: the newest failures plus the
     // accepted guards, never a task reflection was shown.
@@ -309,6 +333,7 @@ describe('the lane\'s pass — scored on the turn-outcome ledger', () => {
     // and the seeded rotation rows.
     const run = rt.storage.sql<{ target: string; target_ref: string | null }>`
       SELECT target, target_ref FROM gepa_runs WHERE target_ref = ${TARGET_ID}`[0];
+
     expect(run).toEqual({ target: 'prompt_section', target_ref: TARGET_ID });
 
     // And the live prompt has not moved.
@@ -366,10 +391,12 @@ describe('the rotation an eviction cannot reset', () => {
     const { control } = scriptedControl(rt, () => 0.5);
 
     const seen: string[] = [];
+
     for (let i = 0; i < PROMPT_SECTION_TARGETS.length; i++) {
       const step = await lanePass(control);
       seen.push(step.sectionId);
     }
+
     expect(seen).toEqual(PROMPT_SECTION_TARGETS.map((section) => section.id));
     // A full round done, the rotation comes back inside the same nine rather
     // than answering idle or a tenth thing.
@@ -458,11 +485,14 @@ describe('the lane\'s trials — held-out trials decide it', () => {
     // is not promoted on its own GEPA score: that score is in-sample for the
     // wording, and the trials are the out-of-sample test of it.
     let optimising = true;
+
     const { control } = scriptedControl(rt, (candidate) => {
       const good = candidate === CANDIDATE ? 0.9 : 0.2;
       const bad = candidate === CANDIDATE ? 0.1 : 0.8;
+
       return optimising ? good : bad;
     });
+
     await propose(control);
     optimising = false;
 

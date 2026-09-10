@@ -12,10 +12,12 @@ const StoredHttpSchema = v.object({
   headers: v.record(v.string(), v.string()),
   body: v.object({ ok: v.boolean() }),
 });
+
 const StoredUserSchema = v.object({
   user: v.object({ api_key: v.string(), password: v.string() }),
   data: v.string(),
 });
+
 const StoredHashSchema = v.object({
   _visibility: v.string(),
   sha256: v.string(),
@@ -42,6 +44,7 @@ describe('applyVisibilityForStorage — redact', () => {
       headers: { authorization: 'Bearer sk-abc123', 'content-type': 'application/json' },
       body: { ok: true },
     }, 'redact');
+
     const stored = v.parse(StoredHttpSchema, r.stored);
     expect(stored.headers.authorization).toBe('<redacted:authorization>');
     expect(stored.headers['content-type']).toBe('application/json');
@@ -52,6 +55,7 @@ describe('applyVisibilityForStorage — redact', () => {
       user: { name: 'alice', api_key: 'k', password: 'p' },
       data: 'visible',
     }, 'redact');
+
     const stored = v.parse(StoredUserSchema, r.stored);
     expect(stored.user.api_key).toBe('<redacted:api_key>');
     expect(stored.user.password).toBe('<redacted:password>');
@@ -70,6 +74,7 @@ describe('applyVisibilityForStorage — redact', () => {
       }),
       data: v.string(),
     });
+
     const r = applyVisibilityForStorage({
       session: {
         authToken: 't1',
@@ -82,6 +87,7 @@ describe('applyVisibilityForStorage — redact', () => {
       },
       data: 'visible',
     }, 'redact');
+
     const stored = v.parse(StoredCamelSchema, r.stored);
     expect(stored.session.authToken).toBe('<redacted:authToken>');
     expect(stored.session.accessToken).toBe('<redacted:accessToken>');
@@ -107,9 +113,11 @@ describe('applyVisibilityForStorage — hash', () => {
 describe('renderForLLM', () => {
   test('chat — brief truncates to ~200 chars', () => {
     const text = 'x'.repeat(500);
+
     const r = renderForLLM({
       ...EVENT_BASE, ingress: 'chat_ws', variant: 'chat', payload_visibility: 'full', payload: { text },
     });
+
     expect(r.brief.length).toBeLessThanOrEqual(200);
     expect(r.variant).toBe('chat');
   });
@@ -118,6 +126,7 @@ describe('renderForLLM', () => {
       ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'full',
       payload: { http_method: 'POST', body: { ok: true }, webhook_id: 'w', http_headers: {}, delivery_id: 'd' },
     });
+
     expect(r.brief).toContain('POST');
   });
   test('hash-visibility events show redacted brief', () => {
@@ -125,6 +134,7 @@ describe('renderForLLM', () => {
       ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'hash',
       payload: { _visibility: 'hash', sha256: 'abc'.repeat(20), size: 42, content_type: 'object' },
     });
+
     expect(r.brief).toContain('redacted');
   });
   test('an internal note names its kind and never leaks its payload bytes', () => {
@@ -137,6 +147,7 @@ describe('renderForLLM', () => {
         data: 'window resets at 2026-08-11T09:00:00Z',
       },
     });
+
     expect(r.brief).toBe('email_inbound_rate_limited');
     expect(r.brief).not.toContain('2026-08-11');
   });
@@ -150,6 +161,7 @@ describe('renderForLLM', () => {
       ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'opaque_handle',
       payload: { _visibility: 'opaque_handle', handle: 'opaque:abcd1234' },
     });
+
     expect(r.brief).toContain('opaque:abcd1234');
     expect(r.brief).toContain('withheld');
     expect(r.brief).not.toContain('read_external_payload');
@@ -159,6 +171,7 @@ describe('renderForLLM', () => {
       ...EVENT_BASE, ingress: 'self_emit', variant: 'internal', payload_visibility: 'full',
       payload: { kind: 'reflect', data: {} },
     });
+
     expect(r.is_self_caused).toBe(true);
   });
 
@@ -173,6 +186,7 @@ describe('renderForLLM', () => {
       const { vfs } = createMemoryVfs();
       const content_path = await spillEventContent(vfs, longReport);
       expect(content_path).toBe(eventContentPath(longReport));
+
       if (content_path === null) throw new Error('long subordinate report was not spilled');
 
       const r = renderForLLM({
@@ -182,6 +196,7 @@ describe('renderForLLM', () => {
           sequence_id: 'seq-1', kinu_mode: 'build',
         },
       });
+
       // Bounded, but it SAYS it is bounded and where the rest lives: head,
       // an in-band omitted count, tail, then the resolvable path.
       expect(r.brief.startsWith(`completed: ${longReport.slice(0, 100)}`)).toBe(true);
@@ -204,6 +219,7 @@ describe('renderForLLM', () => {
           sequence_id: 'seq-2', task: 'Survey auth', kinu_mode: 'build',
         },
       });
+
       expect(r.brief).toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
     });
 
@@ -212,6 +228,7 @@ describe('renderForLLM', () => {
       const body = { question: 'x'.repeat(900) };
       const serialized = JSON.stringify(body);
       const body_path = await spillEventContent(vfs, serialized);
+
       if (body_path === null) throw new Error('long peer body was not spilled');
 
       const r = renderForLLM({
@@ -221,6 +238,7 @@ describe('renderForLLM', () => {
           body, sender_event_id: 'se1', body_path, kinu_mode: 'build',
         },
       });
+
       expect(r.brief.startsWith(`research: ${serialized.slice(0, 100)}`)).toBe(true);
       expect(r.brief).toContain(
         `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
@@ -243,6 +261,7 @@ describe('renderForLLM', () => {
           body: 'shipping today', sender_event_id: 'se1', kinu_mode: 'build',
         },
       });
+
       expect(r.brief).toBe('status: "shipping today"');
     });
 
@@ -254,6 +273,7 @@ describe('renderForLLM', () => {
       const body = { event: 'deploy.failed', log: 'y'.repeat(900), action: 'rollback' };
       const serialized = JSON.stringify(body);
       const body_path = await spillEventContent(vfs, serialized);
+
       if (body_path === null) throw new Error('long webhook body was not spilled');
 
       const r = renderForLLM({
@@ -263,6 +283,7 @@ describe('renderForLLM', () => {
           body, body_path,
         },
       });
+
       expect(r.brief).toContain('deploy.failed');
       expect(r.brief).toContain(
         `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
@@ -276,6 +297,7 @@ describe('renderForLLM', () => {
       const { vfs } = createMemoryVfs();
       const body_text = `Please review:\n${'context line\n'.repeat(90)}Ship it by Friday.`;
       const body_path = await spillEventContent(vfs, body_text);
+
       if (body_path === null) throw new Error('long email body was not spilled');
 
       const r = renderForLLM({
@@ -287,6 +309,7 @@ describe('renderForLLM', () => {
           body_path,
         },
       });
+
       expect(r.brief.startsWith('"Release" [1 attachment]: Please review:')).toBe(true);
       expect(r.brief).toContain(
         `[... ${body_text.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,

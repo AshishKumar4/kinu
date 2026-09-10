@@ -7,7 +7,9 @@ import type { VFS } from '../types/primitives';
  *  the slice silently drops the last character. */
 export function vfsDirname(path: string): string {
   const i = path.lastIndexOf('/');
+
   if (i < 0) return '';
+
   return i === 0 ? '/' : path.slice(0, i);
 }
 
@@ -23,6 +25,7 @@ export async function ensureDir(vfs: Pick<VFS, 'mkdir'>, dir: string): Promise<v
     // workspace filesystem, but a remote environment's may surface EEXIST.
     // Re-throw if it's clearly not an "exists" error.
     const msg = err instanceof Error ? err.message.toLowerCase() : '';
+
     if (!msg.includes('exist') && !msg.includes('eexist')) throw err;
   }
 }

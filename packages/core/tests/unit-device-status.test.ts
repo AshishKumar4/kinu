@@ -11,6 +11,7 @@ import {
 
 function memoryStore(): DevicePresenceStore {
   const kv = new Map<string, string>();
+
   return { get: (k) => kv.get(k) ?? null, set: (k, v) => { kv.set(k, v); } };
 }
 

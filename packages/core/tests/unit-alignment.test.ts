@@ -23,6 +23,7 @@ function setup() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initTurnOutcomeTables(execRaw);
+
   return { sql, actor: createTestActors(sql, execRaw).main };
 }
 
@@ -40,7 +41,9 @@ function seed(sql: SqlExecutor, actor: ActorHandle, opts: {
       now: opts.startAt + i,
     });
   };
+
   for (let i = 0; i < opts.turns; i += 1) write(i < opts.negatives ? 'corrected' : 'accepted', i);
+
   for (let i = 0; i < (opts.abandoned ?? 0); i += 1) write('abandoned', opts.turns + i);
 }
 

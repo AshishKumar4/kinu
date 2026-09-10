@@ -89,10 +89,12 @@ export interface WorkloadTotals {
 
 const percentile = (sorted: readonly number[], q: number): number => {
   if (sorted.length === 0) return 0;
+
   if (sorted.length === 1) return sorted[0]!;
   // Nearest-rank on the sorted sample. No interpolation, because an interpolated
   // p95 over six ticks invents a value between two real measurements.
   const rank = Math.ceil(q * sorted.length);
+
   return sorted[Math.min(sorted.length, Math.max(1, rank)) - 1]!;
 };
 
@@ -115,19 +117,24 @@ const percentile = (sorted: readonly number[], q: number): number => {
  */
 export function opsAreBlind(ticks: readonly TickRecord[], workload: string): boolean {
   const mine = ticks.filter((tick) => tick.workload === workload);
+
   if (mine.length === 0) return false;
   const bytes = mine.reduce((acc, tick) => acc + (tick.bytesPut ?? 0), 0);
   const ops = mine.reduce((acc, tick) => acc + tick.classA + tick.classB + tick.classFree, 0);
+
   return bytes > 0 && ops === 0;
 }
 
 export function totalsFor(ticks: readonly TickRecord[], workload: string): WorkloadTotals {
   const mine = ticks.filter((tick) => tick.workload === workload);
   const walls = mine.map((tick) => tick.wallMs).sort((a, b) => a - b);
+
   const sum = (pick: (tick: TickRecord) => number): number =>
     mine.reduce((acc, tick) => acc + pick(tick), 0);
+
   const classA = sum((tick) => tick.classA);
   const classB = sum((tick) => tick.classB);
+
   return {
     workload,
     ticks: mine.length,
@@ -183,42 +190,51 @@ export function decide(
   const sumFor = (arm: string, workload: string): number =>
     ticks.filter((tick) => tick.arm === arm && tick.workload === workload)
       .reduce((acc, tick) => acc + tick.wallMs, 0);
+
   const countFor = (arm: string, workload: string): number =>
     ticks.filter((tick) => tick.arm === arm && tick.workload === workload).length;
 
   const ratios: Record<string, number> = {};
+
   for (const workload of RULE_WORKLOADS) {
     if (countFor(chainArm, workload) === 0) {
       return { kind: 'inconclusive', reason: `${chainArm} produced no ${workload} ticks` };
     }
+
     if (countFor(candidateArm, workload) === 0) {
       return { kind: 'inconclusive', reason: `${candidateArm} produced no ${workload} ticks` };
     }
+
     const candidate = sumFor(candidateArm, workload);
+
     if (candidate <= 0) {
       return {
         kind: 'inconclusive',
         reason: `${candidateArm} reported ${candidate} ms of ${workload} tick time, which cannot be a denominator`,
       };
     }
+
     ratios[workload] = sumFor(chainArm, workload) / candidate;
   }
 
   const git = ratios['git']!;
   const npm = ratios['npm']!;
   const measured = `git ${git.toFixed(2)}x, npm ${npm.toFixed(2)}x`;
+
   if (git >= 10 && npm >= 3) {
     return {
       kind: 'o-p-wins',
       detail: `${measured} — clears the 10x/3x bar, so tick time tracks pending change and ${candidateArm} becomes default`,
     };
   }
+
   if (git < 3 && npm < 3) {
     return {
       kind: 'chain-stays',
       detail: `${measured} — below 3x on both, so O(c) tick time is not the bottleneck and ${chainArm} stays default`,
     };
   }
+
   return {
     kind: 'inconclusive',
     reason: `${measured} — between the thresholds the rule deliberately leaves undecided`,
@@ -236,23 +252,30 @@ export function decide(
  */
 export function sqliteFinding(ticks: readonly TickRecord[], dbBytes: number): string {
   const mine = ticks.filter((tick) => tick.workload === 'sqlite' && tick.segment.startsWith('sqlite-rewrite'));
+
   if (mine.length === 0) return 'no sqlite rewrite ticks were recorded';
   // A tick that cannot answer is excluded rather than counted as zero; a median
   // over coerced zeros would understate the re-ship and read as good news.
   const perTick = mine.flatMap((tick) => (tick.bytesPut === null ? [] : [tick.bytesPut]));
+
   if (perTick.length === 0) {
     return `${mine.length} sqlite rewrite tick(s) recorded, none able to report bytes moved, `
       + 'so the re-ship ratio is unknown on this arm';
   }
+
   const median = perTick.slice().sort((a, b) => a - b)[Math.floor(perTick.length / 2)]!;
+
   if (dbBytes <= 0) {
     return `median ${(median / 1024 / 1024).toFixed(1)} MiB PUT per rewrite tick; the database size was not measured, `
       + 'so the re-ship ratio is unknown';
   }
+
   const ratio = median / dbBytes;
+
   const verdict = ratio > 0.5
     ? 'file granularity re-ships essentially the whole database per tick, so extent-level tracking is the only thing that would help here'
     : 'the tick moves materially less than the whole database, so file granularity is not re-shipping it and extent-level tracking buys less than expected';
+
   return `median ${(median / 1024 / 1024).toFixed(1)} MiB PUT per rewrite tick against a `
     + `${(dbBytes / 1024 / 1024).toFixed(1)} MiB database (${(ratio * 100).toFixed(0)}%) — ${verdict}`;
 }

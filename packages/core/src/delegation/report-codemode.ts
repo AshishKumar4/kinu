@@ -31,6 +31,7 @@ const HandoffSchema = v.optional(
 );
 
 const STATUS_UNION = SUBORDINATE_REPORT_STATUSES.map((s) => `"${s}"`).join(' | ');
+
 const HANDOFF_MEMBERS = SUBORDINATE_REPORT_HANDOFF_FIELDS
   .map((field) => `${field}?: string[]`).join('; ');
 
@@ -58,14 +59,18 @@ export function createReportCodemodeProvider(deps: () => ReportToolDeps): Codemo
         description: 'Report progress, completion, or a blocker to the workspace orchestrator.',
         execute: (...args: unknown[]) => branchableToolCall(async () => {
           const positional = v.safeParse(PositionalSchema, [args[0], args[1]]);
+
           if (!positional.success) {
             return { error: 'report.send requires a status and content, both strings' };
           }
+
           const [status, content] = positional.output;
           const handoff = v.safeParse(HandoffSchema, args[2]);
+
           if (!handoff.success) {
             return { error: `report.send's third argument is an optional object of string arrays, with any of: ${SUBORDINATE_REPORT_HANDOFF_FIELDS.join(', ')}` };
           }
+
           return await dispatchReport(deps(), { status, content, ...handoff.output });
         }),
       },

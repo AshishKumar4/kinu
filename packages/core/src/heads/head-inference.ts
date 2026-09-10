@@ -102,6 +102,7 @@ export class HeadCapture {
 }
 
 import { permitInPlan } from '../execution/work-mode';
+
 /** The two accumulator tools every head has — record_evidence / record_decision,
  *  pushing into the shared HeadCapture. Backend scratch tools are merged on top. */
 export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
@@ -121,9 +122,12 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
         const ev: Evidence = { id: `ev-${nanoid(6)}`, kind, body, ref, confidence };
         capture.recordEvidence(ev);
         const args: JsonObject = { kind, body };
+
         if (ref !== undefined) args.ref = ref;
+
         if (confidence !== undefined) args.confidence = confidence;
         capture.recordToolCall('record_evidence', args, 'ok', { success: true });
+
         return `evidence recorded (id=${ev.id})`;
       },
     })),
@@ -140,6 +144,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
         const d: Decision = { question, choice, rationale, supportingEvidence };
         capture.recordDecision(d);
         capture.recordToolCall('record_decision', { question, choice, rationale }, 'ok', { success: true });
+
         return 'decision recorded';
       },
     })),
@@ -161,9 +166,11 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
  */
 export function withHeadCaptureRecording(tools: ToolSet, capture: HeadCapture): ToolSet {
   const out: ToolSet = {};
+
   for (const [name, entry] of Object.entries(tools)) {
     out[name] = recordingTool(name, entry, capture);
   }
+
   return out;
 }
 
@@ -173,14 +180,18 @@ function recordingTool<Entry extends ToolSet[string]>(
   capture: HeadCapture,
 ): Entry {
   const execute = entry.execute;
+
   if (!execute) return entry;
+
   return Object.assign({}, entry, {
     execute: async (input: never, options: never) => {
       const value = projectJsonValue({ value: input });
       const args: JsonObject = isJsonObject(value) ? value : { input: value };
+
       try {
         const result = await execute(input, options);
         capture.recordToolCall(name, args, projectJsonValue({ value: result }), { success: true });
+
         return result;
       } catch (err) {
         capture.recordToolCall(name, args, renderThrownChain({ cause: err }), failedToolOutcome({ cause: err }));
@@ -206,6 +217,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
 const HEAD_WORK_TOOLS = ['execute_tools', 'run', 'file'] as const satisfies readonly BuiltinToolName[];
+
 export type HeadWorkspaceLayout = 'shared-workspace' | 'private-scratch';
 
 function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {
@@ -219,12 +231,15 @@ function renderHeadToolConventions(
 ): string[] {
   const tools = new Set(availableToolNames ?? HEAD_PROMPT_TOOL_NAMES);
   const lines: string[] = ['Conventions:'];
+
   if (hasHeadTool(tools, 'record_evidence')) {
     lines.push('- record_evidence whenever you learn something worth surfacing in the merge.');
   }
+
   if (hasHeadTool(tools, 'record_decision')) {
     lines.push('- record_decision when you make a substantive choice the parent might want to reconcile.');
   }
+
   if (hasHeadTool(tools, 'execute_tools')) {
     const executionDoctrine = workspaceLayout === 'shared-workspace'
       ? '- execute_tools runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
@@ -236,6 +251,7 @@ function renderHeadToolConventions(
         + '`workspace.*` is your private scratch, `parent.*` is the canonical parent workspace containing the task\'s code and data, '
         + 'and `laptop.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
         + '`web.*` is also in scope.';
+
     lines.push(
       executionDoctrine,
       ...(input.mode === 'plan'
@@ -243,12 +259,14 @@ function renderHeadToolConventions(
         : []),
     );
   }
+
   if (hasHeadTool(tools, 'run')) {
     const runDoctrine = workspaceLayout === 'shared-workspace'
       ? '- run executes one shell command. Name the runtime: `sandbox` / `laptop` are the parent agent\'s separate environments, '
         + 'and the default `workspace` runtime is the canonical workspace you were forked from.'
       : '- run executes one shell command. The runtime `parent` is the canonical parent workspace, the default `workspace` runtime is private scratch, '
         + 'and runtime `laptop` is the user\'s machine.';
+
     lines.push(
       runDoctrine,
       ...(input.mode === 'plan'
@@ -256,32 +274,40 @@ function renderHeadToolConventions(
         : []),
     );
   }
+
   if (hasHeadTool(tools, 'file')) {
     const filePlane = workspaceLayout === 'shared-workspace'
       ? 'the canonical workspace filesystem'
       : 'your private scratch filesystem; use parent.* inside execute_tools for the canonical parent workspace';
+
     lines.push(input.mode === 'plan'
       ? `- file is available for reading ${filePlane}. Do not edit, write, or delete files in Plan mode.`
       : `- file reads and edits ${filePlane}. Read a file before you edit or overwrite it, and edit by replacing exact text you copied out of the read `
         + 'rather than rewriting the file or shelling out to sed.');
   }
+
   if (hasHeadTool(tools, 'web')) {
     lines.push('- Loop `web` action=search to gather, then action=fetch to read the promising results; record_evidence each finding worth surfacing.');
   }
+
   if (hasHeadTool(tools, 'split_subheads')) {
     lines.push('- split_subheads to recursively explore deeper if needed (depth-budgeted).');
   }
+
   lines.push(
     '- Final text response: 2-4 sentences summarizing what you found + recommending what should happen next.',
     '- Stay focused on YOUR task. Don\'t try to do sibling heads\' work.',
   );
   lines.push('- If you need to share findings but no shared scratch tool exists, put the finding in your final response and record_evidence if available.');
+
   if (!hasHeadTool(tools, ...HEAD_WORK_TOOLS)) {
     lines.push('- You have no filesystem or command tool in this run: reason from inherited context and the available accumulator tools only.');
   }
+
   if (!hasHeadTool(tools, 'split_subheads')) {
     lines.push('- Do not propose recursive subheads; split_subheads is not available in this run.');
   }
+
   return [
     ...lines,
     '',
@@ -393,6 +419,7 @@ function incompleteHeadSummary(
   const recorded = synthesizeHeadSummary({
     decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls,
   });
+
   return `Head ${input.id} did not complete (status=${status}${abortReason ? `; ${abortReason}` : ''}). `
     + (recorded ? `What it recorded before stopping: ${recorded}` : 'It produced no findings.');
 }
@@ -647,17 +674,20 @@ function classifyHeadOutcome(
   const budgetGate = budgetExhausted(budget);
   const aborted = deps.isAborted();
   const broke = failure !== undefined && !aborted && !budgetGate.exhausted;
+
   const status: HeadReport['status'] = broke
     ? 'errored'
     : aborted
       ? 'aborted'
       : budgetGate.exhausted ? 'budget_exceeded' : 'completed';
+
   const stopReason = broke
     ? renderThrownChain({ cause: failure })
     : deps.abortReason?.()
       ?? (budgetGate.exhausted
         ? `${budgetGate.reason} budget exhausted`
         : null);
+
   return { status, stopReason };
 }
 
@@ -709,23 +739,29 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // The mission refusal that stopped this head, if one did. Held so the report
   // says which budget ran out rather than reporting a bare stop.
   let refusal: MissionBudgetRefusal | null = null;
+
   /** Ask the ledger for room. Never called for an unbudgeted run: `mission` is
    *  built only from a non-empty label set, so there is nothing to ask. */
   const outOfBudget = async (): Promise<boolean> => {
     if (!mission || refusal) return refusal !== null;
     refusal = await mission.port.guard('model_call', mission.labels);
+
     return refusal !== null;
   };
 
   const assertActive = (): void => {
     if (deps.isAborted()) throw new DOMException(deps.abortReason?.() ?? 'head was aborted', 'AbortError');
     const gate = budgetExhausted(input.budget);
+
     if (gate.exhausted) throw new Error(gate.reason + ' budget exhausted');
   };
+
   const prepareModelStep = async () => {
     await outOfBudget();
     assertActive();
+
     if (refusal !== null) throw new MissionBudgetExhausted(refusal);
+
     return undefined;
   };
 
@@ -759,8 +795,10 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   const seed = deps.framing ? [...deps.framing.messages] : buildHeadMessages(input);
   session.restoreHistory(seed);
   const seeded = seed.length;
+
   const system = deps.framing?.system
     ?? buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout);
+
   // The resolved model as the prompt layer names it, read off the model the
   // caller already resolved rather than asked for as a second dep nobody would
   // set. It buys two things: the real context window, which is what
@@ -775,6 +813,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // on the default window, because this field is read by the prompt layer alone.
   const constructed = v.safeParse(ConstructedModelSchema, deps.model);
   const named = v.safeParse(v.string(), deps.model);
+
   const modelContext: PromptModelContext = constructed.success
     ? { id: constructed.output.modelId, provider: constructed.output.provider.split('.', 1)[0] }
     : named.success ? { id: named.output } : {};
@@ -790,10 +829,13 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
 
   const onStep = async (step: StepResult<ToolSet>): Promise<void> => {
     if (step.text.trim()) lastText = step.text;
+
     if (step.reasoningText?.trim()) lastReasoning = step.reasoningText;
     const traced = toHeadStep(step);
+
     if (traced) {
       const seq = recorded++;
+
       // A failed trace write must not kill the work it was watching — the sink
       // can be an RPC to another Durable Object. Same treatment the actor gives
       // its own step events.
@@ -807,7 +849,9 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         );
       }
     }
+
     const usage = normalizeUsage(step.usage);
+
     // A step the provider said nothing about meters nothing: neither the report
     // nor the ledger may be moved by a guess.
     if (!usageReported(usage)) return;
@@ -827,13 +871,16 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   // under, so an external cancel becomes the same interrupt an actor's own cancel
   // is — one cancellation path for every kind.
   const cancelled = (): void => { session.interrupt(); };
+
   deps.signal?.addEventListener('abort', cancelled, { once: true });
+
   try {
     for (let index = 0; ; index++) {
       // Before the first call, between steps, AND between turns: an agent
       // spawned into an already-spent mission must not get one free inference
       // out of it, and neither must a resumed one.
       if (await outOfBudget()) break;
+
       // ONE turn id per iteration, derived from the run's own id rather than
       // minted: a recovered activation re-admits the SAME turn under the next
       // epoch, which is what the epoch fence is for, and a fresh id would make
@@ -842,15 +889,21 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
         { runId: deps.runId, turnId: index === 0 ? input.id : `${input.id}#${index}` },
         input.mode, Date.now(),
       );
+
       let turnFailed = false;
+
       try {
         const resolved = await deps.profile({ availableTools: Object.keys(deps.tools), workMode: input.mode });
         session.bindProfile(lease, resolved.profile, resolved.inputs);
+
         const stopWhen = async (): Promise<boolean> => {
           if (deps.isAborted()) return true;
+
           if (budgetExhausted(input.budget).exhausted) return true;
+
           return await outOfBudget();
         };
+
         const outcome = await session.execute(lease, {
           task: input.task,
           // Read per turn, off this actor's OWN pointer, so a promotion that
@@ -878,15 +931,27 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
           // Forwarded as the provider drew them: one frame per delta, in order,
           // never held. Nothing survives the step boundary, so the durable row
           // that lands next supersedes the paint without a tail to reconcile.
-          if (event.type === 'text-delta') { deps.reportDelta?.('text', event.delta); return; }
-          if (event.type === 'reasoning-delta') { deps.reportDelta?.('reasoning', event.delta); return; }
+          if (event.type === 'text-delta') {
+            deps.reportDelta?.('text', event.delta);
+
+            return;
+          }
+
+          if (event.type === 'reasoning-delta') {
+            deps.reportDelta?.('reasoning', event.delta);
+
+            return;
+          }
+
           if (event.type !== 'done') return;
           settled = true;
         });
+
         if (outcome.failure !== null) {
           turnFailed = true;
           failure = toKinuError({ doing: `run agent ${input.id} to a report`, cause: outcome.failure, otherwise: 'unavailable' });
         }
+
         // A promoted loop's answer is its own final text: the builtin arm
         // accumulates prose per step, a scaffold reports one result.
         if (outcome.program?.kind === 'scaffold' && outcome.text.trim()) lastText = outcome.text;
@@ -898,10 +963,12 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       } finally {
         session.finishTurn(lease);
       }
+
       // A run the spawner cancelled, or one past the deadline it was granted,
       // gets no further turn however much work it is still holding.
       if (failure !== undefined || deps.isAborted() || budgetExhausted(input.budget).exhausted) break;
       const resumed = await deps.resume?.();
+
       if (!resumed) break;
       // Appended through the session's own hydration arm, between turns, so the
       // next turn's claim is admitted against the array the wake produced.
@@ -930,6 +997,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
   }
 
   const { status, stopReason } = classifyHeadOutcome(input.budget, deps, failure);
+
   const summary = status === 'completed'
     ? (extractFinalText({ text: lastText, reasoningText: lastReasoning })
       || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })

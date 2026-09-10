@@ -30,15 +30,19 @@ async function completion(
     model: route.model,
     messages: [{ role: 'user', content: user }],
   };
+
   if (system !== undefined) call.system = system;
+
   if (route.providerOptions) call.providerOptions = route.providerOptions;
   const result = await generateText(call);
+
   return { text: result.text.trim(), usage: normalizeUsage(result.usage) };
 }
 
 /** One candidate approach, asked the way every sibling is asked. */
 export function exploreRollout(route: BranchRoute, input: ExplorePromptInput): Promise<BranchExploration> {
   const { system, user } = explorePrompt(input);
+
   return completion(route, system, user);
 }
 

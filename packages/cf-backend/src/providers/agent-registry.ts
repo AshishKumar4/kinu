@@ -88,6 +88,7 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
   return async (key, opts) => {
     if (!source) return null;
     const caller = await resolveCaller(source);
+
     // Auth is re-resolved before EVERY request to a provider (providers/util.ts
     // createAuthedFetch), which puts these two cross-DO reads on the critical
     // path of every model step of every turn: one dropped connection ended the
@@ -97,9 +98,12 @@ export function createUserDOAuthResolver(source: UserCredentialSource | null): A
     // or re-runs a refresh that never happened.
     const headers = await retryTransientDO('credential auth',
       () => source.stub.getAuthHeaders(caller, key, opts));
+
     if (!headers) return null;
+
     const baseURL = await retryTransientDO('credential baseURL',
       () => source.stub.getCredentialBaseURL(caller, key));
+
     return baseURL ? { headers, baseURL } : { headers };
   };
 }
@@ -108,11 +112,13 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   const registry = createProviderRegistry();
 
   let developmentBinding: Ai | undefined;
+
   if (opts.env.DEV_USER_EMAIL && opts.env.AI) {
     // SAFETY: production callers pass the wrangler-generated `Env`, whose `AI`
     // binding is Cloudflare's `Ai`. `ProviderEnv` exposes only its gateway seam.
     developmentBinding = opts.env.AI as Ai;
   }
+
   registry.register(createWorkersAIProvider(opts.workersAI, developmentBinding));
   registry.register(createMyGatewayProvider());
   registry.register(createAIGatewayProvider());
@@ -134,8 +140,10 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   const credentialKeys = async (): Promise<string[]> => {
     if (!source) return [];
     const caller = await resolveCaller(source);
+
     const credentials = await retryTransientDO('credential listing',
       () => source.stub.listCredentials(caller));
+
     return credentials.map((c) => c.key);
   };
 
@@ -157,16 +165,21 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     // Same predicate the provider's own isAvailable() uses, so the default can
     // never name a gateway the provider would refuse to build a model for.
     const platform = resolvePlatformGateway(opts.env);
+
     if (!('reason' in platform)) return AI_GATEWAY_PROVIDER_ID;
     throw new Error(
       'No default provider available (need a UserDO credential stub for workers-ai, '
       + `or a usable platform gateway — ${platform.reason})`,
     );
   }
+
   function defaultModelIdFor(provider: string): string {
     const native = registry.get('workers-ai')?.defaultModel ?? '';
+
     if (!native) throw new Error('workers-ai provider missing defaultModel.');
+
     if (provider === AI_GATEWAY_PROVIDER_ID) return `workers-ai/${native}`;
+
     return registry.get(provider)?.defaultModel ?? native;
   }
 
@@ -180,20 +193,27 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
 
     normalizeSpecSync(specOrNull): string {
       const s = (specOrNull ?? '').trim();
+
       if (!s) {
         const provider = defaultProvider();
+
         return `${provider}/${defaultModelIdFor(provider)}`;
       }
+
       if (s.startsWith('@cf/')) return `workers-ai/${s}`;
+
       if (s.includes('/')) {
         const first = s.slice(0, s.indexOf('/'));
+
         // canResolve is optimistic for catalog-shaped ids — a typo'd provider
         // surfaces a clear models.dev error at request time instead of here
         // (the catalog cannot be consulted synchronously).
         if (registry.canResolve(first)) return s;
+
         if (first === 'workers-ai') return s;   // canonical form pre-existed
         throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
       }
+
       // Bare model id — wrap with the default provider.
       return `${defaultProvider()}/${s}`;
     },

@@ -67,6 +67,7 @@ describe('Cost estimation is model-aware', () => {
       spec: 'kuae-cloud-coding-plan/GLM-4.7',
       pricing: { input: 0, output: 0 },
     });
+
     expect(est.estimatedUSD).toBe(0);
     expect(est.basis.source).toBe('catalog');
     // The whole point of the gate fix: free work is not refusable at any cap.
@@ -94,6 +95,7 @@ describe('Cost estimation is model-aware', () => {
       spec: 'anthropic/claude-fable-5',
       pricing: { input: 10, output: 50 },
     });
+
     const blended = estimateCost(20, 3, 4);
     expect(est.estimatedUSD).toBeGreaterThan(blended.estimatedUSD * 5);
   });
@@ -109,10 +111,12 @@ describe('Cost estimation is model-aware', () => {
       spec: DEFAULT_SPEC,
       pricing: { input: 1.32, output: 3.96, cacheRead: 0.000001 },
     });
+
     const uncached = estimateCost(20, 3, 4, {
       spec: DEFAULT_SPEC,
       pricing: { input: 1.32, output: 3.96 },
     });
+
     expect(cached.estimatedUSD).toBeCloseTo(uncached.estimatedUSD, 10);
   });
 });
@@ -124,6 +128,7 @@ describe('describeCostBasis — the clause a refusal shows a human', () => {
       model: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813',
       rates: { input: 1.32, output: 3.96 },
     });
+
     expect(clause).toContain('workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813');
     expect(clause).toContain('$1.32/1M in');
     expect(clause).toContain('$3.96/1M out');
@@ -133,6 +138,7 @@ describe('describeCostBasis — the clause a refusal shows a human', () => {
     const clause = describeCostBasis({
       source: 'blended', model: 'ollama-cloud/kimi-k3', usdPer1kTokens: 0.003,
     });
+
     expect(clause).toContain('ollama-cloud/kimi-k3');
     expect(clause).toContain('unpriced in the catalog');
     expect(clause).toContain('unknown, not zero');

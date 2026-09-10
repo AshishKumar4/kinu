@@ -19,23 +19,27 @@ describe('createLocalModelResolver', () => {
    */
   test('neither lane this seam builds carries an output cap, whatever the config holds', async () => {
     const bodies: JsonObject[] = [];
+
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
         const body = v.parse(JsonObjectSchema, await request.json());
         bodies.push(body);
+
         if (body.stream === true) {
           const chunk = (delta: JsonObject, finish: JsonValue): string => `data: ${JSON.stringify({
             id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 0, model: String(body.model),
             choices: [{ index: 0, delta, finish_reason: finish }],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           })}\n\n`;
+
           return new Response(
             `${chunk({ content: 'ok' }, null)}${chunk({}, 'stop')}data: [DONE]\n\n`,
             { headers: { 'content-type': 'text/event-stream' } },
           );
         }
+
         return Response.json({
           id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
           choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
@@ -43,23 +47,29 @@ describe('createLocalModelResolver', () => {
         });
       },
     });
+
     const llm: LLMProviderConfig = {
       name: 'workers-ai',
       baseURL: `http://127.0.0.1:${server.port}/v1`,
       headers: { Authorization: 'Bearer test' },
       model: '@cf/test/model',
     };
+
     const staleCap = { maxTokens: 123 };
+
     try {
       await createLocalProviderLLM({ llm }).complete('uncapped');
       await createLocalProviderLLM({ llm: { ...llm, ...staleCap } }).complete('stale cap');
       let streamed = '';
+
       for await (const chunk of createLocalProviderLLM({ llm: { ...llm, ...staleCap } })
         .stream({ system: 'be brief', messages: [{ role: 'user', content: 'stream' }] })) {
         streamed += chunk;
       }
+
       expect(streamed).toBe('ok');
       expect(bodies).toHaveLength(3);
+
       for (const body of bodies) {
         expect(Object.hasOwn(body, 'max_tokens')).toBe(false);
         expect(Object.hasOwn(body, 'max_completion_tokens')).toBe(false);
@@ -76,31 +86,38 @@ describe('createLocalModelResolver', () => {
   test('reports every completed call, silent providers included', async () => {
     const reports: ModelCallReport[] = [];
     let quiet = false;
+
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
         const body = v.parse(JsonObjectSchema, await request.json());
+
         const reply: JsonObject = {
           id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
           choices: [{ index: 0, message: { role: 'assistant', content: ' graded ' }, finish_reason: 'stop' }],
         };
+
         // The second answer carries NO usage block — a real Workers AI shape, and
         // the case any `?? 0` on this path would turn into "the judge was free".
         if (!quiet) reply.usage = { prompt_tokens: 41, completion_tokens: 7, total_tokens: 48 };
+
         return Response.json(reply);
       },
     });
+
     const llm: LLMProviderConfig = {
       name: 'workers-ai',
       baseURL: `http://127.0.0.1:${server.port}/v1`,
       headers: { Authorization: 'Bearer test' },
       model: '@cf/test/model',
     };
+
     try {
       const judge = createLocalProviderLLM({
         llm, spend: { source: 'judge', report: (report) => { reports.push(report); } },
       });
+
       expect(await judge.complete('grade this')).toBe('graded');
       quiet = true;
       await judge.complete('grade this too');
@@ -213,6 +230,7 @@ describe('createLocalModelResolver', () => {
     expect(resolver.normalizeSpecSync('openai-compat:groq/llama-3')).toBe('openai-compat:groq/llama-3');
 
     const providers = await resolver.listProviders();
+
     for (const id of ['openai', 'anthropic', 'openrouter', 'openai-compat', 'openai-compat:groq']) {
       expect(providers.find((p) => p.id === id)?.available).toBe(true);
     }
@@ -255,6 +273,7 @@ describe('createLocalModelResolver', () => {
 // ─── Signed-in cloud source — the worker's /api/user/ai/v1 proxy ───────────
 
 const CLOUD_ORIGIN = 'https://kinu.example.com';
+
 const CLOUD_TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('');
 
 /** The llm config cli/config.ts derives for a signed-in user with no BYO keys. */
@@ -270,8 +289,10 @@ function proxyLLMConfig(origin = CLOUD_ORIGIN): LLMProviderConfig {
 function cloudMenuFetch(origin = CLOUD_ORIGIN): typeof fetch {
   return asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+
     if (url === `${origin}/api/cli/models`) {
       expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${CLOUD_TOKEN}`);
+
       return Response.json({
         models: [
           {
@@ -287,6 +308,7 @@ function cloudMenuFetch(origin = CLOUD_ORIGIN): typeof fetch {
         failures: [],
       });
     }
+
     return fetch(input, init);
   });
 }
@@ -322,6 +344,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
       fetch: cloudMenuFetch(),
     });
+
     expect(resolver.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
     expect(resolver.normalizeSpecSync('my-gateway/openai/gpt-4.1')).toBe('my-gateway/openai/gpt-4.1');
   });
@@ -329,21 +352,25 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
   test('resolved models call the proxy with the CLI bearer and the wire model id', async () => {
     const seen: Array<{ path: string; auth: string | null; affinity: string | null; model: JsonValue | undefined }> = [];
     let wireCalls = 0;
+
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
         wireCalls++;
         const body = v.parse(JsonObjectSchema, await request.json());
+
         if (wireCalls === 1) {
           return new Response('limited', { status: 429, headers: { 'Retry-After': '0' } });
         }
+
         seen.push({
           path: new URL(request.url).pathname,
           auth: request.headers.get('authorization'),
           affinity: request.headers.get('x-session-affinity'),
           model: body.model,
         });
+
         return Response.json({
           id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: String(body.model),
           choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
@@ -351,8 +378,10 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         });
       },
     });
+
     try {
       const origin = `http://127.0.0.1:${server.port}`;
+
       const resolver = createLocalModelResolver({
         llm: proxyLLMConfig(origin),
         credentials: {},
@@ -366,6 +395,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         prompt: 'ping',
         maxRetries: 0,
       });
+
       expect(viaWorkersAI.text).toBe('ok');
       const viaGateway = await generateText({ model: resolver.resolveModel('my-gateway/openai/gpt-4.1'), prompt: 'ping' });
       expect(viaGateway.text).toBe('ok');
@@ -373,6 +403,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       expect(seen.map((s) => s.path)).toEqual(['/api/user/ai/v1/chat/completions', '/api/user/ai/v1/chat/completions']);
       expect(wireCalls).toBe(3);
       expect(seen.map((s) => s.model)).toEqual([DEFAULT_WORKERS_AI_MODEL_ID, 'openai/gpt-4.1']);
+
       for (const request of seen) {
         expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);
         expect(request.affinity).toBe('kinu-jarvis');
@@ -389,12 +420,14 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
       headers: { Authorization: 'Bearer cf-direct' },
       model: '@cf/moonshotai/kimi-k2.6',
     };
+
     const resolver = createLocalModelResolver({
       llm: direct,
       credentials: {},
       cloud: { origin: CLOUD_ORIGIN, token: CLOUD_TOKEN },
       fetch: cloudMenuFetch(),
     });
+
     const providers = await resolver.listProviders();
     // The workers-ai id is the BYO direct endpoint; the proxy still serves my-gateway.
     expect(providers.find((p) => p.id === 'workers-ai')?.label).toBe('Cloudflare Workers AI (local gateway)');
@@ -407,12 +440,14 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     // a container with no `kinu auth`. Measured on the 2026-09-07 pilot: 3
     // prefix-cache hits in 14 steps when no pin was sent.
     const seen: Array<{ affinity: string | null; auth: string | null }> = [];
+
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
         await request.json();
         seen.push({ affinity: request.headers.get('x-session-affinity'), auth: request.headers.get('authorization') });
+
         return Response.json({
           id: 'chatcmpl-1', object: 'chat.completion', created: 0, model: 'echo',
           choices: [{ index: 0, message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
@@ -420,24 +455,31 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
         });
       },
     });
+
     try {
       const endpoint = (name: 'workers-ai' | 'openai-compat', model: string): LLMProviderConfig => ({
         name, baseURL: `http://127.0.0.1:${server.port}/v1`, headers: { Authorization: 'Bearer cf-direct' }, model,
       });
+
       const pinned = createLocalModelResolver({
         llm: endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'), credentials: {}, sessionAffinity: 'kinu-harbor',
       });
+
       await generateText({ model: pinned.resolveModel(null), prompt: 'ping', maxRetries: 0 });
+
       // A third-party endpoint means nothing by the header, so it is not sent there.
       const elsewhere = createLocalModelResolver({
         llm: endpoint('openai-compat', 'gpt-4o-mini'), credentials: {}, sessionAffinity: 'kinu-harbor',
       });
+
       await generateText({ model: elsewhere.resolveModel(null), prompt: 'ping', maxRetries: 0 });
+
       const explicit = createLocalModelResolver({
         llm: { ...endpoint('workers-ai', '@cf/moonshotai/kimi-k2.6'),
           headers: { Authorization: 'Bearer cf-direct', 'X-Session-Affinity': 'caller-pin' } },
         sessionAffinity: 'kinu-harbor',
       });
+
       await generateText({ model: explicit.resolveModel(null), prompt: 'ping', maxRetries: 0 });
       expect(seen).toEqual([
         { affinity: 'kinu-harbor', auth: 'Bearer cf-direct' },
@@ -482,6 +524,7 @@ describe('createLocalModelResolver — claude subscription provider', () => {
       fetch: asFetchFunction(async () => new Response('{}')),
       claudeCli: { probe: async () => ({ binary: false, loggedIn: false }) },
     });
+
     const providers = await resolver.listProviders();
     const claude = providers.find((p) => p.id === 'claude');
     expect(claude?.available).toBe(false);
@@ -495,6 +538,7 @@ describe('createLocalModelResolver — claude subscription provider', () => {
       fetch: asFetchFunction(async () => new Response('{}')),
       claudeCli: { probe: async () => ({ binary: true, loggedIn: false }) },
     });
+
     const providers = await resolver.listProviders();
     const claude = providers.find((p) => p.id === 'claude');
     expect(claude?.available).toBe(false);
@@ -516,11 +560,13 @@ describe('createLocalModelResolver — signed out', () => {
     });
 
     const providers = await resolver.listProviders();
+
     for (const id of ['workers-ai', 'my-gateway']) {
       const provider = providers.find((p) => p.id === id);
       expect(provider?.available).toBe(false);
       expect(provider?.unavailableReason).toContain('kinu auth');
     }
+
     expect(() => resolver.resolveModel('my-gateway/openai/gpt-4.1')).toThrow(/kinu auth/);
   });
 });

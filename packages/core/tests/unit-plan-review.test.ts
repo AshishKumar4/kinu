@@ -66,18 +66,22 @@ function setup() {
   initPlanReviewTable(makeExecRaw(db));
   let id = 0;
   let now = 100;
+
   const store = new PlanReviewStore(makeSql(db), createTestActorsOver(db).main, {
     newId: () => `plan-${++id}`,
     now: () => ++now,
   });
+
   return { db, store };
 }
 
 describe('durable plan review lifecycle', () => {
   test('malformed remote annotations are a failed parse, not an exception escaping safeParse', () => {
     const { db, store } = setup();
+
     try {
       const submitted = store.submit('default', [{ start: 1, content: '# Plan' }]);
+
       if (!submitted.ok) throw new Error(submitted.error);
       expect(v.safeParse(PlanReviewSchema, submitted.plan).success).toBe(true);
       expect(v.safeParse(PlanReviewSchema, { ...submitted.plan, annotations: [{ id: 'broken' }] }).success).toBe(false);
@@ -97,6 +101,7 @@ describe('durable plan review lifecycle', () => {
     const { store } = setup();
     const submitted = store.submit('default', [{ start: 1, content: '# Plan\n\nDo it' }]);
     expect(submitted.ok).toBe(true);
+
     if (!submitted.ok) throw new Error(submitted.error);
     expect(submitted.plan).toMatchObject({
       id: 'plan-1', sessionId: 'default', revision: 1,
@@ -110,6 +115,7 @@ describe('durable plan review lifecycle', () => {
       startMeta: { parentTagName: 'P', parentIndex: 0, textOffset: 0 },
       mathTargets: [{ blockId: 'math-1', tex: 'x^2', displayMode: false }],
     };
+
     const saved = store.saveAnnotations('plan-1', 1, [annotation]);
     expect(saved.ok).toBe(true);
     expect(store.getActive('default')?.annotations).toEqual([annotation]);
@@ -118,6 +124,7 @@ describe('durable plan review lifecycle', () => {
   test('admits only the plan-review annotation shape at the durable boundary', () => {
     const { store } = setup();
     store.submit('default', [{ start: 1, content: '# Plan\n\nDo it' }]);
+
     const base = {
       id: 'a1', blockId: 'paragraph-1', startOffset: 0, endOffset: 4,
       type: 'COMMENT', originalText: 'Plan', createdA: 1,
@@ -142,6 +149,7 @@ describe('durable plan review lifecycle', () => {
     const { store } = setup();
     const submitted = store.submit('default', [{ start: 1, content: 'x'.repeat(3 * 1024 * 1024) }]);
     expect(submitted.ok).toBe(false);
+
     if (submitted.ok) throw new Error('expected the oversized plan to be refused');
     expect(submitted.error).toMatch(/row size|maximum size/);
     expect(store.getActive('default')).toBeNull();
@@ -215,11 +223,13 @@ describe('submit_plan native tool', () => {
     expect(buildBuiltinTools({ rt }).submit_plan).toBeUndefined();
 
     const received: Array<readonly PlanEdit[]> = [];
+
     const tools = buildBuiltinTools({
       rt,
       submitPlan: {
         submit: (edits) => {
           received.push([...edits]);
+
           return {
             ok: true as const,
             plan: {
@@ -232,11 +242,14 @@ describe('submit_plan native tool', () => {
         },
       },
     });
+
     expect(tools.submit_plan).toBeDefined();
     const submitPlan = toolExecute<{ edits: PlanEdit[] }, JsonValue>(tools.submit_plan!);
+
     const result = await submitPlan({
       edits: [{ start: 1, content: '# Plan' }],
     });
+
     expect(received).toEqual([[{ start: 1, content: '# Plan' }]]);
     expect(result).toMatchObject({ ok: true, planId: 'plan-1', revision: 1 });
     expect(JSON.stringify(result)).toContain('awaiting review');

@@ -22,15 +22,20 @@ afterEach(cleanupChats);
 function composerBoxRows(frame: string): string[] {
   const lines = frame.split('\n');
   let bottom = -1;
+
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     if (lines[index]!.startsWith('╰')) { bottom = index; break; }
   }
+
   if (bottom < 0) throw new Error(`no closed box in frame:\n${frame}`);
   let top = -1;
+
   for (let index = bottom - 1; index >= 0; index -= 1) {
     if (lines[index]!.startsWith('╭')) { top = index; break; }
   }
+
   if (top < 0) throw new Error(`composer box never opens in frame:\n${frame}`);
+
   return lines.slice(top, bottom + 1);
 }
 
@@ -54,6 +59,7 @@ describe('the composer over wrapped drafts', () => {
     const rows = composerDraftRows(screen.frame());
     const filled = rows.filter((row) => row.trim() !== '');
     expect(filled.length).toBeGreaterThan(3);
+
     // Every row is inside the box: no draft text bleeds onto a border row.
     for (const row of composerBoxRows(screen.frame()).slice(1, -1)) expect(row.startsWith('│')).toBe(true);
     expect(composerBoxRows(screen.frame()).at(-1)).not.toContain('cornbread');
@@ -95,6 +101,7 @@ describe('the composer over wrapped drafts', () => {
 
     const rows = composerDraftRows(screen.frame()).filter((row) => row.trim() !== '');
     expect(rows.length).toBeGreaterThanOrEqual(3);
+
     // No row overflows the interior, and the wide glyphs are never split.
     for (const row of rows) expect(row.length).toBeLessThanOrEqual(38);
     expect(rows.join('')).toContain('世界世界');
@@ -112,6 +119,7 @@ describe('the composer over wrapped drafts', () => {
     await screen.mockInput.typeText('👨‍👩‍👧‍👦 family '.repeat(6).trim());
     await screen.waitFor('the cluster draft to wrap', () => composerDraftRows(screen.frame()).length > 1);
     const editor = screen.renderer.currentFocusedEditor;
+
     if (!editor) throw new Error('the composer never took focus');
     expect(composerDraftRows(screen.frame()).length)
       .toBe(Math.min(CAP, editor.editorView.getTotalVirtualLineCount()));
@@ -139,6 +147,7 @@ describe('the composer over wrapped drafts', () => {
     await screen.mockInput.typeText('second');
     await screen.waitFor('both lines to be on screen', () => {
       const rows = composerDraftRows(screen.frame()).join(' ');
+
       return rows.includes('second') && rows.includes('first');
     });
     // Two typed lines, the first of them wrapped: more rows than typed lines.

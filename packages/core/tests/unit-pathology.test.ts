@@ -31,6 +31,7 @@ function stubLLM(reply: string | Error): LLM {
     },
     async complete() {
       if (reply instanceof Error) throw reply;
+
       return reply;
     },
   };
@@ -48,6 +49,7 @@ describe('complaint classification — closed vocabulary, first match wins', () 
       ["you didn't add the backoff", 'incomplete'],
       ["that's way more than I asked for, I didn't ask you to refactor", 'overreach'],
     ];
+
     for (const [followup, expected] of cases) {
       expect(complaintClass('add retries to the uploader', followup)).toBe(expected);
     }
@@ -150,6 +152,7 @@ describe('clustering', () => {
       input({ followup: 'you forgot the backoff' }),
       input({ followup: 'it throws a TypeError' }),
     ]);
+
     expect(clusters.map((c) => c.id)).toEqual(['error/terse', 'incomplete/terse']);
   });
 
@@ -166,6 +169,7 @@ describe('LLM labelling can only change a title', () => {
       stubLLM('{"error/terse":"claims success without running anything"}'),
       clusters,
     );
+
     expect(labelled!.title).toBe('claims success without running anything');
     expect({ ...labelled, title: '' }).toEqual({ ...clusters[0]!, title: '' });
   });
@@ -206,6 +210,7 @@ describe('the prompt block', () => {
     const clusters = clusterPathologies([
       input({ followup: 'it throws a TypeError', assistantResponse: '```js\nx\n```', outcome: 'frustrated', scaffoldVersion: 4 }),
     ]);
+
     const block = renderPathologyBlock(clusters);
     expect(block).toContain('error/code');
     expect(block).toContain(describePathology('error/code'));

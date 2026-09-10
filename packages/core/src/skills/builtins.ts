@@ -82,7 +82,9 @@ a recap of what you implemented.
 
 function parseBuiltin(src: string): ParsedSkill {
   const r = parseSkillFile(src, 'builtin');
+
   if (!r.ok) throw new Error(`built-in skill failed to parse: ${r.error}`);
+
   return r.skill;
 }
 

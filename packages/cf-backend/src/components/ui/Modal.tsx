@@ -28,7 +28,9 @@ export function Modal({ title, onClose, icon, children, footer, maxWidthClass = 
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") dismiss(); };
+
     document.addEventListener("keydown", onKey);
+
     return () => document.removeEventListener("keydown", onKey);
   }, [dismiss]);
 

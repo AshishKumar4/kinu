@@ -20,6 +20,7 @@ import { between } from '@kinu.run/test-utils';
 import { terminalChatError } from '../src/hooks/chat-turn-error';
 
 const hook = readFileSync(join(import.meta.dir, '..', 'src', 'hooks', 'use-kinu.ts'), 'utf8');
+
 const page = readFileSync(join(import.meta.dir, '..', 'src', 'pages', 'WorkspacePage.tsx'), 'utf8');
 
 describe('use-kinu chat-error wiring', () => {

@@ -72,7 +72,9 @@ import { diagnostics, KinuError, renderThrownChain } from '@kinu.run/core/obs';
  * leaving a second number here to drift.
  */
 const WEBHOOK_BODY_MAX_BYTES = 1024 * 1024;
+
 const WEBHOOK_KNOCKS_PER_WINDOW = DEFAULT_RATE_LIMIT_PER_MIN;
+
 const OVER_WEBHOOK_BODY_LIMIT = 'webhook body over the 1 MiB limit';
 
 const WebhookRequestSchema = v.object({
@@ -82,13 +84,16 @@ const WebhookRequestSchema = v.object({
   accepted_content_type: v.optional(v.string()),
   rate_limit_per_min: v.optional(v.number()),
 });
+
 const RequestCfSchema = v.object({
   tlsClientAuth: v.optional(v.object({ certVerified: v.optional(v.string()) })),
 });
 
 function requestAuthTimeMs(request: Request): number | null {
   const forwarded = Number(request.headers.get('x-kinu-auth-time') ?? '');
+
   if (Number.isFinite(forwarded) && forwarded > 0) return forwarded;
+
   return null;
 }
 
@@ -99,6 +104,7 @@ function requestAuthTimeMs(request: Request): number | null {
  */
 function requireStepUp(request: Request): Response | null {
   if (isFreshAuthTime(requestAuthTimeMs(request))) return null;
+
   return err(401, 'step-up auth required (re-login within 5 minutes)');
 }
 
@@ -115,6 +121,7 @@ export async function handleHubRequest(
 
   // ── Triggers CRUD (auth + ownership already enforced upstream) ─
   const triggersBase = `/api/workspaces/${agentName}/triggers`;
+
   if (path === triggersBase || path.startsWith(triggersBase + '/')) {
     return await handleTriggersRoute(request, env, agentName, path.slice(triggersBase.length));
   }
@@ -153,11 +160,16 @@ export async function handleWebhookDeliveryRequest(
   env: Env,
 ): Promise<Response | null> {
   const match = matchWebhookDeliveryPath(new URL(request.url).pathname);
+
   if (match === null) return null;
+
   if (request.method !== 'POST') return err(405, 'use POST');
   const secret = webhookRouteSecret(env);
+
   if (secret === null || match.kind !== 'signed') return deliveryNotFound();
+
   if (!(await verifyWebhookRoute(secret, match))) return deliveryNotFound();
+
   return await handleWebhookDelivery(request, env, match);
 }
 
@@ -178,28 +190,37 @@ async function handleEmailConfigRoute(
   agentName: string,
 ): Promise<Response> {
   const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+
   if (request.method === 'GET') {
     return json(await agent.getEmailIngress());
   }
+
   if (request.method === 'PUT') {
     // Widening who can drive turns by email is a grant.
     const stepUp = requireStepUp(request);
+
     if (stepUp) return stepUp;
+
     const body = await safeJson(request, v.object({
       allow: v.optional(v.array(v.string())),
       notifications: v.optional(v.boolean()),
     }));
+
     if (!body || (body.allow === undefined && body.notifications === undefined)) {
       return err(400, 'allow (string[]) and/or notifications (boolean) required');
     }
+
     if (body.allow !== undefined) {
       await agent.setEmailAllowlist(body.allow);
     }
+
     if (body.notifications !== undefined) {
       await agent.setEmailNotifications(body.notifications === true);
     }
+
     return json(await agent.getEmailIngress());
   }
+
   return err(405, 'GET or PUT');
 }
 
@@ -220,6 +241,7 @@ async function handleWebhookDelivery(
   route: SignedWebhookRoute,
 ): Promise<Response> {
   const kv = env.AUTH_KV;
+
   if (kv && !(await ingressAdmitted(kv, 'webhook', peerIp(request), WEBHOOK_KNOCKS_PER_WINDOW))) {
     return ingressDenied();
   }
@@ -228,15 +250,19 @@ async function handleWebhookDelivery(
   // pre-filter and the count of arriving bytes — so this route states the limit
   // and reads the outcome, and there is one place either can change.
   const bounded = await readBounded(request, WEBHOOK_BODY_MAX_BYTES);
+
   if (bounded === 'too_large') return err(413, OVER_WEBHOOK_BODY_LIMIT);
+
   if (bounded instanceof KinuError) {
     diagnostics.failure('webhook.body_unreadable', bounded);
+
     return err(400, 'could not read the request body');
   }
 
   const agent = await getAgentByName<Env, OrchestratorAgent>(
     env.OrchestratorAgent, route.workspaceName,
   );
+
   const parsedCf = v.safeParse(RequestCfSchema, request.cf);
 
   // The ingress needs an EventLog + ReplyChannelStore + TriggerRegistry view
@@ -262,6 +288,7 @@ async function handleWebhookDelivery(
   if (result.status === 'rejected') {
     return err(result.http_status ?? 400, result.reason ?? 'rejected');
   }
+
   // Webhook v1 acknowledges after durable publish. Agent replies are handled
   // through the event/reply-channel system; held-open HTTP webhook responses are
   // intentionally not exposed until that channel has a production-safe waiter.
@@ -287,25 +314,32 @@ async function handleTriggersRoute(
     if (method === 'GET') {
       return json(decodeJsonWire(await agent.listTriggersWire()));
     }
+
     if (method === 'POST') {
       // Creating a trigger is a grant (shared rule with the CLI webhook
       // route — see auth/session.ts isFreshAuthTime).
       const stepUp = requireStepUp(request);
+
       if (stepUp) return stepUp;
+
       // A trigger whose delivery URL cannot be signed is a row no delivery
       // could ever reach, so an unconfigured deployment is reported here
       // instead of writing one. Public delivery says none of this; it 404s.
       if (webhookRouteSecret(env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
       const body = await safeJson(request, WebhookRequestSchema);
+
       if (!body || !body.label || !body.auth_mode) {
         return err(400, 'label and auth_mode required');
       }
+
       let rateLimit: number;
+
       try {
         rateLimit = normalizeWebhookRateLimitPerMin(body.rate_limit_per_min);
       } catch (e) {
         return err(400, renderThrownChain({ cause: e }));
       }
+
       try {
         return json(await agent.createDurableWebhook({
           label: body.label,
@@ -318,19 +352,23 @@ async function handleTriggersRoute(
         return err(500, renderThrownChain({ cause: e }));
       }
     }
+
     return err(405, 'GET or POST');
   }
 
   // /triggers/<id>
   const idMatch = rest.match(/^\/([^/]+)$/);
+
   if (idMatch && method === 'DELETE') {
     const trigger_id = decodeURIComponent(idMatch[1]);
+
     // `owner`: this route is below server.ts's auth, CSRF and workspace-ownership
     // gates, so the caller has been shown to be the workspace's owner. The
     // model's own `agent.cancelSchedule` reaches the same method as `self` and
     // is refused an owner-created ingress.
     return json(await agent.cancelTrigger(trigger_id, 'owner'));
   }
+
   return err(404, 'not found');
 }
 
@@ -339,6 +377,7 @@ async function handleTriggersRoute(
 async function handleEventsList(request: Request, env: Env, agentName: string): Promise<Response> {
   const url = new URL(request.url);
   const variant = url.searchParams.get('variant') ?? undefined;
+
   // The same closed parser the object behind this RPC applies, so a request
   // that skips the route gets the identical ceiling. `parseInt('abc', 10)` is
   // NaN, which the parser reads as "unstated" — the route never has to decide
@@ -352,6 +391,7 @@ async function handleEventsList(request: Request, env: Env, agentName: string): 
   });
 
   const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+
   return json(decodeJsonWire(await agent.listRecentEventsWire({
     variant, since: bounds.since, limit: bounds.limit,
   })));
@@ -366,5 +406,6 @@ interface WebhookHeaders {
 function extractHeaders(request: Request): WebhookHeaders {
   const out: WebhookHeaders = {};
   request.headers.forEach((value, key) => { out[key] = value; });
+
   return out;
 }

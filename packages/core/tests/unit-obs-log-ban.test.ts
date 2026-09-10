@@ -37,7 +37,9 @@ import {
 } from '../src/obs/index';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
 const repoRoot = join(here, '..', '..', '..');
+
 const fixtureProject = join(here, 'fixtures', 'log-ban');
 
 interface Diagnostic {
@@ -61,20 +63,26 @@ interface CompileReport {
  */
 function compileFixtures(): CompileReport {
   const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
+
   const run = spawnSync(tsc, ['--noEmit', '--pretty', 'false', '-p', fixtureProject], {
     cwd: repoRoot,
     encoding: 'utf8',
   });
+
   if (run.error) {
     throw new Error(`could not run ${tsc}`, { cause: run.error });
   }
+
   const output = `${run.stdout}${run.stderr}`;
   const diagnostics: Diagnostic[] = [];
+
   for (const raw of output.split('\n')) {
     const match = /^(.*?)\((\d+),\d+\): error (.*)$/u.exec(raw);
+
     if (!match?.[1] || !match[2] || !match[3]) continue;
     diagnostics.push({ file: match[1], line: Number.parseInt(match[2], 10), text: match[3] });
   }
+
   return { status: run.status ?? -1, diagnostics };
 }
 
@@ -85,15 +93,18 @@ function markedLines(file: string): ReadonlyMap<number, number> {
   const byCase = new Map<number, number>();
   source.forEach((text, index) => {
     const marker = /^\/\/ \[(\d+)\]/u.exec(text);
+
     // The call is the first line after the marker's comment block, which the
     // fixture keeps to a fixed shape: `// [n] …` then optional `//` continuation
     // lines, then the statement. Resolved by scanning forward to the first line
     // that is not a comment.
     if (!marker?.[1]) return;
     let cursor = index + 1;
+
     while (cursor < source.length && source[cursor]?.trimStart().startsWith('//')) cursor += 1;
     byCase.set(Number.parseInt(marker[1], 10), cursor + 1);
   });
+
   return byCase;
 }
 
@@ -169,9 +180,11 @@ describe('the reserved list is the one AGENTS.md states', () => {
     const sentence = /no `apiKey`[^.]*?\./u.exec(agents)?.[0];
     expect(sentence).toBeDefined();
     const named = [...(sentence ?? '').matchAll(/`([A-Za-z()]+)`/gu)].map(([, field]) => field);
+
     // `header(s)` is how the contract writes the pair; the type spells both.
     const expanded = named.flatMap((field) =>
       field === 'header(s)' ? ['header', 'headers'] : [field]);
+
     expect(expanded.sort()).toEqual([...RESERVED_LOG_FIELDS].sort());
   });
 });
@@ -206,11 +219,13 @@ describe('the logger records what a code path claimed', () => {
     // What makes the log line answer the question the string returns could not:
     // WHICH kind of failure, and what actually failed underneath.
     const log = createRecordingLogger();
+
     const failure = toKinuError({
       doing: 'reading workspace_capability',
       cause: new Error('no such table: workspace_capability'),
       otherwise: 'io',
     });
+
     log.failure('capability.read_failed', failure, { table: 'workspace_capability' });
     expect(log.emitted).toEqual([{
       event: 'capability.read_failed',

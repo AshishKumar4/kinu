@@ -28,7 +28,9 @@ export const PROVIDER_SDK_RETRIES = 2;
  * (events/ingress/peer.ts:172-178, orchestrator/terminal-effects.ts:151).
  */
 const DEFAULT_BASE_DELAY_MS = 2_000;
+
 const DEFAULT_BACKOFF_FACTOR = 2;
+
 const DEFAULT_MAX_DELAY_MS = 60_000;
 
 export interface RateLimitRetryOptions {
@@ -71,6 +73,7 @@ export function withRateLimitRetry(
   const now = opts.now ?? Date.now;
   const random = opts.random ?? Math.random;
   const pacer = opts.pacer ?? providerPacer;
+
   const warn = opts.warn ?? ((message: string) => diagnostics.failure(
     'provider.rate_limited',
     new KinuError('unavailable', message),
@@ -81,6 +84,7 @@ export function withRateLimitRetry(
 
     const host = providerHost(input);
     const signal = init?.signal ?? undefined;
+
     for (let attempt = 1; ; attempt++) {
       // THE LANE IS HELD ONLY WHILE THE REQUEST IS AWAITING HEADERS, which is the
       // same boundary Cloudflare's own connection budget frees at, and it is
@@ -89,18 +93,22 @@ export function withRateLimitRetry(
       // untouched — five nodes still stream their answers in parallel.
       const release = await pacer.admit(host, signal);
       let response: Response;
+
       try {
         response = await fetchImpl(input, init);
       } finally {
         release();
       }
+
       if (!(await isRateLimited(response))) return response;
 
       const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'), now());
+
       const backoffCeilingMs = Math.min(
         maxDelayMs,
         baseDelayMs * backoffFactor ** Math.min(attempt - 1, 32),
       );
+
       const waitMs = retryAfterMs ?? Math.floor(random() * backoffCeilingMs);
 
       // Declare the provider cooldown before this request sleeps so siblings
@@ -117,6 +125,7 @@ export function withRateLimitRetry(
 
 function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefined): boolean {
   if (init?.body !== undefined) return v.safeParse(v.string(), init.body).success;
+
   return !(input instanceof Request) || input.body === null;
 }
 
@@ -130,25 +139,31 @@ function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefin
  */
 async function isRateLimited(response: Response): Promise<boolean> {
   if (response.status === 429 || response.status === 529) return true;
+
   if (response.status !== 503) return false;
+
   const detail = [
     response.statusText,
     response.headers.get('x-error-code') ?? '',
     await response.clone().text(),
   ].join(' ');
+
   return /overload(?:ed|ing)?|\bcapacity\b|\btoo many requests\b|\brate[ _-]?limit/i.test(detail);
 }
 
 function parseRetryAfter(value: string | null, nowMs: number): number | null {
   if (value === null || !value.trim()) return null;
   const seconds = Number(value);
+
   if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1_000;
   const at = Date.parse(value);
+
   return Number.isNaN(at) ? null : Math.max(0, at - nowMs);
 }
 
 function providerHost(input: RequestInfo | URL): string {
   const url = URL.parse(input instanceof Request ? input.url : input.toString());
+
   return url?.host || 'provider';
 }
 

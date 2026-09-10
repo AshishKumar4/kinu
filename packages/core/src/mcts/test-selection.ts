@@ -42,21 +42,27 @@ export async function selectWinnerByTest(
 ): Promise<string> {
   // The near-tie set, winner included, ordered by value (winner first).
   const rivals = findNearTiedRivals(nodes, winner, epsilon);
+
   if (rivals.length === 0) return winner.id;
   const candidates = [winner, ...rivals];
 
   // One assertion harness can compare candidates written in one language.
   const language = candidates.find((node) => (node.code_used ?? '').trim().length > 0)?.code_language;
+
   if (!language) return winner.id;
+
   const runnable = candidates.filter((node) =>
     (node.code_used ?? '').trim().length > 0 && node.code_language === language);
+
   if (runnable.length < 2) return winner.id;
 
   // The suite measures runnable code. A winner with none in this language
   // cannot lose to it, so the tie stands and value order holds.
   const winnerRunnable = runnable.find((node) => node.id === winner.id);
+
   if (!winnerRunnable) return winner.id;
   const winnerCode = (winnerRunnable.code_used ?? '').trim();
+
   if (!winnerCode) return winner.id;
 
   // One check suite, written against the task using the value-argmax winner's
@@ -64,6 +70,7 @@ export async function selectWinnerByTest(
   // Suite generation is best-effort: a judge failure keeps the argmax winner
   // instead of failing the search it was meant to settle.
   let checks: readonly string[];
+
   try {
     checks = await generateAssertionSuite(
       deps.judge, winner.task, winnerCode, language);
@@ -73,14 +80,17 @@ export async function selectWinnerByTest(
       toKinuError({ doing: 'generate the discriminating test suite', cause, otherwise: 'unavailable' }),
       { winnerId: winner.id },
     );
+
     return winner.id;
   }
+
   if (checks.length === 0) return winner.id;
 
   const verdicts = await Promise.all(
     runnable.map(async (n) => {
       const code = (n.code_used ?? '').trim();
       const execution = await runForVerdict(deps.executor, code, checks, language);
+
       // The measured share, not the pass bit. The pass bit makes all-pass and
       // all-fail dead ends that fall back to value order; a suite of independent
       // checks separates "two of four" from "none of four", so a near-tie the
@@ -94,7 +104,9 @@ export async function selectWinnerByTest(
   // share keeps today's answer.
   const best = Math.max(...verdicts.map((v) => v.share));
   const winnerShare = verdicts.find((v) => v.node.id === winner.id)?.share;
+
   // No separation: nothing measured beats the argmax winner's own share.
   if (winnerShare === undefined || winnerShare >= best) return winner.id;
+
   return verdicts.find((v) => v.share === best)?.node.id ?? winner.id;
 }

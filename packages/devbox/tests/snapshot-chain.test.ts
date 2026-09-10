@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { mkdirSync, renameSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join } from 'node:path';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+
 // Minted and released HERE, not in a shared helper: `gate:scratch-ownership`
 // reads the file that mints, and a module-scope `afterAll` in an imported file
 // registers with no suite and never fires. Only the prefix is shared.
@@ -22,6 +23,7 @@ const mintedScratch = new Set<string>();
 function devboxScratchDir(label: string): string {
   const dir = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}${label}-`));
   mintedScratch.add(dir);
+
   return dir;
 }
 
@@ -35,10 +37,12 @@ afterAll(() => {
   for (const dir of mintedScratch) {
     rmSync(dir, { recursive: true, force: true });
     const stem = basename(dir);
+
     for (const entry of readdirSync(tmpdir())) {
       if (entry.startsWith(`${stem}.`)) rmSync(join(tmpdir(), entry), { recursive: true, force: true });
     }
   }
+
   mintedScratch.clear();
 });
 
@@ -102,9 +106,11 @@ function storeMountOf(calls: readonly string[]): string {
   const at = calls
     .filter((call) => call.startsWith('mountStore:'))
     .map((call) => call.split(':')[1])[0];
+
   if (at === undefined) {
     throw new Error(`the strategy mounted no store; calls: ${calls.join(', ')}`);
   }
+
   return at;
 }
 
@@ -121,14 +127,19 @@ interface LayerMount {
  *  archive path it read THROUGH the store mount, and the point it chose. */
 function layerMountOf(calls: readonly string[], objectKey: string): LayerMount {
   const archiveName = objectKey.split('/').at(-1)!;
+
   const index = calls.findIndex((call) => {
     const parts = call.split(':');
+
     return parts[0] === 'mountLayer' && parts[1]?.endsWith(`/${archiveName}`) === true;
   });
+
   if (index === -1) {
     throw new Error(`no layer was mounted for ${objectKey}; calls: ${calls.join(', ')}`);
   }
+
   const parts = calls[index]!.split(':');
+
   return { index, archive: parts[1]!, point: parts[2]! };
 }
 
@@ -144,17 +155,25 @@ import {
 import { sessionShellRefusal } from './support/session-shell';
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+
 const EXTRACT_ID = 'a1b2c3d4-0000-4000-8000-000000000002';
+
 /** The generation a record retains as its restore fallback. */
 const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
+
 const FALLBACK_BYTES = 2_048;
+
 const BASE_BYTES = 4_096;
+
 const DELTA_BYTES = 512;
+
 const INTERVAL_MS = 5 * 60_000;
+
 /** What the fake tree measures as its uncompressed size. */
 const STAGE_NEED_BYTES = 1_000;
 
 const UPPER = `${DEVBOX_RUNTIME_DIR}/upper`;
+
 /** The overlay's bottom lower: the base layer's mount point. */
 const LOWER_BASE = `${DEVBOX_RUNTIME_DIR}/lower-base`;
 
@@ -163,9 +182,11 @@ const MOUNTED = [
   'sysfs /sys sysfs rw,relatime 0 0',
   `fuse-overlayfs ${DEVBOX_WORKDIR} fuse.fuse-overlayfs rw,nosuid,nodev,relatime 0 0`,
 ].join('\n');
+
 /** The live failure's shape: the container is up, the disk is there, and the
  *  work directory is a plain directory on the container's own ext4. */
 const NOT_MOUNTED = 'proc /proc proc rw,relatime 0 0\n/dev/vdc / ext4 rw 0 0';
+
 /** The same mount, with the strategy's own upper directory missing from the
  *  container. Writes would have nowhere to land, so no checkpoint could capture
  *  them. Expressed as a missing PATH, not a missing mount option, because
@@ -174,6 +195,7 @@ const MOUNTED_NO_UPPER = MOUNTED;
 
 /** Every outcome kind either half of the suite produced. */
 const seenAttach = new Set<string>();
+
 const seenCheckpoint = new Set<string>();
 
 /** A stand-in for the SHA-256 an upload reports: deterministic per key and
@@ -248,6 +270,7 @@ interface ShellOutcome {
  */
 function excludePatternsOf(command: string): readonly string[] {
   const encoded = /printf %s '(?<data>[A-Za-z0-9+/=]*)'/.exec(command)?.groups?.data ?? '';
+
   return atob(encoded).split('\n')
     .filter(line => line !== '' && !line.startsWith('... '));
 }
@@ -276,18 +299,23 @@ function shellLabel(
   stagedSize: string,
 ): ShellOutcome {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
+
   if (command === 'cat /proc/mounts') return { call: 'readMounts', stdout: mounts };
+
   // The staging-space probe: one command reporting `<need> <free>`.
   if (command.includes('df -Pk')) {
     return { call: 'stagingShortfall', stdout: `${STAGE_NEED_BYTES} ${freeBytes}` };
   }
+
   const exists = /^test -e '(?<path>[^']+)'/.exec(command)?.groups?.path;
+
   if (exists !== undefined) {
     return {
       call: `pathExists:${exists}`,
       stdout: absent(exists) ? 'no' : 'yes',
     };
   }
+
   // The BOUNDED visibility probe: ONE command that asks the store mount for one
   // layer a bounded number of times and, when it never appears, reports what the
   // subtree does hold. The bound lives inside the command the strategy composed,
@@ -296,40 +324,50 @@ function shellLabel(
   // however many times it is asked.
   if (command.includes('printf ready')) {
     const awaited = /test -e '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
+
     return {
       call: `awaitLayer:${awaited}`,
       stdout: absent(awaited) ? 'missing data.sqsh delta.sqsh' : 'ready',
     };
   }
+
   // Releasing every delta layer this container serves, whichever generation
   // mounted it: one command over /proc/mounts rather than one path.
   if (command.includes('awk -v r=')) return { call: 'releaseDeltaLayers', stdout: '' };
   const unmounted = /fusermount3 -u(?:z)? '(?<path>[^']+)'/.exec(command)?.groups?.path;
+
   if (unmounted !== undefined) return { call: `unmountPath:${unmounted}`, stdout: '' };
   const reset = /^rm -rf (?<paths>.+?) && mkdir -p /.exec(command)?.groups?.paths;
+
   if (reset !== undefined) {
     return {
       call: `resetDirs:${reset.split(' ').map(unquote).join(',')}`,
       stdout: '',
     };
   }
+
   const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
+
   if (layer !== undefined) {
     return { call: `mountLayer:${layer.archive!}:${layer.point!}`, stdout: '' };
   }
+
   const overlay = /fuse-overlayfs -o lowerdir=(?<lowers>.+?),upperdir=.+ (?<dir>'[^']+')$/
     .exec(command)?.groups;
+
   if (overlay !== undefined) {
     return {
       call: `overlayAttach:${unquote(overlay.dir!)}:${overlay.lowers!.split(':').length}`,
       stdout: '',
     };
   }
+
   // NO ARM FOR A SEEDING COPY, deliberately. The strategy has none — the delta
   // is a layer — so a `cp -a` reaching this fake would fall through to
   // `exec:cp` and show up in the recorded calls, which is what the assertions
   // below check for by name.
   const squash = /mksquashfs '(?<source>[^']+)'/.exec(command)?.groups?.source;
+
   if (squash !== undefined) {
     // The build, its exclude list and its measurement are ONE command, so the
     // fake answers all three: it counts the policy the archiver will really
@@ -340,10 +378,13 @@ function shellLabel(
       stdout: stagedSize,
     };
   }
+
   if (command.includes('sort -z') && command.includes('sha256sum')) {
     return { call: 'upperFingerprint', stdout: upperMark };
   }
+
   if (command.startsWith('stat -c %s')) return { call: 'statBytes', stdout: String(DELTA_BYTES) };
+
   return { call: `exec:${command.split(' ')[0]!}`, stdout: '' };
 }
 
@@ -479,6 +520,7 @@ function harness(overrides: {
    * SDK — one per container, whichever isolate asks.
    */
   const sdk: SdkMountRegistry = overrides.registry ?? {};
+
   /**
    * The container's publication, as the container performs it.
    *
@@ -489,26 +531,32 @@ function harness(overrides: {
    */
   const publish = (mountedPath: string) => {
     const mount = table.mounted;
+
     if (mount === undefined || !mountedPath.startsWith(`${mount.at}/`)) {
       // What a real container answers when the path is not on a mount: the
       // directory is not there to be written into.
       calls.push(`publishArchive:unmounted:${mountedPath}`);
+
       return { stdout: '1 0', stderr: `dd: can't open '${mountedPath}': No such file`, exitCode: 0 };
     }
+
     const key = `${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`;
     calls.push(`publishArchive:${key}`);
     const landed = overrides.landedBytes ?? DELTA_BYTES;
     // The mount's own reading after the flush. Equal to what the store took
     // unless a test says otherwise, which is the lost-tail shape.
     const flushed = overrides.flushedBytes ?? landed;
+
     if (overrides.failPublish === true) {
       return { stdout: '1 0', stderr: 'dd: fsync failed: Input/output error', exitCode: 0 };
     }
+
     if (overrides.publishLandsNothing !== true) {
       objects.set(key, landed);
       digests.set(key, overrides.landedDigest ?? digestOf(key, landed));
       versions.set(key, overrides.landedVersion ?? versionOf(key, landed));
     }
+
     return { stdout: `0 ${flushed}`, stderr: '', exitCode: 0 };
   };
 
@@ -516,11 +564,13 @@ function harness(overrides: {
     containerRunning: () => overrides.running ?? true,
     readSeedStamp: () => {
       calls.push('readSeedStamp');
+
       return Promise.resolve(seedStamp);
     },
     writeSeedStamp: (stamp) => {
       calls.push(`writeSeedStamp:${stamp}`);
       seedStamp = stamp;
+
       return Promise.resolve();
     },
     allowExtraction: () => overrides.allowExtraction ?? true,
@@ -533,25 +583,31 @@ function harness(overrides: {
         `writeState:${next.rev}:${next.base.id}:${next.delta === undefined ? 'base' : 'delta'}`
         + `${next.lastFailure === undefined ? '' : ':failed'}${rejected ? ':rejected' : ''}`,
       );
+
       // A rejected put changes nothing durable, which is the whole point: the
       // record a reader would find next is still the one before this call.
       if (rejected) return Promise.reject(new Error('durable storage unreachable'));
       // The fence, as the Durable Object's transaction holds it.
       const stored = state?.rev ?? null;
+
       if (stored !== expectedRev) return Promise.reject(new ChainRecordAdvanced(expectedRev, stored));
       state = next;
+
       return Promise.resolve();
     },
     clearState: () => {
       calls.push('clearState');
       state = null;
+
       return Promise.resolve();
     },
     checkpointIntervalMs: () => INTERVAL_MS,
     checkChanges: () => {
       calls.push('checkChanges');
       const change = overrides.change ?? { status: 'changed' as const, version: 'v2' };
+
       if (change instanceof Error) return Promise.reject(change);
+
       return Promise.resolve(change);
     },
     // ONE PORT, so the fake is a container rather than a set of intentions. The
@@ -567,10 +623,13 @@ function harness(overrides: {
     // test that runs it. See `support/session-shell.ts`.
     exec: (command) => {
       const refused = sessionShellRefusal(command);
+
       if (refused !== undefined) {
         calls.push(`sessionKilled:${command.split(' ')[0]!}`);
+
         return Promise.reject(refused);
       }
+
       // THE PUBLICATION IS A COMMAND, which is the whole change: the archive
       // moves because the container was told to copy it onto a mount, not
       // because a port handed bytes to the isolate.
@@ -580,7 +639,9 @@ function harness(overrides: {
       // rather than the start of the line.
       const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
         .exec(command)?.groups;
+
       if (published !== undefined) return Promise.resolve(publish(published.mounted!));
+
       // THE CONTAINER'S OWN VIEW: the strategy's `mountStoreOnce` reads
       // `/proc/mounts`, so the store mount has to appear there exactly as a real
       // s3fs mount does — one line at the path, for exactly as long as the fake
@@ -589,52 +650,63 @@ function harness(overrides: {
       const procMounts = () => table.mounted === undefined
         ? mounts()
         : `${mounts()}\ns3fs ${table.mounted.at} fuse.s3fs rw,nosuid,nodev,relatime 0 0\n`;
+
       const label = shellLabel(
         command, procMounts(), overrides.absent ?? (() => false),
         overrides.freeBytes ?? Number.MAX_SAFE_INTEGER,
         liveMark,
         overrides.stagedReport ?? `0 ${DELTA_BYTES}`,
       );
+
       calls.push(label.call);
+
       if (label.call.startsWith('mountLayer:') && label.call.includes('/lower-delta/')
         && overrides.failDeltaLayer === true && !deltaLayerDied) {
         // ONE-SHOT: the first mount dies, a retry on the same container
         // succeeds. That is the sequence a transient layer failure lives in, so
         // the fake has to be able to express it rather than failing forever.
         deltaLayerDied = true;
+
         return Promise.resolve({
           stdout: '', stderr: 'squashfuse: unable to read squashfs_super_block', exitCode: 1,
         });
       }
+
       if (label.call.startsWith('overlayAttach') && overrides.refuseOverlay === true) {
         return Promise.resolve({
           stdout: '', stderr: 'fuse: device not found', exitCode: 1,
         });
       }
+
       if (label.call.startsWith('makeSquashfs') && overrides.refuseStoreMount === true) {
         // The real local failure: the container has no FUSE device. Deliberately
         // NOT the interception wording, so the degrade cannot be passing because
         // it recognised one particular sentence.
         return Promise.reject(new Error('S3FS mount failed: fuse: device not found'));
       }
+
       return Promise.resolve({ stdout: label.stdout, stderr: '', exitCode: 0 });
     },
     containerGeneration: async () => {
       const next = generations.length > 1 ? generations.shift() : generations[0];
+
       // A replacement is a new container, whose mount table is blank.
       if (next !== table.generation && table.generation !== undefined) table.mounted = undefined;
       table.generation = next;
+
       return next;
     },
     storeRoot: () => STORE_ROOT,
     mountStore: (at) => {
       calls.push(`mountStore:${at}`);
+
       if (overrides.refuseStoreMount === true) {
         // The real local failure: the container has no FUSE device. Deliberately
         // NOT the interception wording, so the degrade cannot be passing because
         // it recognised one particular sentence.
         return Promise.reject(new Error('S3FS mount failed: fuse: device not found'));
       }
+
       // THE SDK'S OWN REFUSAL, not a test's opinion: a second mount of this
       // binding is admitted only at the same prefix with the same setting, which
       // under the one-mount design is the SAME mount asked for again. Anything
@@ -648,6 +720,7 @@ function harness(overrides: {
       // run e2e20260902060426). Together they say: one mount call, at one path,
       // with one setting — asking again is not idempotent.
       const held = sdk.held;
+
       if (held !== undefined && (held.prefix !== prefix || held.readOnly !== false)) {
         return Promise.reject(new Error(
           `R2 binding "BACKUP_BUCKET" is already mounted at ${at} with a different `
@@ -655,18 +728,22 @@ function harness(overrides: {
           + 'value for additional mounts.',
         ));
       }
+
       if (held !== undefined || table.mounted?.at === at) {
         return Promise.reject(new Error(
           `Mount path "${at}" is already in use by bucket "BACKUP_BUCKET". Unmount the `
           + 'existing bucket first or use a different mount path.',
         ));
       }
+
       sdk.held = { prefix, readOnly: false };
       table.mounted = { at, prefix };
+
       return Promise.resolve();
     },
     unmountStore: (at) => {
       calls.push(`unmountStore:${at}`);
+
       // THE PRODUCT PORT, not the SDK's raw call: the strategy's ports go
       // through `#chainPorts.unmountStore`, which catches the SDK's
       // "nothing is mounted here" refusal and survives it, so this fake answers
@@ -674,12 +751,15 @@ function harness(overrides: {
       // when the path was the one being held.
       if (table.mounted?.at === at) table.mounted = undefined;
       sdk.held = undefined;
+
       return Promise.resolve();
     },
     objectFacts: (key) => {
       calls.push(`objectFacts:${key}`);
       const bytes = objects.get(key);
+
       if (bytes === undefined) return Promise.resolve(undefined);
+
       // The STORE's own answers. An absent digest is what R2 gives for an
       // object it was never handed a checksum for, which is every multipart
       // upload; an absent version is only how this fake expresses a store that
@@ -692,16 +772,21 @@ function harness(overrides: {
     },
     deleteObjects: (keys) => {
       calls.push(`deleteObjects:${keys.length}`);
+
       if (overrides.failDelete === true) return Promise.reject(new Error('store unreachable'));
+
       for (const key of keys) objects.delete(key);
+
       return Promise.resolve();
     },
     countEntries: () => {
       calls.push('countEntries');
+
       return Promise.resolve(overrides.entriesAfterExtract ?? 3);
     },
     restoreExtract: (backup) => {
       calls.push(`restoreExtract:${backup.id}`);
+
       return Promise.resolve({ success: overrides.extractLands ?? true });
     },
     createExtractSnapshot: (options) => {
@@ -709,6 +794,7 @@ function harness(overrides: {
       const id = `a1b2c3d4-0000-4000-8000-${String(extractSeq).padStart(12, '0')}`;
       extractSeq += 1;
       objects.set(baseObjectKey(STORE_ROOT, id), DELTA_BYTES);
+
       return Promise.resolve({ id, dir: options.dir, localBucket: true });
     },
     now: () => overrides.now ?? 10 * INTERVAL_MS,
@@ -723,17 +809,22 @@ function harness(overrides: {
   // else.
   const seed = (key: string, layer: ChainLayer): void => {
     objects.set(key, layer.bytes);
+
     if (layer.digest !== undefined) digests.set(key, layer.digest);
+
     if (layer.objectVersion !== undefined) versions.set(key, layer.objectVersion);
   };
+
   for (const generation of state === null
     ? []
     : [state, ...(state.fallback === undefined ? [] : [state.fallback])]) {
     seed(baseObjectKey(STORE_ROOT, generation.base.id), generation.base);
+
     if (generation.delta !== undefined) {
       seed(deltaObjectKey(STORE_ROOT, generation.base.id), generation.delta);
     }
   }
+
   return {
     ports,
     calls,
@@ -782,6 +873,7 @@ function generationLiteral(literal: GenerationLiteral): ChainGeneration {
       ? spelled.objectVersion
       : versionOf(key, spelled.bytes),
   });
+
   return {
     base: {
       id: literal.base.id,
@@ -795,6 +887,7 @@ function generationLiteral(literal: GenerationLiteral): ChainGeneration {
 
 function chainState(over: StateLiteral = {}): ChainState {
   const { base, delta, fallback, ...rest } = over;
+
   return {
     mode: 'chain',
     rev: 1,
@@ -822,12 +915,14 @@ function mountsAfterAttach(calls: readonly string[], mounted = MOUNTED): () => s
 async function attachOf(record: Harness): Promise<AttachOutcome> {
   const outcome = await snapshotChainStorage(record.ports).attach();
   seenAttach.add(outcome.kind);
+
   return outcome;
 }
 
 async function checkpointOf(record: Harness, kind: CheckpointKind): Promise<CheckpointOutcome> {
   const outcome = await snapshotChainStorage(record.ports).checkpoint(kind);
   seenCheckpoint.add(outcome.kind);
+
   return outcome;
 }
 
@@ -856,15 +951,19 @@ interface Chosen {
  */
 async function observeAttach(chainId: string): Promise<Chosen> {
   const calls: string[] = [];
+
   const record = harness({
     state: chainState({ base: { id: chainId, bytes: BASE_BYTES }, delta: { bytes: DELTA_BYTES } }),
     mounts: mountsAfterAttach(calls),
     calls,
   });
+
   const outcome = await snapshotChainStorage(record.ports).attach();
+
   if (outcome.kind !== 'attached') {
     throw new Error(`observing ${chainId}: the attach answered ${outcome.kind}`);
   }
+
   return {
     chainId,
     store: storeMountOf(calls),
@@ -880,6 +979,7 @@ async function observeAttach(chainId: string): Promise<Chosen> {
  * a mirror on both sides never could.
  */
 const CHOSEN = await observeAttach(CHAIN_ID);
+
 const CHOSEN_FALLBACK = await observeAttach(FALLBACK_ID);
 
 /** Mounts that hold the composed shape a wake leaves: an overlay over the base
@@ -977,6 +1077,7 @@ describe('attach — the mount must be observed to have landed', () => {
       const inner = record.ports.exec;
       record.ports.exec = async (command) => {
         raw.push(command);
+
         return await inner(command);
       };
 
@@ -992,6 +1093,7 @@ describe('attach — the mount must be observed to have landed', () => {
 
   test('attach cost is independent of the bytes stored: fixed mounts, zero streams', async () => {
     const calls: string[] = [];
+
     const record = harness({
       state: chainState({
         base: { id: CHAIN_ID, bytes: 8 * 1024 ** 3 },
@@ -1000,6 +1102,7 @@ describe('attach — the mount must be observed to have landed', () => {
       mounts: mountsAfterAttach(calls),
       calls,
     });
+
     expect((await attachOf(record)).kind).toBe('attached');
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
     expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
@@ -1011,11 +1114,13 @@ describe('attach — the mount must be observed to have landed', () => {
       // PUT was all-or-nothing and squashfs verifies its own superblock, so the
       // bytes are sound and dropping them would lose real work.
       const calls: string[] = [];
+
       const record = harness({
         state: chainState({ delta: undefined }),
         mounts: mountsAfterAttach(calls),
         calls,
       });
+
       record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
       expect((await attachOf(record)).kind).toBe('attached');
       // Adopted means COMPOSED: the orphan delta becomes a layer under the fresh
@@ -1037,12 +1142,14 @@ describe('attach — the mount must be observed to have landed', () => {
       // existed. Killed AT the delta mount, the container is still plain and the
       // attach refuses in the container's own words.
       const calls: string[] = [];
+
       const record = harness({
         state: chainState(),
         mounts: mountsAfterAttach(calls),
         calls,
         failDeltaLayer: true,
       });
+
       await expect(attachOf(record)).rejects.toThrow(/squashfs_super_block/);
       // Nothing was mounted over the work directory, so the next attach starts
       // from scratch rather than early-returning over half a composition.
@@ -1065,12 +1172,14 @@ describe('attach — the mount must be observed to have landed', () => {
       // is not an overlay has no changed set to archive, so a checkpoint on a
       // box whose attach did not finish reports FAILED and writes nothing.
       const calls: string[] = [];
+
       const record = harness({
         state: chainState(),
         mounts: mountsAfterAttach(calls),
         calls,
         failDeltaLayer: true,
       });
+
       await expect(attachOf(record)).rejects.toThrow(/squashfs_super_block/);
 
       const outcome = await checkpointOf(record, 'quiesce');
@@ -1106,14 +1215,17 @@ describe('attach — the mount must be observed to have landed', () => {
       'sysfs /sys sysfs rw,relatime 0 0',
       `overlay ${DEVBOX_WORKDIR.replace(/ /g, '\\040')} overlay rw,lowerdir=/a:/b,upperdir=/c,workdir=/d 0 0`,
     ].join('\n');
+
     const record = harness({ state: chainState(), mounts: kernelOverlay });
     expect((await attachOf(record)).kind).toBe('already-attached');
+
     // A plain FUSE mount at the same path is a real filesystem and NOT an
     // overlay: reading it as one would archive a directory that has no upper.
     const fuseOnly = harness({
       state: chainState(),
       mounts: `sysfs /sys sysfs rw,relatime 0 0\ns3fs ${DEVBOX_WORKDIR} fuse.s3fs rw 0 0`,
     });
+
     await expect(attachOf(fuseOnly)).rejects.toThrow(/is not an overlay mount/);
   });
 
@@ -1125,6 +1237,7 @@ describe('attach — the mount must be observed to have landed', () => {
       state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
       now: 1_000 + INTERVAL_MS - 1,
     });
+
     const waited = await checkpointOf(early, 'tick');
     expect(waited.kind).toBe('skipped');
     expect(waited.reason).toContain('within the minimum checkpoint interval');
@@ -1133,12 +1246,14 @@ describe('attach — the mount must be observed to have landed', () => {
       state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
       now: 1_000 + INTERVAL_MS,
     });
+
     expect((await checkpointOf(due, 'tick')).kind).toBe('committed');
 
     const quiesced = harness({
       state: chainState({ at: 1_000 }), mounts: MOUNTED, upperMark: 'written',
       now: 1_000 + 1,
     });
+
     expect((await checkpointOf(quiesced, 'quiesce')).kind).toBe('committed');
   });
 
@@ -1164,6 +1279,7 @@ describe('attach — the mount must be observed to have landed', () => {
         upperMark: 'm1',
         now: 10 * INTERVAL_MS,
       });
+
       const quiet = await checkpointOf(unchanged, 'tick');
       expect(quiet.kind).toBe('skipped');
       expect(quiet.reason).toContain('unchanged');
@@ -1187,6 +1303,7 @@ describe('attach — the mount must be observed to have landed', () => {
         state: chainState({ base: { id: CHAIN_ID, bytes: 20_000 }, delta: undefined, at: 1 }),
         mounts: MOUNTED, now: 10 * INTERVAL_MS,
       });
+
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('committed');
       expect(outcome.movedBytes).toBeGreaterThan(0);
@@ -1214,9 +1331,11 @@ describe('attach — the mount must be observed to have landed', () => {
       // fourteen of its twenty segments.
       const calls: string[] = [];
       const drifted = DELTA_BYTES + 4096;
+
       const record = harness({
         state: chainState(), mounts: mountsAfterAttach(calls), calls,
       });
+
       record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), drifted);
       // A DIFFERENT archive, which is what a crash between the PUT and the state
       // write leaves: another size and another identity under the same key.
@@ -1257,12 +1376,14 @@ describe('attach — the mount must be observed to have landed', () => {
     // A mount line is not enough. With no upper directory nothing the caller
     // writes can be captured, so the box would lose every write silently.
     const calls: string[] = [];
+
     const record = harness({
       state: chainState(),
       mounts: mountsAfterAttach(calls, MOUNTED_NO_UPPER),
       absent: (path) => path === UPPER,
       calls,
     });
+
     await expect(attachOf(record)).rejects.toThrow(/upper directory .* does not exist/);
   });
 
@@ -1303,6 +1424,7 @@ describe('attach — the mount must be observed to have landed', () => {
         mode: 'extract', base: { id: EXTRACT_ID, bytes: DELTA_BYTES }, delta: undefined,
       }),
     });
+
     const outcome = await attachOf(record);
     expect(outcome.kind).toBe('attached');
     expect(outcome.detail).toStartWith('extract ');
@@ -1316,6 +1438,7 @@ describe('attach — the mount must be observed to have landed', () => {
       }),
       entriesAfterExtract: 0,
     });
+
     await expect(attachOf(record)).rejects.toThrow(/reported success, but the directory is empty/);
   });
 
@@ -1326,6 +1449,7 @@ describe('attach — the mount must be observed to have landed', () => {
       }),
       extractLands: false,
     });
+
     await expect(attachOf(record)).rejects.toThrow(/reported failure/);
   });
 });
@@ -1359,6 +1483,7 @@ describe('a wake whose upper already holds this delta', () => {
 
   test('mounts the base alone over the upper it kept', async () => {
     const calls: string[] = [];
+
     const record = harness({
       state: chainState(),
       mounts: mountsAfterAttach(calls),
@@ -1379,6 +1504,7 @@ describe('a wake whose upper already holds this delta', () => {
   test('keeps the upper, because emptying it would throw away the delta AND the pending change',
     async () => {
       const calls: string[] = [];
+
       const record = harness({
         state: chainState(), mounts: mountsAfterAttach(calls), calls, seedStamp: stampFor(),
       });
@@ -1391,6 +1517,7 @@ describe('a wake whose upper already holds this delta', () => {
 
   test('a stamp naming another delta is not this delta: the layer is composed', async () => {
     const calls: string[] = [];
+
     const record = harness({
       state: chainState(),
       mounts: mountsAfterAttach(calls),
@@ -1422,6 +1549,7 @@ describe('a wake whose upper already holds this delta', () => {
 describe('a wake whose container instance changed', () => {
   test('composes the delta as a layer and copies NOTHING', async () => {
     const calls: string[] = [];
+
     // A blank disk: no seed stamp, and a delta far too large to copy inside any
     // start budget.
     const record = harness({
@@ -1491,6 +1619,7 @@ describe('a wake whose container instance changed', () => {
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-wake',
     });
+
     expect((await checkpointOf(own, 'tick')).kind).toBe('committed');
     expect(own.state?.base.id).not.toBe(CHAIN_ID);
 
@@ -1500,6 +1629,7 @@ describe('a wake whose container instance changed', () => {
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-wake',
     });
+
     expect((await checkpointOf(foreign, 'tick')).kind).toBe('committed');
     expect(foreign.state?.base.id).toBe(CHAIN_ID);
     expect(foreign.state?.delta).toBeDefined();
@@ -1555,6 +1685,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-wake',
     });
+
     const storage = snapshotChainStorage(record.ports);
 
     expect((await storage.checkpoint('tick')).kind).toBe('committed');
@@ -1585,6 +1716,7 @@ describe('a commit whose upper is not the whole changed set collapses the chain'
       now: 10 * INTERVAL_MS,
       upperMark: 'written-since-the-wake',
     });
+
     record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
 
     const outcome = await checkpointOf(record, 'tick');
@@ -1650,10 +1782,12 @@ describe('an attach that cannot see or cannot release says so', () => {
         mounts: NOT_MOUNTED,
         absent: () => true,
       });
+
       const raw: string[] = [];
       const inner = record.ports.exec;
       record.ports.exec = async (command) => {
         raw.push(command);
+
         return await inner(command);
       };
 
@@ -1698,6 +1832,7 @@ describe('an attach that cannot see or cannot release says so', () => {
           exitCode: 1,
         };
       }
+
       return await inner(command);
     };
 
@@ -1718,6 +1853,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         mounts: NOT_MOUNTED,
         change: { status: 'unchanged', version: 'v9' },
       });
+
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('failed');
       expect(outcome.reason).toContain('is not an overlay mount');
@@ -1761,6 +1897,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     const record = harness({
       state: null, change: { status: 'unchanged', version: 'v1' }, entriesAfterExtract: 0,
     });
+
     const outcome = await checkpointOf(record, 'quiesce');
     expect(outcome.kind).toBe('skipped');
     expect(outcome.reason).toContain('empty');
@@ -1772,6 +1909,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       mounts: MOUNTED,
       change: { status: 'unchanged', version: 'v7' },
     });
+
     expect((await checkpointOf(record, 'quiesce')).kind).toBe('committed');
   });
 
@@ -1802,12 +1940,14 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       //
       // Being born with an overlay is what makes that state unrepresentable.
       const calls: string[] = [];
+
       const record = harness({
         state: null,
         mounts: mountsAfterAttach(calls),
         calls,
         now: 10 * INTERVAL_MS,
       });
+
       const storage = snapshotChainStorage(record.ports);
 
       expect((await storage.attach()).kind).toBe('empty');
@@ -1854,6 +1994,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         mounts: MOUNTED,
         now: 10 * INTERVAL_MS,
       });
+
       const outcome = await checkpointOf(record, 'quiesce');
 
       expect(outcome.kind).toBe('committed');
@@ -1884,6 +2025,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         mounts: MOUNTED,
         now: 10 * INTERVAL_MS,
       });
+
       await checkpointOf(record, 'quiesce');
 
       expect(record.state?.fallback)
@@ -1913,6 +2055,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         mounts: MOUNTED,
         now: 10 * INTERVAL_MS,
       });
+
       await checkpointOf(record, 'quiesce');
 
       expect(record.state?.fallback?.base.id).toBe(FALLBACK_ID);
@@ -1934,10 +2077,12 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     // Re-runnable is the property: the ids sit in the record until a run
     // finishes deleting them, and the referenced generation is never among them.
     const stranded = 'a1b2c3d4-0000-4000-8000-0000000000ff';
+
     const record = harness({
       state: chainState({ orphans: [stranded] }),
       mounts: MOUNTED,
     });
+
     record.objects.set(baseObjectKey(STORE_ROOT, stranded), 4_096);
     await checkpointOf(record, 'quiesce');
 
@@ -1971,6 +2116,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         now: 10 * INTERVAL_MS,
         failDelete: true,
       });
+
       const outcome = await checkpointOf(record, 'quiesce');
 
       // The archive landed and the pointer is published, so that is what it
@@ -2022,6 +2168,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         failDelete: true,
         rejectWrites: [2],
       });
+
       const outcome = await checkpointOf(record, 'quiesce');
 
       expect(outcome.kind).toBe('committed');
@@ -2063,14 +2210,18 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         mounts: MOUNTED,
         now: 10 * INTERVAL_MS,
       });
+
       const rival = chainState({ base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 7_000 }, rev: 2, at: 5 });
+
       const ports: SnapshotChainPorts = {
         ...record.ports,
         checkChanges: async (dir, since) => {
           record.state = rival;
+
           return await record.ports.checkChanges(dir, since);
         },
       };
+
       const outcome = await snapshotChainStorage(ports).checkpoint('quiesce');
 
       expect(outcome.kind).toBe('failed');
@@ -2099,6 +2250,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         mounts: MOUNTED,
         now: 10 * INTERVAL_MS,
       });
+
       await checkpointOf(record, 'quiesce');
 
       const staged = record.calls.filter(call => call.startsWith('makeSquashfs:'));
@@ -2137,6 +2289,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       mounts: MOUNTED,
       now: 10 * INTERVAL_MS,
     });
+
     expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
     expect(record.state?.base.id).toBe(CHAIN_ID);
     expect(record.calls).toContain(`makeSquashfs:${UPPER}:${CHAIN_EXCLUDES.length}`);
@@ -2197,6 +2350,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     // store from this side — fails here with the sentence it was refused with.
     // This commits because nothing on this side is on the byte path.
     const record = harness({ state: chainState(), mounts: MOUNTED });
+
     const refusing = Object.assign(record.ports, {
       readFileStream: (): never => {
         throw new Error('payload must not be streamed out of the container');
@@ -2205,6 +2359,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         throw new Error('payload must not be put into the store from the isolate');
       },
     });
+
     const outcome = await snapshotChainStorage(refusing).checkpoint('tick');
 
     expect(outcome.kind).toBe('committed');
@@ -2265,10 +2420,12 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // `No such file or directory` — measured live on the first checkpoint of a
       // fresh box, run e2e20260902083130.
       const store = storeMountOf(record.calls);
+
       const command = publishCommand({
         archivePath: '/stage/layer.sqsh',
         mountedPath: `${store}/${CHAIN_ID}/data.sqsh`,
       });
+
       expect(command).toStartWith(`mkdir -p '${store}/${CHAIN_ID}';`);
       expect(command.indexOf('mkdir -p')).toBeLessThan(command.indexOf('dd if='));
       // AND THE MOUNT IS STILL HELD: nothing releases the store path once it
@@ -2300,6 +2457,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       flushedBytes: 700_000,
       landedBytes: 512,
     });
+
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('failed');
     expect(outcome.reason).toContain('did not carry every byte');
@@ -2333,11 +2491,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     // when something touches them — and this is what keeps it that way. An
     // attach that published, copied or streamed anything would show up here.
     const calls: string[] = [];
+
     const record = harness({
       state: chainState({ delta: deltaLayer(CHAIN_ID, DELTA_BYTES) }),
       mounts: mountsAfterAttach(calls),
       calls,
     });
+
     expect((await attachOf(record)).kind).toBe('attached');
     expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
     expect(record.calls.filter(call => call.startsWith('exec:cp'))).toEqual([]);
@@ -2359,20 +2519,25 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // the same mount, and what keeps the archives out of the attach's `rm -rf`
       // is that the reset lists its own layout paths and excludes this one.
       const checkpointCalls: string[] = [];
+
       const committed = harness({
         state: chainState(), mounts: MOUNTED, calls: checkpointCalls,
       });
+
       expect((await checkpointOf(committed, 'tick')).kind).toBe('committed');
       const attachCalls: string[] = [];
+
       const attached = harness({
         state: chainState({ delta: deltaLayer(CHAIN_ID, DELTA_BYTES) }),
         mounts: mountsAfterAttach(attachCalls),
         calls: attachCalls,
       });
+
       expect((await attachOf(attached)).kind).toBe('attached');
 
       const mounts = [...checkpointCalls, ...attachCalls]
         .filter(call => call.startsWith('mountStore:'));
+
       expect(mounts.length).toBeGreaterThan(0);
       // THE ONE MOUNT POINT, in both roles. The fake's own registry holds the
       // rule — a second mount with a different setting or prefix is refused
@@ -2385,11 +2550,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // And a wake that re-attaches releases the store mount first, so a new
       // generation's subtree can take its place at the one mount point.
       const againCalls: string[] = [];
+
       const attachedAgain = harness({
         state: chainState({ delta: deltaLayer(CHAIN_ID, DELTA_BYTES) }),
         mounts: mountsAfterAttach(againCalls),
         calls: againCalls,
       });
+
       expect((await attachOf(attachedAgain)).kind).toBe('attached');
       expect(attachedAgain.calls.indexOf(`unmountStore:${storeMountOf(attachedAgain.calls)}`))
         .toBeLessThan(attachedAgain.calls.findIndex(call => call.startsWith('mountStore:')));
@@ -2413,11 +2580,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     // the last commit, because the upper IS what a delta archives. Asking the
     // merged mount instead is what let five ticks skip over 400 MiB of npm.
     const settled = '7:4096:1700000000';
+
     const record = harness({
       state: chainState({ upperMark: settled }),
       mounts: MOUNTED,
       upperMark: settled,
     });
+
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('skipped');
     expect(outcome.reason).toContain('unchanged');
@@ -2433,11 +2602,13 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       // catch it. The gate had been asking the SDK about the merged
       // `/workspace` while a delta archives `upperDir`.
       const settled = '120:4096:1700000000';
+
       const record = harness({
         state: chainState({ upperMark: settled, at: 1 }),
         mounts: MOUNTED,
         now: 10 * INTERVAL_MS,
       });
+
       // npm lands in the upper. Nothing else about the box changes.
       record.upperMark = '48000:419430400:1700000900';
 
@@ -2463,6 +2634,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       now: 10 * INTERVAL_MS,
       upperMark: '',
     });
+
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('committed');
   });
@@ -2476,6 +2648,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       now: 10 * INTERVAL_MS,
       upperMark: '',
     });
+
     expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
   });
 
@@ -2493,6 +2666,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         stagedReport: '0 700387328',
         landedBytes: 702791680,
       });
+
       const outcome = await checkpointOf(record, 'tick');
       expect(outcome.kind).toBe('committed');
 
@@ -2509,9 +2683,11 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       expect(record.state?.delta?.bytes).not.toBe(700387328);
       // And the consequence that was actually measured: the wake attaches.
       const wokenCalls: string[] = [];
+
       const woken = harness({
         state: record.state, mounts: mountsAfterAttach(wokenCalls), calls: wokenCalls,
       });
+
       woken.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES);
       woken.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), 702791680);
       const attached = await snapshotChainStorage(woken.ports).attach();
@@ -2537,13 +2713,16 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         stagedReport: `0 ${staged}`,
         landedBytes: landed,
       });
+
       expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
       expect(record.state?.delta).toEqual(deltaLayer(CHAIN_ID, landed));
 
       const wokenCalls: string[] = [];
+
       const woken = harness({
         state: record.state, mounts: mountsAfterAttach(wokenCalls), calls: wokenCalls,
       });
+
       woken.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES);
       woken.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), landed);
       expect((await snapshotChainStorage(woken.ports).attach()).kind).toBe('attached');
@@ -2562,6 +2741,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         now: 10 * INTERVAL_MS,
         stagedReport: '0 0',
       });
+
       const outcome = await checkpointOf(record, 'tick');
       expect(outcome.kind).toBe('failed');
       expect(outcome.reason).toContain('mksquashfs reported success');
@@ -2585,6 +2765,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         failPublish: true,
         rejectWrites: [1],
       });
+
       const outcome = await checkpointOf(record, 'tick');
 
       expect(outcome.kind).toBe('failed');
@@ -2616,14 +2797,17 @@ describe('checkpoint — gated on real change, proportional to it', () => {
 
   test('a quiesce skips the interval gate but NEVER the change gate', async () => {
     const settled = '7:4096:1700000000';
+
     const idle = harness({
       state: chainState({ upperMark: settled }), mounts: MOUNTED, upperMark: settled,
     });
+
     expect((await checkpointOf(idle, 'quiesce')).kind).toBe('skipped');
 
     const due = harness({
       state: chainState({ at: 1, upperMark: 'stale' }), mounts: MOUNTED, now: 2,
     });
+
     const outcome = await checkpointOf(due, 'quiesce');
     expect(outcome.kind).toBe('committed');
     expect(outcome.bytes).toBe(BASE_BYTES + DELTA_BYTES);
@@ -2633,6 +2817,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     const record = harness({
       state: chainState(), mounts: MOUNTED, change: { status: 'resync', version: 'v3' },
     });
+
     expect((await checkpointOf(record, 'quiesce')).kind).toBe('committed');
   });
 
@@ -2648,6 +2833,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       change: { status: 'unchanged', version: 'v2' },
       rejectWrites: [1],
     });
+
     const outcome = await checkpointOf(record, 'quiesce');
 
     expect(outcome.kind).toBe('skipped');
@@ -2674,6 +2860,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
     const record = harness({
       state: chainState(), mounts: MOUNTED, change: new Error('change state gone'),
     });
+
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('failed');
     expect(outcome.reason).toContain('change state gone');
@@ -2694,6 +2881,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
       const record = harness({
         state: null, refuseStoreMount: true, allowExtraction: false,
       });
+
       const outcome = await checkpointOf(record, 'quiesce');
       expect(outcome.kind).toBe('failed');
       expect(outcome.reason).toContain('extraction is not permitted');
@@ -2712,6 +2900,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         }),
         allowExtraction: false,
       });
+
       await expect(attachOf(record)).rejects.toThrow(/archived by extraction, which is not permitted/);
     });
 
@@ -2738,6 +2927,7 @@ describe('checkpoint — gated on real change, proportional to it', () => {
         mode: 'extract', base: { id: EXTRACT_ID, bytes: 1 }, delta: undefined,
       }),
     });
+
     record.objects.set(baseObjectKey(STORE_ROOT, EXTRACT_ID), 1);
     const outcome = await checkpointOf(record, 'tick');
     expect(outcome.kind).toBe('committed');
@@ -2762,10 +2952,12 @@ describe('discard — objects before the pointer', () => {
     // nothing would delete them.
     expect(deleted).toBeLessThan(cleared);
     expect(record.calls).toContain('deleteObjects:3');
+
     for (const key of [baseObjectKey(STORE_ROOT, CHAIN_ID), deltaObjectKey(STORE_ROOT, CHAIN_ID),
       metadataObjectKey(STORE_ROOT, CHAIN_ID)]) {
       expect(record.objects.has(key)).toBe(false);
     }
+
     expect(record.state).toBeNull();
   });
 
@@ -2803,6 +2995,7 @@ describe('discard sweeps every generation the record still names', () => {
     // list leaked those objects permanently.
     const stranded = 'a1b2c3d4-0000-4000-8000-0000000000ff';
     const record = harness({ state: chainState({ orphans: [stranded] }) });
+
     for (const id of [CHAIN_ID, stranded]) {
       record.objects.set(baseObjectKey(STORE_ROOT, id), BASE_BYTES);
       record.objects.set(deltaObjectKey(STORE_ROOT, id), DELTA_BYTES);
@@ -2815,11 +3008,13 @@ describe('discard sweeps every generation the record still names', () => {
     const cleared = record.calls.indexOf('clearState');
     expect(deleted).toBeLessThan(cleared);
     expect(record.calls).toContain('deleteObjects:6');
+
     for (const id of [CHAIN_ID, stranded]) {
       for (const key of [baseObjectKey(STORE_ROOT, id), deltaObjectKey(STORE_ROOT, id), metadataObjectKey(STORE_ROOT, id)]) {
         expect(record.objects.has(key)).toBe(false);
       }
     }
+
     expect(record.state).toBeNull();
   });
 });
@@ -2832,6 +3027,7 @@ describe('attachChain resets only its OWN directories', () => {
     const inner = record.ports.exec;
     record.ports.exec = async (command) => {
       raw.push(command);
+
       return await inner(command);
     };
 
@@ -2842,6 +3038,7 @@ describe('attachChain resets only its OWN directories', () => {
     // Against the path this attach really mounted — read back from its own
     // call — rather than a path restated beside the strategy.
     const store = storeMountOf(record.calls);
+
     for (const command of resets) {
       expect(command).not.toContain(store);
     }
@@ -2855,6 +3052,7 @@ describe('attachChain resets only its OWN directories', () => {
       if (command.startsWith('rm -rf')) {
         return { stdout: '', stderr: 'rm: cannot remove: Read-only file system', exitCode: 1 };
       }
+
       return await inner(command);
     };
 
@@ -2871,16 +3069,21 @@ const T_SAME = 1_700_000_000;
 describe('the skip-gate fingerprint keeps sub-second mtime', () => {
   test('a same-size rename changes the per-path mark', () => {
     const dir = devboxScratchDir('devbox-fingerprint-rename');
+
     try {
       const firstPath = join(dir, 'before.txt');
       const secondPath = join(dir, 'after.txt');
       writeFileSync(firstPath, 'same-size');
       utimesSync(firstPath, T_SAME + 0.5, T_SAME + 0.5);
+
       const run = (): string => {
         const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+
         if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+
         return proc.stdout.toString().trim();
       };
+
       const first = run();
       renameSync(firstPath, secondPath);
       utimesSync(secondPath, T_SAME + 0.5, T_SAME + 0.5);
@@ -2895,15 +3098,20 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     // to the same whole second and matched — the narrow unchanged-lie window
     // this gate exists to keep shut.
     const dir = devboxScratchDir('devbox-fingerprint');
+
     try {
       const file = join(dir, 'w.txt');
       writeFileSync(file, 'aaaaaaaaaa');
       utimesSync(file, T_SAME + 0.25, T_SAME + 0.25);
+
       const run = (): string => {
         const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+
         if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+
         return proc.stdout.toString().trim();
       };
+
       const first = run();
 
       writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE
@@ -2922,16 +3130,21 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
     // drifted. The write itself moved ctime, which the per-path record hashes;
     // only an mtime restoration cannot undo that.
     const dir = devboxScratchDir('devbox-fingerprint-restored-mtime');
+
     try {
       const file = join(dir, 'w.txt');
       const at = T_SAME + 0.5;
       writeFileSync(file, 'aaaaaaaaaa');
       utimesSync(file, at, at);
+
       const run = (): string => {
         const proc = Bun.spawnSync(['sh', '-c', upperFingerprintCommand(dir)]);
+
         if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
+
         return proc.stdout.toString().trim();
       };
+
       const first = run();
 
       writeFileSync(file, 'bbbbbbbbbb'); // SAME SIZE, SAME INODE
@@ -2947,6 +3160,7 @@ describe('the skip-gate fingerprint keeps sub-second mtime', () => {
 describe('container replacement during chain attach', () => {
   test('restarts the whole mount sequence on the replacement generation', async () => {
     const calls: string[] = [];
+
     const record = harness({
       state: chainState(),
       mounts: mountsAfterAttach(calls),
@@ -2967,7 +3181,9 @@ describe('archive scope keeps what no build can rebuild', () => {
   /** The whole archiver command one commit really ran for `source`. */
   function archiverCommand(commands: readonly string[], source: string): string {
     const line = commands.find(command => command.includes(`mksquashfs '${source}'`));
+
     if (line === undefined) throw new Error(`nothing was archived from ${source}`);
+
     return line;
   }
 
@@ -2978,9 +3194,12 @@ describe('archive scope keeps what no build can rebuild', () => {
     const inner = record.ports.exec;
     record.ports.exec = async (command) => {
       raw.push(command);
+
       return await inner(command);
     };
+
     expect((await checkpointOf(record, 'tick')).kind).toBe('committed');
+
     return archiverCommand(raw, source);
   }
 
@@ -3002,9 +3221,11 @@ describe('archive scope keeps what no build can rebuild', () => {
       ]) {
         const patterns = excludePatternsOf(command);
         expect(patterns).toEqual([...CHAIN_EXCLUDES]);
+
         for (const pattern of patterns) {
           expect(pattern.startsWith('.git')).toBe(false);
         }
+
         // The policy travels as a FILE with wildcards enabled, which is what
         // makes a glob a glob and a pattern match at any depth. Nothing is
         // spelled as an argument, so no pattern can reach the shell as syntax.
@@ -3046,11 +3267,13 @@ const FIXTURE = new Map<string, number>([
 
 function fixtureTree(label: string): string {
   const dir = devboxScratchDir(label);
+
   for (const [path, size] of FIXTURE) {
     const full = join(dir, path);
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, 'y'.repeat(size));
   }
+
   return dir;
 }
 
@@ -3059,41 +3282,55 @@ function fixtureTree(label: string): string {
 function archiveOf(source: string, excludes: readonly string[]) {
   const archivePath = join(source, '..', `${basename(source)}.sqsh`);
   rmSync(archivePath, { force: true });
+
   const built = Bun.spawnSync(['sh', '-c', archiveCommand({
     sourceDir: source,
     archivePath,
     excludeFile: join(source, '..', `${basename(source)}.excludes`),
     excludes,
   })]);
+
   const [code] = built.stdout.toString().trim().split(/\s+/);
+
   if (code !== '0') {
     throw new Error(`archiver failed: ${built.stdout.toString()} ${built.stderr.toString()}`);
   }
+
   const listed = Bun.spawnSync(['unsquashfs', '-l', archivePath]);
+
   if (listed.exitCode !== 0) throw new Error(listed.stderr.toString());
+
   const entries = listed.stdout.toString().split('\n')
     .filter(line => line.startsWith('squashfs-root/'))
     .map(line => line.slice('squashfs-root/'.length));
+
   let bytes = 0;
+
   for (const entry of entries) bytes += FIXTURE.get(entry) ?? 0;
+
   return { entries, bytes };
 }
 
 /** What the staging estimate would require for the same tree and policy. */
 function estimateOf(source: string, excludes: readonly string[]): number {
   const measured = Bun.spawnSync(['sh', '-c', archiveSizeCommand(source, excludes)]);
+
   if (measured.exitCode !== 0) throw new Error(measured.stderr.toString());
+
   return Number(measured.stdout.toString().trim());
 }
 
 describe('the real archiver applies the policy this file claims', () => {
   test('git metadata travels at every depth, as a directory and as a worktree file', () => {
     const dir = fixtureTree('devbox-archive-git');
+
     try {
       const { entries } = archiveOf(dir, CHAIN_EXCLUDES);
+
       for (const kept of ['.git', '.git/HEAD', '.git/objects/ab/cd', 'sub/.git/HEAD', 'wt/.git']) {
         expect(entries).toContain(kept);
       }
+
       expect(entries).toContain('keep.txt');
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -3105,8 +3342,10 @@ describe('the real archiver applies the policy this file claims', () => {
     // and `sub/.cache` on every archive this strategy has ever written, and
     // `a.log` too, because a glob without `-wildcards` matches nothing.
     const dir = fixtureTree('devbox-archive-depth');
+
     try {
       const { entries } = archiveOf(dir, CHAIN_EXCLUDES);
+
       for (const gone of [
         'node_modules', 'node_modules/p/i.js', 'sub/deep/node_modules/p/i.js',
         'a.log', 'sub/b.log', 'dist/o.js', 'sub/dist/o.js', '.cache/x', 'sub/.cache/x',
@@ -3125,16 +3364,19 @@ describe('the real archiver applies the policy this file claims', () => {
     // globstar means nothing at all — if it meant "everything", this archive
     // would be empty.
     const dir = fixtureTree('devbox-archive-globstar');
+
     try {
       const { entries } = archiveOf(dir, ['**/node_modules', 'dist/**', '**', 'a/**/b']);
       expect(entries).toContain('keep.txt');
       expect(entries).toContain('.git/HEAD');
+
       for (const gone of [
         'node_modules/p/i.js', 'sub/deep/node_modules/p/i.js', 'dist/o.js', 'sub/dist/o.js',
         'a/b/c.txt', 'x/a/b/c.txt',
       ]) {
         expect(entries).not.toContain(gone);
       }
+
       // Nothing this policy does not name is touched.
       expect(entries).toContain('a.log');
       expect(entries).toContain('sub/.cache/x');
@@ -3148,6 +3390,7 @@ describe('the real archiver applies the policy this file claims', () => {
     // while the chain path asks the box for it would obey a box that replaced
     // the policy in one mode and ignore it in the other.
     const dir = fixtureTree('devbox-archive-parity');
+
     try {
       const declared = chainBackupOptions(true, CHAIN_EXCLUDES).excludes ?? [];
       expect(declared).toEqual([...CHAIN_EXCLUDES]);
@@ -3166,6 +3409,7 @@ describe('the real archiver applies the policy this file claims', () => {
     // underestimates fills the container disk, which is the one failure the
     // probe exists to prevent.
     const dir = fixtureTree('devbox-archive-estimate');
+
     try {
       for (const policy of [CHAIN_EXCLUDES, ['**/node_modules', 'dist/**', '**', 'a/**/b'], []]) {
         expect(estimateOf(dir, policy)).toBe(archiveOf(dir, policy).bytes);
@@ -3209,6 +3453,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
       const registry: SdkMountRegistry = {};
       const container: ContainerMounts = {};
       const firstCalls: string[] = [];
+
       const first = harness({
         state: chainState({ upperMark: 'stale', at: 1 }),
         mounts: MOUNTED,
@@ -3216,6 +3461,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
         calls: firstCalls,
         registry, mountsTable: container,
       });
+
       expect((await checkpointOf(first, 'tick')).kind).toBe('committed');
 
       // The stop, then the wake: a fresh isolate on the SAME container, so the
@@ -3224,10 +3470,12 @@ describe('the binding has ONE mount for the container\'s life', () => {
       // registry under a two-setting design; here it takes the same writable
       // store mount the publication uses.
       const wakeCalls: string[] = [];
+
       const woken = harness({
         state: first.state, mounts: mountsAfterAttach(wakeCalls), calls: wakeCalls,
         registry, mountsTable: container,
       });
+
       woken.objects.set(baseObjectKey(STORE_ROOT, CHAIN_ID), BASE_BYTES);
       woken.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);
       expect((await attachOf(woken)).kind).toBe('attached');
@@ -3237,6 +3485,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
       // DIFFERENT fingerprint from the one the first commit recorded, so there
       // is a delta to publish rather than a skip.
       const secondCalls: string[] = [];
+
       const second = harness({
         state: { ...first.state!, upperMark: 'stale-again', at: 1 },
         mounts: MOUNTED,
@@ -3245,6 +3494,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
         upperMark: '8:4096:1700000000',
         now: 20 * INTERVAL_MS,
       });
+
       expect((await checkpointOf(second, 'tick')).kind).toBe('committed');
 
       // AND EVERY MOUNT IS THE ONE MOUNT: the chain's subtree, at the one mount
@@ -3254,6 +3504,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
       const one = [...new Set([...firstCalls, ...wakeCalls, ...secondCalls]
         .filter(call => call.startsWith('mountStore:'))
         .map(call => call.split(':')[1]!))];
+
       expect(one).toHaveLength(1);
       // Both publications landed, and the wake's attach proved the first one.
       expect(second.objects.get(deltaObjectKey(STORE_ROOT, CHAIN_ID))).toBe(DELTA_BYTES);
@@ -3272,18 +3523,21 @@ describe('the binding has ONE mount for the container\'s life', () => {
       const registry: SdkMountRegistry = {};
       const container: ContainerMounts = {};
       const wakeCalls: string[] = [];
+
       const woken = harness({
         state: chainState({ delta: deltaLayer(CHAIN_ID, DELTA_BYTES) }),
         mounts: mountsAfterAttach(wakeCalls),
         calls: wakeCalls,
         registry, mountsTable: container,
       });
+
       expect((await attachOf(woken)).kind).toBe('attached');
       const mountsAfterWake = wakeCalls.filter(call => call.startsWith('mountStore:')).length;
 
       // The upper is NOT the whole changed set — the delta is a layer — so this
       // commit collapses the chain onto a fresh generation.
       const foldCalls: string[] = [];
+
       const fold = harness({
         state: woken.state,
         // The composed shape the wake left, at the paths THAT attach chose —
@@ -3302,6 +3556,7 @@ describe('the binding has ONE mount for the container\'s life', () => {
         upperMark: 'written-since-the-wake',
         now: 20 * INTERVAL_MS,
       });
+
       const folded = await checkpointOf(fold, 'quiesce');
 
       expect(folded.kind).toBe('committed');
@@ -3324,20 +3579,24 @@ describe('the binding has ONE mount for the container\'s life', () => {
       // survives when there is nothing to release.
       const registry: SdkMountRegistry = {};
       const firstCalls: string[] = [];
+
       const first = harness({
         state: chainState(), mounts: mountsAfterAttach(firstCalls), calls: firstCalls,
         registry,
       });
+
       expect((await attachOf(first)).kind).toBe('attached');
       // THE BOX'S ROOT, not a generation's: that is what lets one mount serve
       // every generation this box will publish, a rebase included.
       expect(registry.held).toEqual({ prefix: `${STORE_ROOT}/`, readOnly: false });
 
       const secondCalls: string[] = [];
+
       const second = harness({
         state: first.state, mounts: mountsAfterAttach(secondCalls), calls: secondCalls,
         registry,
       });
+
       expect((await attachOf(second)).kind).toBe('attached');
       expect(secondCalls.indexOf(`unmountStore:${storeMountOf(secondCalls)}`))
         .toBeLessThan(secondCalls.findIndex(call => call.startsWith('mountStore:')));
@@ -3352,6 +3611,7 @@ describe('the generation lifecycle, against ONE box', () => {
     // TWO generations, and it drops to one only when that one has been served.
     // A restore is therefore never down to a single unproven copy.
     let attached = true;
+
     const record = harness({
       state: chainState({
         base: { id: CHAIN_ID, bytes: 100 }, delta: { bytes: 4_000 }, at: 1,
@@ -3359,13 +3619,16 @@ describe('the generation lifecycle, against ONE box', () => {
       mounts: () => (attached ? MOUNTED : NOT_MOUNTED),
       now: 10 * INTERVAL_MS,
     });
+
     const inner = record.ports.exec;
     record.ports.exec = async (command) => {
       // The overlay lands when the attach really mounts one, so the
       // postcondition reads a world this box changed.
       if (command.includes('fuse-overlayfs -o lowerdir=')) attached = true;
+
       return await inner(command);
     };
+
     const storage = snapshotChainStorage(record.ports);
 
     // The stop collapses the chain onto a fresh generation and keeps the old one.
@@ -3405,17 +3668,18 @@ describe('the retained fallback', () => {
     // the one evicted and the record never names a third.
     let state = chainState();
     const retained: string[] = [];
+
     for (let publication = 0; publication < 5; publication += 1) {
       const roles = supersedeGeneration(state);
       expect(roles.fallback).toBeDefined();
-      state = {
-        ...state,
+      state = chainState({
         base: baseLayer(`a1b2c3d4-0000-4000-8000-00000000000${publication}`, 100),
         delta: undefined,
         ...roles,
-      };
+      });
       retained.push(state.fallback!.base.id);
     }
+
     // The first outgoing generation is the proven one, and it is still the
     // slot's occupant five publications later.
     expect(retained).toEqual([CHAIN_ID, CHAIN_ID, CHAIN_ID, CHAIN_ID, CHAIN_ID]);
@@ -3568,6 +3832,7 @@ describe('a restore that refuses the newest generation recovers from the older o
       record.ports.exec = async (command) => {
         if (command.includes('squashfuse')) {
           mounts += 1;
+
           // ONLY the first layer mount, which is the newest generation's base.
           if (mounts === 1) {
             return {
@@ -3575,6 +3840,7 @@ describe('a restore that refuses the newest generation recovers from the older o
             };
           }
         }
+
         return await inner(command);
       };
 
@@ -3634,6 +3900,7 @@ describe('a restore that refuses the newest generation recovers from the older o
       // the already-attached path anyway. The id stays named, so the next attach
       // repeats the retirement.
       const calls: string[] = [];
+
       const record = harness({
         state: withFallback(), mounts: mountsAfterAttach(calls), calls, rejectWrites: [1],
       });
@@ -3665,6 +3932,7 @@ describe('a restore stays inside the tree it is restoring', () => {
     const inner = record.ports.exec;
     record.ports.exec = async (command) => {
       raw.push(command);
+
       return await inner(command);
     };
 
@@ -3672,13 +3940,16 @@ describe('a restore stays inside the tree it is restoring', () => {
 
     // No extraction, in any spelling the image offers.
     expect(raw.filter(command => /^(cp|tar|rsync|unsquashfs)\b/.test(command))).toEqual([]);
+
     // The upper is emptied BEFORE anything is mounted over it, so a composed
     // attach's writable layer holds exactly what is written after it.
     const emptied = raw.findIndex(command =>
       command.startsWith('rm -rf') && command.includes(UPPER) && command.includes('mkdir -p'));
+
     const mounted = raw.findIndex(command => command.includes('squashfuse'));
     expect(emptied).toBeGreaterThan(-1);
     expect(mounted).toBeGreaterThan(emptied);
+
     // And every archive is reachable only under this strategy's own runtime
     // directory: a layer cannot be mounted over the workspace or anywhere a
     // caller writes.
@@ -3696,6 +3967,7 @@ describe('a restore stays inside the tree it is restoring', () => {
  *  agrees. A valid squashfs image in this state mounts and serves the wrong
  *  workspace, which is exactly what a count cannot see. */
 const REPLACED_DIGEST = 'f'.repeat(64);
+
 /** The version the store reports for that replacement upload. R2 mints one per
  *  upload, so a replacement can never carry the recorded one. */
 const REPLACED_VERSION = 'upload-that-replaced-it';
@@ -3724,18 +3996,22 @@ describe('an archive replaced at the same length is refused', () => {
       // record does not mention yet — and it is adopted. A size that agrees
       // while the identity does not is corruption, and it is refused.
       const refusing: string[] = [];
+
       const corrupt = harness({
         state: withFallback(), mounts: mountsAfterAttach(refusing), calls: refusing,
       });
+
       corrupt.digests.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
       expect((await attachOf(corrupt)).detail).toContain('recovered');
       expect(corrupt.state?.lastFailure?.reason).toContain('delta archive');
       expect(corrupt.state?.lastFailure?.reason).toContain('different archive of the same length');
 
       const adopting: string[] = [];
+
       const superseded = harness({
         state: withFallback(), mounts: mountsAfterAttach(adopting), calls: adopting,
       });
+
       const drifted = DELTA_BYTES + 4_096;
       superseded.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), drifted);
       superseded.digests.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
@@ -3774,6 +4050,7 @@ describe('an archive replaced at the same length is refused', () => {
     // UNKNOWN, so the size check stands alone and the box starts — refusing it
     // would be the data loss the chain exists to prevent.
     const calls: string[] = [];
+
     const record = harness({
       state: chainState({
         base: { id: CHAIN_ID, bytes: BASE_BYTES, digest: undefined, objectVersion: undefined },
@@ -3782,6 +4059,7 @@ describe('an archive replaced at the same length is refused', () => {
       mounts: mountsAfterAttach(calls),
       calls,
     });
+
     // The store has answers; the record has neither. Nothing to compare.
     record.digests.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_DIGEST);
     record.versions.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_VERSION);
@@ -3799,6 +4077,7 @@ describe('an archive replaced at the same length is refused', () => {
       // replacement even carries the same digest metadata. What it cannot carry
       // is the version R2 minted for the upload the record describes.
       const calls: string[] = [];
+
       const record = harness({
         state: withFallback({
           base: { id: CHAIN_ID, bytes: BASE_BYTES, digest: undefined },
@@ -3807,6 +4086,7 @@ describe('an archive replaced at the same length is refused', () => {
         mounts: mountsAfterAttach(calls),
         calls,
       });
+
       // The store holds the recorded length, no digest of its own, and a version
       // from a different upload.
       record.versions.set(baseObjectKey(STORE_ROOT, CHAIN_ID), REPLACED_VERSION);
@@ -3830,6 +4110,7 @@ describe('an archive replaced at the same length is refused', () => {
       // never touched must start normally, or the check above would refuse every
       // large archive on every boot.
       const calls: string[] = [];
+
       const record = harness({
         state: chainState({
           base: { id: CHAIN_ID, bytes: BASE_BYTES, digest: undefined },
@@ -3883,6 +4164,7 @@ describe('the patched sandbox SDK: the container is the authority for a mount', 
       join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
       'utf8',
     );
+
     const unmount = dist.slice(dist.indexOf('async unmountBucketUnlocked('));
     const guard = unmount.indexOf('mountpoint -q ${shellEscape(mountPath)}`');
     const fusermount = unmount.indexOf('fusermount -u ${shellEscape(mountPath)}`');

@@ -37,7 +37,9 @@ const AT = Date.UTC(2026, 8, 1, 9, 0, 0);
 
 const SANDBOXED_COPY =
   'Commands can use the agent home, selected folders, GPU, and network. Other files stay hidden.';
+
 const RAW_COPY = 'Off. The agent runs as you with full access.';
+
 const CANNOT_COPY = 'No sandbox. Nothing runs here.';
 
 function device(sandbox: UserDevice['sandbox'], label = 'workstation'): UserDevice {
@@ -75,6 +77,7 @@ function renderRow(sandbox: UserDevice['sandbox']): string {
 function switchState(markup: string) {
   const switches = [...markup.matchAll(/<button[^>]*role="switch"[^>]*>/g)].map((match) => match[0]);
   const checked = switches[0]?.match(/aria-checked="(true|false)"/)?.[1] ?? null;
+
   return { count: switches.length, checked };
 }
 
@@ -160,6 +163,7 @@ describe('the bind card asks one question and offers one binding', () => {
     consentId: 'c1', deviceLabel: 'ashish-laptop', method: 'exec',
     command: 'bun test packages/core', createdAt: AT, workspaceName: 'checkout-fixes',
   };
+
   const html = readable(renderToStaticMarkup(createElement(DeviceConsentCard, { consent, onResolve: () => {} })));
 
   test('the question names the machine and the workspace', () => {
@@ -175,6 +179,7 @@ describe('the bind card asks one question and offers one binding', () => {
     for (const gone of ['Allow once', 'Grant', 'full filesystem', 'full access', 'connected folder', 'shell access', 'Deny']) {
       expect(html).not.toContain(gone);
     }
+
     expect(html).toContain("Commands use ashish-laptop's Sandbox setting");
     expect(html).toContain('Account settings → Devices');
   });
@@ -190,6 +195,7 @@ describe('a device row written before the registry recorded a sandbox', () => {
       createdAt: AT, lastSeenAt: null, expiresAt: null,
       lastIp: null, lastAgent: null, replacedAt: null, revokedAt: null, unstoppedAt: null,
     };
+
     const withSandbox = { ...withoutSandbox, id: 'dev-new', sandbox: { tier: 'raw', capability: 'sandboxed', reason: null, gpu: [] } };
     globalThis.fetch = Object.assign(
       async () => new Response(JSON.stringify([withoutSandbox, withSandbox]), { headers: { 'content-type': 'application/json' } }),

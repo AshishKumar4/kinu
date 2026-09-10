@@ -80,6 +80,7 @@ export function sandboxIdForWorkspace(workspaceName: string): string {
  */
 export function isKinuSandboxId(sandboxId: string): boolean {
   if (!sandboxId.startsWith(SANDBOX_ID_PREFIX)) return false;
+
   return isWorkspaceName(sandboxId.slice(SANDBOX_ID_PREFIX.length));
 }
 
@@ -140,8 +141,11 @@ export async function sandboxPreviewExposed(
     readKvJson(kv, exposureKey(claim.sandboxId, claim.port), EXPOSURE_SCHEMA),
     readKvJson(kv, revocationKey(claim.sandboxId), REVOCATION_SCHEMA),
   ]);
+
   if (exposure === null) return false;
+
   if (revocation !== null && exposure.publishedAt <= revocation.revokedBefore) return false;
+
   return timingSafeEqual(exposure.tokenHash, await sha256Hex(claim.token));
 }
 
@@ -188,8 +192,10 @@ export function sandboxPreviewExposures(
   // new writer after the destroy finished, so it publishes again. The tie is
   // fail-closed, the same side `sandboxPreviewExposed` takes.
   const born = Date.now();
+
   const readRevocation = (): Promise<{ revokedBefore: number } | null> =>
     readKvJson(kv, revocationKey(sandboxId), REVOCATION_SCHEMA);
+
   const write = async (port: number, token: string): Promise<void> => {
     const now = Date.now();
     await writeKvJson(
@@ -199,12 +205,15 @@ export function sandboxPreviewExposures(
       now + PREVIEW_EXPOSURE_TTL_MS,
     );
   };
+
   return {
     async publish(port, token) {
       const revocation = await readRevocation();
+
       if (revocation !== null && revocation.revokedBefore >= born) {
         throw new Error(`sandbox previews for ${sandboxId} were revoked: the workspace is being destroyed`);
       }
+
       await write(port, token);
     },
     async refresh(port, token) {
@@ -212,6 +221,7 @@ export function sandboxPreviewExposures(
         readKvJson(kv, exposureKey(sandboxId, port), EXPOSURE_SCHEMA),
         readRevocation(),
       ]);
+
       // Under a watermark, the only record worth keeping alive is one
       // published after it. A withdrawn record, or none at all, means the
       // exposure the container reports is not one this projection vouches
@@ -220,6 +230,7 @@ export function sandboxPreviewExposures(
         && (revocation.revokedBefore >= born
           || held === null
           || held.publishedAt <= revocation.revokedBefore)) return;
+
       if (held !== null
         && held.publishedAt > Date.now() - REFRESH_AFTER_MS
         && timingSafeEqual(held.tokenHash, await sha256Hex(token))) return;

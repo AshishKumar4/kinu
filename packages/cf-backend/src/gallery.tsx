@@ -162,12 +162,15 @@ import * as v from "valibot";
 import { serveGalleryRpc } from "@/gallery-agent-stub";
 
 const frame = new URLSearchParams(location.search).get("frame") ?? "all";
+
 const squareButtonVariant = "square";
+
 const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
 /* ── /api/user stub ─────────────────────────────────────────────── */
 
 const NOW = Date.now();
+
 const STUB_DATA = v.parse(JsonObjectSchema, {
   // Every field the CLIENT's own parse requires, `displayName` included. It was
   // absent, `UserProfileSchema` refused the body, and the sidebar rendered
@@ -224,8 +227,11 @@ const STUB_DATA = v.parse(JsonObjectSchema, {
    until `gallery:settings-release`. Every sibling GET settles immediately, so
    the gate can observe branch-local publication while one request is held. */
 const SETTINGS_GATEWAY_HOLD = Promise.withResolvers<void>();
+
 let settingsCodexHealthy = false;
+
 window.addEventListener("gallery:settings-heal", () => { settingsCodexHealthy = true; });
+
 window.addEventListener("gallery:settings-release", () => SETTINGS_GATEWAY_HOLD.resolve());
 
 function fixtureJson(body: JsonValue | ProfileCatalogEnvelope, status = 200): Response {
@@ -239,69 +245,88 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
   if (path === "/api/user/profile") {
     return fixtureJson({ email: "owner@example.com", displayName: "Owner", createdAt: NOW - 864e5, lastSeenAt: NOW });
   }
+
   if (path === "/api/user/credentials") {
     return fixtureJson([{ key: "anthropic.bearer", kind: "bearer", createdAt: NOW - 864e5, updatedAt: NOW }]);
   }
+
   if (path === "/api/user/codex") {
     return settingsCodexHealthy
       ? fixtureJson({ connected: false, accountId: null, expiresAt: null, startedFlow: null })
       : fixtureJson({ error: "Codex status fixture failed" }, 503);
   }
+
   if (path === "/api/user/models") {
     return fixtureJson({
       models: [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai" }],
       failures: [],
     });
   }
+
   if (path === "/api/user/providers/catalog") {
     return fixtureJson([{
       id: "anthropic", credKey: "anthropic.bearer", name: "Anthropic", connected: true,
     }]);
   }
+
   if (path === "/api/user/config/default_model") {
     return fixtureJson({ key: "default_model", value: "workers-ai/llama-4" });
   }
+
   if (path === "/api/user/cloudflare/accounts") {
     return fixtureJson({
       connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }],
     });
   }
+
   if (path === "/api/user/cloudflare/gateways") {
     await SETTINGS_GATEWAY_HOLD.promise;
+
     return fixtureJson({
       connected: true, selectedId: "gateway-1",
       gateways: [{ id: "gateway-1", authenticated: true, createdAt: "2026-01-01" }],
       error: null,
     });
   }
+
   if (path === "/api/user/cli") {
     return fixtureJson({
       publicOrigin: location.origin, installCommand: "kinu setup",
       setupCommand: "kinu setup", authCommand: "kinu auth",
     });
   }
+
   if (path === "/api/user/devices/dev-1" && method === "DELETE") {
     localStorage.setItem("gallery-device-incident", "revoked");
+
     return fixtureJson({ ok: true, unstoppedCommands: 2 });
   }
+
   if (path === "/api/user/devices/dev-1/unstopped" && method === "DELETE") {
     localStorage.setItem("gallery-device-incident", "acknowledged");
+
     return fixtureJson({ ok: true });
   }
+
   // The Sandbox switch. The tier lands in localStorage so the roster read that
   // follows the PUT shows the switch where the owner left it, across a reload.
   if (path === "/api/user/devices/dev-1/sandbox" && method === "PUT") {
     const { tier } = v.parse(v.object({ tier: v.picklist(DEVICE_TIERS) }), JSON.parse(v.parse(v.string(), body)));
     localStorage.setItem("gallery-device-tier", tier);
+
     return fixtureJson({ ok: true });
   }
+
   if (path === "/api/user/devices" && method === "POST") {
     return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
   }
+
   if (path === "/api/user/devices") {
     const incident = localStorage.getItem("gallery-device-incident");
+
     if (incident === "acknowledged") return fixtureJson([]);
     const revoked = incident === "revoked";
+
     return fixtureJson([{
       id: "dev-1", label: "Workstation", os: "linux", hostname: "workstation",
       connected: !revoked, createdAt: NOW - 864e5, lastSeenAt: NOW, expiresAt: NOW + 864e5,
@@ -313,7 +338,9 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
       },
     }]);
   }
+
   if (path === "/api/user/devices/consents") return fixtureJson([]);
+
   if (path === "/api/user/profile-catalog") {
     return fixtureJson({
       authority: { kind: "account", accountId: "gallery" },
@@ -322,6 +349,7 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
       catalog: BUILTIN_PROFILE_CATALOG,
     });
   }
+
   return fixtureJson({ error: `gallery has no settings fixture for ${path}` }, 404);
 }
 
@@ -342,16 +370,22 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
 const GALLERY_CONNECT_COMMAND =
   "curl -fsSL 'https://kinu.run/install.sh' | KINU_PARENT_ACTIVATES=1 bash -s -- --no-setup --connect"
   + ' && export PATH="${KINU_HOME:-$HOME/.kinu}/bin:$PATH"';
+
 const connectFixtureMode = new URLSearchParams(location.search).get("connect");
+
 const connectFixtureActive = connectFixtureMode !== null;
+
 let connectRegistrations = 0;
+
 let connectRosterReads = 0;
 
 function deviceConnectFixture(path: string, method: string): Response | null {
   if (path === "/api/user/devices" && method === "POST") {
     connectRegistrations += 1;
+
     return fixtureJson({ origin: location.origin, installCommand: GALLERY_CONNECT_COMMAND }, 201);
   }
+
   if (path === "/api/user/devices" && method === "GET") {
     connectRosterReads += 1;
     // On the document rather than on `window`: a gate reading a global has to
@@ -359,6 +393,7 @@ function deviceConnectFixture(path: string, method: string): Response | null {
     // owns.
     document.documentElement.dataset.galleryRosterReads = String(connectRosterReads);
     document.documentElement.dataset.galleryRegistrations = String(connectRegistrations);
+
     return fixtureJson(connectRegistrations === 0 ? [] : [{
       id: "dev-arrived", label: "Owner PC", os: "darwin", hostname: "owner-mac",
       connected: connectFixtureMode !== "stall",
@@ -368,9 +403,12 @@ function deviceConnectFixture(path: string, method: string): Response | null {
       sandbox: { tier: "sandboxed", capability: "sandboxed", reason: null, gpu: [] },
     }]);
   }
+
   if (path === "/api/user/devices/consents" && method === "GET") return fixtureJson([]);
+
   return null;
 }
+
 const STUB = new Map(Object.entries(STUB_DATA));
 
 /** KINU-060 gallery transport control. Every real WorkspaceRosterProvider
@@ -388,22 +426,29 @@ function MODEL_STUBS(): ModelMenuEntry[] {
 }
 
 const realFetch = window.fetch.bind(window);
+
 const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]) => {
   const parsedInput = v.safeParse(v.string(), input);
   const parsedUrl = v.safeParse(v.instance(URL), input);
   const parsedRequest = v.safeParse(v.instance(Request), input);
+
   const url = parsedInput.success ? parsedInput.output
     : parsedUrl.success ? parsedUrl.output.href
     : parsedRequest.success ? parsedRequest.output.url : location.href;
+
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
   const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : "GET")).toUpperCase();
+
   if (frame === "usersettingsstate" && path.startsWith("/api/user/")) {
     return userSettingsFixture(path, method, init?.body);
   }
+
   if (connectFixtureActive && path.startsWith("/api/user/devices")) {
     const answer = deviceConnectFixture(path, method);
+
     if (answer !== null) return Promise.resolve(answer);
   }
+
   if (frame === "rosterauthority" && path === "/api/user/workspaces" && method === "GET") {
     // CLONED PER CALL. A `Response` body can be read once, and the provider
     // has more than one read in flight against this route (mount plus its
@@ -414,10 +459,13 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
     // fixture's job.
     return rosterAuthorityHold.promise.then((held) => held.clone());
   }
+
   const response = STUB.get(path);
+
   if (response !== undefined && (!init?.method || init.method === "GET")) {
     return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
   }
+
   // The two `/api/` prefixes a browser gate answers for itself. The feedback
   // POST is driven end to end — multipart body, the client's own size refusal,
   // the retry that reuses a capture held in memory — and the control plane's
@@ -428,17 +476,21 @@ const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<
   // look like a failed send, and would make the control plane untestable in the
   // one state it most needs to be tested in.
   if (path === FEEDBACK_ENDPOINT || path.startsWith('/api/control/')) return realFetch(input, init);
+
   // The render-failure report and the build stamp it binds itself to. Both have
   // to reach the network for the same reason the feedback POST does: the gate
   // decides their fate through request interception, and it moves the stamp
   // BETWEEN load and fault to prove the report carries the build this page
   // loaded rather than whichever is live when it asks.
   if (path === CLIENT_ERROR_ENDPOINT || path === '/api/health') return realFetch(input, init);
+
   if (path.startsWith("/api/")) {
     return Promise.resolve(new Response(JSON.stringify({ error: "gallery stub" }), { status: 404 }));
   }
+
   return realFetch(input, init);
 }, { preconnect: realFetch.preconnect });
+
 window.fetch = galleryFetch;
 
 
@@ -471,10 +523,12 @@ const MCTS_ACTIONS = [
 
 function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
+
   return () => {
     a = (a + 0x6D2B79F5) >>> 0;
     let t = Math.imul(a ^ (a >>> 15), 1 | a);
     t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
@@ -482,7 +536,13 @@ function mulberry32(seed: number): () => number {
 function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
   const rnd = mulberry32(0x5EA4C4);
   const rows: MctsRow[] = [];
-  const push = (row: MctsRow): MctsRow => { rows.push(row); return row; };
+
+  const push = (row: MctsRow): MctsRow => {
+    rows.push(row);
+
+    return row;
+  };
+
   const root = push({
     id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028,
     status: "open", action: "Find why the SAVE20 coupon 500s",
@@ -490,29 +550,38 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
     observation: "Four candidate fixes explored; one line survived to depth 6.",
     created_at: NOW - 36e5,
   });
+
   // `winner` walks one line down the tree — the branch the search kept paying
   // for — so the render has a real principal variation to find.
   let winner = root;
   const frontier: MctsRow[] = [root];
+
   while (frontier.length > 0 && rows.length < target) {
     const parent = frontier.shift()!;
+
     if (parent.depth >= maxDepth || parent.status === "failed") continue;
     // A pruned branch was expanded before it was cut, so it keeps the children
     // it had — the dense low-value clusters a real tree carries at the bottom.
     const fanout = parent.status === "pruned" ? 2 : parent.depth === 0 ? 4 : 2 + Math.floor(rnd() * 3);
+
     for (let i = 0; i < fanout && rows.length < target; i++) {
       const onWinningLine = parent.id === winner.id && i === 0 && parent.status !== "pruned";
+
       const value = onWinningLine
         ? Math.min(0.97, 0.42 + parent.depth * 0.09 + rnd() * 0.06)
         : Math.max(0, (parent.value * 0.4 + rnd() * 0.5) - parent.depth * 0.06);
+
       const visits = onWinningLine ? Math.max(2, 9 - parent.depth) : rnd() < 0.35 ? 0 : 1 + Math.floor(rnd() * 2);
+
       const status = onWinningLine ? "open"
         : rnd() < 0.08 ? "failed"
         : value < 0.22 ? "pruned"
         : "open";
+
       // The engine scores a failed branch 0 and backpropagates that; a mock
       // that hands one a mid score photographs a state production cannot reach.
       const score = status === "failed" ? 0 : value;
+
       const child = push({
         id: `n${String(rows.length).padStart(3, "0")}`,
         parent_id: parent.id, depth: parent.depth + 1, visits, value: score, status,
@@ -523,11 +592,14 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
         code_used: onWinningLine ? "await db.exec(`UPDATE coupons SET kind = ...`)" : null,
         created_at: NOW - 36e5 + rows.length * 9e3,
       });
+
       if (onWinningLine) { winner = child; frontier.unshift(child); } else frontier.push(child);
     }
   }
+
   // The search converged on the deepest node of the line it kept paying for.
   winner.status = "terminal";
+
   return rows;
 }
 
@@ -536,10 +608,14 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
  *  nodes is something the harness photographs rather than something a comment
  *  asserts. */
 const MCTS_ROWS = frame === "forkbig" ? mctsSearchRows(520, 9) : mctsSearchRows(106, 6);
+
 const MCTS_TREE = buildTree(MCTS_ROWS);
+
 /** The frames render at most one tree; the surface keys them by search. */
 const MCTS_TREES: ReadonlyMap<string, ForkNode> = new Map([[MCTS_TREE.id, MCTS_TREE]]);
+
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
+
 /** No branch has written since this frame mounted, which is what a photograph
  *  of a settled surface should say. A live one is its own frame. */
 const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
@@ -585,6 +661,7 @@ const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, branchBudget: 3 },
   getEvolutionChangelog: { entries: [], unseen: 0 },
 });
+
 const AGENT_RPC = new Map(Object.entries(AGENT_RPC_DATA));
 
 class GalleryAgentSocket extends EventTarget implements WebSocket {
@@ -622,15 +699,20 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
 
   send(raw: string): void {
     const json = tolerate<unknown>(() => JSON.parse(raw), 'malformed-input');
+
     if (json === undefined) return;
+
     const parsed = v.safeParse(v.object({
       type: v.optional(v.string()), id: v.optional(v.string()), method: v.optional(v.string()),
       args: v.optional(v.array(v.unknown())),
     }), json);
+
     if (!parsed.success) return;
     const frame = parsed.output;
+
     if (frame.type !== "rpc" || !frame.method) return;
     const method = frame.method;
+
     const result = AGENT_RPC.has(method)
       ? AGENT_RPC.get(method)
       // The exploration reads are ANSWERED here rather than falling through, and the
@@ -642,10 +724,12 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
       // trustworthy.
       : EXPLORATION_READS.has(method) ? explorationRead(method, frame.args ?? [])
       : method.startsWith("list") || method.startsWith("get") ? [] : {};
+
     queueMicrotask(() => {
       const message = new MessageEvent("message", {
         data: JSON.stringify({ type: "rpc", id: frame.id, success: true, result }),
       });
+
       this.onmessage?.(message);
       this.dispatchEvent(message);
     });
@@ -660,6 +744,7 @@ class GalleryAgentSocket extends EventTarget implements WebSocket {
 }
 
 const RealWebSocket = window.WebSocket;
+
 window.WebSocket = new Proxy(RealWebSocket, {
   construct(target, args: [string, (string | string[])?]) {
     return String(args[0]).includes("/agents/")
@@ -676,6 +761,7 @@ function msg(message: GalleryMessage): GalleryMessage { return message; }
 
 function rpcResult<Value>(value: Value): Response {
   const serializable = v.parse(JsonValueSchema, value);
+
   return new Response(JSON.stringify(serializable));
 }
 
@@ -785,23 +871,31 @@ const MESSAGES: UIMessage[] = [
 
 function galleryPlanInspection<Input>(input: Input, plans: readonly PlanReview[]) {
   const request = v.parse(SubordinateInspectionRequestSchema, input);
+
   if (request.view === 'plans') return { view: 'plans', path: request.path, page: { status: 'end', items: plans } };
+
   if (request.view === 'children') return { view: 'children', path: request.path, page: { status: 'end', items: [] } };
+
   if (request.view === 'planTasks') return { view: 'planTasks', path: request.path, tasks: [] };
+
   // The exact read a plan-arrival hint is resolved through. It answers the ONE
   // reference it was asked for or nothing at all: a reference to a revision this
   // fixture never issued is `missing`, the same refusal the real existing-only
   // inspection returns, so a stale hint cannot paint a neighbouring plan.
   if (request.view === 'plan') {
     const plan = plans.find(item => item.id === request.id && item.revision === request.revision);
+
     return plan
       ? { view: 'plan', path: request.path, plan }
       : missingSubordinateHistory(request.path);
   }
+
   throw new Error('Unexpected gallery plan inspection');
 }
+
 const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === 'inspectSubordinate') return rpcResult(galleryPlanInspection(args?.[0], [])).json<T>();
+
   // A read whose answer is a RECORD, where the blanket `[]` below is not a
   // smaller version of the right answer but a shape the caller dereferences.
   // `getExposedPorts` is read as `result.ports` inside a `setState` updater, so
@@ -812,7 +906,9 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
   // Empty, because the fork frames photograph trees. A fixture port would put a
   // live-preview chip in the chrome of a screenshot about search.
   if (method === "getExposedPorts") return rpcResult({ ports: [] }).json<T>();
+
   if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
+
   return rpcResult({}).json<T>();
 };
 
@@ -821,7 +917,9 @@ const stubRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
    twice — once to watch the failure being shown (workspacepage) or recorded
    (agentchats), once to prove the affordance still works. */
 const CREATE_FAILS = new URLSearchParams(location.search).get("createFails") === "1";
+
 let createRefused = false;
+
 function maybeRefuseCreate(): void {
   if (!CREATE_FAILS || createRefused) return;
   createRefused = true;
@@ -839,7 +937,9 @@ const GALLERY_SUBS: {
   name: string; displayName: string; role: string; createdBy: string;
   status: string; currentTask: string | null; createdAt: number; dismissedAt: number | null;
 }[] = [];
+
 let gallerySubSeq = 0;
+
 const GALLERY_PLAN_MARKDOWN = `# Repair the \`applyCoupon\` eligibility guard
 
 The checkout accepts archived coupons because the eligibility guard reads the campaign state after the discount has already been applied. This plan moves the guard ahead of mutation and keeps the current response contract.
@@ -912,8 +1012,10 @@ const GALLERY_PLAN_TITLE_NOTE: PlanReviewAnnotation = {
 const GALLERY_PLAN_CONTENT = GALLERY_PLAN_VARIANT === "late-heading"
   ? GALLERY_PLAN_LATE_HEADING
   : GALLERY_PLAN_MARKDOWN;
+
 const GALLERY_PLAN_ANNOTATIONS: readonly PlanReviewAnnotation[] =
   GALLERY_PLAN_VARIANT === "annotated-heading" ? [GALLERY_PLAN_TITLE_NOTE] : [];
+
 const GALLERY_PLAN_STATUS: PlanReview["status"] =
   GALLERY_PLAN_VARIANT === "read-only" ? "superseded" : "pending";
 
@@ -933,32 +1035,44 @@ let galleryAgentPlan: PlanReview = {
 
 const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "inspectSubordinate") return rpcResult(galleryPlanInspection(args?.[0], [galleryAgentPlan])).json<T>();
+
   if (new URLSearchParams(location.search).has("workspaceFault")) {
     const state = document.documentElement.dataset;
     const reads = ["getExecutorFiles", "getWorkspaceSnapshot", "getMemoryContent"];
+
     if (reads.includes(method) && state.workspaceFault === "1") throw new Error("Network connection lost");
     const revision = state.workspaceRevision ?? "before";
+
     if (method === "getExecutorFiles") return rpcResult({ path: "/", entries: [
       { name: `${revision}.txt`, isDir: false, size: 12, mtimeMs: revision === "before" ? 1 : 2 },
     ] }).json<T>();
+
     if (method === "listMounts") return rpcResult([]).json<T>();
+
     if (method === "getMemoryContent") return rpcResult(`Memory ${revision}`).json<T>();
+
     if (method === "getWorkspaceSnapshot") {
       const snapshot = v.parse(JsonObjectSchema, AGENT_RPC.get(method));
+
       return rpcResult({ ...snapshot, memoryContent: `Memory ${revision}` }).json<T>();
     }
   }
+
   if (new URLSearchParams(location.search).get("terminal") === "denied" && method === "getWorkspaceSnapshot") {
     return new Promise<T>(() => {});
   }
+
   if (method === "listSubordinates") return rpcResult([...GALLERY_SUBS]).json<T>();
+
   if (method === "createSubordinateAgent") {
     maybeRefuseCreate();
     const name = `agent-${++gallerySubSeq}`;
+
     const entry = {
       name, displayName: "", role: "agent", createdBy: "user",
       status: "idle", currentTask: null, createdAt: NOW, dismissedAt: null,
     };
+
     GALLERY_SUBS.push(entry);
     galleryAgentPlan = {
       ...galleryAgentPlan,
@@ -969,27 +1083,36 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
       updatedAt: NOW,
       decidedAt: null,
     };
+
     return rpcResult({ name, displayName: "", subordinate: entry }).json<T>();
   }
+
   if (method === "renameSubordinateAgent") {
     const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
     const entry = GALLERY_SUBS.find((sub) => sub.name === name);
+
     if (!entry) throw new Error(`gallery: no subordinate "${name}"`);
     entry.displayName = displayName;
+
     return rpcResult({ ok: true, name, displayName, subordinate: { ...entry } }).json<T>();
   }
+
   if (method === "dismissSubordinate") {
     const [name] = v.parse(v.tuple([v.string()]), args);
     const index = GALLERY_SUBS.findIndex((sub) => sub.name === name);
+
     if (index >= 0) GALLERY_SUBS.splice(index, 1);
+
     return rpcResult({ ok: true, name, historyKept: true }).json<T>();
   }
+
   if (method === "getActorSnapshot") {
     // The hosted actor's own view, answered by the ROOT now rather than by a
     // facet over a stub. Identity mirrors the roster; the mission stays
     // internal — the header renders the ROSTER title, never this field.
     const [name] = v.parse(v.tuple([v.string()]), args);
     const latest = GALLERY_SUBS.find((sub) => sub.name === name) ?? GALLERY_SUBS.at(-1);
+
     return rpcResult({
       name: latest?.name ?? "agent-0",
       displayName: latest?.displayName ?? "",
@@ -1000,15 +1123,19 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
       pendingSteers: [],
     } satisfies SubordinateSnapshot).json<T>();
   }
+
   if (method === "getActivePlanReview") return rpcResult(galleryAgentPlan).json<T>();
+
   if (method === "savePlanReviewAnnotations") {
     return rpcResult({ ok: true, plan: galleryAgentPlan }).json<T>();
   }
+
   if (method === "decidePlanReview") {
     const [, , decision, feedback] = v.parse(
       v.tuple([v.string(), v.number(), v.picklist(["approve", "request_changes"]), v.optional(v.string())]),
       args,
     );
+
     galleryAgentPlan = {
       ...galleryAgentPlan,
       status: decision === "approve" ? "approved" : "changes_requested",
@@ -1017,9 +1144,12 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
       updatedAt: Date.now(),
       decidedAt: Date.now(),
     };
+
     return rpcResult({ ok: true, plan: galleryAgentPlan, queued: true }).json<T>();
   }
+
   if (method === "getChatHistoryPage") return rpcResult({ status: "end", items: [] }).json<T>();
+
   return AGENT_RPC.has(method)
     ? rpcResult(AGENT_RPC.get(method)).json<T>()
     : stubRpc<T>(method, args);
@@ -1459,8 +1589,10 @@ function olderForks(): ForkRunSummary[] {
     "Compare the two candidate fixes on the failing fixture",
     "Establish whether the 500 predates the pricing refactor",
   ];
+
   return Array.from({ length: 31 }, (_, i) => {
     const searched = i % 3 === 0;
+
     return {
       id: searched ? `n${String(100 + i).padStart(3, "0")}` : `root-merge-${100 + i}`,
       // The derived name, as the read model derives it: the task's first clause.
@@ -1859,10 +1991,15 @@ const GEPA_DETAIL = {
 
 const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getReplayEvals") return rpcResult(REPLAY_EVALS).json<T>();
+
   if (method === "getAlignmentConvergence") return rpcResult(ALIGNMENT).json<T>();
+
   if (method === "getOutcomeCalibration") return rpcResult(CALIBRATION).json<T>();
+
   if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
+
   if (method === "getGepaRun") return rpcResult(GEPA_DETAIL).json<T>();
+
   return stubRpc<T>(method, args);
 };
 
@@ -1988,6 +2125,7 @@ function canvasPage(rows: readonly ExplorationCanvasRun[], args: unknown[] | und
   const limit = request.limit ?? 30;
   const after = request.cursor?.after;
   const start = after === undefined ? 0 : rows.findIndex((entry) => entry.run.id === after) + 1;
+
   return seekPage(rows.slice(start, start + limit + 1), limit, (entry) => entry.run.id);
 }
 
@@ -2027,27 +2165,36 @@ function explorationRead(
   method: string, args: readonly unknown[], rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS,
 ): ExplorationAnswer {
   const mutable = [...args];
+
   if (method === "getExplorationCanvas") return canvasPage(rows, mutable);
+
   if (method === "listForkRuns") {
     const page = canvasPage(rows, mutable);
+
     return { ...page, items: page.items.map((entry) => entry.run) };
   }
+
   // The COMPOSED row, which is what `orchestrator.getForkRun` answers. This
   // served a bare `ForkRunSummary` — a shape the read model cannot produce —
   // and the client, reading `entry.run` off it, threw on the first
   // revalidation. Every frame that opens the full-screen explorer rendered a
   // blank body because of this one line.
   if (method === "getForkRun") return rows.find((entry) => entry.run.id === args[0]) ?? null;
+
   if (method === "getSearchTree") return SEARCH_ROWS_BY_ROOT.get(String(args[0])) ?? [];
+
   if (method === "getHeadRun") return JOURNAL_BY_ROOT.get(String(args[0])) ?? null;
+
   // A retired node the server no longer details, and a node NEITHER store holds:
   // both answer null, and the panel must not render either as "recorded nothing".
   if (method === "getMctsNodeDetail") return null;
+
   return TRANSCRIPT_BY_NODE.get(String(args[1])) ?? null;
 }
 
 const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (EXPLORATION_READS.has(method)) return rpcResult(explorationRead(method, args ?? [])).json<T>();
+
   return stubRpc<T>(method, args);
 };
 
@@ -2068,6 +2215,7 @@ function forkRpcOver(rows: readonly ExplorationCanvasRun[]): Rpc {
 
 function focusRun(rootId: string, rows: readonly ExplorationCanvasRun[] = CANVAS_ROWS): Rpc {
   const wanted = rows.filter((entry) => entry.run.id === rootId);
+
   return forkRpcOver([...wanted, ...rows.filter((entry) => entry.run.id !== rootId)]);
 }
 
@@ -2138,6 +2286,7 @@ const RUNNING_ACTIVITY: ReadonlyMap<string, number> = new Map(
  * other fork frame photographs would be a fixture testing itself.
  */
 const LIVE_STAGE_ROWS = [0, 1, 4, 12, MCTS_ROWS.length] as const;
+
 const LIVE_STAGES = LIVE_STAGE_ROWS.length;
 
 /** The run row as the ledger holds it at `stage` — the fact the list renders,
@@ -2145,6 +2294,7 @@ const LIVE_STAGES = LIVE_STAGE_ROWS.length;
 function liveRun(stage: number): ForkRunSummary {
   const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
   const settled = stage >= LIVE_STAGES - 1;
+
   return {
     id: "live000",
     name: "SAVE20 500s",
@@ -2166,6 +2316,7 @@ function liveRun(stage: number): ForkRunSummary {
 function liveCanvasRows(stage: number): readonly ExplorationCanvasRun[] {
   if (stage <= 0) return [];
   const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
+
   return [{
     run: liveRun(stage),
     params: FORK_PARAMS.find((entry) => entry.rootId === "n000") ?? null,
@@ -2181,7 +2332,9 @@ function liveCanvasRows(stage: number): readonly ExplorationCanvasRun[] {
 function liveActivity(stage: number): ReadonlyMap<string, number> {
   const rows = LIVE_STAGE_ROWS[Math.min(stage, LIVE_STAGES - 1)] ?? 0;
   const ticks = new Map<string, number>();
+
   for (const row of MCTS_ROWS.slice(0, rows)) ticks.set(row.id, stage);
+
   return ticks;
 }
 
@@ -2197,7 +2350,9 @@ function liveActivity(stage: number): ReadonlyMap<string, number> {
 function liveRpcOver(stageRef: { readonly current: number }): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const rows = liveCanvasRows(stageRef.current);
+
     if (method === "getSearchTree") return rpcResult(rows[0]?.tree ?? []).json<T>();
+
     return EXPLORATION_READS.has(method)
       ? rpcResult(explorationRead(method, args ?? [], rows)).json<T>()
       : stubRpc<T>(method, args);
@@ -2212,6 +2367,7 @@ function liveRpcOver(stageRef: { readonly current: number }): Rpc {
 function pinnedLiveStage(search: string): number | null {
   const asked = new URLSearchParams(search).get("stage");
   const wanted = asked === null ? Number.NaN : Number(asked);
+
   return Number.isFinite(wanted) ? Math.max(0, Math.min(LIVE_STAGES - 1, wanted)) : null;
 }
 
@@ -2230,12 +2386,15 @@ function ForkLiveFrame({ pinned }: { pinned: number | null }) {
   const activity = useMemo(() => liveActivity(stage), [stage]);
   useEffect(() => {
     if (pinned !== null) return;
+
     const id = setInterval(
       () => setStage((current) => (current + 1) % LIVE_STAGES),
       1_800,
     );
+
     return () => clearInterval(id);
   }, [pinned]);
+
   return (
     <div data-live-stage={stage} className="contents">
       <Shell surface="Exploration" rpc={rpc} headActivity={activity} backgroundJobs={[]} />
@@ -2294,6 +2453,7 @@ function GalleryComposer({ notices = [] }: { notices?: readonly ComposerNotice[]
   const [value, setValue] = useState("");
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
+
   return (
     <div className="border-t p-border p-sidebar">
       <Composer
@@ -2524,6 +2684,7 @@ function ChatSteerFrame() {
   const thread = buildTranscript(STEERED_THREAD, [
     { id: "steer-live", text: "actually, cap it at three heads", state: "queued", atStep: null },
   ]);
+
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
@@ -2588,10 +2749,12 @@ function ComposerFrame() {
   const [value, setValue] = useState("Ship the coupon fix behind a preview first.");
   const [mode, setMode] = useState<ChatMode>("build");
   const [model, setModel] = useState("anthropic/claude-opus-4");
+
   const picker = () => (
     <ModelPicker models={MODEL_STUBS()} value={model} onChange={setModel} size="xs"
       className="min-w-0 flex-1 basis-32 max-w-44" />
   );
+
   const shared = {
     onValueChange: setValue,
     onSend: () => {},
@@ -2601,6 +2764,7 @@ function ComposerFrame() {
     mode: { value: mode, onChange: setMode, locked: false },
     attachments: { parts: [], onAdd: () => {}, onRemove: () => {} },
   } as const;
+
   return (
     <div className="p-bg p-text min-h-screen flex justify-center">
       <div className="w-full max-w-[640px] space-y-8 py-10">
@@ -2621,6 +2785,7 @@ function ComposerFrame() {
     </div>
   );
 }
+
 /* ── Chat infinite scroll ───────────────────────────────────────────
 
    The REAL hooks (usePagedScroll + useGrowingScroll), the REAL merge rule and
@@ -2633,8 +2798,11 @@ function ComposerFrame() {
    Query params: ?latency=ms  ?fail=1 (first fetch fails)  ?depth=N (pages
    before exhaustion). */
 const HISTORY_PAGE = 12;
+
 const historyParams = new URLSearchParams(location.search);
+
 const HISTORY_LATENCY = Number(historyParams.get("latency") ?? 400);
+
 const HISTORY_DEPTH = Number(historyParams.get("depth") ?? 4);
 
 /** The stored transcript this frame pages back through, oldest first. */
@@ -2664,22 +2832,27 @@ function ChatHistoryFrame() {
       const settled = Promise.withResolvers<void>();
       setTimeout(settled.resolve, HISTORY_LATENCY);
       await settled.promise;
+
       if (request === requests.current && failed.current) {
         failed.current = false;
         throw new Error("stub failure");
       }
+
       const end = cursor === undefined
         ? STORED_HISTORY.length
         : STORED_HISTORY.findIndex((row) => row.id === cursor.after);
+
       const from = end < 0 ? STORED_HISTORY.length : end;
       const start = Math.max(0, from - HISTORY_PAGE);
       const items = STORED_HISTORY.slice(start, from);
+
       return start === 0 ? { status: "end", items } : { status: "more", items, next: { after: items[0]!.id } };
     }, []),
     startFrom: useCallback(() => live[0] ? { after: live[0].id } : null, [live]),
   });
 
   const transcript = useMemo(() => mergeTranscript(history.fetched, live), [history.fetched, live]);
+
   const messagesRef = useGrowingScroll<HTMLDivElement>({
     grows: "up", content: transcript, fetched: history.fetched, loading: history.loading,
     onReachEdge: history.loadMore,
@@ -2696,7 +2869,9 @@ function ChatHistoryFrame() {
         id, role: "assistant", parts: [{ type: "text", text: `Live arrival ${id}` }],
       }]);
     };
+
     window.addEventListener("gallery:arrive", onArrive);
+
     return () => window.removeEventListener("gallery:arrive", onArrive);
   }, []);
 
@@ -2735,11 +2910,13 @@ function HistoryAuthorityFrame() {
   const [hold] = useState(() => Promise.withResolvers<void>());
   const failFirst = useRef(true);
   const requests = useRef(0);
+
   const history = usePagedScroll<ChatHistoryEntry>({
     grows: "up",
     fetchPage: useCallback(async () => {
       const request = ++requests.current;
       await hold.promise;
+
       // StrictMode can retire one held walk and start its replacement. Only
       // the latest request consumes the planned failure; the stale request's
       // result is ignored by the hook's generation fence.
@@ -2747,11 +2924,13 @@ function HistoryAuthorityFrame() {
         failFirst.current = false;
         throw new Error("fixture could not read the first history page");
       }
+
       return { status: "end" as const, items: [] };
     }, [hold]),
     // A delivered empty live seed asks the store for its newest page.
     startFrom: useCallback(() => "newest" as const, []),
   });
+
   const loadMore = history.loadMore;
   useEffect(() => { loadMore(); }, [loadMore]);
 
@@ -2788,11 +2967,13 @@ function HistoryAuthorityFrame() {
     </div>
   );
 }
+
 /** KINU-060 actual WorkspaceRosterProvider proof. The fixture holds only the
  * transport response; upsert/rename are the hook's public local transitions,
  * and an old response must not undo them when released. */
 function RosterAuthorityFrame() {
   const roster = useWorkspaceRoster();
+
   const entry: WorkspaceEntry = {
     name: "checkout-fixes",
     displayName: "Checkout coupon bug",
@@ -2800,6 +2981,7 @@ function RosterAuthorityFrame() {
     lastVisited: NOW - 60e3,
     archivedAt: null,
   };
+
   return (
     <div data-roster-authority className="p-bg p-text min-h-screen p-6">
       <button data-roster-local-rename type="button" onClick={() => {
@@ -2825,6 +3007,7 @@ function ClientContinuityFrame() {
   const [draft, setDraft] = useState("compose this");
   const [sends, setSends] = useState(0);
   const [files, setFiles] = useState<string[]>([]);
+
   const userMessage: UIMessage = {
     id: "continuity-user",
     role: "user",
@@ -2889,27 +3072,36 @@ function QualityBranchFrame() {
   const replayHealthy = useRef(false);
   useEffect(() => {
     const heal = () => { replayHealthy.current = true; };
+
     const release = () => alignmentHold.resolve();
     window.addEventListener("gallery:quality-heal", heal);
     window.addEventListener("gallery:quality-release", release);
+
     return () => {
       window.removeEventListener("gallery:quality-heal", heal);
       window.removeEventListener("gallery:quality-release", release);
     };
   }, [alignmentHold]);
+
   const rpc = useMemo<Rpc>(() => async <T,>(method: string): Promise<T> => {
     if (method === "getReplayEvals") {
       if (!replayHealthy.current) throw new Error("replay fixture failed");
+
       return rpcResult(REPLAY_EVALS).json<T>();
     }
+
     if (method === "getAlignmentConvergence") {
       await alignmentHold.promise;
+
       return rpcResult(ALIGNMENT).json<T>();
     }
+
     if (method === "getOutcomeCalibration") {
       await alignmentHold.promise;
+
       return rpcResult(CALIBRATION).json<T>();
     }
+
     return stubRpc<T>(method);
   }, [alignmentHold]);
 
@@ -2995,6 +3187,7 @@ function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
   onSend: (text: string, mode: ChatMode) => void;
 }) {
   const ui = useConversationUiState(conversation);
+
   const scrollRef = useGrowingScroll<HTMLDivElement>({
     grows: "up",
     content: transcript,
@@ -3003,6 +3196,7 @@ function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
     initialScroll: ui.savedScroll,
     onScrollPosition: ui.rememberScroll,
   });
+
   return (
     <div className="@container relative flex min-h-0 flex-1 flex-col" data-agent-pane={conversation}>
       <div className="flex items-center gap-3 border-b p-border px-5 py-3.5">
@@ -3023,6 +3217,7 @@ function AgentChatsPane({ conversation, title, transcript, onRename, onSend }: {
           onValueChange={ui.setDraft}
           onSend={() => {
             const text = ui.draft.trim();
+
             if (!text) return;
             onSend(text, ui.mode);
             ui.setDraft("");
@@ -3042,10 +3237,12 @@ function AgentChatsScene() {
   const { subName } = useParams();
   const navigate = useNavigate();
   const [roster, setRoster] = useState<readonly GalleryRosterEntry[]>(AGENTCHATS_SEED);
+
   const [transcripts, setTranscripts] = useState<Record<string, readonly string[]>>({
     main: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Main turn ${i + 1}: enough rows for the scroller to hold a position.`),
     scout: Array.from({ length: AGENTCHATS_ROWS }, (_, i) => `Scout turn ${i + 1}: an existing conversation with history.`),
   });
+
   const [sent, setSent] = useState<readonly { agent: string; mode: ChatMode; text: string }[]>([]);
   const counter = useRef(0);
   // What the backend keeps to itself: the inherited mission, keyed off-DOM.
@@ -3061,6 +3258,7 @@ function AgentChatsScene() {
     }]);
     await navigate(`/workspace/checkout-fixes/agents/${name}`);
   };
+
   const send = (agent: string) => (text: string, mode: ChatMode) => {
     setSent((current) => [...current, { agent, mode, text }]);
     setTranscripts((current) => ({ ...current, [agent]: [...(current[agent] ?? []), text] }));
@@ -3073,7 +3271,9 @@ function AgentChatsScene() {
           : entry));
     }, 120);
   };
+
   const active = subName ? roster.find((entry) => entry.name === subName) : undefined;
+
   return (
     <div className="p-bg p-text flex h-screen flex-col" data-agentchats>
       <div className="mx-auto flex h-full w-full max-w-3xl min-w-0 flex-col border-x p-border">
@@ -3096,6 +3296,7 @@ function AgentChatsScene() {
             onRename={async (displayName) => {
               setRoster((current) => current.map((entry) =>
                 entry.name === subName ? { ...entry, displayName } : entry));
+
               return displayName;
             }}
             onSend={send(subName)}
@@ -3174,8 +3375,10 @@ function MarkdownFrame() {
     </div>
   );
 }
+
 function CodeRenderingFrame() {
   const [source, setSource] = useState('const pending = "stream');
+
   const samples = [
     ['js', 'export const answer = "ready"; // result'],
     ['ts', 'interface Result { value: number }\nconst answer: Result = { value: 42 };'],
@@ -3190,6 +3393,7 @@ function CodeRenderingFrame() {
     ['cpp', '#include <iostream>\nint main() { std::cout << "ready"; return 0; }'],
     ['unknown-language', '<script>unknown & safe</script>'],
   ];
+
   return <div className="flex h-screen p-bg p-text">
     <aside className="w-60 shrink-0 border-r p-border"><Sidebar /></aside>
     <main className="min-w-0 flex-1 overflow-auto p-4">
@@ -3226,6 +3430,7 @@ const SURFACE_STEPS = [
   ["recessed", "--c-recessed"], ["base", "--c-bg"], ["panel", "--c-sidebar"],
   ["card", "--c-surface"], ["raised", "--c-elevated"], ["overlay", "--c-overlay"],
 ] as const;
+
 /** Role names only. A `dark / light` contrast ratio on each line could only be
  *  measured against one palette, so on any other palette the plate would caption
  *  numbers that are not true of what it is showing. The ratios are asserted per
@@ -3234,10 +3439,12 @@ const SURFACE_STEPS = [
 const TEXT_STEPS = [
   ["ink", "--c-text"], ["mid", "--c-text-2"], ["dim", "--c-text-3"], ["accent-ink", "--c-accent-fg"],
 ] as const;
+
 const STATUS_STEPS = ["success", "warning", "danger", "info"] as const;
 
 function Palette() {
   const { mode } = useTheme();
+
   return (
     <div className="p-bg min-h-screen p-8 space-y-8 max-w-3xl">
       <div>
@@ -3301,12 +3508,14 @@ function Palette() {
  *  visitor reads. */
 function publicDocument(name: string): string | null {
   const install = `curl -fsSL 'https://kinu.run/install.sh' | bash`;
+
   if (name === "login") {
     return loginDocument([
       { href: "/auth/cloudflare/start?return_to=%2F", label: "Cloudflare" },
       { href: "/auth/github/start?return_to=%2F", label: "GitHub" },
     ]);
   }
+
   if (name === "loginfail") {
     return authDocument("Sign in failed", `
       <p class="lede">The sign-in request could not be completed. Return to sign in and try again.</p>
@@ -3315,7 +3524,9 @@ function publicDocument(name: string): string | null {
       <div class="providers"><a class="provider" href="/login?prompt=login">Return to sign in</a></div>
     `);
   }
+
   if (name === "install") return installDocument(install);
+
   if (name === "approve") {
     return approvalDocument("Connect the Kinu CLI", `
       <p>A terminal on this machine asked to sign in as you.</p>
@@ -3328,6 +3539,7 @@ function publicDocument(name: string): string | null {
       <p class="muted">Approve only if you started this in your own terminal.</p>
     `);
   }
+
   return null;
 }
 
@@ -3349,6 +3561,7 @@ function writeDocument(html: string): void {
  */
 function MarksFrame() {
   const sizes = [16, 24, 48, 96] as const;
+
   return (
     <div className="p-bg p-text min-h-screen p-10 space-y-10">
       <div className="space-y-2">
@@ -3464,6 +3677,7 @@ const slateRpc: Rpc = async <T,>(method: string, args?: Parameters<Rpc>[1]): Pro
   if (method === "previewSlate") {
     return rpcResult({ ok: true, value: { url: SLATE_GALLERY_URL, port: 8789 } }).json<T>();
   }
+
   return stubRpc<T>(method, args);
 };
 
@@ -3508,6 +3722,7 @@ const RELEASE_BOARD = {
 
 const releaseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getReleaseBoard") return rpcResult(RELEASE_BOARD).json<T>();
+
   return stubRpc<T>(method, args);
 };
 
@@ -3651,9 +3866,12 @@ const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind ===
 
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listAgentTasks") return rpcResult(AGENT_TASKS).json<T>();
+
   if (method === "getEvolutionChangelog") return rpcResult(CHANGELOG).json<T>();
+
   return stubRpc<T>(method, args);
 };
+
 function PlanReviewFrame() {
   return (
     <div data-gallery-plan-review className="p-bg p-text h-screen">
@@ -3701,7 +3919,9 @@ const SHELL_GRANTS = [
 
 const approvalsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "getShellApprovalGrants") return rpcResult({ grants: SHELL_GRANTS }).json<T>();
+
   if (method === "revokeShellApprovalGrants") return rpcResult({ ok: true, grants: SHELL_GRANTS }).json<T>();
+
   return workRpc<T>(method, args);
 };
 
@@ -3732,9 +3952,12 @@ const PARKED_ONLY: PendingAction[] = PENDING_ACTIONS.filter((a) => a.kind === "d
 function WorkEmptyFrame() {
   const emptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === "listAgentTasks") return rpcResult([]).json<T>();
+
     if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
+
     return stubRpc<T>(method, args);
   };
+
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] h-screen border-x p-border">
@@ -3813,6 +4036,7 @@ function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
     ]],
     ["/sandbox/workspace/dist", [{ name: "app.js", type: "file", size: 220_114, mtimeMs: NOW - 30 * 60e3 }]],
   ]);
+
   if (!offlineLaptop) {
     // The device tree BELOW its consented root. `/pc` and `/pc/home` are
     // deliberately absent: the machine's own path guard refuses everything
@@ -3824,6 +4048,7 @@ function seedCompositeTree(offlineLaptop: boolean): Map<string, DirEntry[]> {
       { name: "notes.html", type: "file", size: 402, mtimeMs: NOW - 36e5 },
     ]);
   }
+
   return tree;
 }
 
@@ -3865,14 +4090,18 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
   deferPreview?: boolean;
 }) {
   const [surface, setSurface] = useState<SurfaceKind>(initialSurface);
+
   const executors = useMemo<ExecutorInfo[]>(() => offlineLaptop
     ? ENVIRONMENT_EXECUTORS.map((exec) => exec.name === "laptop"
       ? { ...exec, available: false, active: false, status: "disconnected" as const, reason: "no device connected" }
       : exec)
     : ENVIRONMENT_EXECUTORS, [offlineLaptop]);
+
   const tree = useRef<Map<string, DirEntry[]> | null>(null);
+
   if (tree.current === null) tree.current = seedCompositeTree(offlineLaptop);
   const text = useRef<Map<string, string> | null>(null);
+
   if (text.current === null) text.current = new Map(Object.entries(FILES_TEXT));
   const heldPreview = useRef<PreviewDeferred | null>(null);
   const heldPreviewContent = useRef("");
@@ -3891,16 +4120,21 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
     const contents = text.current!;
     const dirOf = (p: string) => p.slice(0, p.lastIndexOf("/")) || "/";
     const nameOf = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+
     if (method === "listMounts") return rpcResult(mounts).json<T>();
+
     if (method === "getExecutorFiles") {
       const [execName, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+
       if (execName !== "workspace") return rpcResult({ error: `Executor "${execName}" has no listing here` }).json<T>();
       const asked = path === "" ? "/" : path;
       // A bare mount point lands on the machine's consented root, exactly as
       // `read-models/files.ts` mountLanding resolves it server-side.
       const dir = asked === "/pc" ? PC_CONSENTED_ROOT : asked;
       const entries = store.get(dir);
+
       if (entries !== undefined) return rpcResult({ path: dir, entries }).json<T>();
+
       // Inside the mount but outside the consented root: the device's own
       // refusal, in the words `deviceFiles`' path guard uses.
       const error = dir.startsWith("/pc")
@@ -3908,28 +4142,37 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
           + `'${PC_CONSENTED_ROOT.slice("/pc".length)}' — grant this agent the full-filesystem `
           + `consent tier to reach it, list '${dir.slice("/pc".length) || "/"}'`
         : `ENOENT: ${dir}`;
+
       return rpcResult({ error }).json<T>();
     }
+
     if (method === "readExecutorFile") {
       const [, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
       const content = contents.get(path);
+
       if (deferPreview && previewReads.current++ === 0) {
         heldPreviewContent.current = content ?? "";
         heldPreview.current = Promise.withResolvers<{ content: string; revision: number }>();
+
         return heldPreview.current.promise.then((answer) => rpcResult(answer).json<T>());
       }
+
       return rpcResult(content === undefined
         ? { error: "binary file — not previewable" }
         : { content, revision: 1 }).json<T>();
     }
+
     if (method === "renameExecutorFile") {
       const [, from, to] = v.parse(v.tuple([v.string(), v.string(), v.string()]), args ?? []);
       const listing = store.get(dirOf(from)) ?? [];
       const entry = listing.find((e) => e.name === nameOf(from));
+
       if (!entry) return rpcResult({ error: `no such file or directory: ${from}` }).json<T>();
+
       if ((store.get(dirOf(to)) ?? []).some((e) => e.name === nameOf(to))) {
         return rpcResult({ error: `${to} already exists` }).json<T>();
       }
+
       store.set(dirOf(from), sortDirEntries([
         ...listing.filter((e) => e !== entry),
         ...(dirOf(from) === dirOf(to) ? [{ ...entry, name: nameOf(to) }] : []),
@@ -3937,31 +4180,43 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
       // Collect first, mutate after: setting new keys while iterating a Map
       // visits them (spec), and a rename-into-own-subtree shape would loop.
       const moved = new Map<string, DirEntry[]>();
+
       for (const key of store.keys()) {
         if (key === from || key.startsWith(`${from}/`)) {
           moved.set(to + key.slice(from.length), store.get(key)!);
         }
       }
+
       for (const key of moved.keys()) store.delete(from + key.slice(to.length));
+
       for (const [key, entries] of moved) store.set(key, entries);
       const content = contents.get(from);
+
       if (content !== undefined) { contents.set(to, content); contents.delete(from); }
+
       return rpcResult({ ok: true }).json<T>();
     }
+
     if (method === "deleteExecutorFile") {
       const [, path] = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
       const listing = store.get(dirOf(path)) ?? [];
+
       if (!listing.some((e) => e.name === nameOf(path))) {
         return rpcResult({ error: `no such file or directory: ${path}` }).json<T>();
       }
+
       store.set(dirOf(path), listing.filter((e) => e.name !== nameOf(path)));
+
       // Map iterators are deletion-safe by spec; no snapshot needed.
       for (const key of store.keys()) {
         if (key === path || key.startsWith(`${path}/`)) store.delete(key);
       }
+
       contents.delete(path);
+
       return rpcResult({ ok: true }).json<T>();
     }
+
     return stubRpc<T>(method, args);
   };
 
@@ -3971,16 +4226,19 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
   // must convert to CR LF, and the one reading that shows whether a pasted
   // multi-line command arrived as one call or lost every line after the first.
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
+
   const runCommand = async (name: string, command: string): Promise<ExecutorCommandResult> => {
     const stdout = `${command.split("\n").map((line) => `ran: ${line}`).join("\n")}\n`;
     setExecutorOutputs((prev) => {
       const written = prev.get(name) ?? [];
+
       return new Map(prev).set(name, [...written, {
         id: `terminal-${name}-${String(written.length)}`, command,
         stdout, stdout_len: stdout.length, stderr: "", stderr_len: 0,
         exit_code: 0, created_at: NOW,
       }]);
     });
+
     return { stdout, exitCode: 0 };
   };
 
@@ -4072,9 +4330,11 @@ function olderRuns(): RunSummary[] {
     "Why is the admin report still 500ing?",
     null,
   ];
+
   return Array.from({ length: 40 }, (_, i) => {
     const silent = i % 9 === 8;
     const asking = asked[i % asked.length] ?? null;
+
     return {
       runId: `run_8${String(99 - i).padStart(2, "0")}`,
       startedAt: NOW - (7 + i) * 36e5,
@@ -4122,17 +4382,22 @@ const SUPERVISE_JOBS: BackgroundJob[] = [
 
 const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listCurriculumTasks") return rpcResult({ tasks: SUPERVISE_TASKS }).json<T>();
+
   if (method === "getRunSummaries") {
     const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
     const limit = request.limit ?? 30;
     const after = request.cursor?.after;
     const start = after === undefined ? 0 : SUPERVISE_RUNS.findIndex((run) => run.runId === after) + 1;
+
     return rpcResult(seekPage(
       SUPERVISE_RUNS.slice(start, start + limit + 1), limit, (run) => run.runId,
     )).json<T>();
   }
+
   if (method === "listTriggers") return rpcResult({ triggers: SUPERVISE_TRIGGERS }).json<T>();
+
   if (method === "listBackgroundJobs") return rpcResult(SUPERVISE_JOBS).json<T>();
+
   return stubRpc<T>(method, args);
 };
 
@@ -4514,12 +4779,14 @@ function useAutoExpandToolCalls(): void {
         if (element instanceof HTMLButtonElement) element.click();
       });
     };
+
     const id = setTimeout(() => {
       clickAll();
       // A group's own toggle mounts its members' toggles a render later —
       // one more pass after React commits catches those too.
       requestAnimationFrame(() => requestAnimationFrame(clickAll));
     }, 50);
+
     return () => clearTimeout(id);
   }, []);
 }
@@ -4589,6 +4856,7 @@ function StreamingFrame() {
 
 function ToolCallsFrame() {
   useAutoExpandToolCalls();
+
   return (
     <div className="flex justify-center p-bg p-text min-h-screen">
       <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
@@ -4658,6 +4926,7 @@ const BRAIN_MEMORY = "## Checkout\n\n- The coupon path goes through `/api/cart/a
  *  here, so this frame photographs the product's own sentence rather than a
  *  line that says "Network connection lost." twice. */
 const LOST = "Network connection lost.";
+
 const OUTAGE: WorkspaceErrors = { snapshot: LOST, memoryContent: LOST };
 
 /** One rung of the snapshot ladder: the banner the page shows, over the panes
@@ -4674,6 +4943,7 @@ function AgentPanel(
   },
 ) {
   const banner = formatWorkspaceError(errors, lastValue(snapshot) !== null);
+
   return (
     <section className="space-y-3 border-t p-border pt-6 first:border-0 first:pt-0">
       <div className="p-eyebrow">{label}</div>
@@ -4787,6 +5057,7 @@ const EXPLORATION_FRAMES = {
   forks: true, forkconfig: true, forkmerge: true, forkpreset: true,
   forkfanin: true, forkrefused: true, forkrunning: true, forklive: true,
 } satisfies Record<string, true>;
+
 const GALLERY_WORKSPACE = "checkout-fixes";
 
 /**
@@ -4804,8 +5075,10 @@ function OpenConfigDisclosures({ children }: { children: React.ReactNode }) {
         card.open = true;
       }
     }, 300);
+
     return () => { clearTimeout(timer); };
   }, []);
+
   return <>{children}</>;
 }
 
@@ -4832,18 +5105,22 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
   const noiseRef = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     const canvas = noiseRef.current;
+
     if (canvas === null) return;
     const context = canvas.getContext("2d");
+
     if (context === null) return;
     // Random pixels do not compress, so the PNG lands near its raw size and
     // crosses the 8 MiB limit the endpoint and the client both enforce.
     const frame = context.createImageData(canvas.width, canvas.height);
+
     for (let i = 0; i < frame.data.length; i += 4) {
       frame.data[i] = Math.random() * 256;
       frame.data[i + 1] = Math.random() * 256;
       frame.data[i + 2] = Math.random() * 256;
       frame.data[i + 3] = 255;
     }
+
     context.putImageData(frame, 0, 0);
   }, []);
 
@@ -4913,6 +5190,7 @@ function FeedbackFrame({ noise }: { noise: boolean }) {
  * half fails loudly instead of passing on a string nobody rendered.
  */
 const LEAK_HMAC = "whsec_hmacLEAKSifREDACTIONfails0001";
+
 const LEAK_BEARER = "whsec_bearerLEAKSifREDACTIONfails0002";
 
 function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
@@ -4975,6 +5253,7 @@ function FeedbackSecretsFrame({ modal }: { modal: boolean }) {
  * are the real versions of this, and both came back at the top.
  */
 const SCROLL_BANDS = ["#12406e", "#14783c", "#c81e5a", "#78148c", "#b4a014"];
+
 const SCROLL_CELLS = ["#1e7a3c", "#005ab4", "#f0a800", "#9600b4", "#dcc800"];
 
 function FeedbackScrollScene() {
@@ -5033,6 +5312,7 @@ let renderFault: TypeError | null = null;
 /** `?huge=1` replaces the stack with one far over the request bound, so the gate
  *  can watch the client fit a report rather than send an oversized one. */
 const HUGE_STACK = new URLSearchParams(location.search).get("huge") === "1";
+
 const HUGE_FRAME = "    at applyCoupon (http://127.0.0.1/assets/index-a1b2c3.js:1:2345)";
 
 /**
@@ -5050,13 +5330,16 @@ function BreakableView({ broken }: { broken: boolean }) {
   if (!broken) return <p data-view-intact className="text-sm p-text-2">This view renders.</p>;
   renderFaultThrows += 1;
   document.body.dataset.renderFaultThrows = String(renderFaultThrows);
+
   if (renderFault === null) {
     renderFault = new TypeError(RENDER_FAULT_MESSAGE);
+
     if (HUGE_STACK) {
       renderFault.stack = [`TypeError: ${RENDER_FAULT_MESSAGE}`]
         .concat(Array.from({ length: 600 }, () => HUGE_FRAME)).join("\n");
     }
   }
+
   throw renderFault;
 }
 
@@ -5070,6 +5353,7 @@ function BreakableView({ broken }: { broken: boolean }) {
  */
 function RenderFailureScene() {
   const [broken, setBroken] = useState(false);
+
   return (
     <div className="h-full overflow-y-auto p-bg p-text" data-render-failure>
       <div className="space-y-4 p-6">
@@ -5113,6 +5397,7 @@ function RenderFailureScene() {
 function chunkIsPresent(): boolean {
   if (sessionStorage.getItem(CHUNK_FIXED_KEY) !== null) return true;
   const [navigation] = performance.getEntriesByType("navigation");
+
   return navigation instanceof PerformanceNavigationTiming && navigation.type === "reload";
 }
 
@@ -5142,7 +5427,9 @@ function fixtureFailure(): Error {
 
 const StaleChunkRoute = lazyRoute(async () => {
   recordAttempt("stale");
+
   if (!chunkIsPresent()) throw fixtureFailure();
+
   return { default: () => <p data-lazy-loaded className="text-sm p-text-2">The split route rendered.</p> };
 });
 
@@ -5150,6 +5437,7 @@ const StaleChunkRoute = lazyRoute(async () => {
  *  regenerated loader clears one route's memo and not the others'. */
 const HealthyChunkRoute = lazyRoute(async () => {
   recordAttempt("healthy");
+
   return { default: () => <p data-lazy-healthy className="text-sm p-text-2">The other split route rendered.</p> };
 });
 
@@ -5195,6 +5483,7 @@ function galleryDevice(id: string, label: string, sandbox: UserDevice["sandbox"]
     sandbox,
   };
 }
+
 const SANDBOX_DEVICES: readonly UserDevice[] = [
   galleryDevice("dev-sandboxed", "workstation", { tier: "sandboxed", capability: "sandboxed", reason: null, detail: null, gpu: ["/dev/nvidia0", "/dev/nvidiactl"] }),
   galleryDevice("dev-raw", "build-box", { tier: "raw", capability: "sandboxed", reason: null, detail: null, gpu: [] }),
@@ -5226,12 +5515,16 @@ function DeviceSandboxFrame() {
 async function mount() {
   // Standalone public string documents render without the app shell.
   const document_ = publicDocument(frame);
+
   if (document_ !== null) {
     writeDocument(document_);
+
     return;
   }
+
   let node: React.ReactNode;
   let entries = ["/"];
+
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
   // The same surface with its config disclosure OPEN. The card is shut by the
@@ -5458,14 +5751,17 @@ async function mount() {
     const { default: HomePage } = await import("@/pages/HomePage");
     node = <div className="h-screen p-bg p-text"><HomePage /></div>;
   } else node = <All />;
+
   if (frame in EXPLORATION_FRAMES) {
     entries = [`/workspace/${GALLERY_WORKSPACE}`];
     node = <Routes><Route path="/workspace/:agentId" element={node} /></Routes>;
   }
+
   createRoot(document.getElementById("root")!).render(
     <StrictMode><MemoryRouter initialEntries={entries}><WorkspaceRosterProvider>{node}</WorkspaceRosterProvider></MemoryRouter></StrictMode>,
   );
 }
+
 try {
   await mount();
 } catch (cause) {

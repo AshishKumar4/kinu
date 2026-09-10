@@ -40,11 +40,14 @@ function setTurnContinuity(agent: HarnessAgent, continuity: RunnerView['_turnCon
 
 function runnerPolicy(agent: HarnessAgent): RunnerView['jobRunner']['policy'] {
   let prototype = Object.getPrototypeOf(agent);
+
   while (prototype) {
     const getter = Object.getOwnPropertyDescriptor(prototype, 'jobRunner')?.get;
+
     if (getter) return v.parse(RunnerViewSchema, getter.call(agent)).policy;
     prototype = Object.getPrototypeOf(prototype);
   }
+
   throw new Error('Agent jobRunner getter is missing');
 }
 

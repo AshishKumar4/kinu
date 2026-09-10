@@ -27,6 +27,7 @@ import { jsrpcStub } from './helpers/jsrpc-stub';
 mockAgentsSdk();
 
 const { handleWebhookDeliveryRequest } = await import('../src/events/routes');
+
 const { webhookRoutePath } = await import('../src/events/webhook-route');
 
 /** The one route secret this suite mints and verifies under. */
@@ -37,6 +38,7 @@ function sqlFor(db: Database): SqlExec {
 }
 
 const WORKSPACE = 'kinu-main';
+
 /** A real ULID, the shape `TriggerRegistry.register` mints. */
 const TRIGGER = '01HZY6QK9N4T7M2P8V3XABCDEF';
 
@@ -56,12 +58,15 @@ interface Harness {
 
 function harness(): Harness {
   const probe: DeliveryProbe = { woken: [], bodyText: undefined };
+
   const agent = jsrpcStub({
     acceptWebhookDelivery: async (opts: { body_text: string }) => {
       probe.bodyText = opts.body_text;
+
       return { status: 'accepted' as const, event_id: 'evt_1', admitted: true };
     },
   });
+
   // The doubles are deliberately NOT typed as the bindings they stand in for:
   // a fake `idFromName` returning the name can never satisfy `DurableObjectId`,
   // and `jsrpcStub`'s prototype-bound methods can never satisfy
@@ -74,11 +79,13 @@ function harness(): Harness {
       idFromName: (name: string) => name,
       get: (name: string) => {
         probe.woken.push(name);
+
         return agent;
       },
     },
     WEBHOOK_ROUTE_SECRET: ROUTE_SECRET,
   });
+
   // SAFETY: the three members the route reads are constructed by the
   // Object.assign above — `AUTH_KV` (the knock budget), `WEBHOOK_ROUTE_SECRET`
   // (the route capability) and `OrchestratorAgent.get` (the ingress double) are
@@ -96,6 +103,7 @@ async function delivery(
   const path = await webhookRoutePath(ROUTE_SECRET, {
     workspaceName: WORKSPACE, triggerId: TRIGGER,
   });
+
   return new Request(`https://app.example${path}`, {
     method: 'POST', body, headers: init.headers,
   });
@@ -123,9 +131,11 @@ describe('what a signed webhook delivery may cost', () => {
 
   test('an announced length over the ceiling is refused before the body is read', async () => {
     const { env, probe } = harness();
+
     const request = await delivery('{}', {
       headers: { 'content-length': String(8 * 1024 * 1024) },
     });
+
     const response = await handleWebhookDeliveryRequest(request, env);
 
     expect(response?.status).toBe(413);
@@ -136,10 +146,12 @@ describe('what a signed webhook delivery may cost', () => {
     const { env, probe } = harness();
     const headers = { 'cf-connecting-ip': '203.0.113.7' };
     let refused: Response | null = null;
+
     for (let attempt = 0; attempt < 61 && !refused; attempt += 1) {
       const response = await handleWebhookDeliveryRequest(
         await delivery('{}', { headers }), env,
       );
+
       if (response?.status === 429) refused = response;
     }
 

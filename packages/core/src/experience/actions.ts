@@ -91,11 +91,14 @@ export async function runExperienceAction<Input>(
   input: Input,
 ) {
   const request = v.safeParse(ExperienceActionInputSchema, input);
+
   if (!request.success) {
     const attempted = v.safeParse(v.object({ action: v.string() }), input);
     const subject = attempted.success ? `action "${attempted.output.action}"` : 'action';
+
     return { error: `${subject} is not available. Available: ${EXPERIENCE_ACTIONS.join(', ')}` };
   }
+
   const sources = {
     sql: deps.rt.storage.sql,
     craftStore: deps.rt.craftStore,
@@ -103,17 +106,22 @@ export async function runExperienceAction<Input>(
     actor: deps.rt.actor,
     readScaffoldVersion: (version: number) => readScaffoldVersion(deps.rt, version),
   };
+
   try {
     switch (request.output.action) {
       case 'publish': {
         if (!request.output.kind || !request.output.key) {
           const candidates = await listPublishable(sources);
+
           return candidates.length === 0
             ? { publishable: [], note: 'Nothing here has earned publication yet — a craft needs real uses, a lesson needs corroboration, a fact needs confidence, a scaffold needs a promotion it earned and graded turns behind it.' }
             : { publishable: candidates.map(summarizeCandidate), note: 'Publish one with kind + key.' };
         }
+
         const candidate = await findPublishable(sources, request.output.kind, request.output.key);
+
         if ('refused' in candidate) return { error: candidate.refused };
+
         return { published: summarize(await deps.library.publish(candidate)) };
       }
 
@@ -123,6 +131,7 @@ export async function runExperienceAction<Input>(
           kind: request.output.kind,
           limit: request.output.limit,
         });
+
         return hits.length === 0
           ? { hits: [], note: 'The owner\'s other workspaces have published nothing matching this yet.' }
           : { hits: hits.map(summarize), note: 'Import one with action:"import" and its id.' };
@@ -131,9 +140,12 @@ export async function runExperienceAction<Input>(
       case 'import': {
         if (!request.output.id) return { error: 'import requires the library entry id' };
         const entry = await deps.library.get(request.output.id);
+
         if (!entry) return { error: `no library entry with id "${request.output.id}"` };
         const staged = stageImport(deps.rt, entry);
+
         if (!staged.ok) return { error: staged.reason };
+
         return {
           imported: summarize(entry),
           status: 'provisional',

@@ -53,6 +53,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
 
   if (outputMode === 'rpc') {
     await runRpc(target, opts);
+
     return;
   }
 
@@ -66,6 +67,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
       classic: opts.classic,
       ...transcriptOptions(opts),
     });
+
     return;
   }
 
@@ -73,6 +75,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
     json: outputMode === 'json',
     headless: false,
   });
+
   exitOneShot(failed);
 }
 
@@ -94,10 +97,13 @@ export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
  */
 export async function execCommand(promptParts: string[], opts: ExecOptions): Promise<void> {
   const rawPrompt = await buildPrompt(promptParts);
+
   if (!rawPrompt) {
     throw new Error('A task prompt is required. Usage: kinu exec "task" [--workspace <name>] [--json]');
   }
+
   const target = resolveAgentTarget(resolveExecWorkspaceName(opts.workspace));
+
   const failed = await runOneShot(target, rawPrompt, {
     model: opts.model,
     baseUrl: opts.baseUrl,
@@ -108,6 +114,7 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
     json: opts.json === true,
     headless: true,
   });
+
   exitOneShot(failed);
 }
 
@@ -135,6 +142,7 @@ function exitOneShot(failed: boolean): never {
 function resolveExecWorkspaceName(explicit?: string): string {
   if (explicit?.trim()) return explicit.trim();
   const agents = listConfiguredAgentRefs();
+
   if (agents.length === 1) return agents[0]!.name;
   throw new Error(agents.length === 0
     ? 'No workspaces configured. Create one with: kinu create <name>, or pass --workspace <name>.'
@@ -163,6 +171,7 @@ async function runOneShot(
   // routine event (`admission.uncounted` fires on every openai-compat request)
   // would break every consumer that treats stderr output as the failure text.
   installTurnDiagnostics();
+
   const client = await createAgentClient(
     target,
     { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...transcriptOptions(opts) },
@@ -173,14 +182,17 @@ async function runOneShot(
   // parts, other files stay path references the agent reads with its tools.
   // Resolved after the client exists — it reports the backend's inline cap.
   const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes });
+
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
   let failed = false;
   const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
+
   const unsubscribe = client.subscribe((event) => {
     if (event.type === 'error') failed = true;
     render(event);
   });
+
   const consentWatch = !client.consents
     ? null
     : surface.headless
@@ -188,12 +200,15 @@ async function runOneShot(
       : surface.json
         ? null
         : watchTerminalConsents(client.consents, client.agentName, askLineOnce);
+
   try {
     await client.connect();
+
     const result = await client.send(
       prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text,
       { cwd: process.cwd() },
     );
+
     if (result.hadError) failed = true;
     // send() resolves when the task turn resolves, but the task turn is not
     // always the last one: a tool that auto-detached ends the turn early and
@@ -207,6 +222,7 @@ async function runOneShot(
     // failures that never reached the stream (connect, ticket, transport).
     const alreadyReported = failed;
     failed = true;
+
     if (!alreadyReported) {
       if (surface.json) process.stdout.write(`${JSON.stringify({ type: 'error', ...guideFailure({ cause: err }) })}\n`);
       else printFailure({ cause: err });
@@ -216,6 +232,7 @@ async function runOneShot(
     unsubscribe();
     await client.close();
   }
+
   return failed;
 }
 
@@ -232,6 +249,7 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
   return new Promise((resolve) => {
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     let settled = false;
+
     const settle = (answer: string | null) => {
       if (settled) return;
       settled = true;
@@ -239,6 +257,7 @@ function askLineOnce(question: string, signal: AbortSignal): Promise<string | nu
       rl.close();
       resolve(answer);
     };
+
     const onAbort = () => settle(null);
     signal.addEventListener('abort', onAbort, { once: true });
     rl.once('close', () => settle(null));
@@ -259,12 +278,16 @@ async function runRpc(
     output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() } });
     const unsubscribe = client.subscribe((event) => output({ value: { type: 'event', event } }));
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+
     try {
       for await (const line of rl) {
         if (!line.trim()) continue;
         const cmd = parseRpc(line);
+
         if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
+
         if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
+
         if (cmd.value.type !== 'prompt') {
           try {
             const data = await runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value);
@@ -272,13 +295,17 @@ async function runRpc(
           } catch (err) {
             output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: renderThrownChain({ cause: err }) } });
           }
+
           continue;
         }
+
         const message = String(cmd.value.message ?? '').trim();
+
         if (!message) {
           output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
           continue;
         }
+
         output({ value: { type: 'turn_start', id: cmd.value.id } });
         const result = await client.send(message, { cwd: process.cwd() });
         output({ value: { type: 'message_end', role: 'assistant', text: result.text } });
@@ -289,6 +316,7 @@ async function runRpc(
       unsubscribe();
       await client.close();
     }
+
     return;
   }
 
@@ -299,6 +327,7 @@ async function runRpc(
   // Defer client-owned MCP connection until the first prompt. The daemon
   // already owns orphaned-job recovery.
   let connected = false;
+
   const ensureConnected = async () => {
     if (connected) return;
     connected = true;
@@ -307,11 +336,15 @@ async function runRpc(
 
   try {
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+
     for await (const line of rl) {
       if (!line.trim()) continue;
       const cmd = parseRpc(line);
+
       if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
+
       if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
+
       if (cmd.value.type !== 'prompt') {
         try {
           const data = await runLocalRpcCommand(target.localName, cmd.value, client);
@@ -319,13 +352,17 @@ async function runRpc(
         } catch (err) {
           output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: renderThrownChain({ cause: err }) } });
         }
+
         continue;
       }
+
       const message = String(cmd.value.message ?? '').trim();
+
       if (!message) {
         output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
         continue;
       }
+
       await ensureConnected();
       await client.send(message, { cwd: process.cwd() });
       output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
@@ -345,16 +382,20 @@ async function runRpc(
  * fresh turn profile resolution overrides it. */
 async function runModelProfileCommand(cmd: JsonObject): Promise<JsonValue> {
   const spec = stringField(cmd, 'spec');
+
   const envelope = spec
     ? await updateDefaultTier({ model: spec })
     : await loadActiveProfile();
+
   return decodeJsonValue({ value: { spec: envelope.catalog.tiers.default.model } });
 }
 
 async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
   const rpc = async (method: string, args: JsonValue[] = []): Promise<JsonValue> =>
     callAgentRpc(origin, token, name, method, JsonValueSchema, args);
+
   const type = String(cmd.type);
+
   switch (type) {
     case 'get_state':
     case 'state':
@@ -371,59 +412,81 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       return rpc('listBackgroundJobs', [numberField(cmd, 'limit') ?? 20]);
     case 'memory': {
       const query = stringField(cmd, 'query');
+
       return query
         ? rpc('searchMemoryHybrid', [query, numberField(cmd, 'limit') ?? 10])
         : { content: await rpc('getMemoryContent') };
     }
+
     case 'events':
       {
         const filter: JsonObject = { limit: numberField(cmd, 'limit') ?? 50 };
         const variant = stringField(cmd, 'variant');
         const since = numberField(cmd, 'since');
+
         if (variant) filter.variant = variant;
+
         if (since !== undefined) filter.since = since;
+
         return rpc('listRecentEvents', [filter]);
       }
+
     case 'timeline':
       return rpc('getRunTimeline', [{ limit: numberField(cmd, 'limit') ?? 100 }]);
     case 'mcts': {
       const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
+
       return nodeId ? rpc('getMctsNodeDetail', [nodeId]) : rpc('getMctsTree');
     }
+
     case 'heads':
       return rpc('getHeadRuns', [numberField(cmd, 'limit') ?? 20]);
     case 'gepa': {
       const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
+
       return runId ? rpc('getGepaRun', [runId]) : rpc('getGepaRuns', [numberField(cmd, 'limit') ?? 20]);
     }
+
     case 'executors':
       return rpc('getExecutors');
     case 'exec': {
       const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
       const command = stringField(cmd, 'command');
+
       if (!executor) throw new Error('executor required');
+
       if (!command) throw new Error('command required');
+
       return rpc('executeInExecutor', [executor, command]);
     }
+
     case 'product':
       return rpc('getReleaseBoard', [numberField(cmd, 'limit') ?? 20]);
     case 'stop':
       return rpc('cancelCurrentWork');
     case 'webhook': {
       const label = stringField(cmd, 'label');
+
       if (!label) throw new Error('label required');
+
       const input: CloudWebhookTriggerInput = {
         label,
         auth_mode: normalizeWebhookAuthMode(stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode')),
       };
+
       const secret = stringField(cmd, 'secret');
       const contentType = stringField(cmd, 'contentType');
       const rateLimit = numberField(cmd, 'rateLimit');
+
       if (secret) input.secret = secret;
+
       if (contentType) input.accepted_content_type = contentType;
+
       if (rateLimit) input.rate_limit_per_min = rateLimit;
+
       return decodeJsonValue({ value: await createCloudWebhookTrigger(origin, token, name, input) });
     }
+
     default:
       throw new Error('Unsupported command');
   }
@@ -431,6 +494,7 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
 
 async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
   const type = String(cmd.type);
+
   switch (type) {
     case 'get_state':
     case 'state':
@@ -452,8 +516,10 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       return decodeJsonValue({ value: await client.listJobs(numberField(cmd, 'limit') ?? 20) });
     case 'memory': {
       const query = stringField(cmd, 'query');
+
       return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) } });
     }
+
     case 'events':
       return decodeJsonValue({ value: listLocalEvents(name, {
         variant: stringField(cmd, 'variant'),
@@ -464,27 +530,36 @@ async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentCl
       return listLocalTimeline(name, numberField(cmd, 'limit') ?? 100);
     case 'mcts': {
       const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
+
       return decodeJsonValue({ value: nodeId ? getLocalMctsNode(name, nodeId) : listLocalMcts(name) });
     }
+
     case 'heads':
       return decodeJsonValue({ value: listLocalHeads(name, numberField(cmd, 'limit') ?? 20) });
     case 'gepa': {
       const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
+
       return decodeJsonValue({ value: runId ? getLocalGepaRun(name, runId) : listLocalGepaRuns(name, numberField(cmd, 'limit') ?? 20) });
     }
+
     case 'executors':
       return decodeJsonValue({ value: listLocalExecutors() });
     case 'exec': {
       const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
       const command = stringField(cmd, 'command');
+
       if (!executor) throw new Error('executor required');
+
       if (!command) throw new Error('command required');
+
       return decodeJsonValue({ value: await executeLocalExecutor(name, executor, command) });
     }
+
     case 'product':
       return decodeJsonValue({ value: getLocalReleaseBoard(name, numberField(cmd, 'limit') ?? 20) });
     case 'stop':
       client.stop();
+
       return { interrupted: true, cancelledBackgroundJobs: await markLocalBackgroundJobsCancelled(name) };
     default:
       throw new Error('Unsupported command');
@@ -522,11 +597,13 @@ function renderRunEvent(event: AgentClientEvent): void {
 function createJsonEventWriter(client: AgentClient): (event: AgentClientEvent) => void {
   let wroteHeader = false;
   const output = (value: JsonValue) => process.stdout.write(`${JSON.stringify(value)}\n`);
+
   return (event) => {
     if (!wroteHeader) {
       wroteHeader = true;
       output({ type: 'session', id: client.cliSession.id, workspace: client.agentName, backend: client.mode, cwd: process.cwd() });
     }
+
     for (const value of jsonEvents(event)) output(value);
   };
 }
@@ -535,9 +612,12 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
   switch (event.type) {
     case 'turn-start': {
       const value: JsonObject = { type: 'turn_start', kind: event.kind, text: event.text };
+
       if (event.event) value.event = event.event;
+
       return [value];
     }
+
     case 'text-delta':
       return [{ type: 'message_delta', role: 'assistant', delta: event.delta }];
     case 'tool-call':
@@ -551,6 +631,7 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
         durationMs: event.turn.durationMs,
         hadError: event.turn.hadError,
       };
+
       // The turn's usage, field-for-field, and only when the provider reported
       // something: a reader must be able to tell "spent nothing" from "nobody
       // metered this", so an unreported field is an ABSENT key rather than a 0
@@ -563,11 +644,13 @@ function jsonEvents(event: AgentClientEvent): JsonValue[] {
       if (event.turn.usage && usageReported(event.turn.usage)) {
         turnEnd.usage = projectJsonValue({ value: event.turn.usage });
       }
+
       return [
         { type: 'message_end', role: 'assistant', text: event.turn.text },
         turnEnd,
       ];
     }
+
     case 'step-finish':
       return [];
     case 'error':
@@ -602,6 +685,7 @@ const RpcCommandSchema = v.objectWithRest({ type: v.string() }, JsonValueSchema)
 function parseRpc(line: string): RpcParseResult {
   try {
     const parsed = v.safeParse(RpcCommandSchema, parseJsonObject(line));
+
     return parsed.success
       ? { ok: true, value: parsed.output }
       : { ok: false, error: 'Command must be an object with type' };
@@ -628,10 +712,12 @@ async function readStdin(): Promise<string> {
  */
 async function readOptionalStdin(): Promise<string> {
   const reader = Bun.stdin.stream().getReader();
+
   const first = await Promise.race([
     reader.read(),
     new Promise<'idle'>((resolve) => setTimeout(() => resolve('idle'), OPTIONAL_STDIN_GRACE_MS)),
   ]);
+
   if (first === 'idle') {
     // Cancelling ends the idle read; await its release before returning.
     try {
@@ -639,19 +725,25 @@ async function readOptionalStdin(): Promise<string> {
     } catch (cause) {
       process.stderr.write(`note: releasing idle stdin failed: ${renderThrownChain({ cause })}\n`);
     }
+
     process.stderr.write(
       `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +
       'pipe data promptly or close it (< /dev/null)\n',
     );
+
     return '';
   }
+
   const decoder = new TextDecoder();
   let text = first.done ? '' : decoder.decode(first.value, { stream: true });
+
   while (true) {
     const chunk = await reader.read();
+
     if (chunk.done) break;
     text += decoder.decode(chunk.value, { stream: true });
   }
+
   return text + decoder.decode();
 }
 
@@ -669,15 +761,19 @@ async function buildPrompt(parts: string[]): Promise<string> {
   const chunks = [...parts];
   const argvPrompt = chunks.join(' ').trim();
   let stdin = '';
+
   if (!process.stdin.isTTY) {
     stdin = argvPrompt ? await readOptionalStdin() : await readStdin();
   }
+
   if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
+
   return chunks.join(' ').trim();
 }
 
 function normalizeOutputMode(raw: string | undefined): 'text' | 'json' | 'rpc' {
   const mode = (raw ?? 'text').toLowerCase();
+
   if (mode === 'text' || mode === 'json' || mode === 'rpc') return mode;
   throw new Error('--mode must be text, json, or rpc');
 }

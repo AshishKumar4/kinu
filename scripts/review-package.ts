@@ -11,9 +11,11 @@ import { join } from 'node:path';
 import { withGallery } from './gallery-harness';
 
 const OUT = '/tmp/review-LandingV3';
+
 mkdirSync(OUT, { recursive: true });
 
 const FONTS = join(import.meta.dir, '..', 'packages', 'cf-backend', 'public', 'assets', 'fonts');
+
 const ARTIFACT = '/home/mrwhite0racle/kinu-landing-design/Kinu Landing Page.dc.html';
 
 const faceCss = `
@@ -27,7 +29,9 @@ const artifactHtml = readFileSync(ARTIFACT, 'utf8')
   // support.js is the mock runtime's hover shim; offline it is absent, so the
   // hovers simply stay inert on his side.
   ;
+
 const artifactPath = join(OUT, 'artifact.html');
+
 writeFileSync(artifactPath, artifactHtml);
 
 await withGallery(async ({ browser, origin }) => {
@@ -39,6 +43,7 @@ await withGallery(async ({ browser, origin }) => {
     await a.setViewport({ width, height, deviceScaleFactor: 1 });
     await a.goto(`file://${artifactPath}`, { waitUntil: 'networkidle0' });
     await new Promise((r) => setTimeout(r, 800));
+
     if (width === 1280) await a.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
     await new Promise((r) => setTimeout(r, 400));
     await a.screenshot({ path: `${OUT}/artifact-${label}.png`, fullPage: true });
@@ -49,6 +54,7 @@ await withGallery(async ({ browser, origin }) => {
     await p.setViewport({ width, height, deviceScaleFactor: 1 });
     await p.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
     await p.goto(`${origin}/gallery.html?frame=landing`, { waitUntil: 'networkidle0' });
+
     try {
       await p.waitForFunction(() => !document.querySelector('[data-growing]'), { timeout: 10_000 });
     } catch (cause) {
@@ -57,10 +63,12 @@ await withGallery(async ({ browser, origin }) => {
       // captures regardless.
       console.warn('settle wait elapsed:', cause instanceof Error ? cause.message : String(cause));
     }
+
     await new Promise((r) => setTimeout(r, 600));
     await p.screenshot({ path: `${OUT}/port-${label}.png`, fullPage: true });
     await p.close();
     console.log(`shot ${label}`);
   }
 });
+
 console.log(`review package in ${OUT}`);

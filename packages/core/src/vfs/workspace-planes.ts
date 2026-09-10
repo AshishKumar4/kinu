@@ -50,9 +50,11 @@ export async function writeWorkspaceSoul(
 ): Promise<void> {
   const kernel = (await bundle.session()).vfs.as(CRED_KERNEL);
   const soul = workspacePath(SOUL_PATH);
+
   if (!kernel.exists(WORKSPACE_ROOT) || !kernel.isDirectory(WORKSPACE_ROOT)) {
     throw new Error(`the workspace root ${WORKSPACE_ROOT} does not exist`);
   }
+
   kernel.chown(WORKSPACE_ROOT, CRED_KERNEL.uid, CRED_KERNEL.gid);
   kernel.chmod(WORKSPACE_ROOT, 0o1777);
   kernel.writeFile(soul, content);
@@ -74,11 +76,14 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
   const ensureParent = async (path: string): Promise<void> => {
     const resolved = workspacePath(path);
     const cut = resolved.lastIndexOf('/');
+
     if (cut <= 0) return;
     const parent = resolved.slice(0, cut);
     const plane = await sessionPlane(bundle);
+
     if (!plane.exists(parent)) plane.mkdir(parent, { recursive: true });
   };
+
   const native: ForkNativeFilePort = {
     async truncate(path, size) {
       await ensureParent(path);
@@ -109,6 +114,7 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
     },
     async unlink(path) { (await sessionPlane(bundle)).unlink(workspacePath(path)); },
   };
+
   return new NativeSinkPlan(native, transferId, {
     // Ordinary files publish by rename. SOUL cannot: the protected write chowns
     // the file to the kernel and takes whole content, and renaming a
@@ -121,6 +127,7 @@ export function createWorkspaceForkSink(bundle: WorkspaceBundle, transferId: str
     // by decoding the document into a second whole copy.
     async publish(_targetPath, bytes) {
       await writeWorkspaceSoul(bundle, bytes);
+
       return { mission: summarizeSoulBytes(bytes) };
     },
   });
@@ -151,23 +158,31 @@ export function workspaceArchiveFiles(bundle: WorkspaceBundle): ArchiveFileSourc
     async listEntries() {
       const vfs = await sessionPlane(bundle);
       const entries: Array<{ path: string; type: 'file' | 'directory' }> = [];
+
       const walk = (absolute: string, relative: string): void => {
         const children = [...vfs.readdir(absolute)].sort((a, b) => a.name.localeCompare(b.name));
+
         for (const child of children) {
           if (!child.name || child.name === '.' || child.name === '..' || child.name.includes('/')) {
             throw new Error(
               `Workspace archive encountered an invalid entry name: ${JSON.stringify(child.name)}.`,
             );
           }
+
           const path = relative ? `${relative}/${child.name}` : child.name;
+
           if (child.type !== 'file' && child.type !== 'directory') {
             throw new Error(`Workspace archive cannot preserve ${child.type} entry ${JSON.stringify(path)}.`);
           }
+
           entries.push({ path, type: child.type });
+
           if (child.type === 'directory') walk(`${absolute}/${child.name}`, path);
         }
       };
+
       walk(WORKSPACE_ROOT, '');
+
       return entries;
     },
     async readFile(path) {

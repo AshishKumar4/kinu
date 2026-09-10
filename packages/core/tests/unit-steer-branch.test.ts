@@ -26,6 +26,7 @@ function setup() {
   // never reaches for one — an UPDATE matching no row is indistinguishable
   // from an UPDATE that was never issued.
   ws.execRaw('DROP TABLE search_nodes');
+
   // The journal is actor-private and the pick reads its turn pair from the
   // actor-scoped conversation store, so the workspace issues the one actor that
   // owns the branch heads written below and that the production readers resolve.
@@ -46,9 +47,11 @@ function completedReport(id: string, summary: string, status: HeadReport['status
 function fakeRuntime(run: (input: HeadInput) => Promise<HeadReport>) {
   const spawns: HeadInput[] = [];
   const aborts: string[] = [];
+
   const runtime: HeadRuntime = {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       spawns.push(input);
+
       return {
         id: input.id,
         run: () => run(input),
@@ -57,6 +60,7 @@ function fakeRuntime(run: (input: HeadInput) => Promise<HeadReport>) {
     },
     mergeLLM: async () => { throw new Error('branch runs never merge'); },
   };
+
   return { runtime, spawns, aborts };
 }
 
@@ -70,6 +74,7 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
       task: 'try the other approach',
       inheritedContext: [{ id: 'c1', role: 'user', content: 'original ask', createdAt: 1 }],
     });
+
     const report = await handle.result;
 
     expect(report.status).toBe('completed');
@@ -96,8 +101,10 @@ describe('startBranchHead — one budgeted head over the HeadRuntime seam', () =
     const journal = new HeadJournal(sql, actor);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+
     const { runtime, aborts } = fakeRuntime(async (input) => {
       await gate;
+
       return completedReport(input.id, 'late', 'aborted');
     });
 
@@ -125,20 +132,27 @@ describe('branchOutcomeFromJournal — the journal read a cold settle makes', ()
   ) {
     const { sql, actor } = setup();
     const journal = new HeadJournal(sql, actor);
+
     const { runtime } = fakeRuntime(async (input) => {
       if (status === null) return new Promise<HeadReport>(() => { /* spawned, never reports */ });
       const reported = completedReport(input.id, summary, status);
+
       return errorMessage === undefined ? reported : { ...reported, errorMessage };
     });
+
     const handle = await startBranchHead(runtime, journal, { task: 'try the other way', inheritedContext: [] });
+
     if (status !== null) await handle.result;
+
     return { journal, runId: handle.id };
   }
 
   /** The row a replay reads, addressed the way a replay addresses it. */
   function readBack(journal: HeadJournal, runId: string) {
     const head = journal.readHeadView(branchHeadId(runId));
+
     if (head === null) throw new Error(`no journal row for the head of ${runId}`);
+
     return branchOutcomeFromJournal(head);
   }
 
@@ -180,6 +194,7 @@ describe('branchOutcomeFromJournal — the journal read a cold settle makes', ()
 describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () => {
   test('a completed branch + completed live turn persist a claimed branch-sourced pair', () => {
     const { sql, actor } = setup();
+
     const outcome = settleBranchIntoTakes(sql, actor, {
       task: 'use approach B instead',
       report: completedReport('h1', 'B-style answer'),
@@ -187,6 +202,7 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
       sessionId: 'default',
       liveText: 'A-style answer',
     });
+
     expect(outcome.ok).toBe(true);
 
     const set = latestAlternateTakeSet(sql, actor)!;
@@ -206,31 +222,39 @@ describe('settleBranchIntoTakes — honest settle into ONE takes pipeline', () =
   test('an errored branch writes NO takes set and surfaces the failure reason', () => {
     const { sql, actor } = setup();
     const report = { ...completedReport('h1', '', 'errored'), errorMessage: 'model exploded' };
+
     const outcome = settleBranchIntoTakes(sql, actor, {
       task: 'x', report, turnId: 'turn-9', sessionId: 'default', liveText: 'live',
     });
+
     expect(outcome).toEqual({ ok: false, reason: 'model exploded' });
     expect(latestAlternateTakeSet(sql, actor)).toBeNull();
   });
 
   test('an interrupted live turn writes NO takes set', () => {
     const { sql, actor } = setup();
+
     const outcome = settleBranchIntoTakes(sql, actor, {
       task: 'x', report: completedReport('h1', 'branch answer'),
       turnId: null, sessionId: 'default', liveText: '',
     });
+
     expect(outcome.ok).toBe(false);
+
     if (!outcome.ok) expect(outcome.reason).toContain('live turn did not complete');
     expect(latestAlternateTakeSet(sql, actor)).toBeNull();
   });
 
   test('identical answers offer no choice — no takes set', () => {
     const { sql, actor } = setup();
+
     const outcome = settleBranchIntoTakes(sql, actor, {
       task: 'x', report: completedReport('h1', 'same answer'),
       turnId: 'turn-9', sessionId: 'default', liveText: 'same answer',
     });
+
     expect(outcome.ok).toBe(false);
+
     if (!outcome.ok) expect(outcome.reason).toContain('same answer as the live turn');
     expect(latestAlternateTakeSet(sql, actor)).toBeNull();
   });
@@ -240,6 +264,7 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
   test('picking the branch records corrected + the branch text as the follow-up, without search_nodes', () => {
     // The re-point only applies to mcts-sourced sets (see setup()).
     const { sql, actor } = setup();
+
     const set = recordBranchTakeSet(sql, actor, {
       task: 'use approach B instead', turnId: 'turn-9', sessionId: 'default',
       liveText: 'A-style answer', branchText: 'B-style answer',
@@ -252,6 +277,7 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
 
     const ledger = sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
       SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0]!;
+
     expect(ledger).toMatchObject({
       outcome: 'corrected', source: 'take_pick', followup: 'B-style answer', turn_id: 'turn-9',
     });
@@ -263,10 +289,12 @@ describe('recordTakePick over a branch-sourced set — the pipeline unchanged', 
 
   test('confirming the live answer records acceptance', () => {
     const { sql, actor } = setup();
+
     const set = recordBranchTakeSet(sql, actor, {
       task: 't', turnId: 'turn-9', sessionId: 'default',
       liveText: 'live answer', branchText: 'branch answer',
     })!;
+
     const record = recordTakePick(sql, actor, { takeId: set.id, nodeId: set.candidates[0]!.nodeId });
     expect(record.outcome).toBe('accepted');
     expect(record.changedAnswer).toBe(false);
@@ -283,6 +311,7 @@ describe('recordBranchTakeSet — the settlement key', () => {
       task: 'use approach B instead', turnId: 'turn-9', sessionId: 'default',
       liveText: 'A-style answer', branchText: 'B-style answer',
     };
+
     return settlementKey === undefined ? base : { ...base, settlementKey };
   };
 
@@ -330,11 +359,14 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
     const { sql, actor } = setup();
     const journal = new HeadJournal(sql, actor);
     const { runtime } = fakeRuntime(async (input) => completedReport(input.id, answer));
+
     const handle = await startBranchHead(runtime, journal, {
       task,
       inheritedContext: [{ id: 'c1', role: 'user', content: 'original ask', createdAt: 1 }],
     });
+
     const entry: PendingBranch = { id: handle.id, task, handle: Promise.resolve(handle) };
+
     return { sql, actor, entry };
   }
 
@@ -350,6 +382,7 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
     );
     const settled = events.filter((e) => e.status === 'settled');
     expect(settled).toHaveLength(1);
+
     if (settled[0]?.status !== 'settled') throw new Error('expected a settled event');
     expect(settled[0].takeSetId).toBe(latestAlternateTakeSet(sql, actor)!.id);
     expect(listAlternateTakeSets(sql, actor)).toHaveLength(1);
@@ -358,17 +391,21 @@ describe('settlePendingBranch — the keyed settle both backends run at turn end
   test('a replayed settlement key returns the same set and writes no second one', async () => {
     const { sql, actor, entry } = await pendingBranch('branch answer');
     const events: BranchStatusEvent[] = [];
+
     const deps = {
       sql, actor, sessionId: 'default', broadcast: (e: BranchStatusEvent) => { events.push(e); },
     };
+
     await settlePendingBranch(deps, entry, 'turn-1', 'the live answer', `branch:${entry.id}`);
     await settlePendingBranch(deps, entry, 'turn-1', 'the live answer', `branch:${entry.id}`);
     expect(listAlternateTakeSets(sql, actor)).toHaveLength(1);
     const settled = events.filter((e) => e.status === 'settled');
     expect(settled).toHaveLength(2);
+
     if (settled[0]?.status !== 'settled' || settled[1]?.status !== 'settled') {
       throw new Error('expected settled events');
     }
+
     expect(settled[1].takeSetId).toBe(settled[0].takeSetId);
   });
 

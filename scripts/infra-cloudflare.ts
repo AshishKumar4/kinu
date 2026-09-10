@@ -30,6 +30,7 @@ import * as v from 'valibot';
 import { JsonValueSchema, type JsonValue } from '@kinu.run/core';
 
 const REPO = new URL('..', import.meta.url).pathname;
+
 /** wrangler resolves `wrangler.jsonc`, `.dev.vars` and the account from its cwd. */
 const CF_BACKEND = `${REPO}packages/cf-backend`;
 
@@ -45,7 +46,9 @@ export type Observation =
   | { readonly state: 'unknown'; readonly reason: string };
 
 export const absent: Observation = { state: 'absent' };
+
 export const present = (detail: string): Observation => ({ state: 'present', detail });
+
 export const unknown = (reason: string): Observation => ({ state: 'unknown', reason });
 
 export interface Run {
@@ -81,12 +84,14 @@ const DeclaredAccount = v.object({ account_id: v.optional(v.string()) });
 
 function declaredAccountId(): string | undefined {
   const config = join(CF_BACKEND, 'wrangler.jsonc');
+
   if (!existsSync(config)) return undefined;
   // Bun decodes JSONC natively on `require` — structural, where the regex this
   // replaces read the raw text and would have matched a commented-out id. The
   // hex pin is the same contract the regex carried: an account id is 32 hex
   // digits, and a placeholder must lose to the ambient variable, not win.
   const declared = v.parse(DeclaredAccount, require(config)).account_id;
+
   return declared !== undefined && /^[0-9a-f]+$/.test(declared) ? declared : undefined;
 }
 
@@ -98,6 +103,7 @@ export function wrangler(argv: readonly string[], timeoutMs = 120_000, stdin?: s
     // owner with one account and no declared id is unaffected.
     CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID ?? declaredAccountId(),
   };
+
   const result = spawnSync('npx', ['wrangler', ...argv], {
     cwd: CF_BACKEND,
     encoding: 'utf8',
@@ -105,9 +111,11 @@ export function wrangler(argv: readonly string[], timeoutMs = 120_000, stdin?: s
     env,
     input: stdin,
   });
+
   if (result.error !== undefined) {
     return { ok: false, stdout: '', stderr: `spawn failed: ${result.error.message}`, code: -1 };
   }
+
   return {
     ok: result.status === 0,
     stdout: result.stdout ?? '',
@@ -132,6 +140,7 @@ export function why(run: Run): string {
       && !line.startsWith('⛅')
       && !line.startsWith('─')
       && !line.includes('workers-sdk/issues'));
+
   return lines.slice(-3).join(' / ') || `exit ${String(run.code)}`;
 }
 
@@ -139,6 +148,7 @@ export function why(run: Run): string {
  *  bracket that opens the value the caller asked for. */
 function jsonBody(stdout: string, open: '[' | '{'): string | undefined {
   const at = stdout.indexOf(open);
+
   return at === -1 ? undefined : stdout.slice(at);
 }
 
@@ -161,15 +171,21 @@ class Catalog<TSchema extends v.GenericSchema> {
   load(): { readonly rows: v.InferOutput<TSchema> } | { readonly failure: string } {
     if (this.cached !== undefined) return this.cached;
     const run = wrangler(this.argv);
+
     if (!run.ok) {
       this.cached = { failure: `\`wrangler ${this.argv.join(' ')}\` failed: ${why(run)}` };
+
       return this.cached;
     }
+
     const body = jsonBody(run.stdout, '[');
+
     if (body === undefined) {
       this.cached = { failure: `\`wrangler ${this.argv.join(' ')}\` printed no JSON array` };
+
       return this.cached;
     }
+
     try {
       this.cached = { rows: v.parse(this.schema, JSON.parse(body)) };
     } catch (error) {
@@ -181,20 +197,26 @@ class Catalog<TSchema extends v.GenericSchema> {
           + (error instanceof Error ? error.message : String(error)),
       };
     }
+
     return this.cached;
   }
 }
 
 const NamedRows = v.array(v.object({ name: v.string() }));
+
 const KvRows = v.array(v.object({ id: v.string(), title: v.string() }));
+
 const VectorizeRows = v.array(v.object({
   name: v.string(),
   config: v.object({ dimensions: v.number(), metric: v.string() }),
 }));
+
 const ContainerRows = v.array(v.object({ name: v.string(), image: v.string(), id: v.string() }));
 
 const kvCatalog = new Catalog('KV', ['kv', 'namespace', 'list'], KvRows);
+
 const vectorizeCatalog = new Catalog('Vectorize', ['vectorize', 'list', '--json'], VectorizeRows);
+
 const containerCatalog = new Catalog('Containers', ['containers', 'list', '--json'], ContainerRows);
 
 /** Observed KV namespaces, or the reason the catalogue could not be read.
@@ -202,17 +224,22 @@ const containerCatalog = new Catalog('Containers', ['containers', 'list', '--jso
  *  names — KV titles are not unique and two of them can answer to one name. */
 export function kvNamespace(id: string): Observation {
   const loaded = kvCatalog.load();
+
   if ('failure' in loaded) return unknown(loaded.failure);
   const row = loaded.rows.find((entry) => entry.id === id);
+
   return row === undefined ? absent : present(row.title);
 }
 
 export function vectorize(name: string, dimensions: number, metric: string): Observation {
   const loaded = vectorizeCatalog.load();
+
   if ('failure' in loaded) return unknown(loaded.failure);
   const row = loaded.rows.find((entry) => entry.name === name);
+
   if (row === undefined) return absent;
   const geometry = `${String(row.config.dimensions)}-dim ${row.config.metric}`;
+
   // Present but the wrong shape is worse than absent: the binding resolves and
   // every insert is rejected. Reported as a live index with its real geometry so
   // the caller can compare, rather than silently as "exists".
@@ -223,9 +250,12 @@ export function vectorize(name: string, dimensions: number, metric: string): Obs
 
 export function container(name: string, image: string): Observation {
   const loaded = containerCatalog.load();
+
   if ('failure' in loaded) return unknown(loaded.failure);
   const row = loaded.rows.find((entry) => entry.name === name);
+
   if (row === undefined) return absent;
+
   return present(row.image === image
     ? `${row.id} running ${row.image}`
     : `${row.id} running ${row.image} — MANIFEST DECLARES ${image}; the SDK logs a version `
@@ -251,7 +281,9 @@ export function r2(name: string): Observation {
       }
       : { failure: `\`wrangler r2 bucket list\` failed: ${why(run)}` };
   }
+
   if ('failure' in r2Cache) return unknown(r2Cache.failure);
+
   // A parse that found nothing at all is not "the account has no buckets" — it
   // is a format this reader no longer understands, and saying "absent" there
   // would make provision create a bucket that already exists.
@@ -259,12 +291,14 @@ export function r2(name: string): Observation {
     return unknown('`wrangler r2 bucket list` succeeded and no `name:` line was recognised — '
       + 'its output format changed');
   }
+
   return r2Cache.names.includes(name) ? present(name) : absent;
 }
 
 /* ── The deployed Worker ──────────────────────────────────────────────── */
 
 const DeploymentStatus = v.object({ versions: v.array(v.object({ version_id: v.string() })) });
+
 const VersionView = v.object({
   id: v.string(),
   resources: v.object({
@@ -305,19 +339,25 @@ export type Deployment =
 export function deployment(environment: string | undefined): Deployment {
   const flag = environment === undefined ? [] : ['--env', environment];
   const status = wrangler(['deployments', 'status', '--json', ...flag]);
+
   if (!status.ok) {
     const complaint = why(status);
+
     // wrangler says this in prose and there is no exit code that distinguishes
     // it, so the one string it uses is matched deliberately and narrowly.
     return /not found|does not exist|no deployments/iu.test(complaint)
       ? { state: 'absent' }
       : { state: 'unknown', reason: `\`wrangler deployments status\` failed: ${complaint}` };
   }
+
   const statusBody = jsonBody(status.stdout, '{');
+
   if (statusBody === undefined) {
     return { state: 'unknown', reason: '`wrangler deployments status --json` printed no JSON' };
   }
+
   let versionId: string;
+
   try {
     versionId = v.parse(DeploymentStatus, JSON.parse(statusBody)).versions[0]?.version_id ?? '';
   } catch (error) {
@@ -326,18 +366,24 @@ export function deployment(environment: string | undefined): Deployment {
       reason: `could not read \`wrangler deployments status --json\` — ${error instanceof Error ? error.message : String(error)}`,
     };
   }
+
   if (versionId.length === 0) return { state: 'absent' };
 
   const view = wrangler(['versions', 'view', versionId, '--json', ...flag]);
+
   if (!view.ok) {
     return { state: 'unknown', reason: `\`wrangler versions view\` failed: ${why(view)}` };
   }
+
   const viewBody = jsonBody(view.stdout, '{');
+
   if (viewBody === undefined) {
     return { state: 'unknown', reason: '`wrangler versions view --json` printed no JSON' };
   }
+
   try {
     const parsed = v.parse(VersionView, JSON.parse(viewBody));
+
     return {
       state: 'deployed',
       versionId: parsed.id,
@@ -366,16 +412,22 @@ export function deployment(environment: string | undefined): Deployment {
 export function secretNames(environment: string | undefined): Observation & { readonly names?: readonly string[] } {
   const flag = environment === undefined ? [] : ['--env', environment];
   const run = wrangler(['secret', 'list', '--format', 'json', ...flag]);
+
   if (!run.ok) {
     const complaint = why(run);
+
     return /not found|does not exist/iu.test(complaint)
       ? absent
       : unknown(`\`wrangler secret list\` failed: ${complaint}`);
   }
+
   const body = jsonBody(run.stdout, '[');
+
   if (body === undefined) return unknown('`wrangler secret list --format json` printed no JSON array');
+
   try {
     const rows = v.parse(NamedRows, JSON.parse(body));
+
     return { state: 'present', detail: `${String(rows.length)} secret(s)`, names: rows.map((row) => row.name) };
   } catch (error) {
     return unknown(`could not read \`wrangler secret list\` — ${error instanceof Error ? error.message : String(error)}`);
@@ -415,12 +467,16 @@ const HealthStamp = v.object({ build: v.nullable(v.object({ sha: v.string() })) 
  */
 export async function servesWorker(hostname: string): Promise<Observation> {
   const url = `https://${hostname}/api/health`;
+
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+
     return routeAnswer(url, response.status, v.parse(JsonValueSchema, await response.json()));
   } catch (error) {
     const code = error instanceof Error && 'code' in error ? String(error.code) : '';
+
     if (code === 'ENOTFOUND' || code === 'ECONNREFUSED') return absent;
+
     return unknown(`${url}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
@@ -434,12 +490,15 @@ const PreviewRefusal = v.object({ code: v.literal('NOT_A_PREVIEW') });
 export function routeAnswer(url: string, status: number, body: JsonValue): Observation {
   if (status >= 500) return unknown(`${url} answered ${String(status)} — reachable but unwell`);
   const stamp = v.safeParse(HealthStamp, body);
+
   if (stamp.success) {
     const hostname = new URL(url).hostname;
+
     return present(stamp.output.build === null
       ? `${hostname} → a Kinu Worker, stampless (no full deploy has landed yet)`
       : `${hostname} → a Kinu Worker, build ${stamp.output.build.sha}`);
   }
+
   // Another Kinu Worker's wildcard preview route caught the hostname, which is
   // only possible while this hostname's own, more specific route is gone: a
   // positive observation of absence, and the state a deleted Worker leaves
@@ -449,6 +508,7 @@ export function routeAnswer(url: string, status: number, body: JsonValue): Obser
     return { state: 'absent', detail: `${url} answered ${String(status)} NOT_A_PREVIEW: the wildcard `
       + 'preview route of another Kinu Worker caught the hostname, so its own route is not there' };
   }
+
   return unknown(`${url} answered ${String(status)} without the health document — `
     + 'the hostname resolves and something other than this Worker is answering');
 }
@@ -471,12 +531,15 @@ export const PROBE_LABEL = 'infra-verify-probe';
 export async function hostResolves(hostname: string): Promise<Observation> {
   try {
     const addresses = await resolveHostname(hostname, 'A');
+
     return addresses.length > 0
       ? present(`${hostname} → ${addresses.join(', ')}`)
       : unknown(`${hostname} resolved to no address`);
   } catch (error) {
     const code = error instanceof Error && 'code' in error ? String(error.code) : '';
+
     if (code === 'ENOTFOUND' || code === 'NXDOMAIN') return absent;
+
     return unknown(`${hostname}: ${code.length > 0 ? code : String(error)}`);
   }
 }
@@ -500,10 +563,13 @@ export const wildcardDns = async (suffix: string): Promise<Observation> =>
 export async function edgeResponds(hostname: string): Promise<Observation> {
   try {
     const response = await fetch(`https://${hostname}/`, { signal: AbortSignal.timeout(20_000) });
+
     return present(`HTTP ${String(response.status)} from the edge`);
   } catch (error) {
     const code = error instanceof Error && 'code' in error ? String(error.code) : '';
+
     if (code === 'ENOTFOUND' || code === 'ECONNREFUSED') return absent;
+
     return unknown(`https://${hostname}/: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
@@ -615,7 +681,9 @@ export function accessDestinations(app: AccessApplicationView): readonly string[
     .filter((entry) => (entry.type ?? 'public') === 'public')
     .map((entry) => entry.uri ?? entry.hostname ?? '')
     .filter((uri) => uri.length > 0);
+
   const fromDomain = (app.domain ?? '').length > 0 ? [app.domain ?? ''] : [];
+
   return [...new Set([...fromList, ...fromDomain])].map((uri) => uri.replace(/^https?:\/\//u, ''));
 }
 
@@ -644,12 +712,15 @@ export function accessCovering(
   paths: readonly string[],
 ): AccessCoverage {
   const matches = apps.filter((app) => (app.aud ?? '') === aud);
+
   const covering = matches.find((app) => {
     const destinations = accessDestinations(app);
+
     return paths.every((path) => destinations.some((destination) =>
       destination.startsWith(`${host}${path.replace(/\*$/u, '')}`)
       && destination.endsWith('*')));
   });
+
   return { covering, destinations: matches.flatMap((app) => accessDestinations(app)) };
 }
 
@@ -675,15 +746,19 @@ export function accessOverreach(
 ): readonly string[] {
   const allowed = paths.map((path) => `${host}${path.replace(/\*$/u, '')}`);
   const found: string[] = [];
+
   for (const app of apps) {
     for (const destination of accessDestinations(app)) {
       const claimed = destination.replace(/\/.*$/u, '');
+
       const overreaching = claimed.startsWith('*.')
         ? wildcards.includes(claimed.slice(2))
         : claimed === host && !allowed.some((prefix) => destination.startsWith(prefix));
+
       if (overreaching) found.push(`"${app.name ?? app.id ?? '(unnamed)'}" → ${destination}`);
     }
   }
+
   return found;
 }
 
@@ -703,12 +778,16 @@ async function accessGet<TSchema extends v.GenericSchema>(
   // credentials apart.
   const token = (process.env['KINU_ACCESS_API_TOKEN']
     ?? process.env['CLOUDFLARE_API_TOKEN'] ?? process.env['CF_API_TOKEN'] ?? '').trim();
+
   if (token.length === 0) return { failure: ACCESS_TOKEN_HELP };
   const account = process.env['CLOUDFLARE_ACCOUNT_ID'] ?? declaredAccountId();
+
   if (account === undefined) {
     return { failure: 'no account id: neither CLOUDFLARE_ACCOUNT_ID nor `account_id` in wrangler.jsonc' };
   }
+
   let response: Response;
+
   try {
     response = await fetch(`https://api.cloudflare.com/client/v4/accounts/${account}${path}`, {
       headers: { authorization: `Bearer ${token}` },
@@ -719,19 +798,26 @@ async function accessGet<TSchema extends v.GenericSchema>(
     // upstream. Neither may be read as "the application does not exist".
     return { failure: `GET ${path} did not complete: ${error instanceof Error ? error.message : String(error)}` };
   }
+
   const text = await response.text();
+
   if (response.status === 403 || response.status === 401) {
     return { failure: `GET ${path} answered ${String(response.status)}. ${ACCESS_TOKEN_HELP}` };
   }
+
   if (!response.ok) return { failure: `GET ${path} answered ${String(response.status)}: ${text.slice(0, 200)}` };
   let raw: unknown;
+
   try {
     raw = JSON.parse(text);
   } catch (error) {
     if (!(error instanceof SyntaxError)) throw error; // JSON.parse's only throw
+
     return { failure: `GET ${path} answered 200 with a body that is not JSON` };
   }
+
   const parsed = v.safeParse(schema, raw);
+
   return parsed.success
     ? { body: parsed.output }
     : { failure: `GET ${path} answered a body this cannot read: ${parsed.issues[0]?.message ?? 'unknown shape'}` };
@@ -752,6 +838,7 @@ async function accessApps(): Promise<
   accessAppCache = 'failure' in answer
     ? { failure: answer.failure }
     : { apps: answer.body.result ?? [] };
+
   return accessAppCache;
 }
 
@@ -768,13 +855,18 @@ export async function accessOrganization(teamDomain: string): Promise<Observatio
   if (teamDomain.length === 0) {
     return absent;
   }
+
   const answer = await accessGet('/access/organizations', AccessOrganizationEnvelope);
+
   if ('failure' in answer) {
     return answer.failure.includes('answered 404') ? absent : unknown(answer.failure);
   }
+
   const observed = (answer.body.result?.auth_domain ?? '').trim().toLowerCase();
+
   if (observed.length === 0) return absent;
   const wanted = teamDomain.replace(/^https?:\/\//u, '').replace(/\/+$/u, '').toLowerCase();
+
   return observed === wanted
     ? present(`Zero Trust organization ${observed}`)
     : { state: 'absent', detail: `the account's Zero Trust organization is ${observed}, but `
@@ -801,16 +893,21 @@ export async function accessApplication(
     return { state: 'absent', detail: 'CONTROL_PLANE_ACCESS_AUD is empty in this environment, so '
       + 'no Access application is named and the Worker can verify nothing' };
   }
+
   const listed = await accessApps();
+
   if ('failure' in listed) return unknown(listed.failure);
   const { covering, destinations } = accessCovering(listed.apps, host, aud, paths);
+
   if (covering !== undefined) {
     return present(`${covering.type ?? 'unknown type'} application `
       + `"${covering.name ?? covering.id ?? aud}" covers ${accessDestinations(covering).join(', ')}`);
   }
+
   if (destinations.length === 0) {
     return { state: 'absent', detail: `no Access application on this account has aud ${aud}` };
   }
+
   return { state: 'absent', detail: `the application(s) with aud ${aud} cover `
     + `${destinations.join(', ')} — one of them must cover `
     + `${paths.map((path) => `${host}${path}`).join(' and ')}, both in the SAME application, `
@@ -830,26 +927,34 @@ export async function accessApplication(
 export async function accessPolicies(host: string, aud: string): Promise<Observation> {
   if (aud.length === 0) return absent;
   const listed = await accessApps();
+
   if ('failure' in listed) return unknown(listed.failure);
   const app = listed.apps.find((entry) => (entry.aud ?? '') === aud);
+
   if (app?.id === undefined) {
     return { state: 'absent', detail: `no Access application with aud ${aud} to read policies from` };
   }
+
   const answer = await accessGet(`/access/apps/${app.id}/policies`, AccessPolicyEnvelope);
+
   if ('failure' in answer) return unknown(answer.failure);
   const policies = answer.body.result ?? [];
   const allows = policies.filter((policy) => (policy.decision ?? '') === 'allow');
+
   if (allows.length === 0) {
     return { state: 'absent', detail: `the application protecting ${host} has `
       + `${String(policies.length)} policy/policies and none of them is an Allow — Access is `
       + 'deny-by-default, so it admits nobody' };
   }
+
   const named = allows.filter((policy) => (policy.include ?? []).length > 0);
+
   if (named.length === 0) {
     return { state: 'absent', detail: 'every Allow policy on this application has an EMPTY '
       + 'include rule, which matches every identity the organization can authenticate — the '
       + 'outer gate would admit everyone' };
   }
+
   return present(`${String(named.length)} Allow policy/policies naming identities`);
 }
 
@@ -869,13 +974,16 @@ export async function accessScope(
   paths: readonly string[],
 ): Promise<Observation> {
   const listed = await accessApps();
+
   if ('failure' in listed) return unknown(listed.failure);
   const overreaching = accessOverreach(listed.apps, host, wildcards, paths);
+
   if (overreaching.length > 0) {
     return { state: 'absent', detail: 'Access covers more than the control plane: '
       + `${overreaching.join('; ')}. Every request to those paths is redirected to an `
       + 'interactive Access login before this Worker sees it.' };
   }
+
   return present(`${String(listed.apps.length)} Access application(s) on the account, none `
     + `covering ${host} outside ${paths.join(' / ')}`
     + (wildcards.length === 0 ? '' : ` and none covering ${wildcards.map((w) => `*.${w}`).join(' or ')}`));
@@ -894,15 +1002,19 @@ export async function accessScope(
  */
 export function emailRoutingToWorker(zone: string, workerName: string): Observation {
   const run = wrangler(['email', 'routing', 'rules', 'list', zone]);
+
   if (!run.ok) {
     const complaint = why(run);
+
     return /not enabled|not found|Email Routing/iu.test(complaint) && /not/iu.test(complaint)
       ? absent
       : unknown(`\`wrangler email routing rules list ${zone}\` failed: ${complaint}`);
   }
+
   const matchers = run.stdout
     .split('\n')
     .filter((line) => line.includes(`worker:${workerName}`));
+
   return matchers.length > 0
     ? present(`${String(matchers.length)} rule(s) deliver to ${workerName}`)
     : absent;
@@ -912,5 +1024,6 @@ export function emailRoutingToWorker(zone: string, workerName: string): Observat
  *  is meaningless without one, so it is asked first and separately. */
 export function authenticated(): Observation {
   const run = wrangler(['whoami'], 60_000);
+
   return run.ok ? present('wrangler session valid') : unknown(`\`wrangler whoami\` failed: ${why(run)}`);
 }

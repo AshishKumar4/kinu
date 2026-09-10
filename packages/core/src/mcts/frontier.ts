@@ -75,6 +75,7 @@ export function selectFrontierNode(
   sql: SqlExecutor, actor: ActorHandle, input: FrontierInput,
 ): SearchNode | null {
   const { rootId, maxDepth } = input;
+
   switch (input.policy) {
     case 'uct':
       return selectNode(sql, actor, rootId, input.explorationWeight, maxDepth);

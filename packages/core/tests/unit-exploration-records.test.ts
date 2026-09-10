@@ -51,6 +51,7 @@ function store(): Store {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initExplorationRecordsTable(makeExecRaw(db));
+
   return { sql, actor: createTestActorsOver(db).main };
 }
 
@@ -185,9 +186,11 @@ describe("a cell's best never falls, and the store says which way it refused", (
   test('a BETTER re-record of the same artifact updates it and keeps its first-recorded time', () => {
     const { sql, actor } = store();
     recordExploration(sql, actor, { publication: OPEN, write: write() });
+
     const verdict = recordExploration(sql, actor, {
       publication: OPEN, write: write({ value: 20, at: 1_700_000_999_999 }),
     });
+
     expect(verdict.kind).toBe('recorded');
     const best = bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: null });
     expect(best?.value).toBe(20);
@@ -205,9 +208,11 @@ describe("a cell's best never falls, and the store says which way it refused", (
     // rather than the last thing written.
     const { sql, actor } = store();
     recordExploration(sql, actor, { publication: OPEN, write: write() });
+
     const verdict = recordExploration(sql, actor, {
       publication: OPEN, write: write({ artifact: 'export function solve() { return 2; }', value: 40 }),
     });
+
     expect(verdict).toEqual({ kind: 'recorded', recordKey: expect.any(String), displaced: false });
     expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR })).toHaveLength(2);
     expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: null })?.value).toBe(23);
@@ -237,6 +242,7 @@ describe("displacements count what happened to a cell's best after a row was wri
     const byArtifact = new Map(
       recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR }).map((row) => [row.artifact, row]),
     );
+
     // Both rows that were already there have seen the cell's best move once.
     expect(byArtifact.get('a')?.displacements).toBe(1);
     expect(byArtifact.get('b')?.displacements).toBe(1);
@@ -256,9 +262,11 @@ describe("displacements count what happened to a cell's best after a row was wri
     const { sql, actor } = store();
     recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'a', value: 23 }) });
     recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: 'b', value: 40 }) });
+
     const byArtifact = new Map(
       recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR }).map((row) => [row.artifact, row]),
     );
+
     expect(byArtifact.get('a')?.displacements).toBe(0);
     expect(byArtifact.get('b')?.displacements).toBe(0);
   });
@@ -327,12 +335,14 @@ describe('the key carries the floor, and the two nullable halves of it behave', 
     // The identity *Comparability* requires, completed: two runs whose `kind` resolved
     // to different code are not comparable, and `argumentDigest({kind, spec})` cannot tell.
     const { sql, actor } = store();
+
     const other: ObjectiveIdentity = {
       ...CHEAPER,
       verifierDigest: verifierDigestOf(
         { kind: 'exec-ratio', spec: { params: { n: 24 } } }, 'exec-ratio@def456',
       ),
     };
+
     // Pinned digest of CHEAPER, so a change to the identity's SHAPE fails here
     // rather than silently re-keying every objective it ever wrote.
     expect(objectiveIdOf(other)).not.toBe(
@@ -380,16 +390,20 @@ describe('a row reads back as what was written', () => {
 
   test('`recordsFor` orders best FIRST in the objective\'s own direction', () => {
     const { sql, actor } = store();
+
     for (const value of [40, 23, 31]) {
       recordExploration(sql, actor, { publication: OPEN, write: write({ artifact: `a${String(value)}`, value }) });
     }
+
     expect(recordsFor(sql, actor, { identity: CHEAPER, floor: FLOOR }).map((row) => row.value))
       .toEqual([23, 31, 40]);
+
     for (const value of [0.4, 0.9, 0.6]) {
       recordExploration(sql, actor, {
         publication: OPEN, write: write({ identity: HIGHER, artifact: `b${String(value)}`, value }),
       });
     }
+
     expect(recordsFor(sql, actor, { identity: HIGHER, floor: FLOOR }).map((row) => row.value))
       .toEqual([0.9, 0.6, 0.4]);
   });
@@ -505,9 +519,11 @@ describe('the archive admits by cell and refuses by novelty', () => {
     // The cell IS occupied before the collision, so the digest below is a real row's and
     // not an `undefined` matching an absent field.
     expect(occupant?.artifact).toBe(OCCUPANT);
+
     const verdict = admitToArchive(sql, actor, {
       publication: OPEN, write: cellWrite({ artifact: NEAR, value: 19 }), novelty: 0.5,
     });
+
     expect(verdict).toEqual({
       kind: 'refused',
       cause: 'too-close',
@@ -545,9 +561,11 @@ describe('the archive admits by cell and refuses by novelty', () => {
 
     const { sql: strict } = store();
     admitToArchive(strict, actor, { publication: OPEN, write: cellWrite(), novelty: 1 });
+
     const verdict = admitToArchive(strict, actor, {
       publication: OPEN, write: cellWrite({ artifact: FAR, value: 31 }), novelty: 1,
     });
+
     // Distance exactly 1 CLEARS a floor of 1 — the candidate has to reach the floor, not
     // beat it — so the far answer is the one thing a threshold of 1 still admits.
     expect(verdict.kind).toBe('recorded');
@@ -567,9 +585,11 @@ describe('the archive admits by cell and refuses by novelty', () => {
     admitToArchive(sql, actor, { publication: OPEN, write: cellWrite({ artifact: FAR, value: 11 }), novelty: 0.5 });
     admitToArchive(sql, actor, { publication: OPEN, write: cellWrite({ artifact: OCCUPANT, value: 40 }), novelty: 0.5 });
     expect(bestInCell(sql, actor, { identity: CHEAPER, floor: FLOOR, descriptor: CELL })?.artifact).toBe(FAR);
+
     const verdict = admitToArchive(sql, actor, {
       publication: OPEN, write: cellWrite({ artifact: NEAR, value: 19 }), novelty: 0.5,
     });
+
     expect(verdict).toMatchObject({
       cause: 'too-close',
       distance: noveltyDistance(NEAR, OCCUPANT),

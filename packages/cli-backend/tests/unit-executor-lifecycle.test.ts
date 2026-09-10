@@ -54,20 +54,25 @@ async function executeUnderPath(PATH: string, code: string): Promise<v.InferOutp
     `const answer = await createSandboxedExecutor().execute(${JSON.stringify(code)}, []);`,
     `console.log(JSON.stringify(answer));`,
   ].join('\n'));
+
   const child = Bun.spawn([process.execPath, 'run', probe], {
     env: { PATH, HOME: process.env.HOME ?? '/tmp' },
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   const [out, err, exitCode] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
     child.exited,
   ]);
+
   const lastLine = out.trim().split('\n').pop() ?? '';
+
   if (exitCode !== 0 || lastLine === '') {
     throw new Error(`the executor probe failed under PATH=${PATH} (exit ${exitCode}): ${err.trim() || out.trim()}`);
   }
+
   return v.parse(ProbeAnswerSchema, JSON.parse(lastLine));
 }
 
@@ -88,6 +93,7 @@ function runtimeShim() {
     '',
   ].join('\n'));
   chmodSync(shim, 0o755);
+
   return {
     dir,
     invocations: () => readFileSync(record, 'utf8').split('\n').filter(Boolean).length,

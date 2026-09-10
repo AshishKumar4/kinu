@@ -44,12 +44,14 @@ import type { SpendSource } from '../events/model-call';
  * contradict it.
  */
 export const CONFORMANCE_PRODUCERS = ['judge', 'advisor'] as const satisfies readonly SpendSource[];
+
 export type ConformanceProducer = (typeof CONFORMANCE_PRODUCERS)[number];
 
 /** The composition roots that assemble a model-facing surface. cf splits by
  *  actor profile because the profiles deliberately differ (`actorToolDeps`);
  *  the CLI has one session class. */
 export const CONFORMANCE_ROOTS = ['cf-orchestrator', 'cf-subordinate', 'cli'] as const;
+
 export type ConformanceRoot = (typeof CONFORMANCE_ROOTS)[number];
 
 /** Wired, deliberately absent for a stated reason, or built on first use by a
@@ -69,6 +71,7 @@ export type RootStatuses = Readonly<Record<ConformanceRoot, CapabilityStatus>>;
 const EVERYWHERE = { 'cf-orchestrator': WIRED, 'cf-subordinate': WIRED, cli: WIRED } satisfies RootStatuses;
 
 export const CONFORMANCE_PLANES = ['tool', 'agents-action', 'memory-action', 'table', 'producer'] as const;
+
 export type ConformancePlane = (typeof CONFORMANCE_PLANES)[number];
 
 export interface ConformanceManifest {
@@ -97,7 +100,9 @@ export interface ConformanceManifest {
 
 const NO_USER_PLANE = (what: string): string =>
   `${what} rides the owner's UserDO; a signed-out local runtime has no account plane to serve it`;
+
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
+
 /** A subordinate tree is recursive: a subordinate holds the same roster surface
  *  its parent does, bounded by DELEGATION_MAX_DEPTH rather than by absence. The
  *  bound is a DERIVED budget — at the cap the team deps are not wired and these
@@ -124,8 +129,11 @@ const NIMBUS_BASE = {
   'cf-subordinate': WIRED,
   cli: WIRED,
 } satisfies RootStatuses;
+
 const LAZY_ON_FIRST_USE = (what: string): CapabilityStatus => ({ lazy: `created on first use by ${what}, not at boot` });
+
 const NO_LOCAL_INGRESS = 'a local workspace has no inbound HTTP transport, and `kinu triggers <name> webhook` refuses a local target';
+
 /** The release board's home is the OWNER's UserDO on cf, so no workspace
  *  database there holds it — neither the root's rows nor a hire's. */
 const RELEASE_TABLE = {

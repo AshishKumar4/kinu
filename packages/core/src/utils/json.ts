@@ -23,9 +23,13 @@ export const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => v.union(
 ]));
 
 export const JsonObjectSchema = v.record(v.string(), JsonValueSchema);
+
 export const JsonArraySchema = v.array(JsonValueSchema);
+
 const UndefinedSchema = v.undefined();
+
 const BoundaryArraySchema = v.array(v.unknown());
+
 const BoundaryObjectSchema = v.record(v.string(), v.unknown());
 
 /** Parse serialized JSON and establish its recursive value contract. */
@@ -65,9 +69,11 @@ export function assertJsonValue(
 export function projectJsonValue(input: { value: unknown }): JsonValue {
   try {
     assertJsonValue(input);
+
     return input.value;
   } catch (validationError) {
     const array = v.safeParse(BoundaryArraySchema, input.value);
+
     if (array.success) {
       return array.output.map((value) =>
         v.safeParse(UndefinedSchema, value).success
@@ -76,12 +82,15 @@ export function projectJsonValue(input: { value: unknown }): JsonValue {
     }
 
     const object = v.safeParse(BoundaryObjectSchema, input.value);
+
     if (object.success) {
       const projected: JsonObject = {};
+
       for (const [key, value] of Object.entries(object.output)) {
         if (v.safeParse(UndefinedSchema, value).success) continue;
         projected[key] = projectJsonValue({ value });
       }
+
       return projected;
     }
 
@@ -111,14 +120,18 @@ export const DIGEST_LIMIT = 800;
  */
 export function digestJsonValue(input: { value: unknown }): JsonValue | undefined {
   const absent = v.safeParse(v.union([v.null(), UndefinedSchema]), input.value);
+
   if (absent.success) return absent.output;
   const text = v.safeParse(v.string(), input.value);
+
   if (text.success) {
     return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + '…' : text.output;
   }
+
   try {
     const projected = projectJsonValue(input);
     const serialized = JSON.stringify(projected);
+
     return serialized.length <= DIGEST_LIMIT ? projected : serialized.slice(0, DIGEST_LIMIT) + '…';
   } catch (error) {
     // The clamp precedent: `String()` on an unprojectable value is "[object Object]", so
@@ -140,6 +153,7 @@ export function renderIssues(issues: readonly v.BaseIssue<unknown>[]): string {
   return issues
     .map((issue) => {
       const path = issue.path?.map((segment) => String(segment.key)).join('.');
+
       return path ? `${path}: ${issue.message}` : issue.message;
     })
     .join('; ');

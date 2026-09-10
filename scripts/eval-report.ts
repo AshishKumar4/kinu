@@ -50,23 +50,29 @@ interface CliOptions {
 function parseArgs(argv: readonly string[]): CliOptions | null {
   const roots: string[] = [];
   let family: string | null = null;
+
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+
     if (arg === '--root') {
       const value = argv[++i];
+
       if (value === undefined) return null;
       roots.push(value);
     } else if (arg === '--family') {
       const value = argv[++i];
+
       if (value === undefined) return null;
       family = value;
     } else {
       return null;
     }
   }
+
   if (roots.length === 0) {
     roots.push(join(REPO_ROOT, 'bench-artifacts'), join(REPO_ROOT, 'tests/eval/runs'));
   }
+
   return { roots, family };
 }
 
@@ -80,6 +86,7 @@ function scoredOf(record: EvalRunRecord): Scored[] {
 /** Eligible-weighted total of one named score row across scored observations. */
 function rowTotals(observations: readonly Scored[], name: string) {
   const rows = observations.flatMap((o) => o.scores.filter((s) => s.name === name));
+
   return {
     eligible: rows.reduce((n, r) => n + r.eligible, 0),
     passed: rows.reduce((n, r) => n + r.passed, 0),
@@ -96,6 +103,7 @@ function renderRun(record: EvalRunRecord): string {
   const ms = scored.reduce((n, o) => n + o.ms, 0);
   const inert = record.observations.filter((o) => o.outcome === 'inert').length;
   const errored = record.observations.filter((o) => o.outcome === 'errored').length;
+
   return [
     record.createdAt.slice(0, 10),
     record.runId,
@@ -118,20 +126,25 @@ function renderRun(record: EvalRunRecord): string {
 function renderSwarmCross(records: readonly EvalRunRecord[]): string[] {
   const cells = { usedHit: 0, usedMiss: 0, aloneHit: 0, aloneMiss: 0 };
   let measured = 0;
+
   for (const record of records) {
     for (const observation of scoredOf(record)) {
       const swarm = observation.scores.find((s) => s.name === 'swarm_use');
       const attained = observation.scores.find((s) => s.name === 'threshold_attained');
+
       if (!swarm || !attained) continue;
       measured += 1;
+
       if (swarm.passed > 0) {
         if (attained.passed > 0) cells.usedHit += 1; else cells.usedMiss += 1;
       } else if (attained.passed > 0) cells.aloneHit += 1; else cells.aloneMiss += 1;
     }
   }
+
   if (measured === 0) {
     return ['  swarm × attainment: no observation recorded both rows yet — nothing to correlate'];
   }
+
   return [
     `  swarm × attainment over ${String(measured)} observation(s) (agent-chosen, observational):`,
     `    with swarm:    ${String(cells.usedHit)} attained / ${String(cells.usedMiss)} missed`,
@@ -141,13 +154,16 @@ function renderSwarmCross(records: readonly EvalRunRecord[]): string[] {
 
 function main(argv: readonly string[]): number {
   const options = parseArgs(argv);
+
   if (options === null) {
     console.error('usage: bun scripts/eval-report.ts [--root <dir>]... [--family <id>]');
+
     return 1;
   }
 
   const refusals: { readonly path: string; readonly error: string }[] = [];
   const records: EvalRunRecord[] = [];
+
   for (const root of options.roots) {
     for (const path of runRecordPaths(root)) {
       try {
@@ -163,16 +179,20 @@ function main(argv: readonly string[]): number {
   for (const refusal of refusals) {
     console.log(`UNREADABLE: ${refusal.path} — ${refusal.error}`);
   }
+
   if (refusals.length > 0) console.log('');
 
   const byFamily = new Map<string, EvalRunRecord[]>();
+
   for (const record of records) {
     // Old records predate `family`, and the two published baselines carry
     // hand-named runIds (`flash-a`), so nothing can be derived: they group as
     // pre-family rather than under a guessed name.
     const family = record.family ?? '(pre-family)';
+
     if (options.family !== null && family !== options.family) continue;
     const group = byFamily.get(family);
+
     if (group) group.push(record); else byFamily.set(family, [record]);
   }
 
@@ -180,12 +200,14 @@ function main(argv: readonly string[]): number {
     console.log(`no run records${options.family === null ? '' : ` for family "${options.family}"`} under: `
       + options.roots.join(', '));
     console.log('a record is written by every eval-tier arm run — `bun run evals:full` — beside its transcripts');
+
     return 0;
   }
 
   for (const [family, group] of [...byFamily.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     group.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
     console.log(`── ${family} — ${String(group.length)} run(s) ────────────────────────────`);
+
     for (const record of group) console.log(`  ${renderRun(record)}`);
 
     const scored = group.flatMap(scoredOf);
@@ -195,6 +217,7 @@ function main(argv: readonly string[]): number {
     const tokens = group.reduce((n, r) => n + r.spend.tokensIn + r.spend.tokensOut, 0);
     console.log(`  family: outcome ${rate(outcome.passed, outcome.eligible)}, `
       + `${(ms / 1000).toFixed(0)}s observed, ${String(calls)} calls, ${String(tokens)} tokens`);
+
     if (family === 'optimization') for (const line of renderSwarmCross(group)) console.log(line);
     console.log('');
   }
@@ -202,6 +225,7 @@ function main(argv: readonly string[]): number {
   console.log('what this cannot answer yet: single-observation families accumulate one pair per run '
     + '(no exact test until several runs share one arm); swarm use is agent-chosen, so the 2×2 is '
     + 'observational; per-step time lives in each record\'s transcripts directory.');
+
   return 0;
 }
 

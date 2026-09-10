@@ -21,7 +21,9 @@ import { createTestActorsOver } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];
+
 const repoRoot = resolve(__dirname, '../../..');
+
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
 afterEach(() => {
@@ -31,6 +33,7 @@ afterEach(() => {
 function scratch(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
+
   return dir;
 }
 
@@ -45,13 +48,18 @@ function runCli(home: string, args: string[], cwd: string, env: Record<string, s
 
 async function result(proc: ReturnType<typeof runCli>) {
   const exitCode = await proc.exited;
+
   return { exitCode, stdout: await new Response(proc.stdout).text(), stderr: await new Response(proc.stderr).text() };
 }
 
 const SECRET_TOKEN = ['sk-ant-', 'api03-thisisaplantedsecretfortest1234567890abcdefgh'].join('');
+
 const SECRET_KINU_TOKEN = 'pta_' + 'x'.repeat(40);
+
 const AKIA = ['AKIA', 'ABCDEFGHIJKLMNOP'].join('');
+
 const BEARER_SECRET = 'abcdefghijklmnopqrstuvwxyz';
+
 /**
  * A workspace with exactly the shape the investigation needs: two runs (one
  * that backgrounded a call and was then polled anyway — symptom 1 — and a
@@ -64,6 +72,7 @@ const BEARER_SECRET = 'abcdefghijklmnopqrstuvwxyz';
 function seedInvestigationWorkspace(dbPath: string): void {
   const db = new Database(dbPath, { create: true });
   const execRaw = (sql: string) => { db.exec(sql); };
+
   initRunEventTables(execRaw);
   initHeadsTables(execRaw);
   initSearchTables(execRaw);
@@ -122,6 +131,7 @@ function seedInvestigationWorkspace(dbPath: string): void {
   const insertNode = db.query(`INSERT INTO search_nodes
     (actor_id, id, parent_id, root_id, task, action, visits, value, depth, status, created_at)
     VALUES (?, ?, ?, ?, 'investigate', ?, 1, 0.5, ?, 'open', ?)`);
+
   insertNode.run(actor.actorId, 'search-old-root', null, 'search-old', 'root', 0, 1000);
   insertNode.run(actor.actorId, 'search-new-root', null, 'search-new', 'root', 0, 5000);
   insertNode.run(actor.actorId, 'search-new-c1', 'search-new-root', 'search-new', 'branch a', 1, 5100);
@@ -165,14 +175,17 @@ function seedInvestigationWorkspace(dbPath: string): void {
   // largest. Written through the real writer, because the identity columns the
   // bundle prints are only trustworthy as something that writer filled. ──
   initExplorationRecordsTable(execRaw);
+
   const CALLS: ObjectiveIdentity = {
     metric: 'oracle_calls', unit: 'oracle calls', direction: 'minimise',
     scale: 'log', verifierDigest: 'exec-ratio@abc123',
   };
+
   const PASS: ObjectiveIdentity = {
     metric: 'pass_rate', unit: 'fraction of held-out tasks', direction: 'maximise',
     scale: 'linear', verifierDigest: 'suite@f00d',
   };
+
   const record = (over: Partial<ExplorationWrite>): void => {
     recordExploration(sql, actor, {
       publication: { kind: 'open' },
@@ -184,13 +197,16 @@ function seedInvestigationWorkspace(dbPath: string): void {
       },
     });
   };
+
   for (const [index, value] of [41, 23, 88].entries()) {
     record({ artifact: `calls-${String(index)}`, value, at: 20_000 + index });
   }
+
   const cells: ReadonlyArray<readonly [string, number]> = [
     ['len=short', 0.71], ['len=short', 0.5], ['len=short', 0.44], ['len=short', 0.4],
     ['len=short', 0.39], ['len=medium', 0.66], ['len=long', 0.6],
   ];
+
   for (const [index, [descriptor, value]] of cells.entries()) {
     record({
       identity: PASS, descriptor, value, at: 21_000 + index,
@@ -283,7 +299,9 @@ describe('kinu debug — local backend', () => {
     const records = raw.trim().split('\n').map((line) => v.parse(
       v.objectWithRest({ t: v.string() }, JsonValueSchema), JSON.parse(line),
     ));
+
     const counts = new Map<string, number>();
+
     for (const rec of records) counts.set(rec.t, (counts.get(rec.t) ?? 0) + 1);
     expect(counts.get('run')).toBe(2);
     expect(counts.get('head_run')).toBe(3);
@@ -298,14 +316,18 @@ describe('kinu debug — local backend', () => {
     expect(counts.get('record_objective')).toBe(2);
     expect(counts.get('record_cell')).toBe(4);
     expect(counts.get('record')).toBe(10);
+
     const RecordRowSchema = v.object({
       t: v.literal('record'), descriptor: v.nullable(v.string()),
       artifactDigest: v.string(), value: v.number(),
     });
+
     const rows = records.flatMap((record) => {
       const parsed = v.safeParse(RecordRowSchema, record);
+
       return parsed.success ? [parsed.output] : [];
     });
+
     expect(rows.length).toBeGreaterThan(0);
     expect(new Set(rows.map((row) => row.artifactDigest)).size).toBe(rows.length);
     // `descriptor: null` survives the bundle as null — the NO-PARTITION cell, not
@@ -314,10 +336,13 @@ describe('kinu debug — local backend', () => {
     expect(rows.filter((row) => row.descriptor === 'len=short')).toHaveLength(5);
     // Full per-run event fidelity — the richest source, verbatim.
     const RunEventSchema = v.object({ t: v.literal('run_event'), runId: v.string(), type: v.string() });
+
     const runEvents = records.flatMap((record) => {
       const event = v.safeParse(RunEventSchema, record);
+
       return event.success ? [event.output] : [];
     });
+
     expect(runEvents.filter((e) => e.runId === 'run-new').map((e) => e.type)).toEqual([
       'run_start', 'tool_call_end', 'tool_call_end', 'run_end',
     ]);
@@ -332,6 +357,7 @@ describe('kinu debug — local backend', () => {
 
     const r = await result(runCli(home, ['debug', 'invest', '--out', join(out, 'b.jsonl'), '--json'], repoRoot));
     expect(r.exitCode).toBe(0);
+
     const summary = v.parse(v.object({
       runs: v.array(v.object({
         runId: v.string(), toolCalls: v.number(), jobPollsAfterHandle: v.number(),
@@ -339,6 +365,7 @@ describe('kinu debug — local backend', () => {
       })),
       mctsSearches: v.array(v.object({ rootId: v.string(), nodeCount: v.number(), maxDepth: v.number() })),
     }), JSON.parse(r.stdout));
+
     const newRun = summary.runs.find((run) => run.runId === 'run-new');
     // Both counters read `tool_call_end` — the row production writes. Seeded as
     // `tool_call_start` these were 2 and 1 in this test and 0 and 0 on every
@@ -366,27 +393,34 @@ describe('kinu debug — local backend', () => {
 describe('kinu debug — cloud backend', () => {
   test('walks the same sections over RPC, using the newly-exposed getRunEvents/listRuns/getMctsSearchRuns', async () => {
     const calls: string[] = [];
+
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+
         if (url.pathname !== '/api/cli/workspaces/skywriter/rpc') return new Response('nope', { status: 404 });
+
         if (request.headers.get('authorization') !== 'Bearer ptc_stored_session') {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
+
         const body = v.parse(JsonObjectSchema, await request.json());
         const method = v.parse(v.string(), body.method);
         const args = v.parse(JsonArraySchema, body.args);
         calls.push(method);
         const respond = (result: JsonValue) => Response.json({ result });
+
         switch (method) {
           case 'getWorkspaceSnapshot': return respond({ status: { displayName: 'skywriter', purpose: 'p', scaffoldVersion: 1, model: 'x' } });
           case 'getChatHistoryPage': return respond({ status: 'end', items: [{ id: 'm1', role: 'user', content: 'hi', createdAt: 1 }] });
           case 'listRuns': return respond({ status: 'end', items: [{ runId: 'run-cloud', lastTs: new Date(1000).toISOString(), eventCount: 2 }] });
           case 'getRunEvents': {
             const opts = v.parse(v.object({ since: v.number() }), args[1]);
+
             if (opts.since > 0) return respond([]);
+
             return respond([
               { type: 'run_start', eventIndex: 0, runId: 'run-cloud', timestamp: new Date(1000).toISOString(), caused_by: 'chat' },
               {
@@ -395,6 +429,7 @@ describe('kinu debug — cloud backend', () => {
               },
             ]);
           }
+
           case 'getHeadRuns': return respond([]);
           case 'getMctsSearchRuns': return respond([]);
           case 'getMctsTree': return respond([]);
@@ -424,9 +459,11 @@ describe('kinu debug — cloud backend', () => {
 
     try {
       const bundle = join(out, 'skywriter.debug.jsonl');
+
       const r = await result(runCli(home, ['debug', 'skywriter', '--out', bundle], repoRoot, {
         KINU_ORIGIN: `http://127.0.0.1:${server.port}`,
       }));
+
       expect(r.stderr).toBe('');
       expect(r.exitCode).toBe(0);
       expect(r.stdout).toContain('skywriter');

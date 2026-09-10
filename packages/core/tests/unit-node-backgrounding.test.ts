@@ -55,7 +55,9 @@ import { BUILTIN_TOOLS } from '../src/tools/registry';
 
 /** Sub-second so the arms finish; see the header for why a magnitude is a fixture. */
 const DETACH_MS = 60;
+
 const SETTLE_MS = 200;
+
 const STALL_MS = 4_000;
 
 /** The one long-running tool a node has to hold for any of this to be reachable: a
@@ -66,6 +68,7 @@ function slowExecuteTool() {
   let release!: () => void;
   const done = new Promise<void>((resolve) => { release = resolve; });
   let starts = 0;
+
   return {
     entry: tool({
       description: 'Run code in the sandbox.',
@@ -75,6 +78,7 @@ function slowExecuteTool() {
       execute: async ({ code }) => {
         starts += 1;
         await done;
+
         return `ran ${code}: exit 0`;
       },
     }),
@@ -101,6 +105,7 @@ function detachThenReport(seen: string[][]): ReturnType<typeof scriptedTurnModel
       const woken = text.includes('Background execute_tools job');
       const reported = text.includes('"received":true');
       const launched = prompt.some((message) => message.role === 'tool');
+
       const content: LanguageModelV3Content[] = reported
         ? [{ type: 'text', text: 'Done.' }]
         : woken
@@ -121,6 +126,7 @@ function detachThenReport(seen: string[][]): ReturnType<typeof scriptedTurnModel
             toolName: 'execute_tools',
             input: JSON.stringify({ code: 'await sandbox.run()' }),
           }];
+
       return {
         content,
         finishReason: {
@@ -166,6 +172,7 @@ const PROSE_ONLY_MODEL = scriptedTurnModel({
  */
 async function until(fact: () => boolean, what: string): Promise<void> {
   const deadline = Date.now() + STALL_MS;
+
   while (!fact()) {
     if (Date.now() > deadline) throw new Error(`waited ${String(STALL_MS)}ms and ${what} never happened`);
     await new Promise((resolve) => { setTimeout(resolve, 5); });
@@ -188,6 +195,7 @@ function fixture(over: {
   const { rt, db } = createTestRuntime();
   initHeadsTables(rt.storage.execRaw);
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
+
   const input: NodeAgentInput = {
     nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,
     task: 'Make the reference implementation cheaper.',
@@ -200,16 +208,19 @@ function fixture(over: {
     settle: 'best',
     arbitrate: null,
   };
+
   const seats = hostedSeatsOver({ rt, db });
   /** The actor the node was seated as, captured as `runNodeAgent` acquires it.
    *  A node is its OWN actor now, so the job it detaches is keyed to that id —
    *  counting under `rt.actor` reads zero forever, which STALLS the wait below
    *  instead of failing it, and a stall names no cause. */
   let nodeActorId: string | null = null;
+
   const deps: NodeAgentDeps = {
     hostNode: async (node) => {
       const seat = await seats.hostNode(node);
       nodeActorId = seat.actor.handle.actorId;
+
       return seat;
     },
     model: over.model, journal,
@@ -220,14 +231,19 @@ function fixture(over: {
       detachAfterMs: DETACH_MS, settleGraceMs: SETTLE_MS, wakesAfterTurn: true,
     }),
   };
+
   if (over.executeTool !== undefined) deps.executeTool = over.executeTool;
+
   const detached = (): number => {
     if (nodeActorId === null) return 0;
+
     const rows = rt.storage.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM background_jobs
       WHERE actor_id = ${nodeActorId} AND status='running'`;
+
     return rows[0]?.n ?? 0;
   };
+
   return { input, deps, journal, detached };
 }
 
@@ -235,6 +251,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
   test('a turn that ends holding a live job is neither terminal nor abandoned, and the wake completes it', async () => {
     const slow = slowExecuteTool();
     const prompts: string[][] = [];
+
     const { input, deps, journal, detached } = fixture({
       model: detachThenReport(prompts), executeTool: slow.entry,
     });
@@ -304,6 +321,7 @@ describe('a node backgrounds work, ends its turn, and is woken to finish', () =>
   test('the model is handed a HANDLE, not a result, and the handle is what its transcript records', async () => {
     const slow = slowExecuteTool();
     const prompts: string[][] = [];
+
     const { input, deps, detached } = fixture({
       model: detachThenReport(prompts), executeTool: slow.entry,
     });
@@ -368,6 +386,7 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
       expect(reason).not.toContain('not yet');
       expect(name).not.toBe('');
     }
+
     // And the reason that must not drift back: `DELEGATION_MAX_DEPTH` governs the hire
     // ladder, not a node's search depth, so recursion is not the argument for
     // withholding `agents`.
@@ -387,7 +406,9 @@ describe("a node's tool surface is partitioned exactly, with a reason on every w
     // is disjoint from what is withheld.
     const surface: readonly string[] = ['run', 'file', 'report'];
     const given: readonly string[] = NODE_BUILTIN_TOOLS;
+
     for (const name of surface) expect(given).toContain(name);
+
     for (const name of Object.keys(NODE_WITHHELD_TOOLS)) expect(surface).not.toContain(name);
   });
 });
@@ -408,12 +429,14 @@ describe('a node resolves a function-form executeTool through the finished surfa
       }),
       execute: async ({ code }) => `factory-ran:${code}`,
     });
+
     const model = scriptedTurnModel({
       modelId: 'fake-exec',
       doGenerate: ({ prompt }) => {
         const text = JSON.stringify(prompt);
         const launched = prompt.some((message) => message.role === 'tool');
         const reported = text.includes('"received":true');
+
         const content: LanguageModelV3Content[] = reported
           ? [{ type: 'text', text: 'Done.' }]
           : launched
@@ -432,6 +455,7 @@ describe('a node resolves a function-form executeTool through the finished surfa
               toolName: 'execute_tools',
               input: JSON.stringify({ code: 'const x = 1' }),
             }];
+
         return {
           content,
           finishReason: {
@@ -446,6 +470,7 @@ describe('a node resolves a function-form executeTool through the finished surfa
         };
       },
     });
+
     const { input, deps } = fixture({ model, executeTool: factoryForm });
     const run: NodeRun = await runNodeAgent(input, deps);
     expect(run.report.status).toBe('completed');

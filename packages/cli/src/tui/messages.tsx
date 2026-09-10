@@ -31,6 +31,7 @@ export interface DisplayMessage {
  */
 function UserMessage({ content, attachments, steered, branched }: { content: string; attachments?: string[]; steered?: boolean; branched?: boolean }) {
   const { colors } = useTuiTheme();
+
   return (
     <box flexDirection="row" style={{ width: '100%', paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <box style={{ width: 5, flexShrink: 0 }}>
@@ -86,14 +87,17 @@ function useCodeWellRenderer(): NonNullable<MarkdownOptions['renderNode']> {
   const { colors } = useTuiTheme();
   const well = useRef(colors.well);
   well.current = colors.well;
+
   return useCallback((token, context) => {
     if (token.type !== 'code') return null;
     const code = context.defaultRender();
+
     if (!(code instanceof CodeRenderable)) return code;
     code.fg = well.current.code;
     code.marginTop = 0;
     const box = new BoxRenderable(code.ctx, { ...wellBoxStyle(well.current), width: '100%', flexDirection: 'column' });
     box.add(code);
+
     return box;
   }, []);
 }
@@ -103,6 +107,7 @@ function useCodeWellRenderer(): NonNullable<MarkdownOptions['renderNode']> {
 function AssistantMessage({ content, live }: { content: string; live?: boolean }) {
   const { colors, markdownSyntax } = useTuiTheme();
   const renderCodeWell = useCodeWellRenderer();
+
   return (
     <box flexDirection="column" style={{ width: '100%', paddingLeft: 2, paddingRight: 2, marginBottom: 1 }}>
       <markdown
@@ -141,6 +146,7 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
   const calls = rows.filter((row) => row.kind === 'call').length;
   const failed = rows.filter((row) => row.kind === 'result' && row.message.success === false).length;
   const rule = '┄'.repeat(Math.max(1, resultPreviewWidth));
+
   return (
     <box
       flexDirection="column"
@@ -157,6 +163,7 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
         const separator = row.kind === 'call' && index > 0
           ? <text><span fg={well.border}>{rule}</span></text>
           : null;
+
         return (
           <box key={row.message.id} flexDirection="column">
             {separator}
@@ -173,6 +180,7 @@ function ToolActivityCard({ rows, callPreviewWidth, resultPreviewWidth, expanded
 function ToolCallRow({ toolName, args, previewWidth }: { toolName: string; args?: string; previewWidth: number }) {
   const { well } = useTuiTheme().colors;
   const preview = args ? clipText(args.replace(/\s+/g, ' '), previewWidth) : '';
+
   return (
     <text>
       <span fg={well.accent}>{TUI_MARKS.toolCall} </span>
@@ -185,6 +193,7 @@ function ToolCallRow({ toolName, args, previewWidth }: { toolName: string; args?
 function ToolResultRow({ content, success, previewWidth, expanded }: { content: string; success?: boolean; previewWidth: number; expanded: boolean }) {
   const { well } = useTuiTheme().colors;
   const lines = expanded ? content.split('\n').slice(0, 20) : [clipText(content.replace(/\s+/g, ' '), previewWidth)];
+
   return (
     <box flexDirection="column" style={{ paddingLeft: 2 }}>
       {lines.map((line, index) => (
@@ -200,6 +209,7 @@ function ToolResultRow({ content, success, previewWidth, expanded }: { content: 
 
 function EvolutionMessage({ content }: { content: string }) {
   const { colors } = useTuiTheme();
+
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text><span fg={colors.intent.accent}>{TUI_MARKS.evolution} </span><span fg={colors.intent.accentStrong}>{content}</span></text>
@@ -213,6 +223,7 @@ function EvolutionMessage({ content }: { content: string }) {
  */
 function SystemMessage({ content }: { content: string }) {
   const { colors } = useTuiTheme();
+
   if (content.startsWith('Error:')) {
     return (
       <box style={{ marginLeft: 2, marginRight: 2, marginBottom: 1, border: true, borderStyle: 'rounded', borderColor: colors.intent.danger, paddingLeft: 1, paddingRight: 1 }}>
@@ -220,6 +231,7 @@ function SystemMessage({ content }: { content: string }) {
       </box>
     );
   }
+
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text><span fg={colors.text.muted}>{content}</span></text>
@@ -234,6 +246,7 @@ type TranscriptBlock =
 /** Consecutive tool calls and results fold into one activity card. */
 function groupTranscript(messages: readonly DisplayMessage[]): TranscriptBlock[] {
   const blocks: TranscriptBlock[] = [];
+
   for (const message of messages) {
     const row: ToolActivityRow | null = message.status
       ? null
@@ -242,7 +255,9 @@ function groupTranscript(messages: readonly DisplayMessage[]): TranscriptBlock[]
         : message.role === 'tool_result'
           ? { kind: 'result', message }
           : null;
+
     const last = blocks.at(-1);
+
     if (row === null) {
       blocks.push({ kind: 'message', message });
     } else if (last?.kind === 'tools') {
@@ -251,6 +266,7 @@ function groupTranscript(messages: readonly DisplayMessage[]): TranscriptBlock[]
       blocks.push({ kind: 'tools', key: message.id, rows: [row] });
     }
   }
+
   return blocks;
 }
 
@@ -261,6 +277,7 @@ export function MessageList({ messages, toolDetailsExpanded = false }: {
   const width = useSceneWidth();
   const callPreviewWidth = Math.max(8, Math.min(80, width - 24));
   const resultPreviewWidth = Math.max(8, Math.min(120, width - 12));
+
   return (
     <>
       {groupTranscript(messages).map((block) => {
@@ -275,8 +292,11 @@ export function MessageList({ messages, toolDetailsExpanded = false }: {
             />
           );
         }
+
         const { message } = block;
+
         if (message.status) return <StatusView key={message.id} status={message.status} />;
+
         switch (message.role) {
           case 'user':
             return <UserMessage key={message.id} content={message.content} attachments={message.attachments} steered={message.steered} branched={message.branched} />;

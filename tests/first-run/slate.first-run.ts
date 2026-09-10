@@ -12,14 +12,18 @@ import {
 } from './first-run';
 
 const SUITE = 'First-run · slate';
+
 const CASE = 'slate';
+
 const ID = 'hello';
+
 const ASK = 'Use the file tool to create a slate at /home/user/slates/hello/. '
   + 'Write package.json with main "server.ts" and slate {"title":"Hello","port":8787,"bindings":{}}. '
   + 'Write server.ts as a TypeScript module whose default export has fetch(request, env). '
   + 'The request is an ordinary Request. For GET /ping, respond with JSON '
   + '{"message":"pong","method":request.method,"path":new URL(request.url).pathname}. '
   + 'Return HTTP 404 for other paths. Start its preview yourself and verify GET /ping. Reply with pong on its own line and the working preview URL.';
+
 const ExpectedResponse = v.strictObject({
   message: v.literal('pong'),
   method: v.literal('GET'),
@@ -27,7 +31,9 @@ const ExpectedResponse = v.strictObject({
 });
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
+
 const liveTest = test.skipIf(PLAN === null);
+
 const observations: EvalObservation[] = [];
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
@@ -50,9 +56,11 @@ describe(SUITE, () => {
         const preview = row?.port === 8787 ? ports.find((port) => port.port === row.port) : undefined;
         let answered = false;
         let responseDetail = 'No HTTP request was made because the preview did not start.';
+
         if (preview !== undefined) {
           const url = new URL(preview.url);
           url.pathname = url.pathname.replace(/\/$/, '') + '/ping';
+
           try {
             const response = await fetch(url);
             const body = await response.text();
@@ -63,8 +71,10 @@ describe(SUITE, () => {
             responseDetail = 'Preview request failed: ' + (error instanceof Error ? error.message : String(error));
           }
         }
+
         const history = await session.history();
         const reply = history.filter((entry) => entry.role === 'assistant').at(-1)?.text ?? turn.text;
+
         const subgoals: EvalSubgoal[] = [
           {
             what: 'listed',
@@ -89,6 +99,7 @@ describe(SUITE, () => {
             detail: `Stored reply: ${JSON.stringify(reply).slice(0, 200)}`,
           },
         ];
+
         return subgoals;
       },
     }, observations);

@@ -82,6 +82,7 @@ const PANE_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
 interface WorkerdDigestStream extends WritableStream<ArrayBufferView | ArrayBuffer> {
   readonly digest: Promise<ArrayBuffer>;
 }
+
 declare const crypto: Crypto & {
   DigestStream: new (algorithm: string) => WorkerdDigestStream;
 };
@@ -158,6 +159,7 @@ class ProbeFilePlane implements VFS {
     const end = offset + length;
     const out = new Uint8Array(length);
     let filled = 0;
+
     for (const row of this.exec(
       `SELECT start, substr(bytes, max(1, ? - start + 1), ? - max(?, start)) AS bytes
          FROM probe_file_ranges
@@ -170,6 +172,7 @@ class ProbeFilePlane implements VFS {
       out.set(part, Math.max(0, Number(row.start) - offset));
       filled += part.byteLength;
     }
+
     return filled === length ? out : out.subarray(0, filled);
   }
 
@@ -177,11 +180,15 @@ class ProbeFilePlane implements VFS {
     const raw = this.exec(
       `SELECT max(start + length(bytes)) AS size FROM probe_file_ranges WHERE path = ?`, path,
     )[0]?.size;
+
     const size = raw === null || raw === undefined ? null : Number(raw);
+
     if (size !== null && size !== undefined) return { size, mtimeMs: 0, isDir: false };
+
     const holds = this.exec(
       `SELECT 1 AS found FROM probe_file_ranges WHERE path LIKE ? LIMIT 1`, `${path}/%`,
     );
+
     return holds.length === 0 ? null : { size: 0, mtimeMs: 0, isDir: true };
   }
 
@@ -194,6 +201,7 @@ class ProbeFilePlane implements VFS {
     // Insertion-ordered, deduplicated: several ranges of several files share one
     // directory name, and the walk wants each name once.
     const names = new Set<string>();
+
     for (const row of this.exec(
       `SELECT DISTINCT path FROM probe_file_ranges WHERE path LIKE ? ORDER BY path`, `${prefix}%`,
     )) {
@@ -201,6 +209,7 @@ class ProbeFilePlane implements VFS {
       const slash = rest.indexOf('/');
       names.add(slash < 0 ? rest : rest.slice(0, slash));
     }
+
     return [...names];
   }
 
@@ -223,8 +232,10 @@ class ProbeFilePlane implements VFS {
    *  a VFS. */
   async readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string> {
     const stat = await this.stat(path);
+
     if (stat === null) throw new Error(`ENOENT: ${path}`);
     const whole = await this.readRange(path, 0, stat.size);
+
     return opts?.encoding === undefined ? whole : new TextDecoder().decode(whole);
   }
 
@@ -241,23 +252,28 @@ class ProbeFilePlane implements VFS {
    */
   async digests(): Promise<{ path: string; size: number; digest: string }[]> {
     const out: { path: string; size: number; digest: string }[] = [];
+
     for (const row of this.exec(
       `SELECT DISTINCT path FROM probe_file_ranges ORDER BY path`,
     )) {
       const path = String(row.path);
       const stat = await this.stat(path);
+
       if (stat === null) continue;
       const hash = new crypto.DigestStream('SHA-256');
       const writer = hash.getWriter();
+
       for (let offset = 0; offset < stat.size; offset += PROBE_FRAME_BYTES) {
         await writer.write(
           await this.readRange(path, offset, Math.min(PROBE_FRAME_BYTES, stat.size - offset)),
         );
       }
+
       await writer.close();
       const digest = Array.from(new Uint8Array(await hash.digest), (byte) => byte.toString(16).padStart(2, '0'));
       out.push({ path, size: stat.size, digest: digest.join('') });
     }
+
     return out;
   }
 
@@ -345,6 +361,7 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
    */
   async seed(): Promise<void> {
     this.ensureSchema();
+
     if (await this.ctx.storage.get<string>('transferId') !== undefined) return;
 
     const transferId = `probe-transfer-${this.ctx.id.toString().slice(0, 8)}`;
@@ -357,18 +374,22 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
     void this.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
       VALUES (${'probe_tool'}, ${'Counts what a fork carried.'}, ${null},
               ${'export default () => 1;'}, ${'workspace'}, ${1_760_000_000_001}, ${1_760_000_000_002})`;
+
     for (const n of [1, 2]) {
       void this.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
         VALUES (${`chunk-${n}`}, ${'memory/notes.md'}, ${n}, ${n + 1}, ${`hash-${n}`},
                 ${`Chunk ${n} of the parent's memory index, wide enough to need its own frame.`},
                 ${1_760_000_000_003})`;
     }
+
     this.ctx.storage.sql.exec(PANE_DDL);
+
     const pane = [
       { id: 'm1', parent: null, role: 'user', text: 'Fork me.' },
       { id: 'm2', parent: 'm1', role: 'assistant', text: 'Reading the workspace first.' },
       { id: PROBE_CUT_MESSAGE_ID, parent: 'm2', role: 'assistant', text: 'Done. This is the cut point.' },
     ];
+
     pane.forEach((row, index) => {
       void this.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
         VALUES (${actor.actorId}, ${row.id}, ${'default'}, ${row.parent}, ${row.role},
@@ -387,6 +408,7 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
    *  the source's rather than with a hardcoded digest. */
   async sourceFiles(): Promise<{ path: string; size: number; digest: string }[]> {
     this.ensureSchema();
+
     return this.plane.digests();
   }
 
@@ -402,8 +424,10 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
   async deliver(request: ForkDeliveryRequest): Promise<ForkDeliveryReport> {
     this.ensureSchema();
     const transferId = await this.ctx.storage.get<string>('transferId');
+
     if (transferId === undefined) throw new Error('fork source probe was not seeded');
     const target = this.env.FORK_TARGET.get(this.env.FORK_TARGET.idFromName(request.target));
+
     const report: ForkDeliveryReport = {
       sent: 0, nextSeq: request.from, stream: FORK_STREAM_SEED,
       staged: 0, settled: 0, fork: null, refusal: null,
@@ -428,28 +452,36 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
           report.stream = foldForkStream(report.stream, frame.digest);
           continue;
         }
+
         if (request.stop === 'files' && frame.kind === 'file') break;
+
         if (request.stop !== 'end' && frame.kind === 'commit') break;
+
         const outcome = await target.accept(
           frame.seq === request.from && request.corrupt !== undefined
             ? corruptFrame(frame, request.corrupt)
             : frame,
         );
+
         report.sent += 1;
         report.nextSeq = frame.seq + 1;
+
         // The commit's own digest is not folded — it seals the value, so folding
         // it would leave the two halves computing different sequences.
         if (frame.kind !== 'commit') report.stream = foldForkStream(report.stream, frame.digest);
+
         if (outcome.status === 'staged') report.staged += 1;
         else {
           if (outcome.status === 'settled') report.settled += 1;
           report.fork = outcome.result;
         }
+
         if (request.stop === 'range' && frame.kind === 'file' && !frame.last) break;
       }
     } catch (cause) {
       report.refusal = cause instanceof Error ? cause.message : String(cause);
     }
+
     return report;
   }
 
@@ -471,6 +503,7 @@ function corruptFrame(frame: ForkFrame, how: ForkCorruption): ForkFrame {
   if (frame.kind !== 'file') throw new Error(`frame ${frame.seq} is a ${frame.kind} frame, not a file frame`);
   const bytes = frame.bytes.slice();
   bytes[0] = bytes[0]! ^ 0xff;
+
   return how === 'frame' ? { ...frame, bytes } : sealForkFrame({ ...frame, bytes });
 }
 
@@ -520,6 +553,7 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
     { status: 'staged' | 'settled' | 'published'; result: ForkResult | null }
   > {
     this.ensureSchema();
+
     if (this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`.length === 0) {
       void this.sql`INSERT INTO workspace_identity (id, name, created_at)
         VALUES (${this.ctx.id.toString()}, ${'unpublished-target'}, ${1_760_000_000_100})`;
@@ -540,11 +574,13 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
         owns: (targetPath) => targetPath === SOUL_PATH,
         publish: async (targetPath, bytes) => {
           await this.plane.writeFile(targetPath, bytes);
+
           return { mission: summarizeSoulBytes(bytes) };
         },
       }),
     );
     const outcome = await this.receiver.accept(frame);
+
     return outcome.status === 'staged'
       ? { status: 'staged', result: null }
       : { status: outcome.status, result: outcome.result };
@@ -560,14 +596,18 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
    */
   async cursor(): Promise<ForkStaging | null> {
     this.ensureSchema();
+
     return new ForkStagingState(this.sql).read();
   }
 
   async state(): Promise<ForkTargetState> {
     this.ensureSchema();
+
     const pane = this.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = ${'table'} AND name = ${'assistant_messages'}`.length > 0;
+
     const tally = (rows: { count: number }[]): number => rows[0]?.count ?? 0;
+
     return {
       lineage: readForkLineage(this.sql),
       identity: this.sql<{ id: string; name: string; mission: string | null }>`

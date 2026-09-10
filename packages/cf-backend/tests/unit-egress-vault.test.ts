@@ -22,6 +22,7 @@ async function vault(): Promise<EgressVaultDeps & { db: Database }> {
   const sql = sqlExec(db);
   initEgressVaultTables(sql);
   const cipher = await createCredentialCipher(TEST_USER_ENV);
+
   return { db, sql, cipher, aad: (id) => `test-user-do:egress:${id}` };
 }
 
@@ -75,11 +76,13 @@ describe('add, rotate, revoke', () => {
     const first = await putEgressSecret(deps, STRIPE);
     const rotated = await putEgressSecret(deps, { ...STRIPE, secret: 'sk_live_rotated_value_here' });
     expect(rotated.placeholder).toBe(first.placeholder);
+
     const resolved = await resolveEgressInjection(
       deps,
       { host: 'api.stripe.com', url: 'https://api.stripe.com/v1/charges', headers: [['authorization', `Bearer ${first.placeholder}`]] },
       [rotated],
     );
+
     expect(resolved.kind).toBe('forward');
     expect(resolved.kind === 'forward' && resolved.substitutions[0]!.secret).toBe('sk_live_rotated_value_here');
   });
@@ -96,6 +99,7 @@ describe('add, rotate, revoke', () => {
     const deps = await vault();
     const binding = await putEgressSecret(deps, STRIPE);
     revokeEgressSecret(deps.sql, 'stripe');
+
     // The handler still holds its configured view — this is the window between
     // revocation and reconfiguration, and it must fail closed.
     const resolved = await resolveEgressInjection(
@@ -103,6 +107,7 @@ describe('add, rotate, revoke', () => {
       { host: 'api.stripe.com', url: 'https://api.stripe.com/', headers: [['authorization', `Bearer ${binding.placeholder}`]] },
       [binding],
     );
+
     expect(resolved.kind).toBe('refuse');
     expect(resolved.kind === 'refuse' && resolved.status).toBe(403);
   });
@@ -132,12 +137,14 @@ describe('destination is re-checked on every request', () => {
     const allowed = await resolveEgressInjection(
       deps, { host: 'api.stripe.com', url: 'https://api.stripe.com/v1', headers }, [binding],
     );
+
     expect(allowed.kind).toBe('forward');
     expect(allowed.kind === 'forward' && allowed.substitutions[0]!.secret).toBe(SECRET);
 
     const denied = await resolveEgressInjection(
       deps, { host: 'attacker.test', url: 'https://attacker.test/collect', headers }, [binding],
     );
+
     expect(denied.kind).toBe('refuse');
     // The refusal must not leak the secret it declined to substitute.
     expect(JSON.stringify(denied)).not.toContain(SECRET);
@@ -146,9 +153,11 @@ describe('destination is re-checked on every request', () => {
   test('traffic with no placeholder never opens anything', async () => {
     const deps = await vault();
     const binding = await putEgressSecret(deps, STRIPE);
+
     const resolved = await resolveEgressInjection(
       deps, { host: 'example.com', url: 'https://example.com/', headers: [] }, [binding],
     );
+
     expect(resolved).toEqual({ kind: 'forward', substitutions: [] });
   });
 });
@@ -157,10 +166,12 @@ describe('key rotation', () => {
   test('the vault re-seals under a new key and the secret survives', async () => {
     const deps = await vault();
     await putEgressSecret(deps, STRIPE);
+
     const next = await createCredentialCipher({
       CREDENTIAL_ENCRYPTION_KEY: 'a-second-credential-encryption-key-9876543210',
       CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
+
     const rotated: EgressVaultDeps = { sql: deps.sql, cipher: next, aad: deps.aad };
     expect(await rewrapEgressSecrets(rotated)).toBe(true);
     const stored = String(deps.sql.exec(`SELECT secret FROM user_egress_secrets`).toArray()[0]!.secret);
@@ -173,9 +184,11 @@ describe('key rotation', () => {
     // rotation drops the retired key on the strength of it.
     const deps = await vault();
     await putEgressSecret(deps, STRIPE);
+
     const stranger = await createCredentialCipher({
       CREDENTIAL_ENCRYPTION_KEY: 'an-unrelated-encryption-key-000000000000000',
     });
+
     expect(await rewrapEgressSecrets({ sql: deps.sql, cipher: stranger, aad: deps.aad })).toBe(false);
   });
 });

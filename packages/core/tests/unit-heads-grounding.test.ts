@@ -33,6 +33,7 @@ function newJournal() {
   initHeadsTables(execRaw);
   const sql = makeSql(db);
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'grounding-test');
+
   return { sql, journal: new HeadJournal(sql, actor), db, actor };
 }
 
@@ -70,6 +71,7 @@ function buildRuntime(opts: {
   mergePrompts?: string[];        // out-param: every merge prompt seen
 }): HeadRuntime {
   let mergeCall = 0;
+
   const runtime: HeadRuntime = {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       return {
@@ -83,10 +85,13 @@ function buildRuntime(opts: {
       const narrs = opts.mergeNarratives ?? ['merged'];
       const narrative = narrs[Math.min(mergeCall, narrs.length - 1)]!;
       mergeCall++;
+
       return mergeOut(narrative);
     },
   };
+
   if (opts.grounding) runtime.grounding = opts.grounding;
+
   return runtime;
 }
 
@@ -94,6 +99,7 @@ const ctx: SerializedMessage[] = [{ id: 'm1', role: 'user', content: 'go', creat
 
 function grounding(over: Partial<HeadGrounding> = {}): HeadGrounding {
   const judge = createJSONLLM({ score: 0.5, rationale: 'ok' });
+
   return { executor: verdictExecutor(), explorer: judge, judge, ...over };
 }
 
@@ -102,6 +108,7 @@ function grounding(over: Partial<HeadGrounding> = {}): HeadGrounding {
 describe('grounded head outcome scores', () => {
   test('a head whose code RAN outscores a head whose code FAILED', async () => {
     const { journal } = newJournal();
+
     const runtime = buildRuntime({
       reports: {
         good: report('h-good', { summary: 'works', evidence: [{ id: 'e1', kind: 'artifact', body: '```js\nconst x = 42;\n```' }] }),
@@ -109,6 +116,7 @@ describe('grounded head outcome scores', () => {
       },
       grounding: grounding(),
     });
+
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
@@ -131,11 +139,13 @@ describe('grounded head outcome scores', () => {
 
   test('a non-completed head is floored below a completed one without a judge call', async () => {
     const { journal } = newJournal();
+
     // Judge that throws if ever asked — proves the aborted head spends no call.
     const throwingJudge: LLM = {
       stream() { throw new Error('should not be called for the aborted head'); },
       async complete() { return JSON.stringify({ score: 0.9 }); },
     };
+
     const runtime = buildRuntime({
       reports: {
         done: report('h-done', { summary: 'finished' }),
@@ -143,12 +153,14 @@ describe('grounded head outcome scores', () => {
       },
       grounding: grounding({ judge: throwingJudge, explorer: throwingJudge }),
     });
+
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'done', rationale: 'a' }, { task: 'gone', rationale: 'b' }] },
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
+
     const gone = result.headScores.find((s) => s.status === 'aborted')!;
     const done = result.headScores.find((s) => s.status === 'completed')!;
     expect(gone.score).toBe(0);
@@ -164,15 +176,19 @@ describe('grounded head outcome scores', () => {
     // reports, the merge that would have carried them, and the `head_merge`
     // phase that is the only durable trace a fork ran at all.
     const { journal } = newJournal();
+
     const brokenJudge: LLM = {
       stream() { throw new Error('judge provider unreachable'); },
       async complete(): Promise<string> { throw new Error('judge provider unreachable'); },
     };
+
     const runtime = buildRuntime({
       reports: { a: report('h-a', { summary: 'found A' }), b: report('h-b', { summary: 'found B' }) },
       grounding: grounding({ judge: brokenJudge, explorer: brokenJudge }),
     });
+
     const phases: string[] = [];
+
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
@@ -195,12 +211,14 @@ describe('grounded head outcome scores', () => {
   test('without a grounding seam, scores are neutral and grounded=false', async () => {
     const { journal } = newJournal();
     const runtime = buildRuntime({ reports: { a: report('h-a'), b: report('h-b') } });
+
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
+
     expect(result.grounded).toBe(false);
     expect(result.headScores.every((s) => s.score === 0.5)).toBe(true);
   });
@@ -211,6 +229,7 @@ describe('grounded head outcome scores', () => {
   // generation — and nothing said so.
   test('a head judge request the call budget cannot fund is realised at the ceiling AND disclosed', async () => {
     const { journal } = newJournal();
+
     const runtime = buildRuntime({
       reports: {
         a: report('h-a', {
@@ -220,6 +239,7 @@ describe('grounded head outcome scores', () => {
       },
       grounding: grounding({ judgeSamples: 20 }),
     });
+
     const { stderr } = await captureConsole(() => new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
@@ -243,6 +263,7 @@ describe('k-sample median merge', () => {
   test('grounded merge runs k samples and keeps the median-scored one', async () => {
     const { journal } = newJournal();
     const mergePrompts: string[] = [];
+
     // Three distinct candidate narratives; the judge scores them low/mid/high
     // by keyword so the median ("mid") must be the one selected.
     const scoringJudge: LLM = {
@@ -250,23 +271,28 @@ describe('k-sample median merge', () => {
       async complete(prompt: string) {
         if (prompt.includes('Synthesized answer:')) {
           const s = prompt.includes('CAND-low') ? 0.1 : prompt.includes('CAND-high') ? 0.9 : 0.5;
+
           return JSON.stringify({ score: s });
         }
+
         return JSON.stringify({ score: 0.5 }); // per-head judge
       },
     };
+
     const runtime = buildRuntime({
       reports: { a: report('h-a'), b: report('h-b') },
       grounding: grounding({ judge: scoringJudge, explorer: scoringJudge, mergeSamples: 3 }),
       mergeNarratives: ['CAND-low', 'CAND-mid', 'CAND-high'],
       mergePrompts,
     });
+
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
+
     // k=3 merge synthesis calls were made (the merge prompt is identical each time).
     expect(mergePrompts).toHaveLength(3);
     // The median-scored candidate ("mid") wins — not low, not high.
@@ -276,6 +302,7 @@ describe('k-sample median merge', () => {
   test('a merge judge the provider cannot answer costs the ensemble, not the merge', async () => {
     const { journal } = newJournal();
     const mergePrompts: string[] = [];
+
     // The per-head judge answers; only the merge-narrative scorer rejects. The
     // k syntheses are already in hand and paid for at that point, so losing the
     // ensemble's tie-break is the honest cost — losing the merge is not. This
@@ -285,21 +312,25 @@ describe('k-sample median merge', () => {
       async *stream() { yield ''; },
       async complete(prompt: string) {
         if (prompt.includes('Synthesized answer:')) throw new Error('judge provider unreachable');
+
         return JSON.stringify({ score: 0.5 });
       },
     };
+
     const runtime = buildRuntime({
       reports: { a: report('h-a'), b: report('h-b') },
       grounding: grounding({ judge: halfBrokenJudge, explorer: halfBrokenJudge, mergeSamples: 3 }),
       mergeNarratives: ['CAND-a', 'CAND-b', 'CAND-c'],
       mergePrompts,
     });
+
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
+
     // All k samples were still produced, and one of them is the merge — not an
     // exception that discards the split and its head_merge ledger row.
     expect(mergePrompts).toHaveLength(3);
@@ -309,17 +340,20 @@ describe('k-sample median merge', () => {
   test('ungrounded merge is n=1', async () => {
     const { journal } = newJournal();
     const mergePrompts: string[] = [];
+
     const runtime = buildRuntime({
       reports: { a: report('h-a'), b: report('h-b') },
       mergeNarratives: ['only'],
       mergePrompts,
     });
+
     const result = await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
       parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
     });
+
     expect(mergePrompts).toHaveLength(1);
     expect(result.mergedNarrative).toBe('only');
   });
@@ -333,6 +367,7 @@ describe('evidence is not clipped into the merge', () => {
     const mergePrompts: string[] = [];
     const longBody = 'X'.repeat(1200); // far past a 200-char clip
     const manyEv = Array.from({ length: 9 }, (_, i) => ({ id: `e${i}`, kind: 'fact' as const, body: `finding-${i}` }));
+
     const runtime = buildRuntime({
       reports: {
         a: report('h-a', { evidence: [{ id: 'big', kind: 'fact', body: longBody }, ...manyEv] }),
@@ -340,6 +375,7 @@ describe('evidence is not clipped into the merge', () => {
       },
       mergePrompts,
     });
+
     await new HeadController(runtime, journal).run({
       mode: 'build',
       parentHeadId: null, inheritedContext: ctx,

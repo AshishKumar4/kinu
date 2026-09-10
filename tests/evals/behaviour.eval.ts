@@ -75,6 +75,7 @@ import { resolveArtifactRoot } from '../../scripts/bench-retention';
 interface EvalInput { task: EvalCase; repetition: number }
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
+
 const TARGET = liveModelTarget('Behaviour Evals');
 
 /**
@@ -84,7 +85,9 @@ const TARGET = liveModelTarget('Behaviour Evals');
  * flash number and a 9-observation pro number invite different readings.
  */
 const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+
 const REPEATS = Number(process.env.KINU_EVAL_REPEATS ?? (TIER === 'pro' ? '1' : '2'));
+
 const SEED = Number(process.env.KINU_EVAL_SEED ?? '1');
 
 /**
@@ -140,13 +143,17 @@ const ARM: EvalArmState = {
 function loadCorpus(): EvalCase[] {
   const read = (name: string) =>
     parseCorpus(readFileSync(join(REPO_ROOT, 'tests/eval/corpus', name), 'utf8'));
+
   const behaviour = read('behaviour.jsonl');
+
   const toolUsing = read('seed.jsonl').filter((c) =>
     c.tags?.some((t) => t === 'tool-use' || t === 'multi-step') === true);
+
   return [...behaviour, ...toolUsing, ...hardTaskCases(), ...probeCases()];
 }
 
 const CORPUS = loadCorpus();
+
 /** One entry per (task, repetition) — pi's pairing identity, and what makes two
  *  runs comparable at all. */
 const CASES = CORPUS.flatMap((task) =>
@@ -180,6 +187,7 @@ const ARTIFACT_ROOT = resolveArtifactRoot({
   repoRoot: REPO_ROOT,
   runRoot: tmpdir(),
 });
+
 const RUN_SIGNATURE = createHash('sha256').update(JSON.stringify({
   family: 'behaviour',
   tier: TIER,
@@ -194,16 +202,20 @@ const RUN_SIGNATURE = createHash('sha256').update(JSON.stringify({
     repetition,
   })),
 })).digest('hex');
+
 /** The corpus as the progress store names it. One list, so the resume check,
  *  the census and the report all speak about the same set of cases. */
 const PROGRESS_CASES: EvalProgressCase[] = CASES.map(({ task, repetition }) => ({
   taskId: task.id,
   repetition,
 }));
+
 const EXPECTED_KEYS = new Set(
   PROGRESS_CASES.map(({ taskId, repetition }) => caseKey(taskId, repetition)),
 );
+
 const RUN_PREFIX = `behaviour-${TIER}-`;
+
 const RESUME_DIR = TARGET === null
   ? null
   : findResumableEvalDir(
@@ -212,16 +224,24 @@ const RESUME_DIR = TARGET === null
       RUN_SIGNATURE,
       EXPECTED_KEYS,
     );
+
 const TRANSCRIPTS = RESUME_DIR ?? join(ARTIFACT_ROOT, `${RUN_PREFIX}${String(Date.now())}`);
+
 mkdirSync(TRANSCRIPTS, { recursive: true });
+
 const progress = openEvalProgress(TRANSCRIPTS, RUN_SIGNATURE);
+
 const opened: Database[] = [];
+
 const observationByKey = new Map<string, EvalObservation>();
+
 /** What this process adopted from an interrupted predecessor rather than drove.
  *  Without this, a rehydrated observation arrives with no spend behind it, so
  *  the record's case list covers the run while its cost covers one process. */
 const adoptedSpend = new AdoptedSpendMeter();
+
 let model: LanguageModel;
+
 let published = false;
 
 interface StoredCaseProgress {
@@ -310,9 +330,11 @@ const StoredCaseProgressSchema: v.GenericSchema<StoredCaseProgress> = v.object({
  * broken durable record, never a signal to spend again. */
 function storedCaseProgress(value: JsonValue): StoredCaseProgress {
   const parsed = v.safeParse(StoredCaseProgressSchema, value);
+
   if (!parsed.success) {
     throw new Error('eval progress lost its observation payload; refusing to repeat paid work');
   }
+
   return parsed.output;
 }
 
@@ -336,10 +358,14 @@ function upsertObservation(observation: EvalObservation): void {
  */
 function currentObservations(): EvalObservation[] {
   const attempted = new Set([...observationByKey.values()].map((o) => o.taskId));
+
   return CASES.flatMap(({ task, repetition }): EvalObservation[] => {
     const observation = observationByKey.get(caseKey(task.id, repetition));
+
     if (observation) return [observation];
+
     if (!attempted.has(task.id)) return [];
+
     return [{
       taskId: task.id,
       repetition,
@@ -359,14 +385,18 @@ function currentObservations(): EvalObservation[] {
 // census can count what this run still owes. The plan may then retry an
 // incomplete case and replace that fact with a settled attempt.
 progress.markInFlightIncomplete('previous process ended before the case settled');
+
 progress.markPlanned(PROGRESS_CASES);
+
 for (const { task, repetition } of CASES) {
   const key = caseKey(task.id, repetition);
   const record = progress.record(key);
+
   if (record?.phase === 'progress' || record?.phase === 'settled') {
     if (record.output === undefined) {
       throw new Error(`${key}: completed progress has no stored output`);
     }
+
     const observation = storedCaseProgress(record.output).observation;
     upsertObservation(observation);
     adoptedSpend.adopt(observation, record.activity);
@@ -377,6 +407,7 @@ for (const { task, repetition } of CASES) {
       outcome: 'incomplete',
       reason: record.reason ?? 'case did not settle',
     };
+
     upsertObservation(observation);
     // A record with no verdict is adopted for its spend too, and it has none to
     // give: the attempt stored activity but no totals. Registering it is what
@@ -410,7 +441,9 @@ function ledgerJudge(name: string) {
     name,
     ({ output }) => {
       const row = output.scores.find((s) => s.name === name);
+
       if (!row) return { score: null, metadata: { rationale: `${name} did not report` } };
+
       return {
         score: row.rate,
         metadata: {
@@ -448,11 +481,14 @@ const tagExpectation = createJudge<EvalInput, BehaviourOutput>(
   ({ input, output }) => {
     const expected = (input.task.tags ?? [])
       .map((tag) => TAG_MECHANISM.get(tag)).filter((n): n is string => n !== undefined);
+
     if (expected.length === 0) {
       return { score: null, metadata: { rationale: 'no tag implies a mechanism' } };
     }
+
     const met = expected.filter((name) =>
       (output.scores.find((s) => s.name === name)?.eligible ?? 0) > 0);
+
     return {
       score: met.length / expected.length,
       metadata: {
@@ -463,6 +499,7 @@ const tagExpectation = createJudge<EvalInput, BehaviourOutput>(
     };
   },
 );
+
 const JUDGES = [
   'steering_conversion', 'craft_reuse', 'edit_landing',
   'recovery_durability', 'completion_honesty', 'spill_retrieval', 'tool_outcomes',
@@ -493,9 +530,11 @@ function publishBehaviourRecord(): void {
   // Before the number, never after it: what the total spans is the first thing a
   // reader of a resumed run needs, and `reportLiveModelSpend` prints the total.
   const adopted = formatAdoptedSpend(adoptedSpend.summary());
+
   if (adopted) console.log(`\n${adopted}`);
   const spend = reportLiveModelSpend('Behaviour Evals');
   const observations = currentObservations();
+
   // The five states, over the corpus the run DECLARED. Printed beside the
   // record and before it, because a reader who meets a pass rate before meeting
   // the denominator it was taken over will read a partial run as a finished
@@ -504,6 +543,7 @@ function publishBehaviourRecord(): void {
   if (observations.length > 0) {
     console.log(`\n${formatCaseCensus(progress.census(PROGRESS_CASES))}`);
   }
+
   publishRunRecord({
     family: 'behaviour',
     tier: TIER,
@@ -522,8 +562,10 @@ function publishBehaviourRecord(): void {
 
 const onOperatorCancel = (signal: NodeJS.Signals): void => {
   const reason = `cancelled by operator (${signal})`;
+
   for (const key of progress.markInFlightIncomplete(reason)) {
     const record = progress.record(key);
+
     if (!record) continue;
     upsertObservation({
       taskId: record.taskId,
@@ -532,6 +574,7 @@ const onOperatorCancel = (signal: NodeJS.Signals): void => {
       reason,
     });
   }
+
   // Synchronous durable writes: this listener runs before Vitest's own signal
   // handler tears the worker down, so cancellation itself cannot erase the case
   // it interrupted or turn it into a test failure with no classification.
@@ -540,6 +583,7 @@ const onOperatorCancel = (signal: NodeJS.Signals): void => {
 };
 
 process.prependListener('SIGINT', onOperatorCancel);
+
 process.prependListener('SIGTERM', onOperatorCancel);
 
 beforeAll(() => {
@@ -551,6 +595,7 @@ beforeAll(() => {
     + `${String(ARM.tools.length)} tools, seed ${String(SEED)}`);
   console.log(`corpus:  ${String(CORPUS.length)} tasks x ${String(REPEATS)} repeats `
     + `= ${String(CASES.length)} observations`);
+
   if (RESUME_DIR) {
     const resumed = progress.census(PROGRESS_CASES);
     const done = resumed.total - resumed.states.notRun.length - resumed.states.incomplete.length;
@@ -558,6 +603,7 @@ beforeAll(() => {
       + `${String(resumed.states.incomplete.length)} interrupted, `
       + `${String(resumed.states.notRun.length)} never reached)`);
   }
+
   console.log(`headline: ${String(OUTCOME_BEARING)} of those declare ground truth, so `
     + `${String(OUTCOME_BEARING)} is the pair count — the rest are covariates only`);
   console.log(`design:  ${pre.note}`);
@@ -602,19 +648,24 @@ describeEval('Agent behaviour over the run-event ledger', {
     async run({ input }) {
       const key = caseKey(input.task.id, input.repetition);
       const storedRecord = progress.record(key);
+
       if (storedRecord?.phase === 'progress') {
         if (storedRecord.output === undefined) {
           throw new Error(`${key}: progress is complete but carries no output`);
         }
+
         const stored = storedCaseProgress(storedRecord.output);
+
         if (!stored.output) {
           throw new Error(`${key}: a scored progress record lost its harness output`);
         }
+
         upsertObservation(stored.observation);
         // The second visit to this record — the module-level rehydrate above was
         // the first. The meter is keyed by case, so this is a no-op and the
         // adopted spend cannot be charged twice.
         adoptedSpend.adopt(stored.observation, storedRecord.activity);
+
         return {
           output: stored.output,
           usage: {
@@ -627,6 +678,7 @@ describeEval('Agent behaviour over the run-event ledger', {
 
       progress.markStarted(key);
       const startedAt = Date.now();
+
       try {
         const output = await runBehaviourTask(input.task, {
           dir: join(TRANSCRIPTS, `rep${String(input.repetition)}`),
@@ -643,9 +695,11 @@ describeEval('Agent behaviour over the run-event ledger', {
           onEvent: (event) => {
             if (event.type !== 'run-event') return;
             const delta = activityDelta(event.event);
+
             if (delta) progress.markActivity(key, delta);
           },
         });
+
         const observation: EvalObservation = {
           taskId: input.task.id,
           repetition: input.repetition,
@@ -660,14 +714,18 @@ describeEval('Agent behaviour over the run-event ledger', {
           provenance: output.provenance,
           ms: Date.now() - startedAt,
         };
+
         upsertObservation(observation);
+
         // The episode is COMPLETE before any judge runs. Persist its full output
         // now, so a crash in the reporting layer adopts rather than repeats it.
         const durableProgress = v.parse(
           JsonValueSchema,
           v.parse(StoredCaseProgressSchema, { output, observation } satisfies StoredCaseProgress),
         );
+
         progress.markProgress(key, durableProgress, 'scored');
+
         return {
           output,
           usage: { inputTokens: output.tokensIn, outputTokens: output.tokensOut },
@@ -701,13 +759,16 @@ describeEval('Agent behaviour over the run-event ledger', {
           // one here so it classifies as the terminal failure it is.
           const thrown = error instanceof Error ? error : new Error(String(error));
           const disposition = disposeFailedCase(thrown);
+
           const observation: EvalObservation = {
             taskId: input.task.id,
             repetition: input.repetition,
             outcome: disposition.outcome,
             reason: thrown.message,
           };
+
           upsertObservation(observation);
+
           if (disposition.kind === 'resumable') {
             progress.markIncomplete(key, observation.reason);
           } else {
@@ -715,6 +776,7 @@ describeEval('Agent behaviour over the run-event ledger', {
               JsonValueSchema,
               v.parse(StoredCaseProgressSchema, { observation } satisfies StoredCaseProgress),
             );
+
             progress.markProgress(key, durableProgress, disposition.outcome);
             // Terminal: an episode that produced its own verdict has produced one,
             // and no judge reads a failed case. A restart skips it rather than
@@ -722,6 +784,7 @@ describeEval('Agent behaviour over the run-event ledger', {
             progress.markSettled(key);
           }
         }
+
         throw error;
       }
     },
@@ -732,10 +795,13 @@ describeEval('Agent behaviour over the run-event ledger', {
 }, (it) => {
   it.for(CASES)('$task.id rep$repetition', async (input, { run }) => {
     const key = caseKey(input.task.id, input.repetition);
+
     if (progress.record(key)?.phase === 'settled') {
       console.log(`    [resume] ${key}: settled — not repeated`);
+
       return;
     }
+
     const result = await run(input);
     const out = result.output;
 
@@ -793,6 +859,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
     const instructed = CORPUS
       .filter((evalCase) => INSTRUCTED_CRAFTING.test(evalCase.task))
       .map((evalCase) => evalCase.id);
+
     expect(instructed).toEqual([]);
   });
 
@@ -822,6 +889,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
   test('probes and corpus agree — every probe runs exactly once, with a budget', () => {
     const ids = PROBES.map((probe) => probe.id);
     expect(new Set(ids).size, `duplicate probe ids: ${ids.join(', ')}`).toBe(ids.length);
+
     for (const probe of PROBES) {
       const rows = CORPUS.filter((c) => c.id === probe.id);
       expect(rows.length, `${probe.id} runs ${String(rows.length)} times`).toBe(1);
@@ -829,6 +897,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
       expect(rows[0]?.task).toBe(probe.prompt);
       expect(rows[0]?.budget).toEqual(probe.budget);
     }
+
     const orphaned = CORPUS.filter((c) => c.env === PROBE_ENV && probeFor(c) === undefined);
     expect(orphaned.map((c) => c.id)).toEqual([]);
   });
@@ -857,11 +926,14 @@ describe('corpus quality — can this corpus rank anything at all', () => {
     const files = (entries: Record<string, string>): ProbeFiles => ({
       readText: async (path: string) => entries[path] ?? null,
     });
+
     let index = 0;
+
     const toolEnd = (
       name: string, action: string, path: string | undefined, success: boolean, reason?: 'unread' | 'not_found',
     ): RunEvent => {
       index += 1;
+
       return {
         type: 'tool_call_end', runId: 'probe', eventIndex: index,
         timestamp: `2026-09-08T00:00:${String(index).padStart(2, '0')}Z`,
@@ -870,6 +942,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
         outcome: success ? { success: true } : { success: false, reason: reason ?? null },
       };
     };
+
     // No annotation: the eight keys are literal, and indexing a literal-keyed
     // object by an arbitrary string is correctly refused. So the loop runs
     // fixture-first over `Object.entries`, and the coverage assertion below —
@@ -933,18 +1006,24 @@ describe('corpus quality — can this corpus rank anything at all', () => {
         ],
       },
     };
+
     expect(Object.keys(HAPPY).sort()).toEqual(PROBES.map((probe) => probe.id).sort());
+
     for (const [id, happy] of Object.entries(HAPPY)) {
       const probe = probeFor({ id, env: PROBE_ENV });
+
       if (probe === undefined) throw new Error(`fixture without probe: ${id}`);
       const passed = await probe.verify({ files: files(happy.files), events: happy.events });
       expect(passed.length, `${id} declares no subgoals`).toBeGreaterThan(0);
+
       for (const subgoal of passed) {
         expect(subgoal.reached, `${id}/${subgoal.what}: ${subgoal.detail}`).toBe(true);
       }
+
       const missed = await probe.verify({ files: files({}), events: [] });
       expect(missed.map((subgoal) => subgoal.what).sort()).toEqual(
         passed.map((subgoal) => subgoal.what).sort());
+
       for (const subgoal of missed) {
         expect(subgoal.reached, `${id}/${subgoal.what} reached on empty input`).toBe(false);
       }
@@ -953,7 +1032,9 @@ describe('corpus quality — can this corpus rank anything at all', () => {
     // A read-first trajectory fixes the file without ever meeting the gate:
     // the content subgoal holds while both refusal subgoals miss.
     const blind = probeFor({ id: 'probe-blind-edit', env: PROBE_ENV });
+
     if (blind === undefined) throw new Error('missing probe-blind-edit');
+
     const readFirst = await blind.verify({
       files: files({ 'src/blind.txt': 'The vault is OPEN shut.\n' }),
       events: [
@@ -961,6 +1042,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
         toolEnd('file', 'edit', 'src/blind.txt', true),
       ],
     });
+
     expect(readFirst.find((s) => s.what === 'content-fixed')?.reached).toBe(true);
     expect(readFirst.find((s) => s.what === 'refusal-observed')?.reached).toBe(false);
     expect(readFirst.find((s) => s.what === 'recovered-after-refusal')?.reached).toBe(false);
@@ -968,17 +1050,22 @@ describe('corpus quality — can this corpus rank anything at all', () => {
     // A refusal that escaped the program fails the call: the diagnosis holds
     // while the handled-shape subgoal misses.
     const branch = probeFor({ id: 'probe-codemode-branch', env: PROBE_ENV });
+
     if (branch === undefined) throw new Error('missing probe-codemode-branch');
+
     const escaped = await branch.verify({
       files: files({ 'diagnosis.txt': 'reason:unread' }),
       events: [toolEnd('execute_tools', 'run', undefined, false)],
     });
+
     expect(escaped.find((s) => s.what === 'refusal-diagnosed')?.reached).toBe(true);
     expect(escaped.find((s) => s.what === 'execute_tools-succeeded')?.reached).toBe(false);
 
     // A fact transcribed but never forgotten: value holds, forget misses.
     const facts = probeFor({ id: 'probe-memory-facts', env: PROBE_ENV });
+
     if (facts === undefined) throw new Error('missing probe-memory-facts');
+
     const unforgotten = await facts.verify({
       files: files({ 'recalled.txt': 'BLUEBIRD' }),
       events: [
@@ -986,6 +1073,7 @@ describe('corpus quality — can this corpus rank anything at all', () => {
         toolEnd('memory', 'recall', undefined, true),
       ],
     });
+
     expect(unforgotten.find((s) => s.what === 'value-transcribed')?.reached).toBe(true);
     expect(unforgotten.find((s) => s.what === 'forgotten')?.reached).toBe(false);
   });

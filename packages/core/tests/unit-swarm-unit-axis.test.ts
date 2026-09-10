@@ -52,6 +52,7 @@ const MEASURED = {
     },
   },
 };
+
 /** A composition legal in every respect except the axis under test, so a refusal can
  *  only ever be about `unit` or `context`. */
 function unitCall(over: { unit: SwarmUnitSetting; context: BranchContext }) {
@@ -82,7 +83,9 @@ describe('the unit axis names what a node produces, and nothing else', () => {
    *  acceptance, and `toThrow()` alone cannot tell the three apart. */
   function refusedAt(input: JsonValue): string[] {
     const result = v.safeParse(SwarmConfigSchema, input);
+
     if (result.success) throw new Error(`parsed a cut spelling: ${JSON.stringify(input)}`);
+
     return result.issues.map((issue) => (issue.path ?? []).map((step) => String(step.key)).join('.'));
   }
 
@@ -104,6 +107,7 @@ describe('the unit axis names what a node produces, and nothing else', () => {
     for (const kind of SWARM_UNITS) {
       const call = unitCall({ unit: { kind }, context: 'fresh' });
       const resolved = resolveSwarm(call);
+
       if ('reason' in resolved) throw new Error(`unit:${kind} did not resolve: ${resolved.error}`);
       expect(resolved.config.unit).toEqual({ kind });
     }
@@ -126,15 +130,19 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   /** The message a composition comes back with, or '' when it was accepted. */
   function refusal(config: CutSpelling): string {
     const parsed = v.safeParse(SwarmConfigSchema, config);
+
     return parsed.success ? '' : parsed.issues.map((issue) => issue.message).join(' ');
   }
 
   test('a `custom` call with an empty config is refused naming all six and no more', () => {
     const resolved = resolveSwarm({ preset: 'custom', task: 't', label: 'six', config: {} });
+
     if (!('reason' in resolved)) throw new Error('an empty composition must be refused');
+
     for (const axis of ['unit', 'context', 'expand', 'score', 'advance', 'carry']) {
       expect(resolved.error).toContain(axis);
     }
+
     expect(resolved.error).not.toContain('observe');
     expect(resolved.error).not.toContain('decorrelate');
   });
@@ -212,6 +220,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
       const resolved = resolveSwarm({
         preset, task: 'probe it', key: 'behaviour', objective: MEASURED,
       });
+
       if ('reason' in resolved) throw new Error(`${preset} must resolve: ${resolved.error}`);
       expect(resolved.config.advance).toEqual({ kind: 'archive', novelty: 0.4 });
       expect(resolved.settle).toBe('archive');
@@ -227,6 +236,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
         scale: 'linear', target: 12, verify: { kind: 'exec-ratio', spec: {} },
       },
     });
+
     if ('reason' in resolved) throw new Error(`prove did not resolve: ${resolved.error}`);
     expect(resolved.config.unit).toEqual({ kind: 'answer' });
     expect(resolved.config.score).toEqual({ kind: 'verify' });
@@ -247,6 +257,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
     // The checker is what `prove` IS, and naming one buys the depth-7 best-first tree
     // below. Omitting it yields a run rather than a scolding.
     const resolved = resolveSwarm({ preset: 'prove', task: 'show it' });
+
     if ('reason' in resolved) throw new Error(`prove must RESOLVE: ${resolved.error}`);
     expect(swarmValidity(resolved)).toBeNull();
     expect(resolved.config.score.kind).toBe('judge');
@@ -255,6 +266,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
 
     // And with a checker it is the preset the doctrine describes.
     const checked = resolveSwarm({ preset: 'prove', task: 'show it', objective: MEASURED });
+
     if ('reason' in checked) throw new Error(checked.error);
     expect(swarmValidity(checked)).toBeNull();
     expect(checked.config.score).toEqual({ kind: 'verify' });
@@ -268,6 +280,7 @@ describe('the context axis carries the inheritance question, at one spelling', (
     for (const context of SWARM_CONTEXTS) {
       expect(v.parse(SwarmConfigSchema, { context })).toMatchObject({ context });
     }
+
     expect(() => v.parse(SwarmConfigSchema, { context: 'fork' })).toThrow('renamed');
     expect(() => v.parse(SwarmConfigSchema, { context: { kind: 'fork' } })).toThrow();
   });
@@ -280,6 +293,7 @@ describe('the context axis carries the inheritance question, at one spelling', (
     const call = unitCall({ unit: { kind: 'answer' }, context: 'fresh' });
     const { context: _dropped, ...withoutContext } = call.config;
     const resolved = resolveSwarm({ ...call, config: withoutContext });
+
     if (!('reason' in resolved)) throw new Error('a composition missing `context` must be refused');
     expect(resolved.error).toContain('context');
   });
@@ -297,10 +311,12 @@ describe('the context axis carries the inheritance question, at one spelling', (
         target: 1, verify: { kind: 'exec-ratio', spec: {} },
       },
     });
+
     if ('reason' in optimise) throw new Error(`optimise did not resolve: ${optimise.error}`);
     expect(optimise.config.context).toBe('inherit');
 
     const ideate = resolveSwarm({ preset: 'ideate', task: 'name some approaches' });
+
     if ('reason' in ideate) throw new Error(`ideate did not resolve: ${ideate.error}`);
     expect(ideate.config.context).toBe('fresh');
   });
@@ -314,6 +330,7 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
     // the region opened; what an agent node DOES with its tools is the behavioural
     // suite's subject, not this one's.
     const { rt, testSql } = createTestRuntime();
+
     const result = await runSwarm({
       rt,
       // `unit:'answer'` is an agent node, so the run acquires one seat per node
@@ -336,13 +353,16 @@ describe('a tool-using node over a shared workspace is a runnable composition', 
       mode: 'build',
     }, (() => {
       const resolved = resolveSwarm(unitCall({ unit: { kind: 'answer' }, context: 'fresh' }));
+
       if ('reason' in resolved) throw new Error(`the fixture must resolve: ${resolved.error}`);
+
       return resolved;
     })());
 
     if ('reason' in result) {
       throw new Error(`a tool-using node composition must run: ${result.error}`);
     }
+
     expect(result.report.expansions).toBe(3);
   }, 60_000);
 });

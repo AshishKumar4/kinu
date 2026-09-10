@@ -35,6 +35,7 @@ export async function converge(
     WHERE actor_id = ${rt.actor.actorId} AND root_id = ${rootId}
       AND status IN ('terminal', 'open')
     ORDER BY value DESC, depth DESC`;
+
   const argmaxWinner = population[0];
 
   if (!argmaxWinner) {
@@ -51,6 +52,7 @@ export async function converge(
         executor: rt.executor,
         judge: rt.judgeModel ?? rt.llm,
       });
+
   const winner = selectedId === argmaxWinner.id
     ? argmaxWinner
     : population.find((n) => n.id === selectedId) ?? argmaxWinner;
@@ -74,6 +76,7 @@ export async function converge(
   // tie-break promotes a lower-value passer. Only the exact ties count.
   const indistinguishable = findNearTiedRivals(population, winner, 0)
     .filter((rival) => rival.value === winner.value);
+
   if (indistinguishable.length > 0) {
     if (mode === 'build') {
       await rt.memory.append(
@@ -85,7 +88,9 @@ export async function converge(
       );
       await rt.memory.index('memory/MEMORY.md');
     }
+
     abandonSearchTree(rt.storage.sql, rt.actor, rootId);
+
     return {
       winnerId: winner.id,
       winnerValue: winner.value,
@@ -106,7 +111,9 @@ export async function converge(
       await rt.memory.index('memory/MEMORY.md');
       await recordTaskOutcome(rt, winner.task, 'error', winner.value);
     }
+
     abandonSearchTree(rt.storage.sql, rt.actor, rootId);
+
     return {
       winnerId: winner.id,
       winnerValue: winner.value,
@@ -125,6 +132,7 @@ export async function converge(
       `Task: ${winner.task}\nResult: ${evidenceWindow(winner.observation, EVIDENCE_BUDGETS.convergenceObservation)}\nScore: ${winner.value.toFixed(2)}\n\n` +
       `Summarize in ≤3 bullet points what approach worked:`,
     );
+
     await rt.memory.append(
       'memory/MEMORY.md',
       `\n## Successful approach (${isoDate()}, score ${winner.value.toFixed(2)})\n${summary}\n`,
@@ -135,6 +143,7 @@ export async function converge(
       SELECT code_used, code_language FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND id = ${winner.id}
     `[0];
+
     if (winnerCode?.code_used && isCraftable(winnerCode.code_language)
         && winner.value > DEFAULT_CONFIG.mcts.craftExtractionThreshold) {
       await maybeStoreCraftedTool(rt, winnerCode.code_used, winner.value);
@@ -158,6 +167,7 @@ export async function converge(
     UPDATE search_nodes SET status = 'terminal'
     WHERE actor_id = ${rt.actor.actorId} AND id = ${winner.id}
   `;
+
   if (mode === 'build') await recordTaskOutcome(rt, winner.task, 'success', winner.value);
 
   return {

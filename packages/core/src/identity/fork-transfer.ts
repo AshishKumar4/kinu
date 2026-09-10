@@ -188,9 +188,13 @@ export const ForkFrameSchema = v.variant('kind', [
 ]);
 
 export type ForkFrame = v.InferOutput<typeof ForkFrameSchema>;
+
 export type ForkBeginFrame = Extract<ForkFrame, { kind: 'begin' }>;
+
 export type ForkFileFrame = Extract<ForkFrame, { kind: 'file' }>;
+
 export type ForkRowFrame = Extract<ForkFrame, { kind: ForkRowSection }>;
+
 export type ForkSectionCounts = v.InferOutput<typeof ForkSectionCountsSchema>;
 
 /** A frame before it is sealed. Distributive, so the `kind` discriminant still
@@ -211,9 +215,12 @@ type ForkFrameSealInput = UnsealedForkFrame & { digest?: string };
 export function forkFramePreimage(frame: ForkFrameSealInput): string {
   if (frame.kind === 'file') {
     const { bytes, digest: _digest, ...meta } = frame;
+
     return `${stableStringify({ ...meta })}|${sha256Hex(bytes)}`;
   }
+
   const { digest: _digest, ...body } = frame;
+
   return stableStringify(body);
 }
 
@@ -221,6 +228,7 @@ export function forkFramePreimage(frame: ForkFrameSealInput): string {
  *  the one place the wire schema is applied on the way out. */
 export function sealForkFrame(frame: ForkFrameSealInput): ForkFrame {
   const { digest: _discarded, ...body } = frame;
+
   return v.parse(ForkFrameSchema, { ...body, digest: sha256Hex(forkFramePreimage(body)) });
 }
 
@@ -300,14 +308,17 @@ function messagePayloadBytes(row: ForkMessageRow): number {
 async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
   const actor = openWorkspaceMainActor(sql);
   let rowid = 0;
+
   for (;;) {
     const row = sql<ForkConfigRow & { rowid: number }>`
       SELECT rowid, key, value FROM actor_config
       WHERE actor_id = ${actor.actorId} AND rowid > ${rowid}
       ORDER BY rowid ASC LIMIT 1
     `[0];
+
     if (row === undefined) return;
     rowid = row.rowid;
+
     if (SHELL_APPROVAL_AUTHORITY_KEYS.includes(row.key)) continue;
     yield { key: row.key, value: row.value };
   }
@@ -315,11 +326,13 @@ async function* configRows(sql: SqlExecutor): AsyncGenerator<ForkConfigRow> {
 
 async function* craftedToolRows(sql: SqlExecutor): AsyncGenerator<ForkCraftedToolRow> {
   let rowid = 0;
+
   for (;;) {
     const row = sql<ForkCraftedToolRow & { rowid: number }>`
       SELECT rowid, name, description, params, code, scope, created_at, updated_at
       FROM crafted_tools WHERE rowid > ${rowid} ORDER BY rowid ASC LIMIT 1
     `[0];
+
     if (row === undefined) return;
     rowid = row.rowid;
     yield {
@@ -331,11 +344,13 @@ async function* craftedToolRows(sql: SqlExecutor): AsyncGenerator<ForkCraftedToo
 
 async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChunkRow> {
   let rowid = 0;
+
   for (;;) {
     const row = sql<ForkMemoryChunkRow & { rowid: number }>`
       SELECT rowid, id, path, start_line, end_line, hash, text, updated_at
       FROM memory_chunks WHERE rowid > ${rowid} ORDER BY rowid ASC LIMIT 1
     `[0];
+
     if (row === undefined) return;
     rowid = row.rowid;
     yield {
@@ -350,6 +365,7 @@ async function* paneRows(
 ): AsyncGenerator<ForkPaneRow> {
   for (const id of ids) {
     const row = paneRowById(sql, actor, id);
+
     if (row !== undefined) yield row;
   }
 }
@@ -357,6 +373,7 @@ async function* paneRows(
 async function* messageRows(sql: SqlExecutor, actor: ActorHandle, ids: string[]): AsyncGenerator<ForkMessageRow> {
   for (const id of ids) {
     const row = messageRowById(sql, actor, id);
+
     if (row !== undefined) yield row;
   }
 }
@@ -378,10 +395,13 @@ export async function* forkTransferFrames(
 
   const actor = openWorkspaceMainActor(source.sql);
   const ancestry = ancestryIds(source.sql, actor, source.untilMessageId);
+
   if (ancestry.ids.length === 0) {
     throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
   }
+
   const filePaths: string[] = [];
+
   for await (const path of forkFilePaths(source.vfs)) filePaths.push(path);
 
   const counts: ForkSectionCounts = {
@@ -393,27 +413,37 @@ export async function* forkTransferFrames(
     messages: ancestry.ids.length,
     files: filePaths.length,
   };
+
   const identity = source.sql<{ id: string; name: string }>`
     SELECT id, name FROM workspace_identity LIMIT 1
   `[0];
+
   const lastId = ancestry.ids[ancestry.ids.length - 1];
+
   if (lastId === undefined) {
     throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
   }
+
   let createdAtMs: number;
+
   if (ancestry.authority === 'pane') {
     const row = paneRowById(source.sql, source.actor, lastId);
+
     if (row === undefined) {
       throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
     }
+
     createdAtMs = paneStampMs(row.created_at);
   } else {
     const row = messageRowById(source.sql, actor, lastId);
+
     if (row === undefined) {
       throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
     }
+
     createdAtMs = row.created_at;
   }
+
   const head: v.InferOutput<typeof ForkSnapshotHeadSchema> = {
     source: { workspaceId: identity?.id ?? '', workspaceName: identity?.name ?? '' },
     cut: { messageId: source.untilMessageId, createdAtMs },
@@ -421,11 +451,14 @@ export async function* forkTransferFrames(
 
   let seq = 0;
   let stream = FORK_STREAM_SEED;
+
   const seal = (body: ForkFrameBody): ForkFrame => {
     const frame = sealForkFrame(body);
     stream = foldForkStream(stream, frame.digest);
+
     return frame;
   };
+
   yield seal({
     version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
     kind: 'begin', head, counts, targetAuthority: source.targetAuthority,
@@ -439,8 +472,10 @@ export async function* forkTransferFrames(
   ): AsyncGenerator<ForkFrame> {
     let batch: T[] = [];
     let bytes = 0;
+
     for await (const row of rows) {
       const rowBytes = payloadBytes(row);
+
       // A single row can exceed the frame budget. Send it alone: rejecting it
       // would recreate the total-size failure framing exists to remove.
       if (batch.length > 0 && bytes + rowBytes > source.frameBytes) {
@@ -448,11 +483,14 @@ export async function* forkTransferFrames(
         batch = [];
         bytes = 0;
       }
+
       batch.push(row);
       bytes += rowBytes;
     }
+
     if (batch.length > 0) yield frame(batch);
   };
+
   for (const section of FORK_ROW_SECTIONS) {
     switch (section) {
       case 'agentConfig':
@@ -495,33 +533,40 @@ export async function* forkTransferFrames(
             kind: 'messages', rows,
           }));
         }
+
         break;
     }
   }
 
   for (const path of filePaths) {
     const stat = await source.vfs.stat(path);
+
     if (stat === null) {
       throw new Error(`fork transfer lost file ${JSON.stringify(path)} between the walk and the read`);
     }
+
     // Hashed as the ranges are read, so the whole-file digest the receiver
     // checks costs one range of state here rather than the file.
     const fileHash = createHash('sha256');
+
     for (let offset = 0; offset < stat.size || (offset === 0 && stat.size === 0); offset += source.frameBytes) {
       const length = Math.min(source.frameBytes, stat.size - offset);
       const read = length === 0 ? new Uint8Array(0) : await source.vfs.readRange(path, offset, length);
+
       if (read.byteLength !== length) {
         throw new Error(
           `fork transfer read ${read.byteLength} bytes of ${JSON.stringify(path)} where ${length} were asked for; `
           + 'the file changed under the transfer',
         );
       }
+
       // The frame owns its bytes. A plane is free to answer a range with a view
       // over a larger buffer, and structured clone carries the whole backing
       // buffer of a view — which would put more than this range on the wire.
       const range = read.slice();
       fileHash.update(range);
       const last = offset + length >= stat.size;
+
       if (last) {
         yield seal({
           version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
@@ -535,6 +580,7 @@ export async function* forkTransferFrames(
       }
     }
   }
+
   // `seal` folded each frame in as it went, so the value carried here is O(1)
   // state on BOTH halves — see {@link foldForkStream}.
   yield sealForkFrame({
@@ -624,12 +670,14 @@ export class ForkTransferReceiver {
           { cause },
         );
       }
+
       throw cause;
     }
   }
 
   private async acceptFrame(wire: ForkFrame): Promise<ForkFrameOutcome> {
     const frame = parseForkFrame(wire);
+
     if (frame.kind === 'begin') {
       await this.abortOpenFile();
       await this.writer.clearStagedFiles();
@@ -645,25 +693,31 @@ export class ForkTransferReceiver {
       // Rows arrive frame by frame from here, so what an abandoned attempt left
       // has to be gone NOW rather than at publication.
       this.writer.clearStagedRows();
+
       return { status: 'staged' };
     }
 
     const staged = this.staging.read();
+
     if (staged === null || staged.transferId === null) {
       throw new Error(`fork transfer frame ${frame.seq} has no open transfer to continue`);
     }
+
     if (frame.transferId !== staged.transferId) {
       throw new Error(
         `fork transfer frame ${frame.seq} belongs to transfer ${frame.transferId}, `
         + `and ${staged.transferId} is the transfer open here`,
       );
     }
+
     const landed = this.writer.published;
+
     if (landed !== null) {
       // The transfer already landed; a re-delivered frame must answer with the
       // fork rather than refuse one that is already correct.
       return { status: 'settled', result: landed };
     }
+
     if (frame.seq !== staged.expectedSeq) {
       throw new Error(
         `fork transfer frame ${frame.seq} arrived where frame ${staged.expectedSeq} was expected`,
@@ -686,6 +740,7 @@ export class ForkTransferReceiver {
       sectionCursor,
       stream: foldForkStream(staged.stream, frame.digest),
     });
+
     return { status: 'staged' };
   }
 
@@ -694,22 +749,26 @@ export class ForkTransferReceiver {
    *  the pane rows being staged before the plain rows that reference them. */
   private stageRows(staged: ForkStaging, frame: ForkRowFrame): number {
     const at = FORK_ROW_SECTIONS.indexOf(frame.kind);
+
     if (at < staged.sectionCursor) {
       throw new Error(
         `fork transfer sent section ${frame.kind} after section `
         + `${FORK_ROW_SECTIONS[staged.sectionCursor] ?? 'files'}, out of the order the protocol fixes`,
       );
     }
+
     if (frame.kind === 'agentConfig') this.writer.stageAgentConfig(frame.rows);
     else if (frame.kind === 'craftedTools') this.writer.stageCraftedTools(frame.rows);
     else if (frame.kind === 'memoryChunks') this.writer.stageMemoryChunks(frame.rows);
     else if (frame.kind === 'assistantMessages') this.writer.stagePaneMessages(frame.rows);
     else this.writer.stageMessages(frame.rows);
+
     return at;
   }
 
   private async abortOpenFile(): Promise<void> {
     const path = this.opened;
+
     if (path === null) return;
     this.opened = null;
     this.staging.file(null, 0);
@@ -737,26 +796,35 @@ export class ForkTransferReceiver {
     if (staged.filePath !== null && staged.filePath !== frame.path) {
       throw new Error(`fork transfer began file ${JSON.stringify(frame.path)} while ${JSON.stringify(staged.filePath)} was still incomplete`);
     }
+
     if (frame.offset !== staged.fileBytes) {
       throw new Error(`fork transfer range for ${JSON.stringify(frame.path)} declares offset ${frame.offset} where ${staged.fileBytes} bytes have arrived`);
     }
+
     if (this.opened !== frame.path) {
       await this.files.beginFile(frame.path, staged.filePath === frame.path ? staged.fileBytes : 0);
       this.opened = frame.path;
+
       if (staged.filePath === null) this.staging.file(frame.path, 0);
     }
+
     await this.files.writeRange(frame.path, frame.offset, frame.bytes, frame.last);
     const arrived = staged.fileBytes + frame.bytes.byteLength;
+
     if (!frame.last) {
       this.staging.file(frame.path, arrived);
+
       return FORK_ROW_SECTIONS.length;
     }
+
     const digest = await this.files.stagedDigest(frame.path, arrived);
+
     if (frame.fileDigest !== digest) throw new Error(`fork transfer file ${JSON.stringify(frame.path)} does not match the digest the source declared`);
     const committed = await this.files.commitFile(frame.path);
     this.writer.stageCommittedFile(frame.path, committed?.mission);
     this.opened = null;
     this.staging.file(null, 0);
+
     return FORK_ROW_SECTIONS.length;
   }
 
@@ -772,7 +840,9 @@ export class ForkTransferReceiver {
     if (staged.filePath !== null) {
       throw new Error(`fork transfer committed while file ${JSON.stringify(staged.filePath)} was incomplete`);
     }
+
     const taken = this.writer.staged;
+
     const shortfall = [
       ['agentConfig', staged.declared.agentConfig, taken.agentConfig],
       ['craftedTools', staged.declared.craftedTools, taken.craftedTools],
@@ -781,6 +851,7 @@ export class ForkTransferReceiver {
       ['messages', staged.declared.messages, taken.messages],
       ['files', staged.declared.files, taken.files],
     ] as const;
+
     for (const [section, want, got] of shortfall) {
       if (want !== got) {
         throw new Error(
@@ -788,12 +859,14 @@ export class ForkTransferReceiver {
         );
       }
     }
+
     if (staged.stream !== declared) {
       throw new Error(
         'fork transfer digest does not match the sequence of frames that arrived; '
         + 'refusing to publish a fork assembled from a different stream',
       );
     }
+
     return this.writer.publish();
   }
 }
@@ -802,13 +875,17 @@ export class ForkTransferReceiver {
  * operator is not left reading a bare valibot issue path. */
 function parseForkFrame(frame: ForkFrame): ForkFrame {
   const parsed = v.safeParse(ForkFrameSchema, frame);
+
   if (!parsed.success) {
     throw new Error(`fork transfer frame is not valid for protocol version ${FORK_TRANSFER_VERSION}: `
       + renderIssues(parsed.issues));
   }
+
   const { digest, ...body } = parsed.output;
+
   if (digest !== sha256Hex(forkFramePreimage(body))) {
     throw new Error(`fork transfer frame ${parsed.output.seq} digest does not match its content`);
   }
+
   return parsed.output;
 }

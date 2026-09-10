@@ -17,9 +17,11 @@ import { afterAll, describe, expect, test } from "bun:test";
 import * as v from 'valibot';
 
 const python = Bun.which("python3");
+
 const promptModule = resolve(__dirname, "../src/prompt.ts");
 
 const fixtures = mkdtempSync(join(tmpdir(), "kinu-pty-test-"));
+
 afterAll(() => rmSync(fixtures, { recursive: true, force: true }));
 
 const HARNESS = `
@@ -125,6 +127,7 @@ interface HarnessResult {
 }
 
 const TerminalFlagsSchema = v.object({ icanon: v.boolean(), echo: v.boolean(), isig: v.boolean() });
+
 const HarnessResultSchema: v.GenericSchema<HarnessResult> = v.object({
   output: v.string(), pending: TerminalFlagsSchema, post: TerminalFlagsSchema,
   exited: v.boolean(), signaled: v.boolean(), termsig: v.nullable(v.number()), exitcode: v.nullable(v.number()),
@@ -143,11 +146,14 @@ function runInPty(
   writeFileSync(harnessPath, HARNESS);
   const driverPath = join(fixtures, `driver-${Bun.hash(driverSource).toString(16)}.ts`);
   writeFileSync(driverPath, driverSource);
+
   const run = spawnSync(python!, [harnessPath, mode, JSON.stringify(expectPending), process.execPath, driverPath], {
     encoding: "utf8",
     timeout: 40_000,
   });
+
   expect(run.status).toBe(0);
+
   return v.parse(HarnessResultSchema, JSON.parse(run.stdout.trim().split("\n").at(-1)!));
 }
 

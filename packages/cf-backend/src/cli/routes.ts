@@ -30,6 +30,7 @@ import * as v from 'valibot';
 import { classify, renderThrownChain } from '@kinu.run/core/obs';
 
 const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
+
 const WebhookRequestSchema = v.object({
   label: v.optional(v.string()),
   auth_mode: v.optional(v.picklist(['hmac', 'bearer', 'mtls'])),
@@ -45,18 +46,23 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (url.pathname === '/install' && (method === 'GET' || method === 'HEAD')) {
     return method === 'HEAD' ? new Response(null, installPageInit()) : installPageResponse(url.origin);
   }
+
   if (url.pathname === '/install.sh' && (method === 'GET' || method === 'HEAD')) {
     return installScriptResponse(url.origin, method === 'HEAD');
   }
+
   if (url.pathname === '/downloads/kinu' && (method === 'GET' || method === 'HEAD')) {
     return cliShimResponse(url.origin, method === 'HEAD');
   }
+
   if (CLI_DIST_PATHS.includes(url.pathname) && (method === 'GET' || method === 'HEAD')) {
     return cliDownloadAssetResponse(request, env, url.pathname, 'application/gzip', method === 'HEAD');
   }
+
   if (CLI_DIST_PATHS.some((path) => `${path}.sha256` === url.pathname) && (method === 'GET' || method === 'HEAD')) {
     return cliDownloadAssetResponse(request, env, url.pathname, 'text/plain; charset=utf-8', method === 'HEAD');
   }
+
   if (url.pathname === CLI_VERSION_PATH && (method === 'GET' || method === 'HEAD')) {
     return cliDownloadAssetResponse(request, env, CLI_VERSION_PATH, 'application/json; charset=utf-8', method === 'HEAD');
   }
@@ -64,6 +70,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (url.pathname === '/cli/auth' && method === 'GET') {
     return renderBrowserApproval(request, env);
   }
+
   if (url.pathname === '/cli/auth' && method === 'POST') {
     return approveFromBrowser(request, env);
   }
@@ -75,12 +82,16 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   // inference credentials, so they share one scope.
   const aiProxy = url.pathname.startsWith(`${USER_AI_PROXY_PATH}/`);
   const providerProxy = url.pathname.startsWith(`${USER_AI_PROXY_FORWARD_PREFIX}/`);
+
   if (aiProxy || providerProxy) {
     const cli = await authenticateCli(request, env);
+
     if (cli instanceof Response) return cli;
+
     if (cli.kind === 'access' && !tokenAllows(cli, 'ai.proxy')) {
       return err(403, 'This access token does not have the ai.proxy scope.');
     }
+
     return aiProxy
       ? handleUserAIProxyRequest(request, env, cli)
       : handleUserProviderProxyRequest(request, env, cli);
@@ -91,6 +102,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
   if (path === '/auth/start' && method === 'POST') {
     const body = await safeJson(request, v.object({ deviceName: v.optional(v.string()) }));
+
     try {
       return json(await startCliAuth(env, url.origin, approvalOrigin(env, url), body?.deviceName, clientKey(request)));
     } catch (e) {
@@ -100,7 +112,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
   if (path === '/auth/poll' && method === 'POST') {
     const body = await safeJson(request, v.object({ deviceToken: v.optional(v.string()) }));
+
     if (!body?.deviceToken) return err(400, 'deviceToken required');
+
     try {
       return json(await pollCliAuth(env, body.deviceToken, clientKey(request)));
     } catch (e) {
@@ -118,17 +132,20 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   // only URL `startCliAuth` ever publishes.
 
   const cli = await authenticateCli(request, env);
+
   if (cli instanceof Response) return cli;
 
   // The generic agent RPC endpoint carries its own per-method policy (the
   // AGENT_RPC_ACCESS table), so it is matched ahead of the route-shaped
   // access-token gate.
   const rpcMatch = path.match(/^\/workspaces\/([^/]+)\/rpc$/);
+
   if (rpcMatch && method === 'POST') {
     return handleAgentRpc(request, env, cli, decodeURIComponent(rpcMatch[1]));
   }
 
   const denied = accessTokenDenial(cli, method, path);
+
   if (denied) return denied;
 
   if (path === '/me' && method === 'GET') {
@@ -141,6 +158,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
   if (path === '/logout' && method === 'POST') {
     await cli.userDO.revokeCliTokenHash(await ownerCaller(env), cli.tokenHash);
+
     return json({ ok: true });
   }
 
@@ -154,13 +172,18 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (path === '/sessions' && method === 'GET') {
     return json({ sessions: await cli.userDO.listCliTokens(await ownerCaller(env)) });
   }
+
   if (path === '/sessions' && method === 'DELETE') {
     const result = await cli.userDO.revokeAllCliTokens(await ownerCaller(env));
+
     return json({ ok: true, revoked: result.revoked });
   }
+
   const sessionRevokeMatch = path.match(/^\/sessions\/([a-f0-9]{64})$/);
+
   if (sessionRevokeMatch && method === 'DELETE') {
     await cli.userDO.revokeCliTokenHash(await ownerCaller(env), sessionRevokeMatch[1]);
+
     return json({ ok: true });
   }
 
@@ -169,16 +192,21 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (path === '/profile' && method === 'GET') {
     return json(await cli.userDO.getProfileCatalog(await ownerCaller(env)));
   }
+
   if (path === '/profile' && method === 'PUT') {
     const body = await safeJson(request, v.object({
       catalog: JsonValueSchema,
       expectedVersion: v.number(),
     }));
+
     if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
+
     const result = await cli.userDO.putProfileCatalog(
       await ownerCaller(env), body.catalog, body.expectedVersion,
     );
+
     if (result.ok) return json(result.envelope);
+
     if (result.kind === 'conflict') {
       return json({
         error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
@@ -186,6 +214,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
         currentDigest: result.currentDigest,
       }, { status: 409 });
     }
+
     return err(400, result.reason);
   }
 
@@ -200,15 +229,20 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
       return err(401, 'step-up auth required: run `kinu auth` again. Minting access tokens needs a sign-in within the last 5 minutes.');
     }
+
     const body = await safeJson(request, v.object({
       name: v.optional(v.string()),
       scopes: v.optional(v.array(v.string())),
     }));
+
     if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
       return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
     }
+
     const minted = await cli.userDO.mintAccessToken(await ownerCaller(env), cli.userId, body.name, body.scopes);
+
     if (!minted.ok) return err(400, minted.error);
+
     return json({
       token: minted.token,
       name: minted.record.name,
@@ -218,10 +252,13 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   const tokenRevokeMatch = path.match(/^\/tokens\/([^/]+)$/);
+
   if (tokenRevokeMatch && method === 'DELETE') {
     const ref = decodeURIComponent(tokenRevokeMatch[1]);
     const result = await cli.userDO.revokeAccessToken(await ownerCaller(env), ref);
+
     if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
+
     return json({ ok: true });
   }
 
@@ -238,11 +275,14 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   const workspaceMatch = path.match(/^\/workspaces\/([^/]+)$/);
+
   if (workspaceMatch && method === 'DELETE') {
     try {
       const name = decodeURIComponent(workspaceMatch[1]);
+
       if (!(await cli.userDO.hasWorkspace(await ownerCaller(env), name))) return err(404, `Agent ${name} not found.`);
       await cli.userDO.removeWorkspace(await ownerCaller(env), name, cli.userId);
+
       return json({ ok: true });
     } catch (e) {
       return err(400, renderThrownChain({ cause: e }));
@@ -250,9 +290,12 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   const connectTicketMatch = path.match(/^\/workspaces\/([^/]+)\/connect-ticket$/);
+
   if (connectTicketMatch && method === 'POST') {
     const name = decodeURIComponent(connectTicketMatch[1]);
+
     if (!(await cli.userDO.hasWorkspace(await ownerCaller(env), name))) return err(404, `Agent ${name} not found.`);
+
     const issued = await cli.userDO.issueCliAgentConnectTicket(await ownerCaller(env), {
       userId: cli.userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
@@ -260,25 +303,33 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
       cliTokenHash: cli.tokenHash,
       capabilities: ['agent.websocket'],
     });
+
     if (!issued.ok || !issued.ticket || !issued.expiresAt) return err(403, issued.error ?? 'Could not issue connect ticket.');
+
     return json({ ticket: issued.ticket, expiresAt: issued.expiresAt });
   }
 
   const webhookTriggerMatch = path.match(/^\/workspaces\/([^/]+)\/triggers\/webhook$/);
+
   if (webhookTriggerMatch && method === 'POST') {
     const agent = await cliAgent(env, cli, decodeURIComponent(webhookTriggerMatch[1]));
+
     if (agent instanceof Response) return agent;
+
     // Webhook creation is step-up gated on every path. The CLI's
     // interactive-auth timestamp is its token mint time (minting requires
     // a live browser approval), so a fresh `kinu auth` satisfies it.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
       return err(401, 'step-up auth required: run `kinu auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
     }
+
     // Same rule the web route states: a webhook whose delivery URL cannot be
     // signed is a row nobody can deliver to.
     if (webhookRouteSecret(env) === null) return err(503, WEBHOOK_ROUTE_UNAVAILABLE);
     const body = await safeJson(request, WebhookRequestSchema);
+
     if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
+
     try {
       return json(await agent.createDurableWebhook({
         label: body.label,
@@ -295,9 +346,11 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (path === '/devices' && method === 'GET') {
     return json(await cli.userDO.listDevices(await ownerCaller(env)));
   }
+
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson(request, OptionalLabelSchema);
     const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), body?.label);
+
     return json({ deviceId, token, userId: cli.userId, origin: url.origin }, { status: 201 });
   }
 
@@ -309,24 +362,33 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (path === '/credentials' && method === 'GET') {
     return json(await cli.userDO.listCredentials(await ownerCaller(env)));
   }
+
   const cliCredMatch = path.match(/^\/credentials\/([^/]+)$/);
+
   if (cliCredMatch) {
     const key = decodeURIComponent(cliCredMatch[1]);
+
     if (method === 'POST') {
       const body = await safeJson(request, JsonValueSchema);
+
       try { await cli.userDO.setCredential(await ownerCaller(env), key, body); }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
       // The same mutation path the browser routes run: the authoritative write
       // is done, so the workspaces holding caches of the OLD state are told to
       // drop them. Skipping it here leaves a newly connected provider invisible
       // to every live workspace until some unrelated invalidation lands.
       notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
+
       return json({ ok: true }, { status: 201 });
     }
+
     if (method === 'DELETE') {
       try { await cli.userDO.deleteCredential(await ownerCaller(env), key); }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
       notifyWorkspacesCredentialsChanged(env, cli.userDO, ctx);
+
       return json({ ok: true });
     }
   }
@@ -336,7 +398,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
 
 async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<DurableObjectStub<OrchestratorAgent> | Response> {
   const result = await claimOwnedWorkspace(env, cli.userId, name);
+
   if (!result.ok) return err(result.status, result.error);
+
   return result.agent;
 }
 
@@ -352,25 +416,34 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
     method: v.string(),
     args: v.optional(v.array(JsonValueSchema)),
   }));
+
   const rpcMethod = body?.method ?? '';
+
   if (!rpcMethod) return err(400, 'method required');
   const args = body?.args ?? [];
 
   if (!isAgentRpcMethod(rpcMethod)) {
     return err(404, `No such agent RPC method: ${rpcMethod}`);
   }
+
   const access = requiredRpcAccess(rpcMethod);
+
   if (access === null || access === 'never') {
     return err(404, `No such agent RPC method: ${rpcMethod}`);
   }
+
   if (cli.kind === 'access') {
     const scope = rpcAccessScope(access);
+
     if (!scope) return err(403, `${rpcMethod} requires an interactive CLI session token. Sign in with: kinu auth`);
+
     if (!tokenAllows(cli, scope)) return err(403, `This access token does not have the ${scope} scope.`);
   }
 
   const agent = await cliAgent(env, cli, name);
+
   if (agent instanceof Response) return agent;
+
   // The table check above is the trust boundary: only methods the policy
   // names are ever reached, so the string-indexed dispatch cannot touch
   // anything else on the DO. Args are the method's own responsibility to
@@ -379,6 +452,7 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
     // SAFETY: The allowlist proves the method exists, and the request schema established JSON arguments.
     const invoke = agent[rpcMethod] as (...values: JsonValue[]) => Promise<JsonValue | undefined>;
     const result = await invoke(...args);
+
     return json({ result: result === undefined ? null : result });
   } catch (e) {
     // Same contract as a websocket rpc-error frame: the thrown message goes
@@ -393,6 +467,7 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
 async function sessionTokenMintedAt(env: Env, cli: CliTokenIdentity): Promise<number | null> {
   if (cli.kind !== 'session') return null;
   const tokens = await cli.userDO.listCliTokens(await ownerCaller(env));
+
   return tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
 }
 
@@ -405,20 +480,26 @@ async function sessionTokenMintedAt(env: Env, cli: CliTokenIdentity): Promise<nu
  *  future are interactive-only until listed here. */
 function accessTokenDenial(cli: CliTokenIdentity, method: string, path: string): Response | null {
   if (cli.kind !== 'access') return null;
+
   if (path === '/me' && method === 'GET') return null; // identity introspection works for any valid bearer
   const required = requiredAccessScope(method, path);
+
   if (!required) {
     return err(403, 'This operation requires an interactive CLI session token. Sign in with: kinu auth');
   }
+
   if (!tokenAllows(cli, required)) {
     return err(403, `This access token does not have the ${required} scope.`);
   }
+
   return null;
 }
 
 function requiredAccessScope(method: string, path: string): AccessTokenScope | null {
   if (method === 'GET' && (path === '/workspaces' || path === '/models')) return 'workspace.read';
+
   if (method === 'POST' && /^\/workspaces\/[^/]+\/connect-ticket$/.test(path)) return 'workspace.exec';
+
   return null;
 }
 
@@ -435,6 +516,7 @@ function clientKey(request: Request): string {
 async function authenticateCli(request: Request, env: Env): Promise<CliTokenIdentity | Response> {
   try {
     const result = await authenticateCliToken(request, env);
+
     return result.ok ? result.identity : err(401, result.error);
   } catch (e) {
     // A deployment with no root secret cannot authorize anything for the
@@ -446,24 +528,31 @@ async function authenticateCli(request: Request, env: Env): Promise<CliTokenIden
 
 async function renderBrowserApproval(request: Request, env: Env): Promise<Response> {
   let identity: AuthIdentity;
+
   try { identity = await authenticateRequest(request, env); }
   catch (e) { return accessError(toError(e), request); }
+
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
+
   if (!code) return html('Kinu CLI Auth', '<p>Missing CLI auth code.</p>', 400);
   const requestInfo = await inspectCliAuth(env.AUTH_KV, code);
+
   if (!requestInfo) {
     return html('Kinu CLI Auth', '<p>Unknown or expired CLI auth code.</p>', 400);
   }
+
   if (requestInfo.status === 'expired') {
     return html('Kinu CLI Auth', '<p>This CLI auth code expired. Run <code>kinu auth</code> again.</p>', 400);
   }
+
   if (requestInfo.status === 'approved' || requestInfo.status === 'consumed') {
     return html('Kinu CLI Auth', '<p>This CLI auth request has already been approved. You can return to your terminal.</p>');
   }
 
   const csrf = randomToken(32);
   const expiresAt = new Date(requestInfo.expiresAt).toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' });
+
   return html('Approve Kinu CLI', `
     <p>Sign in this terminal to your Kinu account.</p>
     <dl>
@@ -488,26 +577,36 @@ async function renderBrowserApproval(request: Request, env: Env): Promise<Respon
 
 async function approveFromBrowser(request: Request, env: Env): Promise<Response> {
   let identity: AuthIdentity;
+
   try { identity = await authenticateRequest(request, env); }
   catch (e) { return accessError(toError(e), request); }
+
   if (!isSameOriginPost(request)) {
     return html('Kinu CLI Auth', '<p>Invalid approval origin.</p>', 403);
   }
+
   let form: FormData;
+
   try { form = await request.formData(); }
   catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
+
     return html('Kinu CLI Auth', '<p>Invalid approval form.</p>', 400);
   }
+
   const code = String(form.get('userCode') ?? '');
   const csrf = String(form.get('csrf') ?? '');
   const cookieCsrf = readCookie(request, CLI_APPROVAL_CSRF_COOKIE_NAME);
+
   if (!csrf || !cookieCsrf || !timingSafeEqual(csrf, cookieCsrf)) {
     return html('Kinu CLI Auth', '<p>Invalid or expired approval session. Refresh the approval page and try again.</p>', 403);
   }
+
   if (!code) return html('Kinu CLI Auth', '<p>Missing CLI auth code.</p>', 400);
+
   try {
     await approveCliAuth(env, code, identity, clientKey(request));
+
     return html('Kinu CLI Auth', '<p>CLI connected. You can return to your terminal.</p>', 200, {
       headers: {
         'set-cookie': clearCsrfCookie(),
@@ -745,6 +844,7 @@ if [ "$NEEDS_PARENT_ACTIVATION" = "1" ]; then
   say "  export PATH=\\"$BIN_DIR:\\$PATH\\""
 fi
 `;
+
   return new Response(head ? null : script, {
     headers: {
       'content-type': 'text/x-shellscript; charset=utf-8',
@@ -766,9 +866,11 @@ async function cliDownloadAssetResponse(
   head = false,
 ): Promise<Response> {
   const asset = await fetchDeployedAsset(env, request.url, pathname);
+
   if (!asset) {
     const body = `Deployment incomplete: ${pathname} was not published by this deployment.\n`
       + 'Redeploy through scripts/deploy.sh, or retry shortly if a deploy is in flight.\n';
+
     return new Response(head ? null : body, {
       status: 404,
       headers: {
@@ -778,10 +880,12 @@ async function cliDownloadAssetResponse(
       },
     });
   }
+
   const headers = new Headers(asset.headers);
   headers.set('content-type', contentType);
   headers.set('x-content-type-options', 'nosniff');
   headers.set('cache-control', 'no-store');
+
   return new Response(head ? null : asset.body, { status: 200, headers });
 }
 
@@ -865,6 +969,7 @@ fi
 cd "$CLI_DIR"
 exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"
 `;
+
   return new Response(head ? null : script, {
     headers: {
       'content-type': 'text/x-shellscript; charset=utf-8',
@@ -878,7 +983,9 @@ exec "$KINU_BUN" run "$CLI_DIR/cli.js" "$@"
  *  everything else (KV outage, UserDO failure, …) is a real 500. */
 function cliAuthError(e: Error): Response {
   if (e instanceof RateLimitError) return err(429, e.message);
+
   if (e instanceof CliAuthCodeError) return err(400, e.message);
+
   return err(500, renderThrownChain({ cause: e }));
 }
 
@@ -888,13 +995,16 @@ function accessError(e: Error, request?: Request): Response {
       const url = new URL(request.url);
       const login = new URL('/login', url.origin);
       login.searchParams.set('return_to', url.pathname + url.search + url.hash);
+
       return new Response(null, {
         status: 302,
         headers: { location: login.toString(), 'cache-control': 'no-store' },
       });
     }
+
     return err(e.status, e.message);
   }
+
   return err(500, renderThrownChain({ cause: e }));
 }
 
@@ -902,6 +1012,7 @@ function accessError(e: Error, request?: Request): Response {
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {
   const headers = new Headers(publicHtmlHeaders());
   new Headers(init.headers).forEach((value, name) => headers.set(name, value));
+
   return new Response(approvalDocument(title, body), { ...init, status, headers });
 }
 
@@ -920,7 +1031,9 @@ function clearCsrfCookie(): string {
 function isSameOriginPost(request: Request): boolean {
   const url = new URL(request.url);
   const origin = request.headers.get('origin');
+
   if (origin) return origin === url.origin;
   const referer = request.headers.get('referer');
+
   return !referer || referer.startsWith(`${url.origin}/`);
 }

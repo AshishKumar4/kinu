@@ -25,9 +25,11 @@ describe('destination replay normalization', () => {
     expect(normalized).toBeDefined();
     const assistant = normalized?.[0];
     const tool = normalized?.[1];
+
     const call = assistant?.role === 'assistant' && Array.isArray(assistant.content)
       ? assistant.content.find((part) => part.type === 'tool-call')
       : undefined;
+
     const result = tool?.role === 'tool' ? tool.content[0] : undefined;
 
     expect(call?.type === 'tool-call' && call.toolCallId).toBe('kinu-i-1');

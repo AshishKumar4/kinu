@@ -157,10 +157,12 @@ export interface DeviceCheckpointHint {
 
 export function summarizeRestorePlan(files: ReadonlyArray<FileRestoreChange>) {
   let modified = 0, created = 0, deleted = 0;
+
   for (const f of files) {
     if (f.kind === 'modify') modified += 1;
     else if (f.kind === 'create') created += 1;
     else if (f.kind === 'delete') deleted += 1;
   }
+
   return { modified, created, deleted };
 }

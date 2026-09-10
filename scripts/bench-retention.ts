@@ -39,9 +39,12 @@ export function assertDurableArtifactRoot(root: string, runRoot: string): void {
   if (!isAbsolute(root)) {
     throw new Error(`bench artifact root must be absolute, got ${root} — evidence needs one unambiguous home`);
   }
+
   const resolved = resolve(root);
+
   for (const swept of [...SWEPT_ROOTS, tmpdir()]) {
     const parent = resolve(swept);
+
     if (resolved === parent || resolved.startsWith(parent + sep)) {
       throw new Error(
         `bench artifact root ${resolved} is under ${swept}, which is swept — `
@@ -50,7 +53,9 @@ export function assertDurableArtifactRoot(root: string, runRoot: string): void {
       );
     }
   }
+
   const throwaway = resolve(runRoot);
+
   if (resolved === throwaway || resolved.startsWith(throwaway + sep)) {
     throw new Error(
       `bench artifact root ${resolved} is inside the run root ${throwaway}, whose attempt sandboxes are deleted as the run proceeds`,
@@ -69,14 +74,18 @@ export function resolveArtifactRoot(opts: {
 }): string {
   const flag = opts.flag?.trim();
   const fromEnv = opts.env.BENCH_ARTIFACTS?.trim();
+
   if (opts.flag !== undefined && !flag) {
     throw new Error('--artifacts needs a directory path; retention cannot be switched off');
   }
+
   if (opts.env.BENCH_ARTIFACTS !== undefined && !fromEnv) {
     throw new Error('BENCH_ARTIFACTS is set to an empty value; retention cannot be switched off');
   }
+
   const root = resolve(flag || fromEnv || join(opts.repoRoot, ARTIFACT_DIRNAME));
   assertDurableArtifactRoot(root, opts.runRoot);
+
   return root;
 }
 
@@ -127,7 +136,9 @@ export interface RunRetention {
 }
 
 const RUN_FILE = 'run.json';
+
 const ATTEMPTS_FILE = 'attempts.jsonl';
+
 const PROBE_FILE = '.writable-probe';
 
 interface GitIdentity { commit: string; dirty: boolean }
@@ -137,11 +148,14 @@ interface GitIdentity { commit: string; dirty: boolean }
 export function readGitIdentity(repoRoot: string): GitIdentity {
   const git = (args: readonly string[]): string => {
     const out = Bun.spawnSync(['git', ...args], { cwd: repoRoot, stdout: 'pipe', stderr: 'pipe' });
+
     if (out.exitCode !== 0) {
       throw new Error(`git ${args.join(' ')} failed in ${repoRoot}: ${out.stderr.toString().trim()}`);
     }
+
     return out.stdout.toString();
   };
+
   return {
     commit: git(['rev-parse', 'HEAD']).trim(),
     dirty: git(['status', '--porcelain']).trim().length > 0,
@@ -162,12 +176,15 @@ export function openRunRetention(opts: {
 }): RunRetention {
   const dir = join(opts.artifactRoot, `${opts.provenance.command}-${opts.provenance.runId}`);
   const probe = join(dir, PROBE_FILE);
+
   try {
     mkdirSync(dir, { recursive: true });
     writeFileSync(probe, opts.provenance.runId);
+
     if (readFileSync(probe, 'utf8') !== opts.provenance.runId) {
       throw new Error('probe read back different bytes');
     }
+
     rmSync(probe);
   } catch (error) {
     throw new Error(
@@ -193,6 +210,7 @@ export function openRunRetention(opts: {
       const entry = perTask.get(outcome.taskId) ?? { taskId: outcome.taskId, byVariant: {} };
       const tally = entry.byVariant[outcome.variantId] ?? { attempts: 0, passed: 0 };
       tally.attempts += 1;
+
       if (outcome.passed) tally.passed += 1;
       entry.byVariant[outcome.variantId] = tally;
       perTask.set(outcome.taskId, entry);
@@ -224,15 +242,19 @@ export function createEvalReportDirectory(family: 'eval' | 'first-run', backend:
     flag: undefined, env: { BENCH_ARTIFACTS: process.env.BENCH_ARTIFACTS },
     repoRoot: resolve(import.meta.dirname, '..'), runRoot: tmpdir(),
   });
+
   mkdirSync(root, { recursive: true, mode: 0o700 });
+
   return mkdtempSync(join(root, `${family}-reports-${backend}-`));
 }
 
 if (import.meta.main) {
   const { values } = parseArgs({ options: { family: { type: 'string' }, backend: { type: 'string' } } });
+
   if ((values.family !== 'eval' && values.family !== 'first-run')
     || (values.backend !== 'local' && values.backend !== 'cloud')) {
     throw new Error('Specify --family eval|first-run and --backend local|cloud');
   }
+
   console.log(createEvalReportDirectory(values.family, values.backend));
 }

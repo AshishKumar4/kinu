@@ -66,11 +66,13 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
     const { promise, resolve } = Promise.withResolvers<void>();
     doneRef.current = resolve;
     update({ phase: 'ask', statusLine, deviceName: defaultDeviceName() });
+
     return promise;
   }, [update]);
 
   const offerIfUnconnected = useCallback(async () => {
     if (stateRef.current) return;
+
     if (!(await shouldOfferDeviceConnect())) return;
     await beginAsk('No PC is connected to your account yet.');
   }, [beginAsk]);
@@ -87,15 +89,18 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
     startTransition(async () => {
       try {
         const auth = requireAuthConfig();
+
         const result = await connectDevice(auth, {
           session,
           label: defaultDeviceName(),
           signal: stopWaiting.signal,
           onWaiting: () => {
             const current = stateRef.current;
+
             if (current?.phase === 'connecting') update({ ...current, ticks: current.ticks + 1 });
           },
         });
+
         const outcome = describeConnectOutcome(result, session);
         update({ phase: 'result', ok: outcome.ok, message: outcome.message });
       } catch (cause) {
@@ -109,22 +114,30 @@ export function useDeviceConnectPrompt(): DeviceConnectPrompt {
 
   const handleKey = useCallback((key: TuiKeyEvent): boolean => {
     const current = stateRef.current;
+
     if (!current) return false;
+
     if (current.phase === 'ask') {
       const result = dispatcher.feed(key, ['device']);
+
       if (result.actionId === 'device.connect') startConnect(false);
       else if (result.actionId === 'device.ssh') startConnect(true);
       else if (result.actionId === 'device.dismiss') {
         dismissDeviceConnectPrompt();
         close();
       } else if (result.actionId === 'device.not-now') close();
+
       return true;
     }
+
     if (current.phase === 'result') {
       close();
+
       return true;
     }
+
     if (dispatcher.feed(key, ['device']).actionId === 'device.not-now') stopWaitingRef.current?.abort();
+
     return true;
   }, [close, dispatcher, startConnect]);
 

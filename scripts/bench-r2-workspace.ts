@@ -63,7 +63,9 @@ import {
 import { evaluateRun, recordFromR2Artifact } from './fixtures/storage-matrix/admission';
 
 const FIXTURE_DIR = join(dirname(new URL(import.meta.url).pathname), 'fixtures', 'r2-bench');
+
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
+
 /**
  * Where the probe and its helpers live inside the container.
  *
@@ -78,8 +80,11 @@ const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
  * trees.
  */
 const CONTAINER_HARNESS_DIR = '/workspace/.r2-bench';
+
 const DEFAULT_BUCKET = 'kinu-bench-r2fs';
+
 const STAGING_BUCKET = 'kinu-backups-staging';
+
 /** Phases run per repetition, overridable with `--phases`. The durability pair
  *  is driven separately, around a container restart, so it is not in this list.
  *  Ordered cheapest-first so a run that has to be cut short still produced the
@@ -92,6 +97,7 @@ const STAGING_BUCKET = 'kinu-backups-staging';
 // small by count keeps every call far inside the ceiling and turns a lost arm
 // into, at worst, one missing cell.
 const PHASES = 'posix,seq1,seq10,rand,archive,npmlike,gitlike,small1k,seq100,small10k';
+
 /**
  * Metric groups that exceed the platform's per-exec ceiling on a mounted arm and
  * are therefore driven as a PROCESS with polled output rather than a blocking
@@ -108,8 +114,10 @@ interface ProcessDrivenPhases {
 const PROCESS_DRIVEN_PHASES: ProcessDrivenPhases = {
   npmlike: true, gitlike: true, small1k: true, small10k: true, seq100: true,
 };
+
 /** How long a process-driven group may run before the driver gives up on it. */
 const PROCESS_DEADLINE_MS = 1_800_000;
+
 /** Gap between sentinel polls. Each poll is a tiny exec, nowhere near the ceiling. */
 const PROCESS_POLL_MS = 10_000;
 
@@ -141,9 +149,12 @@ interface Options {
 function parseOptions(argv: readonly string[]): Options {
   const value = (name: string, fallback: string): string => {
     const index = argv.indexOf(`--${name}`);
+
     return index !== -1 && index + 1 < argv.length ? argv[index + 1]! : fallback;
   };
+
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+
   return {
     reps: Number.parseInt(value('reps', '3'), 10),
     seed: Number.parseInt(value('seed', '20260824'), 10),
@@ -236,6 +247,7 @@ async function call<TSchema extends v.GenericSchema>(
   body?: FixtureRequest,
 ): Promise<v.InferOutput<TSchema>> {
   const authorization = `Bearer ${fixture.token}`;
+
   const init: RequestInit = {
     method,
     signal: AbortSignal.timeout(CALL_TIMEOUT_MS),
@@ -243,19 +255,25 @@ async function call<TSchema extends v.GenericSchema>(
       ? { authorization }
       : { authorization, 'content-type': 'application/json' },
   };
+
   if (body !== undefined) init.body = JSON.stringify(body);
   const response = await fetch(`${fixture.origin}${path}`, init);
   const text = await response.text();
+
   if (!response.ok && response.status !== 200) {
     throw new Error(`${method} ${path} → ${response.status}: ${text.slice(0, 400)}`);
   }
+
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(text);
   } catch (error) {
     throw new Error(`${method} ${path} returned non-JSON: ${text.slice(0, 400)}`, { cause: error });
   }
+
   const parsed = v.safeParse(schema, decoded);
+
   if (!parsed.success) {
     throw new Error(
       `${method} ${path} answered outside its contract: `
@@ -263,6 +281,7 @@ async function call<TSchema extends v.GenericSchema>(
       + `\n${text.slice(0, 400)}`,
     );
   }
+
   return parsed.output;
 }
 
@@ -301,18 +320,22 @@ async function sh(fixture: Fixture, command: string, timeoutMs: number): Promise
  *  never sent would say nothing about it. */
 function execCompleted(reply: ExecReply, what: string): ExecCompleted {
   if (reply.error !== undefined) throw new Error(`exec refused (${what}): ${reply.error}`);
+
   return reply;
 }
 
 /** A shell command whose failure is a benchmark failure rather than a datum. */
 async function shOrThrow(fixture: Fixture, command: string, timeoutMs: number): Promise<ExecCompleted> {
   const reply = await sh(fixture, command, timeoutMs);
+
   if (reply.error !== undefined) throw new Error(`exec refused: ${reply.error}`);
+
   if (!reply.ok) {
     throw new Error(
       `command failed (${reply.exitCode}): ${command}\n${reply.stderr.slice(0, 600)}`,
     );
   }
+
   return reply;
 }
 
@@ -345,6 +368,7 @@ function resolveConfig(bucket: string): FixtureConfig {
   const committed = join(FIXTURE_DIR, 'wrangler.jsonc');
   const text = readFileSync(committed, 'utf8').replace(/^\s*\/\/.*$/gm, '');
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(text);
   } catch (error) {
@@ -354,22 +378,28 @@ function resolveConfig(bucket: string): FixtureConfig {
       { cause: error },
     );
   }
+
   const parsed = v.safeParse(FixtureWranglerSchema, decoded);
+
   if (!parsed.success) {
     throw new Error(
       `${committed} is not a config this driver can rewrite: `
       + parsed.issues.map((issue) => `${v.getDotPath(issue) ?? '<root>'}: ${issue.message}`).join('; '),
     );
   }
+
   const source = parsed.output;
   const declared = source.r2_buckets?.[0]?.bucket_name;
+
   if (declared === bucket) return { path: committed, generated: false };
   // The binding is the fixture's own declaration, not a second spelling of it:
   // the generated override replaces only the bucket name.
   const binding = source.r2_buckets?.[0]?.binding;
+
   if (binding === undefined) {
     throw new Error(`${committed} declares no R2 bucket binding this driver can reuse`);
   }
+
   const generated = join(FIXTURE_DIR, 'wrangler.run.json');
   writeFileSync(generated, `${JSON.stringify(
     { ...source, r2_buckets: [{ binding, bucket_name: bucket }] },
@@ -377,6 +407,7 @@ function resolveConfig(bucket: string): FixtureConfig {
     2,
   )}\n`);
   log(`bucket override ${bucket}: generated ${generated}`);
+
   return { path: generated, generated: true };
 }
 
@@ -401,21 +432,26 @@ async function deployFixture(
   // deploy then fails on the name. Removing it first is safe because the name is
   // derived from this fixture's own Worker name and belongs to nothing else.
   const stale = deleteContainerApps(REPO_ROOT, [FIXTURE_CONTAINER_APP], log).join(', ');
+
   if (stale !== 'absent') log(`cleared a stale container application: ${stale}`);
 
   const output = wrangler(['deploy', '--config', configPath, '--var', `BENCH_TOKEN:${token}`]);
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
+
   if (origin === undefined) {
     throw new Error(`wrangler deploy printed no workers.dev origin:\n${output.slice(-3000)}`);
   }
+
   log(`deployed ${origin}`);
 
   // Routing settles a moment after the upload returns. An unauthenticated probe
   // expecting 401 is the cheapest proof that the Worker is answering AND that
   // the token gate is armed — a 200 here would mean the fixture is open.
   const deadline = Date.now() + 120_000;
+
   for (;;) {
     let probe = 0;
+
     try {
       probe = (await fetch(`${origin}/shape`, { signal: AbortSignal.timeout(10_000) })).status;
     } catch (error) {
@@ -423,8 +459,11 @@ async function deployFixture(
       // design — the deadline below ends it — but not silently.
       log(`fixture not answering yet: ${error instanceof Error ? error.message : String(error)}`);
     }
+
     if (probe === 401) break;
+
     if (probe === 200) throw new Error('the fixture answered an unauthenticated request; refusing to run');
+
     if (Date.now() > deadline) throw new Error(`fixture never answered at ${origin} (last status ${probe})`);
     const settle = Promise.withResolvers<void>();
     setTimeout(settle.resolve, 2_000);
@@ -440,15 +479,18 @@ async function deployFixture(
       // first try. A teardown with one route is a teardown that leaks whenever
       // that route is the one that breaks.
       let deleted = wrangler(['delete', '--config', configPath, '--force'], { allowFailure: true });
+
       if (deleted.startsWith(WRANGLER_FAILED)) {
         log(`delete --config failed, falling back to --name: ${deleted.slice(0, 160)}`);
         deleted = wrangler(['delete', '--name', FIXTURE_WORKER, '--force'], { allowFailure: true });
       }
+
       if (deleted.startsWith(WRANGLER_FAILED)) {
         log(`WARNING: the fixture Worker was NOT deleted. Remove it by hand: ${deleted.slice(0, 300)}`);
       } else {
         log('fixture Worker deleted');
       }
+
       // The Worker delete does NOT remove the container application, so this is
       // the second half of leaving nothing behind.
       const app = deleteContainerApps(REPO_ROOT, [FIXTURE_CONTAINER_APP], log).join(', ');
@@ -466,6 +508,7 @@ interface BucketLease {
 
 function bucketExists(name: string): boolean {
   const listing = wrangler(['r2', 'bucket', 'list'], { allowFailure: true });
+
   return listing.includes(name);
 }
 
@@ -473,6 +516,7 @@ function bucketExists(name: string): boolean {
  *  platform derives from it (`<worker>-<class_name lowercased>`). Both are
  *  deleted by teardown. */
 const FIXTURE_WORKER = 'kinu-r2-bench';
+
 const FIXTURE_CONTAINER_APP = `${FIXTURE_WORKER}-sandbox`;
 
 /** The container's own description of itself. Both arms sit in one object
@@ -509,19 +553,24 @@ const ContainerFactsReplySchema: v.GenericSchema<ContainerFactsReply> = v.object
 async function bringContainerUp(fixture: Fixture): Promise<string> {
   const attempts = 4;
   let last = 'no attempt was made';
+
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const facts = await call(fixture, 'GET', '/shape', ContainerFactsReplySchema);
+
     if (facts.error === undefined && facts.stdout !== undefined) {
       return attempt === 1 ? facts.stdout : `${facts.stdout}\n(container start took ${attempt} attempts)`;
     }
+
     last = facts.error ?? 'the fixture answered without a shape or an error';
     log(`container start attempt ${attempt}/${attempts} failed: ${last}`);
+
     if (attempt < attempts) {
       const settle = Promise.withResolvers<void>();
       setTimeout(settle.resolve, attempt * 15_000);
       await settle.promise;
     }
   }
+
   throw new Error(`container never came up after ${attempts} attempts: ${last}`);
 }
 
@@ -535,17 +584,22 @@ function acquireBucket(name: string): BucketLease {
   if (!bucketExists(name)) {
     log(`creating ephemeral bucket ${name}`);
     wrangler(['r2', 'bucket', 'create', name]);
+
     return { created: true, name };
   }
+
   if (name === STAGING_BUCKET) {
     log(
       'WARNING: running against the staging backup bucket. Objects outside '
       + 'bench/<runId>/ will NOT be removed by teardown, and any workspace-snapshot '
       + 'traffic in the same bucket will appear in these numbers.',
     );
+
     return { created: false, name };
   }
+
   const listing = wrangler(['r2', 'object', 'get', `${name}/`, '--pipe'], { allowFailure: true });
+
   if (!listing.startsWith(WRANGLER_FAILED)) {
     throw new Error(
       `bucket ${name} already exists and appears to hold objects. Refusing to run: this `
@@ -553,7 +607,9 @@ function acquireBucket(name: string): BucketLease {
       + `did not create. Pass --bucket <other-name>, or empty this one deliberately first.`,
     );
   }
+
   log(`reusing existing empty bucket ${name}`);
+
   return { created: false, name };
 }
 
@@ -561,6 +617,7 @@ function acquireBucket(name: string): BucketLease {
 
 async function installHarness(fixture: Fixture, syncCli: string): Promise<void> {
   await shOrThrow(fixture, `mkdir -p ${CONTAINER_HARNESS_DIR}`, 60_000);
+
   for (const file of ['stats.ts', 'probe.ts', 'sync.ts']) {
     const content = readFileSync(join(FIXTURE_DIR, file), 'utf8');
     await call(fixture, 'POST', '/write', FixtureAckSchema, {
@@ -576,17 +633,21 @@ async function installHarness(fixture: Fixture, syncCli: string): Promise<void> 
     // IS needed — bun reads it for the module settings the sources were written
     // against.
     const hostDir = join(REPO_ROOT, syncCli);
+
     const files = readdirSync(hostDir, { withFileTypes: true })
       .filter((item) => item.isFile()
         && ((item.name.endsWith('.ts') && !item.name.endsWith('.test.ts')) || item.name === 'tsconfig.json'))
       .map((item) => item.name);
+
     if (files.length === 0) throw new Error(`--sync-cli ${syncCli} holds no .ts files`);
+
     for (const file of files) {
       await call(fixture, 'POST', '/write', FixtureAckSchema, {
         path: `${dir}/${file}`,
         content: readFileSync(join(hostDir, file), 'utf8'),
       });
     }
+
     log(`uploaded ${files.length} sibling sync file(s) from ${syncCli}`);
   }
 
@@ -611,6 +672,7 @@ async function runProbe(
 
   const attempts = 3;
   let last = '';
+
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const reply = await sh(fixture, command, options.timeoutMs);
 
@@ -625,13 +687,16 @@ async function runProbe(
     if (reply.error !== undefined) {
       const transient =
         /status: 5\d\d|ContainerUnavailable|OperationInterrupted|container stopped|not running/i.test(reply.error);
+
       if (!transient) throw new Error(`probe exec refused: ${reply.error}`);
       last = reply.error;
     } else {
       const start = reply.stdout.indexOf('{');
+
       if (start !== -1) return parseProbeRun(reply.stdout.slice(start), `probe ${phases} in ${root}`);
       const lost = /No such file or directory/.test(reply.stderr);
       last = `exit ${reply.exitCode}: ${reply.stderr.slice(0, 300)}`;
+
       if (!lost) {
         throw new Error(
           `probe printed no JSON (exit ${reply.exitCode}).\nstdout: ${reply.stdout.slice(0, 600)}`
@@ -639,6 +704,7 @@ async function runProbe(
         );
       }
     }
+
     if (attempt === attempts) break;
     log(`probe attempt ${attempt}/${attempts} hit a container event (${last.slice(0, 120)}); recovering`);
     // Give the instance time to come back before reinstalling into it.
@@ -648,6 +714,7 @@ async function runProbe(
     await bringContainerUp(fixture);
     await installHarness(fixture, options.syncCli);
   }
+
   throw new Error(`probe never produced JSON after ${attempts} attempts: ${last}`);
 }
 
@@ -683,6 +750,7 @@ async function runProbeAsProcess(
 ): Promise<ProbeRun> {
   const out = `${CONTAINER_HARNESS_DIR}/out-${phase}-${seed}.json`;
   await sh(fixture, `rm -f ${out} ${out}.done`, 60_000);
+
   const spawned = await call(
     fixture, 'POST', '/spawn', SpawnReplySchema,
     {
@@ -691,20 +759,25 @@ async function runProbeAsProcess(
       cwd: CONTAINER_HARNESS_DIR,
     },
   );
+
   if (spawned.error !== undefined || spawned.ok !== true) {
     throw new Error(`could not spawn ${phase}: ${spawned.error ?? 'the route did not confirm a process'}`);
   }
 
   const deadline = Date.now() + PROCESS_DEADLINE_MS;
+
   for (;;) {
     const settle = Promise.withResolvers<void>();
     setTimeout(settle.resolve, PROCESS_POLL_MS);
     await settle.promise;
+
     const poll = execCompleted(
       await sh(fixture, `test -f ${out}.done && echo DONE || echo WAIT`, 120_000),
       `${phase} sentinel poll`,
     );
+
     if (poll.stdout.includes('DONE')) break;
+
     if (Date.now() > deadline) {
       throw new Error(`${phase} did not finish within ${Math.round(PROCESS_DEADLINE_MS / 60_000)} minutes`);
     }
@@ -712,7 +785,9 @@ async function runProbeAsProcess(
 
   const read = execCompleted(await sh(fixture, `cat ${out}`, 300_000), `${phase} result read`);
   const start = read.stdout.indexOf('{');
+
   if (start === -1) throw new Error(`${phase} produced no readable result: ${read.stderr.slice(0, 300)}`);
+
   return parseProbeRun(read.stdout.slice(start), `probe ${phase} in ${root}`);
 }
 
@@ -768,6 +843,7 @@ async function bringUp(
 ): Promise<{ coldMs: number | null; warmMs: number | null; error: string | null }> {
   if (spec.mount === undefined) {
     await shOrThrow(fixture, `mkdir -p ${spec.root}`, timeoutMs);
+
     return { coldMs: null, warmMs: null, error: null };
   }
 
@@ -783,7 +859,9 @@ async function bringUp(
     readOnly: spec.id === 'overlay' ? false : spec.mount.readOnly,
     s3fsOptions: [...spec.mount.s3fsOptions],
   });
+
   if (cold.error !== undefined) return { coldMs: null, warmMs: null, error: cold.error };
+
   if (!cold.ok) {
     return { coldMs: null, warmMs: null, error: `mountpoint reported ${cold.mountpoint}` };
   }
@@ -791,6 +869,7 @@ async function bringUp(
   // Warm mount: unmount and mount again with identical options. The gap between
   // this and the cold number is what a container restart would pay.
   await call(fixture, 'POST', '/unmount', FixtureAckSchema, { mountPath: spec.mount.mountPath });
+
   const warm = await call(fixture, 'POST', '/mount', MountReplySchema, {
     mountPath: spec.mount.mountPath,
     prefix: spec.mount.prefix,
@@ -813,6 +892,7 @@ async function bringUp(
   }
 
   await shOrThrow(fixture, `mkdir -p ${spec.root}`, timeoutMs);
+
   return {
     coldMs: cold.mountMs,
     warmMs: warm.error === undefined && warm.ok ? warm.mountMs : null,
@@ -824,6 +904,7 @@ async function tearDownLayout(fixture: Fixture, spec: LayoutSpec, timeoutMs: num
   if (spec.id === 'overlay') {
     await sh(fixture, `umount ${OVERLAY_MERGED} 2>/dev/null || fusermount -u ${OVERLAY_MERGED} 2>/dev/null; true`, timeoutMs);
   }
+
   if (spec.mount !== undefined) {
     await clearMount(fixture, spec.mount.mountPath);
   }
@@ -840,22 +921,28 @@ async function verifyReadOnlyRefusesWrites(
   timeoutMs: number,
 ): Promise<{ holds: boolean; detail: string }> {
   await clearMount(fixture, R2_MOUNT_PATH);
+
   const mounted = await call(fixture, 'POST', '/mount', MountReplySchema, {
     mountPath: R2_MOUNT_PATH,
     prefix: mountPrefixFor(runId),
     readOnly: true,
     s3fsOptions: [...TUNED_S3FS_OPTIONS],
   });
+
   if (mounted.error !== undefined) {
     return { holds: false, detail: `read-only mount failed: ${mounted.error}` };
   }
+
   if (!mounted.ok) return { holds: false, detail: 'read-only mount failed: unknown' };
+
   const attempt = execCompleted(
     await sh(fixture, `touch ${R2_MOUNT_PATH}/readonly-probe 2>&1; echo "exit=$?"`, timeoutMs),
     'read-only write probe',
   );
+
   await clearMount(fixture, R2_MOUNT_PATH);
   const refused = /exit=[^0]/.test(attempt.stdout) || /Read-only|Permission denied|Forbidden/i.test(attempt.stdout);
+
   return {
     holds: refused,
     detail: refused
@@ -879,20 +966,25 @@ function describePlan(options: Options, runId: string): string {
   lines.push(`phases per rep    ${options.phases}`);
   lines.push(`artifact          ${options.out}`);
   lines.push('');
+
   for (const spec of layoutsFor(runId)) {
     if (!options.layouts.includes(spec.id)) continue;
     lines.push(`arm ${spec.id}`);
     lines.push(`  root      ${spec.root}`);
     lines.push(`  question  ${spec.question}`);
+
     if (spec.mount !== undefined) {
       lines.push(`  mount     ${spec.mount.mountPath} prefix=${spec.mount.prefix} readOnly=${spec.mount.readOnly}`);
       lines.push(`  s3fs      ${spec.mount.s3fsOptions.length === 0 ? '(SDK defaults only)' : spec.mount.s3fsOptions.join(',')}`);
     } else {
       lines.push('  mount     none (control)');
     }
+
     lines.push('');
   }
+
   lines.push('Nothing has run. Drop --plan to execute.');
+
   return lines.join('\n');
 }
 
@@ -948,6 +1040,7 @@ async function main(): Promise<number> {
 
   if (options.plan) {
     process.stdout.write(`${describePlan(options, runId)}\n`);
+
     return 0;
   }
 
@@ -962,26 +1055,33 @@ async function main(): Promise<number> {
     const token = `bench-${crypto.randomUUID()}`;
     const config = resolveConfig(options.bucket);
     const started = await deployFixture(config.path, token);
+
     try {
       const purged = await call(
         started.fixture, 'POST', '/purge', PurgeReplySchema, { prefix: '', whole: true },
       );
+
       log(purged.error === undefined
         ? `purged ${purged.deleted} object(s) in ${purged.passes} pass(es)`
         : `purge refused: ${purged.error}`);
     } finally {
       started.stop();
+
       if (config.generated) rmSync(config.path, { force: true });
     }
+
     const deleted = wrangler(['r2', 'bucket', 'delete', options.bucket], { allowFailure: true });
     log(deleted.startsWith(WRANGLER_FAILED) ? `bucket NOT deleted: ${deleted.slice(0, 300)}` : 'bucket deleted');
+
     return deleted.startsWith(WRANGLER_FAILED) ? 1 : 0;
   }
 
   const identity = wrangler(['whoami'], { allowFailure: true });
+
   if (identity.startsWith(WRANGLER_FAILED)) {
     log('wrangler is not authenticated, so no container can be raised. Printing the plan instead.');
     process.stdout.write(`${describePlan(options, runId)}\n`);
+
     return 0;
   }
 
@@ -1052,8 +1152,10 @@ async function main(): Promise<number> {
         // costs that phase rather than the whole repetition, which is the
         // difference between a gap in a table and an empty column.
         const merged: ProbeRun[] = [];
+
         for (const phase of options.phases.split(',')) {
           const first = rep === 0 && merged.length === 0;
+
           try {
             merged.push(await runProbe(fixture, root, phase.trim(), options.seed + rep, options, first));
           } catch (error) {
@@ -1062,6 +1164,7 @@ async function main(): Promise<number> {
             notes.push(`phase ${phase} did not complete on repetition ${rep + 1}: ${reason.slice(0, 300)}`);
           }
         }
+
         if (merged.length === 0) throw new Error(`every phase failed on arm ${spec.id}`);
         reps.push({
           ...merged[0]!,
@@ -1071,18 +1174,22 @@ async function main(): Promise<number> {
 
       // Explicit sync, for the arm that needs one.
       let sync: SyncOutcome | null = null;
+
       if (spec.needsSync) {
         const live = await runSync(fixture, runId, options);
         // Second sync with no intervening writes. A layout whose idle cost is
         // not zero is a layout that charges for doing nothing.
         const idle = await runSync(fixture, runId, options);
         const measurements: SyncMeasurement[] = [...live.measurements];
+
         if (idle.error !== null) measurements.push({ name: 'idle_error', kind: 'note', note: idle.error });
+
         for (const measurement of idle.measurements) {
           measurements.push(measurement.kind === 'count'
             ? { name: `idle_${measurement.name}`, kind: 'count', count: measurement.count }
             : { name: `idle_${measurement.name}`, kind: 'note', note: measurement.note });
         }
+
         sync = { implementation: live.implementation, error: live.error, measurements };
       }
 
@@ -1092,6 +1199,7 @@ async function main(): Promise<number> {
       // real data, so it is contained here: a failed durability probe is a null
       // durability row, not a lost arm.
       let durability: LayoutResult['durability'] = null;
+
       try {
         durability = await measureDurability(fixture, spec, options, runId);
       } catch (error) {
@@ -1099,7 +1207,9 @@ async function main(): Promise<number> {
         log(`arm ${spec.id}: durability not measured: ${reason.slice(0, 200)}`);
         notes.push(`durability was not measured: ${reason.slice(0, 300)}`);
       }
+
       const ops = (await call(fixture, 'GET', '/ops', OpsReplySchema)).tally;
+
       const inv = await call(
         fixture, 'GET', `/inventory?prefix=${encodeURIComponent(keyPrefix)}`, InventoryReplySchema,
       );
@@ -1156,18 +1266,21 @@ async function main(): Promise<number> {
           prefix: lease.created ? '' : keyPrefix,
           whole: lease.created,
         });
+
         if (purge.error === undefined) {
           teardown['objectsDeleted'] = purge.deleted;
           teardown['purgePasses'] = purge.passes;
         } else {
           teardown['purgeError'] = purge.error;
         }
+
         const remaining = await call(
           fixture,
           'GET',
           `/inventory?prefix=${encodeURIComponent(lease.created ? '' : keyPrefix)}`,
           InventoryReplySchema,
         );
+
         teardown['objectsRemaining'] = remaining.objects;
         teardown['bytesRemaining'] = remaining.bytes;
       } catch (error) {
@@ -1226,10 +1339,12 @@ async function main(): Promise<number> {
     teardown,
     conditions,
   };
+
   // This driver observes only the bucket half of cleanup and the read-only
   // probe; every other C-gate and fault-cut field has no instrumentation here,
   // so it carries its REFUSING default rather than an assumed pass.
   const readOnlyRefusedWrites = conditions.some((row) => row.includes('readOnly mount refuses writes: yes'));
+
   const artifact: RunArtifact = {
     ...artifactDraft,
     admission: evaluateRun(recordFromR2Artifact(artifactDraft, {
@@ -1278,6 +1393,7 @@ async function main(): Promise<number> {
   writeFileSync(join(REPO_ROOT, options.out), `${JSON.stringify(artifact, null, 2)}\n`);
   process.stdout.write(`${renderMarkdown(artifact)}\n`);
   log(`artifact written to ${options.out}`);
+
   return failure === null && (artifact.admission.admitted || options.keep) ? 0 : 1;
 }
 
@@ -1306,27 +1422,33 @@ function fixtureImage(): string {
   const manifest = join(FIXTURE_DIR, 'wrangler.jsonc');
   const text = readFileSync(manifest, 'utf8').replace(/^\s*\/\/.*$/gm, '');
   const parsed = v.safeParse(FixtureContainerSchema, JSON.parse(text));
+
   if (!parsed.success) return 'unknown';
+
   return parsed.output.containers?.[0]?.image ?? 'unknown';
 }
 
 function collectVersions(): RunVersions {
   const manifest = join(REPO_ROOT, 'packages/cf-backend/package.json');
   const parsed = v.safeParse(PackageDependenciesSchema, JSON.parse(readFileSync(manifest, 'utf8')));
+
   if (!parsed.success) {
     throw new Error(
       `${manifest} does not declare dependencies this driver can stamp: `
       + parsed.issues.map((issue) => `${v.getDotPath(issue) ?? '<root>'}: ${issue.message}`).join('; '),
     );
   }
+
   const packageJson = parsed.output;
   let commit = 'unknown';
+
   try {
     commit = execFileSync('git', ['rev-parse', '--short', 'HEAD'], { cwd: REPO_ROOT, encoding: 'utf8' }).trim();
   } catch (error) {
     commit = 'unknown (not a git checkout)';
     log(`no revision in the stamp: ${error instanceof Error ? error.message : String(error)}`);
   }
+
   return {
     commit,
     '@cloudflare/sandbox': packageJson.dependencies?.['@cloudflare/sandbox'] ?? 'unknown',
@@ -1360,16 +1482,19 @@ async function runSync(
     // a live mount as opposed to a plain directory.
     const store = `s3://${OVERLAY_LOWER_MOUNT}/bench/${runId}/overlay`;
     const implementation = `sibling CLI from ${options.syncCli}`;
+
     const scan = await sh(
       fixture,
       `cd ${dir} && bun cli.ts scan --upper ${upper} --journal ${journal}`,
       options.timeoutMs,
     );
+
     // The scan's exit code is a datum, and a scan the fixture refused has no
     // exit code — so that reads as a note rather than as a number.
     const scanned: SyncMeasurement = scan.error === undefined
       ? { name: 'scanExit', kind: 'count', count: scan.exitCode }
       : { name: 'scanExit', kind: 'note', note: `the fixture refused the scan: ${scan.error}` };
+
     const reply = execCompleted(
       await sh(
         fixture,
@@ -1378,7 +1503,9 @@ async function runSync(
       ),
       implementation,
     );
+
     const start = reply.stdout.indexOf('{');
+
     if (start === -1) {
       return {
         implementation,
@@ -1386,6 +1513,7 @@ async function runSync(
         measurements: [scanned],
       };
     }
+
     return {
       implementation,
       error: null,
@@ -1405,7 +1533,9 @@ async function runSync(
     ),
     'built-in sync stand-in',
   );
+
   const start = reply.stdout.indexOf('{');
+
   if (start === -1) {
     return {
       implementation: 'built-in stand-in',
@@ -1413,7 +1543,9 @@ async function runSync(
       measurements: [],
     };
   }
+
   const implementation = 'built-in content-addressed stand-in; no --sync-cli was supplied';
+
   return {
     implementation,
     error: null,
@@ -1452,6 +1584,7 @@ async function measureDurability(
   // assertion hole that let a sibling's probe accept any stdout for an overlay
   // check. If the route did not confirm the round trip, the verdict says so.
   const restartConfirmed = restart.ok === true && restart.restartMs !== undefined;
+
   const restartNote = restartConfirmed
     ? ''
     : ` [RESTART UNVERIFIED: ${restart.error ?? restart.stopError ?? 'the route did not confirm a stop and a fresh exec'}]`;
@@ -1461,6 +1594,7 @@ async function measureDurability(
   // absence of a mount rather than the durability of the bytes.
   if (spec.mount !== undefined) {
     const remount = await bringUp(fixture, spec, options.timeoutMs);
+
     if (remount.error !== null) {
       return {
         verdict: false,
@@ -1469,11 +1603,15 @@ async function measureDurability(
       };
     }
   }
+
   const verify = await runProbe(fixture, root, 'verify-durability', options.seed, options);
+
   const verdict = verify.phases
     .flatMap((phase) => phase.verdicts)
     .find((candidate) => candidate.name === 'durability-survived-restart');
+
   void runId;
+
   return {
     verdict: verdict?.holds ?? false,
     detail: `${verdict?.detail ?? 'the verify phase produced no verdict'}${restartNote}`,

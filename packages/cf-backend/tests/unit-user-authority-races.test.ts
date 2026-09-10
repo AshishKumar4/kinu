@@ -37,10 +37,13 @@ import { sha256Hex } from '../src/lib/crypto';
 import type { Connection } from 'agents';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const AUTHORIZATION = 'c'.repeat(64);
 
 const realFetch = globalThis.fetch;
+
 beforeEach(() => { setDiagnosticsSink(createRecordingLogger()); });
+
 afterEach(() => { globalThis.fetch = realFetch; });
 
 /** One OAuth token-endpoint body, as the provider returns it. */
@@ -67,7 +70,9 @@ interface CodexApproval {
  *  held open at the exact instant another call has to run. */
 function gate() {
   let open = (): void => {};
+
   const promise = new Promise<void>((resolve) => { open = () => resolve(); });
+
   return { promise, open };
 }
 
@@ -80,10 +85,12 @@ function capabilityRows(harness: TestUserDO): string[] {
 describe('a workspace whose delete has begun', () => {
   test('has already lost its authority when the teardown is still in flight', async () => {
     const held = gate();
+
     const harness = createTestUserDO({
       durableObjectId: USER_ID,
       destroyWorkspaceGate: () => held.promise,
     });
+
     const owner = await testOwner();
     const token = await provisionTestWorkspace(harness, 'doomed');
     const survivor = await provisionTestWorkspace(harness, 'survivor');
@@ -118,6 +125,7 @@ describe('a workspace whose delete has begun', () => {
       durableObjectId: USER_ID,
       destroyWorkspaceError: 'the container refused to go',
     });
+
     const owner = await testOwner();
     const token = await provisionTestWorkspace(harness, 'doomed');
 
@@ -180,6 +188,7 @@ describe('a credential the owner moved while a provider was answering', () => {
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
       if (String(input) !== CODEX_TOKEN_URL) throw new Error(`unexpected fetch: ${String(input)}`);
       await during();
+
       return new Response(JSON.stringify(body), {
         status: 200, headers: { 'content-type': 'application/json' },
       });
@@ -235,6 +244,7 @@ describe('a credential the owner moved while a provider was answering', () => {
       await harness.userDO.setCredential(owner, CODEX_CRED_KEY, {
         kind: 'oauth', accessToken: 'access-from-owner', refreshToken: 'refresh-from-owner',
       });
+
       return new Response(JSON.stringify({ error: 'invalid_grant' }), {
         status: 400, headers: { 'content-type': 'application/json' },
       });
@@ -265,17 +275,23 @@ describe('a device-code sign-in the owner superseded', () => {
   }): void {
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
       const url = String(input);
+
       const json = (body: CodexTokens | CodexUserCode | CodexApproval): Response => new Response(JSON.stringify(body), {
         status: 200, headers: { 'content-type': 'application/json' },
       });
+
       if (url === USERCODE_URL) {
         return json({ user_code: options.userCode(), device_auth_id: `auth-${options.userCode()}`, interval: 5 });
       }
+
       if (url === POLL_URL) return json({ authorization_code: 'code', code_verifier: 'verifier' });
+
       if (url === CODEX_TOKEN_URL) {
         await options.duringExchange?.();
+
         return json({ access_token: 'access-approved', refresh_token: 'refresh-approved', expires_in: 3600 });
       }
+
       throw new Error(`unexpected fetch: ${url}`);
     });
   }
@@ -409,6 +425,7 @@ function connection(tags: string[]) {
   // wire and nothing else, so no other part of Connection is reachable from
   // the code under test.
   const wire = partial as Connection;
+
   return { fake, wire };
 }
 
@@ -433,11 +450,14 @@ describe('a CLI bearer revoked under a live websocket', () => {
     const owner = await testOwner();
     const capability = await provisionTestWorkspace(user, 'harness-actor');
     const minted = await user.userDO.mintCliToken(owner, USER_ID, AUTHORIZATION, 'ci runner');
+
     const actor = orchestratorHarness(undefined, {
       userDO: user.userDO, workspace: 'harness-actor', ownerUserId: USER_ID,
     });
+
     actor.agent.harnessHoldsCapability(capability);
     const bearerTag = cliBearerConnectionTag(`${minted.tokenHash}:0`) ?? '';
+
     return { user, actor, tokenHash: minted.tokenHash, bearerTag };
   }
 
@@ -569,10 +589,12 @@ describe('a capability rotation whose subtree push missed a replica', () => {
     // subordinate goes on presenting a token this account does not recognize,
     // with nothing standing to retry it.
     let missed = 1;
+
     const harness = createTestUserDO({
       durableObjectId: USER_ID,
       capabilityPushMissed: () => missed,
     });
+
     const token = await provisionTestWorkspace(harness, 'stranded');
     const hash = await sha256Hex(token);
 
@@ -619,10 +641,12 @@ describe('a capability rotation whose subtree push missed a replica', () => {
 
   test('a fresh mint clears an intent the previous token left behind', async () => {
     let missed = 1;
+
     const harness = createTestUserDO({
       durableObjectId: USER_ID,
       capabilityPushMissed: () => missed,
     });
+
     const first = await provisionTestWorkspace(harness, 'rotating');
     expect(reconcileIntent(harness)).toHaveLength(1);
 
@@ -667,10 +691,13 @@ describe('a browser session revoked under a live websocket', () => {
       sub: 'cf-1',
       authTime: Date.now(),
     });
+
     const actor = orchestratorHarness(undefined, {
       userDO: user.userDO, workspace: 'harness-actor', ownerUserId: USER_ID,
     });
+
     actor.agent.harnessHoldsCapability(capability);
+
     return { user, actor };
   }
 

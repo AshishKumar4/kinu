@@ -94,16 +94,20 @@ export function renderedProse(file: string, text: string): Rendered {
   const claims: { name: string; target: string; at: number; end: number }[] = [];
   walk(root, (node) => {
     const declared = declaredName(node);
+
     if (declared !== undefined) {
       // `docComment` owns both halves of "which comment is this declaration's":
       // the wrapper walk up to the statement a docblock sits above, and the
       // positional read of what stands there.
       const doc = docComment(text, node);
+
       if (doc !== undefined) {
         const owner = ownerName(node);
         docs.push([declared, doc]);
+
         if (owner !== undefined) docs.push([`${owner}.${declared}`, doc]);
         const claim = QUOTE_CLAIM.exec(doc);
+
         // The text it quotes is the expression this declaration is initialised with,
         // resolved after the walk because that is when its fragments are all in.
         if (claim?.[1] !== undefined) {
@@ -111,34 +115,45 @@ export function renderedProse(file: string, text: string): Rendered {
         }
       }
     }
+
     const body = literalText(node);
+
     if (body === undefined) return;
+
     // `literalText` is total over every reader-visible literal, numbers and regexes
     // included, and a numeric literal arrives as its own source text. Only a QUOTED
     // one is prose; the rest are governed where they are written, in code.
     if (node.type === 'Literal' && !/["'`]/.test(text.charAt(node.start))) return;
     let top = node;
+
     while (top.parent !== undefined
       && (top.parent.type === 'TemplateLiteral' || top.parent.type === 'BinaryExpression')) {
       top = top.parent;
     }
+
     rooted.set(top.start, [...(rooted.get(top.start) ?? []), { at: node.start, end: node.end, body }]);
   });
   const byStart = new Map<number, string>();
+
   for (const [start, pieces] of rooted) {
     const ordered = [...pieces].sort((a, b) => a.at - b.at);
     let body = '';
+
     for (const [index, piece] of ordered.entries()) {
       const before = ordered[index - 1];
+
       // Pure concatenation punctuation between two chunks means they are one word;
       // anything else between them is an interpolation, and unknown.
       if (before !== undefined) {
         body += /^["'`)\s+]*$/.test(text.slice(before.end, piece.at)) ? '' : ' ';
       }
+
       body += piece.body;
     }
+
     byStart.set(start, body.replace(/[\r\n]+/g, ' '));
   }
+
   return {
     units: [...byStart.values()],
     docs,
@@ -147,6 +162,7 @@ export function renderedProse(file: string, text: string): Rendered {
     quotes: claims.flatMap(({ name, target, at, end }) => {
       const starts = [...byStart.keys()].filter((start) => start >= at && start < end);
       const held = starts.length === 0 ? undefined : byStart.get(Math.min(...starts));
+
       return held === undefined ? [] : [{ file, name, target, text: held }];
     }),
   };
@@ -176,6 +192,7 @@ function holds(stream: readonly string[], run: readonly string[]): boolean {
   for (let at = 0; at + run.length <= stream.length; at += 1) {
     if (run.every((word, index) => stream[at + index] === word)) return true;
   }
+
   return false;
 }
 
@@ -183,7 +200,9 @@ function holds(stream: readonly string[], run: readonly string[]): boolean {
  *  holds, plus one. What a reader needs to see the divergence without a diff. */
 function divergence(stream: readonly string[], run: readonly string[]): string {
   let kept = 0;
+
   while (kept < run.length && holds(stream, run.slice(0, kept + 1))) kept += 1;
+
   return run.slice(kept, kept + 8).join(' ');
 }
 
@@ -224,15 +243,20 @@ export interface QuotationCorpus {
  */
 export function auditQuotations(seen: QuotationCorpus): string[] {
   const findings: string[] = [];
+
   for (const quote of seen.quotes) {
     const source = seen.docs.get(quote.target);
+
     if (source === undefined) continue;
     const stream = words(quote.text);
+
     const claims = sentences(source.replace(DOC_LEADER, ''))
       .map((sentence) => ({ text: sentence.text, run: words(sentence.text) }))
       .filter((claim) => claim.run.length >= CLAIM_WORDS);
+
     const carried = claims.map((claim) => holds(stream, claim.run));
     const first = carried.indexOf(true);
+
     if (first < 0) {
       findings.push(
         `${quote.file}: ${quote.name} declares itself verbatim from ${quote.target} and`
@@ -241,6 +265,7 @@ export function auditQuotations(seen: QuotationCorpus): string[] {
       );
       continue;
     }
+
     for (const [index, claim] of claims.entries()) {
       if (carried[index] === true || index < first || index > carried.lastIndexOf(true)) continue;
       findings.push(
@@ -250,5 +275,6 @@ export function auditQuotations(seen: QuotationCorpus): string[] {
       );
     }
   }
+
   return findings;
 }

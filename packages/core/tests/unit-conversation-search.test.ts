@@ -19,17 +19,20 @@ interface Fixture { sql: TestSql['sql']; store: ConversationSearchStore }
 const ACTOR_ID = 'actor-search';
 
 let nextRow = 0;
+
 function insert(sql: TestSql['sql'], sessionId: string, role: string, content: string, createdAt?: number): string {
   const id = `m-${++nextRow}-${sessionId}`;
   const ts = createdAt ?? 1_000_000 + nextRow * 1000;
   void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${ACTOR_ID}, ${id}, ${sessionId}, ${role}, ${content}, ${ts})`;
+
   return id;
 }
 
 function setup(): Fixture {
   const { sql, execRaw } = createTestSql();
   initAllTables(execRaw, sql);
+
   return { sql, store: new ConversationSearchStore(sql, testActorHandle(sql, { actorId: ACTOR_ID })) };
 }
 
@@ -94,6 +97,7 @@ describe('ConversationSearchStore.search', () => {
   test('fills to exactly the requested capacity and never past it', () => {
     const { sql, store } = setup();
     const strict = insert(sql, 's0', 'user', 'alpha beta together');
+
     for (let i = 0; i < 8; i++) insert(sql, `p${i}`, 'user', `alpha only number ${i}`);
 
     const hits = store.search('alpha beta', 3);
@@ -115,6 +119,7 @@ describe('ConversationSearchStore.search', () => {
   test('the merged page is stable across repeated identical searches', () => {
     const { sql, store } = setup();
     insert(sql, 's1', 'user', 'gamma delta');
+
     for (let i = 0; i < 4; i++) insert(sql, `t${i}`, 'user', 'gamma alone');
 
     const first = store.search('gamma delta', 4).map((hit) => hit.messageId);
@@ -124,6 +129,7 @@ describe('ConversationSearchStore.search', () => {
 
   test('a full strict page is returned untouched', () => {
     const { sql, store } = setup();
+
     for (let i = 0; i < 4; i++) insert(sql, `s${i}`, 'user', `epsilon zeta pair ${i}`);
     insert(sql, 'partial', 'user', 'epsilon on its own');
 
@@ -135,6 +141,7 @@ describe('ConversationSearchStore.search', () => {
   test('excludes internal mcts rows and clamps limit', () => {
     const { sql, store } = setup();
     insert(sql, 'mcts', 'assistant', 'topicword inside the mcts tree');
+
     for (let i = 0; i < 15; i++) insert(sql, 'chat', 'user', `topicword number ${i}`);
     expect(store.search('topicword', 50).length).toBe(10);   // clamped to 10
     expect(store.search('topicword').every((hit) => hit.conversationId === 'chat')).toBe(true);
@@ -151,8 +158,10 @@ describe('ConversationSearchStore.search', () => {
 describe('ConversationSearchStore.scroll', () => {
   test('returns the anchored window in transcript order with edge counts', () => {
     const { sql, store } = setup();
+
     const ids = Array.from({ length: 9 }, (_, i) =>
       insert(sql, 'long', i % 2 === 0 ? 'user' : 'assistant', `message number ${i}`));
+
     const view = store.scroll(ids[4]!, 2)!;
     expect(view.conversationId).toBe('long');
     expect(view.messages.map((m) => m.content)).toEqual([
@@ -194,6 +203,7 @@ describe('ConversationSearchStore.scroll', () => {
   test('non-finite max_chars falls back to the default budget', () => {
     const { sql, store } = setup();
     const id = insert(sql, 'chat', 'assistant', 'x'.repeat(5000));
+
     for (const maxChars of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
       const view = store.scroll(id, 5, maxChars)!;
       expect(view.messages[0]!.content).toContain('x'.repeat(700));
@@ -230,9 +240,11 @@ describe('ConversationSearchStore.browse', () => {
         '{"id":"pane-user","role":"user","parts":[{"type":"text","text":"pane kickoff"}]}',
         '1970-01-01 00:00:01.000')`;
     insert(sql, 'peer-session', 'user', 'peer kickoff', 2_000);
+
     const conversations = new ConversationSearchStore(
       sql, testActorHandle(sql, { actorId: ACTOR_ID }),
     ).browse();
+
     expect(conversations.find((row) => row.conversationId === 'default')?.preview)
       .toBe('pane kickoff');
     expect(conversations.find((row) => row.conversationId === 'peer-session')?.preview)

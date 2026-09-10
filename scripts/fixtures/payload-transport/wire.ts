@@ -9,27 +9,34 @@ export const HarnessResultSchema = v.looseObject({
   ms: v.optional(v.number()),
   corrupt: v.optional(v.boolean()),
 });
+
 export type HarnessResult = v.InferOutput<typeof HarnessResultSchema>;
 
 export const OkReplySchema = v.looseObject({ ok: v.literal(true) });
+
 export const SetupReplySchema = v.looseObject({
   ok: v.literal(true),
   imageVersion: v.string(),
 });
+
 export type SetupReply = v.InferOutput<typeof SetupReplySchema>;
+
 /** What the Durable Object says it is running. `null` means the binding is
  *  absent, which the driver treats as an unsettleable deployment rather than
  *  as a version. */
 export const VersionReplySchema = v.looseObject({ version: v.nullable(v.string()) });
+
 export const OperationStartReplySchema = v.looseObject({
   ok: v.literal(true),
   started: v.boolean(),
   exitCode: v.nullable(v.number()),
 });
+
 export const OperationPollReplySchema = v.looseObject({
   exitCode: v.nullable(v.number()),
   results: v.optional(v.array(HarnessResultSchema)),
 });
+
 export const PresignReplySchema = v.variant('available', [
   v.looseObject({
     available: v.literal(true),
@@ -41,6 +48,7 @@ export const PresignReplySchema = v.variant('available', [
     reason: v.string(),
   }),
 ]);
+
 export const TemporaryCredentialsReplySchema = v.variant('available', [
   v.looseObject({
     available: v.literal(true),
@@ -55,14 +63,17 @@ export const TemporaryCredentialsReplySchema = v.variant('available', [
     reason: v.string(),
   }),
 ]);
+
 export const ObjectVerificationReplySchema = v.looseObject({
   sha256: Sha256Schema,
   size: v.number(),
 });
+
 export const InventoryReplySchema = v.looseObject({
   objects: v.number(),
   bytes: v.number(),
 });
+
 export const PurgeReplySchema = v.looseObject({
   deleted: v.number(),
   passes: v.number(),

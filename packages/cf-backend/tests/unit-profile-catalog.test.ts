@@ -43,6 +43,7 @@ function catalog(): ProfileCatalog {
     },
   };
 }
+
 async function write(
   harness: TestUserDO,
   expectedVersion: number,
@@ -88,10 +89,12 @@ describe('profile catalog compare-and-swap writes', () => {
     const harness = createTestUserDO();
 
     const first = await write(harness, 0, catalog());
+
     if (!first.ok) throw new Error('first write refused');
     expect(first.envelope.version).toBe(1);
 
     const second = await write(harness, 1, catalog());
+
     if (!second.ok) throw new Error('second write refused');
     expect(second.envelope.version).toBe(2);
 
@@ -103,6 +106,7 @@ describe('profile catalog compare-and-swap writes', () => {
   test('two simultaneous writers produce one winner and one conflict', async () => {
     const harness = createTestUserDO();
     const left = catalog();
+
     const right: ProfileCatalog = {
       ...catalog(),
       roles: {
@@ -118,7 +122,9 @@ describe('profile catalog compare-and-swap writes', () => {
 
     const success = results.find((result) => result.ok);
     const conflict = results.find((result) => !result.ok && result.kind === 'conflict');
+
     if (!success?.ok) throw new Error('CAS produced no winner');
+
     if (!conflict || conflict.ok || conflict.kind !== 'conflict') throw new Error('CAS produced no conflict');
     expect(success.envelope.version).toBe(1);
     expect(conflict.currentVersion).toBe(1);
@@ -130,6 +136,7 @@ describe('profile catalog compare-and-swap writes', () => {
   test('a stale expectedVersion refuses and leaves the winner standing', async () => {
     const harness = createTestUserDO();
     await write(harness, 0, catalog());
+
     const winner: ProfileCatalog = {
       ...catalog(),
       roles: {
@@ -137,15 +144,19 @@ describe('profile catalog compare-and-swap writes', () => {
         planner: role({ instructions: 'Plan first.', preset: 'optimise' }),
       },
     };
+
     const accepted = await write(harness, 1, winner);
+
     if (!accepted.ok) throw new Error('winner write refused');
 
     const loser = await write(harness, 1, catalog());
 
     expect(loser).toMatchObject({ ok: false, kind: 'conflict', currentVersion: 2 });
+
     if (!loser.ok && loser.kind === 'conflict') {
       expect(loser.currentDigest).toBe(profileCatalogDigest(winner));
     }
+
     const read = await harness.userDO.getProfileCatalog(await testOwner());
     expect(read.version).toBe(2);
     expect(Object.keys(read.catalog.roles)).toContain('planner');
@@ -197,9 +208,11 @@ describe('profile catalog compare-and-swap writes', () => {
       }, 'roles.general.id'],
       ['tier without a model', { roles: {}, tiers: { default: {} } }, 'tiers.default.model'],
     ];
+
     for (const [name, bad, path] of cases) {
       const result = await write(harness, 1, bad);
       expect(result.ok, name).toBe(false);
+
       if (!result.ok && result.kind === 'malformed') expect(result.reason, name).toContain(path);
     }
 
@@ -212,6 +225,7 @@ describe('profile catalog compare-and-swap writes', () => {
   test('a malformed stored value fails loudly and preserves its CAS version', async () => {
     const harness = createTestUserDO();
     const first = await write(harness, 0, catalog());
+
     if (!first.ok) throw new Error('first write refused');
     harness.db.query(`UPDATE user_config SET value = ? WHERE key = 'profile_catalog'`)
       .run('{not-json');
@@ -224,6 +238,7 @@ describe('profile catalog compare-and-swap writes', () => {
     const persisted = harness.db.query<{ value: string; version: number }, []>(
       `SELECT value, version FROM user_config WHERE key = 'profile_catalog'`,
     ).all();
+
     expect(persisted).toEqual([{ value: '{not-json', version: 1 }]);
     harness.close();
   });
@@ -235,6 +250,7 @@ describe('profile catalog compare-and-swap writes', () => {
       const result = await write(harness, expectedVersion, catalog());
       expect(result).toMatchObject({ ok: false, kind: 'malformed' });
     }
+
     const read = await harness.userDO.getProfileCatalog(await testOwner());
     expect(read.version).toBe(0);
     harness.close();
@@ -279,11 +295,14 @@ describe('profile catalog storage hygiene', () => {
 
     expect(Object.keys(envelope).sort()).toEqual(['authority', 'catalog', 'digest', 'version']);
     expect(JSON.stringify(envelope)).not.toContain(secret);
+
     // The canonical row holds exactly one key whose value is the catalog JSON.
     const rows = harness.db.query<{ key: string; value: string }, []>(
       `SELECT key, value FROM user_config`,
     ).all();
+
     const catalogRow = rows.find((r) => r.key === 'profile_catalog');
+
     if (!catalogRow) throw new Error('profile catalog row missing');
     expect(Object.keys(JSON.parse(catalogRow.value)).sort()).toEqual(['roles', 'tiers']);
     expect(JSON.stringify(rows.map((r) => r.value))).not.toContain(secret);

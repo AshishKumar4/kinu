@@ -36,6 +36,7 @@ const SteerFrameSchema = v.object({
 function steerFrames(frames: readonly string[]) {
   return frames.flatMap((frame) => {
     const parsed = v.safeParse(SteerFrameSchema, JSON.parse(frame));
+
     return parsed.success ? [parsed.output] : [];
   });
 }
@@ -66,12 +67,14 @@ function steerHarness(): SteerHarness {
     broadcast: (event: { type: string }) => { frames.push(JSON.stringify(event)); },
     enqueueTurn: async (turn: { text: string; metadata?: unknown; idempotencyKey?: string }) => {
       enqueued.push(turn);
+
       return { status: 'queued' as const };
     },
     turnInFlight: () => inFlight,
     setTimer: () => {},
     headRuntime: undefined,
   });
+
   return {
     agent, frames, appended, enqueued,
     startTurn: () => {
@@ -120,6 +123,7 @@ async function stepMessages(
   const config = prepared instanceof Promise ? await prepared : prepared;
   const rewritten = v.safeParse(v.object({ messages: v.array(v.custom<ModelMessage>(() => true)) }), config);
   const carried = rewritten.success ? rewritten.output.messages : messages;
+
   return carried.filter((m) => !v.is(DynamicContextSchema, m));
 }
 
@@ -201,6 +205,7 @@ describe('a message typed while the agent is working', () => {
     const h = steerHarness();
     h.startTurn();
     const turnId = h.agent.harnessDurableTurnId();
+
     if (turnId === null) throw new Error('expected the harness turn to be durable');
     await h.agent.steerTurn('recover this after reset');
 
@@ -352,6 +357,7 @@ describe('a steer that never saw a step boundary', () => {
     await h.agent.steerTurn('first build', 'build');
     await h.agent.steerTurn('plan next', 'plan');
     await h.agent.steerTurn('second build', 'build');
+
     const settled = {
       status: 'completed' as const,
       continuation: false,
@@ -374,11 +380,13 @@ describe('a steer that never saw a step boundary', () => {
     const h = steerHarness();
     h.startTurn();
     await h.agent.steerTurn('one more thing');
+
     const settled = {
       status: 'completed' as const,
       continuation: false,
       message: { id: 'assistant-1', role: 'assistant' as const, parts: [{ type: 'text' as const, text: 'ok' }] },
     };
+
     await h.agent.onChatResponse({ ...settled, requestId: 'req-1' });
     await h.agent.onChatResponse({ ...settled, requestId: 'req-2' });
     expect(h.enqueued).toHaveLength(1);

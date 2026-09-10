@@ -16,6 +16,7 @@ import { WORKSPACE_CREATED_EVENT, renderSoulMarkdown, summarizeSoul } from '@kin
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const MISSION = 'Audit the OAuth callback flow and report what an attacker could reach.';
+
 /** What the dialog leaves behind when it carried no mission: the renderer's own default, read back through the summarizer that derives a mission from soul markdown. The fixture tracks the default across rewordings. */
 const PLACEHOLDER_MISSION = summarizeSoul(renderSoulMarkdown({ name: 'probe' }));
 
@@ -77,9 +78,11 @@ function captureTurns(agent: GenesisAgent): RecordedTurn[] {
           provenance: v.parse(TurnProvenanceSchema, message.metadata ?? {}),
         });
       }
+
       return { status: 'completed' };
     },
   });
+
   return turns;
 }
 
@@ -146,6 +149,7 @@ describe('the workspace takes its own first turn', () => {
     seedMission(harness.db, MISSION);
     let turnStarted = false;
     let endTurn = () => {};
+
     const turnRunning = new Promise<void>((resolve) => { endTurn = resolve; });
     Object.defineProperty(harness.agent, 'saveMessages', {
       configurable: true,
@@ -153,7 +157,12 @@ describe('the workspace takes its own first turn', () => {
       // beginGenesisTurn awaited it, POST /workspaces would hold the New
       // workspace dialog open for the whole turn — so this resolves only when
       // the test says so, and beginGenesisTurn must still answer.
-      value: async () => { turnStarted = true; await turnRunning; return { status: 'completed' }; },
+      value: async () => {
+        turnStarted = true;
+        await turnRunning;
+
+        return { status: 'completed' };
+      },
     });
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });

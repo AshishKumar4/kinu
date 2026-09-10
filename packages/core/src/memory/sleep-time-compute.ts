@@ -56,6 +56,7 @@ Recent turn:
 Current facts in agent's world model:
 ${i.currentFacts.slice(0, 30).map((fact) => {
   const text = v.safeParse(v.string(), fact.value);
+
   return `  ${fact.key} = ${text.success ? text.output : JSON.stringify(fact.value)} (conf ${fact.confidence.toFixed(2)})`;
 }).join('\n') || '  (none)'}
 
@@ -102,6 +103,7 @@ export async function runSleepTimeCompute(
   const text = await judge.complete(PROMPT(input));
   const object = tolerate(() => extractJsonObject(text), 'malformed-input');
   const update = v.safeParse(SleepTimeUpdateSchema, object);
+
   return update.success ? update.output : null;
 }
 
@@ -113,22 +115,30 @@ export function applySleepTimeUpdate(
   // Whitespace-only keys can pass the textual schema but normalize to no key.
   const safeUpserts = update.upserts.flatMap((u) => {
     const key = normalizeFactKey(u.key);
+
     if (key.length === 0) return [];
+
     return [{ ...u, key }];
   });
+
   const skipped = update.upserts.length - safeUpserts.length;
   let upserted = 0;
+
   for (const u of safeUpserts) {
     const result = facts.upsert(u.key, u.value, {
       confidence: u.confidence,
       source: 'sleep-time-compute',
     });
+
     if (result !== 'unchanged') upserted++;
   }
+
   // Decay = re-upsert with lower confidence (preserves value, weakens belief).
   let decayed = 0;
+
   for (const k of update.decay) {
     const cur = facts.recall(k);
+
     if (!cur) continue;
     facts.upsert(k, cur.value, {
       confidence: Math.max(0, cur.confidence - 0.2),
@@ -136,5 +146,6 @@ export function applySleepTimeUpdate(
     });
     decayed++;
   }
+
   return { upserted, decayed, skipped };
 }

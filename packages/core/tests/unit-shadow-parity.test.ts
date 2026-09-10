@@ -30,7 +30,9 @@ const DELEGATING_PENDING = `async function* run(rt, task) {
 }`;
 
 const TASK = 'What is my project codename?';
+
 const CONTEXT_AWARE_ANSWER = 'Your project codename is BLUEFIN.';
+
 const CONTEXT_FREE_ANSWER = "I don't have a codename on record for you.";
 
 async function setup(): Promise<AgentRuntime> {
@@ -44,6 +46,7 @@ async function setup(): Promise<AgentRuntime> {
     VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'delegating pending', 'pending')`;
   await rt.storage.vfs.writeFile('scaffold/agent.js.v1', DELEGATING_PENDING);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }');
+
   return rt;
 }
 
@@ -55,9 +58,11 @@ const contextJudge: StructuredJudgeFn = async (prompt) => {
   const [a, b] = prompt.split('\nResponse B:\n');
   const aSaw = a.slice(a.indexOf('\nResponse A:\n')).includes('BLUEFIN');
   const bSaw = b.includes('BLUEFIN');
+
   if (aSaw === bSaw) {
     return { winner: 'tie', rationale: 'both responses cite the codename', scoreA: 0.8, scoreB: 0.8 };
   }
+
   return {
     winner: aSaw ? 'a' : 'b',
     rationale: 'the loser lacks the conversational context',
@@ -77,6 +82,7 @@ function uiStream(answer: string): () => AsyncIterable<ScaffoldDefaultInferenceC
 describe('shadow context parity', () => {
   test('a delegating pending with the live context does not auto-lose on a context-dependent task', async () => {
     const rt = await setup();
+
     const result = await runAutoShadowEval({
       rt,
       task: TASK,
@@ -97,12 +103,14 @@ describe('shadow context parity', () => {
     const row = rt.storage.sql<{ pending_output: string; winner: string }>`
       SELECT pending_output, winner FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId}`[0]!;
+
     expect(row.pending_output).toBe(CONTEXT_AWARE_ANSWER);
     expect(row.winner).toBe('tie');
   });
 
   test('without the live context the same pending structurally loses — the handicap the fix removes', async () => {
     const rt = await setup();
+
     const result = await runAutoShadowEval({
       rt,
       task: TASK,
@@ -113,6 +121,7 @@ describe('shadow context parity', () => {
       llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
       random: () => 0,
     });
+
     expect(result.skipped).toBe(false);
     expect(result.evaluation?.winner).toBe('current');
   });

@@ -150,6 +150,7 @@ const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
 function rpcReachableNames<Target extends object>(target: Target): string[] {
   const own = new Set(Object.getOwnPropertyNames(target));
   const reachable = new Set<string>();
+
   for (let proto: object | null = Object.getPrototypeOf(target);
        proto !== null && proto !== Object.prototype;
        proto = Object.getPrototypeOf(proto)) {
@@ -157,6 +158,7 @@ function rpcReachableNames<Target extends object>(target: Target): string[] {
       if (name !== 'constructor' && !own.has(name)) reachable.add(name);
     }
   }
+
   return [...reachable].sort();
 }
 
@@ -174,9 +176,11 @@ function rpcReachableNames<Target extends object>(target: Target): string[] {
  */
 export function sealRpcSurface<Instance extends object>(instance: Instance, surface: readonly string[]): void {
   const allowed = new Set(surface);
+
   for (const name of rpcReachableNames(instance)) {
     if (allowed.has(name)) continue;
     const descriptor = inheritedDescriptor(instance, name);
+
     if (descriptor) Object.defineProperty(instance, name, { ...descriptor, enumerable: false });
   }
 }
@@ -187,8 +191,10 @@ function inheritedDescriptor<Instance extends object>(instance: Instance, name: 
        proto !== null && proto !== Object.prototype;
        proto = Object.getPrototypeOf(proto)) {
     const descriptor = Object.getOwnPropertyDescriptor(proto, name);
+
     if (descriptor) return descriptor;
   }
+
   return undefined;
 }
 

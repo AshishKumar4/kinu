@@ -16,6 +16,7 @@ describe('codemode declared status unions come from the shared constants', () =>
     const provider = createReportCodemodeProvider(() => ({
       report: async () => ({ delivered: true }),
     }));
+
     const types = provider.types ?? '';
     // The STATUS POSITION, not the whole parameter list: what this defends is
     // that the union is interpolated from the shared constant, and pinning
@@ -27,10 +28,12 @@ describe('codemode declared status unions come from the shared constants', () =>
   test('tasks.update declares every TASK_STATUS', () => {
     const ws = createTestWorkspace();
     const actor = createTestActor(ws.sql, ws.execRaw, crypto.randomUUID(), 'status-test');
+
     const provider = createTasksCodemodeProvider(
       new TaskListStore(ws.sql, actor, write => ws.db.transaction(write)()),
       actor.config,
     );
+
     const types = provider.types ?? '';
     expect(types).toContain(`update(id: string, status: ${unionOf(TASK_STATUSES)})`);
   });

@@ -32,6 +32,7 @@ interface CliAuthTestBindings<Stub> {
 function testEnv<Stub>(bindings: CliAuthTestBindings<Stub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: CLI auth reads exactly the constructed KV namespace, UserDO
   // namespace, and credential key; every reachable binding is present.
   return env as Env;
@@ -39,6 +40,7 @@ function testEnv<Stub>(bindings: CliAuthTestBindings<Stub>): Env {
 
 function handled(response: Response | null): Response {
   if (!response) throw new Error('CLI auth route did not handle the request');
+
   return response;
 }
 
@@ -46,6 +48,7 @@ function setupEnv() {
   const kv = makeKv();
   const minted: string[] = [];
   const claimed: string[] = [];
+
   const userDO = {
     async ensureProfile() {},
     async mintCliToken(_caller: UserCaller, userId: string, authorizationHash: string, label?: string) {
@@ -58,12 +61,15 @@ function setupEnv() {
       if (claimed.includes(authorizationHash)) {
         throw new Error('That CLI authorization has already been redeemed.');
       }
+
       claimed.push(authorizationHash);
       const token = `ptc_${userId}_testtoken`;
       minted.push(`${label ?? ''}:${token}`);
+
       return { token, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
     },
   };
+
   return {
     kv,
     minted,
@@ -217,24 +223,29 @@ describe('CLI auth error propagation', () => {
       UserDO: { idFromName: (n: string) => n, get: () => ({}) },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
+
     await expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
       .rejects.toThrow(/namespace unavailable/i);
   });
 
   test('rate limiting throws the typed RateLimitError', async () => {
     const { env } = setupEnv();
+
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1');
     }
+
     await expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
       .rejects.toBeInstanceOf(RateLimitError);
   });
 
   test('the ceiling is per client key, so one flooding terminal does not lock out another', async () => {
     const { env } = setupEnv();
+
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1');
     }
+
     const other = await startCliAuth(env, 'https://o.example', 'https://o.example', 't', '10.0.0.9');
     expect(other.userCode).toMatch(/^[A-Z0-9]{4}-[A-Z0-9]{4}$/);
   });
@@ -251,9 +262,11 @@ describe('CLI auth route status mapping', () => {
 
   test('rate-limited start → 429', async () => {
     const { env } = setupEnv();
+
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1');
     }
+
     const res = await handleCliRequest(startRequest(), env);
     expect(res?.status).toBe(429);
   });
@@ -264,6 +277,7 @@ describe('CLI auth route status mapping', () => {
       UserDO: { idFromName: (n: string) => n, get: () => ({}) },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
+
     const res = handled(await handleCliRequest(startRequest(), env));
     expect(res.status).toBe(500);
     expect(v.parse(ErrorResponseSchema, await res.json()).error).toMatch(/namespace unavailable/i);
@@ -289,16 +303,19 @@ describe('the CLI session inventory', () => {
     await provisionTestWorkspace(harness, 'workspace-a');
     const laptop = await harness.userDO.mintCliToken(owner, USER_ID, 'a'.repeat(64), 'laptop');
     const lost = await harness.userDO.mintCliToken(owner, USER_ID, 'b'.repeat(64), 'the machine that is gone');
+
     const env = testEnv({
       AUTH_KV: makeKv(),
       UserDO: { idFromName: () => USER_ID, get: () => harness.userDO },
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
+
     return { harness, owner, env, laptop, lost };
   }
 
   function sessionsRequest(token: string, opts: { method?: string; hash?: string } = {}): Request {
     const path = opts.hash === undefined ? '/api/cli/sessions' : `/api/cli/sessions/${opts.hash}`;
+
     return new Request(`https://kinu.example.com${path}`, {
       method: opts.method ?? 'GET',
       headers: { authorization: `Bearer ${token}` },
@@ -307,6 +324,7 @@ describe('the CLI session inventory', () => {
 
   test('another interactive session can name and end a bearer whose raw copy is gone', async () => {
     const { harness, owner, env, laptop, lost } = await account();
+
     // The raw token of the lost machine's session is deliberately not used
     // again below: the recovery has to work from the INVENTORY, because the
     // raw copy is exactly what no longer exists.
@@ -314,6 +332,7 @@ describe('the CLI session inventory', () => {
       v.object({ sessions: v.array(v.object({ tokenHash: v.string(), label: v.string() })) }),
       await handled(await handleCliRequest(sessionsRequest(laptop.token), env)).json(),
     );
+
     expect(inventory.sessions.map((row) => row.label).sort())
       .toEqual(['laptop', 'the machine that is gone']);
     const orphan = inventory.sessions.find((row) => row.label === 'the machine that is gone');
@@ -356,6 +375,7 @@ describe('the CLI session inventory', () => {
   test('a scoped CI token cannot enumerate or end the account\'s sessions', async () => {
     const { harness, owner, env, laptop } = await account();
     const ci = await harness.userDO.mintAccessToken(owner, USER_ID, 'ci', ['workspace.read', 'workspace.exec']);
+
     if (!ci.ok || !ci.token) throw new Error('the access token was not minted');
 
     for (const request of [
@@ -368,6 +388,7 @@ describe('the CLI session inventory', () => {
       expect(v.parse(ErrorResponseSchema, await handled(refused).json()).error)
         .toContain('interactive CLI session token');
     }
+
     // Nothing was revoked by the refusals.
     expect(await harness.userDO.verifyCliToken(owner, laptop.token)).toMatchObject({ ok: true });
     harness.close();
@@ -375,9 +396,11 @@ describe('the CLI session inventory', () => {
 
   test('a hash that is not 64 hex is not a route at all', async () => {
     const { harness, env, laptop } = await account();
+
     const refused = await handleCliRequest(
       sessionsRequest(laptop.token, { method: 'DELETE', hash: 'not-a-hash' }), env,
     );
+
     expect(refused?.status).toBe(404);
     harness.close();
   });

@@ -14,6 +14,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { tolerate } from "@kinu.run/core/obs";
 
 const repoRoot = resolve(__dirname, "../../..");
+
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
 
 const tempDirs: string[] = [];
@@ -25,6 +26,7 @@ afterEach(() => {
 function tempHome(): string {
   const dir = mkdtempSync(join(tmpdir(), "kinu-prompt-test-"));
   tempDirs.push(dir);
+
   return dir;
 }
 
@@ -44,6 +46,7 @@ function runDetachedCli(args: string[], home: string, timeoutMs = 20_000): Promi
       stdio: ["pipe", "pipe", "pipe"],
       env: { ...process.env, KINU_HOME: home },
     });
+
     let stdout = "";
     let stderr = "";
     child.stdout.setEncoding("utf8").on("data", (chunk: string) => { stdout += chunk; });
@@ -68,6 +71,7 @@ describe("setup without any terminal", () => {
       ["setup", "--account-only", "--origin", "https://kinu.example.com"],
       tempHome(),
     );
+
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("Kinu account was not connected");
@@ -79,6 +83,7 @@ describe("setup without any terminal", () => {
       ["setup", "--origin", "https://kinu.example.com"],
       tempHome(),
     );
+
     expect(result.timedOut).toBe(false);
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("no interactive terminal");
@@ -91,6 +96,7 @@ describe("TUI without a terminal", () => {
     const { requireInteractiveTerminal } = await import("../src/prompt");
     const stdinDesc = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
     Object.defineProperty(process.stdin, "isTTY", { value: undefined, configurable: true });
+
     try {
       expect(() => requireInteractiveTerminal()).toThrow(/interactive terminal/);
     } finally {

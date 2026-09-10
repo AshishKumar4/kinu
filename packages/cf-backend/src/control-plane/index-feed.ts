@@ -58,9 +58,12 @@ const OBSERVE_MEMO_MAX = 4096;
 
 function shouldWrite(key: string, now: number): boolean {
   const last = observed.get(key);
+
   if (last !== undefined && now - last < OBSERVE_TTL_MS) return false;
+
   if (observed.size >= OBSERVE_MEMO_MAX) observed.clear();
   observed.set(key, now);
+
   return true;
 }
 
@@ -85,7 +88,9 @@ export function observeIdentity(
   options: { retain: RetainWork; now?: number },
 ): void {
   const now = options.now ?? Date.now();
+
   if (!hasControlPlane(env)) return;
+
   if (!shouldWrite(identity.userId, now)) return;
   options.retain.waitUntil(retained(identity.userId, false, async () => {
     await controlPlaneStub(env).observeUser(await internalCaller(env), {
@@ -113,8 +118,10 @@ export function observeWorkspaceUse(
   options: { retain: RetainWork; now?: number },
 ): void {
   const now = options.now ?? Date.now();
+
   if (!hasControlPlane(env)) return;
   const key = `${identity.userId}\u0000${workspace}`;
+
   if (!shouldWrite(key, now)) return;
   options.retain.waitUntil(retained(key, true, async () => {
     // The path carries only the slug. `touchWorkspace` preserves a title the
@@ -162,6 +169,7 @@ export async function indexNewWorkspace(
 ): Promise<void> {
   // No destination is not a lost write — see `hasControlPlane`.
   if (!hasControlPlane(env)) return;
+
   try {
     const caller = await internalCaller(env);
     await controlPlaneStub(env).observeWorkspace(caller, {
@@ -192,6 +200,7 @@ export async function unindexWorkspace(
   target: { userId: string; name: string },
 ): Promise<void> {
   if (!hasControlPlane(env)) return;
+
   try {
     const caller = await internalCaller(env);
     await controlPlaneStub(env).forgetWorkspace(caller, target);

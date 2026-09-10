@@ -31,8 +31,11 @@ export interface TokensOpts {
 
 export async function tokensCommand(action: string | undefined, name: string | undefined, opts: TokensOpts): Promise<void> {
   const sub = action ?? 'list';
+
   if (sub === 'list') return listTokens(opts);
+
   if (sub === 'create') return createToken(name, opts);
+
   if (sub === 'revoke') return revokeToken(name ?? opts.name);
   throw new Error('Usage: kinu tokens [list | create --name <name> --scopes <scopes> | revoke <name>]');
 }
@@ -40,14 +43,19 @@ export async function tokensCommand(action: string | undefined, name: string | u
 async function listTokens(opts: TokensOpts): Promise<void> {
   const auth = requireAuthConfig();
   const { tokens } = await listCliAccessTokens(auth.origin, auth.token);
+
   if (opts.json) {
     printJson(projectJsonValue({ value: tokens }));
+
     return;
   }
+
   if (tokens.length === 0) {
     console.log(DIM(`No access tokens. Create one with: kinu tokens create --name ci --scopes ${ACCESS_TOKEN_SCOPES.join(',')}`));
+
     return;
   }
+
   for (const token of tokens) {
     console.log(`${ACCENT(token.name)}  ${DIM(token.scopes.join(', '))}`);
     console.log(`  ${DIM('created')} ${formatWhen(token.createdAt)}  ${DIM('last used')} ${token.lastUsedAt ? formatWhen(token.lastUsedAt) : 'never'}`);
@@ -56,16 +64,21 @@ async function listTokens(opts: TokensOpts): Promise<void> {
 
 async function createToken(positionalName: string | undefined, opts: TokensOpts): Promise<void> {
   const name = opts.name ?? positionalName;
+
   if (!name) throw new Error('Token name required: kinu tokens create --name ci --scopes workspace.exec,workspace.read');
   const scopes = (opts.scopes ?? '').split(/[\s,]+/).filter(Boolean);
+
   if (scopes.length === 0) throw new Error(`Scopes required: --scopes ${ACCESS_TOKEN_SCOPES.join(',')}`);
 
   const auth = requireAuthConfig();
   const created = await createCliAccessToken(auth.origin, auth.token, { name, scopes });
+
   if (opts.json) {
     printJson(projectJsonValue({ value: created }));
+
     return;
   }
+
   console.log(`${OK('✓')} Access token ${ACCENT(created.name)} created with scopes: ${created.scopes.join(', ')}`);
   console.log('');
   console.log(`  ${created.token}`);

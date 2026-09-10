@@ -31,7 +31,9 @@ import {
 import { classify, tolerate, tolerateAsync } from '@kinu.run/core/obs';
 
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
+
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
+
 /**
  * Directories that are not a work tree, so a whole-tree snapshot of one is
  * never what the caller meant. The filesystem root and the user's home were
@@ -55,6 +57,7 @@ export interface HostCheckpointsOpts {
 }
 
 interface GitResult { code: number; stdout: string; stderr: string }
+
 interface GitEnvironment { [name: string]: string }
 
 /** One staged tree, plus the paths that are NOT in it because this process may
@@ -75,9 +78,11 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
   function isolatedEnv(): GitEnvironment {
     const env: GitEnvironment = {};
+
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined && !k.startsWith('GIT_')) env[k] = v;
     }
+
     env.GIT_CONFIG_GLOBAL = devNull;
     env.GIT_CONFIG_SYSTEM = devNull;
     env.GIT_CONFIG_NOSYSTEM = '1';
@@ -89,6 +94,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     // a localized `warning: could not open directory` would read as an
     // unexplained failure and fail the mutation it precedes.
     env.LC_ALL = 'C';
+
     return env;
   }
 
@@ -111,13 +117,16 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     if (!existsSync(cwd)) {
       return Promise.resolve({ code: 1, stdout: '', stderr: `working directory not found: ${cwd}` });
     }
+
     return new Promise((resolveRun, rejectRun) => {
       execFile(gitBin, args, { cwd, env, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (classify({ cause: err }) === 'enoent') {
           gitAvailable = false;
           rejectRun(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
+
           return;
         }
+
         gitAvailable = true;
         const reportedCode = Number(err?.code);
         const code = err && Number.isFinite(reportedCode) ? reportedCode : err ? 1 : 0;
@@ -128,6 +137,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
   async function probeGit(): Promise<boolean> {
     if (gitAvailable !== null) return gitAvailable;
+
     try {
       await runGit(['--version'], homedir(), isolatedEnv());
     } catch (error) {
@@ -136,7 +146,9 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       // must not be reported as "git is not installed".
       if (gitAvailable !== false) throw error;
     }
+
     gitAvailable ??= true;
+
     return gitAvailable;
   }
 
@@ -152,6 +164,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     if (existsSync(join(gitDir, 'HEAD'))) return;
     await fs.mkdir(gitDir, { recursive: true });
     const init = await runGit(['init', '--bare', '--quiet', gitDir], dirname(gitDir), isolatedEnv());
+
     if (init.code !== 0) throw new Error(`checkpoint store init failed: ${init.stderr.trim()}`);
     await fs.mkdir(join(gitDir, 'info'), { recursive: true });
     await fs.writeFile(join(gitDir, 'info', 'exclude'), CHECKPOINT_EXCLUDES.join('\n') + '\n', 'utf8');
@@ -160,6 +173,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
   function snapshotSkipped(dir: string): boolean {
     const abs = resolve(dir);
+
     return abs === '/' || abs === resolve(homedir()) || UNSNAPSHOTTABLE.has(abs)
       || !existsSync(abs) || !statSync(abs).isDirectory();
   }
@@ -170,9 +184,12 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       ['for-each-ref', '--sort=-refname', `--format=%(refname)|%(objectname)|%(subject)`, REF_PREFIX],
       workdirOrBase(workdir), storeEnv(gitDir, workdir),
     );
+
     if (res.code !== 0) return [];
+
     return res.stdout.split('\n').filter(Boolean).map((line) => {
       const [ref, id, ...rest] = line.split('|');
+
       return { ref: ref!, id: id!, subject: rest.join('|') };
     });
   }
@@ -196,6 +213,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     const env = storeEnv(gitDir, workdir);
     const add = await runGit(['add', '-A', '--ignore-errors'], workdir, env);
     const diagnosis = diagnoseStaging(add.stderr);
+
     // A non-zero exit explained ENTIRELY by paths it may not read is not a
     // failure: everything readable is staged and `write-tree` is clean. An
     // unexplained diagnostic, or a non-zero exit with nothing to explain it,
@@ -204,8 +222,11 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     if (diagnosis.unexplained.length > 0 || (add.code !== 0 && diagnosis.unreadable.length === 0)) {
       throw new Error(`checkpoint staging failed: ${add.stderr.trim()}`);
     }
+
     const tree = await runGit(['write-tree'], workdir, env);
+
     if (tree.code !== 0) throw new Error(`checkpoint write-tree failed: ${tree.stderr.trim()}`);
+
     return { tree: tree.stdout.trim(), unreadable: diagnosis.unreadable };
   }
 
@@ -224,20 +245,25 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
 
     const refs = await storeRefs(gitDir, abs);
     const latest = refs[0];
+
     if (latest) {
       const latestTree = await runGit(['rev-parse', `${latest.id}^{tree}`], abs, env);
+
       if (latestTree.code === 0 && latestTree.stdout.trim() === tree) return latest.id;
     }
 
     const subject = checkpointSubject(meta, checkpointReason(reason, staged.unreadable));
     const commit = await runGit(['commit-tree', tree, '-m', subject], abs, env);
+
     if (commit.code !== 0) throw new Error(`checkpoint commit failed: ${commit.stderr.trim()}`);
     const sha = commit.stdout.trim();
     const refName = `${REF_PREFIX}/${String(Date.now()).padStart(13, '0')}-${(refSeq++).toString(36).padStart(3, '0')}`;
     const update = await runGit(['update-ref', refName, sha], abs, env);
+
     if (update.code !== 0) throw new Error(`checkpoint ref update failed: ${update.stderr.trim()}`);
 
     await pruneStore(gitDir, abs, refs.length + 1);
+
     return sha;
   }
 
@@ -247,9 +273,11 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     if (refCount <= keep) return;
     const env = storeEnv(gitDir, workdir);
     const refs = await storeRefs(gitDir, workdir);
+
     for (const stale of refs.slice(keep)) {
       await runGit(['update-ref', '-d', stale.ref], workdir, env);
     }
+
     await runGit(['prune', '--expire=now'], workdir, env);
   }
 
@@ -257,10 +285,13 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     if (!SHA_RE.test(id)) throw new Error(`invalid checkpoint id: ${id}`);
     const abs = resolve(dir);
     const gitDir = storeDirFor(abs);
+
     if (!existsSync(join(gitDir, 'HEAD'))) throw new Error(`no checkpoints exist for ${abs}`);
     const env = storeEnv(gitDir, abs);
     const verify = await runGit(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env);
+
     if (verify.code !== 0) throw new Error(`checkpoint not found: ${id}`);
+
     return { gitDir, abs, env };
   }
 
@@ -271,11 +302,14 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     // restore has no business with it.
     const current = await stageCurrent(gitDir, abs);
     const diff = await runGit(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
+
     if (diff.code !== 0) throw new Error(`checkpoint diff failed: ${diff.stderr.trim()}`);
     const files: FileRestoreChange[] = [];
+
     for (const line of diff.stdout.split('\n')) {
       if (!line) continue;
       const tab = line.indexOf('\t');
+
       if (tab < 0) continue;
       const status = line.slice(0, tab);
       const path = line.slice(tab + 1);
@@ -283,6 +317,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       // deletes it (added since), M/T = restore rewrites it.
       files.push({ path, kind: status === 'A' ? 'create' : status === 'D' ? 'delete' : 'modify' });
     }
+
     return files;
   }
 
@@ -295,8 +330,10 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     async ensureCheckpoint(dir: string, reason = 'pre-mutation'): Promise<string | null> {
       if (!(await probeGit())) return null;
       const abs = resolve(dir);
+
       if (turnDone.has(abs)) return null;
       turnDone.add(abs);
+
       return await snapshot(abs, turn, reason);
     },
 
@@ -304,18 +341,24 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       if (!(await probeGit())) return [];
       const stores = await tolerateAsync(() => fs.readdir(agentBase), 'enoent') ?? [];
       const entries: FileCheckpointEntry[] = [];
+
       for (const name of stores) {
         const gitDir = join(agentBase, name);
         const markerPath = join(gitDir, WORKDIR_MARKER);
+
         if (!existsSync(join(gitDir, 'HEAD')) || !existsSync(markerPath)) continue;
         const workdir = (await fs.readFile(markerPath, 'utf8')).trim();
+
         for (const ref of await storeRefs(gitDir, workdir)) {
           const meta = parseCheckpointSubject(ref.subject);
+
           if (opts.turnId !== undefined && meta.turnId !== opts.turnId) continue;
           entries.push({ id: ref.id, dir: workdir, at: checkpointRefTimestampMs(ref.ref), ...meta });
         }
       }
+
       entries.sort((a, b) => b.at - a.at);
+
       // Truncation is LAST, after any turn filter, so a limit can never hide a
       // checkpoint that exists — see FileCheckpoints.list.
       return entries.slice(0, Math.max(1, opts.limit ?? 50));
@@ -325,12 +368,14 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       if (!(await probeGit())) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
       const { gitDir, abs } = await requireCheckpoint(dir, id);
       const files = await diffToCheckpoint(gitDir, abs, id);
+
       return { dir: abs, id, files };
     },
 
     async restore(dir: string, id: string): Promise<FileRestoreResult> {
       if (!(await probeGit())) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
       const { gitDir, abs, env } = await requireCheckpoint(dir, id);
+
       if (!existsSync(abs)) throw new Error(`working directory no longer exists: ${abs}`);
       const files = await diffToCheckpoint(gitDir, abs, id);
 
@@ -345,12 +390,16 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       for (const change of files) {
         if (change.kind !== 'delete') continue;
         const target = resolve(abs, change.path);
+
         if (!target.startsWith(abs)) continue; // defense: git emits relative paths only
         await tolerateAsync(() => fs.unlink(target), 'enoent');
       }
+
       const read = await runGit(['read-tree', id], abs, env);
+
       if (read.code !== 0) throw new Error(`checkpoint read-tree failed: ${read.stderr.trim()}`);
       const checkout = await runGit(['checkout-index', '-a', '-f'], abs, env);
+
       if (checkout.code !== 0) throw new Error(`checkpoint restore failed: ${checkout.stderr.trim()}`);
 
       return { dir: abs, id, files, preRestoreId };
@@ -365,12 +414,14 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     workdirForPath(path: string): string {
       const abs = resolve(path);
       let candidate = abs;
+
       try {
         if (!statSync(abs).isDirectory()) candidate = dirname(abs);
       } catch (error) {
         if (classify({ cause: error }) !== 'enoent') throw error;
         candidate = dirname(abs);
       }
+
       const home = resolve(homedir());
       // The walk stops at the temp directory: a scratch directory is never a
       // project root, so a marker AT it is no project and nothing above it is
@@ -382,12 +433,16 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
       const temp = resolve(tmpdir());
       const realTemp = tolerate(() => realpathSync(temp), 'enoent') ?? temp;
       let probe = candidate;
+
       while (probe !== dirname(probe) && probe !== home) {
         const real = tolerate(() => realpathSync(probe), 'enoent') ?? probe;
+
         if (probe === temp || real === realTemp) break;
+
         if (PROJECT_MARKERS.some((marker) => existsSync(join(probe, marker)))) return probe;
         probe = dirname(probe);
       }
+
       return candidate;
     },
   };

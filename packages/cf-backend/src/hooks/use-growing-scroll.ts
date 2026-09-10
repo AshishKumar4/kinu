@@ -52,6 +52,7 @@ function resolvePendingScrollRestore(input: {
   readonly exhausted: boolean;
 }): PendingScrollRestore {
   if (input.maxScrollTop < input.target && !input.exhausted) return { kind: "load-more" };
+
   return { kind: "restore", scrollTop: Math.min(input.target, input.maxScrollTop) };
 }
 
@@ -114,16 +115,21 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
 
   const tryRestore = useCallback((node: T) => {
     const target = pendingRestore.current;
+
     if (target === null) return;
+
     const resolution = resolvePendingScrollRestore({
       target,
       maxScrollTop: Math.max(0, node.scrollHeight - node.clientHeight),
       exhausted: latestExhausted.current,
     });
+
     if (resolution.kind === "load-more") {
       reachEdge.current?.();
+
       return;
     }
+
     pendingRestore.current = null;
     node.scrollTop = resolution.scrollTop;
     pinned.current = grows === "up"
@@ -135,19 +141,23 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
     const distance = grows === "up"
       ? node.scrollTop
       : node.scrollHeight - node.scrollTop - node.clientHeight;
+
     if (distance <= PREFETCH_THRESHOLD) reachEdge.current?.();
   }, [grows]);
 
   const onScroll = useCallback(() => {
     const node = el.current;
+
     if (!node) return;
     pinned.current = grows === "up"
       && node.scrollHeight - node.scrollTop - node.clientHeight < PIN_THRESHOLD;
+
     // Every programmatic move lands here too, so a restore still waiting would
     // otherwise be overwritten by the mount's own bottom-jump before it ran.
     if (pendingRestore.current === null) {
       reportPosition.current?.(pinned.current ? "pinned" : node.scrollTop);
     }
+
     maybeLoadMore(node);
   }, [grows, maybeLoadMore]);
 
@@ -157,6 +167,7 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
   const containerRef = useCallback((node: T | null) => {
     el.current?.removeEventListener("scroll", onScroll);
     el.current = node;
+
     if (!node) return;
     // Chrome and Firefox anchor a scroller against content inserted above the
     // viewport all by themselves, and they do it BEFORE this hook's layout
@@ -189,22 +200,28 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
     const syncHeight = () => {
       if (settlingPrepend.current) return;
       const node = el.current;
+
       if (node) lastHeight.current = node.scrollHeight;
     };
+
     syncHeight();
     document.fonts.addEventListener("loadingdone", syncHeight);
+
     return () => document.fonts.removeEventListener("loadingdone", syncHeight);
   }, []);
 
   useLayoutEffect(() => {
     const node = el.current;
+
     if (!node) return;
     const grew = node.scrollHeight - lastHeight.current;
     const fetchedChanged = lastFetched.current !== fetched;
     const loadingChanged = lastLoading.current !== loading;
     lastLoading.current = loading;
+
     if (fetchedChanged) {
       lastFetched.current = fetched;
+
       // Push the viewport down by exactly what was inserted above it, so the
       // message the reader was looking at does not move a pixel. Growth at the
       // other end moves nothing and needs no correction. A still-pending
@@ -216,12 +233,15 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
       // below then restores live-message pinning from the actual position.
       settlingPrepend.current = true;
     }
+
     if (pendingRestore.current !== null) {
       tryRestore(node);
     } else if (!fetchedChanged && !loadingChanged && !settlingPrepend.current && pinned.current) {
       node.scrollTop = node.scrollHeight;
     }
+
     lastHeight.current = node.scrollHeight;
+
     // A reader who kept scrolling while the page was in flight can already be
     // back at the edge with the request they triggered now settled. Without
     // this re-check the next page only starts on their next scroll EVENT, and
@@ -231,13 +251,16 @@ export function useGrowingScroll<T extends GrowingScrollHost>({
 
   useEffect(() => {
     if (loading || !settlingPrepend.current) return;
+
     const frame = requestAnimationFrame(() => {
       settlingPrepend.current = false;
       const node = el.current;
+
       if (!node) return;
       pinned.current = grows === "up"
         && node.scrollHeight - node.scrollTop - node.clientHeight < PIN_THRESHOLD;
     });
+
     return () => cancelAnimationFrame(frame);
   }, [fetched, grows, loading]);
 

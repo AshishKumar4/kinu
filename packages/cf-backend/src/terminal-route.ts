@@ -77,8 +77,10 @@ interface DeviceHolderNamespace {
 function paneWindow(url: URL) {
   const axis = (name: "cols" | "rows"): number => {
     const value = Number(url.searchParams.get(name));
+
     return Number.isInteger(value) && value > 0 && value <= DEVICE_PTY_MAX_AXIS ? value : DEFAULT_WINDOW[name];
   };
+
   return { cols: axis("cols"), rows: axis("rows") };
 }
 
@@ -119,9 +121,11 @@ const PTY_UPGRADE_HEADERS = {
 
 function ptyUpgradeRequest(request: Request): Request {
   const headers = new Headers(request.headers);
+
   for (const name of Array.from(headers.keys())) {
     if (!(name in PTY_UPGRADE_HEADERS)) headers.delete(name);
   }
+
   return new Request(request, { headers });
 }
 
@@ -131,8 +135,10 @@ const CLIENT_GONE = Symbol("terminal client went away");
 
 function clientGone(signal: AbortSignal): Promise<typeof CLIENT_GONE> {
   const { promise, resolve } = Promise.withResolvers<typeof CLIENT_GONE>();
+
   if (signal.aborted) resolve(CLIENT_GONE);
   else signal.addEventListener("abort", () => resolve(CLIENT_GONE), { once: true });
+
   return promise;
 }
 
@@ -159,9 +165,11 @@ export async function handleTerminalRequest(
   const attach = url.pathname === `/api/workspaces/${agentName}/terminal`;
   const keepalive = url.pathname === `/api/workspaces/${agentName}/terminal/keepalive`;
   const reset = url.pathname === `/api/workspaces/${agentName}/terminal/reset`;
+
   if (!attach && !keepalive && !reset) return null;
 
   const executor = url.searchParams.get("executor");
+
   if (!executor) return err(400, "executor query parameter required");
 
   // ONE diagnostic scope for this request, and every failure below carries it.
@@ -173,6 +181,7 @@ export async function handleTerminalRequest(
   const scope = { workspace: agentName, executor };
 
   const lane = terminalLane(executor);
+
   // A refusal a UI can render as a labelled mode rather than as a failure. The
   // body carries the mode and nothing else: what an environment lacks is not a
   // sentence anyone is shown.
@@ -197,26 +206,33 @@ export async function handleTerminalRequest(
     // running in.
     if (keepalive || reset) {
       if (request.method !== "POST") return err(405, "use POST");
+
       // A container quiesces when nobody is typing, so it needs telling that
       // somebody is. A machine is simply on, and its own socket is the
       // liveness this would have reported.
       return json({ ok: true });
     }
+
     if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return err(400, "the terminal endpoint is a WebSocket; send an Upgrade: websocket request");
     }
+
     let opened: { session: string; user: string } | { error: string };
+
     try {
       const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
       const ready = await agent.prepareTerminal(executor);
+
       if ("error" in ready) {
         diagnostics.failure("terminal.not_ready", toKinuError({
           doing: "reaching this workspace's machine for a terminal",
           cause: ready.error,
           otherwise: "unavailable",
         }), scope);
+
         return err(503, ready.error);
       }
+
       opened = await agent.openDeviceTerminal(paneWindow(url));
     } catch (cause) {
       const error = toKinuError({
@@ -224,9 +240,12 @@ export async function handleTerminalRequest(
         cause,
         otherwise: "unavailable",
       });
+
       diagnostics.failure("terminal.device_open_failed", error, scope);
+
       return err(503, renderCauseChain(error));
     }
+
     if ("error" in opened) {
       // Already a rendered chain from the other side of the RPC, so it rides
       // as the cause rather than being restated. A declined grant and a
@@ -237,8 +256,10 @@ export async function handleTerminalRequest(
         cause: opened.error,
         otherwise: "unavailable",
       }), scope);
+
       return err(503, opened.error);
     }
+
     if (request.signal.aborted) return abandonedAttach();
     // The upgrade crosses into the Durable Object that holds the machine's
     // socket. A WebSocket cannot cross an RPC boundary, but an upgrade request
@@ -249,8 +270,10 @@ export async function handleTerminalRequest(
     socketUrl.pathname = DEVICE_TERMINAL_PATH;
     socketUrl.search = `?session=${encodeURIComponent(opened.session)}`;
     const namespace: DeviceHolderNamespace = env.UserDO;
+
     return namespace.get(namespace.idFromName(opened.user)).fetch(new Request(socketUrl, request));
   }
+
   if (!env.Sandbox) return err(503, "no Sandbox binding is configured on this deployment");
 
   // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
@@ -283,8 +306,10 @@ export async function handleTerminalRequest(
   // attached, which is the only evidence that anybody is.
   if (keepalive) {
     if (request.method !== "POST") return err(405, "use POST");
+
     try {
       await sandbox.noteTerminalActivity();
+
       return json({ ok: true });
     } catch (cause) {
       // The whole chain, not the outermost message: a terminal that says only
@@ -297,7 +322,9 @@ export async function handleTerminalRequest(
         cause,
         otherwise: "unavailable",
       });
+
       diagnostics.failure("terminal.lease_renewal_failed", error, scope);
+
       return err(503, renderCauseChain(error));
     }
   }
@@ -313,12 +340,14 @@ export async function handleTerminalRequest(
   // the only way back that does not recycle the whole container.
   if (reset) {
     if (request.method !== "POST") return err(405, "use POST");
+
     try {
       // `deleteSession` REPORTS rather than throws for a session that is not
       // there, and that state already satisfies a reset — the next attach opens
       // a fresh shell either way. So the outcome is stated (`existed`) instead
       // of being flattened into a failure or hidden behind a true.
       const deleted = await sandbox.deleteSession(TERMINAL_SESSION);
+
       return json({ ok: true, existed: deleted.success });
     } catch (cause) {
       const error = toKinuError({
@@ -326,7 +355,9 @@ export async function handleTerminalRequest(
         cause,
         otherwise: "unavailable",
       });
+
       diagnostics.failure("terminal.reset_failed", error, scope);
+
       return err(503, renderCauseChain(error));
     }
   }
@@ -351,6 +382,7 @@ export async function handleTerminalRequest(
   try {
     const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
     const ready = await agent.prepareTerminal(executor);
+
     if ("error" in ready) {
       // The refusal is ALREADY a rendered chain from the other side of the RPC,
       // so it rides as the cause rather than being restated. The pane shows that
@@ -360,6 +392,7 @@ export async function handleTerminalRequest(
         cause: ready.error,
         otherwise: "unavailable",
       }), scope);
+
       return err(503, ready.error);
     }
   } catch (cause) {
@@ -368,7 +401,9 @@ export async function handleTerminalRequest(
       cause,
       otherwise: "unavailable",
     });
+
     diagnostics.failure("terminal.preflight_failed", error, scope);
+
     return err(503, renderCauseChain(error));
   }
 
@@ -382,8 +417,10 @@ export async function handleTerminalRequest(
   // change to the option surface reaches here instead of being absorbed by a
   // local shape that happens to still fit.
   const size: PtyOptions = {};
+
   for (const axis of ["cols", "rows"] as const) {
     const value = Number(url.searchParams.get(axis));
+
     if (Number.isInteger(value) && value > 0 && value <= DEVICE_PTY_MAX_AXIS) size[axis] = value;
   }
 
@@ -408,6 +445,7 @@ export async function handleTerminalRequest(
     const session = await sandbox.getSession(TERMINAL_SESSION);
     const upgrade = session.terminal(ptyUpgradeRequest(request), size);
     const settled = await Promise.race([upgrade, clientGone(request.signal)]);
+
     if (settled === CLIENT_GONE) {
       // The upgrade is still in flight and nobody wants its socket, so it is
       // released rather than left pending: a 101 whose WebSocket is never
@@ -434,8 +472,10 @@ export async function handleTerminalRequest(
           }), scope);
         }
       })());
+
       return abandonedAttach();
     }
+
     return settled;
   } catch (cause) {
     const error = toKinuError({
@@ -443,7 +483,9 @@ export async function handleTerminalRequest(
       cause,
       otherwise: "unavailable",
     });
+
     diagnostics.failure("terminal.attach_failed", error, scope);
+
     return err(503, renderCauseChain(error));
   }
 }

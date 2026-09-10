@@ -14,8 +14,11 @@ const verification = definePromptSection(
   'fixture/verification',
   '## Verification\n- always{{#if hasShell}}\n- {{shellNote}}{{/if}}',
 );
+
 const flagsOnly = definePromptSection('fixture/flags-only', 'a{{#if on}}b{{else}}c{{/if}}');
+
 const slotsOnly = definePromptSection('fixture/slots-only', 'a {{value}}');
+
 const noSlots = definePromptSection('fixture/none', 'plain prose');
 
 const tools: readonly string[] = ['run'];
@@ -31,6 +34,7 @@ verification.render({ hasShell: tools.includes('run'), shellNote: 'run the check
 // excess-property check, so this is the case a `keyof`-based contract can break
 // on; it must still compile.
 const slots = { hasShell: false, shellNote: '' };
+
 verification.render(slots);
 
 // An empty string is a legal value; absent is what is banned.
@@ -38,7 +42,9 @@ verification.render({ hasShell: true, shellNote: '' });
 
 // Contracts that are only flags, only slots, or neither.
 flagsOnly.render({ on: true });
+
 slotsOnly.render({ value: 'x' });
+
 noSlots.render({});
 
 // A promoted replacement, rendered against the same contract.
@@ -48,4 +54,5 @@ verification.renderFrom('## V{{#if hasShell}} {{shellNote}}{{/if}}', {
 
 // The runtime contract reader takes any string — that is its whole point.
 const promoted: string = '## V{{#if hasShell}}{{shellNote}}{{/if}}';
+
 templateContract(verification.id, promoted);

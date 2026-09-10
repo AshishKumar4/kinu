@@ -11,6 +11,7 @@ import { hostToolchainCapabilities, HOST_UNMEASURED_CAPABILITIES } from '../src/
 
 const STRUCTURAL_ONLY =
   '- laptop: connected, files at /pc, runs: native_binary, shell, fs_shared, net_outbound, process_spawn';
+
 /** What no PATH lookup settles. Declared rather than omitted: an omission reads
  *  to the model exactly like a measured absence. */
 const NOT_MEASURED = ', not measured here: docker, gpu';
@@ -26,8 +27,11 @@ function runsLine(): string {
       available: true, configured: true, active: true, status: 'active',
     }],
   });
+
   const line = block?.split('\n').find((row) => row.startsWith('- laptop:'));
+
   if (line === undefined) throw new Error('no rendered laptop row');
+
   return line;
 }
 
@@ -39,6 +43,7 @@ function claims(): string {
 function withPath<T>(PATH: string, fn: () => T): T {
   const previous = process.env.PATH;
   process.env.PATH = PATH;
+
   try {
     return fn();
   } finally {

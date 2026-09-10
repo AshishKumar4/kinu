@@ -22,6 +22,7 @@ import { PLATFORM_CATALOG } from '../src/platform-catalog';
 /** A pacer on a hand-cranked clock, so a declared wait costs the suite nothing. */
 function fixedClock(startMs = 1_000_000) {
   let nowMs = startMs;
+
   return {
     now: () => nowMs,
     advance: (ms: number) => { nowMs += ms; },
@@ -41,17 +42,25 @@ describe('the lane bound is the platform\'s, not a number of ours', () => {
 
     const pacer = new ProviderPacer();
     const held: Array<() => void> = [];
+
     for (let i = 0; i < lanes; i++) held.push(await pacer.admit(HOST));
 
     // One more than the platform allows is held, and admitted the moment a lane
     // frees. Raise or lower the default and exactly one of these two fails.
     let admitted = false;
-    const extra = pacer.admit(HOST).then((release) => { admitted = true; return release; });
+
+    const extra = pacer.admit(HOST).then((release) => {
+      admitted = true;
+
+      return release;
+    });
+
     await Promise.resolve();
     expect(admitted).toBe(false);
 
     held[0]!();
     expect(await extra).toBeInstanceOf(Function);
+
     for (const release of held.slice(1)) release();
   });
 });
@@ -65,7 +74,13 @@ describe('request starts are paced against one provider', () => {
     // A third caller is held. Proven by racing it against a resolved promise
     // rather than by a timer, so the assertion is about ordering and not speed.
     let admitted = false;
-    const third = pacer.admit(HOST).then((release) => { admitted = true; return release; });
+
+    const third = pacer.admit(HOST).then((release) => {
+      admitted = true;
+
+      return release;
+    });
+
     await Promise.resolve();
     expect(admitted).toBe(false);
 
@@ -86,7 +101,13 @@ describe('request starts are paced against one provider', () => {
 
     const held = await pacer.admit(HOST);
     let admitted = false;
-    const third = pacer.admit(HOST).then((release) => { admitted = true; return release; });
+
+    const third = pacer.admit(HOST).then((release) => {
+      admitted = true;
+
+      return release;
+    });
+
     await Promise.resolve();
     expect(admitted).toBe(false);
     held();
@@ -110,6 +131,7 @@ describe('a wait one caller was told to take holds its siblings', () => {
   test('a declared wait is honoured before a lane is granted', async () => {
     const clock = fixedClock();
     const slept: number[] = [];
+
     const pacer = new ProviderPacer({
       lanes: 8,
       now: clock.now,
@@ -131,6 +153,7 @@ describe('a wait one caller was told to take holds its siblings', () => {
     // fan-out on the smallest number any member happened to receive.
     const clock = fixedClock();
     const slept: number[] = [];
+
     const pacer = new ProviderPacer({
       lanes: 8,
       now: clock.now,
@@ -156,6 +179,7 @@ describe('a wait one caller was told to take holds its siblings', () => {
     // sleep at all.
     const clock = fixedClock();
     const slept: number[] = [];
+
     const pacer = new ProviderPacer({
       lanes: 1,
       now: clock.now,
@@ -166,7 +190,13 @@ describe('a wait one caller was told to take holds its siblings', () => {
     pacer.declareWait(HOST, 10_000);
 
     let admitted = false;
-    const queued = pacer.admit(HOST).then((release) => { admitted = true; return release; });
+
+    const queued = pacer.admit(HOST).then((release) => {
+      admitted = true;
+
+      return release;
+    });
+
     // One microtask turn is enough for the cooldown sleep to have been entered.
     await Promise.resolve();
     await Promise.resolve();

@@ -8,6 +8,7 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect';
+
 const ProviderNameSchema = v.picklist([
   'cloudflare',
   'claude',
@@ -18,6 +19,7 @@ const ProviderNameSchema = v.picklist([
   'openai-compatible',
   'opencode',
 ]);
+
 type ProviderName = v.InferOutput<typeof ProviderNameSchema>;
 
 interface ParsedProviderArgs {
@@ -44,11 +46,13 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
 
   if (action === 'list') {
     await printProviders();
+
     return;
   }
 
   if (action === 'disconnect' && !provider && raw) {
     await disconnectAccountProvider(raw);
+
     return;
   }
 
@@ -58,6 +62,7 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
 
   if (action === 'disconnect') {
     await disconnectProvider(provider);
+
     return;
   }
 
@@ -67,16 +72,19 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
     console.log(DIM('Browser sign-in attaches your Cloudflare account for Workers AI and AI Gateway.'));
     console.log(DIM('The OAuth consent must include User Details, Account Settings, Workers AI, and AI Gateway scopes.'));
     await authCommand({ origin: opts.origin });
+
     return;
   }
 
   if (provider === 'claude') {
     await connectClaude();
+
     return;
   }
 
   if (provider === 'opencode') {
     await connectOpenCode(opts);
+
     return;
   }
 
@@ -99,6 +107,7 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
   console.log(DIM('Reuses the model providers and auth tokens from your local opencode CLI.'));
   const avail = await checkOpenCodeAvailability();
   console.log('');
+
   if (avail.binary && avail.authenticated) {
     console.log(`${OK('✓')} opencode detected and authenticated`);
     console.log(DIM('Run `kinu provider connect opencode` to configure, or `kinu setup --provider opencode`.'));
@@ -111,6 +120,7 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
     console.log(`${WARN('!')} opencode CLI not found.`);
     console.log(DIM(INSTALL_HINT_OPENCODE));
   }
+
   console.log(DIM('Cloud workspaces cannot use opencode. They need their own provider credentials.'));
 }
 
@@ -118,11 +128,13 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
   if (!actionOrProvider) return { action: 'list' };
 
   const first = actionOrProvider.trim().toLowerCase();
+
   if (first === 'list' || first === 'ls' || first === 'status') return { action: 'list' };
 
   if (first === 'connect' || first === 'login' || first === 'add') {
     return { action: 'connect', provider: providerArg ? normalizeProvider(providerArg) : undefined };
   }
+
   if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
     // A name this CLI has no branch for may still be one of the models.dev
     // providers connected in the web UI, which `provider list` now shows. It
@@ -169,6 +181,7 @@ function deleteKey<K extends keyof NonNullable<KinuConfig['providers']>>(
 ): boolean {
   if (providers[key] === undefined) return false;
   delete providers[key];
+
   return true;
 }
 
@@ -196,12 +209,15 @@ const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
  */
 async function disconnectProvider(provider: ProviderName): Promise<void> {
   console.log('');
+
   if (provider === 'cloudflare') {
     console.log(`${WARN('!')} Cloudflare and Workers AI connect through your Kinu account.`);
     console.log(DIM('  Sign out with: kinu logout'));
     console.log(DIM('  To disconnect Cloudflare itself, revoke it in your Kinu account settings.'));
+
     return;
   }
+
   if (provider === 'claude' || provider === 'opencode') {
     const tool = provider === 'claude' ? 'Claude Code' : 'opencode';
     const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
@@ -212,22 +228,26 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     // because they are signing out of that tool — and its login is exactly what
     // a listing sweep re-probes, so a resident session must sweep again.
     bumpProviderRevision();
+
     return;
   }
 
   const credential = LOCAL_CREDENTIALS.get(provider);
+
   if (!credential) throw new Error(`No local credential for ${provider}.`);
 
   let removed = false;
   updateConfigFile((config) => {
     if (config.providers) removed = credential.clear(config.providers);
   });
+
   if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
 
   // The account copy is the one most connections now use, so disconnecting
   // has to reach it too — otherwise the provider keeps working and the command
   // looks broken.
   const cloud = credential.credKey ? resolveCloudSession() : null;
+
   if (cloud && credential.credKey) {
     try {
       await deleteCloudCredential(cloud.origin, cloud.token, credential.credKey);
@@ -247,6 +267,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
   bumpProviderRevision();
 
   const live = credential.envVars.filter((name) => process.env[name]);
+
   if (live.length > 0) {
     console.log(`${WARN('!')} ${live.join(' and ')} ${live.length > 1 ? 'are' : 'is'} still set in this environment.`);
     console.log(DIM('  Environment credentials win over the config file. Unset them to disconnect.'));
@@ -262,14 +283,18 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
 async function disconnectAccountProvider(name: string): Promise<void> {
   const cloud = resolveCloudSession();
   console.log('');
+
   if (!cloud) {
     throw new Error(`Unknown provider "${name}". Sign in with \`kinu auth\` to disconnect a provider held by your account.`);
   }
+
   const credKey = `${name.trim().toLowerCase()}.bearer`;
   const connected = (await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey);
+
   if (!connected) {
     throw new Error(`Neither this machine nor your Kinu account has a "${name}" credential. Run \`kinu provider list\` to see what is connected.`);
   }
+
   await deleteCloudCredential(cloud.origin, cloud.token, credKey);
   console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Kinu account.`);
   clearDefaultModelPrefixes([`${name}/`]);
@@ -285,24 +310,29 @@ function clearDefaultModelPrefixes(prefixes: readonly string[]): void {
   let cleared: string | null = null;
   updateConfigFile((config) => {
     const model = config.model;
+
     if (!model || !prefixes.some((prefix) => model.startsWith(prefix))) return;
     cleared = model;
     delete config.model;
   });
+
   if (cleared) console.log(DIM(`  Cleared the default model (${cleared}).`));
 }
 
 /** `normalizeProvider`, but undefined instead of throwing. */
 function maybeProvider(value: string): ProviderName | undefined {
   const parsed = v.safeParse(ProviderNameSchema, canonicalProviderName(value));
+
   return parsed.success ? parsed.output : undefined;
 }
 
 function normalizeProvider(value: string): ProviderName {
   const provider = maybeProvider(value);
+
   if (!provider) {
     throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
   }
+
   return provider;
 }
 
@@ -316,7 +346,9 @@ type AccountCredentials =
 
 async function accountCredentials(): Promise<AccountCredentials> {
   const cloud = resolveCloudSession();
+
   if (!cloud) return { signedOut: true };
+
   try {
     return { credentials: await listCloudCredentials(cloud.origin, cloud.token) };
   } catch (error) {
@@ -329,17 +361,22 @@ async function printProviders(): Promise<void> {
   const account = await accountCredentials();
   const held = 'credentials' in account ? account.credentials : [];
   const inAccount = (credKey: string): boolean => held.some((c) => c.key === credKey);
+
   const connected = (label: string, detail?: string) => {
     console.log(`  ${OK('✓')} ${ACCENT(label)}${detail ? ` ${DIM(detail)}` : ''}`);
   };
+
   const missing = (label: string, hint: string) => {
     console.log(`  ${WARN('!')} ${label} ${DIM(hint)}`);
   };
+
   /** One provider line: a local key wins, the account is the fallback, and the
    *  line says which so "where does this secret live" is never a guess. */
   const provider = (label: string, opts: { localKey: boolean; credKey?: string; model?: string; hint: string }) => {
     if (opts.localKey) return connected(label, [opts.model, 'this machine'].filter(Boolean).join(' · '));
+
     if (opts.credKey && inAccount(opts.credKey)) return connected(label, [opts.model, 'your account'].filter(Boolean).join(' · '));
+
     return missing(label, opts.hint);
   };
 
@@ -354,17 +391,20 @@ async function printProviders(): Promise<void> {
   } else {
     missing('Kinu account', 'kinu provider connect cloudflare');
   }
+
   if ('unreachable' in account) {
     console.log(`    ${WARN('!')} Could not read the keys stored in your account (${account.unreachable}).`);
     console.log(`    ${DIM('The lines below show only what is on this machine.')}`);
   }
 
   const claude = await checkClaudeAvailability();
+
   if (claude.binary && claude.loggedIn) connected('Claude subscription', 'claude/claude-opus-4-x');
   else if (claude.binary) missing('Claude subscription', CLAUDE_LOGIN_HINT);
   else missing('Claude subscription', 'kinu provider connect claude');
 
   const providers = config.providers ?? {};
+
   if (providers.codex?.accessToken || providers.codex?.refreshToken) connected('Codex', currentModel(config.model, 'codex'));
   else missing('Codex', 'kinu provider connect codex');
 
@@ -388,11 +428,13 @@ async function printProviders(): Promise<void> {
   // Everything else the account holds — the models.dev tail connected in the
   // web UI, which this machine can use without ever holding the key.
   const named = new Set(['openai.bearer', 'openrouter.bearer', 'anthropic.bearer', 'openai-compat.default', 'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth']);
+
   for (const cred of held.filter((c) => !named.has(c.key))) {
     connected(cred.key.replace(/\.bearer$/, ''), 'your account');
   }
 
   const oc = await checkOpenCodeAvailability();
+
   if (oc.binary && oc.authenticated) connected('OpenCode', currentModel(config.model, 'opencode'));
   else if (oc.binary) missing('OpenCode', LOGIN_HINT_OPENCODE);
   else missing('OpenCode', 'kinu provider connect opencode');
@@ -406,5 +448,6 @@ async function printProviders(): Promise<void> {
 
 function currentModel(model: string | undefined, prefix: string): string | undefined {
   if (!model?.startsWith(`${prefix}/`)) return undefined;
+
   return model.slice(prefix.length + 1);
 }

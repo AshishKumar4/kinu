@@ -28,10 +28,12 @@ describe('buildEvalReport', () => {
       result('c2', 'a', 0.8, 0.6),
       result('c3', 'tie', 0.5, 0.5),
     ];
+
     const report = buildEvalReport(results, {
       ranAt: 123, strategyA: 'baseline', strategyB: 'candidate',
       modelA: 'm', modelB: 'm', corpus: 'seed.jsonl',
     });
+
     expect(report.ranAt).toBe(123);
     expect(report.summary.total).toBe(3);
     expect(report.aggregateScore).toBeCloseTo((0.9 + 0.6 + 0.5) / 3, 5);
@@ -46,6 +48,7 @@ describe('buildEvalReport', () => {
       [result('boom', 'b', 0, 1, { errorA: 'strategy A crashed' })],
       { strategyA: 'a', strategyB: 'b' },
     );
+
     expect(report.cases[0].errorA).toBe('strategy A crashed');
     expect(report.cases[0].errorB).toBeUndefined();
   });
@@ -91,6 +94,7 @@ describe('evaluateGate', () => {
       [result('c1', 'tie', 0.5, 0.5, { errorA: 'connection refused', errorB: 'connection refused' })],
       { strategyA: 'a', strategyB: 'b' },
     );
+
     const gate = evaluateGate(broken, 0.5);
     expect(gate.pass).toBe(false);
     expect(gate.reason).toContain('errored');
@@ -103,6 +107,7 @@ describe('evaluateGate', () => {
       [result('c1', 'b', 0.9, 0.95), result('c2', 'tie', 0.5, 0.5, { errorB: 'timeout' })],
       { strategyA: 'a', strategyB: 'b' },
     );
+
     expect(evaluateGate(mixed, 0.5).pass).toBe(false);
     expect(evaluateGate(mixed, 0.5).reason).toContain('1/2');
   });
@@ -119,6 +124,7 @@ describe('renderEvalSummary', () => {
       [result('c1', 'b', 0.4, 0.9), result('c2', 'a', 0.8, 0.6)],
       { strategyA: 'single-shot', strategyB: 'single-shot', modelB: 'gpt-x' },
     );
+
     const gate = evaluateGate(report, 0.5);
     const out = renderEvalSummary(report, gate);
     expect(out).toContain('Cases: 2');

@@ -146,11 +146,15 @@ export function stripNonCode(source: string): string {
   const interpolations: number[] = [];
   let inTemplateText = false;
   let i = 0;
+
   while (i < source.length) {
     const c = source[i]!;
+
     if (inTemplateText) {
       if (c === '\\') { i += 2; continue; }
+
       if (c === '`') { inTemplateText = false; out.push(' '); i++; continue; }
+
       if (c === '$' && source[i + 1] === '{') {
         interpolations.push(0);
         inTemplateText = false;
@@ -158,34 +162,44 @@ export function stripNonCode(source: string): string {
         i += 2;
         continue;
       }
+
       i++;
       continue;
     }
+
     if (c === '/' && source[i + 1] === '/') {
       while (i < source.length && source[i] !== '\n') i++;
       out.push(' ');
       continue;
     }
+
     if (c === '/' && source[i + 1] === '*') {
       i += 2;
+
       while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) i++;
       i += 2;
       out.push(' ');
       continue;
     }
+
     if (c === '"' || c === "'") {
       i++;
+
       while (i < source.length && source[i] !== c) {
         if (source[i] === '\\') i++;
         i++;
       }
+
       i++;
       out.push(' ');
       continue;
     }
+
     if (c === '`') { inTemplateText = true; out.push(' '); i++; continue; }
+
     if (interpolations.length > 0) {
       const depth = interpolations[interpolations.length - 1]!;
+
       if (c === '{') interpolations[interpolations.length - 1] = depth + 1;
       else if (c === '}') {
         if (depth === 0) {
@@ -195,12 +209,15 @@ export function stripNonCode(source: string): string {
           i++;
           continue;
         }
+
         interpolations[interpolations.length - 1] = depth - 1;
       }
     }
+
     out.push(c);
     i++;
   }
+
   return out.join('');
 }
 
@@ -215,8 +232,10 @@ export function craftInvocationSites(code: string, known: readonly string[]): st
   if (known.length === 0) return [];
   const source = stripNonCode(code);
   const namespaces = CRAFT_NAMESPACES.join('|');
+
   return known.filter((name) => {
     if (!DOT_CALLABLE.test(name)) return false;
+
     return new RegExp(`(?:^|[^\\w$.])(?:${namespaces})\\.${name}\\s*\\(`).test(source);
   });
 }
@@ -246,6 +265,7 @@ export function craftFailureMarker(name: string): string {
  *  score is taken from. */
 export function craftInvocationError(name: string, cause: Error | string): Error {
   const message = renderThrownChain({ cause: cause });
+
   return new Error(`${craftFailureMarker(name)} ${message}`, { cause });
 }
 
@@ -290,6 +310,7 @@ export interface CraftLedgerDeps {
 
 export function createCraftLedger(deps: CraftLedgerDeps): CraftLedger {
   const floor = DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection;
+
   return {
     names() {
       // The ONE injection policy, so the observer's idea of what is callable
@@ -299,12 +320,14 @@ export function createCraftLedger(deps: CraftLedgerDeps): CraftLedger {
     observe(names, quality) {
       if (names.length === 0) return [];
       updateCraftScores(deps.sql, [...names], quality);
+
       // The ONE injection policy, asked the question it already answers:
       // whatever it no longer passes is what this observation just retired.
       const surviving = new Set(
         filterByEffectiveScore(deps.sql, names.map((name) => ({ name })), floor, nowMs())
           .map((t) => t.name),
       );
+
       return names.filter((name) => !surviving.has(name));
     },
   };

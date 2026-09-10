@@ -25,11 +25,15 @@ interface Credentials {
   readonly apiKey: string;
   readonly provider: string;
 }
+
 const credentials: Credentials = { apiKey: 'sk-live-1', provider: 'workers-ai' };
+
 // `declare` rather than an initialiser: the TYPE is the fixture's subject, and
 // annotating a literal with an open dictionary is itself a lint finding.
 declare const openStrings: Record<string, string>;
+
 declare const openValues: Record<string, LogFieldValue>;
+
 declare const numericKeys: Record<number, string>;
 
 // [1] A reserved field in a literal. The obvious case, and the only one an

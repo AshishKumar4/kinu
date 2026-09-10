@@ -31,17 +31,22 @@ import {
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
+
 /** The session user every unnamed exec already runs as. */
 const ORIGIN: VfsCred = { uid: 1000, gid: 1000, groups: [1000], umask: 0o022 };
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.byteLength);
     const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
+
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
+
     return bytes;
   }
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
@@ -58,21 +63,27 @@ interface OwnerFixture {
 
 async function openOwner(): Promise<OwnerFixture> {
   const database = new Database(':memory:');
+
   const sql: SqlDatabase = {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
       const bound = bindings.map(sqlBinding);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
+
   const workspace = await NimbusWorkspace.create({
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
   });
+
   const durable = new Map<string, unknown>();
+
   const host: ProgrammaticHost = {
     _w1SessionDestroyed: false,
     env: {},
@@ -100,7 +111,9 @@ async function openOwner(): Promise<OwnerFixture> {
     ensureFacetManager: () => undefined,
     initSession: async () => { throw new Error('workspace is already composed'); },
   };
+
   await ensureProgrammaticReady(host);
+
   // The owner's own box: every option the session accepts rides through,
   // because the provisioner roots its layout command with the kernel
   // credential and a facet's file plane pins its own.
@@ -112,6 +125,7 @@ async function openOwner(): Promise<OwnerFixture> {
         env: options?.env,
         cred: options?.cred,
       });
+
       return {
         command,
         success: result.exitCode === 0,
@@ -128,6 +142,7 @@ async function openOwner(): Promise<OwnerFixture> {
       delete: async () => { throw new Error('the owner box execs; it never falls back to the session user'); },
     },
   };
+
   return {
     workspace, host, sql, box, databases: [database],
     homeHost: { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs, sql },
@@ -140,8 +155,10 @@ function sessionBoxFor(host: ProgrammaticHost, cred: VfsCred): NimbusSandboxHand
     ready: async () => undefined,
     exec: async (rawCommand, options) => {
       const forwarded: Parameters<typeof rpcExec>[2] = { cred: options?.cred ?? cred };
+
       if (options?.env !== undefined) forwarded.env = options.env;
       const result = await rpcExec(host, rawCommand, forwarded);
+
       return {
         command: rawCommand,
         success: result.exitCode === 0,
@@ -166,12 +183,14 @@ function node(nodeId: string): NodeIdentity {
 
 function credOf(workspace: { readonly cred?: VfsCred; readonly home: string }): VfsCred {
   if (!workspace.cred) throw new Error(`node at ${workspace.home} was given no credential`);
+
   return workspace.cred;
 }
 
 describe('a hosted node hardcoding /tmp stays private', () => {
   test('the shell resolves /tmp per credential once the owner confines it', async () => {
     const f = await openOwner();
+
     try {
       const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
@@ -190,6 +209,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
 
   test('the credentialed file plane resolves /tmp per credential too', async () => {
     const f = await openOwner();
+
     try {
       const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
@@ -213,6 +233,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
 
   test('cleanup drops the confinement with the bytes', async () => {
     const f = await openOwner();
+
     try {
       const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
@@ -235,6 +256,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
 describe('every facet kind is one home namespace on the owner', () => {
   test('a subordinate and a head provision, write privately, and release to nothing', async () => {
     const f = await openOwner();
+
     try {
       const provision = facetHomeProvisioner(f.homeHost);
       const release = facetHomeReleaser(f.homeHost);
@@ -266,9 +288,11 @@ describe('every facet kind is one home namespace on the owner', () => {
 
   test('a filesystem reopened over the same rows keeps every live rewrite', async () => {
     const f = await openOwner();
+
     try {
       const sub = credOf(await facetHomeProvisioner(f.homeHost)('sub-worker-1'));
       expect(await rpcExec(f.host, 'echo s > /tmp/x', { cred: sub })).toMatchObject({ exitCode: 0 });
+
       // The registry is isolate memory: a second filesystem over the same
       // database starts with none of it.
       const reopened = await NimbusWorkspace.create({
@@ -276,6 +300,7 @@ describe('every facet kind is one home namespace on the owner', () => {
         transactions: { storage: { transactionSync: <T,>(fn: () => T): T => fn() } },
         generation: 2,
       });
+
       const before = reopened.vfs.as(sub);
       expect(() => before.writeFile('/tmp/again', 'x')).toThrow(expect.objectContaining({ code: 'EACCES' }));
       // Restored from the durable layout, the same credential resolves the
@@ -293,6 +318,7 @@ describe('every facet kind is one home namespace on the owner', () => {
 /** The origin's own files, for the uncredentialed plane below. */
 function originFilesBox(f: OwnerFixture): NimbusSandboxHandle {
   const view = f.workspace.vfs.as(ORIGIN);
+
   return {
     ready: async () => undefined,
     exec: (command, options) => f.box.exec(command, options),
@@ -302,6 +328,7 @@ function originFilesBox(f: OwnerFixture): NimbusSandboxHandle {
           return view.readFileString(path);
         } catch (error) {
           const code = v.safeParse(v.object({ code: v.string() }), error);
+
           if (code.success && code.output.code === 'ENOENT') return null;
           throw error;
         }
@@ -321,6 +348,7 @@ function originFilesBox(f: OwnerFixture): NimbusSandboxHandle {
 describe('one box answers both surfaces with the same bytes', () => {
   test('a shell write inside the workspace tree reads back through the files surface, and back', async () => {
     const f = await openOwner();
+
     try {
       const files = nimbusSessionFiles(originFilesBox(f));
 

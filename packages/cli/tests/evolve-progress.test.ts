@@ -70,8 +70,10 @@ async function stubEngine(
     rootId: 'r1', type: 'grounding-unavailable', language: 'rust',
     canRun: ['javascript', 'python'], iteration: 2, remainingBudget: 1,
   });
+
   return { winnerId: 'w', winnerValue: 0.82, converged: true, trajectory: [] };
 }
+
 describe('evolve progress rendering', () => {
   test('every search event reaches the terminal through the command', async () => {
     await createCliAgent({ name: AGENT_NAME, mode: 'local', purpose: 'render progress', ...OFFLINE_PROVIDER });
@@ -80,6 +82,7 @@ describe('evolve progress rendering', () => {
     const originalLog = console.log;
     const originalWrite = process.stdout.write.bind(process.stdout);
     console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+
     // BOTH sinks, because the mode decides which one carries a status event: a
     // pipe gets a plain `console.log` line, a terminal gets the live row
     // written straight to stdout. `display.ts` reads `isTTY` once at module
@@ -89,15 +92,19 @@ describe('evolve progress rendering', () => {
     // producer here is `display.ts` writing template strings.
     const capture: typeof process.stdout.write = (chunk) => {
       lines.push(chunk.toString());
+
       return true;
     };
+
     process.stdout.write = capture;
+
     try {
       await evolveCommand(AGENT_NAME, { budget: '2', ...OFFLINE_PROVIDER }, { runMcts: stubEngine });
     } finally {
       console.log = originalLog;
       process.stdout.write = originalWrite;
     }
+
     const out = Bun.stripANSI(lines.join('\n'));
 
     expect(out).toContain('[1/2]');

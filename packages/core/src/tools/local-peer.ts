@@ -121,6 +121,7 @@ export interface LocalPeerEndpoint {
 
 export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerEndpoint {
   const groupId = peerGroupId(deps.self);
+
   const hubOptions: ConstructorParameters<typeof PeerHub>[0] = {
     sql: deps.sql,
     log: deps.log,
@@ -141,6 +142,7 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
     // beside the controllable one would stamp rows with real time while the
     // pump ran on fabricated time.
   };
+
   const hub = new PeerHub(hubOptions);
 
   /** The peers this agent may address: same pair, self excluded. */
@@ -154,6 +156,7 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
     if (name === deps.self.name) {
       throw new Error('that is this agent — pick another peer (action:"list")');
     }
+
     if (!reachable().some((ref) => ref.name === name)) {
       throw new Error(`unknown peer "${name}" in workspace "${deps.self.workspaceId}"`
         + ' — list the ones you can reach with action:"list"');
@@ -165,6 +168,7 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
     peerBack: (channel, payload) => hub.dispatchPeerBack(channel, payload),
     dispatch: async (now) => {
       await hub.dispatchOutbox(now);
+
       return hub.nextRetryAt();
     },
     deps: {
@@ -173,14 +177,18 @@ export function createLocalPeerEndpoint(deps: LocalPeerEndpointDeps): LocalPeerE
         : { name: ref.name, displayName: ref.displayName })),
       ask: async ({ agent, topic, message, mode, signal }) => {
         requirePeer(agent);
+
         const request: Parameters<PeerHub['ask']>[0] = {
           agent, userId: groupId, topic, message, mode,
         };
+
         if (signal) Object.assign(request, { signal });
+
         return hub.ask(request);
       },
       send: async ({ agent, topic, message, mode }) => {
         requirePeer(agent);
+
         return hub.send({ agent, userId: groupId, topic, message, mode });
       },
       reply: async ({ eventId, message }) => hub.reply({ eventId, message }),

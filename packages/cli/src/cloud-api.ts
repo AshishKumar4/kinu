@@ -65,6 +65,7 @@ export interface CloudDevice {
    *  own home and roots are not here — they live on the runtime status. */
   sandbox: CloudDeviceSandbox;
 }
+
 export type CloudDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
 
 export interface CloudAgentConnectTicket {
@@ -157,22 +158,27 @@ export interface CloudWebhookTrigger {
 }
 
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
+
 const CliAuthStartSchema: v.GenericSchema<CliAuthStart> = v.object({
   deviceToken: v.string(), userCode: v.string(), verificationUrl: v.string(),
   expiresAt: v.string(), intervalSeconds: v.number(),
 });
+
 const CliAuthPollSchema: v.GenericSchema<CliAuthPoll> = v.object({
   status: v.picklist(['pending', 'approved', 'expired']),
   message: v.optional(v.string()), origin: v.optional(v.string()), token: v.optional(v.string()),
   expiresAt: v.optional(v.string()),
   user: v.optional(v.object({ id: v.string(), email: v.string() })),
 });
+
 const CloudAgentSchema: v.GenericSchema<CloudAgent> = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(),
 });
+
 const CloudDeviceRegistrationSchema: v.GenericSchema<CloudDeviceRegistration> = v.object({
   deviceId: v.string(), token: v.string(), userId: v.string(), origin: v.string(),
 });
+
 const CloudDeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),
   capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
@@ -180,27 +186,33 @@ const CloudDeviceSandboxSchema = v.object({
   detail: v.optional(v.nullable(v.string()), null),
   gpu: v.array(v.string()),
 });
+
 /** A hub too old to report the switch: the sandbox is on, because it is on by
  *  default, and a machine that has not proved it can sandbox has not proved
  *  it can sandbox. An older hub must still list the devices. */
 const UNREPORTED_SANDBOX: CloudDeviceSandbox = {
   tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [],
 };
+
 const CloudDeviceSchema: v.GenericSchema<unknown, CloudDevice> = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
   sandbox: v.optional(CloudDeviceSandboxSchema, UNREPORTED_SANDBOX),
 });
+
 const CloudAgentConnectTicketSchema: v.GenericSchema<CloudAgentConnectTicket> = v.object({
   ticket: v.string(), expiresAt: v.number(),
 });
+
 export const CloudAgentStatusSchema: v.GenericSchema<CloudAgentStatus> = v.object({
   name: v.string(), displayName: v.optional(v.string()), purpose: v.string(), soul: v.string(),
   createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(), craftedToolCount: v.number(),
   messageCount: v.number(), model: v.optional(v.nullable(v.string())), reasoningEffort: v.optional(v.nullable(ReasoningEffortSchema)),
   roleId: v.optional(v.string()), tierId: v.optional(v.string()),
 });
+
 const ToolDescriptionSchema = v.object({ name: v.string(), description: v.string() });
+
 export const CloudToolDescriptionsSchema: v.GenericSchema<CloudToolDescriptions> = v.object({
   builtIn: v.array(ToolDescriptionSchema),
   crafted: v.array(v.object({
@@ -209,16 +221,20 @@ export const CloudToolDescriptionsSchema: v.GenericSchema<CloudToolDescriptions>
   })),
   executors: v.array(JsonValueSchema),
 });
+
 const CloudTriggerSchema = v.object({
   id: v.string(), kind: v.string(), spec: JsonValueSchema, state: v.string(), created_at: v.number(),
   next_fire_at: v.optional(v.nullable(v.number())), last_fire_at: v.optional(v.nullable(v.number())),
   fire_count: v.optional(v.number()), url: v.optional(v.string()),
 });
+
 export const CloudTriggerListSchema: v.GenericSchema<CloudTriggerList> = v.object({ triggers: v.array(CloudTriggerSchema) });
+
 export const CloudBackgroundJobSchema: v.GenericSchema<CloudBackgroundJob> = v.object({
   id: v.string(), kind: v.string(), status: v.string(), createdAt: v.optional(v.number()),
   settledAt: v.optional(v.nullable(v.number())), error: v.optional(v.nullable(v.string())),
 });
+
 const CloudModelMenuSchema: v.GenericSchema<CloudModelMenu> = v.object({
   models: v.array(v.object({
     spec: v.string(), label: v.string(), provider: v.string(),
@@ -226,17 +242,23 @@ const CloudModelMenuSchema: v.GenericSchema<CloudModelMenu> = v.object({
   })),
   failures: v.array(v.object({ provider: v.string(), label: v.optional(v.string()), reason: v.string() })),
 });
+
 const CloudCredentialSummarySchema: v.GenericSchema<CloudCredentialSummary> = v.object({
   key: v.string(), kind: v.string(), createdAt: v.number(), updatedAt: v.number(),
 });
+
 const CloudWebhookTriggerSchema: v.GenericSchema<CloudWebhookTrigger> = v.object({
   trigger_id: v.string(), url: v.string(), auth_mode: v.picklist(['hmac', 'bearer', 'mtls']), secret: v.nullable(v.string()),
 });
+
 const CloudAccessTokenSchema: v.GenericSchema<CloudAccessToken> = v.object({
   tokenHash: v.string(), name: v.string(), scopes: v.array(v.string()), createdAt: v.number(), lastUsedAt: v.nullable(v.number()),
 });
+
 const OkSchema = v.object({ ok: v.boolean() });
+
 const WhoamiSchema = v.object({ user: v.object({ id: v.string(), email: v.string(), displayName: v.optional(v.nullable(v.string())) }) });
+
 const CreatedAccessTokenSchema = v.object({ token: v.string(), name: v.string(), scopes: v.array(v.string()), createdAt: v.number() });
 
 /** The cost half of `getActivitySnapshot`, as a CLI-plane caller parses it off
@@ -259,6 +281,7 @@ const ProducerSpendSchema: v.GenericSchema<ProducerSpend> = v.object({
   usage: UsageSchema, usd: v.optional(v.number()), unpricedCalls: v.number(),
   floorPricedCalls: v.number(),
 });
+
 const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.object({
   label: v.string(), parent: v.nullable(v.string()),
   limits: v.object({ usd: v.optional(v.number()), tokens: v.optional(v.number()) }),
@@ -269,6 +292,7 @@ const MissionBudgetSnapshotSchema: v.GenericSchema<MissionBudgetSnapshot> = v.ob
   }),
   calls: v.number(), spawns: v.number(), exhausted: v.boolean(),
 });
+
 const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   producers: v.array(ProducerSpendSchema),
   total: v.object({
@@ -283,6 +307,7 @@ const WorkspaceSpendSchema: v.GenericSchema<WorkspaceSpend> = v.object({
   offTurnShare: v.nullable(v.number()),
   missions: v.array(MissionBudgetSnapshotSchema),
 });
+
 export const ActivitySpendSchema = v.object({ spend: WorkspaceSpendSchema });
 
 /**
@@ -305,6 +330,7 @@ export async function callAgentRpc<Input, T = Input>(
     token,
     body: { method, args },
   });
+
   return v.parse(schema, body.result);
 }
 
@@ -383,6 +409,7 @@ export async function listCloudAvailableModels(origin: string, token: string): P
 export async function getCloudProfile(origin: string, token: string): Promise<ProfileCatalogEnvelope> {
   const { status, body } = await cloudRequest(origin, '/api/cli/profile', { token });
   assertCloudOk(status, body);
+
   return v.parse(ProfileCatalogEnvelopeSchema, body);
 }
 
@@ -410,15 +437,19 @@ export async function updateCloudProfile(
     token,
     body: decodeJsonValue({ value: input }),
   });
+
   if (status === 409) {
     const conflict = v.parse(v.object({
       error: v.string(),
       currentVersion: v.number(),
       currentDigest: v.string(),
     }), body);
+
     return { conflict: true, currentVersion: conflict.currentVersion, currentDigest: conflict.currentDigest };
   }
+
   assertCloudOk(status, body);
+
   return { ok: true, envelope: v.parse(ProfileCatalogEnvelopeSchema, body) };
 }
 
@@ -518,6 +549,7 @@ export async function revokeCliAccessToken(origin: string, token: string, ref: s
 
 export async function registerCloudDevice(origin: string, token: string, label?: string): Promise<CloudDeviceRegistration> {
   const body: JsonValue = label ? { label } : {};
+
   return cloudJson(CloudDeviceRegistrationSchema, origin, '/api/cli/devices', { method: 'POST', token, body });
 }
 
@@ -536,20 +568,26 @@ interface CloudRequestOpts {
  *  structured errors (a 409 conflict is data, not just a message). */
 async function cloudRequest(origin: string, path: string, opts: CloudRequestOpts = {}): Promise<{ status: number; body: JsonValue }> {
   const headers = new Headers();
+
   if (opts.body !== undefined) headers.set('content-type', 'application/json');
+
   if (opts.token) headers.set('authorization', `Bearer ${opts.token}`);
+
   const res = await fetch(`${origin.replace(/\/+$/, '')}${path}`, {
     method: opts.method ?? 'GET',
     headers,
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
   });
+
   const contentType = res.headers.get('content-type') ?? '';
+
   // The body is the server's, not ours: a JSON content-type over an unparseable payload (a proxy
   // error page) is tolerated and leaves the status line to speak. A body we cannot READ is a
   // transport failure and propagates — it is not an empty error.
   const body: JsonValue = contentType.includes('application/json')
     ? (await tolerateAsync(async () => decodeJsonValue({ value: await res.json() }), 'malformed-input')) ?? {}
     : { error: await res.text() };
+
   return { status: res.status, body };
 }
 
@@ -560,6 +598,7 @@ function assertCloudOk(status: number, body: JsonValue): void {
 
 function cloudErrorMessage(status: number, body: JsonValue): string {
   const error = v.safeParse(v.object({ error: v.string() }), body);
+
   return error.success && error.output.error ? error.output.error : `HTTP ${status}`;
 }
 
@@ -573,6 +612,7 @@ async function cloudJson<T>(
 ): Promise<T> {
   const { status, body } = await cloudRequest(origin, path, opts);
   assertCloudOk(status, body);
+
   return v.parse(schema, body);
 }
 

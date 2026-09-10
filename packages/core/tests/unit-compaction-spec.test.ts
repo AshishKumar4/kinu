@@ -22,6 +22,7 @@ const SECTIONS = [
 describe('buildCompactionSummaryPrompt', () => {
   test('demands every handoff section, concreteness, recall-first budget, and secret redaction', () => {
     const prompt = buildCompactionSummaryPrompt({ transcript: 't', budgetTokens: 2_000 });
+
     for (const section of SECTIONS) expect(prompt).toContain(section);
     expect(prompt).toContain('copied verbatim');
     expect(prompt).toContain('never "made some changes"');
@@ -46,11 +47,13 @@ describe('buildCompactionSummaryPrompt', () => {
       previousSummary: '## Active Task\nOld task body',
       budgetTokens: 800,
     });
+
     expect(prompt).toContain('PREVIOUS SUMMARY:');
     expect(prompt).toContain('Old task body');
     expect(prompt).toContain('NEW TURNS TO INCORPORATE:');
     expect(prompt).toContain('In Progress → Completed');
     expect(prompt).toContain('PRESERVE still-relevant information');
+
     for (const section of SECTIONS) expect(prompt).toContain(section);
   });
 
@@ -58,6 +61,7 @@ describe('buildCompactionSummaryPrompt', () => {
     const prompt = buildCompactionSummaryPrompt({
       transcript: 't', latestUserAsk: 'A'.repeat(10_000), budgetTokens: 500,
     });
+
     // Both ends survive (the tail of a long spec-dump ask carries its point)
     // and the cut names itself, so the summarizer knows the ask was longer.
     expect(prompt).toContain('A'.repeat(4_000));

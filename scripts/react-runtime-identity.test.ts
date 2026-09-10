@@ -62,14 +62,18 @@ import {
 import clientConfig from '../packages/cf-backend/vite.config';
 
 const REPO = join(import.meta.dir, '..');
+
 const CF = join(REPO, 'packages', 'cf-backend');
+
 /** Both output trees sit under `packages/cf-backend/dist/`, which that package's
  *  own `.gitignore` already covers, so a run adds nothing to a shared tree's
  *  status. `afterAll` deletes them. */
 const PRODUCTION_OUT = 'dist/react-runtime-identity-probe';
+
 const DEVELOPMENT_OUT = 'dist/react-runtime-identity-probe-dev';
 
 const require = createRequire(import.meta.url);
+
 const REACT_PACKAGES = ['react', 'react-dom', 'scheduler'] as const;
 
 /** One emitted chunk of the client artifact, as the bundler wrote it. */
@@ -201,6 +205,7 @@ const ManifestSchema = v.object({ version: v.string() });
 
 function installedVersion(pkg: string): string {
   const manifest = require.resolve(`${pkg}/package.json`);
+
   return v.parse(ManifestSchema, JSON.parse(readFileSync(manifest, 'utf8'))).version;
 }
 
@@ -209,10 +214,13 @@ function installedVersion(pkg: string): string {
  *  the one thing that survives from React's dist into the bundle unchanged. */
 function literals(source: string, min: number): Set<string> {
   const found = new Set<string>();
+
   for (const match of source.matchAll(/"((?:[^"\\\n]|\\.){1,400})"/g)) {
     const text = match[1];
+
     if (text !== undefined && text.length >= min) found.add(text);
   }
+
   return found;
 }
 
@@ -230,16 +238,22 @@ function developmentMarkers(): readonly string[] {
   const MIN = 40;
   const development = new Set<string>();
   const shipped = new Set<string>();
+
   for (const pkg of REACT_PACKAGES) {
     const dir = reactDistDir(pkg);
+
     for (const file of readdirSync(dir)) {
       if (!file.endsWith('.js')) continue;
       const target = file.endsWith('.development.js') ? development : shipped;
+
       for (const text of literals(readFileSync(join(dir, file), 'utf8'), MIN)) target.add(text);
     }
   }
+
   const markers = [...development].filter((text) => !shipped.has(text));
+
   if (markers.length === 0) throw new Error('derived no development-only marker from React\'s dist');
+
   return markers;
 }
 
@@ -266,6 +280,7 @@ const MARKERS = developmentMarkers();
  */
 async function buildClient(outDir: string, forceDevelopmentReact: boolean): Promise<Artifact> {
   const chunks: Chunk[] = [];
+
   const observer: Plugin = {
     name: 'kinu:react-runtime-identity-observer',
     generateBundle(_options, bundle) {
@@ -280,6 +295,7 @@ async function buildClient(outDir: string, forceDevelopmentReact: boolean): Prom
       }
     },
   };
+
   // `bun test` injects NODE_ENV=test, and Vite derives its own
   // `process.env.NODE_ENV` replacement from the ambient value. Left alone, the
   // test runner would decide which React build the artifact under test holds,
@@ -288,16 +304,20 @@ async function buildClient(outDir: string, forceDevelopmentReact: boolean): Prom
   // does this one.
   const inherited = process.env.NODE_ENV;
   delete process.env.NODE_ENV;
+
   // The two development levers are ADDED rather than spread-when-true, so the
   // production arm passes the deploy path's own options and nothing else.
   const buildOptions: BuildEnvironmentOptions = {
     ...clientConfig.build, outDir, copyPublicDir: false,
   };
+
   const overrides: InlineConfig = { ...clientConfig, configFile: false, root: CF, logLevel: 'error' };
+
   if (forceDevelopmentReact) {
     buildOptions.minify = false;
     overrides.define = { ...clientConfig.define, 'process.env.NODE_ENV': '"development"' };
   }
+
   try {
     await build({
       ...overrides,
@@ -307,6 +327,7 @@ async function buildClient(outDir: string, forceDevelopmentReact: boolean): Prom
   } finally {
     if (inherited !== undefined) process.env.NODE_ENV = inherited;
   }
+
   if (chunks.length === 0) throw new Error(`${outDir}: the build emitted no chunk`);
 
   // The marker scan's own extent, carried as a measured fact rather than left
@@ -314,29 +335,36 @@ async function buildClient(outDir: string, forceDevelopmentReact: boolean): Prom
   // text shipped" and "the scan read no bytes at all", so without these two the
   // production arm could pass while measuring nothing.
   const assetsDir = join(CF, outDir, 'client', 'assets');
+
   const scanned = readdirSync(assetsDir)
     .filter((file) => file.endsWith('.js'))
     .map((file) => readFileSync(join(assetsDir, file), 'utf8'));
+
   const emitted = scanned.join('\n');
 
   const reactModules: string[] = [];
   const reactChunks: string[] = [];
   const agentsChunks: string[] = [];
+
   for (const chunk of chunks) {
     for (const id of chunk.modules) {
       // Package-relative, so a failure names `react/cjs/react.production.js`
       // rather than an absolute path that differs per checkout.
       const parts = id.split('node_modules/');
       const relative = parts[parts.length - 1] ?? id;
+
       if (/^(react|react-dom|scheduler)\//.test(relative)) reactModules.push(relative);
+
       if (/^react\/cjs\/react\.[a-z]+\.js$/.test(relative) && !reactChunks.includes(chunk.fileName)) {
         reactChunks.push(chunk.fileName);
       }
+
       if (relative === 'agents/dist/react.js' && !agentsChunks.includes(chunk.fileName)) {
         agentsChunks.push(chunk.fileName);
       }
     }
   }
+
   return {
     chunks,
     reactModules,
@@ -380,26 +408,35 @@ interface Origin {
 async function serveArtifact(outDir: string): Promise<Origin> {
   const root = join(CF, outDir, 'client');
   const upgrades: string[] = [];
+
   const server: Server = createServer((request, response) => {
     const path = new URL(request.url ?? '/', 'http://artifact.invalid').pathname;
+
     // No worker is running. Answering /api/* as JSON keeps the application on
     // its signed-out path instead of feeding it the SPA shell as a JSON body.
     if (path.startsWith('/api/')) {
       response.statusCode = 401;
       response.setHeader('content-type', 'application/json');
       response.end(JSON.stringify({ error: 'no worker behind this probe' }));
+
       return;
     }
+
     let file = join(root, path);
+
     if (!existsSync(file) || statSync(file).isDirectory()) file = join(root, 'index.html');
+
     if (!existsSync(file)) {
       response.statusCode = 404;
       response.end();
+
       return;
     }
+
     response.setHeader('content-type', contentType(file));
     response.end(readFileSync(file));
   });
+
   // Recorded, then refused. The Agents client only needs to ATTEMPT the socket
   // for its hooks to have run; a handshake would need the Durable Object.
   server.on('upgrade', (request, socket) => {
@@ -413,10 +450,12 @@ async function serveArtifact(outDir: string): Promise<Origin> {
   // `address()` answers a pipe name, a TCP record or null. Parsed rather than
   // shape-checked, the same way `gallery-harness.ts` reads its own port.
   const address = v.safeParse(TcpAddressSchema, server.address());
+
   if (!address.success) {
     server.close();
     throw new Error(`${outDir}: the artifact server has no TCP address after listen`);
   }
+
   return {
     origin: `http://127.0.0.1:${String(address.output.port)}`,
     upgrades,
@@ -439,6 +478,7 @@ function installProbe(): void {
     injects: [], refs: [], dispatchers: [],
     dispatchersWithUseState: 0, reads: 0, writes: 0, commits: 0,
   };
+
   globalThis.__kinuReactProbe = state;
   globalThis.__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
     supportsFiber: true,
@@ -452,6 +492,7 @@ function installProbe(): void {
         reconcilerVersion: internals.reconcilerVersion,
       });
       const ref = internals.currentDispatcherRef;
+
       if (!state.refs.includes(ref)) {
         state.refs.push(ref);
         let held = ref.H;
@@ -459,20 +500,25 @@ function installProbe(): void {
           configurable: true,
           get() {
             state.reads += 1;
+
             return held;
           },
           set(next: ReactDispatcher | null) {
             state.writes += 1;
+
             if (next !== null && !state.dispatchers.includes(next)) {
               state.dispatchers.push(next);
+
               // Evidence that the slot really holds a hooks dispatcher, taken
               // from the object's own key list rather than from a shape check.
               if (Object.keys(next).includes('useState')) state.dispatchersWithUseState += 1;
             }
+
             held = next;
           },
         });
       }
+
       return state.injects.length;
     },
     onCommitFiberRoot() { state.commits += 1; },
@@ -487,12 +533,16 @@ async function readRuntime(browser: Browser, origin: string, path: string): Prom
   const page = await browser.newPage();
   const pageErrors: string[] = [];
   page.on('pageerror', (thrown) => pageErrors.push(renderThrownChain({ cause: thrown })));
+
   try {
     await page.evaluateOnNewDocument(installProbe);
     await page.goto(`${origin}${path}`, { waitUntil: 'networkidle0', timeout: 120_000 });
+
     const measured = await page.evaluate(() => {
       const state = globalThis.__kinuReactProbe;
+
       if (state === undefined) throw new Error('the probe hook never installed');
+
       return {
         renderers: state.injects,
         dispatcherRefs: state.refs.length,
@@ -504,6 +554,7 @@ async function readRuntime(browser: Browser, origin: string, path: string): Prom
         resources: performance.getEntriesByType('resource').map((entry) => entry.name),
       };
     });
+
     return { ...measured, pageErrors };
   } finally {
     await page.close();
@@ -514,13 +565,16 @@ function chromePath(): string | undefined {
   for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
     if (existsSync(candidate)) return candidate;
   }
+
   return undefined;
 }
 
 async function launch(): Promise<Browser> {
   const executablePath = chromePath();
   const options: LaunchOptions = { args: ['--no-sandbox', '--disable-dev-shm-usage'] };
+
   if (executablePath !== undefined) options.executablePath = executablePath;
+
   return puppeteer.launch(options);
 }
 
@@ -530,32 +584,46 @@ async function launch(): Promise<Browser> {
 function lockedReactResolutions(): readonly string[] {
   const lock = readFileSync(join(REPO, 'bun.lock'), 'utf8');
   const resolutions: string[] = [];
+
   for (const match of lock.matchAll(/"([^"\n]*)":\s*\["(react|react-dom)@([^"\n]+)"/g)) {
     resolutions.push(`${match[1] ?? ''} -> ${match[2] ?? ''}@${match[3] ?? ''}`);
   }
+
   return resolutions.sort();
 }
 
 const HOME = '/';
+
 const WORKSPACE = '/workspace/react-runtime-identity-probe';
+
 const LANDING = '/landing.html';
 
 let production: Artifact;
+
 let developmentBuild: Artifact;
+
 let home: RuntimeFacts;
+
 let workspace: RuntimeFacts;
+
 let landing: RuntimeFacts;
+
 let developmentHome: RuntimeFacts;
+
 let agentSockets: readonly string[];
+
 const REACT_VERSION = installedVersion('react');
+
 const REACT_DOM_VERSION = installedVersion('react-dom');
 
 beforeAll(async () => {
   production = await buildClient(PRODUCTION_OUT, false);
   developmentBuild = await buildClient(DEVELOPMENT_OUT, true);
   const browser = await launch();
+
   try {
     const served = await serveArtifact(PRODUCTION_OUT);
+
     try {
       home = await readRuntime(browser, served.origin, HOME);
       workspace = await readRuntime(browser, served.origin, WORKSPACE);
@@ -564,7 +632,9 @@ beforeAll(async () => {
     } finally {
       served.close();
     }
+
     const servedDevelopment = await serveArtifact(DEVELOPMENT_OUT);
+
     try {
       developmentHome = await readRuntime(browser, servedDevelopment.origin, HOME);
     } finally {
@@ -624,6 +694,7 @@ describe('the application and the Agents UI share that one runtime', () => {
     expect(production.agentsChunks.length).toBeGreaterThan(0);
     const reactChunk = production.reactChunks[0];
     expect(reactChunk).toBeDefined();
+
     for (const fileName of production.agentsChunks) {
       const chunk = production.chunks.find((candidate) => candidate.fileName === fileName);
       expect(chunk).toBeDefined();
@@ -639,6 +710,7 @@ describe('the application and the Agents UI share that one runtime', () => {
     const reactChunk = production.reactChunks[0] ?? '';
     const entries = production.chunks.filter((chunk) => chunk.isEntry);
     expect(entries.length).toBeGreaterThan(1);
+
     for (const entry of entries) {
       expect(entry.imports).toContain(reactChunk);
     }

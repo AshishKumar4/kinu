@@ -113,6 +113,7 @@ const AGENT_NAME_RE = /^[a-z0-9][A-Za-z0-9_-]{0,95}$/;
 export function agentHome(agentName: string): string {
   if (agentName === MAIN_AGENT) return WORKSPACE_ROOT;
   assertAgentName(agentName);
+
   return `/home/${agentName}`;
 }
 
@@ -127,6 +128,7 @@ export function agentHome(agentName: string): string {
  */
 export function agentTmpRoot(agentName: string): string {
   assertAgentName(agentName);
+
   return `/tmp/${agentName}`;
 }
 
@@ -143,6 +145,7 @@ export function agentTmpRoot(agentName: string): string {
 export function subordinateAgentName(subordinateName: string): string {
   const agentName = `sub-${subordinateName}`;
   assertAgentName(agentName);
+
   return agentName;
 }
 
@@ -159,6 +162,7 @@ export function subordinateAgentName(subordinateName: string): string {
 export function headAgentName(headId: string): string {
   const agentName = `head-${headId}`;
   assertAgentName(agentName);
+
   return agentName;
 }
 
@@ -166,6 +170,7 @@ export function headAgentName(headId: string): string {
  * every other caller addresses the one logical path from {@link agentTmpRoot}. */
 function agentTmpStorageRoot(agentName: string): string {
   assertAgentName(agentName);
+
   return `tmp/${agentName}`;
 }
 
@@ -236,7 +241,9 @@ export function agentIdentity(sql: SqlDatabase, agentName: string): AgentIdentit
     AGENT_UID_FLOOR - 1,
   );
   const identity = allocatedAgentIdentity(sql, agentName);
+
   if (!identity) throw new Error(`agent identity for '${agentName}' did not persist`);
+
   return identity;
 }
 
@@ -245,6 +252,7 @@ export function agentIdentity(sql: SqlDatabase, agentName: string): AgentIdentit
  *  to give back. */
 function allocatedAgentIdentity(sql: SqlDatabase, agentName: string): AgentIdentity | null {
   const [row] = [...sql.exec(`SELECT uid, gid FROM ${IDENTITY_TABLE} WHERE agent_name = ?`, agentName)];
+
   return row ? { uid: Number(row.uid), gid: Number(row.gid) } : null;
 }
 
@@ -306,6 +314,7 @@ export function provisionAgentHome(root: HomeRootVfs, agentName: string, identit
     root.chown(dir.path, dir.uid, dir.gid);
     root.chmod(dir.path, dir.mode);
   }
+
   return agentHome(agentName);
 }
 
@@ -323,6 +332,7 @@ export function confineAgentTmp(
 ): string {
   const tmpRoot = agentTmpRoot(agentName);
   confiner.confinePrincipal(identity.uid, agentTmpStorageRoot(agentName));
+
   return tmpRoot;
 }
 
@@ -345,10 +355,13 @@ export function releaseAgentHome(
   // The workspace agent's home IS the workspace root; releasing it is never a
   // release.
   if (agentName === MAIN_AGENT) throw new Error('the workspace agent has no home to release');
+
   for (const path of [agentHome(agentName), agentTmpRoot(agentName)]) {
     if (root.exists(path)) root.removeRecursive(path);
   }
+
   const identity = allocatedAgentIdentity(sql, agentName);
+
   if (identity) confiner.releasePrincipal(identity.uid);
 }
 
@@ -372,11 +385,14 @@ export function restoreAgentTmpConfinements(
 ): number {
   ensureIdentityTable(sql);
   let restored = 0;
+
   for (const row of sql.exec(`SELECT agent_name, uid FROM ${IDENTITY_TABLE}`)) {
     const agentName = String(row.agent_name);
+
     if (!root.exists(agentTmpRoot(agentName))) continue;
     confiner.confinePrincipal(Number(row.uid), agentTmpStorageRoot(agentName));
     restored += 1;
   }
+
   return restored;
 }

@@ -69,6 +69,7 @@ const ProviderCatalogEntrySchema = v.object({
 
 function providerCatalogEntry<Input>(input: Input): ProviderCatalogEntry | null {
   const parsed = v.safeParse(ProviderCatalogEntrySchema, input);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -88,6 +89,7 @@ function CardSlot<T>({ resource, what, onRetry, children }: {
       </div>
     );
   }
+
   if (resource.status === "loading") {
     return (
       <div className="flex justify-center py-4" data-settings-resource={what} data-resource-state="loading">
@@ -95,6 +97,7 @@ function CardSlot<T>({ resource, what, onRetry, children }: {
       </div>
     );
   }
+
   return (
     <div className="contents" data-settings-resource={what} data-resource-state="ready">
       {children(resource.value)}
@@ -160,6 +163,7 @@ export default function UserSettingsPage() {
   // more. Any mixed state renders the page and lets each card speak for itself.
   const failures = reads.flatMap((read) => read.resource.status === "error" ? [read.resource.message] : []);
   const allLoading = reads.every((read) => read.resource.status === "loading");
+
   if (allLoading || failures.length === reads.length) {
     return (
       <div className="h-full overflow-y-auto">
@@ -290,6 +294,7 @@ export default function UserSettingsPage() {
                           value={selectedDefaultModel}
                           onChange={async (spec) => {
                             setDefaultModel(spec);
+
                             try { await setConfig('default_model', spec); }
                             catch (err) { setDefaultModel(null); alert(renderThrownChain({ cause: err })); }
                           }}
@@ -324,6 +329,7 @@ const DEVICE_LAPSE_NOTICE_MS = 14 * 24 * 60 * 60 * 1000;
 
 function lapsingDevices(devices: readonly UserDevice[]): UserDevice[] {
   const soon = Date.now() + DEVICE_LAPSE_NOTICE_MS;
+
   return devices.filter((device) =>
     device.revokedAt === null && device.expiresAt !== null && device.expiresAt <= soon);
 }
@@ -368,24 +374,29 @@ function DevicesCard() {
   const revoke = useCallback(async (id: string, label: string) => {
     if (!confirm(`Revoke "${label}"? Agents will lose access.`)) return;
     setErr(null);
+
     try {
       const result = await revokeDevice(id);
+
       if (result.unstoppedCommands > 0) {
         setUnstoppedCounts((current) => new Map(current).set(id, result.unstoppedCommands));
       }
     } catch (e) {
       setErr(`Could not revoke device: ${renderThrownChain({ cause: e })}`);
     }
+
     reloadDevices();
   }, [reloadDevices]);
 
   const acknowledgeIncident = useCallback(async (id: string) => {
     setErr(null);
+
     try {
       await acknowledgeUnstoppedDevice(id);
       setUnstoppedCounts((current) => {
         const next = new Map(current);
         next.delete(id);
+
         return next;
       });
       setAcknowledged((current) => new Set(current).add(id));
@@ -396,6 +407,7 @@ function DevicesCard() {
   }, [reloadDevices]);
 
   const lapsing = lapsingDevices(devices);
+
   return (
     <Card title="Devices" icon={DesktopTowerIcon}>
       {/* What a link MEANS is stated once, by the connect panel below, in the
@@ -507,6 +519,7 @@ export function DeviceRow({
       : unstoppedCommands === 1
         ? "1 command has no confirmed termination and may still run."
         : `${unstoppedCommands} commands have no confirmed termination and may still run.`;
+
     return (
       <div data-device-incident={device.id} role="alert"
         className="border-b p-border p-notice-danger px-3 py-3 text-xs last:border-0">
@@ -545,15 +558,19 @@ export function DeviceRow({
   const save = async () => {
     const name = (editing ?? "").trim();
     setEditing(null);
+
     if (!name || name === device.label) return;
+
     try { await renameDevice(device.id, name); }
     catch (e) { onError(`Could not rename device: ${renderThrownChain({ cause: e })}`); }
+
     onDeviceChanged();
   };
 
   const dropGrant = async (agentName: string) => {
     try { await revokeDeviceConsent(device.id, agentName); }
     catch (e) { onError(`Could not revoke the grant: ${renderThrownChain({ cause: e })}`); }
+
     onGrantsChanged();
   };
 
@@ -567,9 +584,11 @@ export function DeviceRow({
   const setSandbox = async (on: boolean) => {
     if (!on && !confirm(`Turn Sandbox off for "${device.label}"? The agent will run as you with full access.`)) return;
     setSwitching(true);
+
     try { await setDeviceSandboxTier(device.id, on ? "sandboxed" : "raw"); }
     catch (e) { onError(`Could not change the Sandbox setting: ${renderThrownChain({ cause: e })}`); }
     finally { setSwitching(false); }
+
     onDeviceChanged();
   };
 
@@ -596,6 +615,7 @@ export function DeviceRow({
                 setEditing(null);
                 await save();
               }
+
               if (e.key === "Escape") setEditing(null);
             }}
             aria-label="Device name"
@@ -671,6 +691,7 @@ export function DeviceRow({
 
 function CommandCopy({ label, command }: { label: string; command: string }) {
   const { status, copy } = useCopy();
+
   return (
     <div className="flex items-center gap-2 rounded-md border p-border p-2">
       <div className="w-14 shrink-0 p-meta p-text-3">{label}</div>
@@ -699,12 +720,14 @@ function CloudflareAccountSection({ status, onChanged }: {
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   if (!status?.connected || status.accounts.length < 2) return null;
 
   const choose = async (id: string) => {
     if (!id) return;
     setSaving(true);
     setError(null);
+
     try { await selectCloudflareAccount(id); onChanged(); }
     catch (e) { setError(renderThrownChain({ cause: e })); }
     finally { setSaving(false); }
@@ -740,11 +763,13 @@ function CloudflareGatewaySection({ status, onChanged }: {
 }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
   if (!status?.connected) return null;
 
   const choose = async (id: string) => {
     setSaving(true);
     setError(null);
+
     try { await selectCloudflareGateway(id || null); onChanged(); }
     catch (e) { setError(renderThrownChain({ cause: e })); }
     finally { setSaving(false); }
@@ -758,6 +783,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
       />
     );
   }
+
   if (status.gateways.length === 0) {
     return (
       <p className="p-meta p-text-3">
@@ -766,6 +792,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
       </p>
     );
   }
+
   return (
     <div className="space-y-1.5">
       <div className="text-xs p-text-2">Your AI Gateway</div>
@@ -808,17 +835,22 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
 
   const start = useCallback(async () => {
     setError(null);
+
     try {
       const f = await startCodexFlow();
       setFlow(f);
       setPolling(true);
+
       const stopPolling = () => {
         if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+
         setPolling(false);
       };
+
       pollRef.current = setInterval(async () => {
         try {
           const result = await pollCodexFlow();
+
           if (result.connected) {
             stopPolling();
             setFlow(null);
@@ -846,6 +878,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
 
   const disconnect = useCallback(async () => {
     if (!confirm('Disconnect ChatGPT? Your agents will lose access to Codex models.')) return;
+
     try { await disconnectCodex(); onChanged(); } catch (e) { setError(renderThrownChain({ cause: e })); }
   }, [onChanged]);
 
@@ -912,19 +945,24 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
 
   const remove = useCallback(async (key: string, name: string) => {
     if (!confirm(`Remove the saved API key for "${name}"?`)) return;
+
     try { await deleteCredential(key); onChanged(); } catch (e) { alert(renderThrownChain({ cause: e })); }
   }, [onChanged]);
 
   // Connect-a-provider form — any models.dev catalog provider, searchable.
   const byCredKey = new Map(catalog.map((p) => [p.credKey, p]));
+
   const storedKeys = creds
     .filter((c) => /^[a-z0-9][a-z0-9._-]*\.bearer$/.test(c.key))
     .map((c) => ({ key: c.key, provider: byCredKey.get(c.key) }));
+
   const [selected, setSelected] = useState<ProviderCatalogEntry | null>(null);
   const [apiKey, setApiKey] = useState('');
+
   const saveSelected = useCallback(async () => {
     if (!selected || !apiKey.trim()) return;
     setSavingKey(selected.credKey);
+
     try {
       await setCredential(selected.credKey, { kind: 'bearer', token: apiKey.trim() });
       setSelected(null);
@@ -941,10 +979,12 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
   const [compatName, setCompatName] = useState('');
   const [compatBaseURL, setCompatBaseURL] = useState('');
   const [compatApiKey, setCompatApiKey] = useState('');
+
   const saveCompat = useCallback(async () => {
     if (!compatName.trim() || !compatBaseURL.trim() || !compatApiKey.trim()) return;
     const credKey = `openai-compat.${compatName.trim()}`;
     setSavingKey(credKey);
+
     try {
       await setCredential(credKey, {
         kind: 'openai-compat',

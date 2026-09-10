@@ -50,6 +50,7 @@ export function explorePrompt({ mode, context, craftedTools, siblings, languages
   const toolHints = craftedTools.length > 0
     ? `\nKnown patterns:\n${craftedTools.map((t) => `- ${t.name}: ${t.description}`).join('\n')}`
     : '';
+
   if (mode === 'plan') {
     return {
       system: 'You are an expert agent exploring one read-only planning approach.' + toolHints
@@ -59,7 +60,9 @@ export function explorePrompt({ mode, context, craftedTools, siblings, languages
         + diversityDirective(siblings),
     };
   }
+
   const alternatives = languages.slice(1);
+
   return {
     system: 'You are an expert agent exploring one approach to solve a task.' + toolHints
       + `\n\nIf your approach involves code, include it in a \`\`\`${languages[0]} code block`
@@ -87,6 +90,7 @@ export function explorePrompt({ mode, context, craftedTools, siblings, languages
  */
 export function reflectionPrompt(task: string, attempt: string, outcome?: string): string {
   const bounded = evidenceWindow(attempt, EVIDENCE_BUDGETS.reflection);
+
   return `Task: ${evidenceWindow(task, EVIDENCE_BUDGETS.reflection)}\n`
     + (bounded ? `Attempt: ${bounded}\n` : '')
     + (outcome ? `Outcome: ${outcome}\n` : '')

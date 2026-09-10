@@ -163,27 +163,37 @@ export class ExecutorFileUpload {
 
   async chunk(offset: number, chunk: Uint8Array, final: boolean): Promise<ExecutorWriteResult> {
     if (this.settled) return { error: 'file transfer already settled' };
+
     if (offset < 0) return { error: 'chunk offset must not be negative' };
+
     if (offset !== this.received) {
       return { error: `file transfer out of sync: expected offset ${String(this.received)}, got ${String(offset)}` };
     }
+
     if (chunk.byteLength > FILE_CHUNK_BYTES) {
       return { error: `chunk exceeds ${String(FILE_CHUNK_BYTES)} bytes` };
     }
+
     if (this.received + chunk.byteLength > FILE_TRANSFER_MAX_BYTES) {
       this.settled = true;
+
       return { error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit` };
     }
+
     this.parts.push(chunk);
     this.received += chunk.byteLength;
+
     if (!final) return { ok: true };
     const assembled = new Uint8Array(this.received);
     let at = 0;
+
     for (const part of this.parts) {
       assembled.set(part, at);
       at += part.byteLength;
     }
+
     this.settled = true;
+
     return writeExecutorFileOp(this.router, this.executorId, this.path, assembled, this.expectedRevision);
   }
 
@@ -225,14 +235,18 @@ export class ExecutorFileDownload {
     | { error: string; reason: 'too_large' | 'unavailable' }
   > {
     const stat = await this.size();
+
     if ('error' in stat) return { ...stat, reason: 'unavailable' };
+
     if (stat.size > FILE_TRANSFER_MAX_BYTES) {
       return {
         reason: 'too_large',
         error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`,
       };
     }
+
     const loaded = await this.load();
+
     return 'error' in loaded ? loaded : { size: loaded.byteLength };
   }
 
@@ -241,23 +255,31 @@ export class ExecutorFileDownload {
   > {
     if (this.bytes !== null) return this.bytes;
     const read = await readExecutorFileBytes(this.router, this.executorId, this.path);
+
     if ('error' in read) return { ...read, reason: 'unavailable' };
+
     if (read.bytes.byteLength > FILE_TRANSFER_MAX_BYTES) {
       return {
         reason: 'too_large',
         error: `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`,
       };
     }
+
     this.bytes = read.bytes;
+
     return this.bytes;
   }
 
   async range(offset: number, length: number): Promise<{ bytes: Uint8Array } | { error: string }> {
     if (offset < 0) return { error: 'chunk offset must not be negative' };
+
     if (length <= 0) return { error: 'chunk length must be positive' };
     const loaded = await this.load();
+
     if ('error' in loaded) return loaded;
+
     if (offset >= loaded.byteLength) return { error: 'chunk offset past end of file' };
+
     return { bytes: loaded.subarray(offset, offset + length) };
   }
 }
@@ -292,6 +314,7 @@ export function parentDir(dir: string): string {
 export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
   return [...entries].sort((a, b) => {
     if (a.type !== b.type) return a.type === 'dir' ? -1 : 1;
+
     return a.name.localeCompare(b.name);
   });
 }
@@ -317,8 +340,10 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
  */
 async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<string> {
   const executor = MOUNT_EXECUTORS[dir];
+
   if (executor === undefined) return dir;
   const provider = router.getProvider(executor);
+
   if (!provider) return dir;
   // Deliberately ANY failure, and the reason is which error the reader ends up
   // reading. A disconnected device cannot say where it starts either, and the
@@ -330,6 +355,7 @@ async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<st
   // needs the cause and nothing else, and `catch` narrows it without declaring
   // an `unknown` parameter.
   let home: string | null;
+
   try {
     home = await provider.homeDir();
   } catch (cause) {
@@ -337,6 +363,7 @@ async function mountLanding(router: ExecutorFileLookup, dir: string): Promise<st
       { executor, mount: dir, error: renderThrownChain({ cause }) });
     home = null;
   }
+
   return home !== null && home.startsWith('/') && home !== '/' ? `${dir}${home}` : dir;
 }
 
@@ -360,12 +387,16 @@ export async function getExecutorFiles(
 ): Promise<{ path?: string; entries?: DirEntry[]; error?: string }> {
   const provider = router.getProvider(executorId);
   const vfs = provider?.files;
+
   if (!provider || !vfs) return { error: `Executor "${executorId}" has no file plane` };
+
   try {
     const dir = path === ''
       ? await provider.homeDir()
       : await mountLanding(router, normalizeDir(path));
+
     const listed = await listWithVfsOps(vfs, dir);
+
     // `stat` answers null for an entry that is gone, or that this plane could
     // not stat — one child, not the directory. Statting every child one after
     // another and letting any single throw fail the whole listing would tell a
@@ -373,18 +404,22 @@ export async function getExecutorFiles(
     const entries: DirEntry[] = listed.map(({ name, stat }) => ({
       name, type: stat?.isDir ? 'dir' : 'file', size: stat?.size, mtimeMs: stat?.mtimeMs,
     }));
+
     // The canonical home is always reachable by walking down from the root.
     // The workspace box enumerates directory ENTRIES, and on a fresh
     // workspace nothing above the home has any — so `/` listed only the
     // mounts and the whole workspace tree was unreachable by browsing. Each
     // ancestor of the home names the next segment down, structurally.
     const home = await provider.homeDir();
+
     if (home.startsWith('/') && (dir === '/' || home.startsWith(`${dir}/`))) {
       const next = home.slice(dir === '/' ? 1 : dir.length + 1).split('/')[0];
+
       if (next && next !== '' && !entries.some((entry) => entry.name === next)) {
         entries.push({ name: next, type: 'dir' });
       }
     }
+
     return { path: dir, entries: sortDirEntries(entries) };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };
@@ -405,21 +440,30 @@ export async function readExecutorFile(
 ): Promise<ExecutorTextFile> {
   if (!path) return { error: 'path required' };
   const vfs = executorFiles(router, executorId);
+
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+
   try {
     const stat = await vfs.stat(path);
+
     if (stat?.isDir) return { error: 'path is a directory' };
     const inlineType = inlineFileType(path);
+
     if (inlineType !== undefined) {
       return { error: `${inlineType} is not text — this file is shown and downloaded as bytes` };
     }
+
     const window = stat === null ? MAX_VIEWABLE_BYTES : Math.min(stat.size, MAX_VIEWABLE_BYTES);
     const bytes = await readBoundedWithVfsOps(vfs, path, window, stat?.size ?? null);
+
     if (bytes.includes(0)) return { error: 'binary file — not previewable' };
+
     const result: ExecutorTextFile = {
       content: new TextDecoder().decode(bytes),
     };
+
     if (bytes.byteLength < (stat?.size ?? bytes.byteLength)) result.truncated = true;
+
     if (!result.truncated) {
       if (stat?.revision !== undefined && vfs.writeFileIfRevision !== undefined) {
         result.revision = stat.revision;
@@ -427,6 +471,7 @@ export async function readExecutorFile(
         result.readOnlyReason = 'This file plane cannot protect an in-place edit from a newer write. Download it to edit safely.';
       }
     }
+
     return result;
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };
@@ -452,24 +497,30 @@ export async function writeExecutorFileOp(
 ): Promise<ExecutorWriteResult> {
   if (!path || path.endsWith('/')) return { error: 'file path required' };
   const vfs = executorFiles(router, executorId);
+
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
   const conditional = vfs.writeFileIfRevision;
+
   if (expectedRevision === undefined) {
     try {
       await vfs.writeFile(path, bytes);
+
       return { ok: true };
     } catch (err) {
       return { error: renderThrownChain({ cause: err }) };
     }
   }
+
   if (conditional === undefined) {
     return {
       unsupported: true,
       error: CONDITIONAL_WRITE_UNSUPPORTED,
     };
   }
+
   try {
     const result = await conditional(path, bytes, expectedRevision);
+
     return result.ok
       ? { ok: true, revision: result.revision }
       : { conflict: true, revision: result.revision };
@@ -477,6 +528,7 @@ export async function writeExecutorFileOp(
     if (isVfsError(err) && err.code === 'ENOTSUP') {
       return { unsupported: true, error: CONDITIONAL_WRITE_UNSUPPORTED };
     }
+
     return { error: renderThrownChain({ cause: err }) };
   }
 }
@@ -494,11 +546,15 @@ export async function readExecutorFileBytes(
 ): Promise<{ bytes: Uint8Array } | { error: string }> {
   if (!path) return { error: 'path required' };
   const vfs = executorFiles(router, executorId);
+
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+
   try {
     const stat = await vfs.stat(path);
+
     if (stat?.isDir) return { error: 'path is a directory' };
     const raw = await vfs.readFile(path);
+
     return { bytes: raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw) };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };
@@ -517,11 +573,16 @@ export async function statExecutorFile(
 ): Promise<{ size: number } | { error: string }> {
   if (!path) return { error: 'path required' };
   const vfs = executorFiles(router, executorId);
+
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+
   try {
     const stat = await vfs.stat(path);
+
     if (!stat) return { error: `no such file: ${path}` };
+
     if (stat.isDir) return { error: 'path is a directory' };
+
     return { size: stat.size };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };
@@ -533,6 +594,7 @@ export async function statExecutorFile(
  *  (vfs/nimbus-workspace.ts, vfs/mounts.ts) produces exactly these members. */
 function nativeMutations(vfs: VFS): Partial<VfsNativeMutations> {
   const probed: VFS & Partial<VfsNativeMutations> = vfs;
+
   return probed;
 }
 
@@ -552,20 +614,29 @@ export async function renameExecutorPathOp(
   to: string,
 ): Promise<ExecutorWriteResult> {
   if (!from || !to || to.endsWith('/')) return { error: 'both source and target paths are required' };
+
   if (from === to) return { ok: true };
   const vfs = executorFiles(router, executorId);
+
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+
   try {
     if (await vfs.exists(to)) return { error: `${to} already exists` };
     const native = nativeMutations(vfs).rename;
+
     if (native) {
       await native.call(vfs, from, to);
+
       return { ok: true };
     }
+
     const stat = await vfs.stat(from);
+
     if (!stat) return { error: `no such file or directory: ${from}` };
+
     if (stat.isDir) return { error: 'this environment cannot rename a directory in place' };
     await carryFileWithVfsOps({ files: vfs, path: from }, { files: vfs, path: to });
+
     return { ok: true };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };
@@ -585,17 +656,25 @@ export async function deleteExecutorPathOp(
 ): Promise<ExecutorWriteResult> {
   if (!path || normalizeDir(path) === '/') return { error: 'a real path is required' };
   const vfs = executorFiles(router, executorId);
+
   if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+
   try {
     const stat = await vfs.stat(path);
+
     if (!stat) return { error: `no such file or directory: ${path}` };
+
     if (!stat.isDir) {
       await vfs.unlink(path);
+
       return { ok: true };
     }
+
     const native = nativeMutations(vfs).removeRecursive;
+
     if (native) await native.call(vfs, path);
     else await removeTreeWithVfsOps(vfs, path);
+
     return { ok: true };
   } catch (err) {
     return { error: renderThrownChain({ cause: err }) };

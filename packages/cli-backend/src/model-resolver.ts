@@ -60,6 +60,7 @@ const cloudMenuSchema = v.object({
     reason: v.string(),
   })), []),
 });
+
 const proxiedCredentialsSchema = v.object({
   credentials: v.optional(v.array(v.object({
     key: v.string(),
@@ -117,13 +118,17 @@ function proxyFetchFor(cloud: LocalCloudSession, base: typeof fetch | undefined)
   // identity, re-downloading the models.dev catalog on every switch.
   const cacheKey = `${cloud.origin} ${cloud.token}`;
   const cached = proxyFetchCache.get(cacheKey);
+
   if (cached && cached.base === base) return cached.proxy;
+
   const proxy = createProviderProxyFetch({
     forwardURL: providerProxyForwardURL(cloud.origin),
     authorization: `Bearer ${cloud.token}`,
     fetch: base,
   });
+
   proxyFetchCache.set(cacheKey, { base, proxy });
+
   return proxy;
 }
 
@@ -228,9 +233,11 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
   const model = (resolved: string) => resolver.resolveModel(resolved);
   const spend = opts.spend;
   const effortOptions = (resolved: string) => reasoningEffortOptions('low', parseModelSpec(resolved).provider);
+
   return {
     async *stream(input) {
       const resolved = spec();
+
       const request: Parameters<typeof streamText>[0] = {
         model: model(resolved),
         system: input.system,
@@ -239,10 +246,14 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
           content: m.content,
         })),
       };
+
       const providerOptions = effortOptions(resolved);
+
       if (providerOptions) request.providerOptions = providerOptions;
       const result = streamText(request);
+
       for await (const chunk of result.textStream) yield chunk;
+
       // Usage is knowable only once the stream has drained, so the report lands
       // here. A consumer that abandons the generator never reaches this line and
       // reports nothing — honest, because the cost of a stream nobody finished
@@ -251,14 +262,19 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & {
     },
     async complete(prompt) {
       const resolved = spec();
+
       const request: Parameters<typeof generateText>[0] = {
         model: model(resolved),
         prompt,
       };
+
       const providerOptions = effortOptions(resolved);
+
       if (providerOptions) request.providerOptions = providerOptions;
       const result = await generateText(request);
+
       if (spend) reportCall(spend, resolved, result.totalUsage, result.response.modelId);
+
       return result.text.trim();
     },
   };
@@ -279,6 +295,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
   const authStore = buildAuthStore(localEndpoint, credentials, opts.codexAuthStore);
 
   const cloud = opts.cloud;
+
   // An explicit direct endpoint (KINU_BASE_URL → llm.name workers-ai) keeps
   // precedence over the signed-in proxy; the proxy-derived llm config (its
   // baseURL IS the proxy) registers through the cloud providers below instead.
@@ -287,6 +304,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     && localEndpoint.baseURL.replace(/\/+$/, '') === cloudProxyBaseURL(cloud.origin);
 
   const defaultProvider = defaultProviderFor(localEndpoint);
+
   if (localEndpoint !== null && defaultProvider === 'workers-ai' && !llmIsCloudProxy) {
     // The explicit endpoint is Cloudflare-shaped (the product proxy or the
     // account's own /ai/v1), so it takes the same replica pin the proxy path
@@ -313,6 +331,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   if (cloud) {
     const menu = createCloudModelMenu(cloud, opts.fetch);
+
     if (!registry.get('workers-ai')) {
       registry.register(createCloudProxyProvider({
         id: 'workers-ai',
@@ -325,6 +344,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
         fetch: opts.fetch,
       }));
     }
+
     registry.register(createCloudProxyProvider({
       id: 'my-gateway',
       label: 'Your AI Gateway',
@@ -338,6 +358,7 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     if (!registry.get('workers-ai')) {
       registry.register(createSignedOutCloudProvider('workers-ai', 'Cloudflare Workers AI (your account)'));
     }
+
     registry.register(createSignedOutCloudProvider('my-gateway', 'Your AI Gateway'));
   }
 
@@ -366,27 +387,36 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     fetch: cloud ? proxyFetchFor(cloud, opts.fetch) : opts.fetch,
     async getAuth(key, authOpts) {
       const local = await authStore.get(key, authOpts);
+
       if (local) return local;
       const remote = (await proxied?.load())?.byKey.get(key);
+
       return remote ? proxyAuthResolution(key, remote.baseURL) : null;
     },
     async hasCredential(key) {
       if (authStore.has(key)) return true;
+
       // A credential the proxy would never front cannot be hiding in the
       // account, so the local answer is the whole answer for it.
       if (PROXY_DENIED_CRED_KEYS.includes(key)) return false;
       const remote = await proxied?.load();
+
       if (!remote) return false;
+
       if (remote.byKey.has(key)) return true;
+
       // Never listed successfully — "not connected" would be a guess, and a
       // provider reported unavailable for the wrong reason is worse than one
       // reported unavailable for the right one.
       if (remote.error) throw new Error(remote.error);
+
       return false;
     },
     async listCredentialKeys() {
       const keys = new Set(authStore.keys());
+
       for (const key of (await proxied?.load())?.byKey.keys() ?? []) keys.add(key);
+
       return [...keys];
     },
   };
@@ -402,16 +432,22 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
 
   function normalizeSpecSync(specOrNull?: string | null): string {
     const s = (specOrNull ?? '').trim();
+
     if (!s) {
       if (!fallback) throw new Error(noDefaultModelMessage());
+
       return `${fallback.provider}/${fallback.model}`;
     }
+
     if (s.startsWith(WORKERS_AI_MODEL_ID_PREFIX)) return workersAiSpec(s);
 
     const slash = s.indexOf('/');
+
     if (slash > 0) {
       const first = s.slice(0, slash);
+
       if (registry.get(first)) return s;
+
       // A models.dev provider the account has connected is a provider here
       // too — that is what makes a web-UI-connected key selectable locally.
       // The snapshot is empty until a listing lands, so this answer can change
@@ -419,13 +455,16 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
       // `findUnusableModel`, catalog lookup) lists first, and the source is
       // memoized per session so one listing warms them all.
       if (proxied?.providerIds().has(first)) return s;
+
       // Slashful model IDs (for example minimax/m3) are model IDs under the
       // configured local endpoint unless the first path segment is a provider.
       if (!fallback) throw new Error(noDefaultModelMessage());
+
       return `${fallback.provider}/${s}`;
     }
 
     if (!fallback) throw new Error(noDefaultModelMessage());
+
     return `${fallback.provider}/${s}`;
   }
 
@@ -446,11 +485,13 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     async modelInfo(specOrNull) {
       const spec = normalizeSpecSync(specOrNull);
       const { provider, modelId } = parseModelSpec(spec);
+
       return catalogModelInfo(registry.get(provider), deps, modelId);
     },
     async countInputTokens(specOrNull, request) {
       const spec = normalizeSpecSync(specOrNull);
       const { provider, modelId } = parseModelSpec(spec);
+
       return countRequestInputTokens(registry.get(provider), modelId, deps, request);
     },
     getAuth: deps.getAuth,
@@ -461,9 +502,11 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
  *  the agent has none - a headers copy only when there is something to add. */
 function withAffinity(llm: LLMProviderConfig, sessionAffinity: string | undefined): LLMProviderConfig {
   if (!sessionAffinity) return llm;
+
   for (const header in llm.headers) {
     if (header.toLowerCase() === 'x-session-affinity') return llm;
   }
+
   return { ...llm, headers: { ...llm.headers, 'x-session-affinity': sessionAffinity } };
 }
 
@@ -484,13 +527,18 @@ function createGatewayBackedProvider(opts: {
     unavailableReason: () => 'KINU_BASE_URL and KINU_AUTH are required for the local gateway provider.',
     async listModels(deps): Promise<ModelInfo[]> {
       const fallback: ModelInfo[] = [{ id: opts.defaultModel, label: opts.defaultModel, capabilities: ['tools', 'streaming'] }];
+
       if (!opts.catalogProviderId) return fallback;
+
       const models = await listModelsDevProviderModels(opts.catalogProviderId, deps, {
         fallback,
         preferredIds: [opts.defaultModel.replace(/^workers-ai\//, '')],
       });
+
       const prefix = opts.catalogModelPrefix ?? '';
+
       if (!prefix) return models;
+
       return models.map((model) => ({
         ...model,
         id: model.id.startsWith(prefix) ? model.id : `${prefix}${model.id}`,
@@ -542,14 +590,18 @@ const EMPTY_CLOUD_MENU: CloudMenu = { entries: [], failures: new Map() };
 function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch): () => Promise<CloudMenu> {
   const baseFetch = fetchImpl ?? fetch;
   let cached: { at: number; menu: CloudMenu } | null = null;
+
   return async () => {
     if (cached && Date.now() - cached.at < CLOUD_MENU_TTL_MS) return cached.menu;
+
     try {
       const res = await baseFetch(`${cloud.origin.replace(/\/+$/, '')}/api/cli/models`, {
         headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
       });
+
       if (!res.ok) return EMPTY_CLOUD_MENU;
       const source = v.parse(cloudMenuSchema, await res.json());
+
       const entries = source.models.map((item): CloudMenuEntry => ({
         spec: item.spec,
         label: item.label ?? item.spec,
@@ -561,11 +613,14 @@ function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch
           ? Math.floor(item.contextWindow)
           : undefined,
       }));
+
       const menu: CloudMenu = { entries, failures: cloudMenuFailures(source.failures) };
       cached = { at: Date.now(), menu };
+
       return menu;
     } catch (error) {
       diagnostics.event('model_resolver.cloud_menu_fallback', { error: renderThrownChain({ cause: error }) });
+
       return EMPTY_CLOUD_MENU;
     }
   };
@@ -603,9 +658,11 @@ const proxyCredentialSources = new Map<string, { base: typeof fetch | undefined;
 function proxyCredentialSourceFor(cloud: LocalCloudSession, base: typeof fetch | undefined): ProxyCredentialSource {
   const cacheKey = `${cloud.origin} ${cloud.token}`;
   const cached = proxyCredentialSources.get(cacheKey);
+
   if (cached && cached.base === base) return cached.source;
   const source = createProxyCredentialSource(cloud, base);
   proxyCredentialSources.set(cacheKey, { base, source });
+
   return source;
 }
 
@@ -616,12 +673,15 @@ function createProxyCredentialSource(
   const baseFetch = fetchImpl ?? fetch;
   let cached: { at: number; value: ProxiedCredentials } | null = null;
   let providerIds: ReadonlySet<string> = new Set();
+
   const load = async (): Promise<ProxiedCredentials> => {
     if (cached && Date.now() - cached.at < PROXIED_CREDENTIALS_TTL_MS) return cached.value;
+
     try {
       const res = await baseFetch(providerProxyCredentialsURL(cloud.origin), {
         headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
       });
+
       // A rejected session is a real answer — this machine has no account
       // credentials — and serving the last good listing over it would keep
       // advertising providers every call now 401s on.
@@ -629,37 +689,46 @@ function createProxyCredentialSource(
         const value: ProxiedCredentials = { byKey: new Map(), error: null };
         cached = { at: Date.now(), value };
         providerIds = new Set();
+
         return value;
       }
+
       if (!res.ok) throw new Error(`the Kinu provider proxy returned HTTP ${res.status}`);
       const body = v.parse(proxiedCredentialsSchema, await res.json());
       const byKey = new Map<string, { baseURL?: string }>();
+
       for (const { key, baseURL } of body.credentials) {
         if (!key) continue;
         byKey.set(key, baseURL ? { baseURL } : {});
       }
+
       const value: ProxiedCredentials = { byKey, error: null };
       cached = { at: Date.now(), value };
       providerIds = new Set([...byKey.keys()].flatMap((key) => CATALOG_CRED_KEY.exec(key)?.[1] ?? []));
+
       return value;
     } catch (err) {
       if (cached) return cached.value;
+
       return {
         byKey: new Map(),
         error: `Could not reach your Kinu account to list connected providers (${renderThrownChain({ cause: err })}).`,
       };
     }
   };
+
   return { load, providerIds: () => providerIds };
 }
 
 function cloudMenuFailures(rows: v.InferOutput<typeof cloudMenuSchema>['failures']): Map<string, string> {
   const out = new Map<string, string>();
+
   for (const { provider, reason } of rows) {
     if (provider && reason) {
       out.set(provider, reason);
     }
   }
+
   return out;
 }
 
@@ -678,8 +747,10 @@ function createCloudProxyProvider(opts: {
 }): ModelProvider {
   const baseURL = cloudProxyBaseURL(opts.cloud.origin);
   const headers: CloudProxyHeaders = { Authorization: `Bearer ${opts.cloud.token}` };
+
   if (opts.sessionAffinity) headers['x-session-affinity'] = opts.sessionAffinity;
   const prefix = `${opts.id}/`;
+
   return {
     id: opts.id,
     label: opts.label,
@@ -717,6 +788,7 @@ function createCloudProxyProvider(opts: {
  *  visible in /model with the exact step that unlocks them. */
 function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): ModelProvider {
   const reason = 'Sign in with `kinu auth` to use your Cloudflare AI for local agents.';
+
   return {
     id,
     label,
@@ -760,13 +832,21 @@ type CliProviderId =
  */
 function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null {
   if (llm === null) return null;
+
   if (llm.name === 'workers-ai' || llm.model.startsWith('@cf/')) return 'workers-ai';
+
   if (llm.name === 'codex') return 'codex';
+
   if (llm.name === 'openai') return 'openai';
+
   if (llm.name === 'anthropic') return 'anthropic';
+
   if (llm.name === 'openrouter') return 'openrouter';
+
   if (llm.name === OPENCODE_PROVIDER_ID) return OPENCODE_PROVIDER_ID;
+
   if (llm.name === CLAUDE_CLI_PROVIDER_ID) return CLAUDE_CLI_PROVIDER_ID;
+
   return 'openai-compat';
 }
 
@@ -780,10 +860,12 @@ function defaultProviderFor(llm: LLMProviderConfig | null): CliProviderId | null
  */
 export function defaultSpecForEndpoint(llm: LLMProviderConfig | null): string | null {
   const provider = defaultProviderFor(llm);
+
   if (provider === null || llm === null) return null;
   // `codex` is the one provider whose configured model already carries its own
   // prefix in some configs, so prefixing again would name `codex/codex/…`.
   const model = llm.model.startsWith(`${provider}/`) ? llm.model.slice(provider.length + 1) : llm.model;
+
   return `${provider}/${model}`;
 }
 
@@ -807,10 +889,13 @@ function buildAuthStore(
   if (credentials.openaiApiKey) {
     store.set('openai.bearer', bearer(credentials.openaiApiKey));
   }
+
   if (!store.has('openai.bearer') && localEndpoint?.name === 'openai') {
     const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
+
     if (auth) store.set('openai.bearer', { headers: { Authorization: auth } });
   }
+
   if (credentials.anthropicApiKey) {
     store.set('anthropic.bearer', {
       headers: {
@@ -819,8 +904,10 @@ function buildAuthStore(
       },
     });
   }
+
   if (!store.has('anthropic.bearer') && localEndpoint?.name === 'anthropic') {
     const key = localEndpoint.headers['x-api-key'] ?? localEndpoint.headers['X-Api-Key'];
+
     if (key) {
       store.set('anthropic.bearer', {
         headers: {
@@ -830,13 +917,17 @@ function buildAuthStore(
       });
     }
   }
+
   if (credentials.openrouterApiKey) {
     store.set('openrouter.bearer', bearer(credentials.openrouterApiKey));
   }
+
   if (!store.has('openrouter.bearer') && localEndpoint?.name === 'openrouter') {
     const auth = localEndpoint.headers.Authorization ?? localEndpoint.headers.authorization;
+
     if (auth) store.set('openrouter.bearer', { headers: { Authorization: auth } });
   }
+
   if (localEndpoint?.name === 'openai-compat') {
     store.set('openai-compat.default', {
       headers: localEndpoint.headers,
@@ -849,6 +940,7 @@ function buildAuthStore(
       ...compat.headers,
       ...compat.extraHeaders,
     };
+
     if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
     store.set(`openai-compat.${name}`, {
       headers,
@@ -863,6 +955,7 @@ function buildAuthStore(
   return {
     has(key: string): boolean {
       if (key === CODEX_CRED_KEY) return hasCodex();
+
       return store.has(key);
     },
     keys(): string[] {
@@ -870,7 +963,9 @@ function buildAuthStore(
     },
     async get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null> {
       if (key !== CODEX_CRED_KEY) return store.get(key) ?? null;
+
       if (codexAuthStore) return codexAuthStore.getAuth(authOpts);
+
       if (credentials.codexAccessToken) {
         return {
           headers: codexCredentialToHeaders({
@@ -880,6 +975,7 @@ function buildAuthStore(
           }),
         };
       }
+
       return null;
     },
   };

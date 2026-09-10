@@ -9,11 +9,13 @@ describe('Nimbus capability WebSockets in workerd', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     const [exitCode, stdout, stderr] = await Promise.all([
       process.exited,
       new Response(process.stdout).text(),
       new Response(process.stderr).text(),
     ]);
+
     expect(stderr).toBe('');
     expect(exitCode).toBe(0);
     expect(stdout.trim()).toBe('Nimbus capability WebSocket workerd probe passed');

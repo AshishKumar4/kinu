@@ -46,6 +46,7 @@ import {
 // which target and cost basis this run used, or why it is skipping — and throws
 // on a half-configured environment rather than skipping green.
 const TARGET = liveModelTarget('Evolution Proof');
+
 const liveTest = test.skipIf(!TARGET);
 
 
@@ -85,6 +86,7 @@ interface ExposureTally {
    *  ran. */
   readonly probeReturned: boolean;
 }
+
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-evolution-proof-' + Date.now());
@@ -124,6 +126,7 @@ async function chatTurn(
   // system message the provider actually receives.
   const recorder = recordRequestSurface(model);
   const dynamicContext = renderDynamicContextBlock({ memoryTail });
+
   const reuseMode: ReuseMode =
     /\b(?:must\s+)?use execute_tools\b/i.test(userMessage) ? 'instructed' : 'autonomous';
 
@@ -196,6 +199,7 @@ interface CipherChallenge {
 }
 
 const RSA_1: RsaChallenge = { n: 3233, e: 17, c: 2201 };
+
 const RSA_2: RsaChallenge = { n: 5959, e: 13, c: 2531 };
 
 const GRAPH_1: GraphChallenge = {
@@ -229,11 +233,13 @@ function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
   let result = 1n;
   let factor = base % modulus;
   let remaining = exponent;
+
   while (remaining > 0n) {
     if (remaining % 2n === 1n) result = (result * factor) % modulus;
     factor = (factor * factor) % modulus;
     remaining /= 2n;
   }
+
   return result;
 }
 
@@ -243,15 +249,18 @@ function modPow(base: bigint, exponent: bigint, modulus: bigint): bigint {
 function modInverse(value: bigint, modulus: bigint): bigint {
   let [remainder, next] = [value % modulus, modulus];
   let [coefficient, nextCoefficient] = [1n, 0n];
+
   while (next !== 0n) {
     const quotient = remainder / next;
     [remainder, next] = [next, remainder - quotient * next];
     [coefficient, nextCoefficient] = [nextCoefficient, coefficient - quotient * nextCoefficient];
   }
+
   if (remainder !== 1n) {
     throw new Error(`${String(value)} has no inverse mod ${String(modulus)}, so this RSA `
       + 'challenge has no plaintext');
   }
+
   return ((coefficient % modulus) + modulus) % modulus;
 }
 
@@ -259,6 +268,7 @@ function factorSemiprime(n: number): readonly [number, number] {
   for (let candidate = 2; candidate * candidate <= n; candidate++) {
     if (n % candidate === 0) return [candidate, n / candidate];
   }
+
   throw new Error(`${String(n)} is prime, so it is not a product of two primes`);
 }
 
@@ -266,6 +276,7 @@ function rsaPlaintext({ n, e, c }: RsaChallenge): number {
   const [p, q] = factorSemiprime(n);
   const totient = BigInt(p - 1) * BigInt(q - 1);
   const d = modInverse(BigInt(e), totient);
+
   return Number(modPow(BigInt(c), d, BigInt(n)));
 }
 
@@ -276,28 +287,36 @@ function shortestDistance({ adjacency, from, to }: GraphChallenge): number {
   const out = new Map(adjacency.map(row => [row.node, row.out]));
   const distance = new Map<string, number>([[from, 0]]);
   const settled = new Set<string>();
+
   for (;;) {
     let nearest: string | null = null;
     let nearestDistance = Number.POSITIVE_INFINITY;
+
     for (const [node, reached] of distance) {
       if (settled.has(node) || reached >= nearestDistance) continue;
       nearest = node;
       nearestDistance = reached;
     }
+
     if (nearest === null) break;
     settled.add(nearest);
+
     for (const edge of out.get(nearest) ?? []) {
       if (nearestDistance + edge.weight < (distance.get(edge.to) ?? Number.POSITIVE_INFINITY)) {
         distance.set(edge.to, nearestDistance + edge.weight);
       }
     }
   }
+
   const reached = distance.get(to);
+
   if (reached === undefined) throw new Error(`${to} is unreachable from ${from}`);
+
   return reached;
 }
 
 const LETTER_A = 'A'.charCodeAt(0);
+
 const LETTER_Z = 'Z'.charCodeAt(0);
 
 /** Atbash: A maps to Z, B to Y, and so on. Its own inverse, which is what the
@@ -305,7 +324,9 @@ const LETTER_Z = 'Z'.charCodeAt(0);
 function atbash(text: string): string {
   return [...text.toUpperCase()].map(character => {
     const code = character.charCodeAt(0);
+
     if (code < LETTER_A || code > LETTER_Z) return character;
+
     return String.fromCharCode(LETTER_Z - (code - LETTER_A));
   }).join('');
 }
@@ -335,6 +356,7 @@ function graphPrompt({ adjacency, from, to }: GraphChallenge): string {
   const rows = adjacency.map(row => `  ${row.node} -> ${row.out.length === 0
     ? '(none)'
     : row.out.map(edge => `${edge.to}:${String(edge.weight)}`).join(', ')}`).join('\n');
+
   return `
 Implement Dijkstra's shortest path algorithm and solve this problem. Use execute_tools.
 
@@ -358,15 +380,23 @@ Decode it and return the plaintext.
 }
 
 const RSA_CHALLENGE_1 = rsaPrompt(RSA_1);
+
 const RSA_CHALLENGE_2 = rsaPrompt(RSA_2);
+
 const DIJKSTRA_CHALLENGE_1 = graphPrompt(GRAPH_1);
+
 const DIJKSTRA_CHALLENGE_2 = graphPrompt(GRAPH_2);
+
 const CIPHER_CHALLENGE = cipherPrompt(CIPHER);
 
 const RSA_ANSWER_1 = rsaPlaintext(RSA_1);
+
 const RSA_ANSWER_2 = rsaPlaintext(RSA_2);
+
 const DIJKSTRA_ANSWER_1 = shortestDistance(GRAPH_1);
+
 const DIJKSTRA_ANSWER_2 = shortestDistance(GRAPH_2);
+
 const CIPHER_ANSWER = atbash(CIPHER.ciphertext);
 
 describe('Evolution Proof', () => {
@@ -518,9 +548,12 @@ describe('Evolution Proof', () => {
 
     // End session 1 — triggers session reflection
     const challenges = [RSA_CHALLENGE_1, DIJKSTRA_CHALLENGE_1, CIPHER_CHALLENGE];
+
     const turns: CompletedTurn[] = session1Results.map((result, index) => {
       const userMessage = challenges[index];
+
       if (!userMessage) throw new Error(`missing challenge for session result ${index}`);
+
       return {
         userMessage,
         assistantResponse: result.text,
@@ -531,6 +564,7 @@ describe('Evolution Proof', () => {
         hadError: false,
       };
     });
+
     await engine.onSessionComplete({
       sessionId: 'session-1',
       turns,
@@ -551,6 +585,7 @@ describe('Evolution Proof', () => {
     // answer in prose does not read as evolution declining to fire.
     const outcomes = rt.storage.sql<{ outcome: string; source: string }>`
       SELECT outcome, source FROM turn_outcomes`;
+
     const accepted = outcomes.filter(o => o.outcome === 'accepted');
     const turnsThatRanTools = session1Results.filter(r => r.toolCalls.length > 0).length;
     console.log(`    Graded turns: ${outcomes.map(o => `${o.outcome}/${o.source}`).join(', ')}`);
@@ -578,10 +613,13 @@ describe('Evolution Proof', () => {
     // alone is what let a stored "tool" whose body was `await ({ runtime })(…)`
     // read as an artifact.
     const crafted = rt.craftStore.list();
+
     const scores = new Map(rt.storage.sql<{ tool_name: string; score: number }>`
       SELECT tool_name, score FROM craft_scores`.map(r => [r.tool_name, r.score]));
+
     console.log(`    Crafted tools: ${crafted.length}`);
     expect(crafted.length).toBeGreaterThan(0);
+
     for (const t of crafted) {
       console.log(`      ${t.name} (score ${String(scores.get(t.name))}): ${t.description.slice(0, 60)}`);
       console.log(`        code: ${t.code.slice(0, 80)}...`);
@@ -602,6 +640,7 @@ describe('Evolution Proof', () => {
     // absence is asserted beside the reason for it rather than left to a
     // character count that cannot tell it from a truncated write.
     const memory = await rt.memory.read('memory/MEMORY.md');
+
     if (!memory) throw new Error('the workspace lost memory/MEMORY.md between birth and this read');
     console.log(`    Memory (${memory.length} chars): ${JSON.stringify(memory.slice(0, 120))}`);
     expect(memory).toContain('# evolution-proof');
@@ -643,6 +682,7 @@ describe('Evolution Proof', () => {
     expect(inheritedToolNames.length).toBeGreaterThan(0);
 
     const executeEntry = surface.tools.execute_tools;
+
     if (!executeEntry) throw new Error('session 2 has no execute_tools dispatcher');
     const execute = toolExecute<{ code: string }, unknown>(executeEntry);
 
@@ -667,6 +707,7 @@ describe('Evolution Proof', () => {
       ToolListResultSchema,
       await execute({ code: 'return await workspace.listTools();' }),
     );
+
     const listedNames = listed.result.map((tool) => tool.name).sort();
     expect(listedNames).toEqual([...inheritedToolNames].sort());
 
@@ -683,8 +724,10 @@ for (const name of ${JSON.stringify(inheritedToolNames)}) {
 }
 return report;`,
     }));
+
     const unbound = invocations.result.filter((row) => row.phase === 'unbound').map((row) => row.name);
     const reachedBody = invocations.result.filter((row) => row.phase !== 'unbound');
+
     for (const row of invocations.result) console.log(`      tools.${row.name}: ${row.phase}`);
 
     // One invocation with a KNOWN signature, so "an invocation succeeded" is a
@@ -769,6 +812,7 @@ return report;`,
     // Compare RSA specifically
     const rsa1 = session1Results[0];
     const rsa2 = session2Results[0];
+
     if (!rsa1 || !rsa2) throw new Error('RSA comparison requires one result from each session');
     console.log(`\n    RSA Challenge 1: ${rsa1.steps} steps, ${rsa1.toolCalls.length} tools, ${(rsa1.durationMs / 1000).toFixed(1)}s`);
     console.log(`    RSA Challenge 2: ${rsa2.steps} steps, ${rsa2.toolCalls.length} tools, ${(rsa2.durationMs / 1000).toFixed(1)}s`);
@@ -788,6 +832,7 @@ return report;`,
     // artifacts are checked.
     const crafted = rt.craftStore.list();
     console.log(`\n    Crafted tools: ${crafted.length}`);
+
     for (const t of crafted) {
       console.log(`      ${t.name}: ${t.description.slice(0, 50)}`);
     }
@@ -802,6 +847,7 @@ return report;`,
     expect(session1Results.every(r => r.text.length > 0)).toBe(true);
     expect(session2Results.every(r => r.text.length > 0)).toBe(true);
     expect(s1Tools).toBeGreaterThan(0);
+
     // THREE metrics, three denominators, PRD §9.3. Exposure is not a kind of
     // reuse: it is whether the mechanism was reachable at all, and folding it in
     // is what let a run report reuse over a surface where `tools.<name>` was
@@ -829,15 +875,20 @@ return report;`,
       instructed: { eligible: 0, passed: 0 },
       autonomous: { eligible: 0, passed: 0 },
     };
+
     for (const result of session2Results) {
       const bucket = reuseByMode[result.reuseMode];
       bucket.eligible += 1;
+
       const reusedInherited = result.toolCalls.some((call) => {
         const args = JSON.stringify(call.args);
+
         return inheritedToolNames.some((name) => args.includes(name));
       });
+
       if (reusedInherited) bucket.passed += 1;
     }
+
     console.log(`    Instructed reuse: ${String(reuseByMode.instructed.passed)}/`
       + `${String(reuseByMode.instructed.eligible)}`);
     console.log(`    Autonomous reuse: ${reuseByMode.autonomous.eligible === 0
@@ -850,6 +901,7 @@ return report;`,
     // otherwise pass on turn one and go unmeasured afterwards.
     const shownEveryTurn = [...session1Results, ...session2Results]
       .every((turn) => turn.request.agentsOffered && turn.request.agentsIndexed);
+
     console.log(`    Delegation surface shown on every turn: ${String(shownEveryTurn)}`);
 
     // EXPOSURE first, because it is the denominator's precondition.
@@ -890,17 +942,22 @@ describe('the challenge solvers these turns are graded by', () => {
   const cheapestSimplePath = ({ adjacency, from, to }: GraphChallenge): number => {
     const out = new Map(adjacency.map(row => [row.node, row.out]));
     let cheapest = Number.POSITIVE_INFINITY;
+
     const walk = (node: string, cost: number, visited: ReadonlySet<string>): void => {
       if (node === to) {
         cheapest = Math.min(cheapest, cost);
+
         return;
       }
+
       for (const edge of out.get(node) ?? []) {
         if (visited.has(edge.to)) continue;
         walk(edge.to, cost + edge.weight, new Set([...visited, edge.to]));
       }
     };
+
     walk(from, 0, new Set([from]));
+
     return cheapest;
   };
 
@@ -908,6 +965,7 @@ describe('the challenge solvers these turns are graded by', () => {
     { challenge: RSA_1, answer: RSA_ANSWER_1 },
     { challenge: RSA_2, answer: RSA_ANSWER_2 },
   ];
+
   const GRAPH_CASES: readonly { readonly challenge: GraphChallenge; readonly answer: number }[] = [
     { challenge: GRAPH_1, answer: DIJKSTRA_ANSWER_1 },
     { challenge: GRAPH_2, answer: DIJKSTRA_ANSWER_2 },
@@ -957,19 +1015,24 @@ describe('the challenge solvers these turns are graded by', () => {
     // there is no prose copy of it.
     for (const { challenge } of RSA_CASES) {
       const prompt = rsaPrompt(challenge);
+
       for (const value of [challenge.n, challenge.e, challenge.c]) {
         expect(prompt).toContain(String(value));
       }
     }
+
     for (const { challenge } of GRAPH_CASES) {
       const prompt = graphPrompt(challenge);
+
       for (const row of challenge.adjacency) {
         for (const edge of row.out) {
           expect(prompt).toContain(`${edge.to}:${String(edge.weight)}`);
         }
       }
+
       expect(prompt).toContain(`from ${challenge.from} to ${challenge.to}`);
     }
+
     expect(cipherPrompt(CIPHER)).toContain(CIPHER.ciphertext);
   });
 

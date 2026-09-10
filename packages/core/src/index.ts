@@ -2,8 +2,11 @@
 
 // Identity system
 export { initActorTables, initAllTables, initFiberTable, tableExists } from './identity/schema';
+
 export { WorkspacePlanReferenceSchema, type WorkspacePlanReference, SubordinateInspectionRequestSchema, SubordinateInspectionResultSchema, readSubordinateInspection, missingSubordinateHistory, type SubordinateInspectionRequest, type SubordinateInspectionResult } from './subordinates/inspection';
+
 export { inspectSubordinateStorage, type SubordinateInspectionAuthority, type SubordinateInspectionAccess } from './subordinates/inspection-path';
+
 // The once-only lifecycle of one settled response, and the per-effect ledger it
 // wraps. Backend-neutral: the Durable Object and the CLI drive the same state
 // machine over the same table and supply only effect bodies and a wake.
@@ -11,10 +14,12 @@ export {
   declareTerminalRoster,
   type TerminalTurnFacts, type TerminalTurnParts,
 } from './orchestrator/terminal-roster';
+
 export {
   TerminalTransitions, TERMINAL_TRANSITION_CALL_ID,
   type TerminalTransition, type TerminalDisposition, type TerminalTransitionDeps,
 } from './orchestrator/terminal-transition';
+
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect,
@@ -27,15 +32,19 @@ export {
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
   type TerminalSequenceRun,
 } from './orchestrator/terminal-effects';
+
 // The durable record that a keyed piece of work already happened, kept after the
 // row that did it has been retired.
 export {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from './identity/effect-tombstones';
+
 export { readActivityLog, type ActivityLogEntry } from './identity/activity-log';
+
 // The one answer to "which tables a workspace has" — every composition root
 // calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
 export { initWorkspaceSchema, initActorStateSchema, type WorkspaceSchemaSql } from './state/workspace-schema';
+
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -51,10 +60,15 @@ export {
   summarizeSoulBytes,
   writeSoul,
 } from './identity/soul';
+
 export { WORKSPACE_IDENTITY_DDL } from './identity/schema';
+
 export { validateSwarmProfileSnapshot } from './profiles';
+
 export type { ProfileProvenance, SwarmProfileSnapshot } from './profiles';
+
 export { DEFAULT_WORKERS_AI_MODEL_SPEC } from './providers/workers-ai';
+
 export {
   forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
   ForkSnapshotSchema, ForkTargetWriter,
@@ -63,7 +77,9 @@ export {
   type ForkMemoryChunkRow, type ForkCraftedToolRow, type ForkConfigRow, type ForkFile,
   type ForkWriteTarget, type ForkStagedCounts,
 } from './identity/fork';
+
 export { ForkStagingState, type ForkStaging } from './identity/fork-staging';
+
 export {
   FORK_TRANSFER_VERSION, FORK_FRAME_BYTES, FORK_ROW_SECTIONS, FORK_STREAM_SEED,
   ForkFrameSchema, ForkTransferReceiver, forkTransferFrames, sealForkFrame,
@@ -73,10 +89,12 @@ export {
   type UnsealedForkFrame,
   type ForkFileSource, type ForkTransferSource,
 } from './identity/fork-transfer';
+
 export {
   NativeSinkPlan,
   type ForkFileSink, type ForkFileCommit, type ForkNativeFilePort,
 } from './identity/fork-sink';
+
 export {
   sessionTreeAncestry, chatPaneAncestry, hasPaneStore, forkPointExists, normalizeImportedConversation,
   answersForDrainTurns,
@@ -85,9 +103,11 @@ export {
   type SessionTreeNode, type ChatPaneRow,
   type ConversationTurnPair, type ConversationPageRow,
 } from './identity/conversation-store';
+
 export {
   forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
 } from './identity/fork-driver';
+
 // Workspace archive — one portable backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
@@ -98,6 +118,7 @@ export {
   type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
   type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive';
+
 export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
@@ -121,22 +142,26 @@ export {
   EvolutionEngine, buildScaffoldProposalPrompt,
   type ProposalArchiveContext,
 } from './evolution/engine';
+
 export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord,
   type ShadowTrialDrain, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialTurn,
 } from './evolution/types';
+
 export {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
   type DelegationFeatures, type ExecutionPathSignals,
 } from './evolution/delegation-features';
+
 // K_align — the correction rate per 100 graded turns, per scaffold version,
 // with 95% Wilson intervals. Pure telemetry: no benchmark, no judge, no LLM.
 export {
   alignmentConvergence, renderAlignmentConvergence, type AlignmentConvergence, type AlignmentSegment, type AlignmentTotals,
   type AlignmentTrend, type RateInterval,
 } from './evolution/alignment';
+
 // Turn-outcome signal pipeline — the durable turn_outcomes/lessons ledgers
 // every evolution surface reads (audit R3: the measurable loss).
 export {
@@ -155,13 +180,16 @@ export {
   type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
 } from './evolution/outcomes';
+
 export { buildOutcomeEvalSplit, type AdvisorNegativeRow } from './evolution/eval-split';
+
 // The step clock's knowledge channel — execution recoveries observed by the
 // turn's own failure ledger, injected for the rest of the episode.
 export {
   recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
   MAX_RECOVERY_FINDINGS, type RecoveryFinding,
 } from './evolution/recovery';
+
 // C8/C11 — the hand-labeled calibration set, and the bias-corrected view of
 // every rate the classifier feeds. Uncalibrated is reported as such, never
 // approximated away.
@@ -172,12 +200,14 @@ export {
   type LabelingItem, type ParsedLabelFile, type CalibrationReport,
   type CalibrationStratum, type CalibratedSegment,
 } from './evolution/calibration';
+
 export {
   classifierAccuracy, correctedRate, designWeightedKappa, describeCalibrationGap,
   type CalibrationGap, type ClassifierAccuracy, type CorrectedRate, type CorrectedRateResult,
   type ClassifierAccuracyResult, type GoldStratum, type KappaEstimate,
   type MeasuredProportion, type PredictionStratum,
 } from './evolution/ppi';
+
 // The LLM panel that re-judges the hand-labeled turns, and the pre-registered
 // bar it must clear before a recalibration may lean on it instead of the owner.
 export {
@@ -186,6 +216,7 @@ export {
   type EnsembleJudge, type EnsembleRun, type EnsembleRunResult, type EnsembleGap,
   type EnsembleReport, type EnsembleMember, type StandInCondition,
 } from './evolution/ensemble';
+
 // Behavioural weak labels — turns judged by what the user DID (interrupts,
 // refusals, re-asks, approvals), and the harness that scores the classifier and
 // the panel against them. Complements the on-distribution calibration above; it
@@ -196,12 +227,14 @@ export {
   type CorpusStats, type CorpusEvalInput, type CorpusEvalReport, type RaterScore,
   type RaterCost,
 } from './evolution/behavior-labels';
+
 // Replay-eval harness — outcome-labeled turns re-run against the current
 // config; the persisted loss curve.
 export {
   initReplayTables, runReplayEval, listReplayEvals, DEFAULT_REPLAY_SAMPLE_SIZE,
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './evolution/replay';
+
 // Every completed turn still owed evolution work — the durable window plus its
 // typed review obligation, ONE row per turn, owned by EvolutionEngine.
 export {
@@ -211,6 +244,7 @@ export {
   type DeferredTurnReview, type RefusedTurnReview, type TakenTurnReviews,
   type EnqueueOutcome, type DeferredReviewDrain, type AppendTurnOpts,
 } from './evolution/session-window';
+
 // Evolution Changelog — the "what I changed about myself" digest over the
 // durable ledgers, with real revert dispatch (the autonomy-flip transparency).
 export {
@@ -223,6 +257,7 @@ export {
 
 // Configuration
 export { DEFAULT_CONFIG } from './config';
+
 export { UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS } from './chat';
 
 // Typed accessors over the `actor_config` key/value table — collapses ~23
@@ -237,12 +272,19 @@ export {
 
 // Types
 export type * from './types/primitives';
+
 export type * from './types/agent-runtime';
+
 export type * from './types/backend-host';
+
 export type * from './types/signals';
+
 export { SIGNAL_ID_METADATA_KEY } from './types/signals';
+
 export type * from './types/mcts';
+
 export type * from './types/craft';
+
 export type * from './types/evaluation';
 
 // The SQLite-backed slate stores live behind `@kinu.run/core/slates`, not
@@ -251,9 +293,13 @@ export type * from './types/evaluation';
 // code value-imports this barrel, so anything exported here executes in the
 // client graph — keep worker-only modules off it.
 export { parseSlateProject, type SlateProject, type SlateBinding } from './slates/project';
+
 export { SlateBindingRequestSchema, routeSlateBindingCall, resolveSlateChain, type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation } from './slates/bindings';
+
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';
+
 export type { SlateProcess } from './slates/process';
+
 export {
   isSlateMethodName, SlateOperationSchema, requireSlateWorkMode, type SlateOperation, SLATES_CHANGED_EVENT, type SlateCallResult,
   type SlateSummary, type SlateProblem, type SlatesChangedEvent,
@@ -351,6 +397,7 @@ export {
   type PrepareStepContext,
   type TransformContext,
 } from './extension';
+
 export {
   composePrepareStep,
   type StepCachePlan,
@@ -359,6 +406,7 @@ export {
   type StepPipeline,
   type StepPrepareResult, type StepPrepareContext,
 } from './prompting/prepare-step';
+
 export {
   applyStagedContext, unpairedToolCallIds, STAGED_CONTEXT_DEFERRALS,
   type StagedContextEdit, type StagedContextDeferral, type StagedContextOutcome,
@@ -370,6 +418,7 @@ export {
   type WorkingRevision, type WorkingRevisionContent, type WorkingSource,
   type WorkingStatus, type WorkingVia, type WorkingClosedReason,
 } from './orchestrator/working-context';
+
 export {
   createActorContextPlane,
   type ActorContextPlane, type ActorContextPlaneDeps, type AdmittedContext,
@@ -380,11 +429,14 @@ export {
   // evidence, and `null` is the stated spelling for a host that publishes none.
   type ContextEventRecorder, type ContextEditEvent,
 } from './orchestrator/context-plane';
+
 export {
   contextMount,
   type ActorContextStores, type ChildContextResolver, type ContextMountDeps, type ContextFileHeader,
 } from './vfs/context-plane';
+
 export { encodeModelMessages, decodeModelMessages, modelMessagesDigest } from './prompting/message-codec';
+
 export {
   pruneStepToolOutputs,
   stepContextLimit,
@@ -392,11 +444,14 @@ export {
   type ModelWindow,
   type StepPruneBudget,
 } from './prompting/step-prune';
+
 export {
   settleUnpairedToolCalls,
   INTERRUPTED_TOOL_RESULT,
 } from './prompting/interrupted-tool-calls';
+
 export { StepInjections, type RecordedInjection } from './prompting/step-injections';
+
 export {
   classifyTurnFailure,
   planOverflowRecovery,
@@ -415,7 +470,9 @@ export {
   // the policy instead of retyping the number beside it.
   CHARS_PER_TOKEN,
 } from './llm';
+
 export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm';
+
 // The ONE normalized provider usage report, and the absence-preserving
 // arithmetic over it. Every surface that counts tokens speaks this.
 export {
@@ -426,8 +483,11 @@ export {
   usageReported,
   usageTotal,
 } from './usage';
+
 export type { Usage } from './usage';
+
 export { contextWindowForModel } from './context-window';
+
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {
   TurnContextBudget,
@@ -439,6 +499,7 @@ export {
   type ContextBudgetSnapshot,
   type SpillTrip,
 } from './context-budget';
+
 // The cumulative, label-scoped spend governor — the outer integral over every
 // call-scoped budget. Opt-in: no label, no cap, no storage traffic.
 export {
@@ -466,6 +527,7 @@ export {
   type MissionSeam,
   type MissionSpendProvenance,
 } from './mission-budget';
+
 export {
   buildCompactionSummaryPrompt,
   wrapCompactionSummary,
@@ -512,6 +574,7 @@ export {
   type BuiltinToolSpec,
   REPORT_TOOL, SUBMIT_PLAN_TOOL, DEPS_GATED_TOOLS,
 } from './tools/registry';
+
 export {
   CRAFTED_TOOL_NAMESPACE,
   craftedToolDescription, firstSentence, jsonSchemaToTs, nativeToolInputSchema,
@@ -519,8 +582,11 @@ export {
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
+
 export { STATE_NAMESPACE, STATE_TYPES, createStateCodemodeProvider } from './tools/state-codemode';
+
 export { initCodemodeStateTable, createProgramStateStore, type ProgramStateStore } from './identity/program-state';
+
 export {
   APP_TABLE_SCOPES, APP_MUTATIONS,
   initAgentDataTables, createAppDataStore, createDbCodemodeProvider,
@@ -529,10 +595,15 @@ export {
   type AppSelect, type AppOp, type AppOpResult, type AppRow,
   type AppDataStore, type AppDataStoreDeps, type DbOpRecord,
 } from './tools/db-codemode';
+
 export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './identity/actor-handle';
+
 export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './identity/actor-key';
+
 export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
+
 export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
+
 // open-38: ONE physical workspace SQLite for every logical actor. The host that
 // binds an issued actor's runtime objects over that one database, and the loop
 // origin every created actor is seeded with.
@@ -541,33 +612,43 @@ export {
   type ActorHost, type ActorHostDeps, type BoundActor, type HostedActor,
   type LoopSeed, type ActorRetirement, type ResumableActorTurn,
 } from './state/actor-host';
+
 export { seedActorLoop, defaultLoopOrigin, type LoopOrigin } from './scaffold/bootstrap';
+
 export { admitCraftedSource, parsesAsExpression, type CraftedSourceAdmission } from './craft/source';
+
 export { mcpToolKey, isMcpToolKey } from './tools/mcp-naming';
+
 export {
   describeMcpTool, admitMcpDescriptors, toolSurfaceTokens,
   SerializableToolDescriptorSchema, McpToolSurfaceSchema,
   type SerializableToolDescriptor, type RemoteMcpTool,
   type McpSurfaceBudget, type McpDescriptorAdmission,
 } from './tools/mcp-surface';
+
 export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableAgentsInput,
   parseAgentsToolInput, agentsProfileContext,
   AGENTS_ACTION_FIELDS, AGENTS_ACTION_REQUIRED_FIELDS, AGENTS_FIELD_TS_TYPES,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
 } from './delegation/agents-tool';
+
 export {
   createLocalPeerEndpoint, samePeerGroup,
   type HostedAgentRef, type LocalPeerEndpoint, type LocalPeerEndpointDeps,
 } from './tools/local-peer';
+
 // The same delegation dispatch, projected into the codemode sandbox.
 export { createAgentsCodemodeProvider } from './delegation/agents-codemode';
+
 // `agent.*` — self-direction (curriculum, scaffold proposals, schedules,
 // background jobs, compaction) over one host seam both backends implement.
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
+
 // Subordinate roster, identity, admission and the orchestration policy over
 // them — platform-neutral, so a backend supplies only SubordinateRuntime.
 export { SubordinateRosterStore } from './subordinates/roster';
+
 export {
   SubordinateIdentityStore,
   admitSubordinateReport,
@@ -588,6 +669,7 @@ export {
   type SubordinateRuntime,
   type SubordinatesChangedEvent,
 } from './subordinates/support';
+
 // The temporary rung — one full child agent per question, in the ONE roster.
 export {
   SUBORDINATE_LIFETIMES,
@@ -604,6 +686,7 @@ export {
   type TaskTurnEnding,
   type TemporaryRunRequest,
 } from './subordinates/temporary';
+
 // The subordinate tree's depth cap — derived per child, never stated by one.
 export {
   DELEGATION_MAX_DEPTH,
@@ -615,12 +698,14 @@ export {
   type DelegationBudget,
   type DelegationDepthRefusal,
 } from './subordinates/depth';
+
 export {
   buildBuiltinTools,
   type BuiltinToolDeps,
   type CraftedToolSet, type ExecuteToolsBuilder, type ExecuteToolsSurface,
   type ReportToolDeps,
 } from './tools/builtins';
+
 // An actor's surface is buildBuiltinTools plus `agents` — the one tool whose
 // implementation is the search engine, so the factory that emits a node's own
 // surface cannot hold it. See tools/actor-tools.ts.
@@ -633,6 +718,7 @@ export {
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './tools/actor-tools';
+
 // The durable once-only boundary in front of a tool whose effects leave the
 // process — applied inside `buildActorTools`, so both backends supply its deps
 // and neither wraps tools itself. See tools/effect-claim.ts.
@@ -641,25 +727,34 @@ export {
   withEffectClaims,
   type EffectClaimDeps, type ToolEffectClaim, type ToolEffectKey,
 } from './tools/effect-claim';
+
 // Web search + fetch — provider seam + key-less default + codemode provider.
 export * from './web/index';
+
 // The release lane — codemode-only (release.* inside execute_tools). No
 // native tool: see tools/builtins.ts's header for why.
 export {
   createReleaseCodemodeProvider, runReleaseAction,
   type ReleaseToolDeps, type ReleaseActionInput,
 } from './tools/release-codemode';
+
 // memory.* / tasks.* / report.* — codemode projections of the same-named
 // native tools, sharing one dispatcher each (memory-tool.ts / tasks-tool.ts /
 // the native `report` tool's ReportToolDeps).
 export { createMemoryCodemodeProvider } from './tools/memory-codemode';
+
 export { createMemoryDispatcher, type MemoryToolDeps, type MemoryToolInput } from './tools/memory-tool';
+
 export { createTasksCodemodeProvider } from './tools/tasks-codemode';
+
 export { createTasksDispatcher, type TasksToolInput } from './tools/tasks-tool';
+
 export { createReportCodemodeProvider } from './delegation/report-codemode';
+
 // The file plane's dispatcher, shared by the native `file` tool and
 // workspace.editFile (execution/inline.ts) — see tools/file-tool.ts.
 export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool';
+
 // Tool-call rendering vocabulary, shared by the web chat card and the CLI
 // transcript. It was a cf-backend component and the CLI therefore printed raw
 // argument values; see tools/tool-call-summary.ts.
@@ -668,9 +763,13 @@ export {
   toolCallEffect, clip,
   type ToolCallEffect,
 } from './tools/tool-call-summary';
+
 export { ToolOutcomeSchema, failedToolOutcome, type ToolOutcome } from './tools/outcome';
+
 export { repairToolCall } from './tools/repair-tool-call';
+
 export { McpToolError, McpProtocolFailureSchema } from './tools/mcp-error';
+
 export {
   clampToolResult,
   clampSerializedToolResult,
@@ -680,13 +779,16 @@ export {
   TOOL_OUTPUT_DIR,
   type ClampToolResultOptions,
 } from './tools/clamp';
+
 export { handRolledFileWrite, createFileToolSteer } from './tools/run-file-steer';
+
 export {
   toCraftedToolSource,
   type CraftedToolExecute,
   type CraftedToolExecuteFn,
   type CraftedToolSource,
 } from './tools/crafted-executor';
+
 export {
   assignedTurnFraming,
   buildSystemPromptSync,
@@ -699,6 +801,7 @@ export {
   type AssignedTurnFraming,
   type SystemPromptOptions,
 } from './prompt';
+
 // The boundaries of an assembled request — shared by the renderers that write
 // them and the meter that measures against them.
 export {
@@ -707,6 +810,7 @@ export {
   SOUL_SECTION_TITLE,
   type PromptSection,
 } from './prompting/sections';
+
 // What one request was locally measured to be made of — an estimate, carried
 // next to the provider's authoritative totals rather than reconciled into them.
 export {
@@ -717,7 +821,9 @@ export {
   type ContextSegment,
   type ToolDefsLike,
 } from './context-meter';
+
 export { isWorkMode, WorkModeSchema, type TurnProvenance, type WorkMode } from './types/turn';
+
 export {
   compilePromptSurface,
   executorIsSelectable,
@@ -733,6 +839,7 @@ export {
   type PromptSurface,
   type PromptSurfaceOptions,
 } from './prompting/surface';
+
 export {
   assertToolsSupportedByModel,
   modelSupportsTools,
@@ -742,6 +849,7 @@ export {
   type PromptModelFamily,
   type PromptModelProfile,
 } from './prompting/model-profile';
+
 export {
   renderAgentsMdSection,
   collectWorkspaceAgentsMd,
@@ -752,12 +860,14 @@ export {
   type AgentsMdUnavailable,
   type InstructionPlacement,
 } from './prompting/agents-md';
+
 export {
   acceptedMediaForModel,
   sanitizeAttachmentsForModel,
   type AttachmentPolicy,
   type MediaModality,
 } from './prompting/attachment-sanitizer';
+
 export {
   DynamicContextLedger,
   agentDynamicContext,
@@ -779,6 +889,7 @@ export {
   type MissingCapability,
   type TurnLocalContext,
 } from './prompting/volatile-context';
+
 export {
   applyCacheBreakpoints,
   cacheableSystem,
@@ -798,6 +909,7 @@ export {
   type PromptCachePlanInput,
   type PromptCacheStrategy,
 } from './prompting/cache-breakpoints';
+
 export {
   extractJsonArray,
   extractJsonObject,
@@ -806,48 +918,71 @@ export {
   jsonObjectOnlyInstruction,
   stripMarkdownFences,
 } from './prompts/structured';
+
 export { EVIDENCE_BUDGETS, evidenceWindow, renderToolResult } from './prompts/evidence-window';
+
 // Runtime builder (shared across backends)
 export { buildRuntime } from './runtime-builder';
+
 export type { RuntimeComponents } from './runtime-builder';
+
 export { createAgentStores } from './state/agent-stores';
+
 export type { AgentStores } from './state/agent-stores';
+
 export { collectDynamicContext, subordinateDelegatesOf } from './state/dynamic-context';
+
 export type { DynamicContextInput } from './state/dynamic-context';
 
 // MCTS engine
 export { runMCTS, SEARCH_FIBER_NAME, BranchExplorationSchema, BranchReflectionSchema } from './mcts/engine';
+
 export { selectNode } from './mcts/uct';
+
 export { backpropagate } from './mcts/backpropagation';
+
 export { recordNode } from './mcts/record-node';
+
 export type { SessionWriter, SessionMessage, SessionMessagePart } from './mcts/record-node';
+
 export { converge } from './mcts/convergence';
+
 export { pruneLowValueBranches } from './mcts/pruning';
+
 // Sibling diversity at expansion — backends render this into the explore prompt.
 export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity';
+
 // The one question a branch is asked, whatever substrate runs it.
 export {
   explorePrompt, reflectionPrompt,
   type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
 } from './mcts/explore-prompt';
+
 export { exploreRollout, reflectRollout, type BranchRoute } from './mcts/rollout';
+
 export {
   canonicalLanguage, fencedBlocks, readProposalCode,
   type FencedBlock, type ProposalCode,
 } from './execution/code-fence';
+
 // Whole-message branch context inheritance (shared by every explore() backend).
 export {
   formatInheritedContext, DEFAULT_INHERITED_MESSAGES,
   type InheritedMessage,
 } from './mcts/inherited-context';
+
 // Test-based convergence tie-break over near-tied candidates.
 export { selectWinnerByTest, type TestSelectionDeps } from './mcts/test-selection';
+
 export {
   evaluateWithMultiModelJudging, median,
   type EvaluateBranchOptions, type BranchEvaluation,
 } from './mcts/evaluation';
+
 export type { EvaluationGrounding } from './types/evaluation';
+
 export { estimateCost } from './mcts/cost';
+
 // Alternate Takes — near-tied convergence candidates + the pick→ledger signal.
 export {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
@@ -857,6 +992,7 @@ export {
   type AlternateTakeCandidate, type AlternateTakeSet, type AlternateTakeSource,
   type TakePickRecord, type TakePickOutcome,
 } from './mcts/takes';
+
 // Steer-as-Branch — a mid-turn redirect run as a parallel head that settles
 // into the Alternate Takes pipeline against the live turn's answer.
 export {
@@ -867,6 +1003,7 @@ export {
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type BranchOutcome, type PendingBranch,
 } from './steer-branch';
+
 // The user steer-drain — a message typed while a turn runs, spliced into its
 // next step. Not a signal: it persists verbatim, comes back on interrupt, and
 // reruns as a user-origin turn (see user-steer.ts).
@@ -876,6 +1013,7 @@ export {
   type UserSteer, type UserSteerOutcome, type SteerStatusEvent, type SteerStatusDetail,
   type LandedSteerRow,
 } from './orchestrator/user-steer';
+
 // Where a steer sits in the transcript — the read side of the same drain, and
 // pure, so both backends place it identically.
 export {
@@ -887,6 +1025,7 @@ export {
 
 // Schemas
 export { initSearchTables } from './mcts/schemas';
+
 export {
   MctsSearchStore,
   initMctsSearchTable,
@@ -895,13 +1034,18 @@ export {
   type ResumableSearch,
   type MctsSearchRunSummary,
 } from './mcts/search-store';
+
 export { initScaffoldTables } from './scaffold/schemas';
 
 // Scaffold management
 export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap';
+
 export { modifyScaffold, type ModifyResult, type ModifyScaffoldOpts } from './scaffold/modify';
+
 export { rollbackScaffold } from './scaffold/rollback';
+
 export { createScaffoldSurface, type ScaffoldSurfaceOpts } from './scaffold/surface';
+
 // Misevolution gate — fixed safety criteria over every evolution surface
 // (scaffold acceptance + promotion, extracted tools, agent-authored tools,
 // imported experience).
@@ -909,6 +1053,7 @@ export {
   checkMisevolution, checkMisevolutionForSurface, recordMisevolutionVeto,
   type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
 } from './scaffold/misevolution';
+
 // Variant archive — DGM-style lineage + branch-base selection over the
 // existing scaffold_versions/scaffold_evaluations rows (no parallel store).
 export {
@@ -916,6 +1061,7 @@ export {
   type ScaffoldArchiveEntry, type EvolutionBaseSelection,
   type RejectedProposal, type RejectionKind,
 } from './scaffold/archive';
+
 // scaffold execution + shadow-mode rollout
 export {
   runScaffold,
@@ -926,12 +1072,17 @@ export {
   type ScaffoldEvent, type ScaffoldModelEvent, type ScaffoldToolOutput,
   type ScaffoldEmitFn,
 } from './scaffold/executor';
+
 export { pumpScaffoldEvents } from './scaffold/event-pump';
+
 export { scaffoldEventsToUIStream } from './scaffold/ui-stream';
+
 // The two backend inference seams: the DO's UI message stream and a local
 // turn's ChatEvent stream. Same decision, same delegation contract.
 export { scaffoldInferenceTransform, type InferenceStreamResult } from './scaffold/inference-transform';
+
 export { scaffoldChatTransform } from './scaffold/chat-transform';
+
 export {
   initShadowTables,
   getPendingScaffold,
@@ -962,6 +1113,7 @@ export {
   type ScaffoldStatus,
   type ShadowTrialVerdict,
 } from './scaffold/shadow';
+
 // auto-judge shadow evaluation — ONE queued trial, executed: runs the pending
 // scaffold against the recorded task, asks a judge LLM to compare, records the
 // result, optionally auto-applies promotion/rollback once the gate is
@@ -980,12 +1132,17 @@ export {
 
 // CraftStore quality
 export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema';
+
 export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode';
+
 export {
   attributeCraftedFailure,
 } from './craft/attribution';
+
 export { maybeStoreCraftedTool } from './craft/discovery';
+
 export { periodicCraftConsolidation } from './craft/consolidation';
+
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict';
 
 // Execution layer
@@ -1036,6 +1193,7 @@ export {
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index';
+
 export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, requireBuild, requireWorkModePermission, toolsInWorkMode, toolsForInvocation, providersInWorkMode } from './execution/work-mode';
 
 // Client-safe workspace addressing and VFS contracts. The embedded Nimbus
@@ -1045,6 +1203,7 @@ export { currentWorkMode, inWorkMode, runWorkModeInvocation, permitInPlan, requi
 export {
   workspacePath, WORKSPACE_ROOT,
 } from './vfs/workspace-path';
+
 export {
   agentHome, agentTmpRoot, agentCred, agentIdentity,
   provisionAgentHome, confineAgentTmp, releaseAgentHome, restoreAgentTmpConfinements,
@@ -1052,20 +1211,27 @@ export {
   MAIN_AGENT, AGENT_HOME_MODE, AGENT_TMP_MODE, SESSION_UID, AGENT_UID_FLOOR,
   type AgentIdentity, type HomeRootVfs, type TmpConfiner,
 } from './vfs/agent-home';
+
 export type {
   WorkspaceAgent, WorkspaceAgentPlane, WorkspaceBundle, WorkspaceOptions,
   WorkspaceSession, WorkspaceVFS,
 } from './vfs/nimbus-workspace';
+
 export {
   writeWorkspaceSoul, createWorkspaceForkSink, createWorkspaceForkSource, workspaceArchiveFiles,
 } from './vfs/workspace-planes';
+
 export { wireWorkspaceLoopback } from './vfs/workspace-runtimes';
+
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
   type VfsError, type VfsErrorCode,
 } from './vfs/errno';
+
 export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe';
+
 export { ensureDir } from './utils/vfs-helpers';
+
 export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
   readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
@@ -1080,6 +1246,7 @@ export {
   type FileCheckpointEntry, type FileCheckpointListing, type FileRestoreChange, type FileRestoreKind,
   type FileRestorePlan, type FileRestoreResult, type DeviceCheckpointHint,
 } from './checkpoints/types';
+
 // Shadow-git store format — the cross-engine contract (cli-backend imports
 // it; the zero-dep pc-agent daemon pins it, enforced by the parity test).
 export {
@@ -1103,6 +1270,7 @@ export {
   type IndexedChunk,
   type VectorSearchHit,
 } from './memory/vector-store';
+
 export {
   hybridSearch,
   memorySnippetRehydrator,
@@ -1117,6 +1285,7 @@ export {
 // Used by workspace.saveNote, the `memory` builtin tool, and MCP saveNoteFromMcp.
 // readMemoryTail is the shared bounded-tail read both backends weave per turn.
 export { memoryBytes } from './memory/note';
+
 export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note';
 
 // Zero-LLM transcript search over the canonical `messages` table.
@@ -1133,6 +1302,7 @@ export {
   initFactsTable, createFactsStore, renderFactsBlock,
   type Fact, type FactsStore, type FactUpsertResult,
 } from './memory/facts';
+
 export {
   JsonValueSchema, JsonObjectSchema, JsonArraySchema,
   parseJsonValue, parseJsonObject, parseJsonArray, decodeJsonValue, projectJsonValue,
@@ -1158,6 +1328,7 @@ export type {
   ContextEditVia, ContextEditStatus, ContextEditBoundary,
   CacheHitStats, StepTelemetry,
 } from './events/index';
+
 export {
   FAILURE_WITHOUT_ERROR,
   CONTEXT_EDIT_VIA, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_BOUNDARIES,
@@ -1242,6 +1413,7 @@ export * from './curriculum/index';
 // the AuthResolver callback in ProviderDeps — secrets stay inside UserDO
 // (cf-backend) and never enter the provider layer.
 export * from './providers/index';
+
 // Credential value shape (still exported for UserDO + tests; the previous
 // CredentialStore interface is gone).
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store';
@@ -1397,25 +1569,31 @@ export {
   type PendingDeviceConsent,
   type DeviceConsentNotice,
 } from './safety/index';
+
 export {
   refusedHostname,
 } from './safety/egress-destination';
 
 // Utils
 export { nanoid } from './utils/nanoid';
+
 // An abort's reason as an Error, so a cancelled run is attributable to whoever
 // cancelled it. Exported because the hosted-node transport evicts off the same
 // reason the search records.
 export { abortCause } from './utils/abort';
+
 export { hmacSha256Hex, timingSafeEqual } from './utils/crypto';
+
 // One POSIX quoting rule for every command this system composes, on either
 // backend — the shells the executors talk to are the same shells.
 export { shellQuote } from './utils/shell';
+
 // Confidence intervals — every score this system reports travels with one.
 export {
   wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
   type ScoreInterval,
 } from './utils/stats';
+
 export { isoDate, today, nowMs } from './utils/date';
 
 // ── branching heads (parallel reasoning streams with merge) ──
@@ -1431,6 +1609,7 @@ export type {
   HeadFileChange, HeadFileChangeSet,
   SerializedMessage,
 } from './heads/index';
+
 export {
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget, budgetExhausted,
@@ -1481,6 +1660,7 @@ export {
   type AgentTask, type AgentTaskTree, type TaskStatus,
   type TaskAddResult, type TaskAddRejection,
 } from './tasks/store';
+
 export { withTaskPlan, bindTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext } from './tasks/plan-scope';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
@@ -1488,37 +1668,48 @@ export {
   TurnAccumulator,
   type StepLike, type ToolResultLike, type TurnSinks,
 } from './orchestrator/turn-accumulator';
+
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
   type TurnContinuity,
 } from './orchestrator/agent-orchestrator';
+
 export { ActorSession, type ActorSessionOptions, type ActorTurnLease, type ActorExecutionInput, type ActorExecutionResult } from './orchestrator/actor-session';
+
 export { startActorTurn, type ActorTurnInput } from './orchestrator/actor-turn';
+
 export {
   ActorClaimStore, initActorClaimTables, programIdentityOf, verifyClaimedProgram,
   type ActorProgramIdentity, type ActorTurnClaim, type StoredActorClaim,
   type ContextRevision, type ConsumedContext, type ClaimOutcome, type ClaimRecovery,
 } from './orchestrator/actor-claims';
+
 export { prepareActorProgram, type ActorTurnProgram } from './orchestrator/actor-program';
+
 export { SignalDelivery } from './orchestrator/signals';
+
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER,
   STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
   type TurnProgressInputs,
 } from './orchestrator/turn-steering';
+
 export { CraftCycle } from './orchestrator/craft-cycle';
+
 export {
   CompletionGate, observeCompletionState, completionGateText,
   COMPLETION_GATE_EVENT, COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS,
   COMPLETION_OBSERVATION_MAX_CHARS, COMPLETION_TASK_ECHO_MAX_CHARS,
   type TurnCompletionFacts,
 } from './orchestrator/completion-gate';
+
 export {
   assembleTurnMessages, measureCompactionTrigger,
   type TurnContextInput, type CompactionTriggerReader, type MeasuredCompactionTrigger,
   type TurnAdmission,
 } from './orchestrator/turn-context';
+
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery, creditedTurnId,
@@ -1527,6 +1718,7 @@ export {
   type CompactionTriggerState, type SettledTurn, type OutputContinuationFacts,
   type RunEndReason, type RunEndFacts, type RunEndClassification,
 } from './orchestrator/turn-lifecycle';
+
 export {
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT,
@@ -1535,18 +1727,24 @@ export {
   type ScaffoldBridgeOpts, type ScaffoldHistoryQuery, type ScaffoldHistoryReader,
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host';
+
 export {
   BACKGROUNDABLE_TOOLS, resumeBackgroundJob, harvestBackgroundJob, type SwarmHarvestDeps,
 } from './orchestrator/background-tools';
+
 export {
   wrapToolsForBackground, CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool,
 } from './jobs/background-wrap';
+
 export { createDurableMctsSession } from './orchestrator/mcts-session';
+
 export {
   skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
+
 export { ModelCatalogSession } from './orchestrator/model-catalog';
+
 export {
   serializeContentForHeads, narrowInheritedRole,
   inheritedContextFromHistory, inheritedContextFromRows,
@@ -1568,6 +1766,7 @@ export {
   unionAllowedTools, toolAllowedBySkills, trustedActiveSkills,
   SkillError, SKILLS_DIR,
 } from './skills/index';
+
 export type {
   SkillHeader, ParsedSkill, DiscoveredSkill, ActiveSkill, SkillBodyRef,
   SkillsIndex, SkillSource, ActiveSkillSet, ActivationReason,
@@ -1597,6 +1796,7 @@ export {
   type PromptSectionOptimizationResult, type PromptSectionTrialResult,
   type PromptSectionLaneStep, type MeasuredSectionProposal,
 } from './evolution/control';
+
 // CONTINUAL REFINEMENT — `/refine` and the automatic evolution-debt trigger.
 // The refiner is the read-only temporary rung; every typed edit it proposes is
 // routed to the authority that already owns that artifact, and only those
@@ -1613,15 +1813,18 @@ export {
   type RefinementStage, type RefinementStore, type RefinementTrigger,
   type SettleRefinementPatch,
 } from './evolution/refinement';
+
 export {
   advanceRefinementLane, refinementDebt, refinementDebtRequest, requestRefinement,
   type RefinementLaneStep, type RequestRefinementInput,
 } from './evolution/refinement-lane';
+
 export {
   REFINEMENT_DECISIONS, decideRefinementRoute, showRefinementRoute,
   type RefinementDecision, type RefinementDecisionInput, type RefinementDecisionResult,
   type StagedSkillResult, type StagedSkillView,
 } from './evolution/refinement-skill';
+
 export {
   runGepa, runScaffoldGepa, runSectionGepa,
   PROMPT_SECTION_TARGETS, findPromptSectionTarget,
@@ -1630,6 +1833,7 @@ export {
   initGepaTables, startGepaRun, finishGepaRun,
   listGepaRuns, loadGepaCandidates, loadGepaParetoFront, makePersistingHooks,
 } from './evolution/gepa/index';
+
 export type {
   EvalInstance, MetricOutcome, GepaMetric, ReflectionLM,
   GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
@@ -1639,6 +1843,7 @@ export type {
   GepaRunSummary,
   GepaParetoEntry,
 } from './evolution/gepa/index';
+
 // Evolved prompt sections. A backend needs two things: the promoted wording to
 // hand `buildSystemPromptSync` as `sectionOverrides`, and the type of that map.
 // Everything else — the gates, the trial ledger, the archive — is reached
@@ -1646,6 +1851,7 @@ export type {
 export {
   activePromptSectionOverrides, firstPendingPromptSection,
 } from './prompting/section-store';
+
 export type { PromptSectionOverrides } from './prompting/section-templates';
 
 // ── Layer gate ──
@@ -1660,6 +1866,7 @@ export {
   observePipeline, scoreAgainstBaseline, runLayerGate, lockBaseline,
   renderLayerGateReport, runFaultMatrix, renderFaultMatrix,
 } from './layergate/index';
+
 export type {
   Layer, Probe, PipelineSubjects, SubjectName,
   Baseline, LayerGateReport, LayerScore, Fault, FaultImpact,
@@ -1675,6 +1882,7 @@ export {
   compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables, wiredProducers,
   renderConformanceFindings,
 } from './conformance/index';
+
 export type {
   CapabilityStatus, ConformanceFinding, ConformanceFindingKind, ConformanceManifest,
   ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
@@ -1689,38 +1897,51 @@ export {
   classifyEvolutionType, getRunTimeline, runEventToSpan, safeJsonParse, toolKindFor,
   RUN_TIMELINE_DEFAULT, RUN_TIMELINE_MAX,
 } from './read-models/timeline';
+
 export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/timeline';
 
 // The one bound a caller-supplied row count passes through before it reaches
 // SQL. Exported because the CLI's local read models bind their own `LIMIT` and
 // need the same policy as their cloud peers.
 export { boundedInt } from './utils/bounds';
+
 // The pace every durable recovery lane retries at — the notice carrier, the
 // maintenance tick's re-arm and the job runner's deferral. Exported because two
 // of those three live in the backends, and a second copy of the curve is the
 // drift this export exists to prevent.
 export { recoveryBackoffMs } from './utils/recovery-backoff';
+
 export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs';
+
 export type { RunListEntry, RunSummary } from './read-models/runs';
+
 export { workspaceSpend } from './read-models/workspace-spend';
+
 export type {
   ProducerSpend, SpendCoverage, WorkspaceSpend, WorkspaceSpendDeps,
 } from './read-models/workspace-spend';
+
 export {
   censusToolFailures, classifyToolFailure, toolFailureKey, toolFailurePartOfKey,
 } from './read-models/tool-failures';
+
 export type {
   ToolFailure, ToolFailureCensus, ToolFailurePart,
 } from './read-models/tool-failures';
+
 export {
   getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   walkWorkspaceTextFiles,
 } from './read-models/workspace-diff';
+
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff';
+
 export {
   computeWorkspaceDiff, diffLines, fileDiff, parseGitDiff, MAX_LINES_PER_FILE,
 } from './vfs/diff';
+
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff';
+
 export {
   getExecutorFiles, readExecutorFile, sortDirEntries, executorFiles, writeExecutorFileOp,
   readExecutorFileBytes, statExecutorFile, renameExecutorPathOp, deleteExecutorPathOp,
@@ -1728,32 +1949,45 @@ export {
   FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
   ExecutorFileUpload, ExecutorFileDownload,
 } from './read-models/files';
+
 export type {
   DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
   EnvironmentInfo, MountInfo,
 } from './read-models/files';
+
 export { inlineFileType } from './read-models/file-types';
+
 export {
   readLatestSearchTree, readSearchTree, readSearchNodeDetail,
   type SearchNodeDetail,
 } from './read-models/search-tree';
+
 export { readExplorationCanvas, readExplorationRun } from './read-models/exploration-canvas';
+
 export type { ExplorationCanvasRun } from './read-models/exploration-canvas';
+
 export {
   activateMctsProgressActor, applyMctsProgress, createMctsProgressState,
 } from './read-models/mcts-progress';
+
 export type {
   MctsProgressOrder, MctsProgressStamp, MctsProgressState,
 } from './read-models/mcts-progress';
+
 export type { ForkRunParams, SearchRunParams } from './read-models/fork-params';
+
 export { listForkRuns } from './read-models/fork-runs';
+
 export type { ForkRunSummary } from './read-models/fork-runs';
+
 export {
   listRecordCells, listRecordObjectives, readRecordCell,
 } from './read-models/exploration-records';
+
 export type {
   RecordCellSummary, RecordObjectiveSummary,
 } from './read-models/exploration-records';
+
 // The store's own digest handles, on the surface because they are what an RPC's
 // request carries: a surface holds the opaque pair and passes it back, and deriving
 // the type from a read's signature is how a type stops having a name.
@@ -1764,47 +1998,64 @@ export type {
 // in production produces — including the identity columns, whose whole value is that the
 // writer fills them from the identity it hashed.
 export { initExplorationRecordsTable, recordExploration } from './strategy/records';
+
 export type {
   ExplorationWrite, RecordCellHandle, RecordObjectiveHandle,
 } from './strategy/records';
+
 export { readNodeTranscript } from './read-models/node-transcript';
+
 export type {
   NodeTranscriptView, NodeTranscriptCrumb, NodeTranscriptOrigin,
 } from './read-models/node-transcript';
+
 export { buildPendingActions } from './read-models/pending-actions';
+
 export {
   listInstructionApprovals, readInstructionSource, openInstructionSource,
   previewInstruction, gatherApprovableInstructions,
 } from './read-models/instruction-approvals';
+
 export type {
   InstructionSourceKind, InstructionSourceMeta, InstructionSourceRow,
   InstructionSourceView,
 } from './read-models/instruction-approvals';
+
 export { getAgentStatus, getChatHistoryPage, getToolList } from './read-models/status';
+
 export { mapPage, pageSchema, seekPage, SeekCursorSchema, StaleCursorError } from './read-models/page';
+
 export type { Page, PageRequest, SeekCursor } from './read-models/page';
+
 export {
   mergeTranscript, restoredRows, uiMessageRow, uiMessageText, transcriptRole,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, turnAuthor,
 } from './utils/ui-message';
+
 export type { TurnAuthor, StoredRowProjection } from './utils/ui-message';
+
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions';
+
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
 } from './read-models/status';
+
 export {
   cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob,
 } from './read-models/background-jobs';
+
 export type {
   BackgroundJobControl, BackgroundJobPlaneDeps, CancelWorkDeps, CancelWorkOutcome, RetryOutcome,
 } from './read-models/background-jobs';
+
 export {
   getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
   getShellApprovalMode, getShellApprovalGrants, revokeShellApprovalGrants,
   getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
   setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
 } from './read-models/config-plane';
+
 export type {
   EvolutionConfigView, MctsConfigView, SetModelDeps,
 } from './read-models/config-plane';
@@ -1845,9 +2096,11 @@ export {
   type NoteVerdict,
   type SuppressionRule,
 } from './advisor/review';
+
 export {
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views';
+
 export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views';
 
 // Profile catalogs — tier/role configuration from an authority, resolved once
@@ -1859,11 +2112,13 @@ export {
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
   ProfileCatalogEnvelopeSchema,
 } from './profiles';
+
 export type {
   TierId, BuiltinRoleId, RoleId,
   TierAssignment, TierAssignments, RoleDefinition, RoleCatalog, ProfileCatalog,
   ProfileAuthority, ProfileCatalogEnvelope,
 } from './profiles';
+
 export {
   resolveModelRoute,
   loadProfileAuthorityInputs, resolveTurnProfile, resolveAgentTurnProfile, resolveRoutingProfile,
@@ -1878,9 +2133,13 @@ export {
   type RoleChangeActor, type RoleChangePolicy, type RoleChangeOutcome,
   type RoleChangeRefusal, type RoleStateStore,
 } from './profiles';
+
 export type { ReasoningEffort } from './strategy/effort';
+
 export { REASONING_EFFORTS, REASONING_EFFORT_FOR_STAGE } from './strategy/effort';
+
 export type { NamedSwarmPreset, SwarmNodeAssignment } from './strategy/swarm';
+
 // Rendered from the preset table in the same module, so a surface reading this cannot
 // describe a shape the resolver does not produce.
 export { SWARM_PRESET_DOCTRINE } from './strategy/swarm';

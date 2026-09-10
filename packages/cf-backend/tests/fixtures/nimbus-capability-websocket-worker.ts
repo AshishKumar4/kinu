@@ -2,7 +2,9 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { handleFetch } from '../../../../node_modules/@nimbus-sh/worker/dist/session/routes.js';
 
 const PORT = 4321;
+
 const PID = 17;
+
 const CAPABILITY = '0123456789abcdef01234567';
 
 export default {

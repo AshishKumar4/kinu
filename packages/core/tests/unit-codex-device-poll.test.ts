@@ -9,25 +9,32 @@ import { asFetchFunction } from '../src/providers/fetch-shim';
 import { createCodexOAuthClient } from '../src/index';
 
 const POLL_URL = 'https://auth.openai.com/api/accounts/deviceauth/token';
+
 const TOKEN_URL = 'https://auth.openai.com/oauth/token';
+
 const JSON_HEADERS = { 'content-type': 'application/json' };
 
 /** A provider whose poll answers `poll`, whose token exchange grants, and
  *  which records every URL it was asked for. */
 function deviceProvider(poll: Response) {
   const asked: string[] = [];
+
   const client = createCodexOAuthClient(asFetchFunction(async (input: RequestInfo | URL) => {
     const url = String(input);
     asked.push(url);
+
     if (url === POLL_URL) return poll;
+
     if (url === TOKEN_URL) {
       return new Response(JSON.stringify({ access_token: 'access', refresh_token: 'refresh', expires_in: 3600 }), {
         status: 200,
         headers: JSON_HEADERS,
       });
     }
+
     throw new Error(`unexpected fetch: ${url}`);
   }));
+
   return { client, asked };
 }
 
@@ -42,6 +49,7 @@ describe('the Codex device-code poll', () => {
     const answer = await client.pollDeviceFlow('auth-id', 'AAAA-BBBB');
     expect(answer.status).toBe('expired');
     expect(answer.status).not.toBe('pending');
+
     if (answer.status !== 'expired') throw new Error('expected the expired answer');
     expect(answer.message).toMatch(/expired/i);
     // A dead code never reaches the token exchange.
@@ -60,6 +68,7 @@ describe('the Codex device-code poll', () => {
       status: 400,
       headers: JSON_HEADERS,
     });
+
     const { client } = deviceProvider(poll);
     const answer = await client.pollDeviceFlow('auth-id', 'AAAA-BBBB');
     expect(answer).toEqual({ status: 'denied', message: 'the user said no' });
@@ -70,9 +79,11 @@ describe('the Codex device-code poll', () => {
       JSON.stringify({ authorization_code: 'code', code_challenge: 'challenge', code_verifier: 'verifier' }),
       { status: 200, headers: JSON_HEADERS },
     );
+
     const { client } = deviceProvider(poll);
     const answer = await client.pollDeviceFlow('auth-id', 'AAAA-BBBB');
     expect(answer.status).toBe('granted');
+
     if (answer.status !== 'granted') throw new Error('expected the granted answer');
     expect(answer.tokens).toMatchObject({ accessToken: 'access', refreshToken: 'refresh' });
   });

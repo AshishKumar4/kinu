@@ -20,11 +20,13 @@ type SentFrame = v.InferOutput<typeof SentFrameSchema>;
 /** A fake socket that records sent frames and lets the test inject responses. */
 function fakeSocket(open = true) {
   const sent: SentFrame[] = [];
+
   const sock: TunnelSocket & { sent: typeof sent; readyState: number } = {
     readyState: open ? 1 : 3,
     sent,
     send(data: string) { sent.push(v.parse(SentFrameSchema, JSON.parse(data))); },
   };
+
   return sock;
 }
 
@@ -63,6 +65,7 @@ describe('DeviceTunnel', () => {
   test('settles the response even when terminal cleanup throws', async () => {
     const sock = fakeSocket();
     const t = new DeviceTunnel(sock);
+
     const p = t.rpc('exec', ['true'], {
       onTerminal: () => { throw new Error('durable cleanup failed'); },
     });
@@ -155,13 +158,16 @@ describe('DeviceTunnel', () => {
       const p = t.rpc('exec', ['pytest -x'], { timeoutMs: 0 });
       let settled = false;
       void p.then(() => { settled = true; }, () => { settled = true; });
+
       // Several heartbeat periods of silence from the WORK, but the device is
       // answering the probes — which is the only question liveness asks.
       for (let i = 0; i < 6; i++) {
         await new Promise((r) => setTimeout(r, 15));
         const probe = sock.sent.find((f) => f.method === 'ping');
+
         if (probe) t.handleMessage(JSON.stringify({ id: probe.id, error: 'unknown method: ping' }));
       }
+
       expect(settled).toBe(false);
       t.handleMessage(JSON.stringify({
         id: sock.sent[0].id, result: { stdout: '42 passed', exitCode: 0 },

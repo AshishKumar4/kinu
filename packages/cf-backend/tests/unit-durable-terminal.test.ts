@@ -27,11 +27,13 @@ import {
 import { joinHarnessFibers } from './helpers/agents-sdk';
 import type { AgentSignal, CompletedTurn } from '@kinu.run/core';
 import { createChatFiberSnapshot, wrapChatFiberSnapshot } from 'agents/chat';
+
 // The envelope Think's chat-turn snapshot rides in. Spelled here rather than
 // imported: fiber-recovery.ts keeps the same mirror for its read, and the SDK
 // exports the string nowhere — think.js `_runChatRecoveryFiber` hands this
 // literal to `wrapChatFiberSnapshot` at each call site.
 const CHAT_TURN_ENVELOPE_KEY = '__cfThinkChatFiberSnapshot';
+
 import { projectJsonValue, TERMINAL_EFFECT_RETRY_CEILING_MS } from '@kinu.run/core';
 
 /** One settled assistant response, as Think reports it. */
@@ -239,6 +241,7 @@ describe('overflow retry delivery is a durable terminal effect', () => {
     const delivered: AgentSignal[] = [];
     harness.agent.harnessSetSignalDeliverer(async (signal) => {
       delivered.push(signal);
+
       return 'undelivered';
     });
     harness.agent.declareTurnCheckpoint('u-overflow');
@@ -249,6 +252,7 @@ describe('overflow retry delivery is a durable terminal effect', () => {
 
     const first = harness.agent.harnessTerminalEffects('u-overflow', 'a-overflow')
       .find((row) => row.effect_key === 'v1:overflow_retry:a-overflow');
+
     expect(first).toMatchObject({ status: 'pending', attempts: 1 });
 
     const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
@@ -256,10 +260,12 @@ describe('overflow retry delivery is a durable terminal effect', () => {
       beforeStart: (agent) => {
         agent.harnessSetSignalDeliverer(async (signal) => {
           delivered.push(signal);
+
           return 'queued';
         });
       },
     });
+
     // Reactivation CLASSIFIES and arms; the durable wake is what replays.
     await restarted.agent._kinuTerminalRetryTick();
 
@@ -397,6 +403,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
     });
+
     await restarted.agent.harnessResumeTerminalTransitions();
 
     // Replayed, not refused: nothing is owed and the outer row closes.
@@ -442,10 +449,12 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       .find((row) => row.effect_key === 'v1:sleep_time:a-decay')?.status).toBe('pending');
 
     harness.db.exec('DROP TRIGGER probe_block_sleep_tombstone');
+
     const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
       sleepTimeAnswer: ['a-decay', decayOne],
     });
+
     await restarted.agent._kinuTerminalRetryTick();
 
     // ONE decay for one decision, and the sequence closes. Approximate because
@@ -471,6 +480,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
     });
+
     await restarted.agent.harnessResumeTerminalTransitions();
 
     expect(restarted.agent.harnessTerminalEffects('u-takes', 'a-takes')
@@ -512,9 +522,11 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     before.agent.harnessArmTerminalFault('turn_record', 'before');
     await expect(before.agent.onChatResponse(settledResponse('a-rev-b'))).rejects.toThrow('terminal effect turn_record:a-rev-b interrupted before its side effect');
     expect(owedReviews(before)).toBe(0);
+
     const revived = await reactivateOrchestratorHarness(before.db, undefined, {
       clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
     });
+
     await revived.agent._kinuTerminalRetryTick();
     expect(owedReviews(before)).toBe(1);
 
@@ -570,12 +582,14 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       harness.agent.harnessArmTerminalFault('turn_record', phase);
 
       await expect(harness.agent.onChatResponse(settledResponse(`a-sfx-${phase}`))).rejects.toThrow(`terminal effect turn_record:a-sfx-${phase} interrupted ${phase} its side effect`);
+
       // Replayed twice: the second pass is the one that would double anything the
       // first left un-tombstoned.
       for (let pass = 0; pass < 2; pass++) {
         const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
           clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS * (pass + 1),
         });
+
         await restarted.agent.harnessResumeTerminalTransitions();
       }
 
@@ -614,6 +628,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
         clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS * (pass + 1),
       });
+
       await restarted.agent.harnessResumeTerminalTransitions();
     }
 
@@ -651,6 +666,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
         clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS * (pass + 1),
       });
+
       await restarted.agent.harnessResumeTerminalTransitions();
     }
 
@@ -691,6 +707,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       const restarted = await reactivateOrchestratorHarness(harness.db, undefined, {
         clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS,
       });
+
       await restarted.agent.harnessResumeTerminalTransitions();
 
       // The head's OWN cause, under the branch the user started. The status
@@ -760,6 +777,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
    */
   test('a review re-run after a refusal grades the turn once', async () => {
     const harness = orchestratorHarness();
+
     const turn: CompletedTurn = {
       userMessage: 'use the streaming API', assistantResponse: 'here is a batch call',
       toolCalls: [], durationMs: 1, steps: 1, hadError: false, feedback: null,
@@ -864,8 +882,10 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       for (let i = 0; i < 500; i++) {
         if (harness.agent.harnessShadowPlan(`a-shadow-${i}`) !== null) return `a-shadow-${i}`;
       }
+
       throw new Error('no sampling id found');
     };
+
     // The QUEUE, not the ledger row: a completed effect is pruned once its
     // sequence closes, and what the gate is about is whether the candidate got
     // scored against this turn at all. Counted under this harness's own actor:
@@ -892,6 +912,7 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
       harness.agent.harnessDeclareShadowCandidate();
       const messageId = sampled(harness);
       harness.agent.declareTurnCheckpoint(`u-shadow-${shut}`);
+
       // The mode comes off the driving user message, which is where production
       // reads it — stubbing the orchestrator's live turn instead would assert
       // against a path `onChatResponse` never consults.
@@ -918,13 +939,16 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
     harness.agent.harnessDeclareShadowCandidate();
 
     const first = harness.agent.harnessShadowPlan('a-sample');
+
     for (let ask = 0; ask < 50; ask++) {
       expect(harness.agent.harnessShadowPlan('a-sample')).toEqual(first);
     }
+
     // And it is a decision, not a constant: across ids both answers occur.
     const spread = new Set(
       Array.from({ length: 200 }, (_, i) => harness.agent.harnessShadowPlan(`a-${i}`) !== null),
     );
+
     expect(spread).toEqual(new Set([true, false]));
   });
 
@@ -981,11 +1005,13 @@ describe('an interrupted terminal sequence replays its suffix and repeats nothin
         clockSkewMs: TERMINAL_EFFECT_RETRY_CEILING_MS * (attempt + 1),
         fault: ['auto_gepa', 'before'],
       });
+
       await restarted.agent.harnessResumeTerminalTransitions();
     }
 
     const stuck = harness.agent.harnessTerminalEffects('u-stuck', 'a-stuck')
       .find((row) => row.effect_key === 'v1:auto_gepa:a-stuck');
+
     expect(stuck?.status).toBe('pending');
     // Still owed, so the outer transition is still open and the next activation
     // is still handed the suffix.
@@ -1060,6 +1086,7 @@ describe('a turn releases its tool claims only when no response can still run', 
       continuation: true,
       messages: [{ id: turnId, role: 'user' }],
     });
+
     harness.agent.harnessSeedOrphanFiber(
       `__cf_internal_chat_turn:${requestId}`,
       projectJsonValue({ value: wrapChatFiberSnapshot(CHAT_TURN_ENVELOPE_KEY, snapshot, null) }),

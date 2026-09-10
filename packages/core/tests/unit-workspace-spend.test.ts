@@ -39,6 +39,7 @@ function rig() {
   // asked on behalf of a REAL owner rather than of the whole database — and the
   // run-event half is written by a recorder bound to that same owner.
   const actor = createTestActors(ws.sql, ws.execRaw).main;
+
   return { ws, actor, events: new RunEventRecorder(ws.sql, actor) };
 }
 
@@ -88,6 +89,7 @@ describe('workspaceSpend', () => {
   test('a producer the provider never measured is counted, never zeroed', () => {
     const { ws, events, actor } = rig();
     step(events, { input: 1000, output: 100 }, 0.01);
+
     // The Workers AI embedder: its response carries no usage field of any kind.
     for (let i = 0; i < 3; i++) {
       events.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
@@ -157,6 +159,7 @@ describe('workspaceSpend', () => {
     const { ws, events, actor } = rig();
     const journal = new HeadJournal(ws.sql, actor);
     journal.recordSplit('root-1', 'audit the parser', 1);
+
     for (const id of ['h1', 'h2']) {
       journal.insertSpawn({
         id, rootId: 'root-1', parentId: null, depth: 0, task: `task ${id}`, rationale: 'r',
@@ -165,6 +168,7 @@ describe('workspaceSpend', () => {
         loop: defaultLoopOrigin('head'),
       });
     }
+
     journal.recordReport({
       id: 'h1', status: 'completed', summary: 's', wallClockMs: 7, stepCount: 1,
       usage: { input: 9000, output: 300, cacheRead: 8704, neurons: 1483.75 },
@@ -190,6 +194,7 @@ describe('workspaceSpend', () => {
 
   test('a total is not bounded by any window, however long the log gets', () => {
     const { ws, events, actor } = rig();
+
     // WHAT THIS DEFENDS, measured rather than reasoned about. The bounded-fold
     // measurements are 2,001 of 8,000 agent steps with a 2,000-row window and
     // 2,000 judge calls, roughly a 4× under-count on the row the owner reads
@@ -203,6 +208,7 @@ describe('workspaceSpend', () => {
     // eval arm's 400 and the deployed panel's ACTIVITY_STEP_WINDOW. Every one of
     // those numbers turns this total into a floor if the read is folded over it.
     for (let i = 0; i < 450; i++) step(events, { input: 10, output: 1 }, 0.001);
+
     for (let i = 0; i < 300; i++) {
       events.emit(WORKSPACE_RUN_ID, {
         type: 'model_call', source: 'judge', usage: { input: 20, output: 2 },
@@ -231,6 +237,7 @@ describe('workspaceSpend', () => {
 
   test('one busy producer cannot crowd another out of the total', () => {
     const { ws, events, actor } = rig();
+
     // The window's worst failure was not the size of the under-count, it was
     // which producer disappeared: a rare judge call behind a busy turn loop.
     for (let i = 0; i < 400; i++) step(events, { input: 10, output: 1 });
@@ -247,10 +254,12 @@ describe('workspaceSpend', () => {
 
   test('the stored payload really carries the fields the aggregate reads', () => {
     const { ws, actor, events } = rig();
+
     const every: Required<Usage> = {
       input: 11, output: 7, cacheRead: 5, cacheWrite: 3, cacheWrite1h: 2, reasoning: 1,
       neurons: 0.5,
     };
+
     step(events, every, 0.02);
 
     // The aggregate reads the payload with `json_extract`, which cannot be
@@ -265,10 +274,12 @@ describe('workspaceSpend', () => {
     const [row] = ws.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE actor_id = ${actor.actorId} AND type = 'step_finish'`;
+
     const payload = v.parse(
       v.object({ usage: UsageSchema, usd: v.number() }),
       JSON.parse(row!.payload),
     );
+
     expect(Object.keys(payload.usage).sort()).toEqual([...USAGE_FIELDS].sort());
     expect(payload.usd).toBeCloseTo(0.02, 10);
 
@@ -316,6 +327,7 @@ describe('workspaceSpend', () => {
     // 5m one and its dollars are short — which is the whole point of the count.
     const pricing: ModelPricing = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
     const SPEC = 'anthropic/claude-sonnet-4-5';
+
     // Through the REAL producer, so this pins the whole chain: `priceCall`'s
     // verdict, the row that carries it, the SQL that counts it, the fold that
     // sums it. A test that emitted a hand-built row would pass with the

@@ -126,6 +126,7 @@ export function priceCall(usage: Usage, pricing: ModelPricing): CallPrice | unde
   const cacheRead = Math.min(Math.max(0, usage.cacheRead ?? 0), prompt);
   const cacheWrite = Math.min(Math.max(0, usage.cacheWrite ?? 0), prompt - cacheRead);
   const fresh = prompt - cacheRead - cacheWrite;
+
   // `cacheWrite1h` is deliberately NOT in this sum: it is a subset of
   // `cacheWrite`, so the `cacheWrite` term below has already charged it, and
   // models.dev publishes ONE `cache_write` rate. Inventing a second rate for the
@@ -136,11 +137,13 @@ export function priceCall(usage: Usage, pricing: ModelPricing): CallPrice | unde
     + cacheWrite * (pricing.cacheWrite ?? pricing.input)
     + (usage.output ?? 0) * pricing.output
   ) / 1_000_000;
+
   // What that sum cannot know it got wrong, COUNTED rather than corrected —
   // clamped into the write it is a subset of, for the reason the parts above
   // are clamped into the prompt. We ask for this tier (`cache-breakpoints.ts`
   // emits Anthropic `ttl: '1h'`), so the shortfall is live, not hypothetical.
   const floorTokens = Math.min(Math.max(0, usage.cacheWrite1h ?? 0), cacheWrite);
+
   return floorTokens > 0 ? { usd, floorTokens } : { usd };
 }
 
@@ -246,21 +249,26 @@ export class MissionBudgetLedger {
   declare(label: string, limits: MissionBudgetLimits, parent: string | null, now: number): MissionRow {
     this.actor.assertCurrent();
     const existing = this.get(label);
+
     if (existing) return existing;
     const effectiveParent = parent !== null && parent !== label && this.get(parent) !== null ? parent : null;
     void this.sql`INSERT INTO mission_budget
         (actor_id, label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens, calls, spawns, created_at, exhausted_at)
       VALUES (${this.actorId}, ${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, 0, 0, ${now}, NULL)`;
+
     return this.get(label)!;
   }
 
   get(label: string): MissionRow | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<MissionBudgetColumns>`
       SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens,
              calls, spawns, exhausted_at
        FROM mission_budget WHERE actor_id = ${this.actorId} AND label = ${label}`;
+
     const row = rows[0];
+
     return row ? toRow(row) : null;
   }
 
@@ -269,13 +277,16 @@ export class MissionBudgetLedger {
     const out: MissionRow[] = [];
     const seen = new Set<string>();
     let cursor: string | null = label;
+
     while (cursor !== null && !seen.has(cursor) && out.length < MAX_CHAIN_DEPTH) {
       seen.add(cursor);
       const row: MissionRow | null = this.get(cursor);
+
       if (!row) break;
       out.push(row);
       cursor = row.parent;
     }
+
     return out;
   }
 
@@ -347,9 +358,12 @@ function toRow(row: MissionBudgetColumns): MissionRow {
  */
 export function listMissionSpend(sql: SqlExecutor, actor: ActorHandle): MissionBudgetSnapshot[] {
   actor.assertCurrent();
+
   const present = sql<{ name: string }>`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'mission_budget'`;
+
   if (present.length === 0) return [];
+
   return sql<MissionBudgetColumns>`
     SELECT label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens,
            calls, spawns, exhausted_at
@@ -361,6 +375,7 @@ export function listMissionSpend(sql: SqlExecutor, actor: ActorHandle): MissionB
 /** True when the row is at or over either of its caps. */
 function isOverBudget(row: MissionRow): boolean {
   if (row.limitTokens !== null && row.tokens >= row.limitTokens) return true;
+
   return row.limitUsd !== null && row.usd >= row.limitUsd;
 }
 
@@ -368,16 +383,22 @@ function provenanceOf(row: MissionRow): MissionSpendProvenance {
   const source = row.blendedTokens === 0
     ? 'catalog'
     : row.blendedTokens >= row.tokens ? 'blended' : 'mixed';
+
   return { blendedTokens: row.blendedTokens, source };
 }
 
 function toSnapshot(row: MissionRow): MissionBudgetSnapshot {
   const limits: MissionBudgetLimits = {};
+
   if (row.limitUsd !== null) limits.usd = row.limitUsd;
+
   if (row.limitTokens !== null) limits.tokens = row.limitTokens;
   const remaining: MissionBudgetSnapshot['remaining'] = {};
+
   if (row.limitTokens !== null) remaining.tokens = Math.max(0, row.limitTokens - row.tokens);
+
   if (row.limitUsd !== null) remaining.usd = Math.max(0, row.limitUsd - row.usd);
+
   return {
     label: row.label,
     parent: row.parent,
@@ -456,6 +477,7 @@ export class MissionGovernor {
    */
   declare(label: string, limits: MissionBudgetLimits, opts?: { parent?: string }): MissionBudgetSnapshot {
     const parent = opts?.parent ?? this.active[0] ?? null;
+
     return toSnapshot(this.ledger.declare(label, limits, parent, this.now()));
   }
 
@@ -466,17 +488,21 @@ export class MissionGovernor {
    */
   guard(seam: MissionSeam, labels: readonly string[] = this.active): MissionBudgetRefusal | null {
     if (labels.length === 0) return null;
+
     for (const scope of labels) {
       for (const row of this.ledger.chain(scope)) {
         if (!isOverBudget(row)) continue;
         const refusal = this.refusalFor(seam, scope, row);
+
         if (row.exhaustedAt === null) {
           this.ledger.markExhausted(row.label, this.now());
           this.deps.onExhausted?.(refusal);
         }
+
         return refusal;
       }
     }
+
     return null;
   }
 
@@ -499,10 +525,12 @@ export class MissionGovernor {
     labels?: readonly string[]; calls?: number; spawns?: number; usage?: Usage;
   }): void {
     const labels = opts?.labels ?? this.active;
+
     if (labels.length === 0) return;
     const total = Math.max(0, Math.round(tokens));
     const pricing = opts?.usage ? this.deps.pricing?.() ?? null : null;
     const priced = pricing && opts?.usage ? priceCall(opts.usage, pricing) : undefined;
+
     const delta: MissionDebit = {
       tokens: total,
       usd: priced?.usd ?? estimateUsdCost(total),
@@ -510,7 +538,9 @@ export class MissionGovernor {
       calls: opts?.calls ?? 0,
       spawns: opts?.spawns ?? 0,
     };
+
     if (delta.tokens === 0 && delta.calls === 0 && delta.spawns === 0) return;
+
     for (const label of new Set(labels)) this.ledger.debit(label, delta);
   }
 
@@ -525,6 +555,7 @@ export class MissionGovernor {
   /** One label's state, or every active label's when omitted. */
   snapshot(label?: string): MissionBudgetSnapshot[] {
     const labels = label !== undefined ? [label] : this.active;
+
     return labels.map((l) => this.ledger.get(l)).filter((r): r is MissionRow => r !== null).map(toSnapshot);
   }
 
@@ -546,19 +577,24 @@ export class MissionGovernor {
    */
   govern(llm: LLM, labels: readonly string[] = this.active): LLM {
     if (labels.length === 0) return llm;
+
     const guard = (): void => {
       const refusal = this.guard('model_call', labels);
+
       if (refusal) throw new MissionBudgetExhausted(refusal);
     };
+
     return {
       stream: (opts) => {
         guard();
+
         return llm.stream(opts);
       },
       complete: async (prompt) => {
         guard();
         const text = await llm.complete(prompt);
         this.debit(estimateTokens(prompt.length + text.length), { labels, calls: 1 });
+
         return text;
       },
     };
@@ -566,13 +602,16 @@ export class MissionGovernor {
 
   private refusalFor(seam: MissionSeam, scope: string, row: MissionRow): MissionBudgetRefusal {
     const snapshot = toSnapshot(row);
+
     const cap = row.limitTokens !== null
       ? `${row.limitTokens} tokens`
       : `$${(row.limitUsd ?? 0).toFixed(2)}`;
+
     // "≈" only where it is earned: a fully catalog-priced ledger is a
     // measurement, and hedging it would teach the agent to distrust the number.
     const about = snapshot.pricing.source === 'catalog' ? '=' : '≈';
     const spent = `${snapshot.spent.tokens} tokens ${about} $${snapshot.spent.usd.toFixed(4)} against ${cap}`;
+
     return {
       error: 'budget_exhausted',
       seam,
@@ -665,10 +704,12 @@ export function missionMeter(mission: MissionScope | undefined): MissionMeter {
   if (!mission) {
     return { outOfBudget: async () => false, charge: async () => {} };
   }
+
   return {
     outOfBudget: async () => (await mission.port.guard('model_call', mission.labels)) !== null,
     charge: async (usage) => {
       if (!usage) return;
+
       // Work whose provider reported nothing is metered as the SPAWN it was, not
       // as a free call: charging `0` here would be indistinguishable from a
       // provider that reported zero tokens.
@@ -696,6 +737,7 @@ const MissionLabelsMetadataSchema = v.object({
  *  unscoped: a turn must never inherit a budget it cannot name properly. */
 export function readMissionLabels<Metadata>(metadata: Metadata): string[] {
   const parsed = v.safeParse(MissionLabelsMetadataSchema, metadata);
+
   return parsed.success ? parsed.output[MISSION_LABELS_METADATA_KEY] ?? [] : [];
 }
 
@@ -707,10 +749,14 @@ export function readMissionLimits(input: {
 }): MissionBudgetLimits | null {
   const parsedUsd = v.safeParse(v.number(), input.budget_usd);
   const parsedTokens = v.safeParse(v.number(), input.budget_tokens);
+
   const usd = parsedUsd.success && Number.isFinite(parsedUsd.output) && parsedUsd.output > 0
     ? parsedUsd.output : undefined;
+
   const tokens = parsedTokens.success && Number.isFinite(parsedTokens.output) && parsedTokens.output > 0
     ? Math.floor(parsedTokens.output) : undefined;
+
   if (usd === undefined && tokens === undefined) return null;
+
   return { usd, tokens };
 }

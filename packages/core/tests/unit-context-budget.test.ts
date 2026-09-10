@@ -86,6 +86,7 @@ describe('citesSpillAddress', () => {
     const code = `const t = await workspace.readFile('/${SPILL_DIRS.toolOutput}/x9.log');\n` +
       'const parts = t.match(/.{1,20000}/gs) ?? [];\n' +
       'return Promise.all(parts.map((p) => agents.hire({ lifetime: "task", role: "general", mission: `summarise: ${p}` })));';
+
     expect(citesSpillAddress({ code })).toBe(true);
     expect(citesSpillAddress(`read ${SPILL_DIRS.compaction}/sess/abc.md`)).toBe(true);
   });

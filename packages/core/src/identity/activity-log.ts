@@ -28,12 +28,14 @@ export function readActivityLog(
   sql: SqlExecutor, actor: ActorHandle, limit: number,
 ): ActivityLogEntry[] {
   actor.assertCurrent();
+
   const rows = sql<{ event: string; detail: string | null; elapsed_ms: number; created_at: number }>`
     SELECT event, detail, elapsed_ms, created_at
     FROM activity_log
     WHERE actor_id = ${actor.actorId}
     ORDER BY created_at DESC, id DESC
     LIMIT ${Math.max(0, Math.floor(limit))}`;
+
   return rows.map((row) => ({
     event: row.event,
     detail: row.detail,

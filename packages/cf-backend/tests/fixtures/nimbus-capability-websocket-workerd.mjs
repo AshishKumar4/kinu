@@ -3,6 +3,7 @@ import { build } from 'esbuild';
 import { Miniflare, NoOpLog } from 'miniflare';
 
 const CAPABILITY = '0123456789abcdef01234567';
+
 const sessionEntry = new URL('./nimbus-capability-websocket-worker.ts', import.meta.url).pathname;
 
 const edgeScript = `
@@ -56,6 +57,7 @@ const buildResult = await build({
   loader: { '.wasm': 'binary' },
   external: ['cloudflare:workers', 'cloudflare:sockets'],
 });
+
 const sessionScript = buildResult.outputFiles[0].text;
 
 /** miniflare 5: a worker is `{ config }` carrying its own compat date and its
@@ -79,6 +81,7 @@ const worker = (name, code, env) => ({
  *  call per runtime log line, so the runtime diagnostics are rejoined here. */
 const diagnosticSink = () => {
   const lines = [];
+
   return {
     handle: ({ level, message }) => { lines.push(`${level}: ${message}`); },
     text: () => lines.join('\n'),
@@ -86,6 +89,7 @@ const diagnosticSink = () => {
 };
 
 const runtimeDiagnostics = diagnosticSink();
+
 const miniflare = new Miniflare({
   log: new NoOpLog(),
   handleStructuredLogs: runtimeDiagnostics.handle,
@@ -107,6 +111,7 @@ try {
       'sec-websocket-protocol': 'vite-hmr',
     },
   });
+
   assert.equal(response.status, 101);
   assert.equal(response.headers.get('x-guest-authorization'), 'Bearer guest-token');
   assert.equal(response.headers.get('x-guest-internal-capability'), null);
@@ -130,12 +135,14 @@ try {
 
   const hmr = new URL('https://preview.example/__nimbus_hmr');
   hmr.searchParams.set('capability', CAPABILITY);
+
   const hmrResponse = await miniflare.dispatchFetch(hmr, {
     headers: {
       upgrade: 'websocket',
       'sec-websocket-protocol': 'vite-hmr',
     },
   });
+
   assert.equal(hmrResponse.status, 101);
   assert.equal(hmrResponse.headers.get('sec-websocket-protocol'), 'vite-hmr');
   assert.ok(hmrResponse.webSocket);
@@ -144,9 +151,11 @@ try {
 
   const revoked = new URL(preview);
   revoked.searchParams.set('capability', 'ffffffffffffffffffffffff');
+
   const rejected = await miniflare.dispatchFetch(revoked, {
     headers: { upgrade: 'websocket' },
   });
+
   assert.equal(rejected.status, 404);
   assert.equal(rejected.webSocket, null);
 
@@ -156,6 +165,7 @@ try {
       'x-nimbus-hosted-websocket': 'guessed-process-key',
     },
   });
+
   assert.equal(spoofedPeerRoute.status, 404);
   assert.equal(spoofedPeerRoute.webSocket, null);
 
@@ -164,15 +174,18 @@ try {
 }
 
 const baselineDiagnostics = diagnosticSink();
+
 const baseline = new Miniflare({
   log: new NoOpLog(),
   handleStructuredLogs: baselineDiagnostics.handle,
   workers: [worker('edge', guestScript)],
 });
+
 try {
   const response = await baseline.dispatchFetch('https://baseline.example/socket', {
     headers: { upgrade: 'websocket' },
   });
+
   assert.equal(response.status, 101);
   assert.ok(response.webSocket);
   response.webSocket.accept();
@@ -207,7 +220,11 @@ try {
 // and the composed route proves the same channel is live there — without which
 // the leak assertion below would pass on an empty string.
 const guestReached = new RegExp(`^error: ${GUEST_REACHED}$`, 'm');
+
 assert.match(baselineDiagnostics.text(), guestReached);
+
 assert.match(runtimeDiagnostics.text(), guestReached);
+
 assert.doesNotMatch(runtimeDiagnostics.text(), /Tried to access method|RPC|TypeError|501/);
+
 process.stdout.write('Nimbus capability WebSocket workerd probe passed\n');

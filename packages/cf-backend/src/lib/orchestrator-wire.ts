@@ -23,6 +23,7 @@ const ScaffoldRunWireSchema = v.object({
 });
 
 export type RunEventWire = v.InferOutput<typeof RunEventWireSchema>[number];
+
 export type ScaffoldRunWire = v.InferOutput<typeof ScaffoldRunWireSchema>;
 
 export function decodeJsonWire(wire: string): JsonValue {
@@ -59,5 +60,6 @@ export function decodeScaffoldRunWire(wire: string): ScaffoldRunWire {
 export function resumeIndexFromLastEventId(lastEventId: string | null): number {
   if (lastEventId === null || lastEventId.trim() === '') return -1;
   const index = Number(lastEventId);
+
   return Number.isInteger(index) && index >= -1 ? index : -1;
 }

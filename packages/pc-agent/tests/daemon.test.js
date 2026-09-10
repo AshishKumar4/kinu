@@ -5,10 +5,15 @@
  * degraded mode when git is missing.
  */
 'use strict';
+
 const { afterAll, describe, expect, spyOn, test } = require('bun:test');
+
 const fs = require('node:fs');
+
 const os = require('node:os');
+
 const path = require('node:path');
+
 const { tolerate } = require('@kinu.run/core/obs');
 
 /**
@@ -16,13 +21,19 @@ const { tolerate } = require('@kinu.run/core/obs');
  * before require so this suite cannot inspect or modify the developer's home.
  */
 const INFLIGHT_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-inflight-'));
+
 const DEVICE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-home-'));
+
 const previousKinuHome = process.env.KINU_HOME;
+
 process.env.KINU_INFLIGHT_ROOT = INFLIGHT_ROOT;
+
 process.env.KINU_HOME = DEVICE_HOME;
+
 afterAll(() => {
   fs.rmSync(INFLIGHT_ROOT, { recursive: true, force: true });
   fs.rmSync(DEVICE_HOME, { recursive: true, force: true });
+
   if (previousKinuHome === undefined) delete process.env.KINU_HOME;
   else process.env.KINU_HOME = previousKinuHome;
 });
@@ -41,15 +52,19 @@ const {
 
 function fakeWs() {
   const frames = [];
+
   return {
     frames,
     send(data) { frames.push(JSON.parse(data)); },
     /** Await the correlated response for an id (exec resolves async). */
     async response(id, timeoutMs = 5000) {
       const t0 = Date.now();
+
       for (;;) {
         const frame = this.frames.find((f) => f.id === id);
+
         if (frame) return frame;
+
         if (Date.now() - t0 > timeoutMs) throw new Error(`no response for ${id}`);
         await new Promise((r) => setTimeout(r, 10));
       }
@@ -62,6 +77,7 @@ function setup(opts = {}) {
   const work = path.join(root, 'project');
   fs.mkdirSync(work, { recursive: true });
   const ctx = { checkpoints: createCheckpoints({ base: path.join(root, 'shadow'), keep: opts.keep, gitBin: opts.gitBin }) };
+
   return { root, work, ctx, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -80,13 +96,16 @@ describe('daemon token rotation', () => {
     const cfg = { user: 'user-1', token: 'T0' };
     fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
     const seen = [];
+
     const fetchTicket = async (_url, init) => {
       seen.push(JSON.parse(init.body));
+
       return new Response(JSON.stringify({ ticket: `pct_${'a'.repeat(32)}` }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
     };
+
     try {
       await getConnectTicket(cfg, 'https://kinu.run', fetchTicket);
       persistRotatedToken(cfg, 'T1', configPath);
@@ -105,6 +124,7 @@ describe('daemon token rotation', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-token-'));
     const configPath = path.join(root, 'missing', 'device.json');
     const cfg = { user: 'user-1', token: 'T0' };
+
     try {
       expect(() => persistRotatedToken(cfg, 'T1', configPath))
         .toThrow('persist rotated device token');
@@ -122,9 +142,11 @@ describe('daemon token rotation', () => {
     const cfg = { user: 'user-1', token: 'T0' };
     const messages = [];
     fs.writeFileSync(configPath, JSON.stringify(cfg), { mode: 0o600 });
+
     const rename = spyOn(fs, 'renameSync').mockImplementationOnce(() => {
       throw new Error('rename failed');
     });
+
     try {
       expect(handleTokenRotation(
         cfg,
@@ -150,6 +172,7 @@ describe('daemon startup hardening', () => {
     fs.writeFileSync(configPath, `{"user":"user-1","token":"${secret}",`);
 
     let failure;
+
     try {
       readDeviceConfig(configPath);
     } catch (err) {
@@ -167,6 +190,7 @@ describe('daemon startup hardening', () => {
   test('redacts rejected device credentials from ticket exchange failures', async () => {
     const secret = 'pdt_secret_that_must_not_appear';
     let failure;
+
     try {
       await getConnectTicket(
         { user: 'user-1', token: secret },
@@ -180,6 +204,7 @@ describe('daemon startup hardening', () => {
     if (!(failure instanceof Error) || !(failure.cause instanceof Error)) {
       throw new Error('expected ticket exchange to reject with a caused Error');
     }
+
     expect(failure.message).toContain('device credentials were rejected');
     expect(failure.message).not.toContain(secret);
     expect(failure.cause.message).not.toContain(secret);
@@ -193,10 +218,12 @@ describe('daemon startup hardening', () => {
     const sockets = [];
     const scheduled = [];
     const logs = [];
+
     const loop = startConnectLoop({
       getTicket: async () => issued.shift(),
       dial(ticket) {
         const listeners = new Map();
+
         const socket = {
           addEventListener(type, listener) {
             const callbacks = listeners.get(type) ?? [];
@@ -207,8 +234,10 @@ describe('daemon startup hardening', () => {
             for (const listener of listeners.get(type) ?? []) listener(event);
           },
         };
+
         dialed.push(ticket);
         sockets.push(socket);
+
         return socket;
       },
       logger(...parts) {
@@ -239,6 +268,7 @@ describe('daemon startup hardening', () => {
   /** The fake socket the loop tests drive, with the listener map they share. */
   function fakeSocket() {
     const listeners = new Map();
+
     return {
       sent: [],
       closed: 0,
@@ -262,6 +292,7 @@ describe('daemon startup hardening', () => {
     const scheduled = [];
     const logs = [];
     let rejected = 0;
+
     const loop = startConnectLoop({
       getTicket: async () => { throw new Error('device credentials were rejected; re-run: kinu connect'); },
       dial() { throw new Error('must not dial after a refusal'); },
@@ -269,6 +300,7 @@ describe('daemon startup hardening', () => {
       schedule(next) { scheduled.push(next); },
       onRejected() { rejected += 1; },
     });
+
     await Promise.resolve();
     await Promise.resolve();
     loop.stop();
@@ -284,6 +316,7 @@ describe('daemon startup hardening', () => {
     const logs = [];
     let rejected = 0;
     const socket = fakeSocket();
+
     const loop = startConnectLoop({
       getTicket: async () => 'pct_' + 'a'.repeat(32),
       dial: () => socket,
@@ -291,6 +324,7 @@ describe('daemon startup hardening', () => {
       schedule(next) { scheduled.push(next); },
       onRejected() { rejected += 1; },
     });
+
     await Promise.resolve();
     await Promise.resolve();
     socket.emit('close', { code: 4401 });
@@ -302,12 +336,14 @@ describe('daemon startup hardening', () => {
 
     // An ordinary close still redials, or a dropped socket would end the daemon.
     const second = fakeSocket();
+
     const ordinary = startConnectLoop({
       getTicket: async () => 'pct_' + 'b'.repeat(32),
       dial: () => second,
       logger() {},
       schedule(next) { scheduled.push(next); },
     });
+
     await Promise.resolve();
     await Promise.resolve();
     second.emit('close', { code: 1000 });
@@ -321,13 +357,19 @@ describe('daemon startup hardening', () => {
     const scheduled = [];
     const cancelled = [];
     const socket = fakeSocket();
+
     const loop = startConnectLoop({
       getTicket: async () => 'pct_' + 'c'.repeat(32),
       dial: () => socket,
       logger() {},
-      schedule(next) { scheduled.push(next); return scheduled.length; },
+      schedule(next) {
+        scheduled.push(next);
+
+        return scheduled.length;
+      },
       cancel(handle) { cancelled.push(handle); },
     });
+
     await Promise.resolve();
     await Promise.resolve();
     socket.emit('open');
@@ -407,6 +449,7 @@ describe('daemon device path confinement', () => {
     fs.writeFileSync(outside, 'secret');
     fs.symlinkSync(outside, path.join(project, 'link'));
     const ws = fakeWs();
+
     try {
       handle({
         id: 'traversal',
@@ -480,6 +523,7 @@ describe('daemon device path confinement', () => {
     const project = path.join(root, 'project');
     fs.mkdirSync(project);
     const ws = fakeWs();
+
     try {
       const dir = path.join(project, 'nested');
       const file = path.join(dir, 'data.txt');
@@ -509,6 +553,7 @@ describe('daemon device path confinement', () => {
 describe('daemon checkpoint protocol', () => {
   test('an exec frame with a checkpoint hint snapshots before running; restore round-trips', async () => {
     const { work, ctx, cleanup } = setup();
+
     try {
       fs.writeFileSync(path.join(work, 'data.txt'), 'original');
       const ws = fakeWs();
@@ -545,6 +590,7 @@ describe('daemon checkpoint protocol', () => {
 
   test('snapshots dedupe on the turn id; a new turn snapshots again', async () => {
     const { work, ctx, cleanup } = setup();
+
     try {
       const ws = fakeWs();
       const hint = (turnId) => ({ agent: 'a', turnId, sessionId: 's', dir: work });
@@ -567,6 +613,7 @@ describe('daemon checkpoint protocol', () => {
 
   test('writeFile derives the project dir from the path when the hint has no dir', async () => {
     const { work, ctx, cleanup } = setup();
+
     try {
       fs.writeFileSync(path.join(work, 'package.json'), '{}'); // project marker
       fs.mkdirSync(path.join(work, 'src'), { recursive: true });
@@ -593,6 +640,7 @@ describe('daemon checkpoint protocol', () => {
 
   test('frames without a checkpoint hint behave exactly as before (no snapshot)', async () => {
     const { work, ctx, cleanup } = setup();
+
     try {
       const ws = fakeWs();
       handle({ id: 'rpc-nosnapexe0-1', method: 'exec', params: [`echo hi > ${work}/x.txt`] }, ws, ctx);
@@ -604,6 +652,7 @@ describe('daemon checkpoint protocol', () => {
 
   test('degrades honestly when git is missing — operations still run, status says why', async () => {
     const { work, ctx, cleanup } = setup({ gitBin: '/nonexistent/definitely-not-git' });
+
     try {
       const ws = fakeWs();
       // The mutation is never blocked by the unavailable engine.
@@ -627,13 +676,16 @@ describe('daemon checkpoint protocol', () => {
 
   test('retention prunes to the configured keep', async () => {
     const { work, ctx, cleanup } = setup({ keep: 2 });
+
     try {
       const ws = fakeWs();
+
       for (let i = 0; i < 4; i++) {
         fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
         handle({ id: `e${i}`, method: 'exec', params: ['true'], checkpoint: { agent: 'a', turnId: `t${i}`, sessionId: 's', dir: work } }, ws, ctx);
         await ws.response(`e${i}`);
       }
+
       handle({ id: 'l', method: 'checkpointList', params: ['a'] }, ws, ctx);
       const list = (await ws.response('l')).result;
       expect(list).toHaveLength(2);
@@ -650,8 +702,10 @@ describe('daemon checkpoint protocol', () => {
    */
   test('checkpointList narrows by turn in the store, so a limit cannot bury a turn', async () => {
     const { work, ctx, cleanup } = setup();
+
     try {
       const ws = fakeWs();
+
       for (let i = 0; i < 3; i++) {
         fs.writeFileSync(path.join(work, 'n.txt'), `v${i}`);
         handle({
@@ -689,6 +743,7 @@ describe('daemon toolchain probe', () => {
   function withPath(dir, fn) {
     const previous = process.env.PATH;
     process.env.PATH = dir;
+
     try {
       return fn();
     } finally {
@@ -699,14 +754,17 @@ describe('daemon toolchain probe', () => {
   /** A PATH directory holding executables named `names`. */
   function pathWith(names) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-which-'));
+
     for (const name of names) {
       fs.writeFileSync(path.join(dir, name), '#!/bin/sh\n', { mode: 0o755 });
     }
+
     return dir;
   }
 
   test('answers only about the names it was asked, and only those that resolve', async () => {
     const dir = pathWith(['node', 'git']);
+
     try {
       const ws = fakeWs();
       withPath(dir, () => handle({ id: 1, method: 'which', params: [['node', 'bun', 'git', 'python3']] }, ws, {}));
@@ -722,6 +780,7 @@ describe('daemon toolchain probe', () => {
   test('a non-executable file of the right name is not a binary on PATH', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-which-'));
     fs.writeFileSync(path.join(dir, 'python3'), 'not a program', { mode: 0o644 });
+
     try {
       const ws = fakeWs();
       withPath(dir, () => handle({ id: 1, method: 'which', params: [['python3']] }, ws, {}));
@@ -735,6 +794,7 @@ describe('daemon toolchain probe', () => {
 
   test('refuses to answer for anything but a bare binary name', async () => {
     const dir = pathWith(['node']);
+
     try {
       const ws = fakeWs();
       // The probe must not become a way to ask whether paths on the user's
@@ -779,6 +839,7 @@ describe('daemon process under Bun against a local hub', () => {
     const config = { user: 'user-1', token: `pdt_${'a'.repeat(32)}`, origin };
     const configPath = path.join(root, 'device.json');
     fs.writeFileSync(configPath, JSON.stringify(config), { mode: 0o600 });
+
     return { config, configPath };
   }
 
@@ -791,17 +852,22 @@ describe('daemon process under Bun against a local hub', () => {
   function startFakeHub() {
     const frames = [];
     const sockets = [];
+
     const hub = Bun.serve({
       port: 0,
       fetch(req, server) {
         const url = new URL(req.url);
+
         if (url.pathname === '/pc/connect-ticket') {
           return Response.json({ ticket: `pct_${'b'.repeat(32)}`, expiresAt: Date.now() + 60_000 });
         }
+
         if (url.pathname === '/pc/connect') {
           if (server.upgrade(req)) return;
+
           return new Response('upgrade failed', { status: 400 });
         }
+
         return new Response('not found', { status: 404 });
       },
       websocket: {
@@ -809,6 +875,7 @@ describe('daemon process under Bun against a local hub', () => {
         message(socket, message) {
           const frame = JSON.parse(String(message));
           frames.push(frame);
+
           if (frame.type === 'HELLO') {
             // Echo the runtime the daemon is actually running on, so the
             // assertion reads what ran, not what was spawned.
@@ -817,6 +884,7 @@ describe('daemon process under Bun against a local hub', () => {
         },
       },
     });
+
     return {
       origin: `http://localhost:${hub.port}`,
       frames,
@@ -829,6 +897,7 @@ describe('daemon process under Bun against a local hub', () => {
   function spawnDaemon(root, extraEnv) {
     const logPath = path.join(root, 'pc-agent.log');
     const logFd = fs.openSync(logPath, 'a');
+
     const child = Bun.spawn({
       cmd: [process.execPath, DAEMON_PATH],
       env: { ...process.env, KINU_HOME: root, KINU_INFLIGHT_ROOT: path.join(root, 'inflight'), ...extraEnv },
@@ -839,18 +908,23 @@ describe('daemon process under Bun against a local hub', () => {
       stderr: logFd,
       stdin: 'ignore',
     });
+
     fs.closeSync(logFd);
+
     return { child, logPath };
   }
 
   /** Poll the hub's frame list until a predicate holds, or fail with why. */
   async function untilHub(predicate, timeoutMs = 10_000) {
     const deadline = Date.now() + timeoutMs;
+
     while (Date.now() < deadline) {
       const found = predicate();
+
       if (found) return found;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
+
     return null;
   }
 
@@ -861,13 +935,16 @@ describe('daemon process under Bun against a local hub', () => {
     // through the tunnel (see the credential-fence test below), so a file op
     // that proves the socket works must target a consented directory instead.
     const files = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-e2e-files-'));
+
     try {
       const hub = startFakeHub();
+
       try {
         // The daemon reads its origin from device.json, so the config lands
         // after the hub exists and names the hub's real port.
         makeConfig(root, hub.origin);
         const { child, logPath } = spawnDaemon(root);
+
         try {
           // HELLO arrives with the runtime identity only a real Bun carries.
           const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
@@ -891,7 +968,9 @@ describe('daemon process under Bun against a local hub', () => {
 
           const reply = async (id, timeoutMs = 15_000) => {
             const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
+
             if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
+
             return frame;
           };
 
@@ -939,11 +1018,14 @@ describe('daemon process under Bun against a local hub', () => {
           child.kill('SIGTERM');
           await child.exited;
           const inflight = path.join(root, 'inflight');
+
           if (fs.existsSync(inflight)) {
             for (const entry of fs.readdirSync(inflight)) {
               const state = path.join(inflight, entry, 'state');
+
               if (!fs.existsSync(state)) continue;
               const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
+
               // ESRCH is the supervisor already being gone; that is the
               // teardown's goal, so nothing rethrows past it.
               if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
@@ -971,30 +1053,41 @@ describe('daemon process under Bun against a local hub', () => {
    */
   async function withDaemon(extraEnv, body) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-case-'));
+
     try {
       const hub = startFakeHub();
+
       try {
         makeConfig(root, hub.origin);
         const { child, logPath } = spawnDaemon(root, extraEnv);
         const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
+
         try {
           const hello = await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'));
+
           if (!hello) throw new Error(`daemon never connected: log says ${daemonLog()}`);
+
           const reply = async (id, timeoutMs = 15_000) => {
             const frame = await untilHub(() => hub.frames.find((f) => f.id === id), timeoutMs);
+
             if (!frame) throw new Error(`no reply for ${id}: log says ${daemonLog()}`);
+
             return frame;
           };
+
           await body({ hub, root, child, reply, daemonLog });
         } finally {
           child.kill('SIGTERM');
           await child.exited;
           const inflight = path.join(root, 'inflight');
+
           if (fs.existsSync(inflight)) {
             for (const entry of fs.readdirSync(inflight)) {
               const state = path.join(inflight, entry, 'state');
+
               if (!fs.existsSync(state)) continue;
               const pid = Number(/^pid=(\d+)$/m.exec(fs.readFileSync(state, 'utf-8'))?.[1]);
+
               if (Number.isInteger(pid) && pid > 0) tolerate(() => process.kill(-pid, 'SIGKILL'), 'esrch');
             }
           }
@@ -1011,6 +1104,7 @@ describe('daemon process under Bun against a local hub', () => {
   function processAlive(pid) {
     try {
       process.kill(pid, 0);
+
       return true;
     } catch (err) {
       if (err && err.code === 'ESRCH') return false;
@@ -1020,8 +1114,10 @@ describe('daemon process under Bun against a local hub', () => {
 
   async function until(predicate, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
+
     for (;;) {
       if (predicate()) return true;
+
       if (Date.now() >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
@@ -1036,6 +1132,7 @@ describe('daemon process under Bun against a local hub', () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     await withDaemon(undefined, async ({ hub, root, reply }) => {
       fs.writeFileSync(path.join(root, 'config.json'), '{"accessToken":"ptc_owner_bearer"}', { mode: 0o600 });
+
       const refused = [
         ['rpc-fence00rd-1', 'readFile', [path.join(root, 'config.json')]],
         ['rpc-fence00dv-1', 'readFile', [path.join(root, 'device.json')]],
@@ -1045,6 +1142,7 @@ describe('daemon process under Bun against a local hub', () => {
         ['rpc-fence00un-1', 'unlinkPath', [path.join(root, 'device.json')]],
         ['rpc-fence00mk-1', 'mkdirPath', [path.join(root, 'planted')]],
       ];
+
       for (const [id, method, params] of refused) {
         hub.socket().send(JSON.stringify({ id, method, params }));
         const frame = await reply(id);
@@ -1053,6 +1151,7 @@ describe('daemon process under Bun against a local hub', () => {
         expect(frame.result).toBeUndefined();
         expect(frame.error).toContain("inside Kinu's own directory");
       }
+
       // The credentials are intact and the plant did not land.
       expect(fs.readFileSync(path.join(root, 'config.json'), 'utf-8')).toContain('ptc_owner_bearer');
       expect(fs.existsSync(path.join(root, 'device.json'))).toBe(true);
@@ -1061,6 +1160,7 @@ describe('daemon process under Bun against a local hub', () => {
       // A symlink is refused by where it LANDS, not by how it is spelled.
       const bait = path.join(os.tmpdir(), `kinu-fence-bait-${process.pid}`);
       fs.symlinkSync(path.join(root, 'device.json'), bait);
+
       try {
         hub.socket().send(JSON.stringify({ id: 'rpc-fence00sy-1', method: 'readFile', params: [bait] }));
         expect((await reply('rpc-fence00sy-1')).error).toContain("inside Kinu's own directory");
@@ -1080,6 +1180,7 @@ describe('daemon process under Bun against a local hub', () => {
       // The store is the directory, so making it unwritable is what makes the
       // atomic rename fail — the same way a full or read-only disk would.
       fs.chmodSync(root, 0o500);
+
       try {
         hub.socket().send(JSON.stringify({ type: 'ROTATE', token: `pdt_${'d'.repeat(32)}` }));
         await untilHub(() => daemonLog().includes('Device token rotation failed:'));
@@ -1123,10 +1224,12 @@ describe('daemon process under Bun against a local hub', () => {
   test('a sandboxed exec runs in the agent home and cannot reach the machine', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
     const sandbox = require('../src/sandbox.js');
+
     if (sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
     await withDaemon(undefined, async ({ hub, root, reply }) => {
       const agentHome = path.join(root, 'agents', 'ws-1', 'home');
       const consented = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-consented-'));
+
       try {
         hub.socket().send(JSON.stringify({
           id: 'rpc-sandboxrun-1',
@@ -1185,6 +1288,7 @@ describe('daemon process under Bun against a local hub', () => {
   // shell grant into the owner's CLI bearer, their PAT and their SSH agent.
   test('a command gets an allow-listed environment, never the daemon\'s inherited credentials', async () => {
     if (process.platform !== 'linux' && process.platform !== 'darwin') return;
+
     // NODE_OPTIONS is the code-loading class the allow-list exists for, and
     // bun ignores it, so a pre-fix tree still RUNS the command and the failure
     // below is the credential leak rather than a broken spawn. BUN_INSPECT is
@@ -1199,16 +1303,19 @@ describe('daemon process under Bun against a local hub', () => {
       SSH_AUTH_SOCK: '/tmp/leaked-agent.sock',
       NODE_OPTIONS: '--require /tmp/leaked-preload.js',
     };
+
     await withDaemon(poison, async ({ hub, reply }) => {
       hub.socket().send(JSON.stringify({ id: 'rpc-envdump000-1', method: 'exec', params: ['env'] }));
       const dumped = await reply('rpc-envdump000-1');
       expect(dumped.error).toBeUndefined();
       expect(dumped.result.exitCode).toBe(0);
+
       const names = new Set(
         dumped.result.stdout.split('\n')
           .filter((line) => line.includes('='))
           .map((line) => line.slice(0, line.indexOf('='))),
       );
+
       // A command that cannot find its own tools is not hardened, it is broken.
       expect(names.has('PATH')).toBe(true);
       expect(names.has('HOME')).toBe(true);
@@ -1233,8 +1340,10 @@ describe('daemon process under Bun against a local hub', () => {
     const requestId = 'rpc-orphanwait-1';
     const requestDir = path.join(root, 'inflight', requestId);
     let supervisorPid = 0;
+
     try {
       const hub = startFakeHub();
+
       try {
         makeConfig(root, hub.origin);
         const first = spawnDaemon(root);
@@ -1242,6 +1351,7 @@ describe('daemon process under Bun against a local hub', () => {
         expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
         hub.socket().send(JSON.stringify({ id: requestId, method: 'exec', params: ['printf orphan-check'] }));
         const done = await untilHub(() => hub.frames.find((f) => f.id === requestId));
+
         if (!done) throw new Error(`no exec reply: log says ${firstLog()}`);
         expect(done.result.stdout).toContain('orphan-check');
 
@@ -1259,10 +1369,12 @@ describe('daemon process under Bun against a local hub', () => {
         // clears the request — writing the FIFO here would hang the daemon
         // instead of the supervisor, which is the same leak one process along.
         const second = spawnDaemon(root);
+
         try {
           expect(await untilHub(() => hub.frames.filter((f) => f.type === 'HELLO')[1])).not.toBeNull();
           hub.socket().send(JSON.stringify({ id: 'rpc-orphanack-1', method: 'execAck', params: [requestId, 1] }));
           const acked = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-orphanack-1'), 15_000);
+
           if (!acked) throw new Error(`no ack reply: log says ${fs.readFileSync(second.logPath, 'utf-8')}`);
           expect(acked.result).toEqual({ requestId, acknowledged: true });
           expect(fs.existsSync(requestDir)).toBe(false);
@@ -1293,16 +1405,20 @@ describe('daemon process under Bun against a local hub', () => {
     if (process.platform !== 'linux') return;
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-daemon-signal-'));
     let job = 0;
+
     try {
       const hub = startFakeHub();
+
       try {
         makeConfig(root, hub.origin);
         const { child, logPath } = spawnDaemon(root);
+
         try {
           const daemonLog = () => fs.readFileSync(logPath, 'utf-8');
           expect(await untilHub(() => hub.frames.find((f) => f.type === 'HELLO'))).not.toBeNull();
           hub.socket().send(JSON.stringify({ id: 'rpc-ptysignal0-1', method: 'ptyOpen', params: ['sig', 80, 24] }));
           const opened = await untilHub(() => hub.frames.find((f) => f.id === 'rpc-ptysignal0-1'));
+
           if (!opened) throw new Error(`no ptyOpen reply: log says ${daemonLog()}`);
           expect(opened.result.pid).toBeGreaterThan(0);
 
@@ -1310,12 +1426,14 @@ describe('daemon process under Bun against a local hub', () => {
             .filter((f) => f.type === 'PTY_OUT' && f.session === 'sig')
             .map((f) => Buffer.from(f.data, 'base64').toString('utf-8'))
             .join('');
+
           hub.socket().send(JSON.stringify({
             type: 'PTY_IN',
             session: 'sig',
             data: Buffer.from('sleep 600 & job=$!; disown $job; echo started $job\r').toString('base64'),
           }));
           const started = await untilHub(() => /started (\d+)/.exec(output()));
+
           if (!started) throw new Error(`the shell never started the job: log says ${daemonLog()}`);
           job = Number(started[1]);
           expect(processAlive(job)).toBe(true);

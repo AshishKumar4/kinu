@@ -39,11 +39,14 @@ const HEALTH = '/api/health';
 
 /** The build the document loads with, and the one the origin moves to after. */
 const LOADED_SHA = 'abc1234';
+
 const LATER_SHA = 'deadbee';
+
 const STAMP = { version: '0.1.0+abc1234', sha: LOADED_SHA, builtAt: '2026-08-07T00:00:00.000Z' };
 
 /** The needle `gallery.tsx` puts in the thrown error's message. */
 const MESSAGE_NEEDLE = 'MESSAGE_LEAKS_IF_REPORTED_0001';
+
 /** The workspace the route resolves for. A report must carry the TEMPLATE. */
 const WORKSPACE = 'checkout-fixes';
 
@@ -55,6 +58,7 @@ const ReportSchema = v.object({
   stack: v.string(),
   componentStack: v.string(),
 });
+
 type Report = v.InferOutput<typeof ReportSchema>;
 
 /** One POST the page really made. */
@@ -127,12 +131,15 @@ async function watchReportSettlement(page: Page): Promise<void> {
     window.fetch = Object.assign((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input instanceof Request ? input.url : input);
       const pending = real(input, init);
+
       if (url.includes(endpoint)) {
         const settled = () => {
           window.__clientErrorSettled = (window.__clientErrorSettled ?? 0) + 1;
         };
+
         pending.then(settled, settled);
       }
+
       return pending;
     }, { preconnect: real.preconnect });
   }, CLIENT_ERROR_ENDPOINT);
@@ -147,18 +154,23 @@ async function serve(
   await page.setRequestInterception(true);
   page.on('request', async (request: HTTPRequest) => {
     const path = new URL(request.url()).pathname;
+
     if (path === HEALTH) {
       await request.respond({
         status: 200,
         contentType: 'application/json',
         body: JSON.stringify({ ok: true, build: { ...STAMP, sha: stamp.sha } }),
       });
+
       return;
     }
+
     if (path !== CLIENT_ERROR_ENDPOINT) {
       await request.continue();
+
       return;
     }
+
     const body = request.postData() ?? '';
     sent.push({
       method: request.method(),
@@ -167,23 +179,29 @@ async function serve(
       report: v.parse(ReportSchema, JSON.parse(body)),
     });
     const decided = answer();
+
     if (decided === 'stalled') {
       // Neither answered nor aborted: the request stays open for the life of the
       // page. Nothing on the page is allowed to be waiting on it.
       return;
     }
+
     if (decided === 'unreachable') {
       await request.abort('failed');
+
       return;
     }
+
     if (decided === 'refuse') {
       await request.respond({
         status: 401,
         contentType: 'application/json',
         body: JSON.stringify({ error: 'sign in to report a render failure' }),
       });
+
       return;
     }
+
     await request.respond({
       status: 202,
       contentType: 'application/json',
@@ -197,8 +215,10 @@ async function fallback(page: Page): Promise<{ visible: boolean; text: string; r
   return page.evaluate(() => {
     const buttons = [...document.querySelectorAll('button')];
     const retry = buttons.find((node) => (node.textContent ?? '').trim() === 'Try again');
+
     const heading = [...document.querySelectorAll('div')]
       .find((node) => (node.textContent ?? '').startsWith('Something went wrong rendering this view'));
+
     return {
       visible: heading !== undefined,
       text: heading?.textContent ?? '',
@@ -212,6 +232,7 @@ async function tryAgain(page: Page): Promise<void> {
   await page.evaluate(() => {
     const retry = [...document.querySelectorAll('button')]
       .find((node) => (node.textContent ?? '').trim() === 'Try again');
+
     retry?.click();
   });
 }
@@ -228,6 +249,7 @@ async function tryAgain(page: Page): Promise<void> {
 function pause(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   setTimeout(resolve, ms);
+
   return promise;
 }
 
@@ -235,11 +257,14 @@ function pause(ms: number): Promise<void> {
  *  failure reports what arrived rather than only that time ran out. */
 async function reportsSettled(sent: readonly Sent[], count: number): Promise<void> {
   const deadline = Date.now() + 15_000;
+
   while (sent.length < count && Date.now() < deadline) await pause(25);
+
   if (sent.length < count) {
     throw new Error(`only ${String(sent.length)} of ${String(count)} report(s) left the page`);
   }
 }
+
 /** Wait until every issued report fetch has settled and the count holds still
  *  for a full beat — the page's own settlement counter decides when the
  *  duplicate window is over, not a fixed sleep. Capped at the previous fixed
@@ -249,19 +274,24 @@ async function reportsQuiesced(page: Page, sent: readonly Sent[], budgetMs: numb
   let lastSettled = -1;
   let lastSent = -1;
   let quietSince = -1;
+
   for (;;) {
     const settled = await page.evaluate(() => window.__clientErrorSettled ?? 0);
+
     if (settled === lastSettled && sent.length === lastSent) {
       if (quietSince === -1) quietSince = Date.now();
+
       if (Date.now() - quietSince >= 200) return;
     } else {
       lastSettled = settled;
       lastSent = sent.length;
       quietSince = -1;
     }
+
     if (Date.now() >= deadline) {
       throw new Error(`reports never went quiet: ${sent.length} sent, ${settled} settled within ${budgetMs}ms`);
     }
+
     await pause(25);
   }
 }
@@ -294,6 +324,7 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
     // failure has to arrive readable.
     page.on('pageerror', (error) => {
       const rendered = renderThrownChain({ cause: error });
+
       // The dev client's own failed HMR socket, which the harness disables. It is
       // the harness's noise rather than anything this page did, and filtering it
       // by exact text keeps every other second error loud.
@@ -306,6 +337,7 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
     await page.goto(`${origin}/gallery.html?frame=errorboundary${query}`, {
       waitUntil: 'networkidle0',
     });
+
     try {
       await page.waitForSelector('[data-break]');
     } catch (cause) {
@@ -313,18 +345,21 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
       const startup = snapshot.status === 'fulfilled' ? snapshot.value : { readError: renderThrownChain({ cause: snapshot.reason }) };
       throw new Error('Gallery startup: ' + JSON.stringify({ url: page.url(), pageErrors, startupFailures, startup }), { cause });
     }
+
     if (options.moveStampAfterLoad === true) stamp.sha = LATER_SHA;
 
     await page.click('[data-break]');
     await page.waitForFunction(
       () => document.body.textContent?.includes('Something went wrong rendering this view') === true,
     );
+
     for (let attempt = 0; attempt < (options.retries ?? 0); attempt += 1) {
       await tryAgain(page);
       await page.waitForFunction(
         () => document.body.textContent?.includes('Something went wrong rendering this view') === true,
       );
     }
+
     // The report, awaited as an event. Then a quiet window in which a duplicate
     // would have arrived: every send this endpoint makes is issued synchronously
     // from `componentDidCatch`, so a second one is already in flight by the time
@@ -335,9 +370,11 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
 
     const seen = await fallback(page);
     const sceneIntact = await page.$('[data-scene-copy]') !== null;
+
     const faultThrows = await page.evaluate(
       () => Number(document.body.dataset.renderFaultThrows ?? '0'),
     );
+
     // Read BEFORE any navigation discards the page that holds it. Asserted TRUE on
     // the answered drive as well as false on the stalled one, so the discriminator
     // is shown able to tell the two apart rather than assumed to.
@@ -349,12 +386,15 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
     const reportAnswered = await page.evaluate(
       () => (window.__clientErrorSettled ?? 0) > 0,
     );
+
     // Asked last, because it replaces the document the assertions above read.
     let navigated: boolean | null = null;
+
     if (options.navigateAfter === true) {
       await page.goto(`${origin}/gallery.html?frame=errorboundary`, { waitUntil: 'load' });
       navigated = await page.$('[data-break]') !== null;
     }
+
     return {
       sent,
       pageErrors,
@@ -370,10 +410,15 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
 }
 
 let accepted: Observed;
+
 let unreachable: Observed;
+
 let refused: Observed;
+
 let moved: Observed;
+
 let fitted: Observed;
+
 let stalled: Observed;
 
 beforeAll(async () => {
@@ -438,6 +483,7 @@ describe('what the report carries', () => {
   test('stack frames a person can reproduce from', () => {
     const stack = accepted.sent[0]?.report.stack ?? '';
     expect(stack.length).toBeGreaterThan(0);
+
     for (const line of stack.split('\n')) {
       // Every line is a coordinate: `…:<line>:<column>`, optionally in V8's
       // parentheses. Prose cannot satisfy it.
@@ -458,9 +504,11 @@ describe('what the report carries', () => {
     // resolves against a locally generated map.
     const frames = (accepted.sent[0]?.report.componentStack ?? '').split('\n').filter(Boolean);
     expect(frames.length).toBeGreaterThan(1);
+
     for (const frame of frames) {
       expect(frame).toMatch(/^\s*at\s+[A-Za-z_$][\w$.]*(?:\s+\(\S+:\d+:\d+\))?$/u);
     }
+
     expect(frames.some((frame) => /:\d+:\d+\)$/u.test(frame))).toBe(true);
   });
 

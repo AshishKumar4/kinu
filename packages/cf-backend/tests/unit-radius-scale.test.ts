@@ -25,10 +25,12 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const CSS = readFileSync(join(import.meta.dir, '..', 'src', 'index.css'), 'utf8');
+
 const NO_COMMENTS = CSS.replace(/\/\*[\s\S]*?\*\//g, '');
 
 /** The rungs Tailwind's `rounded-*` utilities read. */
 const RUNGS = ['--radius-xs', '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl'] as const;
+
 /** The role names the `.p-*` component classes read. */
 const ROLES = ['--r-control', '--r-row', '--r-card', '--r-overlay'] as const;
 
@@ -42,9 +44,11 @@ function globalDeclarations(): Map<string, string> {
   const plannotator = NO_COMMENTS.indexOf('[data-kinu-plan-review]');
   const scope = plannotator === -1 ? NO_COMMENTS : NO_COMMENTS.slice(0, plannotator);
   const out = new Map<string, string>();
+
   for (const [, name, value] of scope.matchAll(/(--[a-z0-9-]+)\s*:\s*([^;{}]+);/gi)) {
     out.set(name!, value!.trim());
   }
+
   return out;
 }
 
@@ -62,15 +66,20 @@ const LENGTH = /^-?\d*\.?\d+(px|rem|em|%)$/;
 function resolve(token: string, seen: string[] = []): { ok: true; value: string } | { ok: false; at: string } {
   if (seen.includes(token)) return { ok: false, at: `cycle via ${token}` };
   const raw = DECLARED.get(token);
+
   if (raw === undefined) return { ok: false, at: token };
   const refs = [...raw.matchAll(/var\(\s*(--[a-z0-9-]+)/gi)].map((m) => m[1]!);
+
   if (refs.length === 0) {
     return LENGTH.test(raw) ? { ok: true, value: raw } : { ok: false, at: `${token} → non-length ${raw}` };
   }
+
   for (const ref of refs) {
     const inner = resolve(ref, [...seen, token]);
+
     if (!inner.ok) return inner;
   }
+
   return { ok: true, value: raw };
 }
 
@@ -79,10 +88,13 @@ function resolve(token: string, seen: string[] = []): { ok: true; value: string 
  *  rather than an asserted shape. */
 function unresolved(tokens: readonly string[]): string[] {
   const out: string[] = [];
+
   for (const token of tokens) {
     const res = resolve(token);
+
     if (!res.ok) out.push(`${token}: unresolved at ${res.at}`);
   }
+
   return out;
 }
 
@@ -105,10 +117,13 @@ describe('radius scale', () => {
 
   test('every `border-radius: var(…)` in the stylesheet resolves', () => {
     const unresolved: string[] = [];
+
     for (const [, token] of NO_COMMENTS.matchAll(/border-radius:\s*var\(\s*(--[a-z0-9-]+)/gi)) {
       const res = resolve(token!);
+
       if (!res.ok) unresolved.push(`${token}: unresolved at ${res.at}`);
     }
+
     expect(unresolved).toEqual([]);
   });
 });

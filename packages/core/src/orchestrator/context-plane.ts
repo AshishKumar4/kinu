@@ -191,6 +191,7 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
 
   const liveTurn = (): string | null => {
     const latest = claims.latestTurn();
+
     return latest !== null && latest.status === 'admitted' ? latest.turnId : null;
   };
 
@@ -208,6 +209,7 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
   ): void => {
     if (events === null) return;
     const runId = at.turnId === null ? null : claims.read(at.turnId)?.runId ?? null;
+
     if (runId === null) return;
     events.emit(runId, {
       type: 'context_edit',
@@ -236,7 +238,9 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
   const baseIntact = (staged: WorkingRevisionContent, history: readonly ModelMessage[]): boolean => {
     if (history.length < staged.baseMessageCount) return false;
     const base = staged.baseRevision === null ? null : working.revision(staged.baseRevision);
+
     if (base === null) return staged.baseMessageCount === 0;
+
     return modelMessagesDigest(encodeModelMessages(history.slice(0, staged.baseMessageCount))) === base.digest;
   };
 
@@ -260,7 +264,9 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
    */
   const workingHistory = (history: readonly ModelMessage[]): readonly ModelMessage[] => {
     const active = working.active();
+
     if (active === null || history.length < active.baseMessageCount) return history;
+
     return [...active.messages, ...history.slice(active.baseMessageCount)];
   };
 
@@ -281,22 +287,29 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
 
   const atTurnBoundary = (history: readonly ModelMessage[]): BoundaryDisposition => {
     const staged = working.staged();
+
     if (staged === null) return { kind: 'unchanged' };
+
     if (!baseIntact(staged, history)) {
       // Terminal, and the one case where a pending edit does not survive: the
       // history it named is gone, so the tail it protects cannot be identified.
       // Closed with the reason and retained — applying it over a rewritten
       // history would graft unrelated messages into the actor's context.
       working.close(staged.revision, 'history_rewritten');
+
       return { kind: 'unchanged' };
     }
+
     const outcome = applyStagedContext(history, {
       messages: staged.messages, baseMessageCount: staged.baseMessageCount, pending: true,
     });
+
     if (outcome.kind === 'deferred') {
       working.defer(staged.revision, outcome.reason);
+
       return { kind: 'blocked' };
     }
+
     return { kind: 'lands', messages: outcome.messages, revision: staged.revision };
   };
 
@@ -308,27 +321,34 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
   ): ClosedBoundary => {
     if (disposition.kind === 'blocked') {
       const active = working.active();
+
       if (active !== null) return { messages: history, revision: active };
     }
+
     const messages = disposition.kind === 'lands' ? disposition.messages : history;
+
     const revision = working.append({
       messages,
       source: 'turn',
       turnId,
       lands: disposition.kind === 'lands' ? { revision: disposition.revision, stepIndex: null } : null,
     });
+
     if (disposition.kind === 'lands') {
       const activated = working.revision(disposition.revision);
+
       if (activated !== null) {
         record(activated, 'activated', { turnId, stepIndex: null, effectiveAt: 'turn' });
       }
     }
+
     return { messages, revision };
   };
 
   return {
     hydrate(history) {
       const staged = working.staged();
+
       if (staged !== null && baseIntact(staged, history)) {
         // A pending edit survives a restart. Recording a snapshot over it would
         // leave it based on a revision that is no longer the head, so the
@@ -336,12 +356,14 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
         // and the next turn boundary lands it.
         return staged;
       }
+
       return working.append({ messages: history, source: 'hydrate', turnId: null });
     },
 
     startTurn({ turnId, history }) {
       const composed = workingHistory(history);
       const closed = closeBoundary(turnId, composed, atTurnBoundary(composed));
+
       return { messages: [...closed.messages], workingRevision: closed.revision.revision };
     },
 
@@ -349,6 +371,7 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
       return {
         base: () => {
           const staged = working.staged();
+
           if (staged !== null) {
             return {
               revision: staged.revision,
@@ -357,7 +380,9 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
               pending: true,
             };
           }
+
           const active = working.active();
+
           // Null when the turn still runs on exactly what it was admitted with:
           // re-applying that array would copy it for nothing. A landed edit
           // from an earlier step of THIS turn is a different revision, and it
@@ -365,6 +390,7 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
           // override is not history — the SDK rebuilds the next step from the
           // array the stream started with.
           if (active === null || active.revision === claim.workingRevision) return null;
+
           return {
             revision: active.revision,
             messages: active.messages,
@@ -377,10 +403,13 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
             const activated = working.activate(base.revision, { turnId: claim.turnId, stepIndex: stepNumber });
             record(activated, 'activated', { turnId: claim.turnId, stepIndex: stepNumber, effectiveAt: 'step' });
           }
+
           if (deferred !== null) {
             const staged = working.staged();
+
             if (staged !== null) working.defer(staged.revision, deferred);
           }
+
           claims.consume(claim, {
             index: stepNumber,
             messages,
@@ -393,6 +422,7 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
     endTurn({ turnId, history }) {
       const composed = workingHistory(history);
       const closed = closeBoundary(turnId, composed, atTurnBoundary(composed));
+
       return { messages: [...closed.messages], revision: closed.revision };
     },
 
@@ -407,6 +437,7 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
       const base = input.base === 0 ? null : working.revision(input.base);
       const already = base === null ? new Set<string>() : unpairedToolCallIds(base.messages);
       const severed = [...unpairedToolCallIds(input.messages)].filter((id) => !already.has(id));
+
       if (severed.length > 0) {
         throw new KinuError('bad_input',
           `this context leaves tool call(s) ${severed.join(', ')} without their result, and the revision it was `
@@ -414,7 +445,9 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
           + 'provider, so the edit was not staged. Delete the assistant message that made the call as well, '
           + 'or keep its result.');
       }
+
       const turnId = liveTurn();
+
       const staged = working.stage({
         base: input.base,
         messages: input.messages,
@@ -422,8 +455,10 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
         via: input.via,
         turnId,
       });
+
       const effectiveAt: ContextEditEffect = turnId === null ? 'turn' : 'step';
       record(staged, 'staged', { turnId, stepIndex: null, effectiveAt });
+
       return {
         revision: staged.revision,
         baseRevision: input.base,
@@ -437,6 +472,7 @@ export function createActorContextPlane(deps: ActorContextPlaneDeps): ActorConte
 
     read() {
       const turnId = liveTurn();
+
       return {
         actorId: claims.actorId,
         head: working.head(),

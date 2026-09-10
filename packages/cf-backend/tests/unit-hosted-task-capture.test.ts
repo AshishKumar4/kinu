@@ -56,6 +56,7 @@ function turnCalling(name: string, args: JsonObject): MockLanguageModelV3 {
           usage: USAGE, warnings: [],
         };
       }
+
       return {
         content: [{
           type: 'tool-call' as const,
@@ -74,15 +75,18 @@ function turnCalling(name: string, args: JsonObject): MockLanguageModelV3 {
  *  runner — admission, confined tools, report relay. */
 async function delegated(name: string, model: MockLanguageModelV3) {
   const workspace = orchestratorHarness();
+
   const child = await hostedSubordinateHarness(workspace, {
     name, displayName: name, nameOrigin: 'user', mission: 'record what you find.',
   });
+
   workspace.agent.overrideProviderRegistry({
     registry: createProviderRegistry(),
     deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
     resolveModel: () => model,
     normalizeSpecSync: (spec) => spec ?? 'test/model',
   });
+
   return await workspace.agent.runHostedTaskTurn(child.actor, 'Record what you find.');
 }
 

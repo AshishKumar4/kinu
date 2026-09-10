@@ -58,6 +58,7 @@ export interface TerminalPaneOutput {
 /** The prompt, and the prompt for a command the shell has not finished
  *  reading. `sh` writes `$ ` and `> `, and the two mean the same here. */
 const PROMPT = '\x1b[32m$\x1b[0m ';
+
 const CONTINUATION = '\x1b[32m>\x1b[0m ';
 
 /** The in-flight marker, on its own line so it can be erased whole. */
@@ -96,6 +97,7 @@ export class LineTerminalState {
     this.#buffer = '';
     this.#running = false;
     this.#busy = false;
+
     return this.#generation;
   }
 
@@ -111,6 +113,7 @@ export class LineTerminalState {
   recordOutput(id: string): boolean {
     if (this.#writtenOutputIds.has(id)) return false;
     this.#writtenOutputIds.add(id);
+
     return true;
   }
 
@@ -119,6 +122,7 @@ export class LineTerminalState {
   takeCommand(): string {
     const command = this.#buffer.replace(/\n$/, '');
     this.#buffer = '';
+
     return command;
   }
 
@@ -141,6 +145,7 @@ export class LineTerminalState {
     const points = [...this.#buffer];
     points.pop();
     this.#buffer = points.join('');
+
     return true;
   }
 
@@ -158,12 +163,14 @@ export class LineTerminalState {
   finishCommand(generation: number): boolean {
     if (generation !== this.#generation) return false;
     this.#running = false;
+
     return true;
   }
 
   clearBusy(): boolean {
     if (!this.#busy) return false;
     this.#busy = false;
+
     return true;
   }
 }
@@ -191,29 +198,38 @@ const WORD_BREAK = ' \t;&|<>()';
 function readDelimiter(line: string, start: number) {
   let word = '';
   let i = start;
+
   while (i < line.length) {
     const ch = line[i];
+
     if (ch === "'" || ch === '"') {
       i += 1;
+
       while (i < line.length && line[i] !== ch) {
         word += line[i];
         i += 1;
       }
+
       i += 1;
       continue;
     }
+
     if (ch === '\\') {
       i += 1;
+
       if (i < line.length) {
         word += line[i];
         i += 1;
       }
+
       continue;
     }
+
     if (WORD_BREAK.includes(ch)) break;
     word += ch;
     i += 1;
   }
+
   return { word, end: i };
 }
 
@@ -223,53 +239,65 @@ function scanCommandLine(line: string, openQuote: string): CommandLineScan {
   let quote = openQuote;
   let escaped = false;
   let i = 0;
+
   while (i < line.length) {
     const ch = line[i];
+
     if (escaped) {
       escaped = false;
       i += 1;
       continue;
     }
+
     if (quote === "'") {
       // A single quote quotes everything, the backslash included.
       if (ch === "'") quote = '';
       i += 1;
       continue;
     }
+
     if (ch === '\\') {
       escaped = true;
       i += 1;
       continue;
     }
+
     if (quote === '"') {
       if (ch === '"') quote = '';
       i += 1;
       continue;
     }
+
     if (ch === "'" || ch === '"') {
       quote = ch;
       i += 1;
       continue;
     }
+
     if (ch === '#' && (i === 0 || line[i - 1] === ' ' || line[i - 1] === '\t')) {
       // A comment runs to the end of the line, so a `<<EOF` inside one opens
       // no heredoc and must not strand the editor on a continuation prompt.
       break;
     }
+
     if (ch === '<' && line[i + 1] === '<') {
       const dashed = line[i + 2] === '-';
       let at = i + (dashed ? 3 : 2);
+
       while (line[at] === ' ' || line[at] === '\t') at += 1;
       // `<<<` is a here-string and takes no body. It needs no branch of its
       // own: its third `<` breaks the word, the delimiter comes back empty,
       // and an empty delimiter queues nothing.
       const delimiter = readDelimiter(line, at);
+
       if (delimiter.word !== '') heredocs.push({ word: delimiter.word, dashed });
       i = delimiter.end;
       continue;
     }
+
     i += 1;
   }
+
   return { quote, continued: escaped, heredocs };
 }
 
@@ -289,40 +317,51 @@ function scanCommandLine(line: string, openQuote: string): CommandLineScan {
  */
 function needsMoreInput(source: string): boolean {
   const lines = source.split('\n');
+
   // A trailing newline ends the last line; it does not start an empty one.
   if (lines[lines.length - 1] === '') lines.pop();
   let quote = '';
   let continued = false;
   let body: HeredocDelimiter | null = null;
   const queued: HeredocDelimiter[] = [];
+
   for (const line of lines) {
     if (body !== null) {
       const closing = body.dashed ? line.replace(/^\t+/, '') : line;
+
       if (closing === body.word) body = queued.shift() ?? null;
       continue;
     }
+
     const scan = scanCommandLine(line, quote);
     quote = scan.quote;
     continued = scan.continued;
     queued.push(...scan.heredocs);
+
     // The bodies start after the whole logical line, so a continued line keeps
     // collecting operators before the first body arrives.
     if (!continued) body = queued.shift() ?? null;
   }
+
   return quote !== '' || continued || body !== null || queued.length > 0;
 }
 
 /** Skip one escape sequence. Returns the index of its last character. */
 function skipEscape(chars: readonly string[], start: number): number {
   const next = chars[start + 1];
+
   if (next === undefined) return start; // a bare Escape key
+
   if (next !== '[' && next !== 'O') return start + 1; // Escape plus one key
   let i = start + 2;
+
   while (i < chars.length) {
     const code = chars[i].charCodeAt(0);
+
     if (code >= 0x40 && code <= 0x7e) return i; // the final byte
     i += 1;
   }
+
   return chars.length - 1;
 }
 
@@ -345,9 +384,11 @@ export function feedInput(
 ): string | null {
   // By code point, so an astral character stays one unit.
   const chars = [...data];
+
   for (let i = 0; i < chars.length; i += 1) {
     const ch = chars[i];
     const code = ch.charCodeAt(0);
+
     if (code === 0x1b) {
       // An escape sequence is a key this editor does not implement: an arrow,
       // Home, a function key. Skipping it whole keeps its final letter out of
@@ -355,31 +396,39 @@ export function feedInput(
       i = skipEscape(chars, i);
       continue;
     }
+
     if (code === 0x0d || code === 0x0a) {
       if (code === 0x0d && chars[i + 1] === '\n') i += 1;
       state.newline();
       term.write('\r\n');
+
       if (i < chars.length - 1 || needsMoreInput(state.buffer)) {
         term.write(CONTINUATION);
         continue;
       }
+
       const command = state.takeCommand();
+
       if (command.trim() === '') {
         writePrompt(term);
         continue;
       }
+
       return command;
     }
+
     if (code === 0x7f || code === 0x08) {
       if (state.backspace()) term.write('\b \b');
       continue;
     }
+
     if (code === 0x03) {
       state.discard();
       term.write('^C\r\n');
       writePrompt(term);
       continue;
     }
+
     // Tab is text here, not completion: a pasted `<<-` body and any indented
     // script carry them, and dropping them changed what the user pasted.
     if (code === 0x09 || code >= 0x20) {
@@ -387,6 +436,7 @@ export function feedInput(
       term.write(ch);
     }
   }
+
   return null;
 }
 
@@ -396,6 +446,7 @@ export function feedInput(
  *  into a claim about the whole output. */
 function writeClipNote(term: TerminalWriter, stream: string, shown: number, stored: number) {
   const withheld = stored - shown;
+
   if (withheld <= 0) return;
   term.write(`\x1b[2m… ${withheld.toLocaleString()} more ${stream} characters are stored and not shown here\x1b[0m\r\n`);
 }
@@ -421,6 +472,7 @@ function writeClipNote(term: TerminalWriter, stream: string, shown: number, stor
 function writeStream(term: TerminalWriter, text: string, danger: boolean) {
   const painted = text.replace(/\r?\n/g, '\r\n');
   term.write(danger ? `\x1b[31m${painted}\x1b[0m` : painted);
+
   // The next thing painted is the prompt, and it belongs on its own row.
   if (!text.endsWith('\n')) term.write('\r\n');
 }
@@ -438,10 +490,12 @@ function writeStream(term: TerminalWriter, text: string, danger: boolean) {
 export function writeOutputRow(term: TerminalWriter, out: TerminalPaneOutput) {
   const failed = out.exit_code !== 0;
   const repeated = failed && out.stderr !== '' && out.stderr === out.stdout;
+
   if (!repeated) {
     if (out.stdout !== '') writeStream(term, out.stdout, false);
     writeClipNote(term, 'stdout', out.stdout.length, out.stdout_len);
   }
+
   if (failed) {
     if (out.stderr !== '') writeStream(term, out.stderr, true);
     writeClipNote(term, 'stderr', out.stderr.length, out.stderr_len);

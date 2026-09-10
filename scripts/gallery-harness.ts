@@ -29,7 +29,9 @@ import * as v from 'valibot';
 import { tolerate } from '@kinu.run/core/obs';
 
 const REPO = join(import.meta.dir, '..');
+
 const CF = join(REPO, 'packages', 'cf-backend');
+
 const TcpAddressSchema = v.object({
   port: v.pipe(v.number(), v.integer(), v.minValue(1), v.maxValue(65_535)),
 });
@@ -71,8 +73,10 @@ export function recordDiagnostics(page: Page): DiagnosticLine[] {
       DiagnosticLineSchema,
       tolerate(() => JSON.parse(message.text()), 'malformed-input'),
     );
+
     if (parsed.success) lines.push(parsed.output);
   });
+
   return lines;
 }
 
@@ -83,12 +87,14 @@ export async function diagnosticsSettled(
   lines: readonly DiagnosticLine[], count: number, timeoutMs = 10_000,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+
   while (lines.length < count) {
     if (Date.now() > deadline) {
       throw new Error(
         `waited ${String(timeoutMs)}ms for ${String(count)} diagnostic(s); saw ${JSON.stringify(lines)}`,
       );
     }
+
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, 50);
     await tick.promise;
@@ -100,6 +106,7 @@ function chromePath(): string | undefined {
   for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
     if (existsSync(candidate)) return candidate;
   }
+
   return undefined;
 }
 
@@ -118,6 +125,7 @@ const DIST_NAME = /^kinu-gallery-dist-(\d+)-/;
 function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+
     return true;
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ESRCH') return false;
@@ -137,23 +145,29 @@ function processAlive(pid: number): boolean {
  */
 export function reclaimLeakedBuilds(): number {
   let removed = 0;
+
   for (const name of readdirSync(tmpdir())) {
     const owner = DIST_NAME.exec(name)?.[1];
+
     if (owner === undefined) continue;
     const pid = Number(owner);
+
     if (pid === process.pid || processAlive(pid)) continue;
     rmSync(join(tmpdir(), name), { recursive: true, force: true });
     removed += 1;
   }
+
   return removed;
 }
 
 function builtGalleryDist(): Promise<string> {
   galleryDist ??= (async () => {
     const leaked = reclaimLeakedBuilds();
+
     if (leaked > 0) {
       process.stderr.write(`gallery-harness: removed ${String(leaked)} build(s) left by processes that are gone\n`);
     }
+
     const outDir = mkdtempSync(join(tmpdir(), `kinu-gallery-dist-${String(process.pid)}-`));
     process.once('exit', () => rmSync(outDir, { recursive: true, force: true }));
     await build({
@@ -175,8 +189,10 @@ function builtGalleryDist(): Promise<string> {
         },
       },
     });
+
     return outDir;
   })();
+
   return galleryDist;
 }
 
@@ -208,6 +224,7 @@ function builtAssetContentType(file: string): string {
  *  every response is a file that existed before the browser launched. */
 export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>): Promise<T> {
   const dist = await builtGalleryDist();
+
   const http = createHttpServer((request, response) => {
     // Static semantics, GET/HEAD only: the artifact is immutable, and any
     // /api/* traffic a frame produces belongs to the page's own fixtures or
@@ -215,34 +232,47 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>): Pr
     if (request.method !== 'GET' && request.method !== 'HEAD') {
       response.writeHead(405, { allow: 'GET, HEAD' });
       response.end();
+
       return;
     }
+
     const url = new URL(request.url ?? '/', 'http://gallery.invalid');
     const pathname = decodeURIComponent(url.pathname);
     const file = resolve(dist, `.${pathname === '/' ? '/gallery.html' : pathname}`);
+
     if (!file.startsWith(dist + sep) || !existsSync(file) || !statSync(file).isFile()) {
       response.writeHead(404);
       response.end();
+
       return;
     }
+
     response.writeHead(200, { 'content-type': builtAssetContentType(file) });
+
     if (request.method === 'HEAD') {
       response.end();
+
       return;
     }
+
     createReadStream(file).pipe(response);
   });
+
   const listening = Promise.withResolvers<void>();
   http.once('error', listening.reject);
   http.listen(0, '127.0.0.1', listening.resolve);
   await listening.promise;
+
   try {
     const address = v.safeParse(TcpAddressSchema, http.address());
+
     if (!address.success) {
       throw new Error('gallery HTTP server has no TCP address after listen');
     }
+
     const origin = `http://127.0.0.1:${String(address.output.port)}`;
     const executablePath = chromePath();
+
     const launchOptions: LaunchOptions = {
       // Headless Chrome reports no pointing device, so `(hover: hover)` and
       // `(pointer: fine)` are both false and every `hover:` utility Tailwind
@@ -253,8 +283,10 @@ export async function withGallery<T>(body: (gallery: Gallery) => Promise<T>): Pr
         '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
       ],
     };
+
     if (executablePath) launchOptions.executablePath = executablePath;
     const browser = await puppeteer.launch(launchOptions);
+
     try {
       return await body({ browser, origin });
     } finally {

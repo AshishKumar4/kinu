@@ -31,10 +31,12 @@ const store = new Map<string, ConversationUiEntry>();
 
 function entryFor(key: string): ConversationUiEntry {
   let entry = store.get(key);
+
   if (!entry) {
     entry = { draft: "", mode: "build", scroll: "pinned" };
     store.set(key, entry);
   }
+
   return entry;
 }
 
@@ -62,6 +64,7 @@ export interface ConversationUiState {
 
 export function useConversationUiState(key: string): ConversationUiState {
   const [current, setCurrent] = useState(() => ({ key, ...entryFor(key) }));
+
   // Same-render reset when the conversation changes under a mounted component
   // (the main column swaps workspaces without remounting).
   if (current.key !== key) setCurrent({ key, ...entryFor(key) });
@@ -73,16 +76,20 @@ export function useConversationUiState(key: string): ConversationUiState {
       // Store write inside the updater so the rewrite resolves against the
       // same value it renders from; idempotent under a double invoke.
       entryFor(key).draft = draft;
+
       return { ...prev, draft };
     });
   }, [key]);
+
   const setDraft = useCallback((draft: string) => {
     updateDraft(() => draft);
   }, [updateDraft]);
+
   const setMode = useCallback((mode: ChatMode) => {
     entryFor(key).mode = mode;
     setCurrent((prev) => prev.key === key ? { ...prev, mode } : prev);
   }, [key]);
+
   const rememberScroll = useCallback((position: ConversationScroll) => {
     entryFor(key).scroll = position;
   }, [key]);
@@ -123,5 +130,6 @@ export function usePlanGatedMode(
     if (locked) setMode("plan");
     else if (approved) setMode("build");
   }, [locked, approved, setMode]);
+
   return { mode: locked ? "plan" : ui.mode, locked };
 }

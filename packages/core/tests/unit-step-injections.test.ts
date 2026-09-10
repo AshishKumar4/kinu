@@ -7,7 +7,9 @@ import type { ModelMessage } from 'ai';
 import { StepInjections } from '../src/prompting/step-injections';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
+
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
+
 const texts = (messages: ReadonlyArray<ModelMessage>) => messages.map((m) => m.content);
 
 describe('StepInjections', () => {
@@ -22,9 +24,11 @@ describe('StepInjections', () => {
     const inj = new StepInjections<{ message: ModelMessage }>();
     // Step 0: base = [q]; nothing pending yet.
     expect(inj.drain({ stepNumber: 0, messages: [user('q')] }, [])).toBeUndefined();
+
     // Step 1: SDK rebuilt [q, a1] — the injection lands after the tail.
     const step1 = inj.drain({ stepNumber: 1, messages: [user('q'), assistant('a1')] },
       [{ message: user('steer') }]);
+
     expect(texts(step1!)).toEqual(['q', 'a1', 'steer']);
     // Step 2: SDK rebuilt [q, a1, a2] WITHOUT the injection — it re-applies
     // at its recorded index, keeping the prefix stable for the cache.
@@ -35,8 +39,10 @@ describe('StepInjections', () => {
   test('injections at different steps keep their own entry positions', () => {
     const inj = new StepInjections<{ message: ModelMessage }>();
     inj.drain({ stepNumber: 0, messages: [user('q')] }, [{ message: user('first') }]);
+
     const step1 = inj.drain({ stepNumber: 1, messages: [user('q'), assistant('a1')] },
       [{ message: user('second') }]);
+
     expect(texts(step1!)).toEqual(['q', 'first', 'a1', 'second']);
     const step2 = inj.drain({ stepNumber: 2, messages: [user('q'), assistant('a1'), assistant('a2')] }, []);
     expect(texts(step2!)).toEqual(['q', 'first', 'a1', 'second', 'a2']);

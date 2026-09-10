@@ -42,6 +42,7 @@ function roots(label: string) {
   const project = join(root, 'project');
   mkdirSync(state, { recursive: true });
   mkdirSync(project, { recursive: true });
+
   return { state, project };
 }
 
@@ -53,11 +54,14 @@ type LocalAgent = CLIRuntime & { readonly db: Database; readonly dbPath: string 
 function agentRuntime(state: string, name: string, cwd?: string): LocalAgent {
   const dbPath = join(state, name, 'agent.db');
   mkdirSync(dirname(dbPath), { recursive: true });
+
   const config: Parameters<typeof createCLIRuntime>[1] = {
     dbPath, llm: DUMMY_LLM, agentName: name,
   };
+
   if (cwd !== undefined) config.cwd = cwd;
   const db = new Database(dbPath);
+
   return Object.assign(createCLIRuntime(db, config), { db, dbPath });
 }
 
@@ -69,18 +73,23 @@ async function openedWorkspace(state: string, name: string, cwd: string) {
   const db = new Database(dbPath);
   await createWorkspace(db, { name, purpose: `Test agent ${name}`, llm: DUMMY_LLM });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
   return openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd });
 }
 
 async function readText(rt: AgentRuntime, path: string): Promise<string> {
   const raw = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
+
   return raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
 }
 
 async function refusalOf<T>(op: () => Promise<T>): Promise<string> {
   let caught: unknown;
+
   try { await op(); } catch (error) { caught = error; }
+
   if (!isVfsError(caught)) throw new Error(`expected a classified refusal, got ${String(caught)}`);
+
   return caught.code;
 }
 
@@ -125,6 +134,7 @@ describe('peers over one directory', () => {
     expect(first.identity.id).not.toBe(second.identity.id);
 
     const secondState = second.agentStateVfs;
+
     if (!secondState) throw new Error('a bound runtime must expose its own state plane');
     expect(await secondState.exists('memory/notes.md')).toBe(false);
 
@@ -137,6 +147,7 @@ describe('peers over one directory', () => {
     const parent = agentRuntime(state, 'parent', project);
     const binding = registerLocalActor(parent.actor, { name: 'child', creationId: 'child-birth', kind: 'subordinate', lifetime: 'durable' });
     const physicalName = subordinateAgentName(binding.storageKey);
+
     // THE PARENT'S DATABASE. A subordinate has no file of its own, so both the
     // handle and the declared path are the root's.
     const child = await shareLocalWorkspacePlane(
@@ -165,10 +176,12 @@ describe('a fork over the bound directory', () => {
     writeFileSync(join(project, 'task.txt'), 'the task input');
     const parent = agentRuntime(state, 'parent', project);
     const written: WriteEvent[] = [];
+
     const observer: WriteObserver = {
       needsBaseline: () => true,
       record: (event) => { written.push(event); },
     };
+
     const head = await createHeadRuntime(parent, 'h1', observer);
 
     // A fork explores the same project, so what the user left in the directory
@@ -186,6 +199,7 @@ describe('a fork over the bound directory', () => {
     // scratch as HOME and TMPDIR under the workspace's state, and its own state
     // stays its own.
     const headShell = head.shell;
+
     if (!headShell) throw new Error('a head over a bound directory runs the host shell');
     const env = await headShell.exec('pwd; echo "$HOME"; echo "$TMPDIR"');
     expect(env.stdout.trim().split('\n')).toEqual([
@@ -194,6 +208,7 @@ describe('a fork over the bound directory', () => {
       join(resolve(project), '.kinu', 'facets', `head-${head.actor.storageKey}`, 'tmp'),
     ]);
     const parentShell = parent.shell;
+
     if (!parentShell) throw new Error('a bound workspace runs the host shell');
     expect((await parentShell.exec('echo "$HOME"')).stdout.trim()).toBe(process.env.HOME ?? '');
     // Its own SCAFFOLD POINTER, in the parent's database. The separation is the
@@ -266,6 +281,7 @@ describe('the shell over the bound directory', () => {
     // The default is 'strict', which asks a channel this runtime has none of.
     rt.actor.config.setShellApprovalMode('allow_all');
     const shell = rt.shell;
+
     if (!shell) throw new Error('a bound runtime must have a shell');
 
     expect(process.cwd()).not.toBe(resolve(project));
@@ -291,7 +307,9 @@ describe('the shell over the bound directory', () => {
     const rt = agentRuntime(state, `checkpointer-${basename(dirname(state))}`, project);
     rt.actor.config.setShellApprovalMode('allow_all');
     const checkpoints = rt.checkpoints;
+
     if (!checkpoints) throw new Error('a bound runtime must have a checkpoint engine');
+
     if (!(await checkpoints.status()).available) return; // no git on this box
 
     await rt.shell?.exec('echo mutated > before.txt');
@@ -325,6 +343,7 @@ describe('what an opened workspace puts where', () => {
     expect(await rt.storage.vfs.exists('scaffold/agent.js')).toBe(false);
 
     const agentState = rt.agentStateVfs;
+
     if (!agentState) throw new Error('an opened workspace must expose its own state plane');
     expect(await agentState.exists('SOUL.md')).toBe(true);
     expect(await agentState.exists('memory/MEMORY.md')).toBe(true);
@@ -348,6 +367,7 @@ describe('a runtime with no directory bound', () => {
     // Unbound, the two planes are one tree: the mount table wraps it, so the
     // objects differ while the bytes do not.
     const agentState = rt.agentStateVfs;
+
     if (!agentState) throw new Error('every runtime states where its own state lives');
     expect(await agentState.readFile('untracked.txt', { encoding: 'utf8' })).toBe('in the database');
   });
@@ -370,6 +390,7 @@ test('local Plan file inspection remains useful without granting native project 
   const rt = agentRuntime(state, 'inspector', project);
   const planned = buildBuiltinTools({ rt, workMode: 'plan' });
   const file = planned.file;
+
   if (file === undefined) throw new Error('No Plan file tool');
   const inspect = toolExecute(file);
   expect(await inspect({ action: 'list', path: '.' })).toMatchObject({ entries: expect.arrayContaining(['inspect.txt']) });
@@ -379,6 +400,7 @@ test('local Plan file inspection remains useful without granting native project 
   await expect(inspect({ action: 'write', path: 'inspect.txt', content: 'changed' })).rejects.toMatchObject({ code: 'denied' });
   expect(readFileSync(join(project, 'inspect.txt'), 'utf8')).toBe('alpha\nneedle\nomega');
   const buildFile = buildBuiltinTools({ rt, workMode: 'build' }).file;
+
   if (buildFile === undefined) throw new Error('No Build file tool');
   const build = toolExecute(buildFile);
   await build({ action: 'read', path: 'inspect.txt' });

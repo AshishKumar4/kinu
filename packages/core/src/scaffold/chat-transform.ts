@@ -89,6 +89,7 @@ export function scaffoldChatTransform(opts: {
   run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'>;
 }): AsyncIterable<ChatEvent> {
   if (opts.program.kind === 'builtin' || (opts.run.workMode ?? currentWorkMode()) === 'plan') return opts.chat;
+
   return scaffoldTurn(opts.chat, { ...opts.run, scaffoldCodeOverride: opts.program.source });
 }
 
@@ -106,44 +107,58 @@ async function* scaffoldTurn(
 
   for (;;) {
     const next = await pump.next();
+
     if (next.done) {
       if (!next.value.ok && next.value.error) {
         yield { type: 'error', message: next.value.error };
       }
+
       break;
     }
+
     const ev = next.value;
+
     switch (ev.type) {
       case 'model_chunk':
       case 'chat_chunk': {
         const inner = ev.chunk;
+
         // Custom model calls retain their own onStep/spend owner; do not price
         // their steps again as default-turn step_finish records.
         if (ev.type === 'model_chunk' && inner.type === 'step-finish') break;
+
         if (inner.type === 'done') {
           responses.push(...inner.responseMessages);
+
           if (!text.trim()) text = inner.text;
         } else {
           if (inner.type === 'text-delta') text += inner.delta;
           yield inner;
         }
+
         break;
       }
+
       case 'ui_chunk': {
         // Authored JSON UI chunks retain the wire schema boundary; native
         // default/model events above never pass through this codec.
         const parsed = v.safeParse(ChatEventSchema, ev.chunk);
+
         if (!parsed.success) break;
         const inner = parsed.output;
+
         if (inner.type === 'done') {
           responses.push(...inner.responseMessages);
+
           if (!text.trim()) text = inner.text;
           break;
         }
+
         if (inner.type === 'text-delta') text += inner.delta;
         yield inner;
         break;
       }
+
       case 'text_delta':
         text += ev.text;
         nativeText += ev.text;

@@ -21,20 +21,28 @@ import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
+
 const AI_TOKEN = `pta_${USER_ID}_${'a'.repeat(44)}`;
+
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
+
 const AI_BASE_URL = `${ACCOUNT_ROOT}/ai/v1`;
+
 const StringErrorSchema = v.object({ error: v.string() });
+
 const MessageErrorSchema = v.object({ error: v.object({ message: v.string() }) });
+
 const ModelListSchema = v.object({
   object: v.string(),
   data: v.array(v.object({ id: v.string(), object: v.string(), owned_by: v.string() })),
 });
 
 const originalFetch = globalThis.fetch;
+
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 /** The direct binding's default event stream: what a streamed turn really gets
@@ -61,6 +69,7 @@ function setupEnv(opts: {
 } = {}) {
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
   const token = opts.token ?? 'cf-user';
+
   const userDO = {
     async verifyCliToken(_caller: UserCaller, bearer: string) {
       return {
@@ -71,7 +80,9 @@ function setupEnv(opts: {
     },
     async verifyAccessToken(_caller: UserCaller, bearer: string) {
       const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['workspace.read'] : null;
+
       if (!scopes) return { ok: false, error: 'invalid token' };
+
       return {
         ok: true,
         tokenHash: `${scopes.join('+')}-hash`,
@@ -81,10 +92,13 @@ function setupEnv(opts: {
     },
     async getAuthHeaders(_caller: UserCaller, key: string, o?: { forceRefresh?: boolean }) {
       const bearer = o?.forceRefresh ? (opts.freshToken ?? token) : token;
+
       if (key === 'cloudflare.oauth') return { authorization: `Bearer ${bearer}` };
+
       if (key === 'cloudflare.ai-gateway') {
         return gatewayId ? { authorization: `Bearer ${bearer}`, 'cf-aig-gateway-id': gatewayId } : null;
       }
+
       return null;
     },
     async getCredentialBaseURL(_caller: UserCaller, key: string) {
@@ -94,28 +108,34 @@ function setupEnv(opts: {
       return [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }];
     },
   };
+
   const directRuns: Array<{ model: string; inputs: JsonObject }> = [];
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+
   if (opts.evalService) {
     const ai = {
       async run(model: string, inputs: JsonObject) {
         directRuns.push({ model, inputs });
+
         if (inputs.stream !== true) {
           return opts.directOutput ?? {
             response: 'ok',
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           };
         }
+
         if (opts.directRefusal) return opts.directRefusal;
+
         return new Response(opts.directStream ?? DIRECT_SSE, {
           headers: { 'content-type': 'text/event-stream' },
         });
       },
     };
+
     Object.assign(partialEnv, {
       DEV_USER_EMAIL: 'eval-service@kinu.run',
       // SAFETY: this constructed fixture implements `Ai.run`. The
@@ -123,16 +143,20 @@ function setupEnv(opts: {
       AI: ai as Ai,
     });
   }
+
   // SAFETY: AI proxy tests reach only the constructed UserDO namespace and
   // credential key; every binding they access is present above.
   const env = partialEnv as Env;
+
   return { env, directRuns };
 }
 
 function chatRequest(token: string | null, body: JsonValue, extraHeaders: Record<string, string> = {}) {
   const headers = new Headers(extraHeaders);
   headers.set('content-type', 'application/json');
+
   if (token) headers.set('authorization', `Bearer ${token}`);
+
   return new Request('https://kinu.example.com/api/user/ai/v1/chat/completions', {
     method: 'POST',
     headers,
@@ -150,14 +174,18 @@ function captureUpstream(respond: (seen: CapturedUpstream) => Response): Capture
       headers: new Headers(init?.headers),
       body: parseJsonObject(String(init?.body)),
     };
+
     captured.push(seen);
+
     return respond(seen);
   });
+
   return captured;
 }
 
 function handled(response: Response | null): Response {
   if (!response) throw new Error('AI proxy route did not handle the request');
+
   return response;
 }
 
@@ -225,6 +253,7 @@ describe('AI proxy model → upstream selection', () => {
 
   test('the staging eval identity streams over the direct Workers AI binding', async () => {
     const { env, directRuns } = setupEnv({ evalService: true });
+
     const res = await handleCliRequest(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
@@ -262,11 +291,13 @@ describe('AI proxy model → upstream selection', () => {
         'data: [DONE]\n\n',
       ].join(''),
     });
+
     const res = await handleCliRequest(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
       stream: true,
     }), env);
+
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toBe('text/event-stream');
     const body = await res?.text();
@@ -287,6 +318,7 @@ describe('AI proxy model → upstream selection', () => {
         choices: [{ index: 0, message: { role: 'assistant', content: 'never-replayed' }, finish_reason: 'stop' }],
       },
     });
+
     const res = await handleCliRequest(chatRequest(AI_TOKEN, {
       model: '@cf/moonshotai/kimi-k2.6',
       messages: [{ role: 'user', content: 'ping' }],
@@ -351,6 +383,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
       messages: [],
       stream: true,
     }), env);
+
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toBe('text/event-stream');
     const text = await handled(res).text();
@@ -361,6 +394,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
 
   test('a mid-flight 401 forces one refresh and retries with the fresh token', async () => {
     const { env } = setupEnv({ token: 'cf-stale', freshToken: 'cf-fresh' });
+
     const captured = captureUpstream((seen) =>
       seen.headers.get('authorization') === 'Bearer cf-stale'
         ? new Response(JSON.stringify({ errors: [{ code: 10000, message: 'Invalid access token' }] }), {
@@ -394,6 +428,7 @@ describe('AI proxy model listing', () => {
     const { env } = setupEnv({ gatewayId: 'byok-gw', token: `t-${Math.random()}` });
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
       const url = String(input);
+
       if (url.startsWith('https://models.dev/')) {
         return Response.json({
           'cloudflare-workers-ai': {
@@ -410,23 +445,28 @@ describe('AI proxy model listing', () => {
           },
         });
       }
+
       if (url.includes('/provider_configs')) {
         return Response.json({ success: true, result: [{ id: 'pc-0', provider_slug: 'openai' }] });
       }
+
       if (url.includes('/billing/credit-balance')) {
         return Response.json({ success: true, result: { balance: 0 } });
       }
+
       throw new Error(`unexpected fetch: ${url}`);
     });
 
     const res = await handleCliRequest(new Request('https://kinu.example.com/api/user/ai/v1/models', {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
+
     expect(res?.status).toBe(200);
     const body = v.parse(ModelListSchema, await handled(res).json());
     expect(body.object).toBe('list');
     expect(body.data).toContainEqual({ id: '@cf/moonshotai/kimi-k2.6', object: 'model', owned_by: 'workers-ai' });
     expect(body.data).toContainEqual({ id: 'openai/gpt-4.1', object: 'model', owned_by: 'my-gateway' });
+
     // Every listed id is routable by POST /chat/completions as-is.
     for (const model of body.data) {
       expect(model.id.startsWith('@cf/') || model.id.includes('/')).toBe(true);

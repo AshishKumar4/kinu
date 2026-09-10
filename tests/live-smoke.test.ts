@@ -83,7 +83,9 @@ const DeployedDeviceSchema = v.strictObject({
 });
 
 const TARGET = liveModelTarget('Live Smoke');
+
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
+
 const liveTest = test.skipIf(!TARGET);
 
 /**
@@ -93,10 +95,12 @@ const liveTest = test.skipIf(!TARGET);
  * instead of failing as though the deployment were broken.
  */
 const HOSTED = TARGET?.via === 'worker-proxy' ? TARGET : null;
+
 if (TARGET && !HOSTED) {
   console.warn('[skip] Live Smoke (hosted) — the resolved target is an AI Gateway, which fronts a '
     + 'model but no Kinu deployment. Set KINU_ORIGIN + KINU_TOKEN to reach the worker.');
 }
+
 const hostedTest = test.skipIf(!HOSTED);
 
 const TEST_DIR = scratchDir('live-smoke');
@@ -112,6 +116,7 @@ const SMOKE_PROMPT = 'Use your file tool to write the exact text "live smoke ok"
 
 
 const WEB_SMOKE_MARKER = 'WEB_UI_SMOKE_OK';
+
 const WEB_SMOKE_PROMPT = `Use the file tool to write the exact text ${WEB_SMOKE_MARKER} `
   + `into web-ui-smoke.txt, then reply with only ${WEB_SMOKE_MARKER}.`;
 
@@ -120,12 +125,15 @@ function browserLaunchOptions(): LaunchOptions {
     headless: true,
     args: ['--no-sandbox', '--disable-dev-shm-usage'],
   };
+
   const executablePath = [
     '/usr/bin/google-chrome',
     '/usr/bin/google-chrome-stable',
     '/usr/bin/chromium',
   ].find(existsSync);
+
   if (executablePath) options.executablePath = executablePath;
+
   return options;
 }
 
@@ -133,10 +141,13 @@ async function clickButton(page: Page, label: string): Promise<void> {
   const clicked = await page.evaluate((text) => {
     const button = [...document.querySelectorAll('button')]
       .find((candidate) => candidate.textContent?.trim() === text);
+
     if (!(button instanceof HTMLButtonElement) || button.disabled) return false;
     button.click();
+
     return true;
   }, label);
+
   if (!clicked) throw new Error(`No enabled button labelled ${JSON.stringify(label)}.`);
 }
 
@@ -144,12 +155,16 @@ async function clickAriaPrefix(page: Page, prefix: string): Promise<void> {
   const clicked = await page.evaluate((label) => {
     const element = [...document.querySelectorAll('button,a')]
       .find((candidate) => candidate.getAttribute('aria-label')?.startsWith(label));
+
     if (!(element instanceof HTMLElement)) return false;
     element.click();
+
     return true;
   }, prefix);
+
   if (!clicked) throw new Error(`No control has an aria-label beginning ${JSON.stringify(prefix)}.`);
 }
+
 /** Cloud agents this file created, so teardown removes them even on failure. */
 const createdCloudAgents: string[] = [];
 
@@ -161,6 +176,7 @@ describe('Live Smoke — one real turn per backend', () => {
     // not strand the rest, and it must never pass unmentioned.
     if (HOSTED) {
       const { origin, token } = workerSession(HOSTED.llm);
+
       for (const name of createdCloudAgents) {
         try {
           await deleteCloudAgent(origin, token, name);
@@ -170,6 +186,7 @@ describe('Live Smoke — one real turn per backend', () => {
         }
       }
     }
+
     reportLiveModelSpend('Live Smoke');
   });
 
@@ -182,6 +199,7 @@ describe('Live Smoke — one real turn per backend', () => {
     // `settle-probe` that nothing could attribute; `scripts/eval-workspaces.ts`
     // globs this prefix, so an undeleted agent is now findable by name alone.
     const name = evalWorkspaceName('live-smoke');
+
     // Every step below that depends on the DEPLOYMENT rather than on the model's
     // choices is wrapped, so a cold start, a 5xx or a dropped socket is labelled
     // INFRA and never read as "the agent stopped calling tools". The assertions
@@ -195,14 +213,17 @@ describe('Live Smoke — one real turn per backend', () => {
         model: HOSTED.llm.model,
       }),
     );
+
     createdCloudAgents.push(created.name);
 
     const client = new CloudAgentClient({
       origin, token, agentName: created.name, cloudName: created.name, oneShot: true,
     });
+
     try {
       await infraBoundary(`connecting to ${origin}`, () => client.connect());
       const startedAt = Date.now();
+
       // The turn itself is a boundary: reaching the Durable Object at all is the
       // deployment's job. What the model DID with the turn is asserted below,
       // unwrapped, so a wrong answer stays a wrong answer.
@@ -210,6 +231,7 @@ describe('Live Smoke — one real turn per backend', () => {
         'driving one turn through the OrchestratorAgent Durable Object',
         () => client.send(SMOKE_PROMPT),
       );
+
       const elapsedMs = Date.now() - startedAt;
 
       // WHAT THIS TURN COST, from the DEPLOYMENT'S OWN read model.
@@ -272,6 +294,7 @@ describe('Live Smoke — one real turn per backend', () => {
     if (!HOSTED) throw new Error('unreachable: hostedTest runs only with a worker target');
     const { origin, token } = workerSession(HOSTED.llm);
     const browser = await puppeteer.launch(browserLaunchOptions());
+
     try {
       const page = await browser.newPage();
       await page.setViewport({ width: 1_440, height: 900, deviceScaleFactor: 1 });
@@ -302,11 +325,13 @@ describe('Live Smoke — one real turn per backend', () => {
       await page.waitForFunction(() => {
         const save = [...document.querySelectorAll('button')]
           .find((button) => button.getAttribute('aria-label') === 'Save workspace name');
+
         return save?.disabled === false;
       });
       await clickAriaPrefix(page, 'Save workspace name');
       await page.waitForFunction(() => {
         const text = document.body.textContent ?? '';
+
         return (text.match(/Staging UI Smoke/g)?.length ?? 0) >= 2;
       }, { timeout: 90_000 });
 
@@ -315,13 +340,16 @@ describe('Live Smoke — one real turn per backend', () => {
       await page.type(composer, WEB_SMOKE_PROMPT);
       await page.waitForFunction(() => {
         const button = document.querySelector<HTMLButtonElement>('button[aria-label="Send"]');
+
         return button?.disabled === false;
       });
       await clickButton(page, 'Send');
       await page.waitForFunction((marker) => {
         const text = document.body.textContent ?? '';
+
         const stopped = [...document.querySelectorAll('button')]
           .every((button) => button.getAttribute('aria-label') !== 'Stop this turn');
+
         return stopped && text.includes('Wrote web-ui-smoke.txt') && text.includes(String(marker));
       }, { timeout: 300_000 }, WEB_SMOKE_MARKER);
       // Exactly one tool call means two model steps: request the write, then
@@ -350,17 +378,20 @@ describe('Live Smoke — one real turn per backend', () => {
       await page.evaluate(() => {
         const file = [...document.querySelectorAll('button')]
           .find((button) => button.textContent?.trim().startsWith('web-ui-smoke.txt') === true);
+
         file?.click();
       });
 
       await page.waitForFunction((marker) => {
         const back = [...document.querySelectorAll('button')]
           .find((button) => button.getAttribute('aria-label') === 'Back to files');
+
         return back?.parentElement?.parentElement?.textContent?.includes(String(marker)) === true;
       }, { timeout: 60_000 }, WEB_SMOKE_MARKER);
       await page.evaluate(() => {
         const sandbox = [...document.querySelectorAll('button')]
           .find((button) => button.textContent?.includes('sandbox.*') === true);
+
         sandbox?.click();
       });
       await page.waitForFunction(
@@ -383,16 +414,21 @@ describe('Live Smoke — one real turn per backend', () => {
         timeout: 90_000,
       });
       await clickButton(page, 'Workspace');
+
       const mobile = await page.evaluate(() => {
         const panelWidth = (element: Element | null): number | null => {
           for (let current = element?.parentElement; current; current = current.parentElement) {
             if (current.style.flex) return current.getBoundingClientRect().width;
           }
+
           return null;
         };
+
         const chat = document.querySelector('textarea');
+
         const output = [...document.querySelectorAll('button')]
           .find((button) => button.textContent?.trim() === 'Output') ?? null;
+
         return {
           innerWidth,
           scrollWidth: document.documentElement.scrollWidth,
@@ -400,6 +436,7 @@ describe('Live Smoke — one real turn per backend', () => {
           workspaceWidth: panelWidth(output),
         };
       });
+
       expect(mobile).toEqual({
         innerWidth: 390,
         scrollWidth: 390,
@@ -408,12 +445,14 @@ describe('Live Smoke — one real turn per backend', () => {
       });
 
       await clickAriaPrefix(page, 'Open menu');
+
       const actions = await page.evaluate(() => [...document.querySelectorAll('a,button')]
         .filter((element) => /^(Workspace settings|Rename workspace|Remove workspace)/
           .test(element.getAttribute('aria-label') ?? '')
           && element.getAttribute('aria-label')?.endsWith('Staging UI Smoke') === true)
         .filter((element) => element.getBoundingClientRect().width > 0)
         .map((element) => getComputedStyle(element).opacity));
+
       expect(actions).toEqual(['0.6', '0.6', '0.6']);
     } finally {
       await browser.close();
@@ -444,6 +483,7 @@ describe('Live Smoke — one real turn per backend', () => {
       `reading GET ${origin}/api/cli/devices`,
       () => fetch(`${origin}/api/cli/devices`, { headers: { authorization: `Bearer ${token}` } }),
     );
+
     const body = await response.text();
     // The body in the message: a 500 here carries the SQLite error, which names
     // the missing column and is the whole diagnosis.
@@ -462,6 +502,7 @@ describe('Live Smoke — one real turn per backend', () => {
     const db = new Database(dbPath);
     db.exec('PRAGMA journal_mode = WAL');
     let session: LocalAgentSession | null = null;
+
     try {
       // Birth, then OPEN, exactly as production does and as the sibling
       // delegation eval documents: `createWorkspace`'s runtime is the degraded
@@ -488,6 +529,7 @@ describe('Live Smoke — one real turn per backend', () => {
         rt, db, model: liveChatModel(LLM_CONFIG), noAutoEvolve: true, oneShot: true,
         onEvent: (event: SessionEvent) => {
           if (event.type === 'tool-call') toolNames.push(event.toolName);
+
           // The spine reports a failed turn as an event, not a rejection, so a
           // turn that errored would otherwise pass every assertion below.
           if (event.type === 'error') errorMessage = event.message;
@@ -526,6 +568,7 @@ describe('Live Smoke — one real turn per backend', () => {
         const sql = makeSql(db);
         recordLiveModelEpisode(sql, openWorkspaceMainActor(sql));
       }
+
       db.close();
     }
   }, 300_000);

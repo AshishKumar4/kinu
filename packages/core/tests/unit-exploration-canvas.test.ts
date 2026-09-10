@@ -53,6 +53,7 @@ function freshDb() {
   // A REAL actor over this database: every table these read models touch is
   // actor-private now, so a seeded row only exists for the owner that wrote it.
   const actor = createTestActors(sql, execRaw).main;
+
   return { db, sql, actor, actorId: actor.actorId };
 }
 
@@ -67,10 +68,13 @@ function seedSearch(db: Database, actorId: string, run: {
   const insert = db.query(`INSERT INTO search_nodes
     (actor_id, id, parent_id, root_id, task, action, observation, depth, visits, value, status, created_at)
     VALUES (?, ?, ?, ?, ?, ?, '', ?, 1, 0.5, 'open', ?)`);
+
   insert.run(actorId, run.rootId, null, run.rootId, run.task, '', 0, run.at);
+
   for (let i = 0; i < run.nodes; i++) {
     insert.run(actorId, `${run.rootId}-b${i}`, run.rootId, run.rootId, run.task, `branch ${i}`, 1, run.at + i + 1);
   }
+
   db.query(`INSERT INTO mcts_search_runs
     (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
      judge_samples_realised, created_at, updated_at)
@@ -87,12 +91,15 @@ function seedSplit(db: Database, actorId: string, run: {
 }): void {
   db.query(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)`)
     .run(actorId, run.rootId, run.rationale ?? run.task, run.at);
+
   const insert = db.query(`INSERT INTO head_journal
     (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
     VALUES (?, ?, NULL, ?, 0, ?, 'r', 'completed', ?, ?)`);
+
   for (let i = 0; i < run.heads; i++) {
     insert.run(actorId, `${run.rootId}-h${i}`, run.rootId, `angle ${i}`, run.at + i, run.strategy ?? 'synthesize');
   }
+
   if (run.merged) {
     db.query(`INSERT INTO head_merge_results
       (actor_id, root_id, merged_narrative, selected_decisions_json, unresolved_questions_json,
@@ -311,6 +318,7 @@ describe('readExplorationCanvas', () => {
 
     const items = readExplorationCanvas(sql, actor).items;
     expect(items).toHaveLength(3);
+
     for (const entry of items) {
       expect(entry.tree.length > 0).toBe(entry.run.hasSearchTree);
       expect(entry.head !== null).toBe(entry.run.hasNodeTranscripts);
@@ -325,6 +333,7 @@ describe('readExplorationCanvas', () => {
     // overlapping set: every journalled run behind that window draws as "no
     // branches were ever written" while the journal holds them.
     seedSplit(db, actorId, { rootId: 'm1', task: 'journal', at: 1_000, heads: 2, merged: true });
+
     for (let i = 0; i < 4; i++) {
       seedSearch(db, actorId, { rootId: `s${i}`, task: `t${i}`, at: 5_000 + i * 1_000, nodes: 1 });
     }
@@ -335,11 +344,13 @@ describe('readExplorationCanvas', () => {
 
     let cursor: SeekCursor | null = first.status === 'more' ? first.next : null;
     let journalled: ExplorationCanvasRun | undefined;
+
     for (let page = 0; cursor !== null && journalled === undefined && page < 5; page++) {
       const next: Page<ExplorationCanvasRun> = readExplorationCanvas(sql, actor, cursor, 2);
       journalled = next.items.find((entry) => entry.run.id === 'm1');
       cursor = next.status === 'more' ? next.next : null;
     }
+
     expect(journalled?.run.hasNodeTranscripts).toBe(true);
     expect(journalled?.run.hasSearchTree).toBe(false);
     expect(journalled?.head?.rootId).toBe('m1');
@@ -397,22 +408,27 @@ describe('readExplorationCanvas', () => {
 
   test('a full walk reaches every run exactly once', () => {
     const { db, sql, actor, actorId } = freshDb();
+
     for (let i = 0; i < 7; i++) {
       seedSearch(db, actorId, { rootId: `s${i}`, task: `t${i}`, at: 1_000 * (i + 1), nodes: 1 });
     }
+
     seedSplit(db, actorId, { rootId: 'm1', task: 'journalled', at: 3_500, heads: 2, merged: true });
 
     const seen: string[] = [];
     let cursor: SeekCursor | null = null;
     let pages = 0;
+
     for (;;) {
       const page: Page<ExplorationCanvasRun> = readExplorationCanvas(sql, actor, cursor, 3);
       seen.push(...page.items.map((entry) => entry.run.id));
       pages++;
+
       if (page.status === 'end') break;
       cursor = page.next;
       expect(pages).toBeLessThan(10);
     }
+
     expect(pages).toBe(3);
     expect(seen).toEqual(['s6', 's5', 's4', 's3', 'm1', 's2', 's1', 's0']);
     expect(new Set(seen).size).toBe(seen.length);
@@ -423,10 +439,12 @@ describe('Pareto canvas evidence', () => {
   test('derives a stable nondominated frontier from durable vectors, not scalar tree values', () => {
     const { db, sql, actor, actorId } = freshDb();
     seedSearch(db, actorId, { rootId: 'pareto', task: 'trade quality for cost', at: 1_000, nodes: 3 });
+
     const axes = [
       { id: 'quality', direction: 'maximise' as const },
       { id: 'cost', direction: 'minimise' as const },
     ];
+
     for (const [nodeId, evidence] of [
       ['pareto-b0', { quality: 0.9, cost: 10 }],
       ['pareto-b1', { quality: 0.8, cost: 2 }],
@@ -444,6 +462,7 @@ describe('Pareto canvas evidence', () => {
         now: 1_000,
       });
     }
+
     expect(readExplorationRun(sql, actor, 'pareto')?.frontier).toEqual({
       axes,
       candidates: [
@@ -470,6 +489,7 @@ describe('readExplorationRun', () => {
     seedSplit(db, actorId, {
       rootId: 'swarm-1', task: 'cut p99 latency', at: 1_400, heads: 2, rationale: 'optimise',
     });
+
     // Deliberately off the newest page, so this cannot be the list read in disguise.
     for (let i = 0; i < 5; i++) {
       seedSearch(db, actorId, { rootId: `newer-${i}`, task: `newer ${i}`, at: 9_000 + i, nodes: 1 });

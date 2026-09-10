@@ -182,12 +182,14 @@ export function deployedConfigs(
     const config = parseJsonc(
       readFileSync(join(REPO_ROOT, file), 'utf8'), DeployedConfigSchema, file,
     );
+
     const blocks: readonly (readonly [string, readonly v.InferOutput<typeof ContainerSchema>[]])[] = [
       ['top level', config.containers ?? []],
       ...Object.entries(config.env ?? {}).map(
         ([name, block]) => [`env.${name}`, block.containers ?? []] as const,
       ),
     ];
+
     return {
       file,
       entry: join(dirname(file), config.main),
@@ -211,15 +213,19 @@ export function importEdges(file: string, source: string, loader: Loader): reado
   const lowered = transformSync(source, { loader, jsx: 'automatic', format: 'esm' }).code;
   const parsed = parse(`${file}.lowered.ts`, lowered);
   const edges = new Map<string, Edge>();
+
   for (const specifier of moduleSpecifiers(parsed.root)) {
     edges.set(specifier, { specifier, kind: 'import-statement' });
   }
+
   walk(parsed.root, (node) => {
     if (identifierCalleeName(node) !== 'require') return;
+
     for (const specifier of stringArguments(node)) {
       if (!edges.has(specifier)) edges.set(specifier, { specifier, kind: 'require-call' });
     }
   });
+
   return [...edges.values()];
 }
 
@@ -239,23 +245,29 @@ export async function deployedGraph(
 
   const traverse = async (resolver: PluginBuild): Promise<void> => {
     const queue = entries.map((entry) => join(REPO_ROOT, entry));
+
     while (queue.length > 0) {
       const file = queue.pop() ?? '';
+
       if (visited.has(file)) continue;
       visited.add(file);
       const extension = extname(file);
+
       if (!isModuleExtension(extension)) continue;
       const loader: Loader = LOADERS[extension];
       let edges: readonly Edge[];
+
       try {
         edges = importEdges(file, readFileSync(file, 'utf8'), loader);
       } catch (error) {
         const failure = v.safeParse(TransformFailureSchema, error);
+
         const located = failure.success
           ? failure.output.errors.map((one) => (one.location === null || one.location === undefined
             ? one.text
             : `${String(one.location.line)}:${String(one.location.column)}: ${one.text}`))
           : [];
+
         unreadable.push({
           file: relative(REPO_ROOT, file),
           specifier: '',
@@ -265,11 +277,14 @@ export async function deployedGraph(
         });
         continue;
       }
+
       for (const edge of edges) {
         if (isRuntimeProvided(edge.specifier)) continue;
+
         const found = await resolver.resolve(edge.specifier, {
           resolveDir: dirname(file), kind: edge.kind,
         });
+
         if (found.errors.length > 0 || found.path === '') {
           unresolved.push({
             file: relative(REPO_ROOT, file),
@@ -278,6 +293,7 @@ export async function deployedGraph(
           });
           continue;
         }
+
         if (!found.external) queue.push(found.path);
       }
     }
@@ -299,6 +315,7 @@ export async function deployedGraph(
         }));
         resolver.onLoad({ filter: /.*/, namespace: 'kinu-graph' }, async () => {
           await traverse(resolver);
+
           return { contents: '', loader: 'js' };
         });
       },
@@ -343,13 +360,17 @@ function readManifest(dir: string): Manifest {
  *  `package.json` with a name. */
 export function owningPackage(file: string): string | undefined {
   let dir = dirname(file);
+
   while (isAbsolute(dir) && dir !== sep) {
     if (existsSync(join(dir, 'package.json'))) {
       const name = readManifest(dir).name;
+
       if (name !== undefined) return dir;
     }
+
     dir = dirname(dir);
   }
+
   return undefined;
 }
 
@@ -358,8 +379,10 @@ export function owningPackage(file: string): string | undefined {
 function nestingParent(dir: string): string | undefined {
   const marker = `${sep}node_modules${sep}`;
   const at = dir.lastIndexOf(marker);
+
   if (at <= 0) return undefined;
   const above = dir.slice(0, at);
+
   return above.endsWith(`${sep}node_modules`) || !above.includes(`${sep}node_modules${sep}`)
     ? undefined
     : above;
@@ -368,17 +391,22 @@ function nestingParent(dir: string): string | undefined {
 /** Every installed copy of `name` whose modules the deployed graph reached. */
 export function boundCopies(graph: DeployedGraph, name: string): readonly PackageCopy[] {
   const byDir = new Map<string, string[]>();
+
   for (const file of graph.modules) {
     const dir = owningPackage(file);
+
     if (dir === undefined) continue;
+
     if (readManifest(dir).name !== name) continue;
     const held = byDir.get(dir) ?? [];
     held.push(relative(REPO_ROOT, file));
     byDir.set(dir, held);
   }
+
   return [...byDir.entries()]
     .map(([dir, modules]) => {
       const parent = nestingParent(dir);
+
       return {
         dir: relative(REPO_ROOT, dir),
         version: readManifest(dir).version ?? 'no version in its own manifest',
@@ -400,10 +428,13 @@ export function declaredPins(
   name: string, files: readonly string[] = trackedFiles(),
 ): readonly Pin[] {
   const pins: Pin[] = [];
+
   for (const file of files.filter((candidate) => WORKSPACE_MANIFEST.test(candidate))) {
     const range = readManifest(join(REPO_ROOT, dirname(file))).dependencies?.[name];
+
     if (range !== undefined) pins.push({ manifest: file, range });
   }
+
   return pins;
 }
 
@@ -446,10 +477,12 @@ export function lockedResolutions(
   name: string, source = readFileSync(join(REPO_ROOT, LOCK), 'utf8'),
 ): readonly LockedResolution[] {
   const lock = parseJsonc(source, LockSchema, LOCK);
+
   return Object.entries(lock.packages)
     .filter(([key]) => key === name || key.endsWith(`/${name}`))
     .map(([key, row]) => {
       const id = row[0];
+
       return { key, version: id.slice(id.lastIndexOf('@') + 1) };
     })
     .sort((left, right) => left.key.localeCompare(right.key));
@@ -474,35 +507,48 @@ export function literalModuleReads(
   files: readonly string[] = trackedFiles(),
 ): readonly LiteralRead[] {
   const reads: LiteralRead[] = [];
+
   for (const file of files) {
     if (!isParseable(file)) continue;
     const path = join(REPO_ROOT, file);
+
     if (!existsSync(path)) continue;
     const text = readFileSync(path, 'utf8');
+
     if (!text.includes(CONTAINERS)) continue;
     const parsed = parse(file, text);
     walk(parsed.root, (node) => {
       const raw = node.raw;
+
       if (raw.type !== 'Literal' && raw.type !== 'TemplateElement') return;
+
       const written = node.type === 'TemplateElement'
         ? text.slice(node.start, node.end)
         : text.slice(node.start + 1, node.end - 1);
+
       for (const [named] of written.matchAll(MODULE_LITERAL)) {
         reads.push({ file, names: named });
       }
     });
   }
+
   return reads;
 }
 
 /* ── The verdict ────────────────────────────────────────────────────────── */
 
 const CONFIGS = deployedConfigs();
+
 const GRAPH = await deployedGraph(CONFIGS);
+
 const COPIES = boundCopies(GRAPH, CONTAINERS);
+
 const PINS = declaredPins(CONTAINERS);
+
 const READS = literalModuleReads();
+
 const LOCKED = lockedResolutions(CONTAINERS);
+
 const GRAPH_MODULES: ReadonlySet<string> = new Set(
   GRAPH.modules.map((file) => relative(REPO_ROOT, file)),
 );
@@ -524,7 +570,9 @@ console.log(`nested-container-resolution: ${assertMeasured('nested-container-res
   ['containers the deployed configs bind', CONTAINERS_BOUND.length],
   [`${LOCK} resolutions of ${CONTAINERS}`, LOCKED.length],
 ])}`);
+
 for (const copy of COPIES) console.log(`  binds ${describeCopy(copy)}`);
+
 for (const row of LOCKED) console.log(`  ${LOCK} records ${row.key} at ${row.version}`);
 
 describe('the Containers runtime the deployed artifact binds', () => {
@@ -537,6 +585,7 @@ describe('the Containers runtime the deployed artifact binds', () => {
 
   test('exactly one Containers runtime version reaches the deployed graph', () => {
     const versions = [...new Set(COPIES.map((copy) => copy.version))].sort();
+
     if (versions.length === 1) return;
     throw new Error(`${CONTAINERS}: ${String(versions.length)} versions reach one artifact\n${
       COPIES.map((copy) => finding({
@@ -552,6 +601,7 @@ describe('the Containers runtime the deployed artifact binds', () => {
   test('the version the workspaces pin is the version that ships', () => {
     const shipped = [...new Set(COPIES.map((copy) => copy.version))].sort();
     const drifted = PINS.filter((pin) => !shipped.includes(pin.range));
+
     if (drifted.length === 0) return;
     const exact = /^\d+\.\d+\.\d+$/u;
     throw new Error(`${CONTAINERS}: the pinned version is not the shipped version\n${
@@ -579,6 +629,7 @@ describe('the Containers runtime the deployed artifact binds', () => {
     const locked = LOCKED.map((row) => row.version);
     const pinned = PINS.map((pin) => pin.range);
     const versions = [...new Set([...shipped, ...locked, ...pinned])].sort();
+
     if (versions.length === 1) return;
     throw new Error(`${CONTAINERS}: four declarations, ${String(versions.length)} versions\n${
       finding({
@@ -604,6 +655,7 @@ describe('the Containers runtime the deployed artifact binds', () => {
     expect(LOCKED.length, `${LOCK} records no resolution of ${CONTAINERS} at all`)
       .toBeGreaterThan(0);
     const nested = LOCKED.filter((row) => row.key !== CONTAINERS);
+
     if (nested.length === 0) return;
     throw new Error(`${LOCK}: ${String(nested.length)} nested resolution(s)\n${
       nested.map((row) => finding({
@@ -635,6 +687,7 @@ describe('the Containers runtime the deployed artifact binds', () => {
         hono: ['hono@4.13.0', '', {}, 'sha512-unrelated'],
       },
     });
+
     expect(lockedResolutions(CONTAINERS, before).map((row) => `${row.key}@${row.version}`))
       .toEqual([
         '@cloudflare/containers@0.3.7',
@@ -654,6 +707,7 @@ describe('the Containers runtime the deployed artifact binds', () => {
   test('no deployed container image is built from this tree', () => {
     const built = CONTAINERS_BOUND.filter(({ config, container }) =>
       existsSync(join(REPO_ROOT, dirname(config), container.image)));
+
     if (built.length === 0) return;
     throw new Error(`${String(built.length)} container image(s) are built here, so cold-start `
       + `module loading is undecided\n${built.map(({ config, container }) => finding({
@@ -689,6 +743,7 @@ describe('resolution inside the deployed artifact', () => {
 
   test('a literal Containers module path names a module the artifact contains', () => {
     const wrong = READS.filter((read) => !GRAPH_MODULES.has(read.names));
+
     if (wrong.length === 0) return;
     const shipped = COPIES.flatMap((copy) => copy.modules);
     throw new Error(`${String(wrong.length)} literal path(s) name a copy that never ships\n${

@@ -6,6 +6,7 @@ import { kinuHome } from '../src/home';
 import { createHostCheckpoints } from '../src/checkpoints';
 
 const original = process.env.KINU_HOME;
+
 afterEach(() => {
   if (original === undefined) delete process.env.KINU_HOME;
   else process.env.KINU_HOME = original;
@@ -34,6 +35,7 @@ describe('checkpoint store isolation', () => {
   // promises a throwaway home depends on this.
   test('checkpoints land under KINU_HOME, not the real home', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kinu-home-iso-'));
+
     try {
       process.env.KINU_HOME = join(root, 'home');
       const work = join(root, 'project');

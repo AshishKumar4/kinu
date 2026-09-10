@@ -41,6 +41,7 @@ export const TUI_MARKS = {
 
 /** The resting composer placeholder. */
 export const TUI_COMPOSER_PLACEHOLDER = 'Send a message…';
+
 /** The composer placeholder while a turn runs. It names what typing does then.
  *  The first-run pty case waits on its arrival as the product's own word that
  *  a submitted draft went out. */
@@ -104,6 +105,8 @@ export function composerVisibleRows(virtualLines: number, maxRows: number = COMP
   if (!Number.isFinite(virtualLines)) return 1;
   const rows = Math.floor(virtualLines);
   const cap = Number.isFinite(maxRows) ? Math.max(1, Math.floor(maxRows)) : Number.POSITIVE_INFINITY;
+
   if (rows < 1) return 1;
+
   return Math.min(rows, cap);
 }

@@ -88,8 +88,10 @@ describe('the readers can see the end of a long turn', () => {
     await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
 
     const prompts: string[] = [];
+
     const judge = async (prompt: string): Promise<JudgeOutput> => {
       prompts.push(prompt);
+
       return { winner: 'tie', rationale: 'mock', scoreA: 0.5, scoreB: 0.5 };
     };
 
@@ -104,15 +106,18 @@ describe('the readers can see the end of a long turn', () => {
 
     expect(result.skipped).toBe(false);
     expect(prompts).toHaveLength(2);
+
     for (const prompt of prompts) {
       expect(prompt).toContain(`ASK-${ending}`);
       expect(prompt).toContain(`CURRENT-${ending}`);
     }
+
     // One window, judged and recorded: the row is the evidence the verdict was
     // formed on, not a differently-truncated view of it.
     const row = rt.storage.sql<{ task: string; current_output: string }>`
       SELECT task, current_output FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId} LIMIT 1`[0]!;
+
     expect(row.task).toBe(evidenceWindow(trajectory(20_000, `ASK-${ending}`), EVIDENCE_BUDGETS.shadowTask));
     expect(row.current_output).toContain(`CURRENT-${ending}`);
   });
@@ -133,6 +138,7 @@ describe('the readers can see the end of a long turn', () => {
 
     const prompts: string[] = [];
     const currentOutput = trajectory(200_000, `CURRENT-${ending}`);
+
     const control: ScaffoldControl = {
       rt,
       sql: rt.storage.sql,
@@ -150,9 +156,11 @@ describe('the readers can see the end of a long turn', () => {
       model: () => new MockLanguageModelV3(),
       judge: async ({ prompt, schema }) => {
         prompts.push(prompt);
+
         return v.parse(schema, { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 });
       },
     };
+
     // The turn stores the live output WHOLE; the drain windows it once.
     expect(queueTurnShadowTrial(control, {
       task: 'short task', currentOutput, context: [{ role: 'user', content: 'short task' }],
@@ -161,6 +169,7 @@ describe('the readers can see the end of a long turn', () => {
 
     expect(prompts.length).toBeGreaterThan(0);
     const prompt = prompts[0];
+
     if (!prompt) throw new Error('expected shadow judge prompt');
     const omissions = [...prompt.matchAll(/(\d+) chars omitted from the middle/g)].map((match) => Number(match[1]));
     // One window over the live output, reporting what it really dropped.
@@ -173,6 +182,7 @@ describe('the readers can see the end of a long turn', () => {
       assistantResponse: trajectory(40_000, `ANSWER-${ending}`),
       followup: trajectory(20_000, `FOLLOWUP-${ending}`),
     });
+
     expect(prompt).toContain(`ASK-${ending}`);
     expect(prompt).toContain(`ANSWER-${ending}`);
     expect(prompt).toContain(`FOLLOWUP-${ending}`);
@@ -200,7 +210,11 @@ describe('the readers can see the end of a long turn', () => {
       actor,
       judge: {
         async *stream() { yield '{"score": 1.0, "note": "ok"}'; },
-        complete: async (prompt: string) => { prompts.push(prompt); return '{"score": 1.0, "note": "ok"}'; },
+        complete: async (prompt: string) => {
+          prompts.push(prompt);
+
+          return '{"score": 1.0, "note": "ok"}';
+        },
       },
       runTask: async () => trajectory(40_000, `FRESH-${ending}`),
       sampleSize: 1,
@@ -219,6 +233,7 @@ describe('the readers can see the end of a long turn', () => {
       minibatch: [{ id: 'i1', input: trajectory(20_000, `INPUT-${ending}`), evidence: trajectory(20_000, `EVIDENCE-${ending}`) }],
       rollout: { outcomes: [{ instanceId: 'i1', outcome: { score: 0.1, feedback: trajectory(20_000, `FEEDBACK-${ending}`) } }], metricCalls: 1 },
     });
+
     expect(prompt).toContain(`INPUT-${ending}`);
     expect(prompt).toContain(`EVIDENCE-${ending}`);
     expect(prompt).toContain(`FEEDBACK-${ending}`);
@@ -226,10 +241,12 @@ describe('the readers can see the end of a long turn', () => {
 
   test('a candidate source is head-truncated, never middle-elided — a rewrite of holed code comes back holed', () => {
     const source = `// header\n${'const filler = 1;\n'.repeat(2000)}// footer`;
+
     const prompt = renderReflectionPrompt({
       parent: candidate(source),
       minibatch: [], rollout: { outcomes: [], metricCalls: 0 },
     });
+
     expect(prompt).toContain('// header');
     expect(prompt).toContain('... [truncated]');
     expect(prompt).not.toContain('chars omitted from the middle');

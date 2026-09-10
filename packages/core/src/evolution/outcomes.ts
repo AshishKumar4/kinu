@@ -40,6 +40,7 @@ export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
  *  means everywhere it is drawn as a set (GEPA's optimization targets, the
  *  pathology clustering). `abandoned` is an absence of signal, not a verdict. */
 export const NEGATIVE_TURN_OUTCOMES = ['corrected', 'frustrated'] as const;
+
 const NEGATIVE_TURN_OUTCOME_SET: ReadonlySet<TurnOutcome> = new Set(NEGATIVE_TURN_OUTCOMES);
 
 /** The event every rate downstream is really about: a turn the user had to
@@ -102,7 +103,9 @@ export function feedbackToQuality(feedback: 'positive' | 'negative'): number {
  *  carry no user signal either way, so feedback stays null. */
 export function outcomeToFeedback(outcome: TurnOutcome): 'positive' | 'negative' | null {
   if (outcome === 'accepted') return 'positive';
+
   if (outcome === 'abandoned') return null;
+
   return 'negative';
 }
 
@@ -122,10 +125,13 @@ const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.3 } as const;
  *  as one. */
 export function outcomeQuality(outcome: TurnOutcome, source: TurnOutcomeSource = 'classifier'): number {
   if (outcome === 'abandoned') return 0.5;
+
   if (source === 'execution') {
     return outcome === 'accepted' ? EXECUTION_QUALITY.accepted : EXECUTION_QUALITY.negative;
   }
+
   if (outcome === 'frustrated') return 0.1;
+
   return feedbackToQuality(outcome === 'accepted' ? 'positive' : 'negative');
 }
 
@@ -144,7 +150,9 @@ const TRIVIAL_MESSAGE = new RegExp(
 export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCalls'>): boolean {
   if (turn.toolCalls.length > 0) return false;
   const msg = turn.userMessage.trim();
+
   if (TRIVIAL_MESSAGE.test(msg)) return true;
+
   return msg.length < 12 && !msg.includes('?');
 }
 
@@ -159,6 +167,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
  *  recall under either name must score the same, so both are recognised. */
 export function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
   if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
+
   return call.name === 'fact' && call.args.action === 'recall';
 }
 
@@ -207,9 +216,13 @@ export function executionVerdict(
 ): ExecutionVerdict | null {
   const acting = turn.toolCalls.filter((call) => !isPureLookupCall(call));
   const last = acting[acting.length - 1];
+
   if (last === undefined) return null;
+
   if (turn.hadError) return 'failed';
+
   if (last.outcome === undefined) return null;
+
   return last.outcome.success ? 'succeeded' : 'failed';
 }
 
@@ -329,12 +342,16 @@ export async function classifyTurnOutcome(
 ): Promise<OutcomeClassification | null> {
   const raw = await llm.complete(buildOutcomeClassifierPrompt(input));
   const json = tolerate(() => extractJsonObject(raw), 'malformed-input');
+
   if (json === undefined) return null;
   const parsed = v.safeParse(OutcomeClassificationSchema, json);
+
   if (!parsed.success) return null;
+
   const confidence = parsed.output.confidence !== undefined && Number.isFinite(parsed.output.confidence)
     ? Math.min(1, Math.max(0, parsed.output.confidence))
     : 0.5;
+
   return {
     outcome: parsed.output.outcome,
     confidence,
@@ -437,10 +454,12 @@ export function recordOutcomeLabels(sql: SqlExecutor, actor: ActorHandle, input:
 }): number {
   actor.assertCurrent();
   const now = input.now ?? nowMs();
+
   for (const entry of input.labels) {
     void sql`INSERT INTO outcome_labels (actor_id, id, outcome_id, label, labeler, created_at)
         VALUES (${actor.actorId}, ${`lbl-${nanoid()}`}, ${entry.outcomeId}, ${entry.label}, ${input.labeler}, ${now})`;
   }
+
   return input.labels.length;
 }
 
@@ -460,12 +479,14 @@ function toOutcomeLabelRow(r: RawOutcomeLabelRow): OutcomeLabelRow {
  *  silently dropped the oldest labels would drop the turns they speak for. */
 export function listOutcomeLabels(sql: SqlExecutor, actor: ActorHandle, limit?: number): OutcomeLabelRow[] {
   actor.assertCurrent();
+
   const rows = limit === undefined
     ? sql<RawOutcomeLabelRow>`SELECT * FROM outcome_labels WHERE actor_id = ${actor.actorId}
         ORDER BY created_at DESC, id DESC`
     : sql<RawOutcomeLabelRow>`
         SELECT * FROM outcome_labels WHERE actor_id = ${actor.actorId}
         ORDER BY created_at DESC, id DESC LIMIT ${limit}`;
+
   return rows.map(toOutcomeLabelRow);
 }
 
@@ -473,9 +494,11 @@ export function listOutcomeLabels(sql: SqlExecutor, actor: ActorHandle, limit?: 
  *  storage makes a correction a new row, so "newest wins" is the whole read. */
 export function goldLabels(sql: SqlExecutor, actor: ActorHandle): Map<string, OutcomeLabelRow> {
   const latest = new Map<string, OutcomeLabelRow>();
+
   for (const row of listOutcomeLabels(sql, actor)) {
     if (!latest.has(row.outcomeId)) latest.set(row.outcomeId, row);
   }
+
   return latest;
 }
 
@@ -496,10 +519,12 @@ export function recordEnsembleLabels(sql: SqlExecutor, actor: ActorHandle, input
 }): number {
   actor.assertCurrent();
   const now = input.now ?? nowMs();
+
   for (const entry of input.labels) {
     void sql`INSERT INTO outcome_ensemble_labels (actor_id, id, outcome_id, model, label, created_at)
         VALUES (${actor.actorId}, ${`ens-${nanoid()}`}, ${entry.outcomeId}, ${input.model}, ${entry.label}, ${now})`;
   }
+
   return input.labels.length;
 }
 
@@ -507,18 +532,23 @@ export function recordEnsembleLabels(sql: SqlExecutor, actor: ActorHandle, input
  *  "append-only, newest wins" read as `goldLabels`. */
 export function ensembleLabels(sql: SqlExecutor, actor: ActorHandle): EnsembleLabelRow[] {
   actor.assertCurrent();
+
   const rows = sql<{
     id: string; outcome_id: string; model: string; label: OutcomeLabel; created_at: number;
   }>`SELECT * FROM outcome_ensemble_labels WHERE actor_id = ${actor.actorId}
       ORDER BY created_at DESC, id DESC`;
+
   const latest = new Map<string, EnsembleLabelRow>();
+
   for (const r of rows) {
     const key = `${r.outcome_id}\n${r.model}`;
+
     if (latest.has(key)) continue;
     latest.set(key, {
       id: r.id, outcomeId: r.outcome_id, model: r.model, label: r.label, createdAt: r.created_at,
     });
   }
+
   return [...latest.values()];
 }
 
@@ -552,6 +582,7 @@ export interface RecordTurnOutcomeInput {
   evidence?: string | null;
   now?: number;
 }
+
 /** Record one observation of a turn's outcome. APPEND-ONLY: a second verdict
  *  on the same turn inserts another row and never touches prior ones, because
  *  each observation is evidence calibration labels address by id — deleting or
@@ -578,6 +609,7 @@ export function recordTurnOutcome(
          ${input.followup === null || input.followup === undefined ? null : evidenceWindow(input.followup, EVIDENCE_BUDGETS.storedFollowup)},
          ${input.scaffoldVersion ?? null}, ${input.now ?? nowMs()},
          ${input.evidence === null || input.evidence === undefined ? null : evidenceWindow(input.evidence, EVIDENCE_BUDGETS.storedEvidence)})`;
+
   return id;
 }
 
@@ -597,6 +629,7 @@ function toOutcomeRow(r: RawOutcomeRow): TurnOutcomeRow {
     evidence: r.evidence ?? null,
   };
 }
+
 /** Recorded outcomes resolved to ONE EFFECTIVE verdict per turn, newest first,
  *  optionally filtered by outcome kinds.
  *
@@ -634,8 +667,10 @@ export function listTurnOutcomes(
   if (opts.turnIds === undefined) {
     return selectEffectiveTurnOutcomes(sql, actor, opts.limit ?? 50, opts.outcomes);
   }
+
   if (opts.turnIds.length === 0) return [];
   const wanted = new Set(opts.turnIds);
+
   return selectEffectiveTurnOutcomes(sql, actor, undefined, opts.outcomes)
     .filter((row) => row.turnId !== null && wanted.has(row.turnId))
     .slice(0, opts.limit ?? wanted.size);
@@ -659,6 +694,7 @@ function selectEffectiveTurnOutcomes(
   const wanted = TURN_OUTCOMES.filter((o) => !outcomes || outcomes.includes(o));
   const [w0, w1, w2, w3] = [wanted[0] ?? '', wanted[1] ?? '', wanted[2] ?? '', wanted[3] ?? ''];
   const [p0, p1, p2, p3] = TURN_OUTCOME_SOURCE_PRECEDENCE;
+
   const ranked = sql<RawOutcomeRow & { eff_rn: number }>`
     SELECT * FROM (
       SELECT *, ROW_NUMBER() OVER (
@@ -676,6 +712,7 @@ function selectEffectiveTurnOutcomes(
       WHERE actor_id = ${actorId} AND turn_id IS NULL
     ORDER BY created_at DESC, id DESC
     LIMIT ${limit === undefined ? -1 : limit}`;
+
   return ranked.map(toOutcomeRow);
 }
 
@@ -686,9 +723,11 @@ export function takePickOutcome(
 ): TurnOutcome | null {
   if (!turnId) return null;
   actor.assertCurrent();
+
   const rows = sql<{ outcome: TurnOutcome }>`
     SELECT outcome FROM turn_outcomes
     WHERE actor_id = ${actor.actorId} AND turn_id = ${turnId} AND source = 'take_pick' LIMIT 1`;
+
   return rows[0]?.outcome ?? null;
 }
 
@@ -710,6 +749,7 @@ export function recordedTurnVerdict(
   if (!turnId) return null;
   actor.assertCurrent();
   const [p0, p1, p2, p3] = TURN_OUTCOME_SOURCE_PRECEDENCE;
+
   const rows = sql<{ outcome: TurnOutcome; source: TurnOutcomeSource; confidence: number }>`
     SELECT outcome, source, confidence FROM turn_outcomes
     WHERE actor_id = ${actor.actorId} AND turn_id = ${turnId}
@@ -717,6 +757,7 @@ export function recordedTurnVerdict(
              WHEN ${p2} THEN 2 WHEN ${p3} THEN 3 ELSE 4 END ASC,
              created_at DESC, id DESC
     LIMIT 1`;
+
   return rows[0] ?? null;
 }
 
@@ -729,6 +770,7 @@ export function hasNegativeOutcome(
 ): boolean {
   if (turnIds.length === 0) return false;
   const wanted = new Set(turnIds);
+
   return selectEffectiveTurnOutcomes(sql, actor, undefined, NEGATIVE_TURN_OUTCOMES)
     .some((r) => r.turnId !== null && wanted.has(r.turnId));
 }
@@ -749,13 +791,16 @@ export function realOutcomeScaffoldRates(
   sql: SqlExecutor, actor: ActorHandle,
 ): Map<number, RealOutcomeRate> {
   const rates = new Map<number, RealOutcomeRate>();
+
   for (const row of selectEffectiveTurnOutcomes(sql, actor, undefined)) {
     if (row.scaffoldVersion === null) continue;
     const rate = rates.get(row.scaffoldVersion) ?? { accepted: 0, negative: 0 };
+
     if (row.outcome === 'accepted') rate.accepted++;
     else if (isNegativeOutcome(row.outcome)) rate.negative++;
     rates.set(row.scaffoldVersion, rate);
   }
+
   return rates;
 }
 
@@ -771,8 +816,10 @@ export function blendRealOutcomeRates(
   return archive.map((e) => {
     const real = rates.get(e.version);
     const realDecisive = real ? real.accepted + real.negative : 0;
+
     if (!real || realDecisive === 0) return e;
     const shadowDecisive = e.wins + e.losses;
+
     return {
       ...e,
       trials: e.trials + realDecisive,
@@ -855,7 +902,9 @@ export function renderOutcomeCriterion(
     return `The agent's response below was ACCEPTED by the user. ${rule.accepted}\n\n`
       + `Accepted response:\n${evidenceWindow(expected.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`;
   }
+
   const critic = CRITIC_PROSE[expected?.critic ?? 'user'];
+
   return `The agent's response below FAILED — ${critic.verdict}. ${rule.failed}\n\n`
     + `Failed response:\n${evidenceWindow(expected?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n`
     + `${critic.complaint}:\n${evidenceWindow(expected?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
@@ -922,7 +971,9 @@ export interface OutcomeEvalSplit {
 export const LESSON_SOURCES = [
   'turn_reflection', 'session_reflection', 'execution_recovery', 'import',
 ] as const;
+
 export type LessonSource = (typeof LESSON_SOURCES)[number];
+
 export type LessonStatus = 'provisional' | 'corroborated';
 
 /** The lessons DDL, with its CHECK derived from the source list — referenced
@@ -974,6 +1025,7 @@ export function recordLesson(sql: SqlExecutor, actor: ActorHandle, input: {
       VALUES (${actor.actorId}, ${id}, ${JSON.stringify(input.turnIds)}, ${input.text}, ${input.source},
               ${input.status}, ${now}, ${input.status === 'corroborated' ? now : null})
       ON CONFLICT(actor_id, id) DO NOTHING`;
+
   return id;
 }
 
@@ -988,6 +1040,7 @@ function toLessonRow(r: RawLessonRow): LessonRow {
   // it as untied left it permanently un-corroboratable, which is the one thing
   // that keeps a lesson out of MEMORY.md forever.
   const turnIds = v.parse(v.array(v.string()), parseJsonValue(r.turn_ids));
+
   return {
     id: r.id, turnIds, text: r.text, source: r.source, status: r.status,
     createdAt: r.created_at, corroboratedAt: r.corroborated_at,
@@ -1002,19 +1055,23 @@ export function listLessons(
   actor.assertCurrent();
   const status = opts.status ?? null;
   const source = opts.source ?? null;
+
   const rows = sql<RawLessonRow>`SELECT * FROM lessons
     WHERE actor_id = ${actor.actorId}
       AND (${status} IS NULL OR status = ${status})
       AND (${source} IS NULL OR source = ${source})
     ORDER BY created_at DESC LIMIT ${opts.limit ?? 100}`;
+
   return rows.map(toLessonRow);
 }
 
 /** One lesson by id, or null. */
 export function getLesson(sql: SqlExecutor, actor: ActorHandle, id: string): LessonRow | null {
   actor.assertCurrent();
+
   const rows = sql<RawLessonRow>`SELECT * FROM lessons
     WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1`;
+
   return rows[0] ? toLessonRow(rows[0]) : null;
 }
 
@@ -1037,9 +1094,11 @@ export function corroborateLessonsForTurn(
 ): LessonRow[] {
   const provisional = listLessons(sql, actor, { status: 'provisional', limit: 200 });
   const matched = provisional.filter((l) => l.turnIds.includes(turnId));
+
   for (const lesson of matched) {
     void sql`UPDATE lessons SET status = 'corroborated', corroborated_at = ${now}
       WHERE actor_id = ${actor.actorId} AND id = ${lesson.id}`;
   }
+
   return matched.map((l) => ({ ...l, status: 'corroborated' as const, corroboratedAt: now }));
 }

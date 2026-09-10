@@ -23,22 +23,28 @@ import {
 } from '../src/user/workspace-capability';
 
 const WORKSPACE = 'workspace-a';
+
 const OTHER_WORKSPACE = 'workspace-b';
+
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const TOKEN_HASH = 'a'.repeat(64);
 
 // No test here should reach the network; a provider/OAuth call that survives
 // the gate must fail loudly rather than dial out.
 const realFetch = globalThis.fetch;
+
 beforeAll(() => {
   globalThis.fetch = Object.assign(
     async (): Promise<Response> => { throw new Error('network disabled in tests'); },
     { preconnect: realFetch.preconnect },
   );
 });
+
 afterAll(() => { globalThis.fetch = realFetch; });
 
 type UserDOInstance = TestUserDO['userDO'];
+
 type AsyncUserDOResult = {
   [Method in keyof UserDOInstance]: UserDOInstance[Method] extends
     (...args: never[]) => Promise<infer Result> ? Result : never;
@@ -296,6 +302,7 @@ const OWNER_ONLY_CALLS: OwnerOnlyCall[] = [
 async function refused(call: Pick<GatedCall, 'run'>, userDO: UserDOInstance, caller: UserCaller): Promise<boolean> {
   try {
     await call.run(userDO, caller);
+
     return false;
   } catch (error) {
     return error instanceof CapabilityDeniedError;
@@ -311,6 +318,7 @@ async function setupWorkspaces(
   const harness = createTestUserDO({ ...options, deviceResponder: daemon });
   const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
   const otherToken = await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
+
   // A connected socket must belong to a registered device row. The real hub
   // cannot accept a slot whose row does not exist; the old fixture only
   // attached the socket, so deviceRpc quite correctly read "no device
@@ -325,6 +333,7 @@ async function setupWorkspaces(
     // about.
     await harness.sendDeviceHello(CAPABLE_HELLO);
   }
+
   return Object.assign(harness, { token, otherToken });
 }
 
@@ -335,9 +344,11 @@ describe('a registered workspace reaches the whole surface', () => {
 
     const cut: string[] = [];
     const kept: string[] = [];
+
     for (const call of GATED_CALLS) {
       (await refused(call, harness.userDO, caller) ? cut : kept).push(`${call.capability}:${call.name}`);
     }
+
     expect(cut).toEqual([]);
     // Named explicitly so the reach is legible, not just counted.
     expect(kept).toContain('device.rpc:deviceRpc');
@@ -357,9 +368,11 @@ describe('a registered workspace reaches the whole surface', () => {
   test('an owner session is never refused', async () => {
     const harness = await setupWorkspaces();
     const cut: string[] = [];
+
     for (const call of GATED_CALLS) {
       if (await refused(call, harness.userDO, await testOwner())) cut.push(`${call.capability}:${call.name}`);
     }
+
     expect(cut).toEqual([]);
     harness.close();
   });
@@ -418,6 +431,7 @@ describe('a registered workspace reaches the whole surface', () => {
 
 describe('the boundary fails closed', () => {
   type MalformedCaller = string | { workspaceToken: string } | undefined;
+
   const badCallers: Array<{ name: string; caller: MalformedCaller }> = [
     { name: 'no token at all', caller: undefined },
     { name: 'an empty token', caller: { workspaceToken: '' } },
@@ -429,13 +443,16 @@ describe('the boundary fails closed', () => {
     test(`${name} is refused by every privileged method`, async () => {
       const harness = await setupWorkspaces();
       const allowed: string[] = [];
+
       for (const call of GATED_CALLS) {
         // SAFETY: `badCallers` is the locally constructed fixture union above;
         // this deliberate type violation crosses only the runtime trust gate
         // under test, which must reject every value before using its fields.
         const untrustedCaller = caller as UserCaller;
+
         if (!(await refused(call, harness.userDO, untrustedCaller))) allowed.push(`${call.capability}:${call.name}`);
       }
+
       expect(allowed).toEqual([]);
       harness.close();
     });
@@ -446,11 +463,13 @@ describe('the boundary fails closed', () => {
     // No registerWorkspace, no mint — exactly the state of a DO the Worker has
     // not yet claimed. There is no token it could present.
     const allowed: string[] = [];
+
     for (const call of GATED_CALLS) {
       if (!(await refused(call, harness.userDO, { workspaceToken: 'pwc_forged' }))) {
         allowed.push(`${call.capability}:${call.name}`);
       }
     }
+
     expect(allowed).toEqual([]);
     harness.close();
   });
@@ -572,7 +591,9 @@ describe('workspace name reservation', () => {
     const before = harness.db.prepare(
       'SELECT * FROM user_workspaces WHERE name = ?',
     ).get('archived-name');
+
     const result = await harness.userDO.reserveWorkspace(owner, 'archived-name', 'Fork title');
+
     const after = harness.db.prepare(
       'SELECT * FROM user_workspaces WHERE name = ?',
     ).get('archived-name');
@@ -709,6 +730,7 @@ describe('no privileged UserDO method escapes the gate', () => {
       .filter((m) => !NON_RPC_METHODS.has(m.name) && m.name !== IDENTITY_BOOTSTRAP)
       .filter((m) => !m.params.startsWith('caller: UserCaller'))
       .map((m) => m.name);
+
     expect(ungated).toEqual([]);
   });
 
@@ -727,10 +749,12 @@ describe('no privileged UserDO method escapes the gate', () => {
   test('owner-only profile writes reject every workspace token and accept an owner session', async () => {
     const harness = await setupWorkspaces();
     const workspace: UserCaller = { workspaceToken: harness.token };
+
     for (const call of OWNER_ONLY_CALLS) {
       expect(await refused(call, harness.userDO, workspace)).toBe(true);
       expect(await refused(call, harness.userDO, await testOwner())).toBe(false);
     }
+
     harness.close();
   });
 
@@ -740,10 +764,12 @@ describe('no privileged UserDO method escapes the gate', () => {
         .filter((m) => !isInternalMember(m) && m.params.startsWith('caller: UserCaller'))
         .map((m) => m.name),
     );
+
     const exercised = new Set([
       ...GATED_CALLS.map((call) => call.name.replace(/\(.*$/u, '')),
       ...OWNER_ONLY_CALLS.map((call) => call.name),
     ]);
+
     expect([...declared].filter((name) => !exercised.has(name)).sort()).toEqual([]);
   });
 

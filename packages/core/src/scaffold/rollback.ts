@@ -19,14 +19,17 @@ export async function rollbackScaffold(
   rt.actor.assertCurrent();
   const actorId = rt.actor.actorId;
   const sql = rt.storage.sql;
+
   const row = sql<{ status: string }>`
     SELECT status FROM scaffold_versions
     WHERE actor_id = ${actorId} AND version = ${version} LIMIT 1`[0];
+
   if (!row) {
     return { ok: false, error: `Version ${version} not found in scaffold history` };
   }
 
   const target = await readScaffoldVersion(rt, version);
+
   if (target == null) {
     return { ok: false, error: `Version ${version} not found in scaffold history` };
   }
@@ -37,5 +40,6 @@ export async function rollbackScaffold(
         AND (version = ${version}
              OR (status = 'current' AND version != ${version}))`;
   await rt.identity.scaffold.write(target);
+
   return { ok: true };
 }

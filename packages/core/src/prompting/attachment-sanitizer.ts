@@ -69,11 +69,14 @@ export function acceptedMediaForModel(opts: {
   const ceiling: ReadonlySet<MediaModality> = PDF_CAPABLE_PROVIDERS.has(opts.provider ?? '')
     ? new Set<MediaModality>(['image', 'pdf'])
     : new Set<MediaModality>(['image']);
+
   if (!opts.catalogInputModalities) return ceiling;
   const accepted = new Set<MediaModality>();
+
   for (const modality of opts.catalogInputModalities) {
     if (modality !== 'text' && ceiling.has(modality)) accepted.add(modality);
   }
+
   return accepted;
 }
 
@@ -114,6 +117,7 @@ export async function sanitizeAttachmentsForModel(
   policy: AttachmentPolicy,
 ): Promise<ModelMessage[]> {
   const out: ModelMessage[] = [];
+
   for (const message of messages) {
     if (message.role === 'user') {
       if (Array.isArray(message.content)) {
@@ -128,10 +132,12 @@ export async function sanitizeAttachmentsForModel(
       out.push(message);
     }
   }
+
   return out;
 }
 
 type UserPart = Exclude<UserModelMessage['content'], string>[number];
+
 type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
 
 async function sanitizeUserMessage(
@@ -141,15 +147,18 @@ async function sanitizeUserMessage(
 ): Promise<UserModelMessage> {
   let changed = false;
   const parts: UserPart[] = [];
+
   for (const part of content) {
     const replacement =
       part.type === 'image' ? await sanitizeImagePart(part, policy)
       : part.type === 'file' ? await sanitizeFilePart(part, policy)
       : part.type === 'text' ? await sanitizeTextPart(part, policy)
       : null;
+
     if (replacement) changed = true;
     parts.push(replacement ?? part);
   }
+
   return changed ? { ...message, content: parts } : message;
 }
 
@@ -160,29 +169,36 @@ async function sanitizeAssistantMessage(
 ): Promise<AssistantModelMessage> {
   let changed = false;
   const parts: AssistantPart[] = [];
+
   for (const part of content) {
     const replacement = part.type === 'file' ? await sanitizeFilePart(part, policy) : null;
+
     if (replacement) changed = true;
     parts.push(replacement ?? part);
   }
+
   return changed ? { ...message, content: parts } : message;
 }
 
 /** The replacement TextPart for an image part, or null to pass it through. */
 async function sanitizeImagePart(part: ImagePart, policy: AttachmentPolicy): Promise<TextPart | null> {
   if (policy.accepts.has('image')) return null;
+
   return replaceMedia(part.image, part.mediaType ?? 'image', undefined, policy);
 }
 
 /** The replacement TextPart for a file part, or null to pass it through. */
 async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promise<TextPart | null> {
   const modality = mediaModalityFor(part.mediaType);
+
   if (modality !== null && policy.accepts.has(modality)) {
     return modality !== 'image' && oversizeForInlineDocument(part.data)
       ? replaceMedia(part.data, part.mediaType, part.filename, policy)
       : null;
   }
+
   if (isTextMediaType(part.mediaType)) return inlineOrStoreText(part, policy);
+
   return replaceMedia(part.data, part.mediaType, part.filename, policy);
 }
 
@@ -190,6 +206,7 @@ async function sanitizeFilePart(part: FilePart, policy: AttachmentPolicy): Promi
  *  Returns the replacement part, or null to pass it through. */
 async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promise<TextPart | null> {
   const replacement = await sanitizeUserText(part.text, policy);
+
   return replacement === null ? null : { ...part, text: replacement };
 }
 
@@ -202,12 +219,14 @@ async function sanitizeTextPart(part: TextPart, policy: AttachmentPolicy): Promi
  */
 async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise<string | null> {
   const bytes = new TextEncoder().encode(text);
+
   if (bytes.length <= INLINE_TEXT_MAX_BYTES) return null;
   const path = await storeContentAddressed(bytes, 'text/plain', policy);
   const head = text.slice(0, PASTED_TEXT_PREVIEW_CHARS);
   policy.budget?.recordSpill({
     producer: 'pasted_text', omitted: text.length - head.length, referenced: true,
   });
+
   return `[Pasted text (${bytes.length} bytes) saved to ${path} (read or slice it with your file tools; ` +
     `oversize: name ${path} in the mission of a lifetime:"task" agents hire so that agent reads it instead of you). The first ${head.length} chars follow.]\n\n${head}`;
 }
@@ -217,15 +236,20 @@ async function sanitizeUserText(text: string, policy: AttachmentPolicy): Promise
  *  payloads are ~4/3 of their bytes, and a remote URL has no local payload. */
 function oversizeForInlineDocument(data: FilePart['data']): boolean {
   const bytes = estimatePayloadBytes(data);
+
   return bytes !== null && bytes > OVERSIZE_ACCEPTED_DOC_MAX_BYTES;
 }
 
 function estimatePayloadBytes(data: FilePart['data'] | ImagePart['image']): number | null {
   if (data instanceof URL) return null;
+
   if (data instanceof Uint8Array) return data.byteLength;
+
   if (data instanceof ArrayBuffer) return data.byteLength;
+
   if (/^https?:\/\//.test(data)) return null;
   const comma = data.startsWith('data:') ? data.indexOf(',') : -1;
+
   return Math.floor(((comma === -1 ? data.length : data.length - comma - 1) * 3) / 4);
 }
 
@@ -234,9 +258,13 @@ function estimatePayloadBytes(data: FilePart['data'] | ImagePart['image']): numb
  *  separately — see {@link inlineOrStoreText}. */
 function mediaModalityFor(mediaType: string): MediaModality | null {
   if (mediaType.startsWith('image/')) return 'image';
+
   if (mediaType === 'application/pdf') return 'pdf';
+
   if (mediaType.startsWith('audio/')) return 'audio';
+
   if (mediaType.startsWith('video/')) return 'video';
+
   return null;
 }
 
@@ -248,15 +276,19 @@ function isTextMediaType(mediaType: string): boolean {
  *  to read them), larger ones get the standard VFS treatment. */
 async function inlineOrStoreText(file: FilePart, policy: AttachmentPolicy): Promise<TextPart> {
   const payload = decodePayload(file.data);
+
   if (payload.kind === 'remote') return remoteReference(file.data, file.mediaType, file.filename);
+
   if (payload.bytes.length < INLINE_TEXT_MAX_BYTES) {
     const name = file.filename ?? 'attachment.txt';
     const text = new TextDecoder().decode(payload.bytes);
+
     return {
       type: 'text',
       text: `[Attachment ${name} (${file.mediaType}, ${payload.bytes.length} bytes) inlined below]\n\n${text}`,
     };
   }
+
   return storeAndReference(payload.bytes, file.mediaType, file.filename, policy);
 }
 
@@ -267,7 +299,9 @@ async function replaceMedia(
   policy: AttachmentPolicy,
 ): Promise<TextPart> {
   const payload = decodePayload(data);
+
   if (payload.kind === 'remote') return remoteReference(data, mediaType, filename);
+
   return storeAndReference(payload.bytes, mediaType, filename, policy);
 }
 
@@ -283,6 +317,7 @@ async function storeAndReference(
   const basename = path.slice(ATTACHMENTS_DIR.length + 1);
   policy.budget?.recordSpill({ producer: 'attachment', omitted: bytes.length, referenced: true });
   const name = filename ?? basename;
+
   return {
     type: 'text',
     text: `[Attachment ${name} (${mediaType}, ${bytes.length} bytes) saved to ${path} (read it with your file tools)]`,
@@ -303,7 +338,9 @@ async function storeContentAddressed(
   policy: AttachmentPolicy,
 ): Promise<string> {
   const path = `${ATTACHMENTS_DIR}/${sha256Hex(bytes)}.${extensionFor(mediaType)}`;
+
   if (await holdsBytes(policy.vfs, path, bytes)) return path;
+
   try {
     await policy.vfs.mkdir(ATTACHMENTS_DIR, { recursive: true });
   } catch (err) {
@@ -311,7 +348,9 @@ async function storeContentAddressed(
       throw toKinuError({ doing: 'creating the attachments spill directory', cause: err, otherwise: 'io' });
     }
   }
+
   await policy.vfs.writeFile(path, bytes);
+
   return path;
 }
 
@@ -325,10 +364,13 @@ async function holdsBytes(vfs: VFS, path: string, bytes: Uint8Array): Promise<bo
   // how prompting/agents-md.ts already narrows the same `string | Uint8Array`
   // return from this VFS contract.
   const existing = stored instanceof Uint8Array ? stored : new TextEncoder().encode(stored);
+
   if (existing.length !== bytes.length) return false;
+
   for (let i = 0; i < bytes.length; i++) {
     if (existing[i] !== bytes[i]) return false;
   }
+
   return true;
 }
 
@@ -341,6 +383,7 @@ function remoteReference(
 ): TextPart {
   const url = data instanceof URL ? data.toString() : String(data);
   const name = filename ?? url;
+
   return {
     type: 'text',
     text: `[Attachment ${name} (${mediaType}) at ${url} (fetch it with your web tools)]`,
@@ -356,10 +399,15 @@ type DecodedPayload =
  *  binary views. Remote http(s) URLs have no local payload. */
 function decodePayload(data: FilePart['data'] | ImagePart['image']): DecodedPayload {
   if (data instanceof URL) return { kind: 'remote' };
+
   if (data instanceof Uint8Array) return { kind: 'bytes', bytes: data };
+
   if (data instanceof ArrayBuffer) return { kind: 'bytes', bytes: new Uint8Array(data) };
+
   if (data.startsWith('data:')) return { kind: 'bytes', bytes: decodeDataUrl(data) };
+
   if (/^https?:\/\//.test(data)) return { kind: 'remote' };
+
   return { kind: 'bytes', bytes: decodeBase64OrText(data) };
 }
 
@@ -367,7 +415,9 @@ function decodeDataUrl(dataUrl: string): Uint8Array {
   const comma = dataUrl.indexOf(',');
   const header = comma === -1 ? dataUrl : dataUrl.slice(0, comma);
   const payload = comma === -1 ? '' : dataUrl.slice(comma + 1);
+
   if (header.includes(';base64')) return decodeBase64OrText(payload);
+
   return new TextEncoder().encode(decodeURIComponent(payload));
 }
 
@@ -378,10 +428,13 @@ function decodeBase64OrText(value: string): Uint8Array {
   try {
     const binary = atob(value);
     const bytes = new Uint8Array(binary.length);
+
     for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+
     return bytes;
   } catch (error) {
     diagnostics.event('attachment.base64_decode_fallback', { error: renderThrownChain({ cause: error }) });
+
     return new TextEncoder().encode(value);
   }
 }
@@ -400,8 +453,11 @@ function extensionFor(mediaType: string): string {
     'text/markdown': 'md',
     'audio/mpeg': 'mp3',
   };
+
   const mapped = known[mediaType];
+
   if (mapped) return mapped;
   const subtype = mediaType.slice(mediaType.indexOf('/') + 1).replace(/[^A-Za-z0-9]/g, '');
+
   return subtype || 'bin';
 }

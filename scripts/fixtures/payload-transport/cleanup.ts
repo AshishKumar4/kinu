@@ -60,9 +60,12 @@ export const CLEANUP_GATES: readonly CleanupGate[] = [
       + 'changes nothing',
   },
 ];
+
 export const EXIT_OK = 0;
+
 /** The run measured what it could but something failed mid-flight; artifact written. */
 export const EXIT_RUN_FAILURE = 1;
+
 /** ANY cleanup gate failed: resources of ours are still out there. */
 export const EXIT_RESIDUE = 2;
 
@@ -89,22 +92,30 @@ export interface CleanupVerdict {
 export function evaluateCleanup(evidence: readonly CleanupEvidence[]): CleanupVerdict {
   const steps: CleanupEvidence[] = CLEANUP_GATES.map((gate) => {
     const rows = evidence.filter((entry) => entry.gate === gate.name);
+
     if (rows.length === 0) {
       return { gate: gate.name, ok: false, detail: 'no evidence was collected for this gate' };
     }
+
     const failures = rows.filter((row) => !row.ok);
+
     if (failures.length > 0) {
       return { gate: gate.name, ok: false, detail: `${failures.length}/${rows.length} check(s) failed; last: ${failures[failures.length - 1]!.detail}` };
     }
+
     return { gate: gate.name, ok: true, detail: `${rows.length} check(s) passed` };
   });
+
   const failed = steps.filter((step) => !step.ok).map((step) => step.gate);
+
   return { residue: failed.length > 0, failedGates: failed, steps };
 }
 
 /** The driver's exit code for a run, given its failure (if any) and verdict. */
 export function exitFor(runFailure: string | null, cleanup: CleanupVerdict): number {
   if (cleanup.residue) return EXIT_RESIDUE;
+
   if (runFailure !== null) return EXIT_RUN_FAILURE;
+
   return EXIT_OK;
 }

@@ -18,6 +18,7 @@ import type { CandidateObjectReader, RootEnvelopeV1 } from '../bench/candidate-f
 // from `src/candidates/publication` now live in the bench module itself.
 
 const sha = 'a'.repeat(64);
+
 const BOX = 'boxes/3d74cb9b';
 
 function stubStore<const T extends Record<string, Uint8Array>>(objects: T): CandidateObjectReader {
@@ -30,10 +31,12 @@ function stubStore<const T extends Record<string, Uint8Array>>(objects: T): Cand
     }),
     get: async (key) => {
       const bytes = objects[key];
+
       return bytes === undefined ? null : { arrayBuffer: async () => new Uint8Array(bytes).buffer };
     },
     head: async (key) => {
       const bytes = objects[key];
+
       return bytes === undefined ? null : { size: bytes.byteLength };
     },
   };
@@ -56,6 +59,7 @@ describe('candidate closure facts', () => {
       closure: [{ key: `obj/${'b'.repeat(64)}`, byteLength: '2', sha256: 'b'.repeat(64) }],
       closureObject: { key: `closure/${'c'.repeat(64)}`, byteLength: '3', sha256: 'c'.repeat(64) },
     };
+
     const facts = await candidateStoreFacts(stubStore({
       [`${BOX}/candidate-control/bounded-layers/envelopes/${envelopeIdOf(envelope)}.json`]: envelopeBytes(envelope),
       [`${BOX}/candidate/bounded-layers/obj/${sha}`]: new Uint8Array(4),
@@ -70,6 +74,7 @@ describe('candidate closure facts', () => {
       { key: `${BOX}/candidate/bounded-layers/closure/${'c'.repeat(64)}`, declaredBytes: '3', storedBytes: 3 },
       { key: `${BOX}/candidate/bounded-layers/obj/${'b'.repeat(64)}`, declaredBytes: '2', storedBytes: 2 },
     ]);
+
     for (const row of facts.closure) expect(row.key.startsWith(facts.payloadPrefix)).toBe(true);
   });
 
@@ -92,11 +97,14 @@ describe('candidate closure facts', () => {
       closure: [],
       closureObject: { key: `closure/${'c'.repeat(64)}`, byteLength: '3', sha256: 'c'.repeat(64) },
     };
+
     const objects = {
       [`${BOX}/candidate/bounded-layers/obj/${sha}`]: new Uint8Array(4),
       [`${BOX}/candidate/bounded-layers/closure/${'c'.repeat(64)}`]: new Uint8Array(3),
     };
+
     const store = stubStore(objects);
+
     for (const ref of [envelope.rootObject, envelope.closureObject]) {
       expect(await store.head(ref.key)).toBeNull();
       expect(ref.key.startsWith(`${BOX}/candidate/bounded-layers/`)).toBe(false);

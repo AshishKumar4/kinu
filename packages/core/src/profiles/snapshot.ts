@@ -99,11 +99,13 @@ const SwarmProfileSnapshotSchema: v.GenericSchema<SwarmProfileSnapshot> = v.stri
  *  reader — refuse loudly rather than resume under a half-read profile. */
 export function validateSwarmProfileSnapshot<Input>(input: Input): SwarmProfileSnapshot {
   const parsed = v.safeParse(SwarmProfileSnapshotSchema, input);
+
   if (!parsed.success) {
     throw new Error(
       `invalid durable swarm profile snapshot: ${formatProfileValidationIssues(parsed.issues)}`,
     );
   }
+
   return parsed.output;
 }
 

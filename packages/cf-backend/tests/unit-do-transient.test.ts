@@ -13,15 +13,18 @@ import { retryTransientDO, classifyTransientDO } from '../src/lib/do-rpc';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
 
 const USER = '0123456789abcdef0123456789abcdef';
+
 const CONNECTION_LOST = 'Network connection lost.';
 
 /** A call that fails `failures` times with `error`, then succeeds. Counts calls
  *  so "retried" is proven by attempts, never inferred from the outcome. */
 function flaky<T>(failures: number, error: Error, value: T) {
   let seen = 0;
+
   return {
     call: async () => {
       if (seen++ < failures) throw error;
+
       return value;
     },
     calls: () => seen,
@@ -32,6 +35,7 @@ function flaky<T>(failures: number, error: Error, value: T) {
  *  calls like flaky does. */
 function answers<T>(...values: T[]) {
   let seen = 0;
+
   return {
     call: async () => values[Math.min(seen++, values.length - 1)],
     calls: () => seen,
@@ -44,6 +48,7 @@ describe('classifyTransientDO — which failures belong to the platform', () => 
   test('every reset string do.reset.transient declares is classified transient', () => {
     const observables = PLATFORM_CATALOG['do.reset.transient'].observable;
     expect(observables.length).toBeGreaterThan(0);
+
     for (const { message } of observables) {
       expect(classifyTransientDO({ cause: new Error(message) })).not.toBeNull();
     }
@@ -78,6 +83,7 @@ describe('classifyTransientDO — which failures belong to the platform', () => 
   test('an overloaded object is not a transient — retrying is what overloaded it', () => {
     const overloaded = Object.assign(new Error('Durable Object is overloaded.'),
       { retryable: true, overloaded: true });
+
     expect(classifyTransientDO({ cause: overloaded })).toBeNull();
   });
 
@@ -127,6 +133,7 @@ describe('retryTransientDO', () => {
     const flake = flaky(1,
       Object.assign(new Error('Durable Object is overloaded.'), { retryable: true, overloaded: true }),
       'ok');
+
     await expect(retryTransientDO('t', flake.call)).rejects.toThrow('Durable Object is overloaded.');
     expect(flake.calls()).toBe(1);
   });
@@ -153,6 +160,7 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
     const membership = opts.membershipAnswers
       ? answers(...opts.membershipAnswers)
       : flaky(opts.dropHasWorkspace ?? 0, new Error(CONNECTION_LOST), true);
+
     let reconciles = 0;
     const partial: Partial<Env> = {};
     Object.assign(partial, {
@@ -162,10 +170,12 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
         get: () => ({
           async hasWorkspace(_owner: string, name: string) {
             opts.registryReads?.push(name);
+
             return membership.call();
           },
           async ensureWorkspaceCapability() {
             reconciles += 1;
+
             if (opts.capabilityError && reconciles > (opts.capabilitySucceeds ?? 0)) {
               throw opts.capabilityError;
             }
@@ -177,12 +187,15 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
         get: () => ({
           async claimOwner(userId: string) {
             opts.claims?.push(userId);
+
             if (opts.claimError) throw opts.claimError;
+
             return { owner: USER, capabilityHash: 'h' };
           },
         }),
       },
     });
+
     // SAFETY: this harness constructs the whole Env it returns, and
     // claimOwnedWorkspace reads only the owner secret and the two namespace
     // bindings built above, calling only the three RPCs stubbed on them.
@@ -197,18 +210,21 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
   test('a platform failure that persists reports 503, not 500', async () => {
     const result = await claimOwnedWorkspace(
       envWith({ claimError: new Error(CONNECTION_LOST) }), USER, 'persist-503');
+
     expect(result).toMatchObject({ ok: false, status: 503 });
   });
 
   test('a genuine ownership collision still reports 403', async () => {
     const result = await claimOwnedWorkspace(
       envWith({ claimError: new Error('collision-403 is owned by a different user') }), USER, 'collision-403');
+
     expect(result).toMatchObject({ ok: false, status: 403 });
   });
 
   test('an application failure is still ours to own, at 500', async () => {
     const result = await claimOwnedWorkspace(
       envWith({ claimError: new Error('no such table: workspace_identity') }), USER, 'schema-fault');
+
     expect(result).toMatchObject({ ok: false, status: 500 });
   });
 
@@ -234,20 +250,24 @@ describe('claimOwnedWorkspace — the gate on every authenticated workspace requ
 
   test('an unproven caller is membership-checked before the agent wakes', async () => {
     const claims: string[] = [];
+
     const result = await claimOwnedWorkspace(
       envWith({ membershipAnswers: [false], claims }), USER, 'unproven-404');
+
     expect(result).toMatchObject({ ok: false, status: 404 });
     expect(claims).toEqual([]);
   });
 
   test('a removed workspace evicts the proof and reports 404', async () => {
     const reads: string[] = [];
+
     const env = envWith({
       membershipAnswers: [true, false],
       registryReads: reads,
       capabilityError: new Error('Workspace evicted-404 is not in your registry.'),
       capabilitySucceeds: 1,
     });
+
     expect((await claimOwnedWorkspace(env, USER, 'evicted-404')).ok).toBe(true);
     // The proof is now stale: the UserDO's own registry re-check contradicts
     // it, so the request reports 404 and the proof is discarded.

@@ -30,19 +30,23 @@ async function main(): Promise<void> {
   const input = parseAgentWorkerInput(raw);
 
   let session: LocalAgentSession | undefined;
+
   const proxy = createBenchInferenceProxy({
     upstreamBaseURL: input.llm.baseURL,
     maxTokens: input.maxTokens,
     onBreach: () => { session?.interrupt(); },
   });
+
   const meteredLLM = { ...input.llm, baseURL: proxy.baseURL };
 
   const fresh = !existsSync(input.dbPath);
+
   if (fresh) mkdirSync(dirname(input.dbPath), { recursive: true });
   const db = new Database(input.dbPath);
   // SAFETY: The CLI backend owns this bun:sqlite adapter boundary; the same Database instance is its production input.
   const backendDb = db as never;
   db.exec('PRAGMA journal_mode = WAL');
+
   if (fresh) {
     // A v0 workspace: bootstrap scaffold, empty memory, empty CraftStore, no
     // lessons. This is the "stateless" arm's starting point, and it is one call.
@@ -51,6 +55,7 @@ async function main(): Promise<void> {
     // tables for the stateless arm's starting point.
     const sql = makeSql(db);
     const execRaw = (ddl: string): void => { db.exec(ddl); };
+
     initSearchTables(execRaw);
     initScaffoldTables(execRaw);
     initCraftedToolsTables(sql);
@@ -79,12 +84,15 @@ async function main(): Promise<void> {
   });
 
   let error: string | undefined;
+
   try {
     for (const [index, ask] of input.asks.entries()) {
       await session.send(ask);
       await proxy.settle();
       const remove = input.removeAfterAsk[index];
+
       if (remove) rmSync(join(process.cwd(), remove), { recursive: true, force: true });
+
       // Fold at every episode boundary, so a continuation task genuinely
       // crosses compaction rather than depending on the corpus happening to
       // trip the measured trigger.
@@ -101,12 +109,14 @@ async function main(): Promise<void> {
       error = error ? `${error}; ${endError}` : endError;
       hadError = true;
     }
+
     await proxy.settle();
     db.close();
     proxy.stop(true);
   }
 
   const usage = proxy.usage();
+
   if (usage.unmeteredResponses > 0) {
     const usageError = `${usage.unmeteredResponses} successful inference response(s) omitted token usage`;
     error = error ? `${error}; ${usageError}` : usageError;
@@ -121,6 +131,7 @@ async function main(): Promise<void> {
     peakPromptTokens: usage.peakPromptTokens,
     modelCalls: usage.calls,
   };
+
   if (error) out.error = error;
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
@@ -138,6 +149,7 @@ try {
     budgetBreach: null,
     error: cause instanceof Error ? (cause.stack ?? cause.message) : String(cause),
   };
+
   process.stdout.write(`${JSON.stringify(out)}\n`);
   process.exit(1);
 }

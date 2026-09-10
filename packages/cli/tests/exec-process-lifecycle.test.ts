@@ -33,13 +33,16 @@ import { scratchDir } from '@kinu.run/test-utils';
 import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");
+
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
+
 const homes: string[] = [];
 
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = scratchDir("cli-project");
   homes.push(dir);
+
   return dir;
 }
 
@@ -55,10 +58,13 @@ afterEach(() => {
     // success (see heartbeatCommand).
     for (const pidfile of ['daemon.pid', HEARTBEAT_PID]) {
       const recorded = tolerate(() => readFileSync(join(home, pidfile), "utf-8"), 'enoent');
+
       if (recorded === undefined) continue;
       const pid = parseInt(recorded.trim(), 10);
+
       if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), 'esrch');
     }
+
     rmSync(home, { recursive: true, force: true });
   }
 });
@@ -70,6 +76,7 @@ afterEach(() => {
 function modelThatRuns(command: string) {
   let calls = 0;
   const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
+
   const toolCall = {
     id: "call_1",
     type: "function",
@@ -83,11 +90,14 @@ function modelThatRuns(command: string) {
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
+
       const body = v.parse(JsonObjectSchema, await request.json());
       const first = calls++ === 0;
+
       const delta = first
         ? { role: "assistant", tool_calls: [{ index: 0, ...toolCall }] }
         : { role: "assistant", content: "started it" };
+
       const finish = first ? "tool_calls" : "stop";
 
       if (!body.stream) {
@@ -103,7 +113,9 @@ function modelThatRuns(command: string) {
           usage,
         });
       }
+
       const chunk = (data: JsonValue) => `data: ${JSON.stringify(data)}\n\n`;
+
       return new Response([
         chunk(decodeJsonValue({ value: {
           id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
@@ -117,12 +129,14 @@ function modelThatRuns(command: string) {
       ].join(""), { headers: { "content-type": "text/event-stream" } });
     },
   });
+
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
 function newHome(): string {
   const home = scratchDir("exec-lifecycle");
   homes.push(home);
+
   return home;
 }
 
@@ -131,6 +145,7 @@ async function runCli(
   args: string[], env: Record<string, string>, home: string, timeoutMs: number,
 ): Promise<{ exitCode: number | null; elapsed: number; timedOut: boolean; stdout: string }> {
   const started = Date.now();
+
   const proc = Bun.spawn([process.execPath, cliBin, ...args], {
     cwd: newProjectDir(),
     stdin: "ignore",
@@ -138,10 +153,12 @@ async function runCli(
     stderr: "pipe",
     env: { ...process.env, ...env, KINU_HOME: home },
   });
+
   const timer = setTimeout(() => proc.kill("SIGKILL"), timeoutMs);
   const [exitCode, stdout] = await Promise.all([proc.exited, new Response(proc.stdout).text()]);
   clearTimeout(timer);
   const elapsed = Date.now() - started;
+
   return { exitCode, stdout, elapsed, timedOut: elapsed >= timeoutMs };
 }
 
@@ -173,15 +190,18 @@ describe("kinu exec — a one-shot run terminates", () => {
     const home = newHome();
     const beat = join(home, "heartbeat.log");
     const server = modelThatRuns(heartbeatCommand(home, beat, 90));
+
     const env = {
       KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
       KINU_AUTH: "Bearer mock",
       KINU_MODEL: "mock-model",
     };
+
     try {
       const created = await runCli(
         ["create", "lifecycle", "--mode", "local", "--purpose", "process lifecycle"], env, home, 120_000,
       );
+
       expect(created.exitCode).toBe(0);
 
       const run = await runCli(
@@ -211,11 +231,13 @@ describe("kinu exec — a one-shot run terminates", () => {
     // that exits promptly having dropped the result.
     const home = newHome();
     const server = modelThatRuns(heartbeatCommand(home, join(home, "hb2.log"), 90));
+
     const env = {
       KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
       KINU_AUTH: "Bearer mock",
       KINU_MODEL: "mock-model",
     };
+
     try {
       expect((await runCli(
         ["create", "resultflow", "--mode", "local", "--purpose", "tool result flow"], env, home, 120_000,
@@ -224,6 +246,7 @@ describe("kinu exec — a one-shot run terminates", () => {
       const run = await runCli(
         ["exec", "--workspace", "resultflow", "--json", "Start the server"], env, home, 90_000,
       );
+
       expect(run.timedOut).toBe(false);
 
       const events: JsonObject[] = run.stdout.trim().split("\n").map(parseJsonObject);
@@ -241,6 +264,7 @@ describe("kinu exec — a one-shot run terminates", () => {
     const home = newHome();
     const server = modelThatRuns('printf diagnostic; exit 7');
     const env = { KINU_BASE_URL: 'http://127.0.0.1:' + server.port, KINU_AUTH: 'Bearer mock', KINU_MODEL: 'mock-model' };
+
     try {
       expect((await runCli(['create', 'failureflow', '--mode', 'local', '--purpose', 'error outcome flow'], env, home, 120_000)).exitCode).toBe(0);
       const run = await runCli(['exec', '--workspace', 'failureflow', '--json', 'Run the command'], env, home, 90_000);

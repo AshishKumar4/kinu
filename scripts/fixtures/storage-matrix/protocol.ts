@@ -13,9 +13,13 @@ import {
 } from './manifest';
 
 import * as v from 'valibot';
+
 export type StageId = (typeof STORAGE_STAGES)[number]['id'];
+
 export type TreeId = (typeof STORAGE_TREE_CASES)[number]['id'];
+
 export type ChangeId = (typeof STORAGE_CHANGE_CASES)[number]['id'];
+
 export type CacheId = (typeof STORAGE_CACHE_CASES)[number]['id'];
 
 /** A cell is one tree × change × cache point of the matrix. */
@@ -30,13 +34,16 @@ export interface CellId {
  *  declare no triples (platform, scaling, confirmatory) yield none. */
 export function stageCells(stage: StageId): CellId[] {
   const row = STORAGE_STAGES.find((candidate) => candidate.id === stage);
+
   if (row === undefined) throw new Error(`unknown stage "${stage}"`);
   const out: CellId[] = [];
+
   for (const tree of row.trees) {
     for (const change of row.changes) {
       for (const cache of row.caches) out.push({ stage, tree, change, cache });
     }
   }
+
   return out;
 }
 
@@ -46,9 +53,12 @@ export function stageCells(stage: StageId): CellId[] {
 export function coefficientOfVariation(values: readonly number[]): number {
   if (values.length === 0) return Number.POSITIVE_INFINITY;
   const mean = values.reduce((sum, value) => sum + value, 0) / values.length;
+
   if (mean === 0) return values.every((value) => value === 0) ? 0 : Number.POSITIVE_INFINITY;
+
   const variance
     = values.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (values.length - 1);
+
   return Math.sqrt(variance) / mean;
 }
 
@@ -82,13 +92,17 @@ export function scoreCells(cells: readonly MeasuredCell[], budgetMs: number): Sc
     if (cell.values.length < 2) {
       return { ...cell, censored: true, censorReason: 'fewer than two repetitions' };
     }
+
     const cv = coefficientOfVariation(cell.values);
+
     if (cv > MAX_CV) {
       return { ...cell, censored: true, censorReason: `CV ${cv.toFixed(3)} > ${MAX_CV}` };
     }
+
     if (cell.wallMs !== null && cell.wallMs > budgetMs) {
       return { ...cell, censored: true, censorReason: `wall ${cell.wallMs} ms exceeded budget` };
     }
+
     return { ...cell, censored: false, censorReason: null };
   });
 }
@@ -108,15 +122,18 @@ export function latinSquareOrders(arms: readonly string[], rounds?: number): str
   if (new Set(arms).size !== arms.length) {
     throw new Error('a Latin square needs distinct arms');
   }
+
   if (arms.length === 0) return [];
   const full = arms.length;
   const want = rounds ?? full;
   const out: string[][] = [];
+
   while (out.length < want) {
     for (let offset = 0; offset < full && out.length < want; offset++) {
       out.push(arms.map((_, at) => arms[(at + offset) % full]!));
     }
   }
+
   return out;
 }
 
@@ -124,14 +141,18 @@ export function latinSquareOrders(arms: readonly string[], rounds?: number): str
 export function latinSquareValid(orders: readonly (readonly string[])[]): boolean {
   if (orders.length === 0) return true;
   const width = orders[0]!.length;
+
   for (let position = 0; position < width; position++) {
     const seen = new Set<string>();
+
     for (const order of orders) {
       const arm = order[position];
+
       if (arm === undefined || seen.has(arm)) return false;
       seen.add(arm);
     }
   }
+
   return true;
 }
 
@@ -160,6 +181,7 @@ export function registerPilot(
   if (registry.pilots.some((pilot) => pilot.id === id)) {
     throw new Error(`pilot "${id}" is already registered`);
   }
+
   return {
     ...registry,
     pilots: [...registry.pilots, { id, registeredAt, ranking: false }],
@@ -176,6 +198,7 @@ export interface ConfirmatoryPlan {
   readonly direction: 'lower-is-better';
   readonly cells: readonly CellId[];
 }
+
 const ConfirmatoryInputSchema = v.object({
   schema: v.literal('storage-matrix/confirmatory@1'),
   frozenAt: v.pipe(v.string(), v.minLength(1)),
@@ -197,28 +220,38 @@ export function loadConfirmatoryPlan(text: string): ConfirmatoryPlan {
   const seen = new Set<string>();
   const cells: CellId[] = [];
   let stage: StageId | null = null;
+
   for (const rawCell of raw.cells) {
     const tree = STORAGE_TREE_CASES.find((row) => row.id === rawCell.tree);
     const change = STORAGE_CHANGE_CASES.find((row) => row.id === rawCell.change);
     const cache = STORAGE_CACHE_CASES.find((row) => row.id === rawCell.cache);
+
     if (tree === undefined) throw new Error(`confirmatory cell names unknown tree "${rawCell.tree}"`);
+
     if (change === undefined) throw new Error(`confirmatory cell names unknown change "${rawCell.change}"`);
+
     if (cache === undefined) throw new Error(`confirmatory cell names unknown cache "${rawCell.cache}"`);
+
     const owner = STORAGE_STAGES.find((row) => row.trees.some((id) => id === tree.id)
       && row.changes.some((id) => id === change.id)
       && row.caches.some((id) => id === cache.id));
+
     if (owner === undefined) {
       throw new Error(`confirmatory cell ${tree.id}/${change.id}/${cache.id} belongs to no staged stage`);
     }
+
     if (stage !== null && owner.id !== stage) {
       throw new Error(`confirmatory cells span stages ${stage} and ${owner.id}; freeze one stage per plan`);
     }
+
     stage = owner.id;
     const key = `${tree.id}/${change.id}/${cache.id}`;
+
     if (seen.has(key)) throw new Error(`confirmatory cell ${key} is listed twice`);
     seen.add(key);
     cells.push({ stage: owner.id, tree: tree.id, change: change.id, cache: cache.id });
   }
+
   return {
     schema: raw.schema,
     frozenAt: raw.frozenAt,
@@ -238,12 +271,15 @@ export function loadConfirmatoryPlan(text: string): ConfirmatoryPlan {
  */
 export function groupByCase<T>(rows: readonly T[], keyOf: (row: T) => string): Map<string, T[]> {
   const groups = new Map<string, T[]>();
+
   for (const row of rows) {
     const key = keyOf(row);
     const bucket = groups.get(key);
+
     if (bucket === undefined) groups.set(key, [row]);
     else bucket.push(row);
   }
+
   return groups;
 }
 
@@ -254,11 +290,13 @@ export function renderCaseSections<T>(
   renderCase: (caseKey: string, caseRows: readonly T[]) => readonly string[],
 ): string[] {
   const out: string[] = [];
+
   for (const [caseKey, caseRows] of groupByCase(rows, keyOf)) {
     out.push(`#### Case: ${caseKey}`);
     out.push('');
     out.push(...renderCase(caseKey, caseRows));
     out.push('');
   }
+
   return out;
 }

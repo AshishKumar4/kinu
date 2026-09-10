@@ -37,6 +37,7 @@ import { validateSwarmProfileSnapshot, type SwarmProfileSnapshot } from '../prof
  *  mission port, which is a live object whose JSON round-trip would come back
  *  as an empty stub and silently un-govern a resumed search). */
 export type PersistedMCTSConfig = Omit<MCTSConfig, 'signal' | 'onProgress' | 'search' | 'mission'>;
+
 const PersistedMCTSConfigSchema: v.GenericSchema<PersistedMCTSConfig> = v.object({
   mode: v.optional(v.picklist(['build', 'plan'])),
   budget: v.number(),
@@ -50,6 +51,7 @@ const PersistedMCTSConfigSchema: v.GenericSchema<PersistedMCTSConfig> = v.object
   maxEvalLLMCalls: v.optional(v.number()),
   takesEpsilon: v.optional(v.number()),
 });
+
 const StoredModelMessageSchema: v.GenericSchema<ModelMessage> =
   v.custom<ModelMessage>((value) => modelMessageSchema.safeParse(value).success);
 
@@ -176,6 +178,7 @@ export interface MctsSearchRunSummary {
 /** Strip the live, non-serializable fields off an MCTSConfig for persistence. */
 export function persistableMCTSConfig(config: MCTSConfig): PersistedMCTSConfig {
   const { signal: _signal, onProgress: _onProgress, search: _search, mission: _mission, ...rest } = config;
+
   return rest;
 }
 
@@ -285,15 +288,19 @@ export class MctsSearchStore {
    *  the run was given and overstate what is left. */
   private storedBudget(rootId: string, configJson: string): number {
     let raw: unknown;
+
     try {
       raw = JSON.parse(configJson);
     } catch (error) {
       throw new Error(`swarm run ${rootId}: its ledger config_json will not parse`, { cause: error });
     }
+
     const parsed = v.safeParse(v.object({ budget: v.number() }), raw);
+
     if (!parsed.success) {
       throw new Error(`swarm run ${rootId}: its ledger config_json carries no budget`);
     }
+
     return parsed.output.budget;
   }
 
@@ -321,16 +328,20 @@ export class MctsSearchStore {
    */
   findResumable(task: string, mode: WorkMode = 'build'): ResumableSearch | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<Row>`SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch
       FROM mcts_search_runs
       WHERE actor_id=${this.actorId} AND status='running' AND task=${task} AND engine='mcts'
       ORDER BY updated_at DESC`;
+
     for (const row of rows) {
       // `begin` wrote this column with JSON.stringify, so a row that will not
       // parse is corruption. Resuming on a fabricated default would re-enter
       // the search with one branch and no budget and call it a resume.
       const config = v.parse(PersistedMCTSConfigSchema, JSON.parse(row.config_json));
+
       if ((config.mode ?? 'build') !== mode) continue;
+
       return {
         rootId: row.root_id,
         rootMsgId: row.root_msg_id,
@@ -341,6 +352,7 @@ export class MctsSearchStore {
         epoch: row.epoch,
       };
     }
+
     return null;
   }
 
@@ -384,6 +396,7 @@ export class MctsSearchStore {
    */
   findRunningSwarms(task: string): readonly ResumableSwarm[] {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ root_id: string; config_json: string; epoch: number; children: number }>`
       SELECT r.root_id, r.config_json, r.epoch,
         (SELECT COUNT(*) FROM search_nodes s
@@ -392,6 +405,7 @@ export class MctsSearchStore {
       FROM mcts_search_runs r
       WHERE r.actor_id=${this.actorId} AND r.status='running' AND r.task=${task} AND r.engine='swarm'
       ORDER BY r.updated_at DESC, r.created_at DESC, r.root_id DESC`;
+
     return rows.map((row) => ({
       rootId: row.root_id,
       iteration: row.children,
@@ -406,13 +420,16 @@ export class MctsSearchStore {
     const row = this.sql<{ config_json: string }>`
       SELECT config_json FROM mcts_search_runs
       WHERE actor_id = ${this.actorId} AND root_id = ${rootId} LIMIT 1`[0];
+
     if (!row) return null;
     let raw: unknown;
+
     try {
       raw = JSON.parse(row.config_json);
     } catch (error) {
       throw new Error(`swarm run ${rootId}: its ledger config_json will not parse`, { cause: error });
     }
+
     try {
       return v.parse(StoredSwarmConfigSchema, raw);
     } catch (error) {
@@ -422,11 +439,13 @@ export class MctsSearchStore {
 
   readSwarmProfile(rootId: string): SwarmProfileSnapshot | null {
     const stored = this.readStoredSwarmConfig(rootId);
+
     return stored?.profile === undefined ? null : validateSwarmProfileSnapshot(stored.profile);
   }
 
   readSwarmOriginContext(rootId: string): readonly ModelMessage[] | null {
     const stored = this.readStoredSwarmConfig(rootId);
+
     return stored?.originContext ?? null;
   }
   /** Every running swarm root — the rows still claiming a live executor, and
@@ -439,6 +458,7 @@ export class MctsSearchStore {
    *  cannot see it. */
   hasRunningSwarms(): boolean {
     this.actor.assertCurrent();
+
     return this.sql<{ present: number }>`
       SELECT 1 AS present FROM mcts_search_runs
       WHERE actor_id=${this.actorId} AND status='running' AND engine='swarm' LIMIT 1`.length > 0;
@@ -451,6 +471,7 @@ export class MctsSearchStore {
    *  swarm-only read would let a live tree search be treated as finished. */
   hasRunningSearches(): boolean {
     this.actor.assertCurrent();
+
     return this.sql<{ present: number }>`
       SELECT 1 AS present FROM mcts_search_runs
       WHERE actor_id=${this.actorId} AND status='running' LIMIT 1`.length > 0;
@@ -458,6 +479,7 @@ export class MctsSearchStore {
 
   runningSwarmRoots(createdBefore: number): readonly string[] {
     this.actor.assertCurrent();
+
     return this.sql<{ root_id: string }>`
       SELECT root_id FROM mcts_search_runs
       WHERE actor_id=${this.actorId} AND status='running' AND engine='swarm' AND created_at < ${createdBefore}
@@ -485,6 +507,7 @@ export class MctsSearchStore {
    */
   closeUnclaimed(exceptRoots: ReadonlySet<string>, now: number): readonly string[] {
     this.actor.assertCurrent();
+
     // `now` is the ACTIVATION CUTOFF as well as the close timestamp: a running
     // row created after it belongs to a live request of this activation, and
     // the reconciliation that calls this must not fail live work.
@@ -493,10 +516,12 @@ export class MctsSearchStore {
       WHERE actor_id=${this.actorId} AND status='running' AND engine='swarm' AND created_at < ${now}`
       .map((row) => row.root_id)
       .filter((rootId) => !exceptRoots.has(rootId));
+
     for (const rootId of candidates) {
       void this.sql`UPDATE mcts_search_runs SET status='failed', updated_at=${now}
         WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running' AND engine='swarm'`;
     }
+
     return candidates;
   }
 
@@ -519,10 +544,13 @@ export class MctsSearchStore {
     this.actor.assertCurrent();
     void this.sql`UPDATE mcts_search_runs SET epoch = epoch + 1
       WHERE actor_id=${this.actorId} AND root_id=${rootId} AND status='running'`;
+
     const rows = this.sql<{ epoch: number; status: string }>`
       SELECT epoch, status FROM mcts_search_runs
       WHERE actor_id=${this.actorId} AND root_id=${rootId} LIMIT 1`;
+
     const row = rows[0];
+
     return row && row.status === 'running' ? row.epoch : null;
   }
 
@@ -551,13 +579,18 @@ export class MctsSearchStore {
 
   get(rootId: string): { status: SearchStatus; iteration: number; budget: number; epoch: number } | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<Row & { engine: string }>`
       SELECT root_id, task, root_msg_id, config_json, engine, iteration, budget, status, epoch
       FROM mcts_search_runs WHERE actor_id=${this.actorId} AND root_id=${rootId} LIMIT 1`;
+
     const r = rows[0];
+
     if (!r) return null;
+
     if (r.engine === 'swarm') {
       const children = this.childrenOf(r.root_id);
+
       return {
         status: readStatus(r.status),
         iteration: children,
@@ -565,6 +598,7 @@ export class MctsSearchStore {
         epoch: r.epoch,
       };
     }
+
     return { status: readStatus(r.status), iteration: r.iteration, budget: r.budget, epoch: r.epoch };
   }
 
@@ -577,14 +611,17 @@ export class MctsSearchStore {
    *  actor's ledger rather than reading a merged list nothing can attribute. */
   list(limit = 20): MctsSearchRunSummary[] {
     this.actor.assertCurrent();
+
     const rows = this.sql<Row & { engine: string; created_at: number; updated_at: number }>`
       SELECT root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch,
              created_at, updated_at
       FROM mcts_search_runs WHERE actor_id=${this.actorId}
       ORDER BY updated_at DESC LIMIT ${limit}`;
+
     return rows.map((r) => {
       const swarm = r.engine === 'swarm';
       const children = swarm ? this.childrenOf(r.root_id) : null;
+
       return {
         rootId: r.root_id,
         task: r.task,

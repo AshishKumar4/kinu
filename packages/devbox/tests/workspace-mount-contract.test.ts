@@ -30,6 +30,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 const FIXTURE_DIR = join(import.meta.dir, 'support', 'workspace-mount-contract');
+
 /** PER PROCESS, because the tag is machine-global while the fixture is not.
  *  `FIXTURE_DIR` is `import.meta.dir`-relative, so every worktree carries its
  *  own copy of the probe sources, and every agent here works in a worktree by
@@ -43,6 +44,7 @@ function dockerUsable(): boolean {
   const version = spawnSync('docker', ['version', '--format', '{{.Server.Version}}'], {
     encoding: 'utf8', timeout: 30_000,
   });
+
   return version.status === 0;
 }
 
@@ -61,12 +63,15 @@ function probe(kind: 'overlay' | 'direct-io'): MountVerdicts {
     'run', '--rm', '--privileged', '--device', '/dev/fuse',
     '--entrypoint', '/probe/run.sh', IMAGE, kind,
   ], { encoding: 'utf8', timeout: 180_000 });
+
   if (ran.status !== 0) {
     throw new Error(`the ${kind} probe exited ${String(ran.status)}: ${ran.stderr || ran.stdout}`);
   }
+
   const printed = new Map(ran.stdout.split('\n')
     .map((line) => line.trim().split(' '))
     .filter((parts): parts is [string, string] => parts.length === 2));
+
   return { mmap: printed.get('mmap'), wal: printed.get('wal') };
 }
 
@@ -75,6 +80,7 @@ describe.skipIf(!usable)('the workspace mount honours writable MAP_SHARED mappin
     const built = spawnSync('docker', ['build', '-t', IMAGE, FIXTURE_DIR], {
       encoding: 'utf8', timeout: 900_000,
     });
+
     expect(built.stderr + built.stdout).not.toContain('error:');
     expect(built.status).toBe(0);
   }, 900_000);
@@ -120,6 +126,7 @@ describe.skipIf(!usable)('the workspace mount honours writable MAP_SHARED mappin
   // machine running this suite for weeks does not accumulate one tag per run.
   afterAll(() => {
     const removed = spawnSync('docker', ['rmi', '-f', IMAGE], { encoding: 'utf8', timeout: 60_000 });
+
     if (removed.status !== 0) {
       throw new Error(`the fixture tag ${IMAGE} could not be released: ${removed.stderr.trim() || 'docker printed nothing'}`);
     }

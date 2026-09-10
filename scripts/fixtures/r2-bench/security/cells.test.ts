@@ -24,6 +24,7 @@ const SECRET = 'fixture-secret-live-xyz-123';
 
 function observation(overrides: Partial<SecurityCellsObservation> = {}): SecurityCellsObservation {
   const refused = (id: 'F7' | 'F10' | 'F11' | 'F12') => ({ id, status: 'refused' as const, detail: `${id} refused` });
+
   return {
     strategy: 'snapshot-chain',
     completed: true,
@@ -84,6 +85,7 @@ describe('summarizeSecurity', () => {
       token: SECRET,
       driverText: 'no secrets here',
     });
+
     expect(security.securityCellsComplete).toBe(true);
     expect(security.prefixEscapes).toBe(0);
     expect(security.capabilityEscapesOrReplays).toBe(0);
@@ -102,6 +104,7 @@ describe('summarizeSecurity', () => {
         ? { ...cell, status: 'unable' as const, detail: 'no epoch to fence' }
         : cell),
     };
+
     const security = summarizeSecurity({
       rows: [
         { observation: unable },
@@ -109,6 +112,7 @@ describe('summarizeSecurity', () => {
       token: SECRET,
       driverText: 'no secrets here',
     });
+
     expect(security.securityCellsComplete).toBe(false);
     const verdict = evaluateRun(recordWithSecurity(security));
     const g4 = verdict.gates.find((gate) => gate.gate === 'G4');
@@ -124,6 +128,7 @@ describe('summarizeSecurity', () => {
       token: SECRET,
       driverText: 'no secrets here',
     });
+
     expect(security.securityCellsComplete).toBe(false);
   });
 
@@ -135,6 +140,7 @@ describe('summarizeSecurity', () => {
       token: SECRET,
       driverText: 'no secrets here',
     });
+
     const verdict = evaluateRun(recordWithSecurity(security));
     const g4 = verdict.gates.find((gate) => gate.gate === 'G4');
     expect(g4?.ok).toBe(false);
@@ -149,6 +155,7 @@ describe('summarizeSecurity', () => {
       token: SECRET,
       driverText: 'no secrets here',
     });
+
     const verdict = evaluateRun(recordWithSecurity(security));
     expect(verdict.gates.find((gate) => gate.gate === 'G4')?.ok).toBe(false);
   });
@@ -161,6 +168,7 @@ describe('summarizeSecurity', () => {
       token: SECRET,
       driverText: 'no secrets here',
     });
+
     expect(security.prefixEscapes).toBe(2);
     expect(security.capabilityEscapesOrReplays).toBe(1);
     expect(verdictG4Ok(security)).toBe(false);
@@ -174,7 +182,9 @@ describe('summarizeSecurity', () => {
       token: SECRET,
       driverText: `run output contains ${SECRET} verbatim`,
     });
+
     expect(security.credentialLeaks.length).toBeGreaterThan(0);
+
     for (const leak of security.credentialLeaks) expect(leak).not.toContain(SECRET);
     expect(verdictG4Ok(security)).toBe(false);
   });
@@ -192,6 +202,7 @@ describe('summarizeSecurity', () => {
       token: SECRET,
       driverText: 'no secrets here',
     });
+
     expect(security.credentialLeaks).toEqual(['F12: live fixture secret present in a scanned surface']);
     expect(verdictG4Ok(security)).toBe(false);
   });
@@ -199,6 +210,7 @@ describe('summarizeSecurity', () => {
 
 function verdictG4Ok(security: ReturnType<typeof summarizeSecurity>): boolean {
   const verdict = evaluateRun(recordWithSecurity(security));
+
   return verdict.gates.find((gate) => gate.gate === 'G4')?.ok === true;
 }
 
@@ -209,6 +221,7 @@ describe('runSecurityFaultCells wire', () => {
     const seenUrls: string[] = [];
     const seenAuthorizations: Array<string | null> = [];
     const seenBodies: string[] = [];
+
     const answer = async (
       input: Parameters<typeof globalThis.fetch>[0],
       init?: Parameters<typeof globalThis.fetch>[1],
@@ -218,12 +231,15 @@ describe('runSecurityFaultCells wire', () => {
       const parsedAuth = v.safeParse(v.looseObject({ authorization: v.string() }), init?.headers);
       seenAuthorizations.push(parsedAuth.success ? parsedAuth.output.authorization : null);
       seenBodies.push(parsedBody.success ? parsedBody.output : '');
+
       return new Response(JSON.stringify({ ok: true, strategy: 'snapshot-chain', box: 'ab-x', security: obs, ms: 12 }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
       });
     };
+
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+
     try {
       const { observation: parsed, notes } = await runSecurityFaultCells(
         { origin: 'https://bench.invalid', token: SECRET },
@@ -231,12 +247,14 @@ describe('runSecurityFaultCells wire', () => {
         'snapshot-chain',
         'sec-12345678',
       );
+
       expect(parsed.completed).toBe(true);
       expect(parsed.cleanupErrors).toEqual([]);
       expect(notes.length).toBe(4);
       expect(seenUrls).toEqual(['https://bench.invalid/security?box=ab-x']);
       expect(seenAuthorizations).toEqual([`Bearer ${SECRET}`]);
       expect(seenBodies).toHaveLength(1);
+
       for (const body of seenBodies) expect(body).not.toContain(SECRET);
       expect(JSON.stringify(parsed)).not.toContain(SECRET);
     } finally {
@@ -246,11 +264,14 @@ describe('runSecurityFaultCells wire', () => {
 
   test('a refused route throws carrying the wire reason', async () => {
     const real = globalThis.fetch;
+
     const answer = async (): Promise<Response> => new Response(
       JSON.stringify({ ok: false, error: 'strategy not deployed in this run' }),
       { status: 400, headers: { 'content-type': 'application/json' } },
     );
+
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+
     try {
       await expect(runSecurityFaultCells(
         { origin: 'https://bench.invalid', token: SECRET }, 'ab-x', 'snapshot-chain', 'sec-12345678',
@@ -262,11 +283,14 @@ describe('runSecurityFaultCells wire', () => {
 
   test('a contract-breaking reply throws rather than defaulting', async () => {
     const real = globalThis.fetch;
+
     const answer = async (): Promise<Response> => new Response(
       JSON.stringify({ ok: true, strategy: 'snapshot-chain', box: 'ab-x', security: { strategy: 'snapshot-chain' } }),
       { status: 200, headers: { 'content-type': 'application/json' } },
     );
+
     globalThis.fetch = Object.assign(answer, { preconnect: real.preconnect });
+
     try {
       await expect(runSecurityFaultCells(
         { origin: 'https://bench.invalid', token: SECRET }, 'ab-x', 'snapshot-chain', 'sec-12345678',

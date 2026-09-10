@@ -19,6 +19,7 @@ export function LandingActionLink({
   size = 'lg',
 }: LandingActionLinkProps): ReactElement {
   const actionClass = `${primary ? 'p-btn !text-[var(--c-accent-on)]' : ''} !rounded-full`;
+
   return (
     <LinkButton
       href={href}

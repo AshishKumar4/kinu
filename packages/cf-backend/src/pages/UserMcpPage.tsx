@@ -74,6 +74,7 @@ export default function UserMcpPage() {
   useEffect(() => {
     refresh();
     pollRef.current = setInterval(refresh, POLL_MS);
+
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [refresh]);
 
@@ -84,16 +85,19 @@ export default function UserMcpPage() {
   useEffect(() => {
     if (!authResult) return;
     refresh();
+
     const t = setTimeout(() => {
       const next = new URLSearchParams(searchParams);
       next.delete('mcp_auth'); next.delete('error'); next.delete('server_id');
       setSearchParams(next, { replace: true });
     }, 4000);
+
     return () => clearTimeout(t);
   }, [authResult, refresh, searchParams, setSearchParams]);
 
   const remove = useCallback(async (id: string, name: string) => {
     if (!confirm(`Remove "${name}"? All workspaces will lose access to its tools.`)) return;
+
     try { await removeMcpServer(id); refresh(); } catch (e) { alert(renderThrownChain({ cause: e })); }
   }, [refresh]);
 
@@ -165,6 +169,7 @@ export default function UserMcpPage() {
               <tbody>
                 {servers.map((s) => {
                   const badge = statusBadge(s.status);
+
                   return (
                     <tr key={s.id} className="border-b p-border last:border-b-0">
                       <td className="px-4 py-3 font-medium">{s.name}</td>
@@ -230,22 +235,28 @@ export function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onA
   const save = useCallback(async () => {
     if (!name.trim() || !serverUrl.trim()) return;
     setErr(null); setSaving(true);
+
     try {
       let headers: Record<string, string> | undefined;
+
       if (headersText.trim()) {
         try {
           headers = v.parse(v.record(v.string(), v.string()), JSON.parse(headersText));
         } catch (e) { throw new Error(`Bad headers JSON: ${renderThrownChain({ cause: e })}`, { cause: e }); }
       }
+
       const tools = allowedTools.trim()
         ? allowedTools.split(',').map((s) => s.trim()).filter(Boolean)
         : undefined;
+
       const result = await addMcpServer({
         name: name.trim(), serverUrl: serverUrl.trim(), transport, headers, allowedTools: tools,
       });
+
       if (result.authUrl) {
         window.open(result.authUrl, '_blank', 'noopener,noreferrer');
       }
+
       onAdded();
     } catch (e) { setErr(renderThrownChain({ cause: e })); }
     finally { setSaving(false); }

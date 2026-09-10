@@ -157,6 +157,7 @@ import { expandChild, sharedPrefix } from './swarm-expansion';
 import type { ExpandChildCtx } from './swarm-expansion';
 import { measureChild, reportGate, scoreExpansion } from './swarm-scoring';
 import { settleRun } from './settle';
+
 /**
  * The lease epoch a swarm's FIRST attempt writes, and the reason the number matters.
  *
@@ -325,6 +326,7 @@ export interface SwarmRunDeps {
    */
   readonly redrive?: boolean;
 }
+
 /**
  * Run a resolved swarm, or refuse.
  *
@@ -339,6 +341,7 @@ export async function runSwarm(
 ): Promise<SwarmResult | Refusal> {
   const started = Date.now();
   const region = regionRefusal(resolved, deps.mode);
+
   if (region) return region;
   // All three checked by `regionRefusal`; read here so the types are narrowed once.
   const branches = resolved.caps.branches?.value ?? 0;
@@ -346,6 +349,7 @@ export async function runSwarm(
   const measures = resolved.config.score.kind === 'verify';
   const paretoAdvance = resolved.config.advance.kind === 'pareto';
   const judgeSamples = resolved.config.score.kind === 'judge' ? resolved.config.score.samples : null;
+
   // THE PER-NODE ROUTING, resolved before anything spends: an unresolvable spec is
   // refused here, ahead of the baseline measurement, the ledger row and every node —
   // the "before anything spends" the field's first life lacked and its return must
@@ -354,16 +358,20 @@ export async function runSwarm(
   const nodeModelsResult = resolveNodeModels({
     models: resolved.models, resolveModel: deps.resolveModel,
   });
+
   if ('reason' in nodeModelsResult) return nodeModelsResult;
   const nodeModels = nodeModelsResult.models;
+
   const publishing = paretoAdvance
     ? null
     : PUBLISHING_CARRIES.find(
       (carry): carry is PublishingCarry => carry === resolved.config.carry.kind,
     ) ?? null;
+
   const archive = resolved.config.advance.kind === 'archive' && resolved.key !== null
     ? { key: resolved.key, novelty: resolved.config.advance.novelty }
     : null;
+
   const log = deps.logger ?? diagnostics;
 
   let measured: MeasuredObjective | null = null;
@@ -377,12 +385,14 @@ export async function runSwarm(
   if (measures) {
     if (paretoAdvance) {
       const prepared = await prepareParetoMeasurement({ rt: deps.rt, resolved });
+
       if ('reason' in prepared) return prepared;
       pareto = prepared;
       ctx = prepared.ctx;
       verifier = prepared.instruments[0]?.verifier ?? null;
     } else {
       const prepared = await prepareMeasurement({ rt: deps.rt, resolved, archive, log });
+
       if ('reason' in prepared) return prepared;
       ({ measured, verifier, witnessVerifier, ctx, baseline, identity } = prepared);
     }
@@ -392,6 +402,7 @@ export async function runSwarm(
   // has none — the same instance every write below goes through, so a node's
   // spawn, its steps and its report all reach an open surface by the one push.
   const { sql, journal, searchLedger } = initRunLedgers(deps.rt, deps.announceHeadActivity);
+
   const { carriedIn, carriedBest } = readCarryIn({
     sql, actor: deps.rt.actor,
     identity,
@@ -402,6 +413,7 @@ export async function runSwarm(
     metric: measured?.metric ?? '',
     log,
   });
+
   // Whether a node is an agent at all. `thought` is the degenerate point *The six axes*
   // names, and it takes the toolless path below unchanged; the other two run
   // `node-agent.ts`.
@@ -410,9 +422,11 @@ export async function runSwarm(
   // The narrowing, not a second policy: `regionRefusal` has already refused the two
   // values with no scheduler here.
   const policy = frontierPolicyOf(resolved.config.advance.kind);
+
   if (!policy) {
     return unsupported(`advance:"${resolved.config.advance.kind}" has no scheduler in this runner.`);
   }
+
   /**
    * WHAT SELECTS THE NEXT PARENT, decided once here instead of re-derived per
    * iteration — and the reason it is one value rather than two is the state it
@@ -434,6 +448,7 @@ export async function runSwarm(
   const scheduler = policy === 'pareto'
     ? pareto === null ? null : { kind: 'pareto' as const, axes: pareto.axes }
     : { kind: 'frontier' as const, policy };
+
   if (scheduler === null) {
     return unsupported('advance:"pareto" orders its frontier by the axes an instanced or vector '
       + `objective declares, and this run resolved none — score:"${resolved.config.score.kind}" `
@@ -461,6 +476,7 @@ export async function runSwarm(
   const nodeModelResult = resolveNodeModel({
     model: deps.model, resolveModel: deps.resolveModel, runProfile,
   });
+
   if ('reason' in nodeModelResult) return nodeModelResult;
   const nodeModel = nodeModelResult.model;
 
@@ -468,6 +484,7 @@ export async function runSwarm(
     searchLedger, reentry, task: resolved.task, preset: resolved.preset,
     redrive: deps.redrive, log,
   });
+
   if (contendedRefusal) return contendedRefusal;
 
   const { rootId, nodes, root } = await createRoot({
@@ -492,6 +509,7 @@ export async function runSwarm(
   const spentBy = new Map<string, number | null>();
   const seeded = seedResumedSearch({ reentry, nodes, rankDirection, spentBy });
   candidates.push(...seeded.candidates);
+
   /**
    * WHAT THE SCORING BARRIER MOVES — one object, because one function moves it.
    *
@@ -514,6 +532,7 @@ export async function runSwarm(
     bestValue: seeded.bestValue,
     ensembles: [...seeded.ensembles],
   };
+
   const { inheritedExpansions, inheritedTokens } = seeded;
   // THE EXPANSION BUDGET, in units of one child: `depth` waves of `branches`, DERIVED
   // from the two caps the call resolved because there is no third cap to read. `budget`
@@ -552,6 +571,7 @@ export async function runSwarm(
    * line knows the difference between a level a node proposed and one the caller did.
    */
   const assigned = assignedRootGrant({ resolved, reentry, budget });
+
   if (assigned) root.granted = assigned;
   /**
    * THE LEASE every ledger write of this run is stamped with: the epoch a re-entry
@@ -562,6 +582,7 @@ export async function runSwarm(
    * `converge` from it would settle a row this run is making progress on.
    */
   const ledgerEpoch = reentry?.epoch ?? SWARM_FIRST_LEDGER_EPOCH;
+
   // THE RUN'S OWN LEDGER ROW. Written at the START so a live swarm reads as running and
   // a settled one as settled, which is the same discipline `mcts/engine.ts` keeps: the
   // alternative — one row at the settle barrier — would leave every in-flight run
@@ -583,11 +604,13 @@ export async function runSwarm(
     explorationWeight: resolved.config.explorationWeight,
     judgeSamples: judgeSamples ?? undefined,
   };
+
   if (runProfile) Object.assign(ledgerConfig, { profile: runProfile });
 
   if (deps.originContext) Object.assign(ledgerConfig, {
     originContext: deps.originContext,
   });
+
   if (reentry) {
     searchLedger.touch(rootId, ledgerEpoch, Date.now());
   } else {
@@ -611,6 +634,7 @@ export async function runSwarm(
     executeTool: deps.executeTool, webSearch: deps.webSearch,
     publishHeadStream: deps.publishHeadStream,
   });
+
   // THE REPORT CONTRACT, wired exactly where an instrument exists. A judged run gets no
   // gate at all — an absent key, because a check that passed and a check that never
   // existed are different facts — and the ABSENCE is what makes a judged node's report
@@ -669,6 +693,7 @@ export async function runSwarm(
     reportModelCall: deps.reportModelCall,
     charge: (spent: Usage) => mission.charge(spent),
   };
+
   /** THE RUN'S FAN-IN (`strategy/fanin.ts`), built over this run's own collaborators.
    *  The module owns the policy — which parents are consumed, what orders a merge, where
    *  a conflict's vertex comes from, and the landed ledger across barriers; everything
@@ -692,9 +717,11 @@ export async function runSwarm(
       ? (parent) => sharedPrefix({ parent, compactShared: deps.compactShared, model: nodeModel, log, preset: resolved.preset })
       : undefined,
   });
+
   levelFanIn.seedLanded(
     (reentry?.nodes ?? []).filter((node) => node.merged).map((node) => node.id),
   );
+
   /**
    * A grant that has been PAID FOR and not yet expanded.
    *
@@ -706,6 +733,7 @@ export async function runSwarm(
    */
   const reservedChildren = (): boolean => {
     for (const node of nodes.values()) if (node.granted) return true;
+
     return false;
   };
 
@@ -718,6 +746,7 @@ export async function runSwarm(
       aborted = true;
       break;
     }
+
     // THE CAP, ENFORCED MID-RUN. A declared mission budget that ran out stops the next
     // level from opening, so the money left is what the caller still has rather than
     // what a lump after the run reports it no longer had. A run nobody labelled asks
@@ -726,6 +755,7 @@ export async function runSwarm(
       missionSpent = true;
       break;
     }
+
     /**
      * THE WAVE THIS ITERATION RUNS, and there are three sources in strict order.
      *
@@ -745,9 +775,11 @@ export async function runSwarm(
      * THEN SELECTION.
      */
     const resumed = resumeWaves.shift() ?? null;
+
     const owed = resumed
       ? null
       : [...nodes.values()].find((node) => node.granted !== null);
+
     const selected = resumed
       ? { id: resumed.parentId }
       : owed ?? (scheduler.kind === 'pareto'
@@ -757,10 +789,12 @@ export async function runSwarm(
           explorationWeight: resolved.config.explorationWeight
             ?? DEFAULT_CONFIG.mcts.explorationWeight,
         }));
+
     // Nothing selectable: the frontier is exhausted, or every open node sits at the
     // depth cap. A settled search rather than a failed one.
     if (!selected) break;
     const parent = nodes.get(selected.id);
+
     if (!parent) {
       // Every row in this tree was written beside its content, here, in this call. A
       // row with no content is an inconsistency rather than a state, and expanding
@@ -768,6 +802,7 @@ export async function runSwarm(
       // The ledger is settled on the way out: a run that returned a refusal is not a
       // run still going, and this row is what the surface reads its status from.
       searchLedger.fail(rootId, ledgerEpoch, Date.now());
+
       return unavailable(`the search selected node ${selected.id} of its own tree and this run holds `
         + 'no content for it, so the expansion would have no parent to continue from. That is an '
         + 'inconsistent tree rather than a missing instrument, and it stops the run.');
@@ -785,8 +820,10 @@ export async function runSwarm(
     // spend a debit on a wave that was already paid for.
     const grant = resumed ? null : parent.granted ?? (() => {
       const decision = answerProposal({ log, node: parent, resolved, budget });
+
       return decision?.kind === 'granted' ? decision : null;
     })();
+
     if (!resumed) {
       parent.proposal = null;
       // Cleared because a tree selector may re-select an expanded node: `uct` re-widens,
@@ -802,18 +839,21 @@ export async function runSwarm(
     // arbitration, so charging it again here would bill the search twice — and a
     // resumed wave was debited by the attempt that created it.
     const width = resumed ? resumed.siblings : grant?.width ?? budget.take(branches);
+
     // The budget is spent and nothing is owed: the wave this iteration would have run
     // has no room, and creating it free is the overspend conservation exists to refuse.
     if (width === 0) break;
 
     const ancestors = pathTo(nodes, parent);
     const childDepth = parent.depth + 1;
+
     // The *Inherited context* barrier: ONE compacted view per branch point, computed
     // before any child of this parent starts, so nothing a level is ranked on can be a
     // fact about which sibling's compaction kept the useful paragraph.
     const prefix = agentNodes
       ? await sharedPrefix({ parent, compactShared: deps.compactShared, model: nodeModel, log, preset: resolved.preset })
       : [];
+
     // What a child starts from: the proposal's per-branch context where one was
     // granted, otherwise the run's `context`. The expansion axis does not
     // independently control inheritance.
@@ -879,6 +919,7 @@ export async function runSwarm(
      * bucket for the ones that vanished.
      */
     const unusable: string[] = [];
+
     for (const { id, answer } of answers) {
       /**
        * WHY THIS MEMBER PRODUCED NOTHING THE LEVEL CAN CONTINUE FROM, or null where it
@@ -890,6 +931,7 @@ export async function runSwarm(
       const stopped = answer.kind === 'failed'
         ? renderCauseChain(answer.error)
         : answer.expansion.incomplete?.detail ?? null;
+
       if (answer.kind === 'failed') {
         // LOST IS THE NARROWER CLAIM: the search holds NOTHING for this node, so the
         // report's `stop` says it ran narrower than it was configured to. An incomplete
@@ -906,6 +948,7 @@ export async function runSwarm(
         spentBy.set(expansion.id, usageTotal(expansion.usage) ?? null);
         expansions.push(expansion);
       }
+
       if (stopped === null) continue;
       unusable.push(`${id}: ${stopped}`);
       log.event('swarm.branch_failed', {
@@ -915,6 +958,7 @@ export async function runSwarm(
         error: stopped,
       });
     }
+
     // A LEVEL THAT PRODUCED NO USABLE CANDIDATE ENDS THE RUN, by name. This is a fact
     // about the level's OUTCOME and needs no timer: continuing would select the same
     // parent again and pay another whole wave to learn the same thing, and the budget it
@@ -936,9 +980,11 @@ export async function runSwarm(
       // this task would re-enter a tree whose run already gave up — so a refusal that
       // does not settle its row is a refusal that silently continues.
       searchLedger.fail(rootId, ledgerEpoch, Date.now());
+
       return unavailable(`the level at depth ${String(childDepth)} produced no candidate: all `
         + `${String(width)} of its nodes failed. ${unusable.join(' | ')}`);
     }
+
     if (grant) {
       reportVerdict(log, {
         verdict: { kind: 'accepted', nodeIds: expansions.map((child) => child.id) },
@@ -964,7 +1010,9 @@ export async function runSwarm(
      */
     const level = async function* level(): AsyncGenerator<Expansion> {
       yield* expansions;
+
       if (resolved.config.expand !== 'aggregate') return;
+
       // The narrowing repeats the measurement guard rather than asserting it:
       // `regionRefusal` refuses `aggregate` on a run that measures nothing, so the other
       // arm is unreachable for any run that fans in at all.
@@ -978,16 +1026,19 @@ export async function runSwarm(
         atDepth: childDepth,
       });
     };
+
     for await (const expansion of level()) {
       const siblings = expansion.aggregated.length > 0
         ? []
         : expansions.filter((other) => other.id !== expansion.id);
+
       const scoringRefusal = await scoreExpansion({
         expansion, siblings, measures, verifier, witnessVerifier, pareto, ctx, measured, baseline,
         judgeSamples, resolved, rt: deps.rt, mode: deps.mode, languages, sql, rootId,
         candidates, spentBy, nodes, log, searchLedger, ledgerEpoch, rankDirection,
         state: scoringState,
       });
+
       if (scoringRefusal) return scoringRefusal;
     }
 
@@ -1033,6 +1084,7 @@ export async function runSwarm(
     answerProposal({ log, node, resolved, budget });
     node.proposal = null;
   }
+
   return settleRun({
     started, log, sql, actor: deps.rt.actor, resolved, rootId, maxDepth, branches, policy,
     paretoAxes: pareto?.axes ?? null, ctx, verifier, measured, baseline, identity,

@@ -17,13 +17,16 @@ import { makeVfsError } from '../src/vfs/errno';
  *  is measured rather than assumed. */
 function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files: Map<string, string> } {
   const files = new Map(Object.entries(seed));
+
   const self = {
     reads: 0,
     files,
     async readFile(path: string) {
       self.reads++;
       const v = files.get(path);
+
       if (v === undefined) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+
       return v;
     },
     async writeFile(path: string, data: string | Uint8Array) {
@@ -37,6 +40,7 @@ function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files
     async mkdir() {},
     async exists(path: string) { return files.has(path); },
   };
+
   return self;
 }
 
@@ -47,6 +51,7 @@ function watched(seed: Record<string, string> = {}) {
   const local = memVfs();
   const workspace = memVfs(seed);
   const changes = new HeadFileChanges();
+
   return { vfs: observeWrites(workspace, changes), changes, local, workspace };
 }
 
@@ -110,10 +115,13 @@ describe('HeadFileChanges — the review a parent gets', () => {
   });
   test('a binary before-image stays binary (no utf8 decode of the baseline)', async () => {
     const bytes = new Map<string, Uint8Array>([['logo.png', new Uint8Array([0x89, 0x50, 0xae, 0xff])]]);
+
     const raw: VFS = {
       readFile: async (path: string, opts?: { encoding?: string }) => {
         const found = bytes.get(path);
+
         if (found === undefined) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+
         return opts?.encoding === 'utf8' ? new TextDecoder().decode(found) : found;
       },
       writeFile: async (path: string, data: string | Uint8Array) => {
@@ -122,12 +130,14 @@ describe('HeadFileChanges — the review a parent gets', () => {
       readdir: async () => [...bytes.keys()],
       stat: async (path: string) => {
         const found = bytes.get(path);
+
         return found === undefined ? null : { size: found.length, mtimeMs: 0, isDir: false };
       },
       unlink: async (path: string) => { bytes.delete(path); },
       mkdir: async () => {},
       exists: async (path: string) => bytes.has(path),
     };
+
     const changes = new HeadFileChanges();
     const vfs = observeWrites(raw, changes);
     await vfs.writeFile('logo.png', 'hello\n');
@@ -147,10 +157,12 @@ describe('HeadFileChanges — the review a parent gets', () => {
 
   test('a write the plane refused is not reported as a change', async () => {
     const changes = new HeadFileChanges();
+
     const refusing = observeWrites({
       ...memVfs(),
       async writeFile(_path: string, _data: string | Uint8Array) { throw makeVfsError('EROFS', 'read-only', 'x.ts'); },
     }, changes);
+
     await expect(refusing.writeFile('x.ts', 'nope')).rejects.toThrow('EROFS: read-only');
     expect(changes.snapshot()).toEqual([]);
   });

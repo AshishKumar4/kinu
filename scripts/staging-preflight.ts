@@ -42,6 +42,7 @@ const HealthSchema = v.object({
     builtAt: v.string(),
   })),
 });
+
 export type DeployedHealth = v.InferOutput<typeof HealthSchema>;
 
 export type StagingVerdict =
@@ -67,11 +68,15 @@ export function stagingDeploymentVerdict(input: {
   if (input.health === null) {
     return { kind: 'unreachable', reason: input.failure ?? 'the health endpoint did not answer' };
   }
+
   const build = input.health.build;
+
   if (build === null) return { kind: 'unstamped' };
+
   if (build.sha === input.localSha) {
     return { kind: 'current', sha: build.sha, builtAt: build.builtAt };
   }
+
   return { kind: 'stale', deployed: build.sha, local: input.localSha, builtAt: build.builtAt };
 }
 
@@ -108,9 +113,11 @@ export async function readDeployedHealth(origin: string): Promise<{
       headers: { 'cache-control': 'no-cache' },
       signal: AbortSignal.timeout(20_000),
     });
+
     if (!response.ok) {
       return { health: null, failure: `HTTP ${String(response.status)}` };
     }
+
     return { health: v.parse(HealthSchema, await response.json()) };
   } catch (error) {
     return { health: null, failure: String(error) };
@@ -119,11 +126,13 @@ export async function readDeployedHealth(origin: string): Promise<{
 
 export function localHeadSha(): string {
   const head = spawnSync('git', ['rev-parse', '--short', 'HEAD'], { encoding: 'utf8' });
+
   return head.status === 0 ? head.stdout.trim() : 'dev';
 }
 
 function treeIsDirty(): boolean {
   const status = spawnSync('git', ['status', '--porcelain'], { encoding: 'utf8' });
+
   return status.status === 0 && status.stdout.trim().length > 0;
 }
 
@@ -131,6 +140,7 @@ function treeIsDirty(): boolean {
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const allowStale = args.includes('--allow-stale');
+
   const origin = (args.find((arg) => !arg.startsWith('--')) ?? EVAL_STAGING_ORIGIN)
     .trim().replace(/\/+$/, '');
 
@@ -138,6 +148,7 @@ if (import.meta.main) {
   // would happily interrogate production teaches whoever reads it that the origin
   // is negotiable, and this script's answer is what gates a spending run.
   const allowed = evalTargetVerdict(origin);
+
   if (allowed.kind === 'refused') {
     console.error(`staging-preflight: REFUSED — ${allowed.reason}`);
     process.exit(1);
@@ -150,10 +161,12 @@ if (import.meta.main) {
 
   if (verdict.kind === 'current') {
     console.error(`staging-preflight: ${line}`);
+
     if (treeIsDirty()) {
       console.error('staging-preflight: WARNING — this tree has uncommitted changes, which are '
         + 'not in the deployment and so are not being measured.');
     }
+
     process.exit(0);
   }
 
@@ -161,6 +174,7 @@ if (import.meta.main) {
     console.error(`staging-preflight: WARNING (--allow-stale) — ${line}`);
     process.exit(0);
   }
+
   console.error(`staging-preflight: REFUSED — ${line}`);
   process.exit(1);
 }

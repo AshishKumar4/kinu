@@ -47,6 +47,7 @@ import {
 } from './first-run';
 
 const SUITE = 'First-run · approve-clears';
+
 const CASE = 'approve-clears' as const;
 
 /** The machine this case attaches. One is enough: the subject is the queue, and
@@ -60,7 +61,9 @@ const MACHINE = 'kinu-first-run-approve';
 const PAINT_MS = 30_000;
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
+
 const liveTest = test.skipIf(PLAN === null);
+
 const observations: EvalObservation[] = [];
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
@@ -68,16 +71,19 @@ afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observati
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
+
     const account: DeviceAccount = {
       origin: PLAN.origin,
       cliToken: workerSession(PLAN.llm).token,
       identity: PLAN.identity,
     };
+
     // ONE NAMED OWNER rather than two loose bindings, and it is load-bearing:
     // the case body is a closure, so after it a plain `let` still reads as its
     // initializer and every teardown line below would be unreachable code the
     // compiler is right about — the device arm's own reason for the same shape.
     const held: CaseState = { machine: null, browser: null };
+
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
@@ -87,6 +93,7 @@ describe(SUITE, () => {
           const machine = await attachMachine({
             account, name: MACHINE, home: scratchDir('first-run-approve'),
           });
+
           held.machine = machine;
           await grantDeviceConsent(account, machine.deviceId, session.workspace);
 
@@ -122,6 +129,7 @@ describe(SUITE, () => {
           const second = row === null
             ? null
             : await session.execute('laptop', command);
+
           const gone = !existsSync(doomed);
 
           // ── the button ──────────────────────────────────────────────
@@ -186,8 +194,10 @@ describe(SUITE, () => {
       }, observations);
     } finally {
       await held.browser?.close();
+
       if (held.machine !== null) {
         const left = await detachMachine(account, held.machine);
+
         if (left !== null) console.warn(`    [first-run] ${CASE} teardown: ${left}`);
       }
     }
@@ -230,11 +240,14 @@ async function approveThroughTheButton(
 ): Promise<ButtonRun> {
   const empty = { boxesBefore: 0, checkedBefore: 0, boxesAfter: 0, checkedAfter: 0 };
   const page = await browser.newPage();
+
   try {
     // The SAME authority the RPC half acted with, off the same plan, so the two
     // halves cannot be two users looking at two queues.
     const headers = webHeaders(plan.identity);
+
     if (Object.keys(headers).length > 0) await page.setExtraHTTPHeaders(headers);
+
     return await drive(page, plan.origin, workspace, empty);
   } finally {
     await page.close();
@@ -255,6 +268,7 @@ async function drive(
   // page, a navigation error — is rethrown, so a broken harness cannot read as
   // an empty queue.
   let button: Awaited<ReturnType<Page['waitForSelector']>> = null;
+
   try {
     button = await page.waitForSelector('::-p-text(Approve)', { timeout: PAINT_MS });
   } catch (cause) {
@@ -264,6 +278,7 @@ async function drive(
     // the harness breaking and must not read as an empty queue.
     if (!(cause instanceof Error) || cause.name !== 'TimeoutError') throw cause;
   }
+
   if (button === null) {
     return {
       approved: false,
@@ -272,8 +287,10 @@ async function drive(
       ...empty,
     };
   }
+
   const before = await countBoxes(page);
   await button.click();
+
   // The click issues an RPC and re-renders. Settling is observed on the CARD —
   // the button leaves its busy state — rather than waited out on a timer.
   // Settling is OBSERVED on the card — the busy state clearing — and a card
@@ -291,7 +308,9 @@ async function drive(
     // box ticked is the defect itself.
     if (!(cause instanceof Error) || cause.name !== 'TimeoutError') throw cause;
   }
+
   const after = await countBoxes(page);
+
   return {
     approved: true,
     why: '',
@@ -305,6 +324,7 @@ async function drive(
 async function countBoxes(page: Page): Promise<{ boxes: number; checked: number }> {
   return page.evaluate(() => {
     const boxes = [...document.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
+
     return { boxes: boxes.length, checked: boxes.filter((box) => box.checked).length };
   });
 }
@@ -321,8 +341,11 @@ async function openBrowser(): Promise<Browser> {
       '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
     ],
   };
+
   const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH ?? process.env.CHROME_PATH;
+
   if (executablePath !== undefined && executablePath.length > 0) options.executablePath = executablePath;
+
   return puppeteer.launch(options);
 }
 

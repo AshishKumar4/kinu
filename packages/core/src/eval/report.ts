@@ -53,6 +53,7 @@ export interface EvalReport {
  *  Strategy B is the candidate / system-under-test; A is the baseline. */
 export function buildEvalReport(results: EvalResult[], meta: EvalReportMeta): EvalReport {
   const summary = summarizeEval(results);
+
   const cases: EvalCaseScore[] = results.map((r) => ({
     caseId: r.caseId,
     winner: r.verdict.winner,
@@ -64,6 +65,7 @@ export function buildEvalReport(results: EvalResult[], meta: EvalReportMeta): Ev
     errorA: r.runA.error || undefined,
     errorB: r.runB.error || undefined,
   }));
+
   return {
     ranAt: meta.ranAt ?? Date.now(),
     strategyA: meta.strategyA,
@@ -91,14 +93,17 @@ export interface GateResult {
  *  strategies errored. */
 export function evaluateGate(report: EvalReport, threshold: number): GateResult {
   const score = report.aggregateScore;
+
   if (report.summary.total === 0) {
     return { pass: false, aggregateScore: score, threshold, reason: 'no eval cases ran — nothing to gate on' };
   }
+
   // A case whose strategy errored produced no answer, so the judge scored the
   // absence of one — typically as a tie at 0.5. With a corpus of those the
   // aggregate lands exactly on a 0.5 floor and passes, which is how a run where
   // every single model call failed returned a green gate.
   const errored = report.cases.filter((c) => c.errorA !== undefined || c.errorB !== undefined).length;
+
   if (errored > 0) {
     return {
       pass: false,
@@ -107,7 +112,9 @@ export function evaluateGate(report: EvalReport, threshold: number): GateResult 
       reason: `${errored}/${report.cases.length} case(s) errored — the run is not a measurement`,
     };
   }
+
   const pass = score >= threshold;
+
   return {
     pass,
     aggregateScore: score,
@@ -123,13 +130,17 @@ export function renderEvalSummary(report: EvalReport, gate?: GateResult): string
   const s = report.summary;
   const lines: string[] = [];
   lines.push(`Eval: ${report.strategyB}${report.modelB ? ` (${report.modelB})` : ''} vs ${report.strategyA}${report.modelA ? ` (${report.modelA})` : ''} (baseline)`);
+
   if (report.corpus) lines.push(`Corpus: ${report.corpus}`);
   lines.push(`Cases: ${s.total}   B-wins: ${s.bWins}   A-wins: ${s.aWins}   ties: ${s.ties}`);
   lines.push(`Aggregate (B): ${s.avgScoreB.toFixed(3)}   Baseline (A): ${s.avgScoreA.toFixed(3)}   Δ: ${report.regressionDelta >= 0 ? '+' : ''}${report.regressionDelta.toFixed(3)}`);
+
   for (const c of report.cases) {
     const flag = c.errorA || c.errorB ? ' ⚠' : '';
     lines.push(`  ${c.caseId.padEnd(14)} A=${c.scoreA.toFixed(2)} B=${c.scoreB.toFixed(2)} → ${c.winner}${flag}`);
   }
+
   if (gate) lines.push(`Gate: ${gate.pass ? 'PASS' : 'FAIL'} — ${gate.reason}`);
+
   return lines.join('\n');
 }

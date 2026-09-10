@@ -78,14 +78,17 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
   trackController?: (controller: AbortController) => (() => void);
 }): ToolSet {
   const wrapped: ToolSet = { ...raw };
+
   for (const [key, { completion, detachable }] of Object.entries(deps.backgroundable)) {
     const orig = wrapped[key];
     const exec = orig?.execute;
+
     if (!orig || !exec) continue;
     wrapped[key] = {
       ...orig,
       execute: (input, options) => {
         const parsedInput = decodeJsonValue({ value: input });
+
         if (!detachable(parsedInput)) return exec(input, options);
         const controller = new AbortController();
         // One holder per invocation: it accumulates what this call issues, and
@@ -99,6 +102,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
         // runner serves both surfaces and only the turn in flight knows which
         // it is.
         let run: Promise<unknown>;
+
         if (completion === 'spawn') {
           if (!deps.jobRunner.policy.wakesAfterTurn) {
             run = Promise.resolve(exec(input, { ...options, abortSignal }));
@@ -114,6 +118,7 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
                   [SPAWN_STARTED_OPTION]: spawnStarted,
                   [DEVICE_REQUEST_OPTION]: ownership,
                 };
+
                 return exec(input, execOptions);
               },
               deps.jobRunner.thresholdDeps(input, mode, controller, ownership),
@@ -125,15 +130,18 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
           } = {
             ...options, abortSignal, [DEVICE_REQUEST_OPTION]: ownership,
           };
+
           run = withBackgroundThreshold(
             key,
             () => exec(input, execOptions),
             deps.jobRunner.thresholdDeps(input, mode, controller, ownership),
           );
         }
+
         return untrack ? run.finally(untrack) : run;
       },
     };
   }
+
   return wrapped;
 }

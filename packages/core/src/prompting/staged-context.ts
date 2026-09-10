@@ -41,6 +41,7 @@ import type { ModelMessage } from 'ai';
 
 /** Why a boundary could not take a pending revision. */
 export const STAGED_CONTEXT_DEFERRALS = ['unpaired_tool_call', 'history_rewritten'] as const;
+
 export type StagedContextDeferral = (typeof STAGED_CONTEXT_DEFERRALS)[number];
 
 /** The working base a step renders from: the array, and where the material it
@@ -67,14 +68,17 @@ export type StagedContextOutcome =
  */
 export function unpairedToolCallIds(messages: readonly ModelMessage[]): Set<string> {
   const open = new Set<string>();
+
   for (const message of messages) {
     if (message.role === 'assistant' && Array.isArray(message.content)) {
       for (const part of message.content) if (part.type === 'tool-call') open.add(part.toolCallId);
     }
+
     if (message.role === 'tool' && Array.isArray(message.content)) {
       for (const part of message.content) if (part.type === 'tool-result') open.delete(part.toolCallId);
     }
   }
+
   return open;
 }
 
@@ -94,8 +98,10 @@ export function applyStagedContext(
 ): StagedContextOutcome {
   if (live.length < edit.baseMessageCount) return { kind: 'deferred', reason: 'history_rewritten' };
   const tail = live.slice(edit.baseMessageCount);
+
   if (edit.pending && unpairedToolCallIds(tail).size > 0) {
     return { kind: 'deferred', reason: 'unpaired_tool_call' };
   }
+
   return { kind: 'landed', messages: [...edit.messages, ...tail] };
 }

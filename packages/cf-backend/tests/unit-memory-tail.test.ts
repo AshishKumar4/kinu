@@ -17,11 +17,14 @@ function memoryOver(content: string) {
   const store = new MemoryStore(files, sql);
   store.ensureSchema();
   const config = createTestActor(sql, makeExecRaw(database), crypto.randomUUID(), 'memory-tail').config;
+
   const vectors: VectorStore = {
     available: false,
     async upsertChunk() {}, async upsertChunks() {}, async deleteChunks() {}, async search() { return []; },
   };
+
   const memory = adaptMemory(store, files, vectors, config);
+
   return { memory, ready: memory.write(PATH, content) };
 }
 

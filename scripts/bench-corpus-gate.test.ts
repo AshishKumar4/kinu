@@ -17,9 +17,11 @@ import { stalePatches } from './bench-corpus';
 /** The fixture's own patch list. `trackedFiles()` answers for THIS repo, so a
  *  fixture must name its files itself — see `stalePatches`. */
 const PATCH_FILES = ['tests/bench/patches/pick-returns-largest.patch'];
+
 const WITH_ORPHAN = [...PATCH_FILES, 'tests/bench/patches/nobody-measures-me.patch'];
 
 const roots: string[] = [];
+
 afterAll(() => {
   for (const root of roots) rmSync(root, { recursive: true, force: true });
 });
@@ -60,9 +62,11 @@ function fixture(opts: FixtureOptions = {}): string {
     suite: 'core', editable: ['src/pick.ts'],
   })}\n`);
   writeFileSync(join(root, 'tests', 'bench', 'patches', 'pick-returns-largest.patch'), PATCH);
+
   if (opts.orphanPatch === true) {
     writeFileSync(join(root, 'tests', 'bench', 'patches', 'nobody-measures-me.patch'), PATCH);
   }
+
   return root;
 }
 

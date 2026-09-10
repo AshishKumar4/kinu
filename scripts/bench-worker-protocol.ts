@@ -2,6 +2,7 @@ import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../packages/core/src/index';
 
 const NonNegativeIntegerSchema = v.pipe(v.number(), v.finite(), v.integer(), v.minValue(0));
+
 const PositiveIntegerSchema = v.pipe(NonNegativeIntegerSchema, v.minValue(1));
 
 export const LLMProviderConfigSchema = v.strictObject({
@@ -84,8 +85,11 @@ export const WorkerOutputSchema = v.strictObject({
 });
 
 export type AgentWorkerInput = v.InferOutput<typeof AgentWorkerInputSchema>;
+
 export type PiWorkerInput = v.InferOutput<typeof PiWorkerInputSchema>;
+
 export type PanelWorkerInput = v.InferOutput<typeof PanelWorkerInputSchema>;
+
 export type WorkerOutput = v.InferOutput<typeof WorkerOutputSchema>;
 
 function decodeJson(raw: string, label: string): JsonValue {
@@ -102,30 +106,40 @@ function issueSummary(issues: readonly v.BaseIssue<unknown>[]): string {
 
 export function parseAgentWorkerInput(raw: string): AgentWorkerInput {
   const parsed = v.safeParse(AgentWorkerInputSchema, decodeJson(raw, 'agent worker input'));
+
   if (!parsed.success) throw new Error(`invalid agent worker input: ${issueSummary(parsed.issues)}`);
+
   if (parsed.output.asks.length !== parsed.output.removeAfterAsk.length) {
     throw new Error('invalid agent worker input: asks and removeAfterAsk must have equal length');
   }
+
   return parsed.output;
 }
 
 export function parsePiWorkerInput(raw: string): PiWorkerInput {
   const parsed = v.safeParse(PiWorkerInputSchema, decodeJson(raw, 'pi worker input'));
+
   if (!parsed.success) throw new Error(`invalid pi worker input: ${issueSummary(parsed.issues)}`);
+
   if (parsed.output.asks.length !== parsed.output.removeAfterAsk.length) {
     throw new Error('invalid pi worker input: asks and removeAfterAsk must have equal length');
   }
+
   return parsed.output;
 }
 
 export function parsePanelWorkerInput(raw: string): PanelWorkerInput {
   const parsed = v.safeParse(PanelWorkerInputSchema, decodeJson(raw, 'panel worker input'));
+
   if (!parsed.success) throw new Error(`invalid panel worker input: ${issueSummary(parsed.issues)}`);
+
   return parsed.output;
 }
 
 export function parseWorkerOutput(raw: string): WorkerOutput {
   const parsed = v.safeParse(WorkerOutputSchema, decodeJson(raw, 'worker output'));
+
   if (!parsed.success) throw new Error(`invalid worker output: ${issueSummary(parsed.issues)}`);
+
   return parsed.output;
 }

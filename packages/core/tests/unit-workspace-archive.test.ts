@@ -31,6 +31,7 @@ function fresh() {
   // The filesystem is built on demand: a database used only as a RESTORE
   // TARGET must stay genuinely empty, and building one creates tables.
   let vfs: ReturnType<typeof createWorkspaceBundle>['vfs'] | null = null;
+
   return {
     db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: archiveSqlFromDatabase(db),
     get vfs() { return (vfs ??= createWorkspaceBundle(db).vfs); },
@@ -45,12 +46,15 @@ async function seeded() {
   // database whose `messages` rows name an actor, and the restore resolves the
   // main actor out of the directory it just landed.
   const actor = createTestActor(ws.sql, ws.execRaw, 'w1', 'scout');
+
   for (let i = 0; i < 5; i++) {
     void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
            VALUES (${actor.actorId}, ${`m${i}`}, ${'default'}, ${null}, ${'user'}, ${`hello sqlite ${i}`}, ${100 + i})`;
   }
+
   // Binary content through the canonical VFS writer — the chunked BLOB path.
   const bytes = new Uint8Array(300);
+
   for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 7) % 256;
   await ws.vfs.mkdir('artifacts', { recursive: true });
   await ws.vfs.writeFile('artifacts/logo.bin', bytes);
@@ -58,6 +62,7 @@ async function seeded() {
   await ws.vfs.writeFile('notes/plan.md', 'a plan with a "quote" and a \\ backslash');
   // External-content FTS5 over `messages`, maintained by triggers.
   new ConversationSearchStore(ws.sql, actor).search('sqlite');
+
   return { ...ws, bytes, actor };
 }
 
@@ -124,8 +129,10 @@ describe('workspace archive', () => {
 
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, lines);
+
     const table = target.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE name = ${'workspace_capability'}`;
+
     expect(table).toEqual([]);
   });
 
@@ -136,10 +143,12 @@ describe('workspace archive', () => {
     const paged: string[] = [];
     let cursor: ArchiveCursor | null = null;
     let pages = 0;
+
     do {
       const page = await readWorkspaceArchivePage(source.archive, {
         workspace: 'scout', source: 'cloud', now: 7, cursor, maxBytes: 1,
       });
+
       paged.push(...page.lines);
       cursor = page.next;
       pages++;
@@ -158,11 +167,13 @@ describe('workspace archive', () => {
     const source = fresh();
     source.execRaw('CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)');
     void source.sql`INSERT INTO notes (text) VALUES (${'database state'})`;
+
     const bodies = new Map([
       ['SOUL.md', new TextEncoder().encode('# soul\n')],
       ['memory/project.md', new TextEncoder().encode('remember\n')],
       ['project/data.bin', new Uint8Array([0, 255, 7, 8])],
     ]);
+
     const files = {
       async listEntries() {
         return [
@@ -179,26 +190,32 @@ describe('workspace archive', () => {
     const whole = await writeWorkspaceArchive(source.archive, {
       workspace: 'external', source: 'cloud', now: 11, files,
     });
+
     const paged: string[] = [];
     let cursor: ArchiveCursor | null = null;
+
     do {
       const page = await readWorkspaceArchivePage(source.archive, {
         workspace: 'external', source: 'cloud', now: 11, files, cursor, maxBytes: 1,
       });
+
       paged.push(...page.lines);
       cursor = page.next;
     } while (cursor);
+
     expect(paged).toEqual(whole);
     expect(paged.filter((line) => line.includes('"t":"header"'))).toHaveLength(1);
 
     const target = fresh();
     const restoredBodies = new Map<string, Uint8Array>();
+
     const restored = await restoreWorkspaceArchive(target.archive, paged, {
       files: () => ({
         async mkdir() {},
         async writeFile(path, data) { restoredBodies.set(path, data.slice()); },
       }),
     });
+
     expect(restored.files).toBe(3);
     expect(restoredBodies).toEqual(bodies);
     expect(target.sql<{ text: string }>`SELECT text FROM notes`).toEqual([{ text: 'database state' }]);
@@ -208,6 +225,7 @@ describe('workspace archive', () => {
     const ws = fresh();
     ws.execRaw(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`);
     const blob = new ArrayBuffer(64 * 1024);
+
     // ids start at 0 on purpose: with an INTEGER PRIMARY KEY the rowid IS the
     // id, so the first row's key is 0 and a numeric "start here" sentinel
     // would skip it.
@@ -219,13 +237,16 @@ describe('workspace archive', () => {
     // exactly one row — the export must never buffer a batch of them.
     let cursor: ArchiveCursor | null = null;
     const rowsPerPage: number[] = [];
+
     do {
       const page = await readWorkspaceArchivePage(ws.archive, {
         workspace: 'blobby', source: 'cloud', cursor, maxBytes: 4096,
       });
+
       rowsPerPage.push(page.lines.filter((l) => l.includes('"t":"row"')).length);
       cursor = page.next;
     } while (cursor);
+
     expect(rowsPerPage.filter((n) => n > 0)).toEqual([1, 1, 1, 1, 1]);
   });
 
@@ -233,24 +254,30 @@ describe('workspace archive', () => {
     const ws = fresh();
     ws.execRaw(`CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)`);
     ws.execRaw(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`);
+
     for (let i = 0; i < 400; i++) void ws.sql`INSERT INTO notes (text) VALUES (${`note ${i}`})`;
     const blob = new ArrayBuffer(200 * 1024);
+
     for (let i = 0; i < 4; i++) void ws.sql`INSERT INTO blobs (data) VALUES (${blob})`;
 
     // Record what each row query asks for. `notes` earns a large batch; the
     // blob table must not inherit it — one such fetch is hundreds of megabytes.
     const asked: Array<{ table: string; limit: number }> = [];
+
     const spy = {
       exec(query: string, ...bindings: SqlValue[]) {
         const match = /FROM "([^"]+)"/.exec(query);
+
         if (match && /LIMIT \?/.test(query)) {
           asked.push({ table: match[1]!, limit: Number(bindings[bindings.length - 1]) });
         }
+
         return ws.archive.exec(query, ...bindings);
       },
     };
 
     let cursor: ArchiveCursor | null = null;
+
     do {
       const page = await readWorkspaceArchivePage(spy, { workspace: 'mixed', source: 'cloud', cursor });
       cursor = page.next;
@@ -324,8 +351,10 @@ describe('workspace archive', () => {
 
     const target = fresh();
     await restoreWorkspaceArchive(target.archive, lines);
+
     const pane = target.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type = 'table' AND name = ${'assistant_messages'}`;
+
     expect(pane).toEqual([]);
     // …and every pane row landed in `messages` under the actor that WROTE it,
     // not under whoever the restore would have attributed it to. Read UNSCOPED
@@ -355,6 +384,7 @@ describe('the table set an export walks is pinned by its first page', () => {
     // its own to the number under assertion. The restore's pane projection is
     // the only path that resolves a directory, and there is no pane here.
     const actor = testActorHandle(source.sql);
+
     for (let i = 0; i < 5; i++) {
       void source.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
         VALUES (${actor.actorId}, ${'m'+i}, ${'default'}, ${null}, ${'user'}, ${`page boundary ${i}`}, ${100+i})`;
@@ -366,14 +396,17 @@ describe('the table set an export walks is pinned by its first page', () => {
     const pages: string[] = [];
     let cursor: ArchiveCursor | null = null;
     let page = 0;
+
     do {
       if (page === 1) {
         source.execRaw('CREATE TABLE late_arrival (id INTEGER PRIMARY KEY, note TEXT)');
         void source.sql`INSERT INTO late_arrival (note) VALUES (${'born mid-export'})`;
       }
+
       const one = await readWorkspaceArchivePage(source.archive, {
         workspace: 'pinned', source: 'cloud', now: 5, cursor, maxBytes: 1,
       });
+
       pages.push(...one.lines);
       cursor = one.next;
       page++;
@@ -400,11 +433,14 @@ describe('the table set an export walks is pinned by its first page', () => {
     // Walk to the page that carries the first row; the schema-only pages
     // before it are part of the same export but carry no rows to compare.
     let cursor: ArchiveCursor | null = { phase: 'sql', table: 'wr', after: null, rows: 0, tables: ['wr'] };
+
     for (;;) {
       const page = await readWorkspaceArchivePage(ws.archive, {
         workspace: 'wr', source: 'cloud', maxBytes: 1, cursor,
       });
+
       const rows = page.lines.filter((l) => l.includes('"t":"row"'));
+
       if (rows.length > 0) {
         // THE PAGE BOUNDARY: one row emitted, the cursor pointing at the next.
         expect(rows).toHaveLength(1);
@@ -412,9 +448,12 @@ describe('the table set an export walks is pinned by its first page', () => {
         cursor = page.next;
         break;
       }
+
       cursor = page.next;
+
       if (cursor === null) throw new Error('the export finished without emitting a row');
     }
+
     // A row lands between the pages — exactly the concurrent write the old
     // unordered LIMIT/OFFSET shifted offsets under. It sorts BEFORE every row
     // the remaining pages will emit, so an offset walk shifted by it would
@@ -422,17 +461,22 @@ describe('the table set an export walks is pinned by its first page', () => {
     void ws.sql`INSERT INTO wr (k, v) VALUES (${'0'}, ${'0'})`;
 
     const rest: string[] = [];
+
     while (cursor !== null && cursor.phase === 'sql') {
       const next = await readWorkspaceArchivePage(ws.archive, {
         workspace: 'wr', source: 'cloud', maxBytes: 1, cursor,
       });
+
       rest.push(...next.lines);
       cursor = next.next;
     }
+
     const RowLine = v.object({ values: v.object({ k: v.string() }) });
+
     const keys = ['a', ...rest
       .filter((l) => l.includes('"t":"row"'))
       .map((l) => v.parse(RowLine, JSON.parse(l)).values.k)];
+
     // No duplicate, no skip: every row present exactly once regardless of the
     // write that landed between pages. ('0' itself is the mid-export write —
     // rows written after the page boundary are as invisible to this page's

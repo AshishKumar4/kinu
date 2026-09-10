@@ -69,30 +69,39 @@ export async function routeInboundEmail(
   now: number = Date.now(),
 ): Promise<{ outcome: 'admitted' | 'duplicate' | 'dropped'; agent?: string; reason?: string }> {
   const agentName = agentNameFromRecipient(message.to, emailDomain);
+
   if (!agentName) {
     return { outcome: 'dropped', reason: `unroutable recipient ${message.to}` };
   }
+
   // Drop auto-replies (RFC 3834) before waking a turn: Kinu replies
   // on-thread, so admitting a vacation responder or peer agent would loop.
   if (isAutoReplyEmail(message.headers)) {
     return { outcome: 'dropped', agent: agentName, reason: 'auto-reply (RFC 3834)' };
   }
+
   if (message.rawSize > INBOUND_EMAIL_MAX_BYTES) {
     return { outcome: 'dropped', agent: agentName, reason: oversizeReason(message.rawSize) };
   }
+
   const agent = await resolveAgent(agentName);
   const preauth = await agent.authorizeEmailSender(message.from);
+
   if (!preauth.authorized) {
     return { outcome: 'dropped', agent: agentName, reason: preauth.reason ?? 'sender not authorized for this agent' };
   }
+
   // message.raw is single-use — buffer before parsing, under the same ceiling
   // the declared size was pre-filtered against, because a declared size is the
   // sender's claim and the count is ours.
   const raw = await readRawBounded(message.raw, INBOUND_EMAIL_MAX_BYTES);
+
   if (raw === 'too_large') {
     return { outcome: 'dropped', agent: agentName, reason: oversizeReason(INBOUND_EMAIL_MAX_BYTES) };
   }
+
   const parsed = await parseInboundMime(raw);
+
   const result = await agent.acceptEmailDelivery({
     from: message.from,
     to: message.to,
@@ -104,7 +113,9 @@ export async function routeInboundEmail(
     attachments: parsed.attachments,
     now,
   });
+
   if (!result.admitted) return { outcome: 'dropped', agent: agentName, reason: result.reason };
+
   return { outcome: result.duplicate ? 'duplicate' : 'admitted', agent: agentName };
 }
 
@@ -124,22 +135,30 @@ async function readRawBounded(
   const reader = raw.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+
   for (;;) {
     const arrived = await reader.read();
     const value = arrived.value;
+
     if (arrived.done || value === undefined) break;
     total += value.byteLength;
+
     if (total > limit) {
       await reader.cancel('the inbound message is over its limit');
+
       return 'too_large';
     }
+
     chunks.push(value);
   }
+
   const bounded = new Uint8Array(total);
   let at = 0;
+
   for (const chunk of chunks) {
     bounded.set(chunk, at);
     at += chunk.byteLength;
   }
+
   return bounded.buffer;
 }

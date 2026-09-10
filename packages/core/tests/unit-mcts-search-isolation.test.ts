@@ -34,6 +34,7 @@ function scriptedLLM(score: () => number, onSummary: () => string): LLM {
     stream() { throw new Error('MCTS never streams — branches are mocked'); },
     async complete(prompt: string) {
       if (prompt.includes('Summarize in')) return onSummary();
+
       return JSON.stringify({ score: score(), rationale: 'scripted' });
     },
   };
@@ -53,7 +54,9 @@ function rootIdOfNode(db: Database, nodeId: string): string | null {
 
 function requiredRootId(db: Database, nodeId: string): string {
   const rootId = rootIdOfNode(db, nodeId);
+
   if (!rootId) throw new Error(`Expected node '${nodeId}' to belong to a search tree`);
+
   return rootId;
 }
 
@@ -74,6 +77,7 @@ describe('MCTS search isolation', () => {
     const run = db.query<{ root_id: string }, [string]>(
       'SELECT root_id FROM mcts_search_runs WHERE actor_id = ?',
     ).get(rt.actor.actorId);
+
     if (!run) throw new Error('Expected a durable MCTS search run');
     const rootId = run.root_id;
     // The durable record must never claim an outcome the search did not reach.
@@ -106,6 +110,7 @@ describe('MCTS search isolation', () => {
     const history = db.query<{ task: string }, [string]>(
       'SELECT task FROM task_history WHERE actor_id = ? ORDER BY rowid',
     ).all(rt.actor.actorId);
+
     expect(history.map(h => h.task)).toEqual(['TASK ONE', 'TASK TWO']);
   });
 
@@ -125,6 +130,7 @@ describe('MCTS search isolation', () => {
     })).rejects.toThrow();
     const abandoned = store.findResumable('ABANDONED');
     expect(abandoned).not.toBeNull();
+
     if (!abandoned) throw new Error('Expected the evicted search to remain resumable');
     const openBefore = nodesOf(db, abandoned.rootId).filter(n => n.status === 'open').length;
     expect(openBefore).toBeGreaterThan(0);

@@ -24,14 +24,21 @@ describe('MCTS in Plan mode', () => {
     const execute = rt.executor.execute.bind(rt.executor);
     rt.executor.execute = async (...args) => {
       executorCalls++;
+
       return execute(...args);
     };
+
     rt.memory.append = async () => { memoryWrites++; };
+
     rt.memory.index = async () => { memoryWrites++; };
+
     rt.craftStore.create = () => { craftWrites++; };
+
     rt.craftStore.update = () => { craftWrites++; };
+
     rt.spawnBranch = async () => ({ explore: async (_history, _tools, _languages, mode) => {
       branchModes.push(mode);
+
       return { text: '```javascript\nexport const answer = 42;\n```' };
     }, generateReflection: async () => ({ text: 'would mutate memory in Build mode' }), release: async () => {} });
 
@@ -58,8 +65,10 @@ describe('MCTS in Plan mode', () => {
     const execute = rt.executor.execute.bind(rt.executor);
     rt.executor.execute = async (...args) => {
       executorCalls++;
+
       return execute(...args);
     };
+
     rt.spawnBranch = async () => ({ explore: async () => ({ text: '```javascript\nexport const answer = 42;\n```' }), generateReflection: async () => ({ text: '' }), release: async () => {} });
 
     await runMCTS(rt, createMockSession(), 'implement the answer', {

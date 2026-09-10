@@ -96,6 +96,7 @@ import {
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/policy-drift.lock.json`;
 
 /** A module-level constant naming a policy number. */
@@ -194,15 +195,21 @@ export function surveyFile(file: string, text: string): FileSurvey {
 
   for (const statement of tree.children) {
     const { node } = declarationOf(statement);
+
     if (node.raw.type !== 'VariableDeclaration' || node.raw.kind !== 'const') continue;
+
     for (const declarator of node.children) {
       const { raw } = declarator;
+
       if (raw.type !== 'VariableDeclarator') continue;
       const name = declaredName(declarator);
+
       if (name === undefined || !SCREAMING_SNAKE.test(name)) continue;
       const init = declarator.children.find((child) => child.raw !== raw.id);
+
       if (init === undefined) continue;
       const value = numericValue(init);
+
       if (value === undefined) continue;
       declared.push({ name, file, line: lineAt(declarator.start), value });
       named.add(init);
@@ -213,10 +220,12 @@ export function surveyFile(file: string, text: string): FileSurvey {
   walk(tree, (node) => {
     if (named.has(node)) return;
     const value = numericValue(node);
+
     // A folded expression reports once, at its outermost node: `5 * 60 * 1000`
     // is one number, not the three its sub-expressions would each claim.
     if (value === undefined || (node.parent !== undefined && numericValue(node.parent) !== undefined)) return;
     const role = roleOf(node);
+
     if (role === undefined) return;
     inline.push({ file, line: lineAt(node.start), value, role });
   });
@@ -232,19 +241,27 @@ export function surveyFile(file: string, text: string): FileSurvey {
  */
 function roleOf(node: SyntaxNode): string | undefined {
   const parent = node.parent;
+
   if (parent === undefined) return undefined;
   const { raw } = parent;
+
   if (raw.type === 'Property' && raw.value === node.raw) {
     const key = declaredName(parent);
+
     return key === undefined ? undefined : key;
   }
+
   if (raw.type === 'PropertyDefinition' && raw.value === node.raw) return declaredName(parent);
+
   if (raw.type === 'AssignmentExpression' && raw.right === node.raw) {
     return parent.children[0] === undefined ? undefined : identifierText(parent.children[0]);
   }
+
   if (raw.type !== 'CallExpression') return undefined;
   const callee = parent.children[0];
+
   if (callee === undefined) return undefined;
+
   return identifierText(callee)
     ?? (callee.raw.type === 'MemberExpression' ? identifierText(callee.children[1] ?? callee) : undefined);
 }
@@ -271,6 +288,7 @@ const crossReferenced = (
 export function findDrift(sources: ReadonlyMap<string, string>): Survey {
   const declared: Declared[] = [];
   const inline: Inline[] = [];
+
   for (const [file, text] of sources) {
     const found = surveyFile(file, text);
     declared.push(...found.declared);
@@ -281,13 +299,17 @@ export function findDrift(sources: ReadonlyMap<string, string>): Survey {
 
   // ── divergent: one name, two answers ──────────────────────────────────
   const byName = new Map<string, Declared[]>();
+
   for (const entry of declared) {
     const bucket = byName.get(entry.name);
+
     if (bucket) bucket.push(entry); else byName.set(entry.name, [entry]);
   }
+
   for (const [name, entries] of byName) {
     const values = new Set(entries.map((e) => e.value));
     const packages = new Set(entries.map((e) => packageOf(e.file)));
+
     if (values.size < 2 && packages.size < 2) continue;
     const sites = [...entries].sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
     const where = sites.map((s) => `${String(s.value)} at ${s.file}:${String(s.line)}`).join('; ');
@@ -340,26 +362,35 @@ export function findDrift(sources: ReadonlyMap<string, string>): Survey {
      Measured: without this, 23 findings of which 3 were real. With it, the
      three seed-list positives survive and the crowd is silent.                */
   const byValue = new Map<number, Declared[]>();
+
   for (const entry of declared) {
     if (!isPolicyName(entry.name)) continue;
     const bucket = byValue.get(entry.value);
+
     if (bucket) bucket.push(entry); else byValue.set(entry.value, [entry]);
   }
+
   for (const entries of byValue.values()) {
     const carriers = new Map<string, Declared[]>();
+
     for (const entry of entries) {
       for (const word of significantWords(entry.name)) {
         const bucket = carriers.get(word);
+
         if (bucket) bucket.push(entry); else carriers.set(word, [entry]);
       }
     }
+
     for (const [word, pair] of carriers) {
       if (pair.length !== 2) continue;
       const [a, b] = pair;
+
       if (a.name === b.name || packageOf(a.file) === packageOf(b.file)) continue;
+
       if (crossReferenced(a, b, sources)) continue;
       const [left, right] = a.file < b.file ? [a, b] : [b, a];
       const key = `aliased ${left.name}@${left.file} = ${right.name}@${right.file}`;
+
       if (drifts.some((d) => d.key === key)) continue;
       drifts.push({
         kind: 'aliased',
@@ -394,14 +425,19 @@ export function findDrift(sources: ReadonlyMap<string, string>): Survey {
      unrelated decisions that happened to pick the same round number.          */
   for (const literal of inline) {
     const owners = byValue.get(literal.value);
+
     if (owners === undefined) continue;
     const role = significantWords(wordsOfCamel(literal.role));
+
     if (!isPolicyName(wordsOfCamel(literal.role))) continue;
+
     const matching = owners.filter((candidate) => {
       if (packageOf(candidate.file) === packageOf(literal.file)) return false;
       const words = significantWords(candidate.name);
+
       return words.size === role.size && [...words].every((word) => role.has(word));
     });
+
     if (matching.length !== 1) continue;
     const [owner] = matching;
     drifts.push({
@@ -421,16 +457,19 @@ export function findDrift(sources: ReadonlyMap<string, string>): Survey {
   }
 
   drifts.sort((a, b) => a.key.localeCompare(b.key));
+
   return { declared, inline, files: sources.size, drifts };
 }
 
 if (import.meta.main) {
   const survey = findDrift(readSources());
+
   const measured = assertMeasured('policy-drift', [
     ['source files', survey.files],
     ['named policy constants', survey.declared.length],
     ['numeric literals in a role position', survey.inline.length],
   ]);
+
   if (process.argv.includes('--lock')) {
     const count = writeLock(survey.drifts.map((d) => d.key), LOCK);
     console.log(`policy-drift: locked ${String(count)} duplication(s) — ${measured}`);

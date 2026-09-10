@@ -18,15 +18,19 @@ import { observeWrites } from '../src/vfs/observe';
 function fakeTree(entries: Record<string, string>): VFS {
 	const files = new Map<string, string>(Object.entries(entries));
 	const dirs = new Set<string>();
+
 	for (const path of files.keys()) {
 		for (let at = path.indexOf('/'); at !== -1; at = path.indexOf('/', at + 1)) {
 			dirs.add(path.slice(0, at));
 		}
 	}
+
 	return {
 		readFile: async (path) => {
 			const content = files.get(path);
+
 			if (content === undefined) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+
 			return content;
 		},
 		writeFile: async (path, data) => { files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data); },
@@ -34,14 +38,17 @@ function fakeTree(entries: Record<string, string>): VFS {
 			if (path !== '/' && !dirs.has(path)) throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
 			const names = new Set<string>();
 			const prefix = path === '/' ? '/' : `${path}/`;
+
 			for (const key of [...files.keys(), ...dirs]) {
 				if (!key.startsWith(prefix)) continue;
 				names.add(key.slice(prefix.length).split('/')[0]);
 			}
+
 			return [...names];
 		},
 		stat: async (path) => {
 			if (files.has(path)) return { size: files.get(path)!.length, mtimeMs: 0, isDir: false };
+
 			return dirs.has(path) ? { size: 0, mtimeMs: 0, isDir: true } : null;
 		},
 		unlink: async (path) => { files.delete(path); dirs.delete(path); },
@@ -60,6 +67,7 @@ describe('the workspace plane mount table', () => {
 			'/home/dev/report.txt': 'from the machine',
 			'/home/dev/src/app.ts': 'export {};',
 		});
+
 		const mounted = withMountTable(fakeTree({ 'notes.md': 'workspace' }), [mountOf('pc', device)]);
 
 		const walk = await walkRecursive(mounted, '/pc', 10, 100);
@@ -90,14 +98,17 @@ describe('the workspace plane mount table', () => {
 	test('routes mkdir, stat, exists, unlink, and revision writes through a live mount', async () => {
 		const backing = fakeTree({ '/home/dev/remove.txt': 'remove me' });
 		const revisionWrites: Array<[string, number]> = [];
+
 		const device: VFS = {
 			...backing,
 			writeFileIfRevision: async (path, data, expectedRevision) => {
 				revisionWrites.push([path, expectedRevision]);
 				await backing.writeFile(path, data);
+
 				return { ok: true, revision: expectedRevision + 1 };
 			},
 		};
+
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
 
 		await mounted.mkdir('/pc/home/dev/build', { recursive: true });
@@ -106,6 +117,7 @@ describe('the workspace plane mount table', () => {
 		expect(await mounted.exists('/pc/home/dev/build/output.txt')).toBe(true);
 
 		const conditional = mounted.writeFileIfRevision;
+
 		if (conditional === undefined) throw new Error('the mounted VFS must expose conditional writes');
 		expect(await conditional(
 			'/pc/home/dev/build/revision.txt',
@@ -122,6 +134,7 @@ describe('the workspace plane mount table', () => {
 		const device = fakeTree({ '/home/dev/mounted.txt': 'mounted before' });
 		const mounted = withMountTable(base, [mountOf('pc', device)]);
 		const conditional = mounted.writeFileIfRevision;
+
 		if (conditional === undefined) throw new Error('the composite VFS must expose conditional writes');
 
 		for (const [path, before] of [
@@ -129,11 +142,13 @@ describe('the workspace plane mount table', () => {
 			['/pc/home/dev/mounted.txt', 'mounted before'],
 		] as const) {
 			let error: unknown;
+
 			try {
 				await conditional(path, new TextEncoder().encode('after'), 1);
 			} catch (caught) {
 				error = caught;
 			}
+
 			if (!isVfsError(error)) throw new Error(`expected a classified unsupported error, got ${String(error)}`);
 			expect(error.code).toBe('ENOTSUP');
 			expect(error.errno).toBe(-95);
@@ -154,14 +169,19 @@ describe('the workspace plane mount table', () => {
 			mounted.unlink('/pc/x'),
 			mounted.mkdir('/pc/x'),
 		];
+
 		for (const attempt of refused) {
 			let error: unknown;
+
 			try { await attempt; } catch (caught) { error = caught; }
+
 			if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 			expect(error.code).toBe('ENXIO');
 			expect(error.message).toContain('/pc — no device connected');
 		}
+
 		const conditional = mounted.writeFileIfRevision;
+
 		if (conditional === undefined) throw new Error('the mounted VFS must expose conditional writes');
 		await expect(conditional('/pc/x', new Uint8Array(), 1)).rejects.toMatchObject({ code: 'ENXIO' });
 
@@ -175,29 +195,38 @@ describe('the workspace plane mount table', () => {
 			'/home/dev/notes.txt': 'consented',
 			'/etc/secrets.key': 'outside',
 		};
+
 		let unconfined = false;
+
 		const transport: DeviceTransport = {
 			status: () => ({ connected: true, registered: true, toolchain: null }),
 			refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
 			rpc: async (method, params) => {
 				const path = String(params[0]);
 				let content: string | undefined;
+
 				if (path === '/home/dev/notes.txt') content = machine['/home/dev/notes.txt'];
 				else if (path === '/etc/secrets.key') content = machine['/etc/secrets.key'];
+
 				if (method === 'readFile') {
 					if (content === undefined) throw new Error(`ENOENT: ${path}`);
+
 					return content;
 				}
+
 				if (method === 'listFiles') return Object.keys(machine).filter((p) => p.startsWith(`${path}/`));
+
 				if (method === 'exists') return content !== undefined;
 				throw new Error(`unexpected rpc ${method}`);
 			},
 		};
+
 		const view = deviceFiles(transport, {
 			consentedRoot: async () => '/home/dev',
 			deviceHome: async () => '/home/dev',
 			unconfined: async () => unconfined,
 		});
+
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', view)]);
 
 		expect(await mounted.readFile('/pc/home/dev/notes.txt', { encoding: 'utf8' })).toBe('consented');
@@ -217,6 +246,7 @@ describe('the workspace plane mount table', () => {
 
 	test('the root listing carries live mounts and omits absent ones; the canonical tree stays canonical', async () => {
 		const base = fakeTree({ '/notes.md': 'workspace', '/memory/MEMORY.md': 'lessons' });
+
 		const mounted = withMountTable(base, [
 			mountOf('pc', fakeTree({ '/home/dev/a.txt': 'x' })),
 			mountOf('sandbox', null, 'no Sandbox container bound'),
@@ -242,9 +272,11 @@ describe('the workspace plane mount table', () => {
 		const mounted = withMountTable(base, [mountOf('pc', fakeTree({ '/a.txt': 'device' }))]);
 
 		let pcsOutcome = 'mounted';
+
 		try { await mounted.readFile('/pcs/x'); } catch (caught) {
 			pcsOutcome = isVfsError(caught) ? caught.code : 'unclassified';
 		}
+
 		expect(pcsOutcome).not.toBe('ENXIO');
 		expect(await mounted.readFile('pc/ordinary.txt', { encoding: 'utf8' })).toBe('workspace file');
 	});
@@ -261,10 +293,12 @@ describe('the workspace plane mount table', () => {
 
 	test('a mounted path cannot climb through its mount point with ..', async () => {
 		const base = fakeTree({ '/workspace-only.txt': 'workspace bytes' });
+
 		const device: VFS = {
 			...fakeTree({ '/home/dev/notes.txt': 'device bytes' }),
 			readFile: async () => { throw new Error('a confined path must not reach the mounted tree'); },
 		};
+
 		const mounted = withMountTable(base, [mountOf('pc', device)]);
 
 		await expect(mounted.readFile('/pc/../workspace-only.txt')).rejects.toMatchObject({
@@ -277,11 +311,15 @@ describe('the workspace plane mount table', () => {
 	test('standardMounts gate per environment kind', async () => {
 		const laptopFiles = fakeTree({ '/home/dev/a.txt': 'x' });
 		const sandboxFiles = fakeTree({ '/workspace/b.txt': 'y' });
+
 		const mounts = standardMounts((name) => {
 			if (name === "laptop") return { files: laptopFiles, isAvailable: () => false };
+
 			if (name === "sandbox") return { files: sandboxFiles, isAvailable: () => false };
+
 			return undefined;
 		});
+
 		const mounted = withMountTable(fakeTree({}), mounts);
 
 		// A device tunnel is a presence: unavailable means absent even though a
@@ -301,11 +339,17 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		const base = fakeTree({ '/big.bin': 'gigabytes, notionally' });
 		const renames: Array<[string, string]> = [];
 		let bytesRead = 0;
+
 		const native = {
 			...base,
-			readFile: async (path: string, opts?: { encoding?: string }) => { bytesRead += 1; return base.readFile(path, opts); },
+			readFile: async (path: string, opts?: { encoding?: string }) => {
+				bytesRead += 1;
+
+				return base.readFile(path, opts);
+			},
 			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
 		};
+
 		const mounted = withMountTable(native, [mountOf('pc', fakeTree({}))]);
 
 		await mounted.rename('/big.bin', '/renamed.bin');
@@ -316,11 +360,17 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		const base = fakeTree({ '/big.bin': 'gigabytes, notionally' });
 		const renames: Array<[string, string]> = [];
 		let bytesRead = 0;
+
 		const native = {
 			...base,
-			readFile: async (path: string, opts?: { encoding?: string }) => { bytesRead += 1; return base.readFile(path, opts); },
+			readFile: async (path: string, opts?: { encoding?: string }) => {
+				bytesRead += 1;
+
+				return base.readFile(path, opts);
+			},
 			rename: async (oldPath: string, newPath: string) => { renames.push([oldPath, newPath]); },
 		};
+
 		const observer = { needsBaseline: () => false, record: () => {} };
 		const mounted = withMountTable(observeWrites(native, observer), [mountOf('pc', fakeTree({}))]);
 
@@ -341,7 +391,9 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		const mounted = withMountTable(base, [mountOf('pc', fakeTree({}))]);
 
 		let error: unknown;
+
 		try { await mounted.rename('/src', '/moved'); } catch (caught) { error = caught; }
+
 		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 		expect(error.code).toBe('EPERM');
 		expect(error.path).toBe('/src');
@@ -379,6 +431,7 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 	test('a rename between two mounted trees also refuses before either tree changes', async () => {
 		const pc = fakeTree({ '/home/dev/report.txt': 'device copy' });
 		const sandbox = fakeTree({ '/workspace/report.txt': 'container copy' });
+
 		const mounted = withMountTable(fakeTree({}), [
 			mountOf('pc', pc),
 			mountOf('sandbox', sandbox),
@@ -397,7 +450,9 @@ describe('the one plane, mutated: rename and removeRecursive route like every ot
 		const mounted = withMountTable(fakeTree({}), [mountOf('pc', device)]);
 
 		let error: unknown;
+
 		try { await mounted.rename('/pc/home/dev/src', '/pc/home/dev/moved'); } catch (caught) { error = caught; }
+
 		if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
 		expect(error.code).toBe('EPERM');
 		// The refusal comes from the carry, so it names the path the PLANE knows:

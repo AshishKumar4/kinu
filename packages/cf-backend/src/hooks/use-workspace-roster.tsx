@@ -66,6 +66,7 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
     readonly outcome: RosterRead;
   }> => {
     const current = ++generation.current;
+
     try {
       return { generation: current, outcome: { kind: "roster", roster: await listWorkspaces() } };
     } catch (cause) {
@@ -76,16 +77,21 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
 
   const loadRoster = useCallback(async (): Promise<void> => {
     const read = await readRoster();
+
     if (read.generation !== generation.current) return;
+
     if (read.outcome.kind === "failure") {
       setError(renderThrownChain({ cause: read.outcome.cause }));
+
       return;
     }
+
     knownNames.current = new Set(read.outcome.roster.entries.map((entry) => entry.name));
     setEntries(read.outcome.roster.entries);
     setTotal(read.outcome.roster.total);
     setError(null);
   }, [readRoster]);
+
   const refresh = useCallback((): void => {
     startTransition(async () => { await loadRoster(); });
   }, [loadRoster, startTransition]);
@@ -102,9 +108,12 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
     knownNames.current.add(entry.name);
     setEntries((current) => {
       const existing = current.findIndex((item) => item.name === entry.name);
+
       if (existing < 0) return [entry, ...current];
+
       return current.map((item, index) => index === existing ? entry : item);
     });
+
     if (added) setTotal((current) => current + 1);
   }, [retireReads]);
 
@@ -119,6 +128,7 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
     retireReads();
     const removed = knownNames.current.delete(name);
     setEntries((current) => current.filter((entry) => entry.name !== name));
+
     if (removed) setTotal((current) => Math.max(0, current - 1));
   }, [retireReads]);
 
@@ -127,10 +137,12 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
       if (document.visibilityState !== "visible") return;
       refresh();
     };
+
     refresh();
     const interval = window.setInterval(sync, 30_000);
     window.addEventListener("focus", sync);
     document.addEventListener("visibilitychange", sync);
+
     return () => {
       generation.current += 1;
       window.clearInterval(interval);
@@ -145,13 +157,16 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
         WorkspaceRenameSchema,
         event instanceof CustomEvent ? event.detail : null,
       );
+
       if (parsed.success && parsed.output.name && parsed.output.displayName) {
         rename(parsed.output.name, parsed.output.displayName);
       } else {
         refresh();
       }
     };
+
     window.addEventListener("kinu:workspace-renamed", handleRename);
+
     return () => window.removeEventListener("kinu:workspace-renamed", handleRename);
   }, [refresh, rename]);
 
@@ -170,6 +185,8 @@ export function WorkspaceRosterProvider({ children }: { readonly children: React
 
 export function useWorkspaceRoster(): WorkspaceRosterValue {
   const roster = useContext(WorkspaceRosterContext);
+
   if (roster === null) throw new Error("useWorkspaceRoster requires WorkspaceRosterProvider");
+
   return roster;
 }

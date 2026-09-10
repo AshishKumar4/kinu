@@ -49,12 +49,15 @@ function judgeRegistry(
   models: ReadonlyArray<readonly [spec: string, model: LanguageModel]>,
 ): AgentProviderRegistry {
   const bySpec = new Map(models);
+
   return {
     registry: createProviderRegistry(),
     deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
     resolveModel: (spec) => {
       const model = bySpec.get(spec);
+
       if (!model) throw new Error(`no judge for ${spec}`);
+
       return model;
     },
     normalizeSpecSync: (spec) => spec ?? 'test/model',
@@ -69,6 +72,7 @@ function judgeRegistry(
  *  assertion against a DEFAULT effort would pass whether or not the tier's own
  *  assignment was read, which is the thing the old hardcoded effort got wrong. */
 const TINY_MODEL = 'fake-a/m1';
+
 const TINY_EFFORT = 'high' as const;
 
 function titleProfile() {
@@ -80,6 +84,7 @@ function titleProfile() {
       deep: { model: 'fake-deep/m1' },
     },
   };
+
   return resolveTurnProfile({
     envelope: {
       authority: { kind: 'account', accountId: 'acct-1' },
@@ -114,6 +119,7 @@ async function ensembleHarness() {
   // actor's grading cannot read or exhaust another's.
   const sql = sqlOver(harness.db);
   const actor = openWorkspaceMainActor(sql);
+
   for (let i = 0; i < 3; i++) {
     recordTurnOutcome(sql, actor, {
       turnId: `turn-${i}`,
@@ -127,6 +133,7 @@ async function ensembleHarness() {
       now: 1_700_000_000_000 + i * 60_000,
     });
   }
+
   const ids = sql<{ id: string }>`SELECT id FROM turn_outcomes WHERE actor_id = ${actor.actorId} ORDER BY created_at`;
   expect(ids.length).toBe(3);
   recordOutcomeLabels(sql, actor, {
@@ -134,6 +141,7 @@ async function ensembleHarness() {
     labels: ids.map((row) => ({ outcomeId: row.id, label: 'accepted' })),
     now: 1_700_100_000_000,
   });
+
   return { harness, sql };
 }
 
@@ -155,9 +163,11 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     expect(operations).toHaveLength(12); // 6 calls × (start + end)
 
     const byId = new Map<string, typeof operations>();
+
     for (const row of operations) {
       byId.set(row.operationId, [...(byId.get(row.operationId) ?? []), row]);
     }
+
     expect(byId.size).toBe(6);
 
     for (const [operationId, rows] of byId) {
@@ -171,6 +181,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
       // Both rows of one operation name the same judge spec.
       expect(new Set(rows.map((r) => r.spec))).toEqual(new Set([rows[0]!.spec]));
     }
+
     // Both families ran: six of the twelve operation rows name each judge.
     expect(operations.map((r) => r.spec).sort()).toEqual([
       'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1', 'fake-a/m1',
@@ -181,6 +192,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
     // per judge call, still filed under the judge label.
     const calls = recorder.read(WORKSPACE_RUN_ID)
       .filter((event): event is Extract<RunEvent, { type: 'model_call' }> => event.type === 'model_call');
+
     expect(calls).toHaveLength(6);
     expect(calls.every((c) => c.source === 'judge')).toBe(true);
     expect(calls.every((c) => c.usage !== undefined)).toBe(true);
@@ -190,6 +202,7 @@ describe('runOutcomeEnsemble — the judges write their operation lifecycle', ()
 describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
   test('the title call runs the TINY tier and files a start/end pair under fast', async () => {
     const harness = orchestratorHarness();
+
     const titleModel = new MockLanguageModelV3({
       doGenerate: async () => ({
         content: [{ type: 'text' as const, text: '{"title":"Mission Control"}' }],
@@ -201,6 +214,7 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
         warnings: [],
       }),
     });
+
     // Only MODEL CONSTRUCTION is substituted. `modelForSource('fast')` runs its
     // real body — `resolveModelRoute` against the profile below, then this
     // resolver — so the route and the spec it returns are the production ones.
@@ -213,6 +227,7 @@ describe('suggestWorkspaceTitle — the fast-model naming pass', () => {
       ownedModelServices: {
         resolveModelWithEffort: (spec: string | null | undefined, effort: string) => {
           resolved.push({ spec, effort });
+
           return { model: titleModel, providerOptions: undefined };
         },
       },

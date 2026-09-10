@@ -15,13 +15,16 @@ import type { AuthIdentity } from '../src/auth/session';
 import { orchestratorHarness } from './helpers/actor-harness';
 
 const OVERFLOW = 205;
+
 const USER_ID = '0123456789abcdef0123456789abcdef';
 
 async function seedRoster(harness: TestUserDO, count: number) {
   const owner = await testOwner();
+
   for (let i = 0; i < count; i++) {
     await harness.userDO.registerWorkspace(owner, `ws-${String(i).padStart(3, '0')}`);
   }
+
   return owner;
 }
 
@@ -79,6 +82,7 @@ describe('a deletion that could not finish', () => {
       durableObjectId: USER_ID,
       destroyWorkspaceError: 'the container refused to go',
     });
+
     const owner = await testOwner();
     await harness.userDO.registerWorkspace(owner, 'half-gone');
 
@@ -105,6 +109,7 @@ describe('a deletion that could not finish', () => {
     const options: TestUserDOOptions = {
       durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go',
     };
+
     const harness = createTestUserDO(options);
     const owner = await testOwner();
     await harness.userDO.registerWorkspace(owner, 'half-gone');
@@ -126,6 +131,7 @@ describe('a deletion that could not finish', () => {
       durableObjectId: USER_ID,
       destroyWorkspaceError: 'the container refused to go',
     });
+
     const owner = await testOwner();
     await harness.userDO.registerWorkspace(owner, 'half-gone');
     await harness.userDO.registerWorkspace(owner, 'healthy');
@@ -160,6 +166,7 @@ describe('a deletion that could not finish', () => {
       durableObjectId: USER_ID,
       destroyWorkspaceError: 'the container refused to go',
     });
+
     const owner = await testOwner();
     const entry = createdWorkspace(await harness.userDO.registerWorkspace(owner, 'half-gone'));
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
@@ -189,6 +196,7 @@ describe('a deletion that could not finish', () => {
       durableObjectId: USER_ID,
       destroyWorkspaceError: 'the container refused to go',
     });
+
     const owner = await testOwner();
     await harness.userDO.registerWorkspace(owner, 'half-gone');
     await expect(harness.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
@@ -208,6 +216,7 @@ describe('a deletion that could not finish', () => {
     const options: TestUserDOOptions = {
       durableObjectId: USER_ID, destroyWorkspaceError: 'the container refused to go',
     };
+
     const harness = createTestUserDO(options);
     const owner = await testOwner();
     await harness.userDO.registerWorkspace(owner, 'reused');
@@ -233,9 +242,11 @@ describe('a deletion that could not finish', () => {
     // The marker is durable state, not a field on a live object, so an eviction
     // between the failed teardown and the retry loses nothing.
     const storage = new Database(':memory:');
+
     const first = createTestUserDO({
       durableObjectId: USER_ID, storage, destroyWorkspaceError: 'the container refused to go',
     });
+
     const owner = await testOwner();
     await first.userDO.registerWorkspace(owner, 'half-gone');
     await expect(first.userDO.removeWorkspace(owner, 'half-gone', USER_ID)).rejects.toThrow();
@@ -279,9 +290,11 @@ describe('root-cloud title authority', () => {
     await user.userDO.setWorkspaceDisplayName(owner, workspace, 'Build the release dashboard', 'auto');
     await user.userDO.ensureWorkspaceCapability(workspace, null);
     const capability = user.installed.get(workspace);
+
     if (capability === undefined) throw new Error('The workspace has no capability');
     const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId: USER_ID });
     await actor.agent.installWorkspaceCapability(capability);
+
     try {
       expect(await actor.agent.getAgentStatus()).toMatchObject({ displayName: 'Build the release dashboard' });
     } finally {
@@ -351,6 +364,7 @@ describe('listWorkspaces pages', () => {
     const names: string[] = [];
     let cursor: string | null = null;
     let total = -1;
+
     do {
       const page = await harness.userDO.listWorkspaces(owner, { cursor, limit: 50 });
       expect(page.entries.length).toBeLessThanOrEqual(50);
@@ -396,6 +410,7 @@ describe('listWorkspaces pages', () => {
 });
 
 const ErrorBodySchema = v.object({ error: v.string() });
+
 const RosterPageSchema = v.object({
   entries: v.array(v.object({ name: v.string() })),
   total: v.number(),
@@ -415,15 +430,18 @@ describe('malformed paging over HTTP', () => {
     const harness = createTestUserDO({ durableObjectId: USER_ID });
     const listed: unknown[] = [];
     const inner = harness.userDO;
+
     const stub = {
       async ensureProfile(...args: Parameters<TestUserDO['userDO']['ensureProfile']>) {
         return inner.ensureProfile(...args);
       },
       async listWorkspaces(...args: Parameters<TestUserDO['userDO']['listWorkspaces']>) {
         listed.push(args[1]);
+
         return inner.listWorkspaces(...args);
       },
     };
+
     const partialEnv: Partial<Env> = {};
     Object.assign(partialEnv, {
       UserDO: { idFromName: (name: string) => name, get: () => stub },
@@ -433,18 +451,23 @@ describe('malformed paging over HTTP', () => {
     // plus credential key. Every typed binding reachable in this test is
     // present.
     const env = partialEnv as Env;
+
     const call = async (query: string): Promise<Response> => {
       const response = await handleUserRequest(
         new Request(`https://kinu.example.com/api/user/workspaces${query}`), env, IDENTITY,
       );
+
       if (!response) throw new Error('roster route did not handle the request');
+
       return response;
     };
+
     return { harness, call, listed };
   }
 
   test('a non-numeric limit is a 400 and never reaches the registry', async () => {
     const { harness, call, listed } = routeHarness();
+
     try {
       const response = await call('?limit=abc');
       expect(response.status).toBe(400);
@@ -457,6 +480,7 @@ describe('malformed paging over HTTP', () => {
 
   test('a non-positive limit is a 400', async () => {
     const { harness, call } = routeHarness();
+
     try {
       for (const query of ['?limit=-5', '?limit=12.5']) {
         const response = await call(query);
@@ -469,6 +493,7 @@ describe('malformed paging over HTTP', () => {
 
   test('a garbage cursor is a 400, not an outage', async () => {
     const { harness, call } = routeHarness();
+
     try {
       const response = await call('?cursor=%7Bnope');
       expect(response.status).toBe(400);
@@ -483,8 +508,10 @@ describe('malformed paging over HTTP', () => {
 
   test('a usable page still walks through the route', async () => {
     const { harness, call } = routeHarness();
+
     try {
       const owner = await testOwner();
+
       for (const name of ['ws-a', 'ws-b', 'ws-c']) await harness.userDO.registerWorkspace(owner, name);
 
       const first = v.parse(RosterPageSchema, await (await call('?limit=2')).json());

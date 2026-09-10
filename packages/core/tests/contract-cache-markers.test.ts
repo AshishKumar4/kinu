@@ -27,6 +27,7 @@ import { createMockFetch, type MockFetchHandle } from '@kinu.run/test-utils';
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));
+
   return {
     env: {},
     fetch: fetchFn,
@@ -43,8 +44,10 @@ function chatTools(retention?: CacheRetention): ToolSet {
       execute: async ({ x }) => `echo:${x}`,
     }),
   };
+
   // Both backends mark the tool surface at build time; mirror that here.
   markLastToolForAnthropicCache(tools, retention);
+
   return tools;
 }
 
@@ -69,11 +72,13 @@ async function drain(opts: Parameters<typeof runChat>[0]): Promise<void> {
 function bodyOf(handle: MockFetchHandle, i: number): JsonObject {
   const req = handle.requests[i];
   expect(req?.body).toBeDefined();
+
   return parseJsonObject(v.parse(v.string(), req?.body));
 }
 
 function countCacheControl(value: JsonValue): number {
   const json = JSON.stringify(value);
+
   return (json.match(/"cache_control"/g) ?? []).length;
 }
 
@@ -82,18 +87,22 @@ function field<Output>(body: JsonObject, key: string, schema: v.GenericSchema<Ou
 }
 
 const CacheControlSchema = JsonObjectSchema;
+
 const SystemBlocksSchema = v.array(v.object({
   text: v.optional(v.string()), cache_control: v.optional(CacheControlSchema),
 }));
+
 const ToolBlocksSchema = v.array(v.object({
   name: v.optional(v.string()), cache_control: v.optional(CacheControlSchema),
 }));
+
 const AnthropicMessagesSchema = v.array(v.object({
   role: v.optional(v.string()),
   content: v.array(v.object({
     type: v.optional(v.string()), cache_control: v.optional(CacheControlSchema),
   })),
 }));
+
 const OpenAiMessagesSchema = v.array(v.object({
   role: v.string(), content: v.optional(JsonValueSchema),
   cache_control: v.optional(CacheControlSchema),
@@ -155,9 +164,11 @@ describe('Anthropic cache breakpoints on the wire', () => {
         body: callIndex === 0 ? ANTHROPIC_TOOL_USE_SSE : ANTHROPIC_TEXT_SSE,
       }),
     }]);
+
     const deps = makeDeps({
       [ANTHROPIC_CRED_KEY]: { headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' } },
     }, mock.fetch);
+
     const model = createAnthropicProvider().createModel('claude-opus-4-7', deps);
     await drain({
       model,
@@ -170,6 +181,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
         retention,
       },
     });
+
     return mock;
   }
 
@@ -248,6 +260,7 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     const mock = createMockFetch([
       { match: 'api.openai.com', respond: { status: 400, body: {} } },
     ]);
+
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
@@ -264,6 +277,7 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     const mock = createMockFetch([
       { match: 'api.openai.com', respond: { status: 400, body: {} } },
     ]);
+
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
@@ -277,6 +291,7 @@ describe('OpenAI prompt_cache_key on the wire', () => {
     const mock = createMockFetch([
       { match: 'api.openai.com', respond: { status: 400, body: {} } },
     ]);
+
     const deps = makeDeps({ [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } } }, mock.fetch);
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
     await expect(drain({
@@ -294,12 +309,14 @@ describe('OpenRouter cache addressing on the wire', () => {
     const mock = createMockFetch([
       { match: 'openrouter.ai', respond: { status: 400, body: {} } },
     ]);
+
     const deps = makeDeps({ [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or' } } }, mock.fetch);
     const model = createOpenRouterProvider().createModel(modelId, deps);
     await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
       cache: { providerId: 'openrouter', modelId, sessionKey: 'kinu-or' },
     })).rejects.toThrow();
+
     return bodyOf(mock, 0);
   }
 
@@ -331,9 +348,11 @@ describe('openai-compat + no-op providers', () => {
     const mock = createMockFetch([
       { match: 'groq.example', respond: { status: 400, body: {} } },
     ]);
+
     const deps = makeDeps({
       'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://groq.example/v1' },
     }, mock.fetch);
+
     const model = createOpenAICompatProvider().createModel('llama-4', deps);
     await expect(drain({
       model, system: 'sys', history: [...HISTORY], tools: {},
@@ -348,9 +367,11 @@ describe('openai-compat + no-op providers', () => {
     const mock = createMockFetch([
       { match: 'groq.example', respond: { status: 400, body: {} } },
     ]);
+
     const deps = makeDeps({
       'openai-compat.default': { headers: { Authorization: 'Bearer k' }, baseURL: 'https://groq.example/v1' },
     }, mock.fetch);
+
     const model = createOpenAICompatProvider().createModel('llama-4', deps);
     // workers-ai resolves to the `none` strategy — affinity headers, not body fields.
     await expect(drain({

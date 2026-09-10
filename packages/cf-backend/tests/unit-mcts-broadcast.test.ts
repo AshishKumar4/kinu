@@ -47,6 +47,7 @@ const BroadcastSchema = v.object({
     })),
   })),
 });
+
 type Broadcast = v.InferOutput<typeof BroadcastSchema>;
 
 type OrchestratorHarness = ActorHarness<HarnessOrchestratorAgent>;
@@ -57,9 +58,11 @@ function captureBroadcasts(agent: HarnessOrchestratorAgent): Broadcast[] {
     configurable: true,
     value: (payload: string) => {
       const parsed = v.safeParse(BroadcastSchema, JSON.parse(payload));
+
       if (parsed.success) sent.push(parsed.output);
     },
   });
+
   return sent;
 }
 

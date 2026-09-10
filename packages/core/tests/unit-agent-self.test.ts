@@ -29,6 +29,7 @@ function realGovernor(): MissionGovernor {
   const db = new Database(":memory:");
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
+
   return new MissionGovernor({
     storage: { sql, execRaw },
     // The cap is per actor: a mission label is caller-authored prose, so two
@@ -40,30 +41,54 @@ function realGovernor(): MissionGovernor {
 
 function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: string[] } {
   const calls: string[] = [];
+
   return {
     calls,
     proposeCurriculumTasks: async (count) => {
       calls.push(`propose:${count}`);
+
       return [{
         id: "t1", task: "task", rationale: "rationale", predictedSuccess: 0.5,
         targetsSkills: [], proposedAt: 1, status: "pending",
       }];
     },
-    listCurriculumTasks: async (status) => { calls.push(`list:${status}`); return []; },
-    setCurriculumTaskStatus: async (id, status) => { calls.push(`set:${id}:${status}`); return { ok: true }; },
-    proposeScaffold: async (rationale, code, baseVersion) => { calls.push(`scaffold:${rationale.length}:${code.length}:${baseVersion ?? 'live'}`); return { ok: true, version: 2 }; },
+    listCurriculumTasks: async (status) => {
+      calls.push(`list:${status}`);
+
+      return [];
+    },
+    setCurriculumTaskStatus: async (id, status) => {
+      calls.push(`set:${id}:${status}`);
+
+      return { ok: true };
+    },
+    proposeScaffold: async (rationale, code, baseVersion) => {
+      calls.push(`scaffold:${rationale.length}:${code.length}:${baseVersion ?? 'live'}`);
+
+      return { ok: true, version: 2 };
+    },
     listScaffoldVersions: async (limit) => {
       calls.push(`archive:${limit ?? 'all'}`);
+
       return [{
         version: 0, written_at: 1, rationale: "initial", status: "current",
         parent_version: null, trials: 0, wins: 0, losses: 0, ties: 0, win_rate: null,
       }];
     },
-    createTimerTrigger: async (opts) => { calls.push(`timer:${opts.cron ?? opts.atMs}:${opts.missionLabel ?? "uncapped"}`); return { id: "trg1", kind: opts.cron ? "timer_cron" : "timer_oneshot", nextFireAt: 123 }; },
+    createTimerTrigger: async (opts) => {
+      calls.push(`timer:${opts.cron ?? opts.atMs}:${opts.missionLabel ?? "uncapped"}`);
+
+      return { id: "trg1", kind: opts.cron ? "timer_cron" : "timer_oneshot", nextFireAt: 123 };
+    },
     budget: realGovernor(),
-    cancelTrigger: async (id) => { calls.push(`cancel:${id}`); return { ok: true, changed: true }; },
+    cancelTrigger: async (id) => {
+      calls.push(`cancel:${id}`);
+
+      return { ok: true, changed: true };
+    },
     getReplayEvals: async (limit) => {
       calls.push(`replay:${limit ?? 'all'}`);
+
       return [{
         id: "rpl-1", ranAt: 1, sampleSize: 1, acceptedCount: 1, negativeCount: 0,
         meanScore: 0.75, loss: 0.25, interval: { mean: 0.75, lo: 0.5, hi: 1, n: 1 },
@@ -71,8 +96,16 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
       }];
     },
     armCompactNow: () => { calls.push("compactNow"); },
-    jobResult: async (id) => { calls.push(`jobResult:${id}`); return null; },
-    listBackgroundJobs: async (limit) => { calls.push(`jobs:${limit ?? 'all'}`); return []; },
+    jobResult: async (id) => {
+      calls.push(`jobResult:${id}`);
+
+      return null;
+    },
+    listBackgroundJobs: async (limit) => {
+      calls.push(`jobs:${limit ?? 'all'}`);
+
+      return [];
+    },
     ...over,
   };
 }
@@ -83,8 +116,10 @@ describe("createAgentSelfProvider — shape", () => {
     expect(p.name).toBe("agent");
     expect(p.positionalArgs).toBe(true);
     expect(p.types).toContain("schedule"); // declares schedule
+
     for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
       const descriptor = p.tools[name];
+
       if (!descriptor) throw new Error(`missing agent.${name}`);
       expect(descriptor.execute).toBeFunction();
       expect(descriptor.description.length).toBeGreaterThan(0);
@@ -160,7 +195,13 @@ describe("createAgentSelfProvider — delegation + validation", () => {
       retriedBy: null,
       attemptStartedAt: 1, resumeAfter: null,
     };
-    const host = fakeHost({ jobResult: async (id) => { host.calls.push(`jobResult:${id}`); return settled; } });
+
+    const host = fakeHost({ jobResult: async (id) => {
+      host.calls.push(`jobResult:${id}`);
+
+      return settled;
+    } });
+
     const p = createAgentSelfProvider(host);
     expect(await p.tools.jobResult.execute("bgjob-1")).toEqual(settled);
   });
@@ -176,6 +217,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
       retriedBy: null,
       attemptStartedAt: 1, resumeAfter: null,
     };
+
     const host = fakeHost({ jobResult: async () => running });
     const p = createAgentSelfProvider(host);
     const r = v.parse(RunningJobReadSchema, await p.tools.jobResult.execute("bgjob-2"));
@@ -229,6 +271,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("a schedule that names a spending limit declares the ledger and hands the trigger its label", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
+
     const out = v.parse(ScheduledBudgetSchema, await p.tools.schedule.execute({
       cron: "0 12 * * *", budget_usd: 5, budget_label: "nightly-sweep",
     }));
@@ -268,6 +311,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const p = createAgentSelfProvider(fakeHost({
       armCompactNow: () => { throw new Error("no compaction state"); },
     }));
+
     expect(await p.tools.compactNow.execute()).toEqual(
       { error: expect.stringContaining("no compaction state") });
   });

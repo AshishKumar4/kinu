@@ -49,7 +49,9 @@ const STAGING_AT = WRANGLER.indexOf('"staging": {');
  */
 const PRODUCTION_ORIGIN = ((): string => {
   const match = /"CLI_PUBLIC_ORIGIN":\s*"([^"]+)"/.exec(WRANGLER.slice(0, STAGING_AT));
+
   if (!match?.[1]) throw new Error('wrangler.jsonc declares no production CLI_PUBLIC_ORIGIN');
+
   return match[1];
 })();
 
@@ -62,6 +64,7 @@ describe('the eval target allowlist — a deployment serving real users is refus
 
     const verdict = evalTargetVerdict(origin, {});
     expect(verdict.kind).toBe('refused');
+
     // The refusal has to name the variable that makes it run, or an operator's
     // only move is to delete the guard.
     if (verdict.kind === 'refused') {
@@ -117,6 +120,7 @@ describe('the eval target allowlist — a deployment serving real users is refus
   test('a value that is not a URL is refused rather than parsed loosely', () => {
     const verdict = evalTargetVerdict('staging.kinu.run', {});
     expect(verdict.kind).toBe('refused');
+
     if (verdict.kind === 'refused') expect(verdict.reason).toContain('not a URL');
   });
 
@@ -126,6 +130,7 @@ describe('the eval target allowlist — a deployment serving real users is refus
   test('an empty origin is refused, and the refusal names the variable', () => {
     const verdict = evalTargetVerdict('', {});
     expect(verdict.kind).toBe('refused');
+
     if (verdict.kind === 'refused') expect(verdict.reason).toContain(EVAL_IDENTITY_ENV.origin);
   });
 });
@@ -149,8 +154,10 @@ describe('a model endpoint carrying a deployment gets target-checked', () => {
   test('production behind the inference route is refused, naming the override', () => {
     const verdict = evalModelEndpointVerdict(cloudProxyBaseURL(PRODUCTION_ORIGIN), {});
     expect(verdict.kind).toBe('checked');
+
     if (verdict.kind !== 'checked') return;
     expect(verdict.target.kind).toBe('refused');
+
     if (verdict.target.kind === 'refused') {
       expect(verdict.target.reason).toContain(EVAL_IDENTITY_ENV.allowProd);
       expect(verdict.target.reason).toContain(PRODUCTION_ORIGIN);
@@ -161,7 +168,9 @@ describe('a model endpoint carrying a deployment gets target-checked', () => {
     const verdict = evalModelEndpointVerdict(
       cloudProxyBaseURL(PRODUCTION_ORIGIN), { [EVAL_IDENTITY_ENV.allowProd]: '1' },
     );
+
     expect(verdict.kind).toBe('checked');
+
     if (verdict.kind === 'checked') expect(verdict.target.kind).toBe('allowed');
   });
 
@@ -190,6 +199,7 @@ describe('a model endpoint carrying a deployment gets target-checked', () => {
   test('a host belonging to nobody here is refused when it wears the route', () => {
     const verdict = evalModelEndpointVerdict(cloudProxyBaseURL('https://attacker.example'), {});
     expect(verdict.kind).toBe('checked');
+
     if (verdict.kind === 'checked') expect(verdict.target.kind).toBe('refused');
   });
 
@@ -255,6 +265,7 @@ describe('resolveEvalIdentity — the credential is the eval service account or 
   test('an empty environment is absent — no session is borrowed from anyone', () => {
     const resolved = resolveEvalIdentity({});
     expect(resolved.kind).toBe('absent');
+
     if (resolved.kind === 'absent') {
       expect(resolved.reason).toContain(EVAL_IDENTITY_ENV.token);
       expect(resolved.reason).toContain(EVAL_SERVICE_ACCOUNT);
@@ -272,6 +283,7 @@ describe('resolveEvalIdentity — the credential is the eval service account or 
       [EVAL_IDENTITY_ENV.token]: 'pta_eval',
       [EVAL_IDENTITY_ENV.origin]: PRODUCTION_ORIGIN,
     });
+
     expect(resolved.kind).toBe('refused');
   });
 

@@ -31,6 +31,7 @@ const EmailThreadAddrSchema = v.object({
   message_id: v.nullable(v.string()),
   references: v.nullable(v.string()),
 });
+
 const ReplyPayloadSchema = v.object({ content: v.optional(JsonValueSchema) });
 
 export interface EmailThreadingHeaders {
@@ -64,7 +65,9 @@ function replySubject(subject: string): string {
  */
 function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references'>): EmailThreadingHeaders {
   const inReplyTo = boundedMessageId(addr.message_id, 'In-Reply-To');
+
   if (!inReplyTo) return {};
+
   return {
     'In-Reply-To': inReplyTo,
     References: boundedReferences(addr.references, inReplyTo) ?? inReplyTo,
@@ -114,19 +117,23 @@ export async function sendInboundEmailReceipt(
   eventId: string,
 ): Promise<boolean> {
   if (!ctx.email) return false;
+
   const result = await ctx.outbox.send(ctx.email, `receipt:${eventId}`, threadReply(
     thread,
     ctx.agentDisplayName,
     `${ctx.agentDisplayName} has your message.\nThe reply comes back on this thread.`,
   ), Date.now());
+
   if (result.status === 'failed') {
     diagnostics.failure(
       'email.receipt_failed',
       new KinuError('unavailable', result.error),
       { messageId: result.messageId },
     );
+
     return false;
   }
+
   return true;
 }
 
@@ -134,7 +141,9 @@ function payloadText(payload: JsonValue): string {
   if (v.is(v.string(), payload)) return payload;
   const parsed = v.safeParse(ReplyPayloadSchema, payload);
   const content = parsed.success ? parsed.output.content : undefined;
+
   if (v.is(v.string(), content)) return content;
+
   return JSON.stringify(content ?? payload ?? '');
 }
 
@@ -145,18 +154,23 @@ export function createEmailThreadDispatcher(
   return {
     async dispatch(channel, payload) {
       const ctx = getContext();
+
       if (!ctx.email) {
         return { delivered: false, detail: 'send_email binding (EMAIL) not configured' };
       }
+
       let addr: EmailThreadAddr;
+
       try {
         addr = v.parse(EmailThreadAddrSchema, JSON.parse(channel.holder_addr));
       } catch (error) {
         return { delivered: false, detail: `malformed email_thread holder_addr: ${renderThrownChain({ cause: error })}` };
       }
+
       if (!addr.to || !addr.from) {
         return { delivered: false, detail: 'email_thread holder_addr missing addresses' };
       }
+
       // Idempotency key = the channel (one reply per channel); a lease re-drive
       // after a crash mid-send re-sends the SAME Message-ID, deduped downstream.
       const result = await ctx.outbox.send(
@@ -165,7 +179,9 @@ export function createEmailThreadDispatcher(
         threadReply(addr, ctx.agentDisplayName, payloadText(payload)),
         Date.now(),
       );
+
       if (result.status === 'failed') return { delivered: false, detail: result.error };
+
       return { delivered: true };
     },
   };
@@ -189,15 +205,19 @@ export async function dispatchEmailRepliesForTurn(
   now: number,
 ): Promise<EmailReplyDispatchResult> {
   const events = deps.log.query({ turn_id: drainTurnId, variant: 'email' });
+
   if (!replyText.trim()) {
     return {
       delivered: 0,
       pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
     };
   }
+
   let delivered = 0;
+
   for (const ev of events) {
     const channel = deps.replies.findOpenByEvent(ev.id);
+
     if (!channel || channel.kind !== 'email_thread') continue;
     const outcome = await deps.replies.reply(channel.id, replyText, now);
     deps.log.appendNonEventRow({
@@ -209,8 +229,10 @@ export async function dispatchEmailRepliesForTurn(
       payload: { channel_id: channel.id, kind: 'email_thread', outcome },
       now,
     });
+
     if (outcome.outcome === 'delivered') delivered++;
   }
+
   return {
     delivered,
     pending: events.some((event) => deps.replies.findOpenByEvent(event.id, 'email_thread') !== null),
@@ -239,6 +261,7 @@ export async function sendOwnerEmail(
   note: { subject: string; text: string; key: string },
 ): Promise<boolean> {
   if (!deps.email || !deps.emailDomain || !deps.ownerEmail) return false;
+
   const result = await deps.outbox.send(deps.email, `owner:${note.key}`, {
     from: {
       email: agentEmailAddress(deps.agentName, deps.emailDomain),
@@ -249,13 +272,16 @@ export async function sendOwnerEmail(
     text: note.text,
     headers: { 'Auto-Submitted': 'auto-generated' },
   }, Date.now());
+
   if (result.status === 'failed') {
     diagnostics.failure(
       'email.owner_notification_failed',
       new KinuError('unavailable', result.error),
       { workspace: deps.agentName, messageId: result.messageId },
     );
+
     return false;
   }
+
   return true;
 }

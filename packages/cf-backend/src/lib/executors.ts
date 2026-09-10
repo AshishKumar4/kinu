@@ -72,6 +72,7 @@ const EXECUTOR_ORDER = ["laptop", "sandbox", "workspace", "parent"];
 
 export function executorSortKey(name: string): number {
   const idx = EXECUTOR_ORDER.indexOf(name);
+
   return idx === -1 ? 99 : idx;
 }
 
@@ -85,7 +86,9 @@ export function isExecutorActive(exec: ExecutorInfo): boolean {
  *  always there, so listing it beside the reachable ones says nothing). */
 export function isActiveExecutionDevice(exec: ExecutorInfo): boolean {
   if (exec.name === "workspace" || !exec.available) return false;
+
   if (exec.name === "laptop") return true;
+
   return isExecutorActive(exec);
 }
 
@@ -120,9 +123,11 @@ export type ReleaseSubstrate =
 export function releaseSubstrate(executors: ExecutorInfo[]): ReleaseSubstrate {
   if (executors.length === 0) return { state: "unknown" };
   const sandbox = executors.find((e) => e.name === "sandbox");
+
   if (!sandbox?.available) {
     return { state: "unavailable", reason: sandbox?.reason ?? "the sandbox executor is unavailable on this deployment" };
   }
+
   return { state: "ready", note: sandbox.reason ?? null };
 }
 
@@ -131,10 +136,13 @@ const STATIC_PRIORITY = ["laptop", "sandbox"];
 export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActive?: string | null): string {
   const isActive = (name: string) => executors.some((e) =>
     e.name === name && e.available && (e.active || e.status === "active"));
+
   if (lastActive && isActive(lastActive)) return lastActive;
+
   for (const name of STATIC_PRIORITY) {
     if (isActive(name)) return name;
   }
+
   return "workspace";
 }
 

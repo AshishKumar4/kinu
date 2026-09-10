@@ -98,6 +98,7 @@ const TurnAuthorSchema = v.looseObject({
 export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
   const parsed = v.safeParse(TurnAuthorSchema, metadata ?? {});
   const declared = parsed.success ? parsed.output[TURN_AUTHOR_METADATA_KEY] : undefined;
+
   return { ...metadata, [TURN_AUTHOR_METADATA_KEY]: declared ?? 'harness' };
 }
 
@@ -113,11 +114,15 @@ export function stampTurnAuthor(metadata?: JsonObject): JsonObject {
  */
 export function turnAuthor<Metadata>(row: { id?: string; metadata?: Metadata }): TurnAuthor {
   const parsed = v.safeParse(TurnAuthorSchema, row.metadata ?? {});
+
   if (parsed.success) {
     const stamped = parsed.output[TURN_AUTHOR_METADATA_KEY];
+
     if (stamped) return stamped;
+
     if (parsed.output.kinuEvent !== undefined) return 'harness';
   }
+
   return row.id?.startsWith(PROGRAMMATIC_MESSAGE_ID_PREFIX) ? 'harness' : 'operator';
 }
 
@@ -152,13 +157,18 @@ export interface StoredRowProjection {
  *  is a value here and nothing else is. */
 export function uiMessageRow(content: string): StoredRowProjection {
   const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
+
   if (decoded === undefined) return { text: content };
   const parsed = v.safeParse(UiMessageSchema, decoded);
+
   if (!parsed.success || !parsed.output.parts) return { text: content };
+
   const text = parsed.output.parts
     .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
     .join('');
+
   const metadata = parsed.output.metadata;
+
   return metadata === undefined ? { text } : { text, metadata };
 }
 
@@ -182,15 +192,19 @@ export function uiMessageText(content: string): string {
 export function restoredRows(older: readonly ChatHistoryEntry[]): UIMessage[] {
   const seen = new Set<string>();
   const restored: UIMessage[] = [];
+
   for (const entry of older) {
     if (seen.has(entry.id)) continue;
     seen.add(entry.id);
+
     const row: UIMessage = {
       id: entry.id, role: entry.role, parts: [{ type: 'text', text: entry.content }],
     };
+
     if (entry.metadata !== undefined) row.metadata = entry.metadata;
     restored.push(row);
   }
+
   return restored;
 }
 
@@ -220,5 +234,6 @@ export function mergeTranscript(
   live: readonly UIMessage[],
 ): UIMessage[] {
   const known = new Set(live.map((message) => message.id));
+
   return [...restoredRows(older).filter((row) => !known.has(row.id)), ...live];
 }

@@ -37,16 +37,20 @@ export function eventContentPath(content: string): string {
 export async function spillEventContent(vfs: VFS, content: string): Promise<string | null> {
   if (content.length <= EVENT_BRIEF_MAX_CHARS) return null;
   const path = eventContentPath(content);
+
   try {
     if (!(await vfs.exists(path))) {
       try {
         await vfs.mkdir(EVENT_CONTENT_DIR, { recursive: true });
       } catch (err) {
         const msg = err instanceof Error ? err.message.toLowerCase() : '';
+
         if (!msg.includes('exist')) throw err;
       }
+
       await vfs.writeFile(path, content);
     }
+
     return path;
   } catch (err) {
     diagnostics.failure(
@@ -54,6 +58,7 @@ export async function spillEventContent(vfs: VFS, content: string): Promise<stri
       toKinuError({ doing: 'spill oversized event content to the workspace', cause: err, otherwise: 'io' }),
       { path },
     );
+
     return null;
   }
 }

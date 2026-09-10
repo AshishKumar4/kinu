@@ -41,6 +41,7 @@ async function observe(workspace: ActorHarness<RawToolsAgent>): Promise<Observed
   await workspace.agent.observeRuntime().storage.vfs.exists('SOUL.md');
   await workspace.agent._kinuTerminalRetryTick();
   await activateSession(workspace.agent);
+
   return {
     root: 'cf-orchestrator',
     planes: {
@@ -68,9 +69,11 @@ async function observeSubordinate(
     nameOrigin: 'user',
     mission: 'prove the subordinate surface',
   });
+
   const { tools } = await workspace.agent.observeHostedTaskProfile(child.actor, 'prove the subordinate surface');
   await workspace.agent._kinuTerminalRetryTick();
   await activateSession(workspace.agent);
+
   return {
     root: 'cf-subordinate',
     planes: {

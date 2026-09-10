@@ -61,6 +61,7 @@ function fakeBox(input: {
   let interruptions = input.waitsBeforeExit ?? 0;
   const held = Promise.withResolvers<{ exitCode: number }>();
   let exited = false;
+
   const proc: ProcessDouble = {
     id: "proc-1",
     status: "running",
@@ -69,32 +70,41 @@ function fakeBox(input: {
         interruptions -= 1;
         throw new Error("Stream idle timeout after 300000ms");
       }
+
       if (input.holdsUntilKilled === true) return await held.promise;
+
       return { exitCode: input.exitCode ?? 0 };
     },
     getStatus: async () => "running",
   };
+
   const box = {
     ensureReady: async () => {},
     exec: async (command: string, opts?: { timeout?: number }) => {
       const call: BoxCalls["exec"][number] = { command };
+
       if (opts?.timeout !== undefined) call.timeout = opts.timeout;
       calls.exec.push(call);
+
       return { stdout: "bounded", exitCode: 0 };
     },
     startProcess: async (command: string, opts?: { cwd?: string }) => {
       const call: BoxCalls["started"][number] = { command };
+
       if (opts?.cwd !== undefined) call.cwd = opts.cwd;
       calls.started.push(call);
+
       return proc;
     },
     getProcess: async () => proc,
     getProcessLogs: async () => ({ stdout: "epoch 40/40 done\n", stderr: "" }),
     killProcess: async (id: string) => {
       calls.killed.push(id);
+
       if (input.killFails === true) {
         throw new Error(`container refused to kill ${id}: no such process`);
       }
+
       exited = true;
       held.resolve({ exitCode: 137 });
     },
@@ -112,11 +122,13 @@ function fakeBox(input: {
     notePortExposed: async () => {},
     notePortRemoved: async () => undefined,
   };
+
   // Unchecked and named: `KinuSandbox` is a Durable Object class, so a test
   // cannot construct one. The double rides the prototype the way
   // helpers/jsrpc-stub.ts builds stubs — the adapter reaches only methods, and
   // exactly the members above are reachable, which is the boundary under test.
   const sdk: KinuSandbox = Object.create(box);
+
   // The egress preflight is a no-op here: which LANE a command takes is what
   // this file measures, and the preflight has its own suite
   // (unit-egress-interception.test.ts).
@@ -247,14 +259,17 @@ describe("adaptCloudflareSandbox — cancellation reaches the process", () => {
 describe("the codemode program carries no execution deadline of its own", () => {
   test("the generated dynamic Worker gets no 60s kill", async () => {
     let generated = "";
+
     // The real generated program is the evidence: codemode races it against a
     // `setTimeout(… "Execution timed out")` built from its `timeout` option.
     const loader = {
       load: (spec: { modules: Record<string, string> }) => {
         generated = spec.modules["executor.js"] ?? "";
+
         return { getEntrypoint: () => ({ evaluate: async () => ({ result: 1, logs: [] }) }) };
       },
     };
+
     // Unchecked and named: `WorkerLoader` is a workerd binding with no
     // constructible form; codemode reaches only `load`. The double rides the
     // prototype the way helpers/jsrpc-stub.ts builds stubs.

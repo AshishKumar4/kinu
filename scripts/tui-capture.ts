@@ -17,19 +17,25 @@ import type { AgentSearchNode } from '../packages/cli/src/agent-client';
 import type { DisplayMessage } from '../packages/cli/src/tui/messages';
 
 const set = process.argv[2] ?? 'current';
+
 const outDir = `${process.env.TUI_CAPTURE_DIR ?? '/tmp/review-TuiRedesign2'}/${set}`;
+
 mkdirSync(outDir, { recursive: true });
 
 const MODEL = '@cf/deepseek-ai/deepseek-v4-pro-0813';
+
 const WORKSPACE = 'checkout';
+
 const SESSION = '20260821-checkout01';
 
 function prepareHome(): string {
   const home = mkdtempSync(join(tmpdir(), `kinu-tui-cap-${set}-`));
+
   for (const name of ['checkout', 'pricing-guard', 'docs-sweep', 'infra-audit']) {
     mkdirSync(join(home, name), { recursive: true });
     writeFileSync(join(home, name, 'agent.db'), '');
   }
+
   writeFileSync(join(home, 'config.json'), `${JSON.stringify({
     model: MODEL,
     reasoningEffort: 'medium',
@@ -49,26 +55,40 @@ function prepareHome(): string {
       },
     },
   }, null, 2)}\n`);
+
   return home;
 }
 
 const home = prepareHome();
+
 process.env.KINU_HOME = home;
+
 process.env.KINU_BASE_URL = 'https://api.example.invalid/v1';
+
 process.env.KINU_AUTH = 'Bearer capture-fixture-not-a-real-key';
 
 // The CLI config module captures KINU_HOME at import time. Load every app
 // module only after the fixture home and endpoint are set.
 const { createTestRenderer } = await import('@opentui/core/testing');
+
 const { createRoot } = await import('@opentui/react');
+
 const React = await import('react');
+
 const { HomeApp } = await import('../packages/cli/src/tui/home-app');
+
 const { MessageList } = await import('../packages/cli/src/tui/messages');
+
 const { StatusBar } = await import('../packages/cli/src/tui/status-bar');
+
 const { PhaseLine, TakesOverlay, CommandHintOverlay } = await import('../packages/cli/src/tui/overlays');
+
 const { BUILTIN_TUI_THEMES, createThemeRegistry } = await import('../packages/cli/src/tui/theme');
+
 const captureColors = createThemeRegistry(BUILTIN_TUI_THEMES).get('kinu-dark').colors;
+
 const { renderSearchTreeLines } = await import('../packages/cli/src/display');
+
 const { commandsForClient } = await import('../packages/cli/src/slash-commands');
 
 async function settle(renderOnce: () => Promise<void>, passes = 12): Promise<void> {
@@ -81,6 +101,7 @@ async function settle(renderOnce: () => Promise<void>, passes = 12): Promise<voi
 async function shoot(name: string, width: number, height: number, element: React.ReactElement, passes = 12): Promise<void> {
   const renderer = await createTestRenderer({ width, height, useThread: false, maxFps: Number.POSITIVE_INFINITY });
   const root = createRoot(renderer.renderer);
+
   try {
     root.render(element);
     await settle(renderer.renderOnce, passes);
@@ -95,9 +116,11 @@ async function shoot(name: string, width: number, height: number, element: React
 /* ── chat arrangement, exactly ChatApp's ─────────────────────────────── */
 function chatScreen(messages: readonly DisplayMessage[], phase: string | null, processing: boolean, overlay?: React.ReactElement): React.ReactElement {
   const title = processing ? '⟳ processing…' : `${WORKSPACE} · ${SESSION} · Ctrl+P model ›`;
+
   const placeholder = processing
     ? 'Type to steer · Tab queues · Ctrl+B branches · Esc interrupts'
     : 'Type a message or /help · Shift+Enter for a new line';
+
   return React.createElement(
     'box',
     { flexDirection: 'column', style: { width: '100%', height: '100%', backgroundColor: captureColors.background.canvas } },
@@ -139,6 +162,7 @@ function chatScreen(messages: readonly DisplayMessage[], phase: string | null, p
 
 const message = (id: string, role: DisplayMessage['role'], content: string, extra: Partial<DisplayMessage> = {}): DisplayMessage =>
   ({ id, role, content, ...extra });
+
 const WELCOME: DisplayMessage[] = [message('w', 'system', 'Connected to checkout. Type a message or /help for commands.')];
 
 const MIDTURN: DisplayMessage[] = [
@@ -224,4 +248,5 @@ try {
 } finally {
   rmSync(home, { recursive: true, force: true });
 }
+
 process.exit(0);

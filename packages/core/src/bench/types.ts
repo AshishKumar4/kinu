@@ -233,9 +233,11 @@ const TokenFigureSchema = v.pipe(
 
 export function usageTokens<Reported>(usage: Reported): number | undefined {
   const parsed = v.safeParse(UsageBoundarySchema, usage);
+
   if (!parsed.success) return undefined;
   const input = v.safeParse(TokenFigureSchema, parsed.output.inputTokens);
   const output = v.safeParse(TokenFigureSchema, parsed.output.outputTokens);
+
   // The nested dialect's cache and reasoning parts are SUBSETS of these two
   // totals, so they cannot move a token count — and the provider's own `raw`
   // payload is left out for the same reason. `raw` is the oracle for WHETHER a
@@ -253,6 +255,7 @@ export function usageTokens<Reported>(usage: Reported): number | undefined {
     outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
     totalTokens: undefined,
   };
+
   return usageTotal(normalizeUsage(report));
 }
 

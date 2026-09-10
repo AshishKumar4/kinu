@@ -12,8 +12,11 @@ import { createAuthedFetch } from './util';
 import { listModelsDevProviderModels } from './models-dev';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
+
 export const OPENAI_BASE_URL = 'https://api.openai.com/v1';
+
 export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
+
 /** The small tier the evolution engine's mechanical calls run on. */
 export const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
@@ -32,6 +35,7 @@ export interface OpenAIOptions {
 
 export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
   const useResponses = opts.useResponsesAPI ?? true;
+
   return {
     id: 'openai',
     label: 'OpenAI (direct API)',
@@ -48,7 +52,9 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
         credKey: OPENAI_CRED_KEY,
         missingCredentialError: 'OpenAI API key not configured',
       });
+
       const provider = createOpenAI({ apiKey: 'placeholder', fetch: customFetch });
+
       return useResponses ? provider.responses(modelId) : provider.chat(modelId);
     },
   };

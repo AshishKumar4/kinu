@@ -46,6 +46,7 @@ interface SeededWorkspace extends TestWorkspace {
 function fresh(): SeededWorkspace {
   const base = createTestWorkspace();
   base.execRaw(SDK_SESSION_DDL);
+
   return { ...base, actor: createTestActor(base.sql, base.execRaw, 'SRC', 'src') };
 }
 
@@ -54,6 +55,7 @@ function fresh(): SeededWorkspace {
  *  shape every plain-authority reader below is asked about. */
 function local(workspaceId: string, name: string): SeededWorkspace {
   const base = createTestWorkspace();
+
   return { ...base, actor: createTestActor(base.sql, base.execRaw, workspaceId, name) };
 }
 
@@ -69,10 +71,12 @@ function paneAppend(
   const content = JSON.stringify({
     id: msg.id, role: msg.role, parts: [{ type: 'text', text: msg.text }],
   });
+
   const parent = msg.parentId !== undefined
     ? msg.parentId
     : sql<{ id: string }>`SELECT id FROM assistant_messages
         WHERE actor_id = ${actor.actorId} ORDER BY rowid DESC LIMIT 1`[0]?.id ?? null;
+
   void sql`
     INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
     VALUES (${actor.actorId}, ${msg.id}, ${''}, ${parent}, ${msg.role}, ${content}, ${msg.at})
@@ -107,9 +111,11 @@ describe('the default chat is complete through every reader, with no mirror', ()
 
     expect(hasPaneStore(ws.sql)).toBe(true);
     expect(conversationCount(ws.sql, ws.actor)).toBe(8);
+
     const mirrored = ws.sql<{ c: number }>`
       SELECT COUNT(*) AS c FROM messages
       WHERE actor_id = ${ws.actor.actorId} AND session_id = 'default'`;
+
     expect(mirrored[0]!.c).toBe(0);
   });
 
@@ -119,13 +125,16 @@ describe('the default chat is complete through every reader, with no mirror', ()
 
     const ids: string[] = [];
     let cursor: { after: string } | undefined;
+
     for (let pages = 0; pages < 10; pages++) {
       const page = getChatHistoryPage(ws.sql, ws.actor, { limit: 3, cursor });
       ids.unshift(...page.items.map((entry) => entry.id));
+
       // Page is a discriminated union: past the 'end' check, `next` exists.
       if (page.status === 'end') break;
       cursor = page.next;
     }
+
     expect(ids).toEqual(ALL_IDS);
   });
 
@@ -232,6 +241,7 @@ describe('the CLI transcript answers the same questions from `messages`', () => 
       VALUES (${ws.actor.actorId}, ${'cu2'}, ${'default'}, ${'ca1'}, ${'user'}, ${'second ask'}, ${3_000})`;
     void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
       VALUES (${ws.actor.actorId}, ${'csys'}, ${'default'}, ${'cu2'}, ${'user'}, ${'wake notice'})`;
+
     return ws;
   }
 
@@ -354,6 +364,7 @@ describe('a cloud export imported into a LOCAL workspace', () => {
     ws.execRaw(SDK_SESSION_DDL);
     paneAppend(ws, { id: 'cu1', role: 'user', text: 'first ask', parentId: null, at: '2026-08-16 22:00:00' });
     paneAppend(ws, { id: 'ca1', role: 'assistant', text: 'first answer', parentId: 'cu1', at: '2026-08-16 22:00:01' });
+
     return ws;
   }
 
@@ -364,9 +375,11 @@ describe('a cloud export imported into a LOCAL workspace', () => {
     expect(normalizeImportedConversation(ws.sql, ws.actor)).toBe(0);
 
     expect(hasPaneStore(ws.sql)).toBe(false);
+
     const rows = ws.sql<{ id: string; content: string; created_at: number }>`
       SELECT id, content, created_at FROM messages
       WHERE actor_id = ${ws.actor.actorId} AND session_id = 'default' ORDER BY rowid`;
+
     expect(rows.map((r) => r.id)).toEqual(['cu1', 'ca1']);
     expect(rows[0]!.content).toBe('first ask');
     expect(rows[0]!.created_at).toBe(Date.parse('2026-08-16T22:00:00Z'));

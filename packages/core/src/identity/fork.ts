@@ -67,6 +67,7 @@ function encodeUiMessage(id: string, role: string, text: string): string {
  *  and the marker's cut-point-plus-one needs it to stay distinct. */
 function paneStampOf(ms: number): string {
   const iso = new Date(ms).toISOString();
+
   return `${iso.slice(0, 10)} ${iso.slice(11, 23)}`;
 }
 
@@ -167,12 +168,19 @@ export const ForkSnapshotSchema = v.object({
 });
 
 export type ForkSnapshotHead = v.InferOutput<typeof ForkSnapshotHeadSchema>;
+
 export type ForkSnapshot = v.InferOutput<typeof ForkSnapshotSchema>;
+
 export type ForkMessageRow = v.InferOutput<typeof ForkMessageRowSchema>;
+
 export type ForkPaneRow = v.InferOutput<typeof ForkPaneRowSchema>;
+
 export type ForkMemoryChunkRow = v.InferOutput<typeof ForkMemoryChunkRowSchema>;
+
 export type ForkCraftedToolRow = v.InferOutput<typeof ForkCraftedToolRowSchema>;
+
 export type ForkConfigRow = v.InferOutput<typeof ForkConfigRowSchema>;
+
 export type ForkFile = v.InferOutput<typeof ForkFileSchema>;
 
 export interface ForkOpts {
@@ -217,19 +225,24 @@ export async function snapshotWorkspaceForFork(
   const actor = openWorkspaceMainActor(source);
   const { chain: messages, pane: assistantMessages } = forkAncestry(source, actor, untilMessageId);
   const lastMessage = messages[messages.length - 1];
+
   if (lastMessage === undefined) {
     throw new Error(`fork point not found: message id "${untilMessageId}" does not exist in source`);
   }
+
   const forkPointMs = lastMessage.created_at;
 
   const identity = source<{ id: string; name: string }>`
     SELECT id, name FROM workspace_identity LIMIT 1
   `;
+
   // The scaffold is deliberately excluded so the fork re-bootstraps v0 fresh.
   const files = await readForkFiles(sourceVfs);
+
   const craftedTools = source<ForkSnapshot['craftedTools'][number]>`
     SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools
   `;
+
   // Every config row EXCEPT the ones the shell-approval gate reads as live
   // authorization. A remembered "always" and a permissive mode are decisions the
   // owner made about ONE workspace's history; copied into a child they let it
@@ -372,6 +385,7 @@ export class ForkTargetWriter {
    */
   begin(head: ForkSnapshotHead): void {
     const current = this.target<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`[0];
+
     if (!current) {
       void this.target`INSERT INTO workspace_identity(id,name,owner_user_id,created_at) VALUES (${this.opts.workspaceId},${this.opts.workspaceName},${this.opts.ownerUserId ?? ''},${this.now})`;
       new WorkspaceActorDirectory(this.target, { workspaceId: this.opts.workspaceId, ownerUserId: this.opts.ownerUserId ?? '' }).createMain({ name: this.opts.workspaceName });
@@ -379,6 +393,7 @@ export class ForkTargetWriter {
       if (current.id !== this.opts.workspaceId) throw new KinuError('denied', 'The fork target does not match its durable workspace identity.');
       openWorkspaceMainActor(this.target);
     }
+
     this.staging.begin(head);
   }
 
@@ -400,6 +415,7 @@ export class ForkTargetWriter {
     void this.target`DELETE FROM memory_chunks`;
     void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM fork_lineage`;
+
     if (hasPaneStore(this.target)) {
       void this.target`DELETE FROM assistant_messages WHERE actor_id = ${actorId}`;
     }
@@ -407,6 +423,7 @@ export class ForkTargetWriter {
 
   stageAgentConfig(rows: readonly ForkConfigRow[]): void {
     const config = openWorkspaceMainActor(this.target).config;
+
     for (const row of rows) config.set(row.key, row.value);
     this.staging.count({ agentConfig: rows.length });
   }
@@ -419,6 +436,7 @@ export class ForkTargetWriter {
         VALUES (${t.name}, ${t.description}, ${t.params}, ${t.code}, ${t.scope}, ${t.created_at}, ${t.updated_at})
       `;
     }
+
     this.staging.count({ craftedTools: rows.length });
   }
 
@@ -432,6 +450,7 @@ export class ForkTargetWriter {
         VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text}, ${c.updated_at})
       `;
     }
+
     this.staging.count({ memoryChunks: rows.length });
   }
 
@@ -441,6 +460,7 @@ export class ForkTargetWriter {
   stagePaneMessages(rows: readonly ForkPaneRow[]): void {
     if (rows.length === 0) return;
     this.ensurePaneTable();
+
     for (const m of rows) {
       void this.target`
         INSERT OR IGNORE INTO assistant_messages
@@ -449,6 +469,7 @@ export class ForkTargetWriter {
                 ${m.content}, ${m.created_at})
       `;
     }
+
     this.staging.count({ assistantMessages: rows.length });
   }
 
@@ -466,11 +487,13 @@ export class ForkTargetWriter {
   stageMessages(rows: readonly ForkMessageRow[]): void {
     const richChainStaged = this.staged.assistantMessages > 0;
     this.staging.count({ messages: rows.length });
+
     if (this.authority === 'pane') {
       if (richChainStaged) return;
       // A pane-shaped target fed by a plain-sourced snapshot: each flattened
       // row is encoded as the serialized UI message the pane renders.
       this.ensurePaneTable();
+
       for (const m of rows) {
         const text = this.carriedText(m);
         void this.target`
@@ -480,13 +503,16 @@ export class ForkTargetWriter {
                   ${encodeUiMessage(m.id, m.role, text)}, ${paneStampOf(m.created_at)})
         `;
       }
+
       return;
     }
+
     // Plain destination: PKs and parent edges preserved — the chain IS the
     // tree, carried verbatim, under THIS target's actor. The parent edges are
     // re-keyed by that actor too: `messages` keys on (actor_id, id), so the
     // inherited chain is a tree of this actor's rows and nothing else.
     const actorId = this.actorId;
+
     for (const m of rows) {
       void this.target`
         INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
@@ -508,8 +534,11 @@ export class ForkTargetWriter {
   async stageFile(path: string, content: string): Promise<void> {
     this.staging.addFile(path);
     const dir = path.slice(0, path.lastIndexOf('/'));
+
     if (dir) await this.targetVfs.mkdir(dir, { recursive: true });
+
     if (path === SOUL_PATH) this.staging.mission(summarizeSoul(content));
+
     if (path === SOUL_PATH && this.opts.writeSoulFile) await this.opts.writeSoulFile(content);
     else await this.targetVfs.writeFile(path, content);
     this.staging.count({ files: 1 });
@@ -527,6 +556,7 @@ export class ForkTargetWriter {
       if (mission === undefined) throw new Error('fork transfer committed SOUL.md without its protected write');
       this.staging.mission(mission);
     }
+
     this.staging.addFile(path);
     this.staging.count({ files: 1 });
   }
@@ -543,6 +573,7 @@ export class ForkTargetWriter {
     for (const path of this.staging.files()) {
       if (await this.targetVfs.exists(path)) await this.targetVfs.unlink(path);
     }
+
     this.staging.dropFiles();
   }
 
@@ -559,6 +590,7 @@ export class ForkTargetWriter {
    *  correct — including on an activation that never saw the commit. */
   get published(): ForkResult | null {
     const staged = this.staging.read();
+
     return staged === null || !staged.published || staged.head === null
       ? null
       : forkResultOf(staged.head, staged.staged);
@@ -570,7 +602,9 @@ export class ForkTargetWriter {
     if (!this.opts.transaction) return this.publishRows();
     let result: ForkResult | null = null;
     this.opts.transaction(() => { result = this.publishRows(); });
+
     if (result === null) throw new Error('fork publication transaction produced no result');
+
     return result;
   }
 
@@ -583,15 +617,19 @@ export class ForkTargetWriter {
   publishRows(): ForkResult {
     const staged = this.staging.read();
     const head = staged?.head ?? null;
+
     if (staged === null || head === null) {
       throw new Error('fork publication attempted before the transfer declared its head');
     }
+
     const forkPointMs = head.cut.createdAtMs;
+
     if (this.authority === 'pane') this.ensurePaneTable();
 
     // 1. Identity: new id, new name, fresh created_at. The owner carries through
     //    so the row and the file namespace cannot diverge.
     void this.target`DELETE FROM workspace_identity`;
+
     if (this.opts.ownerUserId) {
       void this.target`
         INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
@@ -603,6 +641,7 @@ export class ForkTargetWriter {
         VALUES (${this.opts.workspaceId}, ${this.opts.workspaceName}, ${this.now})
       `;
     }
+
     void this.target`UPDATE workspace_identity SET mission = ${staged.mission}`;
 
     // 2. The derived search index keyed on the OLD rows is stale by
@@ -633,7 +672,9 @@ export class ForkTargetWriter {
       + `${new Date(this.now).toISOString()}. The conversation above happened before the fork. `
       + `Your current tool set and memory are authoritative; ignore any tools or context `
       + `referenced before the fork that you don't see in your active tool list.`;
+
     const markerId = `fork-marker-${this.opts.workspaceId.slice(0, 8)}-${this.now}`;
+
     if (this.authority === 'pane') {
       void this.target`
         INSERT OR IGNORE INTO assistant_messages
@@ -647,6 +688,7 @@ export class ForkTargetWriter {
         VALUES (${this.actorId}, ${markerId}, ${CHAT_SESSION_ID}, ${head.cut.messageId}, ${'system'},
                 ${syntheticText}, ${forkPointMs + 1})
       `;
+
       // The pane table existed only to resolve elided text on a plain target.
       // Keeping it would leave an imported workspace with a store it never had.
       if (staged.paneTableCreated) void this.target`DROP TABLE assistant_messages`;
@@ -657,6 +699,7 @@ export class ForkTargetWriter {
     // source lost the reply, and it is dropped by the next `begin`.
     this.staging.dropFiles();
     this.staging.markPublished();
+
     return forkResultOf(head, staged.staged);
   }
 
@@ -703,17 +746,20 @@ export class ForkTargetWriter {
    *  already staged under the same id. */
   private carriedText(row: ForkMessageRow): string {
     if (row.content !== null) return row.content;
+
     const twin = hasPaneStore(this.target)
       ? this.target<{ content: string }>`
           SELECT content FROM assistant_messages
           WHERE actor_id = ${this.actorId} AND id = ${row.id} LIMIT 1`[0]
       : undefined;
+
     if (!twin) {
       throw new Error(
         `fork snapshot elided the text of message "${row.id}" but carries no assistant_messages row `
         + `under that id, so the transcript cannot be reconstructed`,
       );
     }
+
     return uiMessageText(twin.content);
   }
 }
@@ -751,6 +797,7 @@ export async function writeForkSnapshot(
   // deletion stays inside the caller's transaction below, where a failed
   // publication rolls it back with everything else.
   writer.begin({ source: snapshot.source, cut: snapshot.cut });
+
   for (const file of snapshot.files) await writer.stageFile(file.path, file.content);
 
   const rows = (): ForkResult => {
@@ -760,12 +807,17 @@ export async function writeForkSnapshot(
     writer.stageMemoryChunks(snapshot.memoryChunks);
     writer.stagePaneMessages(snapshot.assistantMessages);
     writer.stageMessages(snapshot.messages);
+
     return writer.publishRows();
   };
+
   let result: ForkResult | null = null;
+
   if (opts.transaction) opts.transaction(() => { result = rows(); });
   else result = rows();
+
   if (result === null) throw new Error('fork write transaction produced no result');
+
   return result;
 }
 
@@ -779,6 +831,7 @@ export async function forkWorkspaceStorage(
   opts: ForkOpts,
 ): Promise<ForkResult> {
   const snapshot = await snapshotWorkspaceForFork(source, sourceVfs, opts.untilMessageId);
+
   return writeForkSnapshot(target, targetVfs, snapshot, {
     workspaceId: opts.targetWorkspaceId,
     workspaceName: opts.targetWorkspaceName,
@@ -810,8 +863,11 @@ export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
   }>`SELECT source_workspace_id, source_workspace_name, source_message_id,
             source_message_created_at, forked_at
      FROM fork_lineage WHERE id = 1 LIMIT 1`;
+
   const r = rows[0];
+
   if (!r) return null;
+
   return {
     sourceWorkspaceId: r.source_workspace_id,
     sourceWorkspaceName: r.source_workspace_name,
@@ -837,12 +893,14 @@ export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
  */
 export async function* forkFilePaths(vfs: VFS): AsyncGenerator<string> {
   if (await vfs.exists(SOUL_PATH)) yield SOUL_PATH;
+
   if (!(await vfs.exists('memory'))) return;
   // The one walk every plane shares, files only. A fork carries the whole
   // memory tree whatever its size: the walker's bounds are runaway guards for
   // other callers, and a database-backed tree has no loop to run away into,
   // so neither is set here and neither can trip.
   const walk = await walkRecursive(vfs, 'memory', Infinity, Infinity);
+
   for (const entry of walk.entries) {
     if (!entry.stat.isDir) yield entry.path;
   }
@@ -852,8 +910,10 @@ export async function* forkFilePaths(vfs: VFS): AsyncGenerator<string> {
  *  walk {@link forkFilePaths} owns. */
 async function readForkFiles(vfs: VFS): Promise<ForkSnapshot['files']> {
   const out: ForkSnapshot['files'] = [];
+
   for await (const path of forkFilePaths(vfs)) {
     out.push({ path, content: v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' })) });
   }
+
   return out;
 }

@@ -157,13 +157,16 @@ function callSignature(toolName: string, args: JsonObject): string {
 /** Key-order-independent serialization, so `{a,b}` and `{b,a}` are one call. */
 function sortJsonValue(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(sortJsonValue);
+
   if (!isJsonObject(value)) return value;
 
   const sorted: JsonObject = {};
   const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+
   for (const [key, child] of entries) {
     sorted[key] = sortJsonValue(child);
   }
+
   return sorted;
 }
 
@@ -173,6 +176,7 @@ function stableArgs(args: JsonObject): string {
 
 function echoArgs(args: JsonObject): string {
   const rendered = stableArgs(args);
+
   return rendered.length <= ARGS_ECHO_MAX_CHARS
     ? rendered
     : `${rendered.slice(0, ARGS_ECHO_MAX_CHARS)}…`;
@@ -258,8 +262,10 @@ export class TurnSteering {
   onToolResult(ctx: ToolResultContext): RecoveryFinding | null {
     const signature = callSignature(ctx.toolName, ctx.args);
     let recovery: RecoveryFinding | null = null;
+
     if (isFailingToolResult(ctx)) {
       const streak = this.failures.get(ctx.toolName);
+
       if (streak) {
         streak.count += 1;
         streak.signature = signature;
@@ -269,6 +275,7 @@ export class TurnSteering {
       }
     } else {
       const streak = this.failures.get(ctx.toolName);
+
       if (streak && streak.count >= CONSECUTIVE_FAILURES_BEFORE_STEER && signature !== streak.signature) {
         recovery = {
           tool: ctx.toolName,
@@ -278,6 +285,7 @@ export class TurnSteering {
           failedSignature: streak.signature,
         };
       }
+
       this.failures.delete(ctx.toolName);
     }
 
@@ -285,13 +293,17 @@ export class TurnSteering {
     // output changed taught the model something, so its streak restarts.
     const resultHash = fnv1a64(ctx.result);
     const seen = this.repeats.get(signature);
+
     if (seen && seen.resultHash === resultHash) {
       seen.count += 1;
+
       return recovery;
     }
+
     this.repeats.set(signature, {
       tool: ctx.toolName, args: echoArgs(ctx.args), resultHash, count: 1,
     });
+
     return recovery;
   }
 
@@ -300,6 +312,7 @@ export class TurnSteering {
    *  steered: no row, `turn_end` being the denominator. */
   snapshot(): TurnSteeringRecord[] {
     if (this.fired) return [{ ...this.fired, converted: this.converted }];
+
     return [];
   }
 
@@ -351,27 +364,36 @@ export class TurnSteering {
     // fired: this is the turn's own accounting, and letting it drift would
     // make the number meaningless if the trigger order ever changes.
     const score = this.progressScore(files);
+
     if (score === this.lastProgress) this.stalledSteps += 1;
     else { this.stalledSteps = 0; this.lastProgress = score; }
 
     if (this.fired) return null;
     const looping = [...this.repeats].find(([, call]) => call.count >= IDENTICAL_CALLS_BEFORE_STEER);
+
     if (looping) {
       const [signature, call] = looping;
       this.namedCall = signature;
       this.fired = { trigger: 'repeated_call', step, tool: call.tool };
+
       return signal(repeatedCallText(call.tool, call.args, call.count));
     }
+
     const stuck = [...this.failures].find(([, streak]) => streak.count >= CONSECUTIVE_FAILURES_BEFORE_STEER);
+
     if (stuck) {
       this.namedCall = stuck[1].signature;
       this.fired = { trigger: 'repeated_failure', step, tool: stuck[0] };
+
       return signal(repeatedFailureText(stuck[0], stuck[1].count));
     }
+
     if (this.stalledSteps >= STEPS_WITHOUT_PROGRESS_BEFORE_STEER) {
       this.fired = { trigger: 'no_progress', step };
+
       return signal(noProgressText(this.stalledSteps));
     }
+
     return null;
   }
 
@@ -381,7 +403,9 @@ export class TurnSteering {
    *  asks for ground the turn has not covered. */
   private answersTheSteer(ctx: ToolCallContext): boolean {
     const signature = callSignature(ctx.toolName, ctx.args);
+
     if (this.fired?.trigger === 'no_progress') return !this.repeats.has(signature);
+
     return signature !== this.namedCall;
   }
 }

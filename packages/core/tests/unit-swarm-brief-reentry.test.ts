@@ -14,6 +14,7 @@ import { branchPrompt } from '../src/strategy/swarm-expansion';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const TASK = 'Find the two independent causes of stale coupon reads';
+
 const BRIEFS = [
   { task: 'Inspect cache invalidation', prompt: 'Trace the revision across a credential rotation' },
   { task: 'Inspect transaction visibility', prompt: 'Read the committed row after reconnecting' },
@@ -21,7 +22,9 @@ const BRIEFS = [
 
 function resolved() {
   const value = resolveSwarm({ preset: 'ideate', task: TASK, nodes: BRIEFS });
+
   if ('reason' in value) throw new Error(value.error);
+
   return value;
 }
 
@@ -43,15 +46,18 @@ function model() {
 describe('a node keeps its assigned question across re-entry', () => {
   test('the durable node list names each question instead of repeating the run task', async () => {
     const { rt, db } = createTestRuntime();
+
     // A real actor per node: this run actually executes its nodes, and each one
     // is its own actor of the one workspace database.
     const result = await runSwarm({
       rt, model: model(), mode: 'build', logger: createRecordingLogger(),
       hostNode: hostedSeatsOver({ rt, db }).hostNode,
     }, resolved());
+
     if ('reason' in result) throw new Error(result.error);
     const journal = new HeadJournal(rt.storage.sql, rt.actor);
     const run = journal.listRuns(1)[0];
+
     if (!run) throw new Error('The swarm left no run to inspect');
     expect(run.heads.map((head) => head.task).sort()).toEqual(BRIEFS.map((brief) => brief.task).sort());
     expect(run.heads.map((head) => head.rationale).sort()).toEqual(BRIEFS.map((brief) => brief.prompt).sort());
@@ -73,6 +79,7 @@ describe('a node keeps its assigned question across re-entry', () => {
       VALUES (${rt.actor.actorId}, 'root', 'root', ${TASK}, '')`;
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, depth, task, observation)
       VALUES (${rt.actor.actorId}, 'parent', 'root', 'root', 1, ${TASK}, 'parent result')`;
+
     for (const [index, brief] of BRIEFS.entries()) {
       journal.insertSpawn({
         id: `child-${index}`, rootId: 'root', parentId: 'parent', depth: 2,
@@ -81,21 +88,26 @@ describe('a node keeps its assigned question across re-entry', () => {
         loop: defaultLoopOrigin('head'),
       });
     }
+
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, depth, task, observation)
       VALUES (${rt.actor.actorId}, 'child-0', 'parent', 'root', 2, 'Inspect cache invalidation', 'settled result')`;
     const reentry = reenterSwarm({ sql, ledger, journal, actor: rt.actor }, { task: TASK, now: 3 });
     const wave = resumedWaves(reentry)[0];
+
     if (!wave) throw new Error('The unfinished level was lost');
     const config = resolved();
     const slots = planLevel({ resolved: config, resumed: wave, grant: null, width: wave.siblings });
     const slot = slots[0];
+
     if (!slot) throw new Error('The unfinished node was lost');
+
     const prompt = branchPrompt({
       resolved: config, mode: 'build', languages: ['javascript'], measured: null, baseline: null,
       index: slot.index, branches: wave.siblings, task: slot.task, inherited: null,
       aggregated: [], ancestors: [], atDepth: 2, maxDepth: 3, carried: null,
       invite: false, assignment: slot.assignment,
     });
+
     expect(slot.id).toBe('child-1');
     expect(prompt.user).toContain('Inspect transaction visibility');
     expect(prompt.user).toContain('Your angle: Read the committed row after reconnecting.');

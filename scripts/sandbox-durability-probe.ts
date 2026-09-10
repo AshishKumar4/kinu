@@ -66,6 +66,7 @@ const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => v.union([
   v.array(JsonValueSchema),
   v.record(v.string(), JsonValueSchema),
 ]));
+
 const JsonObjectSchema: v.GenericSchema<JsonObject> = v.record(v.string(), JsonValueSchema);
 
 
@@ -151,7 +152,9 @@ const StrategyDecisionSchema = v.object({
 });
 
 const BASE_MIB = Number(process.env.PROBE_BASE_MIB ?? 64);
+
 const IDLE_MINUTES = Number(process.env.PROBE_IDLE_MINUTES ?? 11); // > platform default sleepAfter '10m'
+
 const PORT = 8080;
 
 interface Phase { readonly id: string; readonly name: string; readonly proves: string }
@@ -254,6 +257,7 @@ export function durabilityArtifactPath(artifactDir: string, runId: string): stri
   if (!/^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(runId)) {
     throw new Error(`safe artifact id required, got ${JSON.stringify(runId)}`);
   }
+
   return join(artifactDir, `sandbox-durability-${runId}.json`);
 }
 
@@ -268,6 +272,7 @@ export async function persistDurabilityArtifact(
   await mkdir(artifactDir, { recursive: true });
   const output = durabilityArtifactPath(artifactDir, artifact.runId);
   const temporary = `${output}.${randomUUID()}.tmp`;
+
   try {
     await writeFile(temporary, `${JSON.stringify(artifact, null, 2)}\n`, 'utf8');
     // link creates the final name only if it does not already exist. rename
@@ -276,11 +281,13 @@ export async function persistDurabilityArtifact(
   } finally {
     await rm(temporary, { force: true });
   }
+
   return output;
 }
 
 function plan(): void {
   console.log(`sandbox-durability probe plan (base=${BASE_MIB}MiB, idle=${IDLE_MINUTES}min)`);
+
   for (const p of PHASES) console.log(`  ${p.id} ${p.name}: ${p.proves}`);
   console.log("teardown: discardWorkspaceSnapshot deletes every chain object");
   console.log(`evidence: immutable JSON under ${DURABILITY_ARTIFACT_DIR}`);
@@ -301,8 +308,10 @@ const RESTART_WINDOW = [
 function sleep(ms: number): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
   setTimeout(resolve, ms);
+
   return promise;
 }
+
 async function request<T>(
   origin: string,
   token: string,
@@ -311,25 +320,31 @@ async function request<T>(
   schema: v.GenericSchema<T>,
 ): Promise<T> {
   let last = "";
+
   for (let attempt = 0; attempt < 6; attempt++) {
     const res = await fetch(new URL(op, origin), {
       method: "POST",
       headers: { "content-type": "application/json", "x-probe-token": token },
       body: JSON.stringify(body),
     });
+
     let data: unknown;
+
     try {
       data = await res.json();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`${op} did not return JSON: ${message}`, { cause: error });
     }
+
     if (res.ok) return v.parse(schema, data);
     const rendered = JSON.stringify(data) ?? String(data);
     last = `${op} failed (${res.status}): ${rendered.slice(0, 400)}`;
+
     if (!RESTART_WINDOW.some(marker => last.includes(marker))) throw new Error(last);
     await sleep(3_000 * (attempt + 1));
   }
+
   throw new Error(last);
 }
 
@@ -359,16 +374,19 @@ const ACCOUNT_ID = process.env.CLOUDFLARE_ACCOUNT_ID ?? "f44999d1ddda7012e9a8772
 
 function wrangler(args: readonly string[], cwd: string): Promise<{ stdout: string; code: number }> {
   const { promise, resolve, reject } = Promise.withResolvers<{ stdout: string; code: number }>();
+
   const child = spawn("wrangler", [...args], {
     cwd,
     stdio: ["ignore", "pipe", "pipe"],
     env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: ACCOUNT_ID },
   });
+
   let out = "";
   child.stdout.on("data", (chunk: Buffer) => { out += chunk.toString(); process.stdout.write(chunk); });
   child.stderr.on("data", (chunk: Buffer) => { out += chunk.toString(); process.stderr.write(chunk); });
   child.on("error", reject);
   child.on("exit", code => resolve({ stdout: out, code: code ?? 1 }));
+
   return promise;
 }
 
@@ -376,9 +394,11 @@ async function gitSha(): Promise<string> {
   const child = Bun.spawn(['git', 'rev-parse', 'HEAD'], { stdout: 'pipe', stderr: 'ignore' });
   const output = await new Response(child.stdout).text();
   const code = await child.exited;
+
   if (code !== 0 || !/^[0-9a-f]{40}\n$/u.test(output)) {
     throw new Error(`could not read the exact probe build identity (git exit ${code})`);
   }
+
   return output.trim();
 }
 
@@ -399,13 +419,18 @@ async function deployEphemeral(runId: string, token: string): Promise<Deployment
 
   const sourceText = (await Bun.file(`${fixtureDir}wrangler.jsonc`).text())
     .split("\n").filter(line => !line.trim().startsWith("//")).join("\n");
+
   const base = v.parse(JsonObjectSchema, JSON.parse(sourceText));
   const parsedBuckets = v.safeParse(v.array(JsonObjectSchema), base.r2_buckets);
+
   if (!parsedBuckets.success || parsedBuckets.output.length === 0) {
     throw new Error('durability fixture has no R2 bucket binding');
   }
+
   const [firstBucket, ...otherBuckets] = parsedBuckets.output;
+
   if (firstBucket === undefined) throw new Error('durability fixture has no first R2 bucket binding');
+
   const config: JsonObject = {
     ...base,
     name: workerName,
@@ -413,13 +438,16 @@ async function deployEphemeral(runId: string, token: string): Promise<Deployment
     r2_buckets: [{ ...firstBucket, bucket_name: bucketName }, ...otherBuckets],
     vars: { PROBE_TOKEN: token },
   };
+
   await Bun.write(`${fixtureDir}${configFile}`, JSON.stringify(config, null, 2));
 
   const bucket = await wrangler(["r2", "bucket", "create", bucketName], fixtureDir);
+
   if (bucket.code !== 0) throw new Error(`could not create the ephemeral bucket ${bucketName}`);
 
   const deployed = await wrangler(["deploy", "--config", configFile], fixtureDir);
   const url = deployed.stdout.match(/https:\/\/[a-z0-9-]+\.[a-z0-9-]+\.workers\.dev/);
+
   if (deployed.code !== 0 || url === null) {
     // CREATED HERE, SO CLEANED HERE. The outer finally cannot tear down a
     // `Deployment` that was never returned, and leaving an ephemeral bucket
@@ -427,12 +455,15 @@ async function deployEphemeral(runId: string, token: string): Promise<Deployment
     // evidence run that must leave the account as it found it.
     const cleanup = await wrangler(["r2", "bucket", "delete", bucketName], fixtureDir);
     await rm(`${fixtureDir}${configFile}`, { force: true });
+
     const detail = deployed.code !== 0
       ? "wrangler deploy failed; see output above"
       : "deploy printed no workers.dev URL";
+
     if (cleanup.code !== 0) throw new Error(`${detail}; cleanup bucket delete exited ${cleanup.code}`);
     throw new Error(detail);
   }
+
   return { origin: url[0], workerName, bucketName, configFile, fixtureDir };
 }
 
@@ -461,15 +492,18 @@ async function teardown(d: Deployment | undefined, token: string): Promise<void>
   }, failures);
   await collectTeardownFailure('delete fixture Worker', async () => {
     const result = await wrangler(["delete", "--config", d.configFile, "--force"], d.fixtureDir);
+
     if (result.code !== 0) throw new Error(`wrangler delete exited ${result.code}`);
   }, failures);
   await collectTeardownFailure('delete fixture bucket', async () => {
     const result = await wrangler(["r2", "bucket", "delete", d.bucketName], d.fixtureDir);
+
     if (result.code !== 0) throw new Error(`wrangler r2 bucket delete exited ${result.code}`);
   }, failures);
   await collectTeardownFailure('remove generated fixture config', async () => {
     await rm(`${d.fixtureDir}${d.configFile}`, { force: true });
   }, failures);
+
   if (failures.length > 0) throw new Error(`teardown incomplete: ${failures.join('; ')}`);
 }
 
@@ -490,16 +524,20 @@ async function restartVerified(origin: string, token: string): Promise<{ restart
   await call(origin, token, "/exec", { command: `echo ${token_} > /tmp/instance-marker` });
   await call(origin, token, "/stop");
   await wake(origin, token);
+
   const seen = await call(origin, token, "/exec", {
     command: "cat /tmp/instance-marker 2>/dev/null || echo GONE",
   });
+
   const restarted = String(seen.stdout ?? "").includes("GONE");
+
   if (!restarted) {
     throw new Error(
       "RESTART UNVERIFIED: the instance marker survived the stop, so the container never "
       + "went down — no durability verdict may be taken from this cycle",
     );
   }
+
   return { restarted };
 }
 
@@ -508,6 +546,7 @@ async function restartVerified(origin: string, token: string): Promise<{ restart
  *  restarting either way. */
 async function wake(origin: string, token: string, command = "true"): Promise<ProbeResponse> {
   let last: unknown;
+
   for (let attempt = 0; attempt < 6; attempt++) {
     try {
       return await call(origin, token, "/exec", { command, timeoutMs: 60_000 });
@@ -516,6 +555,7 @@ async function wake(origin: string, token: string, command = "true"): Promise<Pr
       await sleep(3_000 * (attempt + 1));
     }
   }
+
   throw last;
 }
 
@@ -523,9 +563,11 @@ async function wake(origin: string, token: string, command = "true"): Promise<Pr
  *  the one that must happen anyway, so it doubles as the readiness poll. */
 async function awaitOrigin(origin: string, token: string): Promise<void> {
   const deadline = Date.now() + 180_000;
+
   for (;;) {
     try {
       await call(origin, token, "/configure", { workspaceName: "durability-probe" });
+
       return;
     } catch (error) {
       if (Date.now() > deadline) throw error;
@@ -538,10 +580,13 @@ async function awaitOrigin(origin: string, token: string): Promise<void> {
 async function probeStrategyDecision(origin: string, token: string): Promise<NonNullable<ProbeEvidence['P0']>> {
   const picked = await callParsed(origin, token, "/state", {}, StrategyStateSchema);
   const decision = await callParsed(origin, token, "/strategyDecision", {}, StrategyDecisionSchema);
+
   if (picked.strategy !== decision.decided) {
     throw new Error(`P0: the product reports strategy ${picked.strategy}; the package's decision is ${decision.decided}`);
   }
+
   if (!picked.durable) throw new Error("P0: the product reports no durable store, so the strategy has nothing to write through");
+
   return { strategy: picked.strategy, durable: true };
 }
 
@@ -555,6 +600,7 @@ export async function run(): Promise<DurabilityProbeArtifact> {
   let outcome: DurabilityProbeArtifact['outcome'] = 'failed';
   let failure: unknown;
   let artifact: DurabilityProbeArtifact | undefined;
+
   try {
     build = {
       gitSha: await gitSha(),
@@ -574,33 +620,41 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // P1 — base layer.
     const bigId = `big-${Date.now()}.bin`;
     const chunk = Buffer.alloc(4 * 1024 * 1024, 0x5a);
+
     for (let i = 0; i < BASE_MIB / 4; i++) {
       await call(origin, token, "/writeFile", {
         path: `/workspace/${bigId}`, content: chunk.toString("base64"),
       });
     }
+
     await call(origin, token, "/writeFile",
       { path: "/workspace/doomed-marker.txt", content: Buffer.from("delete me").toString("base64") });
     await call(origin, token, "/tick");
+
     const baseCheckpoint = await callParsed(
       origin, token, "/finalCheckpoint", {}, CheckpointResponseSchema,
     );
+
     evidence.P1 = { bigFile: bigId, baseMib: BASE_MIB, checkpoint: baseCheckpoint };
     console.log("P1 base layer ok");
 
     // P2 — lazy restore: stop, wake, time it, read ONE slice deep in the file.
     await restartVerified(origin, token);
     const woke = await wake(origin, token, "grep overlay /proc/mounts || echo NO_OVERLAY");
+
     if (String(woke.stdout ?? "").includes("NO_OVERLAY")) {
       throw new Error("attach did not land: /workspace is not an overlay after a verified restart");
     }
+
     const slice = await call(origin, token, "/exec", {
       command: `dd if=/workspace/${bigId} bs=4096 skip=100000 count=1 2>/dev/null | md5sum`,
       timeoutMs: 30_000,
     });
+
     if (woke.stdout === undefined) {
       throw new Error(`wake did not attach a filesystem: ${JSON.stringify(woke).slice(0, 200)}`);
     }
+
     if (String(slice.stdout ?? "").trim().length < 32) throw new Error("deep slice read returned nothing");
     evidence.P2 = {
       wakeWallMs: woke.wallMs, sliceWallMs: slice.wallMs,
@@ -612,30 +666,39 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     await call(origin, token, "/exec", { command: "rm /workspace/doomed-marker.txt" });
     await call(origin, token, "/writeFile",
       { path: "/workspace/new-after-base.txt", content: Buffer.from("added").toString("base64") });
+
     // FORCED, not a tick: the base is a minute old and the five-minute interval
     // gate correctly declines an ordinary tick — measured, first run of this
     // phase against a real container.
     const checkpoint = await callParsed(
       origin, token, "/finalCheckpoint", {}, CheckpointResponseSchema,
     );
+
     const upperBefore = await call(origin, token, "/exec", {
       command: "ls -la /workspace; echo ---; grep workspace /proc/mounts; echo ---; ls -la /var/tmp/kinu/upper",
     });
+
     console.log(`P3 checkpoint=${JSON.stringify(checkpoint)}\n${upperBefore.stdout ?? ""}`);
     await restartVerified(origin, token);
+
     const attached = await call(origin, token, "/exec", {
       command: "grep overlay /proc/mounts || echo NO_OVERLAY; ls -1 /workspace | wc -l",
     });
+
     if (String(attached.stdout ?? "").includes("NO_OVERLAY")) {
       throw new Error(`restore did not attach after a verified restart: ${JSON.stringify(attached).slice(0, 240)}`);
     }
+
     const afterState = await call(origin, token, "/exec", {
       command: "ls -la /workspace; echo ---; grep workspace /proc/mounts; echo ---; ls -la /var/tmp/kinu/upper",
     });
+
     console.log(`P3 after wake:\n${afterState.stdout ?? ""}`);
     const gone = await call(origin, token, "/exec", { command: "test -e /workspace/doomed-marker.txt && echo present || echo absent" });
     const added = await call(origin, token, "/exec", { command: "cat /workspace/new-after-base.txt" });
+
     if ((gone.stdout ?? "").includes("present")) throw new Error("DELETION DID NOT SURVIVE RESTORE");
+
     if (!(added.stdout ?? "").includes("added")) throw new Error("delta content lost across restore");
     evidence.P3 = { deletedAbsent: true, additionPresent: true, checkpoint };
     console.log("P3 whiteouts ok");
@@ -645,20 +708,26 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // a listener that is not there. It must NOT expose a dead URL or report
     // ready; it must stay attached so the caller can repair it.
     const FAILED_PORT = 18_081;
+
     const failed = await callParsed(origin, token, "/startProcess", {
       command: 'node -e "process.exit(1)"', cwd: "/workspace",
     }, ProcessStartResponseSchema);
+
     await callParsed(origin, token, "/notePortExposed", {
       port: FAILED_PORT, name: "failed-lifecycle-probe",
     }, PortTokenResponseSchema);
     await restartVerified(origin, token);
     const lifecycle = await callParsed(origin, token, "/state", {}, LifecycleStateSchema);
+
     const failedListener = await call(origin, token, "/exec", {
       command: `curl -sS -o /dev/null -m 2 -w '%{http_code}|%{exitcode}' --connect-timeout 1 http://127.0.0.1:${FAILED_PORT}/ 2>&1 || true`,
     });
+
     const specsRetained = lifecycle.supervised.some(row => row.processId === failed.processId)
       && lifecycle.ports.some(row => row.port === FAILED_PORT);
+
     const unready = lifecycle.unready;
+
     if (lifecycle.ready || unready === undefined || unready === null || !unready.includes(failed.processId)
       || !(failedListener.stdout ?? '').includes('|7') || !specsRetained) {
       throw new Error(
@@ -666,6 +735,7 @@ export async function run(): Promise<DurabilityProbeArtifact> {
         + `listener=${String(failedListener.stdout)}`,
       );
     }
+
     evidence.P7 = {
       failedProcessId: failed.processId,
       failedPort: FAILED_PORT,
@@ -680,16 +750,20 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // Arm AND VERIFY it before idle, then corroborate its fate with Devbox's
     // durable boot identity. Either signal alone is weaker.
     const beforeIdle = await callParsed(origin, token, "/state", {}, IdleTickSchema);
+
     if (beforeIdle.bootId === undefined || beforeIdle.bootId === null) {
       throw new Error("P5 began without a durable boot identity");
     }
+
     const idleMarker = `idle-${Date.now()}`;
     await call(origin, token, "/exec", {
       command: `printf %s ${idleMarker} > /tmp/idle-probe-marker`,
     });
+
     const markerBeforeIdle = await call(origin, token, "/exec", {
       command: `test "$(cat /tmp/idle-probe-marker)" = ${idleMarker} && echo armed || echo missing`,
     });
+
     if (!(markerBeforeIdle.stdout ?? "").includes("armed")) {
       throw new Error(`P5 marker did not persist before idle: ${markerBeforeIdle.stdout}`);
     }
@@ -703,6 +777,7 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     const schedules = await callParsed(
       origin, token, "/heartbeatSchedules", {}, ScheduleRowsSchema,
     );
+
     if (schedules.length === 0) throw new Error("heartbeat not armed");
     const idleStartedAt = Date.now();
     console.log(`P5 idle ${IDLE_MINUTES} min …`);
@@ -710,9 +785,11 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // Read the durable tick trail BEFORE the exec below wakes the box:
     // /state never touches the container, so this is the post-idle truth.
     const idleState = await callParsed(origin, token, "/state", {}, IdleTickSchema);
+
     const idleSchedules = await callParsed(
       origin, token, "/heartbeatSchedules", {}, ScheduleRowsSchema,
     );
+
     const tick = idleState.lastTick ?? undefined;
     const lastTick = JSON.stringify(tick ?? null);
     const heartbeatRows = String(idleSchedules.length);
@@ -720,30 +797,38 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     // recent and armed its successor. A chain that died mid-window shows a
     // stale `at` — that is the inactivity-sleep failure P5 exists to catch.
     const tickAgeMs = tick === undefined ? Number.POSITIVE_INFINITY : Date.now() - tick.at;
+
     if (!(tickAgeMs < 3 * 60_000 && tick?.armedNext === true)) {
       throw new Error(`heartbeat chain died during idle: lastTick=${lastTick}; heartbeatRows=${heartbeatRows}`);
     }
+
     if (Date.now() - idleStartedAt < IDLE_MINUTES * 60_000) throw new Error("idle window did not elapse");
+
     // (b) Replacement detector: the armed marker and durable boot identity
     // must agree. A missing marker that was never verified before idle proves
     // nothing; a boot id alone can be absent while a stamp is still in flight.
     const marker = await call(origin, token, "/exec", {
       command: `test "$(cat /tmp/idle-probe-marker 2>/dev/null)" = ${idleMarker} && echo alive || echo fresh-disk`,
     });
+
     const replacedByMarker = !(marker.stdout ?? "").includes("alive");
     const replacedByBoot = idleState.bootId !== beforeIdle.bootId;
+
     if (replacedByMarker !== replacedByBoot) {
       throw new Error(
         `P5 replacement signals disagree: marker=${marker.stdout} before=${beforeIdle.bootId} after=${idleState.bootId}`,
       );
     }
+
     const replaced = replacedByBoot;
+
     // (c) Continuity: the workspace bytes are back, whether or not the instance
     // survived. P4 is deliberately after this control, so no stale server claim
     // can make P5 fail before the supervision phase exists.
     const wsAfterIdle = await call(origin, token, "/exec", {
       command: "cat /workspace/new-after-base.txt",
     });
+
     if (!(wsAfterIdle.stdout ?? "").includes("added")) throw new Error("workspace lost across the idle window");
     evidence.P5 = { idleMinutes: IDLE_MINUTES, chainAlive: true, instanceReplaced: replaced, workspaceIntact: true };
     console.log(`P5 hold ok (chain alive; instance ${replaced ? "REPLACED by platform and healed" : "survived"})`);
@@ -754,6 +839,7 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     await call(origin, token, "/stop");
     await wake(origin, token);
     const still = await call(origin, token, "/exec", { command: "cat /workspace/new-after-base.txt" });
+
     if (!(still.stdout ?? "").includes("added")) throw new Error("workspace lost after final cycle");
     evidence.P6 = { intactAfterFinalStop: true };
     console.log("P6 final SIGTERM cycle ok");
@@ -764,21 +850,28 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     const proc = await callParsed(origin, token, "/startProcess", {
       command: 'node -e "setInterval(() => {}, 1000)"', cwd: "/workspace",
     }, ProcessStartResponseSchema);
+
     const portBeforeRestart = await callParsed(
       origin, token, "/notePortExposed", { port: PORT, name: "probe" }, PortTokenResponseSchema,
     );
+
     await call(origin, token, "/stop");
     await wake(origin, token);
+
     const procs = await callParsed(
       origin, token, "/listProcesses", {}, SupervisedProcessResponsesSchema,
     );
+
     const portAfterRestart = await callParsed(
       origin, token, "/notePortExposed", { port: PORT, name: "probe" }, PortTokenResponseSchema,
     );
+
     if (portBeforeRestart.urlToken !== portAfterRestart.urlToken) {
       throw new Error(`preview token changed across restart: ${portBeforeRestart.urlToken}/${portAfterRestart.urlToken}`);
     }
+
     const restarted = procs.some(process => process.processId === proc.processId && process.restartable);
+
     if (!restarted) throw new Error(`supervised process did not return: ${JSON.stringify(procs).slice(0, 200)}`);
     evidence.P4 = {
       processId: proc.processId,
@@ -791,10 +884,12 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     failure = error;
   } finally {
     let cleanupFailure: string | undefined;
+
     try {
       await teardown(deployment, token);
     } catch (error) {
       cleanupFailure = error instanceof Error ? error.message : String(error);
+
       if (failure === undefined) failure = error;
       outcome = 'failed';
     }
@@ -819,10 +914,12 @@ export async function run(): Promise<DurabilityProbeArtifact> {
       outcome,
       evidence,
     };
+
     if (failure !== undefined) {
       const message = failure instanceof Error ? failure.message : String(failure);
       record = { ...record, failure: message };
     }
+
     if (cleanupFailure !== undefined) record = { ...record, cleanupFailure };
     artifact = record;
 
@@ -832,15 +929,18 @@ export async function run(): Promise<DurabilityProbeArtifact> {
     } catch (persistFailure) {
       const message = persistFailure instanceof Error ? persistFailure.message : String(persistFailure);
       console.error(`could not persist durability evidence: ${message}`);
+
       if (failure === undefined) failure = persistFailure;
     }
   }
 
   if (failure !== undefined) throw failure;
+
   if (artifact === undefined) throw new Error('probe produced no artifact');
 
   console.log("\nPROBE GREEN");
   console.log(JSON.stringify(artifact, null, 2));
+
   return artifact;
 }
 

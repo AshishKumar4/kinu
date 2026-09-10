@@ -33,6 +33,7 @@ interface CloudflareLoginTestBindings<UserStub, AgentStub> {
 function testEnv<UserStub, AgentStub>(bindings: CloudflareLoginTestBindings<UserStub, AgentStub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: The callback reads exactly the constructed KV namespace, namespaces,
   // OAuth client values, and credential key; every reachable binding is present above.
   return env as Env;
@@ -46,6 +47,7 @@ function setupEnv() {
    *  the row is what says a cookie is live, and it carries the `authTime` a
    *  step-up compares against. */
   const sessions = new Map<string, { expiresAt: number; identity: BrowserSessionIdentity }>();
+
   const userDO = {
     async ensureProfile(_caller: UserCaller) {},
     async registerBrowserSession(
@@ -53,6 +55,7 @@ function setupEnv() {
     ) { sessions.set(tokenHash, { expiresAt, identity }); },
     async verifyBrowserSession(_caller: UserCaller, tokenHash: string) {
       const row = sessions.get(tokenHash);
+
       return row && row.expiresAt > Date.now() ? { identity: row.identity } : null;
     },
     async revokeBrowserSession(_caller: UserCaller, tokenHash: string) { sessions.delete(tokenHash); },
@@ -63,6 +66,7 @@ function setupEnv() {
     async setConfig(_caller: UserCaller, key: string, value: string) { config.set(key, value); },
     async listActiveWorkspaces(_caller: UserCaller) { return []; },
   };
+
   const env = testEnv({
     AUTH_KV: kv,
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
@@ -71,13 +75,16 @@ function setupEnv() {
     CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+
   return { env, kv, credentials, config, sessions };
 }
 
 function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: string }) {
   const tokenRequests: URLSearchParams[] = [];
+
   const fetchFake = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new Request(input, init).url;
+
     if (url === 'https://dash.cloudflare.com/.well-known/openid-configuration') {
       return Response.json({
         issuer: 'https://dash.cloudflare.com',
@@ -85,8 +92,10 @@ function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: s
         token_endpoint: 'https://dash.cloudflare.com/oauth2/token',
       });
     }
+
     if (url === 'https://dash.cloudflare.com/oauth2/token') {
       tokenRequests.push(new URLSearchParams(String(init?.body)));
+
       return Response.json({
         ...tokens,
         token_type: 'bearer',
@@ -94,20 +103,24 @@ function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: s
         scope: CLOUDFLARE_WORKERS_AI_SCOPES,
       });
     }
+
     if (url === 'https://api.cloudflare.com/client/v4/user') {
       return Response.json({
         success: true,
         result: { id: 'cf-user-1', email: 'ashish@example.com', username: 'ashish' },
       });
     }
+
     if (url === 'https://api.cloudflare.com/client/v4/accounts') {
       return Response.json({
         success: true,
         result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
       });
     }
+
     throw new Error(`Unexpected fetch in test: ${url}`);
   });
+
   return { fetchFake, tokenRequests };
 }
 
@@ -127,19 +140,25 @@ interface CloudflareHandoff {
 
 async function startCloudflareLogin(env: Env, prompt?: 'login'): Promise<CloudflareHandoff> {
   const start = new URL(`${ORIGIN}/auth/cloudflare/start`);
+
   if (prompt) start.searchParams.set('prompt', prompt);
   const response = await handleAuthRequest(new Request(start), env);
+
   if (!response) throw new Error('auth route did not handle the sign-in start');
   const location = response.headers.get('location');
+
   if (!location) throw new Error(`sign-in start did not redirect: HTTP ${response.status}`);
   const authorize = new URL(location);
   const state = authorize.searchParams.get('state');
   const codeChallenge = authorize.searchParams.get('code_challenge');
+
   const setCookie = response.headers.getSetCookie()
     .find((value) => value.startsWith(`${OAUTH_STATE_COOKIE_NAME}=`));
+
   if (!state || !codeChallenge || !setCookie) {
     throw new Error(`sign-in start handed out no bound handoff: ${location}`);
   }
+
   return { state, codeChallenge, setCookie, authorizeUrl: location };
 }
 
@@ -152,10 +171,13 @@ async function completeCloudflareLogin(
   const callback = new URL(`${ORIGIN}/auth/cloudflare/callback`);
   callback.searchParams.set('state', handoff.state);
   callback.searchParams.set('code', 'auth-code-1');
+
   const response = await handleAuthRequest(new Request(callback.toString(), {
     headers: handoff.setCookie === undefined ? {} : { cookie: handoff.setCookie.split(';')[0] },
   }), env);
+
   if (!response) throw new Error('auth route did not handle the callback');
+
   return response;
 }
 
@@ -166,12 +188,15 @@ function sessionCookieIn(response: Response): string | undefined {
 describe('Cloudflare IdP login attaches the Workers AI credential', () => {
   test('one login grants both the app session and a refreshable AI credential', async () => {
     const { env, credentials, config } = setupEnv();
+
     const { fetchFake, tokenRequests } = fakeCloudflareNetwork({
       access_token: 'cf-access-1',
       refresh_token: 'cf-refresh-1',
     });
+
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fetchFake;
+
     try {
       const handoff = await startCloudflareLogin(env);
       const response = await completeCloudflareLogin(env, handoff);
@@ -195,6 +220,7 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
       expect(credentials[0].credential.accessToken).toBe('cf-access-1');
       expect(credentials[0].credential.refreshToken).toBe('cf-refresh-1');
       const expiresAt = credentials[0].credential.expiresAt;
+
       if (expiresAt === undefined) throw new Error('Cloudflare credential did not include an expiry');
       expect(expiresAt).toBeGreaterThan(Date.now());
       expect(credentials[0].credential.metadata?.accountId).toBe('abc123abc123abc123abc123abc123ab');
@@ -207,6 +233,7 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
   test('re-login re-attaches a fresh credential over the stored one', async () => {
     const { env, credentials } = setupEnv();
     const originalFetch = globalThis.fetch;
+
     try {
       globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1', refresh_token: 'cf-refresh-1' }).fetchFake;
       await completeCloudflareLogin(env, await startCloudflareLogin(env));
@@ -235,6 +262,7 @@ describe('a sign-in cannot be planted in another browser', () => {
     const { env, credentials } = setupEnv();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1' }).fetchFake;
+
     try {
       const attacker = await startCloudflareLogin(env);
       const planted = await completeCloudflareLogin(env, { state: attacker.state });
@@ -256,6 +284,7 @@ describe('a sign-in cannot be planted in another browser', () => {
     const { env } = setupEnv();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1' }).fetchFake;
+
     try {
       const attacker = await startCloudflareLogin(env);
       const victim = await startCloudflareLogin(env);
@@ -263,6 +292,7 @@ describe('a sign-in cannot be planted in another browser', () => {
       const planted = await completeCloudflareLogin(env, {
         state: attacker.state, setCookie: victim.setCookie,
       });
+
       expect(planted.status).toBe(400);
       expect(sessionCookieIn(planted)).toBeUndefined();
 
@@ -280,6 +310,7 @@ describe('a sign-in cannot be planted in another browser', () => {
     const { env } = setupEnv();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1' }).fetchFake;
+
     try {
       const handoff = await startCloudflareLogin(env);
       expect(handoff.setCookie).toContain('HttpOnly');
@@ -313,7 +344,9 @@ describe('a sign-in cannot be planted in another browser', () => {
 describe('a stale session sent to re-authenticate', () => {
   function loginRequest(token: string, prompt: 'login' | null): Request {
     const url = new URL(`${ORIGIN}/login`);
+
     if (prompt) url.searchParams.set('prompt', prompt);
+
     return new Request(url, {
       headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}` },
     });
@@ -321,6 +354,7 @@ describe('a stale session sent to re-authenticate', () => {
 
   function sessionTokenFrom(response: Response): string {
     const cookie = sessionCookieIn(response) ?? '';
+
     return decodeURIComponent(/__Host-kinu_session=([^;]+)/.exec(cookie)?.[1] ?? '');
   }
 
@@ -328,6 +362,7 @@ describe('a stale session sent to re-authenticate', () => {
     const { env, sessions } = setupEnv();
     const originalFetch = globalThis.fetch;
     globalThis.fetch = fakeCloudflareNetwork({ access_token: 'cf-access-1' }).fetchFake;
+
     try {
       const signedIn = await completeCloudflareLogin(env, await startCloudflareLogin(env));
       const token = sessionTokenFrom(signedIn);

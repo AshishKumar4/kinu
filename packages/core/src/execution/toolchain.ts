@@ -67,6 +67,7 @@ export const TOOLCHAIN_PROBE_BINARIES: readonly string[] =
  */
 export function toolchainCapabilities(present: Iterable<string>): ExecutorCapability[] {
   const found = present instanceof Set ? present : new Set(present);
+
   return TOOLCHAIN_PROBE
     .filter(([, binaries]) => binaries.some((binary) => found.has(binary)))
     .map(([capability]) => capability);

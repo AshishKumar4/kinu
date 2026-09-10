@@ -102,6 +102,7 @@ export async function handleControlRequest(
   access: AccessIdentity,
 ): Promise<Response | null> {
   const url = new URL(request.url);
+
   if (!isControlPlaneApiPath(url.pathname)) return null;
 
   // Authorize as a READER first, for every method. A recognized operator whose
@@ -110,14 +111,18 @@ export async function handleControlRequest(
   // mutation by a real operator gets an audit row instead of vanishing into a
   // 403.
   const authorization = authorizeAdmin(env, identity, access, { mutating: false });
+
   if (!authorization.ok) {
     reportAdminDenial(authorization.denial, url.pathname, request.method);
+
     return err(adminDenialStatus(authorization.denial), adminDenialMessage(authorization.denial));
   }
+
   const admin = authorization.admin;
 
   try {
     const caller = await adminCaller(env, admin);
+
     return await dispatch(request, env, url, admin, caller);
   } catch (cause) {
     diagnostics.failure('control_plane.request_failed', toKinuError({
@@ -125,6 +130,7 @@ export async function handleControlRequest(
       cause,
       otherwise: 'unavailable',
     }), { path: url.pathname, method: request.method });
+
     return err(500, renderThrownChain({ cause }));
   }
 }
@@ -145,6 +151,7 @@ async function dispatch(
       ? await handleAction(request, env, admin, caller)
       : err(404, 'Not found');
   }
+
   if (request.method !== 'GET') return err(405, 'GET or POST');
 
   switch (head) {
@@ -153,12 +160,15 @@ async function dispatch(
 
     case 'users': {
       const userId = segments[1];
+
       if (userId === undefined) return json(await stub.listUsers(caller, pageQuery(url)));
+
       return await handleUserDetail(env, admin, caller, userId, url);
     }
 
     case 'workspaces': {
       const name = segments[1] === undefined ? undefined : decodeURIComponent(segments[1]);
+
       if (name === undefined) {
         // Built in statements: an absent `?userId=` must leave the property
         // ABSENT, because the store treats `userId: ''` as a filter that matches
@@ -166,18 +176,24 @@ async function dispatch(
         const filter: WorkspaceFilter = {
           includeRemoved: url.searchParams.get('includeRemoved') === '1',
         };
+
         const userId = url.searchParams.get('userId');
+
         if (userId !== null) filter.userId = userId;
+
         return json(await stub.listWorkspaces(caller, pageQuery(url), filter));
       }
+
       // A workspace name is not an address — `?userId=` is what makes it one.
       // Required rather than optional: the alternative resolves the global
       // Durable Object for whatever account happens to hold that name first,
       // which is the reach this route exists to bound.
       const owner = url.searchParams.get('userId');
+
       if (owner === null || !v.is(UserIdSchema, owner)) {
         return err(400, 'a workspace read must name the account that owns it (?userId=)');
       }
+
       return await handleWorkspaceDetail(env, owner, name);
     }
 
@@ -195,8 +211,11 @@ async function dispatch(
     case 'metrics': {
       const ask: MetricsRequest = { hours: numberParam(url, 'hours') ?? 24 };
       const workspace = url.searchParams.get('workspace');
+
       if (workspace !== null) ask.workspace = workspace;
+
       if (url.searchParams.get('refresh') === '1') ask.forceRefresh = true;
+
       return json(await controlPlaneMetrics(env, ask));
     }
 
@@ -236,6 +255,7 @@ async function handleAction(
   caller: ControlCaller,
 ): Promise<Response> {
   const body = await safeJson(request, ControlActionSchema);
+
   if (body === null) {
     return await refuse(env, admin, caller, {
       operation: 'action_rejected', targetKind: 'request', target: '',
@@ -248,6 +268,7 @@ async function handleAction(
   }
 
   const described = describeAction(body);
+
   if (!admin.fresh) {
     return await refuse(env, admin, caller, described, {
       status: 403,
@@ -259,10 +280,12 @@ async function handleAction(
 
   // PHASE ONE. Nothing below this line runs unless the attempt is on the record.
   let intent: ControlAuditRow;
+
   try {
     intent = await appendAudit(env, admin, caller, { ...described, outcome: 'pending', detail: PENDING_DETAIL });
   } catch (cause) {
     reportAuditFailure('intent', { cause }, described.operation);
+
     return err(503, AUDIT_UNAVAILABLE);
   }
 
@@ -282,9 +305,11 @@ async function handleAction(
       // whole shape a settled attempt reports.
       code: outcome.code,
     };
+
     await controlPlaneStub(env).settleAudit(caller, settlement);
   } catch (cause) {
     reportAuditFailure('settle', { cause }, described.operation);
+
     // Not a success, whatever the action did. The operator is told the row is
     // unfinished and where to find it, because the alternative is a green answer
     // over an audit log that cannot say what happened.
@@ -294,6 +319,7 @@ async function handleAction(
   // A refusal by the owning object is a 409, not a 500: the request was
   // well-formed and authorized, and the state said no.
   const status = outcome.outcome === 'ok' ? 200 : outcome.outcome === 'denied' ? 409 : 502;
+
   return json({ outcome: outcome.outcome, detail: outcome.detail }, { status });
 }
 
@@ -303,6 +329,7 @@ const PENDING_DETAIL = 'in flight: the outcome has not been recorded';
 
 const AUDIT_UNAVAILABLE =
   'the admin audit log could not record this attempt, so nothing was run';
+
 const AUDIT_UNSETTLED =
   'the action ran and its outcome could not be recorded; the attempt is still pending in the audit log';
 
@@ -327,8 +354,10 @@ async function refuse(
     });
   } catch (cause) {
     reportAuditFailure('intent', { cause }, identity.operation);
+
     return err(503, AUDIT_UNAVAILABLE);
   }
+
   return err(refusal.status, refusal.message);
 }
 
@@ -361,7 +390,9 @@ async function appendAudit(
     outcome: entry.outcome,
     detail: entry.detail,
   };
+
   if (entry.reason !== undefined) draft.reason = entry.reason;
+
   return await controlPlaneStub(env).recordAudit(caller, draft);
 }
 
@@ -409,6 +440,7 @@ async function handleUserDetail(
   const request = pageQuery(url);
   const reconcile = await reconcileRoster(env, caller, userId, request.cursor === undefined);
   const workspaces = await stub.listWorkspaces(caller, request, { userId, includeRemoved: true });
+
   return json({ user, workspaces, reconcile, viewer: admin.email });
 }
 
@@ -435,8 +467,10 @@ async function reconcileRoster(
 ): Promise<ReconcileReport> {
   if (!firstPage) return { status: 'skipped', reason: CONTINUATION };
   const roster = await readRoster(env, userId);
+
   if (roster.status !== 'ok') return { status: 'failed', reason: roster.reason };
   await controlPlaneStub(env).replaceUserWorkspaces(caller, userId, roster.workspaces);
+
   return { status: 'ok' };
 }
 
@@ -461,13 +495,16 @@ type RosterRead =
  */
 async function readRoster(env: ControlEnv, userId: string): Promise<RosterRead> {
   const MAX_PAGES = 25;
+
   try {
     const owner = await ownerCaller(env);
     const user: DurableObjectStub<UserDO> = env.UserDO.get(env.UserDO.idFromName(userId));
     const workspaces: RosterWorkspace[] = [];
     let cursor: string | null = null;
+
     for (let page = 0; page < MAX_PAGES; page += 1) {
       const answer = await user.listWorkspaces(owner, cursor === null ? {} : { cursor });
+
       for (const row of answer.entries) {
         workspaces.push({
           name: row.name,
@@ -476,9 +513,12 @@ async function readRoster(env: ControlEnv, userId: string): Promise<RosterRead> 
           lastVisited: row.lastVisited,
         });
       }
+
       cursor = answer.nextCursor;
+
       if (cursor === null) return { status: 'ok', workspaces };
     }
+
     // The walk ran out of pages before the roster ran out of rows. Tombstoning
     // on a partial read would delete rows that exist, so this is a failure.
     return {
@@ -509,8 +549,10 @@ async function handleWorkspaceDetail(
   env: ControlEnv, userId: string, workspace: string,
 ): Promise<Response> {
   const owned = await claimOwnedWorkspace(env, userId, workspace);
+
   if (!owned.ok) return err(owned.status, owned.error);
   const agent = owned.agent;
+
   const [runs, activity, jobs, approvals, consents, executors, grants] = await Promise.allSettled([
     agent.getRunSummaries({ limit: DETAIL_WINDOW }),
     agent.getActivitySnapshot({ steps: DETAIL_WINDOW, logs: DETAIL_WINDOW }),
@@ -520,6 +562,7 @@ async function handleWorkspaceDetail(
     agent.getExecutors(),
     agent.getShellApprovalGrants(),
   ]);
+
   const detail: WorkspaceDetail = {
     workspace,
     userId,
@@ -531,6 +574,7 @@ async function handleWorkspaceDetail(
     executors: settled(executors),
     shellGrants: settled(grants),
   };
+
   return json(detail);
 }
 
@@ -584,16 +628,21 @@ function pageQuery(url: URL): PageRequest {
   // refuses a cursor it did not issue.
   const request: PageRequest = {};
   const cursor = v.safeParse(CursorParamSchema, url.searchParams.get('cursor'));
+
   if (cursor.success) request.cursor = { after: cursor.output };
   const limit = numberParam(url, 'limit');
+
   if (limit !== undefined) request.limit = limit;
+
   return request;
 }
 
 function numberParam(url: URL, name: string): number | undefined {
   const raw = url.searchParams.get(name);
+
   if (raw === null) return undefined;
   const parsed = Number(raw);
+
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 

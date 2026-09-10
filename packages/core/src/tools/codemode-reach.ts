@@ -43,6 +43,7 @@ const CodeArgSchema = v.object({ code: v.string() });
 export function codemodeProgramOf(toolName: string, args: JsonObject): string {
   if (toolName !== EXECUTE_TOOLS) return '';
   const parsed = v.safeParse(CodeArgSchema, args);
+
   return parsed.success ? parsed.output.code : '';
 }
 
@@ -56,12 +57,15 @@ export function codemodeProgramOf(toolName: string, args: JsonObject): string {
  */
 export function codemodeReaches(program: string, capability: string): boolean {
   if (program === '') return false;
+
   if (!isBuiltinToolName(capability)) return false;
   const namespace = TOOL_REACH[capability].codemode;
+
   // `execute_tools` IS the sandbox and owns no namespace inside it, so there is
   // nothing to match — and a program is never evidence of reaching it, since
   // being the program is what reaching it means.
   if (namespace === null) return false;
+
   return new RegExp(`(?:^|[^\\w$.])${namespace}\\.[A-Za-z_$][A-Za-z0-9_$]*\\s*\\(`)
     .test(stripNonCode(program));
 }

@@ -138,6 +138,7 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
   }
 
   const { count: unseenCount, revertable } = input.unseenChanges;
+
   if (unseenCount > 0) {
     actions.push({
       id: 'unseen-changes',

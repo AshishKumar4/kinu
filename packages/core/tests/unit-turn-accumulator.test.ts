@@ -166,10 +166,12 @@ describe('TurnAccumulator', () => {
     // sub-millisecond tool would silently lose its timing.
     const details: Array<string | undefined> = [];
     const durations: Array<number | undefined> = [];
+
     const a = new TurnAccumulator({
       logActivity: (_e, d) => details.push(d),
       onToolCallEvent: (e) => durations.push(e.durationMs),
     });
+
     a.recordToolCall({ toolName: 'fast', success: true, output: 1, durationMs: 0 });
     a.recordToolCall({ toolName: 'untimed', success: true, output: 1 });
     expect(details).toEqual(['fast (0ms)', 'untimed']);
@@ -258,11 +260,13 @@ describe('TurnAccumulator', () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
     const execRaw = makeExecRaw(db);
+
     // The cap is per actor, so the governor is bound to the actor whose spend
     // the accumulator is metering.
     const governor = new MissionGovernor({
       storage: { sql, execRaw }, actor: createTestActors(sql, execRaw).main,
     });
+
     governor.declare('nightly', {});
     governor.activate(['nightly']);
     const events: Array<{ usage?: Usage }> = [];

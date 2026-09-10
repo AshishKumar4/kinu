@@ -13,10 +13,13 @@ import type { UserCaller } from '../src/user/workspace-capability';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
+
 const { handleMcpRequest } = await import('../src/mcp-server');
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
+
 const ACCESS_TOKEN = `pta_${USER_ID}_abcdefghijklmnopqrstuvwxyz012345`;
 
 interface AgentCall { method: string; args: JsonValue[]; }
@@ -24,6 +27,7 @@ interface AgentCall { method: string; args: JsonValue[]; }
 function mcpEnv() {
   const calls: AgentCall[] = [];
   const record = (method: string, ...args: JsonValue[]) => { calls.push({ method, args }); };
+
   const userDO = {
     async verifyCliToken(_caller: UserCaller, token: string) {
       return token === SESSION_TOKEN
@@ -38,30 +42,60 @@ function mcpEnv() {
     async hasWorkspace(_caller: UserCaller, name: string) { return name === 'jarvis'; },
     async ensureWorkspaceCapability() {},
   };
+
   const agent = {
-    async claimOwner(userId: string) { record('claimOwner', userId); return { owner: userId, capabilityHash: 'sha-existing' }; },
-    async runTaskFromMcp(text: string) { record('runTaskFromMcp', text); return { status: 'queued' }; },
+    async claimOwner(userId: string) {
+      record('claimOwner', userId);
+
+      return { owner: userId, capabilityHash: 'sha-existing' };
+    },
+    async runTaskFromMcp(text: string) {
+      record('runTaskFromMcp', text);
+
+      return { status: 'queued' };
+    },
     async sendPeerFromMcp(input: { agent: string; message: string; topic?: string }) {
       record('sendPeerFromMcp', input);
+
       if (input.agent === 'stranger') throw new Error('unknown peer "stranger" — list your team with action:"list"');
+
       return { status: 'delivered', message_id: 'evt_123' };
     },
-    async listPeersFromMcp() { record('listPeersFromMcp'); return [{ name: 'atlas', displayName: 'Atlas' }]; },
-    async getReleaseBoard(limit: number) { record('getReleaseBoard', limit); return { changes: [], bindings: [] }; },
-    async createReleaseChange(input: JsonObject) { record('createReleaseChange', input); return { id: 'pc_1', status: 'draft', bindingId: 'bind_1' }; },
-    async transitionReleaseChange(changeId: string, status: string) { record('transitionReleaseChange', changeId, status); return { id: changeId, status }; },
+    async listPeersFromMcp() {
+      record('listPeersFromMcp');
+
+      return [{ name: 'atlas', displayName: 'Atlas' }];
+    },
+    async getReleaseBoard(limit: number) {
+      record('getReleaseBoard', limit);
+
+      return { changes: [], bindings: [] };
+    },
+    async createReleaseChange(input: JsonObject) {
+      record('createReleaseChange', input);
+
+      return { id: 'pc_1', status: 'draft', bindingId: 'bind_1' };
+    },
+    async transitionReleaseChange(changeId: string, status: string) {
+      record('transitionReleaseChange', changeId, status);
+
+      return { id: changeId, status };
+    },
   };
+
   const bindings = {
     AUTH_KV: {},
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
     OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
+
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, bindings);
   // SAFETY: handleMcpRequest only reaches the locally constructed auth and
   // orchestrator namespaces above; every method used by this suite is present.
   const env = partialEnv as Env;
+
   return { env, calls };
 }
 
@@ -71,7 +105,9 @@ function toolCall(agentName: string, name: string, args: JsonObject, token?: str
     accept: 'application/json, text/event-stream',
     'mcp-protocol-version': '2025-03-26',
   });
+
   if (token) headers.set('authorization', `Bearer ${token}`);
+
   return new Request(`https://kinu.example.com/mcp/v1/${agentName}`, {
     method: 'POST',
     headers,
@@ -84,6 +120,7 @@ async function resultText(res: Response | null): Promise<string> {
   if (!res) throw new Error('Expected the MCP handler to return a response');
   const body = await res.text();
   const match = /"text":"((?:[^"\\]|\\.)*)"/.exec(body);
+
   return match?.[1] ? v.parse(v.string(), JSON.parse(`"${match[1]}"`)) : body;
 }
 
@@ -157,11 +194,13 @@ describe('MCP write tools → real @callables', () => {
 
   test('release advance into an engine-owned state is refused — same gate as the builtin tool', async () => {
     const { env, calls } = mcpEnv();
+
     for (const status of ['validating', 'preview_ready', 'applying', 'deployed', 'rolled_back']) {
       const res = await handleMcpRequest(toolCall('jarvis', 'release', { action: 'advance', changeId: 'pc_1', status }, SESSION_TOKEN), env);
       expect(res?.status).toBe(200);
       expect(await resultText(res)).toContain('earned by execution');
     }
+
     expect(calls.some((c) => c.method === 'transitionReleaseChange')).toBe(false);
   });
 

@@ -17,10 +17,13 @@ import { renderThrownChain } from '@kinu.run/core/obs';
 
 /** The one creation surface's wording, kept beside the action it explains. */
 export const MISSION_LABEL = "Mission";
+
 export const MISSION_PLACEHOLDER =
   'A standing brief for the whole workspace. "My personal assistant, Jarvis." "Own the checkout service: find bugs, keep the tests green, ship the fixes."';
+
 export const MISSION_HELP =
   "Becomes the workspace's SOUL.md. Nothing runs until the first message.";
+
 export const CONNECT_AI_MESSAGE = "Connect Cloudflare Workers AI before creating a workspace.";
 
 export function useCreateWorkspace() {
@@ -43,9 +46,11 @@ export function useCreateWorkspace() {
   /** Create + navigate. `onBeforeNavigate` lets a modal dismiss itself first. */
   const create = useCallback(async (mission: string, onBeforeNavigate?: () => void) => {
     const m = mission.trim();
+
     if (!m || busy) return;
     setBusy(true);
     setErr(null);
+
     try {
       const created = await createWorkspaceFromMission(m);
       roster.upsert(created);

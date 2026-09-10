@@ -48,9 +48,11 @@ const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artif
 function parseArray<T>(json: string | null): T[] {
   if (!json) return [];
   const parsed = JSON.parse(json);
+
   if (!Array.isArray(parsed)) {
     throw new Error(`head journal JSON column is not an array: ${json.slice(0, 120)}`);
   }
+
   return parsed;
 }
 
@@ -69,10 +71,13 @@ function parseArray<T>(json: string | null): T[] {
  */
 export function storedUsage(row: StoredHeadUsage): Usage {
   const usage: { -readonly [K in keyof Usage]: number } = {};
+
   for (const field of USAGE_FIELDS) {
     const stored = row[HEAD_USAGE_COLUMNS[field]];
+
     if (stored !== null) usage[field] = stored;
   }
+
   return usage;
 }
 
@@ -274,6 +279,7 @@ export class HeadJournal {
       child_head_ids_json = ${JSON.stringify(report.childHeadIds)},
       file_changes_json = ${JSON.stringify(report.fileChanges ?? [])}
       WHERE actor_id = ${this.actorId} AND id = ${report.id}`;
+
     for (const ev of report.evidence) {
       this.insertEvidence(report.id, ev);
     }
@@ -315,6 +321,7 @@ export class HeadJournal {
     this.actor.assertCurrent();
     const before = scope?.spawnedBefore ?? null;
     const runs = this.unfinishedRuns(null, null, before);
+
     if (runs.length === 0) return [];
     // No `error_message`: nothing has failed. The column is the retirement's, and
     // writing a reason here is how a reader would come to believe the run ended.
@@ -322,6 +329,7 @@ export class HeadJournal {
       SET status = 'interrupted', completed_at = ${now}
       WHERE actor_id = ${this.actorId} AND status = 'running'
         AND (${before} IS NULL OR spawned_at < ${before})`;
+
     return runs;
   }
 
@@ -339,6 +347,7 @@ export class HeadJournal {
    */
   unfinishedRoots(spawnedBefore: number): HeadId[] {
     this.actor.assertCurrent();
+
     return this.unfinishedRuns('interrupted', null, spawnedBefore).map((run) => run.rootId);
   }
 
@@ -386,10 +395,12 @@ export class HeadJournal {
     const root = scope?.rootId ?? null;
     const before = scope?.spawnedBefore ?? null;
     const spared = new Set(scope?.exceptRoots ?? []);
+
     // Filtered here rather than in the predicate: this executor binds one value per
     // interpolation, so a set cannot cross into SQL without hand-built placeholders.
     const runs = this.unfinishedRuns('interrupted', root, before)
       .filter((run) => !spared.has(run.rootId));
+
     // One write per run, for the same reason — and the retiring set is the runs
     // just read, so the rows a caller is told about are exactly the rows written.
     for (const run of runs) {
@@ -399,6 +410,7 @@ export class HeadJournal {
           AND (status = 'running' OR status = 'interrupted')
           AND (${before} IS NULL OR spawned_at < ${before})`;
     }
+
     return runs;
   }
 
@@ -462,12 +474,14 @@ export class HeadJournal {
    */
   findResumableRun(task: string): HeadId | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ root_id: string }>`
       SELECT r.root_id AS root_id
       FROM head_runs r
       LEFT JOIN head_merge_results m ON m.actor_id = r.actor_id AND m.root_id = r.root_id
       WHERE r.actor_id = ${this.actorId} AND r.rationale = ${task} AND m.root_id IS NULL
       ORDER BY r.spawned_at DESC LIMIT 1`;
+
     return rows[0]?.root_id ?? null;
   }
 
@@ -492,7 +506,9 @@ export class HeadJournal {
 
   readSteps(headId: HeadId): HeadStep[] {
     this.actor.assertCurrent();
+
     type Row = { text: string | null; reasoning: string | null; tool_calls_json: string | null };
+
     return this.sql<Row>`
       SELECT text, reasoning, tool_calls_json FROM head_steps
       WHERE actor_id = ${this.actorId} AND head_id = ${headId} ORDER BY seq`.map((r) => ({
@@ -521,7 +537,9 @@ export class HeadJournal {
     const over = limit + 1;
     const after = request.cursor?.after ?? null;
     const from = after === null ? null : this.stepAnchor(headId, after);
+
     type Row = { id: string; text: string | null; reasoning: string | null; tool_calls_json: string | null };
+
     return mapPage(seekPage(from === null
       ? this.sql<Row>`
         SELECT id, text, reasoning, tool_calls_json FROM head_steps
@@ -541,9 +559,11 @@ export class HeadJournal {
    *  wire. Two aggregates, one scan. */
   countSteps(headId: HeadId): StepTotals {
     this.actor.assertCurrent();
+
     const row = this.sql<StepTotals & { tools: number | null }>`
       SELECT COUNT(*) AS steps, SUM(json_array_length(tool_calls_json)) AS tools
       FROM head_steps WHERE actor_id = ${this.actorId} AND head_id = ${headId}`[0];
+
     return { steps: row?.steps ?? 0, toolCalls: row?.tools ?? 0 };
   }
 
@@ -555,7 +575,9 @@ export class HeadJournal {
     const row = this.sql<{ seq: number }>`
       SELECT seq FROM head_steps
       WHERE actor_id = ${this.actorId} AND id = ${after} AND head_id = ${headId}`[0];
+
     if (row === undefined) throw new StaleCursorError('trace', after);
+
     return row.seq;
   }
 
@@ -569,6 +591,7 @@ export class HeadJournal {
 
   readHead(id: HeadId): HeadJournalRow | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<HeadJournalRow>`
       SELECT id, parent_id, root_id, depth, task, rationale, status,
              spawned_at, completed_at, token_input, token_output,
@@ -576,11 +599,13 @@ export class HeadJournal {
              token_reasoning, neurons,
              wall_clock_ms, summary, error_message, merge_strategy
       FROM head_journal WHERE actor_id = ${this.actorId} AND id = ${id}`;
+
     return rows[0] ?? null;
   }
 
   readTree(rootId: HeadId): HeadJournalRow[] {
     this.actor.assertCurrent();
+
     return this.sql<HeadJournalRow>`
       SELECT id, parent_id, root_id, depth, task, rationale, status,
              spawned_at, completed_at, token_input, token_output,
@@ -593,10 +618,13 @@ export class HeadJournal {
 
   readEvidence(headId: HeadId): Evidence[] {
     this.actor.assertCurrent();
+
     type Row = { id: string; kind: string; body: string; ref: string | null; confidence: number | null };
+
     const rows = this.sql<Row>`
       SELECT id, kind, body, ref, confidence
       FROM head_evidence WHERE actor_id = ${this.actorId} AND head_id = ${headId}`;
+
     return rows.map((r) => ({
       id: r.id,
       kind: v.parse(EvidenceKindSchema, r.kind),
@@ -674,9 +702,11 @@ export class HeadJournal {
    */
   listLive(limit = 8): ActiveRoster<LiveHeadRun> {
     this.actor.assertCurrent();
+
     const total = this.sql<{ n: number }>`
       SELECT COUNT(DISTINCT root_id) AS n FROM head_journal
       WHERE actor_id = ${this.actorId} AND status = 'running'`[0]?.n ?? 0;
+
     const items = this.sql<{ root_id: string; rationale: string | null; running: number; total: number; spawned_at: number }>`
       SELECT j.root_id AS root_id,
              MAX(r.rationale) AS rationale,
@@ -696,6 +726,7 @@ export class HeadJournal {
         running: row.running,
         total: row.total,
       }));
+
     return { items, total };
   }
 
@@ -709,12 +740,14 @@ export class HeadJournal {
    */
   listRunningRuns(): HeadRunView[] {
     this.actor.assertCurrent();
+
     const roots = this.sql<{ root_id: string; spawned_at: number }>`
       SELECT root_id, MIN(spawned_at) AS spawned_at
       FROM head_journal
       WHERE actor_id = ${this.actorId} AND status = 'running'
       GROUP BY root_id
       ORDER BY spawned_at ASC`;
+
     return roots.map((row) => this.assembleRun(row.root_id, row.spawned_at));
   }
 
@@ -725,6 +758,7 @@ export class HeadJournal {
    *  roots interrupted on purpose, and their recovery is still owed. */
   hasUnfinishedHeads(): boolean {
     this.actor.assertCurrent();
+
     return this.sql<{ present: number }>`
       SELECT 1 AS present FROM head_journal
       WHERE actor_id = ${this.actorId}
@@ -742,6 +776,7 @@ export class HeadJournal {
     prefix: string, limit: number, spawnedBefore: number,
   ): { id: HeadId; rootId: HeadId; task: string }[] {
     this.actor.assertCurrent();
+
     return this.sql<{ id: string; root_id: string; task: string }>`
       SELECT id, root_id, task FROM head_journal
       WHERE actor_id = ${this.actorId} AND status = 'running' AND root_id LIKE ${`${prefix}%`}
@@ -758,10 +793,12 @@ export class HeadJournal {
    *  synthesis. */
   listRuns(limit: number): HeadRunView[] {
     this.actor.assertCurrent();
+
     const roots = this.sql<{ root_id: string; spawned_at: number }>`
       SELECT root_id, MIN(spawned_at) AS spawned_at FROM head_journal
       WHERE actor_id = ${this.actorId}
       GROUP BY root_id ORDER BY spawned_at DESC LIMIT ${limit}`;
+
     return roots.map((r) => this.assembleRun(r.root_id, r.spawned_at));
   }
 
@@ -770,9 +807,11 @@ export class HeadJournal {
    *  a sibling owns. */
   readRun(rootId: HeadId): HeadRunView | null {
     this.actor.assertCurrent();
+
     const row = this.sql<{ spawned_at: number | null }>`
       SELECT MIN(spawned_at) AS spawned_at
       FROM head_journal WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`[0];
+
     return row?.spawned_at == null ? null : this.assembleRun(rootId, row.spawned_at);
   }
 
@@ -800,6 +839,7 @@ export class HeadJournal {
    */
   readHeadView(headId: HeadId): HeadRunHeadView | null {
     this.actor.assertCurrent();
+
     const row = this.sql<HeadViewRow>`
       SELECT j.id, j.parent_id, j.depth, j.task, j.rationale, j.status, j.summary, j.error_message,
              j.token_input, j.token_output, j.token_cache_read, j.token_cache_write,
@@ -809,6 +849,7 @@ export class HeadJournal {
       FROM head_journal j LEFT JOIN head_steps s ON s.actor_id = j.actor_id AND s.head_id = j.id
       WHERE j.actor_id = ${this.actorId} AND j.id = ${headId}
       GROUP BY j.id`[0];
+
     return row ? headViewOf(row) : null;
   }
 
@@ -829,11 +870,13 @@ export class HeadJournal {
    */
   lastActivityAt(headId: HeadId): number | null {
     this.actor.assertCurrent();
+
     const row = this.sql<{ spawned_at: number; last_step_at: number | null }>`
       SELECT j.spawned_at, MAX(s.created_at) AS last_step_at
       FROM head_journal j LEFT JOIN head_steps s ON s.actor_id = j.actor_id AND s.head_id = j.id
       WHERE j.actor_id = ${this.actorId} AND j.id = ${headId}
       GROUP BY j.id`[0];
+
     return row ? row.last_step_at ?? row.spawned_at : null;
   }
 
@@ -850,22 +893,26 @@ export class HeadJournal {
       FROM head_journal j LEFT JOIN head_steps s ON s.actor_id = j.actor_id AND s.head_id = j.id
       WHERE j.actor_id = ${this.actorId} AND j.root_id = ${rootId}
       GROUP BY j.id ORDER BY j.depth, j.spawned_at`;
+
     // A recursive sub-split's parent head is the run header, not one of its own
     // children; for top-level splits (synthetic root) nothing matches, so all
     // rows are heads.
     const rootRow = rows.find((h) => h.id === rootId) ?? null;
+
     const heads: HeadRunHeadView[] = rows
       .filter((h) => h.id !== rootId)
       .map((h) => headViewOf(h));
 
     const runRow = this.sql<{ rationale: string | null }>`
       SELECT rationale FROM head_runs WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`[0];
+
     const rationale = runRow?.rationale ?? rootRow?.rationale ?? '';
     const task = rootRow?.task || rationale || heads[0]?.task || '(head run)';
 
     const mergeRow = this.sql<{ merged_narrative: string; cost_head_count: number; cost_total_tokens: number | null }>`
       SELECT merged_narrative, cost_head_count, cost_total_tokens
       FROM head_merge_results WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`[0];
+
     const merge = mergeRow
       ? { narrative: mergeRow.merged_narrative, headCount: mergeRow.cost_head_count, totalTokens: mergeRow.cost_total_tokens }
       : null;
@@ -886,6 +933,7 @@ export class HeadJournal {
    *  can never disagree with the live run. */
   readFileChanges(rootId: HeadId): HeadFileChangeSet[] {
     this.actor.assertCurrent();
+
     return this.sql<{ id: string; file_changes_json: string | null }>`
       SELECT id, file_changes_json FROM head_journal
       WHERE actor_id = ${this.actorId} AND root_id = ${rootId} ORDER BY depth, spawned_at`
@@ -895,6 +943,7 @@ export class HeadJournal {
 
   readCachedMerge(rootId: HeadId): MergeResult | null {
     this.actor.assertCurrent();
+
     type Row = {
       merged_narrative: string;
       selected_decisions_json: string | null;
@@ -906,12 +955,15 @@ export class HeadJournal {
       cost_total_wall_ms: number;
       cost_max_depth: number;
     };
+
     const rows = this.sql<Row>`
       SELECT merged_narrative, selected_decisions_json, unresolved_questions_json,
              recommendations_json, blind_spots_json, cost_head_count, cost_total_tokens,
              cost_total_wall_ms, cost_max_depth
       FROM head_merge_results WHERE actor_id = ${this.actorId} AND root_id = ${rootId}`;
+
     const r = rows[0];
+
     if (!r) return null;
     // Evidence aggregate + headIds are not cached as separate columns —
     // rebuild from head_journal/head_evidence on demand.
@@ -919,6 +971,7 @@ export class HeadJournal {
     const evidence: Evidence[] = tree.flatMap((h) => this.readEvidence(h.id));
     const headIds: HeadId[] = tree.filter((h) => h.parent_id == null || h.parent_id === '').map((h) => h.id);
     const ids = headIds.length > 0 ? headIds : tree.map((h) => h.id);
+
     return {
       mergedNarrative: r.merged_narrative,
       selectedDecisions: r.selected_decisions_json ? JSON.parse(r.selected_decisions_json) : [],
@@ -953,7 +1006,9 @@ export class HeadJournal {
       const row = this.sql<{ status: string; decisions_json: string | null; artifacts_json: string | null }>`
         SELECT status, decisions_json, artifacts_json FROM head_journal
         WHERE actor_id = ${this.actorId} AND id = ${id}`[0];
+
       if (!row) return false;
+
       return headProducedFindings({
         // 'running' is not a terminal status: a head still in flight has banked
         // nothing beyond what the recorded arrays below already show.

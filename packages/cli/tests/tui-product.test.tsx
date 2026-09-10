@@ -75,6 +75,7 @@ describe('TUI product registries', () => {
         'conversation.cancel': ['escape'],
       },
     });
+
     expect(resolve(registry, key('escape'), ['modal', 'conversation', 'global'])).toBe('modal.close');
     expect(resolve(registry, key('escape'), ['conversation', 'global'])).toBe('conversation.cancel');
   });
@@ -109,6 +110,7 @@ describe('TUI product registries', () => {
     // terminal demo) print as the product's keybindings. The default preset
     // must actually bind them, or the demo advertises keys that do nothing.
     const registry = createKeybindingRegistry({ presetId: 'pi-omp' });
+
     for (const { action, keys } of TUI_ADVERTISED_HINTS) {
       expect(registry.hint(action)).toBe(keys);
     }
@@ -123,28 +125,36 @@ describe('TUI product registries', () => {
       { name: 'worker', label: 'worker', mode: 'local', status: 'running', cwd: '/tmp/kinu-activity-probe' },
       { name: 'resting', label: 'resting', mode: 'local', status: 'idle', cwd: '/tmp/kinu-activity-probe' },
     ]);
+
     function Probe() {
       const roster = useAgentRoster(source);
+
       return (
         <TuiShell scene="chat" roster={roster} navigationOverlayOpen={false} onNavigationOverlayChange={() => {}}>
           <text>scene</text>
         </TuiShell>
       );
     }
+
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
       width: 120,
       height: 20,
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(<TuiProductProvider><Probe /></TuiProductProvider>);
+
       for (let pass = 0; pass < 200; pass += 1) {
         await renderOnce();
+
         if (captureCharFrame().includes('resting')) break;
         await Bun.sleep(10);
       }
+
       const frame = captureCharFrame();
       expect(frame).toContain(`${TUI_MARKS.activity.running} worker`);
       expect(frame).toContain(`${TUI_MARKS.activity.idle} resting`);
@@ -158,6 +168,7 @@ describe('TUI product registries', () => {
     expect(() => createThemeRegistry(BUILTIN_TUI_THEMES)).not.toThrow();
 
     const dark = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark')!;
+
     const invisible: TuiThemeDefinition = {
       ...dark,
       id: 'invisible',
@@ -166,6 +177,7 @@ describe('TUI product registries', () => {
         text: { ...dark.colors.text, primary: dark.colors.background.overlay },
       },
     };
+
     expect(() => createThemeRegistry([invisible])).toThrow(/text\.primary\/background\.overlay contrast/);
   });
 
@@ -177,6 +189,7 @@ describe('TUI product registries', () => {
 
   test('the selectable system theme follows terminal appearance', async () => {
     const system: ThemeSelection = { mode: 'system', darkThemeId: 'kinu-dark-solid', lightThemeId: 'kinu-light-solid' };
+
     for (const [appearance, expected] of [['dark', 'kinu-dark-solid'], ['light', 'kinu-light-solid']] as const) {
       expect(await renderedThemeId(appearance, system)).toBe(expected);
     }
@@ -200,6 +213,7 @@ describe('TUI product registries', () => {
       appearance: 'light',
       colors: BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light')!.colors,
     });
+
     expect(parseCustomTheme(valid, 'paper-custom.json').id).toBe('paper-custom');
     expect(() => parseCustomTheme(valid.replace('"overlay":"#', '"overlay":"nope#'), 'broken.json')).toThrow(/overlay/);
     expect(() => parseCustomTheme(valid.replace('"appearance":"light"', '"appearance":"light","surprise":true'), 'unknown.json')).toThrow(/surprise/);
@@ -237,7 +251,9 @@ async function renderedThemeId(
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
   });
+
   const root = createRoot(renderer);
+
   try {
     root.render(
       <TuiThemeProvider
@@ -249,12 +265,15 @@ async function renderedThemeId(
         <ActiveThemeProbe />
       </TuiThemeProvider>,
     );
+
     for (let pass = 0; pass < 40; pass += 1) {
       await renderOnce();
       const marked = captureCharFrame().split('theme=')[1];
+
       if (marked !== undefined && marked.trim() !== '') return marked.trimEnd();
       await Bun.sleep(5);
     }
+
     throw new Error(`the theme probe never painted for a ${appearance} terminal`);
   } finally {
     flushSync(() => { root.unmount(); });
@@ -264,5 +283,6 @@ async function renderedThemeId(
 
 function ActiveThemeProbe() {
   const { definition } = useTuiTheme();
+
   return <text>theme={definition.id}</text>;
 }

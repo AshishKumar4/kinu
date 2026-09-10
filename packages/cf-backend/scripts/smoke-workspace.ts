@@ -3,12 +3,16 @@ import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const origin = (process.env.KINU_SMOKE_ORIGIN ?? 'https://staging.kinu.run').replace(/\/+$/, '');
+
 const agentName = process.env.KINU_SMOKE_AGENT ?? `smoke-workspace-${Date.now().toString(36)}`;
+
 const mission = process.env.KINU_SMOKE_MISSION ?? `Verify workspace websocket and snapshot ${new Date().toISOString()}`;
+
 const keepAgent = process.env.KINU_SMOKE_KEEP_AGENT === '1';
 
 function wsOrigin(httpOrigin: string): string {
   if (httpOrigin.startsWith('https://')) return `wss://${httpOrigin.slice('https://'.length)}`;
+
   if (httpOrigin.startsWith('http://')) return `ws://${httpOrigin.slice('http://'.length)}`;
   throw new Error(`Unsupported origin: ${httpOrigin}`);
 }
@@ -21,8 +25,11 @@ async function jsonFetch(path: string, init: RequestInit = {}): Promise<JsonValu
       ...init.headers,
     },
   });
+
   const text = await res.text();
+
   if (!res.ok) throw new Error(`${init.method ?? 'GET'} ${path} -> ${res.status}: ${text}`);
+
   return text ? parseJsonValue(text) : undefined;
 }
 
@@ -82,10 +89,13 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
     });
     ws.addEventListener('message', (event) => {
       const raw = tolerate(() => parseJsonValue(String(event.data)), 'malformed-input');
+
       if (raw === undefined) return;
       const decoded = v.safeParse(WorkspaceMessageSchema, raw);
+
       if (!decoded.success) return;
       const message = decoded.output;
+
       if (message.type === 'cf_agent_identity' && !sentRpc) {
         sentRpc = true;
         ws.send(JSON.stringify({
@@ -94,17 +104,24 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
           method: 'getWorkspaceSnapshot',
           args: [],
         }));
+
         return;
       }
+
       if (message.type !== 'rpc' || message.id !== rpcId) return;
+
       if (message.success === false) {
         finish(() => reject(new Error(`getWorkspaceSnapshot failed: ${String(message.error ?? 'unknown')}`)));
+
         return;
       }
+
       if (!message.result) {
         finish(() => reject(new Error('getWorkspaceSnapshot returned no result')));
+
         return;
       }
+
       finish(() => resolve(message.result));
     });
   });
@@ -112,6 +129,7 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
 
 async function cleanupAgent(): Promise<void> {
   if (keepAgent) return;
+
   try {
     await jsonFetch(`/api/user/workspaces/${encodeURIComponent(agentName)}`, { method: 'DELETE' });
   } catch (err) {
@@ -125,18 +143,23 @@ try {
     body: JSON.stringify({ name: agentName, purpose: mission }),
   });
   const snapshot = await waitForWorkspaceSnapshot();
+
   if (snapshot.status?.name !== agentName) {
     throw new Error(`Snapshot agent mismatch: expected ${agentName}, got ${snapshot.status?.name ?? '(missing)'}`);
   }
+
   if (snapshot.status?.purpose !== mission) {
     throw new Error(`Snapshot purpose mismatch: expected "${mission}", got "${snapshot.status?.purpose ?? '(missing)'}"`);
   }
+
   if (!Array.isArray(snapshot.tools?.builtIn)) {
     throw new Error('Snapshot missing built-in tools array');
   }
+
   if (!Array.isArray(snapshot.executors)) {
     throw new Error('Snapshot missing executors array');
   }
+
   console.log(JSON.stringify({
     ok: true,
     origin,

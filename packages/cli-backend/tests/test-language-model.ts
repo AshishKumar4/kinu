@@ -42,8 +42,10 @@ export class TestLanguageModelV2 implements LanguageModelV2 {
       const result = await doGenerate(options);
       const parts: LanguageModelV2StreamPart[] = [{ type: 'stream-start', warnings: result.warnings }];
       let part = 0;
+
       for (const item of result.content) {
         const id = `p${String(part++)}`;
+
         if (item.type === 'text') {
           parts.push({ type: 'text-start', id });
           parts.push({ type: 'text-delta', id, delta: item.text });
@@ -56,7 +58,9 @@ export class TestLanguageModelV2 implements LanguageModelV2 {
           parts.push(item);
         }
       }
+
       parts.push({ type: 'finish', finishReason: result.finishReason, usage: result.usage });
+
       return {
         stream: new ReadableStream<LanguageModelV2StreamPart>({
           start(controller) {

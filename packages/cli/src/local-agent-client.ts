@@ -89,19 +89,24 @@ export interface LocalAgentClientOptions {
 /** Open a local agent database and wrap its LocalAgentSession as an AgentClient. */
 export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
   const dbPath = agentDbPath(name);
+
   if (!existsSync(dbPath)) {
     throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
   }
+
   const { llmConfig, resolver } = createConfiguredLocalModelResolver({ ...opts, agentName: name });
   const providerCredentials = resolveProviderCredentials();
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
+
   const openConfig = {
     llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH,
     checkpointKeep: loadConfigFile().checkpointKeep,
     cwd: opts.cwd,
   };
+
   const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
+
   const client = new LocalAgentClient({
     agentName: name,
     rt,
@@ -116,8 +121,10 @@ export async function openLocalAgentClient(name: string, opts: LocalAgentClientO
     naming: opts,
     surface: opts.surface ?? 'interactive',
   });
+
   return client;
 }
+
 /**
  * Run one GEPA optimisation pass over a local workspace's scaffold.
  *
@@ -132,6 +139,7 @@ export async function runLocalGepa(
   // One-shot surface: the pass is the whole job, and auto-evolution must not
   // race the candidate it is measuring.
   const client = await openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true });
+
   try {
     return await client.runScaffoldGepaOptimization(opts);
   } finally {
@@ -169,6 +177,7 @@ export async function autoTitleLocalWorkspace(
     persist: (title) => {
       if (config.getNameOrigin() === 'user') return false;
       config.setDisplayNameOrigin(title, 'auto');
+
       return true;
     },
     suggest: async (text) => (await suggestAgentIdentityFromMission(text, opts)).displayName,
@@ -324,16 +333,19 @@ export class LocalAgentClient implements AgentClient {
   /** Start one title operation and retain its settlement on this client. */
   startAutoTitle(source: { mission: string }): void {
     if (this.closed || this.autoTitleTask !== null) return;
+
     const owner: AutoTitleOperation = {
       controller: new AbortController(),
       promise: null,
     };
+
     this.autoTitleTask = owner;
     owner.promise = (async () => {
       // The rejection leaves the handler as a value rather than being judged
       // inside it: what a failure here MEANS is a fact about this client — only
       // `close()` aborts this controller — and not a fact about the error.
       let failure: { readonly cause: unknown } | undefined;
+
       try {
         await autoTitleLocalWorkspace(this.agentName, this.deps.rt, source, {
           ...this.deps.naming,
@@ -344,6 +356,7 @@ export class LocalAgentClient implements AgentClient {
       } finally {
         if (this.autoTitleTask === owner) this.autoTitleTask = null;
       }
+
       // `close()` aborts this controller and the abort reason travels as the
       // rejection, so a failure standing here after it is the cancellation the
       // caller asked for. Filed as `title_save_failed` it would report the
@@ -375,12 +388,14 @@ export class LocalAgentClient implements AgentClient {
    */
   async connect(): Promise<void> {
     const refusal = this.driverLease.acquire();
+
     if (refusal) {
       throw new KinuError(
         refusal.refused.reason,
         `${refusal.refused.error}. Close that session, or continue the conversation there.`,
       );
     }
+
     if (Object.keys(this.deps.mcpServers).length > 0) {
       await this.session.connectMcp(this.deps.mcpServers);
     }
@@ -388,6 +403,7 @@ export class LocalAgentClient implements AgentClient {
 
   subscribe(listener: (event: AgentClientEvent) => void): () => void {
     this.listeners.add(listener);
+
     return () => this.listeners.delete(listener);
   }
 
@@ -395,16 +411,19 @@ export class LocalAgentClient implements AgentClient {
     if (this.pending) throw new Error('A turn is already in progress.');
     const text = promptText(prompt);
     const files = promptFiles(prompt);
+
     // The JSONL log records attachment names, never the data-URL payloads.
     const sessionEntry: JsonObject = {
       text,
       cwd: opts.cwd ?? process.cwd(),
       backend: 'local',
     };
+
     if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
     this.activeCliSession.append('user', sessionEntry);
     const pending: PendingLocalTurn = { result: null };
     this.pending = pending;
+
     try {
       await this.session.send(files.length > 0 ? { text, files } : text, { tier: opts.tier });
       // An agent the owner added without naming has no title yet. What the
@@ -412,6 +431,7 @@ export class LocalAgentClient implements AgentClient {
       // peers it shares a mission with, so that is what names it — once, since
       // persisting marks `name_origin` and the shared policy stops matching.
       this.startAutoTitle({ mission: text });
+
       return pending.result ?? unfinishedTurn();
     } finally {
       if (this.pending === pending) this.pending = null;
@@ -422,15 +442,19 @@ export class LocalAgentClient implements AgentClient {
     const text = promptText(prompt);
     const files = promptFiles(prompt);
     const accepted = this.session.steer(files.length > 0 ? { text, files } : text);
+
     if (!accepted) return false;
+
     const sessionEntry: JsonObject = {
       text,
       steered: true,
       cwd: opts.cwd ?? process.cwd(),
       backend: 'local',
     };
+
     if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
     this.activeCliSession.append('user', sessionEntry);
+
     return true;
   }
 
@@ -439,6 +463,7 @@ export class LocalAgentClient implements AgentClient {
    *  head task is a string). */
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     const text = promptText(prompt);
+
     if (!this.session.branch(text)) return false;
     this.activeCliSession.append('user', {
       text,
@@ -446,6 +471,7 @@ export class LocalAgentClient implements AgentClient {
       cwd: opts.cwd ?? process.cwd(),
       backend: 'local',
     });
+
     return true;
   }
 
@@ -457,23 +483,28 @@ export class LocalAgentClient implements AgentClient {
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.pending) throw new Error('Cannot fork while a turn is running.');
     const { actorId } = this.deps.rt.actor;
+
     const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: string; content: string; created_at: number }>`
       SELECT id, parent_id, role, content, created_at
       FROM messages
       WHERE actor_id = ${actorId} AND session_id = ${this.canonicalConversation}
         AND role IN ('user', 'assistant')
       ORDER BY created_at ASC, rowid ASC`;
+
     const pivot = findForkPivot(rows, point);
+
     if (pivot < 0) {
       throw new Error('Could not locate that message in the durable conversation.');
     }
 
     const archivedConversation = `archive-${crypto.randomUUID()}`;
+
     for (const row of rows.slice(pivot)) {
       void this.deps.rt.storage.sql`
         UPDATE messages SET session_id = ${archivedConversation}
         WHERE actor_id = ${actorId} AND id = ${row.id}`;
     }
+
     // Session reassignment is invisible to the search index's rowid watermark;
     // its entries now name conversations the rows left.
     invalidateConversationSearchIndex(this.deps.rt.storage.sql);
@@ -484,6 +515,7 @@ export class LocalAgentClient implements AgentClient {
     });
     this.session = this.createAgentSession();
     await this.connect();
+
     return { client: this, label: `branch ${this.activeCliSession.id}` };
   }
 
@@ -513,6 +545,7 @@ export class LocalAgentClient implements AgentClient {
     this.closed = true;
     const autoTitleTask = this.autoTitleTask;
     autoTitleTask?.controller.abort(new Error('the client is closing'));
+
     try {
       if (autoTitleTask?.promise) await autoTitleTask.promise;
       await this.session.end();
@@ -531,11 +564,13 @@ export class LocalAgentClient implements AgentClient {
   async history(): Promise<AgentTranscriptMessage[]> {
     if (this.activeCliSession.mode !== 'record') return [];
     const transcript = readCliSessionTranscript(this.agentName, this.activeCliSession.id, this.deps.transcript);
+
     return transcriptMessages(transcript.entries);
   }
 
   async status(): Promise<AgentClientStatus> {
     const info = await this.deps.refreshInfo();
+
     return {
       name: info.name,
       purpose: info.purpose,
@@ -567,6 +602,7 @@ export class LocalAgentClient implements AgentClient {
   async changelog(limit?: number): Promise<AgentChangelogView> {
     const view = this.session.getEvolutionChangelog(limit);
     this.session.markChangelogSeen();
+
     return { entries: view.entries, unseenCount: view.unseenCount };
   }
 
@@ -609,6 +645,7 @@ export class LocalAgentClient implements AgentClient {
   async searchNodes(): Promise<AgentSearchNode[]> {
     // The latest search only — the same projection the cloud getMctsTree serves.
     const nodes = readLatestSearchTree(this.deps.rt.storage.sql, this.deps.rt.actor);
+
     return nodes.map((node) => ({
       depth: node.depth,
       status: node.status,
@@ -620,6 +657,7 @@ export class LocalAgentClient implements AgentClient {
 
   async listJobs(limit = 20): Promise<AgentJobSummary[]> {
     const jobs = await this.session.listBackgroundJobs(limit);
+
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status }));
   }
 
@@ -670,24 +708,29 @@ export class LocalAgentClient implements AgentClient {
       // see a provider connected in another process on its next turn.
       providerRevision: readProviderRevision,
     };
+
     const session = new LocalAgentSession(options);
     // The lease RE-CHECKED at every turn boundary, not trusted from connect():
     // preemption means a lease can be lost between turns, and a session that
     // kept driving after losing it is the interleaving this exists to prevent.
     // Installed on every session, including the one a walk-back fork builds.
     session.setDriverGate(() => this.driverLease.acquire()?.refused ?? null);
+
     return session;
   }
 
   private handleSessionEvent(event: SessionEvent): void {
     const mapped = mapSessionEvent(event);
+
     if (!mapped) return;
+
     if (mapped.type === 'turn-end' && this.pending) this.pending.result = mapped.turn;
     this.emit(mapped);
   }
 
   private emit(event: AgentClientEvent): void {
     this.recorder.record(this.activeCliSession, event);
+
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -717,10 +760,12 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
           outcome: call.outcome,
         })),
       };
+
       // An all-absent report is an object, and a truthy one — gate on the
       // contract's own predicate so a turn nobody metered does not travel
       // looking like a measurement.
       if (event.turn.usage && usageReported(event.turn.usage)) turn.usage = event.turn.usage;
+
       return {
         type: 'turn-end',
         turn,

@@ -59,17 +59,22 @@ export function finalIntegerAnswer(response: string): number | null {
 
 function lastStandaloneInteger(text: string): number | null {
   let answer: number | null = null;
+
   for (const match of text.matchAll(INTEGER_TOKEN)) {
     const token = match[0];
     const start = match.index;
     const end = start + token.length;
     const before = text[start - 1] ?? '';
     const after = text[end] ?? '';
+
     if (WORD_CHAR.test(before) || WORD_CHAR.test(after)) continue;
+
     if (before === '.' && DIGIT.test(text[start - 2] ?? '')) continue;
+
     if (after === '.' && DIGIT.test(text[end + 1] ?? '')) continue;
     answer = Number(token.replaceAll(',', ''));
   }
+
   return answer;
 }
 

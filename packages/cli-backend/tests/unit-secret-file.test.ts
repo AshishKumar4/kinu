@@ -16,9 +16,11 @@ import { join } from 'node:path';
 import { enforceOwnerOnly, ensureSecretDir, writeSecretFile } from '../src/secret-file';
 
 const roots: string[] = [];
+
 function scratch(): string {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-secret-'));
   roots.push(dir);
+
   return dir;
 }
 
@@ -67,11 +69,13 @@ describe('enforceOwnerOnly', () => {
   test('reports the path and preserves the cause when chmod itself fails', () => {
     const missing = join(scratch(), 'does-not-exist');
     let caught: unknown;
+
     try {
       enforceOwnerOnly(missing);
     } catch (error) {
       caught = error;
     }
+
     if (!(caught instanceof Error)) throw new Error('enforceOwnerOnly did not throw an Error');
     expect(caught.message).toContain(missing);
     // Go's %w, in the language: the ENOENT survives for the caller to classify.

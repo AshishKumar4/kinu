@@ -95,6 +95,7 @@ async function stoppedBoxWithService(): Promise<Harness<TestBox>> {
   port(harnessed.rows, 3000, 'tok3000');
   harnessed.container.listening.add(3000);
   await harnessed.container.stop();
+
   return harnessed;
 }
 
@@ -105,6 +106,7 @@ function runningBoxWithService(): Harness<TestBox> {
   proc(harnessed.rows, 'p1');
   port(harnessed.rows, 3000, 'tok3000');
   harnessed.container.listening.add(3000);
+
   return harnessed;
 }
 
@@ -276,6 +278,7 @@ describe('the container-start hook restores the box', () => {
       { callback: 'snapshotWorkspaceIfDue', time: overdue },
       { callback: 'devboxIncidents', time: overdue },
     );
+
     // Built the way `harness` builds it — the same members the class reads at
     // construction — but with the dead row already present, which is what an
     // activation wakes into.
@@ -288,6 +291,7 @@ describe('the container-start hook restores the box', () => {
       id: { toString: () => TEST_BOX_ID },
       blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
     } as ConstructorParameters<typeof Devbox>[0];
+
     new TestBox(state, {});
     // No waiting: this stub runs the gate closure inline inside `new`, and the
     // sweep body is synchronous storage I/O, so the rows are gone before `new`
@@ -316,6 +320,7 @@ describe('the container-start hook restores the box', () => {
     storage.rows.set('devbox:boot-id', 'instance-a');
     storage.rows.set('devbox:restoration', { phase: 'attached' });
     let activation: Promise<unknown> = Promise.resolve();
+
     // SAFETY: the constructor's contract reads `storage`, `id`, `container`
     // and `blockConcurrencyWhile` off its state; the fake carries those four,
     // and hands the gate's closure back so the test can wait on the activation
@@ -327,20 +332,24 @@ describe('the container-start hook restores the box', () => {
       blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => {
         const run = closure();
         activation = run;
+
         return await run;
       },
     } as ConstructorParameters<typeof Devbox>[0];
+
     const box = new TestBox(state, {});
     const container = FakeSandbox.last!;
     // The control server accepts and never answers: any exec parks for ever.
     const silent = gate();
     container.execGate = silent;
+
     // Either the activation settles, or it reaches the parked exec and would
     // hold the platform's gate to its cancel: the old shape, and the red.
     const outcome = await Promise.race([
       activation.then(() => 'settled' as const),
       silent.reached.then(() => 'asked the container' as const),
     ]);
+
     expect({ outcome, execs: container.execs }).toEqual({ outcome: 'settled', execs: [] });
 
     // THE FIRST DELIVERED FRAME asks the question, where a deadline works: the
@@ -358,6 +367,7 @@ describe('the container-start hook restores the box', () => {
     storage.rows.set('devbox:boot-id', 'instance-a');
     storage.rows.set('devbox:restoration', { phase: 'attached' });
     let activation: Promise<unknown> = Promise.resolve();
+
     // SAFETY: the constructor's contract reads `storage`, `id`, `container`
     // and `blockConcurrencyWhile` off its state and nothing else (devbox.ts
     // constructor + `#activate`); the fake is constructed with exactly those
@@ -369,9 +379,11 @@ describe('the container-start hook restores the box', () => {
       blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => {
         const run = closure();
         activation = run;
+
         return await run;
       },
     } as ConstructorParameters<typeof Devbox>[0];
+
     const box = new TestBox(state, {});
     const container = FakeSandbox.last!;
     container.bootId = undefined;

@@ -24,7 +24,9 @@ import * as v from 'valibot';
 export function json<Body>(body: Body, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
   headers.set('content-type', 'application/json');
+
   if (!headers.has('cache-control')) headers.set('cache-control', PRIVATE_NO_STORE);
+
   return new Response(JSON.stringify(projectJsonValue({ value: body })), { ...init, headers });
 }
 
@@ -37,6 +39,7 @@ export async function safeJson<Schema extends v.GenericSchema>(
   schema: Schema,
 ): Promise<v.InferOutput<Schema> | null> {
   const parsed = v.safeParse(schema, await tolerateAsync(() => request.json(), 'malformed-input'));
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -74,25 +77,34 @@ export async function readBoundedStream(
   sink: (chunk: Uint8Array) => Promise<void> | void,
 ): Promise<'ok' | 'too_large' | KinuError> {
   const declared = Number(request.headers.get('content-length'));
+
   if (Number.isFinite(declared) && declared > limit) return 'too_large';
   const body = request.body;
+
   if (body === null) return 'ok';
   const reader = body.getReader();
   let total = 0;
+
   for (;;) {
     let arrived: Awaited<ReturnType<typeof reader.read>>;
+
     try {
       arrived = await reader.read();
     } catch (cause) {
       return toKinuError({ doing: 'reading a request body', cause, otherwise: 'unavailable' });
     }
+
     const value = arrived.value;
+
     if (arrived.done || value === undefined) return 'ok';
     total += value.byteLength;
+
     if (total > limit) {
       await reader.cancel('the request body is over its limit');
+
       return 'too_large';
     }
+
     await sink(value);
   }
 }
@@ -104,17 +116,21 @@ export async function readBounded(
 ): Promise<Uint8Array<ArrayBuffer> | 'too_large' | KinuError> {
   const chunks: Uint8Array[] = [];
   let total = 0;
+
   const outcome = await readBoundedStream(request, limit, (chunk) => {
     chunks.push(chunk);
     total += chunk.byteLength;
   });
+
   if (outcome !== 'ok') return outcome;
   const bounded = new Uint8Array(total);
   let at = 0;
+
   for (const chunk of chunks) {
     bounded.set(chunk, at);
     at += chunk.byteLength;
   }
+
   return bounded;
 }
 
@@ -139,13 +155,16 @@ export function escapeHtml(value: string): string {
 export function fileResponseHeaders(path: string, download: boolean): Headers {
   const name = path.slice(path.lastIndexOf('/') + 1) || 'file';
   const inlineType = download ? undefined : inlineFileType(path);
+
   const headers = new Headers({
     'content-type': inlineType ?? 'application/octet-stream',
     'content-disposition': `${inlineType ? 'inline' : 'attachment'}; filename="${encodeURIComponent(name)}"`,
     'x-content-type-options': 'nosniff',
     'cache-control': 'no-store',
   });
+
   if (inlineType?.startsWith('image/')) headers.set('content-security-policy', 'sandbox');
+
   return headers;
 }
 
@@ -186,10 +205,13 @@ const PRINTABLE_FIELD_VALUE = /^[\x20-\x7E]+$/;
  */
 export function kinuUserAgent(callerUserAgent: string | null): string {
   const caller = callerUserAgent?.trim() ?? '';
+
   if (!caller || !PRINTABLE_FIELD_VALUE.test(caller)) return KINU_USER_AGENT;
+
   // A request that already went through this policy — a second interception
   // hop — must not stack the token again.
   if (caller.startsWith(KINU_USER_AGENT)) return caller;
+
   return `${KINU_USER_AGENT} ${caller}`;
 }
 
@@ -227,9 +249,11 @@ export function reoriginateRequest(
     headers: init.headers,
     redirect: init.redirect,
   };
+
   if (request.body !== null) {
     requestInit.body = request.body;
     requestInit.duplex = 'half';
   }
+
   return new Request(target, requestInit);
 }

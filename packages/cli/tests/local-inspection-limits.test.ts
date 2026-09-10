@@ -26,7 +26,9 @@ import { listLocalTimeline, searchLocalMemory } from '../src/local-inspection';
 // usually loads it first — a suite-private HOME set here would be ignored, and
 // the seeded agent would land where `agentDbPath` never looks.
 const AGENT = 'probe';
+
 const AGENT_DIR = agentDir(AGENT);
+
 const DB_PATH = join(AGENT_DIR, 'agent.db');
 
 afterAll(() => rmSync(AGENT_DIR, { recursive: true, force: true }));
@@ -46,6 +48,7 @@ function seed(rows: number): void {
   const db = new Database(DB_PATH);
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const { actorId } = createTestActorsOver(db, { name: AGENT }).main;
+
   for (let i = 0; i < rows; i++) {
     db.run('INSERT INTO agent_log (actor_id, id, kind, trace_id, payload, received_at) VALUES (?, ?, ?, ?, ?, ?)',
       [actorId, `log-${i}`, 'step', `trace-${i}`, '{}', 1000 + i]);
@@ -54,6 +57,7 @@ function seed(rows: number): void {
     db.run('INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
       [`c-${i}`, `memory/n${i}.md`, 1, 2, `h${i}`, `wrangler staging note ${i}`, 1000 + i]);
   }
+
   db.close();
 }
 

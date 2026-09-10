@@ -75,12 +75,15 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   // must provision it, the way the DO does, or no trial can ever be recorded.
   initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
+
   if (opts.provisionScaffold !== false) {
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
     void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (actor_id, version, written_at, rationale)
       VALUES (${rt.actor.actorId}, 0, ${Date.now()}, ${'initial bootstrap'})`;
   }
+
   const events: SessionEvent[] = [];
+
   // Auto-evolution ON, exactly as a real session has it. The promotion gate IS
   // auto-evolution: a `--no-auto-evolve` session queues no trial and runs none,
   // so turning it off here to quieten the classifier would leave the deadlock
@@ -88,6 +91,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   const session = new LocalAgentSession({
     rt, db, model: fakeModel(defaultAnswer), onEvent: (e) => events.push(e),
   });
+
   return { db, rt, session, events };
 }
 
@@ -97,6 +101,7 @@ async function installScaffold(
   opts: { version: number; status: 'current' | 'pending'; code: string },
 ): Promise<void> {
   await rt.storage.vfs.writeFile(`scaffold/agent.js.v${opts.version}`, opts.code);
+
   if (opts.status === 'current') await rt.identity.scaffold.write(opts.code);
   void rt.storage.sql`
     INSERT OR REPLACE INTO scaffold_versions (actor_id, version, written_at, rationale, status)
@@ -125,10 +130,12 @@ describe('a promoted scaffold drives a local turn', () => {
 
     expect(streamed(events)).toBe('the scaffold answered: who answers?');
     expect(streamed(events)).not.toContain('default loop');
+
     // The reply the user saw is what the durable history keeps.
     const rows = db.query<{ role: string; content: string }, []>(
       `SELECT role, content FROM messages ORDER BY created_at`,
     ).all();
+
     expect(rows.map((r) => r.content)).toEqual(['who answers?', 'the scaffold answered: who answers?']);
   });
 
@@ -187,6 +194,7 @@ function markerJudge(pendingMarker: string): LLM {
     complete: async (prompt: string) => {
       const a = prompt.slice(prompt.indexOf('Response A:'), prompt.indexOf('Response B:'));
       const winner = a.includes(pendingMarker) ? 'a' : 'b';
+
       return JSON.stringify({
         winner, rationale: 'the pending answered better',
         scoreA: winner === 'a' ? 0.9 : 0.2,
@@ -317,8 +325,10 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     rt.actor.config.setShadowSampleRate(1);
 
     await session.send('queue one trial');
+
     const queued = rt.storage.sql<{ id: string }>`SELECT id FROM scaffold_trial_queue
       WHERE actor_id = ${rt.actor.actorId}`;
+
     expect(queued).toHaveLength(1);
     const trialId = queued[0]?.id ?? '';
 
@@ -333,6 +343,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     const claims = rt.storage.sql<{ turn_id: string; normalized_call_id: string }>`
       SELECT turn_id, normalized_call_id FROM tool_effect_claims
       WHERE turn_id = ${trialId}`;
+
     expect(claims).toHaveLength(1);
     expect(claims[0]?.normalized_call_id).toBe(`${trialId}#0`);
   }, 30_000);

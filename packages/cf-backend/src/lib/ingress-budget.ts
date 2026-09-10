@@ -52,8 +52,10 @@ export async function ingressAdmitted(
   const key = `ingress:${String(windowStart)}:${source}`;
   const current = await readKvJson(kv, key, INGRESS_WINDOW_SCHEMA);
   const count = (current !== null && current.windowStart === windowStart ? current.count : 0) + 1;
+
   if (count > limit) return false;
   await writeKvJson(kv, key, { count, windowStart }, windowStart + 2 * INGRESS_WINDOW_MS);
+
   return true;
 }
 
