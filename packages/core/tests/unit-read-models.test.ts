@@ -17,7 +17,7 @@ import {
   SDK_SESSION_DDL,
 } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';

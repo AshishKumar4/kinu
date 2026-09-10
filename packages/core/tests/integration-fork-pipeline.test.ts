@@ -22,7 +22,7 @@ import {
   snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
 } from '../src/index';
 import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
-import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 
 
 async function seedSource(src: TestWorkspace) {

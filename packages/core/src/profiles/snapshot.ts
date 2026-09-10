@@ -16,7 +16,7 @@ import * as v from 'valibot';
 
 import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
 import { REASONING_EFFORTS } from '../strategy/effort';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import {
   TIER_IDS, ProfileAuthoritySchema, formatProfileValidationIssues,
   type RoleId, type TierId,

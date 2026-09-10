@@ -19,7 +19,7 @@
 import type { ToolSet } from 'ai';
 
 import type { BackgroundJob, BackgroundJobStore } from '../jobs/store';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
 import { resumableAgentsInput } from '../tools/agents-tool';
 import { renderThrownChain } from '../obs/index';

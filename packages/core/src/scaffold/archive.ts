@@ -13,7 +13,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue } from '../utils/json';
 import type { ScaffoldStatus } from './shadow';
 

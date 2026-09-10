@@ -13,7 +13,7 @@ function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
 function isFileFrame(frame: ForkFrame): frame is ForkFileFrame {
   return frame.kind === 'file';
 }
-import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
   void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'origin'}, ${100})`;
   const actor = new WorkspaceActorDirectory(ws.sql, { workspaceId: 'SRC', ownerUserId: '' }).createMain({ name: 'origin' });

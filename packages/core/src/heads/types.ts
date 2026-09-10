@@ -442,7 +442,7 @@ export function budgetExhausted(b: HeadBudget) {
   }
   return { exhausted: false };
 }
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 /** The builtin tools a head keeps. `file` is the runtime's native file plane,
  *  `execute_tools` its executor namespaces, `run` its shell router, and `web`
  *  live research. Hosted `file` reaches the canonical workspace; local `file`

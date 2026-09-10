@@ -22,7 +22,7 @@
 
 import { wilsonInterval } from '../utils/stats';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { tableExists } from '../identity/schema';
 
 /** A rate is worth reading when its 95% interval spans no more than 20 points

@@ -41,7 +41,7 @@ import {
   type Priority, type KinuEvent, type RevisitCondition,
   type TraceId, type TurnId,
 } from './types';
-import type { ActorHandle } from '../../state/actor-handle';
+import type { ActorHandle } from '../../identity/actor-handle';
 import { dedupeKeyForDescriptor } from './dedupe';
 import { wakesADrain } from './drain';
 import { deriveFields } from './trust';

@@ -24,7 +24,7 @@ import { claimToolEffect, settleToolEffect, type ToolEffectKey } from '../tools/
 import { argumentDigest } from '../safety/argument-digest';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import {
   TERMINAL_EFFECT_RETRY_BASE_MS,
   TerminalEffectLedger,

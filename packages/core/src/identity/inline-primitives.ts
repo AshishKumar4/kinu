@@ -14,7 +14,7 @@ import type { CraftStore } from '../types/agent-runtime';
 import type {
   Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExecutor, VFS,
 } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from './actor-handle';
 import type { CraftedTool } from '../types/craft';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue } from '../utils/json';

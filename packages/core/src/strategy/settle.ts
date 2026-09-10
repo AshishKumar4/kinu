@@ -24,7 +24,7 @@ import { DEFAULT_CONFIG } from '../config';
 import { selectFrontierNode, type FrontierPolicy } from '../mcts/frontier';
 import type { Logger } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { SwarmProfileSnapshot } from '../profiles';
 import { admitToArchive, archiveCellOf, type ArchiveVerdict } from './archive';

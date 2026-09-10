@@ -15,7 +15,7 @@ import {
 import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers';
 import { forkFilePaths } from '../src/identity/fork';
 import type { VFS } from '../src/types/primitives';
-import { WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/state/workspace-actors';
+import { WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 /** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools.
  *  A message with no explicit `parent_id` is linked to the previous one, which
  *  is what the SDK's session provider does (`parentId ?? latestLeaf`) — a

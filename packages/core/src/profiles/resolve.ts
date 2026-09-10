@@ -17,7 +17,7 @@
 
 import * as v from 'valibot';
 
-import { isWorkMode, type WorkMode } from '../prompting/surface';
+import { isWorkMode, type WorkMode } from '../types/turn';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
 import { REASONING_EFFORT_FOR_STAGE, type ReasoningEffort } from '../strategy/effort';

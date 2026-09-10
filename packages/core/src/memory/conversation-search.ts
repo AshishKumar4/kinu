@@ -20,7 +20,7 @@ import * as v from 'valibot';
 import { CHAT_SESSION_ID, hasPaneStore, paneStampMs } from '../identity/conversation-store';
 import { boundedInt } from '../utils/bounds';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { uiMessageText } from '../utils/ui-message';
 
 // session_id 'mcts' holds MCTS tree nodes, not conversation — excluded from

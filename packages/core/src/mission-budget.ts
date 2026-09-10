@@ -44,7 +44,7 @@
 
 import * as v from 'valibot';
 import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives';
-import type { ActorHandle } from './state/actor-handle';
+import type { ActorHandle } from './identity/actor-handle';
 import { estimateTokens, estimateUsdCost } from './llm';
 import type { ModelPricing } from './providers/types';
 import type { JsonValue } from './utils/json';

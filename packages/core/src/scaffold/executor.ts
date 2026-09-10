@@ -52,7 +52,7 @@ import {
   type JsonValue,
 } from '../utils/json';
 import { renderThrownChain, KinuError } from '../obs/index';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { bindTaskPlan } from '../tasks/plan-scope';
 import { currentWorkMode, requireWorkModePermission, runWorkModeInvocation } from '../execution/work-mode';
 

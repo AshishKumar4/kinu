@@ -21,7 +21,7 @@ import { converge } from '../src/mcts/convergence';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initActorTables } from '../src/identity/schema';
 import type { SqlExecutor } from '../src/types/primitives';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 /** Record a node the way the engine does — value/visits are never written, so
  *  the DDL default is what lands in the row. */

@@ -23,7 +23,7 @@ import {
 } from './types';
 import { ulid } from './ulid';
 import type { SqlExec } from '../../types/primitives';
-import type { ActorHandle } from '../../state/actor-handle';
+import type { ActorHandle } from '../../identity/actor-handle';
 import { parseJsonValue, type JsonValue } from '../../utils/json';
 import { renderThrownChain } from '../../obs/index';
 

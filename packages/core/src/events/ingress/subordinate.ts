@@ -10,7 +10,7 @@ import { spillEventContent } from '../hub/content-spill';
 import { subordinateReportDedupeKey } from '../hub/dedupe';
 import { renderSubordinateHandoff } from '../hub/visibility';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../hub/types';
-import type { WorkMode } from '../../prompting/surface';
+import type { WorkMode } from '../../types/turn';
 import {
   admitSubordinateReport, normalizeReportContent, parentAdmitsSubordinateReport,
   type SubordinateReportOrigin,

@@ -58,13 +58,12 @@ import {
 import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import { PLATFORM_CATALOG } from './platform-catalog';
 
+export type { TurnProvenance, WorkMode } from './types/turn';
 export type {
   PromptBackend,
   PromptExecutorInfo,
   PromptExternalToolInfo,
   PromptIdentity,
-  TurnProvenance,
-  WorkMode,
 } from './prompting/surface';
 export type {
   PromptModelCapability,

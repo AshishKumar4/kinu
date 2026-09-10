@@ -15,7 +15,7 @@ import type { RunEventRecorder } from '../events/recorder';
 import type { RunEvent } from '../events/types';
 import type { BackgroundJobStore } from '../jobs/store';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { Usage } from '../usage';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { boundedInt } from '../utils/bounds';

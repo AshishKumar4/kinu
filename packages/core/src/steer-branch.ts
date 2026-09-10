@@ -21,7 +21,7 @@ import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes';
 import { nanoid } from './utils/nanoid';
 import { renderThrownChain } from './obs/index';
 import { defaultLoopOrigin } from './scaffold/loop-origin';
-import type { ActorHandle } from './state/actor-handle';
+import type { ActorHandle } from './identity/actor-handle';
 
 /** A branch is one head answering one redirect: depth 1, so it answers rather
  *  than splitting further. Like any head it runs until it is done — the settle

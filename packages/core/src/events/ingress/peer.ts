@@ -48,7 +48,7 @@ import {
 } from '../../tools/agents-tool';
 import { countMsgReceived } from '../../tools/msg-counters';
 import type { SqlExec, VFS } from '../../types/primitives';
-import type { WorkMode } from '../../prompting/surface';
+import type { WorkMode } from '../../types/turn';
 import {
   JsonValueSchema, parseJsonObject,
   type JsonValue,

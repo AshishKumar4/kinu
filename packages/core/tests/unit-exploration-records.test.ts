@@ -37,7 +37,7 @@ import type {
   Floor, FloorBreach, ObjectiveIdentity, PublicationState,
 } from '../src/strategy/objective';
 import type { SqlExecutor } from '../src/types/primitives';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 /** One records store and the ONE actor whose rows it holds. The handle is real
  *  and bound through the production directory: every read here is now scoped by

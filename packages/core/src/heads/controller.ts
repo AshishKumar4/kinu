@@ -36,7 +36,7 @@ import { MergeOutputSchema, type MergeOutput } from './merge-schema';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation';
 import { DEFAULT_CONFIG } from '../config';
 import type { LLM, Executor } from '../types/primitives';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { addUsage, usageTotal, type Usage } from '../usage';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { defaultLoopOrigin } from '../scaffold/loop-origin';

@@ -14,15 +14,15 @@ import { initScaffoldTables } from '../src/scaffold/schemas';
 import { getCurrentScaffoldVersion } from '../src/scaffold/shadow';
 import { readScaffoldFileText } from '../src/scaffold/surface';
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
-import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
-import { initCodemodeStateTable } from '../src/tools/state-codemode';
+import { initCodemodeStateTable } from '../src/identity/program-state';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 // From the modules that own them, NOT the barrel: `core/src/index.ts` re-exports
 // the actor host, whose own imports land with the context plane, and this suite
 // must be runnable on its own before that merge.
 import type { Identity, SqlExecutor, VFS } from '../src/types/primitives';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 const PARENT_V1 = '// parent v1 — the promoted loop\nasync function* run(rt, task) { yield "v1"; }\n';
 const PARENT_V2 = '// parent v2 — promoted later\nasync function* run(rt, task) { yield "v2"; }\n';

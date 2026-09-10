@@ -26,7 +26,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createMemoryVfs, createScriptedLLM, testActorHandle } from '@kinu.run/test-utils';
 import { makeExecRaw, makeSql, makeSqlExec } from './helpers';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { RawSqlExec, SqlExec, SqlExecutor, VFS } from '../src/types/primitives';
 

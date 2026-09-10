@@ -2,7 +2,7 @@ import * as v from 'valibot';
 import { KinuError } from '../obs/error';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import { ActorReferenceSchema, bindActorHandle, type ActorHandle, type ActorReference } from './actor-handle';
-import { tableExists } from '../identity/schema';
+import { tableExists } from './schema';
 import { isExplorationActorKey, requireSubordinateActorName } from './actor-key';
 export interface WorkspaceActorAuthority {
   readonly workspaceId: string;

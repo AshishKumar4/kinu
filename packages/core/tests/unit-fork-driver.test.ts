@@ -15,7 +15,7 @@ import {
 } from '../src/index';
 import { createTestWorkspace } from './helpers';
 
-import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 
 async function sourceWorkspace() {
   const { db, sql, vfs } = createTestWorkspace();

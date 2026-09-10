@@ -6,7 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, createMockLLM, createTestRuntime } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 import { initTurnOutcomeTables, recordTurnOutcome } from '../src/evolution/outcomes';
 import { initReplayTables, runReplayEval, listReplayEvals } from '../src/evolution/replay';

@@ -1,6 +1,6 @@
 import { runChat, type ChatEvent, type ChatOptions } from '../chat';
 import { runWorkModeInvocation } from '../execution/work-mode';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSpend } from '../events/model-call';
 import { scaffoldChatTransform } from '../scaffold/chat-transform';
