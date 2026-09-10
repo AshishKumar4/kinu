@@ -387,7 +387,7 @@ export type AgentsToolAction = (typeof AGENTS_TOOL_ACTIONS)[number];
 
 /** The one question the ladder asks. Prefixes the doctrine in both surfaces. */
 export const DELEGATION_FRAME =
-  'One delegation ladder, two rungs: a search is ephemeral and settles into this turn, and a hire is one agent whose `lifetime` decides whether it answers one question and retires or stays in your roster across turns.';
+  'One delegation ladder, two rungs: a search is ephemeral and settles into this turn, and a hire is one agent working a workstream of its own beside you.';
 
 /**
  * The CONTEXT axis, one entry per rung — the half of the ladder that decides
@@ -434,7 +434,7 @@ export const DELEGATION_INHERITANCE = {
   },
   hire: {
     rung:
-      'A hire starts FRESH at either lifetime: it gets its role, its mission and a short digest of your recent messages, and nothing else. It did not watch this conversation, so a mission that assumes it did is the one way hiring fails — write down what it needs.',
+      'A hire starts FRESH: it gets its role, its mission and a short digest of your recent messages, and nothing else. It did not watch this conversation, so a mission that assumes it did is the one way hiring fails — write down what it needs.',
     brief:
       'It did not watch this conversation and gets only a short digest of your recent messages, so state the goal, the constraints and what finished looks like here rather than assuming shared ground.',
   },
@@ -475,13 +475,45 @@ export const DELEGATION_RUNGS = {
   // hire that should have been `durable` wastes one question, while a `durable`
   // hire that should have been `task` leaves a roster row nobody retires.
   hire:
-    'Hire a helper (action=hire): one agent per independent workstream, each running its own tool loop over this same workspace, and `lifetime` decides how long it lives. '
-    + 'lifetime:"task" is for when you want an answer, not a colleague — the agent is created for that one question, this call waits for it to finish and returns its answer here, and it is archived the moment it answers with its transcript kept. It is the lifetime for work that is bounded and self-contained: reading a large file to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. There is no follow-up, so state the whole question once; a second exchange wanted "durable". '
-    + 'lifetime:"durable" (the default) outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished durable hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
+    'Hire a helper (action=hire): one agent per independent workstream, each running its own tool loop over this same workspace. '
+    + 'A hire outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
     // The other half of the CONTEXT axis, from the same per-action source the
     // `mission` field composes.
     + `${DELEGATION_INHERITANCE.hire.rung} `
     + 'Naming an `agent` that already exists instead of a `role` hands that agent the workstream rather than creating one, with `deliverable` saying what finished looks like.',
+} as const;
+
+/**
+ * The `task` lifetime, rendered ONLY where the actor wires a substrate that can
+ * run one. `lifetime` joins the schema on the same condition, and an unwired
+ * `task` hire is refused, so promising it everywhere advertised a field the
+ * caller could not set and a rung it could not reach. The durable half above
+ * reads as the whole of `hire` without it, which is what a team-only actor has.
+ */
+export const DELEGATION_TASK_LIFETIME =
+  '`lifetime` decides how long the helper lives, and lifetime:"task" is for when you want an answer, not a colleague — the agent is created for that one question, this call waits for it to finish and returns its answer here, and it is archived the moment it answers with its transcript kept. It is the lifetime for work that is bounded and self-contained: reading a large file to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. There is no follow-up, so state the whole question once; a second exchange wanted the default "durable".';
+
+/**
+ * The `agents` result contract, in the three pieces its two renderers select
+ * from. The `taskHire` sentence is the same conditional fact as
+ * {@link DELEGATION_TASK_LIFETIME}: an actor with no temporary substrate cannot
+ * produce that shape, so it is not told what it looks like. The full catalogue
+ * description concatenates all three, so a full surface renders byte-identical
+ * text and there is no second assembly to drift.
+ */
+export const AGENTS_RESULT_PARTS = {
+  roster: 'A durable hire and dismiss return roster state. ',
+  taskHire: 'A lifetime:"task" hire returns the agent\'s finished answer, its elapsed time and no roster row. ',
+  rest:
+    'A hire handed to an agent that already exists, and msg, return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
+    + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
+    // The result half is stated because a swarm's answer is not the only thing it
+    // carries, and the two extra fields are the ones a caller must not skip: the
+    // margin is the check docs/EXPLORATION.md — "Floor margin" requires be LOOKED
+    // at, and the caveat is the one sentence that stops a suspect number being
+    // quoted as a result.
+    + 'swarm returns the axes actually in force, the caps and where each came from, `best` with its RAW measured value in your unit beside the normalised score, every candidate including the ones that produced no usable answer and why, and a settle report carrying the measured baseline and the floor margin — and on a live session the call hands back a background job at spawn, with that report arriving as the wake when it settles. '
+    + 'A run that measured past its floor comes back with a publication caveat and no score on that candidate: the answer is still yours to read and is NOT publishable until the bound is re-derived.',
 } as const;
 
 /** How `msg` addresses an agent or an inbound question — the converse half of
@@ -764,7 +796,7 @@ export const BUILTIN_TOOL_SPECS = {
     summary:
       "Spawn and talk to helper agents — a measured search over ephemeral nodes of your own, persistent subordinates in this workspace, and the owner's other workspace agents.",
     whenToUse:
-      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_CONVERSE}`,
+      `${DELEGATION_FRAME} ${DELEGATION_RUNGS.swarm} ${DELEGATION_RUNGS.hire} ${DELEGATION_TASK_LIFETIME} ${DELEGATION_CONVERSE}`,
     // The same facts as positives. This field's LABEL still frames them
     // ("Avoid when: …", renderToolSchemaDescription below), which is the honest
     // place for the framing; the sentences inside it do not have to be
@@ -774,17 +806,7 @@ export const BUILTIN_TOOL_SPECS = {
     // prompt already tells it to do (heads/head-inference.ts).
     whenNotToUse:
       'A single short coherent change is yours to make directly. Nodes that would write the same mutable resource belong in one node that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
-    result:
-      'A durable hire and dismiss return roster state; a lifetime:"task" hire returns the agent\'s finished answer, its elapsed time and no roster row. '
-      + 'A hire handed to an agent that already exists, and msg, return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
-      + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id. '
-      // The result half is stated because a swarm's answer is not the only thing it
-      // carries, and the two extra fields are the ones a caller must not skip: the
-      // margin is the check docs/EXPLORATION.md — "Floor margin" requires be LOOKED
-      // at, and the caveat is the one sentence that stops a suspect number being
-      // quoted as a result.
-      + 'swarm returns the axes actually in force, the caps and where each came from, `best` with its RAW measured value in your unit beside the normalised score, every candidate including the ones that produced no usable answer and why, and a settle report carrying the measured baseline and the floor margin — and on a live session the call hands back a background job at spawn, with that report arriving as the wake when it settles. '
-      + 'A run that measured past its floor comes back with a publication caveat and no score on that candidate: the answer is still yours to read and is NOT publishable until the bound is re-derived.',
+    result: `${AGENTS_RESULT_PARTS.roster}${AGENTS_RESULT_PARTS.taskHire}${AGENTS_RESULT_PARTS.rest}`,
     // The cheapest COMPLETE call, which is what an example is for: `preset` and
     // `task` are the whole minimum, and `ideate` is the one preset that legally
     // takes no `objective`. The shape a model gets wrong here is the objective's

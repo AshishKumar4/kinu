@@ -611,20 +611,29 @@ describe('a recovery reads the record, not the session that finds it', () => {
     await replay;
     expect(asked()).toBe(1);
 
-    // THE RETRY, and it has to be genuinely DUE: the attempt that queued the
-    // turn armed its own next one off this session's skewed clock, so the sweep
-    // is stood one generation further on — the same thing five real seconds do
-    // to a process that stayed open.
+    // THE RETRY, genuinely DUE: the attempt that queued the turn armed its own
+    // next one off this session's skewed clock, so the sweep is stood one
+    // generation further on — the same thing five real seconds do to a process
+    // that stayed open.
+    //
+    // DEFERRED, not attempted, and that is the mechanism: this process is
+    // inside the sequence (the confirming turn parked in its model call holds
+    // it), so `resumeAll` joins rather than re-entering. A second attempt here
+    // would be two carriers running one sequence's effects, which is the whole
+    // reason the in-flight join exists. What the retry must NOT do is abandon
+    // the row: it stays pending with a future instant, so the wake and the next
+    // start both still come back for it.
     const attemptsBefore = gateAttempts(gated);
+    const dueAt = Date.now();
     next.skipBackoff(2);
     await next.recoverTerminalTransitions();
-    // The body RAN: it took another attempt and reported owed. Without this the
-    // sweep could have found the row not yet due and the assertion below would
-    // hold for a retry that never happened.
-    expect(gateAttempts(gated)).toBe(attemptsBefore + 1);
-    // The gate row is still owed, the confirming message is not on disk, and its
-    // queue item was shifted out before the turn started — so the running turn is
-    // the only evidence that this confirmation is already being asked.
+    expect(gateAttempts(gated)).toBe(attemptsBefore);
+    const held = stillOwed(gated);
+    expect(held.map((row) => row.effect_name)).toEqual(['completion_gate']);
+    expect(held.every((row) => row.status === 'pending')).toBe(true);
+    expect(gateNextAttemptAt(gated)).toBeGreaterThan(dueAt);
+    // And no second confirmation was asked while it was deferred.
+    expect(asked()).toBe(1);
     release.resolve();
     await next.settleBackgroundWork();
 
@@ -669,6 +678,12 @@ const rosterRows = (rt: CLIRuntime) =>
 const gateAttempts = (rt: CLIRuntime) =>
   rt.storage.sql<{ attempts: number }>`
     SELECT attempts FROM terminal_effects WHERE effect_name = 'completion_gate'`[0]?.attempts ?? 0;
+/** When the completion-gate row is next attemptable. A deferred row keeps a
+ *  future instant, which is what says the retry was postponed rather than
+ *  abandoned. */
+const gateNextAttemptAt = (rt: CLIRuntime) =>
+  rt.storage.sql<{ at: number }>`
+    SELECT next_attempt_at AS at FROM terminal_effects WHERE effect_name = 'completion_gate'`[0]?.at ?? 0;
 
 describe('a terminal close that fails leaves a way back', () => {
   test('a close whose settle throws re-arms its own wake', async () => {

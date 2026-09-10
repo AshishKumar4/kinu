@@ -228,8 +228,7 @@ function Header(): ReactElement {
     <header className="sticky top-0 z-20 border-b p-border bg-[color-mix(in_srgb,var(--c-bg)_90%,transparent)] backdrop-blur-[10px]">
       <div className={`${SHELL} flex h-[60px] items-center justify-between gap-5`}>
         <a href="#top" aria-label="Kinu home"><KinuLogo /></a>
-        <nav className="flex items-center gap-1" aria-label="Landing sections">
-          {[['platform', 'Cloud & local'], ['local', 'Smart CI'], ['plan', 'Plan'], ['slates', 'Slates'], ['evolution', 'Evolution'], ['swarm', 'Swarms']].map(([id, label]) => <a key={id} href={`#${id}`} className="hidden rounded-full px-3 py-2 text-[13px] p-text-3 transition-colors hover:p-text lg:block">{label}</a>)}
+        <nav className="flex items-center gap-1" aria-label="Landing actions">
           <a href={REPOSITORY} target="_blank" rel="noreferrer" className="hidden items-center gap-1 rounded-full px-3 py-2 text-[13px] p-text-3 hover:p-text xl:flex">GitHub <ArrowUpRightIcon aria-hidden="true" size={13} /></a>
           <Button type="button" variant="ghost" size="sm" onClick={toggleMode} aria-label={`Switch to ${theme.mode === 'dark' ? 'light' : 'dark'} mode`} icon={theme.mode === 'dark' ? <SunIcon size={15} /> : <MoonIcon size={15} />} />
           <LandingActionLink href="/login" primary size="base">Try cloud agents</LandingActionLink>
