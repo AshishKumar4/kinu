@@ -165,7 +165,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // is the depth cap rather than tidiness — `hire scope=workspace` rides the
     // peer transport and creates the ROOT of a fresh tree, so a subordinate
     // holding peers could escape its own subtree in one call
-    // (tools/agents-tool.ts, AgentsToolDeps.peers) — and cross-workspace reach
+    // (delegation/agents-tool.ts, AgentsToolDeps.peers) — and cross-workspace reach
     // is also an ownership boundary its parent owns and it is not party to.
     // Locally the whole action is wired: a local virtual workspace groups
     // several ROOT agents as equal peers over one directory, and LocalAgentHost

@@ -44,7 +44,7 @@ import { MctsSearchStore, initMctsSearchTable } from '../src/mcts/search-store';
 import { initSearchTables } from '../src/mcts/schemas';
 import { HeadJournal } from '../src/heads/journal';
 import { createRecordingLogger } from '../src/obs/index';
-import { createAgentsTool, type AgentsToolDeps, type AgentsToolInput } from '../src/tools/agents-tool';
+import { createAgentsTool, type AgentsToolDeps, type AgentsToolInput } from '../src/delegation/agents-tool';
 import { resumeBackgroundJob } from '../src/orchestrator/background-tools';
 import { BackgroundJobRunner } from '../src/jobs/runner';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store';

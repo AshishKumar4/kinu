@@ -15,7 +15,7 @@ import { createTestRuntime, toolExecute, scriptedTurnModel } from '@kinu.run/tes
 import { hostedSeatsOver } from './helpers-actor-host';
 
 import * as v from 'valibot';
-import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
+import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
 import { SWARM_PRESETS } from '../src/strategy/swarm';
 import {
   agentsActionsFor, buildBuiltinTools, createAgentsTool, parseAgentsToolInput,

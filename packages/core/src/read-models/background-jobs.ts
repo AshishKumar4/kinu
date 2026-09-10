@@ -21,7 +21,7 @@ import type { ToolSet } from 'ai';
 import type { BackgroundJob, BackgroundJobStore } from '../jobs/store';
 import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json';
-import { resumableAgentsInput } from '../tools/agents-tool';
+import { resumableAgentsInput } from '../delegation/agents-tool';
 import { renderThrownChain } from '../obs/index';
 
 /** The three things the control plane asks of a running job registry —

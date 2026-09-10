@@ -51,7 +51,7 @@ import {
   agentsActionFieldsFor,
   agentsActionInputVariantsFor,
   dispatchAgentsAction,
-} from '../src/tools/agents-tool';
+} from '../src/delegation/agents-tool';
 import { ROOT_DELEGATION_BUDGET } from '../src/subordinates/depth';
 import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
 

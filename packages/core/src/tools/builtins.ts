@@ -75,7 +75,7 @@ import {
 import type { ProfileCatalogEnvelope } from '../profiles/catalog';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
-import { dispatchReport, reportHandoffProperties, type ReportToolInput } from './report-tool';
+import { dispatchReport, reportHandoffProperties, type ReportToolInput } from '../delegation/report-tool';
 import {
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportHandoff, type SubordinateReportStatus,

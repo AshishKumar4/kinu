@@ -34,7 +34,7 @@ import type {
   SubordinateHandoff,
   SubordinateRosterEntry,
   TeamToolDeps,
-} from '../tools/agents-tool';
+} from '../delegation/agents-tool';
 import { SUBORDINATE_LIFETIMES, type SubordinateLifetime, type TemporaryAgentPort } from './temporary';
 import { KinuError, renderThrownChain } from '../obs/index';
 

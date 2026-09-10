@@ -22,7 +22,7 @@
       "complexity": 87
     },
     {
-      "key": "packages/core/src/tools/agents-tool.ts#dispatchAgentsAction",
+      "key": "packages/core/src/delegation/agents-tool.ts#dispatchAgentsAction",
       "complexity": 78
     },
     {
@@ -150,7 +150,7 @@
       "complexity": 40
     },
     {
-      "key": "packages/core/src/tools/agents-tool.ts#runSwarmAction",
+      "key": "packages/core/src/delegation/agents-tool.ts#runSwarmAction",
       "complexity": 40
     },
     {

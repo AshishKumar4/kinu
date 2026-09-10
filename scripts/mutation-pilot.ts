@@ -10,7 +10,7 @@
  * declared" — nothing enumerates the guards a module contains.
  *
  * `scripts/mutation-sweep.ts` is a hand-authored CATALOGUE of 20 mutations over
- * `packages/core/src/strategy/` and `packages/core/src/tools/agents-tool.ts`, aimed where
+ * `packages/core/src/strategy/` and `packages/core/src/delegation/agents-tool.ts`, aimed where
  * an audit had already found four built-and-unwired features. Each entry is a decision
  * someone chose to question, with a sentence saying what it decides.
  *

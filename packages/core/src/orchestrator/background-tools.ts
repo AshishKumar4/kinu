@@ -17,7 +17,7 @@ import { CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool } from '../jobs/
 import { RESUME_REDRIVE_OPTION } from '../jobs/threshold';
 import { JobNotResumable } from '../jobs/runner';
 import type { WorkMode } from '../types/turn';
-import { resumableAgentsInput } from '../tools/agents-tool';
+import { resumableAgentsInput } from '../delegation/agents-tool';
 import { harvestSwarm } from '../strategy/swarm-resume';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { SqlExecutor } from '../types/primitives';

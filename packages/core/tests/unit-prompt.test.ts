@@ -26,7 +26,7 @@ import {
   type SkillHeader,
   type PromptExecutorInfo,
 } from '../src/index';
-import { AGENTS_ACTION_FIELDS } from '../src/tools/agents-tool';
+import { AGENTS_ACTION_FIELDS } from '../src/delegation/agents-tool';
 import { DELEGATION_SECTION } from '../src/prompting/section-templates';
 import {
   NAMED_SWARM_PRESETS, SWARM_PRESETS, SWARM_PRESET_POINTS, resolveSwarm,

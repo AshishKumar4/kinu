@@ -46,7 +46,7 @@ import {
   profileCatalogDigest,
   DEFAULT_WORKERS_AI_MODEL_SPEC, WorkspaceActorDirectory, recoverSubordinateLifecycles,
 } from '../src/index';
-import { dispatchAgentsAction, parseAgentsToolInput } from '../src/tools/agents-tool';
+import { dispatchAgentsAction, parseAgentsToolInput } from '../src/delegation/agents-tool';
 import { createMemoryVfs } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw, makeSqlExec, createTestActor } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';

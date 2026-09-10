@@ -33,12 +33,12 @@
  */
 
 import { readExecSignal } from '../execution/signal';
-import { branchableToolCall } from './outcome';
+import { branchableToolCall } from '../tools/outcome';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { projectJsonValue } from '../utils/json';
 import * as v from 'valibot';
-import type { CodemodeProvider } from './sandbox-contract';
-import { TOOL_REACH, type AgentsToolAction } from './registry';
+import type { CodemodeProvider } from '../tools/sandbox-contract';
+import { TOOL_REACH, type AgentsToolAction } from '../tools/registry';
 // Beside the preset table it is rendered from, not beside the other doctrine: the
 // sandbox declaration and the native schema must show the same presets, and they can
 // only be the same if both read the rows.
