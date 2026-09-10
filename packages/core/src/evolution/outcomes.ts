@@ -218,6 +218,30 @@ export function executionVerdictOutcome(verdict: ExecutionVerdict): TurnOutcome 
   return verdict === 'succeeded' ? 'accepted' : 'corrected';
 }
 
+/**
+ * Whether this graded turn may mint a REUSABLE PROCEDURE.
+ *
+ * Promotion needs a grade, not a green light from the runtime. An execution
+ * verdict says the turn's last acting call completed, and a file that read
+ * cleanly and a command that exits zero with the wrong answer both report
+ * `succeeded` — while extraction publishes a crafted tool whose EMA then
+ * decides what later turns are offered. So a proxy may price the turn and feed
+ * its own health band, and it may not teach the workspace a workflow.
+ *
+ * Execution stays symmetric everywhere it is honest: the ledger row, the
+ * quality band and the negative reflection all still read it. This is the one
+ * consumer that needs a source distinction, which is why the distinction lives
+ * here rather than in the verdict.
+ */
+export function promotesProcedure(graded: {
+  readonly outcome: TurnOutcome | null;
+  readonly source: TurnOutcomeSource;
+  /** How many tool calls the turn made. Nothing to generalise from zero. */
+  readonly toolCalls: number;
+}): boolean {
+  return graded.outcome === 'accepted' && graded.source !== 'execution' && graded.toolCalls > 0;
+}
+
 // ── The classifier (one cheap LLM call per non-trivial turn) ─────
 
 export interface OutcomeClassification {
