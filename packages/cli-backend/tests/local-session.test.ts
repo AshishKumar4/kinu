@@ -27,7 +27,7 @@ import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, SignalDelivery,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
-  profileCatalogDigest,
+  profileCatalogDigest, BUILTIN_ROLE_DEFINITIONS,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   EventLog, TriggerRegistry, listTriggers,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
@@ -4691,7 +4691,7 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
 
     await next.send('carry on');
     expect(system).toContain('Role: Researcher');
-    expect(system).toContain('Search before you conclude.');
+    expect(system).toContain(BUILTIN_ROLE_DEFINITIONS.researcher.instructions);
     await next.end();
   });
 
