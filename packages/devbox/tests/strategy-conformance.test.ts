@@ -917,6 +917,96 @@ const CELLS: readonly Cell[] = [
       if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
+  {
+    id: '6.22',
+    title: 'C3 overwrite: a 64 KiB edit publishes within 196,608 bytes in at most 3 objects',
+    async run(arm) {
+      // The C3 cell from scripts/bench-c3-overwrite-cell.ts, driven through
+      // this battery instead of the matched-chain harness: a 64 KiB overwrite
+      // inside a 64 MiB file must publish at most three times the edit size
+      // (64 KiB touches at most two 64 KiB blocks, plus manifest and image
+      // skeleton: 196,608 bytes), and it must not buy those bytes with
+      // objects — three is the ceiling the repaired v2 reached, one the
+      // floor snapshot-chain already holds.
+      const C3_BOUND = 196_608;
+      const seed = new Seeded(61);
+      const bytes = seed.fill(new Uint8Array(64 * 1024 * 1024));
+      await attach(arm);
+      await arm.workspace.plant([{
+        path: 'vol/dense.bin', kind: 'file', mode: 0o644, ino: 7,
+        content: { kind: 'dense', bytes },
+        metadata: { uid: 1000, gid: 1000, atimeNs: '1', mtimeNs: '1', ctimeNs: '1', xattrs: {} },
+      }]);
+      expectCommitted(await arm.storage().checkpoint('quiesce'), 'the 64 MiB base commit');
+      const patch = new Seeded(62).fill(new Uint8Array(64 * 1024));
+      await arm.workspace.pwrite('vol/dense.bin', 8 * 1024 * 1024, patch);
+      expectCommitted(await arm.storage().checkpoint('quiesce'), 'the 64 KiB overwrite commit');
+      const publish = arm.work().publish;
+      const problems: string[] = [];
+      if (publish.bytesPut > C3_BOUND) problems.push(`the 64 KiB overwrite put ${publish.bytesPut} bytes against the ${C3_BOUND} bound`);
+      if (publish.objectsPut > 3) problems.push(`the 64 KiB overwrite put ${publish.objectsPut} objects against the ceiling of 3`);
+      const expected = await arm.workspace.snapshot();
+      const woken = await wake(arm);
+      if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
+      await expectTreeExact(arm, expected, 'after the wake');
+      if (problems.length > 0) throw new Error(problems.join('; '));
+    },
+  },
+  {
+    id: '6.23',
+    title: 'many small changed files: one object per checkpoint, bytes near the change',
+    async run(arm) {
+      // The REGIME-1 guard: a chunked design must not buy fewer bytes with
+      // more objects. Sixty changed small files still publish as ONE object,
+      // the floor snapshot-chain already holds, with bytes near the change
+      // rather than near the tree.
+      await attach(arm);
+      await commitTree(arm, generatedTree({ seed: 63, files: 200, bytesPerFile: 4096 }), 'the 200-file base commit');
+      for (let index = 0; index < 50; index += 1) {
+        await arm.workspace.write(`d000/d${String(Math.floor(index / 64)).padStart(3, '0')}/f${String(index).padStart(6, '0')}.bin`, `rewritten ${index} `.repeat(200));
+      }
+      expectCommitted(await arm.storage().checkpoint('quiesce'), 'the 50-file overwrite commit');
+      const publish = arm.work().publish;
+      const problems: string[] = [];
+      if (publish.objectsPut !== 1) problems.push(`50 changed files put ${publish.objectsPut} objects, the floor is 1`);
+      if (publish.bytesPut > 512 * 1024) problems.push(`50 changed files put ${publish.bytesPut} bytes against the 524,288 bound`);
+      const expected = await arm.workspace.snapshot();
+      const woken = await wake(arm);
+      if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
+      await expectTreeExact(arm, expected, 'after the wake');
+      if (problems.length > 0) throw new Error(problems.join('; '));
+    },
+  },
+  {
+    id: '6.24',
+    title: 'per-file maps: a one-file change costs the same at 1,000 and 5,000 files',
+    async run(arm) {
+      // The merkle-pack failure mode, mechanically refused: no read path may
+      // fetch an index whose size grows with the tree. One changed small file
+      // publishes the same bytes at two tree sizes — a tree-wide index would
+      // separate them. The attach-side half (which delta paths a wake reads)
+      // joins this cell once the chunked publication lands.
+      const deltas = new Map<number, number>();
+      for (const files of [1_000, 5_000]) {
+        const fresh = CONFORMANCE_ARMS[arm.name]();
+        await attach(fresh);
+        await commitTree(fresh, generatedTree({ seed: 67, files, bytesPerFile: 16 }), `the ${files}-file base commit`);
+        await fresh.workspace.write('probe.txt', 'one small changed file');
+        expectCommitted(await fresh.storage().checkpoint('quiesce'), `the one-file commit at ${files} files`);
+        deltas.set(files, fresh.work().publish.bytesPut);
+        const expected = await fresh.workspace.snapshot();
+        const woken = await wake(fresh);
+        if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
+        await expectTreeExact(fresh, expected, `${files} files after the wake`);
+      }
+      const small = deltas.get(1_000);
+      const large = deltas.get(5_000);
+      if (small === undefined || large === undefined) throw new Error('a tree size left no delta measurement');
+      if (small !== large && Math.abs(large - small) / Math.max(large, small, 1) > 0.1) {
+        throw new Error(`one-file delta is ${small} bytes at 1,000 files and ${large} at 5,000: it grows with the tree`);
+      }
+    },
+  },
 ];
 
 async function runCell(cell: Cell, arm: ConformanceArm): Promise<Outcome> {
