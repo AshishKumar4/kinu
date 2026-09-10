@@ -518,8 +518,10 @@ interface DifferentialSeam {
   readonly coreSymbol: string;
   /** The shared fixture both suites must pin, as exported from test-utils. */
   readonly fixture: readonly string[];
-  /** The suite on each side that pins it. */
-  readonly suites: readonly [cf: string, cli: string];
+  /** The suite on each side that pins it: at least one under `cf-backend`
+   *  and one under `cli-backend` or `cli`, and a seam a third surface
+   *  implements names that surface too. */
+  readonly suites: readonly string[];
 }
 
 const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
@@ -582,6 +584,24 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
       'packages/cli-backend/src/local-session.ts',
     ],
   },
+  {
+    // Whether an automatic title may replace the current one. The cloud
+    // registry refused it over any origin but `auto`; the CLI refused it only
+    // over `user`, so a workspace whose origin nobody recorded was renamed by
+    // one backend and left alone by the other. One predicate now, read by the
+    // plan and by every persist.
+    seam: 'auto-title replacement',
+    // Both spellings of one rule: the registry-backed root asks the predicate
+    // with the row it read; a config-backed session persists through the
+    // helper that asks it. Each surface names one of the two.
+    coreSymbol: 'AutoTitle',
+    fixture: ['autoTitleMayReplace', 'persistAutoTitle'],
+    suites: [
+      'packages/cf-backend/src/user/user-do.ts',
+      'packages/cli-backend/src/local-session.ts',
+      'packages/cli/src/local-agent-client.ts',
+    ],
+  },
 ] as const;
 
 describe('the twin differential — one seam, one fixture, both backends', () => {
@@ -595,11 +615,17 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     const unreached: string[] = [];
 
     for (const entry of DIFFERENTIAL_SEAMS) {
-      const cf = [...CF_CLASSES.map(([file]) => read(file)), read('packages/cf-backend/src/head-runtime.ts')];
-
-      const cli = [read(CLI_CLASS[0]), read('packages/cli-backend/src/head-runtime.ts'),
-        read('packages/cli-backend/src/agent-host/host.ts')];
-
+      // The composition surfaces, plus whichever source files the seam itself
+      // names: a seam a user-plane file implements is reached there.
+      const cf = [
+        ...CF_CLASSES.map(([file]) => read(file)), read('packages/cf-backend/src/head-runtime.ts'),
+        ...entry.suites.filter((file) => file.startsWith('packages/cf-backend/src/')).map(read),
+      ];
+      const cli = [
+        read(CLI_CLASS[0]), read('packages/cli-backend/src/head-runtime.ts'),
+        read('packages/cli-backend/src/agent-host/host.ts'),
+        ...entry.suites.filter((file) => file.startsWith('packages/cli')).map(read),
+      ];
       if (!cf.some((body) => body.includes(entry.coreSymbol))) {
         unreached.push(`${entry.seam} — no cf surface names \`${entry.coreSymbol}\``);
       }

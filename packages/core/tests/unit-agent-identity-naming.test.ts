@@ -5,7 +5,7 @@ import {
   applyWorkspaceTitle,
   fallbackWorkspaceIdentity,
   parseWorkspaceTitle,
-  planWorkspaceTitle,
+  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle,
   renderSoulMarkdown,
   summarizeSoul,
   mintSubordinateName,
@@ -117,9 +117,29 @@ describe('automatic workspace titling — the decision', () => {
     expect(planWorkspaceTitle({ ...slugNamed, displayName: 'OAuth Callback Audit' })).toBe(null);
   });
 
-  test('a workspace that was never titled still gets one, without clobbering its shown name first', () => {
-    expect(planWorkspaceTitle({ ...slugNamed, displayName: 'OAuth Callback Audit', nameOrigin: null }))
-      .toEqual({ provisional: null, mission: MISSION });
+  test('a title whose origin nobody recorded is the owner\'s, and is never touched', () => {
+    // The cloud registry has always read an absent origin as the owner's; the
+    // CLI read it as "never titled" and renamed the workspace. One rule now.
+    expect(planWorkspaceTitle({ ...slugNamed, displayName: 'OAuth Callback Audit', nameOrigin: null })).toBe(null);
+    expect(planWorkspaceTitle({ ...slugNamed, nameOrigin: null })).toBe(null);
+    expect(autoTitleMayReplace(null)).toBe(false);
+    expect(autoTitleMayReplace('user')).toBe(false);
+    expect(autoTitleMayReplace('auto')).toBe(true);
+  });
+
+  test('persistAutoTitle is the race check and the write: the owner\'s rename wins', () => {
+    interface NamingRow { name: string; origin: 'user' | 'auto' | null }
+    const stored: NamingRow = { name: 'workspace-1a4e20', origin: 'auto' };
+    const config = {
+      getNameOrigin: () => stored.origin,
+      setDisplayNameOrigin: (name: string, origin: 'user' | 'auto') => { stored.name = name; stored.origin = origin; },
+    };
+    expect(persistAutoTitle(config, 'Audit the OAuth callback flow')).toBe(true);
+    expect(stored).toEqual({ name: 'Audit the OAuth callback flow', origin: 'auto' });
+    stored.name = 'Keys Rotation';
+    stored.origin = 'user';
+    expect(persistAutoTitle(config, 'OAuth Callback Audit')).toBe(false);
+    expect(stored).toEqual({ name: 'Keys Rotation', origin: 'user' });
   });
 
   test('no mission to title from is a no-op', () => {

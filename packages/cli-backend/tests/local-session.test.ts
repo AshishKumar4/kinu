@@ -2500,9 +2500,12 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
         return base.doGenerate(options);
       },
     });
-
-    const { db, session } = setup('unused', model);
-    expect(naming(db)).toEqual({ displayName: null, origin: null });
+    const { db, rt, session } = setup('unused', model);
+    // What `kinu create` writes for an agent added without a name: no title,
+    // and an origin that says the system may supply one. An origin nobody
+    // recorded is the owner's on both backends, and is never titled.
+    rt.actor.config.setDisplayNameOrigin('', 'auto');
+    expect(naming(db)).toEqual({ displayName: '', origin: 'auto' });
 
     await session.send('Audit the OAuth callback flow');
     // end() joins the titling fiber — the lane is tracked precisely so a
