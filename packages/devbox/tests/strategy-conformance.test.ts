@@ -982,29 +982,42 @@ const CELLS: readonly Cell[] = [
     title: 'per-file maps: a one-file change costs the same at 1,000 and 5,000 files',
     async run(arm) {
       // The merkle-pack failure mode, mechanically refused: no read path may
-      // fetch an index whose size grows with the tree. One changed small file
-      // publishes the same bytes at two tree sizes — a tree-wide index would
-      // separate them. The attach-side half (which delta paths a wake reads)
-      // joins this cell once the chunked publication lands.
-      const deltas = new Map<number, number>();
+      // fetch an index whose size grows with the tree. Both halves at two tree
+      // sizes: one changed small file PUBLISHES the same bytes, and the wake
+      // that serves it READS the same bytes out of the delta object. The base
+      // grows with the tree by definition and is not the question; a
+      // tree-wide index — merkle-pack's 563 B per file, read whole on open —
+      // would separate either number.
+      const published = new Map<number, number>();
+      const read = new Map<number, number>();
       for (const files of [1_000, 5_000]) {
         const fresh = CONFORMANCE_ARMS[arm.name]();
         await attach(fresh);
         await commitTree(fresh, generatedTree({ seed: 67, files, bytesPerFile: 16 }), `the ${files}-file base commit`);
         await fresh.workspace.write('probe.txt', 'one small changed file');
         expectCommitted(await fresh.storage().checkpoint('quiesce'), `the one-file commit at ${files} files`);
-        deltas.set(files, fresh.work().publish.bytesPut);
+        published.set(files, fresh.work().publish.bytesPut);
         const expected = await fresh.workspace.snapshot();
+        const deltaKeys = new Set((await fresh.declaredPayload()).filter((object) => object.names.includes('delta')).map((object) => object.key));
+        const window = fresh.durable.ops.length;
         const woken = await wake(fresh);
         if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
         await expectTreeExact(fresh, expected, `${files} files after the wake`);
+        read.set(files, fresh.durable.ops.slice(window)
+          .filter((op) => op.op === 'get' && deltaKeys.has(op.key))
+          .reduce((sum, op) => sum + op.bytes, 0));
       }
-      const small = deltas.get(1_000);
-      const large = deltas.get(5_000);
-      if (small === undefined || large === undefined) throw new Error('a tree size left no delta measurement');
-      if (small !== large && Math.abs(large - small) / Math.max(large, small, 1) > 0.1) {
-        throw new Error(`one-file delta is ${small} bytes at 1,000 files and ${large} at 5,000: it grows with the tree`);
+      const problems: string[] = [];
+      for (const [name, rows] of [['one-file delta', published], ['wake read of the delta', read]] as const) {
+        const small = rows.get(1_000);
+        const large = rows.get(5_000);
+        if (small === undefined || large === undefined) throw new Error(`a tree size left no ${name} measurement`);
+        if (small === 0 || large === 0) problems.push(`${name} is ${small} bytes at 1,000 files and ${large} at 5,000: a wake that reads no delta served nothing`);
+        if (small !== large && Math.abs(large - small) / Math.max(large, small, 1) > 0.1) {
+          problems.push(`${name} is ${small} bytes at 1,000 files and ${large} at 5,000: it grows with the tree`);
+        }
       }
+      if (problems.length > 0) throw new Error(problems.join('; '));
     },
   },
 ];

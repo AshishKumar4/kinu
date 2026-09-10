@@ -65,6 +65,7 @@ import {
   type DeltaFileHashes,
   type DeltaManifest,
   DeltaManifestSchema,
+  type DeltaMaterializeOps,
   type DeltaProbeEntry,
   buildDeltaMaterializeOps,
   buildDeltaStageOps,
@@ -1021,6 +1022,48 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return undefined;
   };
 
+  /**
+   * The manifest a mounted delta layer serves, validated, or null for a
+   * legacy full delta. A record naming a chunked delta whose mount serves no
+   * manifest is a failed layer; so is a manifest whose overrides are not
+   * block-aligned, ascending and inside the file, because `dd seek` over
+   * such a map writes past what the manifest declares.
+   */
+  const readSidecarManifest = async (
+    deltaLayer: string,
+    generation: ChainGeneration,
+    layerFailed: (layer: string, thrown: { readonly cause: unknown }) => Promise<never>,
+  ): Promise<DeltaManifest | null> => {
+    const cat = await ports.exec(`# devbox-manifest-v1\ncat ${shellPath(`${deltaLayer}/${DELTA_MANIFEST_NAME}`)} 2>/dev/null`);
+    let manifest: DeltaManifest | null = null;
+    if (cat.exitCode === 0 && cat.stdout.trim() !== '') {
+      try {
+        const read = v.safeParse(DeltaManifestSchema, JSON.parse(cat.stdout));
+        if (read.success) manifest = read.output;
+      } catch (error) {
+        // Not JSON: a legacy full delta whose tree happens to hold this
+        // path, served as a lower. Logged, because a chunked record over
+        // such bytes is refused just after.
+        ports.log(`${deltaLayer}/${DELTA_MANIFEST_NAME} is not a delta manifest: ${describe({ cause: error })}`);
+      }
+    }
+    if (manifest === null && generation.deltaFormat === 'chunked') {
+      await layerFailed('delta', { cause: new Error('the record names a chunked delta whose mount serves no manifest') });
+    }
+    if (manifest === null) return null;
+    for (const file of manifest.files) {
+      if (file.kind !== 'chunked') continue;
+      let last = -1;
+      for (const override of file.over) {
+        if (override.o % DELTA_BLOCK_BYTES !== 0 || override.o >= file.s || override.o <= last) {
+          await layerFailed('delta', { cause: new Error(`the delta manifest misplaces an override of ${file.p} at ${override.o}`) });
+        }
+        last = override.o;
+      }
+    }
+    return manifest;
+  };
+
   const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     const containerGeneration = await ports.containerGeneration?.();
     // A chain whose layers EXIST cannot be served by extraction, so a mount
@@ -1067,10 +1110,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       );
     }
     // The delta as the STORE describes it, because the layer is mounted from
-    // the stored object. An unreferenced but complete delta is adopted (header,
-    // "Ordering under crash").
-    const storedDelta = await ports.objectFacts(deltaObjectKey(root, generation.base.id));
-    const haveDelta = generation.delta !== undefined || storedDelta !== undefined;
+    // the stored object. A delta the record names was probed and adopted by
+    // `serve` a moment ago, so it is not asked for twice; an unreferenced but
+    // complete delta is adopted here (header, "Ordering under crash").
+    const storedDelta = generation.delta ?? await ports.objectFacts(deltaObjectKey(root, generation.base.id));
+    const haveDelta = storedDelta !== undefined;
 
     // IS THIS UPPER ALREADY THIS DELTA? The stamp is written only by the
     // commit that archived this upper, and it names the delta object, so a
@@ -1126,41 +1170,14 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // layout this is, not the record: a crash between the PUT and the record
     // write can strand either layout under a record naming the other. A
     // legacy full delta (no manifest) composes as a lower exactly as before.
-    let sidecar: { readonly pre: readonly string[]; readonly post: readonly string[] } | null = null;
-    if (composing) {
-      const cat = await ports.exec(`# devbox-manifest-v1\ncat ${shellPath(`${deltaLayer}/${DELTA_MANIFEST_NAME}`)} 2>/dev/null`);
-      let manifest: DeltaManifest | null = null;
-      if (cat.exitCode === 0 && cat.stdout.trim() !== '') {
-        try {
-          const read = v.safeParse(DeltaManifestSchema, JSON.parse(cat.stdout));
-          if (read.success) manifest = read.output;
-        } catch (error) {
-          // Not JSON: a legacy full delta whose tree happens to hold this
-          // path, served as a lower below. Logged, because a chunked record
-          // over such bytes is refused just after.
-          ports.log(`${deltaLayer}/${DELTA_MANIFEST_NAME} is not a delta manifest: ${describe({ cause: error })}`);
-        }
-      }
-      if (manifest === null && generation.deltaFormat === 'chunked') {
-        await layerFailed('delta', { cause: new Error('the record names a chunked delta whose mount serves no manifest') });
-      }
-      if (manifest !== null) {
-        for (const file of manifest.files) {
-          if (file.kind !== 'chunked') continue;
-          let last = -1;
-          for (const override of file.over) {
-            if (override.o % DELTA_BLOCK_BYTES !== 0 || override.o >= file.s || override.o <= last) {
-              await layerFailed('delta', { cause: new Error(`the delta manifest misplaces an override of ${file.p} at ${override.o}`) });
-            }
-            last = override.o;
-          }
-        }
-        sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR });
-        try {
-          await runOpsBatched('materializing the delta into the upper', sidecar.pre);
-        } catch (error) {
-          await layerFailed('delta', { cause: error });
-        }
+    let sidecar: DeltaMaterializeOps | null = null;
+    const manifest = composing ? await readSidecarManifest(deltaLayer, generation, layerFailed) : null;
+    if (manifest !== null) {
+      sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR });
+      try {
+        await runOpsBatched('materializing the delta into the upper', sidecar.pre);
+      } catch (error) {
+        await layerFailed('delta', { cause: error });
       }
     }
     // NEWEST LOWER FIRST. fuse-overlayfs resolves `lowerdir` left to right, so
@@ -1190,10 +1207,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     const bytes = generation.base.bytes + (generation.delta?.bytes ?? 0);
     // The shape decides the next commit: `base+delta layered` means the first
-    // commit with anything to say collapses the chain.
+    // commit with anything to say collapses the chain; an absorbed sidecar
+    // leaves the upper holding the cumulative changed set, so the next commit
+    // publishes a delta of it.
     const restored = !haveDelta
       ? 'base'
-      : held ? 'base+delta already in this upper' : 'base+delta layered';
+      : held ? 'base+delta already in this upper' : sidecar !== null ? 'base+delta absorbed into the upper' : 'base+delta layered';
     ports.log(
       `${DEVBOX_WORKDIR} attached from ${generation.base.id} `
       + `(chain, ${bytes} bytes, ${restored})`,
@@ -1502,13 +1521,16 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return await publishStagedArchive(key, staged, storeHeld, short !== null);
   };
 
-  /** Run generated shell operations in batches of {@link DELTA_OPS_PER_COMMAND}
-   *  lines, so a many-file checkpoint costs round trips in the hundreds, not
-   *  files. A non-zero exit names the batch; the container's own stderr
-   *  carries the operation. */
-  const runOpsBatched = async (doing: string, ops: readonly string[]): Promise<void> => {
+  /** Run generated shell operations — a `# devbox-…` header line then one
+   *  operation per line — in batches of {@link DELTA_OPS_PER_COMMAND}, so a
+   *  many-file checkpoint costs round trips in the hundreds, not files. Every
+   *  batch carries the header and runs under `set -e`: a shell's exit is its
+   *  LAST command's, so without it a failed `cp` in the middle of a batch
+   *  would be reported as success by the `chmod` after it. A non-zero exit
+   *  names the batch; the container's own stderr carries the operation. */
+  const runOpsBatched = async (doing: string, [header = '', ...ops]: readonly string[]): Promise<void> => {
     for (let at = 0; at < ops.length; at += DELTA_OPS_PER_COMMAND) {
-      const result = await ports.exec(ops.slice(at, at + DELTA_OPS_PER_COMMAND).join('\n'));
+      const result = await ports.exec([header, 'set -e', ...ops.slice(at, at + DELTA_OPS_PER_COMMAND)].join('\n'));
       if (result.exitCode !== 0) {
         throw new Error(`${doing} failed in batch ${at / DELTA_OPS_PER_COMMAND + 1} (${result.exitCode}): ${result.stderr || result.stdout}`);
       }
@@ -1542,6 +1564,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       return fallback(`the upper probe did not answer: ${describe({ cause: error })}`);
     }
     if (probe.length === 0) return fallback('the probe listed nothing');
+    // ROOM TO STAGE IT, asked before staging: the package and the hash
+    // scratch are bounded by the upper's own bytes, so a disk short of those
+    // stages in tmpfs exactly as the whole-tree archive does.
+    const short = await shell.stagingShortfall(upperDir, ports.archiveExcludes());
+    const stageRoot = short === null ? stageDir : tmpStageDir;
+    if (short !== null) ports.log(`${short} Staging the chunked delta in memory at ${tmpStageDir} instead.`);
     // A `c` entry is a whiteout only when it is the 0/0 device fuse-overlayfs
     // mints; any other device travels whole.
     const devices = probe.filter((entry) => entry.type === 'c').map((entry) => entry.path);
@@ -1577,7 +1605,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
           baseBlocks: fact?.kind === 'file' ? Math.ceil(fact.size / DELTA_BLOCK_BYTES) : null,
         }] as const;
       }));
-      const hashed = await ports.exec(deltaBlockHashCommand({ workDir: `${stageDir}/hash`, files }));
+      const hashed = await ports.exec(deltaBlockHashCommand({ workDir: `${stageRoot}/hash`, files }));
       try {
         hashes = parseDeltaBlockHashes(hashed.stdout, wanted);
       } catch (error) {
@@ -1589,9 +1617,19 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       }
     }
     const plan = planDeltaPublication({ probe, baseFacts, hashes, hashFiles, whiteouts });
-    const pkgDir = `${stageDir}/pkg`;
-    await runOpsBatched('staging the chunked delta', buildDeltaStageOps(plan, { upperDir, pkgDir }));
-    return await stageAndPut(deltaObjectKey(root, chainId), pkgDir, [], storeHeld);
+    const pkgDir = `${stageRoot}/pkg`;
+    try {
+      await runOpsBatched('staging the chunked delta', buildDeltaStageOps(plan, { upperDir, pkgDir }));
+    } catch (error) {
+      return fallback(`the stage did not complete: ${describe({ cause: error })}`);
+    }
+    try {
+      return await stageAndPut(deltaObjectKey(root, chainId), pkgDir, [], storeHeld);
+    } finally {
+      // The package lives in memory when the disk was short; it is released
+      // whether or not the publication landed.
+      if (short !== null) await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
+    }
   };
 
   const commitExtract = async (
