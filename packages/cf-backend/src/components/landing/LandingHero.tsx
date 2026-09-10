@@ -308,6 +308,20 @@ function SearchCanvas(): ReactElement {
 
 const PHRASES = ['learn from feedback.', 'build their own tools.', 'run on your own machine.', 'compare approaches.'] as const;
 
+/**
+ * The heading a screen reader gets, DERIVED rather than restated.
+ *
+ * The `h1` animates one phrase at a time, so its accessible name has to carry
+ * all four — and it used to carry them as a second hand-written sentence, with
+ * nothing holding the two lists equal. Editing one silently desynchronised the
+ * accessible text from the visible text, which is the drift a hardcoded list
+ * beside its source always earns.
+ */
+const HERO_LABEL = `Agents that ${PHRASES
+  .map((phrase) => phrase.replace(/\.$/, ''))
+  .map((phrase, index, all) => (index === all.length - 1 ? `and ${phrase}` : phrase))
+  .join(', ')}.`;
+
 function Typewriter(): ReactElement {
   const elementRef = useRef<HTMLSpanElement>(null);
   const [phrase, setPhrase] = useState<string>(PHRASES[0]);
@@ -382,7 +396,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             <span className="size-[5px] rounded-full p-dot-accent" />
             The self-evolving agent platform
           </div>
-          <h1 aria-label="Agents that learn from feedback, build their own tools, run on your own machine, and compare approaches." className="mb-6 text-[clamp(40px,5.2vw,68px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
+          <h1 aria-label={HERO_LABEL} className="mb-6 text-[clamp(40px,5.2vw,68px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
             Agents that{' '}
             <Typewriter />
           </h1>
