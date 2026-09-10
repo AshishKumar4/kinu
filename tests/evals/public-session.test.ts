@@ -452,7 +452,10 @@ describe('route-shaped run events score through the production instruments', () 
     resetLiveModelSpend();
     const root = scratchDir('failed-episode-evidence');
     const spend: WorkspaceSpend = {
-      total: { calls: 8, callsWithoutUsage: 0, unpricedCalls: 8, usage: { input: 234433, output: 29531 } },
+      total: {
+        calls: 8, callsWithoutUsage: 0, unpricedCalls: 8, floorPricedCalls: 0,
+        usage: { input: 234433, output: 29531 },
+      },
       producers: [], missions: [], offTurnShare: null,
       coverage: { calls: 8, measured: 8, reported: 1, silent: [], partial: [] },
     };

@@ -86,11 +86,12 @@ export const RunEventSchema = v.variant('type', [
   v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
     reason: v.optional(v.string()), messages: v.optional(v.array(StoredModelMessageSchema)),
     usage: v.optional(UsageSchema), usd: v.optional(v.number()),
+    usdFloorTokens: v.optional(v.number()),
     modelId: v.optional(v.string()), context: v.optional(ContextCompositionSchema) }),
   v.object({ ...BaseFields, type: v.literal('model_call'),
     source: v.picklist(SPEND_SOURCES), usage: v.optional(UsageSchema),
-    usd: v.optional(v.number()), spec: v.optional(v.string()),
-    modelId: v.optional(v.string()) }),
+    usd: v.optional(v.number()), usdFloorTokens: v.optional(v.number()),
+    spec: v.optional(v.string()), modelId: v.optional(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('model_operation'),
     operationId: v.string(), source: v.picklist(SPEND_SOURCES),
     op: v.picklist(MODEL_OPERATION_KINDS), phase: v.picklist(MODEL_OPERATION_PHASES),
@@ -301,6 +302,7 @@ type SpendAggregateRow = Readonly<Record<keyof Usage, number | null>> & {
   readonly calls: number;
   readonly callsWithoutUsage: number;
   readonly unpricedCalls: number;
+  readonly floorPricedCalls: number;
   readonly usd: number | null;
 };
 
@@ -318,6 +320,7 @@ function spendTallyOf(row: SpendAggregateRow): SpendTally {
     callsWithoutUsage: row.callsWithoutUsage,
     usage,
     unpricedCalls: row.unpricedCalls,
+    floorPricedCalls: row.floorPricedCalls,
   };
   return row.usd === null ? tally : { ...tally, usd: row.usd };
 }
@@ -702,6 +705,13 @@ export class RunEventRecorder {
    * summed only over calls that reported usage, matching the fold this replaced —
    * a call the provider said nothing for cannot be priced either, and is already
    * counted as unmeasured.
+   *
+   * `floorPricedCalls` is AGGREGATED, never re-derived. Whether a call's price
+   * is a floor is `priceCall`'s judgement, and the producer wrote it onto the
+   * row as `usdFloorTokens`; deciding it again here from `cacheWrite1h` would
+   * be a second pricing policy, and the copy that stopped being consulted is
+   * the one that would go stale unnoticed. So this counts the marker's PRESENCE
+   * and knows nothing about what makes one.
    */
   spendByProducer(): ReadonlyMap<SpendSource, SpendTally> {
     this.actor.assertCurrent();
@@ -712,14 +722,15 @@ export class RunEventRecorder {
                  ELSE json_extract(payload, '$.source')
                END AS source,
                json_extract(payload, '$.usage') AS usage,
-               json_extract(payload, '$.usd') AS usd
+               json_extract(payload, '$.usd') AS usd,
+               json_extract(payload, '$.usdFloorTokens') AS usdFloorTokens
         FROM run_events
         WHERE actor_id = ${this.actorId}
           AND (type = ${'step_finish' satisfies RunEventType}
             OR type = ${'model_call' satisfies RunEventType})
       ),
       field AS (
-        SELECT source, usd,
+        SELECT source, usd, usdFloorTokens,
                json_extract(usage, '$.input') AS input,
                json_extract(usage, '$.output') AS output,
                json_extract(usage, '$.cacheRead') AS cacheRead,
@@ -738,6 +749,8 @@ export class RunEventRecorder {
              COUNT(*) AS calls,
              SUM(CASE WHEN reported THEN 0 ELSE 1 END) AS callsWithoutUsage,
              SUM(CASE WHEN reported AND usd IS NULL THEN 1 ELSE 0 END) AS unpricedCalls,
+             -- Aggregated from the row, never re-derived here: see the docblock.
+             SUM(CASE WHEN reported AND usdFloorTokens IS NOT NULL THEN 1 ELSE 0 END) AS floorPricedCalls,
              SUM(CASE WHEN reported THEN usd END) AS usd,
              SUM(input) AS input, SUM(output) AS output, SUM(cacheRead) AS cacheRead,
              SUM(cacheWrite) AS cacheWrite, SUM(cacheWrite1h) AS cacheWrite1h,

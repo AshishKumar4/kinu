@@ -132,6 +132,7 @@ interface Tally {
   usage: Usage;
   usd: number | undefined;
   unpricedCalls: number;
+  floorPricedCalls: number;
 }
 
 /**
@@ -142,13 +143,23 @@ interface Tally {
  * A call with usage but no price increments `unpricedCalls` — a call with no
  * usage at all cannot be priced either, and is already counted as unmeasured,
  * so it does not also count as unpriced.
+ *
+ * A call that WAS priced but only to a floor increments `floorPricedCalls`
+ * instead: it is in `usd`, and `usd` is short. `floorTokens` is the per-call
+ * marker `priceCall` produced, absent on an exact price, which is why presence
+ * rather than a threshold decides here.
  */
-function record(tally: Tally, usage: Usage, usd: number | undefined): void {
+function record(
+  tally: Tally, usage: Usage, usd: number | undefined, floorTokens?: number,
+): void {
   tally.calls++;
   if (usageReported(usage)) {
     tally.usage = addUsage(tally.usage, usage);
     if (usd === undefined) tally.unpricedCalls++;
-    else tally.usd = (tally.usd ?? 0) + usd;
+    else {
+      tally.usd = (tally.usd ?? 0) + usd;
+      if (floorTokens !== undefined) tally.floorPricedCalls++;
+    }
   } else {
     tally.callsWithoutUsage++;
   }
@@ -162,7 +173,10 @@ type Tallies = Map<SpendSource, Tally>;
 function tallyFor(tallies: Tallies, source: SpendSource): Tally {
   const existing = tallies.get(source);
   if (existing) return existing;
-  const fresh: Tally = { calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined, unpricedCalls: 0 };
+  const fresh: Tally = {
+    calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
+    unpricedCalls: 0, floorPricedCalls: 0,
+  };
   tallies.set(source, fresh);
   return fresh;
 }
@@ -209,11 +223,15 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
     .sort((a, b) => (usageTotal(b.row.usage) ?? -1) - (usageTotal(a.row.usage) ?? -1))
     .map(({ source, row }) => ({ source, ...finishTotal(row) }));
 
-  const total: Tally = { calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined, unpricedCalls: 0 };
+  const total: Tally = {
+    calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
+    unpricedCalls: 0, floorPricedCalls: 0,
+  };
   for (const p of producers) {
     total.calls += p.calls;
     total.callsWithoutUsage += p.callsWithoutUsage;
     total.unpricedCalls += p.unpricedCalls;
+    total.floorPricedCalls += p.floorPricedCalls;
     total.usage = addUsage(total.usage, p.usage);
     if (p.usd !== undefined) total.usd = (total.usd ?? 0) + p.usd;
   }
@@ -248,6 +266,7 @@ function finishTotal(tally: Tally): SpendTally {
     callsWithoutUsage: tally.callsWithoutUsage,
     usage: tally.usage,
     unpricedCalls: tally.unpricedCalls,
+    floorPricedCalls: tally.floorPricedCalls,
   };
   return tally.usd === undefined ? out : { ...out, usd: tally.usd };
 }

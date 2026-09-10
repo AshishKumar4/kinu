@@ -177,7 +177,10 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
 describe('recordWorkspaceSpend — one meter, two readers', () => {
   const spendOf = (calls: number): WorkspaceSpend => ({
     producers: [],
-    total: { calls, callsWithoutUsage: 0, usage: { input: 10, output: 2 }, unpricedCalls: 0 },
+    total: {
+      calls, callsWithoutUsage: 0, usage: { input: 10, output: 2 },
+      unpricedCalls: 0, floorPricedCalls: 0,
+    },
     coverage: { calls, measured: calls, reported: 1, silent: [], partial: [] },
     offTurnShare: null,
     missions: [],
@@ -229,7 +232,10 @@ describe('recordWorkspaceSpend — one meter, two readers', () => {
     resetLiveModelSpend();
     recordWorkspaceSpend({
       ...spendOf(4),
-      total: { calls: 4, callsWithoutUsage: 3, usage: { input: 10 }, unpricedCalls: 0 },
+      total: {
+        calls: 4, callsWithoutUsage: 3, usage: { input: 10 },
+        unpricedCalls: 0, floorPricedCalls: 0,
+      },
     });
     const spend = liveModelSpend();
     expect(spend.calls).toBe(4);
