@@ -13,7 +13,7 @@
 
 import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log';
-import type { SubordinateReportStatus } from '../events/hub/types';
+import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
 import type { SerializedMessage } from '../heads/types';
 import type { SqlExec } from '../types/primitives';
 import type { ActorHandle } from '../state/actor-handle';
@@ -512,6 +512,11 @@ export function admitSubordinateReport(log: EventLog, input: {
   sequenceId: string;
   task?: string;
   contentPath?: string;
+  /** The structured handoff the `report` tool parsed, already trimmed and
+   *  bounded there. Merged verbatim: this function does not re-shape it,
+   *  because a second normalization is a second place for the stored payload
+   *  and the refused input to disagree. */
+  handoff?: SubordinateReportHandoff;
   mode: WorkMode;
   now: number;
 }): PublishResult {
@@ -527,6 +532,7 @@ export function admitSubordinateReport(log: EventLog, input: {
   };
   if (task) Object.assign(payload, { task });
   if (input.contentPath) Object.assign(payload, { content_path: input.contentPath });
+  if (input.handoff) Object.assign(payload, input.handoff);
   return log.publish({
     descriptor: {
       ingress: 'subordinate',
