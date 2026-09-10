@@ -34,11 +34,9 @@ const FIXTURE_DIR = join(import.meta.dir, 'support', 'workspace-mount-contract')
  *  `FIXTURE_DIR` is `import.meta.dir`-relative, so every worktree carries its
  *  own copy of the probe sources, and every agent here works in a worktree by
  *  mandate. One shared tag therefore means a lane's build of ITS fixture is
- *  what this tree's container starts from — the same cross-writer shape as the
- *  one shared `node_modules`, which cost a false red on a deploy gate today.
- *  Docker caches layers by content rather than by tag, so identical sources
- *  still reuse the apt and gcc steps and a re-run costs the COPY and the two
- *  compiles. */
+ *  what this tree's container starts from. Docker caches layers by content
+ *  rather than by tag, so identical sources still reuse the apt and gcc steps
+ *  and a re-run costs the COPY and the two compiles. */
 const IMAGE = `kinu-workspace-mount-contract:${String(process.pid)}`;
 
 function dockerUsable(): boolean {
