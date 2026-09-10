@@ -16,10 +16,11 @@ import { adaptMemory, backfillMemoryVectors } from '../src/memory-sync';
 function createStore() {
   const database = new Database(':memory:');
   const sql = makeSql(database);
-  const store = new MemoryStore(createWorkspaceBundle(database).vfs, sql);
+  const files = createWorkspaceBundle(database).vfs;
+  const store = new MemoryStore(files, sql);
   store.ensureSchema();
   const config = createTestActor(sql, makeExecRaw(database), crypto.randomUUID(), 'memory-test').config;
-  return { sql, store, config };
+  return { sql, store, files, config };
 }
 
 /** A VectorStore that records upserts/deletes for assertions. */
@@ -43,9 +44,9 @@ const doc = (count: number, fill = 'x') =>
 
 describe('adaptMemory — semantic index sync on write', () => {
   test('indexing embeds every chunk with its verbatim text', async () => {
-    const { store, config } = createStore();
+    const { store, files, config } = createStore();
     const vs = fakeVectorStore();
-    const memory = adaptMemory(store, vs.store, config);
+    const memory = adaptMemory(store, files, vs.store, config);
 
     await memory.write(PATH, doc(60));
     await memory.index(PATH);
@@ -59,9 +60,9 @@ describe('adaptMemory — semantic index sync on write', () => {
   });
 
   test('shrinking a memory deletes the vanished chunk vectors', async () => {
-    const { store, config } = createStore();
+    const { store, files, config } = createStore();
     const vs = fakeVectorStore();
-    const memory = adaptMemory(store, vs.store, config);
+    const memory = adaptMemory(store, files, vs.store, config);
 
     await memory.write(PATH, doc(60));
     await memory.index(PATH);
@@ -77,7 +78,7 @@ describe('adaptMemory — semantic index sync on write', () => {
   });
 
   test('a Vectorize outage does not fail the memory write, and does not claim the chunks were indexed', async () => {
-    const { store, config } = createStore();
+    const { store, files, config } = createStore();
     const throwing: VectorStore = {
       available: true,
       async upsertChunk() { throw new Error('vectorize down'); },
@@ -90,7 +91,7 @@ describe('adaptMemory — semantic index sync on write', () => {
     config.set('memory_vector_backfill_done', 'true');
     config.set('memory_vector_backfill_cursor', 'memory/MEMORY.md:9999-9999');
 
-    const memory = adaptMemory(store, throwing, config);
+    const memory = adaptMemory(store, files, throwing, config);
     await memory.write(PATH, doc(60));
     await expect(memory.index(PATH)).resolves.toBeUndefined();
     // FTS5 still indexed the content.
@@ -107,19 +108,19 @@ describe('adaptMemory — semantic index sync on write', () => {
   });
 
   test('a successful sync leaves the completeness marker alone', async () => {
-    const { store, config } = createStore();
+    const { store, files, config } = createStore();
     const vs = fakeVectorStore();
     config.set('memory_vector_backfill_done', 'true');
-    const memory = adaptMemory(store, vs.store, config);
+    const memory = adaptMemory(store, files, vs.store, config);
     await memory.write(PATH, doc(60));
     await memory.index(PATH);
     expect(config.get('memory_vector_backfill_done')).toBe('true');
   });
 
   test('an unavailable vector store is never called', async () => {
-    const { store, config } = createStore();
+    const { store, files, config } = createStore();
     const vs = fakeVectorStore(false);
-    const memory = adaptMemory(store, vs.store, config);
+    const memory = adaptMemory(store, files, vs.store, config);
     await memory.write(PATH, doc(60));
     await memory.index(PATH);
     expect(vs.upserted).toEqual([]);

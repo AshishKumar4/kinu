@@ -170,6 +170,31 @@ export async function readBoundedWithVfsOps(
 }
 
 /**
+ * A file's trailing `bytes` as text, off the plane's own ranged read — the
+ * memory tail's read. `null` for an absent file, as `read` answers.
+ *
+ * The plane's stat places the window and its ranged read fetches ONLY that
+ * window, so an append-only file that has grown to megabytes costs the tail's
+ * few kilobytes, not the file. A window that opens inside a multi-byte
+ * sequence drops that sequence's continuation bytes: what remains decodes to
+ * exactly the code points a whole-file read would have decoded there, and the
+ * caller slicing the text to its own bound never sees the cut.
+ */
+export async function readTailWithVfsOps(
+	files: VFS & Pick<VfsNativeReads, 'readRange'>, path: string, bytes: number,
+): Promise<string | null> {
+	const stat = await files.stat(path);
+	if (!stat) return null;
+	const offset = Math.max(0, stat.size - bytes);
+	const length = stat.size - offset;
+	if (length === 0) return '';
+	const window = await files.readRange(path, offset, length);
+	let start = 0;
+	if (offset > 0) while (start < window.length && (window[start]! & 0xc0) === 0x80) start++;
+	return new TextDecoder().decode(start === 0 ? window : window.subarray(start));
+}
+
+/**
  * A directory's entries with their metadata, off the plane's stat-inclusive
  * listing where it has one and off concurrent per-child stats where it does
  * not.

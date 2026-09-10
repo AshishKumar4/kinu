@@ -39,6 +39,7 @@ function emptyMemory(): Memory {
     async index() { /* no-op */ },
     async search() { return []; },
     async read() { return null; },
+    async tail() { return null; },
   };
 }
 
