@@ -1694,6 +1694,7 @@ function snapshotChainArm(): ConformanceArm {
         containerRunning: () => !this.disk.dead && !this.disk.stopped,
         allowExtraction: () => false,
         archiveExcludes: () => [],
+        stamp: () => {},
         readState: async () => row,
         writeState: async (next, expectedRev) => {
           // The pointer is the commit. The hold is before it: the old boot has

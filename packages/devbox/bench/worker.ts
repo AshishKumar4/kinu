@@ -57,6 +57,8 @@ import {
   type DevboxStore,
   type DevboxStrategyName,
 } from '../src/index';
+import type { RestorePhase, RestorePhaseStamps } from '../src/durability/contracts';
+import type { LateStartFailure } from '../src/lifecycle';
 import {
   R2_CLASS_A_OPERATIONS as CLASS_A,
   R2_CLASS_B_OPERATIONS as CLASS_B,
@@ -434,8 +436,22 @@ const OPERATION_ID_PREFIX = 'bench:operation-id:';
  *  return, not to defer the work. */
 const OPERATION_DELAY_SECONDS = 1;
 
-/** The in-gate restore's latest wall-clock probe, written by `onStart`. */
+/** The in-gate restore's latest probe, written by `onStart` and by every
+ *  phase stamp under it. */
 const RESTORE_PROBE_KEY = 'bench:restore-probe';
+
+/**
+ * What one container start left behind. `at` is the hook's entry; `phases`
+ * are the stamps the restore reached, each as ms after entry, written
+ * durably AS THEY LAND so a start the platform reset still names its last
+ * phase; `wallMs` is entry to settle, null while the hook has not returned —
+ * which after a reset is for ever, and is the row's whole message.
+ */
+interface RestoreProbe {
+  readonly at: number;
+  readonly wallMs: number | null;
+  readonly phases: RestorePhaseStamps;
+}
 
 /** The two key spellings, in one place each: four call sites read or write
  *  these rows, and a key spelled twice is a row nobody can find. */
@@ -479,19 +495,54 @@ class BenchBox extends Devbox<BenchEnv> {
    * `do.block_concurrency.cancel_ms` cap judges. Stored durably because the
    * object may reset between the restore and the driver's read; overwritten
    * by every start, so a read names the latest wake, never an old one.
+   *
+   * THE ROW IS WRITTEN THREE TIMES PER START, not once at the end: at entry
+   * with no wall time, at every phase the restore reaches, and at settle
+   * with the wall time. The 2026-09-10 decisive run reset inside this hook
+   * and left no row at all, so the one number that mattered — which phase
+   * held the gate — was never recorded. A reset now leaves the row with the
+   * phases it reached and `wallMs: null`.
    */
   override async onStart(): Promise<void> {
+    if (this.#probe !== undefined && this.#probe.wallMs === null) {
+      // Re-entered on a restoring box: the base joins the running restore, and
+      // the start that opened the row keeps it.
+      await super.onStart();
+      return;
+    }
     const enteredAt = Date.now();
+    const opened: RestoreProbe = { at: enteredAt, wallMs: null, phases: {} };
+    this.#probe = opened;
+    await this.ctx.storage.put(RESTORE_PROBE_KEY, opened);
     await super.onStart();
-    const probe = { wallMs: Date.now() - enteredAt, at: enteredAt };
-    await this.ctx.storage.put(RESTORE_PROBE_KEY, probe);
+    const settled: RestoreProbe = { ...(this.#probe ?? opened), wallMs: Date.now() - enteredAt };
+    this.#probe = settled;
+    await this.ctx.storage.put(RESTORE_PROBE_KEY, settled);
   }
 
-  /** The last in-gate restore's wall time, if any start has settled one. */
-  async readRestoreProbe(): Promise<{ readonly wallMs: number; readonly at: number } | undefined> {
-    return await this.ctx.storage.get<{ readonly wallMs: number; readonly at: number }>(
-      RESTORE_PROBE_KEY,
-    );
+  /** The probe of the start in flight on this activation. */
+  #probe: RestoreProbe | undefined;
+
+  /** Each phase lands in the durable row as it happens — written AND synced,
+   *  because the platform cancels the gate by resetting the object, and a
+   *  write still in the cache at that moment is the row this probe exists to
+   *  keep. Not awaited: the hook is synchronous, so the write rides beside the
+   *  restore. */
+  protected override onRestorePhase(phase: RestorePhase, atMs: number): void {
+    const probe = this.#probe;
+    if (probe === undefined) return;
+    const stamped: RestoreProbe = { ...probe, phases: { ...probe.phases, [phase]: atMs } };
+    this.#probe = stamped;
+    void this.ctx.storage.put(RESTORE_PROBE_KEY, stamped)
+      .then(async () => await this.ctx.storage.sync())
+      .catch((cause: LateStartFailure['cause']) => {
+        console.error(`[bench] restore phase ${phase} was not persisted: ${describeThrown({ cause })}`);
+      });
+  }
+
+  /** The last start's probe, if any start has opened one. */
+  async readRestoreProbe(): Promise<RestoreProbe | undefined> {
+    return await this.ctx.storage.get<RestoreProbe>(RESTORE_PROBE_KEY);
   }
 
   /**
