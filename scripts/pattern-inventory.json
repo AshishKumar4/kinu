@@ -1161,6 +1161,27 @@
       "owner": "reason",
       "sourceSha256": "3e24eafe869fdefdf73302a710402d60a2bbe1edc1f74c196f4700d3a73d3355",
       "decision": "lexical"
+    },
+    {
+      "file": "packages/devbox/src/chunked-delta.ts",
+      "kind": "hand-parser",
+      "owner": "parseDeltaProbe",
+      "sourceSha256": "bcf953d24cb0e822f77ec9be270cde542691bb16cc10c64f72726b9fcb2c9889",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/src/chunked-delta.ts",
+      "kind": "hand-parser",
+      "owner": "parseSplitSuffix",
+      "sourceSha256": "6347a4ac746dc0f430515ffe2fede0d6fb7745d6e169de133148a7524242e9fa",
+      "decision": "protected"
+    },
+    {
+      "file": "packages/devbox/src/chunked-delta.ts",
+      "kind": "hand-parser",
+      "owner": "parseDeltaBlockHashes",
+      "sourceSha256": "dbe8c5d846c46a59dcdff2d312e56af517724feb6396c52292662150b2fbe0a0",
+      "decision": "protected"
     }
   ]
 }
