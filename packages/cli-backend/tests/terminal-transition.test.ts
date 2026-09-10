@@ -616,23 +616,21 @@ describe('a recovery reads the record, not the session that finds it', () => {
     // generation further on — the same thing five real seconds do to a process
     // that stayed open.
     //
-    // DEFERRED, not attempted, and that is the mechanism: this process is
+    // DECLINED, not attempted, and that is the mechanism: this process is
     // inside the sequence (the confirming turn parked in its model call holds
     // it), so `resumeAll` joins rather than re-entering. A second attempt here
     // would be two carriers running one sequence's effects, which is the whole
-    // reason the in-flight join exists. What the retry must NOT do is abandon
-    // the row: it stays pending with a future instant, so the wake and the next
-    // start both still come back for it.
+    // reason the in-flight join exists. The decline writes NOTHING durable —
+    // the row is untouched and `nextRetryAt` filters the held sequence in
+    // memory — so the row's own state is what says the work is still owed.
     const attemptsBefore = gateAttempts(gated);
-    const dueAt = Date.now();
     next.skipBackoff(2);
     await next.recoverTerminalTransitions();
     expect(gateAttempts(gated)).toBe(attemptsBefore);
     const held = stillOwed(gated);
     expect(held.map((row) => row.effect_name)).toEqual(['completion_gate']);
     expect(held.every((row) => row.status === 'pending')).toBe(true);
-    expect(gateNextAttemptAt(gated)).toBeGreaterThan(dueAt);
-    // And no second confirmation was asked while it was deferred.
+    // And no second confirmation was asked while it was declined.
     expect(asked()).toBe(1);
     release.resolve();
     await next.settleBackgroundWork();
@@ -678,12 +676,6 @@ const rosterRows = (rt: CLIRuntime) =>
 const gateAttempts = (rt: CLIRuntime) =>
   rt.storage.sql<{ attempts: number }>`
     SELECT attempts FROM terminal_effects WHERE effect_name = 'completion_gate'`[0]?.attempts ?? 0;
-/** When the completion-gate row is next attemptable. A deferred row keeps a
- *  future instant, which is what says the retry was postponed rather than
- *  abandoned. */
-const gateNextAttemptAt = (rt: CLIRuntime) =>
-  rt.storage.sql<{ at: number }>`
-    SELECT next_attempt_at AS at FROM terminal_effects WHERE effect_name = 'completion_gate'`[0]?.at ?? 0;
 
 describe('a terminal close that fails leaves a way back', () => {
   test('a close whose settle throws re-arms its own wake', async () => {
