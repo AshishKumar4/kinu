@@ -1,0 +1,115 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { describe, expect, test } from 'bun:test';
+
+import {
+  decodeRestoreProbeRows,
+  readArmArtifact,
+  readRestoreProbe,
+  writeArmArtifact,
+} from './bench-devbox-strategies';
+import type { Fixture, RestoreProbeRow } from './bench-devbox-strategies';
+
+// ── the in-gate restore poll ────────────────────────────────────────────────
+//
+// The 2026-09-09 onStart probe run reported its timing table from a lane
+// report and retained no rows, so the table cannot be re-read. The driver
+// now polls GET /restore-probe after every wake it settles and keeps the
+// rows on the arm artifact. Three behaviors carry that guarantee: a present
+// probe parses to its wall time, an absent probe is an absent row rather
+// than a zero, and a dead route is a named error row rather than a failed
+// arm. The stub answers BYTES, because bytes are what the driver decodes.
+
+const PROBE_FIXTURE: Fixture = { origin: 'https://bench.invalid', token: 'bench-token' };
+
+function stubFetch(answer: (url: string) => Response | Promise<Response>): () => void {
+  const real = globalThis.fetch;
+  const stub = async (
+    input: Parameters<typeof globalThis.fetch>[0],
+    _init?: Parameters<typeof globalThis.fetch>[1],
+  ): Promise<Response> => answer(String(input));
+  globalThis.fetch = Object.assign(stub, { preconnect: real.preconnect });
+  return () => {
+    globalThis.fetch = real;
+  };
+}
+
+describe('the in-gate restore poll', () => {
+  test('a present probe parses to its wall time', async () => {
+    const restore = stubFetch(() => new Response(JSON.stringify({
+      ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
+      probe: { wallMs: 2347, at: 1_786_000_000_000 }, ms: 4,
+    })));
+    try {
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'post-ladder-wake', 4_259_840, []);
+      expect(row).toEqual({
+        kind: 'post-ladder-wake', treeBytes: 4_259_840,
+        wallMs: 2347, probeAt: 1_786_000_000_000, outcome: 'ok',
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  test('an absent probe is an absent row, not a zero', async () => {
+    const restore = stubFetch(() => new Response(JSON.stringify({
+      ok: false, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe', ms: 3,
+    })));
+    const notes: string[] = [];
+    try {
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes);
+      expect(row.wallMs).toBeNull();
+      expect(row.probeAt).toBeNull();
+      expect(row.outcome).toContain('absent');
+      expect(notes).toEqual([]);
+    } finally {
+      restore();
+    }
+  });
+
+  test('a dead route is a named error row, never a failed arm', async () => {
+    const real = globalThis.fetch;
+    globalThis.fetch = Object.assign(async () => {
+      throw new Error('fetch failed: connection refused');
+    }, { preconnect: real.preconnect });
+    const notes: string[] = [];
+    try {
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'complexity-restore', 65_536, notes);
+      expect(row.wallMs).toBeNull();
+      expect(row.outcome).toContain('error:');
+      expect(notes).toHaveLength(1);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  test('old artifacts without the field read as unmeasured', () => {
+    expect(decodeRestoreProbeRows(undefined)).toEqual([]);
+    // BYTES, because bytes are what the driver decodes: a hand-edited file
+    // can hold a row no typed literal can spell, and the decoder must drop
+    // that row rather than trust it.
+    const mixed = JSON.parse(
+      '[{"kind":"post-ladder-wake","treeBytes":100,"wallMs":200,"probeAt":300,"outcome":"ok"},'
+      + '{"kind":"post-ladder-wake","treeBytes":"huge","wallMs":null,"probeAt":null,"outcome":"ok"}]',
+    );
+    expect(decodeRestoreProbeRows(mixed)).toEqual([
+      { kind: 'post-ladder-wake', treeBytes: 100, wallMs: 200, probeAt: 300, outcome: 'ok' },
+    ]);
+  });
+
+  test('polled rows survive the durable arm artifact', () => {
+    const rows: RestoreProbeRow[] = [
+      { kind: 'cold-attach', treeBytes: 0, wallMs: 2347, probeAt: 1_786_000_000_000, outcome: 'ok' },
+      { kind: 'post-ladder-wake', treeBytes: 4_259_840, wallMs: null, probeAt: null, outcome: 'absent: the box wrote no probe row for its last start' },
+    ];
+    const root = mkdtempSync(`${tmpdir()}/kinu-restore-probe-`);
+    try {
+      writeArmArtifact(root, 'probe-artifact', 'snapshot-chain', { restoreProbes: rows });
+      const read = readArmArtifact(root, 'probe-artifact', 'snapshot-chain');
+      expect(read.error).toBeNull();
+      expect(decodeRestoreProbeRows(read.artifact?.row.restoreProbes)).toEqual(rows);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
