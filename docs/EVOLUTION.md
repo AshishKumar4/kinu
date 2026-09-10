@@ -8,6 +8,8 @@ Two files this page names live in the workspace filesystem, not in this reposito
 
 The other three timescales are conversational: the next user message grades a turn, five turns close a window, five windows close a lifetime.
 
+A headless actor runs the step clock and nothing above it, because `runHeadInference` (`core/src/heads/head-inference.ts`) records none of its turns into the window, and the CLI declares a task-lifetime hire the same way (`cli-backend/src/agent-host/host.ts`). A swarm's verifier score is consumed by the search under the root's actor (`core/src/strategy/swarm-scoring.ts`) and is never written as a lesson.
+
 The step clock fires on every settled `execute_tools` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites in the submitted code: `tools.<name>(`, the one namespace a crafted tool is callable in. Strings and comments are blanked first, so a tool body passed to `createTool` is not read as a call.
 
 The fitness signal is execution, observed at the host. A crafted tool that raised is stamped with its own name leaving the sandbox, so the failure lands on the artifact whether or not the model caught it. A call that broke on its own account blames nobody. A completed call credits only tools that already existed when it started. A tool cannot certify itself on the call that created it. A call moved to the background is not a result and credits nothing.
