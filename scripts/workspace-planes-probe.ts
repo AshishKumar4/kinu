@@ -1,5 +1,5 @@
 import { Database } from 'bun:sqlite';
-import { explorationActorKey, facetHomeProvisioner, nodeAgentName, headAgentName, subordinateAgentName, type AgentRuntime } from '@kinu.run/core';
+import { explorationActorKey, facetHomeProvisioner, headAgentName, subordinateAgentName, type AgentRuntime } from '@kinu.run/core';
 import { createCLIRuntime } from '../packages/cli-backend/src/runtime';
 import { bindLocalActor, registerLocalActor, registerLocalNode } from '../packages/cli-backend/src/actor-identity';
 
@@ -27,7 +27,7 @@ try {
     const head = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: explorationActorKey('head-probe'), creationId: 'head-probe', kind: 'head', lifetime: 'task' }));
     const subordinate = bindLocalActor(sql, registerLocalActor(runtime.actor, { name: 'sub-probe', creationId: 'sub-probe', kind: 'subordinate', lifetime: 'durable' }));
     const identities = [
-      { name: 'node', actor: node, workspace: await provision(nodeAgentName(node.storageKey)) },
+      { name: 'node', actor: node, workspace: await provision(headAgentName(node.storageKey)) },
       { name: 'head', actor: head, workspace: await provision(headAgentName(head.storageKey)) },
       { name: 'subordinate', actor: subordinate, workspace: await provision(subordinateAgentName(subordinate.storageKey)) },
     ];

@@ -33,7 +33,7 @@ interface Fixture {
   readonly host: ActorHost;
   readonly directory: WorkspaceActorDirectory;
   readonly main: ActorReference;
-  child(name: string, creationId: string, kind: 'subordinate' | 'head' | 'node'): ActorReference;
+  child(name: string, creationId: string, kind: 'subordinate' | 'head'): ActorReference;
   /** A NEW host over the SAME database — what a root eviction leaves behind. */
   rebuild(): Fixture;
 }

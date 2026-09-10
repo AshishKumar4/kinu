@@ -36,7 +36,7 @@
  *     3.2×. So a model zoo measures WORSE than repeated sampling from the best model
  *     when the purpose is variety, and prompt angle rather than model identity is
  *     where diversity is bought here;
- *   - `context:'fork'` by putting the MEASURED BASELINE and the measurements
+ *   - `context:'inherit'` by putting the MEASURED BASELINE and the measurements
  *     along this node's own path into the expansion prompt — at depth 1 the only
  *     ancestor is the workspace as found, which is why that arm is unchanged;
  *   - `score:'verify'` through the registry's instrument, one candidate at a time,
@@ -247,7 +247,7 @@ export interface SwarmRunDeps {
    *
    * *Inherited context*: a root that started blank would throw away precisely the
    * context that made the caller decide to search. This is the caller-to-root edge, and
-   * it is the same axis as every branch edge — `context:'fork'` gives the first level
+   * it is the same axis as every branch edge — `context:'inherit'` gives the first level
    * this prefix verbatim, `'fresh'` gives it the task block and the seed alone.
    *
    * Absent means the caller wired none, and then the first level starts from the task
@@ -296,7 +296,7 @@ export interface SwarmRunDeps {
   /**
    * Turns a resolved tier's model SPEC into the model a node runs on.
    *
-   * Wired by `agents-tool.ts` from `AgentsForkDeps.resolveModel`, which every
+   * Wired by `agents-tool.ts` from `AgentsSwarmDeps.resolveModel`, which every
    * backend with a profile authority supplies. It exists because {@link model}
    * is the CALLER's turn model and a delegation's `tier` is documented as the
    * one routing input: without this seam the run recorded the tier's model in
@@ -818,8 +818,8 @@ export async function runSwarm(
     // granted, otherwise the run's `context`. The expansion axis does not
     // independently control inheritance.
     const inheritedArtifact = (grant
-      ? grant.proposal.branches.some((branch) => branch.context === 'fork')
-      : resolved.config.context === 'fork')
+      ? grant.proposal.branches.some((branch) => branch.context === 'inherit')
+      : resolved.config.context === 'inherit')
       ? parent.artifact
       : null;
 

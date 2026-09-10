@@ -8,12 +8,24 @@ export interface WorkspaceActorAuthority {
   readonly workspaceId: string;
   readonly ownerUserId: string | null;
 }
-const ActorSchema = v.object({
+const StoredActorSchema = v.object({
   actorId: v.string(), workspaceId: v.string(), parentActorId: v.nullable(v.string()),
   name: v.string(), storageKey: v.string(), kind: v.picklist(['main', 'subordinate', 'head', 'node', 'branch']),
   creationId: v.string(), lifetime: v.picklist(['durable', 'task']), createdAt: v.number(), retiringAt: v.nullable(v.number()), deletedAt: v.nullable(v.number()),
 });
-export type WorkspaceActor = v.InferOutput<typeof ActorSchema>;
+type StoredWorkspaceActor = v.InferOutput<typeof StoredActorSchema>;
+/**
+ * One actor's directory row, as callers read it.
+ *
+ * `node` is a STORED kind and not a live one: swarm nodes registered under it
+ * before the fold, and those rows are still in workspaces that ran a search.
+ * The DDL keeps accepting it (genesis, never altered) and {@link row} reads it
+ * as `head` — the same read-time-translation shape the instruction-trust
+ * `grandfathered` rows use. No code writes it.
+ */
+export type WorkspaceActor = Omit<StoredWorkspaceActor, 'kind'> & {
+  readonly kind: Exclude<StoredWorkspaceActor['kind'], 'node'>;
+};
 export interface CreateWorkspaceActor {
   readonly parent: ActorHandle;
   readonly name: string;
@@ -21,7 +33,7 @@ export interface CreateWorkspaceActor {
   readonly kind: Exclude<WorkspaceActor['kind'], 'main'>;
   readonly lifetime: WorkspaceActor['lifetime'];
 }
-const CreationFields = { creationId: v.pipe(v.string(), v.nonEmpty()), name: v.pipe(v.string(), v.nonEmpty()), kind: v.picklist(['subordinate', 'head', 'node', 'branch']), lifetime: v.picklist(['durable', 'task']) };
+const CreationFields = { creationId: v.pipe(v.string(), v.nonEmpty()), name: v.pipe(v.string(), v.nonEmpty()), kind: v.picklist(['subordinate', 'head', 'branch']), lifetime: v.picklist(['durable', 'task']) };
 export const ChildActorOperationSchema = v.union([
   v.strictObject({ action: v.literal('register'), ...CreationFields }),
   v.strictObject({ action: v.literal('cancelCreation'), ...CreationFields }),
@@ -91,11 +103,17 @@ export class WorkspaceActorDirectory {
   }
 
   private row(actorId: string): WorkspaceActor | null {
-    const rows = this.sql<WorkspaceActor>`SELECT actor_id AS actorId, workspace_id AS workspaceId,
+    const rows = this.sql<StoredWorkspaceActor>`SELECT actor_id AS actorId, workspace_id AS workspaceId,
       parent_actor_id AS parentActorId, name, storage_key AS storageKey, kind, lifetime, created_at AS createdAt, creation_id AS creationId, retiring_at AS retiringAt, deleted_at AS deletedAt
       FROM workspace_actors WHERE workspace_id = ${this.authority.workspaceId} AND actor_id = ${actorId}`;
-    const row = rows[0];
-    return row ? v.parse(ActorSchema, row) : null;
+    const stored = rows[0];
+    if (!stored) return null;
+    const parsed = v.parse(StoredActorSchema, stored);
+    const { kind, ...rest } = parsed;
+    // A stored `node` is a head running in swarm mode: the fold retired the
+    // kind, not the actor, so the row loads as what it always behaviorally
+    // was — its own shell and scaffold under its own id.
+    return { ...rest, kind: kind === 'node' ? 'head' : kind };
   }
 
   private issue(row: WorkspaceActor): ActorHandle {
@@ -327,7 +345,7 @@ export class WorkspaceActorDirectory {
     let child: WorkspaceActor;
     if (input.action === 'register' || input.action === 'cancelCreation') {
       const parentKind = this.describe(parent).kind;
-      if (parentKind === 'branch' || ((parentKind === 'head' || parentKind === 'node') && input.kind !== 'head')) {
+      if (parentKind === 'branch' || (parentKind === 'head' && input.kind !== 'head')) {
         throw new KinuError('denied', 'This actor kind cannot create the requested child kind.');
       }
       if (input.kind !== 'subordinate' && input.lifetime !== 'task') throw new KinuError('bad_input', 'Exploration actors have task lifetime.');

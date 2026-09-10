@@ -96,7 +96,7 @@ async function parentAtV1(fx: Fixture): Promise<AgentRuntime> {
 describe('seedActorLoop', () => {
   test('per-kind defaults are the ones the design settled on', () => {
     expect(defaultLoopOrigin('head')).toEqual({ kind: 'inherit' });
-    expect(defaultLoopOrigin('node')).toEqual({ kind: 'inherit' });
+    expect(defaultLoopOrigin('head')).toEqual({ kind: 'inherit' });
     expect(defaultLoopOrigin('branch')).toEqual({ kind: 'inherit' });
     expect(defaultLoopOrigin('subordinate')).toEqual({ kind: 'builtin' });
     expect(defaultLoopOrigin('main')).toEqual({ kind: 'builtin' });
@@ -136,9 +136,9 @@ describe('seedActorLoop', () => {
   test('a later parent promotion does not move a child that already inherited', async () => {
     const fx = build();
     const parent = await parentAtV1(fx);
-    const child = fx.directory.create({ parent: fx.main, name: 'exp:node-1', creationId: 'c3', kind: 'node', lifetime: 'task' });
+    const child = fx.directory.create({ parent: fx.main, name: 'exp:node-1', creationId: 'c3', kind: 'head', lifetime: 'task' });
     const rt = fx.actorRuntime(child, 'node-1');
-    await seedActorLoop(rt, parent, defaultLoopOrigin('node'));
+    await seedActorLoop(rt, parent, defaultLoopOrigin('head'));
 
     // The parent promotes v2 after the child was seeded.
     const parentVfs = parent.agentStateVfs ?? parent.storage.vfs;

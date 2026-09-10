@@ -61,12 +61,14 @@ import { KinuError } from '@kinu.run/core/obs';
 import type { CFRuntime } from './runtime';
 import { actorRetirementFor, type ActorRetirementRequest } from './actor-hosting';
 
-/** One creation an exploration runner asks the root to register. */
+/** One creation an exploration runner asks the root to register. A swarm node's
+ *  actor is a head running in swarm mode, so `head` covers both runners and
+ *  only the toolless branch stays apart. */
 export interface ExplorationActorRequest {
   readonly creationId: string;
-  readonly kind: 'head' | 'node' | 'branch';
+  readonly kind: 'head' | 'branch';
   /** What this child should think with. Absent lets `defaultLoopOrigin` stand,
-   *  which for all three kinds is `inherit` — a fork of an actor's reasoning
+   *  which for both kinds is `inherit` — a fork of an actor's reasoning
    *  that ran a fresh v0 would be a fork of nothing the actor had learned. */
   readonly loop?: LoopOrigin;
 }
@@ -355,7 +357,10 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
 export async function hostNodeSeat(
   seams: ExplorationHostSeams, node: NodeIdentity,
 ): Promise<HostedNodeSeat> {
-  const reference = await seams.register({ creationId: node.nodeId, kind: 'node' });
+  // A swarm node's seat is a HEAD row: the kind fold retired `node`, and the
+  // swarm mode travels with the seat (its run id, its journal) rather than the
+  // row. Stored `node` rows still load through the directory's read translation.
+  const reference = await seams.register({ creationId: node.nodeId, kind: 'head' });
   const actor = await seams.host.acquire(reference);
   return {
     actor,

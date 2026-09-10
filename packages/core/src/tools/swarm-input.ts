@@ -130,7 +130,7 @@ const ObjectiveSchema = v.variant('kind', [
 const CUT_OBSERVE = '`observe` was cut entirely, because all three of its values were '
   + 'already something else: observe:"none" is what a unit:{kind:"thought"} node IS, '
   + 'observe:"own" is what holding tools MEANS now that every other unit is a real '
-  + 'agent, and observe:"ancestors" is what context:"fork" supplies by construction. '
+  + 'agent, and observe:"ancestors" is what context:"inherit" supplies by construction. '
   + 'Drop it, and set `context` if what you wanted was the ancestor chain.';
 
 const CUT_GENERATOR = 'unit:"generator" was cut. It was documented as the generator '
@@ -150,8 +150,13 @@ const CUT_DECORRELATE = '`decorrelate` was cut entirely. It shipped with all thr
 const CUT_MUTATE = 'expand:"mutate" was cut. It asked what a child starts from — the '
   + "parent's own answer rather than the workspace as found — and that is the `context` "
   + 'axis, which asks it once for the caller-to-root edge and every branch edge '
-  + 'together. Use context:"fork" for the parent\'s conversation, context:"fresh" for '
+  + 'together. Use context:"inherit" for the parent\'s conversation, context:"fresh" for '
   + 'its results alone.';
+
+const CUT_FORK_CONTEXT = 'context:"fork" was renamed context:"inherit": the value names context '
+  + 'INHERITANCE — the child starts from the parent\'s conversation verbatim — and `fork` is the '
+  + 'removed `agents` action, a different referent sharing one spelling. Use context:"inherit" '
+  + 'for the parent\'s conversation, context:"fresh" for its results alone.';
 
 const CUT_AGREE = 'score:"agree" was cut: it is score:"judge" with the population as the '
   + 'judge, and the ensemble it needed is already the judge arm\'s `samples`. Use '
@@ -180,7 +185,10 @@ const SwarmConfigWireSchema = v.strictObject({
     v.strictObject({ kind: v.literal('thought') }),
     v.pipe(v.strictObject({ kind: v.literal('generator') }), v.check(() => false, CUT_GENERATOR)),
   ])),
-  context: v.optional(v.picklist(SWARM_CONTEXTS)),
+  context: v.optional(v.union([
+    v.picklist(SWARM_CONTEXTS),
+    v.pipe(v.literal('fork'), v.check(() => false, CUT_FORK_CONTEXT)),
+  ])),
   observe: cutAxis(CUT_OBSERVE),
   expand: v.optional(v.union([
     v.picklist(SWARM_EXPANDS),
@@ -321,7 +329,7 @@ export const SwarmNodeAssignmentsSchema: v.GenericSchema<unknown, readonly Swarm
  * NO SPEC VALIDATION HERE, and that is the split the surface already holds: whether a
  * spec RESOLVES is a question about the caller's session and its provider registry,
  * which this schema cannot see. The runner resolves each spec through the one
- * `AgentsForkDeps.resolveModel` seam the actor routes a tier through, and an
+ * `AgentsSwarmDeps.resolveModel` seam the actor routes a tier through, and an
  * unresolvable spec is refused as `bad_input` naming it — BEFORE any node runs, so a
  * fabricated spec costs nothing. An empty STRING is rejected here (minLength 1) because
  * it is a shape question rather than a session one, and `resolveSwarm` restates it as a

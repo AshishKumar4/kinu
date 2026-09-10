@@ -59,7 +59,7 @@ import { renderThrownChain } from '../obs/index';
  * The sandbox-visible declaration of each action, one block per member.
  *
  * Gating is per ACTION, not per field: the only deps shapes any backend wires
- * are `{fork}` (subordinates, CLI local sessions, nodes) and `{fork, team,
+ * are `{swarm}` (subordinates, CLI local sessions, nodes) and `{swarm, team,
  * peers}` (the workspace orchestrator), so a field that would need finer gating
  * cannot occur. If one ever did, `dispatchAgentsAction` already answers it with
  * a sharp error naming the missing transport.

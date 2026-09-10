@@ -155,7 +155,7 @@ describe('the surface has SIX axes, and each cut value is refused by its own nam
   test('`observe` is refused by name, and told where each of its values went', () => {
     const error = refusal({ observe: 'ancestors' });
     expect(error).toContain('`observe` was cut entirely');
-    expect(error).toContain('context:"fork"');
+    expect(error).toContain('context:"inherit"');
   });
 
   test('`decorrelate` is refused by name, and says what turning angles off cost', () => {
@@ -268,7 +268,7 @@ describe('the context axis carries the inheritance question, at one spelling', (
     for (const context of SWARM_CONTEXTS) {
       expect(v.parse(SwarmConfigSchema, { context })).toMatchObject({ context });
     }
-    expect(() => v.parse(SwarmConfigSchema, { context: 'inherit' })).toThrow();
+    expect(() => v.parse(SwarmConfigSchema, { context: 'fork' })).toThrow('renamed');
     expect(() => v.parse(SwarmConfigSchema, { context: { kind: 'fork' } })).toThrow();
   });
 
@@ -285,7 +285,7 @@ describe('the context axis carries the inheritance question, at one spelling', (
   });
 
   test('a named preset supplies it from the row *Presets* fixes, the verifier presets inheriting', () => {
-    // The verifier presets take `fork` because that is what the cut
+    // The verifier presets take `inherit` because that is what the cut
     // `observe:'ancestors'` WAS: a continued conversation carries the ancestor
     // chain's measurements transitively. `ideate` takes `fresh` — it has no branch
     // edge at all.
@@ -298,7 +298,7 @@ describe('the context axis carries the inheritance question, at one spelling', (
       },
     });
     if ('reason' in optimise) throw new Error(`optimise did not resolve: ${optimise.error}`);
-    expect(optimise.config.context).toBe('fork');
+    expect(optimise.config.context).toBe('inherit');
 
     const ideate = resolveSwarm({ preset: 'ideate', task: 'name some approaches' });
     if ('reason' in ideate) throw new Error(`ideate did not resolve: ${ideate.error}`);

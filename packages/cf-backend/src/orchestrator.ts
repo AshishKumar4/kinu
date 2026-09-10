@@ -26,7 +26,7 @@ import {
   agentsActionsFor, agentsProfileContext, assignedTurnFraming, buildActorTools,
   BUILTIN_TOOL_NAMES, createTeamToolDeps, currentDateForPrompt, delegationExhausted,
   mintSubordinateName, withHeadCaptureRecording,
-  type ActorHost, type ActorToolsetDeps, type AgentsForkDeps, type AgentsToolDeps,
+  type ActorHost, type ActorToolsetDeps, type AgentsSwarmDeps, type AgentsToolDeps,
   type AssignedTurnFraming, type BuiltinToolName,
   type BoundActor, type DynamicContext, type HeadInput,
   type HeadJournalPort, type HeadSplitRequest, type HeadSplitResult, type HostedActor,
@@ -720,7 +720,7 @@ export class OrchestratorAgent extends ActorAgent {
       // the same fact.
       nodeHome: (actor) => provisionHostedActorHome(
         { homeHost: () => this.facetHomeHost(), directory: this.workspaceActors() },
-        actor.record, actor.reference, 'node',
+        actor.record, actor.reference, 'head',
       ),
       executeTool: (runtime, webSearch) => {
         const factory = createExecuteToolsFactory({
@@ -926,7 +926,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   private hostedAgentsToolDeps(turn: HostedTaskTurn): AgentsToolDeps {
     const seams = this.explorationSeams();
-    const fork: AgentsForkDeps = {
+    const swarm: AgentsSwarmDeps = {
       rt: turn.runtime,
       model: turn.model,
       resolveModel: (spec: string) => this.ownedModelServices.resolveModel(spec),
@@ -946,7 +946,7 @@ export class OrchestratorAgent extends ActorAgent {
     };
     const deps: AgentsToolDeps = {
       mode: turn.input.mode,
-      fork,
+      swarm,
       budget: this.budget,
     };
     // THIS turn's own resolution, not a second one: the rungs narrow by the

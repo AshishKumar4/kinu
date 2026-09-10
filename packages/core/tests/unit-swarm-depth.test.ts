@@ -71,7 +71,7 @@ const NO_NODE = refuseHostNode('the depth suite runs thought nodes only');
 
 function treeConfig(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
-    unit: { kind: 'thought' }, context: 'fork',
+    unit: { kind: 'thought' }, context: 'inherit',
     expand: 'sample',
     score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'none' },
     ...over,
@@ -99,11 +99,11 @@ function proposal(over?: Partial<BranchProposal>): BranchProposal {
 }
 
 /** A proposal whose branches all ask to FORK — the shape the fifth arm refuses under a
- *  `fresh` search and accepts under a forking one. */
-function forking(width = 2): BranchProposal {
+ *  `fresh` search and accepts under an inheriting one. */
+function inheriting(width = 2): BranchProposal {
   return proposal({
     branches: Array.from({ length: width }, (_unused, i) => ({
-      task: `sub-question ${String(i)}`, rationale: 'r', context: 'fork' as const,
+      task: `sub-question ${String(i)}`, rationale: 'r', context: 'inherit' as const,
     })),
   });
 }
@@ -125,7 +125,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
     // witness for the same reason (`a_legal_proposal_is_accepted`).
     const verdict = arbitrateBranch({
       config: treeConfig(), caps: caps(5, 3), atDepth: 1,
-      remainingChildren: 10, proposal: forking(),
+      remainingChildren: 10, proposal: inheriting(),
     });
     expect(verdict).toEqual({ kind: 'accepted', width: 2 });
   });
@@ -161,7 +161,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
       // never widen" over the axis that actually owns inheritance.
       arbitrateBranch({
         config: treeConfig({ context: 'fresh' }), caps: caps(5, 3), atDepth: 1,
-        remainingChildren: 10, proposal: forking(),
+        remainingChildren: 10, proposal: inheriting(),
       }),
     ];
     for (const verdict of refusals) {
@@ -236,9 +236,9 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
     // failure mode *Arbitration* is written against: a node that cannot tell refusal from
     // being ignored will simply propose again.
     for (const advance of SWARM_ADVANCES) {
-      for (const context of ['fork', 'fresh'] as const) {
+      for (const context of ['inherit', 'fresh'] as const) {
         for (const width of [0, 1, 2, 4, 5]) {
-          for (const asked of ['fork', 'fresh'] as const) {
+          for (const asked of ['inherit', 'fresh'] as const) {
             const verdict = arbitrateBranch({
               config: treeConfig({
                 advance: advance === 'archive' ? { kind: advance, novelty: 0.6 } : { kind: advance },
@@ -246,7 +246,7 @@ describe('*Arbitration* — a node proposes, the engine decides', () => {
               }),
               caps: caps(3, 2), atDepth: 1,
               remainingChildren: 4,
-              proposal: asked === 'fork' ? forking(width) : widthOf(width),
+              proposal: asked === 'inherit' ? inheriting(width) : widthOf(width),
             });
             expect(['accepted', 'refused']).toContain(verdict.kind);
             if (verdict.kind === 'refused') expect(verdict.error.length).toBeGreaterThan(0);

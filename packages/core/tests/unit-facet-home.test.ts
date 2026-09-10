@@ -18,7 +18,7 @@ import {
   headAgentName,
   subordinateAgentName,
 } from '../src/vfs/agent-home';
-import { facetHomeProvisioner, nodeAgentName } from '../src/strategy/node-workspace';
+import { facetHomeProvisioner } from '../src/strategy/node-workspace';
 import { createWorkspaceBundle } from './helpers';
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
@@ -47,16 +47,15 @@ describe('facet agent names share one namespace without colliding', () => {
   test('each kind prefixes its own id', () => {
     expect(subordinateAgentName('researcher-abc123')).toBe('sub-researcher-abc123');
     expect(headAgentName('aX9bK2cD3eF4gH5iJ6kL7m')).toBe('head-aX9bK2cD3eF4gH5iJ6kL7m');
-    expect(nodeAgentName('aX9bK2cD3eF4gH5iJ6kL7m')).toBe('node-aX9bK2cD3eF4gH5iJ6kL7m');
+
   });
 
-  test('one id in three kinds is three homes', () => {
+  test('one id in two kinds is two homes', () => {
     const homes = new Set([
       agentHome(subordinateAgentName('worker-1')),
       agentHome(headAgentName('worker-1')),
-      agentHome(nodeAgentName('worker-1')),
     ]);
-    expect(homes.size).toBe(3);
+    expect(homes.size).toBe(2);
   });
 
   test('a hostile facet id never becomes a path outside /home', () => {

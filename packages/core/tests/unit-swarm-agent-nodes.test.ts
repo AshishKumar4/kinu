@@ -135,7 +135,7 @@ function agentConfig(over?: Partial<SwarmConfig>): SwarmConfig {
     unit: { kind: 'answer' },
     // The first level continues the origin's framing and the second level asks for
     // what it wants; a `fresh` search could not accept an inheriting child at all.
-    context: 'fork',
+    context: 'inherit',
     expand: 'sample',
     score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'none' },
     ...over,
@@ -178,7 +178,7 @@ interface ScriptedRun {
    * How many assistant turns each node ALREADY HAD in front of it on its first step.
    *
    * The discriminator *Inherited context* turns on, observed rather than inferred: a
-   * `fork` child's prompt opens with its parent's own turns, and a `fresh` child's opens
+   * `inherit` child's prompt opens with its parent's own turns, and a `fresh` child's opens
    * with the seed alone. Zero therefore means "started from the seed", and non-zero
    * means "inherited a conversation".
    */
@@ -257,7 +257,7 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
           input: JSON.stringify({
             rationale: 'one thread should try a tournament and one a single scan',
             branches: [
-              { task: 'find the largest with a single linear scan', rationale: 'fewest calls', context: 'fork' },
+              { task: 'find the largest with a single linear scan', rationale: 'fewest calls', context: 'inherit' },
               { task: 'find the largest with a pairwise tournament', rationale: 'a different shape', context: 'fresh' },
             ],
           }),
@@ -447,10 +447,10 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     }
   }, 180_000);
 
-  test('a fork child inherits its parents conversation and a fresh child does not', async () => {
+  test('an inheriting child inherits its parents conversation and a fresh child does not', async () => {
     // The two shapes *Inherited context* names, observed where they DIFFER. Every node's
     // first step is recorded with the number of assistant turns already in front of it: a
-    // `fork` child opens on its parent's own turns, a `fresh` child opens on the seed
+    // `inherit` child opens on its parent's own turns, a `fresh` child opens on the seed
     // alone. Both carry the parent's report and their own focus, which is what makes them
     // two values of one axis rather than two mechanisms.
     const { result, journal, nodes, script } = await run({
@@ -461,14 +461,14 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     const rootId = nodes.find((node) => node.parent_id === null)?.root_id ?? '';
     const deep = journal.readTree(rootId).filter((row) => row.depth === 2);
     expect(deep.length).toBe(2);
-    // The granted branches were one `fork` and one `fresh`, and the engine created both
+    // The granted branches were one `inherit` and one `fresh`, and the engine created both
     // with the FOCUS the proposal named — without it a child is a re-run of its parent.
     const rationales = deep.map((row) => row.rationale ?? '');
     expect(rationales.some((rationale) => rationale.includes('fewest calls'))).toBe(true);
     expect(rationales.some((rationale) => rationale.includes('a different shape'))).toBe(true);
 
     // THE DISCRIMINATOR. Four nodes ran: two at depth 1 (which inherit the origin's
-    // conversation, and the suite wires none, so zero), and two at depth 2 — one forking,
+    // conversation, and the suite wires none, so zero), and two at depth 2 — one inheriting,
     // which sees its parent's turns, and one fresh, which sees none.
     expect(script.inheritedTurns).toHaveLength(4);
     expect(script.inheritedTurns.filter((turns) => turns > 0)).toHaveLength(1);
@@ -645,7 +645,7 @@ describe('the mission ledger a search charges', () => {
     const { model, script } = workingNode({ proposeAtDepth1: true });
     const deps: AgentsToolDeps = {
       mode: 'build',
-      fork: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model },
       budget: governor,
     };
     const provider = createAgentsCodemodeProvider(() => deps);

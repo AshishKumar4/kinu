@@ -4019,7 +4019,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // zero branches.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
-    return { deps: { mode: 'build', fork: { rt, model, hostNode: nodeSeatFactory(rt) } }, calls };
+    return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt) } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {
@@ -4399,14 +4399,14 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
    *
    * ONE builder (`headRuntimeOptions`) constructs it, so "they hand over the
    * same sinks" is true by construction; what needs proving is that the runtime
-   * installed by a MODEL REBIND — the one every fork receives, since
+   * installed by a MODEL REBIND — every search receives, since
    * `headRuntime` claims the session model before handing it over — has the
-   * three properties that matter: per-fork model resolution, a merge routed off
+   * three properties that matter: per-search model resolution, a merge routed off
    * the profile through the local binder, and the session's own spend sinks. A
-   * rebind that omits `resolveModel` makes `agents fork`'s per-fork model a
+   * rebind that omits `resolveModel` makes `agents swarm`'s per-search model a
    * silent no-op on this backend.
    */
-  test('the head runtime a model rebind installs resolves per-fork models and reports its merge to the session', async () => {
+  test('the head runtime a model rebind installs resolves per-search models and reports its merge to the session', async () => {
     const asked: string[] = [];
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => spec?.trim() || 'local/chat',

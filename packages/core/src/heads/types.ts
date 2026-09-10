@@ -58,7 +58,7 @@ export type MergeStrategy =
  * The two fields here are not work limits:
  *   • `maxDepth` terminates RECURSION. `split_subheads` lets a head spawn heads
  *     that spawn heads; without a decrementing depth there is no fixed point and
- *     a single fork call can expand without bound. It never stops a running
+ *     a single swarm call can expand without bound. It never stops a running
  *     head — it refuses a NEW split.
  *   • `maxWallClockMs` exists only when the caller supplies a deadline in
  *     the inherited HeadBudget or node deps. Absent means run to completion. */

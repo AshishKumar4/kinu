@@ -38,14 +38,14 @@ export type LoopOrigin =
 /**
  * The origin a kind takes when its creator names none.
  *
- * A search explores under the loop it is searching FOR — a head or a node that
- * reasoned with the bootstrap loop while its parent runs a promoted one is
- * measuring the wrong program, and the local swarm node already shared its
- * parent's pointer for exactly that reason. A hired subordinate and an
- * ask-by-role temporary have their own role and their own evolution, so they
+ * A search explores under the loop it is searching FOR — a head exploring in
+ * swarm mode that reasoned with the bootstrap loop while its parent runs a
+ * promoted one is measuring the wrong program, and the local swarm node already
+ * shared its parent's pointer for exactly that reason. A hired subordinate and
+ * an ask-by-role temporary have their own role and their own evolution, so they
  * start where the product starts. Every creation site still records what it
  * used: this is the default, not a silence.
  */
 export function defaultLoopOrigin(kind: WorkspaceActor['kind']): LoopOrigin {
-  return kind === 'head' || kind === 'node' || kind === 'branch' ? { kind: 'inherit' } : { kind: 'builtin' };
+  return kind === 'head' || kind === 'branch' ? { kind: 'inherit' } : { kind: 'builtin' };
 }
