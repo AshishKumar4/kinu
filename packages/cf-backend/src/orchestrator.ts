@@ -4878,10 +4878,10 @@ export class OrchestratorAgent extends ActorAgent {
     }));
     const craftedRaw = this.rt.craftStore.list();
     const crafted = craftedRaw.map(t => {
-      // Quality lives on the crafted_tools row, so there is no craft_scores table to join.
+      // Quality lives on the crafted_tools row, keyed by name alone: the table
+      // is workspace-wide and carries no actor_id (`agent-utils/stores/craft.ts`).
       const scoreRow = this.sql<{ score: number; uses: number }>`
-        SELECT score, uses FROM crafted_tools
-      WHERE actor_id = ${this.actorHandle().actorId} AND name = ${t.name} LIMIT 1`;
+        SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
       return {
         name: t.name,
         description: t.description || "Crafted tool",
