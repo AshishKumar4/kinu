@@ -47,7 +47,7 @@
 import type { ModelMessage } from 'ai';
 import { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral } from '../prompting/staged-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
 import { nowMs } from '../utils/date';
 import { decodeModelMessages, encodeModelMessages, modelMessagesDigest } from '../prompting/message-codec';

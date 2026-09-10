@@ -23,7 +23,7 @@ import type {
 } from '../events/types';
 import type { TurnEscalationLedger } from '../execution/escalation';
 import type { CompletedTurn } from '../evolution/types';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { usageReported, type Usage } from '../usage';
 import type { TurnAccumulator } from './turn-accumulator';
 import {

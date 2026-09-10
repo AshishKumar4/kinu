@@ -140,7 +140,7 @@ import type {
 } from './swarm';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ModelCallSink } from '../events/model-call';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import {
   buildNodeDeps, createRoot, initRunLedgers, prepareMeasurement, prepareParetoMeasurement,
   readCarryIn, refuseContendedRun, regionRefusal, resolveNodeModel, resolveNodeModels,

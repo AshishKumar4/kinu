@@ -33,7 +33,7 @@
 import * as v from 'valibot';
 import { seekPage, mapPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from './actor-handle';
 import { tableExists } from './schema';
 import { uiMessageRow, uiMessageText } from '../utils/ui-message';
 

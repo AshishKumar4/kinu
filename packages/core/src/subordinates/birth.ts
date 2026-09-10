@@ -1,9 +1,9 @@
 import * as v from 'valibot';
 import { isValidRoleId, TIER_IDS } from '../profiles/catalog';
-import { isWorkMode, type WorkMode } from '../prompting/surface';
+import { isWorkMode, type WorkMode } from '../types/turn';
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/index';
-import type { ActorReference } from '../state/actor-handle';
+import type { ActorReference } from '../identity/actor-handle';
 import type { SubordinateRosterStore } from './roster';
 import type { SubordinateRuntime } from './support';
 

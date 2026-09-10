@@ -21,7 +21,7 @@ export {
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
   TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
-  RunEndReasonSchema, ModelMessagesSchema, WorkModeSchema, TurnContinuitySchema,
+  RunEndReasonSchema, ModelMessagesSchema, TurnContinuitySchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
   type TerminalEffectOutcome, type TerminalEffectStatus, type TerminalEffectPhase,
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
@@ -519,7 +519,8 @@ export {
   type CraftedDeclaration,
   type CodemodeProvider, type CodemodeResult,
 } from './tools/sandbox-contract';
-export { STATE_NAMESPACE, STATE_TYPES, initCodemodeStateTable, createStateCodemodeProvider, type ProgramStateStore } from './tools/state-codemode';
+export { STATE_NAMESPACE, STATE_TYPES, createStateCodemodeProvider } from './tools/state-codemode';
+export { initCodemodeStateTable, createProgramStateStore, type ProgramStateStore } from './identity/program-state';
 export {
   APP_TABLE_SCOPES, APP_MUTATIONS,
   initAgentDataTables, createAppDataStore, createDbCodemodeProvider,
@@ -528,10 +529,10 @@ export {
   type AppSelect, type AppOp, type AppOpResult, type AppRow,
   type AppDataStore, type AppDataStoreDeps, type DbOpRecord,
 } from './tools/db-codemode';
-export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './state/actor-handle';
-export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './state/actor-key';
+export { ActorReferenceSchema, actorReferenceOf, bindActorHandle, sameActorReference, type ActorReference, type ActorIdentity, type ActorHandle } from './identity/actor-handle';
+export { explorationActorKey, isExplorationActorKey, parseActorKey, requireSubordinateActorName } from './identity/actor-key';
 export { finishSubordinateBirth, recoverSubordinateLifecycles, SubordinateBirthSchema, type SubordinateBirth, type SubordinateSeed } from './subordinates/birth';
-export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './state/workspace-actors';
+export { initWorkspaceActorTable, WorkspaceActorDirectory, actorScaffoldPath, actorStateRoot, openWorkspaceMainActor, ChildActorOperationSchema, type ChildActorOperation, type ActorDirectoryResult, type WorkspaceActorAuthority, type WorkspaceActor, type CreateWorkspaceActor } from './identity/workspace-actors';
 // open-38: ONE physical workspace SQLite for every logical actor. The host that
 // binds an issued actor's runtime objects over that one database, and the loop
 // origin every created actor is seeded with.
@@ -715,10 +716,10 @@ export {
   type ContextSegment,
   type ToolDefsLike,
 } from './context-meter';
+export { isWorkMode, WorkModeSchema, type TurnProvenance, type WorkMode } from './types/turn';
 export {
   compilePromptSurface,
   executorIsSelectable,
-  isWorkMode,
   turnProvenanceForMetadata,
   workModeForTurnMetadata,
   uniqueBuiltinTools,
@@ -728,8 +729,6 @@ export {
   type PromptExecutorInfo,
   type PromptExternalToolInfo,
   type PromptIdentity,
-  type TurnProvenance,
-  type WorkMode,
   type PromptSurface,
   type PromptSurfaceOptions,
 } from './prompting/surface';

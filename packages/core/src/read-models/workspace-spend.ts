@@ -55,7 +55,7 @@ import { addUsage, usageReported, usageTotal, type Usage } from '../usage';
 import { storedUsage } from '../heads/journal';
 import type { StoredHeadUsage } from '../heads/schema';
 import { listMissionSpend, type MissionBudgetSnapshot } from '../mission-budget';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 /**
  * What one producer spent, and what it could not account for.

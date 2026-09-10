@@ -15,7 +15,7 @@ import * as v from 'valibot';
 import { CHANGE_KIND_GLYPH } from '../tui-presentation';
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { FactsStore } from '../memory/facts';
 import { listScaffoldArchive } from '../scaffold/archive';
 import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow';

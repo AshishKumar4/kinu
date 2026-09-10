@@ -11,7 +11,7 @@
 
 import type { SessionWriter, SessionMessage } from '../mcts/record-node';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 export function createDurableMctsSession(sql: SqlExecutor, actor: ActorHandle): SessionWriter {
   const actorId = actor.actorId;

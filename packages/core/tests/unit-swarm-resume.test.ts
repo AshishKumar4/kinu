@@ -67,7 +67,7 @@ import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor } from '../src/types/primitives';
 import type { SearchNode } from '../src/types/mcts';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 /* ── the ledger's own collision rule, over the store ──────────────────────── */
 

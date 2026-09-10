@@ -15,7 +15,7 @@
  * so no caller had to move.
  */
 
-import type { WorkspaceActor } from '../state/workspace-actors';
+import type { WorkspaceActor } from '../identity/workspace-actors';
 
 /**
  * Where a created actor's agentic loop comes from.

@@ -36,11 +36,11 @@ import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import type { SqlExecutor, VFS } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from './actor-handle';
 import type { VfsNativeReads } from '../vfs/mounts';
 import type { ForkFileSink } from './fork-sink';
 import { renderIssues } from '../utils/json';
-import { openWorkspaceMainActor } from '../state/workspace-actors';
+import { openWorkspaceMainActor } from './workspace-actors';
 import {
   ancestryIds,
   messageRowById,

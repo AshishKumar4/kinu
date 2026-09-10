@@ -5,7 +5,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { makeSql, createMockLLM, createTestActor, createTestWorkspace, SDK_SESSION_DDL } from './helpers';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import {
   isTrivialTurn, classifyTurnOutcome, buildOutcomeClassifierPrompt,
   outcomeToFeedback, outcomeQuality, feedbackToQuality,

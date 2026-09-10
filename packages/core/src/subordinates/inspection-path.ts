@@ -29,8 +29,8 @@ import { missingSubordinateHistory, readSubordinateInspection, SubordinateInspec
 import * as v from 'valibot';
 import { tableExists } from '../identity/schema';
 import type { SqlExec, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
-import type { WorkspaceActorDirectory } from '../state/workspace-actors';
+import type { ActorHandle } from '../identity/actor-handle';
+import type { WorkspaceActorDirectory } from '../identity/workspace-actors';
 
 export interface SubordinateInspectionAuthority {
   /** The owner the transport authenticated. */

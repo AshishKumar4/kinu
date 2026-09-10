@@ -21,9 +21,9 @@ import type { ExecutionRouter } from '../execution/types';
 import type { DeviceTransport } from '../execution/device-tunnel-executor';
 import type { FileCheckpoints } from '../checkpoints/types';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from './turn';
 import type { TurnFileLedger } from '../tools/file-ledger';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 /** A live channel a surface that owns a user (ACP's `session/request_permission`)
  *  offers for 'gate'-tier shell approvals — see AgentRuntime.setShellApprovalChannel. */

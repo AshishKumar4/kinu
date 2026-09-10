@@ -25,7 +25,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn } from './types';
 import { JsonObjectSchema, JsonValueSchema, parseJsonValue } from '../utils/json';
 import { UsageSchema } from '../usage';

@@ -54,7 +54,7 @@ import type { CodemodeProvider } from './sandbox-contract';
 import { TOOL_REACH } from './registry';
 import { branchableToolCall } from './outcome';
 import type { RawSqlExec, SqlExecutor, SqlValue } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { DeferredRunEvent, RunEventRecorder } from '../events/recorder';
 import { KinuError, refusalOf, renderCauseChain } from '../obs/error';
 import { currentWorkMode, requireWorkModePermission } from '../execution/work-mode';

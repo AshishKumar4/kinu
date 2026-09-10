@@ -51,7 +51,8 @@ import type { ModelMessage } from 'ai';
 import {
   DYNAMIC_CONTEXT_DELIMITER, DYNAMIC_CONTEXT_OPEN_TAG, sealDelimiters,
 } from './sections';
-import { executorIsSelectable, type PromptExecutorInfo, type TurnProvenance } from './surface';
+import { executorIsSelectable, type PromptExecutorInfo } from './surface';
+import { type TurnProvenance } from '../types/turn';
 import { EXECUTOR_CAPABILITIES } from '../execution/types';
 import {
   connectedDevices, describeGpuNodes, effectiveDeviceMode, sandboxCause,

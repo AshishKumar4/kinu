@@ -20,7 +20,7 @@ import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './st
 import { nanoid } from '../utils/nanoid';
 import { runWorkModeInvocation } from '../execution/work-mode';
 import { recoveryBackoffMs } from '../utils/recovery-backoff';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { classify, diagnostics, renderThrownChain, toKinuError } from '../obs/index';

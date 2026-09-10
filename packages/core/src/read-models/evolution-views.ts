@@ -11,7 +11,7 @@
  */
 
 import type { AgentConfigStore } from '../config/store';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import {
   buildChangelog, countUnseenChangelog, listUnseenChangelog, type ChangelogEntry,
 } from '../evolution/changelog';

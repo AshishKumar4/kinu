@@ -39,7 +39,7 @@ import {
 } from '../../packages/core/src/index';
 import { DIGEST_LIMIT, JsonObjectSchema, JsonValueSchema } from '../../packages/core/src/utils/json';
 import { createWorkspace } from '../../packages/core/src/identity/index';
-import { openWorkspaceMainActor } from '../../packages/core/src/state/workspace-actors';
+import { openWorkspaceMainActor } from '../../packages/core/src/identity/workspace-actors';
 import { makeSql, makeWorkspaceSchemaSql, type CLIRuntime } from '../../packages/cli-backend/src/runtime';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {

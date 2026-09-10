@@ -11,7 +11,7 @@
  */
 import * as v from 'valibot';
 import type { KinuEvent } from './types';
-import type { WorkMode } from '../../prompting/surface';
+import type { WorkMode } from '../../types/turn';
 import { renderForLLM } from './visibility';
 import { JsonObjectSchema } from '../../utils/json';
 

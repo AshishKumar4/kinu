@@ -11,7 +11,7 @@
 // in order, `end` only stated by a query that ran off the data.
 import type { SeekCursor } from '../src/read-models/page';
 import type { SqlExecutor } from '../src/types/primitives';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import { describe, expect, test } from 'bun:test';
 import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 import { createTestWorkspace } from './helpers';

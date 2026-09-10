@@ -70,7 +70,7 @@ import {
   type PublicationState, type VerifierSpec,
 } from './objective';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 /**
  * The objective's own identity, denormalised beside the digest it hashes to.

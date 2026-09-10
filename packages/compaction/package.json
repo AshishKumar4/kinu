@@ -10,12 +10,14 @@
   "dependencies": {
     "@better-compact/core": "^0.1.0",
     "@kinu.run/core": "workspace:*",
-    "ai": "6.0.214"
+    "ai": "6.0.214",
+    "valibot": "^1.4.1"
   },
   "scripts": {
     "check": "tsc --noEmit"
   },
   "devDependencies": {
+    "@ai-sdk/provider": "3.0.12",
     "@kinu.run/test-utils": "workspace:*"
   }
 }

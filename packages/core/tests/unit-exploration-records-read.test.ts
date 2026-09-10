@@ -28,7 +28,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import {
   cellOccupants, describeObjective, initExplorationRecordsTable, objectiveIdOf,
   recordExploration, recordHandleOf, verifierDigestOf,

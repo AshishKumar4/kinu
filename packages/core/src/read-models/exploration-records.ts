@@ -49,7 +49,7 @@ import {
   type CellSeek, type RecordCellHandle, type RecordObjectiveHandle,
 } from '../strategy/records';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { boundedInt } from '../utils/bounds';
 import { mapPage, seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 

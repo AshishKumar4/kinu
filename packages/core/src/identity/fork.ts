@@ -53,7 +53,7 @@ import { CHAT_SESSION_ID, forkAncestry, hasPaneStore } from './conversation-stor
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
 import { uiMessageText } from '../utils/ui-message';
-import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../state/workspace-actors';
+import { openWorkspaceMainActor, WorkspaceActorDirectory } from './workspace-actors';
 import { KinuError } from '../obs/error';
 
 /** The serialized UI message form of one stored row — what the SDK's pane

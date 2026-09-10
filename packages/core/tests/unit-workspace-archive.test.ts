@@ -23,7 +23,7 @@ import {
 } from '../src/index';
 import { createTestActor, createWorkspaceBundle, makeExecRaw, makeSql, SDK_SESSION_DDL } from './helpers';
 import { ConversationSearchStore } from '../src/memory/conversation-search';
-import { openWorkspaceMainActor } from '../src/state/workspace-actors';
+import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { testActorHandle } from '@kinu.run/test-utils';
 
 function fresh() {

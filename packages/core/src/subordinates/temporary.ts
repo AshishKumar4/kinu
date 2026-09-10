@@ -37,7 +37,7 @@
  * stored twice.
  */
 
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import type { RoleId } from '../profiles/catalog';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import { KinuError, renderCauseChain, toKinuError, type ErrorCode } from '../obs/error';

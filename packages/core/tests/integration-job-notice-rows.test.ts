@@ -46,8 +46,8 @@ import { PROGRAMMATIC_MESSAGE_ID_PREFIX, TURN_AUTHOR_METADATA_KEY, uiMessageText
 import type { BackendHost } from '../src/types/backend-host';
 import type { Schedule, SqlExecutor } from '../src/types/primitives';
 import { createTestWorkspace, makeSql, makeExecRaw, makeSqlExec, SDK_SESSION_DDL } from './helpers';
-import { openWorkspaceMainActor } from '../src/state/workspace-actors';
-import type { ActorHandle } from '../src/state/actor-handle';
+import { openWorkspaceMainActor } from '../src/identity/workspace-actors';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import { createTestActors } from '@kinu.run/test-utils';
 
 const JOB = 'bgjob-y2vlvl1wbli9gan6sh78a';

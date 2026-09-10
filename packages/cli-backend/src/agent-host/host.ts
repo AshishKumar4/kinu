@@ -785,15 +785,10 @@ export class LocalAgentHost {
     if (input.parentKey !== null) {
       sessionOpts.workspaceTitle = () => this.rootEntry(input.key).config.getDisplayName();
     }
-    // A TASK-LIFETIME child records no turn into the evolution window. Its
-    // actor answers one `ask` and is dismissed; every later ask mints a fresh
-    // actor, and the lessons ledger is actor-scoped — so a review of its turn
-    // is a reflection model call, paid on the asking caller's critical path
-    // (`dismiss` joins `settleEvolution`), that writes a row nothing ever
-    // reads. The hosted engine stays on: the step clock still ticks for it,
-    // exactly as it does for a head or a node on `runHeadInference`. A durable
-    // hire keeps recording — it persists and reads its own ledger.
-    if (input.actor.record.lifetime === 'task') sessionOpts.noAutoEvolve = true;
+    // A hosted child records no turn into the evolution window, on either
+    // backend: cf runs every subordinate on `runHeadInference`, which never
+    // reaches `recordTurn`. The step clock still ticks for it.
+    if (input.parentKey !== null) sessionOpts.noAutoEvolve = true;
     if (input.ws.modelResolver) sessionOpts.modelResolver = input.ws.modelResolver;
     if (input.ws.staticModel) sessionOpts.model = input.ws.staticModel;
     if (input.ws.profileAuthority) sessionOpts.profileAuthority = input.ws.profileAuthority;

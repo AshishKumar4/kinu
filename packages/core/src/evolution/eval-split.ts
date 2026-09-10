@@ -8,7 +8,7 @@
 import * as v from 'valibot';
 import type { ModelMessage } from 'ai';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { ToolCallRecord } from './types';
 import {
   ADVISOR_CLASS_LABEL, ADVISOR_EVENT_TYPE, AdvisorRowDataSchema,

@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 import { createTestActor, makeSqlExec } from './helpers';
-import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
-import { actorReferenceOf } from '../src/state/actor-handle';
+import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+import { actorReferenceOf } from '../src/identity/actor-handle';
 import { SubordinateRosterStore } from '../src/subordinates/roster';
 import { finishSubordinateBirth, recoverSubordinateLifecycles } from '../src/subordinates/birth';
 import { admitSubordinateTask, describeSubordinateHandoff, type SubordinateRuntime } from '../src/subordinates/support';

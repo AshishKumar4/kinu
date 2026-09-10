@@ -20,7 +20,7 @@
 
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { LanguageModel } from 'ai';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 
 export interface StrategyContext {
   task: string;

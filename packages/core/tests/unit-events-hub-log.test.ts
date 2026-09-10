@@ -19,7 +19,7 @@ import type { JsonValue } from '../src/utils/json';
 import { createRecordingLogger, setDiagnosticsSink, KinuError } from '../src/obs/index';
 import { makeSqlExec } from './helpers';
 import { createTestActorsOver } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 /** One hub database and the ONE actor whose rows it holds.
  *

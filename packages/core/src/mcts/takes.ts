@@ -12,7 +12,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { recordTurnOutcome } from '../evolution/outcomes';
 import {

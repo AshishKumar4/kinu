@@ -9,7 +9,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { SearchNode } from '../types/mcts';
 import type { ConvergenceResult } from '../types/evaluation';
@@ -20,7 +20,7 @@ import { selectWinnerByTest } from './test-selection';
 import { DEFAULT_CONFIG } from '../config';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { isoDate } from '../utils/date';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 
 export async function converge(
   rt: AgentRuntime,

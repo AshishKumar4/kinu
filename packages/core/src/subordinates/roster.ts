@@ -15,14 +15,14 @@
 
 import * as v from 'valibot';
 import type { SqlExec } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
 import { boundedInt } from '../utils/bounds';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SubordinateReportOrigin } from './support';
 import type { SubordinateRosterEntry, SubordinateStatus } from '../tools/agents-tool';
 import { SUBORDINATE_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles } from './temporary';
-import { ActorReferenceSchema, sameActorReference, type ActorReference } from '../state/actor-handle';
+import { ActorReferenceSchema, sameActorReference, type ActorReference } from '../identity/actor-handle';
 import { SubordinateBirthSchema } from './birth';
 import { parseJsonValue } from '../utils/json';
 import { KinuError } from '../obs/error';
