@@ -1,5 +1,5 @@
 import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
-import { createRoot, useKeyboard, useTerminalDimensions } from '@opentui/react';
+import { createRoot, flushSync, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, type ReasoningEffort,
@@ -728,7 +728,16 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   const { promise, resolve } = Promise.withResolvers<HomeTuiAction>();
   const complete = (action: HomeTuiAction) => {
     process.off('SIGINT', onSigint);
-    root.render(<box />);
+    // Unmount synchronously BEFORE the renderer frees its native state.
+    // `root.render(<box />)` is not an unmount: createRoot's render() opens a
+    // new container each call, so it left HomeApp mounted with whatever state
+    // update was still queued — submit() sets `busy` and reaches here before
+    // React's scheduler commits it. That commit then flipped the textarea's
+    // `focused` prop on a renderer whose native pointer destroy() had already
+    // released, and opentui writes the cursor position through that pointer
+    // unguarded: a segfault in the child process, at whatever rate the commit
+    // lost the race. Only flushSync makes unmount() land now.
+    flushSync(() => { root.unmount(); });
     renderer.destroy();
     resolve(action);
   };

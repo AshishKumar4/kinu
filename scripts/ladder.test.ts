@@ -201,6 +201,7 @@ describe('the ladder measures something', () => {
       'scripts/bench-inference-proxy.test.ts',
       'scripts/bench-pi-worker.test.ts',
       'scripts/bench-r2-workspace.test.ts',
+      'scripts/bench-restore-probe.test.ts',
       'scripts/bench.test.ts',
     ]);
     const durabilityProbeGate = LADDER.find(gate =>
