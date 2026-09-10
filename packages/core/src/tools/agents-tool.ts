@@ -97,6 +97,10 @@ import {
   type JsonObject,
   type JsonValue,
 } from '../utils/json';
+import {
+  countedMsgSend,
+  type MsgSendResult,
+} from './msg-counters';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace's ONE actor host: spawn =
@@ -339,6 +343,43 @@ const ASSIGN_NOTES = {
   starts_now: 'Assigned. The subordinate was idle and starts on it now.',
   queued: 'Queued behind the subordinate\'s current or already-admitted work as its own turn.',
 } satisfies Record<SubordinateDelivery, string>;
+
+// ── Counter readers ─────────────────────────────────────────────────────────
+// Each transport answers in its own vocabulary, and the counter needs one:
+// whether the message reached its target, and the transport's id for it. These
+// are the whole translation, declared beside the outcome types they read rather
+// than inside `msg-counters.ts`, which must not learn four delegation shapes to
+// count one thing. They are the only place a counter touches a transport's
+// answer — nothing below re-reads it, so an outcome that grows a case fails
+// here, at the type, instead of being silently counted as something else.
+
+function peerSendCount(outcome: PeerSendOutcome): MsgSendResult {
+  return outcome.status === 'rejected'
+    ? { outcome: 'rejected' }
+    : { outcome: outcome.status, messageId: outcome.message_id };
+}
+
+/** A send-and-await. `replied` rather than `delivered` on purpose: its wait
+ *  includes the answering agent's whole turn, and folding the two together
+ *  would put a think time and an enqueue in one distribution. */
+function peerAskCount(outcome: PeerAskOutcome): MsgSendResult {
+  return { outcome: outcome.status === 'replied' ? 'replied' : 'rejected' };
+}
+
+/** A reply carries no id of its own — the transport routes it by the channel
+ *  the original ask opened, so there is nothing to join a receiver's line to. */
+function peerReplyCount(outcome: PeerReplyOutcome): MsgSendResult {
+  return { outcome: outcome.ok ? 'delivered' : 'rejected' };
+}
+
+/** The subordinate path speaks `starts_now`/`queued`, which is the same
+ *  distinction the peer path calls `delivered`/`queued`. */
+function handoffCount(handoff: SubordinateHandoff): MsgSendResult {
+  return {
+    outcome: handoff.delivery === 'queued' ? 'queued' : 'delivered',
+    messageId: handoff.eventId,
+  };
+}
 
 // ── Exploration substrate deps contract ─────────────────────────────────────
 
@@ -2030,7 +2071,11 @@ export async function dispatchAgentsAction(
               mode,
             };
             if (input.deliverable) Object.assign(assignment, { deliverable: input.deliverable });
-            const handoff = await team.assign(assignment);
+            const handoff = await countedMsgSend(
+              { action: 'hire', transport: 'subordinate', addressing: 'agent', target: input.agent, chars: input.message.length },
+              () => team.assign(assignment),
+              handoffCount,
+            );
             return {
               status: 'working',
               agent: input.agent,
@@ -2043,7 +2088,11 @@ export async function dispatchAgentsAction(
               agent: input.agent, topic: asked.topic, message: input.message, mode,
             };
             if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
-            return await peers.ask(request);
+            return await countedMsgSend(
+              { action: 'hire', transport: 'peer', addressing: 'agent', target: input.agent, chars: input.message.length },
+              () => peers.ask(request),
+              peerAskCount,
+            );
           }
           return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
         }
@@ -2121,13 +2170,24 @@ export async function dispatchAgentsAction(
           );
         }
         if (!input.message) return badInput('msg requires a message');
+        // Bound to consts before the transport calls below, because each of
+        // those is now issued through a closure the counter times, and a
+        // closure over `input.message` reads the property again rather than the
+        // narrowing this line established.
+        const message = input.message;
         if (input.event_id) {
           if (!peers) {
             throw new KinuError('denied', 'answering an event by `event_id` needs the peer transport, which this actor does not have');
           }
-          return await peers.reply({ eventId: input.event_id, message: input.message });
+          const answered = input.event_id;
+          return await countedMsgSend(
+            { action: 'msg', transport: 'peer', addressing: 'event', target: answered, chars: message.length },
+            () => peers.reply({ eventId: answered, message }),
+            peerReplyCount,
+          );
         }
-        if (!input.agent) {
+        const agent = input.agent;
+        if (!agent) {
           return badInput(peers
             ? 'msg requires a target: `agent` to name an agent, or `event_id` to answer the agent message event you were given.'
             : 'msg requires agent and message');
@@ -2137,8 +2197,12 @@ export async function dispatchAgentsAction(
         // switch.
         spawnGuard();
         const sent = requestedTopic(input);
-        if (team && await isSubordinate(input.agent)) {
-          const handoff = await team.message({ name: input.agent, content: input.message, mode });
+        if (team && await isSubordinate(agent)) {
+          const handoff = await countedMsgSend(
+            { action: 'msg', transport: 'subordinate', addressing: 'agent', target: agent, chars: message.length },
+            () => team.message({ name: agent, content: message, mode }),
+            handoffCount,
+          );
           // Same delivered/queued vocabulary the peer transport already uses:
           // delivered = it reached the target's context, queued = it waits
           // behind work already admitted.
@@ -2149,7 +2213,11 @@ export async function dispatchAgentsAction(
           };
         }
         if (peers) {
-          return await peers.send({ agent: input.agent, topic: sent.topic, message: input.message, mode });
+          return await countedMsgSend(
+            { action: 'msg', transport: 'peer', addressing: 'agent', target: agent, chars: message.length },
+            () => peers.send({ agent, topic: sent.topic, message, mode }),
+            peerSendCount,
+          );
         }
         return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
       }
