@@ -562,7 +562,10 @@ export interface LocalAgentSessionOpts {
    */
   providerRevision?: () => number;
   onEvent: (event: SessionEvent) => void;
-  /** Disable auto-evolution (turn + session reflection). Default: enabled. */
+  /** Disable auto-evolution (turn + session reflection). Default: enabled.
+   *  Set by the operator's `--no-auto-evolve`, and by the host for a
+   *  task-lifetime child, whose turn no later actor reads a lesson from
+   *  (`agent-host/host.ts`). */
   noAutoEvolve?: boolean;
   /** This process runs ONE task turn and exits (`kinu exec`/`kinu run`).
    *  Two consequences, both about honesty rather than throttling:
