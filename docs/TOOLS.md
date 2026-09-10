@@ -4,8 +4,9 @@
 tools. Each is a standing choice, so a longer list reduces selection accuracy.
 `buildBuiltinTools` builds one set for both backends. Only `execute_tools`,
 `run`, `file`, `memory`, and `tasks` are unconditional. The rest need wired
-deps. Subordinates get `report`, never `agents.reply`. Files use `file` or
-`workspace.*`. Crafted tools use `tools.<name>(args)`.
+deps. Subordinates get `report` and no `peers`, so answering an inbound agent
+message event — `msg` with `event_id` — is off their surface. Files use `file`
+or `workspace.*`. Crafted tools use `tools.<name>(args)`.
 
 ## Top-level tools
 
@@ -14,7 +15,7 @@ deps. Subordinates get `report`, never `agents.reply`. Files use `file` or
 | `execute_tools` | The codemode sandbox. The model writes JavaScript against `workspace.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, `web.*`, `agent.*`, `llm.*`, and `tools.<name>` for crafted tools |
 | `run` | One shell command in one explicitly selected runtime |
 | `file` | The one file plane, over the same workspace filesystem every other surface addresses. `read` a file, `edit` exact text inside it, `write` it whole |
-| `agents` | The whole delegation surface: `swarm \| hire \| ask \| send \| reply \| list \| dismiss` |
+| `agents` | The whole delegation surface: `swarm \| hire \| msg \| list \| dismiss` |
 | `memory` | The one durable-state tool: `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `conversations` to search or browse this agent's own past conversation |
 | `tasks` | The agent's own task list and active role: `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back, `mode` to set or read the role. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
 | `web` | Live web access: `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
@@ -134,7 +135,10 @@ reads, a snapshot store, and 3-way merge. Its gains concentrate on weak models.
 
 ## agents: delegation
 
-`agents` combines `think`, `team`, and `peers`. `hire`'s `lifetime` decides whether the helper persists.
+`agents` combines the three deps groups `AgentsToolDeps` names: `fork`, `team`,
+and `peers`. There is no `think` deps group; that name survives only as a
+stored run-event tool name, which `read-models/timeline.ts` maps to the `mcts`
+timeline kind. `hire`'s `lifetime` decides whether the helper persists.
 `swarm` measures candidates and settles this turn. `BUILTIN_TOOL_SPECS` holds
 rung triggers. The prompt `## Delegation` section holds the doctrine.
 
@@ -169,6 +173,21 @@ The five-action picklist rejects it. MCTS stays registered in
 `strategy/mcts.ts` but has no model-facing route. The durable search store and
 eval suites call it. See [MCTS.md](./MCTS.md).
 
+Which of the five an actor holds is structural, decided by the deps its backend
+wires. `agentsActionsFor` is the one gate, read by the tool's action enum, the
+prompt `## Delegation` section, and the `agents.*` sandbox namespace:
+
+| Action | The deps that put it on the surface |
+|---|---|
+| `swarm` | `fork` — a model to expand with and a workspace to measure in |
+| `hire`, `msg`, `list` | `team` or `peers` |
+| `dismiss` | `team` |
+
+`lifetime` is gated one level finer, on `team.temporary`. With no port to run a
+task hire on, the field that would ask for one is in neither the JSON Schema nor
+the sandbox declaration, so its absence is structural rather than a refusal at
+call time. `event_id` is gated the same way on `peers`.
+
 `hire`, `msg`, and `list` use a target name:
 
 - `SubordinateAgent` is a same-workspace Durable Object facet with a full turn
@@ -199,9 +218,13 @@ Normal activation still recovers work that the actor owes.
 ### Fields and replay
 
 `AGENTS_ACTION_FIELDS`, `v.strictObject`, and `parseAgentsToolInput` enforce
-the native and codemode field contract. An unknown field fails and names the
-field meant (the `agents-tool.ts` refusal strings carry the exact quote). A
-field another action reads fails and names the action that reads it.
+the native and codemode field contract. It is one parse in two places: the
+native tool's `execute` parses the model's input, and every `agents.*` member
+parses the object the script passed after writing `action` itself, so the member
+called decides the action. Both then reach `dispatchAgentsAction`. An unknown
+field fails and names the field meant (the `agents-tool.ts` refusal strings
+carry the exact quote). A field another action reads fails and names the action
+that reads it.
 
 | Action | Fields its handler reads |
 |---|---|
@@ -235,7 +258,8 @@ swarm, so lost ranking logs as `settlement`.
 
 ### Delivery
 
-`ask` and `send` never block a busy target. They return:
+A `hire` handed to a subordinate that already exists, and `msg`, never block a
+busy target. Both return the three fields `renderHandoff` builds:
 
 | Field | Meaning |
 |-------|---------|
@@ -243,8 +267,12 @@ swarm, so lost ranking logs as `settlement`.
 | `delivery` | `starts_now` (the target was idle; the drain starts a turn) or `queued` (the target was busy or the event was already admitted, so it waits for its own Plan/Build-homogeneous turn) |
 | `subordinate_phase` | `{busy, lastActivityAt, workingOn}`: what the target was doing when the message landed |
 
-`send` also returns `status: delivered | queued`. The host stamps Plan/Build
-mode. The shared drain queues the next serialized turn with it.
+The hire arm adds `status: working` and the `ASSIGN_NOTES` sentence for its
+`delivery`. `msg` adds `status: delivered | queued`. `msg` with `event_id`
+answers an inbound agent message event through `peers.reply` and returns that
+transport's result instead. A `hire` naming a peer is the one call here that
+waits, as above. The host stamps Plan/Build mode. The shared drain queues the
+next serialized turn with it.
 
 ## execute_tools: codemode
 
@@ -274,6 +302,12 @@ in-process through `createNodeExecuteToolFactory`. Both bind these namespaces.
 ### Slates
 
 A slate is an authored project under `/home/user/slates/<id>/`. Its `package.json` names a TypeScript Worker module in `main` and declares capabilities in the strict `slate.bindings` field. The default export handles `fetch(request, env)`; introduced capabilities are `env.NAME.member(...args)`. Write files through the ordinary file plane, then use `workspace.slate({op:'preview',id})` to boot a live preview. `call` POSTs a JSON argument array to a named route. `commit` freezes source, `history` reads versions, `fork` copies a version into a new slate, and `restore` restores a version's tree. Running previews are isolate-lifetime processes, not durable records. These operations stay in the existing workspace codemode namespace; the native surface remains eight tools.
+
+Three different things in this document are spelled `fork`. This one is a
+`workspace.slate` op: it takes a committed `version` and copies its tree into a
+new slate. The removed `agents` action `fork` ran caller-written briefs (see
+*agents: delegation*). The `forkAgent` RPC clones a whole agent at a message
+and is the UI's fork-chat.
 
 ### Projected native tools
 
@@ -328,10 +362,12 @@ return settled
 ```
 
 `createAgentsCodemodeProvider` routes through `dispatchAgentsAction`.
-`agentsActionsFor(deps)` governs it and the native enum: `team` supplies
-`hire`, `ask`, `send`, `list`, `dismiss`; `peers` adds `reply`; a workspace
-orchestrator has seven; a head has none. `forkAgent` is never projected.
-A sandboxed search cannot resume safely. Use the native tool for durable work.
+`agentsActionsFor(deps)` governs it and the native enum by the one rule above,
+so a member exists exactly when the action does. A workspace orchestrator wires
+`fork`, `team`, and `peers`, and gets all five. A head is handed none of the
+three, so `buildBuiltinTools` cannot build the tool and the namespace has no
+members. `forkAgent` is never projected. A sandboxed search cannot resume
+safely. Use the native tool for durable work.
 
 ### No fallback, shared description, and preamble
 
