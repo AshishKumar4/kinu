@@ -57,6 +57,26 @@
 import type { BackupOptions, DirectoryBackup } from '@cloudflare/sandbox';
 import * as v from 'valibot';
 
+import {
+  DELTA_BLOCK_BYTES,
+  DELTA_MANIFEST_NAME,
+  DELTA_OPS_PER_COMMAND,
+  type DeltaBaseFact,
+  type DeltaFileHashes,
+  type DeltaManifest,
+  DeltaManifestSchema,
+  type DeltaProbeEntry,
+  buildDeltaMaterializeOps,
+  buildDeltaStageOps,
+  deltaBaseStatCommand,
+  deltaBlockHashCommand,
+  deltaHashCandidates,
+  deltaProbeCommand,
+  parseDeltaBaseStat,
+  parseDeltaBlockHashes,
+  parseDeltaProbe,
+  planDeltaPublication,
+} from './chunked-delta';
 import { describeThrown as describe, findMount } from './lifecycle';
 import {
   DEVBOX_RUNTIME_DIR,
@@ -1099,11 +1119,71 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         await layerFailed('delta', { cause: error });
       }
     }
+    // A CHUNKED delta is a sidecar, not a lower: its manifest is read off the
+    // mount and materialized INTO THE UPPER before the overlay lands, so the
+    // overlay stands on the base alone and the upper holds the cumulative
+    // changed set (no collapse on the next commit). THE MOUNT DECIDES which
+    // layout this is, not the record: a crash between the PUT and the record
+    // write can strand either layout under a record naming the other. A
+    // legacy full delta (no manifest) composes as a lower exactly as before.
+    let sidecar: { readonly pre: readonly string[]; readonly post: readonly string[] } | null = null;
+    if (composing) {
+      const cat = await ports.exec(`# devbox-manifest-v1\ncat ${shellPath(`${deltaLayer}/${DELTA_MANIFEST_NAME}`)} 2>/dev/null`);
+      let manifest: DeltaManifest | null = null;
+      if (cat.exitCode === 0 && cat.stdout.trim() !== '') {
+        try {
+          const read = v.safeParse(DeltaManifestSchema, JSON.parse(cat.stdout));
+          if (read.success) manifest = read.output;
+        } catch (error) {
+          // Not JSON: a legacy full delta whose tree happens to hold this
+          // path, served as a lower below. Logged, because a chunked record
+          // over such bytes is refused just after.
+          ports.log(`${deltaLayer}/${DELTA_MANIFEST_NAME} is not a delta manifest: ${describe({ cause: error })}`);
+        }
+      }
+      if (manifest === null && generation.deltaFormat === 'chunked') {
+        await layerFailed('delta', { cause: new Error('the record names a chunked delta whose mount serves no manifest') });
+      }
+      if (manifest !== null) {
+        for (const file of manifest.files) {
+          if (file.kind !== 'chunked') continue;
+          let last = -1;
+          for (const override of file.over) {
+            if (override.o % DELTA_BLOCK_BYTES !== 0 || override.o >= file.s || override.o <= last) {
+              await layerFailed('delta', { cause: new Error(`the delta manifest misplaces an override of ${file.p} at ${override.o}`) });
+            }
+            last = override.o;
+          }
+        }
+        sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR });
+        try {
+          await runOpsBatched('materializing the delta into the upper', sidecar.pre);
+        } catch (error) {
+          await layerFailed('delta', { cause: error });
+        }
+      }
+    }
     // NEWEST LOWER FIRST. fuse-overlayfs resolves `lowerdir` left to right, so
-    // the delta precedes the base: it holds the newer version of every path it
-    // names, and the whiteouts that hide what the base still has.
-    await shell.overlayAttach(DEVBOX_WORKDIR, composing ? [deltaLayer, lowerBase] : [lowerBase]);
+    // a legacy delta precedes the base: it holds the newer version of every
+    // path it names, and the whiteouts that hide what the base still has.
+    await shell.overlayAttach(DEVBOX_WORKDIR, composing && sidecar === null ? [deltaLayer, lowerBase] : [lowerBase]);
     await assertOverlayLanded(`chain ${generation.base.id}`);
+    if (sidecar !== null) {
+      try {
+        await runOpsBatched('applying the delta deletions', sidecar.post);
+      } catch (error) {
+        await layerFailed('delta', { cause: error });
+      }
+      // Absorbed: release the sidecar, best effort. A stuck mount must not
+      // fail a start whose workspace is served; the next commit sees the
+      // standing mount as a layered delta and collapses, which is correct
+      // and merely costly, and the next attach releases every delta layer.
+      try {
+        await shell.unmountPath(deltaLayer);
+      } catch (error) {
+        ports.log(`${DEVBOX_WORKDIR} chain ${generation.base.id} absorbed its delta and the sidecar could not be released: ${describe({ cause: error })}`);
+      }
+    }
     // THE STORE MOUNT STAYS: squashfuse reads each layer through it for as
     // long as the overlay serves the work directory, so a release here is
     // refused EBUSY. The publication writes through this same mount.
@@ -1422,6 +1502,98 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return await publishStagedArchive(key, staged, storeHeld, short !== null);
   };
 
+  /** Run generated shell operations in batches of {@link DELTA_OPS_PER_COMMAND}
+   *  lines, so a many-file checkpoint costs round trips in the hundreds, not
+   *  files. A non-zero exit names the batch; the container's own stderr
+   *  carries the operation. */
+  const runOpsBatched = async (doing: string, ops: readonly string[]): Promise<void> => {
+    for (let at = 0; at < ops.length; at += DELTA_OPS_PER_COMMAND) {
+      const result = await ports.exec(ops.slice(at, at + DELTA_OPS_PER_COMMAND).join('\n'));
+      if (result.exitCode !== 0) {
+        throw new Error(`${doing} failed in batch ${at / DELTA_OPS_PER_COMMAND + 1} (${result.exitCode}): ${result.stderr || result.stdout}`);
+      }
+    }
+  };
+
+  /**
+   * Stage the upper as a CHUNKED delta and publish it under the delta key, or
+   * answer null when this host cannot (the probe did not run, `split` is
+   * absent, a fact disagreed mid-checkpoint): the caller then archives the
+   * whole upper as before, so a chunked host is faster and every other host
+   * is exactly what it was. See `chunked-delta.ts` for the format.
+   *
+   * ONLY WHOLE OBJECT: the package is one squashfs, so the object count per
+   * checkpoint stays at one whatever the changed set holds.
+   */
+  const stageChunkedDelta = async (chainId: string, storeHeld: boolean): Promise<ChainLayer | null> => {
+    const fallback = (why: string): null => {
+      ports.log(`${DEVBOX_WORKDIR} chain ${chainId}: archiving the whole upper because ${why}`);
+      return null;
+    };
+    const excludes: string[] = [];
+    for (const pattern of ports.archiveExcludes()) {
+      const normalized = normalizeArchiveExclude(pattern);
+      if (normalized !== null) excludes.push(normalized);
+    }
+    let probe: DeltaProbeEntry[];
+    try {
+      probe = parseDeltaProbe((await ports.exec(deltaProbeCommand(upperDir, excludes))).stdout);
+    } catch (error) {
+      return fallback(`the upper probe did not answer: ${describe({ cause: error })}`);
+    }
+    if (probe.length === 0) return fallback('the probe listed nothing');
+    // A `c` entry is a whiteout only when it is the 0/0 device fuse-overlayfs
+    // mints; any other device travels whole.
+    const devices = probe.filter((entry) => entry.type === 'c').map((entry) => entry.path);
+    const whiteouts = new Set<string>();
+    if (devices.length > 0) {
+      const statted = await ports.exec(['# devbox-whiteout-v1', ...devices.map((path) =>
+        `stat -c '%t,%T' ${shellPath(`${upperDir}/${path}`)} 2>/dev/null || printf 'x\\n'`)].join('\n'));
+      const lines = statted.stdout.split('\n').filter((line) => line !== '' && !line.startsWith('#'));
+      if (lines.length !== devices.length) return fallback('the whiteout probe answered short');
+      devices.forEach((path, at) => { if (lines[at] === '0,0') whiteouts.add(path); });
+    }
+    const carried = probe.filter((entry) => entry.type !== 'd' && !whiteouts.has(entry.path)).map((entry) => entry.path);
+    let baseFacts = new Map<string, DeltaBaseFact | null>();
+    if (carried.length > 0) {
+      try {
+        baseFacts = parseDeltaBaseStat((await ports.exec(deltaBaseStatCommand(carried, lowerBase))).stdout, carried);
+      } catch (error) {
+        return fallback(`the base probe did not answer: ${describe({ cause: error })}`);
+      }
+    }
+    let hashFiles = deltaHashCandidates(probe);
+    let hashes = new Map<number, DeltaFileHashes>();
+    if (hashFiles.length > 0) {
+      const sizes = new Map(probe.map((entry) => [entry.path, entry.size] as const));
+      const files = hashFiles.map((path, index) => {
+        const fact = baseFacts.get(path);
+        return { index, upperPath: `${upperDir}/${path}`, basePath: fact?.kind === 'file' ? `${lowerBase}/${path}` : null };
+      });
+      const wanted = new Map(hashFiles.map((path, index) => {
+        const fact = baseFacts.get(path);
+        return [index, {
+          upperBlocks: Math.ceil((sizes.get(path) ?? 0) / DELTA_BLOCK_BYTES),
+          baseBlocks: fact?.kind === 'file' ? Math.ceil(fact.size / DELTA_BLOCK_BYTES) : null,
+        }] as const;
+      }));
+      const hashed = await ports.exec(deltaBlockHashCommand({ workDir: `${stageDir}/hash`, files }));
+      try {
+        hashes = parseDeltaBlockHashes(hashed.stdout, wanted);
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'NOSPLIT') {
+          return fallback(`the block hashes did not answer: ${describe({ cause: error })}`);
+        }
+        // No `split` on this host: big files travel whole, still one object.
+        hashFiles = [];
+      }
+    }
+    const plan = planDeltaPublication({ probe, baseFacts, hashes, hashFiles, whiteouts });
+    const pkgDir = `${stageDir}/pkg`;
+    await runOpsBatched('staging the chunked delta', buildDeltaStageOps(plan, { upperDir, pkgDir }));
+    return await stageAndPut(deltaObjectKey(root, chainId), pkgDir, [], storeHeld);
+  };
+
   const commitExtract = async (
     previous: ChainState | null,
     version: string,
@@ -1578,6 +1750,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     await shell.resetDirs([stageDir]);
     let layer: ChainLayer;
+    let deltaFormat: 'chunked' | undefined;
     if (fresh) {
       layer = await stageAndPut(
         baseObjectKey(root, chainId), DEVBOX_WORKDIR, ports.archiveExcludes(), storeHeld,
@@ -1598,7 +1771,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // tick time and 1.34x class-A of the plain one. Applied to both, the
       // archives are commensurable, and durability is HONEST: a tree the base
       // drops was only ever "durable in the delta" until the next rebase.
-      layer = await stageAndPut(
+      // CHUNKED FIRST: changed extents plus a per-file map in one object; a
+      // host that cannot stage one archives the whole upper exactly as before
+      // (`stageChunkedDelta` answers null and says why).
+      const chunked = await stageChunkedDelta(chainId, storeHeld);
+      deltaFormat = chunked === null ? undefined : 'chunked';
+      layer = chunked ?? await stageAndPut(
         deltaObjectKey(root, chainId), upperDir, ports.archiveExcludes(), storeHeld,
       );
     }
@@ -1610,6 +1788,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       rev: (previous?.rev ?? 0) + 1,
       base: fresh ? { id: chainId, ...layer } : previous.base,
       delta: fresh ? undefined : layer,
+      deltaFormat: fresh ? undefined : deltaFormat,
       at: ports.now(),
       changeVersion: version,
       upperMark,
