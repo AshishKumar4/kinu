@@ -152,9 +152,10 @@ where its first operation after a stop answered 500:
 `A call to blockConcurrencyWhile() in a Durable Object waited for too long.
 The call was canceled and the Durable Object was reset.` A timer inside that
 block cannot fire until the block releases, so the in-gate budget is polled,
-not raced. The box is admitted only through `startAndWaitForPorts`, which
-marks the container healthy before the hook — so a command the restore issues
-routes straight to the container instead of opening a nested start.
+not raced. The box is admitted through `start()` on the instance, which the
+patched SDK marks healthy before the hook — so a command the restore issues
+routes straight to the container instead of opening a nested start. Admission
+waits for the instance, never for an app port the restore has not started yet.
 
 Every operation awaits `ensureReady()`, which resolves once the work directory is
 attached. A failed attach records an incident, refuses with its reason, and

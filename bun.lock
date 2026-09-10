@@ -125,6 +125,7 @@
         "react": "^19.2.5",
       },
       "devDependencies": {
+        "@kinu.run/test-utils": "workspace:*",
         "@types/react": "^19.2.14",
       },
     },
@@ -150,6 +151,9 @@
         "@better-compact/core": "^0.1.0",
         "@kinu.run/core": "workspace:*",
         "ai": "6.0.214",
+      },
+      "devDependencies": {
+        "@kinu.run/test-utils": "workspace:*",
       },
     },
     "packages/core": {
@@ -195,6 +199,7 @@
     },
   },
   "patchedDependencies": {
+    "@nimbus-sh/platform@0.1.0": "patches/@nimbus-sh%2Fplatform@0.1.0.patch",
     "@nimbus-sh/fabric@0.2.0": "patches/@nimbus-sh%2Ffabric@0.2.0.patch",
     "@plannotator/ui@0.30.0": "patches/@plannotator%2Fui@0.30.0.patch",
     "@cloudflare/think@0.15.1": "patches/@cloudflare%2Fthink@0.15.1.patch",
@@ -202,8 +207,8 @@
     "@nimbus-sh/core@0.6.0": "patches/@nimbus-sh%2Fcore@0.6.0.patch",
     "@cloudflare/sandbox@0.12.8": "patches/@cloudflare%2Fsandbox@0.12.8.patch",
     "@cloudflare/codemode@0.5.1": "patches/@cloudflare%2Fcodemode@0.5.1.patch",
+    "@cloudflare/containers@0.3.7": "patches/@cloudflare%2Fcontainers@0.3.7.patch",
     "agents@0.20.1": "patches/agents@0.20.1.patch",
-    "@nimbus-sh/platform@0.1.0": "patches/@nimbus-sh%2Fplatform@0.1.0.patch",
   },
   "overrides": {
     "@ai-sdk/react": "3.0.216",

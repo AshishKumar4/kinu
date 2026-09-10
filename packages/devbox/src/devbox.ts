@@ -10,16 +10,17 @@
  *
  *   The restoration, run ONCE PER CONTAINER INSTANCE inside the container-start
  *   hook. `Container.onStart` is awaited inside `blockConcurrencyWhile`
- *   (`@cloudflare/containers`, `container.js:583` for `start()` and `:632-636`
- *   for `startAndWaitForPorts`), so the platform holds every request behind the
- *   hook until it settles: nothing can observe a half-restored box, because
- *   nothing is delivered until the restore is done. The box is admitted only
- *   through `startAndWaitForPorts`, which calls `setHealthy()` BEFORE the hook
- *   (`:634-635`) — so a command the restore issues routes straight to the
- *   container instead of opening a nested start. That ordering is the whole
- *   mechanism, and it is the SDK's own documented expectation for work issued
- *   from inside `onStart` (`@cloudflare/sandbox`,
- *   `dist/sandbox-CPj2jsbz.js:1019-1029`).
+ *   (`@cloudflare/containers`, `container.js:583` for `start()`), so the
+ *   platform holds every request behind the hook until it settles: nothing can
+ *   observe a half-restored box, because nothing is delivered until the
+ *   restore is done. The box is admitted through `start()`, which the patched
+ *   SDK marks healthy BEFORE the hook — so a command the restore issues
+ *   routes straight to the container instead of opening a nested start. That
+ *   ordering is the whole mechanism, and it is the SDK's own documented
+ *   expectation for work issued from inside `onStart` (`@cloudflare/sandbox`,
+ *   `dist/sandbox-CPj2jsbz.js:1019-1029`). Admission waits for the instance,
+ *   never for an app port: the restore starts the app, so waiting for its
+ *   port would hold the restore behind work it has not done yet.
  *
  *   The hook can still be re-entered on a container that is already up — the
  *   SDK fires it from its own control paths whenever a start is requested — so
@@ -768,26 +769,28 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * THE CONTAINER-START HOOK RESTORES THE BOX, INSIDE THE PLATFORM'S GATE.
    *
    * `Container.onStart` is awaited inside `blockConcurrencyWhile`
-   * (`@cloudflare/containers`, `container.js:583` for `start()` and `:632-636`
-   * for `startAndWaitForPorts`), so this is the one method on this class that
-   * runs while the platform's own critical section is held — and the platform
-   * delivers no request to the object until it settles. A restore that runs
-   * here cannot be observed half-done, and no caller can touch the container
-   * before it is restored.
+   * (`@cloudflare/containers`, `container.js:583`), so this is the one method
+   * on this class that runs while the platform's own critical section is held
+   * — and the platform delivers no request to the object until it settles. A
+   * restore that runs here cannot be observed half-done, and no caller can
+   * touch the container before it is restored.
    *
    * THE MECHANISM THAT MAKES THIS POSSIBLE, with line numbers. The box is
-   * admitted only through `startAndWaitForPorts`, which calls `setHealthy()`
-   * BEFORE the hook (`container.js:632-636`) — so a command the restore issues
-   * sees a healthy container and routes straight to it instead of opening a
-   * nested start. That ordering is the SDK's own documented expectation for
-   * work issued from inside `onStart` (`@cloudflare/sandbox`,
-   * `dist/sandbox-CPj2jsbz.js:1019-1029`). The other entry, plain `start()`,
-   * never sets healthy (`container.js:570-586`): a command issued there asks
-   * for a nested `startAndWaitForPorts` (`sandbox-CPj2jsbz.js:8691-8705`) and
-   * the activation runs to the cap `do.block_concurrency.cancel_ms` names.
-   * Nothing in this class calls `start()` any more. The RPC control
-   * connection's own start (`:8834-8847`) returns early on a container that is
-   * already running and healthy — the patched SDK
+   * admitted through `start()`, which the patched SDK marks healthy BEFORE the
+   * hook (`patches/@cloudflare%2Fcontainers@0.3.7.patch`, mirroring the
+   * `startAndWaitForPorts` ordering at `container.js:632-636`) — so a command
+   * the restore issues sees a healthy container and routes straight to it
+   * instead of opening a nested start. That ordering is the SDK's own
+   * documented expectation for work issued from inside `onStart`
+   * (`@cloudflare/sandbox`, `dist/sandbox-CPj2jsbz.js:1019-1029`). An
+   * unpatched `start()` never sets healthy (`container.js:570-586`): a command
+   * issued there asks for a nested `startAndWaitForPorts`
+   * (`sandbox-CPj2jsbz.js:8691-8705`) and the activation runs to the cap
+   * `do.block_concurrency.cancel_ms` names. Admission waits for the instance,
+   * never for an app port: the restore starts the app, so the app's port is
+   * proved inside the restore, by its own listener proof, and not before it.
+   * The RPC control connection's own start (`:8834-8847`) returns early on a
+   * container that is already running and healthy — the patched SDK
    * (`patches/@cloudflare%2Fsandbox@0.12.8.patch`) — so a reconnect never
    * re-enters the hook for a container that never restarted.
    *
@@ -1368,13 +1371,24 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // consumed a 300 s container-start budget and reported nothing but the
     // overrun. Measured on the deployed benchmark, run 20260831184750.
     //
-    // `startAndWaitForPorts` IS the observation: it asks the platform for the
-    // instance, proves the control port answers, marks the container healthy
-    // and THEN runs the start hook — which restores the box inside the gate —
-    // and it is idempotent on a container already running. Plain `start()`
-    // never marks healthy (`container.js:570-586`), so a command issued from
-    // inside its hook opens a nested start instead of reaching the container;
-    // nothing in this class calls it any more.
+    // `start` IS the observation: it asks the platform for the instance and
+    // proves it answers before returning, and it is idempotent on a container
+    // already running — so asking again costs one health probe and buys the
+    // guarantee that nothing below runs commands on a container that has never
+    // answered one. It waits for the INSTANCE, never for an app port: a port
+    // the box has not restored yet answers nothing, so a restore that starts
+    // the app cannot wait behind that port — that is a deadlock by
+    // construction, measured live on the deployed benchmark (every admission
+    // refused on a running container whose port was dark). Each app port is
+    // proved inside the restore instead, by its own listener proof under the
+    // restoration budget.
+    //
+    // AND IT MARKS HEALTHY FIRST: the patched SDK sets healthy before the hook
+    // in `start()` (see `patches/@cloudflare%2Fcontainers@0.3.7.patch`), the
+    // way `startAndWaitForPorts` does after its port wait
+    // (`container.js:632-636`) — so a command the restore issues routes
+    // straight to the container instead of opening a nested start, which the
+    // runtime cannot grant while the hook's block is held.
     //
     // ONLY A CONTAINER THAT WAS DOWN TURNS THE GENERATION OVER. A probe against
     // a running container observes the instance an in-flight attempt is already
@@ -1390,20 +1404,20 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const admitting = this.#generation;
     let admissionRefusal: string | null = null;
     try {
-      await this.startAndWaitForPorts({
-        ports: this.defaultPort,
-        cancellationOptions: {
-          // Admission and readiness are separate questions with separate
-          // windows: the platform producing an instance, and the control plane
-          // answering on it. The abort caps their sum at one window: a
-          // container still coming up has not failed, so the answer to a probe
-          // that did not land in that window is another probe, not a longer
-          // one.
-          instanceGetTimeoutMS: this.policy.portWaitMs,
-          portReadyTimeoutMS: this.policy.portWaitMs,
-          waitInterval: ADMISSION_POLL_INTERVAL_MS,
-          abort: AbortSignal.timeout(this.policy.portWaitMs),
-        },
+      await this.start(undefined, {
+        portToCheck: this.defaultPort,
+        // THE PROBE LASTS ITS WHOLE WINDOW. `retries: 1` makes the SDK's
+        // `totalTries` exactly one, so the first refusal ends the call after
+        // one poll and the abort below can never fire. The retry count is the
+        // window divided by the interval — the SDK's own default shape — so
+        // one call polls the whole window.
+        retries: Math.ceil(this.policy.portWaitMs / ADMISSION_POLL_INTERVAL_MS),
+        waitInterval: ADMISSION_POLL_INTERVAL_MS,
+        // The PORT policy bounds the probe, which is the question it is named
+        // for. It is not the container's admission deadline: a container still
+        // coming up has not failed, so the answer to a probe that did not land
+        // in that window is another probe, not a longer one.
+        signal: AbortSignal.timeout(this.policy.portWaitMs),
       });
     } catch (error) {
       // Capacity and a container that has not answered yet are both admission
@@ -1411,8 +1425,8 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // identity that was never admitted.
       //
       // AND A SUPERSEDED ADMISSION IS INERT, for the reason `#recover` is.
-      // `startAndWaitForPorts` is the longest await on this path — a whole
-      // `portWaitMs` — and an attempt parked inside it holds no resource lane, no
+      // `start` is the longest await on this path — a whole `portWaitMs` — and
+      // an attempt parked inside it holds no resource lane, no
       // checkpoint lane and no single-flight entry, so the heartbeat's own busy
       // check cannot see it and a quiesce can land there. Recording then puts a
       // live blocker about a container nobody asked to exist on the one channel
@@ -3476,9 +3490,9 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  through the public method would make it wait for itself.
    *
    *  CALLED INSIDE THE PLATFORM'S GATE, by the container-start restore: the box
-   *  is admitted only through `startAndWaitForPorts`, which marks the container
-   *  healthy before the hook (`container.js:632-636`), so a command issued here
-   *  routes straight to the container (see `onStart` for the line numbers).
+   *  is admitted through `start()`, which the patched SDK marks healthy before
+   *  the hook, so a command issued here routes straight to the container (see
+   *  `onStart` for the line numbers).
    */
   async #rawExec(
     command: string,

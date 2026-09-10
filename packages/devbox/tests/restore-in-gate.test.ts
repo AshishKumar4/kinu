@@ -112,7 +112,7 @@ describe('the container-start hook restores the box', () => {
   test('T1: the admitted start restores in-gate, and the box is ready when it returns', async () => {
     const { box, container } = await stoppedBoxWithService();
 
-    await box.startAndWaitForPorts();
+    await box.start();
 
     // The restore ran INSIDE the block: the boot stamp landed before the start
     // returned. Under the refuted placement this list is empty — the hook
@@ -131,7 +131,7 @@ describe('the container-start hook restores the box', () => {
   test('T2: a settled restore retires its startup row', async () => {
     const { box, container } = await stoppedBoxWithService();
 
-    await box.startAndWaitForPorts();
+    await box.start();
 
     // The arm runs on every start, so without this a settled box wakes once a
     // second for a port probe and a boot-id read nobody asked for. Under the
@@ -156,7 +156,7 @@ describe('the container-start hook restores the box', () => {
 
   test('T4: a request delivered after the gate observes the restored box', async () => {
     const { box, container } = await stoppedBoxWithService();
-    await box.startAndWaitForPorts();
+    await box.start();
     const stamped = stamps(container);
 
     // Delivered the way the platform delivers it: not before the gate opens.
@@ -184,7 +184,7 @@ describe('the container-start hook restores the box', () => {
     const parked = gate();
     container.stampGate = parked;
 
-    const restoring = box.startAndWaitForPorts();
+    const restoring = box.start();
     await parked.reached;
     const answered = box.exec('echo hi');
 
@@ -216,12 +216,12 @@ describe('the container-start hook restores the box', () => {
 
   test('T7: a second start on the same instance adopts instead of restoring', async () => {
     const { box, container } = await stoppedBoxWithService();
-    await box.startAndWaitForPorts();
+    await box.start();
     expect((await box.devboxState()).restoration).toBe('attached');
     const stampedOnce = stamps(container);
     const restarts = container.starts.length;
 
-    await box.startAndWaitForPorts();
+    await box.start();
 
     expect(stamps(container)).toBe(stampedOnce);
     expect(container.starts).toHaveLength(restarts);
@@ -234,7 +234,7 @@ describe('the container-start hook restores the box', () => {
     // box has not done, and the drive runs it rather than serving a world that
     // is gone.
     const { box, container } = await stoppedBoxWithService();
-    await box.startAndWaitForPorts();
+    await box.start();
     expect((await box.devboxState()).restoration).toBe('attached');
     const stampedOnce = stamps(container);
 
@@ -333,7 +333,7 @@ describe('every ending is a named state, and no ending rejects into the platform
     const { box, container, storage } = await stoppedBoxWithService();
     storage.faultOn('devbox:attach-recovery', new Error('durable storage unreachable'));
 
-    await box.startAndWaitForPorts();
+    await box.start();
 
     const state = await box.devboxState();
     expect(state.restoration).toBe('unattached');

@@ -231,21 +231,19 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
-    expect(container.startAndWaitPortsOptions).toHaveLength(1);
-    expect(container.startAndWaitPortsOptions[0]).toMatchObject({
-      ports: 3000,
+    expect(container.startWaitOptions).toHaveLength(1);
+    expect(container.startWaitOptions[0]).toMatchObject({
+      portToCheck: 3000,
       // THE ADMISSION THAT MAKES IN-GATE WORK, expressed as the SDK's own
-      // shape. Only `startAndWaitForPorts` marks the container healthy BEFORE
-      // the start hook (`container.js:632-636`), so a command the restore
-      // issues routes straight to the container instead of opening a nested
-      // start. A plain `start()` never marks healthy, and the first command
-      // issued inside its hook never returns.
-      cancellationOptions: {
-        instanceGetTimeoutMS: TEST_POLICY.portWaitMs,
-        portReadyTimeoutMS: TEST_POLICY.portWaitMs,
-        waitInterval: 100,
-        abort: expect.any(AbortSignal),
-      },
+      // retry shape. The patched `start()` marks the container healthy BEFORE
+      // the hook, so a command the restore issues routes straight to the
+      // container instead of opening a nested start — and it waits for the
+      // instance, never for an app port the restore has not started yet.
+      // `retries` is the window divided by the interval: `retries: 1` made
+      // the SDK give up after ONE poll, so the abort below could never fire.
+      retries: Math.ceil(TEST_POLICY.portWaitMs / 100),
+      waitInterval: 100,
+      signal: expect.any(AbortSignal),
     });
     const state = await box.devboxState();
     expect({
@@ -279,7 +277,7 @@ describe('the startup kick arms restoration without attaching inline', () => {
 
     await box.devboxStartup();
 
-    expect(container.startAndWaitPortsOptions).toHaveLength(1);
+    expect(container.startWaitOptions).toHaveLength(1);
     expect(armed(container)).toBe(1);
     expect(incidents(rows)).toEqual([
       expect.objectContaining({
@@ -288,6 +286,34 @@ describe('the startup kick arms restoration without attaching inline', () => {
       }),
     ]);
     expect((await box.devboxState()).restoration).toBe('unstarted');
+  });
+
+  test('an app-port wait refuses a dark box — admission waits for the instance', async () => {
+    // THE FIDELITY THE BENCH PROOF BOUGHT. A port the box has not restored yet
+    // answers nothing, so the SDK's port wait never breaks on a fresh box and
+    // the hook behind it never runs. Production admits through `start()` for
+    // exactly this reason; this test pins the fake to the platform so a future
+    // admission through the port wait fails here instead of hanging a deploy.
+    const { box, container } = harness(TestBox);
+    await container.stop();
+
+    await expect(box.startAndWaitForPorts({ ports: 3000 })).rejects.toThrow('never answered');
+    expect(container.execs).toEqual([]);
+    expect((await box.devboxState()).restoration).toBe('unstarted');
+  });
+
+  test('a dark box admits through the instance probe and restores', async () => {
+    // THE SHAPE PRODUCTION DEPENDS ON. No listener, no specs, nothing exposed:
+    // the instance probe asks the platform, the patched hook marks healthy,
+    // and the restore settles an empty box. A fresh box that could not do this
+    // could never bootstrap.
+    const { box, container } = harness(TestBox);
+    await container.stop();
+
+    await box.devboxStartup();
+
+    expect(container.execs.some((command) => command.includes(STAMP_COMMAND))).toBe(true);
+    expect((await box.devboxState()).ready).toBe(true);
   });
 
   test('an unhealthy answer AFTER the container ran is a transient refusal the next drive heals', async () => {
