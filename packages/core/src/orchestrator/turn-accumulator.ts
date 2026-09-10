@@ -309,8 +309,8 @@ export class TurnAccumulator {
     if (reported) {
       stepEvent.usage = usage;
       const pricing = this.budget?.pricing() ?? null;
-      const usd = pricing ? priceCall(usage, pricing) : undefined;
-      if (usd !== undefined) stepEvent.usd = usd;
+      const price = pricing ? priceCall(usage, pricing) : undefined;
+      if (price !== undefined) stepEvent.usd = price.usd;
       const modelId = v.safeParse(StringSchema, ctx.response?.modelId);
       if (modelId.success && modelId.output.length > 0) stepEvent.modelId = modelId.output;
     }

@@ -2500,7 +2500,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private priceAt(usage: Usage): number | undefined {
     const pricing = this.modelCatalog.pricing();
-    return pricing ? priceCall(usage, pricing) : undefined;
+    return pricing ? priceCall(usage, pricing)?.usd : undefined;
   }
 
   /** Durable per-session compaction state (plan snapshot + the measured

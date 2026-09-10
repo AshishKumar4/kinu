@@ -20,6 +20,16 @@ export interface ModelSpec { provider: string; modelId: string; }
  * can check a number against the catalog page).
  *
  * `cacheRead`/`cacheWrite` are absent for providers with no prompt cache.
+ *
+ * FOUR FIELDS IS THE WHOLE CONTRACT, and there is no fifth to add. models.dev
+ * publishes ONE `cache_write` rate per model and never one per retention tier:
+ * over the whole live catalog (https://models.dev/api.json, fetched
+ * 2026-09-09) its 7181 models carry `input` 7181x, `output` 7181x,
+ * `cache_read` 4672x and `cache_write` 1492x, and no key naming a tier. So a
+ * 1h-retention write (`Usage.cacheWrite1h`, which `cache-breakpoints.ts` really
+ * does ask Anthropic for) is priced at the 5m rate and `priceCall` returns a
+ * FLOOR, saying how many tokens made it one. A `cacheWrite1h` rate here would
+ * be a number this catalog does not publish.
  */
 export interface ModelPricing {
   input: number;

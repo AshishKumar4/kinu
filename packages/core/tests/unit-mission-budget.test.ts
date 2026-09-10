@@ -314,16 +314,16 @@ describe('priceCall — the one place tokens are multiplied by a rate', () => {
 
   test('a cache WRITE is charged at the catalog cacheWrite rate, not the input rate', () => {
     const expected = (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000;
-    expect(priceCall(ANTHROPIC, SONNET)).toBeCloseTo(expected, 12);
+    expect(priceCall(ANTHROPIC, SONNET)?.usd).toBeCloseTo(expected, 12);
     // Cache writes falling into `fresh` bill at the plain input rate, which
     // under-charges them by the 25% premium Anthropic publishes.
     const asPlainInput = (1_036 * 3 + 2_048 * 0.3 + 500 * 15) / 1_000_000;
-    expect(priceCall(ANTHROPIC, SONNET)).toBeGreaterThan(asPlainInput);
+    expect(priceCall(ANTHROPIC, SONNET)?.usd).toBeGreaterThan(asPlainInput);
   });
 
   test('a catalog with no cacheWrite rate charges the write at the input rate', () => {
     // Every model without a published cache-write price, which is most of them.
-    expect(priceCall({ input: 1_024, output: 0, cacheWrite: 1_024 }, { input: 3, output: 15 }))
+    expect(priceCall({ input: 1_024, output: 0, cacheWrite: 1_024 }, { input: 3, output: 15 })?.usd)
       .toBeCloseTo(1_024 * 3 / 1_000_000, 12);
   });
 
@@ -332,8 +332,28 @@ describe('priceCall — the one place tokens are multiplied by a rate', () => {
     // priced by the line that already charged the write it belongs to. An
     // invented second rate for the tier would charge the same bytes again.
     const withRetention: Usage = { ...ANTHROPIC, cacheWrite1h: 1_000 };
-    expect(priceCall(withRetention, SONNET))
+    expect(priceCall(withRetention, SONNET)?.usd)
       .toBeCloseTo((12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000, 12);
+  });
+
+  test('a 1h-retention write prices as an ESTIMATE; a call without one prices as exact', () => {
+    // Same FIGURE as the test above — no second rate was invented — but not the
+    // same FACT. Anthropic prices the 1h tier above the 5m one models.dev
+    // publishes, so a call carrying that tier was under-charged and its price is
+    // a floor. A reader has to be able to tell that from a price nothing had to
+    // qualify, which is why the floor says how many tokens made it one.
+    const withRetention: Usage = { ...ANTHROPIC, cacheWrite1h: 1_000 };
+    expect(priceCall(withRetention, SONNET)?.floorTokens).toBe(1_000);
+    // ABSENT on an exact price, never `0`. A figure checked and found sound and
+    // a figure nothing ever had to qualify would read identically as `0`, and
+    // only the second is what this can honestly say.
+    expect('floorTokens' in (priceCall(ANTHROPIC, SONNET) ?? {})).toBe(false);
+    // A tier the provider reported as EMPTY leaves the price exact: zero tokens
+    // at an unpublished rate is nothing to qualify.
+    expect('floorTokens' in (priceCall({ ...ANTHROPIC, cacheWrite1h: 0 }, SONNET) ?? {})).toBe(false);
+    // The floor cannot exceed the write it is a subset of, however the provider
+    // reports it — a nonsense split must not claim more than was written.
+    expect(priceCall({ ...ANTHROPIC, cacheWrite1h: 9_999 }, SONNET)?.floorTokens).toBe(1_024);
   });
 
   test('nothing token-billable reported means UNPRICED, never free', () => {
@@ -341,12 +361,12 @@ describe('priceCall — the one place tokens are multiplied by a rate', () => {
     // Neurons are Cloudflare's own billing unit; no per-token rate can price them.
     expect(priceCall({ neurons: 42 }, SONNET)).toBeUndefined();
     // A reported zero, by contrast, IS a measurement — and it costs $0.
-    expect(priceCall({ input: 0, output: 0 }, SONNET)).toBe(0);
+    expect(priceCall({ input: 0, output: 0 }, SONNET)?.usd).toBe(0);
   });
 
   test('cache parts exceeding the whole cannot drive the fresh remainder negative', () => {
     // A nonsense provider report has to yield a sane price, never a credit.
-    expect(priceCall({ input: 1_000, output: 0, cacheRead: 900, cacheWrite: 900 }, SONNET))
+    expect(priceCall({ input: 1_000, output: 0, cacheRead: 900, cacheWrite: 900 }, SONNET)?.usd)
       .toBeCloseTo((900 * 0.3 + 100 * 3.75) / 1_000_000, 12);
   });
 });

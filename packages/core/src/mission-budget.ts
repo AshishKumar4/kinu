@@ -69,6 +69,45 @@ export interface MissionSpendProvenance {
   source: 'catalog' | 'blended' | 'mixed';
 }
 
+/**
+ * What one call cost at catalog rates, and — ONLY when that figure is a FLOOR
+ * rather than the price — how many of its tokens made it one.
+ *
+ * A record rather than a bare number because a price the catalog could charge
+ * exactly and one it could only bound from below are different facts, and a
+ * bare number presents both as the same measurement. Unexported on purpose:
+ * every caller reads `usd` off the returned value, and an exported name no
+ * production module references is the surface `gate:wired` reports.
+ */
+interface CallPrice {
+  /** USD at catalog rates. A FLOOR, never an over-charge, when `floorTokens`
+   *  is present. */
+  readonly usd: number;
+  /**
+   * Tokens charged above at a rate the pricing source publishes for a DIFFERENT
+   * cache-retention tier: the `cacheWrite1h` subset, billed at the one
+   * `cache_write` rate models.dev carries, which is the 5m one.
+   *
+   * ABSENT on an exact price, never `0` — the distinction `strategy/swarm-run.ts`
+   * draws by omitting a gate KEY rather than writing `false`, because a check
+   * that passed and a check that never existed are different facts. A price
+   * qualified and found sound and a price nothing ever had to qualify would
+   * both read as `0`, and only the second is what this can honestly say.
+   *
+   * NO SECOND RATE goes with the count, because there is none to read.
+   * models.dev's per-model `cost` object is the whole pricing contract
+   * `providers/models-dev.ts` parses, and over the entire live catalog
+   * (https://models.dev/api.json, fetched 2026-09-09) its 7181 models publish
+   * `input` 7181x, `output` 7181x, `cache_read` 4672x, `cache_write` 1492x —
+   * and no key naming a retention tier at all. Anthropic does price the 1h tier
+   * above the 5m one (docs.claude.com/en/docs/build-with-claude/prompt-caching),
+   * which is what makes `usd` a floor rather than merely uncertain, but that
+   * ratio is Anthropic's own and writing it down here would be a second
+   * pricing policy for `gate:policy-drift` to find.
+   */
+  readonly floorTokens?: number;
+}
+
 /** USD for one call at catalog rates (USD per 1M tokens), or undefined when the
  *  provider reported no token counts at all — the same contract as the `usd`
  *  beside a step's usage: absent means UNPRICED, never free.
@@ -76,7 +115,7 @@ export interface MissionSpendProvenance {
  *  Exported because per-step cost telemetry must price a call exactly as the
  *  ledger debits it — two implementations of this would drift, and the same
  *  step would then cost different amounts depending on which surface asked. */
-export function priceCall(usage: Usage, pricing: ModelPricing): number | undefined {
+export function priceCall(usage: Usage, pricing: ModelPricing): CallPrice | undefined {
   if (usageTotal(usage) === undefined) return undefined;
   const prompt = usage.input ?? 0;
   // The parts of a CACHE-INCLUSIVE prompt total, clamped so a nonsense report
@@ -91,12 +130,18 @@ export function priceCall(usage: Usage, pricing: ModelPricing): number | undefin
   // `cacheWrite`, so the `cacheWrite` term below has already charged it, and
   // models.dev publishes ONE `cache_write` rate. Inventing a second rate for the
   // 1h retention tier is exactly the policy drift `gate:policy-drift` catches.
-  return (
+  const usd = (
     fresh * pricing.input
     + cacheRead * (pricing.cacheRead ?? pricing.input)
     + cacheWrite * (pricing.cacheWrite ?? pricing.input)
     + (usage.output ?? 0) * pricing.output
   ) / 1_000_000;
+  // What that sum cannot know it got wrong, COUNTED rather than corrected —
+  // clamped into the write it is a subset of, for the reason the parts above
+  // are clamped into the prompt. We ask for this tier (`cache-breakpoints.ts`
+  // emits Anthropic `ttl: '1h'`), so the shortfall is live, not hypothetical.
+  const floorTokens = Math.min(Math.max(0, usage.cacheWrite1h ?? 0), cacheWrite);
+  return floorTokens > 0 ? { usd, floorTokens } : { usd };
 }
 
 /** Which host seam turned the work away. */
@@ -460,7 +505,7 @@ export class MissionGovernor {
     const priced = pricing && opts?.usage ? priceCall(opts.usage, pricing) : undefined;
     const delta: MissionDebit = {
       tokens: total,
-      usd: priced ?? estimateUsdCost(total),
+      usd: priced?.usd ?? estimateUsdCost(total),
       blendedTokens: priced === undefined ? total : 0,
       calls: opts?.calls ?? 0,
       spawns: opts?.spawns ?? 0,
