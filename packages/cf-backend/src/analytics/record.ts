@@ -45,8 +45,12 @@ import { analyticsPlane, type AnalyticsEnv, type AnalyticsWriter } from './write
  * `'orchestrator'`, `'Orchestrator'` and `'cf-orchestrator'` as three values of
  * one dimension. Empty is legal and means the row is not attributable to one
  * actor, which a route handler's row is not.
+ *
+ * Only the root writes rows: a hosted subordinate, head or branch runs
+ * `runHeadInference` and records nothing here, so the fleet metrics do not see
+ * its spend. When that changes, its kinds join from `WorkspaceActor['kind']`.
  */
-export type AgentKind = 'orchestrator' | 'subordinate' | 'exploration' | 'node' | '';
+export type AgentKind = 'orchestrator' | '';
 
 /**
  * How an operation ended. `refused` and `failed` are separate for the reason
