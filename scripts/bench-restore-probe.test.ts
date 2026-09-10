@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test';
 
 import {
   decodeRestoreProbeRows,
+  parseOptions,
   readArmArtifact,
   readRestoreProbe,
   writeArmArtifact,
@@ -111,5 +112,28 @@ describe('the in-gate restore poll', () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+// ── the unarmed decisive launch ─────────────────────────────────────────────
+//
+// G3 judges a publication the rendezvous holds, and the rendezvous is armed
+// only at Worker boot by --fault-cuts. Every decisive run on record before
+// 2026-09-10 launched unarmed and learned it at judgment time, after the paid
+// ladder. The refusal moves to argv parse, before anything is provisioned.
+
+describe('an unarmed decisive launch', () => {
+  test('refuses at parse time and names G3 and the flag', () => {
+    expect(() => parseOptions(['--decisive'])).toThrow(/G3/);
+    expect(() => parseOptions(['--decisive'])).toThrow(/--fault-cuts/);
+  });
+
+  test('an armed decisive parse succeeds, and the flag stays optional elsewhere', () => {
+    expect(parseOptions(['--decisive', '--fault-cuts']).decisive).toBe(true);
+    expect(parseOptions([]).faultCuts).toBe(false);
+    expect(parseOptions(['--verify-only']).decisive).toBe(false);
+    // Verify-only wins over decisive, so the combination is a probe and
+    // measures no gate: no refusal.
+    expect(parseOptions(['--decisive', '--verify-only']).decisive).toBe(false);
   });
 });

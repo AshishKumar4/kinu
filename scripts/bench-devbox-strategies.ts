@@ -6380,6 +6380,21 @@ export function parseOptions(argv: readonly string[]): Options {
   // walk's decisive block reads this field, and a probe that ran it anyway
   // would be the failure mode its own suite refuses.
   const decisive = values.decisive && !values['verify-only'];
+  // AN UNARMED DECISIVE RUN CANNOT BE ADMITTED, so it is refused HERE, before
+  // anything is provisioned. G3 judges a publication the instrument holds at
+  // the ack, and the instrument holds only when the Worker boots with the
+  // rendezvous armed (`--fault-cuts` → BENCH_PUBLICATION_CUT=1). Every decisive
+  // run on record before 2026-09-10 launched unarmed and learned it at
+  // judgment time, 40 minutes to 3 hours of paid work later
+  // (`DECISIVE-2026-09-05.md:1019`, `:1041` "unarmed instrument | 5 | 0").
+  // A verify-only probe measures no gate and keeps the flag optional.
+  if (decisive && !values['fault-cuts']) {
+    throw new Error(
+      '--decisive without --fault-cuts cannot be admitted: G3 (publication safety) judges a '
+      + 'publication the rendezvous holds, and the rendezvous is armed only at Worker boot by '
+      + '--fault-cuts. Add --fault-cuts, or drop --decisive for a smoke run.',
+    );
+  }
   const rawRepetitions = values.repetitions ?? String(decisive ? DECISIVE_REPETITIONS : 1);
   // THE WHOLE TEXT, not `parseInt`'s prefix of it: `parseInt('1.5')` is 1, so a
   // fractional count would silently become a single repetition and the run
