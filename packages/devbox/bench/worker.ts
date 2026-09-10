@@ -689,6 +689,22 @@ class BenchBox extends Devbox<BenchEnv> {
   }
 
   /**
+   * Destroy this box's container identity without touching its rows or its
+   * store: the disk — and the boot id on it — is gone, so the next drive
+   * provisions a fresh instance and restores the committed generation onto
+   * it. The witness instrument for a true cold restore. A stop preserves the
+   * disk, so a wake after one adopts instead of restoring; only a destroy (or
+   * a platform replacement, which this is shaped like) proves the attach a
+   * fresh instance performs. The drive sorts out the generation: it observes
+   * the container down and turns over before admitting.
+   */
+  async destroyContainerForBench(): Promise<boolean> {
+    if (this.ctx.container?.running !== true) return false;
+    await this.destroy();
+    return true;
+  }
+
+  /**
    * The DRIVER owns every measured tick.
    *
    * With the production schedule armed, an ambient tick can fire inside a
@@ -1057,6 +1073,15 @@ export default {
           // for a recovery replay. See `killWithoutQuiesce`.
           await box.killWithoutQuiesce();
           return json({ ok: true, strategy, box: name, ms: Date.now() - started });
+        }
+
+        case 'POST /destroy': {
+          // The identity itself is gone — disk, boot id, mounts — while the
+          // rows and the store stay: the next drive provisions a fresh
+          // instance and restores the committed generation onto it. See
+          // `destroyContainerForBench`.
+          const destroyed = await box.destroyContainerForBench();
+          return json({ ok: true, strategy, box: name, destroyed, ms: Date.now() - started });
         }
 
         case 'POST /wake': {
