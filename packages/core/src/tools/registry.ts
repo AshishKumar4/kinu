@@ -811,7 +811,7 @@ export const BUILTIN_TOOL_SPECS = {
     // over one resource is one node that owns it, which is what a node's own
     // prompt already tells it to do (heads/head-inference.ts).
     whenNotToUse:
-      'A single short coherent change is yours to make directly. Nodes that would write the same mutable resource belong in one node that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
+      'A single short coherent change is yours to make directly. Work that is ONE DEPENDENT CHAIN — each step needing the step before it — belongs to one agent, however large it is: splitting a chain across agents pays for planning and for merging what they each assumed, and buys none of the parallelism the ladder exists for. Fan out over slices that are genuinely independent, and say what each owns. Nodes that would write the same mutable resource belong in one node that owns it. Every subordinate or peer message wakes that agent for a full turn, so each one carries real work.',
     result: `${AGENTS_RESULT_PARTS.roster}${AGENTS_RESULT_PARTS.taskHire}${AGENTS_RESULT_PARTS.rest}`,
     // The cheapest COMPLETE call, which is what an example is for: `preset` and
     // `task` are the whole minimum, and `ideate` is the one preset that legally
