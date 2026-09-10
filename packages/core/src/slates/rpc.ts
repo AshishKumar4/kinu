@@ -1,11 +1,17 @@
 import * as v from 'valibot';
 import type { Refusal } from '../obs/index';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
-import { SlateDirectoryName } from './files';
 import type { WorkMode } from '../prompting/surface';
 import { requireWorkModePermission } from '../execution/work-mode';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;
+
+/** A slate id as one directory name. Defined HERE rather than beside the
+ *  worker-only `SlateFiles`: that module imports the vendored agent-core
+ *  runtime, which cannot load in a browser, while this operation schema —
+ *  and every client that validates against it — must. */
+export const SlateDirectoryName = v.pipe(v.string(), v.minLength(1),
+  v.check((name) => !name.includes('/') && !name.includes('\0') && name !== '.' && name !== '..', 'Slate id must be one directory name'));
 
 /** An app method forwarded as a POST route to another slate. */
 export function isSlateMethodName(name: string): boolean {

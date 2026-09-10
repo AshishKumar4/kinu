@@ -36,6 +36,7 @@
     "gate:duplication": "bun scripts/ast-duplication.ts",
     "gate:complexity": "bun scripts/complexity.ts",
     "gate:wired": "bun scripts/wired.ts",
+    "gate:client-graph": "bun scripts/client-graph.ts",
     "gate:reachability": "bun scripts/reachability.ts",
     "gate:set-equality": "bun scripts/gate-set-equality.ts",
     "gate:do-init": "bun scripts/do-init-gate.ts",
