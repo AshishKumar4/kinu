@@ -4,7 +4,7 @@
  *
  * A value cycle through
  *
- *   heads/head-tools -> tools/builtins -> tools/agents-tool
+ *   heads/head-tools -> tools/builtins -> delegation/agents-tool
  *                    -> strategy/swarm-run -> strategy/node-agent -> heads/head-tools
  *
  * would expose the module-scope spread in `strategy/node-agent.ts`
@@ -56,7 +56,7 @@ const ENTRY_POINTS: ReadonlyArray<readonly [label: string, specifier: string]> =
   ['the core barrel', 'index.ts'],
   ['tools/builtins — the confined-surface factory', 'tools/builtins.ts'],
   ['tools/actor-tools — the actor surface that adds `agents`', 'tools/actor-tools.ts'],
-  ['tools/agents-tool — the delegation tool', 'tools/agents-tool.ts'],
+  ['delegation/agents-tool — the delegation tool', 'delegation/agents-tool.ts'],
   ['strategy/swarm-run — the search that runs the nodes', 'strategy/swarm-run.ts'],
   ['strategy/node-agent — the reader itself, first', 'strategy/node-agent.ts'],
 ];

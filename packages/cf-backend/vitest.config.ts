@@ -190,6 +190,7 @@ export default defineConfig({
             // claimed, which is what registers the child actor this probe
             // rosters.
             UserDO: { className: 'UserDO', useSQLite: true },
+            USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', useSQLite: true },
           },
         }, {
           name: 'slate-egress-probe', ...workerCompatibility, workerLoaders: { LOADER: {} },
@@ -239,6 +240,7 @@ export default defineConfig({
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
           SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', scriptName: 'slate-actor-probe', useSQLite: true },
           PLAN_ANNOUNCE_ROOT: { className: 'OrchestratorAgent', scriptName: 'plan-announce-probe', useSQLite: true },
+          USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', scriptName: 'plan-announce-probe', useSQLite: true },
           SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
         },

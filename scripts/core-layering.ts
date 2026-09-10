@@ -5,7 +5,7 @@
  * connected component. Only `obs` and `checkpoints` sit outside the cycle.
  * `types/` imports a dozen feature directories, `state/agent-stores.ts`
  * constructs every feature's store, `vfs/context-plane.ts` is orchestrator
- * logic, and `identity/workspace-schema.ts` assembles DDL from `evolution`,
+ * logic, and `identity/workspace-schema.ts` (since moved to `state/`) assembled DDL from `evolution`,
  * `mcts`, `strategy` and `tools`. None of that is inseparable design; it is
  * misplaced files. But a package split cannot start while it stands, and
  * nothing today refuses one more upward import.

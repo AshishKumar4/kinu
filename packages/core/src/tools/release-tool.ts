@@ -8,7 +8,7 @@
  * This was the body of a native `release` tool; it is now reached ONLY
  * through the `release.*` codemode namespace (tools/release-codemode.ts) —
  * this file holds the ONE implementation both the codemode members and any
- * future caller share, mirroring tools/agents-tool.ts's dispatchAgentsAction.
+ * future caller share, mirroring delegation/agents-tool.ts's dispatchAgentsAction.
  */
 import {
   isEngineOwnedTransitionTarget,
