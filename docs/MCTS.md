@@ -5,7 +5,7 @@ MCTS explores solution approaches. Cloud branches run as logical actors on the w
 ## No tool reaches this engine
 
 Read before wiring. `swarm | hire | ask | send | reply | list | dismiss`
-never dispatches here; model-facing calls refuse or reach another engine (`packages/core/src/tools/agents-tool.ts`).
+never dispatches here; model-facing calls refuse or reach another engine (`packages/core/src/delegation/agents-tool.ts`).
 
 Models use `action:'swarm'`, `depth`, the verifier registry and
 `strategy/swarm-run.ts`. It shares `uct.ts`, `backpropagation.ts`,

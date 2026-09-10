@@ -27,7 +27,7 @@ reaches exploration engines through their own paths. Lifetime evolution calls
 before spending anything.
 
 Each backend constructs
-`AgentsForkDeps` (`core/src/tools/agents-tool.ts:347`) directly: runtime,
+`AgentsForkDeps` (`core/src/delegation/agents-tool.ts:347`) directly: runtime,
 caller's model, tier-model resolver, cost model, swarm-node loop host,
 swarm-node private home, shared-prefix compaction. It carries no strategy
 objects. To make another policy model-facing, add it to the closed swarm
@@ -405,7 +405,7 @@ delegation ladder. It adds no action, no table, no loop, and no facet builder:
    (`core/src/tools/registry.ts`) is the selection doctrine every surface
    renders, and it states both lifetimes; `HIRE_CREATE_FIELDS`,
    `HIRE_EXISTING_FIELDS` and `AgentsActionInputVariant.excludes`
-   (`core/src/tools/agents-tool.ts`) separate creating an agent from handing the
+   (`core/src/delegation/agents-tool.ts`) separate creating an agent from handing the
    work to one that exists, in the advertised JSON Schema, the sandbox
    declaration and the dispatch.
 2. Reuse the child substrate. `createTemporaryAgentPort`

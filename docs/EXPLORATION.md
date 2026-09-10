@@ -134,7 +134,7 @@ A parameter accepted and silently ignored is a lie. Every named axis is honoured
 or refused. `objective` is REQUIRED exactly for resolved `verify`, and coverage
 `key` exactly for resolved `archive`.
 
-Implemented by `resolveSwarm` and `tools/agents-tool.ts`.
+Implemented by `resolveSwarm` and `delegation/agents-tool.ts`.
 
 ## Refusals
 
