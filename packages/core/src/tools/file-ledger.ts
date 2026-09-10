@@ -34,6 +34,7 @@
 
 import { fnv1a64 } from '../prompting/volatile-context';
 import type { FileEditFailure } from './file-edit';
+import { countSharedWrite, newWriteAuthor } from './msg-counters';
 
 /** Why an edit attempt did not land. The text-surgery failures plus the two the
  *  ledger itself raises and the I/O ones the VFS raises. */
@@ -107,6 +108,11 @@ export class TurnFileLedger {
   private readonly failures = new Map<FileEditOutcomeReason, number>();
   private readonly failedPaths = new Set<string>();
   private readonly recoveredPaths = new Set<string>();
+  /** Who this ledger's applied edits belong to, for the shared-write counter.
+   *  Fixed at construction and NOT cleared by `reset()`: an agent is the same
+   *  agent across its turns, and a per-turn identity would report every one of
+   *  its own re-edits as a collision with itself. */
+  private readonly author = newWriteAuthor();
 
   /** Clear for a new turn. */
   reset(): void {
@@ -164,11 +170,26 @@ export class TurnFileLedger {
     return { state, coveredTo: entry.coveredTo, total: entry.total };
   }
 
-  /** One edit attempt settled. */
+  /**
+   * One edit attempt settled.
+   *
+   * An APPLIED edit is also reported to the shared-write counter under this
+   * ledger's own author ordinal: one ledger per actor, so two hires seated on
+   * the same workspace are two authors writing one path.
+   * That is the only place in the tree where "which agent wrote this" is known
+   * at the moment a write lands — the file planes below are per-actor views of
+   * shared bytes and carry no author — and it is the whole reason attribution
+   * happens here rather than in an end-of-run diff, which smears concurrent
+   * siblings into one pile.
+   *
+   * Counting only, and only on the applied path: a refused edit changed
+   * nothing, so it cannot have collided with anything.
+   */
   recordEdit(path: string, reason: FileEditOutcomeReason | null): void {
     this.attempts++;
     if (reason === null) {
       this.applied++;
+      countSharedWrite(this.author, path);
       if (this.failedPaths.has(path)) this.recoveredPaths.add(path);
       return;
     }
