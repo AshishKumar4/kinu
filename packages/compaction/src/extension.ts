@@ -116,8 +116,6 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       try {
         return await deps.summarize(job.prompt, turnSignal);
       } catch (err) {
-        // A cancelled turn is not a failed summary; the caller's abort propagates.
-        if (turnSignal?.aborted) throw err;
         deps.ports.logger.warn('Compaction summary call failed', {
           rangeStartMessageId: job.rangeStartMessageId,
           rangeEndMessageId: job.rangeEndMessageId,
