@@ -8,6 +8,7 @@
     ".": "./src/index.ts",
     "./identity": "./src/identity/index.ts",
     "./obs": "./src/obs/index.ts",
+    "./slates": "./src/slates/index.ts",
     "./workspace": "./src/vfs/nimbus-workspace.ts"
   },
   "dependencies": {

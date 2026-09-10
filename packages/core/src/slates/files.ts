@@ -4,12 +4,12 @@ import type { SlateId } from '@agent-core/core/slates';
 import type { CredentialedVfs } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
 import * as v from 'valibot';
 import { workspacePath } from '../vfs/workspace-path';
+import { SlateDirectoryName } from './rpc';
 import type { SqliteSlateContentStore } from './content';
 import { nanoid } from '../utils/nanoid';
 import { KinuError } from '../obs/error';
 
-export const SlateDirectoryName = v.pipe(v.string(), v.minLength(1),
-  v.check((name) => !name.includes('/') && !name.includes('\0') && name !== '.' && name !== '..', 'Slate id must be one directory name'));
+export { SlateDirectoryName };
 
 const TreePath = v.pipe(v.string(), v.check((path) => path.split('/').every((part) => part !== '' && part !== '.' && part !== '..')));
 const TreeEntry = v.variant('kind', [

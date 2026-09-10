@@ -1,8 +1,8 @@
 {
-  "reason": "gate:undeclared-imports joins the commit tier: a package that imports what its own manifest never declares, the direction gate:dead-code's declaration census is structurally unable to see. Commit 77.24s to 79.24s, push 395.81s to 397.81s — the new gate declares 2s, scaled from three readings of 5.31/5.49/6.29s taken under load 40 and calibrated against gate:reachability and gate:duplication measured in the same window. The push step table also drops the stale gate self-test row: scripts/undeclared-imports.test.ts joins that bun test invocation, so the command string changed.",
+  "reason": "gate:client-graph joins the commit tier: the browser entries must not reach the vendored agent-core runtime or bun:sqlite through value imports, the edge that blanked bun run dev for four days while the build stayed green by tree-shaking. Commit 79.24s to 80.24s, push 397.81s to 398.81s — the new gate declares 1s from three readings of 0.51/0.54/0.72s on this tree.",
   "tiers": {
     "commit": {
-      "seconds": 79.24,
+      "seconds": 80.24,
       "measuredAt": "2026-09-10",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -22,6 +22,7 @@
         "bun run gate:dead-code": 15,
         "bun run gate:undeclared-imports": 2,
         "bun run gate:wired": 9,
+        "bun run gate:client-graph": 1,
         "bun scripts/schema-drift.ts": 0.23,
         "bun run gate:capability-parity": 1.7,
         "bun run gate:policy-drift": 0.9,
@@ -30,7 +31,7 @@
       }
     },
     "push": {
-      "seconds": 397.81,
+      "seconds": 398.81,
       "measuredAt": "2026-09-10",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -55,6 +56,7 @@
         "bun run gate:dead-code": 15,
         "bun run gate:undeclared-imports": 2,
         "bun run gate:wired": 9,
+        "bun run gate:client-graph": 1,
         "bun scripts/test-census.ts --ratchet": 5.5,
         "bun run gate:complexity": 1.8,
         "bun run gate:silent-drop": 1.4,
