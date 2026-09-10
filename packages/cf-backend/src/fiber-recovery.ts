@@ -73,7 +73,7 @@ export const FIBER_RECOVERY_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 /**
  * The most rows ONE activation sweep scans — the inherent bound the init
  * ruling requires, and the same number the framework's own scan carries
- * (`patches/agents@0.20.1.patch`, where a stopwatch bounded nothing but the
+ * (`patches/agents@0.22.0.patch`, where a stopwatch bounded nothing but the
  * wait). Shared by every row-budgeted sweep in this backend, because three
  * spellings of one budget are three numbers that can drift; a sweep whose
  * per-row cost is different says so with its own constant and its reason
@@ -87,7 +87,7 @@ export const SWEEP_MAX_ROWS = 4096;
 
 /**
  * One metadata row per read. This is not a policy cap: the framework's own
- * scan carries the same 4096-row budget (patches/agents@0.20.1.patch — a
+ * scan carries the same 4096-row budget (patches/agents@0.22.0.patch — a
  * stopwatch bounded nothing but the wait), while the read is structurally
  * incapable of holding more than one snapshot candidate at a time.
  */

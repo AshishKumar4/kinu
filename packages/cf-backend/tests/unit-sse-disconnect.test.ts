@@ -11,7 +11,6 @@ const { handleRunEventsRequest } = await import('../src/run-events-routes');
 function sseEnv(wire: () => string = () => '[]') {
   let polls = 0;
   const stub = {
-    async setName() {},
     async getRunEventsWire() { polls += 1; return wire(); },
   };
   const bindings = {

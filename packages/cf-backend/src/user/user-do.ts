@@ -35,7 +35,7 @@ import {
   type AccessTokenRecord,
   type AccessTokenScope,
 } from "../cli/access-token-store";
-import { MCPClientManager } from "agents/mcp/client";
+import type { MCPClientManager } from "agents/mcp/client";
 import {
   DurableObjectOAuthClientProvider,
   type AgentMcpOAuthProvider,
@@ -635,32 +635,36 @@ function clampRosterLimit(limit?: number): number {
 }
 
 /**
- * Silence the SDK's own MCP manager on this object, before it can dial.
+ * Take the activation-time restore away from the SDK, and keep it for
+ * {@link UserDO.hydrateUserMcp}.
  *
- * The Agent base builds a manager of its own and its init chain calls
- * `restoreConnectionsFromStorage` unconditionally on every activation, with no
- * subclass opt-out (`agents/dist/index.js:1026-1030`). That manager reads the
- * SAME `cf_agents_mcp_servers` rows this object's user plane derives from
- * {@link UserDO.hydrateUserMcp}, but with none of its credential closures — so
- * every activation opened an anonymous connection to every MCP endpoint the
- * user configured, whether or not anyone touched MCP: third-party 401 noise,
- * duplicate sessions churning `server_options`, and an OAuth 401 able to write
- * a fresh `auth_url` onto the shared row, which the user plane then reads as
- * authenticating-and-never-connect.
+ * `agents@0.22.0` made `MCPClientManager` a lifecycle capability: it reaches
+ * storage only through the `Lifecycle` it is installed on, and `Agent`
+ * installs exactly one, so the manager this user plane runs on IS `this.mcp`
+ * (cloudflare/agents#1897 removed `MCPClientManagerOptions.storage`; a second
+ * manager throws on first use). Its `onStart` calls
+ * `restoreConnectionsFromStorage` unconditionally on every activation
+ * (`agents/dist/client-jagG8a9_.js:1303-1308`), with none of this plane's
+ * credential closures in place yet — so every activation opened an anonymous
+ * connection to every MCP endpoint the user configured, whether or not anyone
+ * touched MCP: third-party 401 noise, duplicate sessions churning
+ * `server_options`, and an OAuth 401 able to write a fresh `auth_url` onto the
+ * row, which the user plane then reads as authenticating-and-never-connect.
  *
- * Marking the manager restored is the whole fix: the SDK's restore is then a
- * no-op, and this user's connections are made where their credentials are —
- * `hydrateUserMcp`, on the manager that has them. Set in the constructor, which
- * runs before any entry point reaches the init chain.
+ * Retiring the CALL is the whole fix — the public method with a stated
+ * contract, not the private flag behind it, whose rename would silently bring
+ * the dialing back. The real restore is returned so hydration can run it once
+ * the credentialed transports are registered. Taken in a field initializer,
+ * which runs before any entry point reaches the lifecycle start.
  */
-function retireInheritedMcpManager(manager: MCPClientManager): void {
-  // The CALL is retired, not the private flag behind it: what this object needs
-  // is that the SDK's restore does nothing on a manager it never uses, and that
-  // is a public method with a stated contract rather than an internal field
-  // whose rename would silently bring the dialing back.
+function retireActivationRestore(
+  manager: MCPClientManager,
+): (clientName: string) => Promise<void> {
+  const restore = manager.restoreConnectionsFromStorage.bind(manager);
   manager.restoreConnectionsFromStorage = async (): Promise<void> => {
     diagnostics.event('mcp.inherited_restore_skipped', { manager: USER_MCP_CLIENT_NAME });
   };
+  return restore;
 }
 
 export class UserDO extends Agent<Env> {
@@ -672,15 +676,23 @@ export class UserDO extends Agent<Env> {
     // capability denials this DO's gate produces are the fleet's authorization
     // signal, and without this they reach Workers Logs and no dataset.
     installAnalyticsDiagnostics(this.env);
-    retireInheritedMcpManager(this.mcp);
+  }
+
+  /** The per-user OAuth provider, keyed by {@link USER_MCP_CLIENT_NAME} rather
+   *  than this object's name: it is the key every stored grant was written
+   *  under, and every restore has to spell it the same way. */
+  override createMcpOAuthProvider(callbackUrl: string): AgentMcpOAuthProvider {
+    return new DurableObjectOAuthClientProvider(this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl);
   }
 
   private _initialized = false;
 
-  /** Per-user MCP manager. NOTE: distinct from the inherited `Agent.mcp`
-   *  — that field is the SDK's agent-scoped manager (we don't use it).
-   *  This one is per-user and stores its config in `user_mcp_servers`. */
-  private _userMcp: MCPClientManager | null = null;
+  /** The restore hydration runs, once the SDK's activation-time call has been
+   *  retired (see {@link retireActivationRestore}). */
+  private readonly restoreUserMcp = retireActivationRestore(this.mcp);
+
+  /** Whether {@link hydrateUserMcp} has completed once in this activation. */
+  private _userMcpHydrated = false;
 
   /** The one full reconciliation in flight. UserDO calls interleave at every
    *  external await; joining this makes remove/register/restore/establish one
@@ -2041,6 +2053,14 @@ export class UserDO extends Agent<Env> {
     return token;
   }
 
+  /* The three hibernation entry points below are declared on this class, so
+   * `Lifecycle.installHandlers` leaves them alone
+   * (`agents/dist/durable-object-lifecycle-D6nNQJJd.js:496-502`: a name already
+   * on the host is skipped) and `Agent` itself declares none since
+   * cloudflare/agents#2133 re-parented it onto `DurableObject`. A socket that
+   * is neither a pane's nor a device's is therefore handed to the lifecycle
+   * directly — the same delegation `Agent.fetch` performs — because there is
+   * no `super` implementation left to reach. */
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
     // A pane's socket first. Its bytes are keystrokes for a machine, not a
     // frame anything here parses: an arrow key is three bytes that are not a
@@ -2052,7 +2072,7 @@ export class UserDO extends Agent<Env> {
       return;
     }
     const deviceId = deviceIdFromSocket(ws);
-    if (!deviceId) return super.webSocketMessage(ws, message);
+    if (!deviceId) return this.lifecycle.webSocketMessage(ws, message);
     this.ensureInit();
     let data: string;
     if (isTextWebSocketMessage(message)) {
@@ -2212,7 +2232,7 @@ export class UserDO extends Agent<Env> {
       return;
     }
     const deviceId = deviceIdFromSocket(ws);
-    if (!deviceId) return super.webSocketClose(ws, code, reason, wasClean);
+    if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
     this.ensureInit();
     this._devices.handleClose(deviceId, ws);
     // Every terminal on this machine went with its socket: the daemon hangs up
@@ -2229,7 +2249,7 @@ export class UserDO extends Agent<Env> {
 
   override async webSocketError<ErrorValue>(ws: WebSocket, error: ErrorValue): Promise<void> {
     // Device sockets clean up in webSocketClose, which the runtime fires next.
-    if (!deviceIdFromSocket(ws)) return super.webSocketError(ws, error);
+    if (!deviceIdFromSocket(ws)) return this.lifecycle.webSocketError(ws, error);
   }
 
   /** Mint a device + connect token. The authenticated CLI receives the raw
@@ -4282,26 +4302,13 @@ export class UserDO extends Agent<Env> {
 
   // ── MCP servers ────────────────────────────────────────────────────
 
-  /** Lazy MCPClientManager construction. The callback URL is built per-add
-   *  (it depends on the request origin) so we don't bake it in here. */
+  /** The manager this user's plane runs on: the SDK's own, whose activation
+   *  restore is retired (see {@link retireActivationRestore}) and whose OAuth
+   *  provider is {@link createMcpOAuthProvider}. Its config is
+   *  `user_mcp_servers`; the SDK rows are derived from it. */
   private userMcp(): MCPClientManager {
-    if (this._userMcp) return this._userMcp;
     this.ensureInit();
-    this._userMcp = new MCPClientManager(USER_MCP_CLIENT_NAME, '0.1.0', {
-      storage: this.ctx.storage,
-      // Override so EVERY server (regardless of when added) uses the same
-      // per-user callback URL pattern. The SDK calls this for new connect()s
-      // and for restoreConnectionsFromStorage(). The stored callback_url is
-      // the source of truth for which path the IdP is told to redirect to,
-      // so we pass it through verbatim.
-      createAuthProvider: (callbackUrl: string): AgentMcpOAuthProvider =>
-        new DurableObjectOAuthClientProvider(
-          this.ctx.storage,
-          USER_MCP_CLIENT_NAME,
-          callbackUrl,
-        ),
-    });
-    return this._userMcp;
+    return this.mcp;
   }
 
   /**
@@ -4398,8 +4405,9 @@ export class UserDO extends Agent<Env> {
       registered.push(row.id);
     }
 
-    await mgr.restoreConnectionsFromStorage(USER_MCP_CLIENT_NAME);
+    await this.restoreUserMcp(USER_MCP_CLIENT_NAME);
     for (const id of registered) await mgr.establishConnection(id);
+    this._userMcpHydrated = true;
   }
 
   /** Register one configured server on a transport THIS plane owns, replacing
@@ -4515,7 +4523,7 @@ export class UserDO extends Agent<Env> {
     // storage failure, not a per-server connection failure — those surface as
     // the row's `status` — so it must not report every server disconnected.
     await this.hydrateUserMcp();
-    const connections = this._userMcp?.mcpConnections ?? {};
+    const connections = this.mcp.mcpConnections;
     return rows.map((r): McpServerSummary => {
       const conn = connections[r.id];
       const status = mapConnectionStatus(conn?.connectionState);
@@ -4790,7 +4798,7 @@ export class UserDO extends Agent<Env> {
     }
 
     const out: SerializableToolDescriptor[] = [];
-    const connections = this._userMcp?.mcpConnections ?? {};
+    const connections = this.mcp.mcpConnections;
     // Connection is a property of the SDK connection, NOT of emitted
     // descriptors. A ready server can expose zero tools or have every tool
     // filtered by `allowed_tools`; neither fact means it is still connecting.
@@ -4846,9 +4854,8 @@ export class UserDO extends Agent<Env> {
     // an argument, so there is no agent name left to spoof: a token exists only
     // for a workspace this user's registry issued one to, and dies with it.
     await this.requireTier(caller, 'mcp.tools');
-    const wasCold = this._userMcp === null;
     const manager = this.userMcp();
-    if (wasCold) {
+    if (!this._userMcpHydrated) {
       // Cold start: hydrate the manager before dispatching.
       try { await this.hydrateUserMcp(); }
       catch (err) { throw new Error(`MCP not ready: ${renderThrownChain({ cause: err })}`, { cause: err }); }

@@ -15,9 +15,7 @@
  * The terminal ledger itself — claim, effects, replay — is
  * unit-durable-terminal.test.ts.
  */
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
 import {
@@ -36,15 +34,10 @@ import {
 } from '../src/fiber-recovery';
 
 // The actor harness replaces `agents`; load the installed artifact separately.
-// Its Workers builtins come from the preload's boundary stub; `partyserver` is
-// the one module declaration it still needs supplied. A narrow
-// `cloudflare:workers` mock here once dropped `WorkerEntrypoint` and `tracing`
-// for every suite sharing the process.
-await mock.module('partyserver', () => ({
-  Server: class {},
-  getServerByName: () => undefined,
-  routePartykitRequest: () => undefined,
-}));
+// Its Workers builtins come from the preload's boundary stub, and since
+// cloudflare/agents#2133 vendored PartyServer into `agents/lifecycle` it needs
+// no other module supplied. A narrow `cloudflare:workers` mock here once
+// dropped `WorkerEntrypoint` and `tracing` for every suite sharing the process.
 const installedAgentModule = [
   '../../../node_modules/agents/dist/index.js',
   'fiber-recovery-sql-probe',
@@ -767,7 +760,7 @@ const NOW = 1_700_000_000_000;
   });
 
   test('the PATCHED framework scan carries the same row budget, never a stopwatch', async () => {
-    // This repo owns patches/agents@0.20.1.patch: its _checkRunFibers rewrite
+    // This repo owns patches/agents@0.22.0.patch: its _checkRunFibers rewrite
     // is Kinu code wearing a vendor path, so the init ruling applies to it the
     // same way. The budget half runs the INSTALLED scan past the sweep's own
     // budget: every expired row reports skipped, and the first row past the
@@ -797,11 +790,9 @@ const NOW = 1_700_000_000_000;
 
     // The stopwatch half has no behavioral surface: a fast suite never trips a
     // wall-clock exit, so its absence is only observable in the installed
-    // artifact. A repin that resurrects it fails here by name.
-    const dist = readFileSync(
-      join(import.meta.dirname, '../../../node_modules/agents/dist/index.js'), 'utf8',
-    );
-    expect(dist).not.toContain('scan_deadline_exceeded');
-    expect(dist).not.toContain('scanStartedAt');
+    // scan's own source. A repin that resurrects it fails here by name.
+    const scan = installedCheckRunFibers.toString();
+    expect(scan).not.toContain('scan_deadline_exceeded');
+    expect(scan).not.toContain('scanStartedAt');
   });
 });

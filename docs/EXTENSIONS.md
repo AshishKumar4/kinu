@@ -103,7 +103,7 @@ history indices.
 `ActorAgent` hosts one persistent `ExtensionHost` per activation.
 `OrchestratorAgent` and `SubordinateAgent` extend it. Both get the same
 hooks, compaction, and event injection. `packages/cf-backend/package.json`
-depends on `@cloudflare/think` at `^0.15.1`, resolved to 0.15.1 in this
+depends on `@cloudflare/think` at `^0.17.0`, resolved to 0.17.0 in this
 worktree.
 
 | Think hook | ExtensionHost |
