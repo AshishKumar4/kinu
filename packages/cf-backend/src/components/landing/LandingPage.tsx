@@ -54,7 +54,7 @@ function PlatformSection({ install }: { install: string }): ReactElement {
         <article className="flex min-w-0 flex-col border-t p-border p-6 sm:p-8 md:border-l md:border-t-0">
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Local</span>
           <h3 className="text-[27px] font-semibold leading-tight tracking-[-.025em]">Your terminal or editor.</h3>
-          <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Local workspaces run on your machine. Use the full-screen TUI, a one-shot CLI task, or an editor that speaks ACP. Model requests go to the provider you configured.</p>
+          <p className="mb-6 mt-4 text-[15px] leading-[1.7] p-text-3">Runs on your own machine, against the provider you configured. The snippet below installs it and opens a full-screen TUI.</p>
           <div className="rounded-xl border p-border p-recessed p-4">
             <div className="mb-3 flex items-center justify-between gap-3"><span className="font-mono text-[10px] uppercase tracking-[.14em] p-text-4">Install · Linux</span><Button type="button" variant="ghost" size="sm" aria-label="Copy local setup commands" onClick={() => copy(install + '\n' + localStart)}>{status === 'copied' ? 'Copied' : status === 'failed' ? 'Retry copy' : 'Copy'}</Button></div>
             <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-[1.9] p-text-2"><code>{install + '\n' + localStart}</code></pre>
