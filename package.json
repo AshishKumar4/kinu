@@ -15,6 +15,7 @@
     "packages/*"
   ],
   "scripts": {
+    "preinstall": "bun scripts/refuse-linked-install.ts",
     "prepare": "bun scripts/ladder.ts --install-hooks",
     "test": "bun test --parallel=4 packages/agent-core/ packages/agent-utils/ packages/core/ packages/compaction/",
     "test:cli": "bun scripts/test-cli.ts",
