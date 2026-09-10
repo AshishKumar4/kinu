@@ -1067,7 +1067,7 @@ export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observ
 export { ensureDir } from './utils/vfs-helpers';
 export {
   withMountTable, standardMounts, EXECUTOR_MOUNTS, MOUNT_EXECUTORS,
-  readBoundedWithVfsOps, listWithVfsOps,
+  readBoundedWithVfsOps, readTailWithVfsOps, listWithVfsOps,
   type VfsMount, type MountableProvider,
   type VfsNativeMutations, type VfsNativeReads, type VfsListedEntry,
 } from './vfs/mounts';
