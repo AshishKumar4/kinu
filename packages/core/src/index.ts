@@ -245,11 +245,11 @@ export type * from './types/mcts';
 export type * from './types/craft';
 export type * from './types/evaluation';
 
-export { SqliteSlateStore } from './slates/store';
-export { SqliteSlateContentStore } from './slates/content';
-export { SqliteSlateInvocations, type SlateInvocationAuthority } from './slates/invocations';
-export { SlateFiles, slateDirectory } from './slates/files';
-export { WorkspaceSlates, type WorkspaceSlatesDeps } from './slates/runtime';
+// The SQLite-backed slate stores live behind `@kinu.run/core/slates`, not
+// here: every one of them imports the vendored agent-core runtime, which
+// touches `node:util` at module scope and cannot load in a browser. Client
+// code value-imports this barrel, so anything exported here executes in the
+// client graph — keep worker-only modules off it.
 export { parseSlateProject, type SlateProject, type SlateBinding } from './slates/project';
 export { SlateBindingRequestSchema, routeSlateBindingCall, resolveSlateChain, type SlateBindingRequest, type SlateBindingRoute, type SlateInvocation } from './slates/bindings';
 export { SLATE_READ_MODELS, type SlateReadModel } from './slates/read-models';

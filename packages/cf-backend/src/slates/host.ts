@@ -4,7 +4,10 @@ import { SlateId, SlateVersionId } from '@agent-core/core/slates';
 import * as v from 'valibot';
 import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
-  SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory, parseSlateProject,
+  SlateFiles, SqliteSlateContentStore, SqliteSlateStore, WorkspaceSlates, slateDirectory,
+} from '@kinu.run/core/slates';
+import {
+  parseSlateProject,
   SlateBindingRequestSchema, SlateOperationSchema, requireSlateWorkMode, requireWorkModePermission, routeSlateBindingCall, resolveSlateChain, JsonValueSchema, projectJsonValue, isSlateMethodName, answeredRefusal,
   type JsonValue, type SlateProject,
   type SlateBindingRoute, type SlateCallResult, type SlateInvocation, type SlateSummary, type SlateProblem,
