@@ -1,8 +1,8 @@
 {
-  "reason": "gate:wired and gate:dead-code move from push to commit, and both declare their measured cost instead of the cheaper figure they were pinned at. The premise for their push placement was that nothing can become unwired or dead between a commit and the push that follows it, which assumes the author pushes. A lane commits in its own worktree and yields, and the integrator merges, so there is no intervening push and the violation travelled as an artifact: measured five times on 2026-09-10 (stepPruneBatchTokens, SlateSummary.port, a lazy default export, MOVIE_ASK, PLAN_MESSAGES), each authored by a lane whose own acceptance was green because bun run check contains neither gate. Commit 53.2s to 77.2s, push 382.4s to 395.8s.",
+  "reason": "gate:undeclared-imports joins the commit tier: a package that imports what its own manifest never declares, the direction gate:dead-code's declaration census is structurally unable to see. Commit 77.24s to 79.24s, push 395.81s to 397.81s — the new gate declares 2s, scaled from three readings of 5.31/5.49/6.29s taken under load 40 and calibrated against gate:reachability and gate:duplication measured in the same window. The push step table also drops the stale gate self-test row: scripts/undeclared-imports.test.ts joins that bun test invocation, so the command string changed.",
   "tiers": {
     "commit": {
-      "seconds": 77.24,
+      "seconds": 79.24,
       "measuredAt": "2026-09-10",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -20,6 +20,7 @@
         "bun run gate:install-scripts": 0.05,
         "bun run gate:patch-parity": 0.16,
         "bun run gate:dead-code": 15,
+        "bun run gate:undeclared-imports": 2,
         "bun run gate:wired": 9,
         "bun scripts/schema-drift.ts": 0.23,
         "bun run gate:capability-parity": 1.7,
@@ -29,7 +30,7 @@
       }
     },
     "push": {
-      "seconds": 395.81,
+      "seconds": 397.81,
       "measuredAt": "2026-09-10",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -52,13 +53,14 @@
         "bun run gate:bench-corpus": 0.31,
         "bun run gate:skip-ratchet": 12,
         "bun run gate:dead-code": 15,
+        "bun run gate:undeclared-imports": 2,
         "bun run gate:wired": 9,
         "bun scripts/test-census.ts --ratchet": 5.5,
         "bun run gate:complexity": 1.8,
         "bun run gate:silent-drop": 1.4,
         "bun scripts/secret-scan.ts": 18,
         "bun scripts/schema-drift.ts": 0.23,
-        "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts": 24,
+        "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts": 24,
         "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": 0.1,
         "bun test scripts/ladder.test.ts": 1,
         "bun test scripts/deploy.test.ts": 87,

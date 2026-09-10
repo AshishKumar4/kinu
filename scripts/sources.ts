@@ -83,6 +83,12 @@ const DOCUMENT = /\.md$/;
 /** A package manifest, at the root or in a workspace. */
 const MANIFEST = /(?:^|\/)package\.json$/;
 
+/** A TypeScript project config, at the root or in a workspace. JSONC, not
+ *  JSON, and the one place a package's own path aliases are written down — so
+ *  a specifier a gate would otherwise read as a package name (`@/lib`) is
+ *  answerable from the tree rather than from a list beside the gate. */
+const TYPESCRIPT_CONFIG = /(?:^|\/)tsconfig(?:\.[\w-]+)?\.json$/;
+
 /** A resolved dependency graph, written by an installer rather than by a
  *  person. Every package name in the tree appears in one. */
 const LOCKFILE = /(?:^|\/)(?:bun\.lock|bun\.lockb|package-lock\.json|pnpm-lock\.yaml|yarn\.lock)$/;
@@ -349,6 +355,16 @@ export const isDocument = (file: string): boolean => DOCUMENT.test(file);
  * genuine reference and the only one `oxlint` has.
  */
 export const isManifest = (file: string): boolean => MANIFEST.test(file);
+
+/**
+ * A TypeScript PROJECT CONFIG. Beside {@link isManifest} because the two
+ * together are what decides whether a bare specifier is a package at all: the
+ * manifest says which packages exist for a directory, and `compilerOptions.paths`
+ * says which bare-looking specifiers never reach `node_modules` — `@/lib` is
+ * cf-backend's own `src/lib`, and a gate reading only manifests calls it an
+ * undeclared dependency 42 times.
+ */
+export const isTypescriptConfig = (file: string): boolean => TYPESCRIPT_CONFIG.test(file);
 
 /** A dependency LOCKFILE. It names every package in the resolved graph by
  *  construction, so reading one while asking who USES a package answers yes for
