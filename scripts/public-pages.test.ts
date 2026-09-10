@@ -3,6 +3,24 @@ import type { Browser, Page } from 'puppeteer';
 
 import { withGallery } from './gallery-harness';
 import { THEMES, type Theme } from './computed-style';
+// The walkthrough's deterministic drive, declared here rather than imported:
+// the timeline module lives in component-land (its story quotes the product's
+// fixtures), and importing it would drag the product's DOM components under
+// this gate's own JSX runtime. The shape below is kept identical to
+// `LandingMovieHandle` in `landing-movie-timeline.ts`.
+interface LandingMovieHandle {
+  readonly duration: number;
+  readonly cues: Record<string, number>;
+  seek(at: number): Promise<void>;
+  play(): void;
+  pause(): void;
+  state(): { t: number; playing: boolean; settled: boolean };
+}
+declare global {
+  interface Window {
+    __kinuLandingMovie?: LandingMovieHandle;
+  }
+}
 
 const PHONE = { width: 390, height: 844 } as const;
 const DESKTOP = { width: 1280, height: 900 } as const;
@@ -45,6 +63,30 @@ interface WidthIntegrity {
   readonly cutWorst: readonly string[];
 }
 
+interface RailFact {
+  readonly frames: number;
+  readonly classes: readonly string[];
+  readonly visible: boolean;
+  readonly roster: string;
+}
+
+interface MovieFact {
+  readonly typing: boolean;
+  readonly tools: boolean;
+  readonly decisions: readonly { label: string; disabled: boolean }[];
+  readonly cursorShown: boolean;
+  readonly decided: boolean;
+  readonly slate: boolean;
+  readonly settled: boolean;
+}
+
+interface MovieReducedFact {
+  readonly settled: boolean;
+  readonly cursor: boolean;
+  readonly slate: boolean;
+  readonly decided: boolean;
+  readonly frozen: boolean;
+}
 interface Facts {
   reduced?: { before: string; after: string; pixels: number; animations: number };
   treeFlows?: boolean;
@@ -57,6 +99,11 @@ interface Facts {
   interactions?: { workspace: boolean; decision: boolean; plan: boolean; slate: boolean; tui: boolean; cli: boolean; evolution: boolean };
   command?: string;
   copied?: boolean;
+  rail?: RailFact;
+  railPhoneHidden?: boolean;
+  movie?: MovieFact;
+  movieReduced?: MovieReducedFact;
+  heroA11y?: { label: string; phrases: string[] };
   homeLink?: { visible: boolean; hasGraphic: boolean };
   deploy?: { button: string | null; guide: string | null };
   providers?: string[];
@@ -180,6 +227,13 @@ beforeAll(async () => {
       const phrase = await page.$eval('[data-typewriter]', (element) => element.textContent);
       await page.waitForFunction((previous) => document.querySelector('[data-typewriter]')?.textContent !== previous, { timeout: 5_000 }, phrase);
       expect(await page.$eval('h1', (element) => ({ height: element.getBoundingClientRect().height, label: element.getAttribute('aria-label') }))).toEqual(headline);
+      // The heading animates one phrase at a time, so its accessible name is
+      // the only place a screen reader gets the whole rotation. The sizers
+      // carry every visible phrase; the label must contain each of them.
+      facts.heroA11y = await page.evaluate(() => ({
+        label: document.querySelector('h1')?.getAttribute('aria-label') ?? '',
+        phrases: [...document.querySelectorAll('h1 span.invisible')].map((sizer) => sizer.textContent ?? ''),
+      }));
       await page.$eval('#platform', (element) => element.scrollIntoView());
       await new Promise((resolve) => setTimeout(resolve, 100));
       const offscreen = await page.$eval('[data-typewriter]', (element) => element.textContent);
@@ -208,7 +262,10 @@ beforeAll(async () => {
       // The frames are the product's own components, loaded as their own
       // chunk; `networkidle0` has fetched it, this proves it mounted.
       await page.waitForSelector('[data-landing-frame="checkout"] textarea', { timeout: 10_000 });
-      await page.waitForSelector('[data-landing-frame="plan"] [data-plan-decisions]', { timeout: 10_000 });
+      // The plan frame is the walkthrough movie, driven through its own
+      // handle: at load it holds the story's start (an empty composer), and
+      // each beat below seeks it before asserting that beat's DOM.
+      await page.waitForFunction(() => window.__kinuLandingMovie !== undefined, { timeout: 10_000 });
       await page.waitForSelector('[data-landing-frame="slate"] [data-slate-dashboard]', { timeout: 10_000 });
       await page.evaluate(() => {
         const root = document.querySelector('[data-landing-frame="checkout"]');
@@ -231,20 +288,74 @@ beforeAll(async () => {
       await page.waitForFunction(
         () => document.querySelector('[data-landing-frame="checkout"]')?.textContent?.includes('Retried as') === true,
       );
-      // The plan frame follows the product's decision rule: one annotation
-      // on the plan enables Request changes alone; deciding records it.
-      const planDecisions = await page.$$eval('[data-landing-frame="plan"] [data-plan-decisions] button', (buttons) => (
+      // The plan frame is the walkthrough movie, and every beat below is a DOM
+      // or computed-style read off the seek the handle settles first.
+      const cues = await page.evaluate(() => window.__kinuLandingMovie?.cues);
+      if (cues === undefined) throw new Error('the walkthrough publishes no cues');
+      const seek = (at: number): Promise<void> => page.evaluate(async (seekTo: number) => {
+        await window.__kinuLandingMovie?.seek(seekTo);
+      }, at);
+      // The rail rides every workspace frame, populated through the real
+      // roster transport, marked on the frame's own workspace.
+      facts.rail = await page.evaluate(() => {
+        const frames = [...document.querySelectorAll('[data-landing-frame]')];
+        const asides = frames.map((frame) => frame.querySelector(':scope > aside'));
+        const first = asides[0];
+        return {
+          frames: asides.filter((aside) => aside !== null).length,
+          classes: asides.map((aside) => aside?.getAttribute('class') ?? ''),
+          visible: first !== null
+            && first !== undefined
+            && getComputedStyle(first).display !== 'none'
+            && first.getClientRects().length > 0,
+          roster: first?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+        };
+      });
+      // The request types into the real composer before anything else exists.
+      await seek((cues.typeStart + cues.sent) / 2);
+      await page.waitForFunction(() => {
+        const area = document.querySelector('[data-landing-frame="plan"] textarea');
+        return area instanceof HTMLTextAreaElement && area.value.length > 0;
+      }, { timeout: 10_000 });
+      const typing = await page.$eval('[data-landing-frame="plan"] textarea', (area) => (
+        area instanceof HTMLTextAreaElement ? area.value : ''
+      ));
+      // The agent's tool calls stream into the transcript the way a real turn
+      // renders them.
+      await seek(cues.searchDone + 100);
+      await page.waitForFunction(() => (
+        document.querySelector('[data-landing-frame="plan"] [data-tool-group]') !== null
+        && document.querySelector('[data-landing-frame="plan"]')?.textContent?.includes('apply-coupon') === true
+      ), { timeout: 10_000 });
+      // The plan pops up in the right-hand panel with Approve live: the movie
+      // submits a clean plan, so Request changes stays disabled.
+      await seek(cues.planReady + 200);
+      await page.waitForSelector('[data-landing-frame="plan"] [data-plan-decisions]', { timeout: 15_000 });
+      const decisions = await page.$$eval('[data-landing-frame="plan"] [data-plan-decisions] button', (buttons) => (
         buttons.map((button) => ({ label: button.textContent?.trim() ?? '', disabled: button.disabled }))
       ));
-      expect(planDecisions).toEqual([
-        { label: 'Request changes', disabled: false },
-        { label: 'Approve & implement', disabled: true },
-      ]);
-      expect(await page.$eval('[data-landing-frame="plan"]', (frame) => frame.querySelectorAll('.annotation-highlight').length)).toBeGreaterThan(0);
-      await page.click('[data-landing-frame="plan"] [data-plan-decisions] button');
-      await page.waitForFunction(
-        () => document.querySelector('[data-landing-frame="plan"] [data-plan-footer]')?.textContent?.includes('preparing the next revision') === true,
-      );
+      // The cursor's click approves through the product's own decision path.
+      await seek(cues.approve + 200);
+      await page.waitForFunction(() => (
+        document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved'
+      ), { timeout: 15_000 });
+      const cursorShown = await page.$eval('[data-landing-frame="plan"] [data-movie-cursor]', (cursor) => (
+        getComputedStyle(cursor).opacity !== '0'
+      ));
+      // The build lands a slate, opened in its own tab: the settled state.
+      await seek(cues.end);
+      await page.waitForSelector('[data-landing-frame="plan"] [data-slate-dashboard]', { timeout: 15_000 });
+      facts.movie = {
+        typing: typing.length > 0,
+        tools: true,
+        decisions,
+        cursorShown,
+        decided: true,
+        slate: true,
+        settled: await page.$eval('[data-landing-frame="plan"]', (frame) => (
+          frame.getAttribute('data-movie-settled') === 'true'
+        )),
+      };
       expect(await page.evaluate(() => {
         const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
         const trigger = document.querySelector('[aria-controls="landing-tui-workspaces"]');
@@ -306,7 +417,7 @@ beforeAll(async () => {
       facts.interactions = await page.evaluate(() => ({
         workspace: document.querySelector('[data-landing-frame="checkout"] [data-workspace-panel="run"] textarea') !== null,
         decision: document.querySelector('[data-landing-frame="checkout"]')?.textContent?.includes('Retried as') === true,
-        plan: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Revision requested',
+        plan: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved',
         slate: document.querySelectorAll('[data-landing-frame="slate"] [data-slate-dashboard] .landing-draw').length === 2,
         tui: document.querySelector('[data-tui-agent="jarvis"]') !== null,
         cli: document.querySelector('[data-cli-mode="ci"] pre')?.textContent?.includes('kinu exec --workspace') === true,
@@ -381,6 +492,26 @@ beforeAll(async () => {
           () => document.getAnimations().filter((animation) => animation.playState === 'running').length,
         ),
       };
+      // Under reduced motion the walkthrough never plays: the frame holds its
+      // settled state, publishes no cursor, and does not advance. The pause
+      // below is wall-clock on purpose: only the platform clock can prove a
+      // rAF-driven movie did not advance, and fake timers cannot reach the
+      // browser's frame loop from this process.
+      await page.waitForSelector('[data-landing-frame="plan"][data-movie-settled="true"] [data-slate-dashboard]', { timeout: 15_000 });
+      const movieT0 = await page.evaluate(() => window.__kinuLandingMovie?.state());
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const movieT1 = await page.evaluate(() => window.__kinuLandingMovie?.state());
+      const reducedBits = await page.evaluate(() => ({
+        settled: document.querySelector('[data-landing-frame="plan"]')?.getAttribute('data-movie-settled') === 'true',
+        cursor: document.querySelector('[data-landing-frame="plan"] [data-movie-cursor]') !== null,
+        slate: document.querySelector('[data-landing-frame="plan"] [data-slate-dashboard]') !== null,
+        decided: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved',
+      }));
+      facts.movieReduced = {
+        ...reducedBits,
+        frozen: movieT0 !== undefined && movieT1 !== undefined
+          && movieT0.t === movieT1.t && movieT0.playing === false && movieT1.playing === false,
+      };
       await page.close();
     }
 
@@ -451,6 +582,11 @@ beforeAll(async () => {
         facts.landingTargets = await page.evaluate(() => [
           ...document.querySelectorAll('#top a[href="/login"], #top a[href="#deploy"]'),
         ].map((element) => Math.round(element.getBoundingClientRect().height)));
+        facts.railPhoneHidden = await page.evaluate(() => {
+          const asides = [...document.querySelectorAll('[data-landing-frame] > aside')];
+          return asides.length === 3
+            && asides.every((aside) => getComputedStyle(aside).display === 'none');
+        });
       }
       if (label === '1568' || label === '1920' || label === '2560' || label === '3840') {
         facts.wideColumns[label] = await page.$eval(
@@ -539,6 +675,68 @@ describe('the standalone landing runs', () => {
     expect(interactions.tui).toBeTrue();
     expect(interactions.cli).toBeTrue();
     expect(interactions.evolution).toBeTrue();
+  });
+});
+
+describe('the landing frames reuse the app rail', () => {
+  test('every workspace frame shows the app rail populated at desktop width', () => {
+    const rail = required(facts.rail, 'frame rail');
+    expect(rail.frames).toBe(3);
+    for (const classes of rail.classes) {
+      expect(classes).toBe('hidden w-60 shrink-0 h-full p-sidebar border-r p-border md:block');
+    }
+    expect(rail.visible).toBeTrue();
+    expect(rail.roster).toContain('Checkout coupon bug');
+    expect(rail.roster).toContain('ashish@example.com');
+  });
+
+  test('the rail hides below md the way the app hides it', () => {
+    expect(facts.railPhoneHidden).toBeTrue();
+  });
+});
+
+describe('the plan frame walks through the session', () => {
+  test('the request types into the composer before anything else exists', () => {
+    expect(required(facts.movie, 'walkthrough').typing).toBeTrue();
+  });
+
+  test('tool calls stream into the transcript the way a real turn renders', () => {
+    expect(required(facts.movie, 'walkthrough').tools).toBeTrue();
+  });
+
+  test('the plan pops up in the right panel with Approve live', () => {
+    expect(required(facts.movie, 'walkthrough').decisions).toEqual([
+      { label: 'Request changes', disabled: true },
+      { label: 'Approve & implement', disabled: false },
+    ]);
+  });
+
+  test('the cursor approves and the slate opens in its own tab', () => {
+    const movie = required(facts.movie, 'walkthrough');
+    expect(movie.cursorShown).toBeTrue();
+    expect(movie.decided).toBeTrue();
+    expect(movie.slate).toBeTrue();
+    expect(movie.settled).toBeTrue();
+  });
+
+  test('reduced motion holds the settled state with no cursor and no playback', () => {
+    const reduced = required(facts.movieReduced, 'reduced-motion walkthrough');
+    expect(reduced.settled).toBeTrue();
+    expect(reduced.cursor).toBeFalse();
+    expect(reduced.slate).toBeTrue();
+    expect(reduced.decided).toBeTrue();
+    expect(reduced.frozen).toBeTrue();
+  });
+});
+
+describe('the hero heading names its rotation', () => {
+  test('the h1 accessible name contains every visible phrase', () => {
+    const hero = required(facts.heroA11y, 'hero heading');
+    expect(hero.phrases.length).toBeGreaterThan(1);
+    for (const phrase of hero.phrases) {
+      expect(phrase.length).toBeGreaterThan(0);
+      expect(hero.label).toContain(phrase.replace(/\.$/, ''));
+    }
   });
 });
 

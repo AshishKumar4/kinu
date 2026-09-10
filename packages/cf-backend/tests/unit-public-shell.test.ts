@@ -30,6 +30,10 @@ import {
 import {
   approvalDocument, authDocument, installDocument, loginDocument,
 } from '../src/lib/public-pages';
+import {
+  CURSOR_ENTER_AT, MOVIE_ASK, MOVIE_CUES, MOVIE_END,
+  composerTextAt, cueCountAt, cursorAt, discreteAt,
+} from '../src/components/landing/landing-movie-timeline';
 const INDEX_CSS = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'utf8');
 
 /** The palette blocks that apply to each theme, in source order. Same model as
@@ -467,3 +471,98 @@ describe('the README demo film', () => {
   });
 });
 
+
+/**
+ * The plan frame's walkthrough is data before it is motion: every cue and
+ * cursor position lives in `landing-movie-timeline.ts`, and the component
+ * only paints it. These pin the story's order — typing before tools, tools
+ * before the plan, the plan before the approval, the approval before the
+ * slate — so a shifted timestamp or a dropped beat goes red here, without a
+ * browser.
+ */
+describe('the landing walkthrough timeline', () => {
+  test('cues run in story order and the cursor enters mid-investigation', () => {
+    const order = [
+      'typeStart', 'sent', 'reasoning', 'readStart', 'readDone', 'searchStart',
+      'searchDone', 'submitted', 'planReady', 'approve', 'approvedText',
+      'manifestStart', 'manifestDone', 'serverStart', 'serverDone', 'clientStart',
+      'clientDone', 'previewStart', 'previewDone', 'slateOpen', 'finalText', 'end',
+    ] as const;
+    const times = order.map((cue) => MOVIE_CUES[cue]);
+    expect([...times].sort((a, b) => a - b)).toEqual(times);
+    expect(MOVIE_END).toBe(MOVIE_CUES.end);
+    expect(CURSOR_ENTER_AT).toBe(4_700);
+    // The journey's load-bearing precedences, each explicit so a shifted
+    // timestamp goes red naming the beat it broke.
+    expect(MOVIE_CUES.sent).toBeLessThan(MOVIE_CUES.reasoning);
+    expect(MOVIE_CUES.searchDone).toBeLessThan(MOVIE_CUES.submitted);
+    expect(MOVIE_CUES.submitted).toBeLessThan(MOVIE_CUES.planReady);
+    expect(MOVIE_CUES.planReady).toBeLessThan(MOVIE_CUES.approve);
+    expect(MOVIE_CUES.approve).toBeLessThan(MOVIE_CUES.previewDone);
+    expect(MOVIE_CUES.previewDone).toBeLessThan(MOVIE_CUES.slateOpen);
+  });
+
+  test('cueCountAt counts fired cues and nothing else', () => {
+    expect(cueCountAt(0)).toBe(0);
+    expect(cueCountAt(MOVIE_CUES.typeStart - 1)).toBe(0);
+    expect(cueCountAt(MOVIE_CUES.typeStart)).toBe(1);
+    expect(cueCountAt(MOVIE_END)).toBe(Object.keys(MOVIE_CUES).length);
+  });
+
+  test('the composer types the request, then clears on send', () => {
+    expect(composerTextAt(0)).toBe('');
+    const mid = composerTextAt((MOVIE_CUES.typeStart + MOVIE_CUES.sent) / 2);
+    expect(mid.length).toBeGreaterThan(0);
+    expect(MOVIE_ASK.startsWith(mid)).toBeTrue();
+    expect(mid.length).toBeLessThan(MOVIE_ASK.length);
+    expect(composerTextAt(MOVIE_CUES.sent)).toBe('');
+    expect(composerTextAt(MOVIE_END)).toBe('');
+  });
+
+  test('the cursor rests before it enters and after it settles', () => {
+    expect(cursorAt(0).visible).toBeFalse();
+    expect(cursorAt(CURSOR_ENTER_AT - 1).visible).toBeFalse();
+    expect(cursorAt(MOVIE_END).visible).toBeFalse();
+    const atApprove = cursorAt(MOVIE_CUES.approve + 1);
+    expect(atApprove.visible).toBeTrue();
+    expect(atApprove.pressed).toBe('approve');
+    expect(atApprove.ripple).not.toBeNull();
+  });
+
+  test('the story starts empty: no transcript, no plan, no slate', () => {
+    const start = discreteAt(0);
+    expect(start.messages).toBeEmpty();
+    expect(start.plan).toBeNull();
+    expect(start.slates).toBeEmpty();
+    expect(start.surface).toBe('Work');
+    expect(start.settled).toBeFalse();
+  });
+
+  test('tool calls stream before the plan exists', () => {
+    const tools = discreteAt(MOVIE_CUES.searchDone);
+    expect(tools.plan).toBeNull();
+    const parts = tools.messages.flatMap((message) => message.parts);
+    expect(parts.some((part) => part.type === 'tool-file')).toBeTrue();
+    expect(discreteAt(MOVIE_CUES.planReady - 1).plan).toBeNull();
+  });
+
+  test('the plan pops up pending and clean, so Approve is the live decision', () => {
+    const ready = discreteAt(MOVIE_CUES.planReady);
+    expect(ready.plan?.status).toBe('pending');
+    expect(ready.plan?.annotations).toBeEmpty();
+    expect(ready.surface).toBe('Work');
+  });
+
+  test('the approval beat precedes the slate, and the slate opens its own tab', () => {
+    expect(MOVIE_CUES.approve).toBeLessThan(MOVIE_CUES.slateOpen);
+    const building = discreteAt(MOVIE_CUES.serverDone);
+    expect(building.messages.flatMap((message) => message.parts)
+      .some((part) => part.type === 'tool-file')).toBeTrue();
+    const open = discreteAt(MOVIE_CUES.slateOpen);
+    expect(open.surface).toBe('slate:support-queue');
+    expect(open.slates.map((slate) => slate.id)).toEqual(['support-queue']);
+    const end = discreteAt(MOVIE_END);
+    expect(end.settled).toBeTrue();
+    expect(end.messages.flatMap((message) => message.parts).length).toBeGreaterThan(0);
+  });
+});
