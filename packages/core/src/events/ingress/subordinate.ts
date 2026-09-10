@@ -8,7 +8,8 @@ import type { EventLog } from '../hub/log';
 import type { VFS } from '../../types/primitives';
 import { spillEventContent } from '../hub/content-spill';
 import { subordinateReportDedupeKey } from '../hub/dedupe';
-import type { SubordinateReportStatus } from '../hub/types';
+import { renderSubordinateHandoff } from '../hub/visibility';
+import type { SubordinateReportHandoff, SubordinateReportStatus } from '../hub/types';
 import type { WorkMode } from '../../prompting/surface';
 import {
   admitSubordinateReport, normalizeReportContent, parentAdmitsSubordinateReport,
@@ -30,6 +31,10 @@ export interface SubordinateEventInput {
    *  child's live turn metadata is gone — re-deriving it turns a Plan report
    *  into a Build one. */
   mode: WorkMode;
+  /** The structured handoff beside the prose, when the child sent one. Parsed
+   *  and bounded by the `report` tool; absent on the automatic turn-end relay,
+   *  which has only the assistant's closing words to relay. */
+  handoff?: SubordinateReportHandoff;
 }
 
 /**
@@ -102,11 +107,16 @@ export async function receiveSubordinateEvent(
   // now: a row dismissed while its caller is still holding the line is exactly
   // the case where the answer is most wanted, and the durable event it does not
   // write is the only thing dismissal was protecting against.
+  // A live `agents.ask` waiter is handed ONE string, so the handoff rides in
+  // it as trailing sections rather than being dropped on the way to the only
+  // reader this lane has. The event lane below keeps it structured, because
+  // that lane HAS fields to keep it in.
   if (deps.temporary?.settle({
     name: input.fromSubordinate,
     taskEventId: subordinate.taskEventId,
     status: input.status,
-    content: normalizeReportContent(input.content),
+    content: normalizeReportContent(input.content)
+      + (input.handoff ? renderSubordinateHandoff(input.handoff) : ''),
     origin: input.origin,
   })) {
     return { id: '', disposition: 'admitted' };
@@ -135,6 +145,7 @@ export async function receiveSubordinateEvent(
       mode: input.mode,
       task: subordinate.currentTask ?? undefined,
       contentPath: contentPath || undefined,
+      handoff: input.handoff,
       now,
     });
     if (result.admitted) {

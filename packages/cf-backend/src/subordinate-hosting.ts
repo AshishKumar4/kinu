@@ -52,6 +52,7 @@ import {
   type MissionScope,
   type SqlExec, type SqlExecutor, type SubordinateEventResult, type SubordinateHandoff,
   type SubordinateLifetime, type SubordinateReportOrigin,
+  type SubordinateReportHandoff,
   type SubordinateReportStatus, type SubordinateRosterStore, type SubordinateRuntime,
   type SubordinateSeed, type TaskTurnEnding, type TemporaryAgentPort, type VFS,
   type WorkMode, type WorkspaceActor, type WorkspaceActorDirectory,
@@ -324,6 +325,9 @@ export async function relayHostedReport(
     readonly origin: SubordinateReportOrigin;
     readonly mode: WorkMode;
     readonly sequenceId: string;
+    /** The `report` tool's structured handoff. Absent on the automatic
+     *  turn-end relay, which has only the assistant's closing prose. */
+    readonly handoff?: SubordinateReportHandoff;
   },
 ): Promise<SubordinateEventResult> {
   const parent = hiringParent(seams, child.record);

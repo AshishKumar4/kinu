@@ -69,6 +69,7 @@ import {
   type ReportToolDeps,
   type SubordinateReportOrigin,
   type SubordinateEventResult,
+  type SubordinateReportHandoff,
   type SubordinateReportStatus,
   type AgentConfigStore,
   type JsonObject,
@@ -1288,6 +1289,9 @@ export class LocalAgentHost {
     /** This report's identity on the parent's rail: the key the parent's
      *  ingress deduplicates on, so one report cannot wake it twice. */
     sequenceId: string,
+    /** The `report` tool's structured handoff. Absent on the automatic
+     *  turn-end relay below, which has only the assistant's closing prose. */
+    handoff?: SubordinateReportHandoff,
   ): Promise<SubordinateEventResult> {
     if (!child.parentKey) return { id: '', disposition: 'not_awaited' };
     const parent = this.entries.get(child.parentKey);
@@ -1330,6 +1334,7 @@ export class LocalAgentHost {
       origin,
       sequenceId,
       mode,
+      handoff,
     }, Date.now());
   }
 
@@ -1344,12 +1349,13 @@ export class LocalAgentHost {
    */
   private buildReport(child: HostEntry): ReportToolDeps {
     return {
-      report: async ({ status, content }) => {
+      report: async ({ status, content, handoff }) => {
         const relayed = await this.relayToParent(
           child, content, child.relay?.mode ?? 'build', status, 'report_tool',
           // One in-process tool call is one report — a second call with the
           // same words is a second thing the model chose to say.
           `${child.key}:report:${crypto.randomUUID()}`,
+          handoff,
         );
         // Set HERE rather than off a `tool-call` event: this is the one seam
         // both the native tool and the `report.*` codemode namespace publish
