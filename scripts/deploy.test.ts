@@ -510,7 +510,14 @@ describe("deploy gate", () => {
           .toBeLessThan(REQUIRED_GATES.length);
       }
     }
-  }, 60_000);
+    // BUDGETED PER GATE, not as a literal. This spawns one real `deploy.sh`
+    // per required gate, so its cost is linear in the tier and a fixed number
+    // silently tightens every time a gate is added — which is exactly what
+    // happened on 2026-09-10, when moving `gate:wired` and `gate:dead-code` to
+    // the commit tier pushed a 60s literal into a timeout. Measured that day on
+    // the reference box: 55.2 s and 55.4 s for 23 gates, so ~2.4 s per gate.
+    // 4 s is declared, because a loaded box must not read as a broken deploy.
+  }, REQUIRED_GATES.length * 4_000);
 
   // ── After the upload ──────────────────────────────────────────
   //
