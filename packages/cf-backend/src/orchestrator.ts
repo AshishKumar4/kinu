@@ -3071,6 +3071,7 @@ export class OrchestratorAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.installClientMessageGate();
     this.ensureSchema();
+    this.assertSessionStore();
     // EVERY budgeted sweep this actor owns, through the seam the alarm frame
     // runs — one list, not a hand-folded copy of it, so a sweep added to the
     // seam cannot be missing from the gate. They run inside `Agent.alarm()`'s
