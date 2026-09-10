@@ -2,6 +2,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import * as v from 'valibot';
 import { isPlaceholderMission } from './soul';
 import { tolerate } from '../obs/index';
+import type { AgentConfigStore } from '../config/store';
 import { nanoid } from '../utils/nanoid';
 
 const WorkspaceTitleSchema = v.object({ title: v.string() });
@@ -235,8 +236,8 @@ export interface WorkspaceTitleState {
 }
 
 export interface WorkspaceTitlePlan {
-  /** Deterministic title to persist immediately, or null when the shown title
-   *  is already presentable and only the LLM step can improve it. */
+  /** Deterministic title to persist immediately, or null when the mission
+   *  yields none and only the LLM step can title it. */
   provisional: string | null;
   mission: string;
 }
@@ -249,22 +250,49 @@ function isPlaceholderWorkspaceTitle(displayName: string | null | undefined, slu
   return shown.length === 0 || shown === slug.trim();
 }
 
+/**
+ * Whether an AUTOMATIC title may replace the current one: only a title the
+ * system itself wrote.
+ *
+ * An owner's name is never touched. An origin nobody recorded is the owner's
+ * too: a row written before origins existed was named by whoever created it,
+ * and the cloud registry has always read such a row that way. The CLI read it
+ * as "never titled" and titled it, so one workspace was renamed by one backend
+ * and left alone by the other; this is the stricter reading, once.
+ *
+ * Asked twice per title — by the plan, and again by every `persist`, because a
+ * manual rename can land while the model is thinking and the owner's choice
+ * wins that race.
+ */
+export function autoTitleMayReplace(currentOrigin: 'user' | 'auto' | null | undefined): boolean {
+  return currentOrigin === 'auto';
+}
+
+/**
+ * The `persist` effect for a backend whose naming state is its actor config:
+ * the race check and the write, in one place, so no backend can spell the
+ * check for itself. False says the owner claimed the title first.
+ */
+export function persistAutoTitle(
+  config: Pick<AgentConfigStore, 'getNameOrigin' | 'setDisplayNameOrigin'>, title: string,
+): boolean {
+  if (!autoTitleMayReplace(config.getNameOrigin())) return false;
+  config.setDisplayNameOrigin(title, 'auto');
+  return true;
+}
+
 /** Decide whether a workspace should be auto-titled, and from what.
  *
- *  `null` means leave it alone: the operator named it (`nameOrigin: 'user'`),
- *  there is no mission to title from, or it already carries a title it was
- *  deliberately given. Otherwise the workspace either never had a title
- *  generated (`nameOrigin: null`) or is still showing its raw slug. */
+ *  `null` means leave it alone: the title is the operator's (or nobody's, see
+ *  {@link autoTitleMayReplace}), there is no mission to title from, or it
+ *  already carries a title it was deliberately given. Otherwise the workspace
+ *  is still showing its raw slug. */
 export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
-  if (state.nameOrigin === 'user') return null;
-
+  if (!autoTitleMayReplace(state.nameOrigin)) return null;
   if (isPlaceholderMission(state.mission)) return null;
-  const placeholder = isPlaceholderWorkspaceTitle(state.displayName, state.slug);
-
-  if (!placeholder && state.nameOrigin !== null) return null;
+  if (!isPlaceholderWorkspaceTitle(state.displayName, state.slug)) return null;
   const mission = state.mission.trim();
-
-  return { provisional: (placeholder && workspaceTitleFromMission(mission)) || null, mission };
+  return { provisional: workspaceTitleFromMission(mission) || null, mission };
 }
 
 /** Auto-title a workspace: persist the deterministic title at once so the

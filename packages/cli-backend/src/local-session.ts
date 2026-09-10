@@ -151,7 +151,7 @@ import {
   changeActiveRole, agentsProfileContext, canonicalConversationId,
   resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile,
   buildModelCallEvent,
-  applyWorkspaceTitle, planWorkspaceTitle, suggestWorkspaceTitle,
+  applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   isPlaceholderMission, type WorkspaceTitleState,
   type PromptIdentity,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
@@ -3968,10 +3968,7 @@ export class LocalAgentSession implements BackendHost {
     if (planWorkspaceTitle(state) === null) return;
     await applyWorkspaceTitle(state, {
       persist: (name) => {
-        // A manual rename claimed the title while the model was thinking.
-        // The owner's choice wins the race, and `false` says so to core.
-        if (this.config.getNameOrigin() === 'user') return false;
-        this.config.setDisplayNameOrigin(name, 'auto');
+        if (!persistAutoTitle(this.config, name)) return false;
         this.broadcast({ type: 'workspace_renamed', displayName: name });
 
         return true;
