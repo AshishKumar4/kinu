@@ -3575,6 +3575,20 @@ export async function readRestoreProbe(
   return { kind, treeBytes, wallMs: reply.probe.wallMs, probeAt: reply.probe.at, outcome: 'ok' };
 }
 
+/** Poll the probe and append its row to the arm, in one place: every restore
+ *  the walk settles records exactly one row, present or absent, and the walk
+ *  itself carries no branch for it. */
+async function recordRestoreProbe(
+  fixture: Fixture,
+  box: string,
+  result: ArmResult,
+  kind: RestoreProbeRow['kind'],
+  treeBytes: number | null,
+  notes: string[],
+): Promise<void> {
+  (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, kind, treeBytes, notes));
+}
+
 /**
  * The workload phases: every phase once, then the deciding phase repeated.
  * A phase that throws records its reason and leaves the row absent, which G9
@@ -3852,7 +3866,7 @@ async function measureComplexityRung(
       // The gate occupancy of this rung's restore, at the rung's own tree
       // size. Polled inside the try so a silent probe is an absent row, and
       // the helper never throws past it.
-      (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, 'complexity-restore', treeBytes, notes));
+      await recordRestoreProbe(fixture, box, result, 'complexity-restore', treeBytes, notes);
       result.complexity?.push({
         treeBytes,
         kind: 'restore',
@@ -3973,7 +3987,7 @@ async function measureArm(
   result.attachColdBootId = cold.state.state?.bootId ?? null;
   // The gate occupancy of the cold start itself, beside the driver's own
   // round trip. The tree is empty here; the sized restores come per rung.
-  (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, 'cold-attach', 0, notes));
+  await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes);
   settle('the cold attach');
   log('install harness');
   await installHarness(fixture, box);
@@ -4061,7 +4075,7 @@ async function measureArm(
   result.wakeBootId = woke.state.state?.bootId ?? null;
   result.wakeOps = await closeWakeOpsWindow(fixture, box, opsBeforeWake, notes);
   // The gate occupancy of the post-ladder wake at the full ladder size.
-  (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, 'post-ladder-wake', ladderBytes, notes));
+  await recordRestoreProbe(fixture, box, result, 'post-ladder-wake', ladderBytes, notes);
   recordFinalComplexityRestore(result, ladderBytes, complexityScope);
   settle('the wake');
   verify(
@@ -4322,17 +4336,43 @@ async function measureArm(
   notes.push(...securityCells.notes);
   settle('the security cells');
   // THE DESTROY-COLD RESTORE, after every priced cell and before the
-  // teardown. Drops the container identity with rows and store intact, so
-  // the next wake provisions fresh and restores the committed tree: the
-  // only true cold restore at size this run takes. Past every priced
-  // window like the witness and security cells, and guarded so it can only
-  // append an absent row — never fail an arm whose cells already settled.
+  // teardown — see `runDestroyColdPhase` for why it can only append a row.
+  await runDestroyColdPhase(fixture, box, result, notes, startup, settle);
+
+  // CLEANUP, through the shared release: a cleanup failure is not a
+  // measurement failure, and the arm still returns what it measured.
+  await releaseArm(fixture, box, result, notes);
+  settle('the arm finished');
+  return result;
+}
+
+/**
+ * The destroy-cold restore: drop the container identity with rows and store
+ * intact, so the next wake provisions fresh and restores the committed tree —
+ * the only true cold restore at size this run takes. Past every priced window
+ * like the witness and security cells, and guarded so it can only append a
+ * probe row (an absent one on failure); it never fails an arm whose cells
+ * already settled. `treeBytes` is the largest size the run recorded, a lower
+ * bound past the cells that wrote outside the measured window.
+ */
+async function runDestroyColdPhase(
+  fixture: Fixture,
+  box: string,
+  result: ArmResult,
+  notes: string[],
+  startup: (
+    path: '/create' | '/wake',
+    operation: string,
+    allowedKinds: readonly string[],
+  ) => Promise<StartupCompletion>,
+  settle: (what: string) => void,
+): Promise<void> {
   try {
     await call(fixture, 'POST', `/destroy?box=${box}`, AckReplySchema);
     const rewokeCold = await startup('/wake', 'destroy-cold restore', admittedAttachKinds('wake'));
     const knownSizes = Object.values(result.treeBytes).filter((n) => Number.isSafeInteger(n));
     const coldTreeBytes = knownSizes.length > 0 ? Math.max(...knownSizes) : null;
-    (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, 'destroy-cold-restore', coldTreeBytes, notes));
+    await recordRestoreProbe(fixture, box, result, 'destroy-cold-restore', coldTreeBytes, notes);
     notes.push(
       `destroy-cold restore woke ${rewokeCold.attach.kind}; treeBytes is the largest size the run recorded, `
       + 'a lower bound past the witness and cut cells that wrote outside the measured window',
@@ -4346,12 +4386,6 @@ async function measureArm(
     });
     settle('a refused destroy-cold restore');
   }
-
-  // CLEANUP, through the shared release: a cleanup failure is not a
-  // measurement failure, and the arm still returns what it measured.
-  await releaseArm(fixture, box, result, notes);
-  settle('the arm finished');
-  return result;
 }
 
 /** How long a release is given after an arm already failed. Short on purpose:
