@@ -179,7 +179,7 @@ prompt `## Delegation` section, and the `agents.*` sandbox namespace:
 
 | Action | The deps that put it on the surface |
 |---|---|
-| `swarm` | `fork` — a model to expand with and a workspace to measure in |
+| `swarm` | `swarm` — a model to expand with and a workspace to measure in |
 | `hire`, `msg`, `list` | `team` or `peers` |
 | `dismiss` | `team` |
 
@@ -364,7 +364,7 @@ return settled
 `createAgentsCodemodeProvider` routes through `dispatchAgentsAction`.
 `agentsActionsFor(deps)` governs it and the native enum by the one rule above,
 so a member exists exactly when the action does. A workspace orchestrator wires
-`fork`, `team`, and `peers`, and gets all five. A head is handed none of the
+`swarm`, `team`, and `peers`, and gets all five. A head is handed none of the
 three, so `buildBuiltinTools` cannot build the tool and the namespace has no
 members. `forkAgent` is never projected. A sandboxed search cannot resume
 safely. Use the native tool for durable work.
