@@ -6419,7 +6419,7 @@ export function parseOptions(argv: readonly string[]): Options {
   // the ack, and the instrument holds only when the Worker boots with the
   // rendezvous armed (`--fault-cuts` → BENCH_PUBLICATION_CUT=1). Every decisive
   // run on record before 2026-09-10 launched unarmed and learned it at
-  // judgment time, 40 minutes to 3 hours of paid work later
+  // judgment time, 40 minutes to 3 hours of wall clock later
   // (`DECISIVE-2026-09-05.md:1019`, `:1041` "unarmed instrument | 5 | 0").
   // A verify-only probe measures no gate and keeps the flag optional.
   if (decisive && !values['fault-cuts']) {

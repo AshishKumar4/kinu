@@ -167,11 +167,11 @@ anything under `refs/tags/archive/`, read [docs/BRANCH-ARCHIVE.md](docs/BRANCH-A
 The inventory there is the count, and every tag in it currently carries blobs no
 other ref reaches. No test or gate fires when a tag disappears.
 
-## Platform Spend Is Not A Constraint
+## Cost Never Gates Work
 
-The owner is a Cloudflare employee. Workers, Durable Objects, R2, Containers, Sandboxes, Workers AI and every other Cloudflare resource are free to this project. Never gate, cap, defer or ration a run, a bench, a probe or a deploy on its Cloudflare cost, and never describe one as "paid" or "money". The only real limits are the platform's own (the 30 s `blockConcurrencyWhile` gate, the 10 MB gzip bundle cap, rate limits) and wall-clock time. Model-provider spend is likewise not a reason to skip a measurement.
+The owner is a Cloudflare employee: Workers, Durable Objects, R2, Containers, Sandboxes, Workers AI and model inference cost this project nothing. Never defer, cap, ration or refuse a run, a bench, a probe, a deploy or a measurement on cost grounds, and never call one "paid" or "money" in a brief or a record. This is about the agent's own work decisions. It does not touch two things that stay: the **10 MB gzip bundle cap** is a platform limit and keeps being measured (§ Deploy Discipline), and the `agents` tool's `budget_usd` / `budget_tokens` / `budget_label` are a product feature a user sets on a swarm, pinned by `gate:agents-fields`.
 
-There are no migrations, cutovers or compatibility periods here either. The product has no external users to migrate: a schema change is a reset deployment (§ Errors, Logging & Traceability), a rename moves every caller in one commit, and a deprecated path is deleted, not aliased.
+Likewise never defer or refuse work on migration or backward-compatibility grounds. The product has no external users to migrate: a schema change is a reset deployment (§ Errors, Logging & Traceability), a rename moves every caller in one commit, and a deprecated path is deleted, not aliased.
 
 ## Deploy Discipline
 
