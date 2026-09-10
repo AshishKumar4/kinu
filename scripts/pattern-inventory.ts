@@ -184,7 +184,7 @@ if (import.meta.main) {
       proof: 'The nested-name smoke fixture returned @wrong before the change and @right after it.' },
     { file: 'scripts/bench-devbox-strategies.ts', owner: 'parseOptions', classification: 'REPLACED',
       replacement: 'node:util.parseArgs tokenizes declared options; benchmark domain validation remains local',
-      proof: 'bun test scripts/bench-devbox-decision.test.ts --test-name-pattern "standard option syntax|frozen scope|verify-only wins"' }];
+      proof: 'bun test scripts/bench-restore-probe.test.ts --test-name-pattern "refuses at parse time and names G3|an armed decisive parse succeeds"' }];
   if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
     candidates: result.candidates.map(({ file, kind, owner, source, decision }) => ({
       file, kind, owner, sourceSha256: sourceHash(source), decision,
