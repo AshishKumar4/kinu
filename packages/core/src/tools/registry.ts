@@ -476,7 +476,7 @@ export const DELEGATION_RUNGS = {
   // hire that should have been `task` leaves a roster row nobody retires.
   hire:
     'Hire a helper (action=hire): one agent per independent workstream, each running its own tool loop over this same workspace. '
-    + 'A hire outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
+    + 'By default a hire outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
     // The other half of the CONTEXT axis, from the same per-action source the
     // `mission` field composes.
     + `${DELEGATION_INHERITANCE.hire.rung} `
