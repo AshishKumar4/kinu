@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-10",
-  "files": 2060,
-  "functions": 52102,
+  "files": 2077,
+  "functions": 52616,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -76,10 +76,6 @@
     {
       "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 51
-    },
-    {
-      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
-      "complexity": 50
     },
     {
       "key": "packages/cli/src/commands/setup.ts#setupCommand",
@@ -227,6 +223,10 @@
     },
     {
       "key": "packages/core/src/strategy/swarm.ts#swarmValidity",
+      "complexity": 37
+    },
+    {
+      "key": "packages/devbox/tests/support/strategy-machine.ts#chainExec>fn",
       "complexity": 37
     }
   ]

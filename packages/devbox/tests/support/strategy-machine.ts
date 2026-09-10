@@ -28,6 +28,7 @@ import { createHash } from 'node:crypto';
 
 import * as v from 'valibot';
 
+import { deltaCommand, type ShellReply as DeltaShellReply } from './delta-shell';
 import { sessionShellRefusal } from './session-shell';
 import {
   LiveTree,
@@ -41,6 +42,7 @@ import {
   type PosixMetadata,
   type TreeProperty,
 } from './tree-model';
+import { DELTA_MANIFEST_NAME, DeltaManifestSchema } from '../../src/chunked-delta';
 import {
   baseObjectKey,
   ChainRecordAdvanced,
@@ -473,6 +475,14 @@ export class ContainerDisk {
 
   rmrf(path: string): void {
     this.#alive(`rm -rf ${path}`);
+    const owner = this.#overlayOwner(path);
+    if (owner !== undefined) {
+      // Through the merged view: the upper's subtree goes, and a name a lower
+      // still holds is masked, subtree included.
+      this.tree(owner.overlay.upper).remove(owner.relative);
+      this.#mask(owner);
+      return;
+    }
     for (const [key, bytes] of this.files) {
       if (key === path || key.startsWith(`${path}/`)) {
         this.files.delete(key);
@@ -545,20 +555,35 @@ export class ContainerDisk {
     const owner = this.#overlayOwner(path);
     if (owner !== undefined) {
       this.tree(owner.overlay.upper).remove(owner.relative);
-      // A name a lower still holds is hidden by a whiteout, as fuse-overlayfs
-      // hides it: the upper cannot unlink a lower's file, only mask it.
-      let masked = this.whiteouts.get(owner.point);
-      if (masked === undefined) {
-        masked = new Set();
-        this.whiteouts.set(owner.point, masked);
-      }
-      masked.add(owner.relative);
+      this.#mask(owner);
       return;
     }
     const held = this.files.get(path);
     if (held !== undefined && !this.mountServed.has(path)) this.charge(-held.byteLength);
     this.mountServed.delete(path);
     this.files.delete(path);
+  }
+
+  /** The node at `path` as a reader sees it: through the merged view of an
+   *  overlay, or the tree whose directory holds it. */
+  node(path: string): LiveInode | undefined {
+    this.#alive(`stat ${path}`);
+    return this.#treeAt(path)?.node;
+  }
+
+  /** Where a write to `path` lands and its name there: an overlay's upper for
+   *  a merged path (the name is unmasked, as a create through the overlay
+   *  unmasks it), else the deepest tree directory above it. Undefined for a
+   *  path no tree serves: those are plain files. */
+  writable(path: string): { readonly tree: LiveTree; readonly relative: string } | undefined {
+    this.#alive(`write ${path}`);
+    const owner = this.#overlayOwner(path);
+    if (owner !== undefined) {
+      this.whiteouts.get(owner.point)?.delete(owner.relative);
+      return { tree: this.tree(owner.overlay.upper), relative: owner.relative };
+    }
+    const holder = this.#treeDirAbove(path);
+    return holder === undefined ? undefined : { tree: this.trees.get(holder)!, relative: path.slice(holder.length + 1) };
   }
 
   /** Every file under `dir`, as paths relative to it, through any overlay. */
@@ -580,23 +605,28 @@ export class ContainerDisk {
       const masked = this.whiteouts.get(dir) ?? new Set<string>();
       let inoBase = 0;
       // Lowers first, oldest last in the list, so a newer layer's row replaces
-      // an older one's; the upper replaces every lower. Inode ids are made
-      // disjoint across layers by offset, and stay shared within a layer.
-      for (const layer of [...overlay.lowers].reverse().concat(overlay.upper)) {
-        const tree = this.trees.get(layer);
-        if (tree === undefined) continue;
-        let highest = 0;
-        for (const entry of tree.snapshot()) {
-          highest = Math.max(highest, entry.ino);
-          merged.set(entry.path, { ...entry, ino: entry.ino + inoBase });
-        }
-        inoBase += highest;
+      // an older one's. Inode ids are made disjoint across layers by offset,
+      // and stay shared within a layer. A whiteout hides a lower's name and
+      // everything beneath it; the upper then replaces every lower, and its
+      // own names are never masked.
+      for (const layer of [...overlay.lowers].reverse()) {
+        inoBase = this.#mergeLayer(merged, layer, inoBase);
       }
-      for (const path of masked) merged.delete(path);
+      for (const path of merged.keys()) {
+        if (isMasked(masked, path)) merged.delete(path);
+      }
+      this.#mergeLayer(merged, overlay.upper, inoBase);
       return sortedByPath([...merged.values()]);
     }
     const tree = this.trees.get(dir);
     if (tree !== undefined) return tree.snapshot();
+    const above = this.#treeDirAbove(dir);
+    if (above !== undefined) {
+      const prefix = `${dir.slice(above.length + 1)}/`;
+      return this.trees.get(above)!.snapshot()
+        .filter((entry) => entry.path.startsWith(prefix))
+        .map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) }));
+    }
     const rows: NodeEntry[] = [];
     let ino = 1;
     for (const [key, bytes] of [...this.files].sort(([a], [b]) => (a < b ? -1 : 1))) {
@@ -718,23 +748,62 @@ export class ContainerDisk {
     this.tree(overlay.upper);
   }
 
+  /** Plant one layer's rows over `merged`; answers the next layer's inode offset. */
+  #mergeLayer(merged: Map<string, NodeEntry>, layer: string, inoBase: number): number {
+    const tree = this.trees.get(layer);
+    if (tree === undefined) return inoBase;
+    let highest = 0;
+    for (const entry of tree.snapshot()) {
+      highest = Math.max(highest, entry.ino);
+      merged.set(entry.path, { ...entry, ino: entry.ino + inoBase });
+    }
+    return inoBase + highest;
+  }
+
+  /** Mask a merged name the upper no longer holds, when a lower still does:
+   *  fuse-overlayfs mints a whiteout only over something. */
+  #mask(owner: { point: string; overlay: OverlayRow; relative: string }): void {
+    const below = owner.overlay.lowers.some((layer) => {
+      const tree = this.trees.get(layer);
+      return tree !== undefined && tree.paths().some((path) => path === owner.relative || path.startsWith(`${owner.relative}/`));
+    });
+    if (!below) return;
+    let masked = this.whiteouts.get(owner.point);
+    if (masked === undefined) {
+      masked = new Set();
+      this.whiteouts.set(owner.point, masked);
+    }
+    masked.add(owner.relative);
+  }
+
+  /** The deepest tree directory above `path`, so a layer mounted inside
+   *  another tree's directory answers for its own names. */
+  #treeDirAbove(path: string): string | undefined {
+    let deepest: string | undefined;
+    for (const dir of this.trees.keys()) {
+      if (path.startsWith(`${dir}/`) && (deepest === undefined || dir.length > deepest.length)) deepest = dir;
+    }
+    return deepest;
+  }
+
   /** The node a path names through an overlay or a tree directory. */
   #treeAt(path: string): { node: LiveInode } | undefined {
     const owner = this.#overlayOwner(path);
     if (owner !== undefined) {
-      if (this.whiteouts.get(owner.point)?.has(owner.relative)) return undefined;
-      for (const layer of [owner.overlay.upper, ...owner.overlay.lowers]) {
+      const upper = this.trees.get(owner.overlay.upper)?.node(owner.relative);
+      if (upper !== undefined) return { node: upper };
+      const masked = this.whiteouts.get(owner.point);
+      if (masked !== undefined && isMasked(masked, owner.relative)) return undefined;
+      for (const layer of owner.overlay.lowers) {
         const node = this.trees.get(layer)?.node(owner.relative);
         if (node !== undefined) return { node };
       }
       return undefined;
     }
-    for (const [dir, tree] of this.trees) {
-      if (!path.startsWith(`${dir}/`)) continue;
-      const node = tree.node(path.slice(dir.length + 1));
-      if (node !== undefined) return { node };
-    }
-    return undefined;
+    const dir = this.#treeDirAbove(path);
+    if (dir === undefined) return undefined;
+    const node = this.trees.get(dir)!.node(path.slice(dir.length + 1));
+    return node === undefined ? undefined : { node };
   }
 
   #overlayOwner(path: string): { point: string; overlay: OverlayRow; relative: string } | undefined {
@@ -756,6 +825,15 @@ function ancestors(path: string): string[] {
     steps.push(at);
   }
   return steps;
+}
+
+/** Whether a whiteout set hides `path`: the name itself or an ancestor. */
+function isMasked(masked: ReadonlySet<string>, path: string): boolean {
+  if (masked.has(path)) return true;
+  for (const ancestor of ancestors(path)) {
+    if (masked.has(ancestor.slice(1))) return true;
+  }
+  return false;
 }
 
 function parentOf(path: string): string {
@@ -1065,12 +1143,16 @@ const NO_RESTORE: RestoreWork = {
 
 
 /**
- * The seal row for a whole-tree fence: what every shipped arm does today. The
- * fence hands the builder every file, so staged bytes, chunked bytes and
- * rewritten nodes are all the tree's. `chunksHashed` is the count of
- * `chunkBytes`-sized windows over the data (holes excluded), which is what a
- * fixed-size chunker hashes; a content-defined chunker's own count replaces it
- * where the builder reports one.
+ * The seal row for what the archiver packed. The fence hands the builder
+ * every file, so staged bytes and chunked bytes are the packed tree's.
+ * `chunksHashed` is the count of `chunkBytes`-sized windows over the data
+ * (holes excluded), which is what a fixed-size chunker hashes; a
+ * content-defined chunker's own count replaces it where the builder reports
+ * one. `nodesRewritten` is every node the publication wrote FOR THIS CHANGE:
+ * for a chunked sidecar that is the manifest, the carried files and
+ * directories and the chunks, not the envelope — the manifest's own
+ * directory and the directories beside it — which every publication writes
+ * identically.
  */
 function wholeTreeSeal(entries: readonly NodeEntry[], chunkBytes: number): SealWork {
   let bytesStaged = 0;
@@ -1086,7 +1168,13 @@ function wholeTreeSeal(entries: readonly NodeEntry[], chunkBytes: number): SealW
       if (!segment.zeros) chunksHashed += Math.ceil((segment.end - segment.start) / chunkBytes);
     }
   }
-  return { bytesStaged, bytesChunked: bytesStaged, chunksHashed, nodesRewritten: entries.length, wholeFiles };
+  let envelope = 0;
+  if (entries.some((entry) => entry.path === DELTA_MANIFEST_NAME)) {
+    const home = DELTA_MANIFEST_NAME.slice(0, DELTA_MANIFEST_NAME.lastIndexOf('/'));
+    envelope = entries.filter((entry) => entry.kind === 'dir'
+      && (entry.path === home || home.startsWith(`${entry.path}/`) || parentOf(entry.path) === home)).length;
+  }
+  return { bytesStaged, bytesChunked: bytesStaged, chunksHashed, nodesRewritten: entries.length - envelope, wholeFiles };
 }
 
 /** The one cell this machine cannot host for any arm: it lives on the
@@ -1150,7 +1238,7 @@ export class ArmRefused extends Error {
  * mount. That is what makes "the exact bytes came back" an assertion about the
  * chain rather than about a stub.
  */
-type ShellReply = { stdout: string; stderr: string; exitCode: number };
+type ShellReply = DeltaShellReply;
 const shellOk = (stdout = ''): ShellReply => ({ stdout, stderr: '', exitCode: 0 });
 const shellFail = (stderr: string): ShellReply => ({ stdout: '', stderr, exitCode: 1 });
 
@@ -1217,6 +1305,56 @@ function checkpointCommand(
   return undefined;
 }
 
+/** The container's mounts and releases: a layer mounted, an overlay composed,
+ *  a mount point or every delta layer released. Undefined for any other
+ *  command. */
+function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch): ShellReply | undefined {
+  const unquote = (value: string): string => value.replace(/^'|'$/g, '');
+  // Releasing every delta layer this container serves, whichever generation
+  // mounted it.
+  if (command.includes('awk -v r=')) {
+    const root = unquote(/awk -v r='(?<root>[^']+)'/.exec(command)?.groups?.root ?? '');
+    for (const point of [...disk.mounts.keys()].filter((path) => path.startsWith(root))) {
+      disk.unmount(point);
+    }
+    return shellOk();
+  }
+  // The BOUNDED release: the loop is the strategy's, the unmount is this
+  // container's, and the path is still the one the command names.
+  const released = /\/usr\/bin\/fusermount3 -u(?:z)? '(?<path>[^']+)'/.exec(command)?.groups?.path;
+  if (released !== undefined) {
+    disk.unmount(unquote(released));
+    return shellOk();
+  }
+
+  const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
+  if (layer !== undefined) {
+    const bytes = disk.readFile(layer.archive!);
+    if (bytes === undefined) return shellFail(`bad mount point: ${layer.archive!} is absent`);
+    try {
+      disk.unpack(bytes, layer.point!);
+    } catch (error) {
+      return shellFail(`squashfuse: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    disk.mount(layer.point!, { source: layer.archive!, fstype: 'fuse.squashfuse', options: 'ro' });
+    // The layer is mounted on the container when the isolate may go.
+    deaths.reset('attach:after-layer-mount');
+    return shellOk();
+  }
+
+  const overlay = /fuse-overlayfs -o lowerdir=(?<lowers>.+?),upperdir=(?<upper>[^,]+),workdir=[^ ]+ (?<dir>'[^']+')$/
+    .exec(command)?.groups;
+  if (overlay !== undefined) {
+    disk.mountOverlay(unquote(overlay.dir!), {
+      lowers: overlay.lowers!.split(':').map(unquote),
+      upper: unquote(overlay.upper!),
+    });
+    deaths.reset('attach:after-overlay');
+    return shellOk();
+  }
+  return undefined;
+}
+
 function chainExec(
   disk: ContainerDisk,
   deaths: DeathWatch,
@@ -1230,8 +1368,11 @@ function chainExec(
     // strategy's answer, on a deployment or here. See `session-shell.ts`.
     const refused = sessionShellRefusal(command);
     if (refused !== undefined) throw refused;
-    const fail = shellFail;
     const ok = shellOk;
+    // The chunked delta's own shell, answered with real bytes. See
+    // `delta-shell.ts`.
+    const delta = deltaCommand(command, disk);
+    if (delta !== undefined) return delta;
     if (command === 'cat /proc/mounts') return ok(disk.procMounts());
 
     const exists = /^test -e '(?<path>[^']+)'/.exec(command)?.groups?.path;
@@ -1262,48 +1403,8 @@ function chainExec(
       const listed = /ls -1A '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
       return ok(`missing ${disk.entries(listed).join(' ')}`);
     }
-    // Releasing every delta layer this container serves, whichever generation
-    // mounted it.
-    if (command.includes('awk -v r=')) {
-      const root = unquote(/awk -v r='(?<root>[^']+)'/.exec(command)?.groups?.root ?? '');
-      for (const point of [...disk.mounts.keys()].filter((path) => path.startsWith(root))) {
-        disk.unmount(point);
-      }
-      return ok();
-    }
-    // The BOUNDED release: the loop is the strategy's, the unmount is this
-    // container's, and the path is still the one the command names.
-    const released = /\/usr\/bin\/fusermount3 -u(?:z)? '(?<path>[^']+)'/.exec(command)?.groups?.path;
-    if (released !== undefined) {
-      disk.unmount(unquote(released));
-      return ok();
-    }
-
-    const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
-    if (layer !== undefined) {
-      const bytes = disk.readFile(layer.archive!);
-      if (bytes === undefined) return fail(`bad mount point: ${layer.archive!} is absent`);
-      try {
-        disk.unpack(bytes, layer.point!);
-      } catch (error) {
-        return fail(`squashfuse: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      disk.mount(layer.point!, { source: layer.archive!, fstype: 'fuse.squashfuse', options: 'ro' });
-      // The layer is mounted on the container when the isolate may go.
-      deaths.reset('attach:after-layer-mount');
-      return ok();
-    }
-
-    const overlay = /fuse-overlayfs -o lowerdir=(?<lowers>.+?),upperdir=(?<upper>[^,]+),workdir=[^ ]+ (?<dir>'[^']+')$/
-      .exec(command)?.groups;
-    if (overlay !== undefined) {
-      disk.mountOverlay(unquote(overlay.dir!), {
-        lowers: overlay.lowers!.split(':').map(unquote),
-        upper: unquote(overlay.upper!),
-      });
-      deaths.reset('attach:after-overlay');
-      return ok();
-    }
+    const mounted = mountCommand(command, disk, deaths);
+    if (mounted !== undefined) return mounted;
 
     const seed = /^cp -a '(?<lower>[^']+)\/\.' '(?<upper>[^']+)\//.exec(command)?.groups;
     if (seed !== undefined) {
@@ -1333,11 +1434,14 @@ function chainExec(
       return ok(bytes === undefined ? '' : String(bytes.byteLength));
     }
 
+    // The chain's own directories, emptied and re-created as TREES: the
+    // upper is filled before its overlay is mounted, and a layer is mounted
+    // inside a root that was reset the same way.
     const reset = /^rm -rf (?<paths>.+?) && mkdir -p /.exec(command)?.groups?.paths;
     if (reset !== undefined) {
       for (const path of reset.split(' ').map(unquote)) {
         disk.rmrf(path);
-        disk.mkdirp(path);
+        disk.tree(path);
       }
       return ok();
     }
@@ -1366,7 +1470,6 @@ function snapshotChainArm(): ConformanceArm {
   const deaths = new DeathWatch();
   /** The Durable Object's own row. Shared by every boot and isolate. */
   let row: ChainState | null = null;
-  const wholeInodeRefusal = 'snapshot-chain archives the whole changed inode: a 4 KiB pwrite into a 64 MiB file copies 64 MiB into the upper, the 64 KiB in-place write chunked 67108864 bytes and put 89478808 bytes, 64 dirty pages put 89478658 bytes against the 4194304 bound, and the wake probes the base and the delta layers as 4 remote ops against the O(1) bound of 3 (measured 2026-09-05)';
 
   const generations = (): readonly string[] => row === null ? [] : [
     row.base.id,
@@ -1386,10 +1489,10 @@ function snapshotChainArm(): ConformanceArm {
     #publishing: { readonly at: string; readonly prefix: string } | undefined;
     #finalizeGate = new OneShotGate();
     #rows: WorkRows = { seal: NO_SEAL, publish: NO_PUBLISH, restore: NO_RESTORE };
-    /** The source directory the last checkpoint's archiver actually packed, read
-     *  off the mksquashfs command the product issued. The seal row counts what
-     *  that source held, never the merged workspace beside it. */
-    #packSource: string | undefined;
+    /** What the last checkpoint's archiver actually packed, read off the
+     *  mksquashfs command the product issued as it ran. The seal row counts
+     *  what that source held, never the merged workspace beside it. */
+    #packed: readonly NodeEntry[] | undefined;
 
     constructor() {
       this.workspace = {
@@ -1465,14 +1568,20 @@ function snapshotChainArm(): ConformanceArm {
      *  just published, so replacing it with its own layer frees disk while the
      *  merged view stays exact. Called only when the upper is clean (a
      *  checkpoint then no writes, as 6.18 drives it); a dirty upper holds
-     *  bytes no layer names, and clearing it would lose them. */
+     *  bytes no layer names, and clearing it would lose them.
+     *
+     *  A legacy full delta becomes the newest lower whole. A chunked delta is
+     *  a sidecar: only its `tree/` holds files as the upper holds them, so
+     *  that directory becomes the lower and the upper drops exactly the files
+     *  it serves; a chunked file is base plus overrides, held nowhere whole,
+     *  and stays. Answers the bytes released. */
     evictCleanBytes(): number {
       if (row?.delta === undefined) return 0;
       const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
       if (overlay === undefined) return 0;
       const upper = this.disk.tree(overlay.upper);
-      const freed = upper.bytesHeld();
-      if (freed === 0) return 0;
+      const held = upper.bytesHeld();
+      if (held === 0) return 0;
       const chainId = row.base.id;
       const deltaKey = deltaObjectKey(STORE_ROOT, chainId);
       const bytes = durable.get(deltaKey);
@@ -1480,9 +1589,27 @@ function snapshotChainArm(): ConformanceArm {
       const mountPoint = deltaLayerMountPoint(chainId);
       this.disk.unpack(bytes, mountPoint);
       this.disk.mount(mountPoint, { source: deltaKey, fstype: 'fuse.squashfuse', options: 'ro' });
-      this.disk.mountOverlay(DEVBOX_WORKDIR, { lowers: [mountPoint, ...overlay.lowers], upper: overlay.upper });
-      upper.clear();
-      return freed;
+      const manifestBytes = this.disk.readFile(`${mountPoint}/${DELTA_MANIFEST_NAME}`);
+      const manifest = manifestBytes === undefined ? null : v.safeParse(DeltaManifestSchema, JSON.parse(decoder.decode(manifestBytes)));
+      if (manifest === null || !manifest.success) {
+        this.disk.mountOverlay(DEVBOX_WORKDIR, { lowers: [mountPoint, ...overlay.lowers], upper: overlay.upper });
+        upper.clear();
+        return held;
+      }
+      // WHERE THE SIDECAR KEEPS ITS WHOLE FILES IS OBSERVED, not restated: the
+      // directory under which the first whole file's path is found.
+      const whole = manifest.output.files.filter((file) => file.kind === 'whole');
+      const rows = this.disk.snapshot(mountPoint);
+      const first = whole[0] === undefined ? undefined : rows.find((row) => row.kind === 'file' && row.path.endsWith(`/${whole[0]!.p}`));
+      if (whole[0] === undefined || first === undefined) return 0;
+      const sideRelative = first.path.slice(0, first.path.length - whole[0].p.length - 1);
+      const sideTree = `${mountPoint}/${sideRelative}`;
+      this.disk.tree(sideTree).plant(rows
+        .filter((entry) => entry.path.startsWith(`${sideRelative}/`))
+        .map((entry) => ({ ...entry, path: entry.path.slice(sideRelative.length + 1) })));
+      this.disk.mountOverlay(DEVBOX_WORKDIR, { lowers: [sideTree, ...overlay.lowers], upper: overlay.upper });
+      for (const file of whole) upper.remove(file.p);
+      return held - upper.bytesHeld();
     }
 
     #meter(raw: DevboxStorage): DevboxStorage {
@@ -1504,25 +1631,16 @@ function snapshotChainArm(): ConformanceArm {
         },
         checkpoint: async (kind) => {
           const window = { from: durable.ops.length };
-          const upperDir = `${DEVBOX_RUNTIME_DIR}/upper`;
           const workspaceBefore = await this.workspace.snapshot();
-          const upperBefore = !this.disk.dead && !this.disk.stopped
-            ? this.disk.snapshot(upperDir)
-            : undefined;
-          this.#packSource = undefined;
+          this.#packed = undefined;
           const outcome = await raw.checkpoint(kind);
-          let seal = NO_SEAL;
-          if (outcome.kind === 'committed') {
-            // WHAT THE ARCHIVER PACKED, not the workspace beside it. The product
-            // stages the upper for a delta and the merged view for a fresh base;
-            // the mksquashfs source recorded above says which one this commit
-            // took, and the snapshot from before the commit is what it saw.
-            if (this.#packSource === upperDir && upperBefore !== undefined) {
-              seal = wholeTreeSeal(upperBefore, 128 * 1024);
-            } else {
-              seal = wholeTreeSeal(workspaceBefore, 128 * 1024);
-            }
-          }
+          // WHAT THE ARCHIVER PACKED, not the workspace beside it: the upper
+          // for a legacy delta, a staged sidecar for a chunked one, the merged
+          // view for a fresh base. The mksquashfs command recorded which, and
+          // the snapshot taken as it ran is what it saw.
+          const seal = outcome.kind === 'committed'
+            ? wholeTreeSeal(this.#packed ?? workspaceBefore, 128 * 1024)
+            : NO_SEAL;
           this.#rows = {
             ...this.#rows,
             seal,
@@ -1569,7 +1687,7 @@ function snapshotChainArm(): ConformanceArm {
       const chain = chainExec(this.disk, deaths, publish);
       const exec: typeof chain = async (command) => {
         const packed = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups?.source;
-        if (packed !== undefined) this.#packSource = packed;
+        if (packed !== undefined) this.#packed = this.disk.snapshot(packed);
         return await chain(command);
       };
       const ports: SnapshotChainPorts = {
@@ -1682,11 +1800,13 @@ function snapshotChainArm(): ConformanceArm {
     },
     refusedCells: {
       ...HARNESS_OWNED_CELLS,
-      // A property of the format, measured 2026-09-05: the overlay copies the
-      // whole inode into the upper on the first write, and the delta archives
-      // the whole upper. A sub-file delta is a different format.
-      '6.14': { reason: wholeInodeRefusal },
-      '6.15': { reason: wholeInodeRefusal },
+      // Until 2026-09-10 this and 6.15 were refused as a property of the
+      // format: the overlay copies the whole inode up and the delta archived
+      // the whole upper. The chunked delta publishes changed 16 KiB blocks
+      // (6.14's in-place seal measured 66,135 bytes chunked and 89,724 put
+      // for a 64 KiB write, trees exact), so 6.15 runs. What remains of 6.14
+      // is the wake's constant, which predates the format and is not O(1)=3.
+      '6.14': { reason: 'a snapshot-chain wake makes 4 remote ops against the O(1) bound of 3: the base integrity head, the head that adopts an unreferenced delta, the store mount\'s list and the base layer\'s get (a base+delta wake makes 5; measured 2026-09-10 in the conformance harness)' },
     },
   };
 }
