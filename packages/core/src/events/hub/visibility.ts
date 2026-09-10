@@ -24,7 +24,10 @@
 import { createHash, createHmac } from 'node:crypto';
 import * as v from 'valibot';
 import { evidenceWindow } from '../../prompts/evidence-window';
-import type { PayloadPolicy, KinuEvent } from './types';
+import {
+  SUBORDINATE_REPORT_HANDOFF_FIELDS,
+  type PayloadPolicy, type KinuEvent, type SubordinateReportHandoff,
+} from './types';
 import {
   isJsonObject, JsonObjectSchema, parseJsonValue,
   type JsonObject, type JsonValue,
@@ -185,6 +188,37 @@ function briefWindow(text: string): string {
   return evidenceWindow(text, EVENT_BRIEF_MAX_CHARS);
 }
 
+/**
+ * The structured handoff, rendered WHOLE, one entry per line under its own
+ * field name.
+ *
+ * No window here, and that is the point of
+ * {@link SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}: the dispatcher refuses a
+ * handoff bigger than one brief window, so everything that reaches this
+ * function fits and the parent reads all of it. A window here instead would
+ * cut the concerns list off mid-item with no path to the rest — the handoff
+ * has no spill file, only `content` does.
+ *
+ * The field NAME is the label, verbatim, because the parent and the child are
+ * reading the same word: the child wrote `open_work` into the tool call and
+ * the parent sees `open_work` in its turn.
+ *
+ * Two callers. The second is the task-lifetime lane
+ * (`events/ingress/subordinate.ts`), where an `agents.ask` waiter is handed
+ * ONE string and there is no structured slot to put these in — so the answer
+ * carries them as trailing prose rather than dropping them.
+ */
+export function renderSubordinateHandoff(handoff: SubordinateReportHandoff): string {
+  let rendered = '';
+  for (const field of SUBORDINATE_REPORT_HANDOFF_FIELDS) {
+    const entries = handoff[field];
+    if (entries === undefined || entries.length === 0) continue;
+    rendered += `\n${field}:`;
+    for (const entry of entries) rendered += `\n  - ${entry}`;
+  }
+  return rendered;
+}
+
 /** Compact, human-readable representation of an event for injection into
  *  the LLM context. Never includes raw payload bytes for non-`full`
  *  visibility events. */
@@ -295,7 +329,7 @@ function briefForVariant(event: KinuEvent): string {
       const p = event.payload;
       const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
       const full = p.content_path ? ` — full report: ${p.content_path}` : '';
-      return `${p.status}${task}: ${briefWindow(p.content)}${full}`;
+      return `${p.status}${task}: ${briefWindow(p.content)}${full}${renderSubordinateHandoff(p)}`;
     }
     case 'file_changed':
       return `${event.payload.change} ${event.payload.path}`;

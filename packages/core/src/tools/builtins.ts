@@ -75,8 +75,11 @@ import {
 import type { ProfileCatalogEnvelope } from '../profiles/catalog';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
-import { dispatchReport, type ReportToolInput } from './report-tool';
-import { SUBORDINATE_REPORT_STATUSES } from '../events/hub/types';
+import { dispatchReport, reportHandoffProperties, type ReportToolInput } from './report-tool';
+import {
+  SUBORDINATE_REPORT_STATUSES,
+  type SubordinateReportHandoff, type SubordinateReportStatus,
+} from '../events/hub/types';
 import { createFileToolSteer } from './run-file-steer';
 import { createFileTool } from './file-tool';
 import { TurnFileLedger } from './file-ledger';
@@ -231,9 +234,28 @@ export interface ReportToolDeps {
   /** Publish a `subordinate_report` event into the PARENT workspace's
    *  EventLog (via the parent stub). */
   report(input: {
-    status: import('../events/hub/types').SubordinateReportStatus;
+    status: SubordinateReportStatus;
     content: string;
+    /** The structured handoff, already trimmed and bounded by
+     *  {@link dispatchReport}. Absent when the model sent none, and never
+     *  present at all on a `bodyOnly` destination. */
+    handoff?: SubordinateReportHandoff;
   }): Promise<JsonValue | undefined>;
+  /**
+   * A destination that consumes the PROSE BODY alone, so the structured
+   * handoff fields are not declared to the model here.
+   *
+   * Exactly one such destination exists: a search node's captured report
+   * (`strategy/node-agent.ts`), which the engine grades through `candidateOf`
+   * on `content` and never reads a second field of. Offering `concerns` there
+   * would advertise a field that reaches nobody — the accepted-and-ignored
+   * defect this repository gates against — and it is the same reason the
+   * memory tool's action enum is `memoryActionsFor(!!facts)` rather than a
+   * fixed list with dead arms.
+   *
+   * Absent means the ordinary subordinate → parent spine, which carries them.
+   */
+  readonly bodyOnly?: boolean;
 }
 
 // ReleaseToolDeps lives in tools/release-tool.ts now — the release lane's
@@ -758,12 +780,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             enum: [...SUBORDINATE_REPORT_STATUSES],
             description: 'completed = the assignment is done. blocked = you need input to continue. progress = significant mid-task update.',
           },
-          content: { type: 'string', maxLength: 20000, description: 'What to tell the orchestrator — findings, the result, or what you are blocked on.' },
+          content: { type: 'string', maxLength: 20000, description: 'What to tell the orchestrator — the result, or what you are blocked on. Prose; the fields beside it carry the parts the orchestrator has to act on.' },
+          ...reportHandoffProperties(report),
         },
         required: ['status', 'content'],
       }),
       // The SAME dispatcher `report.*` in codemode calls, so one capability
-      // validates its two arguments one way on both surfaces — a hand-check in
+      // validates its arguments one way on both surfaces — a hand-check in
       // this body is how `status` goes unchecked while `content` is checked.
       execute: async (args: ReportToolInput) => dispatchReport(report, args),
     }));

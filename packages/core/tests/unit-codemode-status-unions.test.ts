@@ -17,7 +17,11 @@ describe('codemode declared status unions come from the shared constants', () =>
       report: async () => ({ delivered: true }),
     }));
     const types = provider.types ?? '';
-    expect(types).toContain(`send(status: ${unionOf(SUBORDINATE_REPORT_STATUSES)}, content: string)`);
+    // The STATUS POSITION, not the whole parameter list: what this defends is
+    // that the union is interpolated from the shared constant, and pinning
+    // the parameters after it turns every signature change into a failure of
+    // a test about something else.
+    expect(types).toContain(`send(status: ${unionOf(SUBORDINATE_REPORT_STATUSES)}, `);
   });
 
   test('tasks.update declares every TASK_STATUS', () => {
