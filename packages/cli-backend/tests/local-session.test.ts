@@ -1848,8 +1848,16 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // runOneShot calls settleBackgroundWork() and then close() → end(), back to
     // back, on the same never-settling job. Two independent graces would double
     // the idle tail a one-shot run makes the owner wait through.
+    //
+    // The grace is deliberately LARGE here. At the 200 ms this used before, the
+    // two hypotheses — one grace or two — sat 200 ms apart, which is inside the
+    // scheduling noise of a loaded box: it measured 559 ms on 2026-09-10 during
+    // a deploy tier and read as a double payment that had not happened. Two
+    // seconds puts them 2 s apart, and the window below is TIGHTER than the old
+    // one in units of grace (1.5x against 2.0x) rather than wider.
+    const grace = 2_000;
     const { db, rt, session } = setup('unused', hangingModel(), {
-      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 200, wakesAfterTurn: true },
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: grace, wakesAfterTurn: true },
     });
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-2x', 'agents', 'build', 'running', '${input}', 1)`);
@@ -1861,8 +1869,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await session.end();
     const total = performance.now() - started;
 
-    expect(total).toBeGreaterThanOrEqual(190);
-    expect(total).toBeLessThan(400);
+    // Paid at all, and paid once: a second grace would land at or past 2x.
+    expect(total).toBeGreaterThanOrEqual(grace * 0.95);
+    expect(total).toBeLessThan(grace * 1.5);
   });
 
   test('a long tool call runs inline under a policy whose threshold it does not cross', async () => {
