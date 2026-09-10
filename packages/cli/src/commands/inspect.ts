@@ -236,6 +236,27 @@ function printSpend(spend: WorkspaceSpend): void {
     console.log(DIM(`${(spend.offTurnShare * 100).toFixed(1)}% of the ${(measured ?? 0).toLocaleString()} measured `
       + 'tokens went on work no turn of this agent ran'));
   }
+  // WHY THE DOLLAR COLUMN IS A FLOOR. Both reasons or neither: a call the
+  // catalog could not price at all and a call it priced at a rate published for
+  // a different cache-retention tier bound the SAME figure, and naming one
+  // while hiding the other leaves the number looking better qualified than it
+  // is. `$16.2642` and "$16.2642, and it is short" are different facts, and
+  // without this line `--json` was the only way to tell them apart.
+  //
+  // The same two clauses the web panel renders (ActivitySurface `spendCaveat`),
+  // deliberately in the same words, so two surfaces cannot describe one figure
+  // differently.
+  const floorReasons: string[] = [];
+  if (spend.total.unpricedCalls > 0) {
+    floorReasons.push(`${plural(spend.total.unpricedCalls, 'measured call')} carried no models.dev rate`);
+  }
+  if (spend.total.floorPricedCalls > 0) {
+    floorReasons.push(`${plural(spend.total.floorPricedCalls, 'priced call')} wrote cache `
+      + 'at a retention tier the catalog does not rate');
+  }
+  if (floorReasons.length > 0) {
+    console.log(DIM(`The dollar total is a floor: ${floorReasons.join('; ')}`));
+  }
 }
 
 /** One producer row's numbers. An absent count is printed as an em dash, never

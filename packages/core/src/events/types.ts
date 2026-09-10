@@ -142,10 +142,12 @@ export type RunEvent =
    *  `usage` is the provider's own report of that request — the authority on
    *  what it cost, field by field, with anything the provider did not mention
    *  absent rather than zero. `usd` is that report priced at the model's catalog
-   *  rate, absent when the model is unpriced. `context` is what the request was
-   *  locally measured to be made of; usage and context do not reconcile exactly
-   *  and are carried side by side so a reader can see the gap. All of them are
-   *  absent when the step produced no such report. */
+   *  rate, absent when the model is unpriced. `usdFloorTokens` qualifies that
+   *  price: present only when `usd` is a FLOOR rather than the figure, and
+   *  equal to the tokens that made it one (see `priceCall`). `context` is what
+   *  the request was locally measured to be made of; usage and context do not
+   *  reconcile exactly and are carried side by side so a reader can see the
+   *  gap. All of them are absent when the step produced no such report. */
   | (RunEventBase & {
       type: 'step_finish';
       stepIndex: number;
@@ -153,6 +155,7 @@ export type RunEvent =
       messages?: ModelMessage[];
       usage?: Usage;
       usd?: number;
+      usdFloorTokens?: number;
       modelId?: string;
       context?: ContextComposition;
     })
@@ -175,12 +178,14 @@ export type RunEvent =
    *
    *  `usd` is that report at the CALL'S OWN model's catalog rate, absent
    *  when unpriced; a judge deliberately runs on a different model from the
-   *  actor, so pricing it at the actor's rate would be a fabricated number. */
+   *  actor, so pricing it at the actor's rate would be a fabricated number.
+   *  `usdFloorTokens` qualifies it the same way it qualifies a step's. */
   | (RunEventBase & {
       type: 'model_call';
       source: SpendSource;
       usage?: Usage;
       usd?: number;
+      usdFloorTokens?: number;
       spec?: string;
       modelId?: string;
     })

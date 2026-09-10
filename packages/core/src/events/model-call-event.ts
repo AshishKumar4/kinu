@@ -62,8 +62,15 @@ export function buildModelCallEvent(report: ModelCallReport, opts: {
     ? opts.pricing
     : null;
   if (rate) {
-    const usd = priceCall(report.usage, rate);
-    if (usd !== undefined) event.usd = usd;
+    const price = priceCall(report.usage, rate);
+    if (price !== undefined) {
+      event.usd = price.usd;
+      // Carried, not dropped: the workspace total counts these rows to say its
+      // dollar figure is a floor, and the count cannot exist if the row does
+      // not say so. Absent when the price is exact, which is what makes the
+      // count mean "floor-priced" rather than "priced".
+      if (price.floorTokens !== undefined) event.usdFloorTokens = price.floorTokens;
+    }
   }
   return event;
 }
