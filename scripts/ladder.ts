@@ -528,6 +528,27 @@ export const LADDER: readonly Gate[] = [
       + 'output is invisible exactly when somebody is deciding how far to trust the tree.',
   },
   {
+    run: 'bun run gate:client-graph',
+    // COMMIT. The 2026-09-06 barrel regression shipped because no commit-tier
+    // gate reads the client module GRAPH: the root barrel gained SQLite-backed
+    // slate stores importing the vendored agent-core runtime, dev died before
+    // mount, and the build stayed green by tree-shaking the unreached exports.
+    // A lane adds one barrel value import in its own worktree and every suite
+    // passes — the same artifact-travels-to-the-integrator shape that moved
+    // `gate:wired` and `gate:dead-code` here. 0.62/0.67/0.75s measured on this
+    // tree, 1s declared, the larger rounded up.
+    tier: 'commit',
+    seconds: 1,
+    catches: 'a client entry that can reach `@agent-core/core` or `bun:sqlite` '
+      + 'through value imports — the edge that blanks `bun run dev` while the '
+      + 'build stays green. Walks the runtime graph from the three browser '
+      + 'entries and fails naming the entry-to-edge chain.',
+    blind: 'a computed specifier `await import(name)` names its module where no '
+      + 'literal carries it; a direct `node:` builtin import in client code, a '
+      + 'different edge with the same symptom; and any resolution Vite sees '
+      + 'that the walk does not model. It prints all three on the GREEN path.',
+  },
+  {
     run: 'bun scripts/test-census.ts --ratchet',
     // PUSH, beside `gate:wired` and `gate:dead-code`, for their reason: it is a
     // WHOLE-TREE census — 835 test files parsed, plus every product module a
