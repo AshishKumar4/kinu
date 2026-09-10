@@ -2351,6 +2351,51 @@ export function decodeComplexityRows(value: ArmResult['complexity']): Complexity
 }
 
 /**
+ * One in-gate restore wall-clock reading, polled from GET /restore-probe
+ * after a wake settles. The number is the gate occupancy the
+ * `do.block_concurrency.cancel_ms` cap judges (hook entry to settle), not
+ * the driver's own round trip. `wallMs` null is ABSENT — the box wrote no
+ * probe row — never zero: a restore that did not report and a restore that
+ * took 0 ms are different facts. Added 2026-09-10: the 2026-09-09 onStart
+ * probe run reported its table from a lane report and retained no rows.
+ */
+export interface RestoreProbeRow {
+  readonly kind: 'cold-attach' | 'complexity-restore' | 'post-ladder-wake' | 'destroy-cold-restore';
+  /** Served-tree bytes at the rung, or null when the size is not known
+   *  (the cold attach lands on an empty tree the driver never measured). */
+  readonly treeBytes: number | null;
+  /** In-gate wall ms, null when the box wrote no probe row. */
+  readonly wallMs: number | null;
+  /** The probe's own entry timestamp, null with an absent row. */
+  readonly probeAt: number | null;
+  /** 'ok', or why the row is absent. */
+  readonly outcome: string;
+}
+
+const RestoreProbeRowSchema: v.GenericSchema<RestoreProbeRow> = v.looseObject({
+  kind: v.picklist(['cold-attach', 'complexity-restore', 'post-ladder-wake', 'destroy-cold-restore']),
+  treeBytes: v.nullable(v.number()),
+  wallMs: v.nullable(v.number()),
+  probeAt: v.nullable(v.number()),
+  outcome: v.string(),
+});
+
+/**
+ * Read one arm's restore-probe rows off its artifact row. Old artifacts carry
+ * no `restoreProbes` field and read as unmeasured; a row that fails its own
+ * shape is dropped rather than trusted. Added 2026-09-10.
+ */
+export function decodeRestoreProbeRows(value: ArmResult['restoreProbes']): RestoreProbeRow[] {
+  if (!Array.isArray(value)) return [];
+  const rows: RestoreProbeRow[] = [];
+  for (const entry of value) {
+    const parsed = v.safeParse(RestoreProbeRowSchema, entry);
+    if (parsed.success) rows.push(parsed.output);
+  }
+  return rows;
+}
+
+/**
  * One restore's priced bill: the operation count and the payload bytes the
  * `/ops` window observed, each null while its source did not answer.
  */
@@ -2420,6 +2465,11 @@ export interface ArmResult {
    *  ladder rung. Optional so artifacts written before 2026-09-05 still read;
    *  absent reads as unmeasured, never as zero. */
   complexity?: ComplexityRow[];
+  /** In-gate restore wall times polled from GET /restore-probe after each
+   *  wake settles, one row per restore with the served-tree bytes beside it.
+   *  Optional so artifacts written before 2026-09-10 still read; absent
+   *  reads as unmeasured, never as zero. */
+  restoreProbes?: RestoreProbeRow[];
   phases: ProbeRun[];
   /** Per-checkpoint rows from the decisive experiment, with their R2 operation
    *  classes. */
@@ -3489,6 +3539,42 @@ async function closeWakeOpsWindow(
   return wakeOps;
 }
 
+const RestoreProbeReplySchema: v.GenericSchema<{
+  readonly ok?: boolean;
+  readonly probe?: { readonly wallMs: number; readonly at: number } | null;
+}> = v.looseObject({
+  ok: v.optional(v.boolean()),
+  probe: v.optional(v.nullable(v.looseObject({ wallMs: v.number(), at: v.number() }))),
+});
+
+/**
+ * Poll one in-gate restore wall time after a wake settles. NEVER throws: a
+ * poll that failed the arm would trade the arm's measured cells for one
+ * diagnostic read, so every failure is an absent row with its reason, and
+ * the arm keeps whatever it measured. Added 2026-09-10.
+ */
+export async function readRestoreProbe(
+  fixture: Fixture,
+  box: string,
+  kind: RestoreProbeRow['kind'],
+  treeBytes: number | null,
+  notes: string[],
+): Promise<RestoreProbeRow> {
+  const absent = (outcome: string): RestoreProbeRow => ({ kind, treeBytes, wallMs: null, probeAt: null, outcome });
+  let reply: v.InferOutput<typeof RestoreProbeReplySchema>;
+  try {
+    reply = await call(fixture, 'GET', `/restore-probe?box=${box}`, RestoreProbeReplySchema);
+  } catch (error) {
+    const words = describeThrown({ cause: error }).slice(0, 240);
+    notes.push(`restore probe ${kind} did not answer: ${words}`);
+    return absent(`error: ${words}`);
+  }
+  if (reply.probe === undefined || reply.probe === null) {
+    return absent(reply.ok === false ? 'absent: the box wrote no probe row for its last start' : 'absent: no probe row in the reply');
+  }
+  return { kind, treeBytes, wallMs: reply.probe.wallMs, probeAt: reply.probe.at, outcome: 'ok' };
+}
+
 /**
  * The workload phases: every phase once, then the deciding phase repeated.
  * A phase that throws records its reason and leaves the row absent, which G9
@@ -3763,6 +3849,10 @@ async function measureComplexityRung(
       const opsBeforeRestore = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
       const rewoke = await startup('/wake', `complexity restore at ${treeBytes}B`, admittedAttachKinds('wake'));
       const restoreOps = await closeWakeOpsWindow(fixture, box, opsBeforeRestore, notes);
+      // The gate occupancy of this rung's restore, at the rung's own tree
+      // size. Polled inside the try so a silent probe is an absent row, and
+      // the helper never throws past it.
+      (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, 'complexity-restore', treeBytes, notes));
       result.complexity?.push({
         treeBytes,
         kind: 'restore',
@@ -3881,6 +3971,9 @@ async function measureArm(
   result.attachColdMs = cold.ms;
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
+  // The gate occupancy of the cold start itself, beside the driver's own
+  // round trip. The tree is empty here; the sized restores come per rung.
+  (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, 'cold-attach', 0, notes));
   settle('the cold attach');
   log('install harness');
   await installHarness(fixture, box);
@@ -3967,6 +4060,8 @@ async function measureArm(
   result.wakeDetail = woke.attach.detail;
   result.wakeBootId = woke.state.state?.bootId ?? null;
   result.wakeOps = await closeWakeOpsWindow(fixture, box, opsBeforeWake, notes);
+  // The gate occupancy of the post-ladder wake at the full ladder size.
+  (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, 'post-ladder-wake', ladderBytes, notes));
   recordFinalComplexityRestore(result, ladderBytes, complexityScope);
   settle('the wake');
   verify(
@@ -4226,6 +4321,31 @@ async function measureArm(
   result.security = securityCells.observation;
   notes.push(...securityCells.notes);
   settle('the security cells');
+  // THE DESTROY-COLD RESTORE, after every priced cell and before the
+  // teardown. Drops the container identity with rows and store intact, so
+  // the next wake provisions fresh and restores the committed tree: the
+  // only true cold restore at size this run takes. Past every priced
+  // window like the witness and security cells, and guarded so it can only
+  // append an absent row — never fail an arm whose cells already settled.
+  try {
+    await call(fixture, 'POST', `/destroy?box=${box}`, AckReplySchema);
+    const rewokeCold = await startup('/wake', 'destroy-cold restore', admittedAttachKinds('wake'));
+    const knownSizes = Object.values(result.treeBytes).filter((n) => Number.isSafeInteger(n));
+    const coldTreeBytes = knownSizes.length > 0 ? Math.max(...knownSizes) : null;
+    (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, 'destroy-cold-restore', coldTreeBytes, notes));
+    notes.push(
+      `destroy-cold restore woke ${rewokeCold.attach.kind}; treeBytes is the largest size the run recorded, `
+      + 'a lower bound past the witness and cut cells that wrote outside the measured window',
+    );
+    settle('the destroy-cold restore');
+  } catch (error) {
+    const words = describeThrown({ cause: error }).slice(0, 240);
+    notes.push(`destroy-cold restore did not answer: ${words}`);
+    (result.restoreProbes ??= []).push({
+      kind: 'destroy-cold-restore', treeBytes: null, wallMs: null, probeAt: null, outcome: `error: ${words}`,
+    });
+    settle('a refused destroy-cold restore');
+  }
 
   // CLEANUP, through the shared release: a cleanup failure is not a
   // measurement failure, and the arm still returns what it measured.
@@ -6260,6 +6380,21 @@ export function parseOptions(argv: readonly string[]): Options {
   // walk's decisive block reads this field, and a probe that ran it anyway
   // would be the failure mode its own suite refuses.
   const decisive = values.decisive && !values['verify-only'];
+  // AN UNARMED DECISIVE RUN CANNOT BE ADMITTED, so it is refused HERE, before
+  // anything is provisioned. G3 judges a publication the instrument holds at
+  // the ack, and the instrument holds only when the Worker boots with the
+  // rendezvous armed (`--fault-cuts` → BENCH_PUBLICATION_CUT=1). Every decisive
+  // run on record before 2026-09-10 launched unarmed and learned it at
+  // judgment time, 40 minutes to 3 hours of paid work later
+  // (`DECISIVE-2026-09-05.md:1019`, `:1041` "unarmed instrument | 5 | 0").
+  // A verify-only probe measures no gate and keeps the flag optional.
+  if (decisive && !values['fault-cuts']) {
+    throw new Error(
+      '--decisive without --fault-cuts cannot be admitted: G3 (publication safety) judges a '
+      + 'publication the rendezvous holds, and the rendezvous is armed only at Worker boot by '
+      + '--fault-cuts. Add --fault-cuts, or drop --decisive for a smoke run.',
+    );
+  }
   const rawRepetitions = values.repetitions ?? String(decisive ? DECISIVE_REPETITIONS : 1);
   // THE WHOLE TEXT, not `parseInt`'s prefix of it: `parseInt('1.5')` is 1, so a
   // fractional count would silently become a single repetition and the run
