@@ -312,7 +312,7 @@ const PHRASES = ['get better with use.', 'build their own tools.', 'run in the c
  * The heading a screen reader gets, DERIVED rather than restated.
  *
  * The `h1` animates one phrase at a time, so its accessible name has to carry
- * all four — and it used to carry them as a second hand-written sentence, with
+ * every one — and it used to carry them as a second hand-written sentence, with
  * nothing holding the two lists equal. Editing one silently desynchronised the
  * accessible text from the visible text, which is the drift a hardcoded list
  * beside its source always earns.
