@@ -136,20 +136,26 @@ function gatedFirstModel(): GatedModel {
  *  child has a wired `report` tool, and its declared terminal status reaches
  *  the parent; hardcoding `'progress'` in `relayToParent` would leave the
  *  child `working` regardless of its report. */
-function reportingChildModel(content: string) {
+function reportingChildModel(content: string, status: 'completed' | 'failed' = 'completed') {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
+  let reflections = 0;
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     // The detached review pass calls this one; without it every turn reports a
-    // failure that belongs to the fixture rather than to the product.
-    doGenerate: async () => ({
-      content: [{ type: 'text', text: 'acknowledged' }],
-      finishReason: 'stop' as const,
-      usage,
-      warnings: [],
-    }),
+    // failure that belongs to the fixture rather than to the product. The
+    // turn reflection is one of those calls, and it is counted apart because
+    // it is the one call turn-level learning spends.
+    doGenerate: async (options) => {
+      if (JSON.stringify(options.prompt).includes('should be done differently')) reflections += 1;
+      return {
+        content: [{ type: 'text', text: 'acknowledged' }],
+        finishReason: 'stop' as const,
+        usage,
+        warnings: [],
+      };
+    },
     doStream: async () => {
       calls += 1;
       // Call 1 is the child's assigned turn; 2 is its continuation past the
@@ -164,7 +170,7 @@ function reportingChildModel(content: string) {
                 type: 'tool-call',
                 toolCallId: 'report-1',
                 toolName: REPORT_TOOL,
-                input: JSON.stringify({ status: 'completed', content }),
+                input: JSON.stringify({ status, content }),
               });
             } else {
               controller.enqueue({ type: 'text-start', id: '0' });
@@ -181,7 +187,7 @@ function reportingChildModel(content: string) {
       };
     },
   });
-  return { model, calls: () => calls };
+  return { model, calls: () => calls, reflections: () => reflections };
 }
 
 /** A child that finishes its assigned turn with NO TEXT AT ALL.
@@ -827,6 +833,66 @@ describe('LocalAgentHost', () => {
   }
 
   /**
+   * A TASK-LIFETIME child records nothing into the evolution window; a durable
+   * hire records its turn. The lifetime decides, at the host's one construction
+   * site for a child session.
+   *
+   * Both children run the same programmatic turn shape — one report-tool call
+   * and nothing else — and the task child's report is a FAILURE, the strongest
+   * signal the headless channel knows: recorded, that turn is graded
+   * `corrected` by the execution verdict and reflected into a lesson through a
+   * model call the asking caller waits on (`dismiss` joins `settleEvolution`).
+   * The actor is dismissed the moment it answers and every later ask mints a
+   * fresh one, so the lesson would sit under an id nothing reads again. The
+   * hire half is the control: the same ledgers, live for a child that persists.
+   */
+  test('a task-lifetime child records no turn into the evolution window; a durable hire does', async () => {
+    // One host per half: the fixture model reports on its FIRST turn only, so
+    // each child needs a model of its own to make its failing report.
+    const ask = makeRoots();
+    const askDb = await seedAgent(ask.state, 'root');
+    const askChild = reportingChildModel('could not find the root cause', 'failed');
+    const asking = makeHost(ask.state, askChild.model, [
+      { name: 'root', cwd: ask.project, workspaceId: 'proj' },
+    ]);
+    const askTeam = await asking.host.team('root');
+    const outcome = await askTeam.temporary!.run({
+      role: 'researcher', roleLabel: 'researcher', task: 'Find the root cause.', mode: 'build',
+    });
+    await asking.host.close();
+    const asked = v.parse(v.object({ agent: v.string() }), outcome).agent;
+    const askActorId = childActorId(askDb, asked);
+    expect(actorLifecycle(askDb, askActorId)).toBe('retained');
+    expect(evolutionRows(askDb, askActorId)).toEqual({ window: 0, outcomes: [], lessons: [] });
+    expect(askChild.reflections()).toBe(0);
+
+    const hire = makeRoots();
+    const hireDb = await seedAgent(hire.state, 'root');
+    const hireChild = reportingChildModel('could not find the root cause', 'failed');
+    const hiring = makeHost(hire.state, hireChild.model, [
+      { name: 'root', cwd: hire.project, workspaceId: 'proj' },
+    ]);
+    const childTurnEnded = Promise.withResolvers<void>();
+    hiring.host.subscribe((agent, event) => {
+      if (agent !== 'root' && event.type === 'turn-end') childTurnEnded.resolve();
+    });
+    const hireTeam = await hiring.host.team('root');
+    await hireTeam.spawn({ role: 'researcher', mission: 'Investigate the incident.', mode: 'build' });
+    const [hired] = await hireTeam.list();
+    if (!hired) throw new Error('The hire was not rostered.');
+    await childTurnEnded.promise;
+    await hiring.host.close();
+
+    // The hire's turn was graded by the environment and reflected: the same
+    // machinery, entered because this child is the one that will read it.
+    const hireRows = evolutionRows(hireDb, childActorId(hireDb, hired.name));
+    expect(hireRows.window).toBe(1);
+    expect(hireRows.outcomes).toEqual([{ outcome: 'corrected', source: 'execution' }]);
+    expect(hireRows.lessons).toEqual([{ source: 'turn_reflection', status: 'provisional' }]);
+    expect(hireChild.reflections()).toBe(1);
+  });
+
+  /**
    * A PROGRESS NOTE MUST NOT CANCEL THE ANSWER.
    *
    * The mid-task `progress` report is invited behaviour, and it sets the DURABLE
@@ -1400,6 +1466,23 @@ function actorRowCount(parent: string, actorId: string): number {
       ).get(actorId)?.c ?? 0;
     }
     return total;
+  } finally { db.close(); }
+}
+
+/** What one actor's turns left in the three conversational evolution ledgers:
+ *  the durable window, the graded outcomes and the lessons. */
+function evolutionRows(dbPath: string, actorId: string) {
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    return {
+      window: db.query<{ c: number }, [string]>('SELECT COUNT(*) AS c FROM completed_turns WHERE actor_id = ?').get(actorId)?.c ?? 0,
+      outcomes: db.query<{ outcome: string; source: string }, [string]>(
+        'SELECT outcome, source FROM turn_outcomes WHERE actor_id = ? ORDER BY created_at',
+      ).all(actorId),
+      lessons: db.query<{ source: string; status: string }, [string]>(
+        'SELECT source, status FROM lessons WHERE actor_id = ? ORDER BY created_at',
+      ).all(actorId),
+    };
   } finally { db.close(); }
 }
 

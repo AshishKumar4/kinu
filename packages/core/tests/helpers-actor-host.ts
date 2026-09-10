@@ -93,6 +93,15 @@ export function hostedSeatsOver(input: {
   readonly db: Database;
   /** The activation every seat's claims are attributed to. */
   readonly runId?: string;
+  /**
+   * Build every seat's engine with auto-evolution ON — the shape both backends
+   * host an actor under (`cf-backend/src/actor-hosting.ts`,
+   * `cli-backend/src/agent-host/host.ts`). Off by default: most suites want the
+   * ledgers the orchestrator reads and none of the writes an enabled engine
+   * makes, and a suite asserting what a hosted actor's turn DOES record must say
+   * so, because that claim is only worth making against the production shape.
+   */
+  readonly autoEvolve?: boolean;
 }): HostedSeats {
   const { rt, db } = input;
   const runId = input.runId ?? 'run-hosted-fixture';
@@ -145,10 +154,11 @@ export function hostedSeatsOver(input: {
       turnInFlight: () => host.hosted(bound.reference)?.session.inFlight ?? false,
       setTimer: (fn, ms) => { timers.push({ fn, ms }); },
     },
-    // The REAL engine over this actor's runtime, with auto-evolution off: a
-    // hosted head or node under test records no evolution state, and every
-    // ledger the orchestrator reads is the one the engine owns.
-    engine: new EvolutionEngine(bound.runtime, { enabled: false }),
+    // The REAL engine over this actor's runtime. Auto-evolution off unless the
+    // suite opted in above: a hosted head or node under test then records no
+    // evolution state, and every ledger the orchestrator reads is the one the
+    // engine owns.
+    engine: new EvolutionEngine(bound.runtime, { enabled: input.autoEvolve === true }),
     // This actor's OWN log, bound to the handle the host bound: a child that
     // published into the root's rows would be one actor's turn moving another's.
     eventLog: new EventLog(exec, bound.handle),
