@@ -225,6 +225,22 @@ describe('apply-winner', () => {
     expect(h.origin.transactions).toHaveLength(1);
   });
 
+  // The skip is `sequential-rebase`'s: the single-apply policies apply the first
+  // member or none, so falling through to a later member here would crown a loser.
+  test('a refused winner lands nothing — the losers stay discarded', async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
+    const winner = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    const loser = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
+
+    const report = await h.run('apply-winner', [{
+      ...winner, verdict: { ...winner.verdict!, clean: false },
+    }, loser]);
+
+    expect(report.outcomes.map((o) => o.kind)).toEqual(['refused']);
+    expect(report.stoppedAt).toBe('n1');
+    expect(h.origin.at.get('b.ts')).toBe('B0\n');
+  });
+
   test('a deletion is applied as a deletion', async () => {
     const h = harness({ 'gone.ts': 'bye\n' });
     const winner = await memberOf(h.origin, 'n1', [{ path: 'gone.ts', base: 'bye\n', after: null }]);
@@ -277,7 +293,7 @@ describe('sequential-rebase', () => {
 
     const report = await h.run('sequential-rebase', [first, second]);
 
-    expect(report.stoppedAt).toBe('n2');
+    expect(report.stoppedAt).toBeNull();
     const [, outcome] = report.outcomes;
     expect(outcome?.kind).toBe('refused');
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
@@ -396,7 +412,7 @@ describe('sequential-rebase', () => {
     });
   });
 
-  test('the settle event reports where merge-back stopped', async () => {
+  test('the settle event counts a skipped refusal without naming a stop', async () => {
     const h = harness({ 'shared.ts': 'V0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }]);
     const second = await memberOf(h.origin, 'n2', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }]);
@@ -405,8 +421,96 @@ describe('sequential-rebase', () => {
 
     const [settled] = named(h.log, 'swarm.merge_settled');
     expect(settled?.fields).toMatchObject({
-      policy: 'sequential-rebase', members: 2, applied: 1, refused: 1, stopped_at: 'n2',
+      policy: 'sequential-rebase', members: 2, applied: 1, refused: 1, stopped_at: '',
     });
+  });
+});
+
+/* ── A refusal skips the member, it does not stop the settle ──────────────── */
+
+// THE WALL THAT WAS NOT LOAD-BEARING. `mergeBack` used to break at the first gate
+// refusal, so one unclean member walled off every clean member behind it. A skipped
+// member joins neither `applied` nor the rebase frontier, so each later member's own
+// gate still sees every dependence it could have had on the skipped one — and lands
+// when it has none.
+describe('a refused member is skipped, not stopped at', () => {
+  test('a clean member lands behind a refused one', async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
+    const dirty = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    const clean = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
+
+    const report = await h.run('sequential-rebase', [{
+      ...dirty, verdict: { ...dirty.verdict!, clean: false },
+    }, clean]);
+
+    // RED on the old break: the second outcome did not exist and `b.ts` never landed.
+    expect(report.outcomes.map((o) => o.kind)).toEqual(['refused', 'applied']);
+    expect(h.origin.at.get('b.ts')).toBe('B1\n');
+    expect(h.origin.at.get('a.ts')).toBe('A0\n');
+    expect(report.stoppedAt).toBeNull();
+  });
+
+  test("a skipped member's refusal is still reported, never absorbed", async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
+    const dirty = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    const clean = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
+
+    const report = await h.run('sequential-rebase', [{
+      ...dirty, verdict: { ...dirty.verdict!, clean: false },
+    }, clean]);
+
+    // The settle record names the refusal beside the apply that followed it...
+    const [first] = report.outcomes;
+    if (first?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(first.refusal.cause).toBe('verdict-unclean');
+    // ...and so does the event stream: a skip is a reported fact, not a silent one.
+    expect(named(h.log, 'swarm.merge_refused')).toHaveLength(1);
+    expect(named(h.log, 'swarm.merge_refused')[0]?.fields).toMatchObject({
+      preset: 'test', policy: 'sequential-rebase', node: 'n1', cause: 'verdict-unclean',
+    });
+  });
+
+  test('a member whose base assumed the skipped one is refused as drift', async () => {
+    const h = harness({ 'a.ts': 'A0\n' });
+    const skipped = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    // Built on top of n1's write: its recorded base is what n1 would have left.
+    const onTop = await memberOf(h.origin, 'n2', [{ path: 'a.ts', base: 'A1\n', after: 'A2\n' }]);
+
+    const report = await h.run('sequential-rebase', [{
+      ...skipped, verdict: { ...skipped.verdict!, clean: false },
+    }, onTop]);
+
+    // n1 never landed and never joined the rebase frontier, so n2's divergence at
+    // `a.ts` is foreign drift, not a rebase — and applying it would silently discard
+    // whatever the origin still holds there.
+    expect(report.outcomes.map((o) => o.kind)).toEqual(['refused', 'refused']);
+    const [, outcome] = report.outcomes;
+    if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(outcome.refusal.cause).toBe('base-drift');
+    expect(outcome.refusal.error).toContain('a.ts');
+    expect(h.origin.at.get('a.ts')).toBe('A0\n');
+  });
+
+  test('a member that declares the skipped one is refused by rule 1', async () => {
+    const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
+    const skipped = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+    const dependent = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }], {
+      deps: ['n1'],
+    });
+
+    const report = await h.run('sequential-rebase', [{
+      ...skipped, verdict: { ...skipped.verdict!, clean: false },
+    }, dependent]);
+
+    // Dependency order still places n2 after n1, and n1 never lands, so rule 1 names
+    // it — the dependent is refused by name rather than applied incoherently.
+    expect(report.order).toEqual(['n1', 'n2']);
+    expect(report.outcomes.map((o) => o.kind)).toEqual(['refused', 'refused']);
+    const [, outcome] = report.outcomes;
+    if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(outcome.refusal.cause).toBe('dependency-unsettled');
+    expect(outcome.refusal.error).toContain('n1');
+    expect(h.origin.at.get('b.ts')).toBe('B0\n');
   });
 });
 

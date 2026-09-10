@@ -45,10 +45,15 @@
  * remains a policy this document does not set."* The transaction shape it DID specify
  * answers it mechanically: atomicity is per member by construction, so there
  * is no cross-member transaction to roll back into and members already applied stay
- * applied. This module therefore stops at the first refusal and reports the boundary
- * as DATA ({@link MergeBackReport.stoppedAt}, `swarm.merge_settled`) rather than
- * choosing silently. The unspecified half is the ORDERING GUARANTEE, not the
- * mechanism, and a reader of the report can see exactly where it stopped.
+ * applied. A refused member is therefore SKIPPED rather than stopped at: later
+ * members are still offered to their own gate, which refuses whatever depended on
+ * the skipped one (rule 1 for a declared edge, rules 4 and 6 for an assumed base),
+ * and a skipped refusal stays legible in the outcomes and in `swarm.merge_refused`.
+ * What STOPS the settle — a conflict-spawned merge node, or the first refusal under
+ * a single-apply policy — is reported as DATA ({@link MergeBackReport.stoppedAt},
+ * `swarm.merge_settled`) rather than chosen silently. The unspecified half is the
+ * ORDERING GUARANTEE, not the mechanism, and a reader of the report can see exactly
+ * which members landed, which were refused, and where the settle stopped.
  */
 
 import {
@@ -399,10 +404,11 @@ export interface MergeBackReport {
    *  none. Data because a merge that stopped early cannot otherwise say what order it
    *  was applying — and under `expand:'aggregate'` the order is the whole claim. */
   readonly order: readonly string[];
-  /** The node id merge-back stopped at, or null when every member was reached. The
-   *  cross-member ordering guarantee *Merge-back* leaves open, stated as data: members
-   *  before this one are applied and stay applied, because atomicity is per member
-   *  and there is no cross-member transaction to roll back into. */
+  /** The node id merge-back stopped at, or null when every member was reached — even
+   *  when some were refused and skipped along the way. The cross-member ordering
+   *  guarantee *Merge-back* leaves open, stated as data: members before this one are
+   *  applied and stay applied, because atomicity is per member and there is no
+   *  cross-member transaction to roll back into. */
   readonly stoppedAt: string | null;
 }
 
@@ -553,10 +559,10 @@ function cycleFrom(
 /**
  * Apply a settled swarm's work to the origin under `policy`.
  *
- * Stops at the first refusal and says where (see {@link MergeBackReport.stoppedAt}).
- * Never throws: a merge that could not proceed is a reported refusal, because the
- * caller's next move is to disclose it and a thrown gate is indistinguishable from a
- * filesystem that broke.
+ * Skips a refused member and says where the settle stopped (see
+ * {@link MergeBackReport.stoppedAt}). Never throws: a merge that could not proceed
+ * is a reported refusal, because the caller's next move is to disclose it and a
+ * thrown gate is indistinguishable from a filesystem that broke.
  *
  * THE ORDER IS DERIVED, not taken on trust. Rule 1 refuses a member whose dependency
  * has not landed, so a caller handed a bad order would be told to reorder something
@@ -642,6 +648,16 @@ export async function mergeBack(
         preset: deps.preset, policy, node: member.nodeId,
         cause: refusal.cause, reason: refusal.reason, error: refusal.error,
       });
+      // A REFUSAL SKIPS THE MEMBER, IT DOES NOT STOP THE SETTLE — under
+      // `sequential-rebase`, the only policy that applies more than one member. A
+      // skipped member joins neither `applied` nor the rebase frontier, so every
+      // dependence a later member could have on it is still caught by that later
+      // member's own gate: a declared edge by rule 1 (`dependency-unsettled`), an
+      // assumed base by rule 6 (`base-drift`, after rule 4's re-verification), and a
+      // shared path by the conflict check, which names only what the origin holds.
+      // The single-apply policies keep the break: they apply the first member or
+      // none, so falling through to a later member would apply a loser as a winner.
+      if (policy === 'sequential-rebase') continue;
       stoppedAt = member.nodeId;
       break;
     }
