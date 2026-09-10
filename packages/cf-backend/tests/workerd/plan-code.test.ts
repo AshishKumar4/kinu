@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { expect, it } from 'vitest';
 
 it('hosted Plan analysis reads files and keeps research state without writes or raw network', async () => {
-  const root = env.SLATE_FACET_ROOT.get(env.SLATE_FACET_ROOT.idFromName('plan-analysis'));
+  const root = env.SLATE_ACTOR_ROOT.get(env.SLATE_ACTOR_ROOT.idFromName('plan-analysis'));
   const planned = await root.code('plan', [
     'const text = await workspace.readFile();',
     'const write = await workspace.writeFile();',
