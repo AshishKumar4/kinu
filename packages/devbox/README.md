@@ -25,11 +25,14 @@ that on every call.
 
 `Devbox` owns this order:
 
-1. `onStart` takes the activity lease and arms two schedule rows. It does no
-   slow work because it runs inside `blockConcurrencyWhile`.
-2. A schedule attaches the filesystem, restarts processes, and re-exposes ports
-   outside that gate under a real budget. A port is re-exposed only after its own
-   listener answers.
+1. `onStart` restores inside `blockConcurrencyWhile`. It arms the container
+   schedule rows, then adopts the running instance when it is already restored,
+   else restores it — attach, workload restart, port exposure — under a polled
+   budget. The platform delivers nothing until the hook settles, so no caller
+   ever observes a half-restored box.
+2. A restore the gate cannot finish parks, never ladders: it records its reason
+   and arms the `devboxStartup` row, whose delivered frame continues it where
+   timers fire. A settled restore retires the startup row it no longer needs.
 3. Operations wait on attachment. A failed attach refuses with its reason and
    walks one bounded recovery ladder instead of resetting the object.
 4. A heartbeat holds the lease. Three gates must agree before a stop.
