@@ -371,6 +371,13 @@ export interface ChainGeneration {
   readonly base: ChainBaseLayer;
   /** The cumulative changed set, or undefined until the first delta lands. */
   readonly delta: ChainLayer | undefined;
+  /** How the delta's bytes are laid out. `chunked` is a sidecar of changed
+  *  extents plus a per-file map, materialized into the upper at attach.
+  *  Absent means the legacy layout: a full squashfs of the upper, composed
+  *  as an overlay lower. Absent is the only legacy value because every
+  *  record written before chunked deltas existed holds a full delta; a box
+  *  that wrote one keeps serving it until its next delta commit replaces it. */
+  readonly deltaFormat?: 'chunked' | undefined;
 }
 
 /** Everything a box knows about its own chain. One record, one writer,
@@ -430,6 +437,7 @@ const ChainGenerationSchema = v.object({
     digest: DigestSchema,
     objectVersion: ObjectVersionSchema,
   })),
+  deltaFormat: v.optional(v.picklist(['chunked'])),
 });
 
 const ChainStateSchema = v.object({
@@ -459,6 +467,7 @@ function generationOf(row: v.InferOutput<typeof ChainGenerationSchema>): ChainGe
       digest: row.delta.digest,
       objectVersion: row.delta.objectVersion,
     },
+    deltaFormat: row.deltaFormat,
   };
 }
 
@@ -1330,6 +1339,44 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   /**
+   * Move a staged archive into the store through the mount and return what
+   * the store then holds: the second half of every publication, shared by
+   * whole-tree and chunked stages. `tmpStaged` says the archive sits on
+   * tmpfs, which is returned whether or not the record below is written.
+   */
+  const publishStagedArchive = async (
+    key: string,
+    staged: string,
+    storeHeld: boolean,
+    tmpStaged: boolean,
+  ): Promise<ChainLayer> => {
+    if (!storeHeld) await mountStoreOnce();
+    const published = await shell.publishArchive(staged, mountedLayerPath(CHAIN_STORE_MOUNT, root, key));
+    const landed = await ports.objectFacts(key);
+    if (tmpStaged) {
+      try {
+        const removed = await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
+        if (removed.exitCode !== 0) ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${removed.stderr.trim()}`);
+      } catch (error) {
+        ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${describe({ cause: error })}`);
+      }
+    }
+    if (landed === undefined) {
+      throw new Error(
+        `the container published ${key} through ${CHAIN_STORE_MOUNT} and the store holds no `
+        + 'such object, so nothing has been recorded.',
+      );
+    }
+    if (landed.bytes !== published) {
+      throw new Error(
+        `the store holds ${landed.bytes} bytes for ${key} where the container flushed `
+        + `${published}. Refusing to record a layer whose upload did not carry every byte.`,
+      );
+    }
+    return landed;
+  };
+
+  /**
    * Build a squashfs of `sourceDir`, publish it as `key`, and return what the
    * store then holds for it.
    *
@@ -1372,33 +1419,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const staged = short === null ? archivePath : `${tmpStageDir}/layer.sqsh`;
     if (short !== null) ports.log(`${short} Staging ${sourceDir} in memory at ${tmpStageDir} instead.`);
     await shell.makeSquashfs(sourceDir, staged, excludes);
-    if (!storeHeld) await mountStoreOnce();
-    const published = await shell.publishArchive(staged, mountedLayerPath(CHAIN_STORE_MOUNT, root, key));
-    const landed = await ports.objectFacts(key);
-    if (short !== null) {
-      // The archive is published; memory is returned whether or not the
-      // record below is written. A failed removal is a console line, because
-      // the layer is in the store and the record is what the caller owes.
-      try {
-        const removed = await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
-        if (removed.exitCode !== 0) ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${removed.stderr.trim()}`);
-      } catch (error) {
-        ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${describe({ cause: error })}`);
-      }
-    }
-    if (landed === undefined) {
-      throw new Error(
-        `the container published ${key} through ${CHAIN_STORE_MOUNT} and the store holds no `
-        + 'such object, so nothing has been recorded.',
-      );
-    }
-    if (landed.bytes !== published) {
-      throw new Error(
-        `the store holds ${landed.bytes} bytes for ${key} where the container flushed `
-        + `${published}. Refusing to record a layer whose upload did not carry every byte.`,
-      );
-    }
-    return landed;
+    return await publishStagedArchive(key, staged, storeHeld, short !== null);
   };
 
   const commitExtract = async (
@@ -1880,3 +1901,4 @@ export function upperFingerprintCommand(sourceDir: string): string {
     + '| LC_ALL=C sort -z | sha256sum | cut -c1-64';
   return `bash -o pipefail -c ${shellPath(walk)}`;
 }
+

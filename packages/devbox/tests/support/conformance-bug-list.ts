@@ -29,4 +29,11 @@ export interface KnownRed {
  * whole changed inode. A new row here is a deliberate act, and the suite fails
  * in both directions until it is.
  */
-export const KNOWN_RED: readonly KnownRed[] = [];
+export const KNOWN_RED: readonly KnownRed[] = [
+  {
+    arm: 'snapshot-chain',
+    cell: '6.22',
+    since: '2026-09-10',
+    reason: 'the 64 KiB overwrite put 89478664 bytes against the 196608 bound: the delta archives the whole copied-up inode',
+  },
+];
