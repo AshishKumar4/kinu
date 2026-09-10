@@ -4,7 +4,10 @@ import { join, resolve } from "node:path";
 import { Database } from "bun:sqlite";
 import * as v from "valibot";
 import { afterEach, describe, expect, test } from "bun:test";
-import { initWorkspaceSchema, openWorkspaceMainActor, type LLMProviderConfig } from "@kinu.run/core";
+import {
+  initWorkspaceSchema, openWorkspaceMainActor,
+  type LLMProviderConfig, type SpendSource, type Usage,
+} from "@kinu.run/core";
 import { createWorkspace } from "@kinu.run/core/identity";
 import { makeSql, makeWorkspaceSchemaSql } from "@kinu.run/cli-backend";
 
@@ -311,6 +314,79 @@ describe("CLI inspection commands", () => {
     } finally {
       db.close();
     }
+  }, CLI_SPAWN_TIMEOUT_MS);
+
+  /**
+   * `kinu spend` must say the dollar total is a floor when it is one.
+   *
+   * Two ways a priced total comes out short, and they are DIFFERENT facts: a
+   * call the catalog could not price at all, and a call it priced at a rate
+   * published for another cache-retention tier (`Usage.cacheWrite1h` \u2014 the tier
+   * `cache-breakpoints.ts` really does ask Anthropic for, priced at the one
+   * `cache_write` rate models.dev publishes, which is the 5m one). Before this,
+   * `kinu spend` printed `$0.0340` for both and `--json` was the only way to
+   * tell an estimate from a price, which is the whole gap.
+   */
+  test("kinu spend names BOTH reasons its dollar total is a floor", async () => {
+    const home = mkdtempSync(join(tmpdir(), "kinu-cli-spend-"));
+    tempDirs.push(home);
+    await createLocalAgent(home, "localtest");
+
+    // Rows in the shape the producers write them: `buildModelCallEvent` sets
+    // `usdFloorTokens` from `priceCall`, and omits it when the price is exact.
+    const db = new Database(join(home, "localtest", "agent.db"));
+    try {
+      const actorId = openWorkspaceMainActor(makeSql(db)).actorId;
+      /** The `model_call` payload fields this read model looks at, so the seed
+       *  carries a value contract rather than a bag of unknowns. */
+      const rows: Array<{
+        source: SpendSource;
+        usage: Usage;
+        usd?: number;
+        usdFloorTokens?: number;
+      }> = [
+        // Priced exactly: no marker at all.
+        { source: "judge", usage: { input: 1_000, output: 100 }, usd: 0.0165 },
+        // Priced, and short: 512 of its written tokens used the 1h tier.
+        {
+          source: "judge",
+          usage: { input: 2_048, output: 100, cacheWrite: 1_024, cacheWrite1h: 512 },
+          usd: 0.0175,
+          usdFloorTokens: 512,
+        },
+        // Measured and unpriceable: the other floor reason, so the line has to
+        // carry both rather than whichever one it met first.
+        { source: "fast", usage: { input: 500, output: 50 } },
+      ];
+      rows.forEach((payload, i) => {
+        db.run("INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts) VALUES (?, ?, ?, 'model_call', ?, ?)", [
+          actorId, "workspace", i, JSON.stringify({ ...payload, eventIndex: i, runId: "workspace", timestamp: new Date(i * 1_000).toISOString() }), new Date(i * 1_000).toISOString(),
+        ]);
+      });
+    } finally {
+      db.close();
+    }
+
+    const json = runCli(home, ["spend", "localtest", "--json"]);
+    expect([json.exitCode, json.stderr.toString()]).toEqual([0, ""]);
+    const parsed = v.parse(
+      v.object({ total: v.object({ unpricedCalls: v.number(), floorPricedCalls: v.number() }) }),
+      JSON.parse(json.stdout.toString()),
+    );
+    // The read model saw exactly one of each, so the prose below has two
+    // reasons to state and neither is a formatting accident.
+    expect(parsed.total).toEqual({ unpricedCalls: 1, floorPricedCalls: 1 });
+
+    const printed = runCli(home, ["spend", "localtest"]);
+    expect([printed.exitCode, printed.stderr.toString()]).toEqual([0, ""]);
+    const out = printed.stdout.toString();
+    // The figure itself still prints \u2014 a qualifier that replaced the number
+    // would be a different defect.
+    expect(out).toContain("$0.0340");
+    // …and it prints QUALIFIED, naming both reasons.
+    expect(out).toContain("The dollar total is a floor");
+    expect(out).toContain("1 measured call carried no models.dev rate");
+    expect(out).toContain("1 priced call wrote cache at a retention tier the catalog does not rate");
   }, CLI_SPAWN_TIMEOUT_MS);
 });
 
