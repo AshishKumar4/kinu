@@ -92,8 +92,8 @@ describe('a local runtime opened without a session', () => {
 
     expect(seen.map((resolution) => [resolution.source, resolution.tier])).toEqual([
       ['judge', 'deep'],
-      ['fast', 'tiny'],
-      ['advisor', 'slow'],
+      ['fast', 'fast'],
+      ['advisor', 'deep'],
     ]);
   });
 

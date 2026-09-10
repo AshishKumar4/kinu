@@ -1333,7 +1333,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       roles: {},
       tiers: {
         default: { model: 'local/a' },
-        slow: { model: 'local/b' },
+        deep: { model: 'local/b' },
       },
     };
     const envelope: ProfileCatalogEnvelope = {
@@ -1344,7 +1344,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     };
     const { session, events } = setupWithResolver(resolver, { profileAuthority: () => envelope });
 
-    await session.send('slow once', { tier: 'slow' });
+    await session.send('deep once', { tier: 'deep' });
     await session.send('then default');
 
     const turns = events.filter((event) => event.type === 'turn-end');

@@ -72,7 +72,7 @@ export interface RuntimeComponents {
   craftStore: CraftStore;
   /** Platform-specific memory (wraps VFS + FTS5) */
   memory: Memory;
-  /** Fixed-tier producer lanes (judge/deep, fast/tiny, advisor/slow),
+  /** Fixed-tier producer lanes (judge/deep, fast/fast, advisor/deep),
    *  composed through MODEL_ROUTE_POLICY from the live turn profile. This is
    *  a buildRuntime input. CFRuntime wires the same three AgentRuntime getters
    *  directly because its provider resolver needs the actor and environment. */

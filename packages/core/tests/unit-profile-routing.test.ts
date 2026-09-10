@@ -57,8 +57,8 @@ function memoryConfig(): RoleStateStore & { dump: () => Map<string, string> } {
 
 /** The lanes whose tier the ACCOUNT fixes, so a turn cannot move them. */
 const FIXED_LANES = [
-  ['scaffold', 'deep'], ['judge', 'deep'], ['advisor', 'slow'],
-  ['compaction', 'fast'], ['fast', 'tiny'], ['reflection', 'fast'],
+  ['scaffold', 'deep'], ['judge', 'deep'], ['advisor', 'deep'],
+  ['compaction', 'fast'], ['fast', 'fast'], ['reflection', 'fast'],
 ] as const;
 
 /** The lanes that ride the TURN's own tier, because they carry its resolved
@@ -87,8 +87,8 @@ describe('exhaustive model routing', () => {
 
   test('producers resolve concrete models off the turn profile; platform refuses', () => {
     const tiers = {
-      tiny: { model: '@cf/b/model-b' }, fast: { model: '@cf/b/model-b' },
-      default: { model: '@cf/a/model-a' }, slow: { model: '@cf/b/model-b' },
+      fast: { model: '@cf/b/model-b' },
+      default: { model: '@cf/a/model-a' },
       deep: { model: '@cf/b/model-b' },
     };
     const profile = resolveTurnProfile(baseInput({
@@ -108,10 +108,10 @@ describe('exhaustive model routing', () => {
 });
 
 describe('resolver tier snapshot', () => {
-  test('unset slots alias default across all five slots', () => {
+  test('unset slots alias default across all three slots', () => {
     const p = resolveTurnProfile(baseInput());
     expect(Object.keys(p.tiers).sort()).toEqual([...TIER_IDS].sort());
-    for (const id of ['tiny', 'fast', 'slow', 'deep'] as const) {
+    for (const id of ['fast', 'deep'] as const) {
       expect(p.tiers[id].model).toBe(BUILTIN_PROFILE_CATALOG.tiers.default!.model);
     }
   });

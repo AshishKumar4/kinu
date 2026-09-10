@@ -210,8 +210,8 @@ usage first and report through `ModelCallSink`.
 
 - `MODEL_ROUTE_POLICY` (`profiles/model-route.ts:47`) is the sole
   `SpendSource` table. `agent`, `head`, `mcts`, `swarm`, `sandbox` use the
-  turn tier. `scaffold` and `judge` use `deep`, `advisor` `slow`,
-  `compaction` and `reflection` `fast`, `fast` `tiny`.
+  turn tier. `scaffold`, `judge` and `advisor` use `deep`;
+  `compaction`, `reflection` and `fast` use `fast`.
   `resolveModelRoute` (`:112`) is the only read path.
 - The CLI resolves the immutable profile and calls `reportCall`
   (`model-resolver.ts:182`, `:250`, `:262`) with
