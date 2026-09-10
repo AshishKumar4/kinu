@@ -103,6 +103,16 @@ const hostedPreviewProbe = buildSync({
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
 
+const slateActorProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-actor-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-actor-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'],
+  target: 'es2022',
+  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 const planAnnounceProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/plan-announce-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/plan-announce-probe.js', import.meta.url)),
@@ -146,6 +156,24 @@ export default defineConfig({
             path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
           })),
           durableObjects: { PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', useSQLite: true } },
+        }, {
+          // The seal target is the production root itself, bound here under
+          // its own names: `exercise` addresses it by binding (never by a
+          // retyped subclass), and the root's directory and UserDO hub resolve
+          // exactly as they do in production. `SLATE_ACTOR_ROOT` is this
+          // file's probe root, which owns no identity row and answers only
+          // the two fixture methods the tests drive.
+          workerLoaders: { LOADER: {} },
+          name: 'slate-actor-probe', ...workerCompatibility,
+          modules: slateActorProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          durableObjects: {
+            SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
         }, {
           // The child resolves its workspace through a binding named exactly
           // `OrchestratorAgent`, because that is the name the production
@@ -209,6 +237,7 @@ export default defineConfig({
           FILES_EIO_PROBE: { className: 'FilesEioProbeDO', useSQLite: true },
           PREVIEW_PORT_PROBE: { className: 'PreviewPortProbeDO', scriptName: 'hosted-preview-probe', useSQLite: true },
           SLATE_PROCESS_PROBE: { className: 'SlateProcessProbeDO', useSQLite: true },
+          SLATE_ACTOR_ROOT: { className: 'SlateActorProbeRoot', scriptName: 'slate-actor-probe', useSQLite: true },
           PLAN_ANNOUNCE_ROOT: { className: 'OrchestratorAgent', scriptName: 'plan-announce-probe', useSQLite: true },
           SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
