@@ -5588,6 +5588,39 @@ export abstract class ActorAgent extends Think<Env> {
    */
 
   /**
+   * The SDK's transcript store, asserted present at wake.
+   *
+   * Think's activation runs before this actor's `onStart` (`think.js`
+   * `startThink`: `Session.create(this)`, the hydrating session read, then the
+   * subclass hook), and that session read is what creates `assistant_messages`
+   * — so on every activation whose Think booted, the table exists by the time
+   * this runs. Every conversational reader in core answers from that table
+   * where it exists and falls to plain `messages` where it does not
+   * (`identity/conversation-store.ts` `hasPaneStore`): right for a local
+   * workspace and for a harness that boots the actor half alone (no Think, no
+   * `session`), and silently WRONG for a hosted workspace whose SDK has moved
+   * the transcript. `@cloudflare/think`'s `brisk-chats-branch` changeset lifts
+   * `assistant_messages`, `assistant_compactions` and `assistant_config` into
+   * `cf_agents_session_*` on first wake and drops them, after which the fork
+   * cut, the archive export, conversation search, the eval split and
+   * {@link readInheritedContext} would each read an empty default chat and
+   * report a conversation of zero messages. Asked with `tableExists`, never by
+   * catching: the throw IS the loud failure, at wake, before any of them runs.
+   */
+  protected assertSessionStore(): void {
+    if (this.session === undefined) return;
+    if (tableExists(this.boundSql, 'assistant_messages')) return;
+    throw new Error(
+      'Think booted its session but the workspace database has no `assistant_messages` table: '
+      + 'the SDK stores the transcript somewhere Kinu\'s conversational readers '
+      + '(fork, archive, search, eval split, inherited context) do not read. Refusing to wake, '
+      + 'because every one of them would otherwise answer with an empty conversation. '
+      + 'This is the `@cloudflare/think` session replatform (changeset `brisk-chats-branch`, '
+      + '`cf_agents_session_*`); the readers must move with it before this version ships.',
+    );
+  }
+
+  /**
    * ONE actor's recent conversation, handed to each spawned head so it sees the
    * full context. Capped to the last N messages to bound head LLM context over
    * long sessions (Think Session already compacts the table at the
@@ -5601,7 +5634,8 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected readInheritedContext(actor: ActorHandle = this.actorHandle()): SerializedMessage[] {
     // The agents SDK's session provider creates assistant_messages on its first
-    // append, so an agent that has not run a turn has none. Asked directly:
+    // session read — Think's boot on a hosted activation, so an agent whose
+    // Think never booted (the bun harness) has none. Asked directly:
     // catching instead made "no conversation yet" indistinguishable from a read
     // that blew up, and a head handed [] reports "I found nothing" rather than
     // "I could not see the parent" — the defect owners actually hit.
