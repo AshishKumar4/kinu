@@ -578,6 +578,15 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  through the durable boot id instead (see `#adoptIfCurrent`). */
   #gateRestore: Promise<void> | undefined;
   #restoration: Restoration = { phase: 'unstarted' };
+  /** ADOPTION PENDING: the activation found a settled restoration in the
+   *  durable rows beside a running container and has not yet asked that
+   *  container whether it is the instance the rows name. The constructor's
+   *  gate delivers no timer, so a container that accepts the connection and
+   *  never answers would hold the gate to the platform's cancel and the reset
+   *  would repeat it, for ever; the question is asked on the first delivered
+   *  frame instead, where the SDK's own request deadline fires. Until then the
+   *  box admits nobody and decides nothing on the restoration's behalf. */
+  #adoptionPending = false;
   /** The work-directory holders the last release pass signalled, kept only
    *  long enough for a refused detach to name them. Cleared on every detach
    *  attempt, successful or not, so a later refusal cannot blame a stale list. */
@@ -662,11 +671,38 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
 
   /**
    * One activation's own work, inside its gate: sweep the dead schedule rows,
-   * then adopt the running container's restoration when there is one.
+   * then note the running container's settled restoration as ADOPTION
+   * PENDING. Storage only — no container command runs in this gate, because
+   * the gate delivers no timer to bound one: a control server that accepts
+   * the connection and never answers would hold the block to the platform's
+   * 30 s cancel, the reset would activate again, and the same command would
+   * hang again, with no request, alarm, stop or destroy ever delivered. The
+   * boot id is compared on the first delivered frame (`#resolveAdoption`),
+   * where the SDK's request deadline can fire.
    */
   async #activate(): Promise<void> {
     await this.#sweepUnknownSchedules();
-    if (this.ctx.container?.running === true) await this.#adoptIfCurrent();
+    if (this.ctx.container?.running === true) {
+      this.#adoptionPending = (await this.#durableClaim()) !== undefined;
+    }
+  }
+
+  /** The durable side's claim about the running instance: the boot id it
+   *  stamped and the phase it settled beside it, or undefined without both. */
+  async #durableClaim(): Promise<{ readonly expected: string; readonly settled: SettledRestoration } | undefined> {
+    const [expected, settled] = await Promise.all([
+      this.ctx.storage.get<string>(BOOT_ID_KEY),
+      this.ctx.storage.get<SettledRestoration>(SETTLED_KEY),
+    ]);
+    if (expected === undefined || !isSettledRestoration(settled)) return undefined;
+    return { expected, settled };
+  }
+
+  /** Settle a pending adoption on a delivered frame, before anything reads
+   *  the restoration it would decide: the request door, the heartbeat and the
+   *  checkpoint's replacement check all pass here first. */
+  async #resolveAdoption(): Promise<void> {
+    if (this.#adoptionPending) await this.#adoptIfCurrent();
   }
 
   // ── the override surface ─────────────────────────────────────────────────
@@ -903,13 +939,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * caller runs it.
    */
   async #adoptIfCurrent(): Promise<boolean> {
-    const [expected, settled] = await Promise.all([
-      this.ctx.storage.get<string>(BOOT_ID_KEY),
-      this.ctx.storage.get<SettledRestoration>(SETTLED_KEY),
-    ]);
-    if (expected === undefined || !isSettledRestoration(settled)) return false;
-    if ((await this.#readBootId()) !== expected) return false;
-    this.#restoration = settled;
+    this.#adoptionPending = false;
+    const claim = await this.#durableClaim();
+    if (claim === undefined) return false;
+    if ((await this.#readBootId()) !== claim.expected) return false;
+    this.#restoration = claim.settled;
     return true;
   }
 
@@ -1143,6 +1177,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * same residue handling every attach has.
    */
   async #healReplacedContainer(): Promise<void> {
+    await this.#resolveAdoption();
     // BOTH ADMITTING PHASES. A box in `repair` is serving callers over a work
     // directory too, so a commit against a replaced container is exactly as
     // wrong there as it is on a fully restored one.
@@ -1708,6 +1743,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     this.#generation += 1;
     this.#startup = undefined;
     this.#restoration = { phase: 'unstarted' };
+    this.#adoptionPending = false;
     // The settled phase named the identity this turnover just retired. A row
     // left standing would let the next activation adopt a restoration onto a
     // container it never restored, so it goes with the generation. Not awaited:
@@ -2202,6 +2238,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * caller is told to ask again.
    */
   async ensureReady(): Promise<RestoreAdmission> {
+    await this.#resolveAdoption();
     // A stopped container may still have the previous instance's attached
     // state in memory. Let the startup callback turn that generation over
     // before this method can accept it as ready.
@@ -2792,6 +2829,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    */
   async devboxState(): Promise<DevboxReport> {
     await this.kickStartup();
+    await this.#resolveAdoption();
     const [supervised, ports, incidents] = await Promise.all([
       this.#procSpecs(),
       this.#portSpecs(),
@@ -3154,6 +3192,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       // work directory twice. An attempt in flight owns the identity it is
       // establishing; the beat asks the question only of a box that has
       // settled on an instance and may have lost it since.
+      await this.#resolveAdoption();
       const settled = this.#restoration.phase === 'attached' || this.#restoration.phase === 'repair';
       if (settled && await this.#containerWasReplaced()) {
         console.error(
