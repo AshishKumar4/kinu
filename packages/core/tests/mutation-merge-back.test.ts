@@ -246,7 +246,7 @@ describe('the stale-verdict refusal is load-bearing', () => {
 
     const report = await runWith(pristine, origin, 'sequential-rebase', members);
 
-    expect(report.stoppedAt).toBe('n2');
+    expect(report.stoppedAt).toBeNull();
     const [, outcome] = report.outcomes;
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('verdict-stale');
@@ -346,9 +346,8 @@ describe('the derived dependency order is load-bearing', () => {
   });
 
   // THE ACCEPTANCE MUTATION: apply the members in the order they were offered. Rule 1 then
-  // refuses the dependent, the merge stops at the first member, and a DAG whose vertices
-  // are created after the parents they consumed can never land anything — which is what
-  // makes the derivation the mechanism rather than a tidy-up.
+  // refuses the dependent — and without the derived order the vertex's own work never
+  // lands, which is what makes the derivation the mechanism rather than a tidy-up.
   test('RED: apply them as offered and the dependent refuses for want of its dependency', async () => {
     const mutant = await mutate('offered-order', [[
       DERIVED_ORDER, "({ kind: 'ordered' as const, members })",
@@ -359,13 +358,15 @@ describe('the derived dependency order is load-bearing', () => {
     const report = await runWith(mutant, origin, 'sequential-rebase', members);
 
     expect(report.order).toEqual(['vertex', 'parent']);
-    const [outcome] = report.outcomes;
+    const [outcome, landed] = report.outcomes;
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-unsettled');
-    expect(report.stoppedAt).toBe('vertex');
-    // Nothing landed at all: the parent was never reached either.
+    // The refusal is skipped rather than stopped at, so the parent still lands behind
+    // it — but the vertex's work does not, which is the RED half of this proof.
+    expect(landed?.kind).toBe('applied');
+    expect(report.stoppedAt).toBeNull();
     expect(origin.at.get('c.ts')).toBe('C0\n');
-    expect(origin.at.get('a.ts')).toBe('A0\n');
+    expect(origin.at.get('a.ts')).toBe('A1\n');
   });
 });
 
