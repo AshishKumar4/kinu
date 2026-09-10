@@ -474,6 +474,7 @@ describe('file tool', () => {
       async index(path: string) { indexed.push(path); },
       async search() { return []; },
       async read() { return null; },
+      async tail() { return null; },
     };
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
       const entry = createFileTool({ vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });

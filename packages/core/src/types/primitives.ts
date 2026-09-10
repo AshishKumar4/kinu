@@ -114,6 +114,15 @@ export interface Memory {
   index(path: string): Promise<void>;
   search(query: string, limit?: number): Promise<MemorySearchResult[]>;
   read(path: string): Promise<string | null>;
+  /**
+   * The newest `bytes` of one file as text; null when the file is absent.
+   *
+   * Bounded on the STORE side: an implementation reads at most `bytes` of the
+   * file, never the file to slice it. A window that opens inside a multi-byte
+   * sequence drops that sequence's remainder, so the text is whole code points
+   * and the same bytes `read` would have decoded there.
+   */
+  tail(path: string, bytes: number): Promise<string | null>;
 }
 
 export interface ResolvedProvider {

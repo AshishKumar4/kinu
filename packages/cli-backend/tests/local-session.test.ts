@@ -3650,7 +3650,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
       ...rt,
       memory: {
         ...rt.memory,
-        read: async () => { throw new Error('Failed after 3 attempts. Last error: Too Many Requests'); },
+        tail: async () => { throw new Error('Failed after 3 attempts. Last error: Too Many Requests'); },
       },
     };
     const events: SessionEvent[] = [];

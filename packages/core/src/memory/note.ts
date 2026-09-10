@@ -40,15 +40,21 @@ export function memoryIndexPath(vfsPath: string): string | null {
 export const MEMORY_TAIL_MAX_CHARS = 2000;
 
 /**
- * The newest bytes of the append-only MEMORY.md — the live lessons/reflections
- * tail both backends weave into the dynamic-context block (never
- * the byte-stable prefix, where every append would bust the cache). Bounded to
- * the file's END because that is where the newest entries land. Undefined when
- * memory is empty. Single source of truth for the path + bound so the cf and
- * CLI weaves cannot drift.
+ * The newest characters of the append-only MEMORY.md — the live
+ * lessons/reflections tail both backends weave into the dynamic-context block
+ * (never the byte-stable prefix, where every append would bust the cache).
+ * Bounded to the file's END because that is where the newest entries land.
+ * Undefined when memory is empty. Single source of truth for the path + bound
+ * so the cf and CLI weaves cannot drift.
+ *
+ * Read through the port's tail, so the store hands over a window and not the
+ * file: `maxChars` UTF-16 units span at most 3 bytes each, plus the up-to-3
+ * continuation bytes a window opening inside a 4-byte sequence sheds. That
+ * window always decodes to at least `maxChars` units when the file has them,
+ * so the final slice is the same text a whole-file read would have given.
  */
 export async function readMemoryTail(memory: Memory, maxChars = MEMORY_TAIL_MAX_CHARS): Promise<string | undefined> {
-  const tail = (await memory.read(MEMORY_PATH))?.slice(-maxChars);
+  const tail = (await memory.tail(MEMORY_PATH, maxChars * 3 + 3))?.slice(-maxChars);
   return tail && tail.length > 0 ? tail : undefined;
 }
 
