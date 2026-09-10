@@ -46,8 +46,8 @@ import {
   DELEGATION_TASK_LIFETIME,
   AGENTS_RESULT_PARTS,
   type AgentsToolAction,
-} from './registry';
-import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from './swarm-input';
+} from '../tools/registry';
+import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { ActorReference } from '../identity/actor-handle';
 import type { SubordinateBirth } from '../subordinates/birth';
@@ -100,7 +100,7 @@ import {
 import {
   countedMsgSend,
   type MsgSendResult,
-} from './msg-counters';
+} from '../tools/msg-counters';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace's ONE actor host: spawn =

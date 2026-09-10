@@ -20,7 +20,7 @@ import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read
 import { boundedInt } from '../utils/bounds';
 import type { SubordinateReportStatus } from '../events/hub/types';
 import type { SubordinateReportOrigin } from './support';
-import type { SubordinateRosterEntry, SubordinateStatus } from '../tools/agents-tool';
+import type { SubordinateRosterEntry, SubordinateStatus } from '../delegation/agents-tool';
 import { SUBORDINATE_LIFETIMES, TEMPORARY_LIFETIME, temporaryRunSettles } from './temporary';
 import { ActorReferenceSchema, sameActorReference, type ActorReference } from '../identity/actor-handle';
 import { SubordinateBirthSchema } from './birth';

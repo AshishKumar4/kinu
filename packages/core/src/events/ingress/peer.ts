@@ -46,7 +46,7 @@ import { scheduledOutbox, type Outbox, type OutboxDisposition } from '../outbox'
 import {
   PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
-} from '../../tools/agents-tool';
+} from '../../delegation/agents-tool';
 import { countMsgReceived } from '../../tools/msg-counters';
 import type { SqlExec, VFS } from '../../types/primitives';
 import type { WorkMode } from '../../types/turn';

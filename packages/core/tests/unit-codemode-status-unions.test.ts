@@ -4,7 +4,7 @@
 import { describe, test, expect } from 'bun:test';
 import { SUBORDINATE_REPORT_STATUSES } from '../src/events/hub/types';
 import { TASK_STATUSES, TaskListStore } from '../src/tasks/store';
-import { createReportCodemodeProvider } from '../src/tools/report-codemode';
+import { createReportCodemodeProvider } from '../src/delegation/report-codemode';
 import { createTasksCodemodeProvider } from '../src/tools/tasks-codemode';
 import { createTestWorkspace, createTestActor } from './helpers';
 

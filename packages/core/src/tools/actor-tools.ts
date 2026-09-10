@@ -23,7 +23,7 @@
 
 import type { ToolSet } from 'ai';
 import { buildToolSurface, type BuiltinToolDeps, type ExecuteToolsBuilder } from './builtins';
-import { createAgentsTool, type AgentsToolDeps } from './agents-tool';
+import { createAgentsTool, type AgentsToolDeps } from '../delegation/agents-tool';
 import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 
 // Named for the toolset rather than the actor because cf-backend's actor-agent.ts
@@ -72,4 +72,4 @@ export {
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
-} from './agents-tool';
+} from '../delegation/agents-tool';

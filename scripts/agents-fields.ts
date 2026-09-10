@@ -25,7 +25,7 @@
  *
  *   declared — `AGENTS_TOOL_ACTIONS` (tools/registry.ts), plus
  *              `AGENTS_ACTION_FIELDS` and the `AgentsInputEntries` the parse
- *              schemas are built from (tools/agents-tool.ts).
+ *              schemas are built from (delegation/agents-tool.ts).
  *   read     — the `input.<field>` member reads `dispatchAgentsAction` actually
  *              performs, per `case` arm, followed transitively through every
  *              call that hands the WHOLE input to another function: `runFork`,
@@ -60,7 +60,7 @@
 import { readSources } from './sources';
 import { declaredName, identifierText, literalText, parse, type SyntaxNode, walk } from './syntax';
 
-const AGENTS_TOOL = 'packages/core/src/tools/agents-tool.ts';
+const AGENTS_TOOL = 'packages/core/src/delegation/agents-tool.ts';
 const REGISTRY = 'packages/core/src/tools/registry.ts';
 /** The handler, the picklist, the per-action map and the schema entries — the
  *  four names this gate is a relation between. */

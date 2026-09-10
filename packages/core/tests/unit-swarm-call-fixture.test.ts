@@ -54,7 +54,7 @@ import {
 } from '../src/strategy/swarm';
 import { VERIFIER_KINDS, resolveVerifier, unregisteredKindRefusal } from '../src/strategy/verifier-registry';
 import { AGENTS_TOOL_ACTIONS } from '../src/tools/registry';
-import { parseAgentsToolInput } from '../src/tools/agents-tool';
+import { parseAgentsToolInput } from '../src/delegation/agents-tool';
 import { JsonObjectSchema } from '../src/utils/json';
 
 /** The corpus task entry zero is written over. Its absence is a broken instrument

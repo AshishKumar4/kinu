@@ -32,7 +32,7 @@ import type { EventLog } from '../events/hub/log';
 import type { ReplyChannelStore } from '../events/hub/reply-channel';
 import type { ReplyChannelRow } from '../events/hub/types';
 import type { JsonValue } from '../utils/json';
-import type { PeerSpawnOutcome, PeersToolDeps } from './agents-tool';
+import type { PeerSpawnOutcome, PeersToolDeps } from '../delegation/agents-tool';
 import type { SqlExec, VFS } from '../types/primitives';
 
 /**

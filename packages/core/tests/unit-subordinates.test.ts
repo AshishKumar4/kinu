@@ -54,7 +54,7 @@ import { createMemoryVfs, createTestActors } from '@kinu.run/test-utils';
 import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
 } from './helpers';
-import { dispatchReport } from '../src/tools/report-tool';
+import { dispatchReport } from '../src/delegation/report-tool';
 
 /** One fixed clock for every roster write these scenes make. */
 const NOW = 1_700_000_000_000;

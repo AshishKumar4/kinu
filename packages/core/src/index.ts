@@ -555,13 +555,13 @@ export {
   parseAgentsToolInput, agentsProfileContext,
   AGENTS_ACTION_FIELDS, AGENTS_ACTION_REQUIRED_FIELDS, AGENTS_FIELD_TS_TYPES,
   type AgentsToolInput, type AgentsProfileContext, type DelegatedProfile,
-} from './tools/agents-tool';
+} from './delegation/agents-tool';
 export {
   createLocalPeerEndpoint, samePeerGroup,
   type HostedAgentRef, type LocalPeerEndpoint, type LocalPeerEndpointDeps,
 } from './tools/local-peer';
 // The same delegation dispatch, projected into the codemode sandbox.
-export { createAgentsCodemodeProvider } from './tools/agents-codemode';
+export { createAgentsCodemodeProvider } from './delegation/agents-codemode';
 // `agent.*` — self-direction (curriculum, scaffold proposals, schedules,
 // background jobs, compaction) over one host seam both backends implement.
 export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self';
@@ -656,7 +656,7 @@ export { createMemoryCodemodeProvider } from './tools/memory-codemode';
 export { createMemoryDispatcher, type MemoryToolDeps, type MemoryToolInput } from './tools/memory-tool';
 export { createTasksCodemodeProvider } from './tools/tasks-codemode';
 export { createTasksDispatcher, type TasksToolInput } from './tools/tasks-tool';
-export { createReportCodemodeProvider } from './tools/report-codemode';
+export { createReportCodemodeProvider } from './delegation/report-codemode';
 // The file plane's dispatcher, shared by the native `file` tool and
 // workspace.editFile (execution/inline.ts) — see tools/file-tool.ts.
 export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool';

@@ -6,7 +6,7 @@
  * `SwarmRunDeps.mission`, `AgentsForkDeps.registry`, `FORK_STRATEGY_ID`, merge-back's
  * four policies, `spawnNodeFacet`, the `carry:'artifacts'` threshold, the `models`
  * field, the judge clamp. So the catalogue is `packages/core/src/strategy/` plus
- * `packages/core/src/tools/agents-tool.ts` — the swarm engine, the delegation tool that
+ * `packages/core/src/delegation/agents-tool.ts` — the swarm engine, the delegation tool that
  * drives it, and the measurement seams they settle by. A wider sweep is affordable in
  * wall clock and would dilute the reading; this one aims where the defects already were.
  *
@@ -69,7 +69,7 @@ export const CATALOGUE: readonly Mutation[] = [
   /* ── Controls: decisions a named suite already pins ───────────────────────── */
   {
     id: 'converse-capability-union',
-    file: 'packages/core/src/tools/agents-tool.ts',
+    file: 'packages/core/src/delegation/agents-tool.ts',
     find: 'const converse = !!deps.team || !!deps.peers;',
     replace: 'const converse = !!deps.team && !!deps.peers;',
     decision: 'hire/ask/send/list are offered when EITHER team or peers is wired',
@@ -78,7 +78,7 @@ export const CATALOGUE: readonly Mutation[] = [
   },
   {
     id: 'dispatch-unsupported-guard',
-    file: 'packages/core/src/tools/agents-tool.ts',
+    file: 'packages/core/src/delegation/agents-tool.ts',
     find: 'if (!actions.includes(input.action)) {',
     replace: 'if (actions.includes(input.action)) {',
     decision: "an action this actor's deps do not support is refused before the switch",
@@ -91,7 +91,7 @@ export const CATALOGUE: readonly Mutation[] = [
   // line's decision, and it is still the one worth inverting.
   {
     id: 'swarm-lump-debit-spawn-count',
-    file: 'packages/core/src/tools/agents-tool.ts',
+    file: 'packages/core/src/delegation/agents-tool.ts',
     find: 'mission?.governor.debit(0, { labels: mission.scope.labels, spawns: 1 });',
     replace: 'mission?.governor.debit(0, { labels: mission.scope.labels, spawns: 0 });',
     decision: "a completed swarm call increments the mission ledger's spawns by one",

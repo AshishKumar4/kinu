@@ -4,14 +4,14 @@
  * action shape; calls the SAME ReportToolDeps.report the native tool does.
  */
 import * as v from 'valibot';
-import type { CodemodeProvider } from './sandbox-contract';
-import type { ReportToolDeps } from './builtins';
+import type { CodemodeProvider } from '../tools/sandbox-contract';
+import type { ReportToolDeps } from '../tools/builtins';
 import { dispatchReport } from './report-tool';
 import {
   SUBORDINATE_REPORT_HANDOFF_FIELDS, SUBORDINATE_REPORT_STATUSES,
 } from '../events/hub/types';
-import { TOOL_REACH } from './registry';
-import { branchableToolCall } from './outcome';
+import { TOOL_REACH } from '../tools/registry';
+import { branchableToolCall } from '../tools/outcome';
 
 /** Positional args arrive untyped from the sandbox; narrowing them is this
  *  surface's only job. Which statuses exist, what an empty body is refused
