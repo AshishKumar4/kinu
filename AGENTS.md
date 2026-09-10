@@ -288,7 +288,7 @@ bench/clbench/  Kinu as a system for the external Continual Learning Bench
 ### cf-backend Architecture
 
 - `OrchestratorAgent extends ActorAgent` — chat, built-in tools, evolution hooks
-- `SubordinateAgent extends ActorAgent` — the one facet class, and the seed decides its mode (`FacetKind`): a hired subordinate sharing workspace files with actor-private shell/scaffold state, a tool-using head, a swarm node's host, or a toolless MCTS branch. `ActorAgent.facetClass()` names it; heads, nodes and branches register under `exp:`-keyed facet addresses (`facet-spawn.ts`)
+- Every non-root kind — a hired subordinate, an exploration head, a swarm node, a toolless branch — is a LOGICAL ACTOR of the one workspace Durable Object, not a facet: one database, one identity row per actor (`actor-hosting.ts`, cutover `f9c0b3847`). `OrchestratorAgent` hosts them through `hostedSubordinateRuntime` (`subordinate-hosting.ts`) and `hostHead` / `hostNodeSeat` / `hostBranch` (`exploration-hosting.ts`); a subordinate, a head and a node run `runHeadInference` and record no turn into the evolution window, by decision
 - `runtime.ts` — `createCFRuntime()` bridges Think DO context to `AgentRuntime`
 - `wrangler.jsonc` — DO bindings, worker_loaders, AI Gateway, SPA assets
 - `ControlPlaneDO` — the singleton admin index, feedback queue and audit log
@@ -432,7 +432,7 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - `beforeTurn()` resets per-turn state counters
 - `configureSession()` adds memory context + cached prompt
 - `@callable()` methods for RPC from React UI via `agent.call()`
-- `SubordinateAgent` serves the exploration `@callable()`s beside the subordinate ones (`initHead`/`runAsHead`/`abortHead`, `initNode`/`runAsNode`, `explore`/`generateReflection`); a branch is toolless, while a head or node shares the canonical file plane with a shell and scaffold keyed by its own id. The RPC seal narrows an instance to the family its seed decides (`rpc-surface.ts`)
+- The exploration and subordinate `@callable()`s live on `OrchestratorAgent`; a branch is toolless, while a head or node shares the canonical file plane with a shell and scaffold keyed by its own actor id. The RPC seal (`rpc-surface.ts`) bounds what a stub-holder can reach
 
 ## Architecture Invariants
 
