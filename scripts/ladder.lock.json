@@ -1,8 +1,8 @@
 {
-  "reason": "gate:client-graph joins the commit tier: the browser entries must not reach the vendored agent-core runtime or bun:sqlite through value imports, the edge that blanked bun run dev for four days while the build stayed green by tree-shaking. Commit 79.24s to 80.24s, push 397.81s to 398.81s — the new gate declares 1s from three readings of 0.51/0.54/0.72s on this tree.",
+  "reason": "gate:core-layering joins the commit tier at 1s; the gate self-test row gains its test",
   "tiers": {
     "commit": {
-      "seconds": 80.24,
+      "seconds": 81.24,
       "measuredAt": "2026-09-10",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -23,6 +23,7 @@
         "bun run gate:undeclared-imports": 2,
         "bun run gate:wired": 9,
         "bun run gate:client-graph": 1,
+        "bun run gate:core-layering": 1,
         "bun scripts/schema-drift.ts": 0.23,
         "bun run gate:capability-parity": 1.7,
         "bun run gate:policy-drift": 0.9,
@@ -31,7 +32,7 @@
       }
     },
     "push": {
-      "seconds": 398.81,
+      "seconds": 399.81,
       "measuredAt": "2026-09-10",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
@@ -57,12 +58,13 @@
         "bun run gate:undeclared-imports": 2,
         "bun run gate:wired": 9,
         "bun run gate:client-graph": 1,
+        "bun run gate:core-layering": 1,
         "bun scripts/test-census.ts --ratchet": 5.5,
         "bun run gate:complexity": 1.8,
         "bun run gate:silent-drop": 1.4,
         "bun scripts/secret-scan.ts": 18,
         "bun scripts/schema-drift.ts": 0.23,
-        "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts": 24,
+        "bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts": 24,
         "bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts scripts/python-suites.test.ts": 0.1,
         "bun test scripts/ladder.test.ts": 1,
         "bun test scripts/deploy.test.ts": 87,

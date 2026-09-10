@@ -549,6 +549,20 @@ export const LADDER: readonly Gate[] = [
       + 'that the walk does not model. It prints all three on the GREEN path.',
   },
   {
+    run: 'bun run gate:core-layering',
+    // COMMIT. 40 of core's 42 directories are one import cycle, so no package
+    // split can start; this declares the three layers and locks today's 177
+    // upward edges shrink-only. 0.43s measured, 1s declared.
+    tier: 'commit',
+    seconds: 1,
+    catches: 'a new import inside packages/core that points from platform to '
+      + 'tools or harness, or from tools to harness — one more edge in the cycle '
+      + 'that blocks the package split.',
+    blind: 'the layer map itself is an assertion, a cross-package edge is '
+      + '`gate:undeclared-imports`\'s, and a literal `import(…)` is not read. '
+      + 'It prints all three on the GREEN path.',
+  },
+  {
     run: 'bun scripts/test-census.ts --ratchet',
     // PUSH, beside `gate:wired` and `gate:dead-code`, for their reason: it is a
     // WHOLE-TREE census — 835 test files parsed, plus every product module a
@@ -681,7 +695,7 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27). The census's own suite joins it here and
