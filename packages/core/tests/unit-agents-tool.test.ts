@@ -274,6 +274,31 @@ describe('agents tool — registration and dep-gating', () => {
     expect(t.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.agents);
   });
 
+  // A description that promises a variant the schema does not carry teaches a
+  // call the dispatcher refuses. `lifetime` joins the schema only where a
+  // temporary substrate is wired, so the paragraph that sells it has to travel
+  // on the same condition — and the durable half has to read as a complete
+  // account of `hire` without it.
+  test('the task lifetime is described only where the actor can run one', () => {
+    const temporaryCapable = withBuildMode({ team: makeTeam().deps });
+    const durableOnly = withBuildMode({ team: { ...makeTeam().deps, temporary: undefined } });
+    const said = (deps: Parameters<typeof renderAgentsToolDescription>[0]): string =>
+      renderAgentsToolDescription(deps);
+
+    expect(said(temporaryCapable)).toContain('lifetime:"task"');
+    expect(said(durableOnly)).not.toContain('lifetime:"task"');
+    expect(said(durableOnly)).not.toContain('`lifetime`');
+    // Still a usable account of the rung it does have.
+    expect(said(durableOnly)).toContain('Hire a helper (action=hire)');
+    expect(said(durableOnly)).toContain('stays in your roster');
+    // And the schema agrees with each, which is the property the prose lies about.
+    const props = (deps: Parameters<typeof agentsTool>[0]): string[] => Object.keys(
+      v.parse(v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }), agentsTool(deps).inputSchema).jsonSchema.properties,
+    );
+    expect(props(temporaryCapable)).toContain('lifetime');
+    expect(props(durableOnly)).not.toContain('lifetime');
+  });
+
   test('team-without-peers gates the peer-only pieces (no event_id target, no scope, no workspace hiring)', () => {
     const deps = withBuildMode({ team: makeTeam().deps });
     expect(agentsActionsFor(deps)).toEqual(['hire', 'msg', 'list', 'dismiss']);
