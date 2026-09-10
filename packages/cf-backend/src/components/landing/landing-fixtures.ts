@@ -12,7 +12,7 @@ import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { JsonValueSchema, SubordinateInspectionRequestSchema, seekPage, type PageRequest, type PendingAction, type PlanReview, type RunSummary, type SlateSummary } from '@kinu.run/core';
 import type { BackgroundJob, Rpc, SubordinateRosterEntry } from '@/lib/protocol';
-import type { ModelMenuEntry } from '@/lib/user-api';
+import type { ModelMenuEntry, UserProfile, WorkspaceEntry } from '@/lib/user-api';
 
 const NOW = Date.now();
 
@@ -26,13 +26,35 @@ export const LANDING_MODELS: ModelMenuEntry[] = [
   { spec: LANDING_MODEL, label: 'Claude Opus 4', provider: 'Anthropic' },
   { spec: 'workers-ai/llama-4', label: 'Llama 4 (Workers AI)', provider: 'Workers AI' },
 ];
-
 export const LANDING_WORKSPACE = 'checkout-fixes';
 
 export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
   { name: 'coupon-tester', displayName: 'Coupon tester', role: 'QA', createdBy: 'orchestrator', status: 'working', currentTask: 'Running the checkout regression suite', createdAt: NOW - 36e5, dismissedAt: null },
   { name: 'migration-review', displayName: 'Migration review', role: 'Reviewer', createdBy: 'orchestrator', status: 'awaiting_input', currentTask: 'Needs a call on the backfill order', createdAt: NOW - 72e5, dismissedAt: null },
 ];
+
+/**
+ * The rail's roster, answered the way `gallery.tsx` answers it: the same
+ * entries the app lists, with the frame's workspace first so the rail marks
+ * the open one. Served by the `landing.tsx` fetch shim, read through the
+ * real `listWorkspaces` transport and `WorkspaceRosterProvider`.
+ */
+export const LANDING_ROSTER = {
+  entries: [
+    { name: 'checkout-fixes', displayName: 'Checkout coupon bug', createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
+    { name: 'perf-audit', displayName: 'Perf audit — landing', createdAt: NOW - 3 * 864e5, lastVisited: NOW - 2 * 36e5, archivedAt: null },
+    { name: 'email-triage', displayName: 'Email triage automation', createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
+  ],
+  total: 3,
+} satisfies { entries: WorkspaceEntry[]; total: number };
+
+/** The rail's user row, served by the same shim and read through `getProfile`. */
+export const LANDING_PROFILE: UserProfile = {
+  email: 'ashish@example.com',
+  displayName: 'Ashish',
+  createdAt: NOW - 90 * 864e5,
+  lastSeenAt: NOW,
+};
 
 /* ── The checkout workspace: a Build turn, mid-fix ─────────────────────── */
 
@@ -266,22 +288,24 @@ export const PLAN_FIXTURE: PlanReview = {
 };
 
 /** The plan's decisions, answered the way the product answers them: a saved
- *  annotation stays, a decision records and the next turn is queued. */
-export function planRpc(onDecide: (plan: PlanReview) => void): Rpc {
+ *  annotation stays, a decision records and the next turn is queued. `base` is
+ *  the plan under review — the static frame's annotated one by default, the
+ *  movie's clean one when the walkthrough drives it. */
+export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview = PLAN_FIXTURE): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
     if (method === 'inspectSubordinate') {
       const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
       if (request.view === 'planTasks') return answer({ view: 'planTasks', path: request.path, tasks: [] });
-      return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' ? [PLAN_FIXTURE] : [] } });
+      return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' ? [base] : [] } });
     }
     if (method === 'getEvolutionChangelog') return answer({ seenAt: NOW, unseenCount: 0, entries: [] });
-    if (method === 'savePlanReviewAnnotations') return answer({ ok: true, plan: PLAN_FIXTURE });
+    if (method === 'savePlanReviewAnnotations') return answer({ ok: true, plan: base });
     if (method === 'decidePlanReview') {
       const [, , decision, feedback] = v.parse(DecideArgsSchema, args);
       const decided: PlanReview = {
-        ...PLAN_FIXTURE,
+        ...base,
         status: decision === 'approve' ? 'approved' : 'changes_requested',
         feedback: feedback ?? null,
         handoffAccepted: true,
