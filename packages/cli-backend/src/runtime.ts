@@ -18,7 +18,7 @@ import type {
   ResolvedTurnProfile, Shell,
 } from '@kinu.run/core';
 import type {
-  Schedule, Memory, VFS, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
+  Schedule, Memory, VFS, VfsNativeReads, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
 } from '@kinu.run/core';
 import type { ExecutorProvider, ResourceLimits } from '@kinu.run/core';
 import type { RequestShellApproval, ShellApprovalPolicy } from '@kinu.run/core';
@@ -32,7 +32,7 @@ import {
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor, commandResult, COMMAND_RESULT_TYPE,
-  withMountTable, standardMounts,
+  withMountTable, standardMounts, readTailWithVfsOps,
   withApprovalGatedShell,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount,
@@ -352,9 +352,11 @@ export function makeWorkspaceSchemaSql(db: LocalDb): WorkspaceSchemaSql {
 }
 
 /**
- * Adapt agent-utils MemoryStore to core Memory interface.
+ * Adapt agent-utils MemoryStore to core Memory interface. The tail reads off
+ * the plane's own stat + ranged read, which is why the plane comes alongside
+ * the store: MemoryStore's filesystem seam has neither.
  */
-function adaptMemory(store: MemoryStore, vfs: VFS): Memory {
+function adaptMemory(store: MemoryStore, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
   return {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
@@ -367,6 +369,7 @@ function adaptMemory(store: MemoryStore, vfs: VFS): Memory {
       return Promise.resolve(store.search(query, limit));
     },
     read: (path) => store.readFile(path),
+    tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
   };
 }
 

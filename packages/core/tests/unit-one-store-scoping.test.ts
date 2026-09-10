@@ -141,7 +141,7 @@ function runtimeFor(w: World, actor: ActorHandle, vfs: VFS = createMemoryVfs().v
     },
     memory: {
       write: async () => {}, append: async () => {}, index: async () => {},
-      search: async () => [], read: async () => null,
+      search: async () => [], read: async () => null, tail: async () => null,
     },
     executor: { languages: ['javascript'], execute: async () => ({ result: undefined }) },
     llm: createScriptedLLM([]),

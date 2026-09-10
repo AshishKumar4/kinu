@@ -9,6 +9,7 @@
 
 import { createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration } from '../vfs/nimbus-workspace';
 import type { WorkspaceBundle } from '../vfs/nimbus-workspace';
+import { readTailWithVfsOps, type VfsNativeReads } from '../vfs/mounts';
 import { chunkMarkdown, initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import type { CraftStore } from '../types/agent-runtime';
 import type {
@@ -89,7 +90,7 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
  * fork copies `memory_chunks`, so the same divergence also hands a fork an
  * empty memory index.
  */
-export function createInlineMemory(db: AgentDatabase, vfs: VFS): Memory {
+export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
   const { sql } = wrapDatabase(db);
   initMemoryChunkTables(sql);
   return {
@@ -135,6 +136,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS): Memory {
       // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
       return await vfs.readFile(path, { encoding: 'utf8' }) as string;
     },
+    tail: (path, bytes) => readTailWithVfsOps(vfs, path, bytes),
   };
 }
 

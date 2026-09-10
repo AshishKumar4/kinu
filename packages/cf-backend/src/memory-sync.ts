@@ -10,8 +10,8 @@
  *                             store existed (idempotent, cursor-paged).
  */
 
-import type { AgentConfigStore, Memory, VectorStore } from "@kinu.run/core";
-import { AGENT_CONFIG_KEYS } from "@kinu.run/core";
+import type { AgentConfigStore, Memory, VectorStore, VFS, VfsNativeReads } from "@kinu.run/core";
+import { AGENT_CONFIG_KEYS, readTailWithVfsOps } from "@kinu.run/core";
 import type { IndexedChunk, MemoryStore } from "@kinu.run/agent-utils/memory";
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
@@ -34,8 +34,15 @@ function invalidateSemanticIndex(config: AgentConfigStore): void {
  * A failed sync degrades to lexical-only recall, but it does not pretend the
  * write was indexed: it clears the backfill's completeness marker so the chunks
  * are re-embedded rather than lost.
+ *
+ * `files` is the plane the store indexes, alongside it because the tail reads
+ * off that plane's stat + ranged read and MemoryStore's filesystem seam has
+ * neither.
  */
-export function adaptMemory(store: MemoryStore, vectorStore: VectorStore, config: AgentConfigStore): Memory {
+export function adaptMemory(
+  store: MemoryStore, files: VFS & Pick<VfsNativeReads, 'readRange'>,
+  vectorStore: VectorStore, config: AgentConfigStore,
+): Memory {
   return {
     write: (path, content) => store.writeFile(path, content),
     append: (path, content) => store.appendToFile(path, content),
@@ -58,6 +65,7 @@ export function adaptMemory(store: MemoryStore, vectorStore: VectorStore, config
     },
     search: (query, limit) => Promise.resolve(store.search(query, limit)),
     read: (path) => store.readFile(path),
+    tail: (path, bytes) => readTailWithVfsOps(files, path, bytes),
   };
 }
 

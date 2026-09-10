@@ -27,6 +27,7 @@ import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
 import { createWorkspace, nextWorkspaceGeneration, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
+import type { VfsNativeReads } from '../src/vfs/mounts';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
@@ -167,7 +168,7 @@ export function makeSqlExec(db: Database): SqlExec {
 /** The production workspace filesystem over the test database — the same
  *  Nimbus component both backends run, so tests catch real writer/reader
  *  drift rather than a fixture's. */
-export function createMemoryVFS(db: Database): VFS {
+export function createMemoryVFS(db: Database): WorkspaceVFS {
   return createWorkspaceBundle(db).vfs;
 }
 
@@ -184,7 +185,7 @@ export function createMemoryVFS(db: Database): VFS {
  * call, because a suite silently running against a workspace with no scaffold is how a production
  * swallow gets excused as "the test target lacks the file".
  */
-function afterSeed(vfs: VFS, seed: () => Promise<void>): VFS {
+function afterSeed(vfs: WorkspaceVFS, seed: () => Promise<void>): VFS & Pick<VfsNativeReads, 'readRange'> {
   let seeded: Promise<void> | null = null;
   const chain = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
     async (...args: A): Promise<R> => {
@@ -194,6 +195,7 @@ function afterSeed(vfs: VFS, seed: () => Promise<void>): VFS {
     };
   return {
     readFile: chain((p: string, o?: { encoding?: string }) => vfs.readFile(p, o)),
+    readRange: chain((p: string, offset: number, length: number) => vfs.readRange(p, offset, length)),
     writeFile: chain((p: string, d: string | Uint8Array) => vfs.writeFile(p, d)),
     readdir: chain((p: string) => vfs.readdir(p)),
     stat: chain((p: string) => vfs.stat(p)),
@@ -258,7 +260,7 @@ export function makeAgentDatabase(db: Database): AgentDatabase {
  * memory assertion in this suite would then be passing against a memory that
  * had never stored anything.
  */
-export function createMemoryMemory(db: Database, vfs: VFS): Memory {
+export function createMemoryMemory(db: Database, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
   return createInlineMemory(makeAgentDatabase(db), vfs);
 }
 
@@ -434,7 +436,7 @@ export function createTestRuntime(opts?: {
   // VFS call and orders every later call behind it: a test that writes its own scaffold cannot be
   // overtaken by the seed landing afterwards, and a test that never touches the filesystem never
   // starts a write that could outlive its database. A failed seed is NOT absorbed.
-  const vfs = afterSeed(workspace.vfs, () =>
+  const { readRange, ...vfs } = afterSeed(workspace.vfs, () =>
     workspace.vfs.mkdir('scaffold', { recursive: true })
       .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial')));
   // The PRODUCTION schema FIRST, for the reason spelled out on
@@ -446,7 +448,9 @@ export function createTestRuntime(opts?: {
   // its copy never had.
   initWorkspaceSchema({ execRaw, sql, exec: makeSqlExec(db) });
   const actor = createTestActor(sql, execRaw, 'test-agent-id', 'test-agent');
-  const memory = createMemoryMemory(db, vfs);
+  // The memory's tail reads through the plane's ranged read; `storage.vfs`
+  // stays the seven base methods, the plane a viewer must refuse to slice.
+  const memory = createMemoryMemory(db, { ...vfs, readRange });
   const craftStore = createMemoryCraftStore(db);
   const llm = createMockLLM(opts?.llmResponses);
   const executor = createMockExecutor();

@@ -487,7 +487,7 @@ export function createCFRuntime(
   craftStoreImpl.ensureSchema();
 
   // Adapt MemoryStore to core's Memory interface (writes sync to vectorStore)
-  const memory = adaptMemory(memoryStore, vectorStore, memoryConfig);
+  const memory = adaptMemory(memoryStore, originVfs, vectorStore, memoryConfig);
 
   // Adapt CraftStore to core's CraftStore interface
   const craftStore = adaptCraftStore(craftStoreImpl);
