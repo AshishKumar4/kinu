@@ -27,7 +27,7 @@ import { createScaffoldSurface } from './scaffold/surface';
 import type { ModelRouteResolution } from './profiles/model-route';
 import type { ResolvedTurnProfile } from './profiles/resolve';
 import type { SpendSource } from './events/model-call';
-import type { ActorHandle } from './state/actor-handle';
+import type { ActorHandle } from './identity/actor-handle';
 /**
  * Where the fixed-tier producer lanes come from. The route POLICY is core's
  * (profiles/model-route.ts); this component supplies what only a backend

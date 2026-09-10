@@ -56,7 +56,7 @@ import type {
 import { SIGNAL_ID_METADATA_KEY } from '../types/signals';
 import { StepInjections } from '../prompting/step-injections';
 import { nanoid } from '../utils/nanoid';
-import { isWorkMode, type WorkMode } from '../prompting/surface';
+import { isWorkMode, type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { stampTurnAuthor } from '../utils/ui-message';
 import { diagnostics, KinuError, toKinuError } from '../obs/index';

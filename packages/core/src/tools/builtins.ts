@@ -103,7 +103,7 @@ import { diagnostics, KinuError, renderThrownChain, toKinuError, type Logger } f
 // module holds no runtime import, so this edge cannot close a ring.
 import { keepBuiltins } from '../heads/types';
 import { toolsInWorkMode, permitInPlan, requireBuild } from '../execution/work-mode';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;

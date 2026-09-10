@@ -13,7 +13,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from './actor-handle';
 
 export interface ActivityLogEntry {
   readonly event: string;

@@ -29,7 +29,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
 

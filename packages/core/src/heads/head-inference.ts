@@ -31,7 +31,7 @@ import {
   type ToolSet, type LanguageModel, type ModelMessage, type StepResult,
 } from 'ai';
 import type { HostedActor } from '../state/actor-host';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
 import type { PromptModelContext } from '../prompting/model-profile';

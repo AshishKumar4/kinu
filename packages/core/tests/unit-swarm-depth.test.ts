@@ -52,7 +52,7 @@ import type { Floor, Objective, ObjectiveIdentity, VectorObjective } from '../sr
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { SearchNode } from '../src/types/mcts';
 import type { LLM, SqlExecutor } from '../src/types/primitives';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import { createTestActors } from '@kinu.run/test-utils';
 import { refuseHostNode } from './helpers-actor-host';
 

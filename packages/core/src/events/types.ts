@@ -20,7 +20,7 @@ import type { MissionBudgetRefusal } from '../mission-budget';
 import type { HeadFileChangeSet } from '../heads/types';
 import type { Usage } from '../usage';
 import type { ToolOutcome } from '../tools/outcome';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import type {
   SpendSource, ModelOperationKind, ModelOperationOutcome, ModelOperationPhase,
 } from './model-call';

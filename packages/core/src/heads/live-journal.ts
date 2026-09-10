@@ -39,7 +39,7 @@
  */
 import { diagnostics, toKinuError } from '../obs';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { HeadJournal } from './journal';
 import type {
   Evidence, HeadId, HeadInput, HeadReport, HeadStep, MergeResult, MergeStrategy,

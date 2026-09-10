@@ -22,7 +22,7 @@
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initActorTables, initWorkspaceOwnershipTables } from './schema';
-import { initWorkspaceActorTable } from '../state/workspace-actors';
+import { initWorkspaceActorTable } from './workspace-actors';
 import { initEffectTombstoneTable } from './effect-tombstones';
 import { initAgentConfigTable } from '../config/store';
 import { initCurriculumTable } from '../curriculum/proposer';

@@ -38,7 +38,7 @@ import {
 } from '../obs/index';
 import { nanoid } from '../utils/nanoid';
 import type { VFS } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { SqlExecutor } from '../types/primitives';
 import type { SwarmBudget } from './swarm-budget';
 import type { BranchContext } from './swarm';

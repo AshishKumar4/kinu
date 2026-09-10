@@ -10,7 +10,7 @@
  */
 
 import type { AgentConfigStore } from '../config/store';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { conversationCount, conversationPageRows, type ConversationPageRow } from '../identity/conversation-store';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
 import { readSoul, summarizeSoul } from '../identity/soul';

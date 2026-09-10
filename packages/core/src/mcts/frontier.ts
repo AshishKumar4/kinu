@@ -32,7 +32,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { SearchNode } from '../types/mcts';
 import { selectNode } from './uct';
 

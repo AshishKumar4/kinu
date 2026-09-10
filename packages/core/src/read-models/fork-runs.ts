@@ -41,7 +41,7 @@ import type { SqlExecutor } from '../types/primitives';
 import { boundedInt } from '../utils/bounds';
 import { seekPage, StaleCursorError, type Page, type SeekCursor } from './page';
 import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 /** One vocabulary across both halves, so a list row can be read without knowing
  *  which stores it wrote. `partial` is "it stopped without a settled answer" —

@@ -22,7 +22,7 @@
  * a subordinate owes no alternate takes, so it passes none, and no row exists.
  */
 import type { JsonValue } from '../utils/json';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import type { RunEndReason } from './turn-lifecycle';
 import type { TurnContinuity } from './agent-orchestrator';
 import type { OwedEffect } from './terminal-effects';

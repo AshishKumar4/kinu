@@ -24,8 +24,8 @@ import { nowMs } from '../utils/date';
 import { createVercelAILLM } from '../llm';
 import { buildRuntime } from '../runtime-builder';
 import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff';
-import type { ActorHandle } from '../state/actor-handle';
-import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../state/workspace-actors';
+import type { ActorHandle } from './actor-handle';
+import { initWorkspaceActorTable, WorkspaceActorDirectory } from './workspace-actors';
 
 export { wrapDatabase, type AgentDatabase } from './inline-primitives';
 

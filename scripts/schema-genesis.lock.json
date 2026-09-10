@@ -24,7 +24,7 @@
     "step_index",
     "recorded_at"
   ],
-  "actor_program_state@packages/core/src/tools/state-codemode.ts": [
+  "actor_program_state@packages/core/src/identity/program-state.ts": [
     "actor_id",
     "key",
     "value",
@@ -1200,7 +1200,7 @@
     "secret",
     "created_at"
   ],
-  "workspace_actors@packages/core/src/state/workspace-actors.ts": [
+  "workspace_actors@packages/core/src/identity/workspace-actors.ts": [
     "actor_id",
     "workspace_id",
     "parent_actor_id",

@@ -10,7 +10,7 @@
 import { initSearchTables } from '../mcts/schemas';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { initScaffoldTables } from '../scaffold/schemas';
-import { initCodemodeStateTable } from '../tools/state-codemode';
+import { initCodemodeStateTable } from './program-state';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 
 export const WORKSPACE_IDENTITY_DDL =

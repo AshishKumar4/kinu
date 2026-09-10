@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ToolSet } from 'ai';
 import * as v from 'valibot';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { KinuError, refusalOf, type Refusal } from '../obs/error';
 
 import type { CodemodeProvider } from '../tools/sandbox-contract';

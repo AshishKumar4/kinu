@@ -4,7 +4,7 @@ import { runMCTS } from '../src/mcts/engine';
 import { initSearchTables } from '../src/mcts/schemas';
 import { initScaffoldTables } from '../src/scaffold/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../src/mcts/search-store';
-import type { WorkMode } from '../src/prompting/surface';
+import type { WorkMode } from '../src/types/turn';
 
 function initTables(runtime: ReturnType<typeof createTestRuntime>['rt']): void {
   initSearchTables(runtime.storage.execRaw);

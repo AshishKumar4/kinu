@@ -16,7 +16,7 @@
 // assignment, and one plan per actor is what makes the list mean anything."
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
 import type { ActiveRoster } from '../prompting/volatile-context';
 import { sqlCheckList } from '../identity/schema';

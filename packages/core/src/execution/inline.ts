@@ -17,7 +17,7 @@
 import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import { appendMemoryNote } from '../memory/note';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno';

@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
-import { actorScaffoldPath, initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { actorScaffoldPath, initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
-import { initCodemodeStateTable } from '../src/tools/state-codemode';
+import { initCodemodeStateTable } from '../src/identity/program-state';
 function workspace(id: string, owner: string) {
   const database = createTestSql();
   database.execRaw(WORKSPACE_IDENTITY_DDL);

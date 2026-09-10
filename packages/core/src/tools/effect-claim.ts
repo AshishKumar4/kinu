@@ -36,7 +36,7 @@ import type { ToolSet } from 'ai';
 import { argumentDigest } from '../safety/argument-digest';
 import { KinuError } from '../obs/index';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue, projectJsonValue, type JsonValue } from '../utils/json';
 import { replayPolicyFor } from './registry';
 

@@ -65,8 +65,8 @@ import {
   OUTPUT_CONTINUATION_EVENT, OUTPUT_CONTINUATION_TEXT, RUN_END_REASONS,
 } from './turn-lifecycle';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
-import type { WorkMode } from '../prompting/surface';
+import type { ActorHandle } from '../identity/actor-handle';
+import type { WorkMode } from '../types/turn';
 import type { TurnContinuity } from './agent-orchestrator';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
 import { OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT } from '../turn-failure';

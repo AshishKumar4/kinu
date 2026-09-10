@@ -59,7 +59,7 @@ import type {
 import type {
   Floor, FloorBreach, ObjectiveIdentity, PublicationState,
 } from '../src/strategy/objective';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 
 type ArchiveModule = typeof pristineArchive;

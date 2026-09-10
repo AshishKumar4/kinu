@@ -12,7 +12,7 @@ import { Database } from 'bun:sqlite';
 import { sqlOver, createMemoryVfs, createTestRuntime } from '@kinu.run/test-utils';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
-import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import {
   createActorHost, childContextResolver,
   type ActorHost, type BoundActor,
@@ -22,7 +22,7 @@ import { initCompletedTurnTable, createCompletedTurnStore } from '../src/evoluti
 import { readScaffoldFileText } from '../src/scaffold/surface';
 import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator';
 import type { Identity, VFS, SqlExecutor } from '../src/index';
-import type { ActorReference } from '../src/state/actor-handle';
+import type { ActorReference } from '../src/identity/actor-handle';
 import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/actor-claims';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };

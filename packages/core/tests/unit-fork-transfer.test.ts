@@ -23,7 +23,7 @@ import {
   type ForkSnapshot, type ForkFrame, type ForkWriteTarget, type UnsealedForkFrame,
 } from '../src/index';
 import { createTestWorkspace as fresh, type TestWorkspace } from './helpers';
-import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 
 const OWNER: ForkWriteTarget = { workspaceId: 'FORK-ID', workspaceName: 'my-fork', now: 4242 };
 

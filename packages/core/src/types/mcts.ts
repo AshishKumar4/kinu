@@ -103,7 +103,7 @@ export type MCTSProgressEvent = MCTSProgressBody & { readonly rootId: string };
 
 export interface MCTSConfig {
   /** Trusted caller mode. Direct/eval callers default to Build. */
-  mode?: import('../prompting/surface').WorkMode;
+  mode?: import('./turn').WorkMode;
   budget: number;
   branches: number;
   maxDepth?: number;

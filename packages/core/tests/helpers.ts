@@ -22,7 +22,7 @@ import type {
   VFS,
 } from '../src/types/primitives';
 import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
@@ -32,9 +32,9 @@ import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';
 import { WORKSPACE_IDENTITY_DDL, tableExists, initActorTables } from '../src/identity/schema';
-import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/state/workspace-actors';
+import { initWorkspaceActorTable, WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
-import { initCodemodeStateTable } from '../src/tools/state-codemode';
+import { initCodemodeStateTable } from '../src/identity/program-state';
 
 export function createTestActor(sql: SqlExecutor, execRaw: RawSqlExec, workspaceId: string, name: string) {
   if (tableExists(sql, 'workspace_identity') && sql`SELECT id FROM workspace_identity LIMIT 1`.length > 0) return openWorkspaceMainActor(sql);

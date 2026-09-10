@@ -17,7 +17,7 @@ import {
 import type { WebhookTriggerSpec } from '../src/events/ingress/webhook';
 import { createMemoryVfs, createTestActors } from '@kinu.run/test-utils';
 import { makeSqlExec, makeSql as taggedSql, makeExecRaw } from './helpers';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 function makeSql(db: Database): SqlExec {
   return makeSqlExec(db);

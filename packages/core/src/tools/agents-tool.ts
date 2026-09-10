@@ -49,7 +49,7 @@ import {
 } from './registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from './swarm-input';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
-import type { ActorReference } from '../state/actor-handle';
+import type { ActorReference } from '../identity/actor-handle';
 import type { SubordinateBirth } from '../subordinates/birth';
 import type { PublishHeadStream } from '../heads/head-stream';
 import type { AnnounceHeadActivity } from '../heads/live-journal';
@@ -78,7 +78,7 @@ import type { NodeIdentity, NodeWorkspace, NodeWorkspaceProvisioner } from '../s
 import type { HostedNodeSeat } from '../strategy/node-agent';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { CostModel } from '../mcts/cost';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, KinuError, renderThrownChain, toKinuError, type Refusal } from '../obs/index';
 import {

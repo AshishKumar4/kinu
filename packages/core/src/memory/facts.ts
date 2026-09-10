@@ -17,7 +17,7 @@
 // not a shared row two actors read differently.
 
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import * as v from 'valibot';
 import { parseJsonValue, type JsonValue } from '../utils/json';
 import { classify } from '../obs/index';

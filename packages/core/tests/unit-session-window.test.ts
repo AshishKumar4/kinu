@@ -4,7 +4,7 @@ import { createTestActors, createTestSql } from '@kinu.run/test-utils';
 import { initCompletedTurnTable, createCompletedTurnStore, type CompletedTurnStore } from '../src/evolution/session-window';
 import type { CompletedTurn } from '../src/evolution/types';
 import type { SqlExecutor } from '../src/types/primitives';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 /** The window is ONE actor's: `completed_turns` is keyed by actor, and a turn
  *  a subordinate completed is not a turn in the root's evolution window. */

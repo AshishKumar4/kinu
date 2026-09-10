@@ -28,8 +28,8 @@
 // reported to the resume gate as work nothing will continue.
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
-import type { WorkMode } from '../prompting/surface';
+import type { ActorHandle } from '../identity/actor-handle';
+import type { WorkMode } from '../types/turn';
 import { renderThrownChain } from '../obs/index';
 import type { ActiveRoster } from '../prompting/volatile-context';
 

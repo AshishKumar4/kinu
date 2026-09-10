@@ -12,7 +12,7 @@ import type { TurnOutcome } from '../src/evolution/outcomes';
 import {
   alignmentConvergence, renderAlignmentConvergence,
 } from '../src/evolution/alignment';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 
 /** The ledger and the actor it belongs to: `turn_outcomes` is keyed by

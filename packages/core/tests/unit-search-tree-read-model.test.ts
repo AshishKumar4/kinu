@@ -14,7 +14,7 @@ import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { initSearchTables } from '../src/mcts/schemas';
 import { readLatestSearchTree, readSearchNodeDetail } from '../src/read-models/search-tree';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 /** The ledger and the actor it belongs to. `search_nodes` is keyed
  *  `(actor_id, id)`, so a seed and a read under different handles would come

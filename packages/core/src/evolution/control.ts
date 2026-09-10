@@ -37,7 +37,7 @@ import {
   type ScaffoldRunOptions, type ScaffoldRunResult,
 } from '../scaffold/executor';
 import { modifyScaffold } from '../scaffold/modify';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { listScaffoldArchive, type ScaffoldArchiveEntry } from '../scaffold/archive';
 import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,

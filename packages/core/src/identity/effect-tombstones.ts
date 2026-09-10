@@ -24,7 +24,7 @@
  */
 
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from './actor-handle';
 import { nowMs } from '../utils/date';
 
 export function initEffectTombstoneTable(execRaw: RawSqlExec): void {

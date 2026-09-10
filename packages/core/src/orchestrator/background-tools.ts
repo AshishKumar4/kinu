@@ -16,12 +16,12 @@ import * as v from 'valibot';
 import { CONFINED_BACKGROUNDABLE_TOOLS, type BackgroundableTool } from '../jobs/background-wrap';
 import { RESUME_REDRIVE_OPTION } from '../jobs/threshold';
 import { JobNotResumable } from '../jobs/runner';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { resumableAgentsInput } from '../tools/agents-tool';
 import { harvestSwarm } from '../strategy/swarm-resume';
 import type { MctsSearchStore } from '../mcts/search-store';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { nanoid } from '../utils/nanoid';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 

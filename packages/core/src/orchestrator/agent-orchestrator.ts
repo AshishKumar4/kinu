@@ -74,7 +74,8 @@ import {
   MISSION_LABELS_METADATA_KEY, readMissionLabels, type MissionGovernor,
 } from '../mission-budget';
 import { nanoid } from '../utils/nanoid';
-import { workModeForTurnMetadata, type WorkMode } from '../prompting/surface';
+import { workModeForTurnMetadata } from '../prompting/surface';
+import { type WorkMode } from '../types/turn';
 import type { JsonObject } from '../utils/json';
 import { diagnostics, toKinuError } from '../obs/index';
 

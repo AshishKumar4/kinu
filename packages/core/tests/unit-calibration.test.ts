@@ -8,7 +8,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { testActorHandle } from '@kinu.run/test-utils';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import { makeSql, makeExecRaw } from './helpers';
 import {
   initTurnOutcomeTables, recordTurnOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,

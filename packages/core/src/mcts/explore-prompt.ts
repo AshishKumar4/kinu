@@ -19,7 +19,7 @@
 
 import { diversityDirective } from './diversity';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 
 /** A crafted tool as a branch is told about it — name and description only. A
  *  branch reasons, it does not call tools. */

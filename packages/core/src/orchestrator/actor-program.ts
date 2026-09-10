@@ -1,5 +1,5 @@
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { readVersionedScaffoldSource } from '../scaffold/shadow';
 import { assertScaffoldActive, type ScaffoldRunControl } from '../scaffold/executor';
 import { sha256Hex } from '../safety/argument-digest';

@@ -42,7 +42,7 @@ import { wrapDatabase } from '../src/identity/create';
 import { normalizeObservedTables } from '../src/conformance';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
 import { initActorTables, initWorkspaceOwnershipTables } from '../src/identity/schema';
-import { initWorkspaceActorTable } from '../src/state/workspace-actors';
+import { initWorkspaceActorTable } from '../src/identity/workspace-actors';
 import { initEffectTombstoneTable } from '../src/identity/effect-tombstones';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCurriculumTable } from '../src/curriculum/proposer';
@@ -70,7 +70,7 @@ import { initTaskListTable } from '../src/tasks/store';
 import { initPromptSectionTables } from '../src/prompting/section-store';
 import { initExplorationRecordsTable } from '../src/strategy/records';
 import { initSwarmNodeRecords } from '../src/strategy/swarm-resume';
-import { initCodemodeStateTable } from '../src/tools/state-codemode';
+import { initCodemodeStateTable } from '../src/identity/program-state';
 import { makeSqlExec } from './helpers';
 
 /**
