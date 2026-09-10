@@ -517,7 +517,7 @@ export interface ActorToolDeps {
   team?: TeamToolDeps;
   /** Cross-workspace peer messaging — orchestrator-only, because
    *  `hire scope=workspace` mints the root of a fresh tree (see
-   *  AgentsToolDeps.peers in core tools/agents-tool.ts). */
+   *  AgentsToolDeps.peers in core delegation/agents-tool.ts). */
   peers?: PeersToolDeps;
   /** Subordinate → parent progress spine — subordinate-only. */
   report?: ReportToolDeps;

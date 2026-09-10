@@ -153,7 +153,7 @@ One cycle, declared and dev-only. `core` lists `@kinu.run/test-utils` under
    deliberately NOT here … Both backends keep constructing that one
    themselves". `layergate/layers.ts:1531-1534` holds a placeholder row that
    `scripts/layergate.ts:9-17,45-49` fills by importing
-   `packages/compaction/src/index`. `identity/workspace-schema.ts:72-76`
+   `packages/compaction/src/index`. `state/workspace-schema.ts:72-76`
    owns compaction's DDL because "that package sits above core". Both backends
    then build the same extension (`cf-backend/src/actor-agent.ts:1495,2475-2490`,
    `cli-backend/src/local-session.ts:883-913`).

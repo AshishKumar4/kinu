@@ -33,6 +33,7 @@ import * as v from 'valibot';
 // registers any actor, and building its runtime reaches `env.UserDO` for the
 // device plane — so the class this worker binds has to be here.
 export { UserDO } from '../../src/user/user-do';
+export { UserSocketProbeDO } from './user-socket-probe';
 
 type ActorEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
 

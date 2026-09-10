@@ -33,6 +33,9 @@ interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
     published: string[];
   }>;
 }
+interface UserSocketProbeRpc extends Rpc.DurableObjectBranded {
+  deliverBareFrame(): Promise<'handled' | { readonly threw: string }>;
+}
 interface SlateEgressRpc extends Rpc.DurableObjectBranded {
   request(mode: 'plan' | 'build', target: string, redirect?: RequestRedirect): Promise<string>;
   publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
@@ -67,6 +70,7 @@ declare global {
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
       SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
+      USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }

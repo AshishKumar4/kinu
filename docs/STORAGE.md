@@ -451,7 +451,7 @@ since owns its own DDL. All of it is `IF NOT EXISTS`. All of it runs from the sa
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
 | Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts` (CLI session; on cf the board lives in the owner's UserDO) |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
-| Compaction | `compaction_state`, `compaction_archive` | `core/src/identity/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
+| Compaction | `compaction_state`, `compaction_archive` | `core/src/state/workspace-schema.ts` (the DDL lives in core because `@kinu.run/compaction` sits above it in the dependency graph) |
 | Typed config | `agent_config` | `core/src/config/store.ts` |
 | Prompt sections | `prompt_section_versions`, `prompt_section_evaluations` | `core/src/prompting/section-store.ts` |
 
@@ -481,7 +481,7 @@ real `sqlite_master`. Read the manifest first. This page narrates over it.
 
 ## Schema initialization
 
-`initWorkspaceSchema()` (`core/src/identity/workspace-schema.ts`) is the one
+`initWorkspaceSchema()` (`core/src/state/workspace-schema.ts`) is the one
 answer to which tables a workspace has. Every composition root calls it: the
 orchestrator DO `ensureSchema()`, the subordinate DO, `openWorkspaceCLI`,
 the local session constructor, and `kinu create`. One list, because parallel
