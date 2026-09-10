@@ -22,11 +22,9 @@ import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { SlateBinding } from '../../src/slates/bindings';
-interface RetainedFacetRpc extends Rpc.DurableObjectBranded {
-  exercise(operation: string): Promise<object>;
-}
-interface SlateFacetRootRpc extends Rpc.DurableObjectBranded {
-  exercise(family: 'subordinate' | 'exploration'): Promise<{ answeredBy: string; method: string; browserCallable: boolean }>;
+import type { ExecutorInfo } from '@kinu.run/core';
+interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
+  exercise(family: 'subordinate' | 'exploration'): Promise<{ answer: ExecutorInfo[]; browserCallable: boolean }>;
   code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
 }
 interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
@@ -67,9 +65,7 @@ declare global {
       FILES_EIO_PROBE: DurableObjectNamespace<FilesEioProbeDO>;
       PREVIEW_PORT_PROBE: DurableObjectNamespace<PreviewPortProbeDO>;
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
-      SLATE_FACET_ROOT: DurableObjectNamespace<SlateFacetRootRpc>;
-      RETAINED_FACET_SDK: DurableObjectNamespace<RetainedFacetRpc>;
-      RETAINED_FACET_ACTOR: DurableObjectNamespace<RetainedFacetRpc>;
+      SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
