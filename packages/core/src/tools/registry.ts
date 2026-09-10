@@ -476,7 +476,7 @@ export const DELEGATION_RUNGS = {
   // hire that should have been `task` leaves a roster row nobody retires.
   hire:
     'Hire a helper (action=hire): one agent per independent workstream, each running its own tool loop over this same workspace. '
-    + 'By default a hire outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
+    + 'A hire outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
     // The other half of the CONTEXT axis, from the same per-action source the
     // `mission` field composes.
     + `${DELEGATION_INHERITANCE.hire.rung} `
@@ -487,11 +487,17 @@ export const DELEGATION_RUNGS = {
  * The `task` lifetime, rendered ONLY where the actor wires a substrate that can
  * run one. `lifetime` joins the schema on the same condition, and an unwired
  * `task` hire is refused, so promising it everywhere advertised a field the
- * caller could not set and a rung it could not reach. The durable half above
- * reads as the whole of `hire` without it, which is what a team-only actor has.
+ * caller could not set and a rung it could not reach.
+ *
+ * It OPENS BY SCOPING the rung above it, because that rung says a hire stays in
+ * the roster and a task hire does not. Where this paragraph is absent the rung
+ * is the whole truth and carries no lifetime vocabulary at all, which is what a
+ * team-only actor reads; where it is present it names itself the exception. The
+ * rung must not hedge instead — a "default" implies an alternative the reader
+ * may have no way to reach.
  */
 export const DELEGATION_TASK_LIFETIME =
-  '`lifetime` decides how long the helper lives, and lifetime:"task" is for when you want an answer, not a colleague — the agent is created for that one question, this call waits for it to finish and returns its answer here, and it is archived the moment it answers with its transcript kept. It is the lifetime for work that is bounded and self-contained: reading a large file to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. There is no follow-up, so state the whole question once; a second exchange wanted the default "durable".';
+  'That roster account is the DEFAULT lifetime, and `lifetime:"task"` overrides it: a task hire is for when you want an answer, not a colleague — the agent is created for that one question, this call waits for it to finish and returns its answer here, and it is archived the moment it answers with its transcript kept. It is the lifetime for work that is bounded and self-contained: reading a large file to answer something specific, an independent review of something you produced, a focused investigation whose result you need before your next step. There is no follow-up, so state the whole question once; a second exchange wanted the default "durable".';
 
 /**
  * The `agents` result contract, in the three pieces its two renderers select
