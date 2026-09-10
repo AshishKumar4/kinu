@@ -893,14 +893,7 @@
       "file": "scripts/bench-devbox-strategies.ts",
       "kind": "hand-parser",
       "owner": "parseOptions",
-      "sourceSha256": "2c61e685ff6326d33fc4dc1f01278866c16623eac0e0c7c7c62cbe4cbb787792",
-      "decision": "cli"
-    },
-    {
-      "file": "scripts/bench-devbox-strategies.ts",
-      "kind": "hand-parser",
-      "owner": "parseOptions",
-      "sourceSha256": "4c99b6ad50426b4e447504f8c11071a96dce01034b1d1b9ae07040679ea6aec0",
+      "sourceSha256": "5dd72aefcacd83ed7bc48f3d545dc213590ac83a613ed45d417391932a0217c8",
       "decision": "cli"
     },
     {

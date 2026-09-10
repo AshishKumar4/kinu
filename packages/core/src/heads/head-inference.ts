@@ -682,6 +682,23 @@ function classifyHeadOutcome(
  * counter, and the findings are ONE capture — so the report says what the whole
  * run did rather than what its last turn did.
  *
+ * THE STEP CLOCK, AND NO OTHER TIMESCALE. Every turn admitted here runs with
+ * the actor's own orchestrator extension registered (`ActorSession.execute`),
+ * so the in-episode clock ticks: crafted-tool fitness moves the workspace-wide
+ * `crafted_tools` EMA, and an execution recovery is recorded under this actor.
+ * No turn is handed to `AgentOrchestrator.recordTurn`, so the turn review, the
+ * session window and the lifetime pass are never entered from this loop — a
+ * head, a node and a subordinate hosted on this loop learn nothing at those
+ * timescales, by decision. Two facts settle it. The lessons ledger is
+ * actor-scoped and every exploration retirement destroys the actor's rows
+ * (`keepHistory: false`), so a lesson written here would outlive nothing. And
+ * the one measured signal a headless run has — a swarm objective's verifier —
+ * is scored by the search under the ROOT's actor (`strategy/swarm-scoring.ts`,
+ * `scoreExpansion`) and consumed there, by selection, the next level's seed and
+ * the records store; a judged run measures nothing and is told apart by the
+ * outcome's own `kind`. `tests/unit-headless-learning.test.ts` fails if a turn
+ * from here starts reaching those ledgers.
+ *
  * NEVER THROWS: a failure becomes an `errored` report, because the controller
  * treats a thrown run() as budget_exceeded and that is a different claim.
  */

@@ -521,6 +521,10 @@ run_required_gate "Dead code" bun run gate:dead-code
 # other's class — an undeclared edge is not a declaration, so the census that
 # walks declarations cannot reach it.
 run_required_gate "Undeclared imports" bun run gate:undeclared-imports
+# Neither of those two reaches this class: the import a browser entry must not
+# reach is declared, imported and wired. Only its REACHABILITY from a client
+# entry is wrong, which no census of declarations resolves.
+run_required_gate "Client graph" bun run gate:client-graph
 run_required_gate "Built but unwired" bun run gate:wired
 # The test corpus's own quality ratchet: a NEW coupled test, by the five axes
 # a test review judges on. Beside the wired gate because they hold two sides of
