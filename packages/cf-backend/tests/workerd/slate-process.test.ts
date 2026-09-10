@@ -128,10 +128,23 @@ it('a compiler warmed with supplementary-group access does not lend it to anothe
   expect(revoked).toMatchObject({ code: 'bad_input' });
 });
 
-it('both sealed actor families answer the native binding RPC without making it browser-callable', async () => {
-  const root = env.SLATE_FACET_ROOT.get(env.SLATE_FACET_ROOT.idFromName('native-slate-bindings'));
+it('the sealed workspace root answers the native binding RPC without making it browser-callable', async () => {
+  // Post-cutover shape (f9c0b3847): `SubordinateAgent` and its exploration
+  // twin are gone — a subordinate, a head, a node and a branch are directory
+  // kinds behind the one sealed workspace object, and a hosted actor holds no
+  // slate read model of its own — so the loop below seeds one sealed
+  // workspace per family rather than one sealed class per family, and asserts
+  // the same two halves for each: the native binding RPC answers server-side
+  // (the seal lists it) and the method stays out of the browser registry.
   const families: readonly ('subordinate' | 'exploration')[] = ['subordinate', 'exploration'];
   for (const family of families) {
-    expect(await root.exercise(family)).toEqual({ answeredBy: 'facet', method: 'getExecutors', browserCallable: false });
+    const root = env.SLATE_ACTOR_ROOT.get(env.SLATE_ACTOR_ROOT.idFromName(`native-slate-bindings:${family}`));
+    const result = await root.exercise(family);
+    expect(result.browserCallable).toBe(false);
+    // The read model answered with its catalogue — not a seal refusal, and
+    // not an empty stand-in. What the catalogue lists is the provider
+    // registry's business (pinned by its own unit tests); this test pins
+    // that the sealed hop reached the method and ran it.
+    expect(result.answer.length).toBeGreaterThan(0);
   }
 });
