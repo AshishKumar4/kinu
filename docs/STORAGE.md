@@ -289,19 +289,140 @@ words. It falls back to OR-joined tokens when the AND query returns nothing.
 
 ## Think message persistence
 
-Chat history belongs to the SDK. `Think` extends the agents SDK
-`Agent` and holds a `Session` from `agents/experimental/memory/session`, which owns:
+Chat history belongs to the SDK. `Think` extends the agents SDK `Agent` and
+holds a `Session` from `agents/experimental/memory/session`, whose
+`AgentSessionProvider.ensureTable` (`agents/dist/experimental/memory/session/index.js:747-790`,
+agents 0.20.1) creates, on the first session read — which is Think's own boot
+(`@cloudflare/think/dist/think.js:1003-1028`, 0.15.1), before the actor's
+`onStart`:
 
-- `assistant_messages`: the durable message path
-- `assistant_sessions`: session metadata
+- `assistant_messages`: the durable message tree (`id`, `session_id`,
+  `parent_id`, `role`, `content`, `created_at`)
 - `assistant_compactions`: the SDK's own compaction records
 - `assistant_config`: session-scoped settings
-- `cf_agents_context_blocks`: LLM-writable memory context blocks
-- `cf_agents_search_entries`: the session's own search index
+- `assistant_fts`: the provider's FTS5 index over message content
 
-Kinu reads through `this.messages` and never writes these directly. The
-`messages` table in the ER diagram above is the Kinu own flattened projection.
-`messages_fts` and the outcome joins read that projection.
+Kinu does not write these, and it does not read them through the SDK. On a
+hosted workspace `assistant_messages` is the pane store — the ONE authority for
+the default chat — and every conversational reader answers from it in raw SQL
+when it exists and from plain `messages` when it does not
+(`packages/core/src/identity/conversation-store.ts` `hasPaneStore`). Plain
+`messages` is the local backend's only store, never a projection of the pane
+(the header of that module records why the projection was retired). The
+census in `packages/core/src/conformance/manifest.ts` declares the four
+tables on both cf roots, and `ActorAgent.assertSessionStore`
+(`packages/cf-backend/src/actor-agent.ts`) refuses an activation whose Think
+booted without leaving `assistant_messages` behind.
+
+### Session replatform migration plan (2026-09-10)
+
+`@cloudflare/think`'s unreleased changeset `brisk-chats-branch`
+(`.changeset/brisk-chats-branch.md` on `cloudflare/agents` `main`) replatforms
+Think onto `agents/sessions`: on first wake each Durable Object lifts its
+`assistant_messages`, `assistant_compactions` and `assistant_config` rows into
+`cf_agents_session_*` tables, verifies every row landed, and DROPS the
+originals; the migration cannot be rolled back. Installed today:
+`@cloudflare/think` 0.15.1, `agents` 0.20.1 (`packages/cf-backend/package.json`).
+Neither is bumped by this plan; the bump is a separate, coordinated change and
+it must not ship before the readers below have moved, because the wake guard
+will refuse every hosted activation the moment they have not.
+
+Nothing below is convertible to the 0.15.1 `Session` read model with identical
+results, which is why every reader is still raw SQL. That read model
+(`agents/dist/experimental/memory/session/index.d.ts:197-225`) is
+`Promise`-returning where every Kinu reader is synchronous over a
+`SqlExecutor`; it is `session_id`-scoped and knows no actor, where every Kinu
+reader is `actor_id`-scoped; `getHistory(leafId)` returns the root-to-leaf path
+only, parsed to `SessionMessage` (`id`, `role`, `parts`, optional `createdAt`
+from the JSON — no `parent_id`, no row `created_at`, no `rowid`), with
+compaction overlays applied (`index.js:798-806`) and unparsable rows dropped.
+
+What each reader must become, and what is unknown until the release names the
+new tables and their columns (the changeset names neither):
+
+| Reader | Today | Will read | Unknown until release |
+|---|---|---|---|
+| `identity/conversation-store.ts` — `hasPaneStore`, `forkPointExists`, `ancestryIds` (pane arm), `paneRowById`, `conversationCount`, `conversationPageRows`, `answersForDrainTurns`, `conversationTurnPair`, `normalizeImportedConversation` | `assistant_messages` by `actor_id`, `id`, `parent_id`, `rowid`, whole-second `created_at` | the `cf_agents_session_*` message table; the ancestry walk and the rowid page cursor must survive the "message larger than one SQLite row is split across continuation rows" model, so a logical message is reassembled from its continuation rows before `content` is flattened | table and column names; whether continuation rows share the parent's id; whether `created_at` stays a whole-second `DATETIME`; whether a `rowid` order still equals insertion order per logical message |
+| `memory/conversation-search.ts` — `scroll`, `listConversations`, `refreshIndex`, and the `conversation_rev_pane_*` revision triggers (`AFTER INSERT/UPDATE/DELETE ON assistant_messages`) | same table, grouped by `session_id`; Kinu's own `conversation_fts` is rebuilt from it | the same message table; the three triggers are Kinu DDL ON the vendor table and go away with the `DROP`, so the revision counter must be re-pointed or the index rebuilt on a regime change | whether media leaving the row into the "content-addressed attachment store" changes what `content` holds for a text part |
+| `identity/fork.ts` — the pane WRITE (`ensurePaneTable`, the three `INSERT OR IGNORE INTO assistant_messages`) and `carriedText` | writes rows in Kinu's own DDL: `actor_id TEXT NOT NULL`, `PRIMARY KEY (actor_id, id)` | rows the SDK's new provider reads back as a conversation — a write that must produce continuation rows and attachment references the provider understands, which raw DDL cannot do before the release documents it | the entire write shape; whether the SDK exposes a bulk import that keeps message ids and parent edges (the fork cut depends on both) |
+| `identity/archive.ts` — `projectPaneIntoPlain` (export normalization) | reads `assistant_messages` by `rowid`, detects an owner column from the table's own DDL | the message table, with continuation rows reassembled | same as the store row |
+| `evolution/eval-split.ts` — `advisorNegatives` join | joins `assistant_messages` twice on `id` / `parent_id` | the message table, on the same two columns | column names |
+| `cf-backend/src/actor-agent.ts` — `readInheritedContext` | last `INHERITED_CONTEXT_CAP` rows by `created_at DESC`, and a `COUNT(*)`, both by `actor_id` | the message table; on the agent itself `this.session.getHistory()` is reachable, but it answers the path, not the actor's rows, and asynchronously — the port contracts that call this reader (`inheritedContext: () => …`, `orchestrator.ts`) are synchronous | whether the release keeps a synchronous in-memory view (`this.messages`) that can stand in for the window |
+| `subordinates/inspection.ts` — the `history` view's existence check | `tableExists(sql, 'assistant_messages')` | the new table name | the name |
+| `utils/ui-message.ts`, `orchestrator/heads-support.ts` | comments naming the table | the same, renamed | nothing |
+
+One fact the migration cannot carry: Kinu's pane queries predicate on
+`actor_id`, a column the vendor DDL does not declare
+(`agents/dist/experimental/memory/session/index.js:750-757` against
+`packages/core/src/identity/fork.ts:685-694`, which is the only DDL in this
+repository that declares it). The SDK's lift copies the columns the SDK wrote,
+so the `cf_agents_session_*` message table will not carry an actor either.
+Whether hosted actors keep sharing one session table by owner column, or each
+hosted actor gets its own SDK session (`Session.forSession(sessionId)` exists
+at 0.20.1, `index.d.ts:104`), is the design decision the readers wait on, and
+it must be made before any of the rows above is rewritten.
+
+Two ways the pane branch can move. Land neither until the release publishes
+the `cf_agents_session_*` DDL and the `this.session.history()` signature.
+
+**A. The pane branch reads the new tables in raw SQL.** Every pane arm in the
+table above is re-pointed at the released message table; the fork's pane
+write is re-shaped to whatever rows the new provider reads back. Cost: the
+58 references (`git grep -n -E 'assistant_(messages|compactions|config)' --
+packages/*/src`), all synchronous, no signature moves; plus the continuation
+row reassembly in every reader that returns `content`, plus a fork write that
+fabricates continuation rows and attachment references the SDK documents for
+nobody — the changeset's own words are "Think no longer reads Sessions tables
+with raw SQL. If you queried `assistant_messages` yourself, use
+`this.session.history()` or `getHistory()`". It leaves the `actor_id`
+question exactly where it is: the new table will not carry the column, so
+either every hosted actor's rows collapse into one session or a Kinu-only
+column is added to a vendor table the vendor rewrites on its own schedule.
+This is the coupling that put the census on watch in the first place, re-made
+against a shape declared private.
+
+**B. `AgentRuntime` gains a session read port.** One interface in
+`packages/core/src/types/agent-runtime.ts` that answers what the readers
+actually ask — the ancestry of a leaf as ids, a message by id, the count, a
+newest-first page with a cursor, the user→assistant pairs, a full dump in
+insertion order — and one write, `append(message, parentId)`, for the fork.
+The cf backend implements it over Think (`getHistory(leafId)`, `getMessage`,
+`appendMessage(message, parentId)` all keep their positional arguments per the
+changeset; one `Session.forSession(actorId)` per hosted actor answers the
+scoping the vendor column never did); the CLI implements it over plain
+`messages`, which is the fall-through arm of every reader today, moved behind
+the port unchanged. Cost: the port is asynchronous, so it propagates through
+the call chains that reach a reader — `read-models/status.ts:159`
+(`conversationPageRows`), `evolution/engine.ts:850`, `eval-split.ts:95` and
+`mcts/takes.ts:424` (`conversationTurnPair`), `identity/fork-transfer.ts:380`
+(`ancestryIds`, the bounded frame stream), `orchestrator.ts:1158`
+(`answersForDrainTurns`), `memory/conversation-search.ts` (`scroll`,
+`listConversations`, `refreshIndex`), `identity/archive.ts`
+(`projectPaneIntoPlain`), `subordinates/inspection.ts:101` and
+`actor-agent.ts` `readInheritedContext` with its synchronous
+`inheritedContext: () => …` port contracts — about a dozen signatures, each
+mechanical. What the port cannot answer identically is the rowid page cursor
+and the whole-second tie-break (`conversation-store.ts:383-389`): the SDK
+exposes neither, so the page is cut on the path the SDK returns, which is
+also the order the pane renders. The three `conversation_rev_pane_*`
+triggers go with the raw table; the index rebuilds on the port's revision
+instead.
+
+**Recommendation: B.** A's cost is smaller today and it is the same debt
+again, on a table the vendor has now said it will not keep stable; B's cost is
+a bounded set of signature moves that lands the fork write on the SDK's own
+append (no fabricated continuation rows) and turns `actor_id` into
+`forSession(actorId)`, which the SDK supports. B is also the only option whose
+CLI half is provably unchanged: it is today's plain arm behind an interface.
+
+Sequence when the release lands: read the released `agents/sessions` DDL and
+`this.session.history()` signature; decide the actor scoping under B; move
+`hasPaneStore` and the readers in the order of the table, with the existing
+suites (`unit-conversation-store`, `unit-conversation-search`, `unit-fork`,
+`integration-fork-pipeline`, `unit-session-store-guard`) as the equivalence
+proof over seeded rows; replace the four `assistant_*` census rows with the
+released table names; then bump `@cloudflare/think` and `agents` together,
+behind a canary, because a rolled-back object has an empty conversation.
 
 ## The rest of the schema
 
