@@ -89,6 +89,7 @@
       ".": {
         "entry": [
           "scripts/*.ts!",
+          "scripts/fixtures/*/worker.ts!",
           "tools/oxlint/anti-slop/index.ts!"
         ],
         "project": [
@@ -124,14 +125,10 @@
       }
     }
   },
-  "//dependencies:@ai-sdk": "The AI SDK v6 packages are pinned EXACTLY, here and in every workspace that declares one, because upstream pins them to each other exactly: `ai@6.0.214` requires `@ai-sdk/provider-utils@4.0.33` and `@ai-sdk/gateway@3.0.139` by exact version, and each provider does the same. A caret on any one of them therefore does not age it independently \u2014 it floats that package ahead of the rest and bun answers with a SECOND copy of the SDK nested under whichever parent disagreed, which is how `@ai-sdk/provider` came to be installed twice while both manifests named one version. So the cohort moves as one edit. This one is GHSA-866g-f22w-33x8 (CVE-2026-8769, uncontrolled resource consumption in provider-utils' response handlers), whose first patched release on the v6 line is provider-utils 4.0.33; these are the earliest same-major releases that pin it. Later v6 releases exist and are also patched, but from `@ai-sdk/openai-compatible@2.0.70` the provider throws its own \"Response stream ended without a finish reason\" before a finish-step lands, which pre-empts the dead-stream detector in packages/core/src/chat.ts and the two contracts unit-chat-stream-integrity.test.ts holds over it. Moving past that boundary is a stream-integrity decision, not a dependency refresh.",
+  "//dependencies:@ai-sdk": "The AI SDK v6 packages are pinned EXACTLY in every workspace that declares one (the root declares only what its own scripts and fixtures import), because upstream pins them to each other exactly: `ai@6.0.214` requires `@ai-sdk/provider-utils@4.0.33` and `@ai-sdk/gateway@3.0.139` by exact version, and each provider does the same. A caret on any one of them therefore does not age it independently \u2014 it floats that package ahead of the rest and bun answers with a SECOND copy of the SDK nested under whichever parent disagreed, which is how `@ai-sdk/provider` came to be installed twice while both manifests named one version. So the cohort moves as one edit. This one is GHSA-866g-f22w-33x8 (CVE-2026-8769, uncontrolled resource consumption in provider-utils' response handlers), whose first patched release on the v6 line is provider-utils 4.0.33; these are the earliest same-major releases that pin it. Later v6 releases exist and are also patched, but from `@ai-sdk/openai-compatible@2.0.70` the provider throws its own \"Response stream ended without a finish reason\" before a finish-step lands, which pre-empts the dead-stream detector in packages/core/src/chat.ts and the two contracts unit-chat-stream-integrity.test.ts holds over it. Moving past that boundary is a stream-integrity decision, not a dependency refresh.",
   "dependencies": {
-    "@ai-sdk/anthropic": "3.0.89",
-    "@ai-sdk/openai": "3.0.77",
     "@ai-sdk/openai-compatible": "2.0.54",
     "ai": "6.0.214",
-    "chalk": "^5.6.2",
-    "commander": "^14.0.3",
     "valibot": "^1.4.1",
     "zod": "^4.3.6"
   },
@@ -160,7 +157,6 @@
     "oxc-parser": "0.143.0",
     "oxlint": "1.78.0",
     "oxlint-tsgolint": "7.0.2001",
-    "postcss": "8.5.28",
     "puppeteer": "^25.10.0",
     "react": "^19.2.5",
     "typescript": "7.0.2",
