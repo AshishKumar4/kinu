@@ -117,7 +117,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
     // The hosted half the loop tests cannot see: the run below is bridged
     // onto THIS actor's session, so the seating — kind, store scoping,
     // inherited loop — is load-bearing rather than incidental.
-    expect(seat.actor.record.kind).toBe('node');
+    expect(seat.actor.record.kind).toBe('head');
     expect(seat.actor.record.parentActorId).toBe(search.workspace.agent.observeRuntime().actor.actorId);
   });
 

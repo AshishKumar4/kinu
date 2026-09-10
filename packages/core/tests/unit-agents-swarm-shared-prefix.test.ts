@@ -25,7 +25,7 @@ import { hostedSeatsOver } from './helpers-actor-host';
 import {
   createAgentsTool,
   type AgentRuntime,
-  type AgentsForkDeps, type AgentsToolDeps, type AgentsToolInput,
+  type AgentsSwarmDeps, type AgentsToolDeps, type AgentsToolInput,
 } from '../src/index';
 import { SOLUTION_FILE } from '../src/strategy/exec-ratio';
 
@@ -84,15 +84,15 @@ function capturingModel(prompts: TurnPrompt[]) {
 
 type CapturingModel = ReturnType<typeof capturingModel>;
 
-/** The fork deps a caller hands the agents tool. Takes the caller's DATABASE as
+/** The swarm deps a caller hands the agents tool. Takes the caller's DATABASE as
  *  well as its runtime, because `unit:'answer'` makes every child an agent node
  *  and each acquires its own actor of that one workspace — one seat per node,
  *  never one shared handle. */
-function forkDeps(
+function swarmDeps(
   world: { rt: AgentRuntime; db: Database },
   model: CapturingModel,
-  overrides: Partial<AgentsForkDeps> = {},
-): AgentsForkDeps {
+  overrides: Partial<AgentsSwarmDeps> = {},
+): AgentsSwarmDeps {
   return { rt: world.rt, hostNode: hostedSeatsOver(world).hostNode, model, ...overrides };
 }
 
@@ -121,7 +121,7 @@ function forkCall(branches: number) {
     branches,
     config: {
       unit: { kind: 'answer' as const },
-      context: 'fork' as const,
+      context: 'inherit' as const,
       expand: 'sample' as const,
       score: { kind: 'verify' as const },
       advance: { kind: 'best-first' as const },
@@ -131,14 +131,14 @@ function forkCall(branches: number) {
 }
 
 describe('compactShared wiring through runSwarmAction', () => {
-  test('context:fork carries the caller conversation through the agents tool bridge', async () => {
+  test('context:inherit carries the caller conversation through the agents tool bridge', async () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
     const origin = [{ role: 'user' as const, content: 'ORIGIN-CONTEXT-MARKER' }];
     const tool = agentsTool({
       mode: 'build',
-      fork: forkDeps({ rt, db }, capturingModel(prompts), {
+      swarm: swarmDeps({ rt, db }, capturingModel(prompts), {
         originContext: () => origin,
       }),
     });
@@ -149,7 +149,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     expect(JSON.stringify(prompts[0])).toContain('ORIGIN-CONTEXT-MARKER');
   }, 120_000);
 
-  test('a fork parent past the threshold reaches its child compacted, not verbatim', async () => {
+  test('an inheriting parent past the threshold reaches its child compacted, not verbatim', async () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile(SOLUTION_FILE, REFERENCE);
     const prompts: TurnPrompt[] = [];
@@ -160,7 +160,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     };
     const tool = agentsTool({
       mode: 'build',
-      fork: forkDeps({ rt, db }, capturingModel(prompts), { compactShared }),
+      swarm: swarmDeps({ rt, db }, capturingModel(prompts), { compactShared }),
     });
 
     await tool.execute(forkCall(1));
@@ -195,7 +195,7 @@ describe('compactShared wiring through runSwarmAction', () => {
     };
     const tool = agentsTool({
       mode: 'build',
-      fork: forkDeps({ rt, db }, capturingModel(prompts), { compactShared }),
+      swarm: swarmDeps({ rt, db }, capturingModel(prompts), { compactShared }),
     });
 
     await tool.execute(forkCall(2));

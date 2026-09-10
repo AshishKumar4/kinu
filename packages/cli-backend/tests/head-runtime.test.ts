@@ -845,7 +845,7 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
 });
 
 /**
- * Per-fork models — `agents fork` advertises a per-fork `model` and the cf
+ * Per-search models — `agents swarm` advertises a per-search `model` and the cf
  * backend honours it (subordinate-agent.ts resolves `input.model` per head). The CLI
  * ran `deps.model` for every head, so the field was a silent no-op here: a panel
  * asked for three vendors got three copies of one, and any measurement of panel

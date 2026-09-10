@@ -64,7 +64,7 @@ describe('the resolution a run resolved', () => {
     // parameter.
     expect(resolution?.kind === 'preset' ? swarmAxisRows(resolution.config) : []).toEqual([
       { axis: 'unit', value: 'answer' },
-      { axis: 'context', value: 'fork' },
+      { axis: 'context', value: 'inherit' },
       { axis: 'expand', value: 'sample' },
       { axis: 'score', value: 'verify' },
       { axis: 'advance', value: 'best-first' },
@@ -102,13 +102,13 @@ describe('the resolution a run resolved', () => {
   test('a judged composition prints its ensemble on the axis that owns it', () => {
     // Tagged onto `judge`, so the axis row carries it rather than a field beside it.
     expect(swarmAxisRows({
-      unit: { kind: 'answer' }, context: 'fork', expand: 'aggregate',
+      unit: { kind: 'answer' }, context: 'inherit', expand: 'aggregate',
       score: { kind: 'judge', samples: 20 },
       advance: { kind: 'archive', novelty: 0.6 },
       carry: { kind: 'reflections', threshold: 0.4 },
     })).toEqual([
       { axis: 'unit', value: 'answer' },
-      { axis: 'context', value: 'fork' },
+      { axis: 'context', value: 'inherit' },
       { axis: 'expand', value: 'aggregate' },
       { axis: 'score', value: 'judge ×20' },
       { axis: 'advance', value: 'archive ≥0.6' },

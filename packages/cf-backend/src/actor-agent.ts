@@ -116,7 +116,7 @@ import {
   type SettledSignals, type InlineSteer,
   type AgentsToolAction,
   type AgentsToolDeps,
-  type AgentsForkDeps,
+  type AgentsSwarmDeps,
   BUILTIN_TOOLS,
   type BuiltinToolName,
   type TurnProvenance,
@@ -533,7 +533,7 @@ export interface ActorToolDeps {
  *  by its registry constant. A bare `['report']` spelled here would carry
  *  no link to the tool it names, so renaming the builtin leaves a gate
  *  matching nothing. The `agents` tool is never dropped on cf — every
- *  actor has the fork substrate — but its ACTIONS gate on the same profile (see
+ *  actor has the swarm substrate — but its ACTIONS gate on the same profile (see
  *  actorAgentsActions). `release` is not a native tool at all (release.* is
  *  codemode-only), so `deps.releases` gates nothing here; it feeds that codemode
  *  namespace directly.
@@ -553,7 +553,7 @@ function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
  *  universal on cf (every ActorAgent owns the strategy registry + facet
  *  substrate); hiring and peer converse ride the actor profile. */
 function actorAgentsActions(deps: ActorToolDeps): AgentsToolAction[] {
-  return agentsActionsFor({ fork: {}, team: deps.team, peers: deps.peers });
+  return agentsActionsFor({ swarm: {}, team: deps.team, peers: deps.peers });
 }
 
 /** The codemode tool whose script keeps issuing device execs for as long as it
@@ -4041,11 +4041,11 @@ export abstract class ActorAgent extends Think<Env> {
     return this.stores.config;
   }
 
-  /** The unified `agents` tool's deps: the fork substrate is universal on cf
-   *  actors — the SAME shared factory the CLI wires (core fork-deps), with
-   *  the host-injected infrastructure recomputed per fork call; the
+  /** The unified `agents` tool's deps: the swarm substrate is universal on cf
+   *  actors — the SAME shared factory the CLI wires (core swarm-deps), with
+   *  the host-injected infrastructure recomputed per swarm call; the
    *  roster/peer halves ride this actor's profile (actorToolDeps). Rebuilt
-   *  with the toolset (getRawTools), so the fork model refreshes exactly
+   *  with the toolset (getRawTools), so the swarm model refreshes exactly
    *  when the toolset does. */
   private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
@@ -4055,10 +4055,10 @@ export abstract class ActorAgent extends Think<Env> {
     // cross-actor collision this makes impossible.
     const seams = this.explorationSeams();
     // Named and annotated rather than nested inline: this is the ONE production
-    // construction site of `AgentsForkDeps` on this backend, and a literal buried
+    // construction site of `AgentsSwarmDeps` on this backend, and a literal buried
     // inside the outer one is a supply no reader — human or gate — can attribute
-    // to the interface it satisfies. The CLI's `buildAgentsForkDeps` is its twin.
-    const fork: AgentsForkDeps = {
+    // to the interface it satisfies. The CLI's `buildAgentsSwarmDeps` is its twin.
+    const swarm: AgentsSwarmDeps = {
       rt: this.rt,
       model: this.getModel(),
       originContext: () => this._turnOriginContext,
@@ -4082,7 +4082,7 @@ export abstract class ActorAgent extends Think<Env> {
        * answers `shared-origin-plane` with `home: '.'`, so every node on this
        * backend was told it shares one plane with its siblings and should treat
        * the tree as read-mostly — while owning a private directory at
-       * `/home/node-<key>`. `isolationDisclosure` puts that sentence in the
+       * `/home/head-<key>`. `isolationDisclosure` puts that sentence in the
        * node's own prompt, so the disclosure was actively false.
        *
        * `hostNodeSeat` here is not a second bind: register and acquire are both
@@ -4128,7 +4128,7 @@ export abstract class ActorAgent extends Think<Env> {
     };
     const deps: AgentsToolDeps = {
       mode: workMode,
-      fork,
+      swarm,
       budget: this.budget,
     };
     deps.profile = () => agentsProfileContext(this._turnProfile, this._turnProfileInputs);
@@ -5509,7 +5509,7 @@ export abstract class ActorAgent extends Think<Env> {
         // each escalation decision here, and the settle spine above writes the
         // durable row.
         escalations: this.acc.escalations,
-        // The unified `agents` delegation tool — fork substrate (heads / mcts
+        // The unified `agents` delegation tool — swarm substrate (heads / mcts
         // settle) is universal; hire/ask/send actions appear only when this
         // actor's profile wires the team/peers transports. Owner resolution
         // stays lazy per action, so the cached toolset stays valid across

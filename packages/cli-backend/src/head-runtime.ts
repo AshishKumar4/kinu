@@ -67,9 +67,9 @@ export interface CLIHeadRuntimeDeps {
   /** How this session turns that routed (spec, effort) pair into a client. The
    *  only merge decision left locally; core owns the rest. */
   bindMergeModel: HeadMergeModelBinder;
-  /** Resolve a per-fork model spec (`HeadInput.model`) to a model. Without it
-   *  every head runs `model` above, which made the per-fork `model` field —
-   *  advertised on the `agents` fork schema and honoured by the cf backend —
+  /** Resolve a per-search model spec (`HeadInput.model`) to a model. Without it
+   *  every head runs `model` above, which made the per-search `model` field —
+   *  advertised on the `agents` swarm schema and honoured by the cf backend —
    *  a silent no-op here: a panel asked for three vendors got three copies of
    *  one. Absent (no resolver on the session) the fallback is still `model`,
    *  and so is an unresolvable spec, because a fork that cannot honour its

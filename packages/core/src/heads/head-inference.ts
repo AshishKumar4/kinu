@@ -545,7 +545,7 @@ export interface HeadInferenceDeps {
    * last durable step at `components/NodeTranscript.tsx:266`; no CLI or core
    * reader names it, and the local head's liveness is the `head_journal` rows
    * {@link reportStep} writes, which BOTH backends wire. Wiring a local sink
-   * would add a producer with no consumer. `AgentsForkDeps.reportNodeDelta` and
+   * would add a producer with no consumer. `AgentsSwarmDeps.reportNodeDelta` and
    * `announceHeadActivity` are the same asymmetry, accepted for the same reason
    * before this contract existed.
    *
