@@ -244,25 +244,6 @@ The checkout accepts archived coupons because the eligibility guard reads the ca
 - Run the focused checkout test with active, archived, and expired campaigns.
 - Confirm that a refused coupon leaves the cart total and discount rows unchanged.`;
 
-export const PLAN_MESSAGES: UIMessage[] = [
-  {
-    id: 'landing-plan-user',
-    role: 'user',
-    parts: [{ type: 'text', text: 'Archived coupons still apply at checkout. Plan the fix before you change anything.' }],
-  },
-  {
-    id: 'landing-plan-agent',
-    role: 'assistant',
-    parts: [
-      { type: 'reasoning', text: 'Plan mode: I can read the handler and the tests, but not edit them. I need the order of the eligibility check and the cart write.' },
-      { type: 'tool-file', toolCallId: 'landing-plan-read', state: 'output-available', input: { action: 'read', path: 'packages/checkout/src/apply-coupon.ts' }, output: '…' },
-      { type: 'tool-file', toolCallId: 'landing-plan-search', state: 'output-available', input: { action: 'search', path: 'packages/checkout', query: 'coupon_ineligible' }, output: '3 matches' },
-      { type: 'tool-submit_plan', toolCallId: 'landing-plan-submit', state: 'output-available', input: { edits: [{ start: 1, content: PLAN_MARKDOWN }] }, output: { ok: true, revision: 1, status: 'pending', message: 'Plan submitted and awaiting review. Do not implement or produce a preview; end this turn now.' } },
-      { type: 'text', text: 'The plan is ready for review. Approve it, or mark the lines that need to change.' },
-    ],
-  },
-];
-
 export const PLAN_FIXTURE: PlanReview = {
   id: 'landing-plan',
   sessionId: 'default',
