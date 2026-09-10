@@ -279,6 +279,42 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(createTestRuntime().rt)).not.toContain('spend someone else\'s context');
   });
 
+  test('both rungs scale the count to the task and calibrate it on numbers this repo runs', () => {
+    // The measured half, from Anthropic's multi-agent research write-up: on
+    // their BrowseComp eval token usage BY ITSELF explains 80% of the
+    // performance variance, and a multi-agent run costs about 15x a chat turn.
+    // What they shipped against it was EXPLICIT NUMBERS in the lead's prompt —
+    // "1 agent with 3-10 tool calls" for fact-finding up to "more than 10
+    // subagents with clearly divided responsibilities" — because agents
+    // misjudge effort in BOTH directions, the named failure being "spawning 50
+    // subagents for simple queries". So each rung states a count AND what the
+    // count spends; an instruction to widen with no price attached is the
+    // over-spawn half of that failure written into the prompt.
+    //
+    // The numbers are OURS. They are DERIVED here rather than trusted, because
+    // registry.ts is import-free by design and strategy/swarm.ts states the
+    // hazard in as many words: prose "an import-free module away from the rows
+    // it describes — in tools/registry.ts, say — drifts from them". The model
+    // reads the band; only this assertion reads the table.
+    const widths = NAMED_SWARM_PRESETS.map((preset) => SWARM_PRESET_POINTS[preset].branches);
+    const band = `from ${String(Math.min(...widths))} to ${String(Math.max(...widths))} per level`;
+    expect(DELEGATION_RUNGS.swarm).toContain(band);
+    expect(DELEGATION_RUNGS.swarm).toContain('`branches` is that count');
+
+    // The hire rung carries the same rule in its own vocabulary and has to
+    // stand ALONE: `agentsActionsFor` gates `swarm` on its own deps, so a
+    // team-only actor renders this rung with no search rung beside it and
+    // cannot calibrate on a preset or a field it never receives.
+    expect(DELEGATION_RUNGS.hire).toMatch(/how many independent workstreams the task holds/);
+    expect(DELEGATION_RUNGS.hire).not.toContain('preset');
+    expect(DELEGATION_RUNGS.hire).not.toContain('branches');
+
+    // Both name the price. Without it the sentence reads as "more is better",
+    // which is the direction the measured finding refuses.
+    expect(DELEGATION_RUNGS.swarm).toContain('token bill');
+    expect(DELEGATION_RUNGS.hire).toContain('token bill');
+  });
+
   test('the prompt index names the actions without teaching when to delegate', () => {
     // The index names each action in one clause and points at the schema for
     // the rest. A shape test ("2+ independent angles") or a candidates/verifier
