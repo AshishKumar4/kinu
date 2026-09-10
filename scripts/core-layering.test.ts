@@ -6,8 +6,7 @@ const corpus = (files: Record<string, string>): Map<string, string> =>
   new Map(Object.entries(files).map(([f, t]) => [`${C}${f}`, t]));
 
 describe('core-layering', () => {
-  test('a root file and an unlisted directory are the harness', () => {
-    expect(layerOf(`${C}chat.ts`)).toBe(2);
+  test('an unlisted directory is the harness', () => {
     expect(layerOf(`${C}newthing/x.ts`)).toBe(2);
     expect(layerOf(`${C}vfs/x.ts`)).toBe(0);
     expect(layerOf(`${C}tools/x.ts`)).toBe(1);
@@ -31,15 +30,20 @@ describe('core-layering', () => {
     expect(v[0]?.line).toBe(3);
   });
 
-  test('type-only imports are findings of their own kind, whichever spelling', () => {
+  test('only a declaration-level type import is erased; a specifier-level one still loads', () => {
     const v = findViolations(corpus({
       'types/a.ts': "import type { A } from '../heads/h';\nimport { type B } from '../mcts/m';\nexport type { C } from '../tools/t';",
       'heads/h.ts': 'export type A = 1;',
       'mcts/m.ts': 'export type B = 1;',
       'tools/t.ts': 'export type C = 1;',
     }));
-    expect(v.map((x) => x.typeOnly)).toEqual([true, true, true]);
-    expect(v.map(keyOf).every((k) => k.endsWith('(type)'))).toBe(true);
+    expect(v.map((x) => [x.to.slice(C.length), x.typeOnly])).toEqual([['heads/h.ts', true], ['mcts/m.ts', false], ['tools/t.ts', true]]);
+  });
+
+  test('a root file is placed by name, and an unlisted one is the harness', () => {
+    expect(layerOf(`${C}llm.ts`)).toBe(0);
+    expect(layerOf(`${C}platform-catalog.ts`)).toBe(0);
+    expect(layerOf(`${C}chat.ts`)).toBe(2);
   });
 
   test('a mixed import is a value finding', () => {

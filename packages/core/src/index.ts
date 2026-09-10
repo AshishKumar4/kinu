@@ -21,7 +21,7 @@ export {
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
   TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
-  RunEndReasonSchema, ModelMessagesSchema, WorkModeSchema, TurnContinuitySchema,
+  RunEndReasonSchema, ModelMessagesSchema, TurnContinuitySchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
   type TerminalEffectOutcome, type TerminalEffectStatus, type TerminalEffectPhase,
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
@@ -716,7 +716,7 @@ export {
   type ContextSegment,
   type ToolDefsLike,
 } from './context-meter';
-export { isWorkMode, type TurnProvenance, type WorkMode } from './types/turn';
+export { isWorkMode, WorkModeSchema, type TurnProvenance, type WorkMode } from './types/turn';
 export {
   compilePromptSurface,
   executorIsSelectable,

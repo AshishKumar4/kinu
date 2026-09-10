@@ -37,13 +37,17 @@ export const LAYERS: ReadonlyMap<string, 0 | 1 | 2> = new Map<string, 0 | 1 | 2>
   ['config', 0], ['identity', 0], ['vfs', 0], ['execution', 0], ['events', 0], ['memory', 0],
   ['safety', 0], ['slates', 0],
   ['tools', 1], ['craft', 1], ['web', 1],
+  // Root files, by name: the six primitives and their accounting are platform,
+  // the loop's assembly is harness. A root file absent here is harness.
+  ['platform-catalog.ts', 0], ['usage.ts', 0], ['llm.ts', 0], ['config.ts', 0], ['cloud-wire.ts', 0],
+  ['context-budget.ts', 0], ['context-meter.ts', 0], ['context-window.ts', 0], ['turn-failure.ts', 0],
+  ['mission-budget.ts', 0],
 ]);
 export const LAYER_NAMES: readonly string[] = ['platform', 'tools', 'harness'];
 
 export function layerOf(file: string): 0 | 1 | 2 {
   const rel = file.slice(CORE.length);
-  const dir = rel.includes('/') ? rel.slice(0, rel.indexOf('/')) : '';
-  return dir === '' ? 2 : (LAYERS.get(dir) ?? 2);
+  return LAYERS.get(rel.includes('/') ? rel.slice(0, rel.indexOf('/')) : rel) ?? 2;
 }
 
 export interface Edge {
@@ -52,16 +56,15 @@ export interface Edge {
   readonly typeOnly: boolean;
 }
 
-/** Every module reference in one file, type-only ones marked. An import whose
- *  every specifier is `type` is erased the same as `import type`. */
+/** Every module reference in one file. Only a declaration-level `import type`
+ *  or `export type` is erased under `verbatimModuleSyntax`; `import { type X }`
+ *  emits `import {} from` and still loads the module, so it is a value edge. */
 export function edgesOf(parsed: Parsed): Edge[] {
   const edges: Edge[] = [];
   walk(parsed.root, (node: SyntaxNode) => {
     const raw = node.raw;
     if (raw.type === 'ImportDeclaration') {
-      const typeOnly = raw.importKind === 'type'
-        || (raw.specifiers.length > 0 && raw.specifiers.every((s) => s.type === 'ImportSpecifier' && s.importKind === 'type'));
-      edges.push({ specifier: raw.source.value, line: parsed.lineAt(node.start), typeOnly });
+      edges.push({ specifier: raw.source.value, line: parsed.lineAt(node.start), typeOnly: raw.importKind === 'type' });
     } else if ((raw.type === 'ExportNamedDeclaration' || raw.type === 'ExportAllDeclaration') && raw.source) {
       edges.push({ specifier: raw.source.value, line: parsed.lineAt(node.start), typeOnly: raw.exportKind === 'type' });
     }
@@ -124,7 +127,7 @@ if (import.meta.main) {
   const measured = assertMeasured(GATE, [
     ['core source files parsed', sources.size],
     ['layers declared', LAYER_NAMES.length],
-    ['directories assigned below the harness', LAYERS.size],
+    ['directories and root files assigned below the harness', LAYERS.size],
   ]);
   const detail = new Map(violations.map((v) => [keyOf(v), [
     `  ${v.from}:${String(v.line)}`,
