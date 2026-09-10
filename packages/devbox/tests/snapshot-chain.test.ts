@@ -514,6 +514,9 @@ function harness(overrides: {
 
   const ports: SnapshotChainPorts = {
     containerRunning: () => overrides.running ?? true,
+    stamp: (phase) => {
+      calls.push(`stamp:${phase}`);
+    },
     readSeedStamp: () => {
       calls.push('readSeedStamp');
       return Promise.resolve(seedStamp);

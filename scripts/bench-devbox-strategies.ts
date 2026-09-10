@@ -64,7 +64,9 @@ import {
   type CellCompletion, type CleanupEvidence, type GateId, type PublicationEvidence,
   type RestoreClaim, type RestoreEvidence, type RunProvenance, type StorageRunRecord,
 } from './fixtures/storage-matrix/admission';
-import type { RestoreWork } from '@kinu.run/devbox/durability/contracts';
+import {
+  RestorePhaseStampsSchema, type RestorePhaseStamps, type RestoreWork,
+} from '@kinu.run/devbox/durability/contracts';
 import {
   PublicationCutSchema, publicationWasCut, rendezvousPublicationCut,
 } from '../packages/devbox/bench/publication-cut';
@@ -2358,18 +2360,28 @@ export function decodeComplexityRows(value: ArmResult['complexity']): Complexity
  * probe row — never zero: a restore that did not report and a restore that
  * took 0 ms are different facts. Added 2026-09-10: the 2026-09-09 onStart
  * probe run reported its table from a lane report and retained no rows.
+ *
+ * `phases` are the landmarks the restore reached, each as ms after hook
+ * entry, written by the box as they land. A row with `probeAt` and phases
+ * but no `wallMs` is a start that never settled: the platform reset the
+ * object inside the gate, and the last phase present is where it was.
+ * Absent phases are absent, never zero; rows written before the stamps
+ * existed carry none.
  */
 export interface RestoreProbeRow {
   readonly kind: 'cold-attach' | 'complexity-restore' | 'post-ladder-wake' | 'destroy-cold-restore';
   /** Served-tree bytes at the rung, or null when the size is not known
    *  (the cold attach lands on an empty tree the driver never measured). */
   readonly treeBytes: number | null;
-  /** In-gate wall ms, null when the box wrote no probe row. */
+  /** In-gate wall ms, null when the box wrote no probe row or the start
+   *  never settled. */
   readonly wallMs: number | null;
   /** The probe's own entry timestamp, null with an absent row. */
   readonly probeAt: number | null;
-  /** 'ok', or why the row is absent. */
+  /** 'ok', or why the row is absent or unsettled. */
   readonly outcome: string;
+  /** The phases the restore reached, ms after entry. */
+  readonly phases?: RestorePhaseStamps;
 }
 
 const RestoreProbeRowSchema: v.GenericSchema<RestoreProbeRow> = v.looseObject({
@@ -2378,6 +2390,7 @@ const RestoreProbeRowSchema: v.GenericSchema<RestoreProbeRow> = v.looseObject({
   wallMs: v.nullable(v.number()),
   probeAt: v.nullable(v.number()),
   outcome: v.string(),
+  phases: v.optional(RestorePhaseStampsSchema),
 });
 
 /**
@@ -3541,10 +3554,18 @@ async function closeWakeOpsWindow(
 
 const RestoreProbeReplySchema: v.GenericSchema<{
   readonly ok?: boolean;
-  readonly probe?: { readonly wallMs: number; readonly at: number } | null;
+  readonly probe?: {
+    readonly wallMs: number | null;
+    readonly at: number;
+    readonly phases?: RestorePhaseStamps;
+  } | null;
 }> = v.looseObject({
   ok: v.optional(v.boolean()),
-  probe: v.optional(v.nullable(v.looseObject({ wallMs: v.number(), at: v.number() }))),
+  probe: v.optional(v.nullable(v.looseObject({
+    wallMs: v.nullable(v.number()),
+    at: v.number(),
+    phases: v.optional(RestorePhaseStampsSchema),
+  }))),
 });
 
 /**
@@ -3572,7 +3593,18 @@ export async function readRestoreProbe(
   if (reply.probe === undefined || reply.probe === null) {
     return absent(reply.ok === false ? 'absent: the box wrote no probe row for its last start' : 'absent: no probe row in the reply');
   }
-  return { kind, treeBytes, wallMs: reply.probe.wallMs, probeAt: reply.probe.at, outcome: 'ok' };
+  const { wallMs, at, phases } = reply.probe;
+  // A start that opened its row and never wrote a wall time: the platform
+  // reset the object inside the gate, or the hook is still held. The phases
+  // say how far it got; the last one present is where the gate was cancelled.
+  const reached = Object.keys(phases ?? {});
+  const where = reached.length === 0 ? 'none' : reached.join(', ');
+  if (wallMs === null) notes.push(`restore probe ${kind}: the start never settled; phases reached: ${where}`);
+  const row: RestoreProbeRow = {
+    kind, treeBytes, wallMs, probeAt: at,
+    outcome: wallMs === null ? `unsettled: the start opened a row and never settled it (phases: ${where})` : 'ok',
+  };
+  return phases === undefined ? row : { ...row, phases };
 }
 
 /** Poll the probe and append its row to the arm, in one place: every restore
@@ -3586,7 +3618,10 @@ async function recordRestoreProbe(
   treeBytes: number | null,
   notes: string[],
 ): Promise<void> {
-  (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, kind, treeBytes, notes));
+  const row = await readRestoreProbe(fixture, box, kind, treeBytes, notes);
+  (result.restoreProbes ??= []).push(row);
+  const phases = Object.entries(row.phases ?? {}).map(([phase, atMs]) => `${phase}=${String(atMs)}`).join(' ');
+  log(`restore probe ${kind}: wallMs=${String(row.wallMs)} ${phases.length === 0 ? 'no phases' : phases} (${row.outcome})`);
 }
 
 /**
@@ -3979,6 +4014,10 @@ async function measureArm(
     const note = `create failed: ${describeThrown({ cause: error })}`;
     log(note);
     notes.push(note);
+    // The refusal's own evidence: a start the platform reset left its row
+    // with the phases it reached and no wall time. Polled here because the
+    // 2026-09-10 refusal recorded nothing but the platform's sentence.
+    await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes);
     settle('a refused create');
     return result;
   }

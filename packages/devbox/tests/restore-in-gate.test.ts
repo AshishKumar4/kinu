@@ -34,6 +34,7 @@
 // each test names.
 import { describe, expect, test } from 'bun:test';
 
+import type { RestorePhase } from '../src/durability/contracts';
 import type { StoredValue } from '../src/storage';
 import { DEFAULT_DEVBOX_POLICY, type DevboxPolicy } from '../src/lifecycle';
 import {
@@ -244,6 +245,39 @@ describe('the container-start hook restores the box', () => {
 
     expect(stamps(container)).toBeGreaterThan(stampedOnce);
     expect((await box.devboxState()).ready).toBe(true);
+  });
+
+  test('T8: a witness reads the phases the gate restore reached, in walk order, and only those', async () => {
+    // The bench fixture keeps these durably as they land, so a start the
+    // platform resets still names its last phase. A fresh box mounts no store
+    // and no base, so those two are absent — not zero. The harness storage
+    // attaches with no container command, so `containerStart` lands on the
+    // first exec after it here; on the shipped chain it is the attach's own
+    // mount probe.
+    const seen: [RestorePhase, number][] = [];
+    class WitnessBox extends TestBox {
+      protected override onRestorePhase(phase: RestorePhase, atMs: number): void {
+        seen.push([phase, atMs]);
+      }
+    }
+    const harnessed: Harness<WitnessBox> = harness(WitnessBox);
+    proc(harnessed.rows, 'p1');
+    harnessed.container.listening.add(3000);
+    await harnessed.container.stop();
+
+    await harnessed.box.start();
+
+    const phases = seen.map(([phase]) => phase);
+    expect([...phases].sort()).toEqual(['attached', 'bootId', 'containerStart']);
+    expect(phases.indexOf('attached')).toBeLessThan(phases.indexOf('bootId'));
+    const clock = seen.map(([, atMs]) => atMs);
+    expect([...clock].sort((a, b) => a - b)).toEqual(clock);
+
+    // A second start on the same instance adopts: the identity is settled by
+    // the read, and nothing else lands.
+    seen.length = 0;
+    await harnessed.box.start();
+    expect(seen.map(([phase]) => phase)).toEqual(['containerStart', 'bootId']);
   });
 
   test('both delivered doors at once open ONE restoration', async () => {

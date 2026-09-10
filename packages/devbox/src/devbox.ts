@@ -102,6 +102,7 @@ import {
   openStartBudget, awaitListenerCommand, polledRestoreSteps,
   racedRestoreSteps, runRestoreStep, type RestoreSteps,
 } from './lifecycle';
+import type { RestorePhase, RestorePhaseStamps } from './durability/contracts';
 import {
   deliverIncidents, INCIDENT_PREFIX, incidentTotals, recordIncident,
   type IncidentRow,
@@ -577,6 +578,11 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *   rather than open a second one. Pure memory: a fresh activation adopts
    *  through the durable boot id instead (see `#adoptIfCurrent`). */
   #gateRestore: Promise<void> | undefined;
+  /** The clock of the restore in flight, opened by the container-start attempt
+   *  and read by every phase stamp until the attempt returns. Memory only: a
+   *  witness that wants the stamps past a reset keeps them itself, through
+   *  `onRestorePhase`. */
+  #phaseClock: { readonly openedAt: number; stamps: RestorePhaseStamps } | undefined;
   #restoration: Restoration = { phase: 'unstarted' };
   /** ADOPTION PENDING: the activation found a settled restoration in the
    *  durable rows beside a running container and has not yet asked that
@@ -799,6 +805,26 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     return Promise.resolve('queued');
   }
 
+  /**
+   * One phase of the restore in flight landed, `atMs` after the container-start
+   * attempt opened. The default reports nothing. A witness overrides it to keep
+   * the stamps somewhere a platform reset cannot erase; synchronous, because
+   * the gate holds nothing for it.
+   */
+  protected onRestorePhase(_phase: RestorePhase, _atMs: number): void {
+    void _phase;
+    void _atMs;
+  }
+
+  /** The first landing of `phase` on the open clock; a repeat is not a phase. */
+  #stampPhase(phase: RestorePhase): void {
+    const clock = this.#phaseClock;
+    if (clock === undefined || clock.stamps[phase] !== undefined) return;
+    const atMs = Date.now() - clock.openedAt;
+    clock.stamps = { ...clock.stamps, [phase]: atMs };
+    this.onRestorePhase(phase, atMs);
+  }
+
   // ── container start ──────────────────────────────────────────────────────
 
   /**
@@ -897,26 +923,31 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    *  retires the startup row it no longer needs. */
   async #gateRestoreAttempt(): Promise<void> {
     const openedAt = Date.now();
-    await this.#armContainerSchedules();
+    this.#phaseClock = { openedAt, stamps: {} };
     try {
-      if (await this.#adoptIfCurrent()) {
-        console.log(
-          `[devbox] container-start restore adopted the running instance in `
-          + `${String(Date.now() - openedAt)}ms`,
-        );
-      } else {
-        await this.#restoreInstance();
-        console.log(
-          `[devbox] container-start restore settled in ${String(Date.now() - openedAt)}ms: `
-          + `${this.#restoration.phase}`,
-        );
+      await this.#armContainerSchedules();
+      try {
+        if (await this.#adoptIfCurrent()) {
+          console.log(
+            `[devbox] container-start restore adopted the running instance in `
+            + `${String(Date.now() - openedAt)}ms`,
+          );
+        } else {
+          await this.#restoreInstance();
+          console.log(
+            `[devbox] container-start restore settled in ${String(Date.now() - openedAt)}ms: `
+            + `${this.#restoration.phase}`,
+          );
+        }
+      } catch (error) {
+        // PARKED, NEVER LADDERED. Destructive recovery — replacing the identity —
+        // needs timers the gate does not deliver, so an in-gate failure records
+        // its reason and arms the startup row, and the delivered frame continues
+        // with the full machinery.
+        await this.#parkForDeliveredFrame(describe({ cause: error }));
       }
-    } catch (error) {
-      // PARKED, NEVER LADDERED. Destructive recovery — replacing the identity —
-      // needs timers the gate does not deliver, so an in-gate failure records
-      // its reason and arms the startup row, and the delivered frame continues
-      // with the full machinery.
-      await this.#parkForDeliveredFrame(describe({ cause: error }));
+    } finally {
+      this.#phaseClock = undefined;
     }
     // A SETTLED RESTORATION RETIRES THE ROW THAT WOULD WAKE IT. The arm above
     // runs on every start, so without this a settled box wakes once a second
@@ -943,6 +974,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     const claim = await this.#durableClaim();
     if (claim === undefined) return false;
     if ((await this.#readBootId()) !== claim.expected) return false;
+    this.#stampPhase('bootId');
     this.#restoration = claim.settled;
     return true;
   }
@@ -1140,6 +1172,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
       return;
     }
     await this.ctx.storage.put(BOOT_ID_KEY, bootId);
+    this.#stampPhase('bootId');
   }
 
   /**
@@ -1320,6 +1353,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // replaced, the heartbeat spots it and drives a fresh attempt, and this one
     // arrives with an outcome describing a container that no longer exists.
     if (!this.#owns(generation)) return;
+    this.#stampPhase('attached');
     await this.#recordAttach(outcome);
     const restored = await this.#restartWorkloads(generation, steps);
     if (!this.#owns(generation)) return;
@@ -3459,6 +3493,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         return { status: checked.status as ChangeStatus, version: checked.version };
       },
       exec: async (command) => await this.#rawExec(command),
+      stamp: (phase) => this.#stampPhase(phase),
       containerGeneration: async () => await this.#readBootId(),
       storeRoot: () => chainStoreRoot(this.#boxPrefix()),
       mountStore: async (at) => {
@@ -3574,12 +3609,14 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
     // `mkdir -p` from the work directory, which always exists.
     if (cwd === DEVBOX_RUNTIME_DIR && !this.#runtimeDirReady) {
       const made = await super.exec(`mkdir -p '${DEVBOX_RUNTIME_DIR}'`, { cwd: DEVBOX_WORKDIR });
+      this.#stampPhase('containerStart');
       if (made.exitCode !== 0) {
         return { stdout: made.stdout, stderr: made.stderr, exitCode: made.exitCode };
       }
       this.#runtimeDirReady = true;
     }
     const result = await super.exec(command, { cwd });
+    this.#stampPhase('containerStart');
     return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
   }
 

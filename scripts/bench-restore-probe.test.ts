@@ -52,6 +52,43 @@ describe('the in-gate restore poll', () => {
     }
   });
 
+  test('a settled probe carries the phases the restore reached, absent ones absent', async () => {
+    const restore = stubFetch(() => new Response(JSON.stringify({
+      ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
+      probe: { wallMs: 4542, at: 1_786_000_000_000, phases: { containerStart: 1210, attached: 3980, bootId: 4530 } }, ms: 4,
+    })));
+    try {
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, []);
+      expect(row.outcome).toBe('ok');
+      expect(row.phases).toEqual({ containerStart: 1210, attached: 3980, bootId: 4530 });
+      // A fresh box mounts no store and no base: those phases are not there,
+      // and nothing reads them as zero.
+      expect(row.phases).not.toHaveProperty('storeMount');
+      expect(row.phases).not.toHaveProperty('baseAttach');
+    } finally {
+      restore();
+    }
+  });
+
+  test('a start the platform reset is an unsettled row naming its last phase', async () => {
+    const restore = stubFetch(() => new Response(JSON.stringify({
+      ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
+      probe: { wallMs: null, at: 1_786_000_000_000, phases: { containerStart: 28_400 } }, ms: 4,
+    })));
+    const notes: string[] = [];
+    try {
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes);
+      expect(row.wallMs).toBeNull();
+      expect(row.probeAt).toBe(1_786_000_000_000);
+      expect(row.phases).toEqual({ containerStart: 28_400 });
+      expect(row.outcome).toContain('unsettled');
+      expect(row.outcome).toContain('containerStart');
+      expect(notes).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
   test('an absent probe is an absent row, not a zero', async () => {
     const restore = stubFetch(() => new Response(JSON.stringify({
       ok: false, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe', ms: 3,
@@ -102,6 +139,10 @@ describe('the in-gate restore poll', () => {
     const rows: RestoreProbeRow[] = [
       { kind: 'cold-attach', treeBytes: 0, wallMs: 2347, probeAt: 1_786_000_000_000, outcome: 'ok' },
       { kind: 'post-ladder-wake', treeBytes: 4_259_840, wallMs: null, probeAt: null, outcome: 'absent: the box wrote no probe row for its last start' },
+      {
+        kind: 'post-ladder-wake', treeBytes: 4_259_840, wallMs: 4542, probeAt: 1_786_000_004_000, outcome: 'ok',
+        phases: { containerStart: 900, storeMount: 2100, baseAttach: 3300, attached: 4100, bootId: 4500 },
+      },
     ];
     const root = mkdtempSync(`${tmpdir()}/kinu-restore-probe-`);
     try {
