@@ -1224,6 +1224,45 @@ describe('buildSystemPromptSync', () => {
     }
   });
 
+  test('every built-in role states what it owns, what it never does, what it hands back, and what it does when blocked', () => {
+    // The four sections a role needs to be delegated to without a second
+    // briefing, spelled here rather than read from the definitions under
+    // test. Presence and order, not wording: the prose is the authority's to
+    // rewrite, the shape is the product's.
+    const sections = ['### Owns', '### Never', '### Hands back', '### When blocked'] as const;
+    const { rt } = createTestRuntime();
+
+    for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
+      const prompt = buildSystemPromptSync(rt, {
+        roleSection: { id, label: deriveRoleLabel(id), instructions: role.instructions },
+      });
+
+      const start = prompt.indexOf(`## Role: ${deriveRoleLabel(id)} (${id})`);
+      const end = prompt.indexOf('\n## ', start + 1);
+      const section = prompt.slice(start, end);
+
+      const positions = sections.map((heading) => ({
+        heading,
+        first: section.indexOf(`\n${heading}\n`),
+        last: section.lastIndexOf(`\n${heading}\n`),
+      }));
+
+      // Present, once each, in the order a reader meets them.
+      expect({ id, missing: positions.filter((p) => p.first < 0).map((p) => p.heading) })
+        .toEqual({ id, missing: [] });
+      expect({ id, repeated: positions.filter((p) => p.first !== p.last).map((p) => p.heading) })
+        .toEqual({ id, repeated: [] });
+      const order = positions.map((p) => p.first);
+      expect({ id, ordered: order.every((at, i) => i === 0 || at > order[i - 1]) })
+        .toEqual({ id, ordered: true });
+
+      // Each section carries at least one bullet of its own.
+      for (const body of section.split(/\n### [^\n]+\n/).slice(1)) {
+        expect({ id, body: body.trim().slice(0, 2) }).toEqual({ id, body: '- ' });
+      }
+    }
+  });
+
   test('a role never widens Plan mode', () => {
     const { rt } = createTestRuntime();
 
