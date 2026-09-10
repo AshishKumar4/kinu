@@ -19,6 +19,8 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 import { RunEventRecorder } from '../src/events/recorder';
 import { WORKSPACE_RUN_ID } from '../src/events/model-call';
+import { buildModelCallEvent } from '../src/events/model-call-event';
+import type { ModelPricing } from '../src/providers/types';
 import { HeadJournal } from '../src/heads/journal';
 import { workspaceSpend } from '../src/read-models/workspace-spend';
 import { MissionGovernor } from '../src/mission-budget';
@@ -305,6 +307,50 @@ describe('workspaceSpend', () => {
     // real run beside it is what makes this decidable: an empty list would read
     // the same whether the exclusion held or the query failed.
     expect(events.listRunsBefore(null, RUN_LIST_LIMIT).map((r) => r.runId)).toEqual(['run-1']);
+  });
+
+  test('a 1h-retention write reaches the total as a FLOOR, and an exact call does not', () => {
+    const { ws, events, actor } = rig();
+    // The rates models.dev publishes for this model, verbatim. There is only
+    // ONE cache-write rate to publish, so the 1h call below is charged at the
+    // 5m one and its dollars are short — which is the whole point of the count.
+    const pricing: ModelPricing = { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+    const SPEC = 'anthropic/claude-sonnet-4-5';
+    // Through the REAL producer, so this pins the whole chain: `priceCall`'s
+    // verdict, the row that carries it, the SQL that counts it, the fold that
+    // sums it. A test that emitted a hand-built row would pass with the
+    // producer dropping the marker on the floor.
+    const call = (cacheWrite1h?: number) => buildModelCallEvent({
+      source: 'judge',
+      spec: SPEC,
+      usage: cacheWrite1h === undefined
+        ? { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024 }
+        : { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024, cacheWrite1h },
+    }, { effectiveSpec: SPEC, pricing });
+
+    events.emit('run-1', call());
+    events.emit('run-1', call(1_000));
+
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
+    const judge = spend.producers.find((p) => p.source === 'judge');
+    // BOTH calls were priced, so `unpricedCalls` says nothing about either and
+    // cannot be what makes this figure a floor.
+    expect(judge?.unpricedCalls).toBe(0);
+    expect(judge?.usd).toBeCloseTo(2 * (12 * 3 + 2_048 * 0.3 + 1_024 * 3.75 + 500 * 15) / 1_000_000, 12);
+    // Exactly ONE of them did. Any-call-estimated: a sum of floors is a floor,
+    // so one is enough to qualify the figure and the count says how many.
+    expect(judge?.floorPricedCalls).toBe(1);
+    expect(spend.total.floorPricedCalls).toBe(1);
+  });
+
+  test('a workspace whose writes were all short-retention reports no floor at all', () => {
+    const { ws, events, actor } = rig();
+    // The tier reported as an explicit ZERO, which is the case a truthy check
+    // on the token count would get right and a presence check could get wrong.
+    step(events, { input: 3_084, output: 500, cacheRead: 2_048, cacheWrite: 1_024, cacheWrite1h: 0 }, 0.02);
+    const spend = workspaceSpend({ events, sql: ws.sql, actor });
+    expect(spend.total.floorPricedCalls).toBe(0);
+    expect(spend.total.usd).toBeCloseTo(0.02, 10);
   });
 });
 

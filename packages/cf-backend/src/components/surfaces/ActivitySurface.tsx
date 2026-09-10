@@ -604,6 +604,13 @@ function spendCaveat(spend: WorkspaceSpend): string | null {
   if (total.unpricedCalls > 0) {
     clauses.push(`${total.unpricedCalls} measured call${total.unpricedCalls === 1 ? "" : "s"} carried no models.dev rate`);
   }
+  // Priced, and priced short: the catalog publishes ONE cache-write rate and
+  // these calls used the longer retention tier, which costs more. Named beside
+  // the missing-rate clause because both bound the same dollar figure, and a
+  // reader who cannot see this one reads a floor as the price.
+  if (total.floorPricedCalls > 0) {
+    clauses.push(`${total.floorPricedCalls} priced call${total.floorPricedCalls === 1 ? "" : "s"} wrote cache at a retention tier the catalog does not rate`);
+  }
   return clauses.length === 0 ? null : clauses.join("; ");
 }
 
@@ -705,6 +712,7 @@ function countNote(
 function usdNote(row: Omit<ProducerSpend, "source">): string | undefined {
   const gaps: string[] = [];
   if (row.unpricedCalls > 0) gaps.push(`${row.unpricedCalls} carried no models.dev rate`);
+  if (row.floorPricedCalls > 0) gaps.push(`${row.floorPricedCalls} wrote cache at an unrated retention tier`);
   if (row.callsWithoutUsage > 0) gaps.push(`${row.callsWithoutUsage} reported no usage to price`);
   if (gaps.length === 0) return undefined;
   const missing = `Of ${row.calls} calls, ${gaps.join(" and ")}.`;

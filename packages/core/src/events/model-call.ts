@@ -120,7 +120,7 @@ export interface ModelCallReport {
  *
  * One declaration for the fold, wherever the folding happens. A producer's row
  * in the workspace total, that total itself, and the per-producer aggregate the
- * recorder sums straight out of the event log are the same five numbers, and the
+ * recorder sums straight out of the event log are the same six numbers, and the
  * two that make them trustworthy are absences: a `usage` field no call reported
  * stays ABSENT rather than summing to a zero that reads as measured, and `usd`
  * stays absent until some call carried a catalog rate, so "nothing here was
@@ -139,8 +139,26 @@ export interface SpendTally {
    *  did — unpriced, never free. */
   readonly usd?: number;
   /** Calls with a usage report but no catalog rate: measured in tokens,
-   *  invisible in dollars. This is why `usd` is a floor. */
+   *  invisible in dollars. This is one reason `usd` is a floor. */
   readonly unpricedCalls: number;
+  /**
+   * The OTHER reason. Calls the catalog DID price, at a rate it does not
+   * publish for the cache-retention tier they used — `priceCall`'s
+   * `floorTokens`, counted per call. Nonzero means `usd` above is under the
+   * real bill.
+   *
+   * ANY-CALL-ESTIMATED, deliberately: a sum of floors is a floor, so one such
+   * call is enough to qualify the whole figure and the count says how much of
+   * the population it was. A COUNT rather than a token sum, because the tokens
+   * are already here — `usage.cacheWrite1h` is the same quantity, summed by the
+   * same fold — and a second copy of them would be a second accounting.
+   *
+   * Zero is a MEASUREMENT here, unlike the per-call marker it aggregates: this
+   * is a count over a population the fold saw, so "none of these calls was
+   * floor-priced" is a fact, where a per-call `0` would only have been the
+   * absence of one.
+   */
+  readonly floorPricedCalls: number;
 }
 
 /**
