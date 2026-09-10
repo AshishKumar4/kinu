@@ -223,7 +223,13 @@ export type DevboxStrategyName = 'snapshot-chain';
 /** The strategy a devbox uses unless its class says otherwise. The measured
  * basis is `bench/measure-first/DECISIVE-2026-09-05.md`, which states the run
  * and the numbers; a change here is a new decision and gets a new dated report
- * beside that one, never an edit to the incumbent's. */
+ * beside that one, never an edit to the incumbent's. That report soundly
+ * establishes merkle-pack's whole-tree index property
+ * (`src/candidates/merkle-pack/build.ts:768-810`,
+ * `src/candidates/merkle-pack/read.ts:296` at the 2026-09-06 tree,
+ * fixed-change experiment `local-merklepack-index-1`) and completes no ladder
+ * for anything (G3/G6 refused for both arms there): bounded-layers is
+ * UNSETTLED (2026-09-09 section). */
 export const DEFAULT_DEVBOX_STRATEGY: DevboxStrategyName = 'snapshot-chain';
 
 export function parseDevboxStrategyName(value: string | null | undefined): DevboxStrategyName | null {

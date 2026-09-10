@@ -29,6 +29,7 @@ import {
   delegationBudgetAtDepth, delegationDepthRefusal,
   receiveSubordinateEvent,
   type SubordinateEventResult,
+  type SubordinateReportHandoff,
   renderAgentsToolDescription,
   TOOL_REACH,
   type AgentsToolDeps,
@@ -117,6 +118,7 @@ interface Scene {
     status?: 'progress' | 'completed' | 'blocked';
     content: string;
     origin?: 'report_tool' | 'turn_end';
+    handoff?: SubordinateReportHandoff;
   }): Promise<SubordinateEventResult>;
   /** Native `agents` dispatch, at the width the tool calls it. */
   call(input: AgentsToolInput, signal?: AbortSignal): Promise<object>;
@@ -241,6 +243,7 @@ function makeScene(options: {
       status: input.status ?? 'completed',
       content: input.content,
       origin: input.origin ?? 'report_tool',
+      handoff: input.handoff,
       // The ingress dedupes on this, so every report in a suite needs its own —
       // two sharing one would have the second read back as already held.
       sequenceId: `temp:${++sequence}`,
@@ -417,6 +420,24 @@ describe('a task-lifetime hire returns one completed answer', () => {
     expect(v.parse(CompletedOutcome, await run.settled)).toMatchObject({
       status: 'completed', answer: 'Root cause: an unregistered callback URL.',
     });
+  });
+
+  test('a structured handoff reaches the waiting caller, which has only one field to read it in', async () => {
+    const scene = makeScene();
+    const run = startRun(scene, { role: 'auditor', mission: 'Audit the ledger.' });
+    await run.ready;
+    // This lane never publishes an event: the answer IS the `ask`'s return
+    // value, and `answer` is the only field in it. So the handoff rides in the
+    // prose rather than being dropped on the way to the one reader there is.
+    await scene.report({
+      content: 'Totals reconcile.',
+      handoff: { concerns: ['March is reconciled against a copy, not the source export'] },
+    });
+
+    expect(v.parse(CompletedOutcome, await run.settled)).toMatchObject({
+      answer: 'Totals reconcile.\nconcerns:\n  - March is reconciled against a copy, not the source export',
+    });
+    expect(scene.published()).toBe(0);
   });
 });
 

@@ -29,6 +29,9 @@ import {
   parentAdmitsSubordinateReport,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
+  SUBORDINATE_REPORT_HANDOFF_MAX_CHARS,
+  type ReportToolDeps,
+  type SubordinateIngressDeps,
   subordinateRelaysTurnEnd,
   type SerializedMessage,
   type SqlExec,
@@ -51,6 +54,7 @@ import { createMemoryVfs, createTestActors } from '@kinu.run/test-utils';
 import {
   makeSql as makeTagged, makeSqlExec, makeExecRaw, createTestActor, createTestWorkspace,
 } from './helpers';
+import { dispatchReport } from '../src/tools/report-tool';
 
 /** One fixed clock for every roster write these scenes make. */
 const NOW = 1_700_000_000_000;
@@ -91,6 +95,13 @@ function reportPayload(event: KinuEvent | undefined): SubordinateReportPayload {
     sequence_id: v.string(),
     task: v.optional(v.string()),
     content_path: v.optional(v.string()),
+    // Named here so this helper cannot become the thing that hides a drop:
+    // both this schema and the log's own strip what they do not list, so a
+    // handoff field missing from EITHER reads back as `undefined`.
+    concerns: v.optional(v.array(v.string())),
+    deviations: v.optional(v.array(v.string())),
+    findings: v.optional(v.array(v.string())),
+    open_work: v.optional(v.array(v.string())),
     kinu_mode: v.picklist(['build', 'plan']),
   }), event.payload);
 }
@@ -1178,36 +1189,48 @@ describe('oversize subordinate reports stay reachable', () => {
   });
 });
 
-describe('the parent ingress, in the order it runs', () => {
-  /** One parent, with an open assignment out to `researcher`. */
-  function parent() {
-    const { sql, actor } = makeWorld();
-    initEventsHubTables(sql);
-    const log = new EventLog(sql, actor);
-    const roster = makeRosterStore();
-    roster.ensureSchema();
-    roster.create(initialRosterEntry);
-    const { vfs, files } = createMemoryVfs();
-    const seen: string[] = [];
-    const announced: Array<{ id: string; content: string }> = [];
-    return {
-      log, roster, files, seen, announced,
-      deps: {
-        log,
-        roster,
-        vfs,
-        transaction: <T,>(body: () => T): T => { seen.push('transaction'); return body(); },
-        announce: (report: { id: string; content: string }) => {
-          seen.push('announce');
-          announced.push({ id: report.id, content: report.content });
-        },
-        onAdmitted: () => { seen.push('drain'); },
-      },
-    };
-  }
+/** One parent, with an open assignment out to `researcher` — the scene both
+ *  the ingress-order tests and the handoff tests run against. Named rather
+ *  than inferred so the two describes below share ONE harness. */
+interface ParentScene {
+  log: EventLog;
+  roster: SubordinateRosterStore;
+  files: Map<string, string>;
+  /** The ordered trace of ingress side effects, for the ordering assertions. */
+  seen: string[];
+  announced: Array<{ id: string; content: string }>;
+  deps: SubordinateIngressDeps;
+}
 
+function parentScene(): ParentScene {
+  const { sql, actor } = makeWorld();
+  initEventsHubTables(sql);
+  const log = new EventLog(sql, actor);
+  const roster = makeRosterStore();
+  roster.ensureSchema();
+  roster.create(initialRosterEntry);
+  const { vfs, files } = createMemoryVfs();
+  const seen: string[] = [];
+  const announced: Array<{ id: string; content: string }> = [];
+  return {
+    log, roster, files, seen, announced,
+    deps: {
+      log,
+      roster,
+      vfs,
+      transaction: <T,>(body: () => T): T => { seen.push('transaction'); return body(); },
+      announce: (report) => {
+        seen.push('announce');
+        announced.push({ id: report.id, content: report.content });
+      },
+      onAdmitted: () => { seen.push('drain'); },
+    },
+  };
+}
+
+describe('the parent ingress, in the order it runs', () => {
   test('spills before opening the storage transaction, so the async write is never inside it', async () => {
-    const scene = parent();
+    const scene = parentScene();
     const content = 'seam found in the auth module; '.repeat(60).trim();
     const spilled = eventContentPath(content);
     // The VFS write is async and the transaction body is not: observing the
@@ -1236,7 +1259,7 @@ describe('the parent ingress, in the order it runs', () => {
   });
 
   test('drops what the parent is not waiting on before the spill, leaving no file behind', async () => {
-    const scene = parent();
+    const scene = parentScene();
     scene.roster.applyReport('researcher', 'completed', 'report_tool', NOW);   // no open assignment left
 
     const result = await receiveSubordinateEvent(scene.deps, {
@@ -1251,7 +1274,7 @@ describe('the parent ingress, in the order it runs', () => {
   });
 
   test('a report from a subordinate this parent does not have is not awaited, not admitted', async () => {
-    const scene = parent();
+    const scene = parentScene();
     // An unknown name is a decision the roster has already forgotten, not a
     // delivery failure: throwing made the child retry a report nobody awaits,
     // so its terminal sequence never converged.
@@ -1267,7 +1290,7 @@ describe('the parent ingress, in the order it runs', () => {
   // delivery until the parent holds it. Before the sequence was the key, the
   // second delivery published a second event and billed a second parent turn.
   test('one sequence delivered twice wakes the parent once, and says the second was already held', async () => {
-    const scene = parent();
+    const scene = parentScene();
     const deliver = () => receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'researcher', status: 'completed', content: 'Market mapped.',
       origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'build',
@@ -1286,7 +1309,7 @@ describe('the parent ingress, in the order it runs', () => {
   });
 
   test('two sequences from one subordinate are two parent events', async () => {
-    const scene = parent();
+    const scene = parentScene();
     const deliver = (sequenceId: string, content: string) =>
       receiveSubordinateEvent(scene.deps, {
         fromSubordinate: 'researcher', status: 'progress', content,
@@ -1304,7 +1327,7 @@ describe('the parent ingress, in the order it runs', () => {
   // The mode therefore travels with the report: re-deriving it at either end
   // turned a Plan report into a Build one.
   test('the report carries the mode its sender stated', async () => {
-    const scene = parent();
+    const scene = parentScene();
     await receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'researcher', status: 'progress', content: 'Three options, no code yet.',
       origin: 'turn_end', sequenceId: 'settle:msg-1', mode: 'plan',
@@ -1313,5 +1336,105 @@ describe('the parent ingress, in the order it runs', () => {
     const event = scene.log.pending({ variant: 'subordinate_report' })[0];
     expect(reportPayload(event).kinu_mode).toBe('plan');
     expect(reportPayload(event).sequence_id).toBe('settle:msg-1');
+  });
+});
+
+/**
+ * The whole spine a real report crosses, composed in production's order: the
+ * model's tool call → the one dispatcher → the destination a backend wires
+ * (`buildReport` in the cli host, `hostedTaskProfile` in the cloud one) → the
+ * parent's ingress → the parent's event → the brief its next turn reads.
+ *
+ * Composed rather than asserted piecewise BECAUSE this feature's failure mode
+ * is a field accepted at one hop and dropped at the next: valibot's `v.object`
+ * strips what it does not name, so a handoff missing from the stored payload's
+ * schema would be written to the row, accepted by every unit around it, and
+ * gone by the time the parent read it back.
+ */
+describe('the structured handoff a report carries', () => {
+  function childReportingTo(scene: ParentScene): ReportToolDeps {
+    return {
+      report: async ({ status, content, handoff }) => {
+        const relayed = await receiveSubordinateEvent(scene.deps, {
+          fromSubordinate: 'researcher', status, content, handoff,
+          origin: 'report_tool', sequenceId: `settle:${content.length}`, mode: 'build',
+        }, 30);
+        return { disposition: relayed.disposition };
+      },
+    };
+  }
+
+  function reportOn(scene: ParentScene): SubordinateReportPayload {
+    return reportPayload(scene.log.pending({ variant: 'subordinate_report' })[0]);
+  }
+
+  test('what the child stated is on the parent’s event AND in the brief the parent reads', async () => {
+    const scene = parentScene();
+
+    await dispatchReport(childReportingTo(scene), {
+      status: 'completed',
+      content: 'Rate limiter landed behind the existing flag.',
+      // The blank entry is what a model leaves behind when it starts a list
+      // and thinks better of it; it must not reach the parent as an empty
+      // bullet, and the surrounding space must not reach it either.
+      concerns: ['  the 429 budget is a guess — no production trace to size it from ', '  '],
+      findings: ['the gateway already limits per-account, so per-IP double-counts'],
+    });
+
+    expect(reportOn(scene)).toMatchObject({
+      concerns: ['the 429 budget is a guess — no production trace to size it from'],
+      findings: ['the gateway already limits per-account, so per-IP double-counts'],
+    });
+    // The payload is not what the parent reads — this is.
+    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]!).brief).toBe(
+      'completed [re: Map the market.]: Rate limiter landed behind the existing flag.'
+      + '\nconcerns:\n  - the 429 budget is a guess — no production trace to size it from'
+      + '\nfindings:\n  - the gateway already limits per-account, so per-IP double-counts',
+    );
+  });
+
+  test('a report that states only status and content delivers exactly what it always did', async () => {
+    const scene = parentScene();
+
+    await dispatchReport(childReportingTo(scene), {
+      status: 'progress', content: 'Mapped 8 of the 14 so far.',
+    });
+
+    const payload = reportOn(scene);
+    // Not `{concerns: [], …}`: an optional field is ABSENT when unused, or
+    // every reader has to learn to tell an empty list from a silent one.
+    expect(payload.concerns).toBeUndefined();
+    expect(payload.open_work).toBeUndefined();
+    expect(renderForLLM(scene.log.pending({ variant: 'subordinate_report' })[0]!).brief)
+      .toBe('progress [re: Map the market.]: Mapped 8 of the 14 so far.');
+  });
+
+  test('a handoff over the shared budget is refused in words, and nothing reaches the parent', async () => {
+    const scene = parentScene();
+    // Refused rather than truncated: the handoff has no spill file, so a
+    // shortened list of open work is a list the parent believes it has read.
+    const oversize = dispatchReport(childReportingTo(scene), {
+      status: 'completed',
+      content: 'Done.',
+      open_work: [`x`.repeat(SUBORDINATE_REPORT_HANDOFF_MAX_CHARS + 1)],
+    });
+
+    await expect(oversize).rejects.toMatchObject({ code: 'bad_input' });
+    await expect(oversize).rejects.toThrow(`${SUBORDINATE_REPORT_HANDOFF_MAX_CHARS}-character budget`);
+    expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
+  });
+
+  test('a destination that reads only the body is offered no handoff, and is handed none', async () => {
+    const scene = parentScene();
+    const bodyOnlyDestination = { ...childReportingTo(scene), bodyOnly: true } satisfies ReportToolDeps;
+
+    await dispatchReport(bodyOnlyDestination, {
+      status: 'completed', content: 'Candidate submitted.',
+      concerns: ['this should not travel to a destination that never declared it'],
+    });
+
+    // The search node's captured report is graded on `content` alone; a field
+    // it was never offered must not arrive at it by the back door either.
+    expect(reportOn(scene).concerns).toBeUndefined();
   });
 });

@@ -45,6 +45,8 @@ import {
   type JsonValue,
   type MemoryToolInput,
   type ReleaseApproval,
+  type ReportToolDeps,
+  type SubordinateReportHandoff,
   type ReleaseCheck,
   type ReleaseDeployment,
   type ReleaseSource,
@@ -500,6 +502,48 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const result = await codemodeExecute(provider, 'send')('completed', 'Fix landed; tests added.');
     expect(result).toEqual({ delivered: true });
     expect(captured).toEqual({ status: 'completed', content: 'Fix landed; tests added.' });
+  });
+
+  test('report.send carries a third-argument handoff to the same deps, and refuses a field it does not own', async () => {
+    const delivered: Array<{ status: string; content: string; handoff?: SubordinateReportHandoff }> = [];
+    const deps: ReportToolDeps = { report: async (input) => { delivered.push(input); return { ok: true }; } };
+    const provider = createReportCodemodeProvider(() => deps);
+
+    await codemodeExecute(provider, 'send')('blocked', 'Cannot proceed.', {
+      concerns: ['the migration is irreversible once it starts'],
+      open_work: ['the backfill, once someone confirms the window'],
+    });
+    expect(delivered).toEqual([{
+      status: 'blocked',
+      content: 'Cannot proceed.',
+      handoff: {
+        concerns: ['the migration is irreversible once it starts'],
+        open_work: ['the backfill, once someone confirms the window'],
+      },
+    }]);
+
+    // A name the sandbox invented is refused HERE rather than travelling as a
+    // key the stored payload's schema then strips in silence — and the
+    // refused call delivers nothing at all.
+    expect(await codemodeExecute(provider, 'send')('completed', 'Done.', { thoughts: ['nice task'] }))
+      .toMatchObject({ error: expect.stringContaining('concerns, deviations, findings, open_work') });
+    expect(delivered).toHaveLength(1);
+  });
+
+  test('the native `report` declares the handoff fields — except to a destination that reads only the body', () => {
+    const { rt } = createTestRuntime();
+    const propertiesOf = (report: ReportToolDeps): string[] => Object.keys(v.parse(
+      v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }),
+      buildBuiltinTools({ rt, report }).report?.inputSchema,
+    ).jsonSchema.properties);
+
+    const sink: ReportToolDeps['report'] = async () => ({ ok: true });
+    expect(propertiesOf({ report: sink }))
+      .toEqual(['status', 'content', 'concerns', 'deviations', 'findings', 'open_work']);
+    // The search node's captured candidate. A slot the destination drops must
+    // not be offered: the model spends tokens filling it and the parent — here,
+    // the engine grading `content` — never sees a word of it.
+    expect(propertiesOf({ report: sink, bodyOnly: true })).toEqual(['status', 'content']);
   });
 
   test('run with no workspace shell REFUSES with a classification, not a bare string', async () => {

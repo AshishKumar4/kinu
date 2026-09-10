@@ -225,9 +225,59 @@ export const SUBORDINATE_REPORT_STATUSES = ['progress', 'completed', 'blocked'] 
 
 export type SubordinateReportStatus = (typeof SUBORDINATE_REPORT_STATUSES)[number];
 
+/**
+ * The structured handoff a report may carry BESIDE its prose body.
+ *
+ * One declaration, for the same reason {@link SUBORDINATE_REPORT_STATUSES} is
+ * one: the native `report` tool's JSON schema, the codemode projection, the
+ * dispatcher's parse, the stored payload's schema and the parent's brief all
+ * read this tuple, so a field the model is offered is a field the parent is
+ * shown.
+ *
+ * WHY THESE FOUR AND NOT MORE. A prose blob makes the parent re-derive what
+ * the child already knew — which of its sentences is a decision it must weigh,
+ * and which is narration. These four are the parts a parent ACTS on: what the
+ * child is unsure of, where it left the brief, what it settled that outlives
+ * the assignment, and what is still owed. "Thoughts" and "feedback" are
+ * deliberately absent: a schema cannot validate reflection, and a field the
+ * model fills only out of politeness costs every caller a slot in the surface
+ * for nothing.
+ *
+ * Every field is optional and the whole handoff may be absent — a report that
+ * says `{status, content}` and nothing else is the contract it always was.
+ */
+export const SUBORDINATE_REPORT_HANDOFF_FIELDS = [
+  'concerns', 'deviations', 'findings', 'open_work',
+] as const;
+
+export type SubordinateReportHandoffField = (typeof SUBORDINATE_REPORT_HANDOFF_FIELDS)[number];
+
+/** One short entry per item, never a second prose body: the entries are what
+ *  the parent reads in full. */
+export type SubordinateReportHandoff = {
+  readonly [Field in SubordinateReportHandoffField]?: readonly string[];
+};
+
+/**
+ * The whole handoff's character budget, summed over every retained entry of
+ * every field.
+ *
+ * It exists so the parent's brief can render the handoff WHOLE. `content` is
+ * unbounded prose, so the brief windows it and `content_path` addresses the
+ * tail; the handoff has no spill path, and truncating the concerns while
+ * keeping six hundred characters of narration would drop exactly the part the
+ * parent was given these fields to weigh. So the bound is enforced where a
+ * refusal is still actionable — at the tool call, which can name it and be
+ * called again — and never at render, which cannot.
+ *
+ * The same figure as the prose brief's window ({@link EVENT_BRIEF_MAX_CHARS}):
+ * one report adds at most one further window to the turn that drains it.
+ */
+export const SUBORDINATE_REPORT_HANDOFF_MAX_CHARS = 600;
+
 /** Subordinate facet → parent workspace. Reports drain into the
  *  orchestrator's next turn on the standard reactor rail. */
-export interface SubordinateReportPayload {
+export interface SubordinateReportPayload extends SubordinateReportHandoff {
   from_subordinate: string;
   status: SubordinateReportStatus;
   content: string;

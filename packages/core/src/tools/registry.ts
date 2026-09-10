@@ -450,6 +450,27 @@ export const DELEGATION_RUNGS = {
   // caller's judgement against the mechanism stated here.
   swarm:
     'Run a search (action=swarm): N nodes each running its own tool loop over this workspace in parallel, handing you back only what they found. '
+    // THE COUNT IS A DECISION, and the rung said "N nodes" without ever telling
+    // the caller to pick N. The measured case is Anthropic's multi-agent research
+    // system: on their BrowseComp eval token usage by itself explains 80% of the
+    // performance variance, a multi-agent run costs about 15x a chat turn, and the
+    // fix they shipped was EXPLICIT NUMBERS in the lead's prompt ("1 agent with
+    // 3-10 tool calls" for fact-finding, "more than 10 subagents with clearly
+    // divided responsibilities" for complex research) because agents misjudge
+    // effort in BOTH directions — the failure they name is spawning 50 subagents
+    // for a simple query. So the sentence scales the count to the task and prices
+    // it; a widen-by-default instruction is the over-spawn half written down.
+    //
+    // OUR band, not theirs: 3 is `optimise`/`prove`, 5 is `ideate`, and
+    // unit-prompt.test.ts derives min/max from SWARM_PRESET_POINTS and fails this
+    // string when a row's width moves — this module imports nothing by design, and
+    // strategy/swarm.ts names that exact drift hazard against this exact file.
+    //
+    // `branches` only. `depth` is deliberately absent: a bare `{preset, task}` call
+    // resolves through `unmeasuredPoint`, which pins depth to 1 on every row, so a
+    // "1 to 7 levels" band here would be false for the most common call. The depth
+    // band rides the `depth` property, which is read when depth is actually set.
+    + 'Scale the candidate count to the size of the task and state it on the call: `branches` is that count, the named presets set it from 3 to 5 per level, and each candidate is one more tool loop with its own token bill — so name a number above that band only when the task has that many independent angles. '
     + 'Candidates are scored by your verifier running in this workspace when you declare an `objective`, and ranked by a judge ensemble when you do not. '
     // The CONTEXT axis reads from DELEGATION_INHERITANCE.swarm above, which the
     // `task` field also composes, so the rung and the field cannot disagree about
@@ -476,6 +497,22 @@ export const DELEGATION_RUNGS = {
   // hire that should have been `task` leaves a roster row nobody retires.
   hire:
     'Hire a helper (action=hire): one agent per independent workstream, each running its own tool loop over this same workspace. '
+    // The line above is a UNIT rule — what one agent is — and the caller still had
+    // no rule for HOW MANY. Same measured source as the search rung, and the same
+    // two halves: scale the count to the work, and say what the count spends.
+    //
+    // It carries no number and no field, because it must stand ALONE.
+    // `agentsActionsFor` gates `swarm` on its own deps, so a team-only actor
+    // renders this rung with no search rung beside it: a preset width or
+    // `branches` quoted here would calibrate on machinery that actor never
+    // receives. The split itself is the calibration instead, and it is reachable
+    // from any deps set that renders this rung at all.
+    //
+    // The dependent-chain clause is the anti-over-spawn half, and it is the one
+    // Anthropic states as a rule: an orchestrator buys something only when there
+    // is bulk to hand off, and on one dependent chain it pays for a plan, a
+    // handoff and a merge that a single agent gets for free.
+    + 'Say how many independent workstreams the task holds before the first hire, as a range: a part that runs without waiting on another part is one workstream, each hire adds one more tool loop and one more token bill, and a chain of dependent steps is one workstream however long it is. '
     + 'A hire outlives this turn and stays in your roster: hand it more work with msg, read the roster with list. A finished hire reports and STAYS, resumable with its context intact — dismiss only one whose role is permanently over. '
     // The other half of the CONTEXT axis, from the same per-action source the
     // `mission` field composes.
