@@ -4266,6 +4266,57 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     await session.end();
   });
+
+  test("a mid-turn row is priced against the ONE spelling of the turn's model, whatever the tier catalog wrote", async () => {
+    // The account catalog names the tier by its bare alias; the resolver spells
+    // it in full. Both name one model, and the ledger must price a report that
+    // uses the full spelling — reading the tier's alias as "the model" left the
+    // row unpriced on this backend while cf, which normalizes, priced it.
+    const { db, rt } = workspaceRuntime();
+    const captured: SinkSlot = { sink: null };
+    const model = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doStream: async (options) => {
+        captured.sink?.({
+          source: 'fast', usage: { input: 1_000_000, output: 0 }, spec: 'openai-compatible/house-model',
+        });
+        return fakeModel('answered').doStream(options);
+      },
+    });
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => {
+        const trimmed = spec?.trim() ?? '';
+        return trimmed === '' || trimmed === 'house-model' ? 'openai-compatible/house-model' : trimmed;
+      },
+      resolveModel: () => model,
+      listProviders: async () => [],
+      // A listing that could not be verified admits the tier's alias as
+      // configured, which is how an account catalog's own spelling reaches a turn.
+      listModels: async () => ({ models: [], failures: [{ provider: 'openai-compatible', reason: 'offline' }] }),
+      modelInfo: async () => ({
+        id: 'house-model', label: 'house', capabilities: ['tools', 'streaming'],
+        cost: { input: 2, output: 8 },
+      }),
+      ...resolverRest,
+    };
+    const catalog = { roles: {}, tiers: { default: { model: 'house-model' } } };
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+    const session = new LocalAgentSession({
+      rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
+      db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
+      onEvent: () => {}, noAutoEvolve: true,
+    });
+    await waitFor(() => session.modelPricing() !== null);
+    await session.send('hi');
+
+    const runId = session.listRuns().items[0]!.runId;
+    const rows = session.getRunEvents(runId).filter((e) => e.type === 'model_call');
+    expect(rows).toMatchObject([{ source: 'fast', spec: 'openai-compatible/house-model', usd: 2 }]);
+    expect(session.getEffectiveModelSpec()).toBe('openai-compatible/house-model');
+    await session.end();
+  });
 });
 
 // ── agents.* in the node codemode sandbox ───────────────────────────────────

@@ -1742,9 +1742,7 @@ export {
   skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
-
-export { ModelCatalogSession } from './orchestrator/model-catalog';
-
+export { ModelCatalogSession, resolveEffectiveModelSpec } from './orchestrator/model-catalog';
 export {
   serializeContentForHeads, narrowInheritedRole,
   inheritedContextFromHistory, inheritedContextFromRows,
