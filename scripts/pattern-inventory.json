@@ -428,6 +428,13 @@
       "decision": "lexical"
     },
     {
+      "file": "packages/core/src/tools/report-tool.ts",
+      "kind": "hand-parser",
+      "owner": "parseHandoff",
+      "sourceSha256": "b5848af4c4993f197b6aaa41912b0ba7d3a4c5bfc3a42983d6cc0f1d057455d5",
+      "decision": "traversal"
+    },
+    {
       "file": "packages/core/src/utils/markdown-frontmatter.ts",
       "kind": "hand-parser",
       "owner": "parseFlatYaml",
