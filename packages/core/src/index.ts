@@ -23,10 +23,12 @@ export {
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect,
+  takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
+  eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
   TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
-  RunEndReasonSchema, ModelMessagesSchema, TurnContinuitySchema,
+  RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
   type TerminalEffectOutcome, type TerminalEffectStatus, type TerminalEffectPhase,
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,

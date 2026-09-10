@@ -565,6 +565,24 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
       'packages/cli-backend/src/agent-host/host.ts',
     ],
   },
+  {
+    // The five effect bodies every actor on both backends owes identically:
+    // the takes claim, the branch settlement, the evolution recording, the
+    // reactor drain and the shadow trial. Each was two near-copies whose
+    // disposition mapping — what is a refusal, what stays owed — drifted a
+    // detail at a time. The fixture is the factories themselves, executed in
+    // core's own suite; both tables must construct through them.
+    seam: 'terminal effect bodies',
+    coreSymbol: 'takesTerminalEffect',
+    fixture: [
+      'takesTerminalEffect', 'branchesTerminalEffect', 'turnRecordTerminalEffect',
+      'eventDrainTerminalEffect', 'shadowTrialTerminalEffect',
+    ],
+    suites: [
+      'packages/cf-backend/src/orchestrator.ts',
+      'packages/cli-backend/src/local-session.ts',
+    ],
+  },
 ] as const;
 
 describe('the twin differential — one seam, one fixture, both backends', () => {
@@ -615,6 +633,22 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     }
 
     expect(drifted).toEqual([]);
+  });
+
+  test('every shared effect body is constructed through its core factory on BOTH backends', () => {
+    // Stricter than the fixture check above, which is satisfied by any one
+    // name: a backend that re-spelled `shadow_trial` inline while still
+    // constructing `takes` through core would pass it. Each of the five is
+    // its own drift site, so each is held separately.
+    const seam = DIFFERENTIAL_SEAMS.find((entry) => entry.seam === 'terminal effect bodies');
+    if (!seam) throw new Error('the terminal effect bodies seam is not declared');
+    const cf = [read('packages/cf-backend/src/actor-agent.ts'), read('packages/cf-backend/src/orchestrator.ts')].join('\n');
+    const cli = read(CLI_CLASS[0]);
+    const missing = seam.fixture.flatMap((factory) => [
+      ...(delegatesTo(cf, factory) ? [] : [`cf does not construct ${factory}`]),
+      ...(delegatesTo(cli, factory) ? [] : [`cli does not construct ${factory}`]),
+    ]);
+    expect(missing).toEqual([]);
   });
 
   test('the shared merge fixture still resolves to the policy core produces', async () => {

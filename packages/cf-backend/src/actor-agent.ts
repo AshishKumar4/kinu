@@ -267,8 +267,9 @@ import {
   // Core's once-only lifecycle for one settled response, and the per-effect
   // ledger it wraps. Both backends drive this same state machine.
   TerminalTransitions, initTerminalEffectTable,
-  terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect, keyedScope,
-  RunEndReasonSchema, ModelMessagesSchema, WorkModeSchema, TurnContinuitySchema,
+  terminalEffect, overflowRetryTerminalEffect, outputLimitContinuationTerminalEffect,
+  turnRecordTerminalEffect, eventDrainTerminalEffect, shadowTrialTerminalEffect,
+  RunEndReasonSchema, WorkModeSchema,
   CompletedTurnSchema, AdvisorRecoverySnapshotSchema,
   type TerminalTransition, type TerminalEffectFault, type TerminalEffectTable,
 } from "@kinu.run/core";
@@ -2077,54 +2078,8 @@ export abstract class ActorAgent extends Think<Env> {
       // cut at its output limit while the model had more to say.
       output_continuation: outputLimitContinuationTerminalEffect(this.orch.signals),
 
-      turn_record: terminalEffect({
-        input: v.object({
-          messageId: v.string(), status: RunEndReasonSchema, turn: JsonValueSchema,
-          continuity: TurnContinuitySchema, workMode: WorkModeSchema, recordedAt: v.number(),
-          autoEvolve: v.boolean(),
-        }),
-        // The window append is idempotent on the assistant message's own durable
-        // identity, so a replay leaves ONE window row and counts the session
-        // cadence once — the property that makes the recording replayable at all.
-        // Continuity, mode and the evolution gate come off the ROW, never off
-        // activation-local state a fresh isolate would default to
-        // `conversation`, `build`, and whatever THIS host's engine is set to.
-        run: ({ messageId, status, turn, continuity, workMode, recordedAt, autoEvolve }) => {
-          if (workMode === 'plan') {
-            // The live plan path records nothing, and a replay must not either.
-            return { status: 'completed', detail: 'a plan turn records no evolution state' };
-          }
-
-          // Unkeyed for an empty id: every such response would share one key, and
-          // the second would read the first's append as its own.
-          const recordedId = keyedScope(messageId);
-          this.orch.recordTurn(
-            this.orch.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
-            continuity,
-            recordedId === undefined
-              ? { recordedAt, enabled: autoEvolve }
-              : { recordedAt, enabled: autoEvolve, id: `turn-${recordedId}` },
-          );
-
-          return { status: 'completed' };
-        },
-      }),
-
-      event_drain: terminalEffect({
-        input: v.object({}),
-        // Idempotent by construction: the drain selects only PENDING, unbound
-        // rows, so a replay picks up whatever is still pending and re-delivers
-        // nothing already bound to a turn.
-        run: async () => {
-          // RETHROWING. The drain absorbs its own selection and binding failures
-          // for its ambient callers, which have nothing owed to retry them. This
-          // row does, and reporting `completed` over a half-bound batch strands
-          // the assignment behind it.
-          await this.orch.drainPendingEvents({ rethrow: true });
-
-          return { status: 'completed' };
-        },
-      }),
+      turn_record: turnRecordTerminalEffect(this.orch),
+      event_drain: eventDrainTerminalEffect(this.orch),
 
       improvement_lanes: terminalEffect({
         input: v.object({
@@ -2155,38 +2110,7 @@ export abstract class ActorAgent extends Think<Env> {
         },
       }),
 
-      shadow_trial: terminalEffect({
-        input: v.object({
-          turn: JsonValueSchema, trialContext: JsonValueSchema, pendingVersion: v.number(),
-        }),
-        // Its OWN row, not a step inside the lanes above: a full queue is a
-        // refusal a later drain clears, so the trial stays owed while the review
-        // beside it does not wait for a slot — nor repeat when the trial retries.
-        run: ({ turn, trialContext, pendingVersion }, scope) => {
-          const trialScope = keyedScope(scope);
-
-          const queued = this.engine.queueShadowTrial(
-            v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
-            trialScope === undefined
-              ? { pendingVersion }
-              : { pendingVersion, id: `trial-${trialScope}` },
-          );
-
-          // A refusal is not a deferral. A session with evolution off answers
-          // `not_sampled` forever, so an owed row for it would hold the outer
-          // claim open across every later start. `not_sampled` means there is
-          // nothing to queue for this turn and the obligation is discharged.
-          // Only a full queue or a failed insert is worth coming back for, and
-          // both clear on their own.
-          if (queued === 'queue_full' || queued === 'failed') {
-            return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
-          }
-
-          return queued === 'queued'
-            ? { status: 'completed' }
-            : { status: 'completed', detail: `no trial to queue: ${queued}` };
-        },
-      }),
+      shadow_trial: shadowTrialTerminalEffect(this.engine),
     };
   }
 

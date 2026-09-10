@@ -136,12 +136,12 @@ import {
   revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   // Alternate Takes — near-tied convergence candidates + the pick signal
-  claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
+  unclaimedAlternateTakeIds,
   listAlternateTakeSets, latestAlternateTakeSet,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
-  startBranchHead, settlePendingBranch, settleBranchIntoTakes, newBranchId,
-  branchHeadId, branchOutcomeFromJournal, headStatusUnsettled, storedHeadReportStatus,
+  startBranchHead, newBranchId,
+  headStatusUnsettled, storedHeadReportStatus,
   STEER_BRANCH_RUN_ID_PREFIX,
   type PendingBranch, type BranchStatusEvent,
   type ReleaseStatus, type ReleaseToolDeps,
@@ -269,6 +269,7 @@ import { SANDBOX_TRANSPORT } from "./sandbox-exec-lane";
 import { sandboxIdForWorkspace, sandboxPreviewExposures } from "./lib/preview-exposures";
 import {
   terminalEffect, keyedScope, declareTerminalRoster,
+  takesTerminalEffect, branchesTerminalEffect,
   type OwedEffect, type TerminalEffectTable, type TerminalTurnParts,
 } from "@kinu.run/core";
 
@@ -2489,25 +2490,7 @@ export class OrchestratorAgent extends ActorAgent {
   protected override terminalEffectTable(): TerminalEffectTable {
     return {
       ...this.sharedTerminalEffects(),
-      takes: terminalEffect({
-        input: v.object({
-          credited: v.nullable(v.string()), startedAt: v.number(),
-          takeIds: v.array(v.string()),
-        }),
-        run: ({ credited, startedAt, takeIds }) => {
-          if (credited === null) {
-            // A turn the captures cannot be attributed to: they competed for an
-            // answer that is not there, so the next turn must not claim them.
-            purgeUnclaimedAlternateTakes(this.boundSql, this.actorHandle(), takeIds);
-          } else {
-            claimAlternateTakesForTurn(this.boundSql, this.actorHandle(), {
-              turnId: credited, sessionId: 'default', startedAt, takeIds,
-            });
-          }
-
-          return { status: 'completed' };
-        },
-      }),
+      takes: takesTerminalEffect({ sql: this.boundSql, actor: this.actorHandle(), sessionId: 'default' }),
 
       craft_usage: terminalEffect({
         input: v.object({ messageId: v.string(), toolNames: v.array(v.string()) }),
@@ -2544,85 +2527,13 @@ export class OrchestratorAgent extends ActorAgent {
         },
       }),
 
-      branches: terminalEffect({
-        input: v.object({
-          id: v.string(), task: v.string(),
-          turnId: v.nullable(v.string()), liveText: v.string(),
-        }),
-        // ONE branch, AWAITED. The earlier body called core's fire-and-forget
-        // settle for the whole list and returned immediately, so the row could be
-        // pruned while heads were still running.
-        //
-        // With no live handle the HEAD JOURNAL is the only record of the branch,
-        // and what it holds is what the comparison needs. Crucially the check is
-        // not "is the head still running": a head reaches `completed` when its
-        // REPORT lands, which is before any take set exists, so treating
-        // non-running as settled skipped precisely the report this effect still
-        // owed. The row's own disposition is the settlement marker instead.
-        //
-        // ASKED FOR BY THE HEAD'S ID, which is `branchHeadId(id)` and not `id`:
-        // the row this effect carries is the branch RUN, and a branch run's one
-        // head is journalled under a DERIVED id (steer-branch.ts). Read by the
-        // run id it found no row at all, reported that as `completed`, and every
-        // eviction between the report and the settle silently dropped the
-        // comparison — the exact case this effect exists for.
-        run: async ({ id, task, turnId, liveText }) => {
-          const live = this._pendingBranches.findIndex((entry) => entry.id === id);
-
-          if (live >= 0) {
-            const [entry] = this._pendingBranches.splice(live, 1);
-
-            if (entry !== undefined) {
-              await settlePendingBranch(
-                {
-                  sql: this.boundSql,
-                  actor: this.actorHandle(),
-                  sessionId: 'default',
-                  broadcast: (event: BranchStatusEvent) => this.broadcastBranchStatus(event),
-                },
-                entry, turnId, liveText,
-                // The branch id, on the LIVE path too. Keyed only on replay, the
-                // live write and the recovery write would be two sets.
-                id,
-              );
-
-              return { status: 'completed' };
-            }
-          }
-
-          const head = this.headJournal.readHeadView(branchHeadId(id));
-
-          if (head === null) {
-            return { status: 'completed', detail: 'the journal holds no such branch head' };
-          }
-
-          const report = branchOutcomeFromJournal(head);
-
-          if (report === null) {
-            // Still executing, or waiting for the activation sweep to write its
-            // terminal status. Owed, so the row stays and the wake comes back.
-            return { status: 'owed', detail: `branch head is ${head.status}` };
-          }
-
-          const outcome = settleBranchIntoTakes(this.boundSql, this.actorHandle(), {
-            task,
-            report,
-            turnId, sessionId: 'default', liveText,
-            // The branch id IS the settlement key. The row keeps a replay from
-            // re-running the comparison; this keeps a crash BETWEEN the take-set
-            // write and the row's disposition from writing a second set.
-            settlementKey: id,
-          });
-
-          this.broadcastBranchStatus(outcome.ok
-            ? {
-              type: 'branch_status', status: 'settled', branchId: id, task,
-              takeSetId: outcome.set.id, turnId: turnId ?? '',
-            }
-            : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
-
-          return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
-        },
+      branches: branchesTerminalEffect({
+        sql: this.boundSql,
+        actor: this.actorHandle(),
+        sessionId: 'default',
+        broadcast: (event) => this.broadcastBranchStatus(event),
+        pending: this._pendingBranches,
+        journal: this.headJournal,
       }),
 
       // ── the settle spine, as four keyed boundaries ──────────────────────
