@@ -78,7 +78,7 @@ function PlanSection(): ReactElement {
       <SectionTitle>See the plan before <Accent>anything is written.</Accent></SectionTitle>
       <p className="mb-10 mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">In Plan mode the agent can read files and research, but not edit anything. It submits a Markdown plan. You mark the lines that need work, or approve it, and only then does a Build turn start.</p>
       <LandingFrame kind="plan" />
-      <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a live workspace.</span><span>Request changes is live while an annotation is on the plan; Approve is live once the plan is clean.</span></p>
+      <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a live workspace.</span><span>A recorded walkthrough plays over the workspace: a request, tool calls, a submitted plan, an approval, and the slate it builds.</span></p>
       <a className="mt-6 inline-block text-sm font-semibold p-accent" href={REPOSITORY + '/blob/main/docs/TOOLS.md#plan-authority'} target="_blank" rel="noreferrer">What Plan mode can and cannot do →</a>
     </section>
   );
