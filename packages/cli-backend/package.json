@@ -17,6 +17,9 @@
     "ai": "6.0.214",
     "@kinu.run/compaction": "workspace:*"
   },
+  "devDependencies": {
+    "@kinu.run/test-utils": "workspace:*"
+  },
   "scripts": {
     "build": "tsc",
     "check": "tsc --noEmit"

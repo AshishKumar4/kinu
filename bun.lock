@@ -125,6 +125,7 @@
         "react": "^19.2.5",
       },
       "devDependencies": {
+        "@kinu.run/test-utils": "workspace:*",
         "@types/react": "^19.2.14",
       },
     },
@@ -142,6 +143,9 @@
         "@nimbus-sh/runtime-cpython": "3.13.14",
         "ai": "6.0.214",
       },
+      "devDependencies": {
+        "@kinu.run/test-utils": "workspace:*",
+      },
     },
     "packages/compaction": {
       "name": "@kinu.run/compaction",
@@ -150,6 +154,9 @@
         "@better-compact/core": "^0.1.0",
         "@kinu.run/core": "workspace:*",
         "ai": "6.0.214",
+      },
+      "devDependencies": {
+        "@kinu.run/test-utils": "workspace:*",
       },
     },
     "packages/core": {
