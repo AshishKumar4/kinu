@@ -51,6 +51,7 @@ export function deriveStop(input: {
   readonly frontierOpen: boolean;
 }): SwarmSettleReport['stop'] {
   const { aborted, missionSpent, lost, remainingBudget, frontierOpen } = input;
+
   return aborted
     ? 'aborted'
     : missionSpent || lost > 0 || (remainingBudget <= 0 && frontierOpen)
@@ -69,7 +70,9 @@ export function suppressedCellCount(input: {
   readonly measuredCells: ReadonlySet<string>;
 }): number {
   if (input.publication.kind === 'open') return 0;
+
   if (input.archiveKey === null) return input.measuredCells.size > 0 ? 1 : 0;
+
   return input.measuredCells.size;
 }
 
@@ -105,9 +108,11 @@ export function measuredCellsFor(
       ? new Set(['flat'])
       : new Set();
   }
+
   return new Set(candidates.flatMap((candidate) => {
     if (candidate.measured === null) return [];
     const cell = archiveCellOf(archive.key, candidate.measured.measured);
+
     return cell.kind === 'cell' ? [cell.descriptor] : [];
   }));
 }
@@ -146,6 +151,7 @@ export function settleReport(input: {
   readonly resumed: SwarmResumeReport | null;
 }): SwarmSettleReport {
   const { resolved, measured, carry } = input;
+
   return {
     settle: resolved.settle,
     floorMargin: measured?.floor ? floorMargin(measured.floor, measured.direction) : null,
@@ -229,6 +235,7 @@ export async function settleRun(input: {
     aborted, missionSpent, lost, remainingBudget, expansionBudget, inheritedExpansions,
     inheritedTokens, ledgerEpoch, searchLedger, runProfile,
   } = input;
+
   const budget = { remaining: remainingBudget };
 
 // MERGE-BACK: how a settled swarm's work reaches the origin (*Merge-back*), and the
@@ -261,6 +268,7 @@ export async function settleRun(input: {
 if (ctx) {
   const policy = mergePolicyOf(resolved.settle);
   const readOrigin = originReader(ctx.vfs);
+
   const members = best && verifier
     ? [await reportedMember({
       nodeId: best.id, answer: best.artifact, score: best.score,
@@ -277,6 +285,7 @@ if (ctx) {
       readOrigin,
     })]
     : [];
+
   await mergeBack({ policy, members, settled: levelFanIn.landedIds() }, {
     log,
     preset: resolved.preset,
@@ -337,6 +346,7 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
   let written = 0;
   let notBetter = 0;
   let tooClose = 0;
+
   // KEYED OFF THE AXIS AND NOT OFF THE VERDICT. `admitCarry` returns `admitted` for
   // `none` and `reflections` because the gate is not those values' business — neither
   // reaches a publication surface — so a loop that read the verdict alone would make
@@ -346,11 +356,13 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
   for (const entry of publishing === null ? [] : carried) {
     if (entry.verdict.kind !== 'admitted') continue;
     const candidate = byId.get(entry.nodeId);
+
     // An admitted candidate under a publishing carry always carries a score, and a
     // score on a verified run always comes from a measurement — but the record keeps
     // the RAW value, so the measurement is what it is read from and its absence skips
     // the row rather than fabricating one.
     if (!candidate || candidate.measured === null) continue;
+
     const write: Omit<ExplorationWrite, 'descriptor'> = {
       identity,
       artifact: candidate.artifact,
@@ -371,12 +383,14 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
       costTokens: spentBy.get(candidate.id) ?? null,
       at: Date.now(),
     };
+
     // One refusal event with one field set, three causes filling it. The fields are
     // CONSTANT across the causes for `settleCarry`'s reason — a name assembled per branch
     // produces one name per outcome and none a query can be written against — and the two
     // that only the novelty test has are empty and -1 elsewhere, the same way that
     // function spells an inapplicable threshold.
     const raw = candidate.measured.value;
+
     const refused = (fields: {
       readonly cause: string; readonly occupant: string; readonly distance: number;
     }): void => {
@@ -389,11 +403,13 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
         ...fields,
       });
     };
+
     let verdict: ArchiveVerdict;
     // The cell this row landed in, empty for a run with no partition. Read back from
     // what the write USED rather than recomputed for the event, so the coverage a reader
     // greps and the descriptor in the row cannot disagree.
     let cellName = '';
+
     if (archive === null) {
       // NO PARTITION, which is not "the unnamed cell": this objective has no descriptor
       // and its comparable set is one cell, exactly as `ExplorationRecord.descriptor`'s
@@ -401,6 +417,7 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
       verdict = recordExploration(sql, actor, { publication, write: { ...write, descriptor: null } });
     } else {
       const cell = archiveCellOf(archive.key, candidate.measured.measured);
+
       if (cell.kind === 'unwitnessed') {
         // The run-level check refuses a key this instrument never reports, so reaching
         // here means the instrument reported it for the baseline and not for this
@@ -411,6 +428,7 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
         refused({ cause: 'unwitnessed', occupant: '', distance: -1 });
         continue;
       }
+
       cellName = cell.descriptor;
       verdict = admitToArchive(sql, actor, {
         publication,
@@ -418,6 +436,7 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
         novelty: archive.novelty,
       });
     }
+
     if (verdict.kind === 'recorded') {
       written += 1;
       log.event('swarm.record_written', {
@@ -441,6 +460,7 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
       refused({ cause: verdict.cause, occupant: '', distance: -1 });
     }
   }
+
   return {
     carriedIn: carriedIn.length,
     carriedInBest: carriedBest?.value ?? null,
@@ -455,6 +475,7 @@ const records: ExplorationRecordsReport | null = identity === null ? null : (() 
 })();
 
 const measuredCells = measuredCellsFor(archive, candidates);
+
 const suppressedCells = suppressedCellCount({
   publication,
   archiveKey: archive?.key ?? null,
@@ -509,6 +530,7 @@ const report = settleReport({
 // this path.
 if (aborted) searchLedger.fail(rootId, ledgerEpoch, Date.now());
 else searchLedger.converge(rootId, ledgerEpoch, Date.now());
+
 const result: SwarmResult = {
   preset: resolved.preset,
   label: resolved.label,
@@ -538,6 +560,8 @@ const result: SwarmResult = {
           : [{ candidate, evidence: candidate.pareto }]),
     ).map(({ candidate }) => candidate),
 };
+
 if (runProfile) Object.assign(result, { profile: runProfile });
+
 return result;
 }

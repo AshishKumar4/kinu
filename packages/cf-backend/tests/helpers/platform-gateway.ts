@@ -25,6 +25,7 @@ export function stubAiBinding(
   respond: (run: RecordedGatewayRun) => Response | Promise<Response> = () => Response.json({ ok: true }),
 ): StubbedAiBinding {
   const runs: RecordedGatewayRun[] = [];
+
   return {
     runs,
     binding: {
@@ -33,6 +34,7 @@ export function stubAiBinding(
           run(data: GatewayRunRequest, options?: { signal?: AbortSignal }): Promise<Response> {
             const recorded: RecordedGatewayRun = { gateway, ...data, signal: options?.signal };
             runs.push(recorded);
+
             return Promise.resolve(respond(recorded));
           },
         };

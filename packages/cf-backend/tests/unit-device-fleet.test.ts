@@ -28,6 +28,7 @@ const WORKSPACE = 'workspace-a';
  *  off the answer and not inferred from the frame log alone. */
 function daemonOn(frame: DeviceFrame): JsonValue {
   if (frame.method === 'which') return { present: ['node'] };
+
   return { stdout: `ran on ${frame.device ?? 'unknown'}`, stderr: '', exitCode: 0 };
 }
 
@@ -61,6 +62,7 @@ async function twoDaemons(): Promise<Fleet> {
     sandbox: { capability: 'sandboxed', reason: null, gpu: ['/dev/nvidia0'] },
   }, rigId);
   const token = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+
   return Object.assign(harness, {
     owner,
     workspace: { workspaceToken: token } satisfies UserCaller,
@@ -130,6 +132,7 @@ describe('two daemons connected at once', () => {
     fleet.consentDecision = 'once';
 
     let refused: unknown;
+
     try {
       await fleet.userDO.deviceRpc(fleet.workspace, 'exec', ['make'], { agentName: WORKSPACE });
     } catch (caught) { refused = caught; }
@@ -150,9 +153,11 @@ describe('two daemons connected at once', () => {
     // The checkpoint plane's device-less read gets the same answer, and the
     // matcher the orchestrator's availability arm branches on recognises it.
     let statusRefused: unknown;
+
     try {
       await fleet.userDO.deviceRpc(fleet.workspace, 'checkpointStatus', []);
     } catch (caught) { statusRefused = caught; }
+
     expect(isDeviceAmbiguityError(statusRefused)).toBe(true);
     expect(isDeviceNotConnectedError(statusRefused)).toBe(false);
     expect(fleet.consentPrompts).toEqual([]);
@@ -162,6 +167,7 @@ describe('two daemons connected at once', () => {
   test('through the transport, the ask reaches the executor as the caller\'s bad_input', async () => {
     const fleet = await twoDaemons();
     fleet.consentDecision = 'once';
+
     const transport = createHubDeviceTransport({
       hub: () => fleet.userDO,
       caller: async () => fleet.workspace,
@@ -266,6 +272,7 @@ describe('what the model is told', () => {
       devices: status.devices,
     };
   }
+
   const render = (status: DeviceStatus): string => renderDynamicContextBlock(context(status)) ?? '';
 
   test('the fleet is named once, with platform, liveness, files and grant per machine', async () => {
@@ -324,6 +331,7 @@ describe('what the model is told', () => {
   test('the roster and the refusal speak the same words', async () => {
     const fleet = await twoDaemons();
     const status = await fleet.userDO.deviceRuntimeStatus(fleet.workspace);
+
     // The ask a refused call carries names exactly the machines the roster
     // lists as connected, in the roster's order, with the same platforms —
     // fleet order (registration, newest first), the hub's own answer to
@@ -332,6 +340,7 @@ describe('what the model is told', () => {
     const expected = `name the machine this command runs on — connected: ${
       connectedDevices(status.devices).map((d) => `${d.name} (${d.os})`).join(', ')
     }. Pass it as device: "<name>".`;
+
     expect(deviceFleetAsk(status.devices)).toBe(expected);
     // Both machines are named; their relative order is registration order
     // (created_at DESC, id ASC on ties), which is run-dependent and not the

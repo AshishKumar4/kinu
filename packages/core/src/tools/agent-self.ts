@@ -170,6 +170,7 @@ interface RunningJobRead {
 
 function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRead | null {
   if (job?.status !== 'running') return job;
+
   return {
     id: job.id,
     kind: job.kind,
@@ -183,13 +184,17 @@ function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRea
 }
 
 const OptionalNumberSchema = v.optional(v.number());
+
 const OptionalCurriculumStatusSchema = v.optional(
   v.picklist(PROPOSED_TASK_STATUSES),
 );
+
 const NonEmptyStringSchema = v.pipe(v.string(), v.minLength(1));
+
 const OptionalBaseVersionSchema = v.optional(
   v.pipe(v.number(), v.integer(), v.minValue(0)),
 );
+
 const ScheduleOptionsSchema = v.object({
   cron: v.optional(v.pipe(v.string(), v.minLength(1))),
   atMs: v.optional(v.pipe(v.number(), v.finite())),
@@ -211,8 +216,10 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'Propose N self-curriculum tasks (Voyager-style) for your own improvement; returns the proposals.',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
+
           if (!parsed.success) return { error: 'agent.proposeCurriculum: count must be a number when given' };
           const count = parsed.output;
+
           try { return await host.proposeCurriculumTasks(count); }
           catch (err) { return { error: `agent.proposeCurriculum: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -221,8 +228,10 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'List your proposed curriculum tasks, optionally filtered by status (pending/accepted/rejected/completed).',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalCurriculumStatusSchema, args[0]);
+
           if (!parsed.success) return { error: 'agent.listCurriculum: invalid status' };
           const status = parsed.output;
+
           try { return await host.listCurriculumTasks(status); }
           catch (err) { return { error: `agent.listCurriculum: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -231,7 +240,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'Accept a proposed curriculum task by id so it becomes runnable.',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
+
           if (!parsed.success) return { error: 'agent.acceptCurriculumTask: id must be a non-empty string' };
+
           try { return await host.setCurriculumTaskStatus(parsed.output, 'accepted'); }
           catch (err) { return { error: `agent.acceptCurriculumTask: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -241,11 +252,15 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const [rationale, code, baseVersion] = args;
           const parsedRationale = v.safeParse(NonEmptyStringSchema, rationale);
+
           if (!parsedRationale.success) return { error: 'agent.proposeScaffold: rationale must be a non-empty string' };
           const parsedCode = v.safeParse(NonEmptyStringSchema, code);
+
           if (!parsedCode.success) return { error: 'agent.proposeScaffold: code must be a non-empty string' };
           const parsedBase = v.safeParse(OptionalBaseVersionSchema, baseVersion);
+
           if (!parsedBase.success) return { error: 'agent.proposeScaffold: baseVersion must be a non-negative integer when given' };
+
           try { return await host.proposeScaffold(parsedRationale.output, parsedCode.output, parsedBase.output); }
           catch (err) { return { error: `agent.proposeScaffold: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -254,7 +269,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'Read-only scaffold archive: versions with status, lineage (parent_version) and shadow-eval record — the stepping stones proposeScaffold can branch from.',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
+
           if (!parsed.success) return { error: 'agent.scaffoldVersions: limit must be a number when given' };
+
           try { return await host.listScaffoldVersions(parsed.output); }
           catch (err) { return { error: `agent.scaffoldVersions: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -263,27 +280,36 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'Schedule a future autonomous turn: { cron } recurring OR { atMs } one-shot (epoch ms), with optional label/payload. The reactor wakes you when it fires. Optional budget_usd / budget_tokens give the whole schedule a cumulative host-enforced spend cap covering every turn it wakes and everything those turns spawn.',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(ScheduleOptionsSchema, args[0] ?? {});
+
           if (!parsed.success) return { error: 'agent.schedule: invalid schedule options' };
           const opts = parsed.output;
           const { cron, atMs } = opts;
+
           if (!cron && atMs === undefined) return { error: 'agent.schedule: provide { cron } or { atMs }' };
+
           if (cron && nextCronFire(cron, Date.now()) === null) return { error: `agent.schedule: unsupported cron expression: ${cron}` };
+
           if (atMs !== undefined && atMs <= Date.now()) return { error: 'agent.schedule: atMs must be in the future' };
           // The ledger is declared BEFORE the trigger so the schedule can carry
           // its label from the first fire; a named label re-enters the existing
           // cumulative row rather than starting a fresh one.
           const limits = readMissionLimits(opts);
+
           const missionLabel = limits
             ? (opts.budget_label?.trim() || `schedule-${nanoid()}`)
             : undefined;
+
           try {
             const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
+
             const result: TimerTrigger & { budget?: JsonValue } = await host.createTimerTrigger({
                 cron, atMs, missionLabel,
                 label: opts.label,
                 payload: opts.payload,
               });
+
             if (budget) result.budget = decodeJsonValue({ value: budget });
+
             return result;
           } catch (err) { return { error: `agent.schedule: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -292,7 +318,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'Read a mission budget: pass a label, or omit to read whatever the current turn spends against. Returns [] when this run is uncapped (the default).',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(v.optional(v.string()), args[0]);
+
           if (!parsed.success) return { error: 'agent.budget: label must be a string when given' };
+
           try { return host.budget.snapshot(parsed.output); }
           catch (err) { return { error: `agent.budget: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -301,7 +329,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'Cancel a previously-scheduled trigger by id (idempotent).',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
+
           if (!parsed.success) return { error: 'agent.cancelSchedule: id must be a non-empty string' };
+
           try { return await host.cancelTrigger(parsed.output, 'self'); }
           catch (err) { return { error: `agent.cancelSchedule: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -310,7 +340,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: BACKGROUND_DESCRIPTION,
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
+
           if (!parsed.success) return { error: 'agent.jobResult: jobId must be a non-empty string' };
+
           try { return formatJobRead(await host.jobResult(parsed.output)); }
           catch (err) { return { error: `agent.jobResult: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -319,7 +351,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'List your recent background jobs (newest first) with their status.',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
+
           if (!parsed.success) return { error: 'agent.backgroundJobs: limit must be a number when given' };
+
           try { return await host.listBackgroundJobs(parsed.output); }
           catch (err) { return { error: `agent.backgroundJobs: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -329,6 +363,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async () => {
           try {
             host.armCompactNow();
+
             return { armed: true, appliesAt: 'next-turn-assembly' };
           } catch (err) { return { error: `agent.compactNow: ${renderThrownChain({ cause: err })}` }; }
         },
@@ -337,7 +372,9 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed. Each entry carries the 95% confidence interval on its mean score — a move inside the interval is noise, not progress.',
         execute: async (...args: unknown[]) => {
           const parsed = v.safeParse(OptionalNumberSchema, args[0]);
+
           if (!parsed.success) return { error: 'agent.replayEvals: limit must be a number when given' };
+
           try { return await host.getReplayEvals(parsed.output); }
           catch (err) { return { error: `agent.replayEvals: ${renderThrownChain({ cause: err })}` }; }
         },

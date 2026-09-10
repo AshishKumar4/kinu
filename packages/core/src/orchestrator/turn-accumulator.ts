@@ -26,6 +26,7 @@ import { digestJsonValue, projectJsonValue, type JsonObject, type JsonValue } fr
 import { ToolOutcomeSchema, type ToolOutcome } from '../tools/outcome';
 
 const UndefinedSchema = v.undefined();
+
 const StringSchema = v.string();
 
 /** A finished step, as the accounting reads it: the ai-SDK v6 StepResult minus
@@ -79,8 +80,11 @@ export interface TurnSinks {
  *  rather than rendered as the absence of a failure. */
 function describeToolFailure(input: { error: unknown }): string {
   const { error } = input;
+
   if (error instanceof Error) return error.message || FAILURE_WITHOUT_ERROR;
+
   if (error === null || error === undefined) return FAILURE_WITHOUT_ERROR;
+
   return String(error) || FAILURE_WITHOUT_ERROR;
 }
 
@@ -205,9 +209,12 @@ export class TurnAccumulator {
     const failure = c.success === false
       ? describeToolFailure({ error: c.error })
       : null;
+
     const recorded = failure !== null ? { error: failure } : c.output;
     const outcome = v.parse(ToolOutcomeSchema, c);
+
     if (!c.success) this.hadError = true;
+
     // A call that names a spill address is the drop-content-keep-the-path
     // recipe being followed — the counter that says the references are read,
     // not just emitted.
@@ -215,23 +222,29 @@ export class TurnAccumulator {
     const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : '';
     this.sinks.logActivity?.('tool_call_end', `${c.toolName}${dur}`);
     this.toolCalls.push({ name: c.toolName, args: c.input ?? {}, result: recorded, outcome });
+
     const event: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'> = {
       name: c.toolName,
       toolCallId: `tc-${this.toolCalls.length}`,
       outcome,
     };
+
     // What the call was ASKED to do, bounded. Without it the durable row names
     // the tool and nothing else, so a ledger of 34 failures could say `file×13`
     // and never which action — and a dispatcher tool's action is the whole
     // difference between a refusal it was right to make and a defect.
     if (c.input !== undefined) {
       const args = digestJsonValue({ value: c.input });
+
       if (args !== undefined) event.args = args;
     }
+
     if (!v.safeParse(UndefinedSchema, recorded).success) {
       event.result = projectJsonValue({ value: recorded });
     }
+
     if (failure !== null) event.error = failure;
+
     if (c.durationMs !== undefined) event.durationMs = c.durationMs;
     this.sinks.onToolCallEvent?.(event);
   }
@@ -247,6 +260,7 @@ export class TurnAccumulator {
     const usage: Usage = ctx.usage ?? {};
     const reported = usageReported(usage);
     this.usage = addUsage(this.usage, usage);
+
     // The model-call debit, taken from the provider's own report of the step
     // just paid for — and taken ONLY when there is a report: a step nothing was
     // reported for meters nothing rather than debiting a zero that would read
@@ -254,6 +268,7 @@ export class TurnAccumulator {
     // total does not add them again, but the whole report goes over so the
     // ledger can charge each part at its own rate.
     if (reported) this.budget?.debit(usageTotal(usage) ?? 0, { calls: 1, usage });
+
     // Each step is one request, so the newest reporting step carries the whole
     // current prompt (`input` is the cache-inclusive total). A step that
     // reported no prompt size leaves the last real measurement standing; a step
@@ -264,10 +279,13 @@ export class TurnAccumulator {
     // makes that indistinguishable from a provider that never mentions caching.
     // Driven off USAGE_FIELDS so a field added to the report cannot go unlogged.
     const extras: string[] = [];
+
     for (const field of USAGE_FIELDS) {
       const value = usage[field];
+
       if (value !== undefined) extras.push(`${field}=${value}`);
     }
+
     if (ctx.response?.modelId) extras.push(`model=${ctx.response.modelId}`);
     const extrasStr = extras.length > 0 ? ` ${extras.join(' ')}` : '';
     this.sinks.logActivity?.(
@@ -284,11 +302,15 @@ export class TurnAccumulator {
     // make the next real step re-record everything before it.
     const cumulative = ctx.response?.messages ?? [];
     const produced = cumulative.length > 0 ? cumulative.slice(this.durableMessages) : [];
+
     if (cumulative.length > 0) this.durableMessages = cumulative.length;
+
     const stepEvent: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0] = {
       stepIndex: this.stepCount,
     };
+
     const reason = v.safeParse(StringSchema, ctx.finishReason);
+
     // Kept on the accumulator as well as on the step's own row: the settle
     // classifier needs the LAST one, and the rows are durable but not readable
     // from inside the turn that is ending. A step that reported nothing
@@ -298,8 +320,11 @@ export class TurnAccumulator {
       stepEvent.reason = reason.output;
       this.lastFinishReason = reason.output;
     }
+
     if (produced.length > 0) stepEvent.messages = [...produced];
+
     if (composition) stepEvent.context = composition;
+
     // The provider's own report of this request, priced at the catalog rate the
     // model carried when the call was made — the same rate and the same
     // arithmetic the mission ledger debits with, so one step never costs two
@@ -310,15 +335,20 @@ export class TurnAccumulator {
       stepEvent.usage = usage;
       const pricing = this.budget?.pricing() ?? null;
       const price = pricing ? priceCall(usage, pricing) : undefined;
+
       if (price !== undefined) {
         stepEvent.usd = price.usd;
+
         // See `buildModelCallEvent`: the row states its own floor so the
         // workspace total can count it, absent when the price is exact.
         if (price.floorTokens !== undefined) stepEvent.usdFloorTokens = price.floorTokens;
       }
+
       const modelId = v.safeParse(StringSchema, ctx.response?.modelId);
+
       if (modelId.success && modelId.output.length > 0) stepEvent.modelId = modelId.output;
     }
+
     this.sinks.onStepEvent?.(stepEvent);
   }
 }

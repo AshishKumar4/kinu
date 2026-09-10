@@ -98,6 +98,7 @@ export class SwarmBudget {
   take(width: number): number {
     const charged = Math.min(Math.max(0, width), this.left);
     this.left -= charged;
+
     return charged;
   }
 
@@ -112,11 +113,13 @@ export class SwarmBudget {
    */
   arbitrate(input: Omit<BranchArbitrationInput, 'remainingChildren'>): BranchDecision {
     const verdict = arbitrateBranch({ ...input, remainingChildren: this.left });
+
     if (verdict.kind === 'refused') return verdict;
     // The read above and the write below with nothing between them: see the
     // header. `verdict.width <= this.left` is `accepted_within_budget`, which is
     // proved of the arbiter, so this cannot drive `left` negative.
     this.left -= verdict.width;
+
     return {
       kind: 'granted',
       width: verdict.width,

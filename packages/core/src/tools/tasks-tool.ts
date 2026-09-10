@@ -29,7 +29,9 @@ import { changeActiveRole, roleChangeOutcomeText } from '../profiles/role-change
 import { KinuError } from '../obs/index';
 
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
+
 const TasksActionSchema = v.picklist(TASKS_TOOL_ACTIONS);
+
 const TitlesSchema = v.array(v.string());
 
 /** The task-list tool's one input shape. `titles` writes, `id` + `status`
@@ -107,42 +109,58 @@ export function createTasksDispatcher(
     // answers an unavailable action (agents-tool.ts) — WITH the vocabulary,
     // which is what makes the model's next call succeed instead of repeat.
     const action = v.safeParse(TasksActionSchema, args.action);
+
     if (!action.success) {
       throw new KinuError('bad_input', unknownActionError('tasks', 'action', args.action, TASKS_TOOL_ACTIONS));
     }
+
     switch (action.output) {
       case 'add': {
         const titles = v.safeParse(TitlesSchema, args.titles ?? []);
+
         if (!titles.success) throw new KinuError('bad_input', 'tasks.add requires `titles` — an array of task titles');
+
         if (titles.output.length === 0) throw new KinuError('bad_input', 'tasks.add requires `titles` — one or more task titles');
         const { added, rejected } = taskList.add(titles.output, args.parent ?? null, now);
+
         const result: TasksAdded = {
           added: added.map((task) => ({ id: task.id, title: task.title, parent: task.parentId })),
         };
+
         if (rejected.length > 0) result.rejected = rejected;
+
         return result;
       }
+
       case 'update': {
         if (!args.id) throw new KinuError('bad_input', 'tasks.update requires `id`');
         const status = v.safeParse(TaskStatusSchema, args.status);
+
         if (!status.success) {
           throw new KinuError('bad_input', 'tasks.update requires `status` — one of ' + TASK_STATUSES.join(', '));
         }
+
         const task = taskList.setStatus(args.id, status.output, now);
+
         if (!task) throw new KinuError('missing', 'no task ' + args.id);
         // The one thing closing a parent hides: work filed under it that is
         // still open. Said at the moment the model would otherwise move on.
         const openSubtasks = status.output === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
         const result: TaskUpdated = { id: task.id, title: task.title, status: task.status };
+
         if (openSubtasks > 0) result.open_subtasks = openSubtasks;
+
         return result;
       }
+
       case 'list': {
         const tasks = taskList.list();
         const shown = tasks.reduce((n, task) => n + 1 + task.subtasks.length, 0);
         const total = taskList.count();
+
         const listed = tasks.map((task): ListedTask => {
           const item: ListedTask = { id: task.id, title: task.title, status: task.status };
+
           if (task.subtasks.length > 0) {
             item.subtasks = task.subtasks.map((sub) => ({
               id: sub.id,
@@ -150,31 +168,43 @@ export function createTasksDispatcher(
               status: sub.status,
             }));
           }
+
           return item;
         });
+
         const result: TasksListed = { tasks: listed };
+
         if (total > shown) result.not_shown = total - shown;
+
         return result;
       }
+
       case 'mode': {
         // No argument = read the current one.
         if (args.role === undefined) {
           return { role: config.getRoleSelection() };
         }
+
         const envelope = roleAuthority?.();
+
         if (!isValidRoleId(args.role)) {
           throw new KinuError('bad_input', 'tasks.mode requires `role` — a kebab-case role id like general or researcher');
         }
+
         if (!envelope) {
           throw new KinuError('unsupported', 'tasks.mode cannot switch roles: this agent has no profile authority to validate against');
         }
+
         const outcome = changeActiveRole({ envelope, config, to: args.role, actor: 'agent' });
+
         if (outcome.kind === 'refused') {
           const text = roleChangeOutcomeText(args.role, outcome, config.getRoleSelection());
+
           if (outcome.reason !== 'unknown-role') throw new KinuError('denied', text);
           const known = Object.keys({ ...BUILTIN_ROLE_DEFINITIONS, ...envelope.catalog.roles }).sort();
           throw new KinuError('bad_input', text + ' Known roles: ' + known.join(', ') + '.');
         }
+
         return { role: args.role };
       }
     }

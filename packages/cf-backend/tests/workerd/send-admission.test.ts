@@ -29,6 +29,7 @@ import * as v from 'valibot';
  *  condition. It bounds only how long a broken platform gets before the
  *  assertion reports the state actually reached. */
 const SETTLE_DEADLINE_MS = 30_000;
+
 const POLL_MS = 25;
 
 const TERMINAL = ['completed', 'aborted', 'skipped', 'error'];
@@ -38,6 +39,7 @@ const ReceiptSchema = v.object({
   accepted: v.boolean(),
   status: v.string(),
 });
+
 type Receipt = v.InferOutput<typeof ReceiptSchema>;
 
 const probe = (name: string) =>
@@ -50,7 +52,9 @@ async function sendOverRoute(name: string, key: string, text: string): Promise<R
     method: 'POST',
     body: text,
   });
+
   expect(response.status).toBe(200);
+
   return v.parse(ReceiptSchema, await response.json());
 }
 
@@ -60,10 +64,13 @@ async function untilSettled(name: string, expected: number): Promise<
   { idempotencyKey: string | undefined; submissionId: string; status: string }[]
 > {
   const started = Date.now();
+
   for (;;) {
     const rows = await probe(name).submissions();
     const settled = rows.filter((row) => TERMINAL.includes(row.status));
+
     if (rows.length >= expected && settled.length === rows.length) return rows;
+
     if (Date.now() - started > SETTLE_DEADLINE_MS) return rows;
     await scheduler.wait(POLL_MS);
   }

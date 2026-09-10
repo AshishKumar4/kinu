@@ -288,6 +288,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     responseMessages: readonly ModelMessage[];
     usage?: Usage;
   }
+
   /** What ONE provider call of this turn ended with. */
   interface CallOutcome {
     /** The steps the SDK recorded for the call — its own on a natural finish,
@@ -304,6 +305,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     /** The caller cut the call. */
     readonly interrupted: boolean;
   }
+
   let stepCount = 0;
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
@@ -312,11 +314,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // ordering cannot drift per backend.
   const contextWindow = opts.modelContext?.contextWindow
     ?? contextWindowForModel(opts.modelContext?.id ?? '');
+
   // An unreported answer allowance says nothing about how much of the window
   // the answer may take, so the honest reading is the whole window and
   // `outputReserveTokens` splits from there. A picked number here would put a
   // fact in the catalog's mouth.
   const modelOutputLimit = opts.modelContext?.modelOutputLimit ?? contextWindow;
+
   const assembly: Parameters<typeof assembleTurnMessages>[0] = {
     system: opts.system,
     history: opts.history,
@@ -329,6 +333,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     trigger: opts.transformTrigger ?? 'auto',
     abortSignal: opts.signal,
   };
+
   // Exact pre-submission admission, when the caller resolved a provider that
   // can answer what a request costs. The assembly owns the decision (one
   // forced compaction, then a re-count, then a refusal) so neither backend
@@ -341,6 +346,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       limits: { contextWindow, modelOutputLimit },
     };
   }
+
   const turnMessages = await assembleTurnMessages(assembly);
 
   // Provider prompt-cache plan: cache-eligible system + request-level cache
@@ -355,6 +361,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     sessionKey: opts.cache?.sessionKey ?? '',
     retention: opts.cache?.retention,
   });
+
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
 
@@ -488,13 +495,16 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         stepCount++;
         const usage = normalizeUsage(step.usage);
         responseSoFar = [...step.response.messages];
+
         for (const part of step.content) if (part.type === 'tool-call') dispatchedCalls?.delete(part.toolCallId);
         const event: PendingStepEvent = { stepIndex: stepCount, responseMessages: responseSoFar };
+
         if (usageReported(usage)) event.usage = usage;
         pendingStepEvents.push(event);
         await opts.onStep?.(step);
       },
     });
+
     // A call that never finishes a step — the provider failed before one, or the
     // caller cut the call — makes the SDK REJECT its deferred accessors (`steps`,
     // `finishReason`, `rawFinishReason`, `totalUsage`) when the stream ends. The
@@ -506,12 +516,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // finished naturally would be a defect here and must be visible.
     const ignoreDeferred = (error: Error): void => {
       if (NoOutputGeneratedError.isInstance(error)) return;
+
       if (interrupted || (opts.signal?.aborted ?? false)) return;
       diagnostics.failure(
         'llm_call.deferred_rejected',
         toKinuError({ doing: 'settle an unread stream accessor', cause: error, otherwise: 'io' }),
       );
     };
+
     result.steps.then(undefined, ignoreDeferred);
     result.finishReason.then(undefined, ignoreDeferred);
     result.rawFinishReason.then(undefined, ignoreDeferred);
@@ -529,19 +541,24 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         switch (chunk.type) {
           case 'text-delta': {
             const delta = chunk.text;
+
             if (delta) {
               stepHadOutput = true;
               allText += delta;
               stepContent.push({ type: 'text', text: delta });
               yield { type: 'text-delta', delta };
             }
+
             break;
           }
+
           case 'reasoning-delta': {
             const delta = chunk.text;
+
             if (delta) yield { type: 'reasoning-delta', delta };
             break;
           }
+
           case 'tool-call': {
             stepHadOutput = true;
             const args = parseToolArgs(chunk.input);
@@ -552,6 +569,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
             break;
           }
+
           case 'tool-result': {
             await opts.onToolOutput?.(chunk);
             const raw = chunk.output;
@@ -567,6 +585,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: rendered, success: true };
             break;
           }
+
           case 'tool-error': {
             // A tool threw: the error is the durable outcome the evolution signal
             // reads. The extension seam sees the error text as the result (same as
@@ -578,6 +597,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, error, ...outcome };
             break;
           }
+
           case 'finish-step': {
             // A finished step with no mapped finish reason and no output is a
             // provider stream that died (closed early, empty SSE, dropped route):
@@ -590,6 +610,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
             stepContent = [];
             break;
           }
+
           case 'error': {
             streamError = chunk.error;
             break;
@@ -599,6 +620,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         // Yield any step-finish events that fired via onStepFinish callback
         while (pendingStepEvents.length > 0) {
           const ev = pendingStepEvents.shift();
+
           if (ev) yield { type: 'step-finish' as const, ...ev };
         }
       }
@@ -622,6 +644,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     if (streamError !== undefined && !interrupted) {
       throw toProviderError({ doing: 'calling the model', cause: streamError });
     }
+
     if (deadFinalStep && !interrupted) {
       // Deliberately still a bare throw, unlike the interrupt: this turn was
       // never cut. It ran to a natural end and what is being rejected is
@@ -648,6 +671,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const cut = interrupted;
     const steps = cut ? recordedSteps : await result.steps;
     const finished = [...responseSoFar];
+
     // Then what the cut interrupted: the step the SDK will never report, and the
     // pairing invariant over the whole call, so the caller persists a history a
     // follow-up turn can be built from. Without it a tool call the caller has
@@ -659,9 +683,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         if (!stepContent.some(part => part.type === 'tool-call' && part.toolCallId === call.toolCallId)) stepContent.push(call);
       }
     }
+
     const produced = cut && stepContent.length > 0
       ? [...finished, { role: 'assistant' as const, content: stepContent }]
       : finished;
+
     return {
       steps,
       produced: settleUnpairedToolCalls(produced) ?? produced,
@@ -720,6 +746,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // If still no text, synthesize from tool results
   if (!allText.trim()) {
     const fallback = synthesizeToolFallback(steps);
+
     if (fallback) allText = fallback;
   }
 
@@ -734,5 +761,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
 function parseToolArgs<T>(raw: T): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, raw);
+
   return parsed.success ? parsed.output : {};
 }

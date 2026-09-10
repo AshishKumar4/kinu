@@ -42,6 +42,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import * as v from 'valibot';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
 const srcUrl = (relative: string): string =>
   pathToFileURL(join(here, '..', 'src', relative)).href;
 
@@ -67,10 +68,12 @@ const ObservedSchema = v.object({
   head: v.array(v.string()),
   node: v.array(v.string()),
 });
+
 type Observed = v.InferOutput<typeof ObservedSchema>;
 
 function observeAfterLoading(specifier: string): Observed {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-init-order-'));
+
   try {
     const probe = join(dir, 'probe.mjs');
     // The first import is the whole experiment; the two below it read constants
@@ -93,6 +96,7 @@ function observeAfterLoading(specifier: string): Observed {
       run.status,
       `importing ${specifier} first did not initialise cleanly (exit ${run.status}):\n${run.stderr}`,
     ).toBe(0);
+
     return v.parse(ObservedSchema, JSON.parse(run.stdout));
   } finally {
     rmSync(dir, { recursive: true, force: true });

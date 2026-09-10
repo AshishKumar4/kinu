@@ -89,6 +89,7 @@ export function readExplorationCanvas(
  */
 export function readExplorationRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ExplorationCanvasRun | null {
   const run = readForkRun(sql, actor, rootId);
+
   return run === null ? null : composeRuns(sql, actor, [run])[0] ?? null;
 }
 
@@ -101,7 +102,9 @@ function composeRuns(
   const params = new Map(
     readForkRunParams(sql, actor, runs.map((run) => run.id)).map((entry) => [entry.rootId, entry]),
   );
+
   const journal = new HeadJournal(sql, actor);
+
   return runs.map((run) => ({
     run,
     params: params.get(run.id) ?? null,
@@ -122,16 +125,22 @@ function readParetoFrontier(
 ): ParetoFrontier | null {
   const table = sql<{ readonly name: string }>`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'swarm_node_records'`;
+
   if (table.length === 0) return null;
+
   const candidates = readSwarmNodeRecords(sql, actor, rootId).flatMap(({ nodeId, record }) =>
     record.outcome?.kind === 'pareto'
       ? [{ nodeId, axes: record.outcome.axes, evidence: record.outcome.evidence }]
       : []);
+
   const axes = candidates[0]?.axes;
+
   if (!axes) return null;
+
   if (candidates.some((candidate) => JSON.stringify(candidate.axes) !== JSON.stringify(axes))) {
     return null;
   }
+
   return {
     axes,
     candidates: paretoFront(

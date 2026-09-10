@@ -42,6 +42,7 @@ export function openTerminalWorkspace(dbPath: string) {
   initAlternateTakesTable(rt.storage.execRaw);
   initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
+
   return { db, rt };
 }
 
@@ -94,12 +95,14 @@ export function scriptedModel(
 ) {
   const state = { titleCalls: 0 };
   let step = 0;
+
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doGenerate: async () => {
       state.titleCalls += 1;
       await opts.onGenerate?.();
+
       return {
         content: [{ type: 'text' as const, text: JSON.stringify({ title: 'Parser Work' }) }],
         finishReason: 'stop' as const,
@@ -112,10 +115,12 @@ export function scriptedModel(
       step += 1;
       await opts.onStream?.(options.prompt);
       const callsTool = opts.toolCall !== undefined && step === 1;
+
       return {
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
+
             if (callsTool && opts.toolCall) {
               controller.enqueue({
                 type: 'tool-call', toolCallId: `call-${step}`,
@@ -123,8 +128,10 @@ export function scriptedModel(
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE });
               controller.close();
+
               return;
             }
+
             controller.enqueue({ type: 'text-start', id: '0' });
             controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
             controller.enqueue({ type: 'text-end', id: '0' });
@@ -136,5 +143,6 @@ export function scriptedModel(
       };
     },
   });
+
   return { model, state };
 }

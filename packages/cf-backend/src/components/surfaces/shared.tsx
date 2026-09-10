@@ -46,13 +46,17 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
   const { status, copy } = useCopy();
   const code = String(children).replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
+
   const { resource, reload } = useAsyncResource(useCallback(async () => {
     if (!lang) return { code, language: lang, html: null };
     const { highlightCode } = await import("./code-highlighter");
+
     return highlightCode(code, lang);
   }, [code, lang]));
+
   const html = resource.status === "ready" && resource.value.code === code && resource.value.language === lang
     ? resource.value.html : null;
+
   return (
     <div className="p-code my-2 rounded-lg overflow-hidden">
       <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 text-[10px]">
@@ -82,6 +86,7 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
  */
 function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?: string }) {
   const [failed, setFailed] = useState(false);
+
   if (failed || !src) {
     return (
       <span data-markdown-image-error role="note" className="my-1.5 inline-flex max-w-full items-baseline gap-1.5 rounded-lg border p-border px-2.5 py-1.5 text-xs p-text-3">
@@ -98,6 +103,7 @@ function MarkdownImage({ src, alt, title }: { src?: string; alt?: string; title?
       </span>
     );
   }
+
   return (
     <img data-markdown-image src={src} alt={alt ?? ""} title={title} loading="lazy"
       className="max-w-full rounded-lg" onError={() => setFailed(true)} />
@@ -117,9 +123,11 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
       // fence is the thing that spans lines.
       code({ className, children, ...props }) {
         const text = String(children ?? "");
+
         if (!className && !text.includes("\n")) {
           return <code className="p-code-inline" {...props}>{children}</code>;
         }
+
         return <CodeBlock className={className}>{children}</CodeBlock>;
       },
       a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>; },
@@ -186,7 +194,9 @@ export function DetailSection({ title, children }: { title: string; children: Re
 /** The product's danger→warning→success bands, as a text token. */
 export function scoreColor(value: number): string {
   if (value >= 0.7) return "p-success";
+
   if (value >= 0.4) return "p-warning";
+
   return "p-danger";
 }
 
@@ -215,17 +225,20 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
   children: React.ReactNode;
 }) {
   const key = `kinu.section.${id}`;
+
   // Read once on mount and write only on toggle: an effect that mirrored state
   // would stamp every default into storage on first paint, which then looks
   // like a choice the user made and freezes the defaults forever.
   const [open, setOpen] = useState(() => {
     const stored = localStorage.getItem(key);
+
     return stored === null ? defaultOpen : stored === "1";
   });
 
   const toggle = () => {
     setOpen((prev) => {
       localStorage.setItem(key, prev ? "0" : "1");
+
       return !prev;
     });
   };
@@ -261,9 +274,13 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
  */
 export function timeAgo(at: number): string {
   const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
+
   if (s < 60) return "just now";
+
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+
   return new Date(at).toLocaleDateString();
 }
 
@@ -327,8 +344,10 @@ export function ConversationStartBoundary({
   empty: ReactNode;
 }) {
   if (hasEntries) return null;
+
   if (error !== null) {
     return <HistoryBoundary loading={false} error={error} exhausted={false} onRetry={onRetry} />;
   }
+
   return exhausted && !streaming ? empty : pending;
 }

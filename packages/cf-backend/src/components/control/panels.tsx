@@ -42,6 +42,7 @@ export function useControlRead<Value>(
   useEffect(() => {
     let live = true;
     setLoad({ phase: 'loading' });
+
     // `control()` names HTTP-level failures in its answer, so a rejection is
     // the transport itself refusing. Settled as `failed` rather than left as
     // an unhandled rejection with the panel spinning on `loading` forever.
@@ -49,6 +50,7 @@ export function useControlRead<Value>(
       diagnostics.failure('control.read_failed', toKinuError({
         doing: 'run a control-plane read', cause: thrown, otherwise: 'io',
       }));
+
       if (live) {
         setLoad({
           phase: 'settled',
@@ -56,10 +58,12 @@ export function useControlRead<Value>(
         });
       }
     };
+
     void read().then(
       (answer) => { if (live) setLoad({ phase: 'settled', answer }); },
       readFailed,
     );
+
     return () => { live = false; };
     // `read` is a fresh closure every render, so it is deliberately not a
     // dependency: the caller's `deps` state what the read actually depends on,
@@ -82,7 +86,9 @@ export function Panel<Value>(
   if (load.phase === 'loading') {
     return <div className="flex items-center justify-center py-12"><Loader size="base" /></div>;
   }
+
   const answer = load.answer;
+
   switch (answer.status) {
     case 'ok':
       return children(answer.value);
@@ -116,6 +122,7 @@ export function Notice(
     : tone === 'warn' ? 'p-accent'
     : tone === 'ok' ? 'p-success'
     : 'p-text-3';
+
   return (
     <div className={`p-card p-3 text-xs flex items-start gap-2 ${toneClass}`}>
       {icon}<div className="min-w-0">{children}</div>
@@ -195,13 +202,17 @@ export function PageWalker(
  *  than as the epoch, which is what `new Date(0)` would show. */
 export function when(at: number | null | undefined): string {
   if (at === null || at === undefined || at <= 0) return '—';
+
   return new Date(at).toLocaleString();
 }
 
 /** A byte count at the precision an operator needs, which is one decimal. */
 export function bytes(count: number | null): string {
   if (count === null) return '—';
+
   if (count < 1024) return `${String(count)} B`;
+
   if (count < 1024 * 1024) return `${(count / 1024).toFixed(1)} KB`;
+
   return `${(count / (1024 * 1024)).toFixed(1)} MB`;
 }

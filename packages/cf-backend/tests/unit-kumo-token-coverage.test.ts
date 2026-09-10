@@ -26,22 +26,27 @@ import { dirname, resolve } from 'node:path';
  *  `[data-mode="dark"]`) match our DOM. Its sibling `theme-fedramp` is scoped
  *  to `[data-theme="fedramp"]`, which we never set. */
 const KUMO_ENTRY = Bun.resolveSync('@cloudflare/kumo/styles/tailwind', import.meta.dir);
+
 const KUMO_THEME = Bun.resolveSync('@cloudflare/kumo/styles/theme-kumo', import.meta.dir);
+
 const INDEX_CSS = resolve(import.meta.dir, '../src/index.css');
 
 /** Stylesheets reachable from `entry` by `@import`, entry included. */
 function importChain(entry: string, seen = new Set<string>()): Set<string> {
   if (seen.has(entry)) return seen;
   seen.add(entry);
+
   for (const [, rel] of readFileSync(entry, 'utf8').matchAll(/@import\s+"(\.[^"]+)"/g)) {
     importChain(resolve(dirname(entry), rel!), seen);
   }
+
   return seen;
 }
 
 /** Custom properties a stylesheet *declares* (`--x: …`), not ones it reads. */
 function declaredProperties(path: string, prefix: RegExp): Set<string> {
   const text = readFileSync(path, 'utf8');
+
   return new Set([...text.matchAll(/(--[a-z0-9-]+)\s*:/g)].map((m) => m[1]!).filter((p) => prefix.test(p)));
 }
 
@@ -85,6 +90,7 @@ describe('Kumo token coverage', () => {
     // the Kumo block. Alpha/mix expressions over a `--c-*` are still
     // indirection; a bare hex or a raw oklch() is not.
     const text = readFileSync(INDEX_CSS, 'utf8');
+
     const literal = [...text.matchAll(/(--(?:color|text-color)-kumo-[a-z0-9-]+)\s*:\s*([^;]+);/g)]
       .filter(([, , value]) => !value!.includes('var(--c-') && !/^\s*(transparent|inherit|currentColor)\s*$/.test(value!))
       .map(([, prop, value]) => `${prop}: ${value!.trim()}`);

@@ -51,6 +51,7 @@ function planeOf(deps: RefinementDeps): VFS {
 async function readText(vfs: VFS, path: string): Promise<string | null> {
   if (!await vfs.exists(path)) return null;
   const read = await vfs.readFile(path, { encoding: 'utf8' });
+
   return read instanceof Uint8Array ? new TextDecoder().decode(read) : read;
 }
 
@@ -76,28 +77,36 @@ export async function routeSkill(
 ): Promise<RefinementRoute> {
   const owner = 'instruction_approvals';
   const digest = instructionDigest(edit.source);
+
   const refused = (reason: string): RefinementRoute => ({
     kind: 'skill', owner, target: edit.path, disposition: 'refused', reason,
   });
+
   if (!deps.approvals) {
     return refused('this host wires no owner approval authority, so no one here can grant a skill trust');
   }
 
   const parsed = parseSkillFile(edit.source, 'agent');
+
   if (!parsed.ok) return refused(`the proposed file is not a valid skill: ${parsed.error}`);
   const nameProblem = skillNameProblem(parsed.skill.name);
+
   if (nameProblem !== null) return refused(`skill name ${nameProblem}`);
+
   if (BUILTIN_SKILL_NAMES[parsed.skill.name]) {
     return refused(`"${parsed.skill.name}" is a built-in skill — a workspace file may not claim `
       + 'its name, because a built-in carries system placement no file has earned');
   }
+
   const canonical = skillPath(parsed.skill.name);
+
   if (edit.path !== canonical) {
     return refused(`the path must be the canonical skill path for its own name (${canonical}), `
       + `not ${edit.path} — discovery reads that directory and nothing else`);
   }
 
   const standing = deps.approvals.get(canonical);
+
   if (standing !== null) {
     return refused(standing.decision === 'revoked'
       ? 'the owner has revoked trust for this path — a refinement must not re-propose bytes they '
@@ -107,6 +116,7 @@ export async function routeSkill(
   }
 
   const vfs = planeOf(deps);
+
   if (await vfs.exists(canonical)) {
     return refused(`${canonical} already exists — those bytes are the owner's or another `
       + "author's, and a promotion that overwrote them would not be a promotion. Propose a "
@@ -116,6 +126,7 @@ export async function routeSkill(
   const staged = refinementStagingPath(request.id, parsed.skill.name);
   await vfs.mkdir(stagingDirOf(staged), { recursive: true });
   await vfs.writeFile(staged, edit.source);
+
   const route: RefinementRoute = {
     kind: 'skill',
     owner,
@@ -126,6 +137,7 @@ export async function routeSkill(
       + `approve it to write the trust row for ${canonical} and move the file there. `
       + edit.rationale,
   };
+
   return route;
 }
 
@@ -146,6 +158,7 @@ async function readStagedSkill(
 
 function stagedPathFor(request: RefinementRequest, route: RefinementRoute): string {
   const name = route.target.slice(route.target.lastIndexOf('/') + 1).replace(/\.md$/u, '');
+
   return refinementStagingPath(request.id, name);
 }
 
@@ -187,15 +200,18 @@ export async function showRefinementRoute(
   input: { requestId: string; routeIndex: number },
 ): Promise<StagedSkillResult> {
   const found = locate(deps, input);
+
   if (!found.ok) return { ok: false, error: found.error };
   const { request, route } = found;
   const source = await readStagedSkill(deps, request, route);
+
   if (source === null) {
     return {
       ok: false,
       error: `the staged file for this edit is gone (${stagedPathFor(request, route)}) — nothing to show`,
     };
   }
+
   return {
     ok: true,
     view: {
@@ -224,7 +240,9 @@ function locate(
   input: { requestId: string; routeIndex: number },
 ): Located {
   const request = createRefinementStore(deps.control.sql, deps.control.rt.actor).get(input.requestId);
+
   if (!request) return { ok: false, error: `no refinement ${input.requestId}` };
+
   if (!DECIDABLE_STAGES.has(request.stage)) {
     return {
       ok: false,
@@ -235,10 +253,13 @@ function locate(
         + ', so there is nothing for you to decide',
     };
   }
+
   const route = request.routes[input.routeIndex];
+
   if (!route) {
     return { ok: false, error: `refinement ${request.id} has no edit ${String(input.routeIndex)}` };
   }
+
   if (route.kind !== 'skill') {
     return {
       ok: false,
@@ -246,17 +267,20 @@ function locate(
         + 'no decision from you — only a staged skill does',
     };
   }
+
   if (route.disposition !== 'pending_owner_approval') {
     return {
       ok: false,
       error: `edit ${String(input.routeIndex)} of ${request.id} is already ${route.disposition}`,
     };
   }
+
   return { ok: true, request, route };
 }
 
 /** What an owner may say about one staged skill. */
 export const REFINEMENT_DECISIONS = ['approve', 'reject'] as const;
+
 export type RefinementDecision = (typeof REFINEMENT_DECISIONS)[number];
 
 export type RefinementDecisionResult =
@@ -306,9 +330,12 @@ export async function decideRefinementRoute(
   input: RefinementDecisionInput,
 ): Promise<RefinementDecisionResult> {
   const found = locate(deps, input);
+
   if (!found.ok) return { ok: false, error: found.error };
   const { request, route } = found;
+
   if (!deps.approvals) return { ok: false, error: 'this host wires no owner approval authority' };
+
   if (input.expectedDigest !== route.digest) {
     return {
       ok: false,
@@ -319,10 +346,12 @@ export async function decideRefinementRoute(
 
   const vfs = planeOf(deps);
   const staged = stagedPathFor(request, route);
+
   if (input.decision === 'reject') {
     // The bytes go. A staged proposal nobody will act on is the only kind of
     // state worth deleting.
     if (await vfs.exists(staged)) await vfs.unlink(staged);
+
     return patch(deps, request, input.routeIndex, {
       ...route,
       disposition: 'rejected',
@@ -331,9 +360,11 @@ export async function decideRefinementRoute(
   }
 
   const source = await readStagedSkill(deps, request, route);
+
   if (source === null) {
     return { ok: false, error: `the staged file for this edit is gone (${staged}) — nothing to approve` };
   }
+
   if (instructionDigest(source) !== route.digest) {
     return {
       ok: false,
@@ -343,6 +374,7 @@ export async function decideRefinementRoute(
   }
 
   const existing = await readText(vfs, route.target);
+
   if (existing !== null && instructionDigest(existing) !== route.digest) {
     return {
       ok: false,
@@ -354,7 +386,9 @@ export async function decideRefinementRoute(
   // Trust FIRST. See the module header.
   deps.approvals.approve(route.target, route.digest);
   const promoted = await promoteStagedSkill(deps, request, route);
+
   if (!promoted.ok) return { ok: false, error: promoted.error };
+
   return patch(deps, request, input.routeIndex, {
     ...route,
     disposition: 'applied',
@@ -372,9 +406,11 @@ function patch(
 ): RefinementDecisionResult {
   const store = createRefinementStore(deps.control.sql, deps.control.rt.actor);
   const routes = request.routes.map((existing, index) => index === routeIndex ? next : existing);
+
   if (!store.record(request.id, request.stage, { routes })) {
     return { ok: false, error: `refinement ${request.id} moved while you were deciding` };
   }
+
   return { ok: true, request: refinementRequestView(store.get(request.id) ?? request), detail };
 }
 
@@ -412,11 +448,13 @@ async function promoteStagedSkill(
   const vfs = planeOf(deps);
   const staged = stagedPathFor(request, route);
   const expected = route.digest;
+
   if (expected === undefined) {
     return { ok: false, error: `route for ${route.target} carries no digest to verify against` };
   }
 
   const existing = await readText(vfs, route.target);
+
   if (existing !== null && instructionDigest(existing) !== expected) {
     return {
       ok: false,
@@ -426,8 +464,10 @@ async function promoteStagedSkill(
   }
 
   let moved = false;
+
   if (existing === null) {
     const source = await readStagedSkill(deps, request, route);
+
     if (source === null) {
       return {
         ok: false,
@@ -435,6 +475,7 @@ async function promoteStagedSkill(
           + 'are gone and cannot be reconstructed',
       };
     }
+
     if (instructionDigest(source) !== expected) {
       return {
         ok: false,
@@ -442,6 +483,7 @@ async function promoteStagedSkill(
           + 'something the owner did not approve',
       };
     }
+
     try {
       await vfs.mkdir(SKILLS_DIR, { recursive: true });
       await vfs.writeFile(route.target, source);
@@ -450,9 +492,11 @@ async function promoteStagedSkill(
       // must not look like a finished promotion.
       return { ok: false, error: `could not write ${route.target}: ${renderThrownChain({ cause: err })}` };
     }
+
     // THE READ-BACK. A torn or transformed write leaves a file discovery admits
     // and the trust row vouches for, whose content is not what was approved.
     const written = await readText(vfs, route.target);
+
     if (written === null || instructionDigest(written) !== expected) {
       return {
         ok: false,
@@ -460,10 +504,12 @@ async function promoteStagedSkill(
           + `proposal is still staged at ${staged} and the promotion can be retried`,
       };
     }
+
     moved = true;
   }
 
   await discardSkillStaging(deps, request, route);
+
   return { ok: true, moved };
 }
 
@@ -482,6 +528,7 @@ async function discardSkillStaging(
 ): Promise<void> {
   const vfs = planeOf(deps);
   const staged = stagedPathFor(request, route);
+
   if (await vfs.exists(staged)) await vfs.unlink(staged);
 }
 
@@ -506,9 +553,12 @@ export async function settleSkillApproval(
   route: RefinementRoute,
 ): Promise<{ readonly state: 'applied' | 'rolled_back' | 'pending'; readonly reason?: string }> {
   const standing = deps.approvals?.get(route.target);
+
   if (standing === null || standing === undefined) return { state: 'pending' };
+
   if (standing.decision === 'revoked' || standing.digest !== route.digest) {
     await discardSkillStaging(deps, request, route);
+
     return {
       state: 'rolled_back',
       reason: standing.decision === 'revoked'
@@ -516,7 +566,10 @@ export async function settleSkillApproval(
         : 'the trust row moved to different bytes, so these are not in effect',
     };
   }
+
   const promoted = await promoteStagedSkill(deps, request, route);
+
   if (!promoted.ok) return { state: 'pending', reason: promoted.error };
+
   return { state: 'applied' };
 }

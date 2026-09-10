@@ -55,6 +55,7 @@ export interface TurnRunRecorder {
  * no run can carry would have been worse than none.
  */
 export const RUN_END_REASONS = ['completed', 'aborted', 'error'] as const;
+
 export type RunEndReason = (typeof RUN_END_REASONS)[number];
 
 /**
@@ -215,10 +216,13 @@ export interface RunEndClassification {
  */
 export function classifyRunEnd(facts: RunEndFacts): RunEndClassification {
   if (facts.interrupted) return { reason: 'aborted' };
+
   if (facts.errorText) return { reason: 'error', error: facts.errorText };
+
   // Neither finished nor threw anything nameable: still a failure, and saying
   // so without inventing a cause is the honest row.
   if (!facts.completed) return { reason: 'error' };
+
   if (facts.lastFinishReason === TOOL_CALLS_PENDING) {
     diagnostics.failure(TURN_ENDED_MID_WORK, toKinuError({
       doing: 'seal a turn that reported a clean end',
@@ -230,6 +234,7 @@ export function classifyRunEnd(facts: RunEndFacts): RunEndClassification {
       otherwise: 'unavailable',
     }));
   }
+
   return { reason: 'completed' };
 }
 
@@ -309,27 +314,38 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
     if (opts.context?.active) {
       recorder.emit(runId, { type: 'context_budget', ...opts.context.snapshot() });
     }
+
     if (opts.files?.active) {
       recorder.emit(runId, { type: 'file_edit', ...opts.files.snapshot() });
     }
+
     for (const steer of opts.steering ?? []) recorder.emit(runId, { type: 'turn_steering', ...steer });
+
     if (opts.completionGate) recorder.emit(runId, { type: 'completion_gate', ...opts.completionGate });
+
     if (opts.craft) recorder.emit(runId, { type: 'craft_cycle', ...opts.craft });
+
     if (opts.recoveries) recorder.emit(runId, { type: 'execution_recovery', ...opts.recoveries });
+
     if (opts.escalations?.active) {
       recorder.emit(runId, { type: 'execution_escalation', ...opts.escalations.snapshot() });
     }
+
     const turnEnd: Extract<RunEventInput, { type: 'turn_end' }> = {
       type: 'turn_end',
       turnIndex: opts.turnIndex,
     };
+
     if (opts.workMode) turnEnd.workMode = opts.workMode;
+
     if (opts.usage !== undefined && usageReported(opts.usage)) turnEnd.usage = opts.usage;
     recorder.emit(runId, turnEnd);
+
     const runEnd: Extract<RunEventInput, { type: 'run_end' }> = {
       type: 'run_end',
       reason: opts.reason,
     };
+
     if (opts.error) runEnd.error = opts.error;
     recorder.emit(runId, runEnd);
   } catch (err) {
@@ -352,6 +368,7 @@ export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
   origin: 'user' | 'programmatic';
 }): CompletedTurn {
   const usage = acc.reportedUsage();
+
   const completed: CompletedTurn = {
     userMessage: opts.userMessage,
     assistantResponse: opts.assistantResponse,
@@ -364,8 +381,11 @@ export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
     sessionId: opts.sessionId,
     origin: opts.origin,
   };
+
   if (opts.turnId !== undefined) completed.turnId = opts.turnId;
+
   if (usage !== undefined) completed.usage = usage;
+
   return completed;
 }
 
@@ -415,7 +435,9 @@ export function applyOverflowRecovery(opts: {
     contextWindow: opts.contextWindow,
     turnWasOverflowRetry: opts.turnWasOverflowRetry,
   });
+
   if (recovery.forceCompaction) opts.state.armForceCompaction(opts.sessionKey);
+
   return recovery;
 }
 
@@ -458,5 +480,6 @@ export interface SettledTurn {
  */
 export function creditedTurnId(turn: SettledTurn): string | null {
   if (!turn.completed || turn.workMode === 'plan') return null;
+
   return turn.messageId;
 }

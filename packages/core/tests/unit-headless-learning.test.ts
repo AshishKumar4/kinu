@@ -49,14 +49,17 @@ function headInput(): HeadInput {
 /** The reflection model call, counted: the one call turn-level learning spends. */
 function reflectingLlm() {
   let reflections = 0;
+
   const llm: LLM = {
     async *stream() { yield ''; },
     async complete(prompt) {
       if (!prompt.includes(REFLECTION_PROMPT)) return '';
       reflections += 1;
+
       return 'When a probe call throws, change its arguments before calling it again.';
     },
   };
+
   return { llm, reflections: () => reflections };
 }
 
@@ -69,12 +72,15 @@ const usage = {
  *  text step. */
 function probingHead(calls: number): LanguageModel {
   let step = 0;
+
   return scriptedTurnModel({ doGenerate: async () => {
     const index = step++;
+
     if (index < calls) return {
       content: [{ type: 'tool-call', toolCallId: `probe-${String(index)}`, toolName: 'probe', input: JSON.stringify({ n: index }) }],
       finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
     };
+
     return {
       content: [{ type: 'text', text: 'the probe never settled' }],
       finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
@@ -103,6 +109,7 @@ describe('a headless actor runs the step clock only', () => {
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async (): Promise<{ ok: boolean }> => { throw new Error('probe exploded'); } }) },
       capture, isAborted: () => false, workspaceLayout: 'shared-workspace',
     });
+
     expect(report.status).toBe('completed');
 
     // The evidence the root's own headless channel grades on IS on this turn:
@@ -124,6 +131,7 @@ describe('a headless actor runs the step clock only', () => {
       userMessage: 'probe the parser', assistantResponse: report.summary,
       turnId: 'h1', sessionId: 'default', origin: 'programmatic',
     });
+
     seat.actor.session.orchestrator.recordTurn(turn, 'conversation');
     await seat.actor.session.orchestrator.settleEvolution();
     expect(windowRows(rt.storage.sql, actor.actorId)).toBe(1);
@@ -144,15 +152,18 @@ describe('a headless actor runs the step clock only', () => {
     // A steer-worthy failure streak broken by a CHANGED call that ran clean —
     // the execution recovery the step clock records mid-episode.
     const failing = CONSECUTIVE_FAILURES_BEFORE_STEER;
+
     const report = await runHeadInference(headInput(), {
       actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
       model: probingHead(failing + 1),
       tools: { probe: tool({ inputSchema: PROBE_SCHEMA, execute: async ({ n }) => {
         if (n < failing) throw new Error(`probe ${String(n)} exploded`);
+
         return { ok: true };
       } }) },
       capture: new HeadCapture(), isAborted: () => false, workspaceLayout: 'shared-workspace',
     });
+
     expect(report.status).toBe('completed');
 
     const findings = listRecoveryFindings(rt.storage.sql, actor);

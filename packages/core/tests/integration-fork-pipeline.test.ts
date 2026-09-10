@@ -32,6 +32,7 @@ async function seedSource(src: TestWorkspace) {
   void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
   const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'SRC-1', ownerUserId: '' }).createMain({ name: 'source-agent' });
   await writeSoul(src.vfs, src.sql, 'help with testing');
+
   // Both stores, same ids and same edges — which is what the projection
   // maintains in production. `m3` is past the cut and must not come across.
   const chain = [
@@ -39,6 +40,7 @@ async function seedSource(src: TestWorkspace) {
     { id: 'm2', parent: 'm1', role: 'assistant', text: 'hi there', at: '1970-01-01 00:00:02' },
     { id: 'm3', parent: 'm2', role: 'user', text: 'post-fork-point', at: '1970-01-01 00:00:03' },
   ] as const;
+
   for (const m of chain) {
     void src.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
       VALUES (${actor.actorId}, ${m.id}, ${m.parent}, ${m.role}, ${m.text},
@@ -48,6 +50,7 @@ async function seedSource(src: TestWorkspace) {
               ${JSON.stringify({ id: m.id, role: m.role, parts: [{ type: 'text', text: m.text }] })},
               ${m.at})`;
   }
+
   void src.sql`INSERT INTO crafted_tools (name, description, code, scope, created_at, updated_at) VALUES (${'helper'}, ${'utility'}, ${'async (x) => x + 1'}, ${'local'}, ${500}, ${500})`;
   await src.vfs.mkdir('memory', { recursive: true });
   await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
@@ -88,6 +91,7 @@ describe('fork pipeline (end-to-end)', () => {
     // store — ONCE. No plain mirror rows exist on the target.
     const msgs = tgt.sql<{ id: string }>`
       SELECT id FROM assistant_messages WHERE role != 'system' ORDER BY rowid ASC`;
+
     expect(msgs.map(m => m.id)).toEqual(['m1', 'm2']);  // m3 is not an ancestor of m2
     const mirrorRows = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c;
     expect(mirrorRows).toBe(0);
@@ -110,6 +114,7 @@ describe('fork pipeline (end-to-end)', () => {
     const marker = tgt.sql<{ id: string; parent_id: string | null; content: string; created_at: string }>`
       SELECT id, parent_id, content, created_at FROM assistant_messages WHERE role = 'system'
     `;
+
     expect(marker.length).toBe(1);
     expect(marker[0]!.parent_id).toBe('m2');
     expect(Date.parse(`${marker[0]!.created_at.replace(' ', 'T')}Z`)).toBe(snapshot.cut.createdAtMs + 1);
@@ -162,8 +167,10 @@ describe('fork pipeline (end-to-end)', () => {
     await seedSource(src);
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
     const soul = snapshot.files.find((file) => file.path === SOUL_PATH);
+
     if (!soul) throw new Error('fork snapshot did not include SOUL.md');
     const protectedWrites: string[] = [];
+
     const options = {
       workspaceId: 'PROTECTED-FORK',
       workspaceName: 'protected-fork',
@@ -191,6 +198,7 @@ describe('fork pipeline (end-to-end)', () => {
       workspaceId: 'FINAL', workspaceName: 'recovered-fork', now: 99999,
       targetAuthority: 'pane',
     } as const;
+
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
 

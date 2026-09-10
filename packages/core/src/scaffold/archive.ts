@@ -50,11 +50,13 @@ export function listScaffoldArchive(
   sql: SqlExecutor, actor: ActorHandle, limit = 50,
 ): ScaffoldArchiveEntry[] {
   actor.assertCurrent();
+
   type Row = {
     version: number; parent_version: number | null; status: ScaffoldStatus;
     rationale: string; pathology: string | null; written_at: number;
     trials: number | null; wins: number | null; losses: number | null; ties: number | null;
   };
+
   const rows = sql<Row>`
     SELECT v.version, v.parent_version, v.status, v.rationale, v.pathology, v.written_at,
            COUNT(e.id) AS trials,
@@ -67,9 +69,11 @@ export function listScaffoldArchive(
     WHERE v.actor_id = ${actor.actorId}
     GROUP BY v.version
     ORDER BY v.version DESC LIMIT ${limit}`;
+
   return rows.map((r) => {
     const wins = r.wins ?? 0, losses = r.losses ?? 0;
     const decisive = wins + losses;
+
     return {
       version: r.version,
       parentVersion: r.parent_version,
@@ -132,6 +136,7 @@ export function listRejectedProposals(
         AND winner = 'current'
       ORDER BY evaluated_at DESC LIMIT 3`
       .flatMap((r) => (r.judge_rationale ? [r.judge_rationale] : []));
+
     const decisive = entry.wins + entry.losses;
     rejected.push({
       kind: 'rolled_back',
@@ -151,11 +156,13 @@ export function listRejectedProposals(
     SELECT message, data, created_at FROM evolution_events
     WHERE actor_id = ${actor.actorId} AND type = 'misevolution_veto'
     ORDER BY created_at DESC LIMIT ${limit}`;
+
   for (const veto of vetoes) {
     // `data` is written by recordMisevolutionVeto in this same package, so a
     // payload that will not parse is corruption in our own row, not a foreign
     // format to shrug at.
     const parsed = v.parse(VetoDataSchema, parseJsonValue(veto.data ?? '{}'));
+
     if ((parsed.surface ?? 'scaffold') !== 'scaffold') continue;
     rejected.push({
       kind: 'misevolution_veto',
@@ -212,23 +219,29 @@ export interface EvolutionBaseSelection {
  */
 function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, number | null> {
   const children = new Map<number, ScaffoldArchiveEntry[]>();
+
   for (const e of archive) {
     if (e.parentVersion === null) continue;
     const siblings = children.get(e.parentVersion);
+
     if (siblings) siblings.push(e);
     else children.set(e.parentVersion, [e]);
   }
 
   const scores = new Map<number, number | null>();
+
   for (const root of archive) {
     let pooled = 0;
     let evidence = 0;
     const stack: ScaffoldArchiveEntry[] = [root];
     const seen = new Set<number>();
+
     while (stack.length > 0) {
       const node = stack.pop()!;
+
       if (seen.has(node.version)) continue;
       seen.add(node.version);
+
       if (node.winRate !== null) {
         // Observations backing this rate: shadow trials plus the real turn
         // outcomes blendRealOutcomeRates folds in. A scored version has ≥ 1.
@@ -236,11 +249,15 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
         pooled += node.winRate * w;
         evidence += w;
       }
+
       const kids = children.get(node.version);
+
       if (kids) stack.push(...kids);
     }
+
     scores.set(root.version, evidence === 0 ? null : pooled / evidence);
   }
+
   return scores;
 }
 
@@ -264,10 +281,12 @@ function cladeScores(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<number, 
  */
 function pathologyCoverage(archive: ReadonlyArray<ScaffoldArchiveEntry>): Map<string, number> {
   const counts = new Map<string, number>();
+
   for (const e of archive) {
     if (e.pathology === null) continue;
     counts.set(e.pathology, (counts.get(e.pathology) ?? 0) + 1);
   }
+
   return counts;
 }
 
@@ -315,7 +334,9 @@ export function selectEvolutionBase(
       ? { version: explorable[0]!.version, mode: 'explore' }
       : (archive.length > 0 ? { version: archive[0]!.version, mode: 'current' } : null);
   }
+
   const exploreShare = Math.min(1, Math.max(0, opts.exploreShare));
+
   if (explorable.length === 0 || random() >= exploreShare) {
     return { version: current.version, mode: 'current' };
   }
@@ -325,15 +346,20 @@ export function selectEvolutionBase(
   // the current version already targets is a covered cell.
   const clade = cladeScores(archive);
   const coverage = pathologyCoverage(archive);
+
   const weight = (e: ScaffoldArchiveEntry): number =>
     (clade.get(e.version) ?? 0.5) +
     1 / (1 + e.trials) +
     (e.pathology === null ? 0 : 1 / (1 + coverage.get(e.pathology)!));
+
   const total = explorable.reduce((acc, e) => acc + weight(e), 0);
   let roll = random() * total;
+
   for (const e of explorable) {
     roll -= weight(e);
+
     if (roll <= 0) return { version: e.version, mode: 'explore' };
   }
+
   return { version: explorable[explorable.length - 1]!.version, mode: 'explore' };
 }

@@ -52,10 +52,13 @@ const config: ScaffoldControl['config'] = {
  *  wraps the reflection prompt as one user text part. */
 function promptText(prompt: LanguageModelV3Prompt): string {
   const text: string[] = [];
+
   for (const message of prompt) {
     if (!Array.isArray(message.content)) { text.push(message.content); continue; }
+
     for (const part of message.content) if (part.type === 'text') text.push(part.text);
   }
+
   return text.join('\n');
 }
 
@@ -70,10 +73,12 @@ function promptText(prompt: LanguageModelV3Prompt): string {
  */
 function refusingControl(rt: AgentRuntime) {
   const calls: string[] = [];
+
   const refuse = (what: string): never => {
     calls.push(what);
     throw new Error(`${what} must not be reached by a pass that has already refused`);
   };
+
   const control = {
     rt,
     sql: rt.storage.sql,
@@ -82,6 +87,7 @@ function refusingControl(rt: AgentRuntime) {
     model: () => refuse('model'),
     judge: () => refuse('judge'),
   } satisfies ScaffoldControl;
+
   return { control, calls };
 }
 
@@ -99,10 +105,12 @@ interface RunnableControl {
 function runnableControl(rt: AgentRuntime): RunnableControl {
   const reflectionPrompts: string[] = [];
   const judgePrompts: string[] = [];
+
   const usage = {
     inputTokens: { total: 5, noCache: 5, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 7, text: 7, reasoning: undefined },
   };
+
   return {
     reflectionPrompts,
     judgePrompts,
@@ -119,6 +127,7 @@ function runnableControl(rt: AgentRuntime): RunnableControl {
         modelId: 'fake-reflection',
         doGenerate: async (options) => {
           reflectionPrompts.push(promptText(options.prompt));
+
           return {
             content: [{ type: 'text' as const, text: CANDIDATE_SCAFFOLD }],
             finishReason: { unified: 'stop' as const, raw: undefined },
@@ -129,6 +138,7 @@ function runnableControl(rt: AgentRuntime): RunnableControl {
       }),
       judge: async ({ prompt, schema }) => {
         judgePrompts.push(prompt);
+
         return v.parse(schema, { score: 0.5, feedback: 'no measurable change in quality' });
       },
     },
@@ -141,12 +151,14 @@ async function evolvableRuntime(): Promise<AgentRuntime> {
   const { rt } = createTestRuntime();
   rt.executor = createEvalExecutor();
   await rt.identity.scaffold.write(SEED_SCAFFOLD);
+
   return rt;
 }
 
 /** Distinct, non-overlapping task text per instance, so "this prompt shows the
  *  train set and nothing from the val set" is decidable by containment. */
 const failureTask = (i: number) => `failure #${i}: the summary skipped the conclusions`;
+
 const guardTask = (i: number) => `guard #${i}: list the files under docs`;
 
 function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number }): void {
@@ -157,6 +169,7 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
       followup: 'no, summarise the conclusions', now: 1_000 + i,
     });
   }
+
   for (let i = 0; i < counts.guards; i++) {
     recordTurnOutcome(rt.storage.sql, rt.actor, {
       turnId: `ok-${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
@@ -215,8 +228,10 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     // Reflection ran, and every minibatch it read came from the train set —
     // no instance the winner is scored on was ever shown to the mutator.
     expect(reflectionPrompts.length).toBeGreaterThan(0);
+
     for (const prompt of reflectionPrompts) {
       expect(split.train.some((instance) => prompt.includes(instance.input))).toBe(true);
+
       for (const scored of split.val) expect(prompt).not.toContain(scored.input);
     }
 
@@ -225,6 +240,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
     for (const scored of split.val) {
       expect(judgePrompts.some((prompt) => prompt.includes(scored.input))).toBe(true);
     }
+
     expect(result.seedScore?.n).toBe(split.val.length);
 
     // And the result says what the selection rested on, split by kind.
@@ -260,6 +276,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
   test('the split it consumes really is disjoint on the ledger it reads', () => {
     const { sql, execRaw } = createTestWorkspace();
     const actor = createTestActor(sql, execRaw, 'ws-gepa-split', 'gepa-split');
+
     for (let i = 0; i < 6; i++) {
       recordTurnOutcome(sql, actor, {
         turnId: `n${i}`, outcome: 'corrected', confidence: 1, source: 'classifier',
@@ -270,6 +287,7 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
         userMessage: `good ${i}`, assistantResponse: 'ok', now: 2000 + i,
       });
     }
+
     const split = buildOutcomeEvalSplit(sql, actor, 24);
     const trainInputs = new Set(split.train.map((i) => i.input));
     expect(split.val.some((i) => trainInputs.has(i.input))).toBe(false);
@@ -285,6 +303,7 @@ test('an unavailable judge aborts scaffold optimization without a numeric candid
   const control: ScaffoldControl = { ...base, judge: async () => { throw new Error('judge provider is unavailable'); } };
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 1 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('judge provider is unavailable') });
+
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
   expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
   expect(loadGepaCandidates(rt.storage.sql, rt.actor, result.runId)).toEqual([]);
@@ -297,12 +316,16 @@ test('a judge failure during reflection evaluation aborts instead of rejecting a
   const { control: base, reflectionPrompts } = runnableControl(rt);
   const seedCalls = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE).val.length;
   let calls = 0;
+
   const control: ScaffoldControl = { ...base, judge: async ({ schema }) => {
     if (++calls > seedCalls) throw new Error('judge failed on reflection evidence');
+
     return v.parse(schema, { score: 0.2, feedback: 'measured seed quality' });
   } };
+
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 1 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('judge failed on reflection evidence') });
+
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
   expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', winnerId: null }));
   expect(loadGepaCandidates(rt.storage.sql, rt.actor, result.runId).map(candidate => ({ source: candidate.source, score: candidate.aggregateScore })))
@@ -316,12 +339,16 @@ test('a mixed measured and unavailable seed reports the actual attempts without 
   seedLedger(rt, { failures: 8, guards: 4 });
   const { control: base } = runnableControl(rt);
   let calls = 0;
+
   const control: ScaffoldControl = { ...base, judge: async ({ schema }) => {
     if (++calls === 2) throw new Error('second measurement unavailable');
+
     return v.parse(schema, { score: 0.8, feedback: 'measured first instance' });
   } };
+
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 1 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('second measurement unavailable') });
+
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
   expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.runId, status: 'aborted', metricCalls: 2, winnerId: null }));
   expect(loadGepaCandidates(rt.storage.sql, rt.actor, result.runId)).toEqual([]);
@@ -333,12 +360,16 @@ test('section GEPA reports mixed scored and unavailable measurements as an abort
   seedLedger(rt, { failures: 8, guards: 4 });
   const { control: base } = runnableControl(rt);
   let calls = 0;
+
   const control: ScaffoldControl = { ...base, judge: async ({ schema }) => {
     if (++calls === 2) throw new Error('section judge unavailable');
+
     return v.parse(schema, { score: 0.8, feedback: 'measured one instance' });
   } };
+
   const result = await advancePromptSectionLane(control);
   expect(result).toMatchObject({ step: 'pass', pass: { ok: false, error: expect.stringContaining('section judge unavailable') } });
+
   if (result.step !== 'pass' || result.pass.runId === undefined) throw new Error('the section pass has no run identity');
   expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.pass.runId, status: 'aborted', metricCalls: 2, winnerId: null }));
   expect(loadGepaCandidates(rt.storage.sql, rt.actor, result.pass.runId)).toEqual([]);
@@ -350,13 +381,17 @@ test('an unavailable candidate judge cannot turn measured incumbent quality into
   seedLedger(rt, { failures: 8, guards: 4 });
   const { control: base } = runnableControl(rt);
   const section = findPromptSectionTarget('state/output-format');
+
   if (section === undefined) throw new Error('the output format section must be registered');
   const source = section.source.slice(0, -6) + 'ASKED.';
   const failure = new Error('candidate judge unavailable');
+
   const control: ScaffoldControl = { ...base, judge: async ({ prompt, schema }) => {
     if (prompt.includes(source)) throw failure;
+
     return v.parse(schema, { score: 0.1, feedback: 'measured incumbent quality' });
   } };
+
   await expect(proposeMeasuredPromptSection(control, { sectionId: section.id, source,
     rationale: 'Clarify the response format while retaining the existing output requirements.' })).rejects.toBe(failure);
   expect(listPromptSectionVersions(rt.storage.sql, rt.actor)).toEqual([]);
@@ -367,21 +402,28 @@ test('an unavailable paired trial cannot supply the last win needed to promote a
   seedLedger(rt, { failures: 8, guards: 4 });
   const { control: base } = runnableControl(rt);
   const section = findPromptSectionTarget('state/output-format');
+
   if (section === undefined) throw new Error('the output format section must be registered');
   const source = section.source.slice(0, -6) + 'ASKED.';
+
   const proposal = proposePromptSection(rt.storage.sql, rt.actor, { section, source,
     incumbentScore: scoreInterval([0.1, 0.1, 0.1, 0.1]), candidateScore: scoreInterval([0.9, 0.9, 0.9, 0.9]),
     rationale: 'Clarify the response format while retaining the existing output requirements.' });
+
   if (!proposal.ok) throw new Error(proposal.error);
+
   for (let index = 0; index < 4; index++) recordPromptSectionTrial(rt.storage.sql, rt.actor, {
     sectionId: section.id, pendingVersion: proposal.version, instanceId: 'measured-' + index,
     currentScore: 0.1, pendingScore: 0.9, winner: 'pending', feedback: 'measured improvement',
   });
   const failure = new Error('pending trial judge unavailable');
+
   const control: ScaffoldControl = { ...base, judge: async ({ prompt, schema }) => {
     if (prompt.includes(source)) throw failure;
+
     return v.parse(schema, { score: 0.1, feedback: 'measured incumbent quality' });
   } };
+
   await expect(advancePromptSectionLane(control)).rejects.toBe(failure);
   expect(getPendingPromptSection(rt.storage.sql, rt.actor, section.id)).toMatchObject({ trialsSoFar: 4, pendingWins: 4 });
   expect(activePromptSectionOverrides(rt.storage.sql, rt.actor)[section.id]).toBeUndefined();
@@ -394,13 +436,17 @@ test('a later unavailable judge leaves valid earlier measurements but no selecte
   const split = buildOutcomeEvalSplit(rt.storage.sql, rt.actor, EVAL_SIZE);
   const completedCalls = split.val.length * 2 + Math.min(3, split.train.length);
   let calls = 0;
+
   const control: ScaffoldControl = { ...base, judge: async ({ prompt, schema }) => {
     if (++calls > completedCalls) throw new Error('judge unavailable after a measured iteration');
+
     return v.parse(schema, { score: prompt.includes('and here is the correction') ? 0.9 : 0.2,
       feedback: 'quality measured before the outage' });
   } };
+
   const result = await runScaffoldGepaOptimization(control, { maxIterations: 2 });
   expect(result).toMatchObject({ ok: false, error: expect.stringContaining('judge unavailable after a measured iteration') });
+
   if (result.runId === undefined) throw new Error('the attempted optimization has no run identity');
   expect(listGepaRuns(rt.storage.sql, rt.actor)).toContainEqual(expect.objectContaining({ runId: result.runId,
     status: 'aborted', winnerId: null, iterations: 1, metricCalls: completedCalls + 1 }));

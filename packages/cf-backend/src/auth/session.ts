@@ -108,12 +108,17 @@ export function readSessionToken(request: Request): string | null {
  *  is an absent cookie rather than a thrown request. */
 export function readCookie(request: Request, name: string): string | null {
   const cookie = request.headers.get('cookie');
+
   if (!cookie) return null;
+
   for (const part of cookie.split(';')) {
     const [candidate, ...rest] = part.trim().split('=');
+
     if (candidate !== name) continue;
     const raw = rest.join('=');
+
     if (!raw) return null;
+
     try {
       return decodeURIComponent(raw);
     } catch (malformed) {
@@ -122,9 +127,11 @@ export function readCookie(request: Request, name: string): string | null {
       // one of ours, so there is no cookie of ours in the request. Anything
       // else is not a cookie problem and is not this function's to answer.
       if (!(malformed instanceof URIError)) throw malformed;
+
       return null;
     }
   }
+
   return null;
 }
 
@@ -161,10 +168,13 @@ const LOOPBACK_HOSTS: readonly string[] = ['localhost', '127.0.0.1', '[::1]', '0
  */
 export async function authenticateRequest(request: Request, env: AuthEnv): Promise<AuthIdentity> {
   const sessionToken = readSessionToken(request);
+
   if (sessionToken) {
     assertSessionBindings(env);
+
     try {
       const identity = await verifySession(env, sessionToken);
+
       if (identity) return identity;
     } catch (e) {
       if (!(e instanceof SessionAuthorityUnavailableError)) throw e;
@@ -172,6 +182,7 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
       // signed-in user into a sign-in the same outage cannot complete.
       throw new AuthError(503, e.message, { cause: e });
     }
+
     throw new AuthError(401, 'Kinu session expired. Sign in again.');
   }
 
@@ -187,10 +198,12 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
   // deployment that configures no secret grants nothing.
   if (env.DEV_USER_EMAIL) {
     const presented = request.headers.get(DEV_IDENTITY_HEADER);
+
     const held = LOOPBACK_HOSTS.includes(new URL(request.url).hostname)
       || (env.DEV_IDENTITY_SECRET !== undefined
         && presented !== null
         && timingSafeEqual(presented, env.DEV_IDENTITY_SECRET));
+
     if (held) {
       return {
         userId: await deriveUserId(env.DEV_USER_EMAIL),
@@ -205,6 +218,7 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
   if (!env.AUTH_KV) {
     throw new AuthError(500, 'Browser auth is not configured (AUTH_KV binding missing)');
   }
+
   throw new AuthError(401, 'No Kinu session in request');
 }
 
@@ -212,6 +226,7 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
  *  cookie path: the dev identity reaches neither. */
 function assertSessionBindings(env: AuthEnv): asserts env is AuthEnv & AuthStoreEnv {
   if (!env.AUTH_KV) throw new AuthError(500, 'AUTH_KV binding is not configured');
+
   if (!env.UserDO) throw new AuthError(500, 'UserDO binding is not configured');
 }
 
@@ -237,10 +252,12 @@ const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 export function crossSiteRejection(request: Request): Response | null {
   if (!readSessionToken(request)) return null;
   const isUpgrade = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+
   if (!isUpgrade && SAFE_METHODS.has(request.method)) return null;
 
   const expected = new URL(request.url).origin;
   const stated = request.headers.get('origin') ?? originOf(request.headers.get('referer'));
+
   if (stated === expected) return null;
 
   return new Response(
@@ -251,6 +268,7 @@ export function crossSiteRejection(request: Request): Response | null {
 
 function originOf(value: string | null): string | null {
   if (!value || !URL.canParse(value)) return null;
+
   return new URL(value).origin;
 }
 
@@ -258,11 +276,17 @@ function originOf(value: string | null): string | null {
  *  not here: they are served on the preview host, which never reaches this.) */
 export function isPublicPath(pathname: string): boolean {
   if (pathname === '/api/health') return true;
+
   if (pathname === '/login' || pathname === '/logout') return true;
+
   if (pathname.startsWith('/auth/')) return true;
+
   if (pathname.startsWith('/api/auth/')) return true;
+
   // covers /pc/connect and /pc/connect-ticket — the tunnel uses its own auth
   if (pathname.startsWith(DEVICE_CONNECT_PATH)) return true;
+
   if (pathname.startsWith('/assets/')) return true;    // hashed static bundles
+
   return false;
 }

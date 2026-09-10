@@ -31,6 +31,7 @@ import { join } from 'node:path';
 import * as v from 'valibot';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const MODULES = join(REPO_ROOT, 'node_modules');
 
 /** The lifecycle hooks Bun will run for a trusted package. */
@@ -58,6 +59,7 @@ function allowedReason(pkg: string): string | undefined {
   for (const [name, reason] of Object.entries(ALLOWED_INSTALL_SCRIPTS)) {
     if (name === pkg) return reason;
   }
+
   return undefined;
 }
 
@@ -76,34 +78,47 @@ export interface DeclaredScript {
 export function declaredInstallScripts(modules: string = MODULES): readonly DeclaredScript[] {
   if (!existsSync(modules)) return [];
   const out: DeclaredScript[] = [];
+
   const consider = (dir: string, pkgName: string): void => {
     const manifest = join(dir, 'package.json');
+
     if (!existsSync(manifest)) return;
     const parsed = v.safeParse(PackageJsonSchema, JSON.parse(readFileSync(manifest, 'utf8')));
+
     if (!parsed.success) return;
     const scripts = parsed.output.scripts ?? {};
     const hooks = LIFECYCLE.filter((h) => scripts[h] !== undefined);
+
     if (hooks.length > 0) out.push({ pkg: parsed.output.name ?? pkgName, hooks });
   };
+
   for (const entry of readdirSync(modules, { withFileTypes: true })) {
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+
     if (entry.name.startsWith('.')) continue;
+
     if (entry.name.startsWith('@')) {
       const scope = join(modules, entry.name);
+
       if (!existsSync(scope)) continue;
+
       for (const inner of readdirSync(scope, { withFileTypes: true })) {
         consider(join(scope, inner.name), `${entry.name}/${inner.name}`);
       }
+
       continue;
     }
+
     consider(join(modules, entry.name), entry.name);
   }
+
   return out.sort((a, b) => a.pkg.localeCompare(b.pkg));
 }
 
 /** `trustedDependencies` from the root manifest — Bun's per-repo allowlist. */
 export function rootTrustedDependencies(root: string = REPO_ROOT): readonly string[] {
   const parsed = v.parse(PackageJsonSchema, JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')));
+
   return parsed.trustedDependencies ?? [];
 }
 
@@ -123,17 +138,22 @@ export interface GateFinding {
 export function blockedByBun(cwd: string = REPO_ROOT): ReadonlySet<string> {
   const proc = Bun.spawnSync(['bun', 'pm', 'untrusted'], { cwd, stdout: 'pipe', stderr: 'pipe' });
   const text = proc.stdout.toString();
+
   if (proc.exitCode !== 0 && text.trim() === '') {
     throw new Error(
       `bun pm untrusted failed (exit ${proc.exitCode}) — cannot determine which install scripts `
       + `bun blocked, so this gate refuses to guess: ${proc.stderr.toString().trim()}`,
     );
   }
+
   const names = new Set<string>();
+
   for (const line of text.split('\n')) {
     const match = /^\.\/node_modules\/(@[^/\s]+\/[^/\s]+|[^/\s@][^/\s]*)\s+@/.exec(line.trim());
+
     if (match?.[1] !== undefined) names.add(match[1]);
   }
+
   return names;
 }
 
@@ -178,6 +198,7 @@ export function judgeInstallScripts(
         + 'repository does not control. Add it with a reason, or pin a version without the hook.',
     });
   }
+
   for (const name of allowed) {
     if (!declared.some((d) => d.pkg === name)) {
       findings.push({
@@ -187,6 +208,7 @@ export function judgeInstallScripts(
       });
     }
   }
+
   // `trustedDependencies` widens Bun's execution set for THIS repo. Every entry
   // must also be allowed here, so the two lists cannot disagree silently.
   for (const name of rootTrustedDependencies(root)) {
@@ -198,25 +220,30 @@ export function judgeInstallScripts(
       });
     }
   }
+
   return { declared, allowed, blocked: [...blocked].sort(), ran: ran.map((r) => r.pkg), findings };
 }
 
 function main(): void {
   const { declared, allowed, blocked, ran, findings } = judgeInstallScripts();
+
   if (declared.length === 0) {
     console.error('install-scripts: the scan found NO dependency declaring a lifecycle hook. '
       + 'This repo installs several that do, so the enumeration is broken rather than the tree clean.');
     process.exit(1);
   }
+
   if (findings.length > 0) {
     for (const f of findings) {
       console.error(`::error::install-scripts: ${f.pkg} — ${f.detail}`);
       console.error(`  ${f.pkg}  ${f.detail}`);
     }
+
     console.error(`install-scripts: ${findings.length} finding(s) over ${declared.length} `
       + `dependency(ies) declaring a lifecycle hook`);
     process.exit(1);
   }
+
   console.log(
     `install-scripts: ok — ${declared.length} declare a lifecycle hook, ${blocked.length} blocked `
     + `by bun, ${ran.length} EXECUTE (${ran.join(', ')}), all ${ran.length} allowed with a stated `

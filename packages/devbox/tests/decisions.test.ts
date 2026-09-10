@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { basename, join } from 'node:path';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
+
 // Minted and released HERE, not in a shared helper: `gate:scratch-ownership`
 // reads the file that mints, and a module-scope `afterAll` in an imported file
 // registers with no suite and never fires. Only the prefix is shared.
@@ -24,6 +25,7 @@ const mintedScratch = new Set<string>();
 function devboxScratchDir(label: string): string {
   const dir = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}${label}-`));
   mintedScratch.add(dir);
+
   return dir;
 }
 
@@ -37,10 +39,12 @@ afterAll(() => {
   for (const dir of mintedScratch) {
     rmSync(dir, { recursive: true, force: true });
     const stem = basename(dir);
+
     for (const entry of readdirSync(tmpdir())) {
       if (entry.startsWith(`${stem}.`)) rmSync(join(tmpdir(), entry), { recursive: true, force: true });
     }
   }
+
   mintedScratch.clear();
 });
 
@@ -95,6 +99,7 @@ import {
 } from '../src/snapshot-chain';
 
 const CHAIN_ID = 'a1b2c3d4-0000-4000-8000-000000000001';
+
 /** The generation a record retains as its restore fallback. */
 const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
 
@@ -102,6 +107,7 @@ const FALLBACK_ID = 'a1b2c3d4-0000-4000-8000-0000000000fb';
 
 describe('quiesce timing matrix — three gates and a confirmed quiet window', () => {
   const T = 1_000_000_000;
+
   const base = {
     now: T,
     containerRunning: true,
@@ -142,6 +148,7 @@ describe('quiesce timing matrix — three gates and a confirmed quiet window', (
       backgroundWork: true,
       quietSince: T - DEFAULT_DEVBOX_POLICY.quietConfirmMs * 10,
     });
+
     expect(step.action).toBe('hold');
     // And the stretch is FORGOTTEN, so the confirmation starts over once the
     // work finishes. A remembered stretch would stop the box on the first tick
@@ -195,6 +202,7 @@ describe('restart plan — processes serve ports, so processes go first', () => 
     { processId: 'p2', command: 'node b.js', cwd: '/workspace/app', createdAt: 2 },
     { processId: 'p1', command: 'python3 a.py', cwd: undefined, createdAt: 1 },
   ];
+
   const ports: readonly PortExposureSpec[] = [
     { port: 8080, name: 'web', token: 'tok8080', createdAt: 3 },
     { port: 3000, name: undefined, token: 'tok3000', createdAt: 4 },
@@ -226,6 +234,7 @@ describe('restart plan — processes serve ports, so processes go first', () => 
       { port: 8080, name: 'first', token: 'a', createdAt: 1 },
       { port: 8080, name: 'second', token: 'b', createdAt: 2 },
     ];
+
     // Last write wins, which matches the storage the specs came from.
     expect(restartPlan([], duplicated).serve).toEqual([duplicated[1]]);
   });
@@ -288,6 +297,7 @@ describe('classifying a lifecycle failure — the SDK\'s own codes, never its pr
     const wrapped = new Error('chain abc is stored as lazy layers and could not be mounted', {
       cause: coded('MISSING_CREDENTIALS'),
     });
+
     expect(classifyRecovery({ cause: wrapped })).toBe('permanent');
   });
 
@@ -295,6 +305,7 @@ describe('classifying a lifecycle failure — the SDK\'s own codes, never its pr
     const wrapped = new Error('abandoned', {
       cause: new ContainerStartOverrun('Devbox.attach', 1),
     });
+
     // The overrun is the outer fact here only when it IS outermost; wrapped the
     // other way round the inner one still answers, which is the chain walk.
     expect(classifyRecovery({ cause: wrapped })).toBe('abandoned');
@@ -329,6 +340,7 @@ describe('the ladder row is parsed strictly, and an unreadable one is not an abs
 
   test('a claim with no stage round-trips, and so does each stage', () => {
     expect(parseRecoveryRow({ owner: OWNER })).toEqual({ kind: 'row', row: { owner: OWNER } });
+
     for (const stage of ['retry', 'replace'] as const) {
       expect(parseRecoveryRow({ owner: OWNER, stage }))
         .toEqual({ kind: 'row', row: { owner: OWNER, stage } });
@@ -349,6 +361,7 @@ describe('the ladder row is parsed strictly, and an unreadable one is not an abs
       // evidence of something else writing here.
       { owner: OWNER, stage: 'retry', attempts: 4 },
     ];
+
     for (const stored of rejected) expect(parseRecoveryRow(stored)).toEqual({ kind: 'malformed' });
   });
 });
@@ -365,6 +378,7 @@ describe('admission claims the row, and refuses on evidence it cannot read', () 
     // a new owner, and none of them may forget how far the ladder has gone.
     expect(admissionStep({ kind: 'row', row: { owner: OWNER } }))
       .toEqual({ admit: true, stage: undefined });
+
     for (const stage of ['retry', 'replace'] as const) {
       expect(admissionStep({ kind: 'row', row: { owner: OWNER, stage } }))
         .toEqual({ admit: true, stage });
@@ -383,6 +397,7 @@ describe('recovery is one decision per failure, with no count and no timeout', (
   const CLASSES: readonly RecoveryClass[] = [
     'abandoned', 'stale-owner', 'exhausted', 'permanent', 'transient', 'unclassified',
   ];
+
   const STAGES: readonly (RecoveryStage | undefined)[] = [undefined, 'retry', 'replace'];
 
   test('a superseded attempt is INERT for every class and every stage', () => {
@@ -448,11 +463,13 @@ describe('recovery is one decision per failure, with no count and no timeout', (
       // wrap: a fourth failure is still a refusal.
       const walk: string[] = [];
       let stage: RecoveryStage | undefined;
+
       for (let step = 0; step < 4; step += 1) {
         const decision = recoveryStep({ owned: true, failure, stage });
         walk.push(decision.action);
         stage = decision.stage;
       }
+
       expect(walk).toEqual(['retry', 'replace', 'refuse', 'refuse']);
     });
   }
@@ -462,9 +479,11 @@ describe('recovery is one decision per failure, with no count and no timeout', (
       for (const stage of STAGES) {
         const decision = recoveryStep({ owned: true, failure, stage });
         expect(['retry', 'replace', 'refuse']).toContain(decision.action);
+
         // A stage that was set is never unset by a failure: the delete belongs
         // to success alone.
         if (stage !== undefined) expect(decision.stage).not.toBeUndefined();
+
         if (decision.stage !== undefined) {
           expect(parseRecoveryRow({ owner: 'o', stage: decision.stage }))
             .toEqual({ kind: 'row', row: { owner: 'o', stage: decision.stage } });
@@ -478,6 +497,7 @@ describe('port tokens and listener probes', () => {
   test('a token is 16 characters drawn only from the alphabet the SDK accepts', () => {
     const token = generatePortToken(n => Uint8Array.from({ length: n }, (_, i) => i * 7));
     expect(token).toHaveLength(16);
+
     for (const character of token) expect(PORT_TOKEN_ALPHABET).toContain(character);
   });
 
@@ -557,18 +577,22 @@ describe('every self-re-arming schedule needs a first link', () => {
   // harness can fire: there is no way to start a container from a test. What is
   // checked is exactly the rule — `onStart` arms all three.
   const source = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
+
   const bodyOf = (signature: string): string => {
     const from = source.indexOf(signature);
     expect(from).toBeGreaterThan(-1);
     const tail = source.slice(from);
+
     return tail.slice(0, tail.indexOf('\n  }'));
   };
 
   test('onStart forges a first link for all three self-re-arming rows', () => {
     const schedules = bodyOf('async #armContainerSchedules(');
+
     for (const callback of ['CHECKPOINT_CALLBACK', 'HEARTBEAT_CALLBACK']) {
       expect(schedules).toContain(`this.#arm(${callback}`);
     }
+
     // THE STARTUP ROW GOES THROUGH `kickStartup`, which owns the question "is
     // anything going to try". A bare `#arm` here armed a successor one second
     // after every admission probe — and the SDK runs this hook on every probe —
@@ -679,6 +703,7 @@ describe('every self-re-arming schedule needs a first link', () => {
         callback, handRolled: false,
       });
     }
+
     const armSites = (body: string): number => [...body.matchAll(/this\.#arm\(/g)].length;
     expect({
       total: armSites(source),
@@ -832,12 +857,14 @@ describe('an incident is written off only when the host says it LANDED', () => {
 
   function ledger(): Ledger {
     const rows = new Map<string, IncidentRow>();
+
     return {
       rows,
       store: {
         get: (key) => Promise.resolve(rows.get(key)),
         put: (key, value) => {
           rows.set(key, value);
+
           return Promise.resolve();
         },
         delete: (key) => Promise.resolve(rows.delete(key)),
@@ -860,8 +887,10 @@ describe('an incident is written off only when the host says it LANDED', () => {
     await recordIncident(store, 'attach', 'the mount refused');
     const answers: IncidentDisposition[] = ['undelivered', 'queued'];
     const ordinals: number[] = [];
+
     const answer = async (_incident: DevboxIncident, attempt: number): Promise<IncidentDisposition> => {
       ordinals.push(attempt);
+
       return answers.shift() ?? 'queued';
     };
 
@@ -891,9 +920,11 @@ describe('an incident is written off only when the host says it LANDED', () => {
     // that path rather than a copy of it.
     const { rows, store } = ledger();
     await recordIncident(store, 'checkpoint', 'the commit failed');
+
     const retryIn = await deliverIncidents(store, () => {
       throw new Error('the host was unreachable');
     });
+
     expect(retryIn).toBe(Math.ceil(incidentRetryDelayMs(1) / 1000));
     expect({ attempts: only(rows)?.attempts, delivered: only(rows)?.deliveredAt })
       .toEqual({ attempts: 1, delivered: undefined });
@@ -926,9 +957,11 @@ describe('the attach budget', () => {
   test('work that overruns is abandoned, and its late failure is still reported', async () => {
     const late: string[] = [];
     const { promise: work, reject: failWork } = Promise.withResolvers<never>();
+
     const run = attachWithin(0, () => work, failure => {
       late.push(describeThrown({ cause: failure.cause }));
     });
+
     await expect(run).rejects.toThrow(/exceeded its 0ms budget and was abandoned/);
     // Abandoning a value is not the same as discarding an error: the late
     // rejection is usually the only diagnostic there is.
@@ -1002,9 +1035,11 @@ describe('the attach budget', () => {
     // destroy a healthy box over a slow app.
     const late: string[] = [];
     const { promise: work, reject: failWork } = Promise.withResolvers<never>();
+
     const outcome = await runRestoreStep(0, () => work, (failure) => {
       late.push(describeThrown({ cause: failure.cause }));
     });
+
     expect(outcome).toEqual({ kind: 'late' });
     failWork(new Error('the server never bound'));
     await Promise.resolve();
@@ -1022,10 +1057,12 @@ describe('the attach budget', () => {
     // rest of the restoration over one dead spec, and the caller wants a reason
     // it can put in `unready` rather than an exception.
     const late: string[] = [];
+
     const outcome = await runRestoreStep(
       25_000, () => Promise.reject(new Error('the port is in use')),
       (failure) => { late.push(describeThrown({ cause: failure.cause })); },
     );
+
     expect(outcome.kind).toBe('failed');
     expect(describeThrown(outcome.kind === 'failed' ? outcome : { cause: undefined }))
       .toBe('the port is in use');
@@ -1040,11 +1077,13 @@ describe('the attach budget', () => {
     // value, so the class is the contract — a caller matching the sentence
     // would silently stop recognising it the day the sentence is reworded.
     let overrun: { readonly cause: unknown } | undefined;
+
     try {
       await attachWithin(0, () => Promise.withResolvers<never>().promise, () => {});
     } catch (error) {
       overrun = { cause: error };
     }
+
     expect(overrun?.cause).toBeInstanceOf(ContainerStartOverrun);
     expect(classifyRecovery(overrun ?? { cause: undefined })).toBe('abandoned');
     expect(recoveryStep({ owned: true, failure: 'abandoned', stage: undefined }))
@@ -1209,16 +1248,21 @@ printf '\\nPIDS stranger=%s cwd=%s session=%s status=%s cwdalive=%s pidsInScan=%
       const init = join(dir, 'init.sh');
       writeFileSync(init, 'inner=$1; shift; sh "$inner" "$@"\n');
       const ready = { stranger: `${dir}-ready-stranger`, cwd: `${dir}-ready-cwd` };
+
       const ran = spawnSync('unshare', [
         '-Ur', '--fork', '--pid', '--mount-proc',
         'sh', init, scenario, dir, script, ready.stranger, ready.cwd,
       ], { encoding: 'utf8', timeout: 20_000 });
+
       const holders = parseWorkdirHolders(ran.stdout.split('ALIVE')[0] ?? '');
+
       // The scenario's own answers, since every pid in them is namespace-local.
       const reported = (name: string): string =>
         new RegExp(`(?:^|\\s)${name}=(\\S+)`).exec(ran.stdout)?.[1] ?? '';
+
       const named = (pid: string): boolean =>
         pid.length > 0 && holders.some((holder) => holder.pid === pid);
+
       expect({
         // Named first, because everything else reads as false when the command
         // never ran at all: a missing `unshare`, a refused namespace, or the
@@ -1272,12 +1316,14 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
     ]) {
       expect(isChainId(bad)).toBe(false);
     }
+
     expect(isChainId(CHAIN_ID)).toBe(true);
     // The refusal itself is judged where it is spent: the key builders below.
   });
 
   test('every key builder validates, so no path can be assembled from a guess', () => {
     const STORE_ROOT = chainStoreRoot('boxes/box-under-test');
+
     for (const build of [baseObjectKey, deltaObjectKey, metadataObjectKey]) {
       expect(() => build(STORE_ROOT, '../../etc/passwd')).toThrow(/is not a UUID/);
       // UNDER THIS BOX'S ROOT, never a global one: the generation prefix is
@@ -1286,6 +1332,7 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
       expect(build(STORE_ROOT, CHAIN_ID)).toStartWith(`${STORE_ROOT}/${CHAIN_ID}/`);
       expect(build(STORE_ROOT, CHAIN_ID)).toStartWith('boxes/');
     }
+
     // Three distinct objects under one prefix, so a discard can name all of
     // them and a delta can be replaced without touching the base.
     const keys = [baseObjectKey(STORE_ROOT, CHAIN_ID), deltaObjectKey(STORE_ROOT, CHAIN_ID), metadataObjectKey(STORE_ROOT, CHAIN_ID)];
@@ -1303,6 +1350,7 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
     ]) {
       expect(normalizeChainState(raw)).toBeNull();
     }
+
     // A sound row parses, and every field survives the parse.
     const sound = { mode: 'chain', rev: 2, base: { id: CHAIN_ID, bytes: 9 }, at: 5 };
     expect(normalizeChainState(sound)).toEqual({
@@ -1331,6 +1379,7 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
       .toBeNull();
     expect(normalizeChainState({ ...sound, base: { id: CHAIN_ID, bytes: 9, objectVersion: '' } }))
       .toBeNull();
+
     // A retained fallback survives it too, delta and all: a generation the
     // reader cannot check is a generation a restore cannot use.
     const withFallback = {
@@ -1340,6 +1389,7 @@ describe('chain identity — UUID keys refuse traversal by construction', () => 
         delta: { bytes: 3, digest, objectVersion },
       },
     };
+
     expect(normalizeChainState(withFallback)?.fallback).toEqual({
       base: { id: FALLBACK_ID, bytes: 7, digest, objectVersion },
       delta: { bytes: 3, digest, objectVersion },
@@ -1362,6 +1412,7 @@ describe('integrity probe — each unsound shape names itself', () => {
   test('the four ways a stored layer can be unusable', () => {
     const bySize = (declared: number | undefined, stored: number | undefined, label: string) =>
       layerIntegrityFailure({ declared: sized(declared), stored: sized(stored), label });
+
     expect(bySize(undefined, 1, 'base')).toContain('declares no size');
     expect(bySize(1, undefined, 'base')).toContain('missing from the store');
     expect(bySize(0, 0, 'delta')).toContain('declares 0 bytes');
@@ -1374,11 +1425,13 @@ describe('integrity probe — each unsound shape names itself', () => {
     // valid squashfs image. It mounts and serves the wrong workspace.
     const digest = 'a'.repeat(64);
     const other = 'b'.repeat(64);
+
     const refusal = layerIntegrityFailure({
       declared: { bytes: 4_096, digest, objectVersion: undefined },
       stored: { bytes: 4_096, digest: other, objectVersion: undefined },
       label: 'delta',
     });
+
     expect(refusal).toContain('different archive of the same length');
     expect(refusal).toContain(other);
     expect(refusal).toContain(digest);
@@ -1413,11 +1466,13 @@ describe('integrity probe — each unsound shape names itself', () => {
       // object, so that is what catches a replacement carrying identical length
       // — even one whose own digest metadata was written to match.
       const big = 512 * 1024 * 1024;
+
       const refusal = layerIntegrityFailure({
         declared: { bytes: big, digest: undefined, objectVersion: 'upload-one' },
         stored: { bytes: big, digest: undefined, objectVersion: 'upload-two' },
         label: 'base',
       });
+
       expect(refusal).toContain('written by a different upload');
       expect(refusal).toContain('upload-one');
       expect(refusal).toContain('upload-two');
@@ -1533,11 +1588,14 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
   test('concurrent callers of the SAME kind JOIN one operation', async () => {
     const lane = createCheckpointLane();
     let calls = 0;
+
     const op = async (): Promise<CheckpointOutcome> => {
       calls += 1;
       await new Promise(resolve => setTimeout(resolve, 5));
+
       return Promise.resolve(ok());
     };
+
     const [a, b] = await Promise.all([lane.run('tick', op), lane.run('tick', op)]);
     expect(calls).toBe(1);
     expect(a).toBe(b); // the same run, not two interleaved ones
@@ -1546,8 +1604,10 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
   test('reports busy from admission until a checkpoint settles', async () => {
     const lane = createCheckpointLane();
     const parked = Promise.withResolvers<void>();
+
     const running = lane.run('tick', async () => {
       await parked.promise;
+
       return await ok();
     });
 
@@ -1561,17 +1621,22 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
   test('a different kind QUEUES behind the running one; nothing interleaves', async () => {
     const lane = createCheckpointLane();
     const events: string[] = [];
+
     const slowTick = async (): Promise<CheckpointOutcome> => {
       events.push('tick:start');
       await new Promise(resolve => setTimeout(resolve, 10));
       events.push('tick:end');
+
       return Promise.resolve(ok());
     };
+
     const quiesce = async (): Promise<CheckpointOutcome> => {
       events.push('quiesce:start');
       events.push('quiesce:end');
+
       return Promise.resolve(ok());
     };
+
     await Promise.all([lane.run('tick', slowTick), lane.run('quiesce', quiesce)]);
     // A quiesce that joined an in-flight tick could inherit a `skipped` answer
     // and stop the container over work that only just landed; it waits and
@@ -1583,8 +1648,10 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
 
   test('a rejected run rejects its joiners and leaves the gate usable', async () => {
     const lane = createCheckpointLane();
+
     const failing = (): Promise<CheckpointOutcome> =>
       Promise.reject(new Error('store unreachable'));
+
     const joiner = lane.run('tick', failing);
     await expect(lane.run('tick', failing)).rejects.toThrow('store unreachable');
     await expect(joiner).rejects.toThrow('store unreachable');
@@ -1596,10 +1663,12 @@ describe('the checkpoint lane — one checkpoint at a time', () => {
 
 function fakeIncidentStore() {
   const rows = new Map<string, IncidentRow>();
+
   const store: IncidentStore = {
     get: (key) => Promise.resolve(rows.get(key)),
     put: (key, value) => {
       rows.set(key, value);
+
       return Promise.resolve();
     },
     delete: (key) => Promise.resolve(rows.delete(key)),
@@ -1608,6 +1677,7 @@ function fakeIncidentStore() {
         .sort(([a], [b]) => (a < b ? -1 : 1))),
     ),
   };
+
   return { store, rows };
 }
 
@@ -1621,6 +1691,7 @@ function seedIncident(store: ReturnType<typeof fakeIncidentStore>, id: string): 
 describe('incident ledger retention — delivered rows are bounded, pending never dropped', () => {
   test('reaping keeps the newest settled rows within the cap and every pending row', async () => {
     const box = fakeIncidentStore();
+
     for (let at = 0; at < INCIDENT_LEDGER_MAX_ROWS + 50; at += 1) {
       seedIncident(box, `d${String(at).padStart(4, '0')}`);
       const row = box.rows.get(`devbox:incident:d${String(at).padStart(4, '0')}`)!;
@@ -1628,6 +1699,7 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
         ...row, deliveredAt: at,
       });
     }
+
     for (let p = 0; p < 5; p += 1) seedIncident(box, `pending${p}`);
 
     const deleted = await reapDeliveredIncidents(box.store);
@@ -1638,6 +1710,7 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
     expect(box.rows.has('devbox:incident:d0000')).toBe(false);
     expect(box.rows.has('devbox:incident:d0054')).toBe(false);
     expect(box.rows.has(`devbox:incident:d${String(55).padStart(4, '0')}`)).toBe(true);
+
     // ...and PENDING is never reaped, however far over the cap they push.
     for (let p = 0; p < 5; p += 1) {
       expect(box.rows.has(`devbox:incident:pending${p}`)).toBe(true);
@@ -1661,6 +1734,7 @@ describe('incident ledger retention — delivered rows are bounded, pending neve
 
 describe('ambient checkpoints belong to product boxes, never the bench fixture', () => {
   const devboxSource = readFileSync(join(import.meta.dir, '..', 'src', 'devbox.ts'), 'utf8');
+
   const workerSource = readFileSync(
     join(import.meta.dir, '..', 'bench', 'worker.ts'), 'utf8',
   );
@@ -1670,11 +1744,14 @@ describe('ambient checkpoints belong to product boxes, never the bench fixture',
       devboxSource.indexOf('async #armContainerSchedules('),
       devboxSource.indexOf('\n  }', devboxSource.indexOf('async #armContainerSchedules(')),
     );
+
     expect(schedules).toContain('if (this.ambientCheckpoints)');
+
     const scheduled = devboxSource.slice(
       devboxSource.indexOf('async devboxCheckpoint('),
       devboxSource.indexOf('\n  }', devboxSource.indexOf('async devboxCheckpoint(')),
     );
+
     expect(scheduled).toContain('if (!this.ambientCheckpoints) return;');
   });
 
@@ -1691,6 +1768,7 @@ describe('ambient checkpoints belong to product boxes, never the bench fixture',
     const direct = [...devboxSource.matchAll(/#requireStorage\(\)\.checkpoint\(/g)].length;
     expect(direct).toBe(1);
     expect(devboxSource).toContain('#lane.run(kind, async () => await this.#withStorageMutation(async () => {');
+
     for (const entry of ['async checkpointNow(', 'async quiesce(', 'async devboxCheckpoint(',
       'override async onActivityExpired(']) {
       const at = devboxSource.indexOf(entry);

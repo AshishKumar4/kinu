@@ -34,6 +34,7 @@ import { classify } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const PROXY_PLACEHOLDER = 'https://kinu-user-ai-proxy.invalid';
+
 const ChatCompletionRouteSchema = v.object({
   model: v.pipe(v.string(), v.trim(), v.minLength(1)),
 });
@@ -48,6 +49,7 @@ export async function handleUserAIProxyRequest(
 
   if (path === '/models' && request.method === 'GET') {
     const menu = await listAvailableModels(env, cli.userId, await ownerCaller(env));
+
     return json({
       object: 'list',
       data: menu.models
@@ -67,20 +69,25 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
   const body = await request.text();
   let bodyValue: JsonObject;
   let model: string;
+
   try {
     bodyValue = v.parse(JsonObjectSchema, JSON.parse(body));
     model = v.parse(ChatCompletionRouteSchema, bodyValue).model;
   } catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
+
     return errorResponse(400, 'Body must be JSON with a non-empty model.');
   }
+
   const workersAI = model.startsWith('@cf/');
+
   if (!workersAI && !model.includes('/')) {
     return errorResponse(400, `Cannot route model "${model}" — use "@cf/{model}" (Workers AI) or "{provider}/{model}" (your AI Gateway).`);
   }
 
   if (workersAI && env.DEV_USER_EMAIL) {
     if (!env.AI) return errorResponse(503, 'Workers AI binding unavailable.');
+
     return createDirectWorkersAIFetch(env.AI)(request.url, {
       method: request.method,
       headers: request.headers,
@@ -99,6 +106,7 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
     requestHeaders: affinityHeader(request),
     mapError: (res, resolved) => mapGatewayError(res, model, resolved.headers['cf-aig-gateway-id']),
   });
+
   return aiFetch(`${PROXY_PLACEHOLDER}/chat/completions`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -111,5 +119,6 @@ async function proxyChatCompletion(request: Request, env: Env, userDO: DurableOb
  *  land on the same replica — the parity of agentAffinityKey for DO agents. */
 function affinityHeader(request: Request): Record<string, string> | undefined {
   const affinity = request.headers.get('x-session-affinity');
+
   return affinity ? { 'x-session-affinity': affinity } : undefined;
 }

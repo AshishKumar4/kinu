@@ -23,6 +23,7 @@ import { sqlExec } from './helpers/user-do';
 
 function makeSql() {
   const db = new Database(':memory:');
+
   return { sql: sqlExec(db), db };
 }
 
@@ -37,8 +38,11 @@ const SentSchema = v.object({
   text: v.optional(v.string()),
   headers: v.optional(v.record(v.string(), v.string())),
 });
+
 type Sent = v.InferOutput<typeof SentSchema>;
+
 type SendEmailBuilder = Parameters<SendEmail['send']>[0];
+
 const OutboxTestRowSchema = v.object({
   state: v.picklist(['pending', 'sent', 'dlq']),
   message: v.string(),
@@ -57,9 +61,12 @@ function fakeBinding(onSend?: (m: Sent) => void) {
     const parsed = v.parse(SentSchema, message);
     onSend?.(parsed);
     sent.push(parsed);
+
     return { messageId: `ack-${sent.length}` };
   }
+
   const binding: SendEmail = { send };
+
   return { binding, sent };
 }
 
@@ -75,6 +82,7 @@ function message(overrides: Partial<OutboundEmailMessage> = {}): OutboundEmailMe
 
 function outbox() {
   const { sql } = makeSql();
+
   return { box: new EmailOutbox(sql), sql };
 }
 
@@ -85,11 +93,14 @@ function rowFor(sql: SqlExec, key: string) {
   const row = sql.exec(
     `SELECT state, message, attempt_count, next_attempt_at FROM outbox_email WHERE dedupe_key = ?`, key,
   ).toArray()[0];
+
   if (row === undefined) return undefined;
   const parsed = v.parse(OutboxTestRowSchema, row);
   const stored = v.parse(SentSchema, JSON.parse(parsed.message));
   const messageId = stored.headers?.['Message-ID'];
+
   if (messageId === undefined) throw new Error(`stored intent ${key} carries no Message-ID`);
+
   return { ...parsed, messageId };
 }
 
@@ -97,6 +108,7 @@ describe('EmailOutbox — write-ahead intent', () => {
   test('the intent is committed pending BEFORE the send lands', async () => {
     const { box, sql } = outbox();
     let stateAtSend: string | undefined;
+
     const { binding } = fakeBinding(() => {
       // Inside the send call the row must already exist and be pending.
       stateAtSend = rowFor(sql, 'k1')?.state;
@@ -107,6 +119,7 @@ describe('EmailOutbox — write-ahead intent', () => {
     expect(stateAtSend).toBe('pending');
     expect(result.status).toBe('sent');
     const row = rowFor(sql, 'k1');
+
     if (!row) throw new Error('expected persisted outbox row');
     expect(row.state).toBe('sent');
     expect(row.messageId).toMatch(/^<kinu\.[0-9a-f]{64}@agents\.example\.com>$/);
@@ -190,6 +203,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     expect(first.status).toBe('failed');
 
     const pending = rowFor(sql, 'recon');
+
     if (!pending) throw new Error('expected pending outbox row');
     expect(pending.state).toBe('pending');          // indeterminate, not lost
     expect(pending.attempt_count).toBe(1);
@@ -224,6 +238,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     await box.send(failing.binding, 'r', message(), 1_000);
 
     const next = box.nextRetryAt();
+
     if (next === null) throw new Error('expected a scheduled retry');
     expect(next).toBeGreaterThan(1_000);
   });
@@ -239,6 +254,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     await box.send(failing.binding, 'arm', message(), 1_000);
 
     const next = box.nextRetryAt();
+
     if (next === null) throw new Error('expected a scheduled retry');
     // Admission arms too: delivery is owed to the alarm even when the caller
     // never drains inline. The LAST arm is the backoff this failure earned.
@@ -251,6 +267,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     const box = new EmailOutbox(sql, async (at) => { armed.push(at); });
     const failing = fakeBinding(() => { throw new Error('permanent'); });
     await box.send(failing.binding, 'dead', message(), 0);
+
     for (let i = 1; i < 10; i++) await box.reconcile(failing.binding, i * 1_000_000_000);
 
     expect(box.nextRetryAt()).toBeNull();
@@ -264,11 +281,13 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     let attempts = 0;
     const failing = fakeBinding(() => { attempts++; throw new Error('permanent'); });
     await box.send(failing.binding, 'dead', message(), 0);
+
     // Advance `now` past each backoff so every reconcile actually re-drives,
     // exhausting the attempt budget.
     for (let i = 1; i < 10; i++) await box.reconcile(failing.binding, i * 1_000_000_000);
 
     const row = rowFor(sql, 'dead');
+
     if (!row) throw new Error('expected dead-lettered outbox row');
     expect(row.state).toBe('dlq');
     expect(row.attempt_count).toBe(8);
@@ -282,6 +301,7 @@ describe('EmailOutbox — reconciliation of an indeterminate', () => {
     const { box, sql } = outbox();
     const failing = fakeBinding(() => { throw new Error('permanent'); });
     await box.send(failing.binding, 'revive', message(), 0);
+
     for (let i = 1; i < 10; i++) await box.reconcile(failing.binding, i * 1_000_000_000);
     expect(rowFor(sql, 'revive')?.state).toBe('dlq');
 

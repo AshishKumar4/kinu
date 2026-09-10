@@ -52,8 +52,10 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const complete = rt.llm.complete.bind(rt.llm);
     rt.llm.complete = async (prompt: string) => {
       prompts.push(prompt);
+
       return complete(prompt);
     };
+
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
@@ -91,6 +93,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
         'Extract a reusable pattern': '{"name":"compute_value","description":"Execute code and return result","params":{"type":"object","properties":{"code":{"type":"string"}},"required":["code"]},"code":"async (args) => { return args.code; }"}',
       }),
     });
+
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
@@ -98,6 +101,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const turn = makeTurn({
       toolCalls: [{ name: 'execute_tools', args: { code: 'return 42' }, result: 42 }],
     });
+
     await engine.reviewTurn(turn, 'great, now do the same for the prod cluster');
 
     expect(turn.feedback).toBe('positive');
@@ -116,14 +120,18 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       toolCalls: [{ name: 'execute_tools', args: {}, result: 'x' }],
       craftedToolsUsed: ['my_crafted_tool'],
     });
+
     await engine.reviewTurn(turn, 'wrong again — that broke the deploy');
+
     const after = rt.storage.sql<{ score: number }>`
       SELECT score FROM crafted_tools WHERE name = 'my_crafted_tool'`[0];
+
     expect(after.score).toBeLessThan(0.5);
 
     const { rt: rt2 } = createTestRuntime({
       llmResponses: classifierResponses('accepted', { 'Extract a reusable pattern': 'not json' }),
     });
+
     void rt2.storage.sql`INSERT INTO crafted_tools (name, score, uses, last_used_at)
         VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
     const engine2 = new EvolutionEngine(rt2);
@@ -131,8 +139,10 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       toolCalls: [{ name: 'execute_tools', args: {}, result: 'x' }],
       craftedToolsUsed: ['my_crafted_tool'],
     }), 'thanks, that worked — next please deploy it');
+
     const after2 = rt2.storage.sql<{ score: number }>`
       SELECT score FROM crafted_tools WHERE name = 'my_crafted_tool'`[0];
+
     expect(after2.score).toBeGreaterThan(0.5);
   });
 
@@ -153,7 +163,12 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     let llmCalls = 0;
     const { rt } = createTestRuntime();
     const realComplete = rt.llm.complete.bind(rt.llm);
-    rt.llm.complete = async (prompt: string) => { llmCalls++; return realComplete(prompt); };
+    rt.llm.complete = async (prompt: string) => {
+      llmCalls++;
+
+      return realComplete(prompt);
+    };
+
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
     engine.onEvent(e => events.push(e));
@@ -194,6 +209,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       turnId: 'exec-1',
       toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
     });
+
     await engine.reviewTurn(turn, null);
 
     const [row] = listTurnOutcomes(rt.storage.sql, rt.actor);
@@ -216,6 +232,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       params: { type: 'object', properties: {}, required: [] },
       code: 'async (args) => ({ ok: true })',
     });
+
     const acted: Partial<CompletedTurn> = {
       toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
     };
@@ -233,6 +250,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const asked = createTestRuntime({
       llmResponses: classifierResponses('accepted', { 'Extract a reusable pattern': pattern }),
     });
+
     await new EvolutionEngine(asked.rt).reviewTurn(
       makeTurn({ turnId: 'graded-promote', ...acted }), 'perfect, thanks',
     );
@@ -302,7 +320,12 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('explicit thumbs beat the classifier (no LLM call) and ride the same ledger', async () => {
     let llmCalls = 0;
     const { rt } = createTestRuntime();
-    rt.llm.complete = async () => { llmCalls++; return 'unused'; };
+    rt.llm.complete = async () => {
+      llmCalls++;
+
+      return 'unused';
+    };
+
     // Copied VERBATIM from the cf-backend DDL that owns this table
     // (orchestrator.ts) — CHECK constraint and composite key included. The
     // copy is the point: a fixture whose spelling drifts from the production
@@ -353,12 +376,18 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     // Counted rather than thrown, so a read that reaches the WRONG row fails
     // on the verdict it produced — `expected "positive", received "negative"`
     // names the defect, where a throw would only name this fixture.
-    rt.llm.complete = async () => { llmCalls++; return 'unused'; };
+    rt.llm.complete = async () => {
+      llmCalls++;
+
+      return 'unused';
+    };
+
     // A REAL second actor of the same workspace, issued by the production
     // directory: a fabricated id could not collide the way two issued actors
     // genuinely do.
     const sibling = createTestActors(rt.storage.sql, rt.storage.execRaw, { name: rt.actor.name })
       .sibling('thumbs-sibling');
+
     rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS turn_feedback (
       actor_id   TEXT NOT NULL,
       message_id TEXT NOT NULL,
@@ -394,7 +423,12 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     let llmCalls = 0;
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    rt.llm.complete = async () => { llmCalls++; return 'unused'; };
+    rt.llm.complete = async () => {
+      llmCalls++;
+
+      return 'unused';
+    };
+
     // recordTakePick already wrote the turn's explicit preference row.
     void rt.storage.sql`INSERT INTO turn_outcomes
         (actor_id, id, turn_id, session_id, outcome, confidence, source, user_message, assistant_response, followup, created_at)
@@ -498,6 +532,7 @@ describe('EvolutionEngine — Session-level', () => {
     const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 100 });
 
     const turns = [makeTurn({ turnId: 's1' }), makeTurn({ turnId: 's2' }), makeTurn({ turnId: 's3' })];
+
     for (const t of turns) await engine.reviewTurn(t, 'perfect, moving on to the next piece of work');
 
     await engine.onSessionComplete(session(turns));
@@ -532,11 +567,13 @@ describe('EvolutionEngine — Session-level', () => {
     // Five windows, each closed by a DIFFERENT engine instance — one per
     // `kinu exec` process, or one per Durable Object lifetime.
     const events: EvolutionEvent[] = [];
+
     for (let i = 0; i < 5; i++) {
       const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 5, lifetimeMCTSBudget: 1, lifetimeMCTSBranches: 1 });
       engine.onEvent(e => events.push(e));
       await engine.onSessionComplete(window);
     }
+
     // The 5th window is the interval — an instance-local counter never got here.
     expect(events.filter(e => e.type === 'mcts_started')).toHaveLength(1);
   });
@@ -568,17 +605,21 @@ describe('the turn-reflection prompt', () => {
     const { rt } = createTestRuntime({
       llmResponses: { ...classifierResponses('corrected'), 'In one sentence': answer },
     });
+
     const prompts: string[] = [];
     const complete = rt.llm.complete.bind(rt.llm);
     rt.llm.complete = async (prompt: string) => {
       prompts.push(prompt);
+
       return complete(prompt);
     };
+
     const engine = new EvolutionEngine(rt);
     await engine.reviewTurn(
       makeTurn({ steps: 41, durationMs: 372_000 }),
       'No — that rotates production keys. I said STAGING.',
     );
+
     return {
       prompt: prompts.find((text) => text.includes('In one sentence')) ?? '',
       lesson: listLessons(rt.storage.sql, rt.actor, { status: 'corroborated' })[0]?.text ?? '',

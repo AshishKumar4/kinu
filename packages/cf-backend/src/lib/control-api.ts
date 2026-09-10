@@ -33,6 +33,7 @@ const ControlUserRowSchema = v.object({
   lastSeenAt: v.number(),
   workspaces: v.number(),
 });
+
 export type ControlUserRow = v.InferOutput<typeof ControlUserRowSchema>;
 
 const ControlWorkspaceRowSchema = v.object({
@@ -44,6 +45,7 @@ const ControlWorkspaceRowSchema = v.object({
   lastSeenAt: v.number(),
   removedAt: v.nullable(v.number()),
 });
+
 export type ControlWorkspaceRow = v.InferOutput<typeof ControlWorkspaceRowSchema>;
 
 const ControlFeedbackRowSchema = v.object({
@@ -59,6 +61,7 @@ const ControlFeedbackRowSchema = v.object({
   bytes: v.nullable(v.number()),
   userAgent: v.nullable(v.string()),
 });
+
 export type ControlFeedbackRow = v.InferOutput<typeof ControlFeedbackRowSchema>;
 
 const ControlAuditRowSchema = v.object({
@@ -74,6 +77,7 @@ const ControlAuditRowSchema = v.object({
   outcome: v.picklist(['pending', 'ok', 'denied', 'failed']),
   detail: v.string(),
 });
+
 export type ControlAuditRow = v.InferOutput<typeof ControlAuditRowSchema>;
 
 const ControlOverviewSchema = v.object({
@@ -86,6 +90,7 @@ const ControlOverviewSchema = v.object({
   activeUsers24h: v.number(),
   activeUsers7d: v.number(),
 });
+
 export type ControlOverview = v.InferOutput<typeof ControlOverviewSchema>;
 
 const MonitorIncidentSchema = v.object({
@@ -95,6 +100,7 @@ const MonitorIncidentSchema = v.object({
   alertedAt: v.nullable(v.number()),
   failures: v.number(),
 });
+
 export type MonitorIncident = v.InferOutput<typeof MonitorIncidentSchema>;
 
 const IncidentsSchema = v.object({ incidents: v.array(MonitorIncidentSchema) });
@@ -113,6 +119,7 @@ const PanelSchema = v.variant('status', [
   v.object({ status: v.literal('ok'), value: JsonValueSchema }),
   v.object({ status: v.literal('failed'), reason: v.string() }),
 ]);
+
 export type Panel = v.InferOutput<typeof PanelSchema>;
 
 const WorkspaceDetailSchema = v.object({
@@ -129,6 +136,7 @@ const WorkspaceDetailSchema = v.object({
   executors: PanelSchema,
   shellGrants: PanelSchema,
 });
+
 export type WorkspaceDetail = v.InferOutput<typeof WorkspaceDetailSchema>;
 
 /**
@@ -156,6 +164,7 @@ export const BackgroundJobRowSchema = v.object({
   resumeAttempts: v.optional(v.number()),
   resumeAfter: v.optional(v.nullable(v.number())),
 });
+
 export type BackgroundJobRow = v.InferOutput<typeof BackgroundJobRowSchema>;
 
 export const DeferredApprovalRowSchema = v.object({
@@ -167,6 +176,7 @@ export const DeferredApprovalRowSchema = v.object({
   requestedAt: v.number(),
   decidedAt: v.nullable(v.number()),
 });
+
 export type DeferredApprovalRow = v.InferOutput<typeof DeferredApprovalRowSchema>;
 
 /** Read a settled panel as typed rows, or answer `null` when it is down or in a
@@ -178,6 +188,7 @@ export function panelRows<Row>(
 ): Row[] | null {
   if (panel.status !== 'ok') return null;
   const parsed = v.safeParse(v.array(schema), panel.value);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -190,6 +201,7 @@ const ReconcileSchema = v.variant('status', [
   v.object({ status: v.literal('failed'), reason: v.string() }),
   v.object({ status: v.literal('skipped'), reason: v.string() }),
 ]);
+
 export type ReconcileReport = v.InferOutput<typeof ReconcileSchema>;
 
 const UserDetailSchema = v.object({
@@ -198,6 +210,7 @@ const UserDetailSchema = v.object({
   reconcile: ReconcileSchema,
   viewer: v.string(),
 });
+
 export type UserDetail = v.InferOutput<typeof UserDetailSchema>;
 
 const AnalyticsResultSchema = v.variant('status', [
@@ -213,13 +226,16 @@ const ControlMetricsSchema = v.object({
   missing: v.array(v.string()),
   panels: v.record(v.string(), AnalyticsResultSchema),
 });
+
 export type ControlMetrics = v.InferOutput<typeof ControlMetricsSchema>;
+
 export type AnalyticsPanel = v.InferOutput<typeof AnalyticsResultSchema>;
 
 const ActionAnswerSchema = v.object({
   outcome: v.picklist(['ok', 'denied', 'failed']),
   detail: v.string(),
 });
+
 export type ActionAnswer = v.InferOutput<typeof ActionAnswerSchema>;
 
 export type { ControlAction, JsonValue };
@@ -251,9 +267,12 @@ async function control<Schema extends v.GenericSchema>(
     ...init,
     headers: { 'content-type': 'application/json', ...init.headers },
   });
+
   const body = await tolerateAsync(() => response.json(), 'malformed-input');
+
   if (response.ok) {
     const parsed = v.safeParse(schema, body);
+
     return parsed.success
       ? { status: 'ok', value: parsed.output }
       // Named rather than thrown: a body this client cannot read is a version
@@ -261,21 +280,30 @@ async function control<Schema extends v.GenericSchema>(
       // an exception with a valibot path in it.
       : { status: 'failed', reason: 'the control plane answered in a shape this page cannot read' };
   }
+
   const error = v.safeParse(ErrorBodySchema, body);
+
   const reason = (error.success ? error.output.error : undefined)
     ?? `HTTP ${String(response.status)}`;
+
   if (response.status === 404) return { status: 'forbidden', reason };
+
   if (response.status === 403) return { status: 'stale-auth', reason };
+
   if (response.status === 503) return { status: 'unconfigured', reason };
+
   return { status: 'failed', reason };
 }
 
 /** Build a `?cursor=&limit=` query from a cursor the previous page returned. */
 function pageQuery(cursor: string | null, limit?: number): string {
   const params = new URLSearchParams();
+
   if (cursor !== null) params.set('cursor', cursor);
+
   if (limit !== undefined) params.set('limit', String(limit));
   const query = params.toString();
+
   return query.length > 0 ? `?${query}` : '';
 }
 
@@ -314,11 +342,16 @@ export function fetchWorkspaces(
   options: WorkspaceListQuery = {},
 ): Promise<ControlAnswer<Page<ControlWorkspaceRow>>> {
   const params = new URLSearchParams();
+
   if (options.cursor !== undefined && options.cursor !== null) params.set('cursor', options.cursor);
+
   if (options.limit !== undefined) params.set('limit', String(options.limit));
+
   if (options.userId !== undefined) params.set('userId', options.userId);
+
   if (options.includeRemoved === true) params.set('includeRemoved', '1');
   const query = params.toString();
+
   return control(
     pageSchema(ControlWorkspaceRowSchema),
     `/workspaces${query.length > 0 ? `?${query}` : ''}`,
@@ -361,8 +394,11 @@ export function fetchMetrics(
   refresh?: boolean,
 ): Promise<ControlAnswer<ControlMetrics>> {
   const params = new URLSearchParams({ hours: String(hours) });
+
   if (workspace !== undefined && workspace.length > 0) params.set('workspace', workspace);
+
   if (refresh === true) params.set('refresh', '1');
+
   return control(ControlMetricsSchema, `/metrics?${params.toString()}`);
 }
 

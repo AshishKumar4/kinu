@@ -18,15 +18,21 @@ import type {
 import { mockAgentsSdk } from "./helpers/agents-sdk";
 
 mockAgentsSdk();
+
 const { handleFilesRequest } = await import("../src/files-routes");
+
 const {
   ExecutorFileDownload, ExecutorFileUpload, FILE_CHUNK_BYTES, FILE_TRANSFER_MAX_BYTES,
 } = await import("@kinu.run/core");
 
 const URL_ = "https://kinu.test/api/workspaces/ws/files?executor=workspace&path=/home/user/blob.bin";
+
 const ErrorReplySchema = v.object({ error: v.string() });
+
 const OkReplySchema = v.object({ ok: v.literal(true) });
+
 const ConditionalOkReplySchema = v.object({ ok: v.literal(true), revision: v.number() });
+
 const ConflictReplySchema = v.object({ error: v.string(), revision: v.number() });
 
 /** What a route test drives: the fake actor plus the recorders its assertions
@@ -47,17 +53,22 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
   const revisions = new Map<string, number>();
   const reads = { count: 0 };
   const aborted: string[] = [];
+
   const uploads = new Map<string, {
     readonly path: string;
     readonly expectedRevision: number | undefined;
     readonly upload: ExecutorFileUploadInstance;
   }>();
+
   const downloads = new Map<string, ExecutorFileDownloadInstance>();
+
   const vfs: VFS = {
     readFile: async (path: string) => {
       reads.count += 1;
       const data = files.get(path);
+
       if (data === undefined) throw new Error(`ENOENT: ${path}`);
+
       return data;
     },
     writeFile: async (path: string, data: Uint8Array | string) => {
@@ -67,54 +78,68 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
     readdir: async (): Promise<string[]> => [],
     stat: async (path: string) => {
       const data = files.get(path);
+
       return data ? { size: data.byteLength, mtimeMs: 0, isDir: false } : null;
     },
     unlink: async (path: string) => { files.delete(path); },
     mkdir: async () => undefined,
     exists: async (path: string) => files.has(path),
   };
+
   if (supportsConditionalWrites) {
     vfs.writeFileIfRevision = async (path, data, expectedRevision) => {
       const revision = revisions.get(path) ?? 0;
+
       if (expectedRevision !== revision) return { ok: false, revision };
       files.set(path, data);
       const nextRevision = revision + 1;
       revisions.set(path, nextRevision);
+
       return { ok: true, revision: nextRevision };
     };
   }
+
   const router = {
     getProvider: (id: string) =>
       id === "workspace" ? { files: vfs, homeDir: async () => "/home/user" } : undefined,
   };
+
   return {
     agent: {
       startExecutorFileDownload: async (executorId, path, transferId) => {
         const download = new ExecutorFileDownload(router, executorId, path);
         downloads.set(transferId, download);
         const opened = await download.open();
+
         if ('error' in opened) downloads.delete(transferId);
+
         return opened;
       },
       readExecutorFileChunk: async (executorId, path, transferId, offset, length) => {
         const download = downloads.get(transferId);
+
         if (!download || !download.serves(executorId, path)) {
           return { error: 'file transfer out of sync: no matching open download' };
         }
+
         const result = await download.range(offset, length);
+
         if ('error' in result || download.completeAfter(offset + result.bytes.byteLength)) {
           downloads.delete(transferId);
         }
+
         return result;
       },
       abortExecutorFileDownload: (transferId) => {
         downloads.delete(transferId);
+
         return Promise.resolve();
       },
       writeExecutorFileChunk: async (
         executorId, path, transferId, offset, chunk, final, expectedRevision,
       ) => {
         let row = uploads.get(transferId);
+
         if (!row || offset === 0) {
           row = {
             path,
@@ -125,15 +150,20 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
         } else if (row.expectedRevision !== expectedRevision) {
           return { error: 'file transfer out of sync: expected revision does not match the first chunk' };
         }
+
         const result = await row.upload.chunk(offset, chunk, final);
+
         if (row.upload.done) uploads.delete(transferId);
+
         return result;
       },
       abortExecutorFileWrite: (transferId) => {
         const row = uploads.get(transferId);
         row?.upload.abort();
         uploads.delete(transferId);
+
         if (row) aborted.push(row.path);
+
         return Promise.resolve();
       },
     },
@@ -149,35 +179,45 @@ function makeAgent({ supportsConditionalWrites = true }: { supportsConditionalWr
 /** The route with the agent seam injected — no namespace, no DO. */
 async function route(request: Request, harness: Harness): Promise<Response> {
   const response = await handleFilesRequest(request, null, "ws", async () => harness.agent);
+
   if (response === null) throw new Error("route did not claim the request");
+
   return response;
 }
 
 function patternBytes(length: number): Uint8Array {
   const out = new Uint8Array(length);
+
   for (let at = 0; at < length; at++) out[at] = at % 251;
+
   return out;
 }
 
 function put(body: BodyInit | Uint8Array, headers: Record<string, string> = {}): Request {
   const payload = body instanceof Uint8Array ? new Blob([Uint8Array.from(body)]) : body;
+
   return new Request(URL_, { method: "PUT", body: payload, headers });
 }
 
 async function collect(response: Response): Promise<Uint8Array> {
   const reader = response.body!.getReader();
   const chunks: Uint8Array[] = [];
+
   for (;;) {
     const { done, value } = await reader.read();
+
     if (done) break;
     chunks.push(value);
   }
+
   const out = new Uint8Array(chunks.reduce((n, c) => n + c.byteLength, 0));
   let at = 0;
+
   for (const chunk of chunks) {
     out.set(chunk, at);
     at += chunk.byteLength;
   }
+
   return out;
 }
 
@@ -217,12 +257,14 @@ describe("files route — PUT", () => {
   test("a declared length over the limit is a 413 refused before the body is pulled", async () => {
     const harness = makeAgent();
     let pulls = 0;
+
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
         pulls += 1;
         controller.enqueue(new Uint8Array(16));
       },
     }, { highWaterMark: 0 });
+
     const request = put(body, { "content-length": String(FILE_TRANSFER_MAX_BYTES + 1024) });
     // A zero watermark makes every pull a real consumer read. The assertions
     // below are that the refusal is the route's own 413 and that it consumed
@@ -244,9 +286,15 @@ describe("files route — PUT", () => {
     const available = Math.ceil((2 * FILE_TRANSFER_MAX_BYTES) / CHUNK);
     let pulls = 0;
     let cancelled: string | undefined;
+
     const body = new ReadableStream<Uint8Array>({
       pull(controller) {
-        if (pulls >= available) { controller.close(); return; }
+        if (pulls >= available) {
+          controller.close();
+
+          return;
+        }
+
         pulls += 1;
         controller.enqueue(patternBytes(CHUNK));
       },

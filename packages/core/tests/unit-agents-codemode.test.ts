@@ -58,6 +58,7 @@ import { NAMED_SWARM_PRESETS, SWARM_PRESETS } from '../src/strategy/swarm';
 interface Call { action: string; input: JsonValue }
 
 const ErrorResultSchema = v.object({ error: v.string() });
+
 const AgentsInputSchemaContract = v.object({
   jsonSchema: v.object({
     properties: v.object({
@@ -65,11 +66,13 @@ const AgentsInputSchemaContract = v.object({
     }),
   }),
 });
+
 const ToolSchemaContract = v.object({
   jsonSchema: v.object({
     properties: v.record(v.string(), v.unknown()),
   }),
 });
+
 const ActionVariantSchemaContract = v.object({
   jsonSchema: v.object({
     oneOf: v.array(v.object({
@@ -81,6 +84,7 @@ const ActionVariantSchemaContract = v.object({
     })),
   }),
 });
+
 const SpawnCallInputSchema = v.object({
   role: v.string(),
   tier: v.optional(v.string()),
@@ -90,12 +94,15 @@ const SpawnCallInputSchema = v.object({
 function namespaceOf(deps: () => TestAgentsToolDeps) {
   const provider = createAgentsCodemodeProvider(() => withBuildMode(deps()));
   expect(provider.name).toBe('agents');
+
   return provider.tools;
 }
 
 function member(tools: CodemodeProvider['tools'], name: string) {
   const descriptor = tools[name];
+
   if (!descriptor) throw new Error(`missing agents.${name}`);
+
   return descriptor;
 }
 
@@ -120,6 +127,7 @@ function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
 function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   const { rt, testSql } = createTestRuntime();
   const model = new MockLanguageModelV3();
+
   return {
     rt, model, resolveModel: () => model,
     // One hosted actor per node id, all over the one workspace database.
@@ -138,6 +146,7 @@ const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHando
 
 function makeTeam() {
   const calls: Call[] = [];
+
   return {
     calls,
     deps: {
@@ -163,6 +172,7 @@ function makeTeam() {
       }),
       rename: async (input) => {
         recordCall(calls, 'rename', input);
+
         return {
           ok: true, name: input.name, displayName: input.displayName,
           subordinate: { ...rosterEntry, name: input.name, displayName: input.displayName },
@@ -170,18 +180,33 @@ function makeTeam() {
       },
       recordTitle: async (input) => {
         recordCall(calls, 'recordTitle', input);
+
         return { ok: true, name: input.name, displayName: input.displayName, applied: true };
       },
       spawn: async (input) => {
         recordCall(calls, 'spawn', input);
+
         return { name: input.name ?? 'researcher', displayName: 'Researcher' };
       },
-      assign: async (input) => { recordCall(calls, 'assign', input); return { ok: true, name: input.name, ...handoff('queued', true) }; },
+      assign: async (input) => {
+        recordCall(calls, 'assign', input);
+
+        return { ok: true, name: input.name, ...handoff('queued', true) };
+      },
       knows: async () => true,
-      status: async (input) => { recordCall(calls, 'status', input); return { roster: [rosterEntry] }; },
-      message: async (input) => { recordCall(calls, 'message', input); return { ok: true, name: input.name, ...handoff('starts_now', false) }; },
+      status: async (input) => {
+        recordCall(calls, 'status', input);
+
+        return { roster: [rosterEntry] };
+      },
+      message: async (input) => {
+        recordCall(calls, 'message', input);
+
+        return { ok: true, name: input.name, ...handoff('starts_now', false) };
+      },
       dismiss: async (input) => {
         recordCall(calls, 'dismiss', input);
+
         return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
       },
     } satisfies TeamToolDeps,
@@ -190,18 +215,29 @@ function makeTeam() {
 
 function makePeers() {
   const calls: Call[] = [];
+
   return {
     calls,
     deps: {
       listPeers: async () => [{ name: 'scout', displayName: 'Scout' }],
       ask: async (input) => {
         recordCall(calls, 'ask', input);
+
         return { status: 'replied', from: input.agent, reply: 'answer' };
       },
-      send: async (input) => { recordCall(calls, 'send', input); return { status: 'delivered', message_id: 'ox1' }; },
-      reply: async (input) => { recordCall(calls, 'reply', input); return { ok: true }; },
+      send: async (input) => {
+        recordCall(calls, 'send', input);
+
+        return { status: 'delivered', message_id: 'ox1' };
+      },
+      reply: async (input) => {
+        recordCall(calls, 'reply', input);
+
+        return { ok: true };
+      },
       spawnWorkspace: async (input) => {
         recordCall(calls, 'spawn_workspace', input);
+
         return { agent: input.name ?? 'specialist', created: true, status: 'replied', from: 'specialist', reply: 'done' };
       },
     } satisfies PeersToolDeps,
@@ -217,6 +253,7 @@ function actionEnumOf(deps: TestAgentsToolDeps): string[] {
     AgentsInputSchemaContract,
     createAgentsTool(withBuildMode(deps)).inputSchema,
   );
+
   return schema.jsonSchema.properties.action.enum;
 }
 
@@ -296,9 +333,11 @@ describe('agents.* codemode namespace — dispatch', () => {
     // refused as the unknown field it now is, naming what swarm does take.
     const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
     expect(await member(ns, 'swarm').execute({ task: 't' })).toMatchObject({ reason: 'bad_input' });
+
     const stale = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute({
       task: 't', settle: 'mcts', preset: 'ideate',
     }));
+
     expect(stale.error).toContain('unknown field "settle"');
     expect(stale.error).toContain(
       'action "swarm" takes: task, preset, objective, key, config, from, label, name, branches, '
@@ -311,6 +350,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     // legal call is answered by the engine and an illegal composition by the
     // axis refusal — never by a second parse living in the sandbox bridge.
     const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
+
     const refused = v.parse(v.object({ reason: v.string(), error: v.string() }), await member(ns, 'swarm').execute({
       task: 'ship it',
       preset: 'ideate',
@@ -319,6 +359,7 @@ describe('agents.* codemode namespace — dispatch', () => {
         target: 1, verify: { kind: 'exec-ratio', spec: {} },
       },
     }));
+
     expect(refused.reason).toBe('bad_input');
     // The nested objective arrived whole — the refusal is the AXIS one about a
     // flat preset carrying a value signal, not a parse complaint about a field
@@ -359,9 +400,11 @@ describe('agents.* codemode namespace — dispatch', () => {
 
   test('deps are read per call, so a re-bound model/session lands without a rebuild', async () => {
     let generation = 0;
+
     const ns = namespaceOf(() => {
       generation += 1;
       const { rt, testSql } = createTestRuntime();
+
       return {
         swarm: {
           rt, model: new MockLanguageModelV3(),
@@ -369,6 +412,7 @@ describe('agents.* codemode namespace — dispatch', () => {
         },
       };
     });
+
     // Each call rebuilds the deps, which is what the generation counter proves:
     // two calls, two reads, and the second sees the later binding.
     await member(ns, 'swarm').execute({ task: 'a' });
@@ -379,10 +423,13 @@ describe('agents.* codemode namespace — dispatch', () => {
   test('deps failures come back as inspectable values, never thrown into the script', async () => {
     const team = makeTeam();
     team.deps.spawn = async () => { throw new Error('kaboom'); };
+
     const ns = namespaceOf(() => ({ team: team.deps, profile: profileDeps().profile }));
+
     const result = v.parse(ErrorResultSchema, await member(ns, 'hire').execute({
       role: 'researcher', mission: 'map the landscape',
     }));
+
     expect(result.error).toMatch(/kaboom/);
   });
 });
@@ -413,9 +460,11 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     const team = makeTeam();
     const peers = makePeers();
     const ns = namespaceOf(() => ({ team: team.deps, peers: peers.deps }));
+
     const result = v.parse(ErrorResultSchema, await member(ns, 'hire').execute({
       agent: 'researcher', message: 'go', timeout_seconds: 30,
     }));
+
     expect(result.error).toContain('agents.hire: unknown field "timeout_seconds"');
     expect(team.calls).toEqual([]);
   });
@@ -452,9 +501,11 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     // `abortSignal` off that bag and hands it to the run.
     const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
     const controller = new AbortController();
+
     const result = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute(
       { task: 't' }, { signal: controller.signal },
     ));
+
     expect(result.error).toContain('swarm needs `preset`');
     expect(result.error).not.toContain('unknown field "signal"');
   });
@@ -483,6 +534,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
 
   test('native and codemode reject the same capability-inapplicable fields', async () => {
     const deps = withBuildMode(fullDeps());
+
     const nativeInput = parseAgentsToolInput({
       action: 'hire',
       scope: 'workspace',
@@ -490,14 +542,17 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
       message: 'begin',
       role: 'researcher',
     });
+
     const native = dispatchAgentsAction(deps, nativeInput);
     await expect(native).rejects.toMatchObject({ code: 'bad_input', message: 'field "role" is not available for action "hire" on this actor' });
+
     const codemode = await member(namespaceOf(fullDeps), 'hire').execute({
       scope: 'workspace',
       mission: 'own the specialist workspace',
       message: 'begin',
       role: 'researcher',
     });
+
     expect(codemode).toEqual({ reason: 'bad_input', error: 'field "role" is not available for action "hire" on this actor' });
   });
 });
@@ -512,6 +567,7 @@ describe('agents.* codemode namespace — declared types', () => {
     expect(searchOnly).not.toContain('dismiss(input: {');
 
     const full = createAgentsCodemodeProvider(fullDeps).types ?? '';
+
     for (const action of AGENTS_TOOL_ACTIONS) expect(full).toContain(`${action}(input`);
   });
 
@@ -545,9 +601,11 @@ describe('agents.* codemode namespace — declared types', () => {
     // capability unreachable rather than merely undescribed. Derived now, so the
     // sandbox contract cannot come to offer a different set than the schema.
     const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
+
     for (const preset of SWARM_PRESETS) expect(types).toContain(`"${preset}"`);
     expect(types).toContain(`preset?: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
     expect(types).toContain(`from?: ${NAMED_SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
+
     for (const line of SWARM_PRESET_DOCTRINE) expect(types).toContain(line);
   });
 
@@ -556,6 +614,7 @@ describe('agents.* codemode namespace — declared types', () => {
     // sandboxes show the model must not differ by a byte, because it is one
     // literal per action rather than text derived from whatever is wired.
     const a = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types;
+
     const b = createAgentsCodemodeProvider(() => withBuildMode({
       swarm: {
         rt: createTestRuntime().rt, model: new MockLanguageModelV3(),
@@ -564,6 +623,7 @@ describe('agents.* codemode namespace — declared types', () => {
         hostNode: refuseHostNode('this case renders declarations and runs no node'),
       },
     })).types;
+
     expect(a).toBe(b);
   });
 
@@ -577,12 +637,14 @@ describe('agents.* codemode namespace — declared types', () => {
     const hireType = (types: string): string => {
       const start = types.indexOf('hire(input:');
       const end = types.indexOf('msg(input:', start);
+
       return types.slice(start, end);
     };
 
     const teamOnly = hireType(createAgentsCodemodeProvider(
       () => withBuildMode({ team: makeTeam().deps }),
     ).types ?? '');
+
     expect(teamOnly).toContain('role: string;');
     expect(teamOnly).toContain('mission: string;');
     expect(teamOnly).not.toContain('scope');
@@ -593,6 +655,7 @@ describe('agents.* codemode namespace — declared types', () => {
     const peersOnly = hireType(createAgentsCodemodeProvider(
       () => withBuildMode({ peers: makePeers().deps }),
     ).types ?? '');
+
     expect(peersOnly).not.toContain('role');
     expect(peersOnly).not.toContain('tier');
     expect(peersOnly).not.toContain('lifetime');
@@ -613,13 +676,16 @@ describe('agents.* codemode namespace — declared types', () => {
 describe('agents surface — one action-field source', () => {
   test('every codemode member declares EXACTLY its action’s fields, in order', () => {
     const types = createAgentsCodemodeProvider(fullDeps).types ?? '';
+
     for (const action of AGENTS_TOOL_ACTIONS) {
       const body = types.slice(types.indexOf(`${action}(input:`));
       const open = body.indexOf('{');
       const close = body.indexOf('})', open);
+
       const memberFields = [...new Set(
         [...body.slice(open, close).matchAll(/^\s{4}(\w+)/gm)].map((m) => m[1]),
       )];
+
       expect(memberFields).toEqual([...agentsActionFieldsFor(fullDeps(), action)]);
     }
   });
@@ -661,15 +727,19 @@ describe('agents surface — one action-field source', () => {
     ).jsonSchema.properties));
 
     const teamOnly = advertised({ team: makeTeam().deps });
+
     for (const field of ['scope', 'topic', 'event_id']) expect(teamOnly.has(field)).toBe(false);
+
     for (const field of ['role', 'tier', 'deliverable', 'lifetime', 'keep_history']) {
       expect(teamOnly.has(field)).toBe(true);
     }
 
     const peersOnly = advertised({ peers: makePeers().deps });
+
     for (const field of ['role', 'tier', 'deliverable', 'lifetime', 'keep_history']) {
       expect(peersOnly.has(field)).toBe(false);
     }
+
     for (const field of ['scope', 'topic', 'event_id']) expect(peersOnly.has(field)).toBe(true);
   });
 
@@ -681,32 +751,39 @@ describe('agents surface — one action-field source', () => {
       { team: makeTeam().deps, peers: makePeers().deps },
       fullDeps(),
     ];
+
     for (const deps of combinations) {
       const resolved = withBuildMode(deps);
       const actions = agentsActionsFor(resolved);
       const types = createAgentsCodemodeProvider(() => resolved).types ?? '';
       const native = v.parse(ActionVariantSchemaContract, createAgentsTool(resolved).inputSchema);
+
       const advertised = new Set(Object.keys(v.parse(
         ToolSchemaContract,
         createAgentsTool(resolved).inputSchema,
       ).jsonSchema.properties));
+
       const expectedAdvertised = new Set([
         'action',
         ...actions.flatMap(action => [...agentsActionFieldsFor(resolved, action)]),
       ]);
+
       expect(advertised).toEqual(expectedAdvertised);
 
       for (const [at, action] of actions.entries()) {
         const start = types.indexOf(`${action}(input:`);
         const next = actions[at + 1];
         const end = next === undefined ? types.indexOf('};', start) : types.indexOf(`${next}(input:`, start);
+
         const memberFields = new Set(
           [...types.slice(start, end).matchAll(/^\s{4}(\w+)/gm)].map(match => match[1]),
         );
+
         expect(memberFields).toEqual(new Set(agentsActionFieldsFor(resolved, action)));
 
         const actualVariants = native.jsonSchema.oneOf
           .filter(variant => variant.properties.action.const === action);
+
         const expectedVariants = agentsActionInputVariantsFor(resolved, action);
         expect(actualVariants.map(variant =>
           variant.properties.scope === false ? false : variant.properties.scope.const))
@@ -734,10 +811,13 @@ describe('agents surface — one action-field source', () => {
       ToolSchemaContract,
       createAgentsTool(withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps })).inputSchema,
     );
+
     const advertised = new Set(Object.keys(schema.jsonSchema.properties).filter((k) => k !== 'action'));
+
     for (const action of AGENTS_TOOL_ACTIONS) {
       for (const field of ACTION_FIELDS[action]) expect(advertised.has(field)).toBe(true);
     }
+
     // Direct model routing left the surface; tier replaced it.
     expect(advertised.has('model')).toBe(false);
     expect(advertised.has('tier')).toBe(true);
@@ -754,6 +834,7 @@ describe('agents surface — one action-field source', () => {
 // ── role / tier / preset precedence through the one resolver ─────────────────
 
 const TEST_MODEL = DEFAULT_WORKERS_AI_MODEL_SPEC;
+
 const TIERED_CATALOG = {
   roles: BUILTIN_PROFILE_CATALOG.roles,
   tiers: {
@@ -804,10 +885,12 @@ describe('agents delegation — role/tier/preset precedence', () => {
     const team = makeTeam();
     const tools = namespaceOf(() => profileDeps({ team: team.deps }));
     await member(tools, 'hire').execute?.({ role: 'planner', mission: 'plan', tier: 'deep' });
+
     const input = v.parse(
       SpawnCallInputSchema,
       team.calls.find((call) => call.action === 'spawn')!.input,
     );
+
     expect(input.tier).toBe('deep');
 
     const restrictedCatalog = {
@@ -823,12 +906,14 @@ describe('agents delegation — role/tier/preset precedence', () => {
       },
       tiers: BUILTIN_PROFILE_CATALOG.tiers,
     } satisfies ProfileCatalog;
+
     const envelope = {
       ...builtinEnvelope(),
       version: 1,
       catalog: restrictedCatalog,
       digest: profileCatalogDigest(restrictedCatalog),
     } satisfies ProfileCatalogEnvelope;
+
     const restricted = profileDeps({
       team: makeTeam().deps,
       profile: () => ({
@@ -838,6 +923,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
         availableTools: [],
       }),
     });
+
     const tools2 = namespaceOf(() => restricted);
     const refused = await member(tools2, 'hire').execute?.({ role: 'auditor', mission: 'x' });
     expect(refused).toMatchObject({ reason: 'bad_input' });
@@ -854,10 +940,13 @@ describe('agents delegation — role/tier/preset precedence', () => {
     // researcher is not the caller (general), so this resolves general→ideate.
     expect(noPreset).not.toMatchObject({ reason: 'bad_input', error: expect.stringContaining('preset') });
     const swarm = deps.swarm;
+
     if (!swarm) throw new Error('profile test needs the swarm substrate');
+
     const row = swarm.rt.storage.sql<{ config_json: string }>`
       SELECT config_json FROM mcts_search_runs ORDER BY created_at DESC LIMIT 1
     `[0];
+
     if (!row) throw new Error('swarm did not persist its resolved config');
     const config = v.parse(v.object({ profile: v.unknown() }), JSON.parse(row.config_json));
     expect(validateSwarmProfileSnapshot(config.profile).sources.presetSource).toBe('role_default');
@@ -879,6 +968,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
   test('role summaries project into the native schema from the same catalog', () => {
     const rendered = (deps: TestAgentsToolDeps): string =>
       JSON.stringify(createAgentsTool(withBuildMode(deps)).inputSchema);
+
     const withCatalog = rendered(profileDeps());
     expect(withCatalog).toContain('researcher');
     expect(withCatalog).toContain('preset research');
@@ -899,12 +989,14 @@ describe('swarm profile snapshot codec', () => {
       availableTools: ['file', 'web'],
       activeSkills: [],
     });
+
     // The ledger stores the one complete immutable profile. Re-drive never
     // re-resolves work mode, role, tiers, skills, or actions.
     const snapshot = {
       profile: resolved,
       sources: { roleSource: 'caller', tierSource: 'role', presetSource: 'role_default' },
     };
+
     const frozen = JSON.parse(JSON.stringify(snapshot));
     const readBack = validateSwarmProfileSnapshot(frozen);
     expect(readBack.profile.role.id).toBe('researcher');

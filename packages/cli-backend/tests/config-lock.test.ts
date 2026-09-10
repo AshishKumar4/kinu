@@ -28,6 +28,7 @@ import {
 describe('the config lock is held by a process, not by a path', () => {
   function scratchConfig() {
     const configPath = join(scratchDir('config-lock'), 'config.json');
+
     return { configPath, lockPath: `${configPath}.lock` };
   }
 
@@ -51,7 +52,9 @@ describe('the config lock is held by a process, not by a path', () => {
 
   function selfStartTicks(): string {
     const ticks = procStartTicks(readFileSync(`/proc/${String(process.pid)}/stat`, 'utf8'));
+
     if (ticks === null) throw new Error('this process has no readable start time');
+
     return ticks;
   }
 
@@ -88,6 +91,7 @@ describe('the config lock is held by a process, not by a path', () => {
       await hold.promise;
       order.push('first leaves');
     });
+
     await entry.promise;
 
     // The contender's first attempt runs synchronously inside this call, so the
@@ -97,6 +101,7 @@ describe('the config lock is held by a process, not by a path', () => {
       order.push('second enters');
       await Promise.resolve();
     });
+
     expect(order).toEqual(['first enters']);
 
     hold.resolve();
@@ -156,10 +161,12 @@ describe('the config lock is held by a process, not by a path', () => {
     forgeLock(lockPath, process.pid, selfStartTicks());
 
     let ran = false;
+
     const blocked = withConfigLockAsync(configPath, async () => {
       await Promise.resolve();
       ran = true;
     });
+
     // The first attempt has already happened, synchronously, and refused.
     expect(decodeLockOwner(readlinkSync(lockPath))).toMatchObject({
       platform: 'linux',
@@ -189,11 +196,13 @@ describe('the config lock is held by a process, not by a path', () => {
     const { configPath } = scratchConfig();
     const order: string[] = [];
     const gate = Promise.withResolvers<void>();
+
     const first = withConfigLockAsync(configPath, async () => {
       order.push('first in');
       await gate.promise;
       order.push('first out');
     });
+
     await Promise.resolve();
     // Started outside the holder's async context: same pid, different call, so
     // the holder WILL release and this one has to wait rather than refuse. Its
@@ -213,10 +222,12 @@ describe('the config lock is held by a process, not by a path', () => {
     writeFileSync(lockPath, 'not a record\n');
 
     let ran = false;
+
     const blocked = withConfigLockAsync(configPath, async () => {
       await Promise.resolve();
       ran = true;
     });
+
     expect(ran).toBe(false);
     expect(lockHeld(lockPath)).toBe(true);
 
@@ -232,10 +243,12 @@ describe('the config lock is held by a process, not by a path', () => {
     symlinkSync('token-only', lockPath);
 
     let ran = false;
+
     const blocked = withConfigLockAsync(configPath, async () => {
       await Promise.resolve();
       ran = true;
     });
+
     expect(ran).toBe(false);
     expect(readlinkSync(lockPath)).toBe('token-only');
 
@@ -263,6 +276,7 @@ describe('the config lock is held by a process, not by a path', () => {
   test('Darwin identity distinguishes live, missing, reused and unreadable processes', () => {
     const initial = darwinStartIdentity('Mon Aug 27 12:34:56 2026');
     const reused = darwinStartIdentity('Tue Aug 28 12:34:56 2026');
+
     if (initial === null || reused === null) throw new Error('fixture lost Darwin lstart identities');
 
     const owner: LockOwner = {
@@ -272,10 +286,14 @@ describe('the config lock is held by a process, not by a path', () => {
       pid: 42,
       identity: initial,
     };
+
     const boundary = createProcessIdentityBoundary('darwin', (pid) => {
       if (pid === process.pid || pid === 42) return { state: 'read', identity: initial };
+
       if (pid === 43) return { state: 'absent' };
+
       if (pid === 44) return { state: 'read', identity: reused };
+
       return { state: 'unreadable' };
     });
 
@@ -284,6 +302,7 @@ describe('the config lock is held by a process, not by a path', () => {
     const { configPath, lockPath } = scratchConfig();
     expect(createConfigLock(boundary).withSync(configPath, () => {
       writeFileSync(configPath, 'darwin config write\n');
+
       return readFileSync(configPath, 'utf8');
     })).toBe('darwin config write\n');
     expect(lockHeld(lockPath)).toBe(false);
@@ -296,7 +315,9 @@ describe('the config lock is held by a process, not by a path', () => {
 
   test('versioned platform records round-trip without cross-platform confusion', () => {
     const identity = darwinStartIdentity('Mon Aug 27 12:34:56 2026');
+
     if (identity === null) throw new Error('fixture lost Darwin lstart identity');
+
     const owner: LockOwner = {
       version: 'v1',
       platform: 'darwin',
@@ -304,6 +325,7 @@ describe('the config lock is held by a process, not by a path', () => {
       pid: 42,
       identity,
     };
+
     expect(decodeLockOwner(encodeLockOwner(owner))).toEqual(owner);
     const linuxRecord = decodeLockOwner('v1 linux 00000000-0000-4000-8000-000000000003 42 darwin-start');
     expect(linuxRecord).toEqual({
@@ -311,6 +333,7 @@ describe('the config lock is held by a process, not by a path', () => {
       platform: 'linux',
       identity: 'darwin-start',
     });
+
     if (linuxRecord === null) throw new Error('fixture lost Linux versioned record');
     expect(createProcessIdentityBoundary('darwin', () => ({ state: 'read', identity })).liveness(linuxRecord)).toBe('unknown');
     // Old records and records with an unexpected version, platform, extra field

@@ -516,6 +516,7 @@ export function agentsProfileContext(
   authority: ProfileAuthorityInputs | null,
 ): AgentsProfileContext | null {
   if (!profile || !authority) return null;
+
   return {
     ...authority,
     roleId: profile.role.id,
@@ -580,6 +581,7 @@ interface UnifiedRosterResult {
  *  Presence-typed so prompt assembly can ask without building the substrate. */
 export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: object }): AgentsToolAction[] {
   const converse = !!deps.team || !!deps.peers;
+
   const present = {
     // Structural rather than a choice: a search needs a model to expand with and a
     // workspace to measure in, which is exactly what AgentsSwarmDeps carries. It is
@@ -592,6 +594,7 @@ export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: 
     list: converse,
     dismiss: !!deps.team,
   } satisfies Record<AgentsToolAction, boolean>;
+
   return AGENTS_TOOL_ACTIONS.filter((action) => present[action]);
 }
 
@@ -600,6 +603,7 @@ export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: 
  *  registry description verbatim and a gated one drops whole rungs. */
 export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
   const spec = BUILTIN_TOOL_SPECS.agents;
+
   const use = [
     DELEGATION_FRAME,
     ...(deps.swarm ? [DELEGATION_RUNGS.swarm] : []),
@@ -611,9 +615,11 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
         ? ['msg says something to a subordinate by name without handing it a workstream; list shows the roster.']
         : []),
   ].join(' ');
+
   const returns = AGENTS_RESULT_PARTS.roster
     + (deps.team?.temporary ? AGENTS_RESULT_PARTS.taskHire : '')
     + AGENTS_RESULT_PARTS.rest;
+
   return [
     spec.summary,
     `Use when: ${use}`,
@@ -857,14 +863,17 @@ export const AGENTS_ACTION_REQUIRED_FIELDS = {
   list: [],
   dismiss: ['agent'],
 } as const satisfies Record<AgentsToolAction, readonly AgentsToolInputField[]>;
+
 /** Creating a helper. `lifetime` joins only where the port that runs a
  *  `task` one is wired, and `scope` only beside `peers`. */
 const HIRE_CREATE_FIELDS = [
   'role', 'mission', 'agent', 'tier',
 ] as const satisfies readonly AgentsToolInputField[];
+
 const HIRE_WORKSPACE_FIELDS = [
   'agent', 'mission', 'scope', 'message',
 ] as const satisfies readonly AgentsToolInputField[];
+
 /** Handing the workstream to an agent that already exists — the target `ask`
  *  used to be a separate action for. No `lifetime` and no `tier`: an agent that
  *  exists already has both, and offering them here would be two knobs that
@@ -900,7 +909,9 @@ export function agentsActionInputVariantsFor(
   action: AgentsToolAction,
 ): readonly AgentsActionInputVariant[] {
   if (action === 'hire') return hireInputVariants(deps);
+
   if (action === 'msg') return msgInputVariants(deps);
+
   return [{
     fields: agentsActionFieldsFor(deps, action),
     required: AGENTS_ACTION_REQUIRED_FIELDS[action],
@@ -911,12 +922,15 @@ export function agentsActionInputVariantsFor(
  *  lives), an agent that already EXISTS, and a whole workspace. */
 function hireInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVariant[] {
   const variants: AgentsActionInputVariant[] = [];
+
   if (deps.team) {
     const fields: AgentsToolInputField[] = [...HIRE_CREATE_FIELDS];
+
     // Deps-gated exactly as the rung is: with no port to run a `task` hire on,
     // the field that would ask for one is in neither the schema nor the sandbox
     // declaration, so absence is structural rather than a runtime refusal.
     if (deps.team.temporary) fields.push('lifetime');
+
     if (deps.peers) fields.push('scope');
     variants.push({
       fields,
@@ -925,8 +939,11 @@ function hireInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVari
       scopeOptional: true,
     });
   }
+
   const existing: AgentsToolInputField[] = [...HIRE_EXISTING_FIELDS];
+
   if (deps.team) existing.push('deliverable');
+
   if (deps.peers) existing.push('topic');
   variants.push({
     fields: existing,
@@ -935,6 +952,7 @@ function hireInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVari
     // agent that does not exist, and this variant is the one that does.
     excludes: deps.team?.temporary ? ['role', 'lifetime'] : ['role'],
   });
+
   if (deps.peers) {
     variants.push({
       fields: HIRE_WORKSPACE_FIELDS,
@@ -942,6 +960,7 @@ function hireInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVari
       scope: 'workspace',
     });
   }
+
   return variants;
 }
 
@@ -950,15 +969,19 @@ function hireInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVari
  *  that issues the events it cites. */
 function msgInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVariant[] {
   const named: AgentsToolInputField[] = ['agent', 'message'];
+
   if (deps.peers) named.push('topic');
+
   const byName: AgentsActionInputVariant = {
     fields: named,
     required: ['agent', 'message'],
   };
+
   // The exclusion only exists when the other target does: with no peer
   // transport there is no `event_id` on this action to be exclusive WITH.
   if (deps.peers) Object.assign(byName, { excludes: ['event_id'] });
   const variants: AgentsActionInputVariant[] = [byName];
+
   if (deps.peers) {
     variants.push({
       fields: ['event_id', 'message'],
@@ -966,6 +989,7 @@ function msgInputVariants(deps: AgentsToolDeps): readonly AgentsActionInputVaria
       excludes: ['agent'],
     });
   }
+
   return variants;
 }
 
@@ -987,6 +1011,7 @@ export function agentsActionFieldsFor(
   action: AgentsToolAction,
 ): readonly AgentsToolInputField[] {
   const fields = AGENTS_ACTION_FIELDS[action];
+
   switch (action) {
     case 'swarm':
       return deps.swarm ? fields : [];
@@ -1015,11 +1040,13 @@ function agentsJsonSchemaVariants(
         action: { const: action },
         scope: variant.scope === undefined ? false : { const: variant.scope },
       };
+
       const branch = {
         type: 'object' as const,
         properties,
         required: ['action', ...variant.required],
       };
+
       // Exclusivity as JSON Schema: the fields this branch REFUSES. Without it
       // the two `hire` targets (and the two `msg` ones) overlap and a call
       // naming both matches each, so `oneOf` would be decorative on exactly the
@@ -1029,6 +1056,7 @@ function agentsJsonSchemaVariants(
           not: { anyOf: variant.excludes.map((field) => ({ required: [field] })) },
         });
       }
+
       return branch;
     }));
 }
@@ -1086,19 +1114,24 @@ const FIELD_NAME_SEPARATORS = /[^a-z0-9]/gi;
 function editDistance(a: string, b: string, limit: number): number {
   if (Math.abs(a.length - b.length) > limit) return limit + 1;
   const row = Array.from({ length: b.length + 1 }, (_, j) => j);
+
   for (let i = 1; i <= a.length; i += 1) {
     let diagonal = row[0];
     row[0] = i;
     let best = i;
+
     for (let j = 1; j <= b.length; j += 1) {
       const substitute = diagonal + (a[i - 1] === b[j - 1] ? 0 : 1);
       diagonal = row[j];
       const next = Math.min(substitute, row[j] + 1, row[j - 1] + 1);
       row[j] = next;
+
       if (next < best) best = next;
     }
+
     if (best > limit) return limit + 1;
   }
+
   return row[b.length];
 }
 
@@ -1109,14 +1142,18 @@ function nearestField(name: string, candidates: readonly string[]): string | und
   const target = name.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
   let nearest: string | undefined;
   let shortest = MAX_FIELD_EDIT_DISTANCE + 1;
+
   for (const candidate of candidates) {
     const collapsed = candidate.replace(FIELD_NAME_SEPARATORS, '').toLowerCase();
     const distance = editDistance(target, collapsed, MAX_FIELD_EDIT_DISTANCE);
+
     if (distance >= shortest) continue;
     nearest = candidate;
     shortest = distance;
+
     if (distance === 0) break;
   }
+
   return nearest;
 }
 
@@ -1127,6 +1164,7 @@ const FieldNamesSchema = v.record(v.string(), v.unknown());
 
 function fieldNames<T>(value: T): readonly string[] {
   const parsed = v.safeParse(FieldNamesSchema, value);
+
   return parsed.success ? Object.keys(parsed.output) : [];
 }
 
@@ -1154,6 +1192,7 @@ function takesSentence(action: AgentsToolAction): string {
  */
 function agentsFieldRefusal<T>(input: T): string | undefined {
   const parsed = v.safeParse(FieldNamesSchema, input);
+
   if (!parsed.success) return undefined;
   const declared = v.safeParse(v.picklist(AGENTS_TOOL_ACTIONS), parsed.output['action']);
   const action = declared.success ? declared.output : undefined;
@@ -1162,8 +1201,10 @@ function agentsFieldRefusal<T>(input: T): string | undefined {
   // would otherwise repeat the same ten-name list four times, burying the one
   // line that says which field was wrong.
   let listFields = false;
+
   for (const field of Object.keys(parsed.output)) {
     if (field === 'action') continue;
+
     if (Object.hasOwn(AgentsInputEntries, field)) {
       if (action && !actionReads(action, field)) {
         const readers = AGENTS_TOOL_ACTIONS.filter((other) => actionReads(other, field));
@@ -1171,13 +1212,17 @@ function agentsFieldRefusal<T>(input: T): string | undefined {
           + ` ${readers.join('/')}, and ${action} would ignore it.`);
         listFields = true;
       }
+
       continue;
     }
+
     const meant = nearestField(field, action ? fieldsOf(action) : AGENTS_INPUT_FIELDS);
+
     if (meant) {
       problems.push(`unknown field "${field}" — did you mean "${meant}"?`);
       continue;
     }
+
     const elsewhere = action ? nearestField(field, AGENTS_INPUT_FIELDS) : undefined;
     problems.push(elsewhere
       ? `unknown field "${field}" — "${elsewhere}" is read by`
@@ -1186,10 +1231,13 @@ function agentsFieldRefusal<T>(input: T): string | undefined {
       : `unknown field "${field}".`);
     listFields = true;
   }
+
   if (problems.length === 0) return undefined;
+
   const fields = listFields
     ? action ? ` ${takesSentence(action)}` : ` Fields are: ${AGENTS_INPUT_FIELDS.join(', ')}.`
     : '';
+
   return `${problems.join(' ')}${fields} ${FIELD_RULE}`;
 }
 
@@ -1200,7 +1248,9 @@ function agentsFieldRefusal<T>(input: T): string | undefined {
  */
 export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
   const refusal = agentsFieldRefusal(input);
+
   if (refusal) throw new Error(refusal);
+
   return v.parse(AgentsToolInputSchema, input);
 }
 
@@ -1217,11 +1267,14 @@ const TRANSLATION_DECIDES = { preset: true, objective: true } satisfies Record<s
  *  later carries on a re-drive without this function being touched. */
 function swarmFieldsOf(row: StoredAgentsRow, skip: Record<string, true>): Partial<AgentsToolInput> {
   const carried: Partial<AgentsToolInput> = {};
+
   for (const field of AGENTS_ACTION_FIELDS.swarm) {
     if (Object.hasOwn(skip, field)) continue;
     const value = row[field];
+
     if (value !== undefined) Object.assign(carried, { [field]: value });
   }
+
   return carried;
 }
 
@@ -1238,6 +1291,7 @@ function recordDroppedFields<T>(
 ): void {
   const carried = new Set(Object.keys(resumed));
   const dropped = fieldNames(input).filter((field) => !carried.has(field));
+
   if (dropped.length === 0 && extra.length === 0) return;
   diagnostics.event('agents.resume.fields_dropped', {
     kind,
@@ -1293,26 +1347,35 @@ function recordDroppedFields<T>(
 const StoredSwarmContextSchema = v.looseObject({
   config: v.optional(v.looseObject({ context: v.optional(v.string()) })),
 });
+
 type StoredSwarmContext = v.InferOutput<typeof StoredSwarmContextSchema>;
+
 function translateStoredSwarmContext(row: StoredSwarmContext): StoredSwarmContext {
   if (row.config?.context !== 'fork') return row;
+
   return { ...row, config: { ...row.config, context: 'inherit' } };
 }
+
 export function resumableAgentsInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind !== 'agents') return null;
   const rewritten = v.safeParse(StoredSwarmContextSchema, input);
   const parsed = v.safeParse(StoredAgentsInputSchema, rewritten.success ? translateStoredSwarmContext(rewritten.output) : input);
+
   if (!parsed.success) return null;
   const row = parsed.output;
+
   if (row.action === 'fork') {
     if (row.task === undefined) return null;
     const resumed: AgentsToolInput = { ...swarmFieldsOf(row, TRANSLATION_DECIDES), action: 'swarm', preset: 'ideate', task: row.task };
     recordDroppedFields(kind, input, resumed, ['settlement']);
+
     return resumed;
   }
+
   if (row.action !== 'swarm') return null;
   const resumed: AgentsToolInput = { action: 'swarm', ...swarmFieldsOf(row, {}) };
   recordDroppedFields(kind, input, resumed, []);
+
   return resumed;
 }
 
@@ -1347,12 +1410,15 @@ function missionScope(
   const limits = readMissionLimits(input);
   /** The caller's own scope, or the fresh child label this call declared a cap on. */
   let labels: readonly string[] = budget.scope;
+
   if (limits) {
     const label = input.budget_label?.trim() || `swarm-${nanoid()}`;
     budget.declare(label, limits);
     labels = [label];
   }
+
   const scope = localMissionScope(budget, labels);
+
   return scope ? { governor: budget, scope } : null;
 }
 
@@ -1405,12 +1471,14 @@ function resolveDelegatedProfile(
 ): DelegatedProfile | { error: string } {
   const roles = effectiveRoleCatalog(ctx.envelope.catalog);
   const callerRole = roles[ctx.roleId];
+
   if (!callerRole) {
     return { error: `unknown active role ${JSON.stringify(ctx.roleId)} — it is not in this `
       + 'account\'s catalog; ask the owner to fix the catalog or pick an explicit role.' };
   }
 
   const spawns = callerRole.spawns;
+
   // Absent inherits EVERYTHING, the same narrowing rule as allowedTools.
   // A list allows exactly those roles; '*' is the explicit wildcard. A caller
   // may always delegate under its own role.
@@ -1432,6 +1500,7 @@ function resolveDelegatedProfile(
       availableTools: ctx.availableTools,
       activeSkills: [],
     });
+
     return {
       resolved,
       sources: {
@@ -1460,9 +1529,11 @@ async function runSwarmAction(
   // for the reason `RESUME_REDRIVE_OPTION` states: the input IS the durable
   // row, and nothing in it could distinguish the two.
   const redrive = readResumeRedrive(toolOptions);
+
   if (!redrive && !input.preset && !deps.profile) {
     return badInput(`swarm needs \`preset\` — the shape of the search${deps.profile ? '' : ' (no role catalog is wired here to take its default from)'}. ${SWARM_PRESET_DOCTRINE.join(' ')}`);
   }
+
   if (!input.task) {
     return badInput('swarm needs `task` — what the search is for, in prose. The measured '
       + 'quantity goes in `objective`, never here.');
@@ -1473,8 +1544,10 @@ async function runSwarmAction(
   // ledger row inside runSwarm — so the provenance below describes a FIRST
   // attempt only.
   let delegated: DelegatedProfile | undefined;
+
   if (!redrive) {
     const ctx = deps.profile?.();
+
     if (ctx) {
       const resolution = resolveDelegatedProfile(
         ctx,
@@ -1482,6 +1555,7 @@ async function runSwarmAction(
         input.tier,
         input.preset === undefined ? 'role_default' : 'explicit',
       );
+
       if ('error' in resolution) return badInput(resolution.error);
       delegated = resolution;
     } else if (input.role !== undefined || input.tier !== undefined) {
@@ -1491,6 +1565,7 @@ async function runSwarmAction(
     // Explicit preset wins; a wired catalog fills the gap from the role's own
     // default; neither means the refusal above already fired.
   }
+
   // A RE-DRIVE WITH NO PRESET IS NOT AN `ideate`. The durable row holds the raw
   // tool input, so a first attempt that took its preset from its role's default
   // stored none — and the fallback at the end of this expression would re-enter
@@ -1501,6 +1576,7 @@ async function runSwarmAction(
   const started = redrive && input.preset === undefined
     ? readStartedSwarmProfile(swarm.rt.storage, swarm.rt.actor, input.task)
     : null;
+
   const preset: SwarmPreset = input.preset
     ?? delegated?.resolved.defaultPreset
     ?? started?.profile.defaultPreset
@@ -1540,10 +1616,12 @@ async function runSwarmAction(
   // Resolution first, per *Presets* — *Validity over the resolved configuration* is
   // stated over the resolved tuple and has no input without it.
   const resolved = resolveSwarm(call);
+
   if ('reason' in resolved) throw new KinuError(resolved.reason, resolved.error);
   // Legality, per *Validity over the resolved configuration*: over the resolved
   // tuple and never over the preset name.
   const illegal = swarmValidity(resolved);
+
   if (illegal) throw new KinuError(illegal.reason, illegal.error);
 
   // The mission scope, and with it both enforcement seams: the governed `LLM` for the
@@ -1551,9 +1629,11 @@ async function runSwarmAction(
   // calls through as it makes them.
   const mission = missionScope(budget, input);
   let rt: AgentRuntime = swarm.rt;
+
   if (mission) {
     rt = { ...swarm.rt, llm: mission.governor.govern(swarm.rt.llm, mission.scope.labels) };
   }
+
   // Resolved BEFORE the bag, in this order, because each of these is a backend
   // factory whose CALL is a real event — a host is built, a broadcast channel is
   // looked up, a home provisioner is constructed — and the bag below then holds
@@ -1575,6 +1655,7 @@ async function runSwarmAction(
   // beside the provisioner, because re-credentialing a runtime with no
   // credential to use is nothing.
   const runtimeForWorkspace = swarm.runtimeForNodeWorkspace?.();
+
   /**
    * ONE TYPED LITERAL, for the reason `call` above gives about itself, and it
    * applies harder here: every field is checked against `SwarmRunDeps`, where
@@ -1630,8 +1711,10 @@ async function runSwarmAction(
     // of this action, where it also decides where the profile comes from.
     redrive,
   };
+
   readSpawnStarted(toolOptions)?.();
   const result = await inWorkMode(mode, () => runSwarm(runDeps, resolved));
+
   if ('reason' in result) throw new KinuError(result.reason, result.error);
   // THE SPAWN, AND ONLY THE SPAWN. The tokens are already on the ledger: every model
   // call the run made debited as it happened, through `SwarmRunDeps.mission` above, and
@@ -1642,13 +1725,16 @@ async function runSwarmAction(
   // the search happened without claiming it was free.
   mission?.governor.debit(0, { labels: mission.scope.labels, spawns: 1 });
   const output: JsonObject = parseJsonObject(JSON.stringify(result));
+
   if (mission) {
     const label = mission.scope.labels[0];
     const snapshot = label !== undefined ? mission.governor.snapshot(label)[0] : undefined;
+
     if (snapshot) {
       Object.assign(output, { mission_budget: parseJsonObject(JSON.stringify(snapshot)) });
     }
   }
+
   return output;
 }
 
@@ -1685,18 +1771,24 @@ type SwarmSchemaProperties = SchemaPropertiesFor<'swarm'>;
  */
 function roleSummaries(deps: AgentsToolDeps): string {
   const ctx = deps.profile?.();
+
   if (!ctx) return '';
   const roles = effectiveRoleCatalog(ctx.envelope.catalog);
   const callerSpawns = roles[ctx.roleId]?.spawns;
+
   const allowed = (id: string): boolean => {
     if (ctx.roleId === id) return true;
+
     if (callerSpawns === undefined || callerSpawns === '*') return true;
+
     return callerSpawns.includes(id);
   };
+
   return Object.entries(roles)
     .filter(([id]) => allowed(id))
     .map(([id, role]) => {
       const label = role.label ?? deriveRoleLabel(id);
+
       return `${id} (${label}, preset ${role.preset}): ${role.description}`;
     })
     .join('; ');
@@ -1704,6 +1796,7 @@ function roleSummaries(deps: AgentsToolDeps): string {
 
 function roleSummaryText(deps: AgentsToolDeps): string {
   const summaries = roleSummaries(deps);
+
   return summaries ? ` Available roles: ${summaries}.` : '';
 }
 
@@ -1721,6 +1814,7 @@ function verifierKindSummary(): string {
   return VERIFIER_KINDS
     .map((kind) => {
       const doc = VERIFIER_KIND_DOC[kind];
+
       return `${kind} — ${doc.summary}; its spec needs {${doc.specFields.join(', ')}}`;
     })
     .join('. ');
@@ -1728,6 +1822,7 @@ function verifierKindSummary(): string {
 
 function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
   if (!deps.swarm) return {};
+
   return {
     // Carries the batch-level role the `context` slot of oh-my-pi (can1357/oh-my-pi,
     // the hard fork — upstream pi has no sub-agents at all) has: the shared background
@@ -1790,9 +1885,11 @@ type ConverseSchemaProperties = SchemaPropertiesFor<Exclude<AgentsToolAction, 's
 
 function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
+
   const targets = deps.team && deps.peers
     ? 'a subordinate here or a peer workspace agent (subordinate names win a collision)'
     : deps.team ? 'a subordinate' : 'a peer workspace agent';
+
   const properties: ConverseSchemaProperties = {
     agent: {
       type: 'string',
@@ -1809,6 +1906,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
       description: 'The workstream for a hire naming an `agent` that already exists, the note or answer for msg, or the first delegated task for hire scope=workspace.',
     },
   };
+
   if (deps.peers) {
     Object.assign(properties, {
       scope: {
@@ -1820,6 +1918,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
       event_id: { type: 'string', description: 'For action=msg: the agent message event id you were given, to answer that question instead of naming an `agent`. Exclusive with `agent`.' },
     });
   }
+
   if (deps.team) {
     const temporary = deps.team.temporary !== undefined;
     Object.assign(properties, {
@@ -1832,6 +1931,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
       deliverable: { type: 'string', maxLength: 2000, description: 'For a hire handing work to a subordinate that already exists: what the finished result should be (optional).' },
       keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
     });
+
     if (temporary) {
       Object.assign(properties, {
         lifetime: {
@@ -1846,6 +1946,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
       });
     }
   }
+
   return properties;
 }
 
@@ -1867,10 +1968,12 @@ function agentsInputProperties(deps: AgentsToolDeps) {
  */
 function requestedTopic(input: AgentsToolInput): { topic: string } {
   const topic = input.topic?.trim() || 'message';
+
   return topic === PEER_REPLY_TOPIC
     ? badInput(`topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes`)
     : { topic };
 }
+
 /**
  * Whether this actor may run the requested action now: absent from its wiring is
  * `unsupported`, and a durable roster change under Plan is `denied`.
@@ -1885,6 +1988,7 @@ function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: Wo
   if (!actions.includes(action)) {
     return { reason: 'unsupported', error: `action "${action}" is not available here. Available: ${actions.join(', ')}` };
   }
+
   return action === 'hire' ? null : workModeRefusal(mode, action !== 'dismiss', 'agents.' + action);
 }
 
@@ -1912,23 +2016,30 @@ function assertHireVariant(input: AgentsToolInput): void {
     if (input.mission !== undefined) {
       return badInput('field "mission" is not available on a hire that names an existing agent — its brief is `message`');
     }
+
     if (input.tier !== undefined) {
       return badInput('field "tier" is not available on a hire that names an existing agent — it already runs at its own tier');
     }
+
     if (input.lifetime !== undefined) {
       return badInput('field "lifetime" is not available on a hire that names an existing agent — it already has one; `lifetime` belongs to a hire that creates with `role`');
     }
+
     return;
   }
+
   if (input.message !== undefined) {
     return badInput('field "message" is not available for a hire that creates an agent — its brief is `mission`');
   }
+
   if (input.deliverable !== undefined) {
     return badInput('field "deliverable" is not available on a hire that creates an agent — say what the result should be in `mission`');
   }
+
   if (input.topic !== undefined) {
     return badInput('field "topic" is not available on a hire that creates an agent — it labels a message to an agent that already exists');
   }
+
   if (input.lifetime === 'task' && input.tier !== undefined) {
     return badInput('field "tier" is not available on a lifetime:"task" hire — it runs at its role\'s tier; omit it, or hire `durable` for an override');
   }
@@ -1957,12 +2068,14 @@ export async function dispatchAgentsAction(
   const mode = inWorkMode(deps.mode, currentWorkMode);
   const team = deps.team;
   const peers = deps.peers;
+
   // No catch: a roster this cannot read is not a roster without this name. The
   // dispatch below already turns a throw into an inspectable `{ error }`, so the
   // failure reaches the caller instead of silently routing an assignment meant
   // for a subordinate down the peer path.
   const isSubordinate = async (name: string): Promise<boolean> => {
     if (!team) return false;
+
     return (await team.list()).some((entry) => entry.name === name);
   };
 
@@ -1974,7 +2087,9 @@ export async function dispatchAgentsAction(
   // (read-models/tool-failures.ts), and this is the response an actor at the
   // delegation depth cap gets — the one place absence would otherwise be silent.
   const admission = actionAdmission(actions, mode, input.action);
+
   if (admission) throw new KinuError(admission.reason, admission.error);
+
   // The spawn seam. Launching a helper is what turns one exhausted run into
   // many, so the cap is checked before the launch — for every action that
   // creates or wakes an agent. `list` and `dismiss` spend nothing and stay
@@ -1983,9 +2098,12 @@ export async function dispatchAgentsAction(
   // half is guarded inside the arm, on the same read it routes on).
   const spawnGuard = () => {
     const refusal = deps.budget?.guard('spawn');
+
     if (refusal) throw new MissionBudgetExhausted(refusal);
   };
+
   if (input.action === 'swarm' || input.action === 'hire') spawnGuard();
+
   // The DEPTH seam, and the second half of a containment that is already
   // structural: an actor at the cap is not wired `team` deps at all, so `hire`
   // is absent from its enum. This covers the one window build-time gating
@@ -2004,6 +2122,7 @@ export async function dispatchAgentsAction(
   // the same read the arm routes on — `if (input.role)` IS the spawn predicate.
   const spawnDepthRefusal = () =>
     team && delegationExhausted(team.delegation) ? delegationDepthRefusal(team.delegation) : null;
+
   try {
     switch (input.action) {
       case 'swarm':
@@ -2016,10 +2135,14 @@ export async function dispatchAgentsAction(
         // where the two could drift.
         const lifetime = input.lifetime ?? 'durable';
         const planBar = workModeRefusal(mode, lifetime === 'task', 'agents.hire');
+
         if (planBar) throw new KinuError(planBar.reason, planBar.error);
+
         if ((input.scope ?? 'subordinate') === 'workspace') {
           const workspaceDepth = spawnDepthRefusal();
+
           if (workspaceDepth) throw new KinuError(workspaceDepth.reason, workspaceDepth.error);
+
           // Classified, not a bare `{error}`: this is the escape route the depth
           // cap closes — a fresh workspace is the root of its own tree with the
           // whole cap below it — so the one refusal that has to hold must land
@@ -2028,25 +2151,34 @@ export async function dispatchAgentsAction(
             throw new KinuError('denied', 'hire scope=workspace creates a whole workspace, which only the workspace orchestrator may do — '
               + 'hire a subordinate here instead (omit scope), or run a search.');
           }
+
           if (input.role !== undefined) {
             return badInput('field "role" is not available for action "hire" on this actor');
           }
+
           if (input.tier !== undefined) {
             return badInput('field "tier" is not available for action "hire" on this actor');
           }
+
           if (!input.mission || !input.message) return badInput('hire scope=workspace requires mission and message');
+
           const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
             purpose: input.mission,
             message: input.message,
             mode,
           };
+
           if (input.agent) Object.assign(request, { name: input.agent });
+
           if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+
           return await peers.spawnWorkspace(request);
         }
+
         if (!peers && input.scope !== undefined) {
           return badInput('field "scope" is not available for action "hire" on this actor');
         }
+
         // `role` IS the discriminator, and it is a presence test rather than an
         // exclusion: with a role this hire CREATES (and `agent`, given, is the
         // name to create under), without one it hands the workstream to an agent
@@ -2061,21 +2193,26 @@ export async function dispatchAgentsAction(
               ? 'hire requires a target and a brief: `role` with `mission` to create an agent, or `agent` with `message` to hand the workstream to one that exists.'
               : 'hire requires agent and message');
           }
+
           assertHireVariant(input);
           spawnGuard();
           const asked = requestedTopic(input);
+
           if (team && await isSubordinate(input.agent)) {
             const assignment: Parameters<TeamToolDeps['assign']>[0] = {
               name: input.agent,
               task: input.message,
               mode,
             };
+
             if (input.deliverable) Object.assign(assignment, { deliverable: input.deliverable });
+
             const handoff = await countedMsgSend(
               { action: 'hire', transport: 'subordinate', addressing: 'agent', target: input.agent, chars: input.message.length },
               () => team.assign(assignment),
               handoffCount,
             );
+
             return {
               status: 'working',
               agent: input.agent,
@@ -2083,28 +2220,37 @@ export async function dispatchAgentsAction(
               note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
             };
           }
+
           if (peers) {
             const request: Parameters<PeersToolDeps['ask']>[0] = {
               agent: input.agent, topic: asked.topic, message: input.message, mode,
             };
+
             if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+
             return await countedMsgSend(
               { action: 'hire', transport: 'peer', addressing: 'agent', target: input.agent, chars: input.message.length },
               () => peers.ask(request),
               peerAskCount,
             );
           }
+
           return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
         }
+
         // From here the hire CREATES, which is what spends a level of tree.
         const createDepth = spawnDepthRefusal();
+
         if (createDepth) throw new KinuError(createDepth.reason, createDepth.error);
+
         if (!team) {
           // Capability absence, and `denied` is what that is: the call is
           // well-formed and this actor does not wire the surface it needs.
           throw new KinuError('denied', 'hiring subordinates is not available on this actor');
         }
+
         assertHireVariant(input);
+
         if (!input.mission) return badInput('hire requires role and mission');
         // `agent`, here, is the NAME to create under rather than a target.
         // The role is a catalog id here. It is validated and spawn-checked, then carried
@@ -2112,9 +2258,11 @@ export async function dispatchAgentsAction(
         // Without a catalog the hire is refused rather than seeded onto an
         // identity the child's next turn cannot resolve.
         const ctx = deps.profile?.();
+
         if (!ctx) {
           throw new KinuError('denied', 'This actor wires no role catalog. Hire cannot resolve a role without one.');
         }
+
         if (lifetime === 'task') {
           // A name would be accepted and ignored: a task agent is archived the
           // moment it answers, so the name never becomes addressable and the
@@ -2123,35 +2271,48 @@ export async function dispatchAgentsAction(
             return badInput('field "agent" is not available on a lifetime:"task" hire — it is archived the '
               + 'moment it answers, so a name you chose is never addressable. Omit it, or hire `durable`.');
           }
+
           const temporary = team.temporary;
+
           if (!temporary) {
             throw new KinuError('denied', 'lifetime:"task" runs the agent to its single answer inside this call, which this actor has no substrate for — '
               + 'omit `lifetime` for a durable hire, or name an existing agent with `agent` (action:"list" shows the roster).');
           }
+
           const delegatedTask = resolveDelegatedProfile(ctx, input.role, undefined);
+
           if ('error' in delegatedTask) return badInput(delegatedTask.error);
+
           const request: TemporaryRunRequest = {
             role: delegatedTask.resolved.role.id,
             roleLabel: input.role,
             task: input.mission,
             mode,
           };
+
           if (toolOptions?.abortSignal) Object.assign(request, { signal: toolOptions.abortSignal });
+
           return await temporary.run(request);
         }
+
         const delegated = resolveDelegatedProfile(ctx, input.role, input.tier);
+
         if ('error' in delegated) return badInput(delegated.error);
         // Only an EXPLICIT override rides along: a role's own default tier
         // is re-derived by the child at its next turn boundary from its
         // roleId, so storing it twice would be a second source of truth.
         const resolvedTier = input.tier !== undefined ? delegated.resolved.tier : undefined;
+
         const request: Parameters<TeamToolDeps['spawn']>[0] = {
           role: delegated.resolved.role.id,
           mission: input.mission,
           mode,
         };
+
         if (resolvedTier !== undefined) Object.assign(request, { tier: resolvedTier.id });
+
         if (input.agent) Object.assign(request, { name: input.agent });
+
         return await team.spawn(request);
       }
 
@@ -2169,40 +2330,49 @@ export async function dispatchAgentsAction(
             + 'drop `event_id` to message the named agent, or drop `agent` to answer that event.',
           );
         }
+
         if (!input.message) return badInput('msg requires a message');
         // Bound to consts before the transport calls below, because each of
         // those is now issued through a closure the counter times, and a
         // closure over `input.message` reads the property again rather than the
         // narrowing this line established.
         const message = input.message;
+
         if (input.event_id) {
           if (!peers) {
             throw new KinuError('denied', 'answering an event by `event_id` needs the peer transport, which this actor does not have');
           }
+
           const answered = input.event_id;
+
           return await countedMsgSend(
             { action: 'msg', transport: 'peer', addressing: 'event', target: answered, chars: message.length },
             () => peers.reply({ eventId: answered, message }),
             peerReplyCount,
           );
         }
+
         const agent = input.agent;
+
         if (!agent) {
           return badInput(peers
             ? 'msg requires a target: `agent` to name an agent, or `event_id` to answer the agent message event you were given.'
             : 'msg requires agent and message');
         }
+
         // Waking an agent is a spawn-shaped spend; answering a question already
         // asked is not, which is why this guard is here and not before the
         // switch.
         spawnGuard();
         const sent = requestedTopic(input);
+
         if (team && await isSubordinate(agent)) {
           const handoff = await countedMsgSend(
             { action: 'msg', transport: 'subordinate', addressing: 'agent', target: agent, chars: message.length },
             () => team.message({ name: agent, content: message, mode }),
             handoffCount,
           );
+
           // Same delivered/queued vocabulary the peer transport already uses:
           // delivered = it reached the target's context, queued = it waits
           // behind work already admitted.
@@ -2212,6 +2382,7 @@ export async function dispatchAgentsAction(
             ...renderHandoff(handoff),
           };
         }
+
         if (peers) {
           return await countedMsgSend(
             { action: 'msg', transport: 'peer', addressing: 'agent', target: agent, chars: message.length },
@@ -2219,6 +2390,7 @@ export async function dispatchAgentsAction(
             peerSendCount,
           );
         }
+
         return badInput(`unknown agent "${input.agent}" — check the roster with action:"list"`);
       }
 
@@ -2230,6 +2402,7 @@ export async function dispatchAgentsAction(
         if (input.agent && team && await team.knows(input.agent)) {
           return await team.status({ name: input.agent });
         }
+
         // ONE roster read. A `lifetime:'task'` hire appears here while it
         // works — an agent spending the owner's money right now is a helper, and
         // a roster that called itself empty while one ran was the defect this
@@ -2238,9 +2411,13 @@ export async function dispatchAgentsAction(
         const peerRoster = peers ? await peers.listPeers() : undefined;
         const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
         const roster: UnifiedRosterResult = {};
+
         if (subordinates) Object.assign(roster, { subordinates });
+
         if (peerRoster) Object.assign(roster, { peers: peerRoster });
+
         if (empty) Object.assign(roster, { note: 'No helper agents yet — create one with action:"hire".' });
+
         return roster;
       }
 
@@ -2248,7 +2425,9 @@ export async function dispatchAgentsAction(
         if (!team) {
           throw new KinuError('denied', 'dismiss applies to subordinates, which this actor does not have');
         }
+
         if (!input.agent) return badInput('dismiss requires agent');
+
         return await team.dismiss({
           name: input.agent,
           keepHistory: input.keep_history ?? true,
@@ -2322,6 +2501,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       // TYPES and never for names, which is how `budgetUsd` reached the
       // dispatcher and was read by nothing at all.
       let parsed: AgentsToolInput;
+
       try {
         parsed = parseAgentsToolInput(input);
       } catch (error) {
@@ -2329,6 +2509,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
         // the parse refused is bad input, not a tool that broke.
         throw new KinuError('bad_input', renderThrownChain({ cause: error }), { cause: error });
       }
+
       return dispatchAgentsAction(deps, parsed, toolOptions);
     },
   }));

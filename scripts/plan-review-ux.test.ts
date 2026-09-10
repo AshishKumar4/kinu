@@ -92,6 +92,7 @@ interface ObservedPlan {
 async function settledWithin(wait: Promise<unknown>): Promise<boolean> {
   try {
     await wait;
+
     return true;
   } catch (cause) {
     if (cause instanceof TimeoutError) return false;
@@ -121,6 +122,7 @@ async function openFrame(
   await page.evaluateOnNewDocument((nextMode: Mode) => localStorage.setItem('theme', nextMode), mode);
   const query = new URLSearchParams({ frame, ...params });
   await page.goto(`${origin}/gallery.html?${query.toString()}`, { waitUntil: 'networkidle0' });
+
   return page;
 }
 
@@ -135,6 +137,7 @@ async function observeDesktop(browser: Browser, origin: string, mode: Mode): Pro
   const page = await openFrame(browser, origin, 'planreview', mode, { width: 1280, height: 900 });
   await page.waitForSelector('[data-plan-review-root]');
   const strip = await readActionStrip(page, ACTION_STRIP);
+
   const before = await page.evaluate(() => {
     const titleRoot = document.querySelector<HTMLElement>('[data-plan-title]');
     const title = titleRoot?.matches('h1') ? titleRoot : titleRoot?.querySelector<HTMLElement>('h1');
@@ -143,7 +146,9 @@ async function observeDesktop(browser: Browser, origin: string, mode: Mode): Pro
     const plan = document.querySelector<HTMLElement>('[data-plan-document]');
     const code = document.querySelector<HTMLElement>('[data-plan-document] pre');
     const scroll = document.querySelector<HTMLElement>('[data-plan-scroll]');
+
     if (!title || !section || !body || !plan || !code || !scroll) throw new Error('plan fixture did not render its document contract');
+
     return {
       mode: document.documentElement.dataset.mode,
       title: title.textContent ?? '',
@@ -165,18 +170,23 @@ async function observeDesktop(browser: Browser, origin: string, mode: Mode): Pro
 
   await page.click('[data-plan-annotations-toggle]');
   await page.waitForSelector('[data-annotation-panel="true"]');
+
   const opened = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>('[data-annotation-panel="true"]');
     const scrim = document.querySelector<HTMLElement>('[data-plan-scrim]');
+
     if (!rail || !scrim) throw new Error('the open rail did not render beside a scrim element');
+
     return {
       railWidth: Math.round(rail.getBoundingClientRect().width),
       scrimDisplay: getComputedStyle(scrim).display,
     };
   });
+
   await page.click('[data-plan-annotations-toggle]');
   await page.waitForFunction(() => document.querySelector('[data-annotation-panel="true"]') === null);
   await page.close();
+
   return { ...before, ...strip, ...opened };
 }
 
@@ -184,11 +194,14 @@ async function observeMobile(browser: Browser, origin: string): Promise<MobilePl
   const page = await openFrame(browser, origin, 'planreview', 'dark', { width: 390, height: 844 });
   await page.waitForSelector('[data-plan-review-root]');
   await page.$eval('[data-plan-document] pre', (code) => code.scrollIntoView({ block: 'center' }));
+
   const before = await page.evaluate(() => {
     const code = document.querySelector<HTMLElement>('[data-plan-document] pre');
     const footer = document.querySelector<HTMLElement>('[data-plan-footer]');
+
     if (!code || !footer) throw new Error('mobile plan fixture is incomplete');
     const footerBox = footer.getBoundingClientRect();
+
     return {
       overflow: document.documentElement.scrollWidth - innerWidth,
       codeOverflow: getComputedStyle(code).overflowX,
@@ -199,17 +212,20 @@ async function observeMobile(browser: Browser, origin: string): Promise<MobilePl
 
   await page.click('[data-plan-annotations-toggle]');
   await page.waitForSelector('[data-annotation-panel="true"]');
+
   const rail = await page.$eval('[data-annotation-panel="true"]', (panel) => ({
     railPosition: getComputedStyle(panel).position,
     railWidth: Math.round(panel.getBoundingClientRect().width),
     rootWidth: Math.round(document.querySelector<HTMLElement>('[data-plan-review-root]')?.getBoundingClientRect().width ?? 0),
   }));
+
   // The panel's OWN close control: the narrow-container scrim carries the same
   // label for the same action and is display:none at this viewport, so the
   // selector names which one this assertion is about.
   await page.click('[data-annotation-panel="true"] button[aria-label="Close annotations"]');
   await page.waitForFunction(() => document.querySelector('[data-annotation-panel="true"]') === null);
   await page.close();
+
   return { ...before, ...rail };
 }
 
@@ -223,10 +239,13 @@ async function observeWorkspace(browser: Browser, origin: string): Promise<Works
     () => document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent?.includes('applyCoupon') === true,
     { timeout: 20_000 },
   );
+
   const before = await page.evaluate(() => {
     const root = document.querySelector<HTMLElement>('[data-plan-review-root]');
     const plan = document.querySelector<HTMLElement>('[data-plan-document]');
+
     if (!root || !plan) throw new Error('WorkspacePage did not mount the real plan document');
+
     return {
       title: document.querySelector('[data-plan-title] h1, h1[data-plan-title]')?.textContent ?? '',
       rootWidth: Math.round(root.getBoundingClientRect().width),
@@ -234,13 +253,17 @@ async function observeWorkspace(browser: Browser, origin: string): Promise<Works
       overflow: document.documentElement.scrollWidth - innerWidth,
     };
   });
+
   await page.click('[data-plan-annotations-toggle]');
   await page.waitForSelector('[data-annotation-panel="true"]');
+
   const opened = await page.evaluate(() => {
     const rail = document.querySelector<HTMLElement>('[data-annotation-panel="true"]');
     const plan = document.querySelector<HTMLElement>('[data-plan-document]');
     const scrim = document.querySelector<HTMLElement>('[data-plan-scrim]');
+
     if (!rail || !plan || !scrim) throw new Error('WorkspacePage annotation rail did not open over a scrim');
+
     return {
       railPosition: getComputedStyle(rail).position,
       railWidth: Math.round(rail.getBoundingClientRect().width),
@@ -248,6 +271,7 @@ async function observeWorkspace(browser: Browser, origin: string): Promise<Works
       scrimDisplay: getComputedStyle(scrim).display,
     };
   });
+
   // The rail covers the document here and the panel's own backdrop is gated on
   // a mobile VIEWPORT, so the scrim is the only in-place way back to the plan.
   // Whether clicking it CLOSES the rail is the assertion, so a scrim that only
@@ -259,13 +283,17 @@ async function observeWorkspace(browser: Browser, origin: string): Promise<Works
   // lands on the rail and proves nothing about the scrim.
   const scrim = await page.$('[data-plan-scrim]');
   const scrimBox = await scrim?.boundingBox();
+
   if (!scrimBox) throw new Error('the open rail left no scrim box to click');
   await page.mouse.click(scrimBox.x + 8, scrimBox.y + 8);
+
   const railClosedByScrim = await settledWithin(page.waitForFunction(
     () => document.querySelector('[data-annotation-panel="true"]') === null,
     { timeout: 15_000 },
   ));
+
   await page.close();
+
   return { ...before, ...opened, railClosedByScrim };
 }
 
@@ -285,17 +313,21 @@ async function observePromotion(
       highlightWarnings.push(message.text());
     }
   });
+
   if (settle !== undefined) {
     // A missing highlight is the FINDING here, so its absence is tolerated and
     // left to `titleHighlights` below, which names the contract that went
     // missing rather than reporting a suite that timed out.
     await settledWithin(page.waitForSelector(settle, { timeout: 20_000 }));
   }
+
   const observed = await page.evaluate(() => {
     const header = document.querySelector<HTMLElement>('[data-plan-title]');
     const heading = header?.matches('h1') ? header : header?.querySelector<HTMLElement>('h1');
     const plan = document.querySelector<HTMLElement>('[data-plan-document]');
+
     if (!heading || !plan) throw new Error('plan variant did not render a titled document');
+
     return {
       headerTitle: heading.textContent ?? '',
       documentH1s: [...plan.querySelectorAll('h1[data-block-id]')].map((block) => block.textContent ?? ''),
@@ -303,10 +335,13 @@ async function observePromotion(
       titleHighlights: heading.querySelectorAll('.annotation-highlight').length,
     };
   });
+
   await page.close();
+
   if (highlightWarnings.length > 0) {
     throw new Error(`the plan viewers logged unpaintable anchors: ${highlightWarnings.join(' | ')}`);
   }
+
   return observed;
 }
 
@@ -316,10 +351,12 @@ async function observeSettled(browser: Browser, origin: string): Promise<Settled
   const status = await page.$eval('[data-plan-status]', (badge) => badge.textContent ?? '');
   const strip = await readActionStrip(page, ACTION_STRIP);
   await page.close();
+
   return { status, ...strip };
 }
 
 let observed: ObservedPlan;
+
 beforeAll(async () => {
   observed = await withGallery(async ({ browser, origin }) => ({
     desktop: {
@@ -365,6 +402,7 @@ describe('the plan review document, as a browser lays it out', () => {
       // nothing to dim and nothing to click through.
       expect(plan.scrimDisplay).toBe('none');
     }
+
     expect(observed.desktop.dark.pageBackground).not.toBe(observed.desktop.light.pageBackground);
   });
 

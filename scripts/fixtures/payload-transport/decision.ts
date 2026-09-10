@@ -60,6 +60,7 @@ export function operationNeedsStart(existing: { exitCode?: number | null } | nul
 export function judgeImage(pinnedImage: string, observed: string | null): ImageVerdict {
   if (observed === null) return { kind: 'unknown' };
   const pinnedTag = pinnedImage.split(':').pop() ?? '';
+
   return observed.startsWith(pinnedTag)
     ? { kind: 'ok', observed }
     : { kind: 'stale', pinned: pinnedImage, observed };
@@ -74,7 +75,9 @@ export const CPU_ACCOUNTING_NOTE =
 /** Median wall time of one cell family (all reps of one arm/op/size). */
 function medianWallMs(cells: readonly Cell[]): number | null {
   const walls = cells.filter((cell) => cell.wallMs !== null).map((cell) => cell.wallMs!);
+
   if (walls.length === 0) return null;
+
   return summarize(walls).p50;
 }
 
@@ -87,8 +90,11 @@ const EXCLUSION_REASON = {
 
 function statusOf(cells: readonly Cell[]): 'ok' | 'unavailable' | 'failed' | 'corrupt' {
   if (cells.some((cell) => cell.status === 'corrupt')) return 'corrupt';
+
   if (cells.some((cell) => cell.status === 'failed')) return 'failed';
+
   if (cells.some((cell) => cell.status === 'unavailable')) return 'unavailable';
+
   return 'ok';
 }
 
@@ -105,28 +111,36 @@ export function rankTier(cells: readonly Cell[], sizeMiB: PayloadSizeMiB): Verdi
 
   for (const arm of PAYLOAD_ARMS) {
     const own = tierCells.filter((cell) => cell.arm === arm);
+
     if (own.length === 0) continue;
 
     const status = statusOf(own);
+
     if (status !== 'ok') {
       exclusions.push({ arm, reason: EXCLUSION_REASON[status]! });
       continue;
     }
+
     const putMedian = medianWallMs(own.filter((cell) => cell.op === 'put'));
     const getMedian = medianWallMs(own.filter((cell) => cell.op === 'get'));
+
     if (putMedian === null || getMedian === null) {
       exclusions.push({ arm, reason: 'no completed transfers to rank' });
       continue;
     }
+
     const putWalls = own.filter((cell) => cell.op === 'put' && cell.wallMs !== null)
       .map((cell) => cell.wallMs!);
+
     const getWalls = own.filter((cell) => cell.op === 'get' && cell.wallMs !== null)
       .map((cell) => cell.wallMs!);
+
     // Dispersion on EITHER direction disqualifies the arm at this tier.
     if (summarize(putWalls).cv > UNSTABLE_CV || summarize(getWalls).cv > UNSTABLE_CV) {
       exclusions.push({ arm, reason: EXCLUSION_REASON['unstable']! });
       continue;
     }
+
     // The tier's figure is the SLOWER direction: a transport is as good as its
     // worst leg, and reporting max(put, get) cannot flatter anyone.
     const slowestMedianMs = Math.max(putMedian, getMedian);
@@ -146,7 +160,9 @@ export function rankTier(cells: readonly Cell[], sizeMiB: PayloadSizeMiB): Verdi
       exclusions,
     };
   }
+
   ranked.sort((a, b) => b.medianMiBs - a.medianMiBs);
+
   return { kind: 'ranking', sizeMiB, ranked, exclusions };
 }
 

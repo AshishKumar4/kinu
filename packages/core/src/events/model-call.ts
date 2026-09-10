@@ -213,9 +213,11 @@ export interface ModelCallSpend {
  * caller, and a name nobody threads is a name that lies.
  */
 export const MODEL_OPERATION_KINDS = ['complete', 'stream', 'generate_json'] as const;
+
 export type ModelOperationKind = (typeof MODEL_OPERATION_KINDS)[number];
 
 export const MODEL_OPERATION_PHASES = ['start', 'end'] as const;
+
 export type ModelOperationPhase = (typeof MODEL_OPERATION_PHASES)[number];
 
 /**
@@ -228,6 +230,7 @@ export type ModelOperationPhase = (typeof MODEL_OPERATION_PHASES)[number];
  * call was taking.
  */
 export const MODEL_OPERATION_OUTCOMES = ['ok', 'failed'] as const;
+
 export type ModelOperationOutcome = (typeof MODEL_OPERATION_OUTCOMES)[number];
 
 /**
@@ -282,6 +285,7 @@ export type ModelOperationSink = (event: ModelOperationEvent) => void;
 /** Characters of a failure's cause chain kept on the end row. Enough to name
  *  the provider fault; never a whole prompt echoed back inside an error. */
 const OPERATION_ERROR_MAX_CHARS = 300;
+
 /** The stable id one operation is known by, start row to end row. Random
  *  rather than counted: an activation's counter restarts at eviction and would
  *  hand the second life's first operation the first life's id, which then reads
@@ -324,18 +328,22 @@ export function beginModelOperation(
   detail?: { readonly spec?: string },
 ): ModelOperation {
   const sink = spend?.operations;
+
   if (!sink) return UNWATCHED_OPERATION;
   const operationId = newModelOperationId();
   const source = spend.source;
   const spec = detail?.spec;
+
   const base = spec === undefined
     ? { operationId, source, op }
     : { operationId, source, op, spec };
+
   sink({ ...base, phase: 'start' });
   // One end row per frame. A stream whose consumer drains it and then throws
   // would otherwise close the same operation twice, and two ends for one start
   // is a shape no reader can interpret.
   let settled = false;
+
   return {
     completed(result): void {
       if (settled) return;

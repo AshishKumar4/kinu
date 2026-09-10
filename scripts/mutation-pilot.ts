@@ -168,10 +168,12 @@ const EXITS: ReadonlySet<string> = new Set([
 /** The name of the function a node sits in, for the report. */
 function enclosingName(node: SyntaxNode): string {
   let up: SyntaxNode | undefined = node;
+
   while (up !== undefined) {
     if (isFunctionLike(up)) return ownerName(functionOwner(up)) ?? '(anonymous)';
     up = up.parent;
   }
+
   return '(top level)';
 }
 
@@ -181,12 +183,17 @@ function enclosingName(node: SyntaxNode): string {
  *  checked. */
 function isGuard(node: SyntaxNode): boolean {
   const { raw } = node;
+
   if (raw.type !== 'IfStatement' || raw.alternate != null) return false;
   const consequent = node.children.find((child) => child.raw === raw.consequent);
+
   if (consequent === undefined) return false;
+
   if (EXITS.has(consequent.type)) return true;
+
   if (consequent.type !== 'BlockStatement' || consequent.children.length !== 1) return false;
   const only = consequent.children[0];
+
   return only !== undefined && EXITS.has(only.type);
 }
 
@@ -201,6 +208,7 @@ function isGuard(node: SyntaxNode): boolean {
 export function mutantsIn(file: string, text: string): Mutant[] {
   const parsed = parse(file, text);
   const found: Mutant[] = [];
+
   const add = (node: SyntaxNode, operator: Operator, start: number, end: number, after: string) => {
     found.push({
       id: `${file}:${parsed.lineAt(start)}:${operator}`,
@@ -217,30 +225,39 @@ export function mutantsIn(file: string, text: string): Mutant[] {
 
   walk(parsed.root, (node) => {
     const { raw } = node;
+
     if (raw.type === 'IfStatement') {
       const test = node.children.find((child) => child.raw === raw.test);
+
       if (test !== undefined) {
         add(node, 'negate-condition', test.start, test.end, `!(${text.slice(test.start, test.end)})`);
       }
+
       // The guard as a whole: dropping it asks whether anything depends on the
       // early exit, which negating the condition cannot ask.
       if (isGuard(node)) add(node, 'drop-guard', node.start, node.end, ';');
+
       return;
     }
+
     if (raw.type === 'BinaryExpression' || raw.type === 'LogicalExpression') {
       // A lookup rather than an index: both tables keep their literal key type,
       // and an operator that is in neither is the common case here (`===`, `+`).
       const table = raw.type === 'BinaryExpression' ? FLIPPED : SWAPPED;
+
       const swapped = Object.entries(table)
         .find(([operator]) => operator === raw.operator)?.[1];
+
       if (swapped === undefined) return;
       // The operator token sits between the two operands; the left operand's end
       // is where to start looking for it.
       const left = node.children.find((child) => child.raw === raw.left);
       const right = node.children.find((child) => child.raw === raw.right);
+
       if (left === undefined || right === undefined) return;
       const between = text.slice(left.end, right.start);
       const at = between.indexOf(raw.operator);
+
       if (at === -1) return;
       const start = left.end + at;
       add(
@@ -252,6 +269,7 @@ export function mutantsIn(file: string, text: string): Mutant[] {
       );
     }
   });
+
   return found;
 }
 
@@ -273,41 +291,54 @@ export function pool(files: ReadonlyMap<string, string>): Mutant[] {
  */
 export function select(all: readonly Mutant[], budget: number): Mutant[] {
   const byOperator = new Map<Operator, Mutant[]>();
+
   for (const mutant of all) {
     byOperator.set(mutant.operator, [...(byOperator.get(mutant.operator) ?? []), mutant]);
   }
+
   // Within an operator, walk files round-robin too, so one crowded file cannot
   // take the operator's whole share.
   const queues = [...byOperator.entries()]
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([, mutants]) => {
       const byFile = new Map<string, Mutant[]>();
+
       for (const mutant of mutants) {
         byFile.set(mutant.file, [...(byFile.get(mutant.file) ?? []), mutant]);
       }
+
       const files = [...byFile.values()];
       const spread: Mutant[] = [];
+
       for (let depth = 0; spread.length < mutants.length; depth += 1) {
         for (const inFile of files) {
           const next = inFile[depth];
+
           if (next !== undefined) spread.push(next);
         }
       }
+
       return spread;
     });
 
   const chosen: Mutant[] = [];
+
   for (let depth = 0; chosen.length < budget; depth += 1) {
     let progressed = false;
+
     for (const queue of queues) {
       const next = queue[depth];
+
       if (next === undefined) continue;
       progressed = true;
       chosen.push(next);
+
       if (chosen.length === budget) break;
     }
+
     if (!progressed) break;
   }
+
   return chosen;
 }
 
@@ -328,17 +359,21 @@ export function defenders(
 ): readonly string[] {
   const target = join(root, mutant.file);
   const found: string[] = [];
+
   for (const [file, text] of suites) {
     if (mutant.enclosing !== '(anonymous)' && mutant.enclosing !== '(top level)'
       && text.includes(mutant.enclosing)) {
       found.push(file);
       continue;
     }
+
     const imports = moduleSpecifiers(parse(file, text).root)
       .filter((specifier) => specifier.startsWith('.'))
       .map((specifier) => join(root, dirname(file), specifier));
+
     if (imports.some((path) => target === path || target === `${path}.ts`)) found.push(file);
   }
+
   return found;
 }
 
@@ -357,6 +392,7 @@ function git(...args: readonly string[]): string {
 function requireOwnWorktree(): void {
   const tree = git('rev-parse', '--show-toplevel');
   const main = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
+
   if (tree === main) {
     throw new Error(
       `Refusing to mutate ${tree}: this is the main checkout, which every other agent, `
@@ -371,6 +407,7 @@ function requireOwnWorktree(): void {
  *  `git checkout --`, and that recovery must not be able to destroy work. */
 function requireCleanTargets(files: readonly string[]): void {
   const dirty = git('status', '--porcelain', '--', ...files);
+
   if (dirty !== '') {
     throw new Error(
       'Refusing to mutate: these targets have uncommitted changes, and the recovery from '
@@ -400,6 +437,7 @@ function apply(mutant: Mutant): void {
   const path = join(root, mutant.file);
   const source = readFileSync(path, 'utf8');
   const at = source.slice(mutant.start, mutant.end);
+
   if (at !== mutant.before) {
     throw new Error(
       `${mutant.id}: the span no longer holds ${JSON.stringify(mutant.before)} but `
@@ -407,6 +445,7 @@ function apply(mutant: Mutant): void {
       + 'proven nothing.',
     );
   }
+
   pristine.set(mutant.file, source);
   writeFileSync(path, source.slice(0, mutant.start) + mutant.after + source.slice(mutant.end));
 }
@@ -414,10 +453,12 @@ function apply(mutant: Mutant): void {
 /** Put the file back, and prove it went back. */
 function revert(mutant: Mutant): void {
   const text = pristine.get(mutant.file);
+
   if (text === undefined) throw new Error(`${mutant.file} was never mutated`);
   const path = join(root, mutant.file);
   writeFileSync(path, text);
   pristine.delete(mutant.file);
+
   if (readFileSync(path, 'utf8') !== text) {
     throw new Error(
       `${mutant.file} did not restore to its pristine bytes after ${mutant.id}. Stopping so `
@@ -438,6 +479,7 @@ interface Run {
 
 function runSuites(paths: readonly string[], deadlineMs: number | undefined): Run {
   const started = Date.now();
+
   const spawned = Bun.spawnSync({
     cmd: ['bun', 'test', ...paths],
     cwd: root,
@@ -447,7 +489,9 @@ function runSuites(paths: readonly string[], deadlineMs: number | undefined): Ru
     timeout: deadlineMs,
     killSignal: 'SIGKILL',
   });
+
   const ms = Date.now() - started;
+
   return {
     failed: spawned.exitCode !== 0,
     // A signal death inside the deadline is a runtime fault, not a clock: the
@@ -480,17 +524,24 @@ function judge(mutant: Mutant, suites: ReadonlyMap<string, string>, baselineMs: 
   const deadlineMs = baselineMs * DEADLINE_FACTOR;
   apply(mutant);
   let spent = 0;
+
   try {
     if (focused.length > 0) {
       const run = runSuites(focused, deadlineMs);
       spent += run.ms;
+
       if (run.timedOut) return { mutant, outcome: 'timeout', defenders: focused, ms: spent };
+
       if (run.failed) return { mutant, outcome: 'killed-focused', defenders: focused, ms: spent };
     }
+
     const escalated = runSuites([CORE_TIER], deadlineMs);
     spent += escalated.ms;
+
     if (escalated.timedOut) return { mutant, outcome: 'timeout', defenders: focused, ms: spent };
+
     if (escalated.failed) return { mutant, outcome: 'killed-core', defenders: focused, ms: spent };
+
     return { mutant, outcome: 'survived', defenders: focused, ms: spent };
   } finally {
     revert(mutant);
@@ -544,6 +595,7 @@ export function render(verdicts: readonly Verdict[], poolSize: number, wallMs: n
     lines.push('\nA survivor is undefended behaviour, not a failing build. This program '
       + 'reports; it does not gate.');
   }
+
   lines.push('\nBlind spots, printed whatever the outcome:');
   lines.push('  - EQUIVALENT MUTANTS. A generated mutation can be a second spelling of the '
     + 'same behaviour, and no run can tell that from an undefended one. Read a survivor '
@@ -556,6 +608,7 @@ export function render(verdicts: readonly Verdict[], poolSize: number, wallMs: n
     + 'only by a cf-backend or cli suite reads as a survivor here.');
   lines.push('  - THE WORKING TREE, not HEAD. Uncommitted work in the scope is refused '
     + 'outright rather than measured.');
+
   return lines.join('\n');
 }
 
@@ -567,13 +620,16 @@ export const BUDGET = 24;
 
 if (import.meta.main) {
   const argv = process.argv.slice(2);
+
   const value = (flag: string): string | undefined => {
     const at = argv.indexOf(flag);
+
     return at === -1 ? undefined : argv[at + 1];
   };
 
   const files = scopeFiles();
   const all = pool(files);
+
   if (all.length === 0) {
     throw new Error(
       `The generator produced no mutants over ${SCOPE.join(', ')}. Either the scope is empty `
@@ -583,24 +639,32 @@ if (import.meta.main) {
 
   const only = value('--only');
   const budget = Number(value('--budget') ?? BUDGET);
+
   const selected = only !== undefined
     ? all.filter((mutant) => mutant.id === only)
     : (argv.includes('--all') ? all : select(all, budget));
+
   if (selected.length === 0) throw new Error(`no mutant matches --only ${String(only)}`);
 
   if (argv.includes('--list')) {
     const byOperator = new Map<Operator, number>();
+
     for (const mutant of all) {
       byOperator.set(mutant.operator, (byOperator.get(mutant.operator) ?? 0) + 1);
     }
+
     console.log(`${all.length} mutants over ${files.size} files in ${SCOPE.join(', ')}`);
+
     for (const [operator, count] of [...byOperator].sort()) {
       console.log(`  ${operator.padEnd(18)} ${count}`);
     }
+
     console.log(`\nthe sample this budget takes (${selected.length}):`);
+
     for (const mutant of selected) {
       console.log(`  ${mutant.id.padEnd(58)} ${mutant.before} -> ${mutant.after}`);
     }
+
     process.exit(0);
   }
 
@@ -611,23 +675,28 @@ if (import.meta.main) {
   // every kill meaningless, and it is also where the deadline comes from — no
   // clock in this program is a guess.
   const baseline = runSuites([CORE_TIER], undefined);
+
   if (baseline.failed) {
     throw new Error(
       'The pristine baseline is not green, so a kill would prove nothing about the mutant. '
       + `Fix the suite first.\n${baseline.output.slice(-4000)}`,
     );
   }
+
   console.log(`baseline ${CORE_TIER} green in ${Math.round(baseline.ms / 1000)} s; `
     + `each run stops at ${DEADLINE_FACTOR}x that.`);
 
   const suites = readMatching((file) => isRunnableSuite(file) && file.endsWith('.ts')
     && trackedFiles().includes(file));
+
   const started = Date.now();
   const verdicts: Verdict[] = [];
+
   for (const mutant of selected) {
     const verdict = judge(mutant, suites, baseline.ms);
     verdicts.push(verdict);
     console.log(`  ${verdict.outcome.padEnd(14)} ${verdict.mutant.id}`);
   }
+
   console.log(render(verdicts, all.length, Date.now() - started));
 }

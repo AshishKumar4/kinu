@@ -31,12 +31,15 @@ import { describe, expect, it } from 'vitest';
  *  assertion reports the state actually reached. Chat recovery is scheduled on
  *  the object's own alarm with backoff, so its window is the wider one. */
 const FIBER_DEADLINE_MS = 20_000;
+
 const TURN_DEADLINE_MS = 90_000;
+
 const POLL_MS = 50;
 
 /** A stub held across a reset is itself broken by the reset; the id survives.
  *  Re-acquiring is what a real caller does on its next request. */
 const witness = (name: string) => env.WITNESS.get(env.WITNESS.idFromName(name));
+
 const probe = (name: string) => env.EVICTION_PROBE.get(env.EVICTION_PROBE.idFromName(name));
 
 /**
@@ -48,9 +51,12 @@ async function untilSeen(
   name: string, deadlineMs: number, matches: (notes: string[]) => boolean,
 ): Promise<string[]> {
   const started = Date.now();
+
   for (;;) {
     const notes = await witness(name).seen();
+
     if (matches(notes)) return notes;
+
     if (Date.now() - started > deadlineMs) return notes;
     await scheduler.wait(POLL_MS);
   }
@@ -61,9 +67,12 @@ async function untilSeen(
  *  measure nothing. */
 async function untilFiberRow(name: string, deadlineMs: number): Promise<{ name: string }[]> {
   const started = Date.now();
+
   for (;;) {
     const rows = await probe(name).openFiberRows();
+
     if (rows.length > 0) return rows;
+
     if (Date.now() - started > deadlineMs) return rows;
     await scheduler.wait(POLL_MS);
   }
@@ -75,9 +84,12 @@ async function untilFiberRow(name: string, deadlineMs: number): Promise<{ name: 
  *  in this file — which is what "with no client" means for a chat turn. */
 async function untilTranscript(name: string, deadlineMs: number, needle: string): Promise<string> {
   const started = Date.now();
+
   for (;;) {
     const transcript = (await probe(name).transcript()).join('\n');
+
     if (transcript.includes(needle)) return transcript;
+
     if (Date.now() - started > deadlineMs) return transcript;
     await scheduler.wait(POLL_MS);
   }

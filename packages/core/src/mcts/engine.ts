@@ -51,10 +51,12 @@ export const BranchExplorationSchema = v.object({
   text: v.string(),
   usage: v.optional(UsageSchema),
 });
+
 export const BranchReflectionSchema = v.object({
   text: v.string(),
   usage: v.optional(UsageSchema),
 });
+
 const MCTSPhaseSchema: v.GenericSchema<MCTSPhase> = v.object({
   iteration: v.number(),
   budget: v.number(),
@@ -73,6 +75,7 @@ export async function runMCTS(
   initAlternateTakesTable(rt.storage.execRaw);
 
   const search = config.search;
+
   if (search) initMctsSearchTable(rt.storage.execRaw);
 
   // Resume an unfinished search for this task (one evicted mid-run): continue its
@@ -80,6 +83,7 @@ export async function runMCTS(
   // The stored config is authoritative for the loop — knobs can't drift on resume.
   const mode = config.mode ?? 'build';
   const resumed = search?.findResumable(task, mode) ?? null;
+
   const effective: MCTSConfig = resumed
     ? { ...config, ...resumed.config, mode }
     : { ...config, mode };
@@ -109,6 +113,7 @@ export async function runMCTS(
   // the remainder.
   const estimateBudget = resumed?.budget ?? effective.budget;
   const estimate = estimateCost(estimateBudget, N_BRANCHES, maxEvalLLMCalls, config.costModel?.());
+
   if (estimate.estimatedUSD > maxCostUSD) {
     // The BASIS is named, not just the number. A refusal that says only
     // "$19.08 exceeds $10" is unactionable when the $19.08 came from a blended
@@ -179,6 +184,7 @@ export async function runMCTS(
 
     while (phase.budget > 0) {
       throwIfAborted(config.signal);
+
       // The mission ledger gates the EXPANSION, not the branch: a branch that
       // refused its own call would return empty, score 0, and backpropagate
       // that 0 up the persisted tree. Stopping here settles the tree on what it
@@ -189,6 +195,7 @@ export async function runMCTS(
       // keeps flowing to the shallower frontier. Break only when nothing is
       // selectable (frontier exhausted or every open node is at the cap).
       const selected = selectNode(rt.storage.sql, rt.actor, rootId, W, maxDepth);
+
       if (!selected) break;
 
       const iteration = phase.iteration + 1;
@@ -201,14 +208,17 @@ export async function runMCTS(
       const branchIds = Array.from({ length: N_BRANCHES }, () =>
         `${selected.id.slice(0, 8)}-${nanoid(8)}`,
       );
+
       const abortBranches = async () => {
         await Promise.allSettled(branchIds.map((id) => rt.abortBranch(id, 'aborted')));
       };
+
       const branchHandles = await abortable(
         Promise.all(branchIds.map(id => rt.spawnBranch(id))),
         config.signal,
         abortBranches,
       );
+
       // The expansion owns its branch agents for exactly this iteration:
       // they explore, get scored, reflect, and are then released. On the CLI
       // these are child processes — leaking them keeps the search's caller
@@ -219,6 +229,7 @@ export async function runMCTS(
         const priorHistory = selected.msg_id
           ? session.getHistory(selected.msg_id)
           : [{ role: 'user', content: task }];
+
         const craftedTools = rt.craftStore.list();
 
         // EXPLORE — parallel LLM calls (allSettled: one branch failure doesn't kill the rest).
@@ -237,7 +248,9 @@ export async function runMCTS(
           config.signal,
           abortBranches,
         );
+
         throwIfAborted(config.signal);
+
         const explorations = explorationResults.map((r, i) => {
           // A branch runs behind a backend seam (a facet RPC on cf, a forked
           // worker locally), so a "fulfilled" result is still untrusted input:
@@ -246,6 +259,7 @@ export async function runMCTS(
           const exploration = r.status === 'fulfilled'
             ? v.safeParse(BranchExplorationSchema, r.value)
             : null;
+
           if (exploration?.success) {
             // Reported HERE and not in the charge loop below, because this is the
             // only place that knows the branch completed a call: a rejected or
@@ -259,8 +273,10 @@ export async function runMCTS(
             // another process and reports neither, and inventing one would name
             // a model this search cannot see.
             config.reportModelCall?.({ source: 'mcts', usage: exploration.output.usage ?? {} });
+
             return exploration.output;
           }
+
           report({
             type: 'branch-failed', stage: 'explore', iteration,
             branchId: branchIds[i] ?? '',
@@ -268,8 +284,10 @@ export async function runMCTS(
               ? renderThrownChain({ cause: r.reason })
               : 'branch returned no exploration',
           });
+
           return { text: '' };
         });
+
         // Charged per rollout, from the provider's own report, so the ledger is
         // current when the next expansion's guard reads it.
         for (const exploration of explorations) await charge(exploration.usage);
@@ -298,6 +316,7 @@ export async function runMCTS(
           type: 'phase', phase: 'evaluate',
           iteration, remainingBudget: phase.budget, branches: N_BRANCHES,
         });
+
         const scoreResults = await abortable(
           Promise.allSettled(explorations.map((exploration, i) =>
             evaluateWithMultiModelJudging({
@@ -319,6 +338,7 @@ export async function runMCTS(
           config.signal,
           abortBranches,
         );
+
         throwIfAborted(config.signal);
         const scores: number[] = [];
         // What the environment said back to each branch, indexed alongside the
@@ -329,9 +349,11 @@ export async function runMCTS(
         // node row persists so a search that earns no answer is diagnosable
         // from the tree alone. Null where the evaluation failed outright.
         const evaluations: Array<BranchEvaluation | null> = [];
+
         for (const [i, r] of scoreResults.entries()) {
           if (r.status === 'fulfilled') {
             const language = r.value.unrunnableLanguage;
+
             if (language !== undefined && !reportedUngroundedLanguages.has(language)) {
               reportedUngroundedLanguages.add(language);
               report({
@@ -342,6 +364,7 @@ export async function runMCTS(
                 remainingBudget: phase.budget,
               });
             }
+
             // The ensemble this branch ACTUALLY ran. `judgeSamples` is only the
             // request: it shares one per-evaluation call pool with check
             // generation, so a request the pool cannot fund is realised lower,
@@ -351,12 +374,14 @@ export async function runMCTS(
             // that short-circuited before judging attempted zero samples, which
             // is not a clamp.
             const realised = r.value.judgeSamplesAttempted;
+
             if (realised > 0) {
               // On the ledger row as well as in the diagnostic, because the surface
               // reads the row: an event nobody can query later is not a field a run's
               // parameters carry. The store keeps the smallest any branch reached.
               search?.observeJudgeEnsemble(rootId, realised);
             }
+
             if (realised > 0 && realised < judgeSamples && !reportedClampedEnsembles.has(realised)) {
               reportedClampedEnsembles.add(realised);
               diagnostics.event('mcts.judge_ensemble_clamped', {
@@ -368,11 +393,13 @@ export async function runMCTS(
                 maxEvalLLMCalls,
               });
             }
+
             scores.push(r.value.score);
             observations.push(executionObservation(r.value.execution));
             evaluations.push(r.value);
             continue;
           }
+
           report({
             type: 'branch-failed', stage: 'evaluate', iteration,
             branchId: branchIds[i] ?? '', error: renderThrownChain({ cause: r.reason }),
@@ -385,6 +412,7 @@ export async function runMCTS(
         // RECORD nodes — action plus the observation it earned, which is the
         // pair a child expansion inherits through session.getHistory(msg_id).
         const childNodeIds: string[] = [];
+
         for (let i = 0; i < N_BRANCHES; i++) {
           const childId = branchIds[i] ?? nanoid();
           const exploration = explorations[i] ?? { text: '' };
@@ -414,6 +442,7 @@ export async function runMCTS(
         for (let i = 0; i < N_BRANCHES; i++) {
           const nodeId = childNodeIds[i];
           const score = scores[i];
+
           if (nodeId !== undefined && score !== undefined) {
             backpropagate(rt.storage.sql, rt.actor, nodeId, score);
           }
@@ -426,19 +455,24 @@ export async function runMCTS(
         const reflecting = mode === 'build'
           ? scores.filter(score => score < reflectionThreshold).length
           : 0;
+
         if (reflecting > 0) {
           report({
             type: 'phase', phase: 'reflect',
             iteration, remainingBudget: phase.budget, branches: reflecting,
           });
         }
+
         // A reflection is another model call on the far side, so the rollouts
         // just debited above can be what takes the budget away from it.
         const mayReflect = mode === 'build' && !(await outOfBudget());
+
         for (let i = 0; mayReflect && i < N_BRANCHES; i++) {
           const score = scores[i] ?? 0;
+
           if (score >= reflectionThreshold) continue;
           const handle = branchHandles[i];
+
           if (!handle) continue;
           // A reflection is an optional memory side-effect on an already-scored
           // branch. Its model call fails the same way exploration does (that is
@@ -453,6 +487,7 @@ export async function runMCTS(
           // without the environment's answer asks a model to guess at a runtime
           // error the engine already read. Null when nothing executed.
           let result: BranchReflection | undefined;
+
           try {
             result = await handle.generateReflection(task, observations[i] ?? undefined);
           } catch (cause) {
@@ -461,16 +496,21 @@ export async function runMCTS(
               branchId: branchIds[i] ?? '', error: renderThrownChain({ cause }),
             });
           }
+
           let reflection = '';
+
           if (result) {
             const parsed = v.safeParse(BranchReflectionSchema, result);
+
             if (parsed.success) {
               await charge(parsed.output.usage);
               config.reportModelCall?.({ source: 'mcts', usage: parsed.output.usage ?? {} });
               reflection = parsed.output.text.trim();
             }
           }
+
           throwIfAborted(config.signal);
+
           // An empty reflection carries no lesson — writing it just litters
           // MEMORY.md with duplicate bare "### Failure lesson" headers.
           if (reflection) {
@@ -481,6 +521,7 @@ export async function runMCTS(
             await rt.memory.index('memory/MEMORY.md');
           }
         }
+
         await pruneLowValueBranches(rt, rootId, pruneThreshold, minVisitsForPrune);
         throwIfAborted(config.signal);
 
@@ -489,6 +530,7 @@ export async function runMCTS(
           for (let i = 0; i < N_BRANCHES; i++) {
             const score = scores[i] ?? 0;
             const code = offeredCode[i];
+
             if (score > craftExtractionThreshold && code?.kind === 'runnable'
                 && isCraftable(code.language)) {
               await maybeStoreCraftedTool(rt, code.code, score);
@@ -508,6 +550,7 @@ export async function runMCTS(
         // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
         // continue from the remaining budget against the persisted tree (B6).
         search?.checkpoint(rootId, searchEpoch, phase.iteration, phase.budget, Date.now());
+
         // The checkpoint above is durable but silent: nothing reached Workers Logs
         // or `wrangler tail` per iteration, so a durably-checkpointed search running
         // for HOURS produced no visible sign of life. Gated on `search`, matching the
@@ -522,6 +565,7 @@ export async function runMCTS(
             remaining: phase.budget,
           });
         }
+
         report({
           type: 'iteration-complete',
           iteration: phase.iteration, remainingBudget: phase.budget, scores,
@@ -543,11 +587,13 @@ export async function runMCTS(
     // node, so it must settle as `no_acceptable_candidate`.
     try {
       const result = await converge(rt, session, rootId, minAcceptableScore, takesEpsilon, mode);
+
       if (result.converged) {
         search?.converge(rootId, searchEpoch, Date.now());
       } else {
         search?.noAcceptableCandidate(rootId, searchEpoch, Date.now());
       }
+
       return result;
     } catch (err) {
       // The budget is spent, so a resume would re-enter with nothing left to
@@ -566,6 +612,7 @@ function nodeEvaluationDiagnostics(
   evaluation: BranchEvaluation | null | undefined,
 ): NodeEvaluationDiagnostics | null {
   if (!evaluation) return null;
+
   return {
     grounding: evaluation.grounding,
     score: evaluation.score,
@@ -592,17 +639,21 @@ async function abortable<T>(
   onAbort: () => Promise<void>,
 ): Promise<T> {
   if (!signal) return promise;
+
   if (signal.aborted) {
     await onAbort();
     throwIfAborted(signal);
   }
+
   let aborting = false;
   let cleanup = (): void => {};
+
   const aborted = new Promise<never>((_resolve, reject) => {
     const onSignalAbort = async (): Promise<void> => {
       if (aborting) return;
       aborting = true;
       cleanup();
+
       try {
         await onAbort();
       } catch (cause) {
@@ -616,16 +667,20 @@ async function abortable<T>(
           { signalReason: renderThrownChain({ cause: signal.reason }) },
         );
       }
+
       reject(signal.reason instanceof Error ? signal.reason : new Error('MCTS aborted'));
     };
+
     cleanup = () => signal.removeEventListener('abort', onSignalAbort);
     signal.addEventListener('abort', onSignalAbort, { once: true });
   });
+
   try {
     return await Promise.race([
       (async (): Promise<T> => {
         try {
           const value = await promise;
+
           return aborting ? await aborted : value;
         } catch (cause) {
           if (aborting) return await aborted;

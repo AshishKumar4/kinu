@@ -31,6 +31,7 @@ const expectedRules = [
   "anti-slop/no-wait-until-in-durable-object",
   "anti-slop/no-widen-then-assert",
   "anti-slop/require-cause-on-rethrow",
+  "anti-slop/require-readable-spacing",
   "anti-slop/require-runtime-import-extension",
   "anti-slop/require-safety-comment-for-type-assertion",
 ];

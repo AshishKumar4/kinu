@@ -26,6 +26,7 @@ import { noVacuousTypePredicateRule } from "./rules/no-vacuous-type-predicate.ts
 import { noWaitUntilInDurableObjectRule } from "./rules/no-wait-until-in-durable-object.ts";
 import { noWidenThenAssertRule } from "./rules/no-widen-then-assert.ts";
 import { requireCauseOnRethrowRule } from "./rules/require-cause-on-rethrow.ts";
+import { requireReadableSpacingRule } from "./rules/require-readable-spacing.ts";
 import { requireRuntimeImportExtensionRule } from "./rules/require-runtime-import-extension.ts";
 import { requireSafetyCommentForTypeAssertionRule } from "./rules/require-safety-comment-for-type-assertion.ts";
 
@@ -64,6 +65,7 @@ const antiSlopPlugin = eslintCompatPlugin({
 		"no-wait-until-in-durable-object": noWaitUntilInDurableObjectRule,
 		"no-widen-then-assert": noWidenThenAssertRule,
 		"require-cause-on-rethrow": requireCauseOnRethrowRule,
+		"require-readable-spacing": requireReadableSpacingRule,
 		"require-runtime-import-extension": requireRuntimeImportExtensionRule,
 		"require-safety-comment-for-type-assertion": requireSafetyCommentForTypeAssertionRule,
 	},

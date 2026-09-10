@@ -110,6 +110,7 @@ import {
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/wired.lock.json`;
 
 /**
@@ -127,9 +128,11 @@ const parsed = new Map<string, { readonly text: string; readonly tree: Parsed }>
 
 function parseOnce(file: string, text: string): Parsed {
   const cached = parsed.get(file);
+
   if (cached !== undefined && cached.text === text) return cached.tree;
   const tree = parse(file, text);
   parsed.set(file, { text, tree });
+
   return tree;
 }
 
@@ -186,12 +189,15 @@ const TYPE_ONLY: ReadonlySet<string> = new Set([
 /** The exported names of `file` that declare a value. */
 function exportedValues(tree: SyntaxNode, exported: ReadonlySet<string>): Set<string> {
   const types = new Set<string>();
+
   for (const statement of tree.children) {
     if (isReExport(statement)) continue;
     const { node } = declarationOf(statement);
     const name = declaredName(node);
+
     if (name !== undefined && TYPE_ONLY.has(node.type)) types.add(name);
   }
+
   return new Set([...exported].filter((name) => !types.has(name)));
 }
 
@@ -200,8 +206,10 @@ function defaultExportName(tree: SyntaxNode): string | undefined {
   for (const statement of tree.children) {
     if (statement.raw.type !== 'ExportDefaultDeclaration') continue;
     const name = declaredName(declarationOf(statement).node);
+
     if (name !== undefined) return name;
   }
+
   return undefined;
 }
 
@@ -260,12 +268,16 @@ export function createResolver(
 
   const subpaths = (pkg: string): Readonly<Record<string, string>> => {
     const cached = manifests.get(pkg);
+
     if (cached !== undefined) return cached;
     const manifest = `packages/${pkg}/package.json`;
+
     const parsed = tracked.has(manifest)
       ? v.parse(SubpathSchema, JSON.parse(readRepositoryFile(root, manifest))).exports
       : {};
+
     manifests.set(pkg, parsed);
+
     return parsed;
   };
 
@@ -273,22 +285,30 @@ export function createResolver(
   const aliases = (from: string): readonly (readonly [string, string])[] => {
     const dir = from.split('/').slice(0, 2).join('/');
     const cached = aliasRules.get(dir);
+
     if (cached !== undefined) return cached;
     const config = `${dir}/tsconfig.json`;
+
     const paths = tracked.has(config)
       ? v.parse(AliasSchema, JSON.parse(readRepositoryFile(root, config))).compilerOptions.paths
       : {};
+
     const rules = Object.entries(paths).flatMap(([pattern, targets]) => {
       const target = targets[0];
+
       if (target === undefined || !pattern.endsWith('*') || !target.endsWith('*')) return [];
+
       return [[pattern.slice(0, -1), collapsePath(`${dir}/${target.slice(0, -1)}`)] as const];
     });
+
     aliasRules.set(dir, rules);
+
     return rules;
   };
 
   return (from, raw) => {
     const specifier = raw.includes(QUERY) ? raw.slice(0, raw.indexOf(QUERY)) : raw;
+
     const found = (base: string): Resolution => ({
       file: IMPORT_CANDIDATES.map((suffix) => base + suffix).find((path) => corpus.has(path)),
       local: true,
@@ -296,25 +316,34 @@ export function createResolver(
 
     if (specifier.startsWith('.')) {
       const base = collapsePath(`${from.slice(0, from.lastIndexOf('/'))}/${specifier}`);
+
       // A relative path into node_modules is a DEPENDENCY reached through the
       // filesystem — @nimbus-sh/worker exports no subpath for its dist session
       // modules, and nimbus-programmatic.ts documents the one live instance.
       // External like any package specifier, never a dangling local edge.
       if (base.split('/').includes('node_modules')) return EXTERNAL;
+
       return found(base);
     }
+
     if (specifier.startsWith(WORKSPACE_SCOPE)) {
       const [pkg, ...rest] = specifier.slice(WORKSPACE_SCOPE.length).split('/');
+
       if (pkg === undefined || pkg.length === 0) return EXTERNAL;
       const entry = subpaths(pkg)[rest.length === 0 ? '.' : `./${rest.join('/')}`];
       const named = entry === undefined ? undefined : collapsePath(`packages/${pkg}/${entry}`);
+
       if (named !== undefined && corpus.has(named)) return { file: named, local: true };
+
       return found(collapsePath(`packages/${pkg}/src/${rest.join('/')}`));
     }
+
     for (const [prefix, target] of aliases(from)) {
       if (!specifier.startsWith(prefix)) continue;
+
       return found(collapsePath(`${target}/${specifier.slice(prefix.length)}`));
     }
+
     return EXTERNAL;
   };
 }
@@ -342,8 +371,10 @@ export function buildGraph(reachers: ReadonlyMap<string, string>): Graph {
 
     for (const statement of tree.children) {
       const [specifier] = moduleSpecifiers(statement);
+
       if (specifier === undefined) continue;
       const { file: target, local } = resolve(file, specifier);
+
       if (target === undefined) {
         // A specifier resolving OUTSIDE the reacher corpus but inside the tree is
         // a legitimate non-edge: a `.json` payload, a fixture, test scaffolding.
@@ -351,23 +382,30 @@ export function buildGraph(reachers: ReadonlyMap<string, string>): Graph {
         if (local && anywhere(file, specifier).file === undefined) {
           dangling.push(`${file} -> ${specifier}`);
         }
+
         continue;
       }
+
       edges.add(target);
+
       for (const bound of reExportBindings(statement)) {
         forwards.push({ file: target, imported: bound.imported, exported: bound.local });
       }
     }
+
     // Dynamic imports reach a file even when no imported binding is consumed.
     for (const specifier of moduleSpecifiers(tree)) {
       const { file: target } = resolve(file, specifier);
+
       if (target !== undefined) edges.add(target);
     }
 
     const consumedImports = importUses(tree).flatMap(use => {
       const { file: target } = resolve(file, use.specifier);
+
       return target === undefined ? [] : [{ file: target, imported: use.imported }];
     });
+
     const exports = exportedDeclarations(file, text, tree);
     modules.set(file, {
       file,
@@ -379,6 +417,7 @@ export function buildGraph(reachers: ReadonlyMap<string, string>): Graph {
       edges: [...edges],
     });
   }
+
   return { modules, dangling };
 }
 
@@ -448,17 +487,21 @@ export interface Entrypoint {
 export function builtinToolNames(modules: ReadonlyMap<string, Module>,
   read: (file: string) => string): Set<string> {
   const names = new Set<string>();
+
   for (const [file, module] of modules) {
     if (!module.exports.has('TOOL_REACH')) continue;
     walk(parseOnce(file, read(file)).root, (node) => {
       if (node.raw.type !== 'VariableDeclarator') return;
       const [id, init] = node.children;
+
       if (id === undefined || identifierText(id) !== 'TOOL_REACH' || init === undefined) return;
       walk(init, (row) => {
         if (row.raw.type !== 'Property') return;
         const [key, value] = row.children;
+
         if (key === undefined || value === undefined || value.raw.type !== 'ObjectExpression') return;
         const name = identifierText(key) ?? literalText(key);
+
         if (name === undefined) return;
         // `native: true` is the membership rule; a row that reaches only codemode
         // is not handed to the model and must not root reachability.
@@ -466,14 +509,19 @@ export function builtinToolNames(modules: ReadonlyMap<string, Module>,
         walk(value, (field) => {
           if (field.raw.type !== 'Property') return;
           const [fieldKey, fieldValue] = field.children;
+
           if (fieldKey === undefined || fieldValue === undefined) return;
+
           if (identifierText(fieldKey) !== 'native') return;
+
           if (literalText(fieldValue) === 'true') native = true;
         });
+
         if (native) names.add(name);
       });
     });
   }
+
   return names;
 }
 
@@ -491,17 +539,21 @@ export function builtinToolNames(modules: ReadonlyMap<string, Module>,
 function buildsATool(value: SyntaxNode | undefined): boolean {
   if (value === undefined) return false;
   const { raw } = value;
+
   if (raw.type === 'ObjectExpression') {
     return value.children.some((property) => property.raw.type === 'Property'
       && !property.raw.computed && property.raw.key.type === 'Identifier'
       && property.raw.key.name === 'execute');
   }
+
   if (raw.type === 'TSSatisfiesExpression' || raw.type === 'TSAsExpression'
     || raw.type === 'AwaitExpression') {
     return buildsATool(value.children[0]);
   }
+
   if (raw.type !== 'CallExpression') return false;
   const callee = identifierText(value.children[0] ?? value);
+
   return callee === 'tool' || (callee !== undefined && TOOL_FACTORY.test(callee));
 }
 
@@ -529,11 +581,14 @@ const SPAWNS = /^(?:fork|spawn|spawnSync|execFile|execFileSync)$/;
  *  than unfolding the callee shape inline. */
 function spawningCallee(call: SyntaxNode): string | undefined {
   const { raw } = call;
+
   if (raw.type !== 'CallExpression') return undefined;
+
   const callee = raw.callee.type === 'MemberExpression' && !raw.callee.computed
     && raw.callee.property.type === 'Identifier'
     ? raw.callee.property.name
     : raw.callee.type === 'Identifier' ? raw.callee.name : undefined;
+
   return callee !== undefined && SPAWNS.test(callee) ? callee : undefined;
 }
 
@@ -563,8 +618,10 @@ function spawnedScripts(
   const found = new Set<string>();
   const frontier = call.children.slice(1);
   const seen = new Set<SyntaxNode>();
+
   while (frontier.length > 0) {
     const node = frontier.pop();
+
     if (node === undefined || seen.has(node)) continue;
     seen.add(node);
     // A bare name: follow it to what it was bound to, once. Deeper chains are
@@ -572,8 +629,11 @@ function spawnedScripts(
     // one.
     const name = node.raw.type === 'Identifier' ? identifierText(node) : undefined;
     const bound = name === undefined ? undefined : literals.get(name);
+
     if (bound !== undefined) { frontier.push(bound); continue; }
+
     const text = literalText(node);
+
     if (text !== undefined) {
       // Relative to the spawning file first — a bare `branch-worker.ts` is a
       // sibling — then as a repository path, which is how a script names
@@ -581,10 +641,13 @@ function spawnedScripts(
       for (const candidate of [collapsePath(`${directory}/${text}`), collapsePath(text)]) {
         if (corpus.has(candidate) && candidate !== from) found.add(candidate);
       }
+
       continue;
     }
+
     frontier.push(...node.children);
   }
+
   return [...found];
 }
 
@@ -592,8 +655,10 @@ function spawnedScripts(
  *  is attributed to the symbol that owns it. */
 function enclosingExport(node: SyntaxNode, module: Module): string | undefined {
   let top = node;
+
   while (top.parent?.parent !== undefined) top = top.parent;
   const name = declaredName(declarationOf(top).node);
+
   return name !== undefined && module.exports.has(name) ? name : undefined;
 }
 
@@ -607,25 +672,33 @@ function foreignRooted(
   files: ReadonlyMap<string, string>,
 ): Map<string, { file: string; node: SyntaxNode }> {
   const declared = new Map<string, { file: string; node: SyntaxNode; base: string | undefined }>();
+
   for (const [file, text] of files) {
     walk(parseOnce(file, text).root, (node) => {
       if (node.type !== 'ClassDeclaration') return;
       const name = declaredName(node);
+
       if (name !== undefined) declared.set(name, { file, node, base: superClassName(node) });
     });
   }
+
   const rooted = new Map<string, { file: string; node: SyntaxNode }>();
+
   for (const [name, entry] of declared) {
     let base = entry.base;
+
     for (let hop = 0; base !== undefined && hop < 16; hop += 1) {
       const parent = declared.get(base);
+
       if (parent === undefined) {
         rooted.set(name, { file: entry.file, node: entry.node });
         break;
       }
+
       base = parent.base;
     }
   }
+
   return rooted;
 }
 
@@ -646,20 +719,25 @@ function platformHooks(
   lineAt: (offset: number) => number,
 ): Entrypoint[] {
   const owner = declaredName(node);
+
   if (owner === undefined || !rooted.has(owner)) return [];
   const hooks: Entrypoint[] = [];
+
   for (const member of classMembers(node)) {
     if (member.type !== 'MethodDefinition' || methodKind(member) !== 'method') continue;
+
     if (member.raw.type === 'MethodDefinition'
       && (member.raw.computed || member.raw.accessibility === 'private'
         || member.raw.key.type === 'PrivateIdentifier')) continue;
     const method = declaredName(member);
+
     if (method === undefined || invoked.has(method)) continue;
     hooks.push({
       file, line: lineAt(member.start), kind: 'platform-hook', at: `${owner}.${method}`,
       symbol: module.exports.has(owner) ? owner : undefined,
     });
   }
+
   return hooks;
 }
 
@@ -676,11 +754,13 @@ function importMetaMainNode(tree: SyntaxNode): SyntaxNode | undefined {
   let found: SyntaxNode | undefined;
   walk(tree, (node) => {
     const { raw } = node;
+
     if (raw.type === 'MemberExpression' && !raw.computed
       && raw.object.type === 'MetaProperty' && raw.object.meta.name === 'import'
       && raw.object.property.name === 'meta' && raw.property.type === 'Identifier'
       && raw.property.name === 'main') found = node;
   });
+
   return found;
 }
 
@@ -690,6 +770,7 @@ export function findEntrypoints(
   builtins: ReadonlySet<string>,
 ): Entrypoint[] {
   const invoked = new Set<string>();
+
   for (const [file, text] of reachers) for (const name of invokedNames(file, text)) invoked.add(name);
   const rooted = foreignRooted(reachers);
   const corpus = new Set(reachers.keys());
@@ -697,8 +778,10 @@ export function findEntrypoints(
 
   for (const [file, text] of reachers) {
     const module = modules.get(file);
+
     if (module === undefined) continue;
     const { root: tree, lineAt } = parseOnce(file, text);
+
     const add = (node: SyntaxNode, kind: EntrypointKind, at: string): void => {
       found.push({ file, line: lineAt(node.start), kind, at, symbol: enclosingExport(node, module) });
     };
@@ -708,6 +791,7 @@ export function findEntrypoints(
     }
 
     const directProcessRoot = importMetaMainNode(tree);
+
     if (directProcessRoot !== undefined) {
       add(directProcessRoot, 'process-entry', 'import.meta.main');
     }
@@ -726,6 +810,7 @@ export function findEntrypoints(
       if (node.raw.type !== 'VariableDeclarator') return;
       const bound = identifierText(node.children[0] ?? node);
       const init = node.children[1];
+
       if (bound !== undefined && init !== undefined) bindings.set(bound, init);
     });
 
@@ -741,12 +826,15 @@ export function findEntrypoints(
       if (raw.type === 'CallExpression' && raw.callee.type === 'Identifier'
         && MOUNTS.has(raw.callee.name)) {
         add(node, 'browser-bundle', raw.callee.name);
+
         return;
       }
+
       // `fork(workerPath, [dbPath])` — a path this tree hands to the OS. The
       // spawned file is a root: nothing imports it, so without this every
       // symbol the child consumes reads as reached by nothing.
       const spawns = spawningCallee(node);
+
       if (spawns !== undefined) {
         for (const script of spawnedScripts(node, file, bindings, corpus)) {
           found.push({
@@ -756,6 +844,7 @@ export function findEntrypoints(
           });
         }
       }
+
       // `tools.run = tool({…})` and `{ run: tool({…}) }` — a handler bound under
       // a name the model sends. The VALUE has to be a built tool: `run` and
       // `file` are ordinary property names, and keying on the name alone found
@@ -764,11 +853,14 @@ export function findEntrypoints(
         && !raw.left.computed && raw.left.property.type === 'Identifier'
         && builtins.has(raw.left.property.name) && buildsATool(node.children[1])) {
         add(node, 'builtin-tool', raw.left.property.name);
+
         return;
       }
+
       if (raw.type === 'Property' && !raw.computed && raw.key.type === 'Identifier'
         && builtins.has(raw.key.name) && buildsATool(node.children[1])) {
         add(node, 'builtin-tool', raw.key.name);
+
         return;
       }
 
@@ -780,7 +872,9 @@ export function findEntrypoints(
         const [first] = raw.arguments;
         const verb = node.children.find((child) => child.raw === first);
         const name = verb === undefined ? undefined : literalText(verb);
+
         if (name !== undefined) add(node, 'cli-command', name);
+
         return;
       }
 
@@ -789,9 +883,11 @@ export function findEntrypoints(
       if (raw.type === 'ExportDefaultDeclaration') {
         const literal = node.children.find((child) => child.raw.type === 'ObjectExpression')
           ?? node.children[0]?.children.find((child) => child.raw.type === 'ObjectExpression');
+
         for (const property of literal?.children ?? []) {
           const key = property.children[0];
           const name = key === undefined ? undefined : identifierText(key);
+
           if (name !== undefined) {
             found.push({
               file, line: lineAt(property.start), kind: 'module-default', at: name,
@@ -799,6 +895,7 @@ export function findEntrypoints(
             });
           }
         }
+
         return;
       }
 
@@ -806,6 +903,7 @@ export function findEntrypoints(
       found.push(...platformHooks(node, file, module, rooted, invoked, lineAt));
     });
   }
+
   return found.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
 }
 
@@ -821,24 +919,33 @@ function declarationSite(
   seen: Set<string>,
 ): string | undefined {
   const key = `${file}#${name}`;
+
   if (seen.has(key)) return undefined;
   seen.add(key);
   const module = modules.get(file);
+
   if (module === undefined) return undefined;
+
   if (name === 'default') {
     return module.defaultName === undefined ? undefined : `${file}#${module.defaultName}`;
   }
+
   if (module.exports.has(name)) return key;
+
   for (const forward of module.forwards) {
     if (forward.exported === name && forward.imported !== NAMESPACE) {
       const found = declarationSite(forward.file, forward.imported, modules, seen);
+
       if (found !== undefined) return found;
     }
+
     if (forward.imported === NAMESPACE && forward.exported === NAMESPACE) {
       const found = declarationSite(forward.file, name, modules, seen);
+
       if (found !== undefined) return found;
     }
   }
+
   return undefined;
 }
 
@@ -853,12 +960,16 @@ function everySite(
   if (seen.has(file)) return;
   seen.add(file);
   const module = modules.get(file);
+
   if (module === undefined) return;
+
   for (const name of module.exports) into.add(`${file}#${name}`);
+
   for (const forward of module.forwards) {
     if (forward.imported === NAMESPACE) everySite(forward.file, modules, into, seen);
     else {
       const site = declarationSite(forward.file, forward.imported, modules, new Set());
+
       if (site !== undefined) into.add(site);
     }
   }
@@ -877,10 +988,14 @@ export function measureReach(
 ): Reach {
   const live = new Set<string>();
   const frontier = [...new Set(entrypoints.map((entry) => entry.file))];
+
   for (const file of frontier) live.add(file);
+
   while (frontier.length > 0) {
     const file = frontier.pop();
+
     if (file === undefined) continue;
+
     for (const edge of graph.modules.get(file)?.edges ?? []) {
       if (live.has(edge)) continue;
       live.add(edge);
@@ -889,21 +1004,28 @@ export function measureReach(
   }
 
   const reached = new Set<string>();
+
   for (const entry of entrypoints) {
     if (entry.symbol !== undefined) reached.add(`${entry.file}#${entry.symbol}`);
   }
+
   for (const file of live) {
     const module = graph.modules.get(file);
+
     if (module === undefined) continue;
+
     for (const origin of module.consumedImports) {
       if (origin.imported === NAMESPACE) {
         everySite(origin.file, graph.modules, reached, new Set());
         continue;
       }
+
       const site = declarationSite(origin.file, origin.imported, graph.modules, new Set());
+
       if (site !== undefined) reached.add(site);
     }
   }
+
   return { live, reached };
 }
 
@@ -932,12 +1054,15 @@ export function findUnreached(
   // production an import is only a binding, which is the whole reason a barrel
   // confers nothing — see `measureReach`.
   const testReferences = new Map<string, string[]>();
+
   for (const [file, text] of tests) {
     const { root: tree } = parseOnce(file, text);
     const touched = new Set(referencedNames(tree));
+
     for (const statement of tree.children) for (const name of importedNames(statement)) {
       touched.add(name);
     }
+
     for (const name of touched) {
       const list = testReferences.get(name) ?? [];
       list.push(file);
@@ -946,26 +1071,33 @@ export function findUnreached(
   }
 
   const found: Unwired[] = [];
+
   for (const [file, module] of graph.modules) {
     if (!inScope(file)) continue;
     const { lineAt, root: tree } = parseOnce(file, read(file));
     const lines = new Map<string, number>();
+
     for (const statement of tree.children) {
       if (isReExport(statement)) continue;
       const name = declaredName(declarationOf(statement).node);
+
       if (name !== undefined) lines.set(name, lineAt(statement.start));
     }
+
     for (const name of module.values) {
       if (reach.reached.has(`${file}#${name}`)) continue;
       const callers = testReferences.get(name) ?? [];
+
       const reason = !reach.live.has(file)
         ? 'no entrypoint reaches the file that declares it'
         : callers.length > 0
           ? `referenced only by ${String(callers.length)} test file(s): ${callers.slice(0, 3).join(', ')}`
           : 'no production reference anywhere; a barrel re-export is not one';
+
       found.push({ file, line: lines.get(name) ?? 1, name, kind: 'unreached-export', reason });
     }
   }
+
   return found;
 }
 
@@ -1006,10 +1138,13 @@ function annotatedTypes(
 ): readonly string[] {
   if (annotation === undefined) return [];
   const names: string[] = [];
+
   const descend = (node: SyntaxNode): void => {
     if (node.raw.type === 'TSTypeReference') {
       const name = identifierText(node.children[0] ?? node);
+
       if (name === undefined) return;
+
       if (INSTANCE_UTILITIES.has(name)) {
         // `Omit<T, 'id'>` is still an instance of T's shape, minus a key — the
         // draft an `id`-minting seam takes is the case that made this visible:
@@ -1022,9 +1157,12 @@ function annotatedTypes(
         // `OAuthProviderConfig` as unsupplied on the first run of this rule.
         const arguments_ = node.children.find((child) => child.raw.type === 'TSTypeParameterInstantiation');
         const first = arguments_?.children[0];
+
         if (first !== undefined) descend(first);
+
         return;
       }
+
       // A PROJECT-LOCAL mapped alias — `INSTANCE_UTILITIES` written in this
       // tree's own words, and the same rule for the same reason.
       // `cli-backend/src/local-session.ts:333` declares
@@ -1041,32 +1179,44 @@ function annotatedTypes(
       // NAMED type is a mapped type over one concrete interface, which is how
       // `vfs/context-plane.ts:127` writes the same idea.
       const carried = instanceOf?.(name);
+
       if (carried !== undefined) {
         if (carried.kind === 'parameter') {
           const supplied = node.children.find((child) => child.raw.type === 'TSTypeParameterInstantiation');
           const at = supplied?.children[carried.position];
+
           if (at !== undefined) descend(at);
         } else {
           names.push(carried.type);
         }
+
         return;
       }
+
       names.push(name);
+
       return;
     }
+
     if (node.raw.type === 'TSIndexedAccessType' && member !== undefined) {
       const [owner, index] = node.children;
       const declaring = owner === undefined ? undefined : identifierText(owner.children[0] ?? owner);
       const key = index === undefined ? undefined : literalText(index.children[0] ?? index);
+
       if (declaring !== undefined && key !== undefined) {
         names.push(...member(declaring, key));
+
         return;
       }
     }
+
     if (node.raw.type === 'TSTypeLiteral' || node.raw.type === 'TSFunctionType') return;
+
     for (const child of node.children) descend(child);
   };
+
   descend(annotation);
+
   return names;
 }
 
@@ -1102,16 +1252,21 @@ type MappedInstance =
  */
 function mappedInstanceOf(alias: SyntaxNode, mapped: SyntaxNode): MappedInstance | undefined {
   const keyOf = mapped.children.find((child) => child.raw.type === 'TSTypeOperator');
+
   if (keyOf === undefined) return undefined;
   const operator = 'operator' in keyOf.raw ? keyOf.raw.operator : undefined;
+
   if (operator !== 'keyof') return undefined;
   const over = keyOf.children.find((child) => child.raw.type === 'TSTypeReference');
+
   if (over === undefined) return undefined;
   const name = identifierText(over.children[0] ?? over);
+
   if (name === undefined) return undefined;
   const declared = alias.children.find((child) => child.raw.type === 'TSTypeParameterDeclaration');
   const own = (declared?.children ?? []).map((child) => identifierText(child.children[0] ?? child));
   const position = own.indexOf(name);
+
   return position === -1 ? { kind: 'named', type: name } : { kind: 'parameter', position };
 }
 
@@ -1140,12 +1295,16 @@ const PASS_THROUGH: ReadonlySet<string> = new Set([
 function returnedLiterals(statement: SyntaxNode): SyntaxNode[] {
   const found: SyntaxNode[] = [];
   const frontier = [...statement.children];
+
   while (frontier.length > 0) {
     const node = frontier.pop();
+
     if (node === undefined) continue;
+
     if (node.raw.type === 'ObjectExpression') found.push(node);
     else if (PASS_THROUGH.has(node.raw.type)) frontier.push(...node.children);
   }
+
   return found;
 }
 
@@ -1161,14 +1320,19 @@ interface Supplied {
 function suppliedKeys(literal: SyntaxNode): Supplied {
   const keys: string[] = [];
   let opaque = false;
+
   for (const property of literal.children) {
     if (property.raw.type === 'SpreadElement') { opaque = true; continue; }
+
     if (property.raw.type !== 'Property' || property.raw.computed) { opaque = true; continue; }
+
     const key = property.children[0];
     const name = key === undefined ? undefined : identifierText(key) ?? literalText(key);
+
     if (name === undefined) opaque = true;
     else keys.push(name);
   }
+
   return { keys, opaque };
 }
 
@@ -1202,6 +1366,7 @@ function calleePositions(
   typed: ReadonlyMap<string, Typed[]>,
 ): string[][] | undefined {
   if (callee === undefined) return undefined;
+
   return parameters.get(origins.get(callee) ?? `${file}#${callee}`)
     ?? (typed.get(callee) ?? [])
       .map((binding) => signatures.get(binding.type))
@@ -1302,24 +1467,32 @@ export function measureFields(
    * redeclares differently.
    */
   const mappedInstances = new Map<string, MappedInstance>();
+
   for (const [file, text] of reachers) {
     walk(parseOnce(file, text).root, (node) => {
       if (node.type === 'TSInterfaceDeclaration') {
         const name = declaredName(node);
+
         const extended = node.children
           .filter((child) => child.raw.type === 'TSInterfaceHeritage')
           .map((child) => identifierText(child.children[0] ?? child))
           .filter((base): base is string => base !== undefined);
+
         if (name === undefined) return;
+
         if (extended.length > 0) bases.set(name, extended);
         const body = node.children.find((child) => child.raw.type === 'TSInterfaceBody');
+
         for (const member of body?.children ?? []) {
           const key = declaredName(member);
+
           if (key === undefined) continue;
           members.set(`${name}#${key}`, annotatedTypes(annotationOf(member)));
         }
+
         return;
       }
+
       // `type CFRuntime = AgentRuntime & { … }` is `extends` spelled as an
       // intersection: a literal annotated with the alias supplies every named
       // member's fields. Without this, AgentRuntime.deviceTransport read as
@@ -1327,23 +1500,32 @@ export function measureFields(
       // annotated `CFRuntime` — an alias this walk never resolved.
       if (node.type === 'TSTypeAliasDeclaration') {
         const name = declaredName(node);
+
         if (name === undefined) return;
         // A homomorphic mapped alias, recorded before the arms below because a
         // mapped type is none of the things they look for.
         const mapped = node.children.find((child) => child.raw.type === 'TSMappedType');
+
         if (mapped !== undefined) {
           const carries = mappedInstanceOf(node, mapped);
+
           if (carries !== undefined) mappedInstances.set(`${file}#${name}`, carries);
+
           return;
         }
+
         const intersection = node.children.find((child) => child.raw.type === 'TSIntersectionType');
+
         if (intersection !== undefined) {
           const members = intersection.children
             .map((child) => (child.raw.type === 'TSTypeReference' ? identifierText(child.children[0] ?? child) : undefined))
             .filter((member): member is string => member !== undefined);
+
           if (members.length > 0) bases.set(name, members);
+
           return;
         }
+
         // `type ModelCallSink = (report: ModelCallReport) => void` — a callback
         // SEAM. Nothing declares a function of the callback's name, so the
         // table above holds nothing for `reportModelCall?.({ … })`; the
@@ -1351,13 +1533,16 @@ export function measureFields(
         // receives. Without this, `ModelCallReport.modelId` read as supplied by
         // nothing while `cf-backend/src/lib/web-provider.ts:47` supplies it.
         const signature = node.children.find((child) => child.raw.type === 'TSFunctionType');
+
         if (signature !== undefined) {
           const declared = 'params' in signature.raw ? signature.raw.params : [];
           signatures.set(name, signature.children
             .filter((child) => declared.some((param) => param === child.raw))
             .map((child) => [...annotatedTypes(annotationOf(child))]));
+
           return;
         }
+
         // `type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>` —
         // one reference, and `annotatedTypes` already unwraps the utilities
         // whose instances carry the shape whole. A UNION is deliberately not
@@ -1368,20 +1553,26 @@ export function measureFields(
         // tree — filled them, because the alias hid the interface behind it.
         const reference = node.children.find((child) => child.raw.type === 'TSTypeReference');
         const aliased = annotatedTypes(reference);
+
         if (aliased.length > 0) bases.set(name, aliased);
+
         return;
       }
+
       if (!isFunctionLike(node)) return;
       const name = declaredName(node) ?? declaredName(node.parent ?? node);
+
       if (name === undefined) return;
       // By IDENTITY against `raw.params`, never by node type: a
       // `FunctionDeclaration`'s own `id` is an `Identifier` child too, so
       // filtering on the type shifted every parameter one place right and
       // `buildActorTools`'s only argument was read as position 1.
       const declared = 'params' in node.raw ? node.raw.params : [];
+
       const positions = node.children
         .filter((child) => declared.some((param) => param === child.raw))
         .map((child) => [...annotatedTypes(annotationOf(child))]);
+
       const seen = parameters.get(`${file}#${name}`) ?? [];
       positions.forEach((types, index) => {
         seen[index] = [...(seen[index] ?? []), ...types];
@@ -1399,20 +1590,26 @@ export function measureFields(
   const withBases = (types: readonly string[]): readonly string[] => {
     const all = new Set<string>();
     const frontier = [...types];
+
     while (frontier.length > 0) {
       const type = frontier.pop();
+
       if (type === undefined || all.has(type)) continue;
       all.add(type);
       frontier.push(...(bases.get(type) ?? []));
     }
+
     return [...all];
   };
 
   const site = (types: readonly string[], literal: SyntaxNode): void => {
     const { keys, opaque } = suppliedKeys(literal);
+
     for (const type of withBases(types)) {
       constructed.add(type);
+
       if (opaque) supplies.add(`${type}#${NAMESPACE}`);
+
       for (const key of keys) supplies.add(`${type}#${key}`);
     }
   };
@@ -1431,39 +1628,52 @@ export function measureFields(
    */
   const calleeOrigins = (file: string, tree: SyntaxNode): Map<string, string> => {
     const origins = new Map<string, string>();
+
     for (const statement of tree.children) {
       const [specifier] = moduleSpecifiers(statement);
+
       if (specifier === undefined) continue;
       const { file: target } = resolve(file, specifier);
+
       if (target === undefined) continue;
+
       for (const bound of importBindings(statement)) {
         if (bound.imported === NAMESPACE) continue;
         const declaration = declarationSite(target, bound.imported, modules, new Set());
+
         const at = declaration === undefined
           ? `${target}#${bound.imported}`
           : declaration;
+
         origins.set(bound.local, at);
       }
     }
+
     return origins;
   };
 
   for (const [file, text] of reachers) {
     const { root: tree } = parseOnce(file, text);
     const origins = calleeOrigins(file, tree);
+
     /** A mapped alias this file can SEE: one it declares, or one it imported.
      *  Resolved through the caller's own import for the reason the table is
      *  keyed by file at all. */
     const instanceOfAlias = (name: string): MappedInstance | undefined =>
       mappedInstances.get(`${file}#${name}`) ?? mappedInstances.get(origins.get(name) ?? '');
+
     // Names this file takes from outside the corpus, so a type it shares with a
     // dependency stops being attributable everywhere.
     for (const statement of tree.children) {
       const [specifier] = moduleSpecifiers(statement);
+
       if (specifier === undefined) continue;
+
       if (resolve(file, specifier).file !== undefined) continue;
+
       for (const name of importedNames(statement)) foreignNames.add(name);
     }
+
     // BY NAME, not a flat list: every member access was compared against every
     // annotated binding in the file, which is quadratic in the largest files and
     // was most of a 3.6 s run.
@@ -1480,12 +1690,16 @@ export function measureFields(
       if (node.raw.type === 'VariableDeclarator') {
         const bound = identifierText(node.children[0] ?? node);
         const init = node.children.find((child) => child.raw.type === 'ObjectExpression');
+
         if (bound !== undefined && init !== undefined) literals.set(bound, init);
       }
+
       const annotation = annotationOf(node);
       const scope = owningScope(node);
       const bound = identifierText(node.children[0] ?? node) ?? identifierText(node);
+
       if (annotation === undefined || bound === undefined) return;
+
       for (const type of annotatedTypes(annotation, memberTypes, instanceOfAlias)) {
         typed.set(bound, [...(typed.get(bound) ?? []), { type, from: scope.from, to: scope.to }]);
       }
@@ -1496,12 +1710,14 @@ export function measureFields(
 
       if (raw.type === 'MemberExpression' && !raw.computed && raw.property.type === 'Identifier') {
         const receiver = identifierText(node.children[0] ?? node);
+
         if (receiver !== undefined) {
           for (const binding of typed.get(receiver) ?? []) {
             if (node.start < binding.from || node.end > binding.to) continue;
             reads.add(`${binding.type}#${raw.property.name}`);
           }
         }
+
         // `deps.field = …` supplies it — and on the BASE too, exactly as a
         // literal annotated with a subtype supplies the base's fields. The CLI
         // finishes its turn options that way: `liveTurnOpts` is annotated
@@ -1516,28 +1732,38 @@ export function measureFields(
             }
           }
         }
+
         return;
       }
 
       if (raw.type === 'VariableDeclarator') {
         const init = node.children.find((child) => child.raw.type === 'ObjectExpression');
+
         if (init !== undefined) site(annotatedTypes(annotationOf(node.children[0] ?? node), memberTypes, instanceOfAlias), init);
+
         return;
       }
+
       if (raw.type === 'TSSatisfiesExpression' || raw.type === 'TSAsExpression') {
         const literal = node.children.find((child) => child.raw.type === 'ObjectExpression');
+
         if (literal !== undefined) {
           site(annotatedTypes(node.children[1] ?? node, memberTypes, instanceOfAlias), literal);
         }
+
         return;
       }
+
       if (isFunctionLike(node)) {
         const returned = annotatedTypes(returnTypeOf(node), memberTypes, instanceOfAlias);
+
         if (returned.length === 0) return;
         walk(node, (inner) => {
           if (inner.raw.type !== 'ReturnStatement') return;
+
           for (const literal of returnedLiterals(inner)) site(returned, literal);
         });
+
         return;
       }
 
@@ -1549,27 +1775,34 @@ export function measureFields(
         && raw.callee.property.name === 'assign') {
         const [into, ...rest] = node.children.slice(1);
         const target = into === undefined ? undefined : identifierText(into);
+
         const types = target === undefined
           ? []
           : (typed.get(target) ?? []).map((binding) => binding.type);
+
         for (const argument of rest) {
           if (argument.raw.type === 'ObjectExpression') site(types, argument);
           else for (const type of types) supplies.add(`${type}#${NAMESPACE}`);
         }
+
         return;
       }
+
       if (raw.type !== 'CallExpression') return;
       const callee = identifierText(node.children[0] ?? node);
       const positions = calleePositions(callee, file, origins, parameters, signatures, typed);
+
       if (positions === undefined) return;
       node.children.slice(1).forEach((argument, index) => {
         const literal = argument.raw.type === 'ObjectExpression'
           ? argument
           : literals.get(identifierText(argument) ?? '');
+
         if (literal !== undefined) site(positions[index] ?? [], literal);
       });
     });
   }
+
   return { reads, supplies, constructed, foreignNames };
 }
 
@@ -1584,11 +1817,13 @@ interface Span {
 function owningScope(node: SyntaxNode): Span {
   let up: SyntaxNode | undefined = node;
   let last: SyntaxNode = node;
+
   while (up !== undefined) {
     if (isFunctionLike(up)) return { from: up.start, to: up.end };
     last = up;
     up = up.parent;
   }
+
   return { from: last.start, to: last.end };
 }
 
@@ -1606,23 +1841,31 @@ export function findUnsupplied(
   read: (file: string) => string,
 ): Unwired[] {
   const found: Unwired[] = [];
+
   for (const [file, module] of graph.modules) {
     if (!inScope(file) || !reach.live.has(file)) continue;
     const { root: tree, lineAt } = parseOnce(file, read(file));
     walk(tree, (node) => {
       if (node.type !== 'TSInterfaceDeclaration') return;
       const owner = declaredName(node);
+
       if (owner === undefined || !module.exports.has(owner)) return;
+
       if (!facts.constructed.has(owner)) return;
+
       // A name this tree shares with a dependency: see
       // {@link FieldFacts.foreignNames}.
       if (facts.foreignNames.has(owner)) return;
+
       if (facts.supplies.has(`${owner}#${NAMESPACE}`)) return;
       walk(node, (member) => {
         if (!isOptionalMember(member)) return;
         const field = declaredName(member);
+
         if (field === undefined) return;
+
         if (!facts.reads.has(`${owner}#${field}`)) return;
+
         if (facts.supplies.has(`${owner}#${field}`)) return;
         found.push({
           file,
@@ -1635,6 +1878,7 @@ export function findUnsupplied(
       });
     });
   }
+
   return found;
 }
 
@@ -1729,6 +1973,7 @@ if (import.meta.main) {
   const read = (file: string): string => reachers.get(file) ?? '';
 
   const graph = buildGraph(reachers);
+
   if (graph.dangling.length > 0) {
     throw new Error(
       `wired: ${String(graph.dangling.length)} local import(s) resolve to no file in the tree. `
@@ -1743,6 +1988,7 @@ if (import.meta.main) {
   const facts = measureFields(reachers, graph.modules);
 
   const governed = [...graph.modules.keys()].filter(inScope);
+
   const exports = governed.reduce(
     (total, file) => total + (graph.modules.get(file)?.exports.size ?? 0), 0,
   );
@@ -1769,6 +2015,7 @@ if (import.meta.main) {
       console.log(`${entry.kind}\t${entry.file}:${String(entry.line)}\t${entry.at}`
         + `\t${entry.symbol ?? '-'}`);
     }
+
     console.log(`wired: ${String(entrypoints.length)} entrypoint(s) over ${measured}`);
     process.exit(0);
   }
@@ -1788,10 +2035,13 @@ if (import.meta.main) {
 
   const ratchet = reconcile(keys, LOCK);
   const code = report('wired', ratchet, detail, 'bun scripts/wired.ts --lock', measured);
+
   if (code === 0) {
     console.log(`wired: ${String(keys.length)} recorded unwired export(s)/field(s) remain — `
       + 'visible work, not a clean tree. `bun scripts/wired.ts` names them.');
+
     for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
+
   process.exit(code);
 }

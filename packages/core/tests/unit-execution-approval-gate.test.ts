@@ -22,13 +22,16 @@ import type { ExecutorProvider } from '../src/execution/types';
 import type { ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate';
 
 const DENY = 'rm -rf /';
+
 const GATE = 'sudo rm -rf /var/lib/important';
+
 const ALLOW = 'echo hi';
 
 /** A minimal ExecutorProvider shaped like nimbus/sandbox/laptop — a real
  *  shell reachable through codemode's `<name>.exec()` namespace. */
 function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus') {
   const executed: string[] = [];
+
   const provider: ExecutorProvider = {
     name,
     kind,
@@ -43,6 +46,7 @@ function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbu
         execute: async (...args: unknown[]) => {
           const command = String(args[0]);
           executed.push(command);
+
           return `ran: ${command}`;
         },
       },
@@ -51,6 +55,7 @@ function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbu
         execute: async (...args: unknown[]) => {
           const command = String(args[0]);
           executed.push(command);
+
           return `started: ${command}`;
         },
       },
@@ -60,6 +65,7 @@ function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbu
       },
     },
   };
+
   return { provider, executed };
 }
 
@@ -134,20 +140,32 @@ describe('gateProviderExec — the executor-seam gate', () => {
   test('re-gating an already-gated provider is a no-op — idempotent against the same object crossing two routers', async () => {
     const { provider, executed } = fakeShellProvider('laptop', 'laptop');
     const askedFirst: ShellApprovalRequest[] = [];
+
     const firstPolicy: ShellApprovalPolicy = {
       mode: () => 'strict',
-      requestApproval: async (req) => { askedFirst.push(req); return 'allow'; },
+      requestApproval: async (req) => {
+        askedFirst.push(req);
+
+        return 'allow';
+      },
     };
+
     const gatedOnce = gateProviderExec(provider, firstPolicy);
 
     // Simulate a second router (e.g. a CLI head reusing the parent's laptop
     // provider verbatim — see cli-backend/runtime.ts buildCLIHeadRuntime)
     // gating the ALREADY-gated provider again with a DIFFERENT policy.
     const askedSecond: ShellApprovalRequest[] = [];
+
     const secondPolicy: ShellApprovalPolicy = {
       mode: () => 'strict',
-      requestApproval: async (req) => { askedSecond.push(req); return 'deny'; },
+      requestApproval: async (req) => {
+        askedSecond.push(req);
+
+        return 'deny';
+      },
     };
+
     const gatedTwice = gateProviderExec(gatedOnce, secondPolicy);
 
     expect(gatedTwice.tools.exec!.execute).toBe(gatedOnce.tools.exec!.execute);
@@ -242,10 +260,16 @@ describe('the executor reaches the gate', () => {
 
   test("a recursive delete on the agent's own sandbox runs, unasked", async () => {
     const asked: ShellApprovalRequest[] = [];
+
     const router = new DefaultExecutionRouter({
       mode: () => 'strict',
-      requestApproval: async (req) => { asked.push(req); return 'deny'; },
+      requestApproval: async (req) => {
+        asked.push(req);
+
+        return 'deny';
+      },
     });
+
     const { provider, executed } = fakeShellProvider('sandbox', 'sandbox');
     router.register(provider);
 
@@ -257,10 +281,16 @@ describe('the executor reaches the gate', () => {
 
   test("the identical command against the owner's laptop is put to them", async () => {
     const asked: ShellApprovalRequest[] = [];
+
     const router = new DefaultExecutionRouter({
       mode: () => 'strict',
-      requestApproval: async (req) => { asked.push(req); return 'deny'; },
+      requestApproval: async (req) => {
+        asked.push(req);
+
+        return 'deny';
+      },
     });
+
     const { provider, executed } = fakeShellProvider('laptop', 'laptop');
     router.register(provider);
 
@@ -272,11 +302,17 @@ describe('the executor reaches the gate', () => {
 
   test('a standing grant for that rule on that machine stops the asking', async () => {
     const asked: ShellApprovalRequest[] = [];
+
     const router = new DefaultExecutionRouter({
       mode: () => 'strict',
       granted: (g) => g.rule === 'rm-recursive' && g.executor === 'laptop',
-      requestApproval: async (req) => { asked.push(req); return 'deny'; },
+      requestApproval: async (req) => {
+        asked.push(req);
+
+        return 'deny';
+      },
     });
+
     const { provider, executed } = fakeShellProvider('laptop', 'laptop');
     router.register(provider);
 

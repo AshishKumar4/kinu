@@ -196,10 +196,14 @@ const TRIGGERS_INDEXES: ReadonlyArray<string> = [
 /** Initialize all hub tables, indexes, and views. Idempotent. */
 export function initEventsHubTables(sql: SqlExec): void {
   sql.exec(AGENT_LOG_DDL);
+
   for (const ix of INDEXES) sql.exec(ix);
+
   for (const view of VIEWS) sql.exec(view);
   sql.exec(REPLY_CHANNELS_DDL);
+
   for (const ix of REPLY_CHANNELS_INDEXES) sql.exec(ix);
   sql.exec(TRIGGERS_DDL);
+
   for (const ix of TRIGGERS_INDEXES) sql.exec(ix);
 }

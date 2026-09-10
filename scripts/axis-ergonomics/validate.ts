@@ -115,6 +115,7 @@ function r7Error(count: number, order: RemedyOrder): string {
   const finding =
     `you named ${String(count)} models and set no decorrelation, so model variety is this `
     + `run's only source of candidate diversity. ${SELF_MOA_EVIDENCE}`;
+
   return order === 'keep-first'
     ? `${finding} Keep the models — they are for capability and cost routing, which is what `
       + "the field is for — and set decorrelate:'angles' or 'fresh' so the diversity comes "
@@ -136,8 +137,11 @@ function checkR7(
   order: RemedyOrder,
 ): Violation | null {
   const models = config.models ?? [];
+
   if (models.length <= 1) return null;
+
   if (decorrelate !== undefined && decorrelate !== 'none') return null;
+
   return { kind: 'rule', rule: 'R7', error: r7Error(models.length, order) };
 }
 
@@ -156,16 +160,20 @@ export function validate(config: ProposedConfig, remedyOrder: RemedyOrder = 'dro
   // Vocabulary, before rules: a rule stated over a word we do not have would be
   // a rule about nothing.
   const clean: Partial<Record<AxisName, string>> = {};
+
   for (const [axis, value] of Object.entries(axes)) {
     const name = AXIS_NAMES.find((a) => a === axis);
+
     if (name === undefined) {
       violations.push({ kind: 'unknown-axis', got: axis, value });
       continue;
     }
+
     if (!AXIS_VALUES[name].some((v) => v === value)) {
       violations.push({ kind: 'unknown-value', axis: name, got: value });
       continue;
     }
+
     clean[name] = value;
   }
 
@@ -221,11 +229,13 @@ export function validate(config: ProposedConfig, remedyOrder: RemedyOrder = 'dro
   }
 
   const r7 = checkR7(config, clean.decorrelate, remedyOrder);
+
   if (r7 !== null) violations.push(r7);
 
   if (advance === 'archive') {
     unverifiable.push('R3: whether the archive key is model-decided cannot be read off the config');
   }
+
   if (score === 'judge' && advance !== undefined && TREE_SELECTORS.some((t) => t === advance)) {
     unverifiable.push('R4: judge marginalisation count is not exposed on this surface');
   }

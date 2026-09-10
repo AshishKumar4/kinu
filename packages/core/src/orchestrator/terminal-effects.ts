@@ -137,12 +137,14 @@ export function keyedScope(scope: string): string | undefined {
  * zero.
  */
 export const TERMINAL_EFFECT_RETRY_BASE_MS = 5_000;
+
 export const TERMINAL_EFFECT_RETRY_CEILING_MS = 600_000;
 
 /** How long after its `attempts`-th failure an owed effect waits: 5s, 10s, 20s
  *  … doubling to the ten-minute ceiling and staying there. */
 export function terminalEffectBackoffMs(attempts: number): number {
   const grown = TERMINAL_EFFECT_RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1);
+
   return Math.min(grown, TERMINAL_EFFECT_RETRY_CEILING_MS);
 }
 
@@ -175,6 +177,7 @@ export const TERMINAL_EFFECT_NAMES = [
   'sleep_time', 'auto_title', 'auto_gepa',
   'parent_report',
 ] as const;
+
 export type TerminalEffectName = (typeof TERMINAL_EFFECT_NAMES)[number];
 
 const TerminalEffectNameSchema = v.picklist(TERMINAL_EFFECT_NAMES);
@@ -258,6 +261,7 @@ function signalTerminalEffect(signals: SignalDeliverer, spec: {
     input: v.object({}),
     run: async (_input, scope) => {
       const effectScope = keyedScope(scope);
+
       const signal = effectScope === undefined
         ? { kind: spec.kind, text: spec.text }
         : {
@@ -265,7 +269,9 @@ function signalTerminalEffect(signals: SignalDeliverer, spec: {
           text: spec.text,
           idempotencyKey: `${spec.keyPrefix}:${effectScope}`,
         };
+
       const outcome = await signals.deliver(signal);
+
       return outcome === 'undelivered'
         ? { status: 'owed', detail: spec.undelivered }
         : { status: 'completed' };
@@ -556,6 +562,7 @@ export class TerminalEffectLedger {
     const now = this.deps.now();
     owed.forEach((effect, index) => {
       const key = terminalEffectKey(effect.name, effect.scope);
+
       // Looked up by NAME AND SCOPE, not by the key this build would compute.
       // A row written under an older key version names the same obligation, and
       // a forward path that missed it would insert a second row and dispatch the
@@ -569,6 +576,7 @@ export class TerminalEffectLedger {
         WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
           AND effect_name = ${effect.name} AND scope = ${effect.scope}
         LIMIT 1`[0];
+
       if (existing !== undefined) {
         if (existing.status === 'completed') return;
         claimed.push({
@@ -582,8 +590,10 @@ export class TerminalEffectLedger {
           lane: existing.lane === 'detached' ? 'detached' : 'inline',
           target: this.resolve(effect.name, effect.scope, existing.effect_key),
         });
+
         return;
       }
+
       const encoded = JSON.stringify(effect.input);
       void this.deps.sql`INSERT INTO terminal_effects
         (actor_id, sequence_id, effect_key, effect_name, scope, seq, input_json, lane, status, outcome,
@@ -596,6 +606,7 @@ export class TerminalEffectLedger {
         target: this.resolve(effect.name, effect.scope, key), lane: effect.lane,
       });
     });
+
     return claimed;
   }
 
@@ -608,14 +619,17 @@ export class TerminalEffectLedger {
     // parent report indefinitely. One early wake that finds nothing to do is the
     // harmless failure; a suffix nothing retries is not.
     await this.armWake();
+
     for (const row of claimed) {
       if (row.lane === 'inline') await this.attempt(sequenceId, row);
     }
+
     // Started only now, so an inline effect the queue waits on cannot be
     // overtaken by a detached one it precedes.
     const detached = claimed
       .filter((row) => row.lane === 'detached')
       .map(async (row) => await this.attempt(sequenceId, row));
+
     return {
       // Re-armed after the join, from what is LEFT: the arm before the inline
       // pass covered the claimed suffix, and this one collapses the wake onto
@@ -657,12 +671,14 @@ export class TerminalEffectLedger {
     // or model lane is in flight consumes the alarm that brought us here and
     // would leave the still-owed suffix with no carrier at all.
     await this.armWake();
+
     // The RECORDED lanes, reproducing the forward scheduler. Walking the roster
     // serially let a detached reply that hangs block the recording behind it —
     // work the live path had already committed before it ever started the reply.
     for (const row of rows) {
       if (row.lane === 'inline') await this.attempt(sequenceId, row);
     }
+
     await Promise.all(
       rows.filter((row) => row.lane === 'detached')
         .map(async (row) => await this.attempt(sequenceId, row)),
@@ -675,6 +691,7 @@ export class TerminalEffectLedger {
    *  sequences exist. */
   pendingSequences(): readonly string[] {
     this.deps.actor.assertCurrent();
+
     return this.deps.sql<{ sequence_id: string }>`
       SELECT sequence_id FROM terminal_effects
       WHERE actor_id = ${this.actorId} AND status != 'completed'
@@ -695,16 +712,21 @@ export class TerminalEffectLedger {
     inFlight: ReadonlySet<string> = new Set(),
   ): number | null {
     this.deps.actor.assertCurrent();
+
     const rows = this.deps.sql<{ sequence_id: string; at: number | null }>`
       SELECT sequence_id, MIN(next_attempt_at) AS at FROM terminal_effects
       WHERE actor_id = ${this.actorId} AND status != 'completed' GROUP BY sequence_id`;
+
     const deferred = this.deps.now() + TERMINAL_EFFECT_RETRY_CEILING_MS;
     let earliest: number | null = null;
+
     for (const row of rows) {
       if (row.at === null) continue;
       const at = inFlight.has(row.sequence_id) ? Math.max(row.at, deferred) : row.at;
+
       if (earliest === null || at < earliest) earliest = at;
     }
+
     return earliest;
   }
 
@@ -724,6 +746,7 @@ export class TerminalEffectLedger {
   /** Every non-terminal row of one sequence, with its dispatch decision made. */
   private pending(sequenceId: string): PendingRow[] {
     this.deps.actor.assertCurrent();
+
     return this.deps.sql<OwedEffectRow>`
       SELECT effect_key, effect_name, scope, seq, input_json, lane, status, attempts, next_attempt_at
       FROM terminal_effects
@@ -756,20 +779,25 @@ export class TerminalEffectLedger {
    */
   private resolve(rawName: string, scope: string, key: string): ResolvedTarget {
     const parsed = v.safeParse(TerminalEffectNameSchema, rawName);
+
     if (!parsed.success) {
       return { kind: 'blocked', name: null, reason: `unknown effect "${rawName}"` };
     }
+
     const effect = this.deps.effects[parsed.output];
+
     if (effect === undefined) {
       return {
         kind: 'blocked', name: parsed.output,
         reason: `effect "${rawName}" is not implemented by this actor`,
       };
     }
+
     if (terminalEffectKey(parsed.output, scope) !== key) {
       // A stored key has always carried a version prefix, so an absent one is
       // itself the mismatch and names itself in the reason.
       const cut = key.indexOf(':');
+
       return {
         kind: 'blocked', name: parsed.output,
         reason: `effect "${rawName}" was recorded under key version `
@@ -777,6 +805,7 @@ export class TerminalEffectLedger {
           + `and this build speaks ${TERMINAL_EFFECT_KEY_VERSION}`,
       };
     }
+
     return { kind: 'runnable', name: parsed.output, effect };
   }
 
@@ -797,6 +826,7 @@ export class TerminalEffectLedger {
     // construction, which is what `preExisting` says and what keeps that
     // invariant here instead of in the insert's choice of instant.
     this.deps.actor.assertCurrent();
+
     if (row.preExisting && row.nextAttemptAt > this.deps.now()) return;
     const attempts = row.attempts + 1;
     // Armed BEFORE the side effect, not after it. An eviction mid-effect never
@@ -806,6 +836,7 @@ export class TerminalEffectLedger {
       SET attempts = ${attempts}, next_attempt_at = ${this.deps.now() + terminalEffectBackoffMs(attempts)}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
         AND effect_key = ${row.key} AND status != 'completed'`;
+
     if (row.target.kind === 'blocked') {
       this.record(sequenceId, row.key, 'blocked', row.target.reason);
       diagnostics.failure('turn.terminal_effect_blocked', toKinuError({
@@ -813,12 +844,15 @@ export class TerminalEffectLedger {
         cause: new Error(row.target.reason),
         otherwise: 'unsupported',
       }), { sequence: sequenceId, effect: row.key, attempts });
+
       return;
     }
+
     const { name, effect } = row.target;
     const fault = this.deps.fault?.() ?? null;
     fault?.('before', name, row.scope);
     let outcome: TerminalEffectOutcome;
+
     try {
       outcome = await effect.run(parseJsonValue(row.input), row.scope);
     } catch (err) {
@@ -831,13 +865,18 @@ export class TerminalEffectLedger {
       // Owed, never abandoned: the row keeps its input and the wake armed above
       // brings an activation back for it.
       this.record(sequenceId, row.key, 'pending', `failed: ${renderThrownChain({ cause: err })}`);
+
       return;
     }
+
     fault?.('after', name, row.scope);
+
     if (outcome.status === 'owed') {
       this.record(sequenceId, row.key, 'pending', `owed: ${outcome.detail}`);
+
       return;
     }
+
     void this.deps.sql`UPDATE terminal_effects
       SET status = 'completed', outcome = ${outcome.detail ?? null}, settled_at = ${this.deps.now()}
       WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
@@ -861,6 +900,7 @@ export class TerminalEffectLedger {
   /** Arm the durable wake for the earliest owed row, if anything is still owed. */
   private async armWake(): Promise<void> {
     const at = this.nextRetryAt();
+
     if (at !== null) await this.deps.scheduleRetry(at);
   }
 }

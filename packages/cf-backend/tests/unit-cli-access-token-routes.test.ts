@@ -10,11 +10,17 @@ import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
+
 const EXEC_TOKEN = `pta_${USER_ID}_${'e'.repeat(44)}`;
+
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
+
 const BOTH_TOKEN = `pta_${USER_ID}_${'b'.repeat(44)}`;
+
 const PROXY_TOKEN = `pta_${USER_ID}_${'p'.repeat(44)}`;
+
 const ACCESS_TOKENS = new Map([
   [EXEC_TOKEN, { hash: 'exec-hash', scopes: ['workspace.exec'] }],
   [READ_TOKEN, { hash: 'read-hash', scopes: ['workspace.read'] }],
@@ -23,7 +29,9 @@ const ACCESS_TOKENS = new Map([
 ]);
 
 const ErrorResponseSchema = v.object({ error: v.string() });
+
 const RpcStatusResponseSchema = v.object({ result: v.object({ name: v.string() }) });
+
 const MeResponseSchema = v.object({
   user: v.object({ id: v.string() }),
   token: v.object({
@@ -31,11 +39,13 @@ const MeResponseSchema = v.object({
     scopes: v.union([v.literal('all'), v.array(v.string())]),
   }),
 });
+
 const MintedTokenSchema = v.object({
   token: v.string(),
   name: v.string(),
   scopes: v.array(v.string()),
 });
+
 const TokenListSchema = v.object({
   tokens: v.array(v.object({
     tokenHash: v.string(),
@@ -60,6 +70,7 @@ interface AccessTokenTestBindings<UserStub, AgentStub> {
 function testEnv<UserStub, AgentStub>(bindings: AccessTokenTestBindings<UserStub, AgentStub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: The scoped-token paths reach only the two constructed namespaces
   // and credential key; every typed binding reachable in these tests is present.
   return env as Env;
@@ -67,6 +78,7 @@ function testEnv<UserStub, AgentStub>(bindings: AccessTokenTestBindings<UserStub
 
 function handled(response: Response | null): Response {
   if (!response) throw new Error('CLI route did not handle the request');
+
   return response;
 }
 
@@ -76,6 +88,7 @@ async function errorBody(response: Response | null) {
 
 function setupEnv(opts: { sessionMintedAt?: number } = {}) {
   const calls: string[] = [];
+
   const userDO = {
     async verifyCliToken(_caller: UserCaller, token: string) {
       return {
@@ -86,7 +99,9 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     },
     async verifyAccessToken(_caller: UserCaller, token: string) {
       const entry = ACCESS_TOKENS.get(token);
+
       if (!entry) return { ok: false, error: 'invalid token' };
+
       return {
         ok: true,
         tokenHash: entry.hash,
@@ -105,7 +120,9 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     },
     async mintAccessToken(_caller: UserCaller, userId: string, name: string, scopes: string[]) {
       calls.push(`tokens:mint:${userId}:${name}:${scopes.join('+')}`);
+
       if (name === 'dup') return { ok: false as const, error: 'An active access token named "dup" already exists.' };
+
       return {
         ok: true as const,
         token: `pta_${userId}_${'n'.repeat(44)}`,
@@ -114,10 +131,12 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     },
     async listAccessTokens(_caller: UserCaller) {
       calls.push('tokens:list');
+
       return [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['workspace.exec'], createdAt: 1, lastUsedAt: 2 }];
     },
     async revokeAccessToken(_caller: UserCaller, ref: string) {
       calls.push(`tokens:revoke:${ref}`);
+
       return { ok: true as const, revoked: ref === 'ci' };
     },
     async hasWorkspace(_caller: UserCaller, name: string) {
@@ -126,59 +145,73 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
     async ensureWorkspaceCapability() {},
     async issueCliAgentConnectTicket(_caller: UserCaller, input: { cliTokenHash: string }) {
       calls.push(`connect-ticket:${input.cliTokenHash}`);
+
       return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
     },
     async listDevices(_caller: UserCaller) {
       calls.push('devices:list');
+
       return [];
     },
     async registerDevice(_caller: UserCaller) {
       calls.push('devices:register');
+
       return { deviceId: 'dev_1', token: 'raw-device-token' };
     },
   };
+
   const agent = {
     async claimOwner(userId: string) {
       return { owner: userId, capabilityHash: 'sha-existing' };
     },
     async inspectSubordinate() {
       calls.push('inspect');
+
       return { view: 'children', path: [], page: { status: 'end', items: [] } };
     },
     async getAgentStatus() {
       calls.push('status');
+
       return { name: 'jarvis', purpose: 'help' };
     },
     async cancelCurrentWork() {
       calls.push('work:cancel');
+
       return { ok: true };
     },
     async executeInExecutor(id: string, command: string) {
       calls.push(`executors:exec:${id}:${command}`);
+
       return { stdout: 'ok', exitCode: 0 };
     },
     async setModel(spec: string) {
       calls.push(`model:set:${spec}`);
+
       return { ok: true, spec };
     },
     async resolveDeviceConsent(id: string, decision: string) {
       calls.push(`consents:resolve:${id}:${decision}`);
+
       return { ok: true };
     },
     async createTimerTrigger() {
       calls.push('triggers:timer');
+
       return { id: 'trg_1', kind: 'timer_oneshot', nextFireAt: 1 };
     },
     async createDurableWebhook() {
       calls.push('triggers:webhook');
+
       return { trigger_id: 'trg_webhook' };
     },
   };
+
   const env = testEnv({
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
     OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+
   return { env, calls };
 }
 
@@ -196,6 +229,7 @@ const jsonInit = (body: JsonValue, method = 'POST'): RequestInit => ({
 });
 
 const rpcInit = (method: string, args: JsonValue[] = []): RequestInit => jsonInit({ method, args });
+
 const RPC = '/api/cli/workspaces/jarvis/rpc';
 
 describe('access token scope enforcement', () => {
@@ -240,6 +274,7 @@ describe('access token scope enforcement', () => {
 
   test('access tokens are denied every interactive-only surface, server-side', async () => {
     const { env, calls } = setupEnv({ sessionMintedAt: Date.now() });
+
     const forbidden: Array<[string, RequestInit]> = [
       ['/api/cli/workspaces/jarvis/triggers/webhook', jsonInit({ label: 'ci', auth_mode: 'hmac' })],
       [RPC, rpcInit('createTimerTrigger', [{ atMs: Date.now() + 1000, trust: 'owner' }])],
@@ -254,11 +289,13 @@ describe('access token scope enforcement', () => {
       ['/api/cli/tokens/ci', { method: 'DELETE' }],
       ['/api/cli/logout', { method: 'POST' }],
     ];
+
     for (const [path, init] of forbidden) {
       const res = await handleCliRequest(req(BOTH_TOKEN, path, init), env);
       expect(`${path}:${res?.status}`).toBe(`${path}:403`);
       expect((await errorBody(res)).error).toContain('interactive CLI session token');
     }
+
     expect(calls.filter((c) => !c.startsWith('connect-ticket'))).toEqual([]);
   });
 
@@ -293,10 +330,12 @@ describe('access token scope enforcement', () => {
 describe('access token management routes (session tokens only)', () => {
   test('minting requires a step-up-fresh session token', async () => {
     const fresh = setupEnv({ sessionMintedAt: Date.now() - 60_000 });
+
     const minted = await handleCliRequest(
       req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['workspace.exec', 'workspace.read'] })),
       fresh.env,
     );
+
     expect(minted?.status).toBe(201);
     // The minted token is the one time the secret is in a body, and the
     // account-wide policy reaches it from `json()` rather than from this route
@@ -310,10 +349,12 @@ describe('access token management routes (session tokens only)', () => {
     expect(fresh.calls).toContain(`tokens:mint:${USER_ID}:ci:workspace.exec+workspace.read`);
 
     const stale = setupEnv({ sessionMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
+
     const refused = await handleCliRequest(
       req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci', scopes: ['workspace.exec'] })),
       stale.env,
     );
+
     expect(refused?.status).toBe(401);
     expect((await errorBody(refused)).error).toContain('step-up auth required');
     expect(stale.calls.some((c) => c.startsWith('tokens:mint'))).toBe(false);
@@ -323,10 +364,12 @@ describe('access token management routes (session tokens only)', () => {
     const { env } = setupEnv({ sessionMintedAt: Date.now() });
     const missing = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'ci' })), env);
     expect(missing?.status).toBe(400);
+
     const dup = await handleCliRequest(
       req(SESSION_TOKEN, '/api/cli/tokens', jsonInit({ name: 'dup', scopes: ['workspace.exec'] })),
       env,
     );
+
     expect(dup?.status).toBe(400);
     expect((await errorBody(dup)).error).toContain('already exists');
   });
@@ -351,9 +394,11 @@ describe('access token management routes (session tokens only)', () => {
 test('retained subordinate inspection requires the owning interactive session', async () => {
   const { env, calls } = setupEnv();
   const inspection = rpcInit('inspectSubordinate', [{ path: [], view: 'children', page: {} }]);
+
   for (const token of [EXEC_TOKEN, READ_TOKEN, BOTH_TOKEN, PROXY_TOKEN]) {
     expect(handled(await handleCliRequest(req(token, RPC, inspection), env)).status).toBe(403);
   }
+
   expect(handled(await handleCliRequest(req(SESSION_TOKEN, '/api/cli/workspaces/foreign/rpc', inspection), env)).status).toBe(404);
   expect(calls).toEqual([]);
   expect(handled(await handleCliRequest(req(SESSION_TOKEN, RPC, inspection), env)).status).toBe(200);

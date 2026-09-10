@@ -53,18 +53,24 @@ export function buildModelCallEvent(report: ModelCallReport, opts: {
     source: report.source,
     usage: report.usage,
   };
+
   if (report.spec !== undefined) event.spec = report.spec;
+
   if (report.modelId !== undefined) event.modelId = report.modelId;
+
   // Narrowed by the guard rather than asserted after it: the rate is only a rate
   // for THIS call when the spec matches, so the match is what produces the
   // non-null value.
   const rate = report.spec !== undefined && report.spec === opts.effectiveSpec
     ? opts.pricing
     : null;
+
   if (rate) {
     const price = priceCall(report.usage, rate);
+
     if (price !== undefined) {
       event.usd = price.usd;
+
       // Carried, not dropped: the workspace total counts these rows to say its
       // dollar figure is a floor, and the count cannot exist if the row does
       // not say so. Absent when the price is exact, which is what makes the
@@ -72,5 +78,6 @@ export function buildModelCallEvent(report: ModelCallReport, opts: {
       if (price.floorTokens !== undefined) event.usdFloorTokens = price.floorTokens;
     }
   }
+
   return event;
 }

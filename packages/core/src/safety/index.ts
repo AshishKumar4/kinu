@@ -107,4 +107,5 @@ export {
 export {
   refusedHostname,
 } from './egress-destination';
+
 export type { Refusal } from '../obs/error';

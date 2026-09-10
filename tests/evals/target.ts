@@ -80,13 +80,17 @@ export interface EvalTargetPlan {
  */
 export function resolveEvalTarget(suite: string, model: string): EvalTargetPlan | null {
   const backend = resolveEvalBackend();
+
   if (backend.kind === 'refused') throw new Error(`${suite}: ${backend.reason}`);
 
   const target = liveModelTarget(suite);
+
   if (target === null) return null;
 
   const llm: LLMProviderConfig = { ...target.llm, model };
+
   if (backend.backend === 'local') return localPlan(suite, target, llm);
+
   return cloudPlan(suite, target, llm);
 }
 
@@ -109,6 +113,7 @@ export function resolveEvalTarget(suite: string, model: string): EvalTargetPlan 
 function localPlan(suite: string, target: LiveModelTarget, llm: LLMProviderConfig): EvalTargetPlan {
   const model = liveChatModel(llm);
   const run = `${evalNameSlug(suite)}-${Date.now().toString(36)}`;
+
   return {
     backend: 'local',
     describe: `local cli-backend runtime · ${target.describe}`,
@@ -116,6 +121,7 @@ function localPlan(suite: string, target: LiveModelTarget, llm: LLMProviderConfi
     model,
     provision: (request) => {
       const name = `${run}-${evalNameSlug(request.subject)}`;
+
       return provisionLocalTarget({
         dir: join(tmpdir(), `kinu-eval-${name}`),
         workspace: name,
@@ -151,9 +157,11 @@ function cloudPlan(suite: string, target: LiveModelTarget, llm: LLMProviderConfi
       + 'then `kinu tokens create --name evals --scopes ai.proxy`, and export it as '
       + 'KINU_EVAL_TOKEN.');
   }
+
   const session = workerSession(llm);
   const model = liveChatModel(llm);
   const suiteSlug = evalNameSlug(suite);
+
   return {
     backend: 'cloud',
     describe: `cloud staging · ${session.origin} · ${target.describe}`,
@@ -191,7 +199,9 @@ export function platformSpecific(
 ): void {
   if (plan.backend === only) {
     assert();
+
     return;
   }
+
   console.warn(`[platform] skipped a ${only}-only assertion on the ${plan.backend} arm — ${reason}`);
 }

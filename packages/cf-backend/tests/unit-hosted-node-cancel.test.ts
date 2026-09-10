@@ -60,27 +60,32 @@ function nodeInput(nodeId: string): NodeAgentInput {
     arbitrate: null,
   };
 }
+
 /** A search over one workspace, with the production seat factory: each node is
  *  acquired from the workspace's one host, so the run under test is the
  *  backend's own wiring rather than a re-declaration of it. */
 async function hostedSearch(signal?: AbortSignal) {
   const workspace = orchestratorHarness();
   const seams = workspace.agent.observeExplorationSeams();
+
   const journal: HeadJournal = new HeadJournal(
     sqlOver(workspace.db), workspace.agent.observeRuntime().actor,
   );
+
   return { workspace, seams, journal, signal };
 }
 
 /** A model that reports on its first step, the way a settled node does. */
 function reportingModel(answer: string, calls: { count: number }): MockLanguageModelV3 {
   let call = 0;
+
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-node',
     doGenerate: async () => {
       call += 1;
       calls.count = call;
+
       if (call > 1) {
         return {
           content: [{ type: 'text' as const, text: 'Reported.' }],
@@ -92,6 +97,7 @@ function reportingModel(answer: string, calls: { count: number }): MockLanguageM
           warnings: [],
         };
       }
+
       return {
         content: [{
           type: 'tool-call' as const,
@@ -126,6 +132,7 @@ describe('cancelling a search reaches its hosted nodes', () => {
     controller.abort(new Error('cancelled by operator'));
     const search = await hostedSearch(controller.signal);
     const calls = { count: 0 };
+
     const deps = buildNodeDeps({
       hostNode: (node) => hostNodeSeat(search.seams, node),
       model: reportingModel('the direct angle answers it', calls),

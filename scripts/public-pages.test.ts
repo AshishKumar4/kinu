@@ -3,6 +3,7 @@ import type { Browser, Page } from 'puppeteer';
 
 import { withGallery } from './gallery-harness';
 import { THEMES, type Theme } from './computed-style';
+
 // The walkthrough's deterministic drive, declared here rather than imported:
 // the timeline module lives in component-land (its story quotes the product's
 // fixtures), and importing it would drag the product's DOM components under
@@ -16,6 +17,7 @@ interface LandingMovieHandle {
   pause(): void;
   state(): { t: number; playing: boolean; settled: boolean };
 }
+
 declare global {
   interface Window {
     __kinuLandingMovie?: LandingMovieHandle;
@@ -23,7 +25,9 @@ declare global {
 }
 
 const PHONE = { width: 390, height: 844 } as const;
+
 const DESKTOP = { width: 1280, height: 900 } as const;
+
 const LANDING_WIDTHS = [
   ['390', PHONE],
   ['640', { width: 640, height: 900 }],
@@ -34,6 +38,7 @@ const LANDING_WIDTHS = [
   ['2560', { width: 2560, height: 1200 }],
   ['3840', { width: 3840, height: 1400 }],
 ] as const;
+
 const PUBLIC_FRAMES = ['login', 'install', 'approve'] as const;
 
 interface Contrast {
@@ -87,6 +92,7 @@ interface MovieReducedFact {
   readonly decided: boolean;
   readonly frozen: boolean;
 }
+
 interface Facts {
   reduced?: { before: string; after: string; pixels: number; animations: number };
   treeFlows?: boolean;
@@ -117,7 +123,9 @@ interface Facts {
 }
 
 let browser: Browser;
+
 let origin: string;
+
 const facts: Facts = {
   landingOverflow: {},
   publicOverflow: {},
@@ -127,26 +135,32 @@ const facts: Facts = {
 
 function required<T>(value: T | undefined, label: string): T {
   if (value === undefined) throw new Error(`${label} was not measured`);
+
   return value;
 }
 
 function luminance(rgb: readonly [number, number, number]): number {
   const linear = (channel: number): number => {
     const c = channel / 255;
+
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
   };
+
   return 0.2126 * linear(rgb[0]) + 0.7152 * linear(rgb[1]) + 0.0722 * linear(rgb[2]);
 }
 
 function contrastRatio(a: readonly [number, number, number], b: readonly [number, number, number]): number {
   const high = Math.max(luminance(a), luminance(b));
   const low = Math.min(luminance(a), luminance(b));
+
   return (high + 0.05) / (low + 0.05);
 }
 
 function parseRgb(value: string): [number, number, number] {
   const channels = value.match(/-?[\d.]+/g);
+
   if (channels === null || channels.length < 3) throw new Error(`not a colour: ${value}`);
+
   return [Number(channels[0]), Number(channels[1]), Number(channels[2])];
 }
 
@@ -166,6 +180,7 @@ async function openLanding(
     () => document.querySelector('h1') !== null,
     { timeout: 15_000 },
   );
+
   return page;
 }
 
@@ -179,10 +194,12 @@ async function openPublic(
   await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: theme.mode }]);
   await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
   const mode = await page.evaluate(() => document.documentElement.dataset.mode);
+
   if (mode !== theme.mode) {
     await page.close();
     throw new Error(`${frame}: expected ${theme.mode}, got ${String(mode)}`);
   }
+
   return page;
 }
 
@@ -190,14 +207,18 @@ async function opaqueCanvasPixels(page: Page): Promise<number> {
   const handle = await page.waitForFunction(() => {
     const canvas = document.querySelector('canvas');
     const context = canvas?.getContext('2d');
+
     if (canvas === null || context === null || context === undefined || canvas.width === 0 || canvas.height === 0) return null;
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
     let opaque = 0;
+
     for (let index = 3; index < data.length; index += 4) {
       if (data[index] !== 0) opaque += 1;
     }
+
     return opaque > 0 ? opaque : null;
   }, { polling: 100, timeout: 5_000 });
+
   return Number(await handle.jsonValue());
 }
 
@@ -243,6 +264,7 @@ beforeAll(async () => {
       const surfaces = await page.evaluate(() => {
         const measure = (element: Element | null): SurfaceFact => {
           const box = element?.getBoundingClientRect();
+
           return {
             present: element !== null,
             width: Math.round(box?.width ?? 0),
@@ -250,12 +272,14 @@ beforeAll(async () => {
             text: element?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
           };
         };
+
         return {
           workspace: measure(document.querySelector('[aria-label="Kinu workspace interface preview"]')),
           tui: measure(document.querySelector('[aria-label="Kinu terminal interface preview"]')),
           cli: measure(document.querySelector('[aria-label="Kinu command line preview"]')),
         };
       });
+
       facts.workspace = surfaces.workspace;
       facts.tui = surfaces.tui;
       facts.cli = surfaces.cli;
@@ -269,8 +293,10 @@ beforeAll(async () => {
       await page.waitForSelector('[data-landing-frame="slate"] [data-slate-dashboard]', { timeout: 10_000 });
       await page.evaluate(() => {
         const root = document.querySelector('[data-landing-frame="checkout"]');
+
         const supervise = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
           .find((button) => button.textContent?.trim() === 'Supervise');
+
         supervise?.click();
       });
       await page.waitForFunction(
@@ -279,8 +305,10 @@ beforeAll(async () => {
       );
       await page.evaluate(() => {
         const root = document.querySelector('[data-landing-frame="checkout"]');
+
         const run = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
           .find((button) => button.textContent?.trim() === 'Run');
+
         run?.click();
       });
       await page.waitForSelector('[data-landing-frame="checkout"] button[aria-label="Retry"]');
@@ -291,16 +319,20 @@ beforeAll(async () => {
       // The plan frame is the walkthrough movie, and every beat below is a DOM
       // or computed-style read off the seek the handle settles first.
       const cues = await page.evaluate(() => window.__kinuLandingMovie?.cues);
+
       if (cues === undefined) throw new Error('the walkthrough publishes no cues');
+
       const seek = (at: number): Promise<void> => page.evaluate(async (seekTo: number) => {
         await window.__kinuLandingMovie?.seek(seekTo);
       }, at);
+
       // The rail rides every workspace frame, populated through the real
       // roster transport, marked on the frame's own workspace.
       facts.rail = await page.evaluate(() => {
         const frames = [...document.querySelectorAll('[data-landing-frame]')];
         const asides = frames.map((frame) => frame.querySelector(':scope > aside'));
         const first = asides[0];
+
         return {
           frames: asides.filter((aside) => aside !== null).length,
           classes: asides.map((aside) => aside?.getAttribute('class') ?? ''),
@@ -315,11 +347,14 @@ beforeAll(async () => {
       await seek((cues.typeStart + cues.sent) / 2);
       await page.waitForFunction(() => {
         const area = document.querySelector('[data-landing-frame="plan"] textarea');
+
         return area instanceof HTMLTextAreaElement && area.value.length > 0;
       }, { timeout: 10_000 });
+
       const typing = await page.$eval('[data-landing-frame="plan"] textarea', (area) => (
         area instanceof HTMLTextAreaElement ? area.value : ''
       ));
+
       // The agent's tool calls stream into the transcript the way a real turn
       // renders them.
       await seek(cues.searchDone + 100);
@@ -331,17 +366,21 @@ beforeAll(async () => {
       // submits a clean plan, so Request changes stays disabled.
       await seek(cues.planReady + 200);
       await page.waitForSelector('[data-landing-frame="plan"] [data-plan-decisions]', { timeout: 15_000 });
+
       const decisions = await page.$$eval('[data-landing-frame="plan"] [data-plan-decisions] button', (buttons) => (
         buttons.map((button) => ({ label: button.textContent?.trim() ?? '', disabled: button.disabled }))
       ));
+
       // The cursor's click approves through the product's own decision path.
       await seek(cues.approve + 200);
       await page.waitForFunction(() => (
         document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved'
       ), { timeout: 15_000 });
+
       const cursorShown = await page.$eval('[data-landing-frame="plan"] [data-movie-cursor]', (cursor) => (
         getComputedStyle(cursor).opacity !== '0'
       ));
+
       // The build lands a slate, opened in its own tab: the settled state.
       await seek(cues.end);
       await page.waitForSelector('[data-landing-frame="plan"] [data-slate-dashboard]', { timeout: 15_000 });
@@ -362,6 +401,7 @@ beforeAll(async () => {
         const user = document.querySelector('[data-tui-role="user"]');
         const assistant = document.querySelector('[data-tui-role="assistant"]');
         const buttons = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])];
+
         return {
           pinned: (pinned?.getClientRects().length ?? 0) > 0,
           trigger: (trigger?.getClientRects().length ?? 0) > 0,
@@ -386,20 +426,25 @@ beforeAll(async () => {
       // selecting the agent, not the section, swaps the surface.
       await page.evaluate(() => {
         const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
+
         const cloud = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
           .find((button) => button.getAttribute('aria-expanded') === 'false' && button.textContent?.includes('Cloud') === true);
+
         cloud?.click();
       });
       await page.waitForFunction(() => {
         const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
+
         return [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
           .some((button) => button.textContent?.includes('Jarvis') === true);
       });
       expect(await page.evaluate(() => document.querySelector('[data-tui-agent]')?.getAttribute('data-tui-agent'))).toBe('audit');
       await page.evaluate(() => {
         const pinned = document.querySelector('[aria-label="Pinned workspaces"]');
+
         const jarvis = [...(pinned?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
           .find((button) => button.textContent?.includes('Jarvis') === true);
+
         jarvis?.click();
       });
       await page.waitForFunction(
@@ -458,17 +503,23 @@ beforeAll(async () => {
           ['section body', '#platform p'],
           ['primary action', '#top a[href="/login"]'],
         ] as const;
+
         const background = (node: Element): string => {
           for (let element: Element | null = node; element !== null; element = element.parentElement) {
             const colour = getComputedStyle(element).backgroundColor;
+
             if (colour !== 'rgba(0, 0, 0, 0)' && colour !== 'transparent') return colour;
           }
+
           return getComputedStyle(document.body).backgroundColor;
         };
+
         return samples.flatMap(([what, selector]) => {
           const element = document.querySelector(selector);
+
           if (element === null) return [];
           const style = getComputedStyle(element);
+
           return [{ what, ink: style.color, paper: background(element), size: parseFloat(style.fontSize) }];
         });
       }).then((rows) => rows.map((row) => ({
@@ -501,12 +552,14 @@ beforeAll(async () => {
       const movieT0 = await page.evaluate(() => window.__kinuLandingMovie?.state());
       await new Promise((resolve) => setTimeout(resolve, 1200));
       const movieT1 = await page.evaluate(() => window.__kinuLandingMovie?.state());
+
       const reducedBits = await page.evaluate(() => ({
         settled: document.querySelector('[data-landing-frame="plan"]')?.getAttribute('data-movie-settled') === 'true',
         cursor: document.querySelector('[data-landing-frame="plan"] [data-movie-cursor]') !== null,
         slate: document.querySelector('[data-landing-frame="plan"] [data-slate-dashboard]') !== null,
         decided: document.querySelector('[data-landing-frame="plan"] [data-plan-status]')?.textContent === 'Approved',
       }));
+
       facts.movieReduced = {
         ...reducedBits,
         frozen: movieT0 !== undefined && movieT1 !== undefined
@@ -525,37 +578,50 @@ beforeAll(async () => {
       // ellipsis truncation. Everything else is silent clipping.
       facts.landingOverflow[label] = await page.evaluate(() => {
         const viewport = document.documentElement.clientWidth;
+
         const contained = (start: Element): boolean => {
           for (let node = start.parentElement; node !== null && node !== document.body; node = node.parentElement) {
             const style = getComputedStyle(node);
             const scrollable = style.overflowX === 'auto' || style.overflowX === 'scroll';
+
             const truncation = (style.overflowX === 'hidden' || style.overflowX === 'clip')
               && style.textOverflow === 'ellipsis';
+
             if (!scrollable && !truncation) continue;
             const box = node.getBoundingClientRect();
+
             if (box.left >= -1 && box.right <= viewport + 1) return true;
           }
+
           return false;
         };
+
         const worst: string[] = [];
         const cutWorst: string[] = [];
+
         for (const element of document.querySelectorAll('main *, header *, footer *')) {
           const box = element.getBoundingClientRect();
+
           if (box.width === 0 || box.height === 0) continue;
+
           if ((box.right > viewport + 1 || box.left < -1) && !contained(element)) {
             worst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(Math.round(box.left))},${String(Math.round(box.right))}]`);
           }
+
           // The second half of the same defect, which the viewport axis above
           // cannot see: an element whose OWN content is wider than its box, with
           // `overflow-x: visible`, is cut by whichever ancestor clips — no
           // ellipsis to say so and nothing to scroll. Its box may sit entirely
           // inside the viewport, so containment is not the question here.
           const style = getComputedStyle(element);
+
           if (style.overflowX !== 'visible' || element.scrollWidth <= element.clientWidth + 2) continue;
+
           if (!contained(element)) {
             cutWorst.push(`${element.tagName.toLowerCase()}.${element.className.toString().slice(0, 60)} [${String(element.clientWidth)}<${String(element.scrollWidth)}]`);
           }
         }
+
         return {
           scroll: document.documentElement.scrollWidth - viewport,
           clipped: worst.length,
@@ -564,8 +630,10 @@ beforeAll(async () => {
           cutWorst: cutWorst.slice(0, 6),
         };
       });
+
       const surfacesFit = await page.evaluate(() => {
         const viewport = document.documentElement.clientWidth;
+
         return [
           document.querySelector('[aria-label="Kinu workspace interface preview"]'),
           document.querySelector('[data-landing-frame="plan"]'),
@@ -574,26 +642,32 @@ beforeAll(async () => {
           document.querySelector('[aria-label="Kinu command line preview"]'),
         ].every((element) => {
           const box = element?.getBoundingClientRect();
+
           return box !== undefined && box.left >= -1 && box.right <= viewport + 1;
         });
       });
+
       expect(surfacesFit, `landing@${label}: a preview left the viewport`).toBeTrue();
+
       if (label === '390') {
         facts.landingTargets = await page.evaluate(() => [
           ...document.querySelectorAll('#top a[href="/login"], #top a[href="#deploy"]'),
         ].map((element) => Math.round(element.getBoundingClientRect().height)));
         facts.railPhoneHidden = await page.evaluate(() => {
           const asides = [...document.querySelectorAll('[data-landing-frame] > aside')];
+
           return asides.length === 3
             && asides.every((aside) => getComputedStyle(aside).display === 'none');
         });
       }
+
       if (label === '1568' || label === '1920' || label === '2560' || label === '3840') {
         facts.wideColumns[label] = await page.$eval(
           '#platform',
           (element) => Math.round(element.getBoundingClientRect().width),
         );
       }
+
       await page.close();
     }
 
@@ -604,12 +678,14 @@ beforeAll(async () => {
           facts.publicOverflow[`${frame}@${theme.mode}@${label}`] = await page.evaluate(
             () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
           );
+
           if (frame === 'login' && theme.mode === 'dark' && label === '390') {
             facts.publicTargets = await page.evaluate(() => [
               ...document.querySelectorAll('a.provider, a.btn, button'),
             ].filter((element) => element.getClientRects().length > 0)
               .map((element) => Math.round(element.getBoundingClientRect().height)));
           }
+
           if (frame === 'login' && theme.mode === 'dark' && label === '1280') {
             facts.providers = await page.evaluate(() => [
               ...document.querySelectorAll<HTMLAnchorElement>('a.provider'),
@@ -618,6 +694,7 @@ beforeAll(async () => {
               const viewportCenter = document.documentElement.clientWidth / 2;
               const card = document.querySelector('.card')?.getBoundingClientRect();
               const bar = document.querySelector('.bar-inner')?.getBoundingClientRect();
+
               return {
                 dialog: document.querySelector('[role="dialog"]')?.getAttribute('aria-modal') === 'true',
                 cardOffset: Math.abs((card?.left ?? 0) + (card?.width ?? 0) / 2 - viewportCenter),
@@ -626,6 +703,7 @@ beforeAll(async () => {
               };
             });
           }
+
           await page.close();
         }
       }
@@ -656,10 +734,12 @@ describe('the standalone landing runs', () => {
     const workspace = required(facts.workspace, 'workspace preview');
     const tui = required(facts.tui, 'terminal preview');
     const cli = required(facts.cli, 'CLI preview');
+
     for (const surface of [workspace, tui, cli]) {
       expect(surface.present).toBeTrue();
       expect(surface.width).toBeGreaterThan(500);
     }
+
     expect(workspace.height).toBeGreaterThan(600);
     expect(tui.height).toBeGreaterThan(600);
     expect(cli.height).toBeGreaterThan(150);
@@ -682,9 +762,11 @@ describe('the landing frames reuse the app rail', () => {
   test('every workspace frame shows the app rail populated at desktop width', () => {
     const rail = required(facts.rail, 'frame rail');
     expect(rail.frames).toBe(3);
+
     for (const classes of rail.classes) {
       expect(classes).toBe('hidden w-60 shrink-0 h-full p-sidebar border-r p-border md:block');
     }
+
     expect(rail.visible).toBeTrue();
     expect(rail.roster).toContain('Checkout coupon bug');
     expect(rail.roster).toContain('ashish@example.com');
@@ -733,6 +815,7 @@ describe('the hero heading names its rotation', () => {
   test('the h1 accessible name contains every visible phrase', () => {
     const hero = required(facts.heroA11y, 'hero heading');
     expect(hero.phrases.length).toBeGreaterThan(1);
+
     for (const phrase of hero.phrases) {
       expect(phrase.length).toBeGreaterThan(0);
       expect(hero.label).toContain(phrase.replace(/\.$/, ''));
@@ -763,6 +846,7 @@ describe('public actions work', () => {
   test('each configured sign-in provider starts OAuth', () => {
     const providers = required(facts.providers, 'sign-in providers');
     expect(providers.length).toBeGreaterThan(0);
+
     for (const href of providers) expect(href).toMatch(/^\/auth\/[^/]+\/start/);
   });
 
@@ -800,6 +884,7 @@ describe('public pages are responsive', () => {
     for (const height of required(facts.landingTargets, 'landing phone targets')) {
       expect(height).toBeGreaterThanOrEqual(36);
     }
+
     for (const height of required(facts.publicTargets, 'public phone targets')) {
       expect(height).toBeGreaterThanOrEqual(34);
     }
@@ -811,6 +896,7 @@ describe('public pages are responsive', () => {
     // spend their real estate — 68vw at 2560, capped at 120rem for 4K — while
     // copy blocks keep their own max-width.
     const expected = { '1568': 1240, '1920': 1240, '2560': 1661, '3840': 1840 };
+
     for (const [where, target] of Object.entries(expected)) {
       const width = required(facts.wideColumns[where], `measured width @${where}`);
       expect(Math.abs(width - target), `${where}: measured ${String(width)}`).toBeLessThanOrEqual(2);
@@ -821,6 +907,7 @@ describe('public pages are responsive', () => {
 describe('rendered landing text is readable', () => {
   test('sampled roles meet WCAG AA on their actual surfaces', () => {
     expect(facts.contrast.length).toBeGreaterThanOrEqual(8);
+
     for (const { what, ratio, size } of facts.contrast) {
       expect(ratio, `${what} at ${String(size)}px`).toBeGreaterThanOrEqual(size >= 24 ? 3 : 4.5);
     }

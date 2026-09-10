@@ -115,14 +115,17 @@ export function WorkTab({
   const onNewPlan = useCallback(() => onOpenSurface("Work"), [onOpenSurface]);
 
   const loadTasks = useCallback(() => planRpc<AgentTaskTree[]>("listAgentTasks", []), [planRpc]);
+
   // The agent writes its plan mid-turn and the server never pushes it, so the
   // tab revalidates while anything is still open and stands down once
   // everything has settled.
   const revalidate = useCallback((tasks: AgentTaskTree[] | null) => {
     if (isStreaming) return 4000;
     const open = (tasks ?? []).some((t) => !isSettled(t.status) || t.subtasks.some((s) => !isSettled(s.status)));
+
     return open ? 4000 : null;
   }, [isStreaming]);
+
   const { resource: taskResource, reload: reloadTasks } = useAsyncResource(loadTasks, revalidate);
   const tasks = lastValue(taskResource);
 
@@ -140,12 +143,14 @@ export function WorkTab({
     () => buildJournal(settledJobs, closedTasks, changelog?.entries ?? []),
     [settledJobs, closedTasks, changelog],
   );
+
   const visible = journal.filter((row) => filter === "all" || row.filter === filter);
 
   // Commands the agent parked on the owner decide HERE — grouped so a night's
   // worth is one decision rather than N scattered rows. Everything else keeps
   // its deep link to where its decision is really made.
   const parkedCommands = pendingActions.filter((a) => a.kind === "deferred_action");
+
   const elsewhere = pendingActions.filter(
     (a): a is DecidedElsewhere => a.kind !== "deferred_action");
 
@@ -284,6 +289,7 @@ export function WorkTab({
  *  "all" when the whole queue is selected, the count otherwise. */
 function countLabel(chosen: number, total: number): string {
   if (total === 1) return "";
+
   return chosen === total ? "all" : String(chosen);
 }
 
@@ -338,6 +344,7 @@ export class ParkedDecisionFlow {
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
+
     return () => { this.#listeners.delete(listener); };
   };
 
@@ -361,6 +368,7 @@ export class ParkedDecisionFlow {
   readonly decide = async (decision: ParkedDecision, ids: readonly string[]): Promise<void> => {
     if (this.#snapshot.busy || ids.length === 0) return;
     this.#set({ busy: true, error: null, decided: null });
+
     try {
       await this.#deps.decide([...ids], decision);
       // The EMPTY set, never null: null selects everything, and what was
@@ -377,6 +385,7 @@ export class ParkedDecisionFlow {
 
   #set(partial: Partial<ParkedQueueSnapshot>): void {
     this.#snapshot = { ...this.#snapshot, ...partial };
+
     for (const listener of this.#listeners) listener();
   }
 }
@@ -386,6 +395,7 @@ export function ParkedCommands({ actions, rpc, onDecided, flow: injected }: { ac
     decide: (ids, decision) => rpc("decideDeferredApprovals", [ids, decision]),
     onDecided: () => onDecided?.(),
   }));
+
   const flow = injected ?? fresh;
   const state = useSyncExternalStore(flow.subscribe, flow.snapshot, flow.snapshot);
   const allIds = actions.map((a) => a.id);
@@ -467,6 +477,7 @@ function PendingRow(
 ) {
   const home = PENDING_HOME[action.kind];
   const Icon = PENDING_ICON[action.kind];
+
   const content = (
     <div className="min-w-0">
       <div className="text-[13px] leading-[18px] p-text">{action.title}</div>
@@ -478,11 +489,15 @@ function PendingRow(
       </div>
     </div>
   );
+
   const icon = <Icon size={14} className="mt-0.5 shrink-0 p-accent" />;
+
   if (home.surface === null) {
     return <div className="grid grid-cols-[14px_minmax(0,1fr)] items-start gap-2 py-2">{icon}{content}</div>;
   }
+
   const surface = home.surface;
+
   return (
     <button
       type="button"
@@ -526,5 +541,6 @@ export function buildJournal(
       key: `self:${entry.id}`, at: entry.at, filter: "self", kind: "self", entry,
     })),
   ];
+
   return rows.sort((a, b) => b.at - a.at);
 }

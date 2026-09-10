@@ -39,6 +39,7 @@ export async function waitForAnswer<T>(
   for (;;) {
     if (opts.signal?.aborted) return undefined;
     const answer = await probe();
+
     if (answer !== undefined) return answer;
     opts.onWaiting?.();
     await pause(opts.intervalMs, opts.signal);
@@ -50,18 +51,24 @@ export async function waitForAnswer<T>(
  *  suite stops waiting for the product's own signal. */
 function pause(ms: number, signal?: AbortSignal): Promise<void> {
   const { promise, resolve } = Promise.withResolvers<void>();
+
   if (signal?.aborted) {
     resolve();
+
     return promise;
   }
+
   const onAbort = () => {
     clearTimeout(timer);
     resolve();
   };
+
   const timer = setTimeout(() => {
     signal?.removeEventListener('abort', onAbort);
     resolve();
   }, ms);
+
   signal?.addEventListener('abort', onAbort, { once: true });
+
   return promise;
 }

@@ -14,8 +14,11 @@ import { describe, expect, test } from 'bun:test';
 import { screenOf } from './helpers/pty-screen';
 
 const ESC = '\u001B';
+
 const CSI = `${ESC}[`;
+
 const at = (row: number, col: number) => `${CSI}${String(row)};${String(col)}H`;
+
 const SIZE = { rows: 30, cols: 100 };
 
 describe('the pty screen model', () => {
@@ -25,6 +28,7 @@ describe('the pty screen model', () => {
     // it, and an SGR reset sits between the two runs.
     const bytes = `${at(29, 31)}Connecting…${at(29, 31)}Se${CSI}0m${at(29, 34)}`
       + `${CSI}38;2;156;145;132m${CSI}48;2;36;30;22md a message…`;
+
     expect(bytes).not.toContain('Send a message…');
     const screen = screenOf(bytes, SIZE);
     expect(screen.split('\n')[28]).toContain('Send a message…');
@@ -45,6 +49,7 @@ describe('the pty screen model', () => {
     const bytes = `${CSI}?2031h${ESC}]11;?\u0007${CSI}>0q${CSI}?1016$p${CSI}?u${CSI}1 q`
       + `${ESC}Ptmux;${ESC}${ESC}]11;?\u0007${ESC}\\`
       + `${at(1, 1)}${CSI}38;2;255;255;255m${CSI}48;2;20;17;16mink${CSI}0m`;
+
     expect(screenOf(bytes, SIZE)).toBe(`ink${'\n'.repeat(29)}`);
   });
 

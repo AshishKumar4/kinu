@@ -82,6 +82,7 @@ const CLI_BEARER_RE = /^([a-f0-9]{64}):(\d{1,15})$/;
  *  connection carries no CLI bearer at all (a browser session). */
 export function cliBearerConnectionTag(headerValue: string | null): string | null {
   if (!headerValue) return null;
+
   // A malformed value still gets a tag: the header's PRESENCE is what says this
   // is a CLI connection, so dropping it here would turn an unreadable bearer
   // into an unchecked one.
@@ -94,9 +95,12 @@ export function cliBearerFromTags(tags: Iterable<string>): CliSocketBearer | nul
   for (const tag of tags) {
     if (!tag.startsWith(CLI_BEARER_TAG_PREFIX)) continue;
     const match = CLI_BEARER_RE.exec(tag.slice(CLI_BEARER_TAG_PREFIX.length));
+
     if (!match) return { readable: false };
+
     return { readable: true, tokenHash: match[1], generation: Number(match[2]) };
   }
+
   return null;
 }
 
@@ -118,6 +122,7 @@ const SESSION_BEARER_RE = /^[a-f0-9]{64}$/;
  *  connection carries no browser session (a CLI ticket connection). */
 export function sessionBearerConnectionTag(headerValue: string | null): string | null {
   if (!headerValue) return null;
+
   // Same rule as the CLI bearer: the header's PRESENCE is what says this is a
   // browser connection, so an unparseable value still gets a tag and is
   // refused at frame time rather than read as "no session to check".
@@ -132,9 +137,12 @@ export function sessionBearerFromTags(tags: Iterable<string>): { tokenHash: stri
   for (const tag of tags) {
     if (!tag.startsWith(SESSION_BEARER_TAG_PREFIX)) continue;
     const value = tag.slice(SESSION_BEARER_TAG_PREFIX.length);
+
     if (!SESSION_BEARER_RE.test(value)) return { unreadable: true };
+
     return { tokenHash: value };
   }
+
   return null;
 }
 
@@ -357,7 +365,9 @@ type AgentRpcMethodsExist = {
     ? true
     : false;
 }[AgentRpcMethod];
+
 const agentRpcMethodsExist: AgentRpcMethodsExist = true;
+
 void agentRpcMethodsExist;
 
 /** The access class for a client-supplied method name; null when the method
@@ -379,6 +389,7 @@ export function rpcAccessScope(access: AgentRpcAccess | null): AccessTokenScope 
 export function cliScopesConnectionTag(headerValue: string | null): string | null {
   if (!headerValue) return null;
   const normalized = normalizeAccessTokenScopes(headerValue.split(','));
+
   // A scoped header that fails to parse must fail closed, not fall open to
   // an unrestricted connection: an empty scope set denies every RPC.
   return `${CLI_SCOPES_TAG_PREFIX}${normalized.ok ? normalized.scopes.join(',') : ''}`;
@@ -389,8 +400,10 @@ function cliScopesFromTags(tags: Iterable<string>): AccessTokenScope[] | null {
   for (const tag of tags) {
     if (!tag.startsWith(CLI_SCOPES_TAG_PREFIX)) continue;
     const parsed = normalizeAccessTokenScopes(tag.slice(CLI_SCOPES_TAG_PREFIX.length).split(','));
+
     return parsed.ok ? parsed.scopes : [];
   }
+
   return null;
 }
 
@@ -408,20 +421,25 @@ const RpcFrameSchema = v.object({
 export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Message): string | null {
   if (!v.is(v.string(), message)) return null;
   const scopes = cliScopesFromTags(tags);
+
   if (scopes === null) return null;
 
   const parsed = v.safeParse(RpcFrameSchema, tolerate(() => JSON.parse(message), 'malformed-input'));
+
   if (!parsed.success) return null;
   const { id, method } = parsed.output;
 
   const access = requiredRpcAccess(method);
   const required = rpcAccessScope(access);
+
   if (required && scopes.includes(required)) return null;
+
   const error = access === 'never'
     ? `${method} is not remotely invokable.`
     : required
       ? `This access token does not have the ${required} scope required by ${method}.`
       : `${method} requires an interactive CLI session token. Sign in with: kinu auth`;
+
   // The refused METHOD and the scope it wanted, never the token and never the
   // frame. A scoped token asking for something outside its scope is either a
   // client we shipped with the wrong scope set or someone probing the surface,
@@ -437,5 +455,6 @@ export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Me
     tool: method,
     source: required ?? 'interactive',
   });
+
   return JSON.stringify({ type: 'rpc', id, success: false, error });
 }

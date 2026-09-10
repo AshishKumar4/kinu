@@ -23,6 +23,7 @@ export function dedupeKeyFor(event: KinuEvent): string | null {
   if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
     return event.dedupe_key;
   }
+
   return dedupeReadableEvent(event);
 }
 
@@ -42,6 +43,7 @@ function dedupeReadableEvent(
       const p = event.payload;
       const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
       const bodyHash = sha256Hex(stableStringify(decodeJsonValue({ value: p.body })), 24);
+
       return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;
     }
 
@@ -65,8 +67,10 @@ function dedupeReadableEvent(
       // deliver the same id). Mail without one falls back to a content hash
       // bucketed like webhooks.
       const p = event.payload;
+
       if (p.message_id) return `email:${p.message_id}`;
       const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
+
       return `email:${sha256Hex(`${p.from}|${p.to}|${p.subject}|${p.body_text}`, 24)}:${bucket}`;
     }
 

@@ -25,6 +25,7 @@ import type { Identity, SqlExecutor, VFS } from '../src/types/primitives';
 import type { ActorHandle } from '../src/identity/actor-handle';
 
 const PARENT_V1 = '// parent v1 — the promoted loop\nasync function* run(rt, task) { yield "v1"; }\n';
+
 const PARENT_V2 = '// parent v2 — promoted later\nasync function* run(rt, task) { yield "v2"; }\n';
 
 interface Fixture {
@@ -36,6 +37,7 @@ interface Fixture {
 
 function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: string): Identity {
   const path = `agents/${name}/scaffold/agent.js`;
+
   return {
     id: `actor-${name}`,
     name,
@@ -54,6 +56,7 @@ function build(): Fixture {
   const db = new Database(':memory:');
   const sql = sqlOver(db);
   const execRaw = (ddl: string): void => { db.exec(ddl); };
+
   execRaw(WORKSPACE_IDENTITY_DDL);
   initWorkspaceActorTable(execRaw);
   initAgentConfigTable(execRaw);
@@ -63,11 +66,13 @@ function build(): Fixture {
   void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'seeded')`;
   const directory = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' });
   const template = createTestRuntime().rt;
+
   return {
     sql, directory,
     main: directory.createMain({ name: 'seeded' }),
     actorRuntime: (handle, name) => {
       const plane = createMemoryVfs().vfs;
+
       return {
         ...template,
         actor: handle,
@@ -90,6 +95,7 @@ async function parentAtV1(fx: Fixture): Promise<AgentRuntime> {
   void fx.sql`UPDATE scaffold_versions SET status = 'historical'
     WHERE actor_id = ${parent.actor.actorId} AND version = 0`;
   await parent.identity.scaffold.write(PARENT_V1);
+
   return parent;
 }
 
@@ -125,10 +131,12 @@ describe('seedActorLoop', () => {
     expect(await rt.identity.scaffold.read()).toBe(PARENT_V1);
     const versioned = rt.agentStateVfs ?? rt.storage.vfs;
     expect(await versioned.readFile(`${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' })).toBe(PARENT_V1);
+
     // Lineage is recorded, so the child's evolution has a parent to diff against.
     const row = fx.sql<{ parent_version: number | null; rationale: string }>`
       SELECT parent_version, rationale FROM scaffold_versions
       WHERE actor_id = ${child.actorId} AND version = 1`[0];
+
     expect(row?.parent_version).toBe(1);
     expect(row?.rationale).toContain(parent.actor.actorId);
   });

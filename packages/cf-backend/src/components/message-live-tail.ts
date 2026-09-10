@@ -40,17 +40,23 @@ export type LiveTail =
 export function liveTail(parts: readonly Part[]): LiveTail {
   for (let i = parts.length - 1; i >= 0; i--) {
     const part = parts[i];
+
     if (part === undefined) continue;
+
     if (isToolUIPart(part)) {
       const done = part.state === "output-available" || part.state === "output-error";
+
       return done ? { kind: "thinking" } : { kind: "tool" };
     }
+
     if (part.type === "text") {
       return part.state === "done" ? { kind: "thinking" } : { kind: "text", part };
     }
+
     if (part.type === "reasoning") {
       return part.state === "done" ? { kind: "thinking" } : { kind: "reasoning", part };
     }
   }
+
   return { kind: "thinking" };
 }

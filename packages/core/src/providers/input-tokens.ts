@@ -109,8 +109,11 @@ export async function countRequestInputTokens(
   if (!provider) {
     return { kind: 'unsupported', provider: 'unknown', reason: 'the model resolved through no registered provider' };
   }
+
   const count = provider.countInputTokens;
+
   if (!count) return { kind: 'unsupported', provider: provider.id, reason: NO_COUNT_ENDPOINT };
+
   try {
     return await count(modelId, deps, request);
   } catch (error) {
@@ -119,6 +122,7 @@ export async function countRequestInputTokens(
       toKinuError({ doing: 'count the assembled request before submitting it', cause: error, otherwise: 'io' }),
       { provider: provider.id, model: modelId },
     );
+
     return { kind: 'unsupported', provider: provider.id, reason: renderThrownChain({ cause: error }) };
   }
 }

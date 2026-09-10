@@ -176,6 +176,7 @@ describe('invocation handles are revoked, not merely discouraged', () => {
       // Live INSIDE the callback, which is what makes the assertion below about
       // revocation rather than about a broken handle.
       tick.span('alarm.phase', () => undefined);
+
       return Promise.resolve();
     });
 
@@ -205,6 +206,7 @@ describe('invocation handles are revoked, not merely discouraged', () => {
     const seat = seatFor();
     tracing().invocation('rpc', 'call', (call) => { seat.handle = call; });
     let refusal: KinuError | null = null;
+
     try {
       seat.handle?.span('rpc.late', () => undefined);
     } catch (thrown) {
@@ -213,6 +215,7 @@ describe('invocation handles are revoked, not merely discouraged', () => {
       if (thrown instanceof KinuError) refusal = thrown;
       else throw thrown;
     }
+
     // A refusal carries its classification, reason first: `unsupported`, because
     // opening a span from escaped work is not a runtime condition to retry — it is a
     // programming error, and a retry would produce the same lie.
@@ -250,19 +253,23 @@ describe('a span marks a failure and changes nothing about it', () => {
   const spanFor = () => {
     const tracer: RecordingTracer = createRecordingTracer();
     const empty: ReadonlyMap<string, SpanAttributeValue> = new Map();
+
     return { tracer, attributes: () => tracer.opened[0]?.attributes ?? empty };
   };
 
   test('a span opens and closes around real async work', async () => {
     const { tracer } = spanFor();
     const order: string[] = [];
+
     const answer = await tracer.span('work', { isolateGen: 3, selfPath: 'A:a' }, async (span) => {
       order.push('inside');
       await Promise.resolve();
       span.setAttribute('kinu.rows', 4);
       order.push('after_await');
+
       return 'done';
     });
+
     expect(answer).toBe('done');
     expect(order).toEqual(['inside', 'after_await']);
     // Opened, and opened ONCE. An empty `opened` is the shape of instrumentation
@@ -285,12 +292,14 @@ describe('a span marks a failure and changes nothing about it', () => {
     // Collected rather than parked in a `let`: the identity of what came out is the
     // assertion, so nothing here may narrow or default it.
     const caught: Error[] = [];
+
     try {
       tracer.span('write', { isolateGen: 1, selfPath: 'A:a' }, () => { throw thrown; });
     } catch (error) {
       if (!(error instanceof Error)) throw error;
       caught.push(error);
     }
+
     // IDENTITY, not shape: a wrapped error would satisfy `toThrow(...)` while
     // having destroyed the classification and the chain the caller has to read.
     expect(caught[0]).toBe(thrown);
@@ -303,6 +312,7 @@ describe('a span marks a failure and changes nothing about it', () => {
     const { tracer, attributes } = spanFor();
     const thrown = new KinuError('timeout', 'awaiting the node', { cause: new Error('600s idle') });
     const rejected: Error[] = [];
+
     try {
       await tracer.span(
         'run',
@@ -313,6 +323,7 @@ describe('a span marks a failure and changes nothing about it', () => {
       if (!(cause instanceof Error)) throw cause;
       rejected.push(cause);
     }
+
     expect(rejected[0]).toBe(thrown);
     expect(attributes().get(SPAN_ATTR_ERROR)).toBe(true);
   });
@@ -321,6 +332,7 @@ describe('a span marks a failure and changes nothing about it', () => {
     const secret = 'sk-live-0000000000000000';
     const { tracer } = spanFor();
     const absorbed: Error[] = [];
+
     try {
       await tracer.span('thrown', { isolateGen: 1, selfPath: 'A:a' }, async () => {
         throw new Error(`upstream refused: ${secret}`);
@@ -329,11 +341,13 @@ describe('a span marks a failure and changes nothing about it', () => {
       if (!(cause instanceof Error)) throw cause;
       absorbed.push(cause);
     }
+
     expect(absorbed).toHaveLength(1);
     tracer.span('tolerated', { isolateGen: 1, selfPath: 'A:a' }, (span) => {
       span.fail(new Error(`upstream refused: ${secret}`));
     });
     expect(tracer.opened).toHaveLength(2);
+
     for (const span of tracer.opened) {
       // The whole recorded surface, not a named key: a future attribute carrying
       // the message under any other name is the same leak.
@@ -344,10 +358,13 @@ describe('a span marks a failure and changes nothing about it', () => {
 
   test('a tolerated failure marks the span without throwing', () => {
     const { tracer, attributes } = spanFor();
+
     const answer = tracer.span('phase', { isolateGen: 1, selfPath: 'A:a' }, (span) => {
       span.fail(new Error('the reconcile is degraded but the tick continues'));
+
       return 'continued';
     });
+
     // The alarm tick's shape: the phase tolerates its failure and the invocation
     // proceeds, so the span must say it failed while the caller sees success.
     expect(answer).toBe('continued');

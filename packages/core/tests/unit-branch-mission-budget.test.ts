@@ -56,15 +56,20 @@ function countingLedger() {
   const rawSql = makeSql(db);
   const rawExec = makeExecRaw(db);
   const statements: string[] = [];
+
   const sql: SqlExecutor = <T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
     statements.push(strings.join('?').replace(/\s+/g, ' ').trim());
+
     return rawSql<T>(strings, ...values);
   };
+
   const execRaw: RawSqlExec = (ddl) => {
     statements.push(ddl.replace(/\s+/g, ' ').trim());
     rawExec(ddl);
   };
+
   const actor = createTestActors(sql, execRaw).main;
+
   return { db, sql, execRaw, statements, actor };
 }
 
@@ -72,32 +77,38 @@ function countingLedger() {
 // an annotated constant would make the arithmetic below reach through
 // `number | undefined` and the test would have to assert its own fixtures.
 const PER_ROLLOUT = { input: 800, output: 200 } satisfies Usage;
+
 const PER_REFLECTION = { input: 300, output: 100 } satisfies Usage;
 
 /** A search whose branches always propose something and always score low
  *  enough to reflect, each call reporting a fixed spend. */
 function branchingRuntime() {
   const { rt } = createTestRuntime();
+
   // Score every branch below mcts.reflectionThreshold, so the reflect phase —
   // a second far-side model call per branch — actually runs.
   const judge: LLM = {
     async *stream() { yield '{"score": 0.1}'; },
     async complete() { return '{"score": 0.1}'; },
   };
+
   rt.llm = judge;
   rt.judgeModel = judge;
   let rollouts = 0;
   let reflections = 0;
   rt.spawnBranch = async () => ({ explore: async () => {
     rollouts++;
+
     return { text: 'an approach', usage: PER_ROLLOUT };
   }, generateReflection: async () => {
     reflections++;
+
     return { text: 'it did not work', usage: PER_REFLECTION };
   }, release: async () => {} });
   initSearchTables(rt.storage.execRaw);
   initScaffoldTables(rt.storage.execRaw);
   initCraftedToolsTables(rt.storage.sql);
+
   return { rt, rollouts: () => rollouts, reflections: () => reflections };
 }
 
@@ -181,6 +192,7 @@ describe('a declared budget reaches the search between expansions', () => {
     governor.declare('mission', { tokens: 10_000_000 }, {});
 
     const seen: number[] = [];
+
     const scope: MissionScope = {
       labels: ['mission'],
       port: {
@@ -188,6 +200,7 @@ describe('a declared budget reaches the search between expansions', () => {
         async debit(tokens, opts) { seen.push(tokens); governor.debit(tokens, opts); },
       },
     };
+
     const { rt, rollouts, reflections } = branchingRuntime();
     await search(rt, scope);
 
@@ -213,12 +226,14 @@ describe('a declared budget reaches the search between expansions', () => {
     expect(governor.snapshot('mission')[0]!.exhausted).toBe(true);
     // Stopped nowhere near the 16 rollouts the budget of 8 would have taken.
     expect(rollouts()).toBeLessThan(6);
+
     // Every node the tree kept came from a rollout that actually ran: a stop is
     // an absence of expansions, never an expansion full of empty proposals that
     // would backpropagate 0 through the persisted tree.
     const nodes = rt.storage.sql<{ observation: string; parent_id: string | null }>`
       SELECT observation, parent_id FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND parent_id IS NOT NULL`;
+
     expect(nodes.length).toBe(rollouts());
     expect(nodes.every((n) => n.observation === 'an approach')).toBe(true);
     ledger.db.close();
@@ -233,7 +248,11 @@ describe('a declared budget reaches the search between expansions', () => {
     const { rt, rollouts, reflections } = branchingRuntime();
     let spawned = 0;
     const spawn = rt.spawnBranch;
-    rt.spawnBranch = async (id) => { spawned++; return spawn(id); };
+    rt.spawnBranch = async (id) => {
+      spawned++;
+
+      return spawn(id);
+    };
 
     await search(rt, localMissionScope(governor, ['mission']));
 
@@ -248,11 +267,13 @@ describe('a declared budget reaches the search between expansions', () => {
   test('exhaustion fires the run-event hook exactly once', async () => {
     const ledger = countingLedger();
     const exhausted: string[] = [];
+
     const governor = new MissionGovernor({
       storage: { sql: ledger.sql, execRaw: ledger.execRaw },
       actor: ledger.actor,
       onExhausted: (refusal) => { exhausted.push(refusal.label); },
     });
+
     governor.declare('mission', { tokens: 2_000 }, {});
 
     const { rt } = branchingRuntime();
@@ -303,7 +324,11 @@ describe('a declared budget reaches the search between expansions', () => {
 
     const { rt } = branchingRuntime();
     let explores = 0;
-    rt.spawnBranch = async () => ({ explore: async () => { explores++; return { text: 'an approach', usage: {} }; }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
+    rt.spawnBranch = async () => ({ explore: async () => {
+      explores++;
+
+      return { text: 'an approach', usage: {} };
+    }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
 
     await search(rt, localMissionScope(governor, ['mission']));
 
@@ -347,7 +372,11 @@ describe('every rollout is reported, labelled or not', () => {
     const reports: ModelCallReport[] = [];
     const { rt } = branchingRuntime();
     let explores = 0;
-    rt.spawnBranch = async () => ({ explore: async () => { explores++; return { text: 'an approach', usage: {} }; }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
+    rt.spawnBranch = async () => ({ explore: async () => {
+      explores++;
+
+      return { text: 'an approach', usage: {} };
+    }, generateReflection: async () => ({ text: 'no lesson', usage: {} }), release: async () => {} });
 
     await search(rt, localMissionScope(governor, ['mission']), 3, 2, (r) => reports.push(r));
 
@@ -363,7 +392,11 @@ describe('every rollout is reported, labelled or not', () => {
     const reports: ModelCallReport[] = [];
     const { rt } = branchingRuntime();
     let reflections = 0;
-    rt.spawnBranch = async () => ({ explore: async () => { throw new Error('branch down'); }, generateReflection: async () => { reflections++; return { text: 'it died', usage: PER_REFLECTION }; }, release: async () => {} });
+    rt.spawnBranch = async () => ({ explore: async () => { throw new Error('branch down'); }, generateReflection: async () => {
+      reflections++;
+
+      return { text: 'it died', usage: PER_REFLECTION };
+    }, release: async () => {} });
 
     await search(rt, null, 3, 2, (report) => reports.push(report));
 

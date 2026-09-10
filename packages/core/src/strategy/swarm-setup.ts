@@ -76,6 +76,7 @@ export function unavailable(error: string): Refusal {
 export function badInput(error: string): Refusal {
   return refusalOf(new KinuError('bad_input', error));
 }
+
 /**
  * Whether this tree can execute the resolved shape now, or the refusal naming what
  * it would have needed.
@@ -87,25 +88,30 @@ export function badInput(error: string): Refusal {
  */
 export function regionRefusal(resolved: ResolvedSwarm, mode: WorkMode): Refusal | null {
   const composition = compositionRefusal(resolved);
+
   if (composition) return composition;
   const { config, settle } = resolved;
   const publishes = config.advance.kind !== 'pareto' && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind);
   const planAllowed = settle === 'merge' && config.score.kind !== 'verify' && !publishes;
+
   return workModeRefusal(mode, planAllowed, 'Search measurement, publication or project apply');
 }
 
 function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
   const { config, caps } = resolved;
   const depth = caps.depth;
+
   if (!depth) {
     return badInput('neither this call nor its base states `depth`, so nothing says how deep the '
       + 'search may go — and no default exists to inherit, because a composition with no `from` has '
       + 'no preset row behind it. Pass `depth`, or name a base with `from`.');
   }
+
   if (!caps.branches) {
     return badInput('neither this call nor its base states `branches`, so nothing says how many '
       + 'candidates an expansion produces. Pass `branches`, or name a base with `from`.');
   }
+
   // Tool-using nodes are graded on their reports, not shared-workspace diffs;
   // the recorded `agent-trajectory-search` result of 18% demonstrates the cost
   // of blocking the composition on the wrong boundary. Judged scoring uses the
@@ -120,12 +126,15 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
   // literature says is not worth building, and it is refused here as well as in
   // `swarmValidity` because this function is also the in-process entry point.
   const marginalisation = judgeMarginalisationRefusal(config);
+
   if (marginalisation) return marginalisation;
+
   if (isTreeAdvance(config.advance.kind) && config.score.kind === 'none') {
     // Unreachable through `swarmValidity`, which refuses this composition outright.
     // Kept because this function is also the in-process entry point.
     return badInput(`advance:"${config.advance.kind}" cannot select without a score.`);
   }
+
   if (config.advance.kind === 'pareto'
     && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind)) {
     // Unreachable through `swarmValidity`, which refuses this composition outright.
@@ -133,6 +142,7 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return badInput('advance:"pareto" keeps its durable frontier in node evidence and cannot '
       + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
   }
+
   // `advance:'archive'` RUNS — see `admitToArchive` at the settle barrier. It does NOT
   // share `pareto`'s refusal: "needs a store this run has no writer for" is one sentence
   // covering two different causes, and the archive is not one of them —
@@ -141,7 +151,9 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
   // through the predicate `swarmValidity` shares so an in-process caller cannot run a
   // shape the tool surface refuses.
   const archive = archiveRegionRefusal(config, caps);
+
   if (archive) return archive;
+
   if (!resolved.key && config.advance.kind === 'archive') {
     // Unreachable through `swarmValidity`, which refuses an archive with no descriptor
     // outright. Kept because this function is also the in-process entry point, and
@@ -149,6 +161,7 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return badInput('advance:"archive" bins its elites by a descriptor and this call named none. '
       + 'Supply `key`, naming a quantity the objective\'s own instrument reports.');
   }
+
   // `expand:'aggregate'` RUNS — see `fanInAtLevel`. What refuses here is a composition
   // in which a fan-in could never HAPPEN, and each arm names the one thing that makes it
   // impossible. A composition that resolved and then quietly aggregated nothing would
@@ -159,6 +172,7 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
     return badInput('expand:"aggregate" needs a scalar verifier verdict to re-grade a merge node, '
       + 'while advance:"pareto" preserves a vector without collapsing it. Use expand:"sample".');
   }
+
   if (config.expand === 'aggregate') {
     if (depth.value < 2) {
       return badInput('expand:"aggregate" is fan-in — k parents consumed by one child — and a '
@@ -166,11 +180,13 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
         + 'root, whose level is the root alone, so nothing would ever be aggregated. Raise `depth` '
         + 'past 1, or use expand:"sample" for one flat wave of independent candidates.');
     }
+
     if (!isTreeAdvance(config.advance.kind)) {
       return badInput(`expand:"aggregate" needs a second level and advance:"${config.advance.kind}" `
         + 'has no selection step, so this search stops after the root\'s one wave and no level is '
         + `ever consumed. Use one of ${SWARM_TREE_ADVANCES.join('/')}.`);
     }
+
     if (config.score.kind !== 'verify') {
       // NOT "judge cannot score". It scores, and the ensemble is reached above — what it
       // does not do is PLACE a candidate. A fan-in merges its parents' work, and a
@@ -185,6 +201,7 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
         + 'scorer and lose the DAG.');
     }
   }
+
   return null;
 }
 
@@ -192,7 +209,9 @@ function compositionRefusal(resolved: ResolvedSwarm): Refusal | null {
  *  and no others: no model, no network, no trajectory. */
 export function measurementContext(rt: AgentRuntime): MeasurementContext | null {
   const shell = rt.shell;
+
   if (!shell) return null;
+
   return { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
 }
 
@@ -201,6 +220,7 @@ export function measurementContext(rt: AgentRuntime): MeasurementContext | null 
 export function baselineOf(measurement: Measurement, key: string | null): number | null {
   if (!key) return null;
   const reported = measurement.measured?.[key];
+
   return reported !== undefined && Number.isFinite(reported) ? reported : null;
 }
 
@@ -210,6 +230,7 @@ export function baselineOf(measurement: Measurement, key: string | null): number
 export function breaches(floor: Floor, direction: ObjectiveDirection, value: number): boolean {
   return direction === 'minimise' ? value < floor.value : value > floor.value;
 }
+
 /** The instruments and declared axes that produce one Pareto vector. */
 export interface PreparedParetoMeasurement {
   readonly axes: readonly ParetoAxis[];
@@ -231,15 +252,20 @@ export async function prepareParetoMeasurement(input: {
   readonly resolved: ResolvedSwarm;
 }): Promise<PreparedParetoMeasurement | Refusal> {
   const objective = input.resolved.objective;
+
   if (!objective || (objective.kind !== 'instanced' && objective.kind !== 'vector')) {
     return badInput('advance:"pareto" requires an instanced or vector objective.');
   }
+
   const axes = paretoObjectiveAxes(objective);
+
   if ('reason' in axes) return badInput(axes.reason);
   const ctx = measurementContext(input.rt);
+
   if (!ctx) {
     return unavailable('this workspace has no shell, so its Pareto instruments cannot run.');
   }
+
   const components: readonly {
     readonly axisIds: readonly string[];
     readonly perInstance: boolean;
@@ -251,19 +277,26 @@ export async function prepareParetoMeasurement(input: {
       perInstance: false,
       objective: component,
     }));
+
   const instruments: PreparedParetoMeasurement['instruments'][number][] = [];
+
   for (const component of components) {
     if (!('kind' in component.objective.verify)) {
       return unsupported('a Pareto objective supplies a closure verifier, which names no durable '
         + 'artifact path. Register a verifier kind for every Pareto axis.');
     }
+
     const kind = registeredVerifierKind(component.objective.verify.kind);
+
     if (kind === null) return unregisteredKindRefusalFor(component.objective.verify.kind);
     const fault = await preflightVerifier(kind, ctx);
+
     if (fault !== null) {
       return unavailable(`the "${kind}" Pareto instrument cannot run in this workspace: ${fault}`);
     }
+
     const resolvedVerifier = resolveVerifier(component.objective.verify);
+
     if ('reason' in resolvedVerifier) return resolvedVerifier;
     instruments.push({
       axisIds: component.axisIds,
@@ -271,6 +304,7 @@ export async function prepareParetoMeasurement(input: {
       verifier: resolvedVerifier,
     });
   }
+
   return { axes: axes.axes, ctx, instruments };
 }
 
@@ -313,13 +347,16 @@ export async function prepareMeasurement(input: {
 }): Promise<PreparedMeasurement | Refusal> {
   const { rt, resolved, archive, log } = input;
 const objective = resolved.objective;
+
 if (!objective) return badInput('score:"verify" with no `objective` measures nothing.');
 const measured = measuredHalf(objective);
+
 if (!measured) {
   return unsupported(`an objective of kind "${objective.kind}" is measured per component or per `
     + 'instance, and this run settles one answer against one number. Use kind:"scalar", or '
     + 'kind:"witness" with a scalar `proxy`.');
 }
+
 if (!('kind' in measured.verify)) {
   // The closure arm is legal for in-process callers and unusable HERE, for a
   // reason that is not about publishability: a closure declares no path a
@@ -331,6 +368,7 @@ if (!('kind' in measured.verify)) {
     + 'candidate is written to, so this run cannot place one for it to measure. Register a '
     + 'verifier kind and pass verify as {kind, spec}.');
 }
+
 // ORDER MATTERS HERE: the kind, the shell, then whether THIS instrument can run in THIS
 // shell, and only then the spec. Every refusal above the spec is one no spec could have
 // avoided, so a caller is never sent to correct a field while the instrument behind it
@@ -343,14 +381,18 @@ if (!('kind' in measured.verify)) {
 // sequence (an unregistered kind, two spec-shape complaints, then two faulted
 // baselines) and the turn was cut before it ever ran a search.
 const kind = registeredVerifierKind(measured.verify.kind);
+
 if (kind === null) return unregisteredKindRefusalFor(measured.verify.kind);
 const ctx = measurementContext(rt);
+
 if (!ctx) {
   return unavailable('this workspace has no shell, so nothing can run a measurement in it — a '
     + 'verifier is given a filesystem and a shell and this actor was wired neither. The call is '
     + 'well-formed; the instrument is absent.');
 }
+
 const instrumentFault = await preflightVerifier(kind, ctx);
+
 if (instrumentFault !== null) {
   return unavailable(`the "${kind}" instrument cannot run in this workspace's shell, so no `
     + `score:"verify" search can start here — and no \`spec\` would change that: ${instrumentFault}. `
@@ -359,28 +401,38 @@ if (instrumentFault !== null) {
     + 'a named preset runs a judged sweep at its own width, which needs no instrument at all. '
     + 'Switching preset is not required and would cost this one its width and unit.');
 }
+
 const resolvedVerifier = resolveVerifier(measured.verify);
+
 if ('reason' in resolvedVerifier) return resolvedVerifier;
 const verifier = resolvedVerifier;
 let witnessVerifier: ResolvedVerifier | null = null;
 let witnessDigest: string | null = null;
+
 if (measured.witness !== null) {
   if (!('kind' in measured.witness)) {
     return unsupported('this witness check is a closure, which names no candidate path and '
       + 'cannot be identified across durable runs. Register it as a verifier kind.');
   }
+
   const witnessKind = registeredVerifierKind(measured.witness.kind);
+
   if (witnessKind === null) return unregisteredKindRefusalFor(measured.witness.kind);
   const witnessFault = await preflightVerifier(witnessKind, ctx);
+
   if (witnessFault !== null) {
     return unavailable(`the witness instrument cannot run in this workspace: ${witnessFault}`);
   }
+
   const resolvedWitness = resolveVerifier(measured.witness);
+
   if ('reason' in resolvedWitness) return resolvedWitness;
   witnessVerifier = resolvedWitness;
   witnessDigest = verifierDigestOf(measured.witness, resolvedWitness.implementation);
 }
+
 const proxyDigest = verifierDigestOf(measured.verify, resolvedVerifier.implementation);
+
 const identity = {
   metric: measured.metric,
   unit: measured.unit,
@@ -390,10 +442,12 @@ const identity = {
     ? proxyDigest
     : argumentDigest({ proxy: proxyDigest, witness: witnessDigest }),
 };
+
 // *Measured baseline*: the baseline is measured on the workspace AS FOUND, before
 // any candidate exists. A fault here MUST NOT start the run — there is nothing to
 // normalise against and nothing to compare to.
 let asFound: Measurement;
+
 try {
   asFound = await verifier.verify(ctx);
 } catch (error) {
@@ -401,12 +455,15 @@ try {
     + `${renderThrownChain({ cause: error })}. That is the instrument `
     + 'breaking rather than a candidate failing, and it fails the run by design.');
 }
+
 const baseline = baselineOf(asFound, verifier.baselineKey)
   ?? (asFound.kind === 'measured' ? asFound.value : null);
+
 if (baseline === null) {
   return unavailable('the baseline measurement produced no number, so there is nothing to '
     + `normalise against: ${asFound.detail}`);
 }
+
 // *Floor margin*: the run's own first measurement refutes the floor.
 if (measured.floor && breaches(measured.floor, measured.direction, baseline)) {
   return badInput(`the workspace as found already measures ${String(baseline)} `
@@ -414,6 +471,7 @@ if (measured.floor && breaches(measured.floor, measured.direction, baseline)) {
     + 'solution may cross. The floor is refuted by the run\'s own baseline before any candidate '
     + `exists. Re-derive the bound: ${measured.floor.proof}`);
 }
+
 // *Measured baseline* — a target at or beyond the measured baseline leaves no range
 // to score on.
 if (normalisedScore({
@@ -425,6 +483,7 @@ if (normalisedScore({
     + 'saturate at 1.0 and the search would have no gradient — the baseline is measured rather '
     + `than declared, so raise the target past ${String(baseline)}.`);
 }
+
 // THE ARCHIVE'S KEY, CHECKED AGAINST THE INSTRUMENT THAT HAS TO WITNESS IT — here,
 // because this is the first and cheapest moment it can be: the baseline measurement
 // has just reported the quantities this instrument reports, and a key naming none of
@@ -434,6 +493,7 @@ if (normalisedScore({
 // naming the keys this instrument does report.
 if (archive) {
   const cell = archiveCellOf(archive.key, asFound.measured);
+
   if (cell.kind === 'unwitnessed') {
     return badInput(`advance:"archive" bins every candidate by \`key\`, and the descriptor has to be `
       + `WITNESSED by the instrument rather than claimed by a node — but "${archive.key}" is not among `
@@ -443,6 +503,7 @@ if (archive) {
       + 'run with no coverage claim.');
   }
 }
+
 log.event('swarm.baseline_measured', {
   preset: resolved.preset,
   metric: measured.metric,
@@ -450,6 +511,7 @@ log.event('swarm.baseline_measured', {
   target: measured.target,
   kind: verifier.kind,
 });
+
   return { measured, verifier, witnessVerifier, ctx, baseline, identity };
 }
 
@@ -502,9 +564,11 @@ export function initRunLedgers(
   // reason `initSearchTables` is: a workspace that has never run a fork has no
   // `head_journal`.
   initHeadsTables(rt.storage.execRaw);
+
   const journal = announce === undefined
     ? new HeadJournal(sql, rt.actor)
     : new LiveHeadJournal(sql, rt.actor, announce);
+
   // The run-level ledger every search in this workspace has a row in. Initialised for
   // the same reason the two above are, and written for the reason *Accepted and
   // ignored* gives: a swarm wrote a tree and no ledger row, so the surface could read
@@ -522,6 +586,7 @@ export function initRunLedgers(
   // state and cannot answer a resume — `value` is a mean over a subtree, and no column
   // holds the raw measurement a winner is ranked on or the breach that seals a run.
   initSwarmNodeRecords(rt.storage.execRaw);
+
   return { sql, journal, searchLedger };
 }
 
@@ -557,11 +622,14 @@ export function readCarryIn(input: {
   readonly log: Logger;
 }): CarryIn {
   const { sql, actor, identity, publishing, floor, preset, carryKind, metric, log } = input;
+
   const carriedIn = identity !== null && publishing !== null
     ? recordsFor(sql, actor, { identity, floor })
     : [];
+
   // Best FIRST, by `recordsFor`'s own ordering in the objective's direction.
   const carriedBest = carriedIn[0] ?? null;
+
   if (carriedBest) {
     log.event('swarm.records_carried_in', {
       preset,
@@ -572,6 +640,7 @@ export function readCarryIn(input: {
       displacements: carriedBest.displacements,
     });
   }
+
   return { carriedIn, carriedBest };
 }
 
@@ -618,12 +687,15 @@ export function resolveReentry(input: {
   readonly log: Logger;
 }): ReentryResolution {
   const { sql, searchLedger, journal, actor, redrive, task, preset, profile, log } = input;
+
   const reentry = redrive === true
     ? reenterSwarm({ sql, ledger: searchLedger, journal, actor }, {
       task: task, now: Date.now(),
     })
     : null;
+
   const runProfile = profile ?? reentry?.profile ?? null;
+
   if (runProfile && !redrive) {
     log.event('swarm.profile_snapshot', {
       role: runProfile.profile.role.id, tier: runProfile.profile.tier.id,
@@ -635,6 +707,7 @@ export function resolveReentry(input: {
       digest: runProfile.profile.digest,
     });
   }
+
   return { reentry, runProfile };
 }
 
@@ -663,9 +736,11 @@ export function resolveNodeModel(input: {
   readonly runProfile: SwarmProfileSnapshot | null;
 }): { readonly model: LanguageModel } | Refusal {
   let nodeModel = input.model;
+
   if (input.runProfile) {
     const spec = input.runProfile.profile.tier.model;
     const tier = input.runProfile.profile.tier.id;
+
     if (!input.resolveModel) {
       return unsupported(
         `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, but no model `
@@ -674,6 +749,7 @@ export function resolveNodeModel(input: {
         + 'backend.',
       );
     }
+
     try {
       nodeModel = input.resolveModel(spec);
     } catch (error) {
@@ -685,6 +761,7 @@ export function resolveNodeModel(input: {
         { cause: error }));
     }
   }
+
   return { model: nodeModel };
 }
 
@@ -728,6 +805,7 @@ export function resolveNodeModels(input: {
   readonly resolveModel: ((spec: string) => LanguageModel) | undefined;
 }): { readonly models: readonly RoutedNodeModel[] } | Refusal {
   if (input.models === null) return { models: [] };
+
   if (!input.resolveModel) {
     return unsupported(
       'this search routes each node through `models`, but no model resolver is wired in '
@@ -735,7 +813,9 @@ export function resolveNodeModels(input: {
       + 'names others. Wire AgentsSwarmDeps.resolveModel on this backend.',
     );
   }
+
   const resolved: RoutedNodeModel[] = [];
+
   for (const [index, spec] of input.models.entries()) {
     try {
       resolved.push({ spec, model: input.resolveModel(spec) });
@@ -748,6 +828,7 @@ export function resolveNodeModels(input: {
         { cause: error }));
     }
   }
+
   return { models: resolved };
 }
 
@@ -786,11 +867,13 @@ export function refuseContendedRun(input: {
   const { searchLedger, reentry, task, preset, redrive, log } = input;
   const live = reentry ? [] : searchLedger.findRunningSwarms(task);
   const contended = live[0];
+
   if (!contended) return null;
   log.event('swarm.duplicate_root_refused', {
     preset, root: contended.rootId,
     redrive: redrive === true, running: live.length,
   });
+
   return unavailable(`this workspace is already running a swarm for this task (${contended.rootId}, `
     + `iteration ${String(contended.iteration)}, ${String(contended.budget)} of its expansion budget `
     + 'left), and a second search over one task would pay twice for one answer and crown a winner '
@@ -843,6 +926,7 @@ export async function createRoot(input: {
   // that column also carries the task string where the path held nothing, which is not
   // an artifact at all.
   const rootArtifact = verifier && ctx ? await readArtifact(ctx, verifier.artifact) : null;
+
   if (!reentry) {
     insertSearchNode(sql, actor, {
       nodeId: rootId, parentNodeId: null, parentMsgId: null, rootId,
@@ -857,6 +941,7 @@ export async function createRoot(input: {
       codeUsed: null, depth: 0, msgId: null,
     });
   }
+
   const root: TreeNode = {
     id: rootId, parentId: null, depth: 0, artifact: rootArtifact,
     // The baseline IS the root's measurement, and its normalised score is 0 by
@@ -874,7 +959,9 @@ export async function createRoot(input: {
     // a level the search produced.
     aggregated: [],
   };
+
   const nodes = new Map<string, TreeNode>([[rootId, root]]);
+
   // One run header, so every node of this search groups under one root in the journal
   // instead of each appearing as its own empty run — the defect `recordSplit` exists
   // to close, reached here for the same reason. Idempotent under a re-entry: the row is
@@ -882,8 +969,10 @@ export async function createRoot(input: {
   if (agentNodes) {
     journal.recordSplit(rootId, resolved.label ?? resolved.preset, Date.now());
   }
+
   return { rootId, nodes, root };
 }
+
 /**
  *
  * Every accumulator above is seeded from the durable rows so a re-entry continues
@@ -953,18 +1042,22 @@ export function seedResumedSearch(input: {
   // point of them.
   let inheritedExpansions = reentry?.pending.length ?? 0;
   let inheritedTokens: number | null = null;
+
   for (const node of reentry?.nodes ?? []) {
     // The root was seeded above, measured against the workspace as it is NOW.
     if (node.parentId === null) continue;
     inheritedExpansions += 1;
     const { record } = node;
     const outcome = record?.outcome ?? null;
+
     const measurement = outcome?.kind === 'sealed' || outcome?.kind === 'scored'
       ? outcome.measurement
       : null;
+
     const score = outcome?.kind === 'scored' || outcome?.kind === 'judged'
       ? outcome.score
       : null;
+
     const pareto = outcome?.kind === 'pareto' ? outcome.evidence : null;
     nodes.set(node.id, {
       id: node.id, parentId: node.parentId, depth: node.depth,
@@ -980,7 +1073,9 @@ export function seedResumedSearch(input: {
       compacted: null,
       aggregated: record?.aggregated ?? [],
     });
+
     if (!record) continue;
+
     const candidate: SwarmCandidate = {
       id: node.id,
       artifact: node.artifact,
@@ -995,24 +1090,31 @@ export function seedResumedSearch(input: {
       score,
       pareto,
     };
+
     candidates.push(candidate);
     spentBy.set(node.id, record.tokens);
+
     if (record.tokens !== null) inheritedTokens = (inheritedTokens ?? 0) + record.tokens;
+
     if (outcome?.kind === 'judged' && outcome.ensemble > 0) ensembles.push(outcome.ensemble);
+
     if (outcome?.kind === 'sealed') {
       publication = { kind: 'sealed', breach: outcome.breach, clearedBy: null };
     }
+
     // THE SAME RANK EXPRESSION THE LOOP USES, over the same arms: a verified candidate
     // ranks on its RAW measurement and a judged one on the ensemble's median, and a
     // sealed candidate ranks on nothing at all.
     const rank = outcome?.kind === 'scored'
       ? outcome.measurement.value
       : outcome?.kind === 'judged' ? outcome.score : null;
+
     if (rank !== null && (bestValue === null || isBetter(rank, bestValue, rankDirection))) {
       best = candidate;
       bestValue = rank;
     }
   }
+
   return {
     candidates, ensembles, publication, best, bestValue,
     inheritedExpansions, inheritedTokens,
@@ -1049,20 +1151,31 @@ export function buildNodeDeps(input: {
   readonly webSearch?: WebSearchProvider;
 }): NodeAgentDeps {
   const deps = input;
+
   const nodeDeps: NodeAgentDeps = {
     hostNode: deps.hostNode, model: deps.model, journal: deps.journal, logger: deps.logger,
     // The wall clock is OPT-IN (deps.maxWallClockMs, wired below when declared):
     // there is no default clock over a node's work. Its turn runs until it is
     // done, cancelled, refused by its mission governor, or fails definitively.
   };
+
   if (deps.signal !== undefined) nodeDeps.signal = deps.signal;
+
   if (deps.reportModelCall !== undefined) nodeDeps.reportModelCall = deps.reportModelCall;
+
   if (deps.publishHeadStream !== undefined) nodeDeps.publishHeadStream = deps.publishHeadStream;
+
   if (deps.maxWallClockMs !== undefined) nodeDeps.maxWallClockMs = deps.maxWallClockMs;
+
   if (deps.mission !== undefined) nodeDeps.mission = deps.mission;
+
   if (deps.provisionHome !== undefined) nodeDeps.provisionHome = deps.provisionHome;
+
   if (deps.runtimeForWorkspace !== undefined) nodeDeps.runtimeForWorkspace = deps.runtimeForWorkspace;
+
   if (deps.executeTool !== undefined) nodeDeps.executeTool = deps.executeTool;
+
   if (deps.webSearch !== undefined) nodeDeps.webSearch = deps.webSearch;
+
   return nodeDeps;
 }

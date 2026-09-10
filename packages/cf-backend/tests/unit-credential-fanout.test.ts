@@ -17,6 +17,7 @@ const IDENTITY: AuthIdentity = {
 
 function setup() {
   const notified: string[] = [];
+
   const stub = {
     async ensureProfile() {},
     async userMcp_warmConnections() { return { servers: 0 }; },
@@ -31,6 +32,7 @@ function setup() {
       ];
     },
   };
+
   const pending: Promise<unknown>[] = [];
   const partialCtx: Partial<ExecutionContext> = {};
   Object.assign(partialCtx, {
@@ -44,7 +46,11 @@ function setup() {
     UserDO: { idFromName: (n: string) => n, get: () => stub },
     OrchestratorAgent: {
       idFromName: (n: string) => n,
-      get: (id: string) => ({ async onCredentialsChanged() { notified.push(id); return { ok: true }; } }),
+      get: (id: string) => ({ async onCredentialsChanged() {
+        notified.push(id);
+
+        return { ok: true };
+      } }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
@@ -52,6 +58,7 @@ function setup() {
   // constructed namespaces and encryption key above; no other Env binding is
   // reachable in the fanout behavior exercised here.
   const env = partialEnv as Env;
+
   return { env, ctx, notified, pending };
 }
 

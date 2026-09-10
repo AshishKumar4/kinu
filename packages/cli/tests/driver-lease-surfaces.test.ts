@@ -22,6 +22,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -31,6 +32,7 @@ afterEach(() => {
 function freshDir(prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix));
   tempDirs.push(dir);
+
   return dir;
 }
 
@@ -46,6 +48,7 @@ function freshDir(prefix: string): string {
 function scenario(body: string): JsonObject {
   const home = freshDir('kinu-lease-home-');
   const project = freshDir('kinu-lease-project-');
+
   const script = `
     const { mkdirSync } = await import('node:fs');
     const { join } = await import('node:path');
@@ -105,6 +108,7 @@ function scenario(body: string): JsonObject {
       process.exit(0);
     }
   `;
+
   const proc = Bun.spawnSync({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
@@ -125,9 +129,11 @@ function scenario(body: string): JsonObject {
       NO_COLOR: '1',
     },
   });
+
   if (proc.exitCode !== 0) {
     throw new Error(`lease scenario failed (${proc.exitCode}): ${proc.stderr.toString()}`);
   }
+
   return parseJsonObject(proc.stdout.toString().trim().split('\n').at(-1) ?? '{}');
 }
 

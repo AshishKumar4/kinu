@@ -47,6 +47,7 @@ export function ScrollBoundary({ what, count, loading, exhausted, error, onRetry
       </div>
     );
   }
+
   if (loading) {
     return (
       <div className="flex items-center justify-center gap-2 py-2 text-[11px] p-text-3"
@@ -56,6 +57,7 @@ export function ScrollBoundary({ what, count, loading, exhausted, error, onRetry
       </div>
     );
   }
+
   if (exhausted) {
     return (
       <div className="flex items-center justify-center gap-1.5 py-2 text-[11px] p-text-3"
@@ -65,5 +67,6 @@ export function ScrollBoundary({ what, count, loading, exhausted, error, onRetry
       </div>
     );
   }
+
   return <div className="py-2" aria-hidden="true" />;
 }

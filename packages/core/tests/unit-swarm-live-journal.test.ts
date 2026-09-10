@@ -61,9 +61,12 @@ function resolved(): ResolvedSwarm {
     depth: 1,
     branches: 2,
   });
+
   if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
   const illegal = swarmValidity(call);
+
   if (illegal) throw new Error(`the suite's own composition is not legal: ${illegal.error}`);
+
   return call;
 }
 
@@ -80,12 +83,15 @@ function reportingNode() {
     modelId: 'fake-live-journal',
     doGenerate: async ({ prompt }) => {
       let lastUser = -1;
+
       for (const [index, message] of prompt.entries()) {
         if (message.role === 'user') lastUser = index;
       }
+
       const own = prompt.slice(lastUser + 1).filter((message) => message.role === 'assistant').length;
       const content: LanguageModelV3Content[] = [];
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
+
       if (own === 0) {
         content.push({ type: 'text', text: 'Guarding at the reader is the cheaper of the two.' });
         content.push({
@@ -102,6 +108,7 @@ function reportingNode() {
         content.push({ type: 'text', text: 'Reported.' });
         finish = 'stop';
       }
+
       return {
         content,
         finishReason: { unified: finish, raw: undefined },
@@ -128,6 +135,7 @@ async function run(announce?: AnnounceHeadActivity) {
   const { rt, db } = createTestRuntime();
   const reader = new HeadJournal(rt.storage.sql, rt.actor);
   const seen: Announcement[] = [];
+
   const deps: SwarmRunDeps = {
     rt,
     // A REAL seat per node, over this runtime's own database: `unit:'answer'`
@@ -139,6 +147,7 @@ async function run(announce?: AnnounceHeadActivity) {
     mode: 'build',
     logger: createRecordingLogger(),
   };
+
   // Assigned rather than spread, and the shape is the point the run itself
   // depends on: an absent seam must be an ABSENT KEY, because that absence is
   // exactly what makes the ledgers build the plain journal.
@@ -155,11 +164,14 @@ async function run(announce?: AnnounceHeadActivity) {
       },
     });
   }
+
   const result = await runSwarm(deps, resolved());
+
   if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
   const rootId = reader.listRuns(1)[0]?.rootId ?? '';
   expect(rootId).not.toBe('');
   const nodes = reader.readTree(rootId).filter((row) => row.id !== rootId);
+
   return { seen, nodes, reader, rootId };
 }
 
@@ -204,6 +216,7 @@ describe('a swarm journals out loud', () => {
     // a degraded run. So the durable half must be identical: the rows, their
     // traces and their settlement all land.
     expect(nodes.length).toBeGreaterThan(0);
+
     for (const node of nodes) {
       expect(reader.countSteps(node.id).steps).toBeGreaterThan(0);
       expect(headStatusUnsettled(node.status)).toBe(false);

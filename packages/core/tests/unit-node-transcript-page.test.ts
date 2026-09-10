@@ -22,6 +22,7 @@ import { readNodeTranscript } from '../src/read-models/node-transcript';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const RUN = 'run-page';
+
 const NODE = 'node-page';
 
 function spawn(id: string, rootId: string): HeadInput {
@@ -43,19 +44,24 @@ function seeded(n: number) {
   const journal = new HeadJournal(sql.sql, actor);
   journal.recordSplit(RUN, 'a swarm', Date.now());
   journal.insertSpawn(spawn(NODE, RUN));
+
   for (let i = 0; i < n; i++) {
     journal.appendStep(NODE, i, { text: `step ${i}`, toolCalls: [] });
   }
+
   return { sql: sql.sql, actor, journal };
 }
+
 /** Every page, oldest first — the walk a caller performs. */
 function walkSteps(sql: SqlExecutor, actor: ActorHandle, limit: number): string[] {
   const texts: string[] = [];
   let cursor: SeekCursor | undefined;
+
   for (;;) {
     const view = readNodeTranscript(sql, actor, RUN, NODE, { limit, cursor });
     expect(view).not.toBeNull();
     texts.unshift(...view!.steps.items.map((s) => s.text));
+
     if (view!.steps.status === 'end') return texts;
     cursor = view!.steps.next;
   }
@@ -75,6 +81,7 @@ describe('node transcript paging', () => {
     expect(steps.status).toBe('more');
     // Newest PAGE first; within it, reading order.
     expect(steps.items.map((s) => s.text)).toEqual(['step 4', 'step 5', 'step 6']);
+
     if (steps.status !== 'more') return;
     expect(steps.next.after).toBe(`${NODE}-s4`);
   });
@@ -128,6 +135,7 @@ describe('the search path names the run it belongs to', () => {
       VALUES (${actor.actorId}, 'r', 'r', null, ${'Audit every reader of coupon.kind — the checkout package'}, ${rootAction}, '', 0, 0, 0, 'open')`;
     void ws.sql`INSERT INTO search_nodes (actor_id, root_id, id, parent_id, task, action, observation, value, visits, depth, status)
       VALUES (${actor.actorId}, 'r', 'n1', 'r', ${'Audit every reader of coupon.kind'}, ${'Walk the cart serializer'}, 'a proposal', 0.7, 2, 1, 'open')`;
+
     return { sql: ws.sql, actor };
   }
 

@@ -23,22 +23,28 @@ const DECLARATION = /^ {2}((?:@[A-Za-z_$][A-Za-z0-9_$]*\([^\n]*?\)\s+)*)((?:publ
 /** The text between `open` (an index pointing at `(`) and its matching `)`. */
 function balancedParams(source: string, open: number): string | null {
   let depth = 0;
+
   for (let i = open; i < source.length; i++) {
     if (source[i] === '(') depth++;
     else if (source[i] === ')' && --depth === 0) return source.slice(open + 1, i).trim();
   }
+
   return null;
 }
 
 export function declaredClassMembers(source: string): DeclaredMember[] {
   const members: DeclaredMember[] = [];
+
   for (const match of source.matchAll(DECLARATION)) {
     const name = match[3];
+
     if (name === 'constructor') continue;
     const params = balancedParams(source, match.index + match[0].length - 1);
+
     if (params === null) continue;
     members.push({ modifiers: match[2].trim(), name, params });
   }
+
   return members;
 }
 

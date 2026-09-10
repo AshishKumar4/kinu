@@ -83,14 +83,18 @@ const BLOCKED_HOSTNAMES: ReadonlySet<string> = new Set([
  */
 function parseIPv4(host: string): [number, number, number, number] | null {
   const labels = host.split('.');
+
   if (labels.length !== 4) return null;
   const octets: [number, number, number, number] = [0, 0, 0, 0];
+
   for (const [index, label] of labels.entries()) {
     if (!/^\d{1,3}$/.test(label)) return null;
     const value = Number(label);
+
     if (value > 255) return null;
     octets[index] = value;
   }
+
   return octets;
 }
 
@@ -102,12 +106,19 @@ function parseIPv4(host: string): [number, number, number, number] | null {
  */
 function isRefusedIPv4([a, b]: [number, number, number, number]): boolean {
   if (a === 0) return true; // 0.0.0.0/8 — this network
+
   if (a === 10) return true; // 10.0.0.0/8 — RFC1918
+
   if (a === 127) return true; // 127.0.0.0/8 — loopback
+
   if (a === 169 && b === 254) return true; // 169.254.0.0/16 — link-local, incl. metadata
+
   if (a === 172 && b >= 16 && b <= 31) return true; // 172.16.0.0/12 — RFC1918
+
   if (a === 192 && b === 168) return true; // 192.168.0.0/16 — RFC1918
+
   if (a === 100 && b >= 64 && b <= 127) return true; // 100.64.0.0/10 — CGNAT
+
   return false;
 }
 
@@ -121,25 +132,34 @@ function isRefusedIPv4([a, b]: [number, number, number, number]): boolean {
  */
 function expandIPv6(host: string): readonly number[] | null {
   const sections = host.split('::');
+
   if (sections.length > 2) return null;
   const head = sections[0] === '' ? [] : sections[0]!.split(':');
+
   const tail = sections.length === 2
     ? (sections[1] === '' ? [] : sections[1]!.split(':'))
     : [];
+
   if (sections.length === 1 && head.length !== 8) return null;
   const pieces = [...head, ...tail];
+
   if (pieces.length > 8) return null;
   const groups = pieces.map((piece) => Number.parseInt(piece, 16));
+
   if (groups.some((group) => Number.isNaN(group))) return null;
+
   if (sections.length === 2) {
     // `::` fills IN PLACE: the head groups keep their positions at the front
     // and the zeros go between head and tail. Prepending them would move the
     // head to the tail and turn `fe80::a` into `::a:fe80` — a different
     // address in a public family, which a prefix check would then miss.
     const missing = 8 - pieces.length;
+
     if (missing < 1) return null;
+
     return [...groups.slice(0, head.length), ...Array.from({ length: missing }, () => 0), ...groups.slice(head.length)];
   }
+
   return groups;
 }
 
@@ -160,21 +180,27 @@ function expandIPv6(host: string): readonly number[] | null {
 function isRefusedIPv6(groups: readonly number[]): boolean {
   // `::1` expands to seven zero groups then 1 — the LAST group carries it.
   if (groups.slice(0, 7).every((g) => g === 0) && groups[7] === 1) return true; // ::1
+
   if (groups.every((g) => g === 0)) return true; // ::
+
   if (groups[0]! >= 0xfe80 && groups[0]! <= 0xfebf) return true; // fe80::/10
+
   if (groups[0]! >= 0xfc00 && groups[0]! <= 0xfdff) return true; // fc00::/7 ULA
   // Embedded IPv4: ::ffff:a.b.c.d (mapped) and ::a.b.c.d (compatible). The
   // first six groups are zero (mapped keeps group 5 = 0xffff), the last two
   // groups are the IPv4 address in 16-bit pieces.
   const mapped = groups.slice(0, 5).every((g) => g === 0) && groups[5] === 0xffff;
   const compatible = groups.slice(0, 6).every((g) => g === 0);
+
   if (mapped || compatible) {
     // The two tail groups are the embedded IPv4 in 16-bit pieces; both carry
     // one octet pair, so the four octets are split out of them exactly.
     const high = groups[6]!;
     const low = groups[7]!;
+
     return isRefusedIPv4([high >> 8, high & 0xff, low >> 8, low & 0xff]);
   }
+
   return false;
 }
 
@@ -193,12 +219,15 @@ function isRefusedIPv6(groups: readonly number[]): boolean {
  */
 export function refusedHostname(hostname: string): Refusal | null {
   const host = hostname.toLowerCase().replace(/\.$/, '');
+
   if (!host) return refusalOf(new KinuError('denied', 'the request names no host, so it cannot be judged'));
 
   const bare = host.startsWith('[') ? host.slice(1, -1) : host;
+
   if (BLOCKED_HOSTNAMES.has(bare)) {
     return refusalOf(new KinuError('denied', `blocked internal host: ${bare}`));
   }
+
   // `foo.localhost` resolves to loopback on every conforming stack (RFC 6761).
   // `.internal` is ICANN's reserved private-use TLD (delegated to no registry,
   // resolvable only inside a private network) and is what the cloud-metadata
@@ -213,19 +242,24 @@ export function refusedHostname(hostname: string): Refusal | null {
     // Fail closed: a bracketed literal that does not re-parse as IPv6 is not
     // judged, so it does not leave.
     const groups = expandIPv6(bare);
+
     if (groups === null) {
       return refusalOf(new KinuError('denied', `blocked unparseable IPv6 literal: ${bare}`));
     }
+
     if (isRefusedIPv6(groups)) {
       return refusalOf(new KinuError('denied', `blocked private/internal IPv6 address: ${bare}`));
     }
+
     return null;
   }
 
   const ipv4 = parseIPv4(host);
+
   if (ipv4 !== null && isRefusedIPv4(ipv4)) {
     return refusalOf(new KinuError('denied', `blocked private/internal address: ${host}`));
   }
+
   // A numeric form that is not a full dotted quad never leaves as a name. The
   // WHATWG parser expands the legal ones before this code runs (measured:
   // `127.1`, `2130706433`, `0x7f000001` all arrive as `127.0.0.1`), so one
@@ -235,5 +269,6 @@ export function refusedHostname(hostname: string): Refusal | null {
   if (ipv4 === null && /^\d+(\.\d+)*$/.test(host)) {
     return refusalOf(new KinuError('denied', `blocked unparseable IPv4 literal: ${host}`));
   }
+
   return null;
 }

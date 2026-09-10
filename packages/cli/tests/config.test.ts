@@ -51,6 +51,7 @@ describe("CLI config safety", () => {
     tempDirs.push(home, kinuHome);
 
     const script = "import { AGENT_HOME } from './packages/cli/src/config.ts'; console.log(AGENT_HOME);";
+
     const proc = Bun.spawnSync({
       cmd: [process.execPath, "-e", script],
       cwd: resolve(__dirname, "../../.."),
@@ -126,6 +127,7 @@ describe("CLI config safety", () => {
 });
 
 const CLOUD_ORIGIN = "https://kinu.example.com";
+
 const CLOUD_TOKEN = ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join("");
 
 describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
@@ -156,6 +158,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       accessToken: CLOUD_TOKEN,
       providers: { openai: { apiKey: "sk-test" } },
     });
+
     expect(out).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
   });
 
@@ -176,6 +179,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
         openaiCompat: { default: { baseURL: "http://localhost:11434/v1", apiKey: "local" } },
       },
     });
+
     expect(out).toEqual({
       name: "workers-ai",
       baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1`,
@@ -189,6 +193,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   // answer for a spec the signed-in account owns.
   test("a local openai-compatible endpoint cannot answer for a native spec", () => {
     const compat = { default: { baseURL: "http://localhost:11434/v1", apiKey: "local" } };
+
     for (const model of [
       `workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`,
       DEFAULT_WORKERS_AI_MODEL_ID,
@@ -197,6 +202,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       const out = runResolveLLM({
         origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model, providers: { openaiCompat: compat },
       });
+
       expect(out).toMatchObject({ name: "workers-ai", baseURL: `${CLOUD_ORIGIN}/api/user/ai/v1` });
     }
 
@@ -205,6 +211,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN,
       model: "openai-compat/gpt-oss:20b", providers: { openaiCompat: compat },
     });
+
     expect(local).toMatchObject({ name: "openai-compat", baseURL: "http://localhost:11434/v1", model: "gpt-oss:20b" });
   });
 
@@ -215,6 +222,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       model: "openai/gpt-5.5",
       providers: { openai: { apiKey: "sk-test" } },
     });
+
     expect(out).toMatchObject({ name: "openai", model: "gpt-5.5" });
   });
 
@@ -223,6 +231,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
       { origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN },
       { KINU_BASE_URL: "https://gateway.example/v1", KINU_AUTH: "Bearer direct" },
     );
+
     expect(out).toMatchObject({ name: "openai-compat", baseURL: "https://gateway.example/v1" });
   });
 
@@ -247,6 +256,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
       accessToken: CLOUD_TOKEN,
       tokenExpiresAt: new Date(Date.now() - 60_000).toISOString(),
     });
+
     expect(expired).toBeNull();
   });
 
@@ -254,17 +264,21 @@ describe("resolveLLMConfig — registry-only providers", () => {
     const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-llm-req-"));
     tempDirs.push(kinuHome);
     writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
+
     const script = `
       import { requireLLMConfig } from './packages/cli/src/config.ts';
       try { console.log(JSON.stringify(requireLLMConfig())); }
       catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
     `;
+
     const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+
     for (const name of [
       "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
       "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
       "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
     ]) delete env[name];
+
     const proc = Bun.spawnSync({
       cmd: [process.execPath, "-e", script],
       cwd: resolve(__dirname, "../../.."),
@@ -272,6 +286,7 @@ describe("resolveLLMConfig — registry-only providers", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
+
     expect(proc.exitCode).toBe(0);
     expect(parseJsonValue(proc.stdout.toString())).toMatchObject({
       error: expect.stringContaining("claude"),
@@ -286,12 +301,15 @@ function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}
   const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-llm-"));
   tempDirs.push(kinuHome);
   writeFileSync(join(kinuHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
+
   const script = `
     import { resolveLLMConfig } from './packages/cli/src/config.ts';
     try { console.log(JSON.stringify(resolveLLMConfig())); }
     catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
   `;
+
   const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome, ...extraEnv };
+
   for (const name of [
     "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
     "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
@@ -299,6 +317,7 @@ function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}
   ]) {
     if (!(name in extraEnv)) delete env[name];
   }
+
   const proc = Bun.spawnSync({
     cmd: [process.execPath, "-e", script],
     cwd: resolve(__dirname, "../../.."),
@@ -306,7 +325,9 @@ function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}
     stdout: "pipe",
     stderr: "pipe",
   });
+
   expect(proc.exitCode).toBe(0);
+
   return parseJsonValue(proc.stdout.toString());
 }
 
@@ -318,14 +339,18 @@ function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
     JSON.stringify({ accessToken: "ptc_test", tokenExpiresAt }),
     { mode: 0o600 },
   );
+
   const script = `
     import { requireAuthConfig } from './packages/cli/src/config.ts';
     try { const auth = requireAuthConfig(); console.log(process.env.KINU_TOKEN ? 'ok ' + auth.token : 'ok'); }
     catch (err) { console.log(err instanceof Error ? err.message : String(err)); }
   `;
+
   const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+
   if (envToken) env.KINU_TOKEN = envToken;
   else delete env.KINU_TOKEN;
+
   return Bun.spawnSync({
     cmd: [process.execPath, "-e", script],
     cwd: resolve(__dirname, "../../.."),
@@ -347,6 +372,7 @@ interface NameCheck {
 function runNameChecks(): NameCheck[] {
   const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-names-"));
   tempDirs.push(kinuHome);
+
   const script = `
     import { agentDir, upsertAgentConfig } from './packages/cli/src/config.ts';
     const results = [];
@@ -367,6 +393,7 @@ function runNameChecks(): NameCheck[] {
     check(withAlias("kinu"));
     console.log(JSON.stringify(results));
   `;
+
   const proc = Bun.spawnSync({
     cmd: [process.execPath, "-e", script],
     cwd: resolve(__dirname, "../../.."),
@@ -374,7 +401,9 @@ function runNameChecks(): NameCheck[] {
     stdout: "pipe",
     stderr: "pipe",
   });
+
   expect(proc.exitCode).toBe(0);
+
   return JSON.parse(proc.stdout.toString());
 }
 
@@ -399,6 +428,7 @@ const PreferenceWriteResultSchema: v.GenericSchema<PreferenceWriteResult> = v.ob
 function runPreferenceWrite(): PreferenceWriteResult {
   const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-preferences-"));
   tempDirs.push(kinuHome);
+
   const script = `
     import { writeFileSync } from 'node:fs';
     import { CONFIG_PATH, loadConfigFile } from './packages/cli/src/config.ts';
@@ -414,6 +444,7 @@ function runPreferenceWrite(): PreferenceWriteResult {
     try { loadConfigFile(); } catch (error) { invalidRejection = error instanceof Error ? error.message : String(error); }
     console.log(JSON.stringify({ modelResult, effortShow, effortSet, invalid, config, invalidRejection }));
   `;
+
   const proc = Bun.spawnSync({
     cmd: [process.execPath, "-e", script],
     cwd: resolve(__dirname, "../../.."),
@@ -421,7 +452,9 @@ function runPreferenceWrite(): PreferenceWriteResult {
     stdout: "pipe",
     stderr: "pipe",
   });
+
   expect(proc.exitCode).toBe(0);
+
   return v.parse(PreferenceWriteResultSchema, JSON.parse(proc.stdout.toString()));
 }
 
@@ -441,6 +474,7 @@ describe("a logout the server could not be told about", () => {
       JSON.stringify({ origin, accessToken: TOKEN, tokenExpiresAt: new Date(Date.now() + 86_400_000).toISOString() }),
       { mode: 0o600 },
     );
+
     return home;
   }
 
@@ -453,6 +487,7 @@ describe("a logout the server could not be told about", () => {
       const { logoutCommand } = await import('./packages/cli/src/commands/auth.ts');
       await logoutCommand({ origin: ${JSON.stringify(origin)} });
     `;
+
     const proc = Bun.spawn({
       cmd: [process.execPath, "-e", script],
       cwd: resolve(__dirname, "../../.."),
@@ -460,26 +495,32 @@ describe("a logout the server could not be told about", () => {
       stdout: "pipe",
       stderr: "pipe",
     });
+
     const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
+
     await proc.exited;
+
     return stdout + stderr;
   }
 
   test("keeps the only copy of the bearer, records the pending revocation, and clears both on a retry that lands", async () => {
     let reachable = false;
+
     const server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
       fetch(request) {
         if (new URL(request.url).pathname !== "/api/cli/logout") return new Response("no", { status: 404 });
+
         return reachable
           ? Response.json({ ok: true })
           : new Response('{"error":"the session store is unavailable"}', { status: 503 });
       },
     });
+
     const origin = `http://127.0.0.1:${server.port}`;
     const home = logoutHome(origin);
 

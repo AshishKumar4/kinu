@@ -27,6 +27,7 @@ import { jsonObjectOnlyInstruction } from '../src/prompts/structured';
  *  real workspace has. */
 function setup() {
   const ws = createTestWorkspace();
+
   // A REAL workspace main actor, not a stand-in: the split's evidence reader
   // goes through `conversationTurnPair`, so the `messages` rows seeded below
   // have to carry the same `actor_id` the reader scopes by.
@@ -64,6 +65,7 @@ describe('classifyTurnOutcome — one cheap LLM call', () => {
     const llm = createMockLLM({
       'Classify what the follow-up reveals': '{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked with a fix"}',
     });
+
     const result = await classifyTurnOutcome(llm, input);
     expect(result).toEqual({ outcome: 'corrected', confidence: 0.9, evidence: 'user re-asked with a fix' });
   });
@@ -71,10 +73,13 @@ describe('classifyTurnOutcome — one cheap LLM call', () => {
   test('parses accepted and frustrated; clamps confidence', async () => {
     const accepted = await classifyTurnOutcome(
       createMockLLM({ 'Classify': '{"outcome":"accepted","confidence":1.7,"evidence":"moved on"}' }), input);
+
     expect(accepted?.outcome).toBe('accepted');
     expect(accepted?.confidence).toBe(1);
+
     const frustrated = await classifyTurnOutcome(
       createMockLLM({ 'Classify': '{"outcome":"frustrated","confidence":0.8,"evidence":"explicit anger"}' }), input);
+
     expect(frustrated?.outcome).toBe('frustrated');
   });
 
@@ -234,6 +239,7 @@ describe('execution-sourced rows are priced and labelled as proxies', () => {
     for (const source of ['explicit', 'classifier', 'session_end', 'take_pick'] as const) {
       expect(isUserVerdictSource(source)).toBe(true);
     }
+
     expect(isUserVerdictSource('execution')).toBe(false);
   });
 
@@ -302,6 +308,7 @@ describe('turn_outcomes ledger', () => {
 
   test('a rare outcome buried under many newer rows is still returned', () => {
     const { sql, actor } = setup();
+
     // The failures the optimizer learns from, followed by far more accepted
     // turns than any candidate window: a JS-side filter over a bounded window
     // drops them silently, which truncates the whole evolution signal.
@@ -311,12 +318,14 @@ describe('turn_outcomes ledger', () => {
         userMessage: 'fix', assistantResponse: 'wrong', now: 1000 + i,
       });
     }
+
     for (let i = 0; i < 500; i++) {
       recordTurnOutcome(sql, actor, {
         turnId: `pos${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
         userMessage: 'ok', assistantResponse: 'fine', now: 2000 + i,
       });
     }
+
     expect(listTurnOutcomes(sql, actor, { limit: 10, outcomes: ['corrected', 'frustrated'] })
       .map((r) => r.turnId)).toEqual(['neg2', 'neg1', 'neg0']);
     // The limit now bounds the rows actually wanted, not a pre-filter window.
@@ -338,9 +347,11 @@ describe('turn_outcomes ledger', () => {
 describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
   test('aggregates accepted/negative per serving version and blends into win-rates', () => {
     const { sql, actor } = setup();
+
     for (let i = 0; i < 3; i++) {
       recordTurnOutcome(sql, actor, { outcome: 'accepted', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
     }
+
     recordTurnOutcome(sql, actor, { outcome: 'corrected', confidence: 1, source: 'classifier', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
     recordTurnOutcome(sql, actor, { outcome: 'abandoned', confidence: 1, source: 'session_end', userMessage: 't', assistantResponse: 'a', scaffoldVersion: 1 });
 
@@ -351,6 +362,7 @@ describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
       version: 1, parentVersion: 0, status: 'historical', rationale: 'r', pathology: null, writtenAt: 0,
       trials: 2, wins: 1, losses: 1, ties: 0, winRate: 0.5,
     };
+
     const untouched: ScaffoldArchiveEntry = { ...entry, version: 2 };
     const [blended, same] = blendRealOutcomeRates([entry, untouched], rates);
     // (1 shadow win + 3 accepted) / (2 shadow decisive + 4 real decisive)
@@ -397,6 +409,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
         userMessage: `fix task ${i}`, assistantResponse: `bad answer ${i}`, followup: `correction ${i}`, now: 1000 + i,
       });
     }
+
     for (let i = 0; i < accepted; i++) {
       recordTurnOutcome(sql, actor, {
         turnId: `a${i}`, outcome: 'accepted', confidence: 1, source: 'classifier',
@@ -437,6 +450,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
   test('failures far older than the accepted rows still reach train/val', () => {
     const { sql, actor } = setup();
     seed(sql, actor, 5, 0);
+
     // The optimizer's targets are the OLDEST rows here. A bounded pre-filter
     // window would leave the split with nothing to optimize toward.
     for (let i = 0; i < 400; i++) {
@@ -445,6 +459,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
         userMessage: 'ok', assistantResponse: 'fine', now: 5000 + i,
       });
     }
+
     const split = buildOutcomeEvalSplit(sql, actor, 8);
     expect(split.degeneracy).toBeNull();
     expect(split.train).toHaveLength(3);
@@ -454,6 +469,7 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
   test('no instance is ever on both sides, across every budget', () => {
     const { sql, actor } = setup();
     seed(sql, actor, 9, 9);
+
     for (const budget of [2, 3, 4, 5, 6, 8, 12, 18, 24]) {
       const split = buildOutcomeEvalSplit(sql, actor, budget);
       const trainTurns = new Set(split.train.map(turnOf));

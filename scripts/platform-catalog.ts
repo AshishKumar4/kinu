@@ -88,7 +88,9 @@ const BOUNDS_KINDS: readonly BoundsKind[] = [
  * from a production constant with nothing behind it.
  */
 const ARTEFACT_URI = /\b(?:local|agent|artifact):\/\/[\w./-]+/;
+
 const LOCATOR = /\.\w+(?::\d|\s*§\s*\d+(?:\.\d+)*(?![\w.])|#[\w.-]+)/;
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 /**
@@ -146,6 +148,7 @@ function unresolvedRepoPaths(text: string): readonly string[] {
       // the dangling citation this whole catalog exists to replace. The sha is
       // the entire difference and the gate insists on it.
       const before = text.slice(Math.max(0, m.index - 50), m.index);
+
       return !/\bgit\s+[0-9a-f]{7,40}:$/.test(before);
     })
     .map((m) => m[0])
@@ -162,6 +165,7 @@ export function auditSchema(entries: readonly PlatformFactEntry[]): SchemaAudit 
     const fail = (reason: string): void => void problems.push({ id, reason });
 
     if (fact.subject.trim().length === 0) fail('no subject');
+
     if (!EVIDENCE_LABELS.includes(fact.evidence)) fail(`evidence label "${fact.evidence}" is not one of the six`);
     byEvidence.set(fact.evidence, (byEvidence.get(fact.evidence) ?? 0) + 1);
 
@@ -179,30 +183,39 @@ export function auditSchema(entries: readonly PlatformFactEntry[]): SchemaAudit 
     if (!ISO_DATE.test(fact.date) || Number.isNaN(Date.parse(fact.date))) {
       fail(`date "${fact.date}" is not an ISO calendar date`);
     }
+
     if (fact.trigger.trim().length === 0) fail('no trigger — nothing can fire it, so nothing can test it');
+
     if (fact.onBreach.trim().length === 0) fail('no breach behaviour');
 
     if (fact.limit !== null) {
       if (!Number.isFinite(fact.limit.value) || fact.limit.value <= 0) {
         fail(`limit value ${String(fact.limit.value)} is not a positive finite number`);
       }
+
       if (!UNITS.includes(fact.limit.unit)) fail(`limit unit "${fact.limit.unit}" is not a base unit`);
+
       // A threshold that does not say what it protects is how a response cap
       // comes to be read as isolate protection.
       if (fact.bounds === null) fail('has a threshold but does not say what it bounds');
     }
+
     if (fact.bounds !== null && !BOUNDS_KINDS.includes(fact.bounds)) {
       fail(`bounds "${fact.bounds}" is not one of the ten kinds`);
     }
+
     if (fact.knownBreachPath !== undefined && fact.knownBreachPath.trim().length === 0) {
       fail('declares a known breach path and names nothing');
     }
+
     // The check that mechanises the whole point: a citation into THIS repo must
     // still resolve. Both documents this catalog replaces were cited in perfect
     // form from live code and neither existed.
     for (const field of ['provenance', 'onBreach', 'notes', 'knownBreachPath'] as const) {
       const text = fact[field];
+
       if (text === undefined) continue;
+
       for (const gone of unresolvedRepoPaths(text)) {
         fail(`${field} cites \`${gone}\`, which is not in this repo`);
       }
@@ -213,16 +226,20 @@ export function auditSchema(entries: readonly PlatformFactEntry[]): SchemaAudit 
         fail('an observable with an empty context or message');
       }
     }
+
     // Having WATCHED a failure and not recorded what it said is the gap that
     // makes a simulator invent its own error string. Only demanded of entries
     // that claim first-hand sight of the breach.
     const firstHand = fact.evidence === 'proven-by-probe' || fact.evidence === 'observed-in-production';
+
     if (firstHand && fact.firstPartySignal && fact.observable.length === 0) {
       fail(`${fact.evidence} with a first-party signal but no verbatim observable`);
     }
+
     if (!firstHand && fact.firstPartySignal && fact.observable.length === 0) {
       gaps.push({ id, missing: 'the verbatim string this surfaces as' });
     }
+
     if (fact.limit === null && fact.evidence === 'documented') {
       gaps.push({ id, missing: 'a threshold — documented as behaviour only' });
     }
@@ -271,6 +288,7 @@ const PLATFORM_VOCABULARY: readonly string[] = [
  *  may sit. The citation window is wider because a comment block explains the
  *  claim first and names the entry at the end. */
 const VOCABULARY_WINDOW = 200;
+
 const CITATION_WINDOW = 500;
 
 export interface ProseMention {
@@ -286,15 +304,18 @@ const lineOf = (text: string, index: number): number =>
 
 export function findProseMentions(file: string, text: string): readonly ProseMention[] {
   const found: ProseMention[] = [];
+
   for (const match of text.matchAll(QUANTITY)) {
     const at = match.index;
     const near = text.slice(Math.max(0, at - VOCABULARY_WINDOW), at + VOCABULARY_WINDOW);
     const vocabulary = PLATFORM_VOCABULARY.find((word) => near.includes(word));
+
     if (vocabulary === undefined) continue;
     const wide = text.slice(Math.max(0, at - CITATION_WINDOW), at + CITATION_WINDOW);
     const citedId = PLATFORM_FACT_IDS.find((id) => wide.includes(id)) ?? null;
     found.push({ file, line: lineOf(text, at), quantity: match[0], vocabulary, citedId });
   }
+
   return found;
 }
 
@@ -328,7 +349,9 @@ export function auditSources(sources: ReadonlyMap<string, string>): SourceAudit 
 
   for (const [file, text] of sources) {
     if (PROSE_EXEMPT_FILES.includes(file)) continue;
+
     if (text.includes('PLATFORM_CATALOG')) importers.push(file);
+
     for (const id of PLATFORM_FACT_IDS) if (text.includes(id)) citedIds.add(id);
     mentions.push(...findProseMentions(file, text));
   }
@@ -345,10 +368,15 @@ export function auditSources(sources: ReadonlyMap<string, string>): SourceAudit 
 
 const human = (value: number, unit: string): string => {
   if (unit !== 'bytes') return `${value.toLocaleString('en-US')} ${unit}`;
+
   if (value % (1000 * 1000 * 1000) === 0) return `${value / (1000 * 1000 * 1000)} GB`;
+
   if (value % (1024 * 1024) === 0) return `${value / (1024 * 1024)} MiB`;
+
   if (value % (1000 * 1000) === 0) return `${value / (1000 * 1000)} MB`;
+
   if (value % 1024 === 0) return `${value / 1024} KiB`;
+
   return `${value.toLocaleString('en-US')} bytes`;
 };
 
@@ -367,7 +395,9 @@ function report(): string {
     + `${String(injectableFaults().length)} carry first-hand evidence and may be injected as real faults.`,
     '',
   ];
+
   const audited = auditSchema(platformFactEntries());
+
   if (audited.gaps.length > 0) {
     out.push(
       '## Declared gaps',
@@ -376,11 +406,14 @@ function report(): string {
       + 'number in place of a missing one is how a catalog becomes folklore.',
       '',
     );
+
     for (const gap of audited.gaps) out.push(`- \`${gap.id}\` — missing ${gap.missing}`);
     out.push('');
   }
+
   const cited = auditSources(readSources()).citedIds;
   const uncited = PLATFORM_FACT_IDS.filter((id) => !cited.includes(id));
+
   if (uncited.length > 0) {
     out.push(
       '## Not yet reached by production code',
@@ -390,9 +423,11 @@ function report(): string {
       + 'a call site and do not.',
       '',
     );
+
     for (const id of uncited) out.push(`- \`${id}\``);
     out.push('');
   }
+
   for (const id of PLATFORM_FACT_IDS) {
     const fact = platformFact(id);
     out.push(`## \`${id}\``, '');
@@ -408,29 +443,39 @@ function report(): string {
     out.push(`| On breach | ${fact.onBreach} |`);
     out.push(`| First-party signal | ${fact.firstPartySignal ? 'yes' : 'NO — models as silent disappearance'} |`);
     out.push('');
+
     if (fact.observable.length > 0) {
       out.push('Verbatim:', '');
+
       for (const seen of fact.observable) out.push(`- *${seen.context}* — \`${seen.message}\``);
       out.push('');
     }
+
     if (fact.measurements !== undefined) {
       out.push('Measured:', '');
+
       for (const m of fact.measurements) out.push(`- ${m.scenario}: **${human(m.value, m.unit)}**`);
       out.push('');
     }
+
     if (fact.contributors !== undefined) {
       out.push('Accounted contributors:', '');
+
       for (const c of fact.contributors) out.push(`- ${c}`);
       out.push('');
     }
+
     if (fact.conflictsWith !== undefined) {
       out.push(`Sources disagree with: ${fact.conflictsWith.map((c) => `\`${c}\``).join(', ')}`, '');
     }
+
     if (fact.knownBreachPath !== undefined) {
       out.push(`**Known live breach path:** ${fact.knownBreachPath}`, '');
     }
+
     if (fact.notes !== undefined) out.push(fact.notes, '');
   }
+
   return out.join('\n');
 }
 
@@ -456,6 +501,7 @@ if (import.meta.main) {
   // silently stops matching is indistinguishable from a clean tree, so a clean
   // result is only meaningful while the regex is proven to still fire.
   let measured: string;
+
   try {
     measured = assertMeasured('platform-catalog', [
       ['catalog entries', schema.inspected],
@@ -476,6 +522,7 @@ if (import.meta.main) {
       .sort((a, b) => b[1] - a[1])
       .map(([label, n]) => `${String(n)} ${label}`)
       .join(', ');
+
     // Counts on the success line; the LISTS live in `--report`.
     //
     // Printing them here is the wrong shape: a warning nobody has to clear
@@ -499,6 +546,7 @@ if (import.meta.main) {
 
   if (schema.problems.length > 0) {
     console.error(`platform-catalog: ${String(schema.problems.length)} entry problem(s)\n`);
+
     for (const p of schema.problems) {
       console.error(finding({
         invariant: 'every catalog entry carries an evidence label, a followable provenance, '
@@ -513,8 +561,10 @@ if (import.meta.main) {
       }));
     }
   }
+
   if (unsourced.length > 0) {
     console.error(`\nplatform-catalog: ${String(unsourced.length)} uncited platform sentence(s)\n`);
+
     for (const m of unsourced) {
       console.error(finding({
         invariant: 'a sentence stating a platform number names the catalog entry it comes from',
@@ -528,5 +578,6 @@ if (import.meta.main) {
       }));
     }
   }
+
   process.exit(1);
 }

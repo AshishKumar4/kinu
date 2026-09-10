@@ -337,10 +337,12 @@ describe('the five states partition the declared corpus', () => {
 
   test('inert and errored are finished verdicts, so a run of them is complete', () => {
     const dir = join(root, 'census-complete');
+
     const declared: EvalProgressCase[] = [
       { taskId: 'did-nothing', repetition: 0 },
       { taskId: 'broke', repetition: 0 },
     ];
+
     const store = openEvalProgress(dir, 'shape-complete');
     store.markPlanned(declared);
     runToSettled(store, 'did-nothing', 'inert');
@@ -367,6 +369,7 @@ describe('a run killed mid-corpus resumes, and cannot report as green', () => {
     { taskId: 'gamma', repetition: 0 },
     { taskId: 'gamma', repetition: 1 },
   ];
+
   const signature = 'shape-killed';
 
   function killedMidCorpus(dir: string): void {
@@ -422,6 +425,7 @@ describe('a run killed mid-corpus resumes, and cannot report as green', () => {
       rerun.markProgress(key, { answer: `${input.taskId} finished on the rerun` }, 'scored');
       rerun.markSettled(key);
     }
+
     for (const adopted of plan.adopt) {
       rerun.markSettled(caseKey(adopted.input.taskId, adopted.input.repetition));
     }

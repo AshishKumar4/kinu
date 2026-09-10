@@ -42,14 +42,17 @@ const codemodeHandoff: SubordinateHandoff = {
   eventId: 'evt-1', delivery: 'starts_now',
   phase: { busy: false, lastActivityAt: null, workingOn: null },
 };
+
 import { createTestRuntime, scriptedTurnModel } from '@kinu.run/test-utils';
 import { hostedSeatsOver } from '../../core/tests/helpers-actor-host';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
+
 // Every one of these reaches `cloudflare:workers` at module load, so they are
 // imported after the mock is registered.
 const { resolveProvider } = await import('@cloudflare/codemode/ai');
+
 const { createExecuteToolsFactory } = await import('../src/execute-tools');
 
 /** A search's answer, narrowed to what the round-trip is read back off. */
@@ -87,6 +90,7 @@ function webSearchProvider(): WebSearchProvider {
 function executeToolsDescription(agents?: () => AgentsToolDeps): string {
   const { rt, testSql } = createTestRuntime();
   initCraftedToolsTables(testSql.sql);
+
   const options = {
     loader: workerLoader(),
     egress: null,
@@ -95,6 +99,7 @@ function executeToolsDescription(agents?: () => AgentsToolDeps): string {
     workspace: 'test-workspace',
     webSearch: webSearchProvider(),
   };
+
   const native = {
     file: tool({
       description: 'The file plane.',
@@ -106,10 +111,13 @@ function executeToolsDescription(agents?: () => AgentsToolDeps): string {
       execute: async () => 'x',
     }),
   };
+
   const built = agents
     ? createExecuteToolsFactory({ ...options, agents }).toolFor(native)
     : createExecuteToolsFactory(options).toolFor(native);
+
   if (!built.description) throw new Error('execute_tools description is missing');
+
   return built.description;
 }
 
@@ -143,6 +151,7 @@ function searchOnlyDeps(): AgentsToolDeps {
   // bare runtime value — because the seat factory is where a wave would
   // otherwise give every node one claim ledger and one loop pointer.
   const seats = hostedSeatsOver({ rt, db: testSql.db });
+
   return { mode: 'build', swarm: { rt, hostNode: seats.hostNode, model: expandingModel() } };
 }
 
@@ -236,9 +245,11 @@ describe('agents.* in the cf codemode tool', () => {
   test('the namespace is declared in the sandbox types the model reads', () => {
     const description = executeToolsDescription(fullDeps);
     expect(description).toContain('export declare const agents: {');
+
     for (const member of ['swarm(input', 'hire(input', 'msg(input', 'list(input', 'dismiss(input']) {
       expect(description).toContain(member);
     }
+
     // Its neighbours are untouched — this is one more namespace, not a rewrite.
     expect(description).toContain('export declare const web: {');
   });
@@ -272,6 +283,7 @@ describe('agents.swarm marshalled through the sandbox dispatcher', () => {
     const { fns } = resolveProvider(createAgentsCodemodeProvider(() => deps));
     const swarm = v.parse(v.function(), fns.swarm);
     const roundTrippedInput = parseJsonValue(JSON.stringify(input));
+
     return decodeJsonValue({ value: await swarm(roundTrippedInput) });
   }
 
@@ -285,6 +297,7 @@ describe('agents.swarm marshalled through the sandbox dispatcher', () => {
     const result = v.parse(SearchResultSchema, await sandboxSwarm(searchOnlyDeps(), {
       task: 'review the diff', preset: 'ideate', branches: 2, depth: 1,
     }));
+
     expect(result.caps.branches).toEqual({ value: 2, origin: 'call' });
     expect(result.caps.depth).toEqual({ value: 1, origin: 'call' });
     // And the caps that arrived are the ones the run was actually governed by:

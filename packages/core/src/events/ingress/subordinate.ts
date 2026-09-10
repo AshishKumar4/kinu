@@ -92,8 +92,10 @@ export async function receiveSubordinateEvent(
   // the parent demonstrably holds and leave the child's durable row owed forever.
   // The rail itself is the only witness that survives the child's crash.
   const held = deps.log.idForDedupeKey(subordinateReportDedupeKey(input.sequenceId));
+
   if (held !== null) return { id: held, disposition: 'already_held' };
   const subordinate = deps.roster.get(input.fromSubordinate);
+
   // An unknown name is a decision the roster has already forgotten, not a
   // delivery failure. Throwing made the child retry a report nobody awaits,
   // so its terminal sequence never converged. `not_awaited` settles its row.
@@ -121,6 +123,7 @@ export async function receiveSubordinateEvent(
   })) {
     return { id: '', disposition: 'admitted' };
   }
+
   // A DISMISSED target is a decision, not a delivery failure. Throwing made the
   // child retry a report the parent has deliberately stopped awaiting, so its
   // terminal sequence never converged. `not_awaited` is the honest answer and it
@@ -128,14 +131,17 @@ export async function receiveSubordinateEvent(
   if (subordinate.status === 'dismissed') {
     return { id: '', disposition: 'not_awaited' };
   }
+
   // Before the spill: a relay this workspace is not the audience for must not
   // leave a file behind on its file plane either. No event exists, so no id.
   if (!parentAdmitsSubordinateReport({ entry: subordinate })) {
     return { id: '', disposition: 'not_awaited' };
   }
+
   // Before the transaction: the VFS write is async, admission is not.
   const content = normalizeReportContent(input.content);
   const contentPath = await spillEventContent(deps.vfs, content);
+
   const published = deps.transaction(() => {
     const result = admitSubordinateReport(deps.log, {
       fromSubordinate: input.fromSubordinate,
@@ -148,11 +154,14 @@ export async function receiveSubordinateEvent(
       handoff: input.handoff,
       now,
     });
+
     if (result.admitted) {
       deps.roster.applyReport(input.fromSubordinate, input.status, input.origin, now);
     }
+
     return result;
   });
+
   // The UNIQUE key decided it atomically, so a delivery that raced the read
   // above lands here instead of publishing beside the row it lost to.
   if (!published.admitted) return { id: published.id, disposition: 'already_held' };
@@ -165,5 +174,6 @@ export async function receiveSubordinateEvent(
     timestamp: now,
   });
   deps.onAdmitted();
+
   return { id: published.id, disposition: 'admitted' };
 }

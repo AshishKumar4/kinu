@@ -41,12 +41,15 @@ export function wrapDatabase(db: AgentDatabase) {
     const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     const stmt = db.prepare<T>(query);
+
     if (isRead) return stmt.all(...bound);
     stmt.run(...bound);
+
     return [];
   };
 
   const execRaw: RawSqlExec = (ddl: string) => db.exec(ddl);
+
   return { sql, execRaw };
 }
 
@@ -60,11 +63,14 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
     exec(query: string, ...bindings: unknown[]) {
       const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v ?? null));
       const stmt = db.prepare(query);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return db.prepare<never>(query).all(...bound);
       stmt.run(...bound);
+
       return [];
     },
   };
+
   return createWorkspaceFilesystem({
     sql,
     transactions: {
@@ -93,6 +99,7 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
 export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeReads, 'readRange'>): Memory {
   const { sql } = wrapDatabase(db);
   initMemoryChunkTables(sql);
+
   return {
     async write(path, content) { await vfs.writeFile(path, content); },
     async append(path, content) {
@@ -100,6 +107,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
       const existing = await vfs.exists(path)
         ? await vfs.readFile(path, { encoding: 'utf8' }) as string
         : '';
+
       await vfs.writeFile(path, existing + content);
     },
     async index(path) {
@@ -115,6 +123,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
       // searches an index that is missing exactly what the inline path wrote.
       void sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE path = ${path})`;
       void sql`DELETE FROM memory_chunks WHERE path = ${path}`;
+
       for (const chunk of await chunkMarkdown(content)) {
         const id = `${path}:${chunk.startLine}-${chunk.endLine}`;
         void sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
@@ -126,6 +135,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
       const rows = sql<{ path: string; start_line: number; end_line: number; text: string }>`
         SELECT path, start_line, end_line, text FROM memory_chunks
         WHERE text LIKE ${`%${query}%`} LIMIT ${limit}`;
+
       return rows.map((r, i) => ({
         path: r.path, startLine: r.start_line, endLine: r.end_line,
         snippet: r.text.slice(0, 200), score: 1 - i * 0.1,
@@ -133,6 +143,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS & Pick<VfsNativeR
     },
     async read(path) {
       if (!await vfs.exists(path)) return null;
+
       // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
       return await vfs.readFile(path, { encoding: 'utf8' }) as string;
     },
@@ -150,6 +161,7 @@ export function createInlineCraftStore(db: AgentDatabase): CraftStore {
     },
     update(name, patch) {
       if (patch.code !== undefined) db.run('UPDATE crafted_tools SET code = ?, updated_at = ? WHERE name = ?', [patch.code, Date.now(), name]);
+
       if (patch.description !== undefined) db.run('UPDATE crafted_tools SET description = ?, updated_at = ? WHERE name = ?', [patch.description, Date.now(), name]);
     },
     get(name) { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools WHERE name = ?').all(name)[0]; },
@@ -158,6 +170,7 @@ export function createInlineCraftStore(db: AgentDatabase): CraftStore {
     search(query, limit = 10) {
       const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
       const all = db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all();
+
       return all.filter(t => words.some(w => t.description.toLowerCase().includes(w))).slice(0, limit);
     },
   };
@@ -171,6 +184,7 @@ export function createInlineExecutor(): Executor {
         // Execute the code, not just parse it. Wrap in async IIFE to support await.
         const fn = new Function(`return (async () => { ${code} })()`);
         const result: unknown = await fn();
+
         return {
           result: result === undefined ? '(no return value)' : decodeJsonValue({ value: result }),
         };
@@ -188,6 +202,7 @@ export function createInlineSchedule(sql: SqlExecutor, actor: ActorHandle): Sche
   // A fiber is a LANE OF ONE ACTOR's work, and its name is minted per lane, so
   // every actor sharing this database presents the same names.
   const actorId = actor.actorId;
+
   return {
     after: async (_ms, fn) => { await fn(); },
     cron: async () => {},
@@ -196,10 +211,12 @@ export function createInlineSchedule(sql: SqlExecutor, actor: ActorHandle): Sche
       const id = nanoid();
       void sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
         VALUES (${actorId}, ${id}, ${name}, ${null}, ${Date.now()})`;
+
       const stash: FiberCtx['stash'] = (data) => {
         void sql`UPDATE fibers SET snapshot = ${JSON.stringify(data)}
           WHERE actor_id = ${actorId} AND id = ${id}`;
       };
+
       try { return await fn({ stash, snapshot: null }); }
       finally { void sql`DELETE FROM fibers WHERE actor_id = ${actorId} AND id = ${id}`; }
     },

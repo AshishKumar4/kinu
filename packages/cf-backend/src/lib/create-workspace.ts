@@ -5,6 +5,8 @@ import { registerWorkspace, type WorkspaceEntry } from "@/lib/user-api";
  *  with an empty conversation, waiting for the first thing to do. */
 export async function createWorkspaceFromMission(mission: string): Promise<WorkspaceEntry> {
   const trimmed = mission.trim();
+
   if (!trimmed) throw new Error("Mission required.");
+
   return registerWorkspace(undefined, trimmed);
 }

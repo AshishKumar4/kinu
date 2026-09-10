@@ -17,15 +17,21 @@ import { tolerate } from "../packages/core/src/obs/index";
 
 // Load credentials from .dev.vars
 const devVars = readFileSync("packages/cf-backend/.dev.vars", "utf8");
+
 const vars: Record<string, string> = {};
+
 for (const line of devVars.split("\n")) {
   const eq = line.indexOf("=");
+
   if (eq > 0) vars[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
 }
 
 const GATEWAY_URL = vars.AI_GATEWAY_URL;
+
 const GATEWAY_AUTH = process.env.AI_GATEWAY_AUTH ?? vars.AI_GATEWAY_AUTH;
+
 const MODEL = "@cf/deepseek-ai/deepseek-v4-pro-0813";
+
 const FAST_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 if (!GATEWAY_URL || !GATEWAY_AUTH) {
@@ -220,14 +226,17 @@ async function measureStreaming(opts: {
   tools?: typeof TOOL_SCHEMAS;
 }): Promise<TestResult> {
   const messages: GatewayMessage[] = [];
+
   if (opts.systemPrompt) messages.push({ role: "system", content: opts.systemPrompt });
   messages.push({ role: "user", content: opts.userMessage });
+
   const body: GatewayRequest = {
     model: opts.model,
     messages,
     stream: true,
     max_tokens: 128,
   };
+
   if (opts.tools?.length) body.tools = opts.tools;
 
   const t0 = performance.now();
@@ -246,6 +255,7 @@ async function measureStreaming(opts: {
 
     if (!resp.ok) {
       const errText = await resp.text();
+
       return { name: opts.name, ttfc: -1, total: performance.now() - t0, firstChunk: "", error: `HTTP ${resp.status}: ${errText.slice(0, 200)}` };
     }
 
@@ -258,12 +268,14 @@ async function measureStreaming(opts: {
         error: "Gateway response had no body",
       };
     }
+
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let totalText = "";
 
     while (true) {
       const { done, value } = await reader.read();
+
       if (done) break;
 
       const text = decoder.decode(value, { stream: true });
@@ -271,21 +283,27 @@ async function measureStreaming(opts: {
 
       if (ttfc < 0) {
         ttfc = performance.now() - t0;
+
         // Extract first meaningful content from SSE
         for (const line of text.split("\n")) {
           if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
           const decoded = tolerate(() => parseJsonValue(line.slice(6)), "malformed-input");
+
           if (decoded === undefined) continue;
           const parsed = v.safeParse(streamChunkSchema, decoded);
+
           if (!parsed.success) continue;
           const delta = parsed.output.choices[0]?.delta;
+
           if (delta?.content) { firstChunk = delta.content.slice(0, 60); break; }
+
           if (delta?.reasoning_content) { firstChunk = `[reasoning] ${delta.reasoning_content.slice(0, 50)}`; break; }
         }
       }
     }
 
     const total = performance.now() - t0;
+
     return { name: opts.name, ttfc, total, firstChunk };
   } catch (error) {
     return { name: opts.name, ttfc: -1, total: performance.now() - t0, firstChunk: "", error: errorMessage(error) };
@@ -360,16 +378,19 @@ async function main() {
   console.log("\n╔══════════════════════════════════════════════════════╦═══════════╦═══════════╗");
   console.log("║ Test                                                 ║   TTFC    ║   Total   ║");
   console.log("╠══════════════════════════════════════════════════════╬═══════════╬═══════════╣");
+
   for (const r of results) {
     const name = r.name.padEnd(52);
     const ttfc = r.error ? "ERROR".padStart(7) : `${(r.ttfc / 1000).toFixed(1)}s`.padStart(7);
     const total = `${(r.total / 1000).toFixed(1)}s`.padStart(7);
     console.log(`║ ${name} ║ ${ttfc}   ║ ${total}   ║`);
   }
+
   console.log("╚══════════════════════════════════════════════════════╩═══════════╩═══════════╝");
 
   if (results.some(r => r.error)) {
     console.log("\nErrors:");
+
     for (const r of results) if (r.error) console.log(`  ${r.name}: ${r.error}`);
   }
 }

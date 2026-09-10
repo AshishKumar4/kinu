@@ -41,7 +41,9 @@ async function workspace(storedModel?: string): Promise<{ db: Database; dbPath: 
   const db = new Database(dbPath);
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM, hostRoot: null, agentName: 'jarvis' });
   await (rt.agentStateVfs ?? rt.storage.vfs).writeFile('SOUL.md', '# jarvis\n\n## Mission\n\nRun the lab.');
+
   if (storedModel !== undefined) rt.actor.config.setModel(storedModel);
+
   return { db, dbPath };
 }
 
@@ -54,9 +56,11 @@ function stubModels(rt: CLIRuntime): ModelRouteResolution[] {
     async *stream() { yield ''; },
     complete: async () => {
       seen.push(resolution);
+
       return 'stub answer';
     },
   }));
+
   return seen;
 }
 
@@ -145,6 +149,7 @@ describe('the authority a session refines', () => {
     const { db, dbPath } = await workspace();
     const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, hostRoot: null });
     const bootstrap = await rt.profiles?.envelope();
+
     if (!bootstrap) throw new Error('the runtime built no profile authority');
 
     rt.profiles?.refine({ envelope: () => ({ ...bootstrap, version: 7 }) });

@@ -20,9 +20,11 @@ import type { JsonValue } from '../src/utils/json';
 const STUDIO: DeviceFleetEntry = {
   id: 'dev-studio', name: 'ashish@studio', os: 'darwin', hostname: 'studio', connected: true,
 };
+
 const RIG: DeviceFleetEntry = {
   id: 'dev-rig', name: 'mrwhite@rig', os: 'linux', hostname: 'rig', connected: true,
 };
+
 const SPARE: DeviceFleetEntry = {
   id: 'dev-spare', name: 'spare box', os: 'linux', hostname: 'spare', connected: false,
 };
@@ -34,12 +36,14 @@ interface Sent { method: string; params: JsonValue[]; deviceId: string | undefin
 function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport & { sent: Sent[]; setFleet(next: readonly DeviceFleetEntry[]): void } {
   const sent: Sent[] = [];
   let fleet = devices;
+
   const status = (): DeviceStatus => ({
     connected: fleet.some((d) => d.connected),
     registered: fleet.length > 0,
     toolchain: null,
     devices: fleet,
   });
+
   return {
     sent,
     setFleet(next) { fleet = next; },
@@ -47,10 +51,15 @@ function fleetTransport(devices: readonly DeviceFleetEntry[]): DeviceTransport &
     refreshStatus: async () => status(),
     rpc: async (method, params, opts): Promise<JsonValue> => {
       sent.push({ method, params, deviceId: opts?.deviceId });
+
       if (method === 'exec') return { stdout: `ran on ${opts?.deviceId ?? 'unnamed'}`, stderr: '', exitCode: 0 };
+
       if (method === 'listFiles') return [{ name: `entry-of-${opts?.deviceId}`, type: 'file' }];
+
       if (method === 'exists') return true;
+
       if (method === 'writeFile') return { success: true };
+
       return { content: Buffer.from(`bytes of ${opts?.deviceId}`).toString('base64'), encoding: 'base64' };
     },
   };
@@ -145,9 +154,11 @@ describe('the device fleet at the executor surface', () => {
       refreshStatus: async () => ({ connected: false, registered: true, toolchain: null }),
       rpc: async (method, params, opts): Promise<JsonValue> => {
         bare.sent.push({ method, params, deviceId: opts?.deviceId });
+
         return { stdout: 'hi', stderr: '', exitCode: 0 };
       },
     };
+
     const provider = createDeviceTunnelExecutor(bare);
 
     expect(await provider.tools.exec.execute('echo hi')).toBe('hi');
@@ -163,12 +174,15 @@ describe('the device fleet at the executor surface', () => {
 describe('the composite file plane', () => {
   test('one live machine keeps /pc as its own root, byte for byte', async () => {
     const t = fleetTransport([STUDIO, SPARE]);
+
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/home/dev', deviceHome: async () => '/home/dev', unconfined: async () => true,
     });
+
     // The composite plane is the provider's own public `files`; the test
     // reaches it the way the mount table does, never a private builder.
     const plane = provider.files;
+
     if (plane === undefined) throw new Error('the device executor exposes no file plane');
 
     expect(await plane.readFile('/home/dev/notes.md', { encoding: 'utf8' })).toBe('bytes of dev-studio');
@@ -181,12 +195,15 @@ describe('the composite file plane', () => {
 
   test('a fleet serves each machine under /pc/<name>, and its root lists them', async () => {
     const t = fleetTransport([STUDIO, RIG, SPARE]);
+
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
     });
+
     // The composite plane is the provider's own public `files`; the test
     // reaches it the way the mount table does, never a private builder.
     const plane = provider.files;
+
     if (plane === undefined) throw new Error('the device executor exposes no file plane');
 
     expect(await plane.readdir('/')).toEqual(['ashish@studio', 'mrwhite@rig']);
@@ -202,12 +219,15 @@ describe('the composite file plane', () => {
 
   test('a path under no live machine is a stated absence naming the fleet', async () => {
     const t = fleetTransport([STUDIO, RIG]);
+
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/', deviceHome: async () => '/', unconfined: async () => true,
     });
+
     // The composite plane is the provider's own public `files`; the test
     // reaches it the way the mount table does, never a private builder.
     const plane = provider.files;
+
     if (plane === undefined) throw new Error('the device executor exposes no file plane');
 
     await expect(plane.readFile('/home/dev/a.txt')).rejects.toMatchObject({ code: 'ENXIO' });
@@ -239,6 +259,7 @@ describe('the run tool names the machine', () => {
     const router = new DefaultExecutionRouter();
     router.register(createDeviceTunnelExecutor(t));
     const tools = buildBuiltinTools({ rt: { ...rt, executionRouter: router } });
+
     return {
       t,
       run: toolExecute<{ command: string; runtime: string; device?: string; why?: string }, string>(tools.run),

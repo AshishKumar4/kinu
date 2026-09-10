@@ -8,12 +8,14 @@ import { useTuiTheme } from './theme';
 
 export function StatusView({ status }: { status: AgentClientStatus }) {
   const { colors } = useTuiTheme();
+
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text>
         <strong fg={colors.intent.accentStrong}>Workspace Status</strong>
         {renderStatusLines(status).map((line) => {
           const [label = '', ...value] = line.split(/\s+/);
+
           return (
             <span key={label}>
               {'\n'}

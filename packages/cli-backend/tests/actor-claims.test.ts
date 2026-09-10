@@ -28,15 +28,19 @@ import { createTestRuntime, makeSqlExec } from '../../core/tests/helpers';
 import { createSandboxedExecutor } from '../src/executor';
 
 const catalog = { roles: {}, tiers: { default: { model: 'fake/actor-model' } } };
+
 const profiles: ProfileAuthorityInputs = {
   envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
   provider: { revision: 'claim-fixture', availableModels: ['fake/actor-model'] },
 };
+
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
   outputTokens: { total: 1, text: 1, reasoning: undefined },
 };
+
 const V1 = 'async function run() { await host.emit({ type: "text_delta", text: "v1 answer" }); }';
+
 const V2 = 'async function run() { await host.emit({ type: "text_delta", text: "v2 answer" }); }';
 
 interface Bound {
@@ -53,21 +57,28 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
   await files.mkdir('scaffold', { recursive: true });
   await files.writeFile(rt.identity.scaffold.path + '.v1', V1);
   await files.writeFile(rt.identity.scaffold.path + '.v2', V2);
+
   const owner = rt.storage.sql<{ owner_user_id: string }>`
     SELECT owner_user_id FROM workspace_identity WHERE id = ${rt.actor.workspaceId}`[0];
+
   if (owner === undefined) throw new Error('the real runtime fixture must have a workspace owner');
+
   const directory = new WorkspaceActorDirectory(rt.storage.sql, {
     workspaceId: rt.actor.workspaceId, ownerUserId: owner.owner_user_id,
   });
+
   const parent = directory.main();
   const eventSql = makeSqlExec(db);
   initEventsHubTables(eventSql);
+
   const bind = (name: string): Bound => {
     const handle = directory.create({
       parent, name, kind: 'subordinate', lifetime: 'durable', creationId: 'claimed-' + name,
     });
+
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync);
+
     const actor: ActorSession = new ActorSession({
       runtime, claims: stores.claims, installedBuild: null,
       orchestration: {
@@ -80,8 +91,10 @@ async function workspace(): Promise<{ bind: (name: string) => Bound; rt: AgentRu
         },
       },
     });
+
     return { actor, runtime, stores, handle };
   };
+
   return { bind, rt };
 }
 
@@ -103,24 +116,29 @@ async function runTurn(bound: Bound, opts: {
   readonly onEvent?: (event: ChatEvent) => void;
 }) {
   const mode = opts.mode ?? 'build';
+
   const lease = bound.actor.beginTurn(
     { runId: opts.runId ?? `run-${opts.turnId}`, turnId: opts.turnId }, mode, Date.now(),
   );
+
   bound.actor.bindProfile(lease, resolveTurnProfile({
     ...profiles, roleId: 'general', workMode: mode, availableTools: [], activeSkills: [],
   }), profiles);
   bound.actor.appendInput(lease, opts.input);
+
   const result = await bound.actor.execute(lease, {
     task: 'go', loopVersion: opts.loopVersion,
     chat: { model: opts.model, system: 'sys', tools: opts.tools ?? {} },
     extensions: [], dynamic: () => ({}),
   }, (event) => opts.onEvent?.(event));
+
   // What the host does with a settled turn, in the order it does it: name the
   // claim's outcome from what the run did, then release the lease. A lease
   // released without a named outcome settles `indeterminate` instead, which is
   // what the run-close path exists to avoid.
   bound.actor.settleTurnClaim(lease, result.failure === null ? 'completed' : 'error');
   bound.actor.finishTurn(lease);
+
   return { lease, result };
 }
 
@@ -128,13 +146,16 @@ test('the claim and its admitted context are durable before the first model call
   const { bind } = await workspace();
   const left = bind('left');
   let claimAtFirstCall: StoredActorClaim | null = null;
+
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => {
     // Read straight out of SQLite from inside the provider call: whatever this
     // sees is what was durable BEFORE the first model effect existed.
     claimAtFirstCall = left.stores.claims.read('turn-a');
+
     return { content: [{ type: 'text', text: 'answered' }],
       finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] };
   } });
+
   // The BUILTIN loop, deliberately: a promoted program answers from its own
   // source and may never call a model at all, so the builtin arm is the one
   // whose first side effect IS the provider call this probe reads from.
@@ -142,6 +163,7 @@ test('the claim and its admitted context are durable before the first model call
     turnId: 'turn-a', loopVersion: 0, model,
     input: { role: 'user', content: 'admitted input' },
   });
+
   expect(result.failure).toBeNull();
   expect(claimAtFirstCall).toMatchObject({
     turnId: 'turn-a', runId: 'run-turn-a', epoch: 1, workMode: 'build', status: 'admitted',
@@ -160,11 +182,17 @@ test('a source change after admission cannot alter the bytes the turn consumed',
   const left = bind('left');
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   let aliasReads = 0;
-  rt.identity.scaffold.read = async () => { aliasReads++; return V2; };
+  rt.identity.scaffold.read = async () => {
+    aliasReads++;
+
+    return V2;
+  };
+
   const { result } = await runTurn(left, {
     turnId: 'turn-src', loopVersion: 1, model: answerOnce('unused'),
     input: { role: 'user', content: 'run v1' },
   });
+
   expect(result.failure).toBeNull();
   expect(result.text).toBe('v1 answer');
   // The version's file is rewritten AFTER the turn consumed it, exactly as a
@@ -172,13 +200,16 @@ test('a source change after admission cannot alter the bytes the turn consumed',
   await files.writeFile(rt.identity.scaffold.path + '.v1', V2);
   const claim = left.stores.claims.read('turn-src');
   expect(claim?.program.digest).toBe(createHash('sha256').update(V1).digest('hex'));
+
   if (claim === null) throw new Error('the turn must have left a claim to verify');
+
   const recovery = await verifyClaimedProgram(
     claim,
     (version) => readVersionedScaffoldSource(left.runtime, version),
     sha256Hex,
     () => left.stores.claims.consumedContext('turn-src'),
   );
+
   // Recovery REFUSES to read the new bytes as the claimed ones, and says which
   // digest it found rather than resuming on whatever is there now.
   expect(recovery.kind).toBe('source_changed');
@@ -198,24 +229,29 @@ test('a cold reader recovers the claimed program identity and the exact context 
       { type: 'file', data: attachment, mediaType: 'image/png' },
     ] },
   });
+
   // A SECOND store bundle over the same database, bound to the same issued
   // actor: this is what an activation that did not run the turn can see.
   const cold = createAgentStores(
     () => left.runtime.storage.sql, () => left.handle, left.runtime.storage.transactionSync,
   );
+
   const claim = cold.claims.read('turn-cold');
   expect(claim).toMatchObject({ turnId: 'turn-cold', epoch: 1, status: 'settled', outcome: 'completed' });
   // A BUILTIN turn carries no source digest and — on this host — no build
   // identity. Neither is invented: the descriptor that names the arm is not
   // hashed into something that reads like retained code.
   expect(claim?.program).toEqual({ kind: 'builtin', version: 0, digest: null, build: null });
+
   if (claim === null) throw new Error('the turn must have left a claim to verify');
+
   const recovery = await verifyClaimedProgram(
     claim,
     (version) => readVersionedScaffoldSource(left.runtime, version),
     sha256Hex,
     () => cold.claims.consumedContext('turn-cold'),
   );
+
   expect(recovery.kind).toBe('build_unknown');
   const consumed = cold.claims.consumedContext('turn-cold');
   expect(consumed?.stepIndex).toBe(0);
@@ -227,6 +263,7 @@ test('a cold reader recovers the claimed program identity and the exact context 
   const file = parts.find((part) => part.type === 'file');
   expect(file).toMatchObject({ type: 'file', mediaType: 'image/png' });
   const data = file && 'data' in file ? file.data : undefined;
+
   if (!(data instanceof Uint8Array)) throw new Error('the stored attachment must decode to its own bytes');
   expect([...data]).toEqual([...attachment]);
 });
@@ -235,17 +272,21 @@ test('a rich tool exchange survives the revision round trip as native messages',
   const { bind } = await workspace();
   const left = bind('left');
   let step = 0;
+
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => {
     const first = step++ === 0;
+
     return { content: first
       ? [{ type: 'tool-call', toolCallId: 'call-1', toolName: 'probe', input: '{"path":"a.png"}' }]
       : [{ type: 'text', text: 'done' }],
     finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined }, usage, warnings: [] };
   } });
+
   const tools = { probe: tool({
     inputSchema: jsonSchema<{ path: string }>({ type: 'object', properties: { path: { type: 'string' } } }),
     execute: async () => ({ bytes: 6, sample: 'AQIDBAUG' }),
   }) };
+
   await runTurn(left, {
     turnId: 'turn-tools', loopVersion: 0, model, tools,
     input: { role: 'user', content: 'probe it' },
@@ -266,12 +307,15 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
   const { bind } = await workspace();
   const left = bind('left');
   const claims = left.stores.claims;
+
   const stale = claims.admit({
     runId: 'run-old', turnId: 'turn-fence', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: [{ role: 'user', content: 'first activation' }], workingRevision: 0,
   });
+
   expect(stale.epoch).toBe(1);
+
   // The activation that replaces it re-admits the SAME turn and takes the next
   // epoch — the case the single-row handoff could not represent.
   const live = claims.admit({
@@ -279,6 +323,7 @@ test('a stale execution epoch cannot write to the claim a newer one owns', async
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: [{ role: 'user', content: 'second activation' }], workingRevision: 0,
   });
+
   expect(live.epoch).toBe(2);
   expect(() => claims.consume(stale, { index: 0, messages: [{ role: 'user', content: 'stale step' }], workingRevision: 0 }))
     .toThrow(KinuError);
@@ -296,16 +341,19 @@ test('one actor cannot write another actor\'s claim, and their revisions never m
   const { bind } = await workspace();
   const left = bind('left');
   const right = bind('right');
+
   const leftClaim = left.stores.claims.admit({
     runId: 'run-l', turnId: 'shared-turn-id', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: [{ role: 'user', content: 'left context' }], workingRevision: 0,
   });
+
   const rightClaim = right.stores.claims.admit({
     runId: 'run-r', turnId: 'shared-turn-id', workMode: 'plan',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
     context: [{ role: 'user', content: 'right context' }], workingRevision: 0,
   });
+
   // The same turn id on two issued actors is two claims, each at epoch 1.
   expect(leftClaim.epoch).toBe(1);
   expect(rightClaim.epoch).toBe(1);
@@ -322,35 +370,42 @@ test('one actor cannot write another actor\'s claim, and their revisions never m
 test('a context edit written through the native file tool reaches the NEXT model request', async () => {
   const { bind } = await workspace();
   const left = bind('left');
+
   // The actor's own file plane, with /context composed exactly as a backend
   // composes it: the edit below goes through the same dispatcher, ledger and
   // store a model's `file` call goes through.
   const vfs = withMountTable(left.runtime.storage.vfs, [contextMount({
     stores: () => ({ actorId: left.handle.actorId, claims: left.stores.claims, events: null }),
   })]);
+
   const file = createFileDispatcher({
     vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(),
   });
+
   // The provider's OWN prompt, as JSON: this is the wire-facing message list,
   // not our `ModelMessage` shape, and reading it back through a schema keeps
   // that distinction honest instead of asserting one is the other.
   const requests: string[] = [];
   let step = 0;
+
   // THREE steps, because that is what the product actually requires of a model
   // editing a file: read it, then edit against what the read returned, then
   // answer. The read-before-write gate is real on this plane.
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: (options) => {
     requests.push(JSON.stringify(options.prompt));
     const at = step++;
+
     const call = at === 0
       ? { action: 'read', path: '/context/working.jsonl' }
       : { action: 'edit', path: '/context/working.jsonl',
           edits: [{ old_text: 'the WRONG premise', new_text: 'the RIGHT premise' }] };
+
     return { content: at < 2
       ? [{ type: 'tool-call', toolCallId: `file-${String(at)}`, toolName: 'file', input: JSON.stringify(call) }]
       : [{ type: 'text', text: 'done' }],
     finishReason: { unified: at < 2 ? 'tool-calls' : 'stop', raw: undefined }, usage, warnings: [] };
   } });
+
   const tools = { file: tool({
     inputSchema: jsonSchema<FileToolInput>({
       type: 'object',
@@ -379,6 +434,7 @@ test('a context edit written through the native file tool reaches the NEXT model
   // that happened in between.
   const third = v.parse(v.array(v.object({ role: v.string() })), JSON.parse(requests[2] ?? '[]'));
   expect(third.map((row) => row.role)).toEqual(['system', 'user', 'assistant', 'tool', 'assistant', 'tool']);
+
   // The premise the model is now reasoning from. Asserted on the USER message
   // rather than the whole prompt, because the tool result of the read
   // legitimately quotes the pre-edit bytes — that is what the model read.
@@ -386,13 +442,16 @@ test('a context edit written through the native file tool reaches the NEXT model
     role: v.string(),
     content: v.union([v.string(), v.array(v.object({ text: v.optional(v.string()) }))]),
   }));
+
   const parsed = v.parse(PromptText, JSON.parse(requests[2] ?? '[]'));
   const userMessage = parsed.find((row) => row.role === 'user');
   const flat = v.safeParse(v.string(), userMessage?.content);
+
   const premise = flat.success
     ? flat.output
     : v.parse(v.array(v.object({ text: v.optional(v.string()) })), userMessage?.content ?? [])
       .map((part) => part.text ?? '').join('');
+
   expect(premise).toBe('reason from the RIGHT premise');
 
   // The durable record agrees. The edit is its own revision, authored through
@@ -418,12 +477,15 @@ test('a mid-turn host edit stages a revision instead of rewriting a running turn
   const { bind } = await workspace();
   const left = bind('left');
   let stagedRevision: number | null = null;
+
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => {
     // A host edit arriving while the turn is admitted and running.
     stagedRevision = left.actor.restoreHistory([{ role: 'user', content: 'replaced by the host' }]);
+
     return { content: [{ type: 'text', text: 'answered' }],
       finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] };
   } });
+
   await runTurn(left, {
     turnId: 'turn-hydrate', loopVersion: 0, model,
     input: { role: 'user', content: 'original' },
@@ -459,6 +521,7 @@ test('the stored revision decodes through the codec the recorder validates with'
   const { bind } = await workspace();
   const left = bind('left');
   const claims = left.stores.claims;
+
   const claim = claims.admit({
     runId: 'run-codec', turnId: 'turn-codec', workMode: 'build',
     program: { kind: 'builtin', version: 0, digest: null, build: null },
@@ -468,9 +531,11 @@ test('the stored revision decodes through the codec the recorder validates with'
       { type: 'file', data: new URL('https://example.invalid/a.pdf'), mediaType: 'application/pdf' },
     ] }], workingRevision: 0,
   });
+
   const row = left.runtime.storage.sql<{ messages: string; digest: string }>`
     SELECT messages, digest FROM actor_context_revisions
     WHERE actor_id = ${left.handle.actorId} AND turn_id = ${claim.turnId} AND revision = 0`[0];
+
   if (row === undefined) throw new Error('the admitting transaction must write revision 0');
   // The stored payload is not a JSON dump of the byte array: the object index
   // shape `{"0":0,"1":1}` is exactly the lossy round trip this codec avoids.
@@ -480,6 +545,7 @@ test('the stored revision decodes through the codec the recorder validates with'
   const bytes = parts.find((part) => part.type === 'file' && part.mediaType === 'application/octet-stream');
   const url = parts.find((part) => part.type === 'file' && part.mediaType === 'application/pdf');
   const decodedBytes = bytes && 'data' in bytes ? bytes.data : undefined;
+
   if (!(decodedBytes instanceof Uint8Array)) throw new Error('the binary part must decode to bytes');
   expect([...decodedBytes]).toEqual([0, 1, 254, 255]);
   expect(url && 'data' in url ? String(url.data) : null).toBe('https://example.invalid/a.pdf');

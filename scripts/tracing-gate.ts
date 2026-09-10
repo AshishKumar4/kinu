@@ -90,6 +90,7 @@ const TRACER_SOURCES = [
 ] as const;
 
 const FIXTURE_ENTRY = 'packages/cf-backend/tests/fixtures/tracing-gate-worker.ts';
+
 const TRACER_FACTORY = 'createWorkersTracer';
 
 export interface EnvironmentConfig {
@@ -145,6 +146,7 @@ export function environmentsOf(configPath: string): readonly EnvironmentConfig[]
   const source = readFileSync(join(REPO, configPath), 'utf8');
   const config = parseJsonc(source, WranglerConfigSchema, configPath);
   const topName = config.name ?? basename(dirname(configPath));
+
   return [
     environmentRow(configPath, topName, config),
     ...Object.entries(config.env ?? {}).map(([envName, env]) => environmentRow(
@@ -194,7 +196,9 @@ export async function observeSpans(): Promise<SpanObservations> {
     platform: 'browser',
     external: ['cloudflare:workers'],
   });
+
   const script = bundled.outputFiles[0]?.text ?? '';
+
   if (script.length === 0) {
     throw new Error(`${FIXTURE_ENTRY}: bundled to nothing — the gate would measure an empty worker`);
   }
@@ -221,27 +225,35 @@ export async function observeSpans(): Promise<SpanObservations> {
         },
       },
     };
+
     if (tailConsumers) options.config.tailConsumers = tailConsumers;
+
     return options;
   };
+
   const run = async (attachSink: boolean): Promise<readonly RuntimeObservation[]> => {
     const workers: WorkerOptions[] = attachSink
       ? [worker('traced', script, [{ worker: 'sink' }]), worker('sink', sinkScript)]
       : [worker('traced', script)];
+
     const mf = new Miniflare({
       log: new NoOpLog(),
       workers,
     });
+
     try {
       const response = await mf.dispatchFetch('https://tracing-gate.example/');
+
       if (!response.ok) throw new Error(`tracing fixture answered HTTP ${String(response.status)}`);
       const body: unknown = await response.json();
       const rows = v.safeParse(FixtureRowsSchema, body);
+
       if (!rows.success) {
         throw new Error(
           `${FIXTURE_ENTRY}: response is not [{ name, isTraced }] rows — ${v.summarize(rows.issues)}`,
         );
       }
+
       return rows.output;
     } finally {
       await mf.dispose();
@@ -259,6 +271,7 @@ export function auditTracing(
   observations: SpanObservations,
 ): readonly string[] {
   const findings: string[] = [];
+
   for (const env of environments) {
     if (instrumentedCount > 0 && !env.tracesEnabled) {
       findings.push(finding({
@@ -271,6 +284,7 @@ export function auditTracing(
           + '"observability" block; wrangler does not inherit it from the top level',
       }));
     }
+
     for (const consumer of env.tailConsumers) {
       if (consumer === env.workerName) {
         findings.push(finding({
@@ -285,6 +299,7 @@ export function auditTracing(
       }
     }
   }
+
   for (const span of observations.withSink) {
     if (!span.isTraced) {
       findings.push(finding({
@@ -298,6 +313,7 @@ export function auditTracing(
       }));
     }
   }
+
   for (const span of observations.withoutSink) {
     if (span.isTraced) {
       findings.push(finding({
@@ -310,6 +326,7 @@ export function auditTracing(
       }));
     }
   }
+
   return findings;
 }
 
@@ -329,13 +346,17 @@ async function main(): Promise<number> {
 
   if (findings.length > 0) {
     console.error(`${gate}: ${String(findings.length)} violation(s)\n`);
+
     for (const entry of findings) console.error(entry);
     console.error(`\n${gate}: measured ${measured}`);
+
     return 1;
   }
+
   console.log(`${gate}: ok — ${measured}`);
   console.log('  blind: the span tree shape. tailStream is not dispatched locally or on the deployed runtime, so shape is readable only from Cloudflare ingestion');
   console.log('  blind: the file list is hand kept. A new production call site outside TRACER_SOURCES is uncounted until the list gains it');
+
   return 0;
 }
 

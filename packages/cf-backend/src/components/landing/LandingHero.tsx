@@ -25,6 +25,7 @@ interface TreeState {
 }
 
 type Rgb = readonly [red: number, green: number, blue: number];
+
 interface TreePalette {
   readonly accent: Rgb;
   readonly bright: Rgb;
@@ -34,13 +35,18 @@ interface TreePalette {
 function cssRgb(name: string): Rgb {
   const value = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   const hex = /^#([0-9a-f]{6})$/iu.exec(value)?.[1];
+
   if (hex !== undefined) {
     const number = Number.parseInt(hex, 16);
+
     return [(number >> 16) & 255, (number >> 8) & 255, number & 255];
   }
+
   const channels = value.match(/[\d.]+/gu)?.slice(0, 3).map(Number);
+
   if (channels === undefined) return [224, 164, 88];
   const [red, green, blue] = channels;
+
   return red === undefined || green === undefined || blue === undefined
     ? [224, 164, 88]
     : [red, green, blue];
@@ -60,8 +66,10 @@ function treePalette(): TreePalette {
 
 function pseudoRandom(seed: number): () => number {
   let value = seed;
+
   return () => {
     value = (value * 16_807) % 2_147_483_647;
+
     return value / 2_147_483_647;
   };
 }
@@ -72,8 +80,10 @@ function buildTree(width: number, height: number): TreeState {
   const levels = 5;
   const left = width * 0.04;
   const right = width * 0.97;
+
   const addNode = (parent: number | null, depth: number, top: number, bottom: number): void => {
     const span = bottom - top;
+
     const node: TreeNode = {
       id: nodes.length,
       parent,
@@ -87,10 +97,14 @@ function buildTree(width: number, height: number): TreeState {
       pruned: false,
       hidden: false,
     };
+
     nodes.push(node);
+
     if (parent !== null) nodes[parent]?.children.push(node.id);
+
     if (depth >= levels - 1) return;
     const childCount = depth === 0 ? 3 : random() < 0.46 ? 2 : random() < 0.8 ? 3 : 1;
+
     for (let index = 0; index < childCount; index += 1) {
       if (depth > 1 && random() < 0.18) continue;
       addNode(
@@ -101,34 +115,44 @@ function buildTree(width: number, height: number): TreeState {
       );
     }
   };
+
   addNode(null, 0, height * 0.06, height * 0.94);
+
   const leaves = nodes.filter((node) => (
     node.children.length === 0
     && node.depth >= levels - 2
     && node.y > height * 0.25
     && node.y < height * 0.75
   ));
+
   const winnerNode = leaves[Math.floor(random() * leaves.length)] ?? nodes.at(-1);
+
   if (winnerNode === undefined) throw new Error('landing tree has no nodes');
   const winningPath = new Set<number>();
+
   for (let node: TreeNode | undefined = winnerNode; node !== undefined;) {
     winningPath.add(node.id);
     node = node.parent === null ? undefined : nodes[node.parent];
   }
+
   for (const node of nodes) {
     if (node.depth < 2 || winningPath.has(node.id)) continue;
     const parent = node.parent === null ? undefined : nodes[node.parent];
+
     if (parent?.pruned === true || parent?.hidden === true) {
       node.hidden = true;
       continue;
     }
+
     const probability = node.children.length === 0 ? 0.32 : 0.23;
     node.pruned = random() < probability;
   }
+
   const visibleNodes = nodes.filter((node) => !node.hidden);
   [...visibleNodes].sort((a, b) => a.depth - b.depth || a.y - b.y)
     .forEach((node, index) => { node.appear = 180 + index * 105 + random() * 55; });
   const lastAppear = Math.max(...visibleNodes.map((node) => node.appear));
+
   return { nodes, winner: winnerNode.id, winningPath, lastAppear };
 }
 
@@ -150,10 +174,13 @@ function drawTree(
 
   for (const node of state.nodes) {
     if (node.hidden) continue;
+
     if (node.parent === null) continue;
     const parent = state.nodes[node.parent];
+
     if (parent === undefined) continue;
     const arrival = Math.min(1, Math.max(0, (time - node.appear) / 700));
+
     if (arrival <= 0) continue;
     const eased = arrival < 1 ? 1 - (1 - arrival) ** 3 : 1;
     const startX = parent.x;
@@ -162,6 +189,7 @@ function drawTree(
     const endY = startY + (node.y + sway(node) - startY) * eased;
     const pruned = node.pruned || parent.pruned;
     const selected = !pruned && state.winningPath.has(node.id) && state.winningPath.has(parent.id);
+
     if (pruned) {
       context.setLineDash([2.5, 6]);
       context.strokeStyle = rgba(palette.accent, 0.2);
@@ -175,6 +203,7 @@ function drawTree(
       context.strokeStyle = gradient;
       context.lineWidth = selected ? 0.9 + 0.9 * winningProgress : 0.85;
     }
+
     context.beginPath();
     context.moveTo(startX, startY);
     const controlX = startX + (endX - startX) * 0.55;
@@ -186,6 +215,7 @@ function drawTree(
   for (const node of state.nodes) {
     if (node.hidden) continue;
     const arrival = Math.min(1, Math.max(0, (time - node.appear) / 620));
+
     if (arrival <= 0) continue;
     const x = node.x;
     const y = node.y + sway(node);
@@ -195,6 +225,7 @@ function drawTree(
     const pruned = node.pruned;
     const leaf = node.pruned || node.children.every((child) => state.nodes[child]?.hidden === true);
     const radius = (root ? 5 : leaf ? 3.6 : 2.6) * (0.5 + 0.5 * arrival);
+
     if (pruned) {
       context.beginPath();
       context.arc(x, y, radius * 0.82, 0, Math.PI * 2);
@@ -202,6 +233,7 @@ function drawTree(
       context.fill();
       continue;
     }
+
     context.beginPath();
     context.arc(x, y, winner ? radius * (1 + 0.5 * winningProgress) : radius, 0, Math.PI * 2);
     context.fillStyle = winner && winningProgress > 0.1
@@ -220,8 +252,10 @@ function SearchCanvas(): ReactElement {
 
   useEffect(() => {
     const canvas = canvasRef.current;
+
     if (canvas === null) return;
     const context = canvas.getContext('2d');
+
     if (context === null) return;
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     let visible = false;
@@ -233,10 +267,12 @@ function SearchCanvas(): ReactElement {
 
     const resize = (): boolean => {
       const box = canvas.getBoundingClientRect();
+
       if (box.width < 4 || box.height < 4) return false;
       const ratio = Math.min(2, window.devicePixelRatio || 1);
       const width = Math.round(box.width * ratio);
       const height = Math.round(box.height * ratio);
+
       if (canvas.width === width && canvas.height === height) return false;
       canvas.width = width;
       canvas.height = height;
@@ -245,18 +281,23 @@ function SearchCanvas(): ReactElement {
       canvas.dataset.pruned = String(tree.nodes.filter((node) => node.pruned).length);
       canvas.dataset.hidden = String(tree.nodes.filter((node) => node.hidden).length);
       canvas.dataset.visible = String(tree.nodes.filter((node) => !node.hidden).length);
+
       return true;
     };
+
     const paint = (elapsed: number): void => {
       lastElapsed = elapsed;
       drawTree(context, tree, elapsed, dimensions.width, dimensions.height, dimensions.ratio, treePalette());
+
       if (elapsed >= tree.lastAppear + 2_000) canvas.dataset.settled = "true";
       else delete canvas.dataset.settled;
     };
+
     const draw = (now: number): void => {
       const settledAt = tree.lastAppear + 2_000;
       const elapsed = reduced.matches ? settledAt : now - started;
       paint(elapsed);
+
       if (!reduced.matches && visible && !document.hidden) timer = window.setTimeout(() => draw(performance.now()), 34);
     };
 
@@ -264,16 +305,20 @@ function SearchCanvas(): ReactElement {
     const initialElapsed = reduced.matches ? tree.lastAppear + 2_000 : 180;
     started = performance.now() - initialElapsed;
     paint(initialElapsed);
+
     const syncPlayback = (): void => {
       window.clearTimeout(timer);
       started = performance.now() - lastElapsed;
+
       if (reduced.matches) paint(tree.lastAppear + 2_000);
       else if (visible && !document.hidden) draw(performance.now());
     };
+
     const visibilityObserver = new IntersectionObserver(([entry]) => {
       visible = entry?.isIntersecting === true;
       syncPlayback();
     });
+
     visibilityObserver.observe(canvas);
     reduced.addEventListener('change', syncPlayback);
     document.addEventListener('visibilitychange', syncPlayback);
@@ -282,9 +327,11 @@ function SearchCanvas(): ReactElement {
       if (!resize()) return;
       paint(tree.lastAppear + 2_000);
     });
+
     observer.observe(canvas);
     const modeObserver = new MutationObserver(() => paint(lastElapsed));
     modeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-mode"] });
+
     return () => {
       window.clearTimeout(timer);
       observer.disconnect();
@@ -327,6 +374,7 @@ function Typewriter(): ReactElement {
   const [phrase, setPhrase] = useState<string>(PHRASES[0]);
   useEffect(() => {
     const element = elementRef.current;
+
     if (element === null) return;
     const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
     let index = 0;
@@ -334,11 +382,13 @@ function Typewriter(): ReactElement {
     let deleting = true;
     let visible = false;
     let timer = 0;
+
     const step = (): void => {
       const current = PHRASES[index]!;
       length += deleting ? -1 : 1;
       setPhrase(current.slice(0, length));
       let delay = deleting ? 24 : 65;
+
       if (length === 0) {
         index = (index + 1) % PHRASES.length;
         deleting = false;
@@ -347,10 +397,13 @@ function Typewriter(): ReactElement {
         deleting = true;
         delay = 2_600;
       }
+
       timer = window.setTimeout(step, delay);
     };
+
     const sync = (): void => {
       window.clearTimeout(timer);
+
       if (reduced.matches) {
         index = 0;
         length = PHRASES[0].length;
@@ -360,13 +413,16 @@ function Typewriter(): ReactElement {
         timer = window.setTimeout(step, 2_600);
       }
     };
+
     const observer = new IntersectionObserver(([entry]) => {
       visible = entry?.isIntersecting === true;
       sync();
     });
+
     observer.observe(element);
     reduced.addEventListener('change', sync);
     document.addEventListener('visibilitychange', sync);
+
     return () => {
       window.clearTimeout(timer);
       observer.disconnect();
@@ -374,6 +430,7 @@ function Typewriter(): ReactElement {
       document.removeEventListener('visibilitychange', sync);
     };
   }, []);
+
   return (
     <span ref={elementRef} aria-hidden="true" className="grid p-accent">
       {/* Shared grid cells reserve the tallest phrase at every font and width. */}
@@ -385,6 +442,7 @@ function Typewriter(): ReactElement {
 
 export function LandingHero({ install }: { install: string }): ReactElement {
   const { status, copy } = useCopy();
+
   return (
     <section id="top" className="relative overflow-hidden">
       {/* Base column is an explicit minmax(0,1fr): with no template, the

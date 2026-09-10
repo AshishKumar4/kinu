@@ -23,12 +23,14 @@ const REQUEST: DeviceConsentRequest = {
 function registry(timeoutMs = 10_000) {
   const notices: DeviceConsentNotice[] = [];
   let n = 0;
+
   const reg = new DeviceConsentRegistry({
     announce: (notice) => { notices.push(notice); },
     newId: () => `cons-${++n}`,
     timeoutMs,
     now: () => 1_700_000_000_000,
   });
+
   return { reg, notices };
 }
 
@@ -143,6 +145,7 @@ describe('DeviceConsentRegistry identity', () => {
 
   test('a request differing in anything the card shows gets its own card', async () => {
     const { reg } = registry();
+
     const pending = [
       reg.request(REQUEST),
       reg.request({ ...REQUEST, command: 'rm -rf build' }),
@@ -150,11 +153,14 @@ describe('DeviceConsentRegistry identity', () => {
       reg.request({ ...REQUEST, deviceId: 'dev-2' }),
       reg.request({ ...REQUEST, workspaceName: 'notes' }),
     ];
+
     // One card per question the owner would read differently, so none join.
     expect(reg.list()).toHaveLength(5);
+
     for (const consent of reg.list()) {
       expect(reg.resolve(consent.consentId, 'deny')).toBe(true);
     }
+
     await Promise.all(pending);
   });
 
@@ -163,6 +169,7 @@ describe('DeviceConsentRegistry identity', () => {
     // id is unknown, which is what announcing before the id can be answered
     // would do.
     const answered: boolean[] = [];
+
     const reg = new DeviceConsentRegistry({
       announce: (notice) => {
         if (notice.kind === 'raised') answered.push(reg.resolve(notice.consent.consentId, 'once'));
@@ -170,6 +177,7 @@ describe('DeviceConsentRegistry identity', () => {
       newId: () => 'cons-1',
       timeoutMs: 10_000,
     });
+
     const decision = await reg.request(REQUEST);
     expect(answered).toEqual([true]);
     expect(decision).toBe('once');

@@ -27,6 +27,7 @@ const AccountStatusSchema = v.object({
 });
 
 const PERSONAL = { id: 'aaa111aaa111aaa111aaa111aaa111aa', name: 'Personal' };
+
 const EMPLOYER = { id: 'bbb222bbb222bbb222bbb222bbb222bb', name: 'Employer' };
 
 /** What connect time stores for a token that sees both accounts. */
@@ -55,6 +56,7 @@ function stubGatewayNetwork(): () => void {
       { id: 'gw-two', authentication: false, created_at: '2026-01-02T00:00:00Z' },
     ],
   }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
   return () => { globalThis.fetch = original; };
 }
 
@@ -69,6 +71,7 @@ describe('Cloudflare account selection', () => {
   test('the accounts a login can see are listed with the one in use', async () => {
     const restore = stubGatewayNetwork();
     const harness = createTestUserDO();
+
     try {
       await harness.userDO.setCredential(await testOwner(), CLOUDFLARE_OAUTH_CRED_KEY, multiAccountCredential());
       expect(await harness.userDO.listCloudflareAccounts(await testOwner())).toEqual({
@@ -87,6 +90,7 @@ describe('Cloudflare account selection', () => {
   test('selecting the entitlement-bearing account moves inference to it', async () => {
     const restore = stubGatewayNetwork();
     const harness = createTestUserDO();
+
     try {
       const owner = await testOwner();
       await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, multiAccountCredential());
@@ -107,6 +111,7 @@ describe('Cloudflare account selection', () => {
   test('the AI Gateway of the old account does not survive the switch', async () => {
     const restore = stubGatewayNetwork();
     const harness = createTestUserDO();
+
     try {
       const owner = await testOwner();
       await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, multiAccountCredential());
@@ -124,6 +129,7 @@ describe('Cloudflare account selection', () => {
   test('an account the login cannot see is refused and changes nothing', async () => {
     const restore = stubGatewayNetwork();
     const harness = createTestUserDO();
+
     try {
       const owner = await testOwner();
       await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, multiAccountCredential());
@@ -157,6 +163,7 @@ const IDENTITY: AuthIdentity = {
 function routeHarness(selectFails = false) {
   const notified: string[] = [];
   const selected: string[] = [];
+
   const stub = {
     async ensureProfile() {},
     async userMcp_warmConnections() { return { servers: 0 }; },
@@ -171,6 +178,7 @@ function routeHarness(selectFails = false) {
       selected.push(id);
     },
   };
+
   const pending: Promise<unknown>[] = [];
   const partialCtx: Partial<ExecutionContext> = {};
   Object.assign(partialCtx, { waitUntil(promise: Promise<unknown>) { pending.push(promise); } });
@@ -182,7 +190,11 @@ function routeHarness(selectFails = false) {
     UserDO: { idFromName: (name: string) => name, get: () => stub },
     OrchestratorAgent: {
       idFromName: (name: string) => name,
-      get: (id: string) => ({ async onCredentialsChanged() { notified.push(id); return { ok: true }; } }),
+      get: (id: string) => ({ async onCredentialsChanged() {
+        notified.push(id);
+
+        return { ok: true };
+      } }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
@@ -190,12 +202,14 @@ function routeHarness(selectFails = false) {
   // namespaces the handlers reach plus the encryption key ownerCaller reads;
   // no other Env binding is reachable in the account routes exercised here.
   const env = partialEnv as Env;
+
   const call = (path: string, method: string, body?: { id: string }) =>
     handleUserRequest(new Request(`https://kinu.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
       body: body === undefined ? undefined : JSON.stringify(body),
     }), env, IDENTITY, ctx);
+
   return { call, notified, selected, pending };
 }
 

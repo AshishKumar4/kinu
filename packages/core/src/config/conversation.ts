@@ -25,7 +25,9 @@ const FIRST_CONVERSATION_ID = 'default';
 /** Resolve — creating on first use — the agent's canonical conversation id. */
 export function canonicalConversationId(config: AgentConfigStore): string {
   const stored = config.get(AGENT_CONFIG_KEYS.conversationId);
+
   if (stored) return stored;
   config.set(AGENT_CONFIG_KEYS.conversationId, FIRST_CONVERSATION_ID);
+
   return FIRST_CONVERSATION_ID;
 }

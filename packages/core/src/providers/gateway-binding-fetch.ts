@@ -42,6 +42,7 @@ export type GatewayTargetResult = GatewayTarget | { reason: string };
 export function parseGatewayTarget(raw: string | undefined): GatewayTargetResult {
   if (!raw) return { reason: 'AI_GATEWAY_URL var missing.' };
   let url: URL;
+
   try {
     url = new URL(raw);
   } catch (cause) {
@@ -49,13 +50,16 @@ export function parseGatewayTarget(raw: string | undefined): GatewayTargetResult
       reason: `AI_GATEWAY_URL is not a URL: ${renderThrownChain({ cause: cause })}`,
     };
   }
+
   const [version, account, id] = url.pathname.split('/').filter(Boolean);
+
   if (version !== 'v1' || !account || !id) {
     return {
       reason: 'AI_GATEWAY_URL is not an AI Gateway URL (expected '
         + `{origin}/v1/{account}/{gateway}/{provider}/...), got ${JSON.stringify(raw)}.`,
     };
   }
+
   return { id, origin: url.origin, prefix: `/v1/${account}/${id}/` };
 }
 
@@ -72,10 +76,12 @@ export function createGatewayBindingFetch(opts: {
   target: GatewayTarget;
 }): typeof globalThis.fetch {
   const { binding, target } = opts;
+
   return asFetchFunction(async (input, init) => {
     const request = input instanceof Request ? input : undefined;
     const rawURL = request ? request.url : input.toString();
     const method = (init?.method ?? request?.method ?? 'GET').toUpperCase();
+
     // Anything this transport cannot express is a wiring bug, not passthrough
     // traffic: forwarding it would send the request somewhere unintended and
     // report a misleading upstream error instead of naming the real problem.
@@ -87,25 +93,31 @@ export function createGatewayBindingFetch(opts: {
     };
 
     let url: URL;
+
     try {
       url = new URL(rawURL);
     } catch (cause) {
       return reject(`unparseable URL: ${renderThrownChain({ cause: cause })}`);
     }
+
     // Compare normalized origin + pathname, not raw strings, so a lexical
     // variant cannot split provider/endpoint differently than the wire would.
     if (url.origin !== target.origin || !url.pathname.startsWith(target.prefix)) {
       return reject('outside the configured gateway prefix');
     }
+
     if (method !== 'POST') return reject('the gateway binding accepts POST only');
 
     const rest = url.pathname.slice(target.prefix.length);
     const slash = rest.indexOf('/');
+
     if (slash < 1) return reject('no provider/endpoint in the path');
 
     const bodyText = await readBodyText(request, init);
+
     if (bodyText === undefined) return reject('no request body');
     let query: unknown;
+
     try {
       query = JSON.parse(bodyText);
     } catch (cause) {
@@ -113,6 +125,7 @@ export function createGatewayBindingFetch(opts: {
     }
 
     const signal = init?.signal ?? request?.signal ?? undefined;
+
     return binding.gateway(target.id).run({
       provider: rest.slice(0, slash),
       // The query string belongs to the endpoint — it is part of what the wire
@@ -131,9 +144,12 @@ async function readBodyText(
   init: RequestInit | undefined,
 ): Promise<string | undefined> {
   const body = init?.body;
+
   // Per the fetch spec an explicit `body: null` in init clears a Request's body.
   if (body === null) return undefined;
+
   if (body === undefined) return request?.body ? request.clone().text() : undefined;
+
   return new Request(BODY_SINK_URL, { method: 'POST', body }).text();
 }
 
@@ -145,6 +161,8 @@ function collectHeaders(
   init: RequestInit | undefined,
 ): GatewayRunRequest['headers'] {
   const headers = copyHeaders(init?.headers === undefined ? request?.headers : init.headers);
+
   for (const name of STRIPPED_HEADERS) headers.delete(name);
+
   return Object.fromEntries(headers.entries());
 }

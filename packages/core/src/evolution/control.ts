@@ -159,6 +159,7 @@ function scaffoldRunOptions(
   extra: Partial<ScaffoldRunOptions>,
 ): ScaffoldRunOptions {
   const surface = control.surface(task);
+
   return {
     rt: control.rt,
     task,
@@ -186,11 +187,14 @@ export async function runScaffoldCaptureText(
   candidateCode?: string,
 ): Promise<string> {
   let text = '';
+
   const result = await runScaffold(scaffoldRunOptions(control, task, {
     emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
     scaffoldCodeOverride: candidateCode,
   }));
+
   if (!result.ok && result.error) throw new Error(result.error);
+
   return text;
 }
 
@@ -207,6 +211,7 @@ export async function runScaffoldOnce(
 ): Promise<ScaffoldRunResult> {
   const pending = opts?.useShadowOverride ? getPendingScaffold(control.sql, control.rt.actor) : null;
   const codeOverride = pending ? await readScaffoldVersion(control.rt, pending.version) : null;
+
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride ?? undefined,
   }));
@@ -247,10 +252,14 @@ export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): numb
   // durable identity to record a trial under either, so it offers none.
   if (turnKey === '') return null;
   const sampleRate = control.config.getShadowSampleRate();
+
   if (sampleRate <= 0) return null;
   const pending = getPendingScaffold(control.sql, control.rt.actor);
+
   if (!pending) return null;
+
   if (sampleFraction(turnKey) >= sampleRate) return null;
+
   return pending.version;
 }
 
@@ -268,10 +277,12 @@ function sampleFraction(turnKey: string): number {
   // FNV-1a, 32-bit. Not a security hash — it needs to spread short, similar ids
   // evenly, and it needs to be the same three lines on every backend.
   let hash = 0x811c9dc5;
+
   for (let i = 0; i < turnKey.length; i++) {
     hash ^= turnKey.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193) >>> 0;
   }
+
   return hash / 0x1_0000_0000;
 }
 
@@ -300,6 +311,7 @@ export function queueTurnShadowTrial(
       currentOutput: turn.currentOutput,
       context: turn.context,
     };
+
     return queueShadowTrial(
       control.sql,
       control.rt.actor,
@@ -310,6 +322,7 @@ export function queueTurnShadowTrial(
       'evolution.shadow_trial_queue_failed',
       toKinuError({ doing: 'queue a shadow trial', cause: err, otherwise: 'io' }),
     );
+
     return 'failed';
   }
 }
@@ -332,10 +345,12 @@ export function queueTurnShadowTrial(
 export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<ShadowTrialDrain> {
   const pending = getPendingScaffold(control.sql, control.rt.actor);
   purgeQueuedShadowTrials(control.sql, control.rt.actor, pending?.version ?? null);
+
   if (!pending) return { trials: 0, applied: null };
 
   let trials = 0;
   let processed = 0;
+
   // Re-read between laps: a turn can queue a trial while the previous lap is
   // running, and a drain that only ever saw its opening snapshot would leave
   // the newest evidence for a pass that may never come. A lap that finds
@@ -343,7 +358,9 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
   // it one drain has already run more trials than the gate can consume.
   while (processed < MAX_QUEUED_SHADOW_TRIALS) {
     const batch = listQueuedShadowTrials(control.sql, control.rt.actor, pending.version);
+
     if (batch.length === 0) break;
+
     for (const trial of batch) {
       if (processed >= MAX_QUEUED_SHADOW_TRIALS) break;
       processed++;
@@ -352,6 +369,7 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
       // work instead of running it a second time.
       const surface = control.surface(trial.task, trial.context, trial.id);
       let applied: 'promote' | 'rollback' | null = null;
+
       try {
         const result = await runAutoShadowEval({
           rt: control.rt,
@@ -368,7 +386,9 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
           // not run the pending scaffold's tool calls a second time.
           trialId: trial.id,
         });
+
         applied = result.applied ?? null;
+
         if (!result.skipped) trials++;
       } catch (err) {
         // A trial that throws is a trial we cannot score, not a queue we should
@@ -379,13 +399,17 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
           { trialId: trial.id },
         );
       }
+
       dropQueuedShadowTrial(control.sql, control.rt.actor, trial.id);
+
       if (applied) {
         purgeQueuedShadowTrials(control.sql, control.rt.actor, null);
+
         return { trials, applied };
       }
     }
   }
+
   return { trials, applied: null };
 }
 
@@ -400,9 +424,11 @@ export async function previewScaffoldLive(
   task: string,
 ): Promise<ScaffoldRunResult> {
   const codeOverride = await readScaffoldVersion(control.rt, version);
+
   if (codeOverride == null) {
     throw new Error(`previewScaffoldLive: no scaffold code found for v${version}`);
   }
+
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride,
   }));
@@ -424,12 +450,14 @@ export async function proposeScaffold(
     control.rt, rationale, code,
     baseVersion !== undefined ? { baseVersion } : undefined,
   );
+
   if (result.ok) {
     void control.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)
       VALUES (${control.rt.actor.actorId}, ${nanoid()}, 'scaffold_proposed',
               ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
               ${null}, ${Date.now()})`;
   }
+
   return result;
 }
 
@@ -483,7 +511,9 @@ export type ShadowStatus =
  *  gate currently says. With nothing pending, the recent archive instead. */
 export function getShadowStatus(sql: SqlExecutor, actor: ActorHandle): ShadowStatus {
   const pending = getPendingScaffold(sql, actor);
+
   if (!pending) return { hasPending: false, versions: listScaffoldVersions(sql, actor, 10) };
+
   return {
     hasPending: true,
     pending,
@@ -509,17 +539,22 @@ export async function applyScaffoldDecision(
   mode: 'auto' | 'promote' | 'rollback',
 ): Promise<ScaffoldDecisionResult> {
   const pending = getPendingScaffold(control.sql, control.rt.actor);
+
   if (!pending) return { ok: false, error: 'no pending scaffold' };
   let decision: 'promote' | 'rollback';
+
   if (mode === 'auto') {
     const auto = decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision;
+
     if (auto === 'continue') return { ok: false, error: 'inconclusive; need more trials' };
     decision = auto;
   } else {
     decision = mode;
   }
+
   const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
   const result = await applyPromotionDecision(control.rt, pending, decision);
+
   return { ok: true, fromVersion, ...result };
 }
 
@@ -538,17 +573,21 @@ function reflectionLmFor(control: ScaffoldControl, model: LanguageModel): Reflec
       { source: 'reflection', operations: control.operations },
       'complete',
     );
+
     let result;
+
     try {
       result = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
     } catch (err) {
       operation.failed({ cause: err });
       throw err;
     }
+
     const usage = normalizeUsage(result.totalUsage);
     const modelId = result.response.modelId;
     operation.completed({ usage, modelId });
     control.reportModelCall?.({ source: 'reflection', usage, modelId });
+
     return result.text;
   };
 }
@@ -567,6 +606,7 @@ async function judgeScore(control: ScaffoldControl, prompt: string): Promise<Met
     schema: GepaScoreSchema,
     prompt: `${prompt}\n\nJSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
   });
+
   return { score: scored.score, feedback: scored.feedback };
 }
 
@@ -614,6 +654,7 @@ export async function runScaffoldGepaOptimization(
   // 1. Train/val split from outcome-labeled turns (the turn_outcomes ledger).
   const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, evalSize);
   const { train: trainSet, val: evalSet } = split;
+
   // Without a failure to optimise toward there is nothing to select on but
   // judge noise over already-accepted turns — and an empty train set would
   // hand the eval set straight back to reflection as its minibatch source.
@@ -639,17 +680,21 @@ export async function runScaffoldGepaOptimization(
   // response the user approved; negatives are scored on whether the candidate
   // already addresses the complaint, whoever made it.
   let metricCalls = 0;
+
   const metric = async (
     candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
   ): Promise<MetricOutcome> => {
     metricCalls++;
     let output: string;
+
     try {
       output = await runScaffoldCaptureText(control, instance.input, candidate);
     } catch (err) {
       const message = renderThrownChain({ cause: err });
+
       return { score: 0, feedback: `scaffold execution failed: ${message}` };
     }
+
     return judgeScore(
       control,
       `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
@@ -667,6 +712,7 @@ export async function runScaffoldGepaOptimization(
   const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
   let iterations = 0;
   let result;
+
   try {
     result = await runScaffoldGepa({
       rt: control.rt,
@@ -676,13 +722,18 @@ export async function runScaffoldGepaOptimization(
       reflectionLm,
       budget,
       onCandidate: persist.onCandidate,
-      onIteration: state => { iterations = state.iteration + 1; return persist.onIteration(state); },
+      onIteration: state => {
+        iterations = state.iteration + 1;
+
+        return persist.onIteration(state);
+      },
     });
   } catch (err) {
     const message = renderThrownChain({ cause: err });
     finishGepaRun(control.sql, control.rt.actor, {
       runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
     });
+
     return { ok: false, error: message, runId };
   }
 
@@ -709,7 +760,9 @@ export async function runScaffoldGepaOptimization(
       guards: evalSet.length - split.heldOutNegatives,
     },
   };
+
   if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
+
   return output;
 }
 
@@ -791,6 +844,7 @@ async function runPromptSectionGepaOptimization(
 ): Promise<PromptSectionOptimizationResult> {
   const evalSize = clampGepaEvalBudget(opts.evalSize ?? control.config.getGepaEvalBudget());
   const split = buildOutcomeEvalSplit(control.sql, control.rt.actor, evalSize);
+
   if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
     return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
   }
@@ -802,16 +856,19 @@ async function runPromptSectionGepaOptimization(
     maxMetricCalls: Math.max(10, Math.min(opts.maxMetricCalls ?? 120, 400)),
     minibatchSize: 3,
   };
+
   const reflectionLm = reflectionLmFor(control, await control.model());
 
   const runId = startGepaRun(control.sql, control.rt.actor, {
     target: 'prompt_section', targetRef: opts.sectionId, budget,
   });
+
   const persist = makePersistingHooks({ sql: control.sql, actor: control.rt.actor, runId });
   const metric = sectionMetric(control, opts.sectionId);
   let metricCalls = 0;
   let iterations = 0;
   let result;
+
   try {
     result = await runSectionGepa({
       sql: control.sql,
@@ -819,18 +876,28 @@ async function runPromptSectionGepaOptimization(
       sectionId: opts.sectionId,
       evalSet: split.val,
       trainSet: split.train,
-      metric: (candidate, instance) => { metricCalls++; return metric(candidate, instance); },
+      metric: (candidate, instance) => {
+        metricCalls++;
+
+        return metric(candidate, instance);
+      },
       reflectionLm,
       budget,
       onCandidate: persist.onCandidate,
-      onIteration: state => { iterations = state.iteration + 1; return persist.onIteration(state); },
+      onIteration: state => {
+        iterations = state.iteration + 1;
+
+        return persist.onIteration(state);
+      },
     });
   } catch (err) {
     finishGepaRun(control.sql, control.rt.actor, {
       runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls, iterations,
     });
+
     return { ok: false, error: renderThrownChain({ cause: err }), runId };
   }
+
   const gepa = result.gepa;
   finishGepaRun(control.sql, control.rt.actor, {
     runId,
@@ -842,6 +909,7 @@ async function runPromptSectionGepaOptimization(
   });
 
   const seedBytes = Buffer.byteLength(gepa?.history[0]?.source ?? '', 'utf8');
+
   const output: PromptSectionOptimizationResult = {
     ok: true,
     runId,
@@ -854,8 +922,11 @@ async function runPromptSectionGepaOptimization(
     iterations: gepa?.iterationsRun ?? 0,
     byteDelta: Buffer.byteLength(gepa?.winner.source ?? '', 'utf8') - seedBytes,
   };
+
   if (result.proposeError) output.refusal = result.proposeError.error;
+
   if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
+
   return output;
 }
 
@@ -887,8 +958,10 @@ async function runPromptSectionTrials(
   opts?: { trials?: number },
 ): Promise<PromptSectionTrialResult> {
   const pending = getPendingPromptSection(control.sql, control.rt.actor, sectionId);
+
   if (!pending) return { sectionId, pending: false, trialsRun: 0 };
   const section = findPromptSectionTarget(sectionId);
+
   if (!section) return { sectionId, pending: false, trialsRun: 0 };
 
   const incumbent = incumbentSectionSource(control.sql, control.rt.actor, section);
@@ -900,11 +973,13 @@ async function runPromptSectionTrials(
   const instances = split.val.slice(0, Math.max(1, opts?.trials ?? 3));
 
   let trialsRun = 0;
+
   for (const instance of instances) {
     const [current, candidate] = await Promise.all([
       metric(incumbent, instance),
       metric(pending.source, instance),
     ]);
+
     recordPromptSectionTrial(control.sql, control.rt.actor, {
       sectionId,
       pendingVersion: pending.version,
@@ -919,16 +994,21 @@ async function runPromptSectionTrials(
   }
 
   const settled = getPendingPromptSection(control.sql, control.rt.actor, sectionId);
+
   if (!settled) return { sectionId, pending: true, trialsRun };
   const verdict = decidePromptSectionPromotion(settled);
+
   const result: PromptSectionTrialResult = {
     sectionId, pending: true, trialsRun,
     decision: verdict.decision, winRate: verdict.winRate,
   };
+
   if (verdict.decision === 'continue') return result;
   const applied = applyPromptSectionDecision(control.sql, control.rt.actor, settled, verdict.decision);
   result.action = applied.action;
+
   if (applied.vetoReason) result.vetoReason = applied.vetoReason;
+
   return result;
 }
 
@@ -974,15 +1054,18 @@ export async function proposeMeasuredPromptSection(
   input: { sectionId: string; source: string; rationale: string; trials?: number },
 ): Promise<MeasuredSectionProposal> {
   const section = findPromptSectionTarget(input.sectionId);
+
   if (!section) {
     return {
       ok: false, sectionId: input.sectionId, code: 'unknown_section',
       error: `"${input.sectionId}" is not a registered prompt section`,
     };
   }
+
   const split = buildOutcomeEvalSplit(
     control.sql, control.rt.actor, clampGepaEvalBudget(control.config.getGepaEvalBudget()),
   );
+
   if (split.degeneracy !== null) {
     return {
       ok: false, sectionId: section.id, code: 'degenerate_split',
@@ -995,10 +1078,12 @@ export async function proposeMeasuredPromptSection(
   // The held-out half, exactly as the trials use it: a candidate measured on the
   // turns whoever wrote it was shown has learned those turns.
   const instances = split.val.slice(0, Math.max(1, input.trials ?? 3));
+
   const scored = await Promise.all(instances.map(async (instance) => Promise.all([
     metric(incumbent, instance),
     metric(input.source, instance),
   ])));
+
   const incumbentScore = scoreInterval(scored.map(([current]) => current.score));
   const candidateScore = scoreInterval(scored.map(([, candidate]) => candidate.score));
 
@@ -1009,9 +1094,11 @@ export async function proposeMeasuredPromptSection(
     incumbentScore,
     candidateScore,
   });
+
   if (!proposal.ok) {
     return { ok: false, sectionId: section.id, code: proposal.code, error: proposal.error };
   }
+
   return {
     ok: true, sectionId: section.id, version: proposal.version, incumbentScore, candidateScore,
   };
@@ -1034,13 +1121,16 @@ function nextPromptSectionTarget(sql: SqlExecutor, actor: ActorHandle): PromptSe
   const lastPass = lastGepaRunPerTarget(sql, actor, 'prompt_section');
   let next: PromptSection<string> | null = null;
   let nextAt = Number.POSITIVE_INFINITY;
+
   for (const section of PROMPT_SECTION_TARGETS) {
     const at = lastPass.get(section.id) ?? Number.NEGATIVE_INFINITY;
+
     if (at < nextAt) {
       next = section;
       nextAt = at;
     }
   }
+
   return next;
 }
 
@@ -1073,11 +1163,15 @@ export async function advancePromptSectionLane(
   control: ScaffoldControl,
 ): Promise<PromptSectionLaneStep> {
   const pending = firstPendingPromptSection(control.sql, control.rt.actor);
+
   if (pending !== null) {
     return { step: 'trials', sectionId: pending, trials: await runPromptSectionTrials(control, pending) };
   }
+
   const section = nextPromptSectionTarget(control.sql, control.rt.actor);
+
   if (!section) return { step: 'idle' };
+
   return {
     step: 'pass',
     sectionId: section.id,

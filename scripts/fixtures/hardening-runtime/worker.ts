@@ -10,6 +10,7 @@ import { KinuSandboxExecutor, renderToolsPrelude } from '../../../packages/cf-ba
 import { codemodeEgress } from '../../../packages/cf-backend/src/codemode-egress';
 import { createDirectWorkersAIFetch } from '../../../packages/cf-backend/src/providers/direct-workers-ai-fetch';
 import type { OrchestratorAgent } from '../../../packages/cf-backend/src/orchestrator';
+
 export { CodemodeEgress } from '../../../packages/cf-backend/src/codemode-egress';
 
 interface ProbeEnv {
@@ -32,26 +33,32 @@ async function abortProbe(env: ProbeEnv, ordering: 'abort-first' | 'finish-first
   const underlying = workersModel(env);
   const textSeen = Promise.withResolvers<void>();
   let finalChunks = 0;
+
   const model: LanguageModelV3 = {
     specificationVersion: 'v3', provider: underlying.provider,
     modelId: underlying.modelId, supportedUrls: underlying.supportedUrls,
     doGenerate: (options) => underlying.doGenerate(options),
     async doStream(options) {
       const response = await underlying.doStream(options);
+
       return { ...response, stream: response.stream.pipeThrough(new TransformStream({
         async transform(part, controller) {
           if (part.type === 'finish') {
             finalChunks++;
             await textSeen.promise;
+
             if (ordering === 'abort-first') abort.abort();
           }
+
           controller.enqueue(part);
         },
       })) };
     },
   };
+
   const events: ChatEvent[] = [];
   let thrown: string | null = null;
+
   try {
     for await (const event of runChat({
       model, system: 'Answer the arithmetic question in one short sentence.',
@@ -59,13 +66,17 @@ async function abortProbe(env: ProbeEnv, ordering: 'abort-first' | 'finish-first
       tools: {}, signal: abort.signal,
     })) {
       events.push(event);
+
       if (event.type === 'text-delta') textSeen.resolve();
+
       if (event.type === 'done' && ordering === 'finish-first') abort.abort();
     }
   } catch (cause) {
     thrown = cause instanceof Error ? cause.message : String(cause);
   }
+
   const done = events.filter((event) => event.type === 'done');
+
   return { ordering, finalChunks, terminalCount: done.length,
     text: done.map((event) => event.text), thrown, eventOrder: events.map((event) => event.type) };
 }
@@ -79,18 +90,24 @@ async function replayProbe(env: ProbeEnv) {
       }), execute: ({ a, b }) => a + b,
     }),
   };
+
   const prompt: ModelMessage = { role: 'user', content: 'Call add for 142 and 857, then give the sum.' };
+
   const source = await generateText({
     model: workersModel(env, '@cf/openai/gpt-oss-20b'),
     messages: [prompt], tools, toolChoice: 'required', stopWhen: stepCountIs(1),
   });
+
   const history = [prompt, ...source.response.messages];
   const request = normalizeReplayForDestination(history, 'workers-ai') ?? history;
+
   const destination = await generateText({ model: workersModel(env),
     messages: [...request, { role: 'user', content: 'Use the completed tool result. Give only the sum.' }],
     tools, toolChoice: 'none',
   });
+
   const reasoning = source.content.filter((part) => part.type === 'reasoning');
+
   return {
     source: { provider: 'workers-ai / OpenAI GPT-OSS', model: '@cf/openai/gpt-oss-20b', responseId: source.response.id,
       finishReason: source.finishReason, reasoningParts: reasoning.length,
@@ -105,16 +122,22 @@ async function replayProbe(env: ProbeEnv) {
 
 async function egressProbe(env: ProbeEnv) {
   const executor = new KinuSandboxExecutor({ loader: env.LOADER, egress: codemodeEgress() });
+
   const urls = ['https://example.com/', 'http://169.254.169.254/latest/meta-data/',
     'http://169.254.169.254.nip.io/latest/meta-data/', 'http://10.0.0.1.nip.io/',
     'http://127.0.0.1.nip.io/'];
+
   const results = [];
+
   for (const url of urls) {
     const code = `try { const r = await fetch(${JSON.stringify(url)}); return {status:r.status,body:(await r.text()).slice(0,180)}; } catch (cause) { return {error:cause.message}; }`;
+
     const result = await executor.execute(code, [{ name: 'tools', fns: {},
       prelude: renderToolsPrelude([], { workspace: 'hardening-probe' }) }]);
+
     results.push({ url, ...result });
   }
+
   return results;
 }
 
@@ -124,20 +147,25 @@ async function webhookProbe(env: ProbeEnv) {
   const victimId = env.STAGING_AGENT.idFromName(victim).toString();
   const agent = await getAgentByName<Env, OrchestratorAgent>(env.STAGING_AGENT, name);
   const owner = crypto.randomUUID().replaceAll('-', '');
+
   try {
     await agent.claimOwner(owner);
     const webhook = await agent.createDurableWebhook({ label: 'hardening probe', auth_mode: 'bearer' });
+
     try {
       const signed = await fetch(`https://staging.kinu.run${webhook.url}`, {
         method: 'POST', headers: { authorization: 'Bearer deliberately-incorrect', 'content-type': 'application/json' },
         body: '{}', redirect: 'manual',
       });
+
       const unsigned = await fetch(`https://staging.kinu.run/api/workspaces/${victim}/webhook/${webhook.trigger_id}`, {
         method: 'POST', body: '{}', redirect: 'manual',
       });
+
       const forged = await fetch(`https://staging.kinu.run/api/workspaces/${victim}/webhook/${webhook.trigger_id}/v1-${'0'.repeat(32)}`, {
         method: 'POST', body: '{}', redirect: 'manual',
       });
+
       return { workspace: name, victim, victimId,
         signed: { status: signed.status, body: await signed.text() },
         unsigned: { status: unsigned.status, cache: unsigned.headers.get('cache-control') },
@@ -175,12 +203,15 @@ async function wireProbe(env: ProbeEnv): Promise<WireObservation[]> {
     run(model: string, inputs: JsonObject, options: { returnRawResponse: true }):
       Promise<Response | ReadableStream<Uint8Array> | JsonObject>;
   } = env.AI;
+
   const tools = [{ type: 'function', function: { name: 'add', description: 'Add two integers.',
     parameters: { type: 'object', properties: { a: { type: 'number' }, b: { type: 'number' } }, required: ['a', 'b'] } } }];
+
   const call = { id: 'call_kinu_0', type: 'function', function: { name: 'add', arguments: '{"a":2,"b":3}' } };
   const opener = { role: 'user', content: 'Call add for 2 and 3, then give the sum.' };
   const result = { role: 'tool', tool_call_id: 'call_kinu_0', content: '5' };
   const closer = { role: 'user', content: 'Use the completed tool result. Give only the sum.' };
+
   const spellings = {
     'user-text-parts': { messages: [{ role: 'user', content: [{ type: 'text', text: 'Reply with OK.' }] }] },
     'assistant-null-content': { tools, messages: [opener, { role: 'assistant', content: null, tool_calls: [call] }, result, closer] },
@@ -188,7 +219,9 @@ async function wireProbe(env: ProbeEnv): Promise<WireObservation[]> {
     'assistant-reasoning-content': { tools, messages: [opener,
       { role: 'assistant', content: '', reasoning_content: 'Adding them with the tool.', tool_calls: [call] }, result, closer] },
   } satisfies Record<string, JsonObject>;
+
   const observations: WireObservation[] = [];
+
   for (const model of ['@cf/qwen/qwen3-30b-a3b-fp8', '@cf/openai/gpt-oss-20b', '@cf/zai-org/glm-5.3']) {
     for (const [spelling, inputs] of Object.entries(spellings)) {
       try {
@@ -201,6 +234,7 @@ async function wireProbe(env: ProbeEnv): Promise<WireObservation[]> {
       }
     }
   }
+
   return observations;
 }
 
@@ -208,17 +242,26 @@ export default {
   async fetch(request: Request, env: ProbeEnv): Promise<Response> {
     if (!env.PROBE_SECRET || request.headers.get('authorization') !== `Bearer ${env.PROBE_SECRET}`) return new Response('Not found', { status: 404 });
     const path = new URL(request.url).pathname;
+
     if (path === '/trace') {
       const tracer = createWorkersTracer();
+
       return tracer.span('fetch.hardening_probe', { isolateGen: 1, selfPath: 'HardeningProbe:staging' }, (span) =>
         Response.json({ traced: span.isTraced, date: new Date().toISOString() }));
     }
+
     if (path === '/abort-first') return Response.json(await abortProbe(env, 'abort-first'));
+
     if (path === '/finish-first') return Response.json(await abortProbe(env, 'finish-first'));
+
     if (path === '/replay') return Response.json(await replayProbe(env));
+
     if (path === '/egress') return Response.json(await egressProbe(env));
+
     if (path === '/webhook') return Response.json(await webhookProbe(env));
+
     if (path === '/wire') return Response.json(await wireProbe(env));
+
     return new Response('Not found', { status: 404 });
   },
 };

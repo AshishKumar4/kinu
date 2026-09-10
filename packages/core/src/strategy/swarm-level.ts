@@ -68,13 +68,16 @@ export interface ResumedWave {
  */
 export function resumedWaves(reentry: SwarmReentry | null): ResumedWave[] {
   const byParent = new Map<string, { parentId: string; siblings: number; members: PendingSwarmNode[] }>();
+
   for (const node of reentry?.pending ?? []) {
     const wave = byParent.get(node.parentId);
+
     if (wave) wave.members.push(node);
     else byParent.set(node.parentId, {
       parentId: node.parentId, siblings: node.siblings, members: [node],
     });
   }
+
   return [...byParent.values()];
 }
 
@@ -106,9 +109,12 @@ export function assignedRootGrant(input: {
   readonly budget: SwarmBudget;
 }): BranchGrant | null {
   const assignments = input.resolved.nodes;
+
   if (!assignments || input.reentry) return null;
   const width = input.budget.take(assignments.length);
+
   if (width === 0) return null;
+
   return {
     kind: 'granted',
     width,
@@ -155,11 +161,13 @@ export function planLevel(input: {
   readonly width: number;
 }): readonly LevelSlot[] {
   const { resolved, resumed, grant, width } = input;
+
   const briefs = grant
     ? grant.proposal.branches.map((branch) => branch.rationale)
     : resumed
       ? resumed.members[0]?.briefs ?? []
       : Array.from({ length: width }, (_unused, index) => diversityAngle(index, width));
+
   /** The slots this call fills, and the pending row behind each where there is one.
    *  Annotated so both arms are checked against one shape rather than widened by a
    *  cast at the point where they meet. */
@@ -167,9 +175,11 @@ export function planLevel(input: {
     resumed
       ? resumed.members.map((node) => ({ index: node.index, pending: node }))
       : Array.from({ length: width }, (_unused, index) => ({ index, pending: null }));
+
   return filled.map(({ index, pending }): LevelSlot => {
     const branch = grant?.proposal.branches[index];
     const brief = briefs?.[index];
+
     return {
       index,
       id: pending?.id ?? grant?.nodeIds[index] ?? nanoid(),

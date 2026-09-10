@@ -58,10 +58,15 @@ const ASSERTION_HEADER = 'cf-access-jwt-assertion';
  *  organization" case, and would otherwise be defeated by both orgs sharing a
  *  cache slot. */
 const TEAM = 'https://kinu.cloudflareaccess.com';
+
 const OTHER_TEAM = 'https://someone-else.cloudflareaccess.com';
+
 const AUD = 'a'.repeat(64);
+
 const OTHER_AUD = 'b'.repeat(64);
+
 const OPERATOR = 'ops@kinu.run';
+
 const SECRET = 'control-plane-access-test-secret-0123456789';
 
 const ENV: ControlPlaneAccessEnv = {
@@ -80,15 +85,20 @@ interface SigningKey {
 
 async function signingKey(kid: string): Promise<SigningKey> {
   const { privateKey, publicKey } = await generateKeyPair('RS256', { extractable: true });
+
   return { kid, privateKey, jwk: { ...await exportJWK(publicKey), kid, alg: 'RS256', use: 'sig' } };
 }
 
 /** The keys each organization publishes. `unpublished` is generated like the
  *  others and deliberately absent from every JWKS. */
 let ours: SigningKey;
+
 let theirs: SigningKey;
+
 let unpublished: SigningKey;
+
 let rotated: SigningKey;
+
 let realFetch: typeof globalThis.fetch;
 
 beforeAll(async () => {
@@ -103,6 +113,7 @@ beforeAll(async () => {
   } satisfies Record<string, readonly JWK[]>;
 
   realFetch = globalThis.fetch;
+
   // The ONE thing stubbed, and only the certs endpoint: everything else in this
   // file is production code. A request to any other URL throws rather than
   // answering, so a test that accidentally depends on the network fails loudly
@@ -114,12 +125,15 @@ beforeAll(async () => {
   const stub = ((input: RequestInfo | URL): Promise<Response> => {
     const url = input instanceof URL ? input.href : input instanceof Request ? input.url : input;
     const match = Object.entries(sets).find(([certsUrl]) => certsUrl === url);
+
     if (match === undefined) throw new Error(`unexpected fetch in a unit test: ${url}`);
     const [, keys] = match;
+
     return Promise.resolve(new Response(JSON.stringify({ keys }), {
       status: 200, headers: { 'content-type': 'application/json' },
     }));
   }) as typeof globalThis.fetch;
+
   globalThis.fetch = stub;
 });
 
@@ -142,14 +156,18 @@ async function token(key: SigningKey, claims: Claims = {}): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const identity = { type: 'app', country: 'US' };
   const payload = claims.email === null ? identity : { ...identity, email: claims.email ?? OPERATOR };
+
   let jwt = new SignJWT(payload)
     .setProtectedHeader({ alg: 'RS256', kid: key.kid, typ: 'JWT' })
     .setIssuer(claims.issuer ?? TEAM)
     .setAudience(claims.audience ?? AUD)
     .setSubject(claims.sub ?? 'access-uuid-1')
     .setIssuedAt(now);
+
   if (claims.omitExp !== true) jwt = jwt.setExpirationTime(now + (claims.expiresIn ?? 3600));
+
   if (claims.omitNbf !== true) jwt = jwt.setNotBefore(now + (claims.notBefore ?? 0));
+
   return jwt.sign(key.privateKey);
 }
 
@@ -174,6 +192,7 @@ describe('the assertion is verified, never trusted', () => {
   test('a valid assertion yields the email and sub the identity provider verified', async () => {
     const answer = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
     expect(answer.ok).toBe(true);
+
     if (!answer.ok) throw new Error('unreachable');
     expect(answer.access).toEqual({ email: OPERATOR, sub: 'access-uuid-1' });
   });
@@ -185,7 +204,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { email: '  OPS@Kinu.RUN ' })), ENV,
     );
+
     expect(answer.ok).toBe(true);
+
     if (!answer.ok) throw new Error('unreachable');
     expect(answer.access.email).toBe(OPERATOR);
   });
@@ -195,6 +216,7 @@ describe('the assertion is verified, never trusted', () => {
     // requests are reaching this origin around Access.
     const answer = await verifyControlPlaneAccess(assertedRequest(null), ENV);
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_missing');
     expect(adminDenialStatus(answer.denial)).toBe(404);
@@ -204,6 +226,7 @@ describe('the assertion is verified, never trusted', () => {
   test('an empty assertion header is missing rather than invalid', async () => {
     const answer = await verifyControlPlaneAccess(assertedRequest('   '), ENV);
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_missing');
   });
@@ -215,8 +238,10 @@ describe('the assertion is verified, never trusted', () => {
     const request = new Request('https://kinu.run/api/control/overview', {
       headers: { cookie: `CF_Authorization=${await token(ours)}` },
     });
+
     const answer = await verifyControlPlaneAccess(request, ENV);
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_missing');
   });
@@ -227,6 +252,7 @@ describe('the assertion is verified, never trusted', () => {
     const foreign = await token(theirs, { issuer: OTHER_TEAM });
     const answer = await verifyControlPlaneAccess(assertedRequest(foreign), ENV);
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -235,7 +261,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { issuer: OTHER_TEAM })), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -246,7 +274,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { audience: OTHER_AUD })), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -255,7 +285,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(unpublished)), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -265,6 +297,7 @@ describe('the assertion is verified, never trusted', () => {
     // published key, and the signature is over a different private key entirely.
     const answer = await verifyControlPlaneAccess(assertedRequest(await token(rotated)), ENV);
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -276,14 +309,18 @@ describe('the assertion is verified, never trusted', () => {
       'raw', new TextEncoder().encode(JSON.stringify(ours.jwk)),
       { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
     );
+
     const now = Math.floor(Date.now() / 1000);
+
     const forged = await new SignJWT({ email: OPERATOR })
       .setProtectedHeader({ alg: 'HS256', kid: ours.kid })
       .setIssuer(TEAM).setAudience(AUD).setSubject('access-uuid-1')
       .setIssuedAt(now).setNotBefore(now).setExpirationTime(now + 3600)
       .sign(hmacKey);
+
     const answer = await verifyControlPlaneAccess(assertedRequest(forged), ENV);
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -292,7 +329,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { expiresIn: -60 })), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -301,7 +340,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { notBefore: 600 })), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -311,7 +352,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { omitExp: true })), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -320,7 +363,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { omitNbf: true })), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_invalid');
   });
@@ -332,7 +377,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { email: null, sub: '' })), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     // Refused for the missing claim rather than the signature: the token is
     // genuine, and telling those two apart is the difference between "revoke a
@@ -344,7 +391,9 @@ describe('the assertion is verified, never trusted', () => {
     const answer = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { sub: '' })), ENV,
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_no_email');
   });
@@ -356,7 +405,9 @@ describe('an unconfigured deployment has no admin plane', () => {
       assertedRequest(await token(ours)),
       { CONTROL_PLANE_ACCESS_AUD: AUD },
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_unconfigured');
   });
@@ -366,7 +417,9 @@ describe('an unconfigured deployment has no admin plane', () => {
       assertedRequest(await token(ours)),
       { CONTROL_PLANE_ACCESS_TEAM_DOMAIN: TEAM },
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_unconfigured');
   });
@@ -379,6 +432,7 @@ describe('an unconfigured deployment has no admin plane', () => {
     ]) {
       const answer = await verifyControlPlaneAccess(assertedRequest(await token(ours)), env);
       expect(answer.ok).toBe(false);
+
       if (answer.ok) throw new Error('unreachable');
       expect(answer.denial).toBe('access_unconfigured');
     }
@@ -389,6 +443,7 @@ describe('an unconfigured deployment has no admin plane', () => {
     // it tells a stranger the path exists and something behind it is broken.
     expect(adminDenialStatus('access_unconfigured')).toBe(404);
     expect(adminDenialMessage('access_unconfigured')).toBe('Not found');
+
     // Indistinguishable from every other Access refusal on the wire.
     for (const denial of ['access_missing', 'access_invalid', 'access_no_email'] as const) {
       expect(adminDenialStatus(denial)).toBe(404);
@@ -407,7 +462,9 @@ describe('an unconfigured deployment has no admin plane', () => {
         assertedRequest(await token(ours)),
         { CONTROL_PLANE_ACCESS_TEAM_DOMAIN: raw, CONTROL_PLANE_ACCESS_AUD: AUD },
       );
+
       expect(answer.ok).toBe(true);
+
       if (!answer.ok) throw new Error(`unreachable for ${raw}`);
       expect(answer.access.email).toBe(OPERATOR);
     }
@@ -431,7 +488,9 @@ describe('an unconfigured deployment has no admin plane', () => {
         assertedRequest(await token(ours)),
         { CONTROL_PLANE_ACCESS_TEAM_DOMAIN: raw, CONTROL_PLANE_ACCESS_AUD: AUD },
       );
+
       expect(answer.ok).toBe(false);
+
       if (answer.ok) throw new Error(`unreachable for ${raw}`);
       expect(answer.denial).toBe('access_unconfigured');
     }
@@ -441,9 +500,11 @@ describe('an unconfigured deployment has no admin plane', () => {
 describe('the two gates are joined by the email, and both still apply', () => {
   test('a verified Access identity plus an allowlisted session authorizes, and carries both', async () => {
     const verified = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
+
     if (!verified.ok) throw new Error('the fixture assertion should verify');
     const answer = authorizeAdmin(ADMIN_ENV, identity(), verified.access, { mutating: true });
     expect(answer.ok).toBe(true);
+
     if (!answer.ok) throw new Error('unreachable');
     expect(answer.admin.email).toBe(OPERATOR);
     expect(answer.admin.fresh).toBe(true);
@@ -456,9 +517,11 @@ describe('the two gates are joined by the email, and both still apply', () => {
     const verified = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { email: 'someone-else@kinu.run' })), ENV,
     );
+
     if (!verified.ok) throw new Error('the fixture assertion should verify');
     const answer = authorizeAdmin(ADMIN_ENV, identity(), verified.access, { mutating: false });
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_mismatch');
     // 404, like every other admin-existence refusal: the caller passed Access but
@@ -473,12 +536,16 @@ describe('the two gates are joined by the email, and both still apply', () => {
     const verified = await verifyControlPlaneAccess(
       assertedRequest(await token(ours, { email: 'someone-else@kinu.run' })), ENV,
     );
+
     if (!verified.ok) throw new Error('the fixture assertion should verify');
+
     const answer = authorizeAdmin(
       ADMIN_ENV, identity({ authTime: Date.now() - 6 * 60 * 1000 }), verified.access,
       { mutating: true },
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('access_mismatch');
   });
@@ -488,12 +555,16 @@ describe('the two gates are joined by the email, and both still apply', () => {
     // needs no Access application: with no operators the plane is unreachable
     // whatever the outer gate says. Held here so the two are never conflated.
     const verified = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
+
     if (!verified.ok) throw new Error('the fixture assertion should verify');
+
     const answer = authorizeAdmin(
       { CREDENTIAL_ENCRYPTION_KEY: SECRET, CONTROL_PLANE_ADMINS: '' },
       identity(), verified.access, { mutating: false },
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('no_admins_configured');
   });
@@ -503,11 +574,15 @@ describe('the two gates are joined by the email, and both still apply', () => {
     // synthesizes one permanently-fresh identity for every request, so an
     // allowlist match there would be unauthenticated operator authority.
     const verified = await verifyControlPlaneAccess(assertedRequest(await token(ours)), ENV);
+
     if (!verified.ok) throw new Error('the fixture assertion should verify');
+
     const answer = authorizeAdmin(
       ADMIN_ENV, identity({ provider: 'dev' }), verified.access, { mutating: false },
     );
+
     expect(answer.ok).toBe(false);
+
     if (answer.ok) throw new Error('unreachable');
     expect(answer.denial).toBe('dev_identity');
   });
@@ -570,6 +645,7 @@ describe('Access is scoped to the control plane and to nothing else', () => {
       '/api/controlx',
       '/api/controllers/list',
     ];
+
     for (const path of outside) {
       expect(isControlPlaneSurface(path)).toBe(false);
       expect(isControlPlaneApiPath(path)).toBe(false);
@@ -588,6 +664,7 @@ describe('Access is scoped to the control plane and to nothing else', () => {
       expect(isPublicPath(path)).toBe(true);
       expect(isControlPlaneSurface(path)).toBe(false);
     }
+
     // And the control-plane surface is not on it, which is the direction that
     // would silently unprotect the admin plane.
     for (const path of ['/control', '/control/users', '/api/control', '/api/control/overview']) {

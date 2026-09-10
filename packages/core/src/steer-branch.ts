@@ -98,6 +98,7 @@ export async function startBranchHead(
 ): Promise<SteerBranchHandle> {
   const rootId = input.id ?? newBranchId();
   const spawnedAt = Date.now();
+
   const headInput: HeadInput = {
     // DERIVED from the run id, not random: a branch run has exactly one head
     // and `rootId` is already unique, so the surface that holds a branchId can
@@ -117,12 +118,14 @@ export async function startBranchHead(
     // A steer branch is one head of one run: same rule as every other fork.
     loop: defaultLoopOrigin('head'),
   };
+
   journal.recordSplit(rootId, BRANCH_RATIONALE, spawnedAt);
   journal.insertSpawn(headInput);
   const spawned = await runtime.spawnHead(headInput);
 
   const result = (async (): Promise<HeadReport> => {
     let report: HeadReport;
+
     try {
       report = await raceWithTimeout(spawned, undefined);
     } catch (cause) {
@@ -140,7 +143,9 @@ export async function startBranchHead(
         errorMessage: renderThrownChain({ cause }),
       };
     }
+
     journal.recordReport(report);
+
     return report;
   })();
 
@@ -188,13 +193,17 @@ export async function settlePendingBranch(
   const fail = (message: string) => deps.broadcast({
     type: 'branch_status', status: 'error', branchId: entry.id, task: entry.task, message,
   });
+
   let handle: SteerBranchHandle;
+
   try {
     handle = await entry.handle;
   } catch (err) {
     fail(renderThrownChain({ cause: err }));
+
     return;
   }
+
   if (!turnId || !liveText.trim()) {
     // Broadcast before aborting, so the terminal status lands whatever the
     // abort does. The detached settle owner records an abort rejection: a head
@@ -202,17 +211,22 @@ export async function settlePendingBranch(
     // rejection would hide.
     fail('the live turn did not complete, so there is nothing to compare against');
     await handle.abort('the live turn did not complete');
+
     return;
   }
+
   const report = await handle.result;
+
   const settlement = {
     task: entry.task, report, turnId, sessionId: deps.sessionId, liveText,
   };
+
   const outcome = settleBranchIntoTakes(
     deps.sql,
     deps.actor,
     settlementKey === undefined ? settlement : { ...settlement, settlementKey },
   );
+
   if (outcome.ok) {
     deps.broadcast({
       type: 'branch_status', status: 'settled', branchId: entry.id, task: entry.task,
@@ -266,6 +280,7 @@ export function branchOutcomeFromJournal(
   if (headStatusUnsettled(head.status)) return null;
   const summary = head.summary ?? '';
   const status = storedHeadReportStatus(head.status);
+
   if (status === null) {
     return {
       status: 'errored',
@@ -274,6 +289,7 @@ export function branchOutcomeFromJournal(
         ?? `the branch head's journal row carries an unrecognized status "${head.status}"`,
     };
   }
+
   return head.errorMessage === null
     ? { status, summary }
     : { status, summary, errorMessage: head.errorMessage };
@@ -313,12 +329,15 @@ export function settleBranchIntoTakes(
         ?? `the branch ended with status "${input.report.status}"`,
     };
   }
+
   if (!input.report.summary.trim()) {
     return { ok: false, reason: 'the branch produced no answer' };
   }
+
   if (!input.turnId || !input.liveText.trim()) {
     return { ok: false, reason: 'the live turn did not complete, so there is nothing to compare against' };
   }
+
   const settlement = {
     task: input.task,
     turnId: input.turnId,
@@ -327,6 +346,7 @@ export function settleBranchIntoTakes(
     branchText: input.report.summary,
     now: input.now,
   };
+
   const set = recordBranchTakeSet(
     sql,
     actor,
@@ -334,8 +354,10 @@ export function settleBranchIntoTakes(
       ? settlement
       : { ...settlement, settlementKey: input.settlementKey },
   );
+
   if (!set) {
     return { ok: false, reason: 'the branch reached the same answer as the live turn' };
   }
+
   return { ok: true, set };
 }

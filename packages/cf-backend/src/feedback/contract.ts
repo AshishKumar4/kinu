@@ -28,7 +28,9 @@ export const FEEDBACK_MAX_SCREENSHOT_BYTES = 8 * 1024 * 1024;
 export const FEEDBACK_MAX_REQUEST_BYTES = FEEDBACK_MAX_SCREENSHOT_BYTES + 64 * 1024;
 
 export const FEEDBACK_MAX_NOTE_CHARS = 4000;
+
 export const FEEDBACK_MAX_ROUTE_CHARS = 512;
+
 export const FEEDBACK_MAX_USER_AGENT_CHARS = 512;
 
 /** The only content type the screenshot part may declare, and the only one the

@@ -9,8 +9,10 @@ import * as v from 'valibot';
 
 /** The one call that asks a branch for a candidate approach. */
 export const BRANCH_EXPLORE = 'explore' as const;
+
 /** The one call that asks a branch what its attempt taught. */
 export const BRANCH_REFLECT = 'reflect' as const;
+
 /** The first reply a worker sends, before any call is answered. */
 export const BRANCH_READY = 'ready' as const;
 
@@ -62,7 +64,10 @@ export const BranchCallAttributionSchema = v.looseObject({
 });
 
 export type BranchCall = v.InferOutput<typeof BranchCallSchema>;
+
 export type BranchReply = v.InferOutput<typeof BranchReplySchema>;
+
 export type BranchMethod = BranchCall['method'];
+
 /** A reply that answers a call. The ready announcement is not one. */
 export type BranchCallReply = Exclude<BranchReply, { method: typeof BRANCH_READY }>;

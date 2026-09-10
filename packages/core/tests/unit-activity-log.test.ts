@@ -14,10 +14,12 @@ function setup() {
   // account of ONE actor's turn, and the writer and the reader below have to
   // name the same handle or the read comes back empty.
   const actor = createTestActors(sql, execRaw).main;
+
   const write = (event: string, detail: string | null, createdAt: number): void => {
     void sql`INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at)
         VALUES (${actor.actorId}, ${event}, ${detail}, ${0}, ${createdAt})`;
   };
+
   return { sql, actor, write };
 }
 
@@ -32,6 +34,7 @@ describe('readActivityLog', () => {
 
   test('the limit keeps the newest entries, not the first ones written', () => {
     const { sql, actor, write } = setup();
+
     for (let i = 0; i < 10; i++) write(`e${i}`, null, 1000 + i);
     expect(readActivityLog(sql, actor, 3).map((e) => e.event)).toEqual(['e7', 'e8', 'e9']);
   });

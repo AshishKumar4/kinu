@@ -36,7 +36,9 @@ export const CACHE_HIT_EMA_ALPHA = 0.2;
  */
 export function cacheHitRate(usage: Usage): number | null {
   const { input, cacheRead } = usage;
+
   if (input === undefined || cacheRead === undefined || input <= 0) return null;
+
   return cacheRead / input;
 }
 
@@ -80,6 +82,7 @@ export interface StepTelemetry {
 function percentile(sorted: readonly number[], q: number): number | null {
   if (sorted.length === 0) return null;
   const rank = Math.ceil(q * sorted.length);
+
   return sorted[Math.min(Math.max(rank, 1), sorted.length) - 1] ?? null;
 }
 
@@ -99,20 +102,25 @@ export function summarizeSteps(
 
   for (const step of samples) {
     const usage = step.usage ?? {};
+
     if (usageReported(usage)) tokens = addUsage(tokens, usage);
     else stepsWithoutUsage++;
+
     if (step.usd === undefined) unpricedSteps++;
     else {
       usd += step.usd;
       pricedSteps++;
     }
+
     const rate = cacheHitRate(usage);
+
     if (rate === null) continue;
     rates.push(rate);
     ema = ema === null ? rate : alpha * rate + (1 - alpha) * ema;
   }
 
   const sorted = [...rates].sort((a, b) => a - b);
+
   return {
     steps: samples.length,
     windowLimit: opts.windowLimit,

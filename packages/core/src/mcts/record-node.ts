@@ -29,6 +29,7 @@ export interface SessionWriter {
   appendMessage(message: SessionMessage, parentId?: string | null): Promise<void>;
   getHistory(leafId?: string | null): Array<{ role: string; content: string }>;
 }
+
 /**
  * Fixed-size evaluator facts persisted with a branch node. This deliberately
  * excludes proposal text (`observation`) and execution error text (the bounded

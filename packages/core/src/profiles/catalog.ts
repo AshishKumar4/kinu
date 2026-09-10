@@ -22,6 +22,7 @@ import { JsonValueSchema } from '../utils/json';
 /** Named inference tiers in their stable UI order. Only `default` must be
  *  configured; every other tier aliases it when absent. */
 export const TIER_IDS = ['tiny', 'fast', 'default', 'slow', 'deep'] as const;
+
 export type TierId = (typeof TIER_IDS)[number];
 
 /** The roles every authority implicitly ships. A catalog may override any of
@@ -29,6 +30,7 @@ export type TierId = (typeof TIER_IDS)[number];
 const BUILTIN_ROLE_IDS = [
   'general', 'researcher', 'planner', 'implementer', 'auditor', 'designer',
 ] as const;
+
 export type BuiltinRoleId = (typeof BUILTIN_ROLE_IDS)[number];
 
 /**
@@ -44,6 +46,7 @@ export const DEFAULT_ROLE_ID = 'general' as const satisfies BuiltinRoleId;
 
 /** Kebab-case, lowercase-first: the same discipline skill names follow. */
 export const ROLE_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+
 const ROLE_ID_MAX_LEN = 64;
 
 export type RoleId = string;
@@ -124,6 +127,7 @@ const RoleDefinitionSchema = v.strictObject({
   spawns: v.optional(v.union([v.literal('*'), v.array(RoleIdSchema)])),
   plan: v.optional(v.literal(true)),
 });
+
 export type RoleCatalog = Readonly<Record<RoleId, RoleDefinition>>;
 
 export interface ProfileCatalog {
@@ -140,12 +144,15 @@ function allSpawnReferencesExist(
   catalog: v.InferOutput<typeof ProfileCatalogObjectSchema>,
 ): boolean {
   const known = new Set<string>([...BUILTIN_ROLE_IDS, ...Object.keys(catalog.roles)]);
+
   for (const role of Object.values(catalog.roles)) {
     if (role.spawns === undefined || role.spawns === '*') continue;
+
     for (const target of role.spawns) {
       if (!known.has(target)) return false;
     }
   }
+
   return true;
 }
 
@@ -190,6 +197,7 @@ export const ProfileCatalogEnvelopeSchema = v.strictObject({
 export function formatProfileValidationIssues(issues: readonly v.BaseIssue<unknown>[]): string {
   return issues.slice(0, 3).map((issue) => {
     const path = issue.path?.map((item) => String(item.key)).join('.') ?? '(root)';
+
     return `${path}: ${issue.message}`;
   }).join('; ');
 }
@@ -199,18 +207,22 @@ export function formatProfileValidationIssues(issues: readonly v.BaseIssue<unkno
  *  catalog that duplicates fields the record keys and envelope already own. */
 export function validateProfileCatalog<Input>(input: Input): ProfileCatalog {
   const parsed = v.safeParse(ProfileCatalogSchema, input);
+
   if (!parsed.success) {
     throw new Error(`invalid profile catalog: ${formatProfileValidationIssues(parsed.issues)}`);
   }
+
   return parsed.output;
 }
 
 /** Same contract for a whole envelope: authority, CAS version, digest, catalog. */
 export function validateProfileCatalogEnvelope<Input>(input: Input): ProfileCatalogEnvelope {
   const parsed = v.safeParse(ProfileCatalogEnvelopeSchema, input);
+
   if (!parsed.success) {
     throw new Error(`invalid profile catalog envelope: ${formatProfileValidationIssues(parsed.issues)}`);
   }
+
   return parsed.output;
 }
 
@@ -273,6 +285,7 @@ export const BUILTIN_ROLE_DEFINITIONS = {
 export function effectiveRoleCatalog(catalog: ProfileCatalog): RoleCatalog {
   return Object.freeze({ ...BUILTIN_ROLE_DEFINITIONS, ...catalog.roles });
 }
+
 /** Display label for a role id with no explicit label: kebab words, capitalised. */
 export function deriveRoleLabel(id: RoleId): string {
   return id.split('-').filter(Boolean)

@@ -64,6 +64,7 @@ function provider(availableModels = ['m-default', 'm-fast']): ProviderCatalogSna
 
 function resolve(overrides: Partial<ResolveTurnProfileInput> = {}) {
   const catalogFixture = catalog({ roles: { scout: SCOUT } });
+
   const input: ResolveTurnProfileInput = {
     envelope: envelope(catalogFixture),
     provider: provider(),
@@ -73,6 +74,7 @@ function resolve(overrides: Partial<ResolveTurnProfileInput> = {}) {
     activeSkills: [],
     ...overrides,
   };
+
   return resolveTurnProfile(input);
 }
 
@@ -83,6 +85,7 @@ function refusalMessage(operation: () => void): string {
     if (error instanceof Error) return error.message;
     throw error;
   }
+
   throw new Error('expected resolution to refuse');
 }
 
@@ -101,6 +104,7 @@ describe('tier resolution', () => {
 
   test('every unconfigured non-default tier aliases default, marked as fallback', () => {
     const defaultOnly = catalog({ tiers: { default: { model: 'm-default' } } });
+
     for (const missing of ['tiny', 'fast', 'slow', 'deep'] as const) {
       const profile = resolveTurnProfile({
         envelope: envelope(defaultOnly),
@@ -111,6 +115,7 @@ describe('tier resolution', () => {
         availableTools: [],
         activeSkills: [],
       });
+
       expect(profile.tier).toEqual({
         id: 'default', source: 'default', model: 'm-default',
         reasoningEffort: 'medium',
@@ -123,10 +128,12 @@ describe('tier resolution', () => {
       roles: { 'deep-thinker': { ...SCOUT, tier: 'deep' } },
       tiers: TIERS,
     });
+
     const profile = resolveTurnProfile({
       envelope: envelope(catalogFixture), provider: provider(), roleId: 'deep-thinker',
       workMode: 'build', availableTools: [], activeSkills: [],
     });
+
     expect(profile.tier.id).toBe('default');
     expect(profile.tier.source).toBe('default');
   });
@@ -151,6 +158,7 @@ describe('provider availability', () => {
     const message = refusalMessage(() => {
       resolve({ explicitTier: 'fast', availableTools: [], provider: provider(['m-default']) });
     });
+
     expect(message).toContain('fast');
     expect(message).toContain('rev-7');
   });
@@ -172,6 +180,7 @@ describe('provider availability', () => {
       roleId: 'scout', explicitTier: 'fast', availableTools: [],
       provider: degraded(['m-default']),
     });
+
     // The configured model stands: it was never looked up, so nothing about it
     // was disproved, and substituting m-default would be the silent swap the
     // test above forbids.
@@ -185,9 +194,11 @@ describe('provider availability', () => {
     // identical availableModels, and the only difference is whether the
     // snapshot admits a listing failed.
     const clean: ProviderCatalogSnapshot = { revision: 'rev-7', availableModels: ['m-default'] };
+
     const asking = (snapshot: ProviderCatalogSnapshot) => () => resolve({
       roleId: 'scout', explicitTier: 'fast', availableTools: [], provider: snapshot,
     });
+
     // Absent and empty are the SAME assertion — "I enumerated everything" — so
     // a producer with no failure channel is not accidentally treated as
     // degraded, which would disable the check for every caller that predates it.
@@ -206,6 +217,7 @@ describe('provider availability', () => {
     const profile = resolve({
       roleId: 'general', availableTools: [], provider: degraded(['m-default']),
     });
+
     expect(profile.tier.model).toBe('m-default');
     expect(profile.tiers.fast.model).toBe('m-fast');
   });
@@ -221,6 +233,7 @@ describe('role validation', () => {
       availableTools: [],
       activeSkills: [],
     });
+
     expect(profile.role).toEqual({
       id: 'general', label: 'General',
       description: BUILTIN_ROLE_DEFINITIONS.general.description,
@@ -235,6 +248,7 @@ describe('role validation', () => {
     const message = refusalMessage(() => {
       resolve({ roleId: 'wizard' });
     });
+
     expect(message).toContain('wizard');
     expect(message).toContain('general');
   });
@@ -263,10 +277,12 @@ describe('action narrowing', () => {
   });
   test('a role can never widen: names absent from the surface never appear', () => {
     const catalogFixture = catalog({ roles: { 'ghost-hunter': { ...SCOUT, allowedTools: ['seance', 'search'] } } });
+
     const profile = resolveTurnProfile({
       envelope: envelope(catalogFixture), provider: provider(), roleId: 'ghost-hunter',
       workMode: 'build', availableTools: ['search'], activeSkills: [],
     });
+
     expect(profile.allowedTools).toEqual(['search']);
   });
 });

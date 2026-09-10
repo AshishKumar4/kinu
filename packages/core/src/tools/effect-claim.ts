@@ -94,19 +94,23 @@ export function claimToolEffect(
 ): ToolEffectClaim {
   actor.assertCurrent();
   const actorId = actor.actorId;
+
   const existing = sql<{ result_json: string | null }>`
     SELECT result_json FROM tool_effect_claims
     WHERE actor_id=${actorId} AND turn_id=${key.turnId}
       AND normalized_call_id=${key.callId} AND call_digest=${key.digest}
     LIMIT 1`[0];
+
   if (existing) {
     return existing.result_json === null
       ? { kind: 'indeterminate' }
       : { kind: 'settled', result: parseJsonValue(existing.result_json) };
   }
+
   void sql`INSERT OR IGNORE INTO tool_effect_claims
       (actor_id, turn_id, normalized_call_id, call_digest, result_json)
     VALUES (${actorId}, ${key.turnId}, ${key.callId}, ${key.digest}, ${null})`;
+
   return { kind: 'claimed' };
 }
 
@@ -157,17 +161,21 @@ export function withEffectClaims(tools: ToolSet, deps: EffectClaimDeps): ToolSet
   // stopped being a tool. Assigning into a declared ToolSet makes the compiler
   // check every entry against the surface it is going into.
   const claimed: ToolSet = {};
+
   for (const [name, entry] of Object.entries(tools)) {
     claimed[name] = replayPolicyFor(name) === 'safe'
       ? entry
       : withEffectClaim(name, entry, deps);
   }
+
   return claimed;
 }
 
 function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaimDeps): ToolSet[string] {
   const execute = entry.execute;
+
   if (!execute) return entry;
+
   return {
     ...entry,
     execute: async (input, options) => {
@@ -176,8 +184,11 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
         callId: options.toolCallId,
         digest: argumentDigest({ tool: name, args: projectJsonValue({ value: input }) }),
       };
+
       const claim = claimToolEffect(deps.sql, deps.actor, key);
+
       if (claim.kind === 'settled') return claim.result;
+
       if (claim.kind === 'indeterminate') throw indeterminateEffect(name, key);
       const output = await execute(input, options);
       // Durable before published: the caller reads this value only after the
@@ -185,6 +196,7 @@ function withEffectClaim(name: string, entry: ToolSet[string], deps: EffectClaim
       settleToolEffect(
         deps.sql, deps.actor, key, JSON.stringify(projectJsonValue({ value: output })),
       );
+
       return output;
     },
   };

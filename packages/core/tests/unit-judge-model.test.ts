@@ -41,11 +41,17 @@ describe('modelVendorFamily', () => {
 describe('selectJudgeModel', () => {
   test('an explicit review model wins outright and skips the availability query', async () => {
     let queried = false;
+
     const selection = await selectJudgeModel({
       reviewSpec: 'anthropic/claude-haiku-4-5',
       chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
-      candidates: async () => { queried = true; return ['openai/gpt-5.5']; },
+      candidates: async () => {
+        queried = true;
+
+        return ['openai/gpt-5.5'];
+      },
     });
+
     expect(selection).toEqual({ spec: 'anthropic/claude-haiku-4-5', source: 'configured' });
     expect(queried).toBe(false);
   });
@@ -56,6 +62,7 @@ describe('selectJudgeModel', () => {
       chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
       candidates: noCandidates,
     });
+
     expect(selection.source).toBe('configured');
   });
 
@@ -70,6 +77,7 @@ describe('selectJudgeModel', () => {
         'openai/gpt-5.5',
       ],
     });
+
     expect(selection).toEqual({ spec: 'anthropic/claude-opus-4-7', source: 'cross-family' });
   });
 
@@ -79,6 +87,7 @@ describe('selectJudgeModel', () => {
       chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
       candidates: async () => ['openai/gpt-5.5'],
     });
+
     expect(selection).toEqual({ spec: 'openai/gpt-5.5', source: 'cross-family' });
   });
 
@@ -88,6 +97,7 @@ describe('selectJudgeModel', () => {
       chatSpec: 'openai/gpt-5.5',
       candidates: async () => ['codex/gpt-5.5', 'openai/gpt-5.4'],
     });
+
     expect(selection).toEqual({ spec: 'openai/gpt-5.5', source: 'same-family-fallback' });
   });
 
@@ -97,6 +107,7 @@ describe('selectJudgeModel', () => {
       chatSpec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
       candidates: noCandidates,
     });
+
     expect(selection.source).toBe('same-family-fallback');
     expect(selection.spec).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
@@ -114,6 +125,7 @@ describe('selectEnsembleJudges', () => {
         'openai/gpt-5.5',
       ],
     });
+
     expect(selection).toEqual({
       specs: ['anthropic/claude-fable-5', 'codex/gpt-5.6-sol'],
       source: 'cross-family',
@@ -128,6 +140,7 @@ describe('selectEnsembleJudges', () => {
       chatSpec: () => 'openai/gpt-5.5',
       candidates: async () => ['codex/gpt-5.6-sol', 'anthropic/claude-fable-5', 'workers-ai/@cf/moonshotai/kimi-k3'],
     });
+
     expect(selection.specs).toEqual(['anthropic/claude-fable-5', 'workers-ai/@cf/moonshotai/kimi-k3']);
   });
 
@@ -140,11 +153,21 @@ describe('selectEnsembleJudges', () => {
     // neither.
     let queried = false;
     let resolved = false;
+
     const selection = await selectEnsembleJudges({
       specs: ['anthropic/claude-fable-5', ' codex/gpt-5.6-sol ', '  '],
-      chatSpec: () => { resolved = true; return 'openai/gpt-5.5'; },
-      candidates: async () => { queried = true; return []; },
+      chatSpec: () => {
+        resolved = true;
+
+        return 'openai/gpt-5.5';
+      },
+      candidates: async () => {
+        queried = true;
+
+        return [];
+      },
     });
+
     expect(selection).toEqual({
       specs: ['anthropic/claude-fable-5', 'codex/gpt-5.6-sol'],
       source: 'configured',
@@ -159,11 +182,17 @@ describe('selectEnsembleJudges', () => {
     // or the exclusion silently stops working and judges come from the
     // classifier's own vendor.
     let calls = 0;
+
     const selection = await selectEnsembleJudges({
       specs: null,
-      chatSpec: () => { calls += 1; return 'openai/gpt-5.5'; },
+      chatSpec: () => {
+        calls += 1;
+
+        return 'openai/gpt-5.5';
+      },
       candidates: async () => ['codex/gpt-5.6-sol', 'anthropic/claude-fable-5'],
     });
+
     expect(calls).toBe(1);
     expect(selection.specs).toEqual(['anthropic/claude-fable-5']);
   });
@@ -176,6 +205,7 @@ describe('selectEnsembleJudges', () => {
       chatSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
       candidates: async () => ['openai/gpt-5.5', 'codex/gpt-5.4'],
     });
+
     expect(selection.specs).toEqual(['openai/gpt-5.5']);
     expect((await selectEnsembleJudges({
       specs: [], chatSpec: () => 'openai/gpt-5.5', candidates: noCandidates,

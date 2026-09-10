@@ -77,6 +77,7 @@ export const SANDBOX_TRANSPORT = "rpc" as const;
 
 async function jsonResultOrVoid<Result>(result: Promise<Result>) {
   const value = await result;
+
   return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
@@ -90,21 +91,26 @@ async function jsonResultOrVoid<Result>(result: Promise<Result>) {
  */
 async function observeExit(handle: KinuSandbox, started: Process): Promise<number> {
   let exitCode = started.exitCode;
+
   while (exitCode === undefined) {
     try {
       exitCode = (await started.waitForExit()).exitCode;
     } catch (cause) {
       const status = await started.getStatus();
+
       // A process that has not finished is observed again; anything else is
       // settled and its exit code is read from the store.
       if (status === "starting" || status === "running") continue;
       const settled = await handle.getProcess(started.id);
+
       if (settled?.exitCode === undefined) {
         throw new Error(`sandbox process ${started.id} ended without an exit code`, { cause });
       }
+
       exitCode = settled.exitCode;
     }
   }
+
   return exitCode;
 }
 
@@ -142,16 +148,20 @@ async function execWithoutDeadline(
   // kill, and asks once — a turn's signal is shared, and each exec in flight
   // kills only its own process.
   const { promise: killed, resolve, reject } = Promise.withResolvers<void>();
+
   const kill = (): void => {
     cancelling = true;
     void handle.killProcess(started.id).then(resolve, reject);
   };
+
   if (signal?.aborted === true) kill();
   else signal?.addEventListener("abort", kill, { once: true });
+
   try {
     // `killed` never settles without an abort, so in the ordinary case this is a
     // plain wait for the exit code.
     const exitCode = await Promise.race([observed, killed.then(() => observed)]);
+
     // The race can only RESOLVE through `observed`, so an exit code here means
     // the process is gone whatever the kill itself reported.
     if (cancelling) {
@@ -160,7 +170,9 @@ async function execWithoutDeadline(
         "AbortError",
       );
     }
+
     const logs = await handle.getProcessLogs(started.id);
+
     return { stdout: logs.stdout, stderr: logs.stderr, exitCode };
   } finally {
     signal?.removeEventListener("abort", kill);
@@ -221,10 +233,12 @@ export function adaptCloudflareSandbox(
   // network, and latching that permanently is the same defect as a restore flag
   // that marked a container restored before reading what to restore.
   let inFlight: Promise<void> | null = null;
+
   const configured = async (): Promise<void> => {
     if (inFlight !== null) return await inFlight;
     const attempt = configureEgress();
     inFlight = attempt;
+
     try {
       await attempt;
     } catch (error) {
@@ -232,11 +246,14 @@ export function adaptCloudflareSandbox(
       throw error;
     }
   };
+
   const onContainer = async <T>(run: () => Promise<T>): Promise<T> => {
     await configured();
     await handle.ensureReady();
+
     return await run();
   };
+
   return {
     ensureReady: () => onContainer(() => Promise.resolve()),
     // A deadline only when a caller ASKED for one; absent, the process lane,
@@ -261,10 +278,13 @@ export function adaptCloudflareSandbox(
       if (previews === null) throw new Error(PREVIEWS_UNPUBLISHABLE);
       const exposed = await onContainer(() => handle.exposePort(port, opts));
       const label = sandboxPreviewLabelOf(new URL(exposed.url), { PREVIEW_HOST_SUFFIX: opts.hostname });
+
       if (label === null || label.port !== port) {
         throw new Error(`the SDK minted a preview URL this deployment cannot publish: ${exposed.url}`);
       }
+
       await previews.publish(port, label.token);
+
       return exposed;
     },
     // Withdrawn BEFORE the container object is asked to revoke: the safe
@@ -272,6 +292,7 @@ export function adaptCloudflareSandbox(
     // still admits, so a failure in the second half leaves the first standing.
     unexposePort: async (port) => {
       await previews?.withdraw(port);
+
       return await onContainer(() => jsonResultOrVoid(handle.unexposePort(port)));
     },
     // The one authenticated path that OBSERVES exposures rather than making
@@ -289,11 +310,14 @@ export function adaptCloudflareSandbox(
     // whose ports are all live.
     getExposedPorts: async (hostname) => {
       const rows = await onContainer(() => handle.getExposedPorts(hostname));
+
       if (previews !== null) {
         const index = previews;
         await Promise.all(rows.map(async (row) => {
           const label = sandboxPreviewLabelOf(new URL(row.url), { PREVIEW_HOST_SUFFIX: hostname });
+
           if (label === null || label.port !== row.port) return;
+
           try {
             await index.refresh(row.port, label.token);
           } catch (cause) {
@@ -305,6 +329,7 @@ export function adaptCloudflareSandbox(
           }
         }));
       }
+
       return rows;
     },
     startSupervisedProcess: (command, opts) =>

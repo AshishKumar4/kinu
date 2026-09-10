@@ -157,9 +157,12 @@ function resolved(depth: number, branches: number, over?: Partial<SwarmConfig>):
     depth,
     branches,
   });
+
   if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
   const illegal = swarmValidity(call);
+
   if (illegal) throw new Error(`the suite's own composition is not legal: ${illegal.error}`);
+
   return call;
 }
 
@@ -206,7 +209,9 @@ interface ScriptedNode {
  *  below multiplies them by the call count the script observed: the expected total is
  *  then the provider's own arithmetic, not a number read back off the ledger. */
 const CALL_INPUT_TOKENS = 120;
+
 const CALL_OUTPUT_TOKENS = 45;
+
 /** `usageTotal` is input + output — cache and reasoning are subsets of those two. */
 const CALL_TOKENS = CALL_INPUT_TOKENS + CALL_OUTPUT_TOKENS;
 
@@ -222,24 +227,32 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
     modelId: 'fake-agent-node',
     doGenerate: async ({ prompt, tools }) => {
       generations += 1;
+
       for (const tool of tools ?? []) offered.add(tool.name);
+
       for (const line of JSON.stringify(prompt).matchAll(/(Granted: [^"]*|Refused \([^"]*)/g)) {
         if (!verdicts.includes(line[0])) verdicts.push(line[0]);
       }
+
       let lastUser = -1;
+
       for (const [index, message] of prompt.entries()) {
         if (message.role === 'user') lastUser = index;
       }
+
       const own = prompt.slice(lastUser + 1).filter((message) => message.role === 'assistant').length;
+
       if (own === 0) {
         inheritedTurns.push(prompt.slice(0, lastUser).filter((m) => m.role === 'assistant').length);
       }
+
       const canPropose = (tools ?? []).some((tool) => tool.name === PROPOSE_BRANCH_TOOL);
       const proposes = canPropose && input.proposeAtDepth1;
       const reportAt = proposes ? 2 : 1;
 
       const content: LanguageModelV3Content[] = [];
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
+
       if (own === 0) {
         // Look at the real workspace before answering. The result comes back through the
         // real VFS, so a broken surface fails here rather than later.
@@ -280,6 +293,7 @@ function workingNode(input: { readonly proposeAtDepth1: boolean }): ScriptedNode
         content.push({ type: 'text', text: 'Reported: a single linear scan.' });
         finish = 'stop';
       }
+
       return {
         content,
         finishReason: { unified: finish, raw: undefined },
@@ -301,6 +315,7 @@ async function workspace(): Promise<{ rt: AgentRuntime; db: Database }> {
   const { rt, db } = createTestRuntime();
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, `// a nested loop over every pair\n${REFERENCE}`);
+
   return { rt, db };
 }
 
@@ -315,17 +330,21 @@ async function run(input: {
   const logger = createRecordingLogger();
   const { model, script } = workingNode({ proposeAtDepth1: input.proposeAtDepth1 });
   const startedAt = Date.now();
+
   const result = await runSwarm(
     { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger, },
     resolved(input.depth, input.branches),
   );
+
   const wallClockMs = Date.now() - startedAt;
+
   // Scoped: the run's search ledger is the CALLER's (`initRunLedgers` binds
   // `rt.actor`), and each node is now its own actor over this same database, so
   // an unscoped `SELECT *` would fold a node's own tree rows into this count.
   const nodes = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
     ORDER BY depth ASC, created_at ASC`;
+
   return { rt, logger, nodes, result, script, journal: new HeadJournal(rt.storage.sql, rt.actor), wallClockMs };
 }
 
@@ -334,6 +353,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     const { nodes, result, script, logger } = await run({
       depth: 2, branches: 2, proposeAtDepth1: true,
     });
+
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
     // A LOOP, not a generation: every node issued at least a read and a report, so a
@@ -350,6 +370,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(script.offered.has('report')).toBe(true);
     expect(script.offered.has(PROPOSE_BRANCH_TOOL)).toBe(true);
     expect(script.offered.has('agents')).toBe(false);
+
     for (const name of script.offered) {
       expect([...NODE_BUILTIN_TOOLS, PROPOSE_BRANCH_TOOL]).toContain(name);
     }
@@ -358,6 +379,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     const depths = nodes.map((node) => node.depth);
     expect(Math.max(...depths)).toBe(2);
     const byId = new Map(nodes.map((node) => [node.id, node]));
+
     for (const node of nodes) {
       if (node.parent_id === null) continue;
       expect(node.depth).toBe((byId.get(node.parent_id)?.depth ?? -99) + 1);
@@ -383,6 +405,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     const { nodes, result, journal, logger } = await run({
       depth: 2, branches: 2, proposeAtDepth1: true,
     });
+
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
     // The run groups under ONE root, so the journal shows a search rather than N
@@ -391,6 +414,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(rootId).toBeTruthy();
     const view = journal.readRun(rootId ?? '');
     expect(view).not.toBeNull();
+
     if (!view) return;
 
     // ONE JOURNAL ROW PER MODEL-WRITTEN NODE. The root is the workspace as found and no
@@ -418,11 +442,14 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     // THE FIRST LEVEL READ THE WORKSPACE, and the trace carries the tool's OUTPUT and not
     // only its name — a trace of names cannot answer why a node concluded what it did.
     const firstLevel = modelWritten.filter((node) => node.depth === 1).map((node) => node.id);
+
     for (const id of firstLevel) {
       const head = view.heads.find((candidate) => candidate.id === id);
+
       const fileStep = head && journal.readSteps(head.id).find(
         (step) => step.toolCalls.some((call) => call.name === 'file'),
       );
+
       expect(fileStep).toBeDefined();
       expect(JSON.stringify(fileStep?.toolCalls)).toContain(REFERENCE_PATH);
     }
@@ -433,6 +460,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
         (step) => step.toolCalls.filter((call) => call.name === PROPOSE_BRANCH_TOOL),
       ),
     );
+
     expect(proposals.length).toBeGreaterThanOrEqual(1);
 
     // THE ISOLATION STATE IS REPORTED RATHER THAN ASSUMED. *Isolation* allows exactly two
@@ -441,6 +469,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     // have.
     const settled = logger.emitted.filter((line) => line.event === 'swarm.node_settled');
     expect(settled.length).toBe(modelWritten.length);
+
     for (const line of settled) {
       expect(line.fields.isolation).toBe('shared-origin-plane');
       expect(line.fields.reported).toBe('self');
@@ -456,6 +485,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     const { result, journal, nodes, script } = await run({
       depth: 2, branches: 2, proposeAtDepth1: true,
     });
+
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
     const rootId = nodes.find((node) => node.parent_id === null)?.root_id ?? '';
@@ -481,6 +511,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     const { result, script, wallClockMs, logger } = await run({
       depth: 2, branches: 2, proposeAtDepth1: true,
     });
+
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
     // One `doGenerate` per node step, summed across every node.
@@ -503,6 +534,7 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     // request that can only ever be refused must not be offered. The node then finishes
     // without it — which is the check that the build-time gate does not strand a node.
     const { result, script } = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
+
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
     expect(script.offered.has(PROPOSE_BRANCH_TOOL)).toBe(false);
     expect(script.calls).not.toContain(PROPOSE_BRANCH_TOOL);
@@ -524,14 +556,17 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
 describe('the run a reader gets back', () => {
   test('is ONE run carrying its tree, its transcripts, its params and its task', async () => {
     const { rt, result, nodes } = await run({ depth: 2, branches: 2, proposeAtDepth1: true });
+
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
     // The denominators, before anything is claimed about the row: this workspace really
     // holds both halves. A read model asserted over an empty tree or an empty journal
     // passes for the wrong reason, which is the defect this repository keeps finding.
     expect(nodes.length).toBeGreaterThan(0);
+
     const journalled = rt.storage.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_journal WHERE actor_id = ${rt.actor.actorId}`[0]?.n ?? 0;
+
     expect(journalled).toBeGreaterThan(0);
 
     const page = readExplorationCanvas(rt.storage.sql, rt.actor);
@@ -561,6 +596,7 @@ describe('the run a reader gets back', () => {
 
   test('the ledger row says the run settled, with what it actually spent', async () => {
     const { rt, result } = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
+
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
     const ledger = new MctsSearchStore(rt.storage.sql, rt.actor).list(10);
@@ -615,10 +651,13 @@ describe('the mission ledger a search charges', () => {
    */
   function wireObjective() {
     const declared = objective();
+
     if (declared.kind !== 'scalar' || declared.floor === undefined) {
       throw new Error("the suite's own objective must be a scalar one carrying a floor");
     }
+
     const { floor } = declared;
+
     return {
       ...declared,
       floor: {
@@ -643,12 +682,15 @@ describe('the mission ledger a search charges', () => {
     governor.declare(LABEL, input.tokens === undefined ? {} : { tokens: input.tokens });
     governor.activate([LABEL]);
     const { model, script } = workingNode({ proposeAtDepth1: true });
+
     const deps: AgentsToolDeps = {
       mode: 'build',
       swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model },
       budget: governor,
     };
+
     const provider = createAgentsCodemodeProvider(() => deps);
+
     const out = await provider.tools.swarm!.execute({
       preset: 'custom',
       label: 'agent-nodes',
@@ -658,12 +700,14 @@ describe('the mission ledger a search charges', () => {
       depth: input.depth,
       branches: input.branches,
     });
+
     // Scoped like `run()`'s: the run's search ledger is the CALLER's, and each
     // node is its own actor over this same database now, so an unscoped read
     // would fold a node's own tree rows into the caller's count.
     const nodes = rt.storage.sql<SearchNode>`
       SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
       ORDER BY depth ASC, created_at ASC`;
+
     return { governor, script, nodes, out: v.parse(SwarmOutputSchema, out) };
   }
 
@@ -710,6 +754,7 @@ describe('the mission ledger a search charges', () => {
     // level lands on it and the second is refusable. Nothing but a ledger consulted
     // while the run is still going can refuse it.
     const cap = CALL_TOKENS * 2;
+
     const { governor, script, nodes, out } = await runUnderMission({
       depth: 2, branches: 2, tokens: cap,
     });

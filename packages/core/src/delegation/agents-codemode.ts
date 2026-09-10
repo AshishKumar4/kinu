@@ -55,6 +55,7 @@ import {
 } from './agents-tool';
 
 import { renderThrownChain } from '../obs/index';
+
 /**
  * The sandbox-visible declaration of each action, one block per member.
  *
@@ -135,13 +136,16 @@ function renderInputVariant(
   variant: AgentsActionInputVariant,
 ): string {
   const required = new Set<keyof typeof AGENTS_FIELD_TS_TYPES>(variant.required);
+
   return [
     '{',
     ...fields.map((field) => {
       const optional = required.has(field) ? '' : '?';
+
       const type = field === 'scope' && variant.scope !== undefined
         ? `"${variant.scope}"`
         : AGENTS_FIELD_TS_TYPES[field];
+
       return `    ${field}${optional}: ${type};`;
     }),
     '  }',
@@ -168,6 +172,7 @@ const AGENTS_CODEMODE_TASK_LIFETIME_DOC = `  /** \`lifetime\` decides how long a
 
 function memberDoc(action: AgentsToolAction, deps: AgentsToolDeps): string {
   const base = AGENTS_CODEMODE_MEMBER_DOCS[action];
+
   return action === 'hire' && deps.team?.temporary
     ? `${base}
 ${AGENTS_CODEMODE_TASK_LIFETIME_DOC}`
@@ -176,9 +181,11 @@ ${AGENTS_CODEMODE_TASK_LIFETIME_DOC}`
 
 function renderInputType(action: AgentsToolAction, deps: AgentsToolDeps): string {
   const variants = agentsActionInputVariantsFor(deps, action);
+
   const input = variants.length === 1
     ? renderInputVariant(variants[0]!.fields, variants[0]!)
     : variants.map(variant => renderInputVariant(variant.fields, variant)).join('\n  | ');
+
   return `${memberDoc(action, deps)}
   ${action}(input: ${variants.length === 1 ? input : `\n  | ${input}`}): ${memberReturn(action, deps)};`;
 }
@@ -212,6 +219,7 @@ function memberReturn(action: AgentsToolAction, deps: AgentsToolDeps): string {
 
 function memberDescription(action: AgentsToolAction, deps: AgentsToolDeps): string {
   const base = AGENTS_CODEMODE_DESCRIPTIONS[action];
+
   return action === 'hire' && deps.team?.temporary
     ? `${base} Pass lifetime:"task" for an agent created for that`
       + ' one question, which resolves with its finished answer and is then archived.'
@@ -263,28 +271,36 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
         // actually made. Reading it positionally (`args[1]`) also lost
         // cancellation for every zero-argument call.
         let context: unknown;
+
         for (const arg of args) {
           if (readExecSignal({ context: arg }) !== undefined) context = arg;
         }
+
         const raw = args[0] === context ? undefined : args[0];
         const parsedRaw = raw === undefined ? undefined : v.safeParse(JsonValueSchema, raw);
+
         // Reason first, as every refusal on this surface: a script branching on
         // the class must not parse prose to learn its call was malformed.
         if (parsedRaw && (!parsedRaw.success || !isJsonObject(parsedRaw.output))) {
           return { reason: 'bad_input', error: `agents.${action}: expects a single options object` };
         }
+
         // `action` is written last: the member the script called decides it,
         // never a field in the object the script passed.
         const candidate: JsonObject = {};
+
         if (parsedRaw?.success) Object.assign(candidate, parsedRaw.output);
         Object.assign(candidate, { action });
         let input;
+
         try {
           input = parseAgentsToolInput(candidate);
         } catch (error) {
           return { reason: 'bad_input', error: `agents.${action}: ${renderThrownChain({ cause: error })}` };
         }
+
         const signal = readExecSignal({ context });
+
         try {
           return await dispatchAgentsAction({ ...deps(), mode }, input, signal ? { abortSignal: signal } : undefined);
         } catch (cause) {

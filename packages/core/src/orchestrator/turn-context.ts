@@ -148,10 +148,13 @@ export function measureCompactionTrigger(
   durableLength: number,
 ): MeasuredCompactionTrigger {
   const lastPromptTokens = state.loadPromptTokens(sessionKey, durableLength);
+
   const measured: MeasuredCompactionTrigger = {
     trigger: state.takeForceCompaction(sessionKey) ? 'force' : 'auto',
   };
+
   if (lastPromptTokens !== null) measured.providerReportedTokens = lastPromptTokens;
+
   return measured;
 }
 
@@ -176,21 +179,26 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
       trigger,
       abortSignal: input.abortSignal,
     });
+
     const assembled = [...(transformed ?? history), ...(input.turnLocal ?? [])];
+
     return settleUnpairedToolCalls(assembled) ?? assembled;
   };
 
   const assembled = await assemble(input.trigger);
   const admission = input.admission;
+
   if (!admission) return assembled;
 
   const limit = stepContextLimit(admission.limits);
+
   const measure = async (messages: ModelMessage[]): Promise<number | null> => {
     const counted = await admission.count({
       system: input.system,
       messages,
       tools: admission.tools,
     });
+
     if (counted.kind === 'counted') return counted.tokens;
     // No exact count exists for this provider or this request. Reported once,
     // never approximated: a gate run on a number nobody measured would refuse
@@ -198,10 +206,12 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
     diagnostics.event('admission.uncounted', {
       provider: counted.provider, reason: counted.reason, sessionKey: input.sessionKey,
     });
+
     return null;
   };
 
   const tokens = await measure(assembled);
+
   if (tokens === null || tokens <= limit) return assembled;
 
   // The request does not fit. A turn assembled with trigger:'force' has already
@@ -211,6 +221,8 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
 
   const compacted = await assemble('force');
   const recounted = await measure(compacted);
+
   if (recounted !== null && recounted > limit) throw refuseOversizedRequest(recounted, limit);
+
   return compacted;
 }

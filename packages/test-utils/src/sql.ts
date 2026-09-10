@@ -35,10 +35,12 @@ export function sqlOver(db: Database): SqlExecutor {
     ...values: SqlValue[]
   ): T[] {
     const q = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
+
     // bun:sqlite binds TypedArrays, not ArrayBuffers (the canonical VFS BLOB type).
     const bound: SQLQueryBindings[] = values.map((value) => (
       value instanceof ArrayBuffer ? new Uint8Array(value) : value
     ));
+
     return db.prepare<T, SQLQueryBindings[]>(q).all(...bound);
   };
 }
@@ -47,6 +49,7 @@ export function sqlOver(db: Database): SqlExecutor {
  *  this gets an isolated database. */
 export function createTestSql(): TestSql {
   const db = new Database(':memory:');
+
   return {
     sql: sqlOver(db),
     execRaw: (ddl: string) => { db.exec(ddl); },
@@ -71,6 +74,7 @@ export function testActorHandle(
   opts: { readonly actorId?: string; readonly live?: () => boolean } = {},
 ): ActorHandle {
   const actorId = opts.actorId ?? 'actor-test';
+
   return bindActorHandle(sql, {
     actorId,
     workspaceId: 'ws-test',

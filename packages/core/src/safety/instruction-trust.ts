@@ -39,6 +39,7 @@ import * as v from 'valibot';
 export type {
   InstructionTrust, VerifiedInstructionTrust, InstructionTrustResolver,
 } from '../types/instruction-trust';
+
 import type { VerifiedInstructionTrust } from '../types/instruction-trust';
 
 /** The owner's standing answer for one path. `grandfathered` is a stored answer
@@ -54,6 +55,7 @@ export interface InstructionApproval {
   readonly digest: string;
   readonly decision: InstructionDecision;
 }
+
 /**
  * The digest an approval binds.
  *
@@ -86,6 +88,7 @@ interface Row {
 
 function toApproval(row: Row): InstructionApproval {
   const decision = v.safeParse(DECISION, row.decision);
+
   return {
     path: row.path,
     digest: row.digest,
@@ -117,7 +120,9 @@ export function trustOfInstructionApprovals(
   content: string,
 ): VerifiedInstructionTrust {
   const row = rows.find((candidate) => candidate.path === path);
+
   if (!row || row.digest !== instructionDigest(content)) return 'unverified';
+
   return row.decision === 'revoked' ? 'unverified' : 'approved';
 }
 
@@ -150,9 +155,11 @@ export class InstructionApprovalStore {
   /** The standing decision for this path, whatever bytes it was made about. */
   get(path: string): InstructionApproval | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<Row>`
       SELECT path, digest, decision FROM instruction_approvals
       WHERE actor_id = ${this.actorId} AND scope = ${this.scope} AND path = ${path} LIMIT 1`;
+
     return rows[0] ? toApproval(rows[0]) : null;
   }
 
@@ -160,6 +167,7 @@ export class InstructionApprovalStore {
    *  one rule in {@link trustOfInstructionApprovals}. */
   trustOf(path: string, content: string): VerifiedInstructionTrust {
     const row = this.get(path);
+
     return trustOfInstructionApprovals(row === null ? [] : [row], path, content);
   }
 
@@ -190,6 +198,7 @@ export class InstructionApprovalStore {
    *  lists beside the files discovery actually found. */
   list(): InstructionApproval[] {
     this.actor.assertCurrent();
+
     return this.sql<Row>`
       SELECT path, digest, decision FROM instruction_approvals
       WHERE actor_id = ${this.actorId} AND scope = ${this.scope} ORDER BY path`.map(toApproval);
@@ -215,10 +224,14 @@ export type AdmittedInstructionDecision =
  */
 export function admitInstructionDecision(path: string, digest?: string): AdmittedInstructionDecision {
   const clean = path.trim();
+
   if (clean === '') return { ok: false, error: 'path is required' };
+
   if (digest === undefined) return { ok: true, path: clean, digest: '' };
+
   if (!/^[0-9a-f]{64}$/.test(digest)) {
     return { ok: false, error: 'digest must be the 64-character SHA-256 the surface displayed' };
   }
+
   return { ok: true, path: clean, digest };
 }

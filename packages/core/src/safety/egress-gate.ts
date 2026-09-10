@@ -85,7 +85,9 @@ export function isEgressPlaceholder(value: string): boolean {
 export function findEgressPlaceholders(text: string): string[] {
   const scanner = new RegExp(`${EGRESS_PLACEHOLDER_PREFIX}${PLACEHOLDER_BODY}`, 'g');
   const seen = new Set<string>();
+
   for (const match of text.matchAll(scanner)) seen.add(match[0]);
+
   return [...seen];
 }
 
@@ -126,6 +128,7 @@ export function egressSecretRule(bindingId: string): string {
  *  else. */
 export function parseEgressSecretRule(rule: string): string | null {
   const id = rule.startsWith('egress-secret:') ? rule.slice('egress-secret:'.length) : '';
+
   return id.length > 0 ? id : null;
 }
 
@@ -155,6 +158,7 @@ export function grantedEgressBindings(
   const approved = new Set(
     grants.filter((g) => g.executor === EGRESS_EXECUTOR).map((g) => g.rule),
   );
+
   return vault.filter((b) => approved.has(egressSecretRule(b.id)));
 }
 
@@ -170,9 +174,12 @@ export function grantedEgressBindings(
 export function egressHostMatches(pattern: string, host: string): boolean {
   const target = host.trim().toLowerCase();
   const glob = pattern.trim().toLowerCase();
+
   if (glob.length === 0 || target.length === 0) return false;
+
   if (!glob.includes('*')) return glob === target;
   const escaped = glob.split('*').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
   return new RegExp(`^${escaped.join('.*')}$`).test(target);
 }
 
@@ -273,15 +280,19 @@ export function planEgress(
   active: readonly EgressSecretBinding[],
 ): EgressPlan {
   const present = new Set(findEgressPlaceholders(facts.url));
+
   for (const [, value] of facts.headers) {
     for (const found of findEgressPlaceholders(value)) present.add(found);
   }
+
   if (present.size === 0) return { kind: 'forward', substitutions: [] };
 
   const byPlaceholder = new Map(active.map((b) => [b.placeholder, b]));
   const substitutions: EgressSubstitution[] = [];
+
   for (const placeholder of present) {
     const binding = byPlaceholder.get(placeholder);
+
     if (!binding) {
       return {
         kind: 'refuse',
@@ -293,6 +304,7 @@ export function planEgress(
           + 'approved secret. It was revoked, or it was never granted.',
       };
     }
+
     if (!egressHostMatches(binding.host, facts.host)) {
       return {
         kind: 'refuse',
@@ -302,8 +314,10 @@ export function planEgress(
           + 'destination its secret was approved for.',
       };
     }
+
     substitutions.push({ bindingId: binding.id, placeholder });
   }
+
   return { kind: 'forward', substitutions };
 }
 
@@ -320,9 +334,11 @@ export interface ScrubReplacement {
  *  value, a status message. */
 export function scrubText(text: string, replacements: readonly ScrubReplacement[]): string {
   let out = text;
+
   for (const { find, replaceWith } of replacements) {
     if (find.length > 0) out = out.split(find).join(replaceWith);
   }
+
   return out;
 }
 
@@ -350,9 +366,11 @@ export function createScrubStream(
   replacements: readonly ScrubReplacement[],
 ): TransformStream<Uint8Array, Uint8Array> {
   const encoder = new TextEncoder();
+
   const needles = replacements
     .filter((r) => r.find.length > 0)
     .map((r) => ({ find: encoder.encode(r.find), to: encoder.encode(r.replaceWith) }));
+
   if (needles.length === 0) return new TransformStream();
   const longest = Math.max(...needles.map((n) => n.find.length));
 
@@ -360,13 +378,18 @@ export function createScrubStream(
 
   const matchesAt = (buf: Uint8Array, at: number, needle: Uint8Array): boolean => {
     for (let i = 0; i < needle.length; i += 1) if (buf[at + i] !== needle[i]) return false;
+
     return true;
   };
+
   /** Could a needle START here and finish in bytes we have not seen yet? */
   const straddles = (buf: Uint8Array, at: number): boolean => needles.some((n) => {
     const available = buf.length - at;
+
     if (available >= n.find.length) return false;
+
     for (let i = 0; i < available; i += 1) if (buf[at + i] !== n.find[i]) return false;
+
     return true;
   });
 
@@ -375,8 +398,10 @@ export function createScrubStream(
     const out: Uint8Array[] = [];
     let plainFrom = 0;
     let i = 0;
+
     while (i < buf.length) {
       const hit = needles.find((n) => i + n.find.length <= buf.length && matchesAt(buf, i, n.find));
+
       if (hit) {
         if (i > plainFrom) out.push(buf.subarray(plainFrom, i));
         out.push(hit.to);
@@ -384,10 +409,13 @@ export function createScrubStream(
         plainFrom = i;
         continue;
       }
+
       if (!final && straddles(buf, i)) break;
       i += 1;
     }
+
     if (i > plainFrom) out.push(buf.subarray(plainFrom, i));
+
     return { out, keep: final ? new Uint8Array(0) : buf.subarray(i) };
   };
 
@@ -397,6 +425,7 @@ export function createScrubStream(
     controller: TransformStreamDefaultController<Uint8Array>,
   ): void => {
     let buf: Uint8Array;
+
     if (carry.length === 0) {
       buf = chunk;
     } else {
@@ -404,16 +433,19 @@ export function createScrubStream(
       buf.set(carry, 0);
       buf.set(chunk, carry.length);
     }
+
     const { out, keep } = scan(buf, final);
     // Copied, not referenced: `keep` is a view over `buf`, and `buf` is the
     // caller's chunk when there was no carry.
     carry = keep.length > 0 ? new Uint8Array(keep) : new Uint8Array(0);
+
     for (const piece of out) if (piece.length > 0) controller.enqueue(new Uint8Array(piece));
   };
 
   return new TransformStream({
     transform(chunk, controller) {
       drain(chunk, false, controller);
+
       // A pathological stream of single bytes that all look like a prefix
       // cannot grow the retained window past one needle.
       if (carry.length > longest) throw new Error('scrub stream retained more than one needle');

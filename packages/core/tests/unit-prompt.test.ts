@@ -49,6 +49,7 @@ function agentSelfTypes(): string {
   const host: AgentSelfHost = new Proxy(Object.create(null), {
     get: () => async () => null,
   });
+
   return createAgentSelfProvider(host).types ?? '';
 }
 
@@ -66,12 +67,14 @@ describe('buildSystemPromptSync', () => {
     // No sentence here tells the model WHEN to delegate — pressure in an index
     // is doctrine in a second place, and one of the two will drift.
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       availableTools: ['agents'],
       agentsActions: ['swarm', 'hire', 'msg'],
       temporaryAsk: true,
       registeredExecutors: [],
     });
+
     expect(prompt).toMatch(/## Delegation/);
     expect(prompt).toMatch(/Helper agents are one tool: `agents`/);
     expect(prompt).toMatch(/Its schema says what each action does/);
@@ -111,10 +114,12 @@ describe('buildSystemPromptSync', () => {
 
   test('each index clause renders only for the agents actions the backend wires', () => {
     const { rt } = createTestRuntime();
+
     const both = buildSystemPromptSync(rt, {
       availableTools: ['agents'],
       registeredExecutors: [],
     });
+
     expect(both).toContain('## Delegation');
     expect(both).toMatch(/`swarm` runs parallel nodes over this workspace/);
     expect(both).toMatch(/`hire` creates a persistent subordinate in this workspace/);
@@ -125,6 +130,7 @@ describe('buildSystemPromptSync', () => {
       agentsActions: ['swarm'],
       registeredExecutors: [],
     });
+
     expect(searchOnly).toContain('## Delegation');
     expect(searchOnly).toMatch(/`swarm` runs parallel nodes over this workspace/);
     expect(searchOnly).not.toContain('`hire` creates a persistent subordinate');
@@ -134,11 +140,13 @@ describe('buildSystemPromptSync', () => {
     // `agents.*` is built from the same deps that produce agentsActions, so
     // the line renders exactly when an actor can both delegate and run code.
     const { rt } = createTestRuntime();
+
     const both = buildSystemPromptSync(rt, {
       availableTools: ['agents', 'execute_tools'],
       agentsActions: ['swarm'],
       registeredExecutors: [],
     });
+
     expect(both).toContain('callable inside execute_tools as `agents.<action>`');
 
     // No sandbox → no namespace to advertise.
@@ -147,6 +155,7 @@ describe('buildSystemPromptSync', () => {
       agentsActions: ['swarm'],
       registeredExecutors: [],
     });
+
     expect(noSandbox).not.toContain('agents.<action>');
 
     // No delegation deps → the section is not rendered at all.
@@ -154,6 +163,7 @@ describe('buildSystemPromptSync', () => {
       availableTools: ['execute_tools'],
       registeredExecutors: [],
     });
+
     expect(noDelegation).not.toContain('agents.<action>');
   });
 
@@ -207,6 +217,7 @@ describe('buildSystemPromptSync', () => {
     const sentences = (text: string): string[] =>
       text.replace(/\{\{[^}]*\}\}/g, ' ')
         .split(/(?<=[.!?])[\s\n]+/).map((s) => s.trim()).filter((s) => s.length > 25);
+
     const section = new Set(sentences(DELEGATION_SECTION.source));
     const shared = sentences(BUILTIN_TOOL_SPECS.agents.whenToUse).filter((s) => section.has(s));
     expect(shared).toEqual([]);
@@ -336,6 +347,7 @@ describe('buildSystemPromptSync', () => {
     // `UNCONSTRUCTIBLE` sentence about a preset the table does construct — is
     // exactly the drift one shared constant prevents.
     const doctrine = SWARM_PRESET_DOCTRINE.join(' ');
+
     for (const preset of SWARM_PRESETS) expect(doctrine).toContain(preset);
     expect(doctrine).not.toContain('UNCONSTRUCTIBLE');
 
@@ -344,6 +356,7 @@ describe('buildSystemPromptSync', () => {
     for (const preset of NAMED_SWARM_PRESETS) {
       expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
     }
+
     // And the claim is true of the engine, not just of the prose.
     for (const preset of NAMED_SWARM_PRESETS) {
       // An archive preset needs its coverage key to be legal, and the key is added as a
@@ -351,9 +364,11 @@ describe('buildSystemPromptSync', () => {
       // which is the same rule the resolver reads to tell "the caller stated none" from
       // "the caller stated undefined".
       const archive = SWARM_PRESET_POINTS[preset].config.advance.kind === 'archive';
+
       const call: SwarmInput = archive
         ? { preset, task: 'x', key: 'k' }
         : { preset, task: 'x' };
+
       expect(resolveSwarm(call)).not.toHaveProperty('reason');
     }
   });
@@ -381,10 +396,12 @@ describe('buildSystemPromptSync', () => {
     // drift produces silently, because nothing typechecks a template string.
     const liveActions: readonly string[] = AGENTS_TOOL_ACTIONS;
     const swarmFields: readonly string[] = AGENTS_ACTION_FIELDS.swarm;
+
     for (const skill of BUILTIN_SKILLS) {
       for (const [, action] of skill.body.matchAll(/action:\s*["'](\w+)["']/g)) {
         expect(liveActions).toContain(action);
       }
+
       for (const [, field] of skill.body.matchAll(/agents\(\{([^}]*)\}/g)) {
         for (const [, key] of field.matchAll(/(\w+):/g)) {
           if (key === 'action') continue;
@@ -420,6 +437,7 @@ describe('buildSystemPromptSync', () => {
     // tool-capable profile, a tool-less profile, nor an uncatalogued provider
     // can make it a real delegation feature.
     const { rt } = createTestRuntime();
+
     const prompts = [
       buildSystemPromptSync(rt, {
         availableTools: ['agents'],
@@ -466,6 +484,7 @@ describe('buildSystemPromptSync', () => {
   test('tool when-to-use doctrine is schema-only: descriptions carry it, prompt prose does not', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
+
     for (const name of BUILTIN_TOOLS) {
       const spec = BUILTIN_TOOL_SPECS[name];
       // Schema description = summary + Use when / Avoid when / Returns.
@@ -479,8 +498,10 @@ describe('buildSystemPromptSync', () => {
       // schema every family reads, never through a second rendering in prose.
       expect(prompt).not.toContain(spec.whenToUse);
       expect(prompt).not.toContain(spec.whenNotToUse);
+
       if ('doctrine' in spec && spec.doctrine) expect(prompt).not.toContain(spec.doctrine);
     }
+
     // The `Use when:` / `Avoid when:` schema prefixes never leak into prose.
     expect(prompt).not.toContain('Use when:');
     expect(prompt).not.toContain('Avoid when:');
@@ -496,16 +517,20 @@ describe('buildSystemPromptSync', () => {
     // everyone, which is what the schema-only doctrine rule already does.
     const { rt } = createTestRuntime();
     const registeredExecutors: string[] = [];
+
     const opts = {
       availableTools: ['run', 'memory'] as const,
       externalTools: [{ name: 'tool_docs_search', source: 'mcp' as const, description: 'Search docs.' }],
       registeredExecutors,
     };
+
     const section = (id: string) => {
       const prompt = buildSystemPromptSync(rt, { ...opts, model: { id } });
       const start = prompt.indexOf('## Tools available this turn');
+
       return prompt.slice(start, prompt.indexOf('\n## ', start + 1));
     };
+
     const kimi = section('@cf/moonshotai/kimi-k2.6');
     expect(kimi).toEqual(section('anthropic/claude-sonnet-4.5'));
     expect(kimi).toEqual(section('codex/gpt-5.5'));
@@ -517,9 +542,11 @@ describe('buildSystemPromptSync', () => {
     // neither the example going missing nor a summary appearing is silent.
     expect(kimi).toContain(`- **run**: \`${BUILTIN_TOOL_SPECS.run.example}\``);
     expect(kimi).toContain(`- **memory**: \`${BUILTIN_TOOL_SPECS.memory.example}\``);
+
     for (const name of BUILTIN_TOOLS) {
       expect(kimi).not.toContain(BUILTIN_TOOL_SPECS[name].summary);
     }
+
     expect(kimi).toContain('**tool_docs_search** (MCP) — Search docs.');
     expect(kimi).toContain('Call the tools listed here');
   });
@@ -565,6 +592,7 @@ describe('buildSystemPromptSync', () => {
   test('renders every BUILTIN_TOOL with its description', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
+
     for (const name of BUILTIN_TOOLS) {
       expect(prompt).toContain(`**${name}**`);
     }
@@ -646,16 +674,19 @@ describe('buildSystemPromptSync', () => {
     // auto-activates is invisible to the model — nothing in the prompt names
     // it, and there is no tool call left that lists it either.
     const { rt } = createTestRuntime();
+
     const dormant: SkillHeader = {
       name: 'dormant-skill', description: 'Not active this turn, but the model should still know it exists.',
       allowed_tools: [], keywords: [], auto_activate: false, disable_model_invocation: false,
       user_invocable: true, ext: {}, source: 'vfs',
     };
+
     // The index is what the admission already decided to print, so a fixture
     // states its lines rather than a corpus to re-admit.
     const prompt = buildSystemPromptSync(rt, {
       availableSkills: { lines: [skillIndexLine(dormant)], omitted: 0, tokens: 0 },
     });
+
     expect(prompt).toContain('## Skills');
     // A workspace file says so in the index — provenance, not a verdict on it.
     expect(prompt).toContain('**dormant-skill** (workspace file) — Not active this turn');
@@ -670,12 +701,14 @@ describe('buildSystemPromptSync', () => {
 
   test('renders executor section when registeredExecutors supplied', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       executors: [
         { name: 'workspace', kind: 'workspace', capabilities: [], available: true, configured: true, active: true, status: 'active' },
         { name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
       ],
     });
+
     expect(prompt).toContain('workspace.*');
     expect(prompt).toContain('sandbox.*');
     expect(prompt).toMatch(/Showing a running app/);
@@ -691,6 +724,7 @@ describe('buildSystemPromptSync', () => {
 
   test('teaches the preview workflow for the executor that actually exposes inbound ports', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [
@@ -708,12 +742,14 @@ describe('buildSystemPromptSync', () => {
     // workflow and leaving slates to a note at the end sends a model deciding
     // HOW to build a dashboard down the server route first.
     const { rt } = createTestRuntime();
+
     const workspacePreviews = buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [
         { name: 'workspace', kind: 'workspace', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
       ],
     });
+
     expect(workspacePreviews).toMatch(/is a Worker slate/);
     expect(workspacePreviews.indexOf('Worker slate')).toBeLessThan(workspacePreviews.indexOf('standalone Node/Vite'));
 
@@ -727,6 +763,7 @@ describe('buildSystemPromptSync', () => {
         { name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
       ],
     });
+
     expect(containerPreviewsOnly).toMatch(/Showing a running app/);
     expect(containerPreviewsOnly).not.toMatch(/is a Worker slate/);
   });
@@ -740,10 +777,12 @@ describe('buildSystemPromptSync', () => {
     // in the agent's own plane at /pc (and /sandbox where a container binds),
     // while the shell stays over workspace bytes only.
     const { rt } = createTestRuntime();
+
     const executors: PromptExecutorInfo[] = [
       { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
     ];
+
     for (const backend of ['cli-local', 'cf'] as const) {
       const prompt = buildSystemPromptSync(rt, { backend, executors });
       expect(prompt).toMatch(/separate machines/i);
@@ -755,6 +794,7 @@ describe('buildSystemPromptSync', () => {
 
   test('renders only selectable executors when lifecycle facts are supplied', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
@@ -776,18 +816,21 @@ describe('buildSystemPromptSync', () => {
     // (cli-backend/runtime.ts registers createInlineExecutor), which carries no
     // isolate limit and reports a measured cgroup instead when it has one.
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       ],
     });
+
     expect(prompt).toContain('workspace.*');
     expect(prompt).not.toContain('Worker isolate');
   });
 
   test('a registered-but-offline device stays visible, by name, with the way back', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [
@@ -819,6 +862,7 @@ describe('buildSystemPromptSync', () => {
     // changes: a machine's name here would be whichever the hub happened to
     // pick when two are connected.
     const { rt } = createTestRuntime();
+
     for (const granted of [false, true]) {
       const prompt = buildSystemPromptSync(rt, {
         backend: 'cf',
@@ -849,6 +893,7 @@ describe('buildSystemPromptSync', () => {
     // The whole reason names left the prefix: two fleets, one prefix. A
     // connect or a rename must not re-prefill the conversation.
     const { rt } = createTestRuntime();
+
     const render = (identity: { label?: string; granted?: boolean }) => buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [{
@@ -856,12 +901,14 @@ describe('buildSystemPromptSync', () => {
         ...identity,
       }],
     });
+
     expect(render({ label: 'ashish@studio', granted: false })).toBe(render({ label: 'mrwhite@rig', granted: true }));
     expect(render({})).toBe(render({ label: 'ashish@studio', granted: true }));
   });
 
   test('the cli-local laptop is the CLI host machine — direct, no consent prompt', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
       executors: [
@@ -884,6 +931,7 @@ describe('buildSystemPromptSync', () => {
 
   test('names the workspace filesystem and each environment by its own namespace', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [
@@ -892,6 +940,7 @@ describe('buildSystemPromptSync', () => {
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
       ],
     });
+
     // The workspace filesystem is named by where it actually is, and the shell
     // is said to run over exactly those bytes — a mount alias like `/local`
     // names a path those bytes do not live at.
@@ -913,6 +962,7 @@ describe('buildSystemPromptSync', () => {
 
   test('the doctrine follows the executor list, not the backend', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
       executors: [
@@ -920,6 +970,7 @@ describe('buildSystemPromptSync', () => {
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
       ],
     });
+
     expect(prompt).toContain('`laptop.*`');
     expect(prompt).not.toContain('`sandbox.*`');
     expect(prompt).not.toContain('`nimbus.*`');
@@ -927,12 +978,14 @@ describe('buildSystemPromptSync', () => {
 
   test('a workspace with no execution devices renders no mount doctrine', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       ],
     });
+
     expect(prompt).not.toContain('mount table');
   });
 
@@ -973,10 +1026,12 @@ describe('buildSystemPromptSync', () => {
     // task's own checks, so it is not told to. The two artifact-shape lines are
     // ungated — they apply to any answer.
     const { rt } = createTestRuntime();
+
     const noExec = buildSystemPromptSync(rt, {
       availableTools: ['memory'],
       registeredExecutors: [],
     });
+
     expect(noExec).toContain('## Verification');
     expect(noExec).toContain('Check every deliverable the request names');
     expect(noExec).not.toContain('Run the real check');
@@ -985,6 +1040,7 @@ describe('buildSystemPromptSync', () => {
       availableTools: ['memory', 'run'],
       registeredExecutors: [],
     });
+
     expect(withRun).toMatch(/Run the real check and report what passed or failed/);
     expect(withRun).toMatch(/A result is something you executed/);
   });
@@ -998,10 +1054,12 @@ describe('buildSystemPromptSync', () => {
 
   test('renders only the available built-in tools for a gated turn', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       availableTools: ['memory', 'web'],
       registeredExecutors: [],
     });
+
     expect(prompt).toContain('**memory**');
     expect(prompt).toContain('**web**');
     expect(prompt).not.toContain('**execute_tools**');
@@ -1012,6 +1070,7 @@ describe('buildSystemPromptSync', () => {
 
   test('renders external tools separately from built-in tools', () => {
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       availableTools: ['memory'],
       externalTools: [
@@ -1032,6 +1091,7 @@ describe('buildSystemPromptSync', () => {
     const externalTools = JSON.parse(
       '[{"name":"good_tool","source":"mcp"},{"bogus":true},{"name":"  "},"plain_tool"]',
     );
+
     const surface = compilePromptSurface({ externalTools });
     expect(surface.externalTools.map((tool) => tool.name)).toEqual(['good_tool', 'plain_tool']);
   });
@@ -1043,6 +1103,7 @@ describe('buildSystemPromptSync', () => {
         { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' },
       ],
     });
+
     expect(surface.executors.map((exec) => exec.name)).toEqual(['laptop', 'workspace']);
     expect(surface.selectableExecutors.map((exec) => exec.name)).toEqual(['workspace']);
   });
@@ -1098,10 +1159,12 @@ describe('buildSystemPromptSync', () => {
     expect(workModeForTurnMetadata(wake)).toBe('build');
 
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
       workMode: workModeForTurnMetadata(wake),
     });
+
     expect(prompt).not.toContain('the referenced job result first');
     expect(String(turnLocalContextMessage({ provenance: turnProvenanceForMetadata(wake) })!.content))
       .toContain('the referenced job result first');
@@ -1146,6 +1209,7 @@ describe('buildSystemPromptSync', () => {
 
   test('a resolved role renders exactly once in its own prompt section', () => {
     const { rt } = createTestRuntime();
+
     for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
       const prompt = buildSystemPromptSync(rt, {
         roleSection: {
@@ -1154,6 +1218,7 @@ describe('buildSystemPromptSync', () => {
           instructions: role.instructions,
         },
       });
+
       expect(prompt).toContain(`## Role: ${deriveRoleLabel(id)} (${id})`);
       expect(prompt.split(role.instructions)).toHaveLength(2);
     }
@@ -1161,10 +1226,12 @@ describe('buildSystemPromptSync', () => {
 
   test('a role never widens Plan mode', () => {
     const { rt } = createTestRuntime();
+
     const planOnly = buildSystemPromptSync(rt, {
       workMode: 'plan',
       planSubmissionAvailable: true,
     });
+
     for (const [id, role] of Object.entries(BUILTIN_ROLE_DEFINITIONS)) {
       const prompt = buildSystemPromptSync(rt, {
         workMode: 'plan',
@@ -1175,11 +1242,14 @@ describe('buildSystemPromptSync', () => {
           instructions: role.instructions,
         },
       });
+
       expect(prompt).toContain('Do not change project files, system resources, releases, or deployments');
       expect(prompt).toContain('Until the plan is approved, do not begin implementation');
       expect(prompt).toContain('Do not expose ports or produce preview or output links');
+
       for (const line of planOnly.split('\n')) expect(prompt).toContain(line);
     }
+
     expect(compilePromptSurface({
       workMode: 'plan',
       roleSection: {
@@ -1387,20 +1457,26 @@ describe('buildSystemPromptSync', () => {
       'Verification': 620,
       'Output format': 180,
     } satisfies Record<string, number>;
+
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
       registeredExecutors: ['workspace', 'nimbus', 'sandbox', 'laptop'],
       currentDate: '2026-06-11',
       model: { id: 'anthropic/claude-sonnet-4.5' },
     });
+
     const sections = new Map(splitPromptSections(prompt).map((s) => [s.title, s.chars]));
     const problems: string[] = [];
+
     for (const [title, budget] of Object.entries(BUDGETS)) {
       const size = sections.get(title);
+
       if (size === undefined) problems.push(`section "${title}" missing from the prompt`);
       else if (size > budget) problems.push(`section "${title}" is ${size} chars — over its ${budget}-char budget`);
     }
+
     expect(problems).toEqual([]);
   });
 
@@ -1424,6 +1500,7 @@ describe('buildSystemPromptSync', () => {
     // every family, and the rung mechanics reach them through the
     // family-neutral schema.
     const { rt } = createTestRuntime();
+
     for (const id of ['@cf/moonshotai/kimi-k2.6', 'anthropic/claude-sonnet-4.5']) {
       const prompt = buildSystemPromptSync(rt, { model: { id } });
       expect(prompt).toMatch(/## Delegation/);

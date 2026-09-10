@@ -31,6 +31,7 @@ test('a fresh Slate list retains reload versions only for listed ids', () => {
 });
 
 const TEST_ACTOR = 'actor';
+
 const NEXT_ACTOR = 'next-actor';
 
 function createMctsProgressState(): MctsProgressState<ForkNode> {
@@ -53,15 +54,18 @@ function applyMctsProgress(
 function activeAdmission(): LiveRefreshAdmission {
   const admission = createLiveRefreshAdmission();
   admission.activateActor(TEST_ACTOR);
+
   return admission;
 }
 
 function reporter(initial: LiveRefreshErrors = {}) {
   let errors = initial;
+
   return {
     get errors() { return errors; },
     report(source: LiveRefreshSource, message: string | null) {
       const next = { ...errors };
+
       if (message === null) delete next[source];
       else next[source] = message;
       errors = next;
@@ -71,10 +75,12 @@ function reporter(initial: LiveRefreshErrors = {}) {
 
 function consentReporter(initial: ReadonlyMap<string, string> = new Map()) {
   let errors = new Map(initial);
+
   return {
     get errors() { return errors; },
     report(consentId: string, message: string | null) {
       const next = new Map(errors);
+
       if (message === null) next.delete(consentId);
       else next.set(consentId, message);
       errors = next;
@@ -115,14 +121,17 @@ describe('MCTS progress admission', () => {
       createMctsProgressState(),
       mctsProgress('root', 7, 80, 'the prior isolate observation'),
     );
+
     const freshIsolate = applyMctsProgress(
       oldIsolate,
       mctsProgress('root', 8, 1, 'the new isolate observation'),
     );
+
     const delayedPriorIsolate = applyMctsProgress(
       freshIsolate,
       mctsProgress('root', 7, 81, 'a delayed prior-isolate observation'),
     );
+
     const replay = applyMctsProgress(
       freshIsolate,
       mctsProgress('root', 8, 1, 'the replayed new-isolate observation'),
@@ -189,12 +198,15 @@ describe('MCTS progress admission', () => {
       createMctsProgressState(),
       mctsProgress('root', 7, 80, 'the previous actor'),
     );
+
     const activated = activateMctsProgressActor(previousActor, NEXT_ACTOR);
+
     const nextActor = applyMctsProgress(
       activated,
       mctsProgress('root', 1, 1, 'the next actor'),
       NEXT_ACTOR,
     );
+
     const delayedPrevious = applyMctsProgress(
       nextActor,
       mctsProgress('root', 7, 81, 'the delayed previous actor'),
@@ -215,6 +227,7 @@ describe('workspace live refresh failures', () => {
     const newer = Promise.withResolvers<string>();
     let visible = 'stale';
     const errors = reporter();
+
     const olderRefresh = refreshLiveResource(
       'jobs',
       () => older.promise,
@@ -222,6 +235,7 @@ describe('workspace live refresh failures', () => {
       errors.report,
       admission.admit(TEST_ACTOR, 'jobs'),
     );
+
     const newerRefresh = refreshLiveResource(
       'jobs',
       () => newer.promise,
@@ -244,6 +258,7 @@ describe('workspace live refresh failures', () => {
     const newer = Promise.withResolvers<string>();
     let visible = 'stale';
     const errors = reporter({ jobs: 'prior failure' });
+
     const olderRefresh = refreshLiveResource(
       'jobs',
       () => older.promise,
@@ -251,6 +266,7 @@ describe('workspace live refresh failures', () => {
       errors.report,
       admission.admit(TEST_ACTOR, 'jobs'),
     );
+
     const newerRefresh = refreshLiveResource(
       'jobs',
       () => newer.promise,
@@ -275,6 +291,7 @@ describe('workspace live refresh failures', () => {
     const nextActor = Promise.withResolvers<string>();
     let visible = 'stale';
     const errors = reporter();
+
     const priorRefresh = refreshLiveResource(
       'jobs',
       () => priorActor.promise,
@@ -285,6 +302,7 @@ describe('workspace live refresh failures', () => {
 
     admission.activateActor('next-actor');
     visible = 'cleared';
+
     const nextRefresh = refreshLiveResource(
       'jobs',
       () => nextActor.promise,
@@ -292,6 +310,7 @@ describe('workspace live refresh failures', () => {
       errors.report,
       admission.admit('next-actor', 'jobs'),
     );
+
     nextActor.resolve('next actor');
     await nextRefresh;
     priorActor.resolve('prior actor');
@@ -307,10 +326,12 @@ describe('workspace live refresh failures', () => {
     let visible = 'actor-a';
     let requested = false;
     const errors = reporter();
+
     const refreshFromActorA = () => refreshLiveResource(
       'jobs',
       () => {
         requested = true;
+
         return Promise.resolve('late actor-a result');
       },
       (value) => { visible = value; },
@@ -366,6 +387,7 @@ describe('workspace live refresh failures', () => {
     const admission = activeAdmission();
     const errors = reporter();
     const keep = () => {};
+
     await Promise.all([
       refreshLiveResource(
         'tools',
@@ -500,6 +522,7 @@ describe('loading the workspace snapshot', () => {
       tools: CONNECTION_LOST,
       jobs: 'the jobs table is still unreachable',
     });
+
     const admission = activeAdmission();
 
     const outcome = await loadWorkspaceSnapshot(
@@ -527,6 +550,7 @@ describe('loading the workspace snapshot', () => {
       (key) => admission.admit(TEST_ACTOR, key),
       SEEDED,
     );
+
     await refreshLiveResource(
       'memoryContent',
       () => Promise.reject(new Error('MEMORY.md is unreadable')),
@@ -553,13 +577,16 @@ describe('loading the workspace snapshot', () => {
         isSourceCurrent: (source: LiveRefreshSource) => boolean,
       ) => {
         const value = await snapshotRead.promise;
+
         if (!isCurrent()) return;
+
         if (isSourceCurrent('memoryContent')) memoryContent = value;
       },
       errors.report,
       (key) => admission.admit(TEST_ACTOR, key),
       SEEDED,
     );
+
     await refreshLiveResource(
       'memoryContent',
       () => Promise.resolve('current memory'),
@@ -584,6 +611,7 @@ describe('loading the workspace snapshot', () => {
     const olderLoad = loadWorkspaceSnapshot(
       () => older.promise, errors.report, (key) => admission.admit(TEST_ACTOR, key), SEEDED,
     );
+
     const newerLoad = loadWorkspaceSnapshot(
       () => newer.promise, errors.report, (key) => admission.admit(TEST_ACTOR, key), SEEDED,
     );
@@ -605,6 +633,7 @@ describe('loading the workspace snapshot', () => {
     const loading = loadWorkspaceSnapshot(
       () => read.promise, errors.report, (key) => admission.admit('left-behind', key), SEEDED,
     );
+
     admission.activateActor('opened-next');
     read.reject(new Error(CONNECTION_LOST));
 
@@ -667,6 +696,7 @@ describe('device consent resolution', () => {
     const admission = activeAdmission();
     const errors = consentReporter();
     const remove = (id: string) => pending.splice(pending.indexOf(id), 1);
+
     const firstResolution = resolvePendingConsent(
       'consent-1',
       'once',
@@ -675,6 +705,7 @@ describe('device consent resolution', () => {
       errors.report,
       admission.admit(TEST_ACTOR, 'consentResolution:consent-1'),
     );
+
     const secondResolution = resolvePendingConsent(
       'consent-2',
       'deny',

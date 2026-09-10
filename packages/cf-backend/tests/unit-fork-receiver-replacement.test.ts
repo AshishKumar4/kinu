@@ -21,9 +21,11 @@ import {
 import { orchestratorHarness, reactivateOrchestratorHarness } from './helpers/actor-harness';
 
 const OWNER = 'harness-owner';
+
 const FORK = 'forked-replacement';
 
 const CONTENT = new TextEncoder().encode('replacement transfer bytes!');
+
 const DIGEST = new Bun.CryptoHasher('sha256').update(CONTENT).digest('hex');
 
 function begin(transferId: string): ForkFrame {
@@ -40,7 +42,9 @@ function range(transferId: string, seq: number, offset: number, end: number, las
     version: FORK_TRANSFER_VERSION, transferId, seq, kind: 'file',
     path: 'memory/replaced.md', offset, bytes: CONTENT.subarray(offset, end), last,
   };
+
   if (last) body = { ...body, fileDigest: DIGEST };
+
   return sealForkFrame(body);
 }
 
@@ -70,20 +74,25 @@ describe('a replacement transfer stages under its OWN suffix', () => {
     const second = await reactivateOrchestratorHarness(first.db, undefined, {
       world: { workspace: FORK },
     });
+
     const rangeEnd = range('tx-two', 2, 10, CONTENT.byteLength, true);
     expect((await second.agent.rawCopyFromFork(FORK, rangeEnd, OWNER)).ok).toBe(true);
 
     const stream = [beginTwo, rangeTwo, rangeEnd]
       .reduce((held, frame) => foldForkStream(held, frame.digest), FORK_STREAM_SEED);
+
     const commit = sealForkFrame({
       version: FORK_TRANSFER_VERSION, transferId: 'tx-two', seq: 3, kind: 'commit', stream,
     });
+
     const outcome = await second.agent.rawCopyFromFork(FORK, commit, OWNER);
+
     if (!outcome.ok) throw new Error(`commit refused: ${outcome.reason}`);
     expect(outcome.status).toBe('published');
 
     const landed = await second.agent.observeRuntime().storage.vfs
       .readFile('memory/replaced.md', { encoding: 'utf8' });
+
     expect(landed).toBe('replacement transfer bytes!');
   });
 });

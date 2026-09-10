@@ -63,6 +63,7 @@ interface GateVerdict {
   readonly refusal: string | null;
   readonly reason: FileEditOutcomeReason | null;
 }
+
 const QuerySchema = v.pipe(v.string(), v.minLength(1));
 
 /**
@@ -102,27 +103,34 @@ async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, p
   error: string;
 }> {
   const err = input.error;
+
   if (err instanceof FileRefusalError) return { reason: err.verdict, error: err.message };
+
   if (err instanceof KinuError) {
     if (err.code === 'denied' || err.code === 'missing' || err.code === 'io') {
       return { reason: err.code, error: err.message };
     }
+
     // `bad_input` is rethrown rather than classified: like a malformed tool
     // argument, content this file cannot be never became an edit attempt, and
     // counting it among them would inflate the ledger's attempt count.
     throw err;
   }
+
   if (!isVfsError(err)) {
     return { reason: 'io', error: `${action} ${path} failed: ${renderThrownChain({ cause: err })}` };
   }
+
   const reason: FileEditOutcomeReason = err.code === 'ENOENT' ? 'missing'
     : err.code === 'EACCES' || err.code === 'EPERM' ? 'denied' : 'io';
+
   // ENOENT and EISDIR are the model's own addressing mistakes, and the hint
   // names this agent's real roots. Everything else (a reserved mount, an
   // offline device, a read-only plane) already carries its own reason.
   const hint = err.code === 'ENOENT' || err.code === 'EISDIR'
     ? ` — ${await vfsAddressingHint(vfs, 'the `file` tool\'s path')}`
     : '';
+
   return { reason, error: `${err.message}${hint}` };
 }
 
@@ -140,22 +148,29 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   /** A Plan-safe inspection: the VFS answer, bounded like a read. */
   const inspect = async (action: 'list' | 'stat' | 'search', path: string, read: () => Promise<JsonValue | null>): Promise<JsonValue> => {
     let output: JsonValue | null;
+
     try { output = await read(); }
     catch (cause) {
       const refused = await vfsFailure(vfs, { error: cause }, action, path);
+
       return failure(refused.reason, refused.error);
     }
+
     if (output === null) return failure('missing', 'No path at ' + path);
     const bounded = await clampSerializedToolResult({ output }, { vfs, budget, producer: 'file_read' });
+
     return bounded ?? failure('io', 'File inspection produced no serializable result');
   };
+
   const searchLines = (content: string, query: string): { line: number; text: string }[] =>
     content.split('\n').flatMap((text, index) => text.includes(query) ? [{ line: index + 1, text }] : []);
+
   /** Text of a file. A VFS is free to answer `{encoding:'utf8'}` with bytes;
    *  decoding beats an unchecked cast that would throw out of `execute`. */
   const readText = async (path: string): Promise<string> => {
     const raw = await vfs.readFile(path, { encoding: 'utf8' });
     const text = v.safeParse(v.string(), raw);
+
     return text.success
       ? text.output
       : new TextDecoder().decode(v.parse(v.instance(Uint8Array), raw));
@@ -167,10 +182,12 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
    *  file, an `edit` changed one span of what it already knew. */
   const persist = async (path: string, content: string, observe: () => void): Promise<void> => {
     const dir = vfsDirname(path);
+
     if (dir) await ensureDir(vfs, dir);
     await vfs.writeFile(path, content);
     observe();
     const indexed = memoryIndexPath(path);
+
     if (deps.memory && indexed) await deps.memory.index(indexed);
   };
 
@@ -185,6 +202,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   const gate = (path: string, current: string, action: 'edit' | 'overwrite'): GateVerdict => {
     const need: FileSeenNeed = action === 'edit' ? 'part' : 'whole';
     const verdict = ledger.seenState(path, current, need);
+
     switch (verdict.state) {
       case 'seen':
         return { refusal: null, reason: null };
@@ -215,34 +233,46 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     // threw out of the tool instead of answering, and an unrecognised action
     // was answered without naming the three that work.
     const parsed = v.safeParse(ActionSchema, args.action);
+
     if (!parsed.success) {
       return failure('bad_input', unknownActionError('file', 'action', args.action, FILE_TOOL_ACTIONS));
     }
+
     const parsedPath = v.safeParse(PathSchema, args.path);
+
     if (!parsedPath.success) return failure('bad_input', 'file requires `path`.');
     const path = parsedPath.output;
+
     if (parsed.output === 'write' || parsed.output === 'edit') requireBuild('file.' + parsed.output);
+
     switch (parsed.output) {
       case 'list':
         return inspect('list', path, async () => ({ path, entries: await vfs.readdir(path) }));
       case 'stat':
         return inspect('stat', path, async () => {
           const stat = await vfs.stat(path);
+
           return stat === null ? null : { path, size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDir };
         });
       case 'search': {
         const query = v.safeParse(QuerySchema, args.query);
+
         if (!query.success) return failure('bad_input', 'file search requires a non-empty literal query');
+
         return inspect('search', path, async () => ({ path, matches: searchLines(await readText(path), query.output) }));
       }
+
       case 'read': {
         let content: string;
+
         try {
           content = await readText(path);
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'read', path);
+
           return failure(vfsFail.reason, vfsFail.error);
         }
+
         const configured = DEFAULT_TOOL_RESULT_MAX_CHARS;
         const cap = budget.capFor(configured);
         // The BOM is stripped from what the model is SHOWN, not from the file:
@@ -252,76 +282,97 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         const slice = readFileSlice(shown, { path, offset: args.offset, limit: args.limit, maxChars: cap });
         ledger.observeRange(path, content, slice.first, slice.last, slice.total);
         budget.admit(slice.output.length);
+
         if (slice.omitted > 0) {
           // The full text is not spilled anywhere: it is already addressable
           // at its own path, and the marker says which offset continues it.
           budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true, tightened: cap < configured });
         }
+
         return slice.output;
       }
 
       case 'write': {
         if (args.content === undefined) return failure('bad_input', 'file action=write requires `content`.');
         let existing: string | null = null;
+
         try {
           existing = await readText(path);
         } catch (err) {
           if (!isVfsError(err) || err.code !== 'ENOENT') {
             const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
+
             return failure(vfsFail.reason, vfsFail.error);
           }
         }
+
         if (existing !== null) {
           const { refusal, reason } = gate(path, existing, 'overwrite');
+
           if (refusal && reason) return failure(reason, refusal);
         }
+
         const content = args.content;
+
         try {
           await persist(path, content, () => ledger.observeWhole(path, content));
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'write', path);
+
           return failure(vfsFail.reason, vfsFail.error);
         }
+
         return { ok: true, path, bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
       }
 
       case 'edit': {
         const raw = Array.isArray(args.edits) ? args.edits : [];
+
         if (raw.length === 0) {
           return failure('bad_input', 'file action=edit requires `edits`: [{ old_text, new_text }].');
         }
+
         // A malformed edit must not be read as the destructive option: a
         // missing new_text would otherwise default to deleting the match.
         const EditInputSchema = v.object({ old_text: v.string(), new_text: v.string() });
         const malformed = raw.findIndex((edit) => !v.safeParse(EditInputSchema, edit).success);
+
         if (malformed !== -1) {
           return failure('bad_input',
             `edits[${malformed}] needs both old_text and new_text. ` +
             'old_text is the text to find; new_text replaces it, and "" deletes it.');
         }
+
         const edits: FileEdit[] = v.parse(v.array(EditInputSchema), raw)
           .map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
 
         let current: string;
+
         try {
           current = await readText(path);
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, vfsFail.reason);
+
           return failure(vfsFail.reason, vfsFail.error);
         }
 
         const { refusal, reason } = gate(path, current, 'edit');
+
         if (refusal && reason) {
           ledger.recordEdit(path, reason);
+
           return failure(reason, refusal);
         }
 
         const outcome = applyFileEdits(current, edits, path);
+
         if (!outcome.ok) {
           ledger.recordEdit(path, outcome.reason);
+
           return failure(outcome.reason, outcome.message);
         }
+
         try {
           // Coverage carries across the edit: only the span the model named
           // itself changed, so what it knew about the file it still knows.
@@ -329,9 +380,12 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         } catch (err) {
           const vfsFail = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, vfsFail.reason);
+
           return failure(vfsFail.reason, vfsFail.error);
         }
+
         ledger.recordEdit(path, null);
+
         return {
           ok: true,
           path,
@@ -345,6 +399,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
 /** The native `file` tool — a thin AI-SDK wrapper around createFileDispatcher. */
 export function createFileTool(deps: FileToolDeps): ToolSet[string] {
   const run = createFileDispatcher(deps);
+
   return permitInPlan(tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.file,
     inputSchema: jsonSchema<FileToolInput>({

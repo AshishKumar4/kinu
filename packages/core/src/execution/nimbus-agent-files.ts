@@ -186,6 +186,7 @@ const RefusedSchema = v.object({
   ),
   message: v.optional(v.string()),
 });
+
 const AnsweredSchema = v.object({
   ok: v.literal(true),
   size: v.optional(v.number()),
@@ -195,7 +196,9 @@ const AnsweredSchema = v.object({
   b64: v.optional(v.string()),
   n: v.optional(v.number()),
 });
+
 const AnswerSchema = v.union([AnsweredSchema, RefusedSchema]);
+
 type Answer = v.InferOutput<typeof AnsweredSchema>;
 
 /** A typed refusal, kept as a value so `stat` can read the code before deciding
@@ -211,26 +214,34 @@ export function agentSessionFiles(
   box: NimbusSandboxHandle, cred: VfsCred,
 ): VFS & VfsNativeMutations & Pick<VfsNativeReads, 'readRange'> {
   const command = `node -e ${shellQuote(RUNNER)}`;
+
   const ask = async (request: AgentFsRequest): Promise<Answer> => {
     const result = await box.exec(command, {
       cred,
       env: { [REQUEST_ENV]: JSON.stringify(request) },
     });
+
     if (result.exitCode !== 0) {
       throw new AgentFsRefusal('EIO', result.stderr.trim() || `the session runner exited ${result.exitCode}`);
     }
+
     const parsed = v.safeParse(v.pipe(v.string(), v.parseJson(), AnswerSchema), result.stdout);
+
     if (!parsed.success) {
       throw new AgentFsRefusal(
         'EIO', `the session runner answered ${JSON.stringify(result.stdout.slice(0, 200))}`,
       );
     }
+
     const answer = parsed.output;
+
     // The refusal's code is already narrowed by the schema, which falls back to
     // `EIO` for anything this plane does not speak.
     if (!answer.ok) throw new AgentFsRefusal(answer.code, answer.message ?? 'refused');
+
     return answer;
   };
+
   /**
    * The refusal as the file plane raises it, with the operation and path the
    * caller used rather than the substrate's own storage key.
@@ -249,8 +260,10 @@ export function agentSessionFiles(
         failure.path,
       );
     }
+
     throw failure.cause;
   };
+
   const run = async (
     request: AgentFsRequest,
     doing: string,
@@ -262,6 +275,7 @@ export function agentSessionFiles(
       return raise({ cause, doing, path });
     }
   };
+
   /**
    * Stage the bytes beside the target, then publish them with the step the
    * caller names.
@@ -280,6 +294,7 @@ export function agentSessionFiles(
     commit: (temp: string) => AgentFsRequest,
   ): Promise<Answer> => {
     const temp = `${workspacePath(path)}.kinu-${Math.random().toString(36).slice(2, 10)}.part`;
+
     try {
       for (let sent = 0; sent === 0 || sent < bytes.byteLength; sent += AGENT_FS_CHUNK_BYTES) {
         await run({
@@ -288,6 +303,7 @@ export function agentSessionFiles(
           b64: bytesToBase64(bytes.subarray(sent, sent + AGENT_FS_CHUNK_BYTES)),
         }, doing, path);
       }
+
       return await run(commit(temp), doing, path);
     } catch (cause) {
       // THE CALLER'S FAILURE IS THE ONE THAT MATTERS, so the cleanup cannot
@@ -305,9 +321,11 @@ export function agentSessionFiles(
           }),
         );
       }
+
       throw cause;
     }
   };
+
   const self: VFS & VfsNativeMutations & Pick<VfsNativeReads, 'readRange'> = {
     async readFile(path, opts) {
       const target = workspacePath(path);
@@ -317,16 +335,21 @@ export function agentSessionFiles(
       // The cost is one extra call at EOF; a lost tail costs the file.
       const parts: Uint8Array[] = [];
       let read = 0;
+
       for (;;) {
         const chunk = await run(
           { op: 'read', path: target, off: read, len: AGENT_FS_CHUNK_BYTES }, 'open', path,
         );
+
         const bytes = base64ToBytes(chunk.b64 ?? '');
+
         if (bytes.byteLength === 0) break;
         read += bytes.byteLength;
         parts.push(bytes);
       }
+
       const whole = parts.length === 1 && parts[0] ? parts[0] : join(parts, read);
+
       return opts?.encoding === 'utf8' ? new TextDecoder().decode(whole) : whole;
     },
     /**
@@ -341,19 +364,24 @@ export function agentSessionFiles(
      */
     async readRange(path, offset, length) {
       const target = workspacePath(path);
+
       if (length <= 0) return new Uint8Array(0);
       const parts: Uint8Array[] = [];
       let read = 0;
+
       while (read < length) {
         const chunk = await run({
           op: 'read', path: target, off: offset + read,
           len: Math.min(AGENT_FS_CHUNK_BYTES, length - read),
         }, 'open', path);
+
         const bytes = base64ToBytes(chunk.b64 ?? '');
+
         if (bytes.byteLength === 0) break;
         read += bytes.byteLength;
         parts.push(bytes);
       }
+
       return parts.length === 1 && parts[0] ? parts[0] : join(parts, read);
     },
     async writeFile(path, data) {
@@ -376,6 +404,7 @@ export function agentSessionFiles(
     },
     async stat(path) {
       let result: VfsEntryStat | null = null;
+
       try {
         const answer = await ask({ op: 'stat', path: workspacePath(path) });
         result = {
@@ -387,10 +416,12 @@ export function agentSessionFiles(
         if (!(cause instanceof AgentFsRefusal && cause.code === 'ENOENT')) {
           return raise({ cause, doing: 'stat', path });
         }
+
         // ENOENT is the VFS stat contract's one absence value; every other
         // refusal retains its class and cause through `raise`.
         result = null;
       }
+
       return result;
     },
     async unlink(path) {
@@ -413,6 +444,7 @@ export function agentSessionFiles(
       );
     },
   };
+
   return self;
 }
 
@@ -421,9 +453,11 @@ export function agentSessionFiles(
 function join(parts: readonly Uint8Array[], total: number): Uint8Array {
   const whole = new Uint8Array(total);
   let at = 0;
+
   for (const part of parts) {
     whole.set(part, at);
     at += part.byteLength;
   }
+
   return whole;
 }

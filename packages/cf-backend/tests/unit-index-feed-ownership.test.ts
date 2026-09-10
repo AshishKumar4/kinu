@@ -27,8 +27,11 @@ mockAgentsSdk();
 const { default: worker } = await import('../src/server');
 
 const APP_HOST = 'app.example.com';
+
 const OWNER_EMAIL = 'owner@example.com';
+
 const SECRET = 'index-feed-test-secret-0123456789';
+
 /** What a caller presents to act as `DEV_USER_EMAIL` on a host that is not
  *  localhost. The fixture drives a published host, so it holds the secret the
  *  way the staging eval harness does. */
@@ -91,6 +94,7 @@ function harness(owned: readonly string[]) {
     get: (name: string) => ({
       async claimOwner(userId: string) {
         if (!owned.includes(name)) throw new Error('Agent owned by a different user');
+
         return { owner: userId, capabilityHash: null };
       },
     }),
@@ -162,10 +166,12 @@ describe('the workspace index feed sits behind the ownership gate', () => {
     // The shape that made this exploitable: one signed-in session, many names.
     // Each one is a distinct memo key, so each one would be a separate row.
     const h = harness(['mine']);
+
     for (const name of ['made-up-1', 'made-up-2', 'made-up-3']) {
       const response = await worker.fetch(appRequest(`/api/workspaces/${name}/state`), h.env, h.ctx);
       expect(response.status).toBe(404);
     }
+
     await h.settle();
 
     expect(h.index.workspaces).toEqual([]);

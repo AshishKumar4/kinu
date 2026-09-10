@@ -125,27 +125,33 @@ interface ReleaseEngineContext {
  *  change the engine acts on. */
 async function runReleaseEngineAction(ctx: ReleaseEngineContext): Promise<ReleaseActionResult> {
   const engine = ctx.releases.engine;
+
   if (!engine) {
     return { error: `action=${ctx.args.action} needs the execution engine, which this backend does not provide — the ledger actions (update/transition/record_check) remain available` };
   }
+
   if (!ctx.args.changeId) return { error: `${ctx.args.action} requires changeId` };
+
   switch (ctx.args.action) {
     case 'apply':
       return await engine.apply(ctx.args.changeId);
     case 'run_checks':
       if (!ctx.args.checks?.length) return { error: 'run_checks requires checks: [{ name, command }]' };
+
       return await engine.runChecks(
         ctx.args.changeId,
         ctx.args.checks.map((c) => ({ name: c.name ?? '', command: c.command ?? '' })),
       );
     case 'preview':
       if (ctx.args.port == null) return { error: 'preview requires port (the port your server listens on)' };
+
       return await engine.preview(ctx.args.changeId, {
         port: ctx.args.port,
         startCommand: ctx.args.startCommand || undefined,
       });
     case 'deploy':
       if (!ctx.args.deployment?.environment) return { error: 'deploy requires deployment.environment (local | staging | production)' };
+
       return await engine.deploy(ctx.args.changeId, {
         environment: ctx.args.deployment.environment,
         command: ctx.args.deployment.command || undefined,
@@ -169,8 +175,11 @@ export async function runReleaseAction(
         return await releases.board();
       case 'bind_source': {
         const b = args.binding ?? {};
+
         if (b.kind !== 'local' && b.kind !== 'github') return { error: 'binding.kind must be local or github' };
+
         if (!b.label) return { error: 'binding.label is required' };
+
         return await releases.bindSource({
           kind: b.kind,
           label: b.label,
@@ -181,11 +190,14 @@ export async function runReleaseAction(
           deployTarget: b.deployTarget,
         });
       }
+
       case 'create':
         if (!args.bindingId || !args.userPrompt) return { error: 'create requires bindingId and userPrompt' };
+
         return await releases.create({ bindingId: args.bindingId, userPrompt: args.userPrompt, plan: args.plan });
       case 'update':
         if (!args.changeId) return { error: 'update requires changeId' };
+
         return await releases.update(args.changeId, {
           plan: args.plan,
           summary: args.summary,
@@ -194,6 +206,7 @@ export async function runReleaseAction(
         });
       case 'transition':
         if (!args.changeId || !args.status) return { error: 'transition requires changeId and status' };
+
         if (releases.engine && isEngineOwnedTransitionTarget(args.status)) {
           return {
             error:
@@ -201,9 +214,11 @@ export async function runReleaseAction(
               `use action=apply / run_checks / deploy / rollback to get there for real`,
           };
         }
+
         return await releases.transition(args.changeId, args.status);
       case 'record_check':
         if (!args.changeId || !args.check?.name || !args.check.status) return { error: 'record_check requires changeId, check.name, and check.status' };
+
         if (releases.engine) {
           return {
             error:
@@ -211,6 +226,7 @@ export async function runReleaseAction(
               'the pass/fail comes from the actual command output',
           };
         }
+
         return await releases.recordCheck(args.changeId, {
           name: args.check.name,
           status: args.check.status,
@@ -220,6 +236,7 @@ export async function runReleaseAction(
         });
       case 'request_approval':
         if (!args.changeId || !args.approvalType) return { error: 'request_approval requires changeId and approvalType' };
+
         // A rollback approval binds the command it authorises, so the owner is
         // approving a specific restore rather than the word "rollback".
         // `deployment.command` is where the caller already states it, and
@@ -231,6 +248,7 @@ export async function runReleaseAction(
           : await releases.requestApproval(args.changeId, args.approvalType);
       case 'record_deployment':
         if (!args.changeId || !args.deployment?.environment) return { error: 'record_deployment requires changeId and deployment.environment' };
+
         if (releases.engine) {
           return {
             error:
@@ -238,6 +256,7 @@ export async function runReleaseAction(
               'the version id and rollback target come from the actual command output',
           };
         }
+
         return await releases.recordDeployment(args.changeId, {
           environment: args.deployment.environment,
           workerVersionId: args.deployment.workerVersionId,

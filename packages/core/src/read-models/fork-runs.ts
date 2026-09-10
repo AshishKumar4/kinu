@@ -118,12 +118,14 @@ export function listForkRuns(
   const page = boundedInt(limit, DEFAULT_FORK_PAGE, 1, MAX_FORK_PAGE);
   const after = cursor === null ? null : parseForkAnchor(cursor.after);
   const over = page + 1;
+
   return seekPage(readRuns(sql, actor.actorId, null, queryPositions(sql, actor.actorId, over, null, after)), page, forkAnchor);
 }
 
 /** One exact run, including runs older than the current page. */
 export function readForkRun(sql: SqlExecutor, actor: ActorHandle, rootId: string): ForkRunSummary | null {
   actor.assertCurrent();
+
   return readRuns(sql, actor.actorId, rootId, queryPositions(sql, actor.actorId, 1, rootId, null))[0] ?? null;
 }
 
@@ -147,12 +149,14 @@ function parseForkAnchor(after: string): ForkAnchor {
   const split = after.indexOf(':');
   const startedAt = Number(after.slice(0, split));
   const id = after.slice(split + 1);
+
   // A malformed anchor is a stale one as far as a caller is concerned: the walk
   // has to restart either way, and answering an unreadable position with an
   // empty page would report the runs behind it as exhausted.
   if (split < 1 || !Number.isFinite(startedAt) || id === '') {
     throw new StaleCursorError('fork list', after);
   }
+
   return { startedAt, id };
 }
 
@@ -187,6 +191,7 @@ function queryPositions(
 ): RunPosition[] {
   const at = after?.startedAt ?? null;
   const from = after?.id ?? null;
+
   return sql<{ root_id: string; started_at: number }>`
     SELECT root_id AS root_id, MIN(started_at) AS started_at
     FROM (
@@ -230,17 +235,21 @@ function readRuns(
   const wanted = new Set(positions.map((position) => position.rootId));
   const trees = queryTreeHalves(sql, actorId, rootId, wanted);
   const journals = queryTranscriptHalves(sql, actorId, rootId, wanted);
+
   return positions.flatMap((position) => {
     const tree = trees.get(position.rootId);
     const transcripts = journals.get(position.rootId);
     const status = runStatus(tree, transcripts);
+
     // Neither half: nothing this workspace stored says anything about the run, so
     // there is no run to report. Unreachable through `queryPositions`, whose every
     // row comes from one of these two stores, and a guard rather than a default
     // because a fabricated row is precisely what this read model must not produce.
     if (status === null) return [];
+
     const task = tree?.task?.trim() || transcripts?.rootTask?.trim()
       || transcripts?.rationale?.trim() || '(exploration run)';
+
     return [{
       id: position.rootId,
       // The TREE's root task is a task written by the engine that ran, whereas
@@ -276,7 +285,9 @@ function runStatus(
 ): ForkRunStatus | null {
   const treeStatus = tree === undefined ? null : searchStatus(tree);
   const transcriptStatus = transcripts === undefined ? null : transcriptsStatus(transcripts);
+
   if (treeStatus === 'running' || transcriptStatus === 'running') return 'running';
+
   return treeStatus ?? transcriptStatus;
 }
 
@@ -345,7 +356,9 @@ function queryTreeHalves(
     WHERE n.actor_id = ${actorId}
       AND (${rootId} IS NULL OR n.root_id = ${rootId})
     GROUP BY n.root_id`;
+
   const halves = new Map<string, TreeHalf>();
+
   for (const row of rows) {
     if (!wanted.has(row.root_id)) continue;
     halves.set(row.root_id, {
@@ -358,6 +371,7 @@ function queryTreeHalves(
       bestTerminal: row.best_terminal,
     });
   }
+
   return halves;
 }
 
@@ -374,6 +388,7 @@ function queryTreeHalves(
  */
 export function runName(rootLabel: string | null, task: string): string {
   const given = rootLabel?.trim();
+
   return given || shortName(task);
 }
 
@@ -382,13 +397,17 @@ export function runName(rootLabel: string | null, task: string): string {
  *  {@link NAME_MAX_CHARS} otherwise. A title, so no ellipsis: what it cuts,
  *  it cuts cleanly. */
 const NAME_MAX_CHARS = 48;
+
 function shortName(task: string): string {
   const cleaned = task.replace(/\s+/g, ' ').trim();
+
   if (!cleaned) return '(exploration run)';
   const cut = cleaned.search(/[—–:;,|]|\.\s|\.\s*$|\n/);
   const clause = cut >= 8 ? cleaned.slice(0, cut) : cleaned;
+
   if (clause.length <= NAME_MAX_CHARS) return clause.replace(/[\s—–:;,|.]+$/, '');
   const bound = clause.lastIndexOf(' ', NAME_MAX_CHARS);
+
   return (bound >= 20 ? clause.slice(0, bound) : clause.slice(0, NAME_MAX_CHARS))
     .replace(/[\s—–:;,|.]+$/, '');
 }
@@ -418,12 +437,17 @@ function shortName(task: string): string {
  */
 function searchStatus(tree: TreeHalf): ForkRunStatus {
   if (tree.ledgerStatus === 'failed') return 'failed';
+
   if (tree.ledgerStatus === 'converged') return 'completed';
+
   // This list's `failed` bucket is "settled without a usable answer". The
   // exact `no_acceptable_candidate` cause remains on the run ledger.
   if (tree.ledgerStatus === 'no_acceptable_candidate') return 'failed';
+
   if (tree.terminal > 0) return 'completed';
+
   if (tree.frontier > 0) return 'running';
+
   // Nothing left to select and nothing ever won: the lease is stale, the row was
   // pruned (settled over a day ago), or it was never written. Either way the
   // search stopped without an answer.
@@ -477,7 +501,9 @@ function queryTranscriptHalves(
       AND j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
       AND (${rootId} IS NULL OR j.root_id = ${rootId})
     GROUP BY j.root_id`;
+
   const halves = new Map<string, TranscriptHalf>();
+
   for (const row of rows) {
     if (!wanted.has(row.root_id)) continue;
     halves.set(row.root_id, {
@@ -490,6 +516,7 @@ function queryTranscriptHalves(
       settled: row.settled,
     });
   }
+
   return halves;
 }
 
@@ -505,8 +532,11 @@ function transcriptsStatus(transcripts: TranscriptHalf): ForkRunStatus {
       : transcripts.rootStatus === 'completed' ? 'completed'
       : 'failed';
   }
+
   if (transcripts.running > 0) return 'running';
+
   if (transcripts.settled > 0) return 'completed';
+
   // Nothing synthesised: every node landing cleanly is still a completed run whose
   // synthesis was skipped; anything else stopped short of an answer.
   return transcripts.errored === 0 ? 'completed' : 'partial';

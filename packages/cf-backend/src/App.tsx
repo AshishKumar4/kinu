@@ -39,6 +39,7 @@ function LazyFallback() {
 // facet socket is swapped lazily.
 function KeyedWorkspace() {
   const { agentId } = useParams();
+
   return <WorkspacePage key={agentId} />;
 }
 
@@ -56,6 +57,7 @@ function KeyedWorkspace() {
 // rather than a reset for each.
 function KeyedSettings() {
   const { agentId } = useParams();
+
   return <SettingsPage key={agentId} />;
 }
 
@@ -63,6 +65,7 @@ function KeyedSettings() {
 // old /triggers deep links land there.
 function TriggersRedirect() {
   const { agentId } = useParams();
+
   return <Navigate to={`/workspace/${agentId}?altitude=supervise`} replace />;
 }
 

@@ -4,6 +4,7 @@ import { expect, it } from 'vitest';
 it('compiled authored TypeScript answers through a resident process until stopped', async () => {
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('resident-server'));
   await subject.start();
+
   try {
     const first = await subject.request('/first');
     const second = await subject.request('/second');
@@ -14,6 +15,7 @@ it('compiled authored TypeScript answers through a resident process until stoppe
   } finally {
     await subject.stop();
   }
+
   expect((await subject.request('/stopped')).status).toBe(404);
 });
 
@@ -21,10 +23,12 @@ it('Slate compilation requires Nimbus credentialed EsbuildService reads', async 
   const subject = env.SLATE_PROCESS_PROBE.get(env.SLATE_PROCESS_PROBE.idFromName('compiler-authority'));
   await subject.seedPrivateSource();
   expect(await subject.readPrivateSourceAsAgent()).toMatchObject({ error: expect.stringContaining('EACCES') });
+
   const result = await subject.compileProbe([
     'import secret from "/root/private.ts";',
     'export default { fetch() { return new Response(secret); } };',
   ].join('\n'));
+
   expect(result).toMatchObject({ code: 'bad_input' });
 });
 
@@ -35,6 +39,7 @@ it('each resident request retains its own app call chain across the loopback bin
     '  return Response.json(await env.PEER.echo(new URL(request.url).pathname));',
     '} };',
   ].join('\n'), true);
+
   try {
     const answers = await Promise.all([subject.request('/deep', ['a', 'b', 'c']), subject.request('/one', ['z'])]);
     expect(answers.map((answer) => JSON.parse(answer.body))).toEqual([
@@ -63,6 +68,7 @@ it('authored code that keeps an old request\'s bindings cannot replay its call c
     '  catch (cause) { return Response.json({ replayRefused: String(cause.message) }); }',
     '} };',
   ].join('\n'), true);
+
   try {
     // A shallow root call, whose bindings the slate keeps.
     expect(JSON.parse((await subject.request('/keep', [])).body)).toEqual({ chain: ['probe'], args: ['kept'] });
@@ -91,6 +97,7 @@ it('bindings kept from a PREVIEW request cannot stand in for a hop lineage', asy
     '  catch (cause) { return Response.json({ replayRefused: String(cause.message) }); }',
     '} };',
   ].join('\n'), true);
+
   try {
     // A preview visit: no chain argument, which is the browser shape.
     expect(JSON.parse((await subject.request('/visit')).body)).toEqual({ visited: true });
@@ -110,6 +117,7 @@ it('authored fetch failures preserve their cause chain and leave the process cal
     '  return new Response("alive");',
     '} };',
   ].join('\n'));
+
   try {
     const failed = await subject.request('/fail');
     expect(failed.status).toBe(500);
@@ -137,6 +145,7 @@ it('the sealed workspace root answers the native binding RPC without making it b
   // the same two halves for each: the native binding RPC answers server-side
   // (the seal lists it) and the method stays out of the browser registry.
   const families: readonly ('subordinate' | 'exploration')[] = ['subordinate', 'exploration'];
+
   for (const family of families) {
     const root = env.SLATE_ACTOR_ROOT.get(env.SLATE_ACTOR_ROOT.idFromName(`native-slate-bindings:${family}`));
     const result = await root.exercise(family);

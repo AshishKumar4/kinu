@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import { isVendoredSource, trackedFiles } from '../../scripts/sources';
 
 const root = import.meta.dirname;
+
 const Manifest = v.object({
   repository: v.string(),
   commit: v.pipe(v.string(), v.regex(/^[0-9a-f]{40}$/u)),
@@ -18,6 +19,7 @@ test('every agent-core runtime file matches the pinned upstream bytes', () => {
   expect(files).toEqual(Object.keys(manifest.vendored).sort());
   expect(files.some((file) => file.endsWith('.js'))).toBe(true);
   expect(files.some((file) => file.endsWith('.d.ts'))).toBe(true);
+
   for (const file of files) {
     const digest = createHash('sha256').update(readFileSync(join(root, file))).digest('hex');
     expect(digest, `${file} diverged from upstream ${manifest.commit}`).toBe(manifest.vendored[file]);

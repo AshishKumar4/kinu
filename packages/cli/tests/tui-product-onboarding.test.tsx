@@ -20,9 +20,11 @@ describe('guided onboarding renderer', () => {
       workspaceCount: 0,
       skippedSteps: [],
     };
+
     const update = (patch: Partial<OnboardingReadiness>) => {
       readiness = { ...readiness, ...patch };
     };
+
     const operations: TuiOnboardingOperations = {
       readReadiness: () => readiness,
       chooseLocation: (location) => update({ location }),
@@ -34,14 +36,17 @@ describe('guided onboarding renderer', () => {
       createWorkspace: () => update({ workspaceCount: 1 }),
       skip: (step) => update({ skippedSteps: [...readiness.skippedSteps, step] }),
     };
+
     const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
     const store = createMemoryTuiPreferenceStore();
+
     const scene = (
       <TuiProductProvider runtime={{ preferenceStore: store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
         <GuidedOnboarding
@@ -52,6 +57,7 @@ describe('guided onboarding renderer', () => {
         />
       </TuiProductProvider>
     );
+
     try {
       root.render(scene);
       await waitForFrame(renderOnce, captureCharFrame, 'Step 4/6 · theme');
@@ -79,6 +85,7 @@ describe('guided onboarding renderer', () => {
       workspaceCount: 0,
       skippedSteps: [],
     };
+
     const operations: TuiOnboardingOperations = {
       readReadiness: () => readiness,
       chooseLocation: () => {},
@@ -90,13 +97,16 @@ describe('guided onboarding renderer', () => {
       createWorkspace: () => {},
       skip: () => {},
     };
+
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(
         <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
@@ -130,13 +140,16 @@ describe('guided onboarding renderer', () => {
       createWorkspace: () => {},
       skip: () => {},
     };
+
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(
         <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
@@ -166,6 +179,7 @@ describe('guided onboarding renderer', () => {
       workspaceCount: 0,
       skippedSteps: [],
     };
+
     const operations: TuiOnboardingOperations = {
       readReadiness: () => readiness,
       chooseLocation: () => {
@@ -179,13 +193,16 @@ describe('guided onboarding renderer', () => {
       createWorkspace: () => {},
       skip: () => {},
     };
+
     const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({
       width: 80,
       height: 24,
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
+
     try {
       root.render(
         <TuiProductProvider runtime={{ preferenceStore: createMemoryTuiPreferenceStore(), terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
@@ -220,8 +237,10 @@ async function waitForFrame(
 ): Promise<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await renderOnce();
+
     if (capture().includes(expected)) return;
     await Bun.sleep(1);
   }
+
   expect(capture()).toContain(expected);
 }

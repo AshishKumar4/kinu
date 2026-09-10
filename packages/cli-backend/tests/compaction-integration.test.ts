@@ -45,11 +45,13 @@ import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { scratchPath } from '@kinu.run/test-utils';
 
 const SESSION = 'kinu-itest:default';
+
 const silentLogger: Logger = { info() {}, debug() {}, warn() {}, error() {} };
 
 /** One user→assistant→tool exchange with a fat tool output. */
 function exchange(i: number, outputChars: number): ModelMessage[] {
   const id = `call_${i}`;
+
   return [
     { role: 'user', content: `Task ${i}: please run step ${i} of the plan.` },
     {
@@ -71,7 +73,9 @@ function exchange(i: number, outputChars: number): ModelMessage[] {
 
 function history(exchanges: number, outputChars: number): ModelMessage[] {
   const messages: ModelMessage[] = [];
+
   for (let i = 0; i < exchanges; i++) messages.push(...exchange(i, outputChars));
+
   return messages;
 }
 
@@ -85,11 +89,13 @@ interface CapturingModel {
 /** One-step text model that records the exact prompt of every call. */
 function capturingModel(): CapturingModel {
   const prompts: PromptMessage[][] = [];
+
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async (options) => {
       prompts.push(options.prompt);
+
       return {
         stream: new ReadableStream({
           start(c) {
@@ -105,11 +111,13 @@ function capturingModel(): CapturingModel {
       };
     },
   });
+
   return { model, prompts };
 }
 
 function messageText(m: PromptMessage): string {
   if (m.role === 'system') return m.content;
+
   return m.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
 }
 
@@ -118,12 +126,14 @@ function ephemeralBlocks(prompt: PromptMessage[]): number[] {
   prompt.forEach((m, i) => {
     if (m.role === 'user' && messageText(m).startsWith('<dynamic_context fingerprint="')) indices.push(i);
   });
+
   return indices;
 }
 
 describe('default compaction over the real storage plane', () => {
   test('rewrite → VFS transcript read-back → durable replay → ledger reset on non-replay', async () => {
     const db = new Database(scratchPath('compaction-integration', 'agent.db'), { create: true });
+
     const rt = createCLIRuntime(db, {
       dbPath: db.filename,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
@@ -134,6 +144,7 @@ describe('default compaction over the real storage plane', () => {
     const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];
     let summarizeCalls = 0;
+
     // Wired EXACTLY as both backends wire it: shared stores + model-transport
     // summarize + the non-replayed ledger reset.
     const extension = createCompactionExtension({
@@ -146,6 +157,7 @@ describe('default compaction over the real storage plane', () => {
       ephemeral: ledger,
       summarize: async () => {
         summarizeCalls++;
+
         return [
           '## Decisions',
           `- Summary(${summarizeCalls}): preserve the verified implementation decisions.`,
@@ -163,11 +175,13 @@ describe('default compaction over the real storage plane', () => {
       },
       onOutcome: (event) => {
         outcomes.push(event);
+
         if (event.outcome !== 'replayed') ledger.reset();
       },
     });
 
     const { model, prompts } = capturingModel();
+
     const drive = async (messages: ModelMessage[], transformTrigger?: 'force') => {
       const options: ChatOptions = {
         model,
@@ -180,9 +194,12 @@ describe('default compaction over the real storage plane', () => {
         extensions: new ExtensionHost().register(extension),
         cache: { sessionKey: SESSION },
       };
+
       if (transformTrigger) options.transformTrigger = transformTrigger;
+
       for await (const _ of runChat(options)) { /* drain */ }
     };
+
     // What a turn assembly does with the armed one-shot flag.
     const driveForced = (messages: ModelMessage[]) =>
       drive(messages, state.takeForceCompaction(SESSION) ? 'force' : undefined);
@@ -213,6 +230,7 @@ describe('default compaction over the real storage plane', () => {
 
     // The reference message cites the transcript path the plan persisted.
     const snapshot = await state.plans.load(SESSION);
+
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
     expect(snapshot.transcriptRelativePath).toStartWith('.kinu/compaction/');
     expect(plannedJson).toContain(snapshot.transcriptRelativePath);
@@ -220,11 +238,13 @@ describe('default compaction over the real storage plane', () => {
     // Durable persistence is a real row in agent.db, not memory.
     const rows = rt.storage.sql<{ plan_json: string }>`
       SELECT plan_json FROM compaction_state WHERE session_key = ${SESSION}`;
+
     expect(rows).toHaveLength(1);
 
     // ── Lossless recall: the citation reads back through the agent's own
     // file surface (workspace.readFile over the SAME composite VFS).
     const workspace = rt.executionRouter?.getProvider('workspace');
+
     if (!workspace) throw new Error('expected the workspace executor');
     const readBack = await workspace.tools.readFile.execute(snapshot.transcriptRelativePath);
     expect(String(readBack)).toContain('output-0 ');
@@ -295,14 +315,17 @@ describe('default compaction over the real storage plane', () => {
 
   test('the first rung: superseded ephemeral blocks survive every unpressured turn and go first under pressure', async () => {
     const db = new Database(scratchPath('compaction-integration-rung', 'agent.db'), { create: true });
+
     const rt = createCLIRuntime(db, {
       dbPath: db.filename,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
+
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const state = createCompactionStateStore(rt.storage.sql, rt.actor);
     const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];
+
     const extension = createCompactionExtension({
       ports: {
         transcripts: createVfsTranscriptStore(() => rt.storage.vfs),
@@ -314,6 +337,7 @@ describe('default compaction over the real storage plane', () => {
       summarize: async () => { throw new Error('no summary should be needed'); },
       onOutcome: (event) => {
         outcomes.push(event);
+
         if (event.outcome !== 'replayed') ledger.reset();
       },
     });
@@ -322,6 +346,7 @@ describe('default compaction over the real storage plane', () => {
     // Fat blocks so what the rung frees is decisive rather than marginal.
     let facts = '';
     const messages: ModelMessage[] = [];
+
     const drive = (providerReportedTokens?: number) => (async () => {
       const options: ChatOptions = {
         model,
@@ -334,7 +359,9 @@ describe('default compaction over the real storage plane', () => {
         extensions: new ExtensionHost().register(extension),
         cache: { sessionKey: SESSION },
       };
+
       if (providerReportedTokens !== undefined) options.providerReportedTokens = providerReportedTokens;
+
       for await (const _ of runChat(options)) { /* drain */ }
     })();
 
@@ -349,6 +376,7 @@ describe('default compaction over the real storage plane', () => {
       messages.push({ role: 'user', content: `turn ${turn}` }, { role: 'assistant', content: 'ok' });
       await drive();
     }
+
     expect(outcomes).toHaveLength(0);          // the ladder never fired…
     expect(ledger.size).toBe(3);               // …so nothing was ever dropped.
     expect(ephemeralBlocks(prompts[2] ?? [])).toHaveLength(3);
@@ -356,6 +384,7 @@ describe('default compaction over the real storage plane', () => {
     // The cache-prefix invariant on the wire: each request repeats the last
     // one's messages verbatim and only appends.
     const bytes = prompts.map((p) => p.map(cacheableBytes));
+
     for (let i = 1; i < bytes.length; i++) {
       expect(bytes[i]!.slice(0, bytes[i - 1]!.length)).toEqual(bytes[i - 1]!);
       expect(bytes[i]!.length).toBeGreaterThan(bytes[i - 1]!.length);

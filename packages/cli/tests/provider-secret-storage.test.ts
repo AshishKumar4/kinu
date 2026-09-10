@@ -9,12 +9,14 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 
 const homes: string[] = [];
+
 afterEach(() => { for (const dir of homes.splice(0)) rmSync(dir, { recursive: true, force: true }); });
 
 function kinuHome(config: JsonObject): string {
   const home = mkdtempSync(join(tmpdir(), 'kinu-secret-home-'));
   homes.push(home);
   writeFileSync(join(home, 'config.json'), JSON.stringify(config));
+
   return home;
 }
 
@@ -46,13 +48,16 @@ async function runStore(home: string, opts: { local: boolean; origin?: string; e
       console.log('THREW:' + e.message);
     }
   `;
+
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     KINU_HOME: home, NO_COLOR: '1',
     OPENROUTER_API_KEY: '', KINU_TOKEN: '',
   };
+
   if (opts.origin) env.KINU_ORIGIN = opts.origin;
   else delete env.KINU_ORIGIN;
+
   const proc = Bun.spawn({
     cmd: [process.execPath, '-e', runner],
     cwd: join(import.meta.dir, '../../..'),
@@ -60,26 +65,31 @@ async function runStore(home: string, opts: { local: boolean; origin?: string; e
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+
   return { stdout: stdout + stderr, exitCode };
 }
 
 describe('where a provider secret is written', () => {
   test('signed in, it goes to the account and never lands on this disk', async () => {
     const received: Array<{ path: string; auth: string | null; body: string }> = [];
+
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
         const url = new URL(request.url);
         received.push({ path: url.pathname, auth: request.headers.get('authorization'), body: await request.text() });
+
         return Response.json({ ok: true }, { status: 201 });
       },
     });
+
     const origin = `http://127.0.0.1:${server.port}`;
     const home = kinuHome({ origin, accessToken: 'ptc_test_token' });
 
@@ -138,7 +148,9 @@ describe('where a provider secret is written', () => {
       port: 0, hostname: '127.0.0.1',
       fetch: () => Response.json({ ok: true }, { status: 201 }),
     });
+
     const home = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
+
     try {
       const res = await runStore(home, { local: false, endpoint: 'https://[2606:4700:4700::1111]/v1' });
       expect(res.stdout).toContain('WHERE:account');
@@ -155,6 +167,7 @@ describe('when the account will not take it', () => {
       hostname: '127.0.0.1',
       fetch: () => new Response('{"error":"credential rejected"}', { status: 400 }),
     });
+
     const home = kinuHome({ origin: `http://127.0.0.1:${server.port}`, accessToken: 'ptc_test_token' });
 
     try {
@@ -173,6 +186,7 @@ describe('when the account will not take it', () => {
       port: 0, hostname: '127.0.0.1',
       fetch: () => Response.json({ ok: true }, { status: 201 }),
     });
+
     const home = kinuHome({
       origin: `http://127.0.0.1:${server.port}`,
       accessToken: 'ptc_test_token',

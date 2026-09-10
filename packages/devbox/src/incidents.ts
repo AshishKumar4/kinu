@@ -101,9 +101,11 @@ export async function deliverIncidents(
 ): Promise<number | null> {
   const rows = await store.list({ prefix: INCIDENT_PREFIX });
   let nextDelayMs: number | undefined;
+
   for (const [key, row] of rows) {
     if (row.deliveredAt !== undefined || row.rejectedAt !== undefined) continue;
     let disposition: IncidentDisposition;
+
     try {
       disposition = await deliver({
         incidentId: row.incidentId,
@@ -128,6 +130,7 @@ export async function deliverIncidents(
       );
       disposition = 'undelivered';
     }
+
     if (disposition === 'undelivered') {
       // TOOK IT, DID NOT ANNOUNCE IT. Stamping `deliveredAt` here is how a box
       // stopped retrying an incident nobody had seen: the host's own ledger
@@ -137,13 +140,16 @@ export async function deliverIncidents(
       await store.put(key, { ...row, attempts: row.attempts + 1 });
       continue;
     }
+
     await store.put(key, {
       ...row,
       attempts: row.attempts + 1,
       ...(disposition === 'queued' ? { deliveredAt: Date.now() } : { rejectedAt: Date.now() }),
     });
   }
+
   await reapDeliveredIncidents(store);
+
   return nextDelayMs === undefined ? null : Math.max(1, Math.ceil(nextDelayMs / 1000));
 }
 
@@ -156,13 +162,18 @@ export async function deliverIncidents(
  */
 export async function reapDeliveredIncidents(store: IncidentStore): Promise<number> {
   const rows = await store.list({ prefix: INCIDENT_PREFIX });
+
   const settled = [...rows.entries()]
     .filter(([, row]) => row.deliveredAt !== undefined || row.rejectedAt !== undefined)
     .sort(([, a], [, b]) => (a.deliveredAt ?? a.rejectedAt ?? a.at)
       - (b.deliveredAt ?? b.rejectedAt ?? b.at));
+
   const excess = rows.size - Math.max(0, INCIDENT_LEDGER_MAX_ROWS);
+
   if (excess <= 0) return 0;
+
   for (const [key] of settled.slice(0, excess)) await store.delete(key);
+
   return excess;
 }
 
@@ -177,9 +188,12 @@ export interface IncidentTotals {
 export function incidentTotals(rows: Iterable<IncidentRow>): IncidentTotals {
   let total = 0;
   let undelivered = 0;
+
   for (const row of rows) {
     total += 1;
+
     if (row.deliveredAt === undefined && row.rejectedAt === undefined) undelivered += 1;
   }
+
   return { total, undelivered } satisfies IncidentTotals;
 }

@@ -47,9 +47,11 @@ export interface LayerGateReport {
 function digest(value: LayerObservation): string {
   if (value === undefined) return fnv1a64('undefined');
   const serialized = JSON.stringify(value);
+
   if (serialized === undefined) {
     throw new Error('layer observation must be JSON-serializable');
   }
+
   return fnv1a64(stableStringify(parseJsonValue(serialized)));
 }
 
@@ -61,6 +63,7 @@ async function observeLayers<S>(
   layers: readonly Layer<S>[],
 ): Promise<Map<string, string>> {
   const observations = new Map<string, string>();
+
   for (const layer of layers) {
     for (const probe of layer.probes) {
       try {
@@ -70,6 +73,7 @@ async function observeLayers<S>(
       }
     }
   }
+
   return observations;
 }
 
@@ -82,6 +86,7 @@ export function observePipeline<S>(
   ...input: [subjects: PipelineSubjects] | [subjects: S, layers: readonly Layer<S>[]]
 ): Promise<Map<string, string>> {
   if (input.length === 1) return observeLayers(input[0], LAYERS);
+
   return observeLayers(input[0], input[1]);
 }
 
@@ -96,16 +101,20 @@ export function scoreAgainstBaseline(
   layers: readonly ScoringLayer[] = LAYERS,
 ): LayerGateReport {
   const scores: LayerScore[] = [];
+
   for (const layer of layers) {
     const drifted: string[] = [];
     const unlocked: string[] = [];
     let matched = 0;
+
     for (const probe of layer.probes) {
       const locked = baseline[probe.id];
+
       if (locked === undefined) unlocked.push(probe.id);
       else if (locked === observations.get(probe.id)) matched += 1;
       else drifted.push(probe.id);
     }
+
     scores.push({
       layer: layer.id,
       conformance: layer.probes.length === 0 ? null : matched / layer.probes.length,
@@ -115,7 +124,9 @@ export function scoreAgainstBaseline(
       unlocked,
     });
   }
+
   const measured = scores.filter((s) => s.conformance !== null);
+
   return {
     layers: scores,
     aggregate: measured.length === 0
@@ -144,6 +155,7 @@ export async function runLayerGate<S>(
   if (opts.layers === undefined) {
     return scoreAgainstBaseline(await observePipeline(opts.subjects), opts.baseline);
   }
+
   return scoreAgainstBaseline(
     await observePipeline(opts.subjects, opts.layers),
     opts.baseline,
@@ -160,6 +172,7 @@ export async function lockBaseline<S>(
   const observations = input.length === 1
     ? await observePipeline(input[0])
     : await observePipeline(input[0], input[1]);
+
   return Object.fromEntries([...observations].sort(([a], [b]) => (a < b ? -1 : 1)));
 }
 
@@ -169,15 +182,19 @@ function pct(value: number | null): string {
 
 export function renderLayerGateReport(report: LayerGateReport): string {
   const width = Math.max(...report.layers.map((s) => s.layer.length));
+
   const lines = report.layers.map((s) => {
     const head = `  ${s.layer.padEnd(width)}  ${pct(s.conformance)}  ${s.matched}/${s.probes}`;
+
     const notes = [
       s.drifted.length ? `drifted: ${s.drifted.join(', ')}` : '',
       s.unlocked.length ? `unlocked: ${s.unlocked.join(', ')}` : '',
       s.conformance === null ? 'NOT MEASURED' : '',
     ].filter(Boolean);
+
     return notes.length ? `${head}  — ${notes.join('; ')}` : head;
   });
+
   return [
     'Layer gate',
     ...lines,

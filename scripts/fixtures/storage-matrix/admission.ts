@@ -157,6 +157,7 @@ export interface RestoreEvidence {
 export interface CellCompletion extends CellId {
   readonly completed: boolean;
 }
+
 /** G7 evidence: the run's reconciled operation tally. */
 export interface AccountingEvidence {
   /** Where the tally came from, e.g. `fixture /ops after final arm`. */
@@ -242,7 +243,9 @@ export interface AdmissionVerdict {
  *  the manifest is the one vocabulary both the stages and this verdict speak. */
 function gate(id: GateId, reasons: readonly string[]): GateResult {
   const row = STORAGE_GATES.find((candidate) => candidate.id === id);
+
   if (row === undefined) throw new Error(`frozen manifest names no purpose for gate ${id}`);
+
   return { gate: id, purpose: row.purpose, ok: reasons.length === 0, reasons };
 }
 
@@ -250,20 +253,30 @@ const ISO_TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d
 
 function provenanceProblems(provenance: RunProvenance): string[] {
   const problems: string[] = [];
+
   if (provenance.runId.trim() === '') problems.push('runId is empty');
+
   if (!/^[0-9a-f]{7,64}$/.test(provenance.commit)) {
     problems.push(`commit "${provenance.commit}" is not a git revision`);
   }
+
   if (!ISO_TIMESTAMP.test(provenance.startedAt)) problems.push(`startedAt "${provenance.startedAt}" is not ISO`);
+
   if (!ISO_TIMESTAMP.test(provenance.finishedAt)) problems.push(`finishedAt "${provenance.finishedAt}" is not ISO`);
+
   if (
     ISO_TIMESTAMP.test(provenance.startedAt) && ISO_TIMESTAMP.test(provenance.finishedAt)
     && Date.parse(provenance.finishedAt) < Date.parse(provenance.startedAt)
   ) problems.push('finishedAt precedes startedAt');
+
   if (provenance.seed.trim() === '') problems.push('seed is empty');
+
   if (provenance.image.trim() === '') problems.push('container image is empty');
+
   if (Object.keys(provenance.versions).length === 0) problems.push('no dependency versions recorded');
+
   if (provenance.containerFacts.trim() === '') problems.push('container facts were never collected');
+
   return problems;
 }
 
@@ -274,27 +287,35 @@ export function expectedCells(
   confirmatoryPlan: ConfirmatoryPlan | null,
 ): CellId[] {
   const out: CellId[] = [];
+
   for (const stage of declaredStages) out.push(...stageCells(stage));
+
   if (declaredStages.includes('confirmatory') && confirmatoryPlan !== null) {
     out.push(...confirmatoryPlan.cells);
   }
+
   return out;
 }
 
 function censorProblems(scored: readonly ScoredCell[]): string[] {
   const problems: string[] = [];
+
   for (const cell of scored) {
     if (cell.censored && cell.censorReason !== null) {
       problems.push(`deciding cell ${cellKey(cell.id)} censored: ${cell.censorReason}`);
     }
   }
+
   if (scored.length > 0 && scored.every((cell) => cell.censored)) {
     problems.push('every deciding cell is censored, so no statistical claim survives');
   }
+
   return problems;
 }
+
 function semanticsProblems(record: StorageRunRecord): string[] {
   const problems: string[] = [];
+
   for (const arm of record.arms) {
     // WITNESSES ARE JUDGED ON EVERY ARM, whatever its rank eligibility. Gating
     // this on the non-candidate branch would let an instrument that made its
@@ -302,6 +323,7 @@ function semanticsProblems(record: StorageRunRecord): string[] {
     // defects still reproduced. Preregistration is a drift detector; it is not
     // a statement about who may win, and the two must not be wired together.
     problems.push(...witnessProblems(arm));
+
     if (arm.kind !== 'candidate') {
       // A calibration reference — the layout benchmark's native disk — measures
       // the machine rather than a strategy, so a rankEligible flag on one is an
@@ -309,16 +331,20 @@ function semanticsProblems(record: StorageRunRecord): string[] {
       if (arm.rankEligible) {
         problems.push(`arm \`${arm.arm}\` is a ${arm.kind} but is marked rank-eligible`);
       }
+
       continue;
     }
+
     if (arm.producedMeasurements && !arm.semanticsPassed) {
       problems.push(`arm \`${arm.arm}\` failed ${arm.failedChecks.length} semantics check(s)`
         + ` (${arm.failedChecks.slice(0, 5).join(', ')})`);
     }
+
     if (!arm.rankEligible) {
       problems.push(`competing arm \`${arm.arm}\` is marked rank-ineligible`);
     }
   }
+
   return problems;
 }
 
@@ -335,11 +361,13 @@ function witnessProblems(arm: ArmEvidence): string[] {
   const expected = new Set(arm.expectedRedChecks);
   const observed = new Set(arm.observedRedChecks);
   const problems: string[] = [];
+
   for (const name of arm.observedRedChecks) {
     if (!expected.has(name)) {
       problems.push(`arm \`${arm.arm}\` failed unexpected check "${name}" not in its preregistered witnesses`);
     }
   }
+
   for (const name of arm.expectedRedChecks) {
     if (!observed.has(name)) {
       problems.push(
@@ -348,81 +376,103 @@ function witnessProblems(arm: ArmEvidence): string[] {
       );
     }
   }
+
   return problems;
 }
 
 function publicationProblems(publication: PublicationEvidence): string[] {
   const problems: string[] = [];
+
   if (publication.readOnlyDeclared && publication.readOnlyRefusedWrites !== true) {
     problems.push('a read-only surface was declared but was not proven to refuse writes');
   }
+
   if (!publication.faultCutCompleted) {
     problems.push('no completed fault-cut evidence: the interruption at the publication cut never ran to completion');
   }
+
   if (publication.allOldOrAllNew !== true) {
     problems.push('observers did not confirm all-old-or-all-new state across the cut');
   }
+
   const ackLoss = publication.barrierAckLoss;
+
   if (ackLoss === null || ackLoss > 0) {
     problems.push(ackLoss === null
       ? 'barrier-ack loss across the cut was never counted'
       : `${ackLoss} barrier acknowledgement(s) were lost`);
   }
+
   const absent = publication.absentReferences;
+
   if (absent === null || absent > 0) {
     problems.push(absent === null
       ? 'post-publication references were never swept for absent objects'
       : `${absent} reference(s) resolved to absent objects after publication`);
   }
+
   if (publication.rollbackOrPhantomRoot !== false) {
     problems.push(publication.rollbackOrPhantomRoot === null
       ? 'rollback and phantom-root behaviour was never checked'
       : 'a rollback or a phantom root was observed');
   }
+
   return problems;
 }
 
 function securityProblems(security: SecurityEvidence): string[] {
   const problems: string[] = [...security.credentialLeaks];
+
   if (!security.securityCellsComplete) {
     problems.push('security fault cells incomplete: F7 stale-writer, F10 hostile-metadata, '
       + 'F11 capability escape/replay, and F12 credential exposure must all have run');
   }
+
   if (security.prefixEscapes > 0) {
     problems.push(`${security.prefixEscapes} object(s) landed outside the run's own key prefix`);
   }
+
   if (security.capabilityEscapesOrReplays > 0) {
     problems.push(`${security.capabilityEscapesOrReplays} capability escape(s) or replay(s) were accepted`);
   }
+
   if (security.staleWriterAccepted) {
     problems.push('a write from a superseded writer epoch was accepted');
   }
+
   if (security.hostileMetadataAccepted) {
     problems.push('hostile metadata was stored or served rather than refused');
   }
+
   return problems;
 }
 
 function restoreProblems(record: StorageRunRecord): string[] {
   const kinds = new Map(record.arms.map((arm) => [arm.arm, arm.kind]));
   const problems: string[] = [];
+
   for (const row of record.restore) {
     // A red control's unbounded-restore claim is its WITNESS, not a defect:
     // only candidate rows are held to the restore-class bar.
     if (!row.expected || kinds.get(row.arm) !== 'candidate') continue;
+
     if (row.work === null) {
       problems.push(`arm \`${row.arm}\` declares durability but never exercised a restore`);
     }
+
     if (row.claim === 'unbounded') {
       problems.push(`arm \`${row.arm}\` claims an unbounded restore class, which no durable arm may claim`);
     }
+
     if (row.claim !== 'none' && !row.mechanicalBoundVerified) {
       problems.push(`arm \`${row.arm}\` claims a ${row.claim} restore bound that was never mechanically verified`);
     }
+
     if (row.claim === 'none' && row.work !== null) {
       problems.push(`arm \`${row.arm}\` declares durability but claims no restore class at all`);
     }
   }
+
   return problems;
 }
 
@@ -457,11 +507,13 @@ export function evaluateRun(record: StorageRunRecord): AdmissionVerdict {
       censorProblems(scoreCells(record.deciding, record.decidingBudgetMs)),
     ),
   ];
+
   return { admitted: gates.every((row) => row.ok), gates };
 }
 
 function mountTruthProblems(record: StorageRunRecord): string[] {
   const problems: string[] = [];
+
   for (const arm of record.arms) {
     if (arm.producedMeasurements && !arm.attachedVerified) {
       problems.push(
@@ -469,15 +521,18 @@ function mountTruthProblems(record: StorageRunRecord): string[] {
         + 'the container\'s own blank disk, not the strategy',
       );
     }
+
     if (!arm.producedMeasurements && !arm.attachedVerified && arm.failedChecks.length === 0) {
       problems.push(`arm \`${arm.arm}\` neither attached nor recorded why`);
     }
   }
+
   return problems;
 }
 
 function completenessProblems(record: StorageRunRecord): string[] {
   const done = new Set(record.cells.filter((cell) => cell.completed).map(cellKey));
+
   return expectedCells(record.declaredStages, record.confirmatoryPlan)
     .filter((cell) => !done.has(cellKey(cell)))
     .map((cell) => `cell ${cellKey(cell)} (${cell.stage}) did not complete`);
@@ -487,41 +542,58 @@ function accountingProblems(accounting: AccountingEvidence | null): string[] {
   if (accounting === null) return ['the run recorded no operation accounting at all'];
   const problems: string[] = [];
   const known = new Set<string>(R2_OP_VOCABULARY);
+
   for (const name of Object.keys(accounting.calls)) {
     if (!known.has(name)) problems.push(`unknown operation counter "${name}" in ${accounting.source}`);
   }
+
   const classesSum = accounting.classA + accounting.classB + accounting.classFree;
+
   if (classesSum !== accounting.total) {
     problems.push(`class totals (${classesSum}) do not equal the recorded total (${accounting.total})`);
   }
+
   const callsSum = Object.values(accounting.calls).reduce((sum, count) => sum + count, 0);
+
   if (callsSum !== accounting.total) {
     problems.push(`counter sum (${callsSum}) does not equal the recorded total (${accounting.total})`);
   }
+
   return problems;
 }
 
 function cleanupProblems(cleanup: CleanupEvidence): string[] {
   const problems: string[] = [];
+
   if (!cleanup.attempted) problems.push('cleanup never ran');
+
   if (cleanup.kept) problems.push('--keep left resources in place, so cleanup did not complete');
   problems.push(...cleanup.errors.map((error) => `cleanup error: ${error}`));
+
   if (cleanup.multipartResidue > 0) {
     problems.push(`${cleanup.multipartResidue} incomplete multipart upload(s) remain`);
   }
+
   if (!cleanup.workerAbsent) problems.push('C1: the fixture Worker is still present');
+
   if (!cleanup.runtimeAbsent) problems.push('C2: container applications or runtime instances remain');
+
   if (!cleanup.bucketAndMultipartEmpty) {
     problems.push('C3: the dedicated bucket was not deleted, or objects and multipart uploads remain');
   }
+
   if (!cleanup.boxDurableStateEmpty) problems.push('C4: box durable rows, alarms, or mounts remain');
+
   if (!cleanup.localSecretsProcessesAbsent) {
     problems.push('C5: local secrets, generated configs, or child processes remain');
   }
+
   if (!cleanup.countersReconciled) problems.push('C6: operation counters do not reconcile');
+
   if (cleanup.attempted && !cleanup.kept && !cleanup.replayIdempotent) {
     problems.push('C7: the cleanup replay was not idempotent');
   }
+
   return problems;
 }
 
@@ -537,9 +609,11 @@ export function requireAdmitted(verdict: AdmissionVerdict): void {
 /** The refusal a renderer prints instead of a recommendation. */
 export function refusalText(verdict: AdmissionVerdict): string {
   const failed = verdict.gates.filter((row) => !row.ok);
+
   const lines = failed.map(
     (row) => `- ${row.gate} ${row.purpose}: ${row.reasons.join('; ')}`,
   );
+
   return [
     'RECOMMENDATION REFUSED. This run failed admission, so ranking anything it measured would '
     + 'publish a claim the instrument cannot support:',
@@ -555,6 +629,7 @@ export function refusalText(verdict: AdmissionVerdict): string {
 export function cleanupEvidenceFromReport(report: CleanupReport): CleanupEvidence {
   const byGate = new Map(report.checks.map((row) => [row.gate, row]));
   const okOr = (gate: CleanupGateId): boolean => byGate.get(gate)?.ok ?? false;
+
   return {
     attempted: true,
     kept: report.kept,
@@ -605,12 +680,15 @@ function armFromLayout(layout: RunArtifact['layouts'][number]): ArmEvidence {
   const failed = layout.mountError !== null
     ? [`mount refused: ${layout.mountError}`]
     : [];
+
   let semanticsPassed = layout.mountError === null;
+
   if (semanticsPassed && layout.id !== NATIVE_CONTROL) {
     // The control runs on the container disk by design; every mounted arm must
     // hold the same POSIX verdicts the control held, per repetition, or G2
     // refuses the arm.
     const broken = new Set<string>();
+
     for (const run of layout.reps) {
       for (const phase of run.phases) {
         for (const verdictRow of phase.verdicts) {
@@ -618,9 +696,11 @@ function armFromLayout(layout: RunArtifact['layouts'][number]): ArmEvidence {
         }
       }
     }
+
     for (const name of broken) failed.push(name);
     semanticsPassed = broken.size === 0;
   }
+
   return {
     arm: layout.id,
     kind: layout.id === NATIVE_CONTROL ? 'control' : 'candidate',
@@ -683,19 +763,23 @@ export function aggregateR2Accounting(
   artifact: Pick<RunArtifact, 'layouts'>,
 ): AccountingEvidence | null {
   const tallies = artifact.layouts.map((layout) => layout.ops).filter((ops) => ops !== null);
+
   if (tallies.length === 0) return null;
   const calls: Record<string, number> = {};
   let classA = 0;
   let classB = 0;
   let classFree = 0;
   let total = 0;
+
   for (const ops of tallies) {
     classA += ops.classA;
     classB += ops.classB;
     classFree += ops.classFree;
     total += ops.total;
+
     for (const [name, count] of Object.entries(ops.calls)) calls[name] = (calls[name] ?? 0) + count;
   }
+
   return {
     source: `fixture /ops tallies summed over ${tallies.length} arm(s)`,
     calls,

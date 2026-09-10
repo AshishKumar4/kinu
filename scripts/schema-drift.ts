@@ -48,6 +48,7 @@ import { assertMeasured, finding } from './gate-ratchet';
 import { isProductSource, readMatching } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const GENESIS_LOCK = `${root}scripts/schema-genesis.lock.json`;
 
 /** The name and the opening of a table body: `(` for an inline column list,
@@ -86,14 +87,18 @@ export function lockKey(table: string, file: string): string {
  *  or `DEFAULT (unixepoch() * 1000)` cannot end the body early. */
 function balancedBody(source: string, openIndex: number): string {
   let depth = 0;
+
   for (let i = openIndex; i < source.length; i += 1) {
     const ch = source[i];
+
     if (ch === '(') depth += 1;
     else if (ch === ')') {
       depth -= 1;
+
       if (depth === 0) return source.slice(openIndex + 1, i);
     }
   }
+
   throw new Error('schema-drift: a CREATE TABLE body has no closing paren');
 }
 
@@ -102,11 +107,13 @@ function balancedBody(source: string, openIndex: number): string {
  *  never a table quietly left out of the census. */
 function interpolatedBody(source: string, file: string, table: string, name: string): string {
   const declaration = new RegExp(`(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*\`\\s*\\(`).exec(source);
+
   if (declaration === null) {
     throw new Error(
       `schema-drift: ${file} builds ${table} from \${${name}}, which is not a local template beginning with '('`,
     );
   }
+
   return balancedBody(source, source.indexOf('(', declaration.index));
 }
 
@@ -115,36 +122,47 @@ function interpolatedBody(source: string, file: string, table: string, name: str
  *  it is the only way to see those columns at all. */
 function objectLiteralKeys(source: string, file: string, table: string, name: string): string[] {
   const declaration = new RegExp(`(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=\\s*\\{`).exec(source);
+
   if (declaration === null) {
     throw new Error(`schema-drift: ${file}: ${table} builds columns from ${name}, which is not a local object`);
   }
+
   const open = source.indexOf('{', declaration.index);
   let depth = 0;
   let end = source.length;
+
   for (let i = open; i < source.length; i += 1) {
     if (source[i] === '{') depth += 1;
     else if (source[i] === '}') {
       depth -= 1;
+
       if (depth === 0) { end = i; break; }
     }
   }
+
   // Keys at the object's own nesting level, so a one-line object reads the same
   // as a formatted one and a nested value's keys are never counted as columns.
   const keys: string[] = [];
   let level = 0;
+
   for (const part of source.slice(open + 1, end).split(',')) {
     if (level === 0) {
       const key = /^\s*([a-z_][a-z0-9_]*)\s*:/.exec(part)?.[1];
+
       if (key !== undefined) keys.push(key);
     }
+
     for (const ch of part) {
       if (ch === '{' || ch === '(' || ch === '[') level += 1;
+
       if (ch === '}' || ch === ')' || ch === ']') level -= 1;
     }
   }
+
   if (keys.length === 0) {
     throw new Error(`schema-drift: ${file}: ${table} builds columns from ${name}, which has no keys`);
   }
+
   return keys;
 }
 
@@ -152,20 +170,28 @@ function objectLiteralKeys(source: string, file: string, table: string, name: st
  *  can be followed one step: `const IDENTITY_COLUMN_DDL = Object.entries(…)`. */
 function declarationStatement(source: string, name: string): string | null {
   const declaration = new RegExp(`(?:const|let|var)\\s+${name}\\s*(?::[^=]+)?=`).exec(source);
+
   if (declaration === null) return null;
   let depth = 0;
   let quote = '';
+
   for (let i = declaration.index; i < source.length; i += 1) {
     const ch = source[i] ?? '';
+
     if (quote !== '') {
       if (ch === quote && source[i - 1] !== '\\') quote = '';
       continue;
     }
+
     if (ch === '\'' || ch === '"' || ch === '`') { quote = ch; continue; }
+
     if (ch === '(' || ch === '{' || ch === '[') depth += 1;
+
     if (ch === ')' || ch === '}' || ch === ']') depth -= 1;
+
     if (ch === ';' && depth === 0) return source.slice(declaration.index, i);
   }
+
   return source.slice(declaration.index);
 }
 
@@ -175,13 +201,16 @@ function declarationStatement(source: string, name: string): string | null {
  *  failure, never a table quietly left out of the census. */
 function generatedColumns(source: string, file: string, table: string, part: string): string[] {
   const inline = /\$\{\s*Object\.(?:entries|keys)\(\s*([A-Za-z_$][\w$]*)\s*\)/.exec(part)?.[1];
+
   if (inline !== undefined) return objectLiteralKeys(source, file, table, inline);
 
   const constant = /^\$\{\s*([A-Za-z_$][\w$]*)\s*\}$/.exec(part)?.[1];
   const statement = constant === undefined ? null : declarationStatement(source, constant);
+
   const indirect = statement === null
     ? undefined
     : /Object\.(?:entries|keys)\(\s*([A-Za-z_$][\w$]*)\s*\)/.exec(statement)?.[1];
+
   if (indirect !== undefined) return objectLiteralKeys(source, file, table, indirect);
 
   throw new Error(
@@ -193,13 +222,16 @@ function generatedColumns(source: string, file: string, table: string, part: str
  *  inside a template argument balance out, so plain brace counting is enough. */
 function closingBrace(body: string, start: number): number {
   let depth = 0;
+
   for (let i = start; i < body.length; i += 1) {
     if (body[i] === '{') depth += 1;
     else if (body[i] === '}') {
       depth -= 1;
+
       if (depth === 0) return i;
     }
   }
+
   throw new Error('schema-drift: an interpolated DDL body has no closing brace');
 }
 
@@ -214,8 +246,10 @@ function expandColumnBlocks(body: string, source: string, file: string, table: s
   let out = '';
   let depth = 0;
   let i = 0;
+
   while (i < body.length) {
     const ch = body[i] ?? '';
+
     if (ch === '$' && body[i + 1] === '{') {
       const end = closingBrace(body, i + 1);
       const part = body.slice(i, end + 1);
@@ -227,11 +261,14 @@ function expandColumnBlocks(body: string, source: string, file: string, table: s
       i = end + 1;
       continue;
     }
+
     if (ch === '(') depth += 1;
+
     if (ch === ')') depth -= 1;
     out += ch;
     i += 1;
   }
+
   return out;
 }
 
@@ -242,50 +279,68 @@ function parseColumns(body: string, source: string, file: string, table: string)
   const parts: string[] = [];
   let depth = 0;
   let current = '';
+
   for (const ch of text) {
     if (ch === '(') depth += 1;
+
     if (ch === ')') depth -= 1;
+
     if (ch === ',' && depth === 0) {
       parts.push(current);
       current = '';
       continue;
     }
+
     current += ch;
   }
+
   parts.push(current);
 
   const columns: string[] = [];
+
   for (const part of parts) {
     const trimmed = part.trim();
+
     if (trimmed === '') continue;
     const word = /^[A-Za-z_][A-Za-z0-9_]*/.exec(trimmed)?.[0];
+
     if (word === undefined) {
       throw new Error(
         `schema-drift: ${file}: ${table} has a body part this cannot read: ${trimmed.slice(0, 60)}`,
       );
     }
+
     if (Object.hasOwn(CONSTRAINT_KEYWORD, word.toUpperCase())) continue;
     columns.push(word);
   }
+
   if (columns.length === 0) throw new Error(`schema-drift: ${file}: ${table} parsed no columns`);
+
   return columns;
 }
 
 export function parseTables(file: string, source: string): TableDdl[] {
   const byTable = new Map<string, string[]>();
+
   for (const match of source.matchAll(DDL_RE)) {
     const table = match[1];
+
     if (table === undefined) continue;
     const constant = match[2];
+
     const body = constant === undefined
       ? balancedBody(source, source.indexOf('(', match.index + match[0].length - 1))
       : interpolatedBody(source, file, table, constant);
+
     const columns = byTable.get(table) ?? [];
+
     for (const column of parseColumns(body, source, file, table)) {
       if (!columns.includes(column)) columns.push(column);
     }
+
     byTable.set(table, columns);
   }
+
   return [...byTable].map(([table, columns]) => ({ table, file, columns }));
 }
 
@@ -294,6 +349,7 @@ export function tablesIn(sources: ReadonlyMap<string, string>): TableDdl[] {
 }
 
 const GenesisLockSchema = v.record(v.string(), v.array(v.string()));
+
 export type GenesisLock = v.InferOutput<typeof GenesisLockSchema>;
 
 export function readGenesisLock(path: string = GENESIS_LOCK): GenesisLock {
@@ -313,9 +369,11 @@ const DRIFT_FIX = 'put the new columns in a table of their own, or reset product
  */
 export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock): Violation[] {
   const violations: Violation[] = [];
+
   for (const { table, file, columns } of tables) {
     const key = lockKey(table, file);
     const genesis = lock[key];
+
     if (genesis === undefined) {
       violations.push({
         key,
@@ -329,13 +387,17 @@ export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock):
       });
       continue;
     }
+
     const added = columns.filter((column) => !genesis.includes(column));
     const removed = genesis.filter((column) => !columns.includes(column));
+
     if (added.length === 0 && removed.length === 0) continue;
+
     const found = [
       added.length > 0 ? `[${added.join(', ')}] added after genesis` : '',
       removed.length > 0 ? `[${removed.join(', ')}] removed after genesis` : '',
     ].filter((part) => part !== '').join('; ');
+
     violations.push({
       key,
       detail: finding({
@@ -349,6 +411,7 @@ export function driftViolations(tables: readonly TableDdl[], lock: GenesisLock):
       }),
     });
   }
+
   return violations;
 }
 
@@ -366,7 +429,9 @@ export function genesisForNewTable(table: TableDdl, lock: GenesisLock): readonly
   const siblings = Object.entries(lock)
     .filter(([key]) => key.startsWith(`${table.table}@`))
     .map(([, columns]) => columns);
+
   if (siblings.length === 0) return table.columns;
+
   return table.columns.filter((column) => siblings.every((columns) => columns.includes(column)));
 }
 
@@ -391,20 +456,26 @@ export function lockUpdate(
   const next: Record<string, string[]> = Object.fromEntries(
     Object.entries(lock).map(([key, columns]) => [key, [...columns]]),
   );
+
   const added: string[] = [];
   const refused: string[] = [];
+
   for (const table of tables) {
     const key = lockKey(table.table, table.file);
     const existing = lock[key];
+
     if (existing === undefined) {
       next[key] = [...genesis(table)];
       added.push(key);
       continue;
     }
+
     const recomputed = genesis(table);
+
     if (existing.length === recomputed.length && existing.every((c, i) => c === recomputed[i])) continue;
     refused.push(`${key}: locked [${existing.join(', ')}], DDL now reads [${recomputed.join(', ')}]`);
   }
+
   return {
     next: Object.fromEntries(Object.entries(next).sort(([a], [b]) => a.localeCompare(b))),
     added: added.sort(),
@@ -443,6 +514,7 @@ export function survey(lock: GenesisLock = readGenesisLock()): Survey {
   const readable = new Map([...sources].filter(([, source]) => READABLE_TOKEN.test(source)));
   const tables = tablesIn(readable);
   const present = new Set(tables.map(({ table, file }) => lockKey(table, file)));
+
   return {
     files: sources.size,
     parsed: readable.size,
@@ -478,6 +550,7 @@ if (import.meta.main) {
   // report a drift-free tree while comparing every table against nothing — so
   // it reads the file and fails when the file is not there.
   const state = survey(locking && !existsSync(GENESIS_LOCK) ? {} : readGenesisLock());
+
   // The corpus counts are asserted on both paths. The LOCK COUNT is asserted
   // only on the checking path, for the same reason.
   const corpus: readonly (readonly [string, number])[] = [
@@ -485,25 +558,31 @@ if (import.meta.main) {
     ['of them parsed', state.parsed],
     ['tables', state.tables.length],
   ];
+
   if (locking) {
     const update = lockUpdate(state.tables, state.lock, (table) => genesisForNewTable(table, state.lock));
+
     if (update.refused.length > 0) {
       console.error(
         `schema-drift --lock: refusing to rewrite ${String(update.refused.length)} existing genesis entr(ies).\n`
         + 'A genesis is a fact about deployed storage. Move the columns to a table of their own, '
         + 'or reset production and delete the lock file before re-locking.\n',
       );
+
       for (const line of update.refused) console.error(`  ${line}`);
       process.exit(1);
     }
+
     writeFileSync(GENESIS_LOCK, `${JSON.stringify(update.next, null, 2)}\n`);
     console.log(
       `schema-drift: locked ${String(update.added.length)} new table(s) — `
       + assertMeasured('schema-drift', corpus),
     );
+
     for (const key of update.added) console.log(`  + ${key}`);
   } else if (state.violations.length > 0) {
     console.error(`schema-drift: ${String(state.violations.length)} violation(s)\n`);
+
     for (const violation of state.violations) console.error(violation.detail);
     process.exit(1);
   } else {
@@ -511,7 +590,9 @@ if (import.meta.main) {
       ...corpus,
       ['locked genesis entries', Object.keys(state.lock).length],
     ]);
+
     console.log(`schema-drift: ok — ${measured}`);
+
     for (const spot of blindSpots(state)) console.log(`  blind: ${spot}`);
   }
 }

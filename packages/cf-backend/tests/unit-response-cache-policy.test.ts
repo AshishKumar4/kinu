@@ -31,11 +31,13 @@ function userEnv(): Env {
     async userMcp_warmConnections() { return { servers: 0 }; },
     async listCredentials() { return []; },
   };
+
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     UserDO: { idFromName: (name: string) => name, get: () => stub },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+
   // SAFETY: the constructed environment provides the one namespace and the
   // encryption key the credential-summary read reaches; no other binding is on
   // that path.
@@ -48,6 +50,7 @@ describe('authenticated JSON is private and never stored', () => {
       new Request('https://kinu.example.com/api/user/credentials'),
       userEnv(), IDENTITY,
     );
+
     expect(response?.status).toBe(200);
     expect(response?.headers.get('cache-control')).toBe(PRIVATE_NO_STORE);
   });
@@ -65,10 +68,12 @@ describe('a route that names its own policy keeps it', () => {
   test('the public health stamp stays revalidatable', async () => {
     const partialEnv: Partial<Env> = {};
     Object.assign(partialEnv, { ASSETS: { fetch: async () => new Response('', { status: 404 }) } });
+
     // SAFETY: the health route reads only the assets binding constructed here.
     const response = await handleHealthRequest(
       new Request('https://kinu.example.com/api/health'), partialEnv as Env,
     );
+
     expect(response?.headers.get('cache-control')).toBe('no-cache');
   });
 

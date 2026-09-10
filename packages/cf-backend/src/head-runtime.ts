@@ -92,6 +92,8 @@ export function createHeadRuntime(deps: HeadRuntimeDeps): HeadRuntime {
       operations: deps.operations,
     }),
   };
+
   if (deps.grounding) runtime.grounding = deps.grounding;
+
   return runtime;
 }

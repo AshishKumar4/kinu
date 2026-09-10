@@ -26,6 +26,7 @@ export function createModelSummarizer(
     // names the in-flight fold on the next activation.
     const operation = beginModelOperation(spend, 'complete');
     let result;
+
     try {
       result = await generateText({
         model: getModel(),
@@ -36,12 +37,14 @@ export function createModelSummarizer(
       operation.failed({ cause: err });
       throw err;
     }
+
     // A thrown request has no provider usage report. Its failed operation row
     // records the cause without inventing spend.
     const usage = normalizeUsage(result.totalUsage);
     const modelId = result.response.modelId;
     operation.completed({ usage, modelId });
     spend?.report({ source: spend.source, usage, modelId });
+
     return result.text;
   };
 }

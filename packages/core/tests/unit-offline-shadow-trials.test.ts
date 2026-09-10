@@ -33,7 +33,9 @@ import { createTestRuntime } from './helpers';
 import { createTestSql, testActorHandle } from '@kinu.run/test-utils';
 
 const TASK = 'what did we decide about the codename?';
+
 const LIVE_ANSWER = '<<live-answer>>';
+
 const CONTEXT: ModelMessage[] = [
   { role: 'user', content: 'the codename is BLUEFIN' },
   { role: 'assistant', content: 'noted' },
@@ -48,12 +50,15 @@ function evalExecutor(): Executor {
       const resolved: ResolvedProvider[] = Array.isArray(providers)
         ? providers
         : [{ name: 'workspace', fns: providers }];
+
       try {
         const fn = new Function(
           ...resolved.map((provider) => provider.name),
           `return (async () => {\n${code}\n})();`,
         );
+
         const result = await fn(...resolved.map((provider) => provider.fns));
+
         return { result: result === undefined ? undefined : decodeJsonValue({ value: result }) };
       } catch (err) {
         return { result: undefined, error: err instanceof Error ? err.message : String(err) };
@@ -79,6 +84,7 @@ async function setup(): Promise<AgentRuntime> {
     VALUES (${rt.actor.actorId}, 1, ${Date.now()}, 'candidate', 'pending')`;
   await rt.storage.vfs.writeFile('scaffold/agent.js.v1', PENDING_SOURCE);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "live" }; }');
+
   return rt;
 }
 
@@ -97,6 +103,7 @@ function countedControl(
   const counts = { surface: 0, judge: 0, defaultInference: 0 };
   const contexts: ScaffoldReplayContext[] = [];
   const verdict = opts?.verdict ?? 'pending';
+
   const control: ScaffoldControl = {
     rt,
     sql: rt.storage.sql,
@@ -108,6 +115,7 @@ function countedControl(
     surface: (_task, context) => {
       counts.surface++;
       contexts.push(context ?? []);
+
       return {
         llmStream: async function* () { yield { type: 'text-delta', delta: '' } satisfies ChatEvent; },
         defaultInference: async function* () { counts.defaultInference++; yield { value: '' }; },
@@ -116,14 +124,17 @@ function countedControl(
     model: () => new MockLanguageModelV3(),
     judge: async ({ schema }) => {
       counts.judge++;
+
       // Content-blind, but the protocol is order-swapped, so a fixed slot would
       // flip and tie. Attribute by the pending's known output instead.
       const out: JudgeOutput = verdict === 'tie'
         ? { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 }
         : { winner: 'a', rationale: 'm', scoreA: 0.8, scoreB: 0.4 };
+
       return v.parse(schema, out);
     },
   };
+
   return { control, counts, contexts };
 }
 
@@ -138,6 +149,7 @@ function contentJudge(
     const a = prompt.slice(prompt.indexOf('\nResponse A:\n'), bMark);
     const pendingIsA = a.includes(pendingText);
     const pick = winner === 'pending' ? (pendingIsA ? 'a' : 'b') : (pendingIsA ? 'b' : 'a');
+
     return v.parse(schema, {
       winner: pick,
       rationale: 'content',
@@ -197,9 +209,11 @@ describe('the interactive path runs no trial', () => {
   test('a host that never drains cannot grow the queue without bound', async () => {
     const rt = await setup();
     const { control } = countedControl(rt);
+
     for (let i = 0; i < MAX_QUEUED_SHADOW_TRIALS; i++) {
       expect(queueTurnShadowTrial(control, { task: `t${i}`, currentOutput: 'a', context: [] }, PLAN)).toBe('queued');
     }
+
     expect(queueTurnShadowTrial(control, { task: 'one more', currentOutput: 'a', context: [] }, PLAN))
       .toBe('queue_full');
     expect(listQueuedShadowTrials(rt.storage.sql, rt.actor, 1)).toHaveLength(MAX_QUEUED_SHADOW_TRIALS);
@@ -210,12 +224,14 @@ describe('a queued trial is not evidence', () => {
   test('the gate sees queued trials separately and still says continue', async () => {
     const rt = await setup();
     const { control } = countedControl(rt);
+
     // Four decisive wins recorded — one short of the ladder's minimum.
     for (let i = 0; i < 4; i++) {
       void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
         VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
+
     for (let i = 0; i < 6; i++) {
       queueTurnShadowTrial(control, { task: `t${i}`, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     }
@@ -227,6 +243,7 @@ describe('a queued trial is not evidence', () => {
 
     const status = getShadowStatus(rt.storage.sql, rt.actor);
     expect(status.hasPending).toBe(true);
+
     if (!status.hasPending) throw new Error('unreachable');
     expect(status.queuedTrials).toBe(6);
     expect(status.pending.trialsSoFar).toBe(4);
@@ -258,16 +275,20 @@ describe('the offline drain is what executes trials', () => {
 
   test('a conclusive gate promotes from the drain, and the stale queue is discarded', async () => {
     const rt = await setup();
+
     for (let i = 0; i < 5; i++) {
       void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
         VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
+
     const counted = countedControl(rt, { autoPromote: true });
+
     const control: ScaffoldControl = {
       ...counted.control,
       judge: contentJudge(`pending: ${TASK}`, 'pending'),
     };
+
     for (let i = 0; i < 3; i++) {
       queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
     }
@@ -275,9 +296,11 @@ describe('the offline drain is what executes trials', () => {
     const drain = await runQueuedShadowTrials(control);
 
     expect(drain).toEqual({ trials: 1, applied: 'promote' });
+
     const statuses = new Map(rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId}`.map((r) => [r.version, r.status]));
+
     expect(statuses.get(1)).toBe('current');
     // The two trials still queued were evidence about a candidate nobody is
     // deciding on any more.
@@ -302,10 +325,12 @@ describe('the offline drain is what executes trials', () => {
   test('a trial that throws is dropped rather than wedging the queue', async () => {
     const rt = await setup();
     const counted = countedControl(rt);
+
     const control: ScaffoldControl = {
       ...counted.control,
       judge: async () => { throw new Error('judge down'); },
     };
+
     queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] }, PLAN);
 
     const drain = await runQueuedShadowTrials(control);
@@ -392,6 +417,7 @@ describe('the stored replay context is bounded', () => {
     const rt = await setup();
     const { control } = countedControl(rt);
     const filler = 'x'.repeat(SHADOW_TRIAL_CONTEXT_CHARS / 4);
+
     const huge: ModelMessage[] = [
       { role: 'user', content: `oldest ${filler}` },
       { role: 'assistant', content: filler },
@@ -417,14 +443,19 @@ describe('a keyed trial survives the consumption of its queue row', () => {
   function openQueue() {
     const { sql, execRaw } = createTestSql();
     initShadowTables(execRaw);
+
     return { sql, actor: testActorHandle(sql) };
   }
+
   const trial = (id?: string, now?: number) => {
     const args: Parameters<typeof queueShadowTrial>[2] = {
       pendingVersion: 2, task: TASK, currentOutput: LIVE_ANSWER, context: [],
     };
+
     if (id !== undefined) args.id = id;
+
     if (now !== undefined) args.now = now;
+
     return args;
   };
 
@@ -447,6 +478,7 @@ describe('a keyed trial survives the consumption of its queue row', () => {
     const { sql, actor } = openQueue();
     queueShadowTrial(sql, actor, trial('trial:seq-1', 1));
     dropQueuedShadowTrial(sql, actor, 'trial:seq-1');
+
     for (let i = 0; i < MAX_QUEUED_SHADOW_TRIALS; i++) queueShadowTrial(sql, actor, trial());
 
     expect(queueShadowTrial(sql, actor, trial('trial:seq-1', 9))).toBe('queued');

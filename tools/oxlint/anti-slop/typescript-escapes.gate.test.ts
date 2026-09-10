@@ -57,6 +57,7 @@ export function reply(ok: boolean): any {
 }
 `,
     good: `export interface Reply { readonly ok: boolean; }
+
 export function reply(ok: boolean): Reply {
   return { ok };
 }
@@ -84,6 +85,7 @@ export function reply(ok: boolean): Reply {
 export const harness: number = rawText;
 `,
     good: `declare const rawText: string;
+
 export const harness: string = rawText;
 `,
   },
@@ -96,6 +98,7 @@ export const harness: string = rawText;
 export const harness: number = rawText;
 `,
     good: `declare const rawText: string;
+
 export const harness: string = rawText;
 `,
   },
@@ -108,6 +111,7 @@ declare const rawText: string;
 export const harness: number = rawText;
 `,
     good: `declare const rawText: string;
+
 export const harness: string = rawText;
 `,
   },

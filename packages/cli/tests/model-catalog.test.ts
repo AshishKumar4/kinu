@@ -19,6 +19,7 @@ const FEED: AgentModelEntry[] = [
 describe('menu model dedupe', () => {
   const menuModels = (models: unknown[]) =>
     normalizeModelMenu({ payload: { models, failures: [] } }).models;
+
   test('pins the platform default, then groups providers in feed order', () => {
     const out = menuModels(FEED);
     expect(out.map((m) => m.spec)).toEqual([
@@ -35,6 +36,7 @@ describe('menu model dedupe', () => {
       { spec: 'groq/m', label: 'M', provider: 'groq', capabilities: ['tools'] },
       { spec: 'groq/m', label: 'M', provider: 'groq', capabilities: ['vision'] },
     ]);
+
     expect(out).toHaveLength(1);
     expect(out[0].capabilities?.sort()).toEqual(['tools', 'vision']);
   });
@@ -45,6 +47,7 @@ describe('menu entry normalization + contextWindowForSpec', () => {
     const rows = normalizeModelMenu({ payload: { models: [
       { spec: 'groq/llama-3.3-70b-versatile', label: 'Llama 3.3 70B', provider: 'groq', contextWindow: 131072 },
     ], failures: [] } }).models;
+
     expect(contextWindowForSpec(rows, 'groq/llama-3.3-70b-versatile')).toBe(131072);
     expect(contextWindowForSpec(rows, 'missing/spec')).toBeUndefined();
   });
@@ -59,6 +62,7 @@ describe('menu entry normalization + contextWindowForSpec', () => {
       },
       { provider: 'my-gateway', id: 'openai/gpt-4.1', label: 'GPT-4.1', contextWindow: 1047576 },
     ], failures: [] } }).models;
+
     expect(rows).toEqual([
       {
         spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'GLM 5.3', provider: 'workers-ai',

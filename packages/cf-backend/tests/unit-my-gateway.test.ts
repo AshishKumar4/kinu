@@ -23,6 +23,7 @@ import {
 } from '../src/lib/cloudflare-oauth';
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
+
 const AI_BASE_URL = `${ACCOUNT_ROOT}/ai/v1`;
 
 function gatewayStub(opts: {
@@ -31,13 +32,17 @@ function gatewayStub(opts: {
   freshToken?: string;
 } = {}) {
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
+
   const headersFor = (token: string) => gatewayId
     ? { authorization: `Bearer ${token}`, 'cf-aig-gateway-id': gatewayId }
     : null;
+
   return userCredentialSource({
     getAuthHeaders: async (key: string, o?: { forceRefresh?: boolean }) => {
       if (key === 'cloudflare.oauth') return { authorization: `Bearer ${opts.token ?? 'cf-user'}` };
+
       if (key !== CLOUDFLARE_AI_GATEWAY_CRED_KEY) return null;
+
       return headersFor(o?.forceRefresh ? (opts.freshToken ?? opts.token ?? 'cf-user') : (opts.token ?? 'cf-user'));
     },
     listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
@@ -60,6 +65,7 @@ function chatCompletionResponse(model: string): Response {
 describe('my-gateway request shape', () => {
   test('routes through the account /ai/v1 endpoint with bearer + cf-aig-gateway-id', async () => {
     const seen: Array<{ url: string; auth: string | null; gateway: string | null; model: unknown }> = [];
+
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ gatewayId: 'prod-gw', token: 'cf-user-token' }),
@@ -72,6 +78,7 @@ describe('my-gateway request shape', () => {
           gateway: headers.get('cf-aig-gateway-id'),
           model: body.model,
         });
+
         return chatCompletionResponse('openai/gpt-4.1');
       }),
     });
@@ -80,6 +87,7 @@ describe('my-gateway request shape', () => {
       model: reg.resolveModel('my-gateway/openai/gpt-4.1'),
       prompt: 'ping',
     });
+
     expect(result.text).toBe('ok');
     expect(seen).toHaveLength(1);
     expect(seen[0].url).toBe(`${AI_BASE_URL}/chat/completions`);
@@ -91,17 +99,20 @@ describe('my-gateway request shape', () => {
 
   test('a mid-flight 401 forces one refresh and retries with the fresh token', async () => {
     const wire: Array<string | null> = [];
+
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ token: 'cf-stale', freshToken: 'cf-fresh' }),
       fetch: asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         wire.push(headers.get('authorization'));
+
         if (headers.get('authorization') === 'Bearer cf-stale') {
           return new Response(JSON.stringify({ errors: [{ code: 10000, message: 'Invalid access token' }] }), {
             status: 401, headers: { 'content-type': 'application/json' },
           });
         }
+
         return chatCompletionResponse('anthropic/claude-sonnet-4-5');
       }),
     });
@@ -110,6 +121,7 @@ describe('my-gateway request shape', () => {
       model: reg.resolveModel('my-gateway/anthropic/claude-sonnet-4-5'),
       prompt: 'ping',
     });
+
     expect(result.text).toBe('ok');
     expect(wire).toEqual(['Bearer cf-stale', 'Bearer cf-fresh']);
   });
@@ -130,6 +142,7 @@ describe('my-gateway availability gating', () => {
       listCredentials: async () => [],
       getCredentialBaseURL: async () => null,
     });
+
     const reg = createAgentProviderRegistry({ env: {}, userDO: dead });
     expect(await reg.registry.get('my-gateway')!.isAvailable(reg.deps)).toBe(false);
     expect(await reg.registry.get('my-gateway')!.unavailableReason!(reg.deps)).toMatch(/select an AI Gateway/i);
@@ -166,36 +179,43 @@ describe('my-gateway model discovery', () => {
     return asFetchFunction(async (input: RequestInfo | URL) => {
       const url = String(input);
       opts.onRequest?.(url);
+
       if (url.startsWith('https://models.dev/')) {
         return new Response(modelsDevBody, { headers: { 'content-type': 'application/json' } });
       }
+
       if (url.includes('/provider_configs')) {
         return new Response(JSON.stringify({
           success: true,
           result: opts.slugs.map((slug, i) => ({ id: `pc-${i}`, provider_slug: slug, alias: 'default', default_config: true })),
         }), { headers: { 'content-type': 'application/json' } });
       }
+
       if (url.includes('/billing/credit-balance')) {
         if (opts.balance === 'denied') {
           return new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }), {
             status: 403, headers: { 'content-type': 'application/json' },
           });
         }
+
         return new Response(JSON.stringify({ success: true, result: { balance: opts.balance ?? 0 } }), {
           headers: { 'content-type': 'application/json' },
         });
       }
+
       throw new Error(`unexpected fetch: ${url}`);
     });
   }
 
   test('lists models for the gateway BYOK providers, ids prefixed with the wire author', async () => {
     const urls: string[] = [];
+
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ gatewayId: 'byok-gw', token: `t-${Math.random()}` }),
       fetch: discoveryFetch({ slugs: ['openai', 'google-ai-studio', 'workers-ai'], onRequest: (u) => urls.push(u) }),
     });
+
     const models = await reg.registry.get('my-gateway')!.listModels(reg.deps);
     const ids = models.map((m) => m.id).sort();
     // google-ai-studio (gateway slug) → google (wire author + models.dev id);
@@ -211,6 +231,7 @@ describe('my-gateway model discovery', () => {
       userDO: gatewayStub({ gatewayId: 'credits-gw', token: `t-${Math.random()}` }),
       fetch: discoveryFetch({ slugs: [], balance: 12.5 }),
     });
+
     const models = await reg.registry.get('my-gateway')!.listModels(reg.deps);
     const ids = models.map((m) => m.id);
     // Curated unified-billing set ∩ what models.dev knows in this fixture.
@@ -225,14 +246,17 @@ describe('my-gateway model discovery', () => {
       userDO: gatewayStub({ gatewayId: 'old-scope-gw', token: `t-${Math.random()}` }),
       fetch: asFetchFunction(async (input: RequestInfo | URL) => {
         const url = String(input);
+
         if (url.startsWith('https://models.dev/')) {
           return new Response(modelsDevBody, { headers: { 'content-type': 'application/json' } });
         }
+
         return new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }), {
           status: 403, headers: { 'content-type': 'application/json' },
         });
       }),
     });
+
     expect(await reg.registry.get('my-gateway')!.listModels(reg.deps)).toEqual([]);
   });
 
@@ -243,25 +267,31 @@ describe('my-gateway model discovery', () => {
     // from the model picker with nothing to say why.
     const token = `t-${Math.random()}`;
     let upstream: 'ok' | 'down' = 'ok';
+
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub({ gatewayId: 'byok-gw', token }),
       fetch: asFetchFunction(async (input: RequestInfo | URL) => {
         const url = String(input);
+
         if (url.startsWith('https://models.dev/')) {
           return new Response(modelsDevBody, { headers: { 'content-type': 'application/json' } });
         }
+
         if (upstream === 'down') return new Response('upstream is unwell', { status: 500 });
+
         if (url.includes('/provider_configs')) {
           return new Response(JSON.stringify({ success: true, result: [{ provider_slug: 'openai' }] }), {
             headers: { 'content-type': 'application/json' },
           });
         }
+
         return new Response(JSON.stringify({ success: true, result: { balance: 0 } }), {
           headers: { 'content-type': 'application/json' },
         });
       }),
     });
+
     const provider = reg.registry.get('my-gateway')!;
 
     expect((await provider.listModels(reg.deps)).map((m) => m.id)).toEqual(['openai/gpt-4.1']);
@@ -288,12 +318,15 @@ describe('my-gateway model discovery', () => {
       userDO: gatewayStub({ gatewayId: 'busy-gw', token: `t-${Math.random()}` }),
       fetch: asFetchFunction(async (input: RequestInfo | URL) => {
         const url = String(input);
+
         if (url.startsWith('https://models.dev/')) {
           return new Response(modelsDevBody, { headers: { 'content-type': 'application/json' } });
         }
+
         return new Response('slow down', { status: 429 });
       }),
     });
+
     await expect(reg.registry.get('my-gateway')!.listModels(reg.deps)).rejects.toThrow(/429/);
   });
 });
@@ -307,6 +340,7 @@ describe('my-gateway error mapping', () => {
         status, headers: { 'content-type': 'application/json' },
       })),
     });
+
     try {
       await generateText({ model: reg.resolveModel('my-gateway/minimax/m3'), prompt: 'ping' });
       throw new Error('expected generateText to fail');
@@ -339,14 +373,17 @@ describe('my-gateway error mapping', () => {
 describe('my-gateway registry precedence', () => {
   test('workers-ai and dynamic catalog ids stay authoritative for their own specs', async () => {
     const wire: string[] = [];
+
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: gatewayStub(),
       fetch: asFetchFunction(async (input: RequestInfo | URL) => {
         wire.push(String(input));
+
         return chatCompletionResponse('@cf/moonshotai/kimi-k2.6');
       }),
     });
+
     // `workers-ai/...` resolves through the bespoke workers-ai provider —
     // same /ai/v1 endpoint, no my-gateway involvement.
     await generateText({ model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'), prompt: 'ping' });
@@ -370,6 +407,7 @@ describe('Cloudflare AI Gateway discovery helpers', () => {
     const gateways = await fetchCloudflareAIGateways('abc123abc123abc1', 'tok', asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe(`${ACCOUNT_ROOT}/ai-gateway/gateways?per_page=50`);
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer tok');
+
       return new Response(JSON.stringify({
         success: true,
         result: [
@@ -379,6 +417,7 @@ describe('Cloudflare AI Gateway discovery helpers', () => {
         ],
       }), { headers: { 'content-type': 'application/json' } });
     }));
+
     expect(gateways).toEqual([
       { id: 'default', authenticated: false, createdAt: '2026-01-01T00:00:00Z' },
       { id: 'prod-gw', authenticated: true, createdAt: null },
@@ -414,6 +453,7 @@ describe('UserDO gateway credential derivation', () => {
       success: true,
       result: gateways.map((gateway) => ({ id: gateway.id, authentication: gateway.authentication })),
     }), { status: 200, headers: { 'content-type': 'application/json' } }));
+
     return () => { globalThis.fetch = original; };
   }
 
@@ -424,7 +464,9 @@ describe('UserDO gateway credential derivation', () => {
       { id: 'gw-one', authentication: false },
       { id: 'gw-two', authentication: false },
     ]);
+
     const harness = createTestUserDO();
+
     try {
       const owner = await testOwner();
       await harness.userDO.setCredential(owner, CLOUDFLARE_OAUTH_CRED_KEY, oauthCredential());
@@ -457,6 +499,7 @@ describe('UserDO gateway credential derivation', () => {
   test('login-time discovery auto-selects a sole gateway', async () => {
     const restore = stubGatewayListing([{ id: 'gw-solo', authentication: false }]);
     const harness = createTestUserDO();
+
     try {
       const owner = await testOwner();
       // setCredential(cloudflare.oauth) discovers inline, so my-gateway works

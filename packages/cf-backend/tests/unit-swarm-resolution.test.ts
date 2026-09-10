@@ -55,6 +55,7 @@ function journal(nodes: readonly JournalNode[]): HeadRunView {
     spawnedAt: 1, heads: nodes, merge: null,
   };
 }
+
 describe('the resolution a run resolved', () => {
   test('a named preset resolves to its tuple, and settle is derived from it', () => {
     const resolution = swarmResolutionOf('prove');
@@ -142,6 +143,7 @@ describe('the fan-in vertex, read out of the rationale the engine writes', () =>
       node('b', 'fan-in over 3 parents of depth 1'),
       node('c', 'fan-in over 2 parents of depth 2'),
     ]));
+
     expect([...vertices]).toEqual([['b', 3], ['c', 2]]);
   });
 
@@ -155,6 +157,7 @@ describe('the fan-in vertex, read out of the rationale the engine writes', () =>
       node('a', 'expansion 1 of 2'),
       node('b', '   '),
     ]));
+
     expect(why.get('a')).toBe('expansion 1 of 2');
     expect(why.has('b')).toBe(false);
   });
@@ -209,6 +212,7 @@ describe('what a running search says about itself', () => {
         liveNode('e', 'aborted', { errorMessage: 'operator stopped it' }),
       ]),
     );
+
     expect(live).toMatchObject({ running: 2, reported: 1, failed: 2, total: 5 });
   });
 
@@ -219,11 +223,13 @@ describe('what a running search says about itself', () => {
       liveNode('a', 'running', { spawnedAt: 1_000, lastStepAt: 9_000 }),
       liveNode('b', 'running', { spawnedAt: 4_000, lastStepAt: null }),
     ]));
+
     expect(live?.lastEventAt).toBe(9_000);
 
     const unstarted = runLiveness(journal([
       liveNode('b', 'running', { spawnedAt: 4_000, lastStepAt: null }),
     ]));
+
     expect(unstarted?.lastEventAt).toBe(4_000);
   });
 
@@ -232,6 +238,7 @@ describe('what a running search says about itself', () => {
       liveNode('a', 'completed', { depth: 1 }), liveNode('b', 'completed', { depth: 1 }),
       liveNode('c', 'running', { depth: 2 }), liveNode('d', 'running', { depth: 2 }),
     ]));
+
     expect(live?.levels).toEqual([
       { depth: 1, running: 0, reported: 2, failed: 0, total: 2 },
       { depth: 2, running: 2, reported: 0, failed: 0, total: 2 },
@@ -242,6 +249,7 @@ describe('what a running search says about itself', () => {
     const live = runLiveness(journal([
       liveNode('a', 'completed'), liveNode('b', 'completed'),
     ]));
+
     expect(live).toMatchObject({ running: 0, reported: 2, failed: 0, total: 2 });
   });
 
@@ -257,6 +265,7 @@ describe('what a running search says about itself', () => {
     const live = runLiveness(journal([
       liveNode('a', 'interrupted'),
     ]));
+
     expect(live).toMatchObject({ running: 0, reported: 0, failed: 0, total: 1 });
   });
 });

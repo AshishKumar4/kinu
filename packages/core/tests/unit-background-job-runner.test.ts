@@ -29,11 +29,14 @@ import { inWorkMode } from '../src/execution/work-mode';
 function fakeFiber() {
   const stashes: JsonValue[] = [];
   const runs: Promise<unknown>[] = [];
+
   const fiber: Schedule['fiber'] = async (_name, fn) => {
     const body = fn({ stash: (data) => { stashes.push(data); }, snapshot: null });
     runs.push(body);
+
     return body;
   };
+
   return { fiber, stashes, runs, settled: () => Promise.all(runs) };
 }
 
@@ -41,16 +44,20 @@ function fakeHost() {
   const enqueued: ProgrammaticTurn[] = [];
   let status: 'queued' | 'skipped' = 'queued';
   let rejection: Error | null = null;
+
   const host: BackendHost = {
     broadcast: () => {},
     enqueueTurn: async (i) => {
       enqueued.push(i);
+
       if (rejection) throw rejection;
+
       return { status };
     },
     turnInFlight: () => false,
     setTimer: () => {},
   };
+
   return {
     host,
     enqueued,
@@ -85,10 +92,13 @@ function setup(opts: {
   // threaded, so the second process reopens the SAME actor's rows.
   const actors = createTestActors(realSql, makeExecRaw(db));
   const actor = actors.main;
+
   const sql = (<T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
     if (storeFault.closed) throw new Error('Cannot use a closed database');
+
     return realSql<T>(strings, ...values);
   }) satisfies SqlExecutor;
+
   const store = new BackgroundJobStore(sql, actor);
   const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
@@ -98,6 +108,7 @@ function setup(opts: {
   const logs: Array<{ e: string; d?: string }> = [];
   const notified: Array<{ id: string; status: string }> = [];
   let drainSchedules = 0;
+
   const runnerDeps = {
     store, fiber, signals: new SignalDelivery(host), eventLog,
     scheduleDrain: () => { drainSchedules++; },
@@ -110,7 +121,9 @@ function setup(opts: {
     harvest: opts.harvest,
     scheduleResume: opts.scheduleResume,
   };
+
   const runner = new BackgroundJobRunner(runnerDeps);
+
   return {
     runner, runnerDeps, store, eventLog, stashes, runs, settled, host, enqueued,
     setStatus, setRejection, logs, notified, drainSchedules: () => drainSchedules,
@@ -147,12 +160,14 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('starts its durable fiber only after external work is transferred to the job', async () => {
     const handoff = Promise.withResolvers<void>();
     const transferred: string[] = [];
+
     const { runner, store, stashes, settled } = setup({
       onDetached: async (jobId) => {
         transferred.push(jobId);
         await handoff.promise;
       },
     });
+
     const controller = new AbortController();
     const deps = runner.thresholdDeps({}, 'build', controller);
     const detaching = deps.onThreshold('run', Promise.resolve('done'));
@@ -211,10 +226,12 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ variant: 'timer', trust: 'self', priority: 'normal' });
     const wake = pending[0];
+
     if (!wake || wake.variant !== 'timer'
       || (wake.payload_visibility !== 'full' && wake.payload_visibility !== 'redact')) {
       throw new Error('expected a readable timer wake event');
     }
+
     expect(wake.payload.trigger_id).toBe(`background-job-wake:${id}`);
     expect(buildDrainBatch(pending)?.text).toContain(`agent.jobResult('${id}')`);
     expect(drainSchedules()).toBe(1);
@@ -248,6 +265,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     const { runner, store, eventLog, stashes, settled, setRejection } = setup();
     setRejection(new Error('queue unavailable'));
     eventLog.publish = () => { throw new Error('ledger unavailable'); };
+
     const id = runner.create('think', {}, 'build', new AbortController());
 
     runner.detach(id, 'think', Promise.resolve('the answer'));
@@ -346,12 +364,15 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
 
   test('keeps a job retryable when its transferred external work cannot be cancelled', async () => {
     let attempts = 0;
+
     const { runner, store, settled } = setup({
       onCancelled: async () => {
         attempts += 1;
+
         if (attempts === 1) throw new Error('device unavailable');
       },
     });
+
     const controller = new AbortController();
     const id = runner.create('run', {}, 'build', controller);
     const work = Promise.withResolvers<never>();
@@ -415,9 +436,15 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   test('a second cancel while the first is in flight fires no second external cancel', async () => {
     const confirm = Promise.withResolvers<void>();
     let externalCancels = 0;
+
     const { runner, store, settled } = setup({
-      onCancelled: () => { externalCancels += 1; return confirm.promise; },
+      onCancelled: () => {
+        externalCancels += 1;
+
+        return confirm.promise;
+      },
     });
+
     const id = runner.create('run', {}, 'build', new AbortController());
     const work = Promise.withResolvers<never>();
     runner.detach(id, 'run', work.promise);
@@ -442,9 +469,11 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     // holding that outcome back forever would strand a `running` row with no
     // executor and no result.
     const confirm = Promise.withResolvers<void>();
+
     const { runner, store, settled, enqueued } = setup({
       onCancelled: async () => { await confirm.promise; throw new Error('device unavailable'); },
     });
+
     const id = runner.create('run', {}, 'build', new AbortController());
     const work = Promise.withResolvers<string>();
     runner.detach(id, 'run', work.promise);
@@ -485,6 +514,7 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
 describe('BackgroundJobRunner.recover — evict mid-flight', () => {
   const orphanRow = (store: BackgroundJobStore, id: string): string => {
     store.create({ id, kind: 'think', workMode: 'build', input: '{}', now: Date.now() });
+
     return id;
   };
 
@@ -537,11 +567,14 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   test('a resumable job is reclaimed under a fresh epoch and re-driven to completion', async () => {
     let seenInput: unknown = undefined;
     let seenMode: 'plan' | 'build' | undefined;
+
     const resume: JobResumer = async (_kind, input, mode) => {
       seenInput = input;
       seenMode = mode;
+
       return { text: 'resumed answer' };
     };
+
     const { runner, store, enqueued, settled, notified, logs } = setup({ resume });
     // A job created with its tool input, then interrupted mid-flight (stashed running).
     store.create({ id: 'jr', kind: 'think', workMode: 'plan', input: '{"strategy":"mcts","task":"t"}', now: Date.now() });
@@ -565,6 +598,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
   test('a kind the resumer cannot re-drive falls back to the eviction failure', async () => {
     const resume: JobResumer = async (kind) => { throw new JobNotResumable(kind); };
+
     const { runner, store, enqueued, settled } = setup({ resume });
     store.create({ id: 'jn', kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
 
@@ -594,6 +628,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     // first finds the wait its predecessor armed already elapsed, which is the
     // one thing a test cannot do by waiting: the instants reach 60s.
     let last = first;
+
     for (let activation = 0; activation < 12; activation++) {
       first.store.deferResume('jc', Date.now() - 1);
       last = setup({ resume, db: first.db });
@@ -618,10 +653,12 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     // Each activation reads the wait off the ROW, so the delay it arms is
     // measurable against the attempt clock the same claim wrote.
     const waits: number[] = [];
+
     for (let activation = 0; activation < 9; activation++) {
       first.store.deferResume('jp', Date.now() - 1);
       await setup({ resume, db: first.db }).runner.recover({ jobId: 'jp', phase: 'running' });
       const job = first.store.get('jp');
+
       if (job?.resumeAfter === null || job === null) throw new Error('a claim armed no next attempt');
       waits.push(job.resumeAfter - job.attemptStartedAt);
     }
@@ -689,6 +726,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     const { runner, store, storeFault, settled, enqueued, db } = setup();
     const id = runner.create('run', { command: 'sleep 1' }, 'build', new AbortController());
     let finish: () => void = () => {};
+
     runner.detach(id, 'run', new Promise<string>((resolve) => { finish = () => resolve('done'); }));
 
     // Teardown: the process gave up on the fiber and closed the database.
@@ -731,6 +769,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       const inFlight = await setup({ resume, db: first.db }).runner.recoverOrphans();
       expect(inFlight.map((j) => j.id)).toEqual(['jz']);
     }
+
     expect(first.store.get('jz')?.resumeAttempts).toBe(6);
 
     // And a seventh that arrives DURING the wait. It re-drives nothing, and the
@@ -748,6 +787,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     const resume: JobResumer = async () => 'should not run';
     const { runner, store, settled } = setup({ resume });
     let finish: () => void = () => {};
+
     const id = runner.create('run', {}, 'build', new AbortController());
     runner.detach(id, 'run', new Promise<string>((resolve) => { finish = () => resolve('real result'); }));
 
@@ -775,11 +815,13 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     expect(first.store.get('jf')?.resumeAfter).toBeGreaterThan(Date.now());
 
     const next = setup({ resume, db: first.db });
+
     const claimed = await jobRedriveResumeGate({
       recoverOrphans: () => next.runner.recoverOrphans(),
       inputOf: (jobId) => next.store.getInput(jobId),
       rootsForTask: (t) => (t === task ? ['root-live'] : []),
     })(['root-live']);
+
     // Claimed, so `reconcileInterruptedForks` continues the run instead of
     // retiring it — over a job that this activation deliberately did not re-drive.
     expect(claimed).toEqual(['root-live']);
@@ -792,6 +834,7 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
       inputOf: (jobId) => next.store.getInput(jobId),
       rootsForTask: (t) => (t === task ? ['root-live'] : []),
     })(['root-live']);
+
     expect(retired).toEqual([]);
   });
 
@@ -831,8 +874,15 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
   test('an unreadable stored input fails its own job; the sweep still answers and the rest recover', async () => {
     const resumed: JsonValue[] = [];
     let release: () => void = () => {};
+
     const held = new Promise<string>((resolve) => { release = () => resolve('resumed'); });
-    const resume: JobResumer = (_kind, input) => { resumed.push(input); return held; };
+
+    const resume: JobResumer = (_kind, input) => {
+      resumed.push(input);
+
+      return held;
+    };
+
     const task = 'measure the three candidates';
     const first = setup({ resume });
     const now = Date.now();
@@ -843,8 +893,10 @@ describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forev
     const readInput = next.store.getInput.bind(next.store);
     next.store.getInput = (id) => {
       if (id === 'jp') throw new Error('disk I/O error');
+
       return readInput(id);
     };
+
     const claimed = await jobRedriveResumeGate({
       recoverOrphans: () => next.runner.recoverOrphans(),
       inputOf: (jobId) => next.store.getInput(jobId),
@@ -900,9 +952,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // property of the TURN (the cloud DO serves a watched chat turn and an
     // unwatched drain from one agent) switches policy between calls.
     let surface: InvocationSurface = 'interactive';
+
     const perTurn = new BackgroundJobRunner({
       ...oneShot.runnerDeps, policy: () => BACKGROUND_POLICY[surface],
     });
+
     expect(perTurn.policy.detachAfterMs).toBe(BACKGROUND_POLICY.interactive.detachAfterMs);
     surface = 'one-shot';
     expect(perTurn.policy.detachAfterMs).toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
@@ -915,9 +969,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
   test('past the concurrency cap classifies refusal without aborting foreground work', async () => {
     const { runner, store, logs } = setup();
+
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
+
     const controller = new AbortController();
     const work = Promise.withResolvers<string>();
     controller.signal.addEventListener('abort', () => {
@@ -927,6 +983,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const outcome = await deps.onThreshold('run', work.promise);
 
     expect(outcome.detached).toBe(false);
+
     if (outcome.detached) throw new Error('expected the full cap to refuse detach');
     // No ninth job: the cap stays hard, while this call keeps its foreground owner.
     expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
@@ -948,9 +1005,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // on passing.
     const { runner, store, actors, db } = setup();
     const sibling = new BackgroundJobStore(makeSql(db), actors.sibling('other'));
+
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       sibling.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
+
     // The owner sees none of them — its roster and its history are the actor's
     // half. That absence is what makes the refusal below attributable to the
     // workspace count rather than to anything this actor can read.
@@ -960,29 +1019,38 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
+
     expect(outcome.detached).toBe(false);
+
     if (outcome.detached) throw new Error('expected a sibling-filled cap to refuse detach');
     expect(outcome.reason).toBe('too many jobs already running');
   });
 
   test('under the cap a refusal never happens — the boundary is exact', async () => {
     const { runner, store } = setup();
+
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
       store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
+
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
+
     expect(outcome.detached).toBe(true);
   });
 
   test('a settled job frees a slot — the cap counts what is in flight, not what ever ran', async () => {
     const { runner, store } = setup();
+
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
+
     store.settle('busy-0', 0, 'done', Date.now());
+
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
+
     expect(outcome.detached).toBe(true);
   });
 
@@ -994,15 +1062,18 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // them — the give-up, coming back through the admission door.
     const resume: JobResumer = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
+
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       store.create({ id: `owed-${i}`, kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
       store.reclaim(`owed-${i}`);
       store.deferResume(`owed-${i}`, Date.now() + 60_000);
     }
+
     expect(store.countRunningInWorkspace()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
+
     expect(outcome.detached).toBe(true);
   });
 
@@ -1012,9 +1083,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // armed instant, because the pause is written FORWARD at claim time.
     const resume: JobResumer = () => new Promise<never>(() => {});
     const { runner, store } = setup({ resume });
+
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       store.create({ id: `live-${i}`, kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     }
+
     // This runner re-drives all eight, so all eight are live here AND all eight
     // have a future `resume_after`.
     await runner.recoverOrphans();
@@ -1023,6 +1096,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
+
     expect(outcome.detached).toBe(false);
   });
 
@@ -1038,6 +1112,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     ownership.report('req-2');
     const received: string[][] = [];
     const ownersDuringTransfer: Array<string | null> = [];
+
     const { runner } = setup({
       onDetached: async (_jobId, requestIds) => {
         received.push([...requestIds]);
@@ -1046,6 +1121,7 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
         ownership.report('req-late');
       },
     });
+
     const outcome = await runner.thresholdDeps({}, 'build', new AbortController(), ownership)
       .onThreshold('run', Promise.resolve('done'));
 
@@ -1062,17 +1138,21 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const ownership = new DeviceRequestOwnership();
     ownership.report('req-1');
     const work = Promise.withResolvers<string>();
+
     const { runner, store, logs, settled } = setup({
       onDetached: () => { throw new Error('the device refused the handover'); },
     });
+
     const controller = new AbortController();
     controller.signal.addEventListener('abort', () => {
       work.reject(new Error('the transfer failure aborted live work'));
     });
+
     const outcome = await runner.thresholdDeps({}, 'build', controller, ownership)
       .onThreshold('run', work.promise);
 
     expect(outcome.detached).toBe(true);
+
     if (!outcome.detached) throw new Error('expected a job to preserve the live work');
     const jobId = outcome.jobId;
     expect(store.get(jobId)?.status).toBe('running');
@@ -1163,7 +1243,9 @@ describe('a background job gives up its turn, and hands over what it has', () =>
       resume: async (kind) => { throw new JobNotResumable(kind); },
       harvest: async () => ({ rootId: 'root-2', candidates: [{ nodeId: 'n1', score: 0.4 }] }),
     });
+
     store.create({ id: 'bgjob-unresumable', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
+
     // Interrupted repeatedly first: the generation count rides the partial, and
     // reaching this terminal on attempt 51 must read no differently from
     // reaching it on attempt 1 — there is no count that decides anything now.
@@ -1187,6 +1269,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
       resume: async (kind) => { throw new JobNotResumable(kind); },
       harvest: async () => null,
     });
+
     store.create({ id: 'bgjob-unresumable-empty', kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
 
     await runner.recoverOrphans();
@@ -1205,6 +1288,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
       resume: async () => { throw new Error('the branch budget was rejected'); },
       harvest: async () => ({ rootId: 'root-3' }),
     });
+
     store.create({ id: 'bgjob-thrown', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     await runner.recoverOrphans();
@@ -1239,6 +1323,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     const { runner, store } = setup({
       harvest: async () => { throw new Error('the ledger is unreadable'); },
     });
+
     store.create({ id: 'bgjob-throws', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     await runner.recoverOrphans();
 
@@ -1249,10 +1334,16 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     // The guard. Without this arm a change that bounds everything passes the tests
     // above, and every resume in the product stops working.
     let resumeCalls = 0;
+
     const { runner, store, settled } = setup({
-      resume: async () => { resumeCalls += 1; return 'continued'; },
+      resume: async () => {
+        resumeCalls += 1;
+
+        return 'continued';
+      },
       harvest: async () => ({ never: 'read' }),
     });
+
     store.create({ id: 'bgjob-young', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
 
     await runner.recoverOrphans();
@@ -1267,6 +1358,7 @@ describe('a background job gives up its turn, and hands over what it has', () =>
     const { runner, store, enqueued, settled } = setup({
       resume: async () => 'continued at last',
     });
+
     store.create({ id: 'bgjob-gen', kind: 'agents', workMode: 'build', input: '{}', now: Date.now() });
     store.reclaim('bgjob-gen');
     store.reclaim('bgjob-gen');
@@ -1307,6 +1399,7 @@ test('a recovered Plan job cannot mutate project files through a Build-shaped ca
   await rt.storage.vfs.mkdir('/home/user', { recursive: true });
   await rt.storage.vfs.writeFile(path, 'original');
   const file = buildBuiltinTools({ rt }).file;
+
   if (file === undefined) throw new Error('No file tool');
   const write = toolExecute<JsonValue, JsonValue>(file);
   await write({ action: 'read', path });

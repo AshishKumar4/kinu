@@ -121,6 +121,7 @@ export type EvalTargetVerdict =
  */
 export function evalTargetVerdict(origin: string, env: EnvSource = process.env): EvalTargetVerdict {
   const normalized = origin.trim().replace(/\/+$/, '');
+
   if (!normalized) {
     return {
       kind: 'refused',
@@ -134,6 +135,7 @@ export function evalTargetVerdict(origin: string, env: EnvSource = process.env):
   // matched around: `http://localhost:5173` and `http://[::1]:8787` are the two
   // shapes a local dev server actually arrives as.
   let hostname: string;
+
   try {
     hostname = new URL(normalized).hostname;
   } catch (error) {
@@ -147,12 +149,15 @@ export function evalTargetVerdict(origin: string, env: EnvSource = process.env):
   if (env[EVAL_IDENTITY_ENV.allowProd]?.trim() === '1') {
     return { kind: 'allowed', origin: normalized, why: 'override' };
   }
+
   if (LOOPBACK_HOSTS.includes(hostname)) {
     return { kind: 'allowed', origin: normalized, why: 'local' };
   }
+
   if (normalized === EVAL_STAGING_ORIGIN) {
     return { kind: 'allowed', origin: normalized, why: 'staging' };
   }
+
   return {
     kind: 'refused',
     origin: normalized,
@@ -200,18 +205,23 @@ export function evalModelEndpointVerdict(
   env: EnvSource = process.env,
 ): EvalModelEndpointVerdict {
   let url: URL;
+
   try {
     url = new URL(baseUrl.trim());
   } catch (error) {
     // Not a URL, so it names no deployment and reaches nothing. The provider
     // stack refuses it on the first call.
     if (classify({ cause: error }) !== 'malformed-input') throw error;
+
     return { kind: 'gateway' };
   }
 
   const target = evalTargetVerdict(url.origin, env);
+
   if (target.kind === 'allowed') return { kind: 'checked', target };
+
   if (url.pathname.replace(/\/+$/, '') === USER_AI_PROXY_PATH) return { kind: 'checked', target };
+
   return { kind: 'gateway' };
 }
 
@@ -231,12 +241,15 @@ export interface RefusedEvalEndpoint {
 export function refusedEvalEndpoint(env: EnvSource = process.env): RefusedEvalEndpoint | null {
   for (const variable of LIVE_MODEL_ENV.gatewayURL) {
     const value = env[variable]?.trim();
+
     if (!value) continue;
     const verdict = evalModelEndpointVerdict(value, env);
+
     if (verdict.kind === 'checked' && verdict.target.kind === 'refused') {
       return { variable, reason: verdict.target.reason };
     }
   }
+
   return null;
 }
 
@@ -282,6 +295,7 @@ export function resolveEvalIdentity(env: EnvSource = process.env): EvalIdentityR
   }
 
   const verdict = evalTargetVerdict(origin, env);
+
   if (verdict.kind === 'refused') {
     return { kind: 'refused', reason: verdict.reason };
   }

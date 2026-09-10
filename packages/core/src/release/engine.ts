@@ -169,8 +169,11 @@ const NOT_CONFIGURED =
   'wrangler.jsonc first (see docs/EXECUTION-LAYER-SPEC.md).';
 
 const DEFAULT_WORK_ROOT = '/workspace/releases';
+
 const GIT = `git -c user.name=Kinu -c user.email=kinu@agent -c core.hooksPath=/dev/null`;
+
 const OUTPUT_CAP = 20_000;
+
 const MAX_CHECKS_PER_RUN = 8;
 
 function cap(text: string): string {
@@ -186,8 +189,10 @@ function isSafeChangeId(id: string): boolean {
 export function parseDeployOutput(output: string) {
   const version = /Current Version ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output)
     ?? /\bVersion ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output);
+
   const deployment = /Current Deployment ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output)
     ?? /\bDeployment ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output);
+
   return { versionId: version?.[1] ?? null, deploymentId: deployment?.[1] ?? null };
 }
 
@@ -231,20 +236,25 @@ export class ReleaseEngine {
     | { ok: false; error: string }
   > {
     if (!isSafeChangeId(changeId)) return { ok: false, error: `invalid release change id: ${changeId}` };
+
     if (!this.exec) return { ok: false, error: NOT_CONFIGURED };
     const detail = await this.ledger.detail(changeId);
+
     return { ok: true, detail, exec: this.exec };
   }
 
   private async pathExists(exec: ReleaseExec, path: string): Promise<boolean> {
     const res = await exec.exec(`test -e ${shellQuote(path)} && echo yes || echo no`);
+
     return res.stdout.includes('yes');
   }
 
   private async headSha(exec: ReleaseExec, workdir: string): Promise<string | null> {
     const res = await exec.exec(`${GIT} rev-parse HEAD`, { cwd: workdir });
+
     if (res.exitCode !== 0) return null;
     const sha = res.stdout.trim();
+
     return /^[0-9a-f]{7,40}$/.test(sha) ? sha : null;
   }
 
@@ -264,20 +274,26 @@ export class ReleaseEngine {
     // commands pick up through GIT_CONFIG_GLOBAL, removed when done.
     const authFile = `/tmp/${changeId}.gitauth`;
     const netGit = auth ? `GIT_CONFIG_GLOBAL=${shellQuote(authFile)} ${GIT}` : GIT;
+
     if (auth) {
       await exec.writeFile(authFile, `[http]\n\textraheader = AUTHORIZATION: ${auth}\n`);
       await exec.exec(`chmod 600 ${shellQuote(authFile)}`);
     }
+
     try {
       const hasRepo = await this.pathExists(exec, `${workdir}/.git`);
+
       if (!hasRepo) {
         await exec.exec(`rm -rf ${shellQuote(workdir)} && mkdir -p ${shellQuote(this.workRoot)}`);
+
         const clone = await exec.exec(
           `${netGit} clone --depth 50 --branch ${shellQuote(branch)} ${shellQuote(binding.repoUrl)} ${shellQuote(workdir)}`,
         );
+
         if (clone.exitCode !== 0) {
           const out = combinedOutput(clone);
           const authy = /authentication|could not read|403|401|terminal prompts disabled/i.test(out);
+
           if (authy && !auth) {
             return (
               `git clone of ${binding.repoUrl} failed and no GitHub credential is stored. ` +
@@ -285,6 +301,7 @@ export class ReleaseEngine {
               `for this repo), then retry apply.\n${cap(out)}`
             );
           }
+
           return `git clone failed (exit ${clone.exitCode}):\n${cap(out)}`;
         }
       } else {
@@ -296,15 +313,19 @@ export class ReleaseEngine {
           `${netGit} fetch origin ${shellQuote(`refs/heads/${branch}`)}`,
           { cwd: workdir },
         );
+
         if (fetched.exitCode !== 0) return `git fetch failed (exit ${fetched.exitCode}):\n${cap(combinedOutput(fetched))}`;
       }
+
       // Pristine base for every (re-)apply: drop local drift, rebuild the
       // change branch from the fetched default branch tip.
       const checkout = await exec.exec(
         `${GIT} reset --hard && ${GIT} clean -fd && ${GIT} checkout -B ${shellQuote(`kinu/${changeId}`)} ${shellQuote(`origin/${branch}`)}`,
         { cwd: workdir },
       );
+
       if (checkout.exitCode !== 0) return `git checkout failed (exit ${checkout.exitCode}):\n${cap(combinedOutput(checkout))}`;
+
       return null;
     } finally {
       if (auth) await exec.exec(`rm -f ${shellQuote(authFile)}`);
@@ -317,18 +338,25 @@ export class ReleaseEngine {
    *  source of truth. */
   private async ensureLocalWorkdir(exec: ReleaseExec, workdir: string): Promise<string | null> {
     const hasRepo = await this.pathExists(exec, `${workdir}/.git`);
+
     if (!hasRepo) {
       const init = await exec.exec(
         `mkdir -p ${shellQuote(workdir)} && cd ${shellQuote(workdir)} && ${GIT} init -b main && ${GIT} add -A && ${GIT} commit --allow-empty -m 'base snapshot'`,
       );
+
       if (init.exitCode !== 0) return `git init failed (exit ${init.exitCode}):\n${cap(combinedOutput(init))}`;
+
       return null;
     }
+
     const base = await exec.exec(`${GIT} rev-list --max-parents=0 HEAD`, { cwd: workdir });
     const baseSha = base.stdout.trim().split('\n').pop()?.trim();
+
     if (base.exitCode !== 0 || !baseSha) return `could not resolve base commit:\n${cap(combinedOutput(base))}`;
     const reset = await exec.exec(`${GIT} reset --hard ${shellQuote(baseSha)} && ${GIT} clean -fd`, { cwd: workdir });
+
     if (reset.exitCode !== 0) return `git reset to base failed (exit ${reset.exitCode}):\n${cap(combinedOutput(reset))}`;
+
     return null;
   }
 
@@ -343,9 +371,13 @@ export class ReleaseEngine {
       ['awaiting_approval', ['preview_ready', 'patching']],
       ['failed', ['patching']],
     ]);
+
     const path = steps.get(change.status);
+
     if (!path) return `cannot apply a change in terminal status '${change.status}'`;
+
     for (const next of path) await this.ledger.transition(change.id, next);
+
     return null;
   }
 
@@ -353,13 +385,17 @@ export class ReleaseEngine {
 
   async apply(changeId: string): Promise<ApplyResult> {
     const pre = await this.requireDetail(changeId);
+
     if (!pre.ok) return pre;
     const { detail, exec } = pre;
     const { change, binding } = detail;
+
     if (!binding) return { ok: false, error: `change ${changeId} has no source binding` };
+
     if (!change.patch?.trim()) {
       return { ok: false, error: 'change has no patch — store the unified diff first (action=update with patch), then apply' };
     }
+
     // BEFORE the working copy is set up, let alone written: the protected-path
     // rule is an authority question, and answering it after a clone has already
     // run is answering it late. `validateReleasePatchPath` has existed and been
@@ -367,19 +403,25 @@ export class ReleaseEngine {
     // patch naming `.env`, `.ssh/`, `wrangler.jsonc` or `.git/` applied with no
     // inspection at all.
     const forbidden = validateReleasePatchTargets(change.patch);
+
     if (forbidden) {
       await this.ledger.recordCheck(changeId, { name: 'apply patch', status: 'failed', stderr: cap(forbidden) });
+
       return { ok: false, error: forbidden };
     }
 
     const statusErr = await this.normalizeToPatching(change);
+
     if (statusErr) return { ok: false, error: statusErr };
     const workdir = this.workdirFor(changeId);
+
     const setupErr = binding.kind === 'github'
       ? await this.ensureGithubWorkdir(exec, changeId, binding, workdir)
       : await this.ensureLocalWorkdir(exec, workdir);
+
     if (setupErr) {
       await this.ledger.recordCheck(changeId, { name: 'apply patch', status: 'failed', stderr: cap(setupErr) });
+
       return { ok: false, error: setupErr };
     }
 
@@ -389,6 +431,7 @@ export class ReleaseEngine {
 
     const started = Date.now();
     const applied = await exec.exec(`${GIT} apply --whitespace=nowarn ${shellQuote(patchPath)}`, { cwd: workdir });
+
     if (applied.exitCode !== 0) {
       await this.ledger.recordCheck(changeId, {
         name: 'apply patch',
@@ -397,6 +440,7 @@ export class ReleaseEngine {
         stderr: cap(applied.stderr || `git apply exited ${applied.exitCode}`),
         durationMs: Date.now() - started,
       });
+
       return {
         ok: false,
         error:
@@ -409,6 +453,7 @@ export class ReleaseEngine {
       `${GIT} add -A && ${GIT} commit -m ${shellQuote(`release change ${changeId}`)}`,
       { cwd: workdir },
     );
+
     if (commit.exitCode !== 0) {
       const out = combinedOutput(commit);
       const empty = /nothing to commit|nothing added to commit/i.test(out);
@@ -418,10 +463,12 @@ export class ReleaseEngine {
         stderr: cap(empty ? 'patch produced no file changes' : out),
         durationMs: Date.now() - started,
       });
+
       return { ok: false, error: empty ? 'patch produced no file changes' : `git commit failed:\n${cap(out)}` };
     }
 
     const sha = await this.headSha(exec, workdir);
+
     if (!sha) return { ok: false, error: 'applied and committed, but could not resolve the commit sha' };
 
     await this.ledger.recordCheck(changeId, {
@@ -431,6 +478,7 @@ export class ReleaseEngine {
       durationMs: Date.now() - started,
     });
     const updated = await this.ledger.transition(changeId, 'validating');
+
     return { ok: true, workdir, commit: sha, status: updated.status };
   }
 
@@ -438,23 +486,30 @@ export class ReleaseEngine {
 
   async runChecks(changeId: string, checks: Array<{ name: string; command: string }>): Promise<RunChecksResult> {
     const pre = await this.requireDetail(changeId);
+
     if (!pre.ok) return pre;
     const { detail, exec } = pre;
+
     if (detail.change.status !== 'validating') {
       return { ok: false, error: `checks run in status 'validating' (current: '${detail.change.status}') — apply the change first` };
     }
+
     const cleaned = checks
       .map((c) => ({ name: String(c.name ?? '').trim().slice(0, 120), command: String(c.command ?? '').trim() }))
       .filter((c) => c.name && c.command);
+
     if (cleaned.length === 0) return { ok: false, error: 'no checks given — pass checks: [{ name, command }]' };
+
     if (cleaned.length > MAX_CHECKS_PER_RUN) return { ok: false, error: `too many checks (max ${MAX_CHECKS_PER_RUN} per run)` };
 
     const workdir = this.workdirFor(changeId);
+
     if (!(await this.pathExists(exec, workdir))) {
       return { ok: false, error: `working copy ${workdir} is gone (the container filesystem was recycled) — re-run apply first` };
     }
 
     const results: CheckRunResult[] = [];
+
     for (const check of cleaned) {
       const started = Date.now();
       const res = await exec.exec(check.command, { cwd: workdir });
@@ -471,9 +526,11 @@ export class ReleaseEngine {
     }
 
     const allPassed = results.every((r) => r.status === 'passed');
+
     const updated = allPassed
       ? await this.ledger.transition(changeId, 'preview_ready')
       : detail.change;
+
     return { ok: true, allPassed, results, status: updated.status };
   }
 
@@ -481,34 +538,45 @@ export class ReleaseEngine {
 
   async preview(changeId: string, opts: { port: number; startCommand?: string }): Promise<PreviewResult> {
     const pre = await this.requireDetail(changeId);
+
     if (!pre.ok) return pre;
     const { detail, exec } = pre;
     const status = detail.change.status;
+
     if (!['validating', 'preview_ready', 'awaiting_approval'].includes(status)) {
       return { ok: false, error: `preview runs after apply (status 'validating'/'preview_ready', current: '${status}')` };
     }
+
     const port = Math.round(Number(opts.port));
+
     if (!Number.isFinite(port) || port <= 0 || port > 65535) return { ok: false, error: `invalid port: ${opts.port}` };
 
     const workdir = this.workdirFor(changeId);
+
     if (opts.startCommand?.trim()) {
       if (!(await this.pathExists(exec, workdir))) {
         return { ok: false, error: `working copy ${workdir} is gone — re-run apply first` };
       }
+
       const log = `/tmp/${changeId}-srv.log`;
+
       const started = await exec.exec(
         `nohup sh -c ${shellQuote(opts.startCommand.trim())} > ${shellQuote(log)} 2>&1 & echo started`,
         { cwd: workdir },
       );
+
       if (started.exitCode !== 0) {
         return { ok: false, error: `failed to launch server:\n${cap(combinedOutput(started))}` };
       }
+
       await new Promise((r) => setTimeout(r, 1500));
     }
 
     const exposed = await exec.exposePort(port, `pc-${changeId}`);
+
     if ('error' in exposed) return { ok: false, error: exposed.error };
     await this.ledger.update(changeId, { previewUrl: exposed.url });
+
     return { ok: true, url: exposed.url };
   }
 
@@ -519,15 +587,18 @@ export class ReleaseEngine {
     opts: { environment: ReleaseDeployment['environment']; command?: string },
   ): Promise<DeployResult> {
     const pre = await this.requireDetail(changeId);
+
     if (!pre.ok) return pre;
     const { detail, exec } = pre;
     const { change, binding, approvals, deployments } = detail;
     const environment = opts.environment;
+
     if (!['local', 'staging', 'production'].includes(environment)) {
       return { ok: false, error: `invalid environment: ${environment}` };
     }
 
     const requiredApproval = approvalTypeForEnvironment(environment);
+
     if (!hasApproved(approvals, requiredApproval)) {
       return {
         ok: false,
@@ -536,12 +607,14 @@ export class ReleaseEngine {
           `Use action=request_approval, then the owner approves it on the Releases surface.`,
       };
     }
+
     if (change.status !== 'awaiting_approval' && change.status !== 'applying') {
       return { ok: false, error: `deploy runs from 'awaiting_approval' (current: '${change.status}')` };
     }
 
     const workdir = this.workdirFor(changeId);
     const command = opts.command?.trim() || deployTargetAsCommand(binding?.deployTarget ?? null);
+
     // Preview promotion is local-only: staging/production deploys run a real
     // deploy command, so without one there is nothing to record — fail before
     // the digest check and before any status transition.
@@ -563,9 +636,11 @@ export class ReleaseEngine {
       patch: change.patch,
       command,
     });
+
     const digestBound = approvals.some(
       (a) => a.approvalType === requiredApproval && a.decision === 'approved' && a.argumentDigest === expectedDigest,
     );
+
     if (!digestBound) {
       return {
         ok: false,
@@ -575,6 +650,7 @@ export class ReleaseEngine {
           `current change and command, then deploy.`,
       };
     }
+
     if (!command && !change.previewUrl) {
       return {
         ok: false,
@@ -583,16 +659,20 @@ export class ReleaseEngine {
           'like "bunx wrangler deploy") and no preview URL to promote — run preview first',
       };
     }
+
     if (change.status === 'awaiting_approval') await this.ledger.transition(changeId, 'applying');
     const priorVersion = deployments.find((d) => d.workerVersionId)?.workerVersionId ?? null;
 
     let workerVersionId: string | null;
     let deploymentId: string | null;
+
     if (command) {
       if (!(await this.pathExists(exec, workdir))) {
         await this.ledger.transition(changeId, 'failed');
+
         return { ok: false, error: `working copy ${workdir} is gone — re-run apply, checks, and approval flow` };
       }
+
       const started = Date.now();
       const res = await exec.exec(command, { cwd: workdir });
       const output = combinedOutput(res);
@@ -603,10 +683,13 @@ export class ReleaseEngine {
         stderr: cap(res.stderr),
         durationMs: Date.now() - started,
       });
+
       if (res.exitCode !== 0) {
         await this.ledger.transition(changeId, 'failed');
+
         return { ok: false, error: `deploy command exited ${res.exitCode}:\n${cap(output)}` };
       }
+
       const parsed = parseDeployOutput(output);
       workerVersionId = parsed.versionId ?? (await this.headSha(exec, workdir));
       deploymentId = parsed.deploymentId;
@@ -614,9 +697,11 @@ export class ReleaseEngine {
       // Promote the verified preview: the deployed artifact IS the working
       // copy the preview URL serves; its identity is the real HEAD sha.
       const sha = await this.headSha(exec, workdir);
+
       if (!sha) {
         return { ok: false, error: `cannot resolve the working-copy commit in ${workdir} — re-run apply first` };
       }
+
       workerVersionId = sha;
       deploymentId = change.previewUrl;
     }
@@ -624,11 +709,13 @@ export class ReleaseEngine {
     const rollbackTarget = priorVersion ?? (await (async () => {
       const res = await exec.exec(`${GIT} rev-parse HEAD~1`, { cwd: workdir });
       const sha = res.stdout.trim();
+
       return res.exitCode === 0 && /^[0-9a-f]{7,40}$/.test(sha) ? sha : null;
     })());
 
     await this.ledger.recordDeployment(changeId, { environment, workerVersionId, deploymentId, rollbackTarget });
     const updated = await this.ledger.transition(changeId, 'deployed');
+
     return { ok: true, environment, workerVersionId, deploymentId, rollbackTarget, status: updated.status };
   }
 
@@ -636,26 +723,33 @@ export class ReleaseEngine {
 
   async rollback(changeId: string, opts?: { command?: string }): Promise<RollbackResult> {
     const pre = await this.requireDetail(changeId);
+
     if (!pre.ok) return pre;
     const { detail, exec } = pre;
     const { change, binding, approvals, deployments } = detail;
+
     if (change.status !== 'deployed') {
       return { ok: false, error: `rollback runs from 'deployed' (current: '${change.status}')` };
     }
+
     if (!hasApproved(approvals, 'rollback')) {
       return {
         ok: false,
         error: "rollback requires an APPROVED 'rollback' approval — use action=request_approval with approvalType=rollback",
       };
     }
+
     const latest = deployments[0];
+
     if (!latest?.rollbackTarget) {
       return { ok: false, error: 'no rollback target recorded on the latest deployment — nothing to restore' };
     }
+
     const target = latest.rollbackTarget;
     const isCommitTarget = /^[0-9a-f]{7,40}$/.test(target);
     const explicitCommand = opts?.command?.trim() || null;
     const platformCommand = isCommitTarget ? null : explicitCommand;
+
     if (!isCommitTarget && !platformCommand) {
       return {
         ok: false,
@@ -677,9 +771,11 @@ export class ReleaseEngine {
       patch: change.patch,
       command: platformCommand,
     });
+
     const digestBound = approvals.some(
       (a) => a.approvalType === 'rollback' && a.decision === 'approved' && a.argumentDigest === expectedDigest,
     );
+
     if (!digestBound) {
       return {
         ok: false,
@@ -691,9 +787,11 @@ export class ReleaseEngine {
     }
 
     const workdir = this.workdirFor(changeId);
+
     if (!(await this.pathExists(exec, `${workdir}/.git`))) {
       if (binding?.kind === 'github') {
         const err = await this.ensureGithubWorkdir(exec, changeId, binding, workdir);
+
         if (err) return { ok: false, error: `working copy lost and re-clone failed: ${err}` };
       } else {
         return {
@@ -718,9 +816,11 @@ export class ReleaseEngine {
         stderr: cap(res.stderr || (res.exitCode !== 0 ? `rollback command exited ${res.exitCode}` : '')),
         durationMs: Date.now() - started,
       });
+
       if (res.exitCode !== 0) {
         return { ok: false, error: `rollback command exited ${res.exitCode}:\n${cap(combinedOutput(res))}` };
       }
+
       await this.ledger.recordDeployment(changeId, {
         environment: latest.environment,
         workerVersionId: target,
@@ -728,18 +828,22 @@ export class ReleaseEngine {
         rollbackTarget: latest.workerVersionId,
       });
       const updated = await this.ledger.transition(changeId, 'rolled_back');
+
       return { ok: true, restored: target, verified: true, status: updated.status };
     }
 
     const reset = await exec.exec(`${GIT} reset --hard ${shellQuote(target)} && ${GIT} clean -fd`, { cwd: workdir });
+
     if (reset.exitCode !== 0) {
       return {
         ok: false,
         error: `git reset --hard ${target} failed (exit ${reset.exitCode})\n${cap(combinedOutput(reset))}`,
       };
     }
+
     const restoredSha = await this.headSha(exec, workdir);
     const verified = restoredSha != null && (restoredSha === target || restoredSha.startsWith(target) || target.startsWith(restoredSha));
+
     if (!verified) {
       await this.ledger.recordCheck(changeId, {
         name: 'rollback',
@@ -747,6 +851,7 @@ export class ReleaseEngine {
         stderr: cap(`expected HEAD ${target}, got ${restoredSha ?? 'unknown'}`),
         durationMs: Date.now() - started,
       });
+
       return { ok: false, error: `rollback NOT verified: expected HEAD ${target}, got ${restoredSha ?? 'unknown'}` };
     }
 
@@ -754,8 +859,10 @@ export class ReleaseEngine {
     // preview serves the workdir directly, so the reset already took effect.
     const command = explicitCommand ?? deployTargetAsCommand(binding?.deployTarget ?? null);
     let redeployNote = 'preview workdir restored in place';
+
     if (command) {
       const res = await exec.exec(command, { cwd: workdir });
+
       if (res.exitCode !== 0) {
         await this.ledger.recordCheck(changeId, {
           name: 'rollback',
@@ -764,8 +871,10 @@ export class ReleaseEngine {
           stderr: cap(res.stderr || `redeploy exited ${res.exitCode}`),
           durationMs: Date.now() - started,
         });
+
         return { ok: false, error: `restored ${target} but redeploy failed (exit ${res.exitCode}):\n${cap(combinedOutput(res))}` };
       }
+
       redeployNote = `redeployed via: ${command}`;
     }
 
@@ -782,6 +891,7 @@ export class ReleaseEngine {
       rollbackTarget: latest.workerVersionId,
     });
     const updated = await this.ledger.transition(changeId, 'rolled_back');
+
     return { ok: true, restored: restoredSha, verified: true, status: updated.status };
   }
 }

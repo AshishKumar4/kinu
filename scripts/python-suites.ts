@@ -70,13 +70,16 @@ export interface SuiteRoot {
  */
 export function suiteRoots(files: readonly string[]): readonly SuiteRoot[] {
   const byDirectory = new Map<string, string[]>();
+
   for (const file of files) {
     const directory = dirname(file);
     const module = file.slice(directory.length + 1).replace(/\.py$/, '');
     const existing = byDirectory.get(directory);
+
     if (existing === undefined) byDirectory.set(directory, [module]);
     else existing.push(module);
   }
+
   return [...byDirectory]
     .map(([directory, modules]): SuiteRoot => ({ directory, modules: modules.sort() }))
     .sort((left, right) => left.directory.localeCompare(right.directory));
@@ -93,15 +96,18 @@ export function suiteRoots(files: readonly string[]): readonly SuiteRoot[] {
  */
 export function loadedModules(output: string): ReadonlySet<string> {
   const loaded = new Set<string>();
+
   for (const match of output.matchAll(/^\S+ \(([A-Za-z0-9_]+)\./gmu)) {
     if (match[1] !== undefined) loaded.add(match[1]);
   }
+
   return loaded;
 }
 
 /** The count `unittest` reports for one root, or `null` when it printed none. */
 export function reportedCount(output: string): number | null {
   const match = /^Ran (\d+) tests? in /mu.exec(output);
+
   return match?.[1] === undefined ? null : Number(match[1]);
 }
 
@@ -120,12 +126,14 @@ export const BLIND_SPOTS: readonly string[] = [
 function main(): number {
   const files = trackedFiles().filter(isPythonSuite);
   const roots = suiteRoots(files);
+
   const measured = assertMeasured('python-suites', [
     ['suite files', files.length],
     ['discovery roots', roots.length],
   ]);
 
   const version = spawnSync(PYTHON, ['--version'], { cwd: root, encoding: 'utf8' });
+
   if (version.status !== 0) {
     console.error(finding({
       invariant: `${PYTHON} runs the tracked Python suites`,
@@ -137,11 +145,13 @@ function main(): number {
         + 'run must not report green — that is how three suites came to run in no pipeline',
       fix: 'install python3, or point KINU_PYTHON at the interpreter this checkout should use',
     }));
+
     return 1;
   }
 
   const findings: string[] = [];
   let executed = 0;
+
   for (const { directory, modules } of roots) {
     // `-t <dir>` as well as `-s <dir>`: with `-t .` these roots are not
     // importable and discovery raises rather than running.
@@ -150,6 +160,7 @@ function main(): number {
       ['-m', 'unittest', 'discover', '-v', '-s', directory, '-t', directory, '-p', DISCOVER_PATTERN],
       { cwd: root, encoding: 'utf8' },
     );
+
     const output = `${run.stdout}\n${run.stderr}`;
     const count = reportedCount(output);
     const loaded = loadedModules(output);
@@ -170,6 +181,7 @@ function main(): number {
       }));
       continue;
     }
+
     if (count === null || count === 0) {
       findings.push(finding({
         invariant: 'a discovery root runs at least one test',
@@ -182,6 +194,7 @@ function main(): number {
       }));
       continue;
     }
+
     if (absent.length > 0) {
       findings.push(finding({
         invariant: 'every enumerated suite file is a module discovery loaded',
@@ -194,16 +207,22 @@ function main(): number {
       }));
       continue;
     }
+
     executed += count;
   }
 
   if (findings.length > 0) {
     console.error(`\npython-suites: ${String(findings.length)} finding(s)\n`);
+
     for (const entry of findings) console.error(entry);
+
     return 1;
   }
+
   console.log(`python-suites: ok — ${measured}, ${String(executed)} tests executed`);
+
   for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
+
   return 0;
 }
 

@@ -33,11 +33,14 @@ import { createTestActorsOver } from '@kinu.run/test-utils';
  *  test can decide WHEN the settlement completes. */
 function inlineFiber() {
   const runs: Promise<unknown>[] = [];
+
   const fiber: Schedule['fiber'] = async (_name, fn) => {
     const body = fn({ stash: () => {}, snapshot: null });
     runs.push(body);
+
     return body;
   };
+
   return { fiber, settled: () => Promise.all(runs) };
 }
 
@@ -61,6 +64,7 @@ function scene() {
   // notice where nothing drains it.
   const actor = createTestActorsOver(db).main;
   const store = new BackgroundJobStore(makeSql(db), actor);
+
   const runner = new BackgroundJobRunner({
     store,
     fiber,
@@ -76,6 +80,7 @@ function scene() {
     const jobId = runner.create(kind, { q: 1 }, 'build', controller);
     const gate = Promise.withResolvers<JsonValue | undefined>();
     runner.detach(jobId, kind, gate.promise);
+
     return { jobId, controller, release: gate.resolve };
   };
 
@@ -85,6 +90,7 @@ function scene() {
   const calls: string[] = [];
   /** Whether a foreground controller was already aborted when chats went. */
   let chatsSawAborted: boolean | null = null;
+
   const stop = () => cancelCurrentWork({
     cancelChats: () => {
       chatsSawAborted = [...activeToolControllers].some((c) => c.signal.aborted);
@@ -92,11 +98,16 @@ function scene() {
     },
     activeToolControllers,
     broadcast: (payload) => { broadcasts.push(payload); },
-    stopDeviceCommands: async () => { calls.push('devices'); return []; },
+    stopDeviceCommands: async () => {
+      calls.push('devices');
+
+      return [];
+    },
   });
 
   return { store, runner, settled, detachHeldJob, activeToolControllers, stop, broadcasts, calls, chatsSawAborted: () => chatsSawAborted };
 }
+
 describe('Stop scopes to the displayed turn', () => {
   test('a detached job held at its settlement boundary survives Stop and completes', async () => {
     const s = scene();
@@ -157,6 +168,7 @@ describe('Stop scopes to the displayed turn', () => {
     await s.stop();
 
     expect(s.broadcasts).toHaveLength(1);
+
     // Parsed, not cast. `strictObject` states the frame's WHOLE surface, so a
     // `cancelledJobs` that came back would fail here — which is a real assertion
     // about the wire rather than a spelling of `Object.keys`.

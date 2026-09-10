@@ -74,9 +74,11 @@ import type { ActorTurnProgram } from './actor-program';
  * what `gate:wired` reported it as.
  */
 const CLAIM_OUTCOMES = [...RUN_END_REASONS, 'indeterminate'] as const;
+
 export type ClaimOutcome = (typeof CLAIM_OUTCOMES)[number];
 
 const CLAIM_STATUSES = ['admitted', 'settled'] as const;
+
 const PROGRAM_KINDS = ['builtin', 'scaffold'] as const;
 
 /** The selected program, as the claim binds it. */
@@ -300,9 +302,11 @@ export class ActorClaimStore {
     const encoded = encodeModelMessages(input.context);
     const digest = modelMessagesDigest(encoded);
     const at = nowMs();
+
     const epoch = this.transactionSync(() => {
       const prior = this.sql<{ epoch: number }>`
         SELECT epoch FROM actor_turn_claims WHERE actor_id = ${this.actorId} AND turn_id = ${input.turnId}`[0];
+
       const next = (prior?.epoch ?? 0) + 1;
       void this.sql`
         INSERT INTO actor_turn_claims (
@@ -330,8 +334,10 @@ export class ActorClaimStore {
           epoch = excluded.epoch, working_revision = excluded.working_revision, digest = excluded.digest,
           message_count = excluded.message_count, messages = excluded.messages,
           step_index = NULL, recorded_at = excluded.recorded_at`;
+
       return next;
     });
+
     return Object.freeze({
       actorId: this.actorId,
       runId: input.runId,
@@ -360,6 +366,7 @@ export class ActorClaimStore {
   }): ConsumedContext {
     const encoded = encodeModelMessages(step.messages);
     const digest = modelMessagesDigest(encoded);
+
     return this.transactionSync(() => {
       this.assertLive(claim);
       const revision = this.nextRevision(claim.turnId);
@@ -371,6 +378,7 @@ export class ActorClaimStore {
       void this.sql`
         UPDATE actor_turn_claims SET consumed_revision = ${revision}, run_id = ${claim.runId}
         WHERE actor_id = ${this.actorId} AND turn_id = ${claim.turnId} AND epoch = ${claim.epoch}`;
+
       return { revision, digest };
     });
   }
@@ -384,11 +392,13 @@ export class ActorClaimStore {
    */
   turns(limit = 50): readonly StoredActorClaim[] {
     this.actor.assertCurrent();
+
     const rows = this.sql<ClaimRow & { turn_id: string }>`
       SELECT turn_id, run_id, epoch, work_mode, program_kind, program_version, program_digest,
              program_build, status, outcome, consumed_revision, claimed_at
       FROM actor_turn_claims WHERE actor_id = ${this.actorId}
       ORDER BY claimed_at DESC, turn_id DESC LIMIT ${limit}`;
+
     return rows.map((row) => this.claimOf(row.turn_id, row));
   }
 
@@ -402,6 +412,7 @@ export class ActorClaimStore {
    *  of every step's array is a listing of the whole turn's context. */
   revisions(turnId: string): readonly RenderedRequest[] {
     this.actor.assertCurrent();
+
     return this.sql<Omit<RevisionRow, 'messages'> & { recorded_at: number }>`
       SELECT revision, epoch, working_revision, digest, message_count, step_index, recorded_at
       FROM actor_context_revisions
@@ -441,10 +452,12 @@ export class ActorClaimStore {
   /** One stored claim, or null. */
   read(turnId: string): StoredActorClaim | null {
     this.actor.assertCurrent();
+
     const row = this.sql<ClaimRow>`
       SELECT run_id, epoch, work_mode, program_kind, program_version, program_digest,
              program_build, status, outcome, consumed_revision, claimed_at
       FROM actor_turn_claims WHERE actor_id = ${this.actorId} AND turn_id = ${turnId} LIMIT 1`[0];
+
     return row === undefined ? null : this.claimOf(turnId, row);
   }
 
@@ -455,11 +468,13 @@ export class ActorClaimStore {
    */
   unsettled(limit = 50): StoredActorClaim[] {
     this.actor.assertCurrent();
+
     const rows = this.sql<ClaimRow & { turn_id: string }>`
       SELECT turn_id, run_id, epoch, work_mode, program_kind, program_version, program_digest,
              program_build, status, outcome, consumed_revision, claimed_at
       FROM actor_turn_claims WHERE actor_id = ${this.actorId} AND status = 'admitted'
       ORDER BY claimed_at DESC LIMIT ${limit}`;
+
     return rows.map((row) => this.claimOf(row.turn_id, row));
   }
 
@@ -468,6 +483,7 @@ export class ActorClaimStore {
    *  array the dead activation's last step was issued with. */
   consumedContext(turnId: string, revision?: number): ContextRevision | null {
     this.actor.assertCurrent();
+
     const rows = revision === undefined
       ? this.sql<RevisionRow>`
         SELECT revision, epoch, working_revision, digest, message_count, messages, step_index
@@ -478,7 +494,9 @@ export class ActorClaimStore {
         SELECT revision, epoch, working_revision, digest, message_count, messages, step_index
         FROM actor_context_revisions
         WHERE actor_id = ${this.actorId} AND turn_id = ${turnId} AND revision = ${revision} LIMIT 1`;
+
     const row = rows[0];
+
     return row === undefined ? null : revisionOf(row);
   }
 
@@ -523,6 +541,7 @@ export class ActorClaimStore {
     const latest = this.sql<{ revision: number | null }>`
       SELECT MAX(revision) AS revision FROM actor_context_revisions
       WHERE actor_id = ${this.actorId} AND turn_id = ${turnId}`[0]?.revision;
+
     return (latest ?? 0) + 1;
   }
 
@@ -536,20 +555,25 @@ export class ActorClaimStore {
    */
   private assertLive(claim: ActorTurnClaim): void {
     this.actor.assertCurrent();
+
     if (claim.actorId !== this.actorId) {
       throw new KinuError('denied',
         `this claim belongs to actor ${claim.actorId} and cannot be written through actor ${this.actorId}`);
     }
+
     const row = this.sql<{ epoch: number; status: string }>`
       SELECT epoch, status FROM actor_turn_claims
       WHERE actor_id = ${this.actorId} AND turn_id = ${claim.turnId} LIMIT 1`[0];
+
     if (row === undefined) {
       throw new KinuError('denied', `actor turn ${claim.turnId} holds no durable claim`);
     }
+
     if (row.epoch !== claim.epoch) {
       throw new KinuError('denied',
         `actor turn ${claim.turnId} is owned by execution epoch ${row.epoch}, not ${claim.epoch}`);
     }
+
     if (row.status === 'settled') {
       throw new KinuError('denied', `actor turn ${claim.turnId} is settled and takes no further work`);
     }
@@ -595,15 +619,19 @@ export async function verifyClaimedProgram(
   loadContext: () => ContextRevision | null,
 ): Promise<ClaimRecovery> {
   const context = loadContext()?.messages ?? [];
+
   if (claim.program.kind === 'builtin') {
     return claim.program.build === null
       ? { kind: 'build_unknown', claim, context }
       : { kind: 'verified', claim, context };
   }
+
   const source = await readVersionedSource(claim.program.version);
   const found = source === null ? null : digestOf(source);
+
   if (found === null || found !== claim.program.digest) {
     return { kind: 'source_changed', claim, found };
   }
+
   return { kind: 'verified', claim, context };
 }

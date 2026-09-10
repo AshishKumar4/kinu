@@ -72,11 +72,13 @@ async function run(): Promise<Scenarios> {
       // The signal that React has mounted the surface, not a guessed duration:
       // `.p-card` is the class every scenario below asserts against.
       await page.waitForSelector('.p-card');
+
       return page;
     };
 
     const on = async (seed: string | null, withdraw?: string): Promise<ThemeAudit> => {
       const page = await openShell('dark');
+
       if (seed !== null) {
         await page.evaluate((css: string) => {
           const style = document.createElement('style');
@@ -84,18 +86,23 @@ async function run(): Promise<Scenarios> {
           document.head.append(style);
         }, seed);
       }
+
       if (withdraw !== undefined) {
         await page.evaluate((token: string) => {
           document.documentElement.style.setProperty(token, 'initial');
         }, withdraw);
       }
+
       const audit = await page.evaluate(auditPage);
+
       // A plain object, not `dataset`: a DOMStringMap crosses the CDP boundary
       // as `{}` and every attribute read comes back undefined.
       const { mode } = await page.evaluate(() => ({
         mode: document.documentElement.dataset.mode,
       }));
+
       await page.close();
+
       return { mode, audit };
     };
 
@@ -115,19 +122,24 @@ async function run(): Promise<Scenarios> {
       const control = '[aria-label="Switch to light mode"]';
       await page.waitForSelector(control);
       await page.click(control);
+
       // Polled rather than awaited on a selector so a control that fails to
       // switch reports the theme it stayed in, instead of failing every scenario
       // in this file from `beforeAll` with a timeout.
       const read = () => page.evaluate(() => ({
         mode: document.documentElement.dataset.mode,
       }));
+
       let applied = await read();
+
       for (let attempt = 0; attempt < 40 && applied.mode !== want; attempt += 1) {
         await Bun.sleep(25);
         applied = await read();
       }
+
       const audit = await page.evaluate(auditPage);
       await page.close();
+
       return { mode: applied.mode, audit };
     };
 

@@ -32,6 +32,7 @@ import {
 // which target and cost basis this run used, or why it is skipping — and throws
 // on a half-configured environment rather than skipping green.
 const TARGET = liveModelTarget('Deep Evolution');
+
 const liveTest = test.skipIf(!TARGET);
 
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
@@ -210,13 +211,16 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     console.log('  ══════════════════════════════════════════════');
 
     let correct = 0, usedCode = 0;
+
     for (const s of scorecard) {
       const mark = s.correct ? '✅' : '❌';
       const code = s.usedExecuteCode ? '💻' : '  ';
       const said = s.answered === null ? 'none' : String(s.answered);
       console.log(`  ${mark} ${code} #${s.id} [${s.difficulty.padEnd(6)}] said=${said} `
         + `tools=[${s.toolNames.join(',')}]`);
+
       if (s.correct) correct++;
+
       if (s.usedExecuteCode) usedCode++;
     }
 
@@ -224,11 +228,14 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     console.log(`  Used execute_tools: ${usedCode}/${PROBLEMS.length}`);
     console.log(`\n  Evolution events: ${events.length}`);
     const byType: Record<string, number> = {};
+
     for (const e of events) byType[e.type] = (byType[e.type] ?? 0) + 1;
+
     for (const [type, count] of Object.entries(byType)) console.log(`    ${type}: ${count}`);
 
     const craftedTools = rt.craftStore.list();
     console.log(`\n  Crafted tools: ${craftedTools.length}`);
+
     for (const t of craftedTools) console.log(`    ${t.name}: ${t.description.slice(0, 60)}`);
 
     console.log('  ══════════════════════════════════════════════');
@@ -251,6 +258,7 @@ describe('the answer oracle these problems are scored with', () => {
     // states the answer", so the cases are exactly the problems where it does.
     const echoing = PROBLEMS.filter(p => p.question.includes(String(p.answer)));
     expect(echoing.map(p => p.id)).toEqual([3, 4, 8]);
+
     for (const p of echoing) {
       expect(finalIntegerAnswer(p.question)).not.toBe(p.answer);
     }
@@ -290,11 +298,13 @@ describe('the answer oracle these problems are scored with', () => {
 
   test('a negative is not its positive', () => {
     expect(finalIntegerAnswer('-4')).toBe(-4);
+
     // Over the whole corpus rather than one problem: no answer here is negative,
     // so a response stating the negation of one has not stated it.
     for (const p of PROBLEMS) {
       expect(finalIntegerAnswer(`-${String(p.answer)}`)).not.toBe(p.answer);
     }
+
     // A hyphen between digits is a range, so `0-3` states 0 and no negative.
     expect(finalIntegerAnswer('grid rows 0-3')).toBe(0);
   });

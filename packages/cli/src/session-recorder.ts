@@ -77,6 +77,7 @@ export class SessionRecorder {
   private flushText(session: CliSession, finalText?: string, meta?: AssistantTurnMetadata): void {
     const text = this.pendingText || (finalText ?? '');
     this.pendingText = '';
+
     if (!text.trim()) return;
     session.append('assistant', { text, backend: this.backend, ...meta });
   }

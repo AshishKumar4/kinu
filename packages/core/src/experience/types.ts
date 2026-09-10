@@ -94,6 +94,7 @@ export function misevolutionSourceOf(payload: ExperiencePayload): string {
  *  shows so the agent can judge an entry before importing it. */
 export function describePayload(payload: ExperiencePayload, maxChars = 400): string {
   const text = describeText(payload);
+
   return text.length > maxChars ? `${text.slice(0, maxChars)}…` : text;
 }
 
@@ -148,7 +149,9 @@ const ExperiencePayloadSchema: v.GenericSchema<ExperiencePayload> = v.variant('k
  *  shape mismatch. */
 export function parseExperiencePayload(json: string): ExperiencePayload | null {
   const rawPayload: unknown = tolerate(() => JSON.parse(json), 'malformed-input');
+
   if (rawPayload === undefined) return null;
   const decoded = v.safeParse(ExperiencePayloadSchema, rawPayload);
+
   return decoded.success ? decoded.output : null;
 }

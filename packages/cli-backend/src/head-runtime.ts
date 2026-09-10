@@ -141,6 +141,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
   const runtime: HeadRuntime = {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       const abort = new AbortController();
+
       return {
         id: input.id,
         run: () => runLocalHead(input, deps, abort.signal),
@@ -154,6 +155,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
       operations: deps.operations,
     }),
   };
+
   return deps.grounding ? { ...runtime, grounding: deps.grounding } : runtime;
 }
 
@@ -163,6 +165,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
  *  down a split the other forks are already running. */
 function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
   if (!input.model || !deps.resolveModel) return deps.model();
+
   try {
     return deps.resolveModel(input.model);
   } catch (err) {
@@ -175,6 +178,7 @@ function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
       }),
       { headId: input.id, model: input.model },
     );
+
     return deps.model();
   }
 }
@@ -197,8 +201,10 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
   // `capture.files.snapshot()` and nothing else fills it, so a seat built
   // without this reports that the head changed nothing however much it wrote.
   const seat = await deps.hostHead(input, capture.files);
+
   try {
     const rt = seat.actor.runtime;
+
     // execute_tools over the head's OWN router providers (its own home in the
     // one file plane + the parent's real `laptop.*`) plus the web/llm codemode
     // namespaces, `state.*` over the head's own program state and `db.*` over
@@ -217,6 +223,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
         createDbCodemodeProvider(seat.actor.stores.appData),
       ],
     });
+
     const executeTool = (finished: ToolSet) => sandbox({
       native: finished,
       // A head reads the workspace's crafted tools through its own router; it
@@ -224,6 +231,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       craftedTools: () => ({}),
       providers: rt.executionRouter?.getProviders() ?? [],
     });
+
     const tools = buildHeadToolSet({
       input,
       capture,
@@ -232,8 +240,10 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       webSearch: deps.webSearch,
       split: (request) => runLocalSplit(request, input, deps),
     });
+
     const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
     const journal = deps.journal();
+
     const inferenceOptions: Parameters<typeof runHeadInference>[1] = {
       // THE CLAIMED LOOP. `actor` carries the session every iteration is
       // admitted on, `runId` the run its claims attribute to, `profile` the
@@ -253,7 +263,9 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, signal: 
       // thing that can say what a head is doing before it reports.
       reportStep: (seq, step) => journal.appendStep(input.id, seq, step),
     };
+
     if (mission) inferenceOptions.mission = mission;
+
     return await runHeadInference(input, inferenceOptions);
   } finally {
     await seat.release();
@@ -267,6 +279,7 @@ async function runLocalSplit(
   deps: CLIHeadRuntimeDeps,
 ): Promise<HeadSplitResult> {
   const controller = new HeadController(createCLIHeadRuntime(deps), deps.journal());
+
   const controllerInput: Parameters<HeadController['run']>[0] = {
     parentHeadId: input.id,
     parentDepth: input.depth,
@@ -279,8 +292,10 @@ async function runLocalSplit(
     // A subtree charges the same mission its root does — otherwise a head
     // escapes its budget simply by splitting again.
   };
+
   if (input.missionLabels?.length) controllerInput.missionLabels = input.missionLabels;
   const result = await controller.run(controllerInput);
+
   return {
     narrative: result.mergedNarrative,
     decisions: result.selectedDecisions,

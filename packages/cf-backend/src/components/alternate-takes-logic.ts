@@ -10,6 +10,7 @@ import type { AlternateTakeSet } from '@kinu.run/core';
 export function currentTakeIndex(set: AlternateTakeSet): number {
   const current = set.chosenNodeId ?? set.winnerNodeId;
   const index = set.candidates.findIndex((c) => c.nodeId === current);
+
   return index >= 0 ? index : 0;
 }
 
@@ -21,6 +22,7 @@ export function takeChipLabel(set: AlternateTakeSet): string {
 /** Wrap-around carousel step (delta of ±1 from the arrows / arrow keys). */
 export function cycleTakeIndex(current: number, delta: number, count: number): number {
   if (count <= 0) return 0;
+
   return ((current + delta) % count + count) % count;
 }
 

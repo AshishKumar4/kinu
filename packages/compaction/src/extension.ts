@@ -111,6 +111,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   const summaryScheduler = createSummaryScheduler(deps.ports.logger);
 
   let turnSignal: AbortSignal | undefined;
+
   const summarizer: Summarizer = {
     async complete(job) {
       try {
@@ -121,6 +122,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
           rangeEndMessageId: job.rangeEndMessageId,
           error: renderThrownChain({ cause: err }),
         });
+
         return null;
       }
     },
@@ -173,13 +175,16 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   function relieveEphemeralPressure(ctx: TransformContext, turns: Turn[]): number {
     const measured = measuredTokens(ctx, turns, 0);
     const triggerTokens = Math.floor(ctx.contextWindow * profile.triggerPercent / 100);
+
     if (ctx.trigger !== 'force' && measured < triggerTokens) return 0;
     const freed = deps.ephemeral.dropSuperseded();
+
     if (freed > 0) {
       deps.ports.logger.info('Pruned superseded ephemeral context', {
         sessionKey: ctx.sessionKey, freedTokens: freed, measured, triggerTokens,
       });
     }
+
     return freed;
   }
 
@@ -196,9 +201,12 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
   ): Promise<ProcessResult> {
     const inputs: BuildPlanInputs = { ...buildInputs(ctx, reportedTokens), force: true, priorPlan: prior ?? undefined };
     let plan = buildPlan(turns, inputs, kinuSpec);
+
     if (!plan) return { outcome: 'unchanged' };
+
     if (plan.summaryJobs.length > 0) {
       const summaries = await summarize(plan.summaryJobs);
+
       if (Object.keys(summaries).length > 0) {
         plan = buildPlan(
           turns,
@@ -207,9 +215,11 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
         ) ?? plan;
       }
     }
+
     await writeTranscript(plan, { transcripts: deps.ports.transcripts, logger: deps.ports.logger, codec: kinuCodec });
     const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
     await deps.ports.plans.save(ctx.sessionKey, toPlanSnapshot(plan));
+
     return { outcome: 'planned', turns: transformed, plan };
   }
 
@@ -229,16 +239,20 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
     rollingSummaryAttempted: boolean,
   ): Promise<Extract<ProcessResult, { outcome: 'planned' }> | null> {
     if (!plan.requiresCustomCompaction) return null;
+
     // Published core owns rolling attempts, including validation and its
     // circuit breaker. Never bypass that policy with a second direct call.
     if (rollingSummaryAttempted) return null;
+
     if (plan.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)) return null;
     const prefixTurns = compactedTurnsForPlan(turns, plan);
+
     if (prefixTurns.length === 0) return null;
 
     const previous = prior?.prefixSummary?.startsWith(CONTEXT_CHECKPOINT_PREFIX)
       ? stripCheckpointPreamble(prior.prefixSummary)
       : null;
+
     const prompt = buildCompactionSummaryPrompt({
       transcript: plan.transcript.content || formatTranscript(prefixTurns, kinuCodec),
       latestUserAsk: latestUserAsk(ctx.messages),
@@ -247,15 +261,19 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       // 100 tokens.
       budgetTokens: Math.max(100, Math.floor(kinuCodec.estimateTurns(prefixTurns) * 0.2)),
     });
+
     let body: string;
+
     try {
       body = await deps.summarize(prompt);
     } catch (err) {
       deps.ports.logger.warn('Compaction prefix-summary call failed; keeping deterministic summary', {
         error: renderThrownChain({ cause: err }),
       });
+
       return null;
     }
+
     if (!body.trim()) return null;
 
     const upgraded = buildPlan(
@@ -270,11 +288,13 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       },
       kinuSpec,
     );
+
     if (!upgraded) return null;
     // Same compacted range ⇒ same rangeHash ⇒ the transcript is already
     // persisted at the same citable path; no second write needed.
     const transformed = transformTurns(turns, upgraded.rawTailStartIndex, upgraded, kinuSpec);
     await deps.ports.plans.save(ctx.sessionKey, toPlanSnapshot(upgraded));
+
     return { outcome: 'planned', turns: transformed, plan: upgraded };
   }
 
@@ -290,7 +310,9 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       plan.transcript.relativePath,
       deps.archive.list(ctx.sessionKey),
     );
+
     if (!derived) return;
+
     if (derived.reset) deps.archive.clear(ctx.sessionKey);
     deps.archive.append(ctx.sessionKey, derived.range);
   }
@@ -300,6 +322,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
 
     async transformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
       turnSignal = ctx.abortSignal;
+
       if (ctx.messages.length === 0 || ctx.contextWindow <= 0) return undefined;
       const messages = [...ctx.messages];
       const turns = kinuCodec.encode(messages);
@@ -309,9 +332,11 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       const cached = await deps.ports.plans.load(ctx.sessionKey);
       const prior = cached && cached.sessionId === ctx.sessionKey ? cached : null;
       let rollingSummaryAttempted = false;
+
       const summarize = async (jobs: BoundarySummaryJob[]): Promise<Record<string, string>> => {
         rollingSummaryAttempted ||= jobs.some((job) => job.key.startsWith('prefix-summary:'));
         const summaries = await runJobs(ctx.sessionKey, jobs);
+
         return summaries;
       };
 
@@ -332,11 +357,14 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
               providerReportedTokens: reportedTokens,
               summarize,
             });
+
       if (processed.outcome === 'unchanged') {
         const remaining = prior ? await deps.ports.plans.load(ctx.sessionKey) : null;
+
         if (prior && remaining === null) {
           deps.onOutcome?.({ sessionKey: ctx.sessionKey, outcome: 'invalidated' });
         }
+
         return undefined;
       }
 
@@ -363,6 +391,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): KinuEx
       // when a NEW range is archived — so a replayed plan re-renders it
       // byte-identically and the provider's prefix cache survives.
       const manifest = renderArchiveManifest(deps.archive.list(ctx.sessionKey));
+
       return kinuCodec.decode(withArchiveManifest(applied.turns, manifest), messages);
     },
   };
@@ -411,8 +440,10 @@ export function createSharedPrefixCompactor(
     profile: deps.profile,
     ephemeral: NO_EPHEMERAL_PLANE,
   });
+
   return async (messages, basis) => {
     if (messages.length === 0) return messages;
+
     const compacted = await extension.transformContext?.({
       sessionKey: basis.key,
       messages: [...messages],
@@ -420,6 +451,7 @@ export function createSharedPrefixCompactor(
       contextWindow: basis.contextWindow,
       trigger: 'force',
     });
+
     return compacted ?? messages;
   };
 }
@@ -450,16 +482,21 @@ function measuredTokens(ctx: TransformContext, turns: Turn[], ephemeralRelief: n
 
 function compactedTurnsForPlan(turns: Turn[], plan: BoundaryContextPlan): Turn[] {
   const turnIndex = turns.findIndex((turn) => turn.key === plan.rawTailStartMessageId);
+
   if (turnIndex < 0) return turns.slice(0, plan.rawTailStartIndex);
   const boundary = plan.rawTailItemBoundary;
+
   if (!boundary) return turns.slice(0, turnIndex);
 
   const turn = turns[turnIndex];
   const boundaryItemIndex = turn.items.findIndex((item) => item.key === boundary.itemKey);
+
   if (boundaryItemIndex < 0) return turns.slice(0, turnIndex);
   const endIndex = boundary.side === 'after' ? boundaryItemIndex + 1 : boundaryItemIndex;
+
   if (endIndex <= 0) return turns.slice(0, turnIndex);
   const items = turn.items.slice(0, endIndex);
+
   return [
     ...turns.slice(0, turnIndex),
     { ...turn, items, fragmentKey: JSON.stringify(items.map((item) => item.key)) },
@@ -472,7 +509,9 @@ function compactedTurnsForPlan(turns: Turn[], plan: BoundaryContextPlan): Turn[]
 function latestUserAsk(messages: readonly ModelMessage[]): string | undefined {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
+
     if (message.role !== 'user') continue;
+
     const text =
       Array.isArray(message.content)
         ? message.content
@@ -480,7 +519,9 @@ function latestUserAsk(messages: readonly ModelMessage[]): string | undefined {
             .map((part) => part.text)
             .join('\n')
         : message.content;
+
     if (text.trim()) return text;
   }
+
   return undefined;
 }

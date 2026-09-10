@@ -79,16 +79,19 @@ async function listWorkspaceRoster(ctx: WorkspaceRosterContext): Promise<Respons
   const cursor = ctx.url.searchParams.get('cursor');
   const limitRaw = ctx.url.searchParams.get('limit');
   const limit = limitRaw === null || limitRaw.trim() === '' ? undefined : Number(limitRaw);
+
   // The roster bounds live in user-do's clampRosterLimit. This check only
   // keeps a non-number from arriving as NaN, which otherwise reads as a
   // throw from the registry rather than as a bad request.
   if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1)) {
     return err(400, 'Workspace roster limit must be a positive integer.');
   }
+
   try {
     return json(await ctx.stub.listWorkspaces(ctx.owner, { cursor, limit }));
   } catch (e) {
     const message = renderThrownChain({ cause: e });
+
     // Matched by message because the DO RPC boundary carries no error class.
     // User-do holds this string verbatim as wire contract.
     if (message.startsWith('Invalid workspace roster cursor')) return err(400, message);
@@ -103,11 +106,13 @@ export async function handleUserRequest(
   ctx?: ExecutionContext,
 ): Promise<Response | null> {
   const url = new URL(request.url);
+
   if (!url.pathname.startsWith('/api/user')) return null;
   const path = url.pathname.slice('/api/user'.length);
   const method = request.method;
 
   let owner: UserCaller;
+
   try { owner = await ownerCaller(env); }
   catch (e) {
     // Same answer the CLI plane gives: a deployment with no root secret cannot
@@ -136,6 +141,7 @@ export async function handleUserRequest(
   if (ctx && !warmedMcpUsers.has(identity.userId)) {
     warmedMcpUsers.add(identity.userId);
     const caller = await ownerCaller(env);
+
     const reportBootstrapFailure = (step: string) => <Thrown,>(thrown: Thrown): void => {
       warmedMcpUsers.delete(identity.userId);
       diagnostics.failure('user.bootstrap_failed', toKinuError({
@@ -144,6 +150,7 @@ export async function handleUserRequest(
         otherwise: 'unavailable',
       }), { step, userId: identity.userId });
     };
+
     ctx.waitUntil(stub.userMcp_warmConnections(caller).catch(reportBootstrapFailure('mcp_warm')));
   }
 
@@ -164,6 +171,7 @@ export async function handleUserRequest(
     // remedy is an Access policy change, and hiding the link would hide the
     // problem.
     const controlPlane = isControlPlaneOperator(env, identity);
+
     return json(profile === null ? null : { ...profile, controlPlane });
   }
 
@@ -171,14 +179,18 @@ export async function handleUserRequest(
   if (path === '/profile-catalog' && method === 'GET') {
     return json(await stub.getProfileCatalog(owner));
   }
+
   if (path === '/profile-catalog' && method === 'PUT') {
     const body = await safeJson(request, v.object({
       catalog: JsonValueSchema,
       expectedVersion: v.number(),
     }));
+
     if (!body) return err(400, 'Body must be { catalog, expectedVersion }.');
     const result = await stub.putProfileCatalog(owner, body.catalog, body.expectedVersion);
+
     if (result.ok) return json(result.envelope);
+
     if (result.kind === 'conflict') {
       return json({
         error: `Version conflict: the stored catalog is at version ${result.currentVersion}.`,
@@ -186,11 +198,13 @@ export async function handleUserRequest(
         currentDigest: result.currentDigest,
       }, { status: 409 });
     }
+
     return err(400, result.reason);
   }
 
   if (path === '/cli' && method === 'GET') {
     const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
+
     return json({
       publicOrigin: cliOrigin,
       installCommand: buildCliInstallCommand({ origin: cliOrigin }),
@@ -203,17 +217,30 @@ export async function handleUserRequest(
   if (path === '/workspaces' && method === 'GET') {
     return listWorkspaceRoster({ stub, owner, url });
   }
+
   if (path === '/workspaces' && method === 'POST') {
     return handleCreateWorkspaceRequest(request, env, identity.userId, stub, ctx);
   }
+
   const agentTouchMatch = path.match(/^\/workspaces\/([^/]+)\/touch$/);
+
   if (agentTouchMatch && method === 'POST') {
-    try { await stub.touchWorkspace(await ownerCaller(env), decodeURIComponent(agentTouchMatch[1])); return json({ ok: true }); }
+    try {
+      await stub.touchWorkspace(await ownerCaller(env), decodeURIComponent(agentTouchMatch[1]));
+
+      return json({ ok: true });
+    }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
+
   const agentMatch = path.match(/^\/workspaces\/([^/]+)$/);
+
   if (agentMatch && method === 'DELETE') {
-    try { await stub.removeWorkspace(await ownerCaller(env), decodeURIComponent(agentMatch[1]), identity.userId); return json({ ok: true }); }
+    try {
+      await stub.removeWorkspace(await ownerCaller(env), decodeURIComponent(agentMatch[1]), identity.userId);
+
+      return json({ ok: true });
+    }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
 
@@ -221,42 +248,56 @@ export async function handleUserRequest(
   if (path === '/devices' && method === 'GET') {
     return json(await stub.listDevices(await ownerCaller(env)));
   }
+
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson(request, OptionalLabelSchema);
     const cliOrigin = normalizeCliOrigin(env.CLI_PUBLIC_ORIGIN || url.origin);
+
     const installCommand = buildCliInstallCommand({
       origin: cliOrigin,
       setup: false,
       connect: true,
       label: body?.label,
     });
+
     return json({ origin: cliOrigin, installCommand }, { status: 201 });
   }
+
   const deviceAcknowledgeMatch = path.match(/^\/devices\/([^/]+)\/unstopped$/);
+
   if (deviceAcknowledgeMatch && method === 'DELETE') {
     try {
       const result = await stub.acknowledgeUnstoppedDevice(await ownerCaller(env), decodeURIComponent(deviceAcknowledgeMatch[1]));
+
       if (!result.ok) return err(404, 'No unconfirmed command incident matched this revoked device');
+
       return json({ ok: true });
     } catch (e) {
       return err(400, renderThrownChain({ cause: e }));
     }
   }
+
   const deviceMatch = path.match(/^\/devices\/([^/]+)$/);
+
   if (deviceMatch && method === 'DELETE') {
     try {
       const result = await stub.revokeDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1]));
+
       return json(result);
     } catch (e) {
       return err(400, renderThrownChain({ cause: e }));
     }
   }
+
   if (deviceMatch && method === 'PATCH') {
     const body = await safeJson(request, v.object({ name: v.optional(v.string()) }));
     const name = body?.name?.trim();
+
     if (!name) return err(400, 'Body must be { name }');
     const result = await stub.renameDevice(await ownerCaller(env), decodeURIComponent(deviceMatch[1]), name);
+
     if (!result.ok) return err(404, 'device not found');
+
     return json({ ok: true });
   }
 
@@ -265,26 +306,36 @@ export async function handleUserRequest(
   if (path === '/devices/consents' && method === 'GET') {
     return json(await stub.listDeviceConsents(await ownerCaller(env)));
   }
+
   const consentMatch = path.match(/^\/devices\/([^/]+)\/consent$/);
   // ── The device's Sandbox switch. Owner session only: the UserDO refuses a
   //    workspace caller, and a workspace that could turn its own sandbox off
   //    would be granting itself the whole machine.
   const sandboxMatch = path.match(/^\/devices\/([^/]+)\/sandbox$/);
+
   if (sandboxMatch && method === 'PUT') {
     const body = await safeJson(request, v.object({ tier: v.optional(v.picklist(DEVICE_TIERS)) }));
     const tier = body?.tier;
+
     if (!tier) return err(400, `Body must be { tier: ${DEVICE_TIERS.map((t) => `'${t}'`).join(' | ')} }`);
     const result = await stub.setDeviceTier(await ownerCaller(env), decodeURIComponent(sandboxMatch[1]), tier);
+
     if (!result.ok) return err(404, 'device not found');
+
     return json({ ok: true });
   }
+
   if (consentMatch && method === 'DELETE') {
     const agentName = url.searchParams.get('agentName')?.trim();
+
     if (!agentName) return err(400, 'Query must carry ?agentName=');
+
     const result = await stub.revokeDeviceConsent(
       await ownerCaller(env), agentName, decodeURIComponent(consentMatch[1]),
     );
+
     if (!result.ok) return err(400, 'grant not revoked');
+
     return json({ ok: true });
   }
 
@@ -292,21 +343,31 @@ export async function handleUserRequest(
   if (path === '/credentials' && method === 'GET') {
     return json(await stub.listCredentials(await ownerCaller(env)));
   }
+
   const credMatch = path.match(/^\/credentials\/([^/]+)$/);
+
   if (credMatch) {
     const key = decodeURIComponent(credMatch[1]);
+
     if (method === 'POST') {
       const body = await safeJson(request, JsonValueSchema);
+
       if (body === null) return err(400, 'Body must be JSON');
+
       try { await stub.setCredential(await ownerCaller(env), key, body); }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
       notifyWorkspacesCredentialsChanged(env, stub, ctx);
+
       return json({ ok: true });
     }
+
     if (method === 'DELETE') {
       try { await stub.deleteCredential(await ownerCaller(env), key); }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
       notifyWorkspacesCredentialsChanged(env, stub, ctx);
+
       return json({ ok: true });
     }
   }
@@ -315,19 +376,25 @@ export async function handleUserRequest(
   if (path === '/codex' && method === 'GET') {
     return json(await stub.getCodexStatus(await ownerCaller(env)));
   }
+
   if (path === '/codex' && method === 'DELETE') {
     await stub.disconnectCodex(await ownerCaller(env));
     notifyWorkspacesCredentialsChanged(env, stub, ctx);
+
     return json({ ok: true });
   }
+
   if (path === '/codex/start' && method === 'POST') {
     try { return json(await stub.startCodexDeviceFlow(await ownerCaller(env))); }
     catch (e) { return err(502, renderThrownChain({ cause: e })); }
   }
+
   if (path === '/codex/poll' && method === 'POST') {
     try {
       const status = await stub.pollCodexDeviceFlow(await ownerCaller(env));
+
       if (status.connected) notifyWorkspacesCredentialsChanged(env, stub, ctx);
+
       return json(status);
     } catch (e) { return err(502, renderThrownChain({ cause: e })); }
   }
@@ -336,19 +403,26 @@ export async function handleUserRequest(
   if (path === '/config' && method === 'GET') {
     return json(await stub.listConfig(await ownerCaller(env)));
   }
+
   const cfgMatch = path.match(/^\/config\/([^/]+)$/);
+
   if (cfgMatch) {
     const key = decodeURIComponent(cfgMatch[1]);
+
     if (key === PROFILE_CATALOG_CONFIG_KEY) {
       return err(400, 'Profile catalogs use /api/user/profile-catalog.');
     }
+
     if (method === 'GET') {
       return json({ key, value: await stub.getConfig(await ownerCaller(env), key) });
     }
+
     if (method === 'PUT') {
       const body = await safeJson(request, v.object({ value: v.string() }));
+
       if (!body) return err(400, 'value (string) required');
       await stub.setConfig(await ownerCaller(env), key, body.value);
+
       return json({ ok: true });
     }
   }
@@ -357,9 +431,11 @@ export async function handleUserRequest(
   if (path === '/providers' && method === 'GET') {
     return json(await stub.listConnectedProviders(await ownerCaller(env)));
   }
+
   if (path === '/providers/catalog' && method === 'GET') {
     return json(await listProviderCatalog(env, identity.userId, await ownerCaller(env)));
   }
+
   if (path === '/models' && method === 'GET') {
     return json(await listAvailableModels(env, identity.userId, await ownerCaller(env)));
   }
@@ -368,12 +444,17 @@ export async function handleUserRequest(
   if (path === '/cloudflare/accounts' && method === 'GET') {
     return json(await stub.listCloudflareAccounts(await ownerCaller(env)));
   }
+
   if (path === '/cloudflare/account' && method === 'PUT') {
     const body = await safeJson(request, v.object({ id: v.string() }));
+
     if (!body) return err(400, 'id (string) required');
+
     try { await stub.selectCloudflareAccount(await ownerCaller(env), body.id); }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
     notifyWorkspacesCredentialsChanged(env, stub, ctx);
+
     return json({ ok: true });
   }
 
@@ -381,14 +462,19 @@ export async function handleUserRequest(
   if (path === '/cloudflare/gateways' && method === 'GET') {
     return json(await stub.listAIGateways(await ownerCaller(env)));
   }
+
   if (path === '/cloudflare/gateway' && method === 'PUT') {
     const body = await safeJson(request, v.object({ id: v.nullable(v.string()) }));
+
     if (!body) {
       return err(400, 'id (string | null) required');
     }
+
     try { await stub.selectAIGateway(await ownerCaller(env), body.id); }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
+
     notifyWorkspacesCredentialsChanged(env, stub, ctx);
+
     return json({ ok: true });
   }
 
@@ -397,27 +483,45 @@ export async function handleUserRequest(
     try { return json(await stub.userMcp_list(await ownerCaller(env))); }
     catch (e) { return err(500, renderThrownChain({ cause: e })); }
   }
+
   if (path === '/mcp/servers' && method === 'POST') {
     const body = await safeJson(request, JsonValueSchema);
+
     if (body === null) return err(400, 'Body must be JSON');
     const origin = publicOrigin(request);
+
     try { return json(await stub.userMcp_add(await ownerCaller(env), body, origin), { status: 201 }); }
     catch (e) { return err(400, renderThrownChain({ cause: e })); }
   }
+
   const mcpIdMatch = path.match(/^\/mcp\/servers\/([^/]+)$/);
+
   if (mcpIdMatch) {
     const id = decodeURIComponent(mcpIdMatch[1]);
+
     if (method === 'DELETE') {
-      try { await stub.userMcp_remove(await ownerCaller(env), id); return json({ ok: true }); }
+      try {
+        await stub.userMcp_remove(await ownerCaller(env), id);
+
+        return json({ ok: true });
+      }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
     }
+
     if (method === 'PATCH') {
       const body = await safeJson(request, JsonValueSchema);
+
       if (body === null) return err(400, 'Body must be JSON');
-      try { await stub.userMcp_update(await ownerCaller(env), id, body); return json({ ok: true }); }
+
+      try {
+        await stub.userMcp_update(await ownerCaller(env), id, body);
+
+        return json({ ok: true });
+      }
       catch (e) { return err(400, renderThrownChain({ cause: e })); }
     }
   }
+
   if (path === '/mcp/callback' && method === 'GET') {
     // The OAuth provider stamps `<nonce>.<serverId>` in `state`; we don't
     // need to extract it here — `userMcp_handleOAuthCallback` does the validation
@@ -429,8 +533,11 @@ export async function handleUserRequest(
     // result. We include `?mcp_auth=ok|failed&error=...` for UX clarity.
     const settingsUrl = new URL('/user/settings/mcp', publicOrigin(request));
     settingsUrl.searchParams.set('mcp_auth', result.ok ? 'ok' : 'failed');
+
     if (result.error) settingsUrl.searchParams.set('error', result.error.slice(0, 200));
+
     if (result.serverId) settingsUrl.searchParams.set('server_id', result.serverId);
+
     return new Response(null, { status: 302, headers: { Location: settingsUrl.toString() } });
   }
 

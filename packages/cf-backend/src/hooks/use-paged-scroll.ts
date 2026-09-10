@@ -80,6 +80,7 @@ export function walkStart(
   anchor: string | undefined, delivered: boolean,
 ): SeekCursor | "newest" | null {
   if (anchor !== undefined) return { after: anchor };
+
   return delivered ? "newest" : null;
 }
 
@@ -122,6 +123,7 @@ export function usePagedScroll<Item>({
   const loadMore = useCallback(() => {
     if (inFlight.current || exhausted) return;
     const from = cursor.current ?? latest.current.startFrom();
+
     if (from === null) return;
     const generation = walk.current;
     inFlight.current = true;
@@ -134,22 +136,27 @@ export function usePagedScroll<Item>({
       // retire this walk's generation, and a walk with no list left to fill has
       // none left to fail into either.
       let thrown: { cause: unknown } | null = null;
+
       try {
         const page = await latest.current.fetchPage(from === "newest" ? undefined : from);
+
         if (generation !== walk.current) return;
         setFetched((prev) => grows === "up" ? [...page.items, ...prev] : [...prev, ...page.items]);
         setError(null);
+
         if (page.status === "end") setExhausted(true);
         else cursor.current = page.next;
       } catch (err) {
         thrown = { cause: err };
       } finally {
         if (loadTasks.current.get(taskId) === owner) loadTasks.current.delete(taskId);
+
         if (generation === walk.current) {
           inFlight.current = false;
           setLoading(false);
         }
       }
+
       if (thrown !== null && generation === walk.current) setError(describeError(thrown.cause));
     })();
   }, [grows, exhausted]);

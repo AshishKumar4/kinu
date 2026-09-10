@@ -6,6 +6,7 @@ import type { ModelMessage } from 'ai';
 import { measureContext, TurnContextMeter, DYNAMIC_CONTEXT_OPEN_TAG } from '../src/index';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
+
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 
 describe('measureContext', () => {
@@ -27,6 +28,7 @@ describe('measureContext', () => {
       file: { description: 'edit files', inputSchema: { type: 'object' } },
       run: { description: 'shell', inputSchema: { type: 'object' } },
     };
+
     const { segments } = measureContext({ tools, messages: [] });
     const toolRows = segments.filter((s) => s.plane === 'tools');
     expect(toolRows.map((s) => s.label)).toEqual(['file', 'run']);
@@ -37,6 +39,7 @@ describe('measureContext', () => {
     const { segments } = measureContext({
       messages: [user('aa'), assistant('bbb'), user('cccc')],
     });
+
     const rows = segments.filter((s) => s.plane === 'messages');
     expect(rows).toEqual([
       { plane: 'messages', label: 'user', chars: 6, items: 2 },
@@ -60,6 +63,7 @@ describe('measureContext', () => {
       role: 'tool',
       content: [{ type: 'tool-result', toolCallId: '1', toolName: 'run', output: { type: 'text', value: 'ok' } }],
     };
+
     const { segments } = measureContext({ messages: [message] });
     expect(segments[0]?.chars).toBe(JSON.stringify(message.content).length);
   });
@@ -77,6 +81,7 @@ describe('measureContext', () => {
       tools: { run: { description: 'shell', inputSchema: {} } },
       messages: [user('hi'), assistant('yo')],
     });
+
     expect(m.measuredChars).toBe(m.segments.reduce((sum, s) => sum + s.chars, 0));
   });
 

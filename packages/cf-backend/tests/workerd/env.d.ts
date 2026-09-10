@@ -23,24 +23,29 @@ import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { SlateBinding } from '../../src/slates/bindings';
 import type { ExecutorInfo } from '@kinu.run/core';
+
 interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
   exercise(family: 'subordinate' | 'exploration'): Promise<{ answer: ExecutorInfo[]; browserCallable: boolean }>;
   code(mode: 'plan' | 'build', code: string): Promise<{ answer: string; file: string }>;
 }
+
 interface PlanAnnounceRpc extends Rpc.DurableObjectBranded {
   exercise(): Promise<{
     hops: Record<string, { ok: boolean; error: string | null }>;
     published: string[];
   }>;
 }
+
 interface UserSocketProbeRpc extends Rpc.DurableObjectBranded {
   deliverBareFrame(): Promise<'handled' | { readonly threw: string }>;
 }
+
 interface SlateEgressRpc extends Rpc.DurableObjectBranded {
   request(mode: 'plan' | 'build', target: string, redirect?: RequestRedirect): Promise<string>;
   publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
   unmediatedThenMediated(): Promise<{ unmediated: string; mediated: string; reused: string }>;
 }
+
 declare global {
   namespace Cloudflare {
     interface Env {
@@ -74,6 +79,7 @@ declare global {
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
     }
+
     /** The test worker re-exports the production egress entrypoint, so
      *  `exports.CodemodeEgress` is a loopback stub here as it is in production. */
     interface GlobalProps {

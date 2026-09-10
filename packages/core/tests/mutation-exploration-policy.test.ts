@@ -63,18 +63,26 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor } from '../src/types/primitives';
 
 type ArchiveModule = typeof pristineArchive;
+
 type ClampModule = typeof pristineClamp;
+
 type MergeBackModule = typeof pristineMergeBack;
+
 type RecordsModule = typeof pristineRecords;
+
 type SwarmBudgetModule = typeof pristineSwarmBudget;
+
 type ObjectiveModule = typeof pristineObjective;
 
 const TEST_DIR = new URL('.', import.meta.url).pathname;
+
 // Canonical, because the loader resolves a copy's relative imports from its REAL
 // path: on macOS `tmpdir()` is `/var/folders/...`, a symlink to `/private/var/...`
 // one level deeper, so a specifier counted from the symlink lands one `../` short.
 const MUTANTS = realpathSync(scratchDir('mutation-exploration-policy'));
+
 const SRC = new URL('../src/', import.meta.url).pathname;
+
 symlinkSync(resolve(TEST_DIR, '../../../node_modules'), resolve(MUTANTS, 'node_modules'), 'dir');
 
 /** A file to copy, and what to change in it. */
@@ -102,11 +110,14 @@ function writeMutants(label: string, plan: readonly Copy[]): (src: string) => st
     resolve(SRC, copy.src),
     resolve(MUTANTS, `policy.mutant-${label}-${copy.src.replaceAll('/', '-')}`),
   ]));
+
   for (const copy of plan) {
     const origin = resolve(SRC, copy.src);
     let source = readFileSync(origin, 'utf8');
+
     for (const [find, replace] of copy.edits ?? []) {
       const occurrences = source.split(find).length - 1;
+
       if (occurrences !== 1) {
         throw new Error(
           `mutation "${label}" expected exactly one occurrence of ${JSON.stringify(find)} in `
@@ -114,25 +125,34 @@ function writeMutants(label: string, plan: readonly Copy[]): (src: string) => st
           + 'mutation would have proven nothing — update the snippet rather than the assertion.',
         );
       }
+
       source = source.replace(find, replace);
     }
+
     const dir = origin.slice(0, origin.lastIndexOf('/'));
+
     const rewritten = source.replaceAll(
       /from '(\.[^']*)'/g,
       (_whole: string, specifier: string) => {
         const resolved = resolve(dir, specifier);
         const to = target.get(`${resolved}.ts`) ?? resolved;
         const path = relative(MUTANTS, to);
+
         return `from '${path.startsWith('.') ? path : `./${path}`}'`;
       },
     );
+
     const at = target.get(origin);
+
     if (at === undefined) throw new Error(`no copy planned for ${copy.src}`);
     writeFileSync(at, rewritten);
   }
+
   return (src) => {
     const at = target.get(resolve(SRC, src));
+
     if (at === undefined) throw new Error(`${src} is not in mutation "${label}"'s plan`);
+
     return at;
   };
 }
@@ -140,15 +160,23 @@ function writeMutants(label: string, plan: readonly Copy[]): (src: string) => st
 /* ── The snippets, and the readings that invert them ──────────────────────── */
 
 const NOVELTY_FLOOR = 'if (nearest !== null && nearest.distance < novelty) {';
+
 const NEAREST_SEARCH =
   'if (nearest === null || distance < nearest.distance) nearest = { occupant, distance };';
+
 const IS_BETTER =
   "return direction === 'minimise' ? candidate < incumbent : candidate > incumbent;";
+
 const PARETO_WEAKER = "if (axis.direction === 'maximise' ? l < r : l > r) return false;";
+
 const SEAL_CLEARED = "if (state.clearedBy !== null) return { kind: 'admitted' };";
+
 const POLICY_BEST = "case 'best': return 'apply-winner';";
+
 const CYCLE_SCAN = 'if (placed.has(member.nodeId)) continue;\n    const stuck = new Map(';
+
 const BUDGET_ROOM = 'if (remainingChildren < width) {';
+
 const CLAMP_TAIL = 'const tailLen = maxChars - headLen;';
 
 /** Every snippet above, against the file it must sit in exactly once. */
@@ -199,47 +227,60 @@ interface Defended {
 }
 
 const RECORDS_SUITE = 'unit-exploration-records.test.ts';
+
 const MERGE_SUITE = 'unit-merge-back.test.ts';
+
 const BUDGET_SUITE = 'unit-swarm-budget.test.ts';
+
 const CLAMP_SUITE = 'unit-clamp-tool-result.test.ts';
+
 const PARETO_SUITE = 'unit-pareto-advance.test.ts';
 
 const THRESHOLD_IS_A_FLOOR: Defended = {
   file: RECORDS_SUITE,
   name: 'THE THRESHOLD IS READ AS A FLOOR: 0 admits the near-copy, 1 refuses the far one',
 };
+
 const NEAREST_IS_NAMED: Defended = {
   file: RECORDS_SUITE,
   name: 'THE NEAREST occupant is named, not whichever one the cell was sorted on top',
 };
+
 const DIRECTION_DECIDES: Defended = {
   file: RECORDS_SUITE,
   name: 'the DIRECTION decides which way is better, so a maximise objective is not silently inverted',
 };
+
 const TIE_DOES_NOT_DISPLACE: Defended = {
   file: RECORDS_SUITE,
   name: 'a TIE does not displace: `isBetter` is strict and a re-record of the same number moved nothing',
 };
+
 const SEAL_WRITES_NOTHING: Defended = {
   file: RECORDS_SUITE,
   name: 'a breached run writes NOTHING, and the refusal names the seal',
 };
+
 const POLICY_FROM_SETTLE: Defended = {
   file: MERGE_SUITE,
   name: 'each settle shape maps to the policy *Merge-back* derives',
 };
+
 const CYCLE_WHATEVER_THE_ORDER: Defended = {
   file: MERGE_SUITE,
   name: 'a cycle is refused whatever order it is offered in',
 };
+
 const EVERY_POLICY_REACHABLE: Defended = {
   file: BUDGET_SUITE,
   name: 'the arbiter it wraps is unchanged: every policy is still reachable through it',
 };
+
 const HONOURS_A_CUSTOM_BUDGET: Defended = {
   file: CLAMP_SUITE,
   name: 'honours a custom budget',
 };
+
 const PARETO_DIRECTION: Defended = {
   file: PARETO_SUITE,
   name: 'honours each declared vector direction instead of assuming maximise',
@@ -268,6 +309,7 @@ function store(records: RecordsModule): [SqlExecutor, ActorHandle] {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   records.initExplorationRecordsTable(execRaw);
+
   return [sql, createTestActors(sql, execRaw).main];
 }
 
@@ -302,9 +344,12 @@ const BREACH: FloorBreach = {
 const SEALED: PublicationState = { kind: 'sealed', breach: BREACH, clearedBy: null };
 
 const CELL = 'candOps=23';
+
 const OCCUPANT = 'export function solve(input, oracle) { return input.tokens[0]; }';
+
 /** One token away from {@link OCCUPANT}: distance 1/9. */
 const NEAR = `${OCCUPANT} // tweak`;
+
 /** No shared vocabulary at all, so distance 1. */
 const FAR = 'const answer = 42;';
 
@@ -342,6 +387,7 @@ interface Origin {
 
 function originOf(initial: Record<string, string>): Origin {
   const at = new Map(Object.entries(initial));
+
   return {
     at,
     readOrigin: async (path) => at.get(path) ?? null,
@@ -359,6 +405,7 @@ async function memberOf(
   files: readonly MemberFileChange[], deps: readonly string[] = [],
 ): Promise<MergeMember> {
   const diff = { nodeId, files: [...files], provenance: 'private-home' as const };
+
   return {
     nodeId,
     diff,
@@ -482,6 +529,7 @@ async function paretoDirectionDecides(objective: ObjectiveModule): Promise<void>
     { id: 'lower-quality-cheap', evidence: { quality: 0.8, cost: 2 } },
     { id: 'worse-both', evidence: { quality: 0.7, cost: 12 } },
   ]);
+
   expect(front.map((candidate) => candidate.id))
     .toEqual(['high-quality-expensive', 'lower-quality-cheap']);
 }
@@ -514,12 +562,15 @@ async function policyFromSettle(mergeBack: MergeBackModule): Promise<void> {
 /** {@link CYCLE_WHATEVER_THE_ORDER}. */
 async function cycleWhateverTheOrder(mergeBack: MergeBackModule): Promise<void> {
   const origin = originOf({ 'a.ts': 'A0\n', 'b.ts': 'B0\n', 'c.ts': 'C0\n' });
+
   const a = await memberOf(origin, mergeBack, 'n1', [
     { path: 'a.ts', base: 'A0\n', after: 'A1\n' },
   ]);
+
   const b = await memberOf(origin, mergeBack, 'n2', [
     { path: 'b.ts', base: 'B0\n', after: 'B1\n' },
   ], ['n3']);
+
   const c = await memberOf(origin, mergeBack, 'n3', [
     { path: 'c.ts', base: 'C0\n', after: 'C1\n' },
   ], ['n2']);
@@ -527,6 +578,7 @@ async function cycleWhateverTheOrder(mergeBack: MergeBackModule): Promise<void> 
   const report = await runMerge(mergeBack, origin, 'sequential-rebase', [a, b, c]);
   const [outcome] = report.outcomes;
   expect(outcome?.kind).toBe('refused');
+
   if (outcome?.kind !== 'refused') return;
   expect(outcome.refusal.cause).toBe('dependency-cycle');
   expect(outcome.refusal.error).toContain('n2 -> n3 -> n2');
@@ -553,9 +605,11 @@ async function everyPolicyReachable(budget: SwarmBudgetModule): Promise<void> {
       config: swarmConfig({ context: 'fresh' }), caps: caps(5, 3), atDepth: 1, proposal: proposal(2),
     }),
   ];
+
   const reached = decisions.flatMap(
     (decision) => (decision.kind === 'refused' ? [decision.policy] : []),
   );
+
   expect(reached).toEqual([...BRANCH_REFUSAL_POLICIES]);
 }
 
@@ -577,6 +631,7 @@ function mutantArchive(
   label: string, edits: readonly (readonly [string, string])[],
 ): Promise<ArchiveModule> {
   const at = writeMutants(label, [{ src: 'strategy/archive.ts', edits }]);
+
   // SAFETY: `archive.ts`'s own text, one matched edit applied, so the export shape is
   // `pristineArchive`'s by construction.
   return import(at('strategy/archive.ts')) as Promise<ArchiveModule>;
@@ -592,6 +647,7 @@ function mutantRecords(
     { src: 'strategy/objective.ts', edits },
     { src: 'strategy/records.ts' },
   ]);
+
   // SAFETY: `records.ts`'s own text, unedited, importing the edited `objective.ts` beside
   // it — so the export shape is `pristineRecords`'s by construction.
   return import(at('strategy/records.ts')) as Promise<RecordsModule>;
@@ -601,6 +657,7 @@ function mutantObjective(
   label: string, edits: readonly (readonly [string, string])[],
 ): Promise<ObjectiveModule> {
   const at = writeMutants(label, [{ src: 'strategy/objective.ts', edits }]);
+
   // SAFETY: the mutant is `objective.ts`'s own text with one checked edit applied, and
   // writeMutants requires that edit to match exactly once, so its export shape is
   // pristineObjective's by construction. A dynamic import cannot be typed statically.
@@ -611,6 +668,7 @@ function mutantMergeBack(
   label: string, edits: readonly (readonly [string, string])[],
 ): Promise<MergeBackModule> {
   const at = writeMutants(label, [{ src: 'strategy/merge-back.ts', edits }]);
+
   // SAFETY: `merge-back.ts`'s own text, one matched edit applied, so the export shape is
   // `pristineMergeBack`'s by construction.
   return import(at('strategy/merge-back.ts')) as Promise<MergeBackModule>;
@@ -624,6 +682,7 @@ function mutantSwarmBudget(
     { src: 'strategy/swarm.ts', edits },
     { src: 'strategy/swarm-budget.ts' },
   ]);
+
   // SAFETY: `swarm-budget.ts`'s own text, unedited, importing the edited `swarm.ts` beside
   // it — so the export shape is `pristineSwarmBudget`'s by construction.
   return import(at('strategy/swarm-budget.ts')) as Promise<SwarmBudgetModule>;
@@ -633,6 +692,7 @@ function mutantClamp(
   label: string, edits: readonly (readonly [string, string])[],
 ): Promise<ClampModule> {
   const at = writeMutants(label, [{ src: 'tools/clamp.ts', edits }]);
+
   // SAFETY: `clamp.ts`'s own text, one matched edit applied, so the export shape is
   // `pristineClamp`'s by construction.
   return import(at('tools/clamp.ts')) as Promise<ClampModule>;
@@ -653,6 +713,7 @@ describe('the archive novelty comparison is load-bearing', () => {
     const mutant = await mutantArchive('floor-as-ceiling', [
       [NOVELTY_FLOOR, 'if (nearest !== null && nearest.distance > novelty) {'],
     ]);
+
     await expect(thresholdIsAFloor(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 
@@ -669,6 +730,7 @@ describe('the archive novelty comparison is load-bearing', () => {
       [NEAREST_SEARCH,
         'if (nearest === null || distance > nearest.distance) nearest = { occupant, distance };'],
     ]);
+
     await expect(nearestIsNamed(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
@@ -685,6 +747,7 @@ describe('`isBetter` is load-bearing in its direction and in its strictness', ()
       [IS_BETTER,
         "return direction === 'minimise' ? candidate > incumbent : candidate < incumbent;"],
     ]);
+
     await expect(directionDecides(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 
@@ -703,6 +766,7 @@ describe('`isBetter` is load-bearing in its direction and in its strictness', ()
       [IS_BETTER,
         "return direction === 'minimise' ? candidate <= incumbent : candidate >= incumbent;"],
     ]);
+
     await expect(tieDoesNotDisplace(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
@@ -722,6 +786,7 @@ describe('the publication seal is load-bearing', () => {
     const mutant = await mutantRecords('seal-inverted', [
       [SEAL_CLEARED, "if (state.clearedBy === null) return { kind: 'admitted' };"],
     ]);
+
     await expect(sealWritesNothing(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
@@ -740,6 +805,7 @@ describe('the merge policy derivation is load-bearing', () => {
     const mutant = await mutantMergeBack('best-rebases', [
       [POLICY_BEST, "case 'best': return 'sequential-rebase';"],
     ]);
+
     await expect(policyFromSettle(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
@@ -761,6 +827,7 @@ describe("the cycle scan's all-or-nothing is load-bearing", () => {
     const mutant = await mutantMergeBack('no-cycle-scan', [
       [CYCLE_SCAN, 'if (true) continue;\n    const stuck = new Map('],
     ]);
+
     await expect(cycleWhateverTheOrder(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
@@ -783,6 +850,7 @@ describe('budget arbitration is load-bearing', () => {
     const mutant = await mutantSwarmBudget('room-inverted', [
       [BUDGET_ROOM, 'if (remainingChildren > width) {'],
     ]);
+
     await expect(everyPolicyReachable(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
@@ -802,6 +870,7 @@ describe('the clamp arithmetic is load-bearing', () => {
     const mutant = await mutantClamp('tail-takes-the-cap', [
       [CLAMP_TAIL, 'const tailLen = maxChars;'],
     ]);
+
     await expect(honoursACustomBudget(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
@@ -817,6 +886,7 @@ describe('Pareto direction is load-bearing', () => {
     const mutant = await mutantObjective('pareto-direction-inverted', [
       [PARETO_WEAKER, "if (axis.direction === 'maximise' ? l < r : l < r) return false;"],
     ]);
+
     await expect(paretoDirectionDecides(mutant)).rejects.toThrow(ASSERTION_FAILED);
   });
 });
@@ -833,8 +903,10 @@ describe('the harness cannot prove a guard it did not remove', () => {
   test('every snippet this file mutates sits in its file exactly once', () => {
     const moved = SNIPPETS.filter(([src, snippet]) => {
       const source = readFileSync(resolve(SRC, src), 'utf8');
+
       return source.split(snippet).length - 1 !== 1;
     }).map(([src, snippet]) => `${src}: ${snippet.slice(0, 40)}`);
+
     expect(moved).toEqual([]);
   });
 
@@ -845,9 +917,11 @@ describe('the harness cannot prove a guard it did not remove', () => {
   test('every defended test exists exactly once where it is claimed', () => {
     const missing = DEFENDED.filter((defended) => {
       const source = readFileSync(resolve(TEST_DIR, defended.file), 'utf8');
+
       return source.split(`test('${defended.name}'`).length - 1
         + source.split(`test("${defended.name}"`).length - 1 !== 1;
     }).map((defended) => `${defended.file}: ${defended.name}`);
+
     expect(missing).toEqual([]);
   });
 

@@ -50,6 +50,7 @@ describe('a number with no locator', () => {
     const found = audit(
       'Koh et al. 2407.01476 Table 4 reports 41.7% on the same 200-task subset.',
     );
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('41.7%');
     expect(found[0]).toContain('carries no locator');
@@ -171,6 +172,7 @@ describe('a withdrawn number', () => {
     const found = audit(
       'Koh et al. 2407.01476 Table 4 shows +12.5 from a purely judged scalar.',
     );
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('WITHDRAWN');
   });
@@ -305,6 +307,7 @@ describe('a comment block ends where its author ended it', () => {
       '// Self-MoA (2502.00674) found the homogeneous ensemble beat the mixed one 65.7',
       '// vs 59.1 with the proposer count held fixed, and 41.7% of runs agreed.',
     ].join('\n'));
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('41.7%');
     expect(found[0]).toContain('carries no locator');
@@ -355,6 +358,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
       recorded(`${reply}\n${structure}`).replace('"ranAt"', '"stampedAt"'),
       coverage(),
     );
+
     expect(found.some((finding) => finding.includes('cites 9000 beside'))).toBe(true);
     expect(found.some((finding) => finding.includes('cites 9599 beside'))).toBe(false);
     // And the load-bearing check still fires on the same text, so the bound did not
@@ -369,6 +373,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
       recorded(reply).replace('"ranAt"', '"stampedAt"'),
       coverage(),
     );
+
     expect(found.some((finding) =>
       finding.includes('adjective where a compute condition belongs'))).toBe(true);
   });
@@ -383,6 +388,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
       passage, passage, passage,
       'The judged selector still gives 28.5% at matched compute.',
     ].join('\n\n'));
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('adjective where a compute condition belongs');
   });
@@ -418,6 +424,7 @@ describe('reach, and the recorded corpus that showed it was unbounded', () => {
       `{\n  "note": "hand written",\n  "ranAt": "2026-08-18T06:06:17.962Z",\n${reply}\n}`,
       coverage(),
     );
+
     expect(found.some((finding) =>
       finding.includes('adjective where a compute condition belongs'))).toBe(true);
   });
@@ -467,9 +474,11 @@ describe('a string that declares itself a quotation', () => {
    *  phases for the same reason the gate has two: the target may be read later. */
   function auditQuoted(...files: readonly string[]): string[] {
     const seen = coverage();
+
     for (const [index, text] of files.entries()) {
       auditFile(`packages/core/src/fixture-${String(index)}.ts`, text, seen);
     }
+
     return auditQuotations(seen);
   }
 
@@ -485,6 +494,7 @@ describe('a string that declares itself a quotation', () => {
       "  + 'diversity by up to 3.2x. '",
       "  + 'A zoo is worse than repeated sampling when the purpose is decorrelation.';",
     ].join('\n'));
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('drops "Available on EVERY preset."');
     expect(found[0]).toContain('diverges at "available on every preset"');
@@ -498,6 +508,7 @@ describe('a string that declares itself a quotation', () => {
       "  + 'The homogeneous ensemble beat the mixed one 65.7 vs 59.1. '",
       "  + 'A zoo is worse than repeated sampling when the purpose is decorrelation.';",
     ].join('\n'));
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('diverges at "quality dominating diversity by up to 3.2x"');
   });
@@ -518,6 +529,7 @@ describe('a string that declares itself a quotation', () => {
       '/** Verbatim from `Spec.models`. */',
       "export const LOOSE = 'Model choice routes for capability, never for decorrelating.';",
     ].join('\n'));
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('shares not one sentence');
   });
@@ -544,6 +556,7 @@ describe('a string that declares itself a quotation', () => {
       "  'A cheap model for recon, a strong one for synthesis. '",
       "  + 'A zoo is worse than repeated sampling when the purpose is decorrelation.';",
     ].join('\n'));
+
     expect(found).toHaveLength(2);
     expect(found[0]).toContain('drops "Available on EVERY preset."');
     expect(found[1]).toContain('drops "The homogeneous ensemble beat the mixed one');

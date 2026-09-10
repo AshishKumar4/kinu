@@ -24,6 +24,7 @@ function envelope(catalog = BUILTIN_PROFILE_CATALOG): ProfileCatalogEnvelope {
     digest: profileCatalogDigest(catalog),
     catalog,
   };
+
   return Object.freeze(value);
 }
 
@@ -48,6 +49,7 @@ function baseInput(overrides: Partial<Parameters<typeof resolveTurnProfile>[0]> 
 
 function memoryConfig(): RoleStateStore & { dump: () => Map<string, string> } {
   const rows = new Map<string, string>();
+
   return {
     get: (k) => rows.get(k) ?? null,
     set: (k, v) => { rows.set(k, v); },
@@ -68,8 +70,10 @@ const INVOCATION_LANES = ['agent', 'head', 'mcts', 'swarm'] as const;
 describe('exhaustive model routing', () => {
   test('every producer resolves, and only platform refuses', () => {
     const profile = resolveTurnProfile(baseInput());
+
     for (const source of SPEND_SOURCES) {
       const route = resolveModelRoute(source, profile);
+
       if (source === 'platform') expect(route).toBeNull();
       else expect(route).toMatchObject({ source });
     }
@@ -77,9 +81,11 @@ describe('exhaustive model routing', () => {
 
   test('the PRD lane map is the shipped policy', () => {
     const profile = resolveTurnProfile(baseInput());
+
     for (const [source, tier] of FIXED_LANES) {
       expect(resolveModelRoute(source, profile)?.tier).toBe(tier);
     }
+
     for (const source of INVOCATION_LANES) {
       expect(resolveModelRoute(source, profile)?.tier).toBe(profile.tier.id);
     }
@@ -91,9 +97,11 @@ describe('exhaustive model routing', () => {
       default: { model: '@cf/a/model-a' }, slow: { model: '@cf/b/model-b' },
       deep: { model: '@cf/b/model-b' },
     };
+
     const profile = resolveTurnProfile(baseInput({
       envelope: envelope({ roles: { ...BUILTIN_PROFILE_CATALOG.roles }, tiers }),
     }));
+
     const judge = resolveModelRoute('judge', profile);
     expect(judge).toMatchObject({ source: 'judge', tier: 'deep', model: '@cf/b/model-b' });
     // A fixed lane resolves its OWN slot's model, not the turn's.
@@ -111,6 +119,7 @@ describe('resolver tier snapshot', () => {
   test('unset slots alias default across all five slots', () => {
     const p = resolveTurnProfile(baseInput());
     expect(Object.keys(p.tiers).sort()).toEqual([...TIER_IDS].sort());
+
     for (const id of ['tiny', 'fast', 'slow', 'deep'] as const) {
       expect(p.tiers[id].model).toBe(BUILTIN_PROFILE_CATALOG.tiers.default!.model);
     }
@@ -118,10 +127,12 @@ describe('resolver tier snapshot', () => {
 
   test('cloud and local authorities produce identical profiles for identical inputs', () => {
     const localEnv = envelope();
+
     const accountEnv: ProfileCatalogEnvelope = {
       ...localEnv,
       authority: { kind: 'account', accountId: 'acct-1' },
     };
+
     const a = resolveTurnProfile(baseInput({ envelope: localEnv }));
     const b = resolveTurnProfile(baseInput({ envelope: accountEnv }));
     // Authority is part of the profile cache identity, so its digest differs too.
@@ -155,6 +166,7 @@ describe('durable role change', () => {
   test('approval refuses a widening self-switch and lands a narrowing one', () => {
     const config = memoryConfig();
     config.set(AGENT_CONFIG_KEYS.roleChangePolicy, 'approval');
+
     const restricted = envelope({
       roles: {
         ...BUILTIN_PROFILE_CATALOG.roles,
@@ -169,6 +181,7 @@ describe('durable role change', () => {
       },
       tiers: { ...BUILTIN_PROFILE_CATALOG.tiers },
     });
+
     // general (full surface) → scout (narrow): not widening, lands now.
     const narrowed = changeActiveRole({ envelope: restricted, config, to: 'scout', actor: 'agent' });
     expect(narrowed.kind).toBe('applied');
@@ -222,6 +235,7 @@ describe('what a caller is told about a role change', () => {
       { kind: 'refused', reason: 'invalid-role-id' },
       { kind: 'refused', reason: 'approval-required' },
     ];
+
     for (const outcome of outcomes) {
       const text = say(outcome);
       expect(text.length).toBeGreaterThan(0);

@@ -62,6 +62,7 @@ interface WorkspaceActivity {
   unseenChangelog: number;
   agents: SidebarAgent[];
 }
+
 const WorkspaceActivityEventSchema = v.object({
   name: v.string(),
   running: v.boolean(),
@@ -74,11 +75,17 @@ const WorkspaceActivityEventSchema = v.object({
 function shortAge(lastVisited: number): string | null {
   if (!lastVisited) return null;
   const seconds = Math.max(0, Math.floor((Date.now() - lastVisited) / 1000));
+
   if (seconds < 60) return "now";
+
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
+
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h`;
+
   if (seconds < 2_592_000) return `${Math.floor(seconds / 86400)}d`;
+
   if (seconds < 31_536_000) return `${Math.floor(seconds / 2_592_000)}mo`;
+
   return `${Math.floor(seconds / 31_536_000)}y`;
 }
 
@@ -95,9 +102,11 @@ function SidebarRenameEditor({ workspace, onSaved, onCancel }: {
   const save = async (event: FormEvent) => {
     event.preventDefault();
     const displayName = value.trim();
+
     if (!displayName || saving || connectionStatus !== "connected") return;
     setSaving(true);
     setError(null);
+
     try {
       const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
       onSaved(result.displayName);
@@ -148,10 +157,13 @@ export default function Sidebar() {
   // useParams can't see :agentId from here (the Sidebar renders outside the
   // route's Outlet) — match the location directly instead.
   const sectionMatch = useMatch({ path: "/:section/:agentId/*", end: false });
+
   const agentId = sectionMatch && WORKSPACE_SCOPED_SECTIONS.includes(sectionMatch.params.section ?? "")
     ? sectionMatch.params.agentId
     : undefined;
+
   const navigate = useNavigate();
+
   const {
     entries: workspaces,
     total: workspaceTotal,
@@ -160,6 +172,7 @@ export default function Sidebar() {
     rename: renameWorkspace,
     remove: removeFromRoster,
   } = useWorkspaceRoster();
+
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [profileFailed, setProfileFailed] = useState(false);
   const [activity, setActivity] = useState<Record<string, WorkspaceActivity>>({});
@@ -184,11 +197,14 @@ export default function Sidebar() {
     const h = (e: Event) => {
       if (!(e instanceof CustomEvent)) return;
       const parsed = v.safeParse(WorkspaceActivityEventSchema, e.detail);
+
       if (!parsed.success) return;
       const { name, running, unseenChangelog, agents } = parsed.output;
       setActivity((prev) => ({ ...prev, [name]: { running, unseenChangelog, agents } }));
     };
+
     window.addEventListener("kinu:workspace-activity", h);
+
     return () => window.removeEventListener("kinu:workspace-activity", h);
   }, []);
 
@@ -199,7 +215,9 @@ export default function Sidebar() {
         setShowUserMenu(false);
       }
     };
+
     document.addEventListener('click', onClick);
+
     return () => document.removeEventListener('click', onClick);
   }, []);
 
@@ -208,6 +226,7 @@ export default function Sidebar() {
     const name = deleteTarget.name;
     setDeleteBusy(true);
     setDeleteError(null);
+
     // Leave the agent's workspace BEFORE destroying it: the still-mounted
     // useAgent socket would auto-reconnect to the destroyed DO name and
     // resurrect an empty ghost agent (idFromName instantiates on connect).
@@ -273,6 +292,7 @@ export default function Sidebar() {
             // A workspace is titled by its first prompt, so a row can be blank.
             // The slug is not the fallback: it is the address this row links to.
             const shown = workspaceTitle(a.displayName);
+
             return (
               <li key={a.name}>
                 <div className="group relative mx-2">

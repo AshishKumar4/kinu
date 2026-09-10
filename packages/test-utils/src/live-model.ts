@@ -71,8 +71,10 @@ type EnvSource = Record<string, string | undefined>;
 function first(env: EnvSource, names: readonly string[]): string | undefined {
   for (const name of names) {
     const value = env[name]?.trim();
+
     if (value) return value;
   }
+
   return undefined;
 }
 
@@ -100,6 +102,7 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
         + `A CLI bearer names no target: set the deployment origin (${EVAL_STAGING_ORIGIN}).`,
     };
   }
+
   // WHERE, before HOW MUCH. This pair reaches a Kinu DEPLOYMENT, not merely
   // a model: the same origin fronts `/api/cli/workspaces`, so a suite resolved
   // against production can create and delete real workspaces there — which is
@@ -107,10 +110,12 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
   // live suite, so no suite has to remember the rule.
   if (origin) {
     const verdict = evalTargetVerdict(origin, env);
+
     if (verdict.kind === 'refused') {
       return { kind: 'misconfigured', reason: verdict.reason };
     }
   }
+
   if (origin && token) {
     return {
       kind: 'ready',
@@ -137,6 +142,7 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
         + "suite's traffic to somebody else's account.",
     };
   }
+
   if (gatewayURL && !gatewayAuth) {
     return {
       kind: 'misconfigured',
@@ -145,6 +151,7 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
         + 'cf-aig-authorization header answers 401 on every call.',
     };
   }
+
   if (gatewayURL && gatewayAuth) {
     return {
       kind: 'ready',
@@ -196,13 +203,17 @@ export function workerSession(llm: LLMProviderConfig): LiveModelSession {
   const origin = llm.baseURL.endsWith(USER_AI_PROXY_PATH)
     ? llm.baseURL.slice(0, -USER_AI_PROXY_PATH.length)
     : llm.baseURL;
+
   if (origin === llm.baseURL) {
     throw new Error(`${llm.baseURL} is not a worker AI-proxy base URL, so no worker origin can be `
       + 'recovered from it. This target fronts a model and no Kinu deployment, so there is no '
       + 'workspace API to reach.');
   }
+
   const header = llm.headers['Authorization'];
+
   if (!header) throw new Error('the resolved worker target carries no Authorization header');
+
   return { origin, token: header.replace(/^Bearer /, '') };
 }
 
@@ -229,17 +240,24 @@ export function liveModelTarget(suite: string): LiveModelTarget | null {
   // gate still requires that skip to be declared, so the suite cannot go quiet.
   if (process.env['KINU_EVAL_LIVE'] !== '1') {
     console.warn(`[skip] ${suite} — live evals are opt-in: run 'bun run test:eval' (KINU_EVAL_LIVE=1)`);
+
     return null;
   }
+
   const resolved = resolveLiveModel();
+
   if (resolved.kind === 'misconfigured') {
     throw new Error(`${suite}: live-model environment refuses this run — ${resolved.reason}`);
   }
+
   if (resolved.kind === 'absent') {
     console.warn(`[skip] ${suite} — ${resolved.reason}`);
+
     return null;
   }
+
   console.warn(`[live] ${suite} — ${resolved.target.describe}`);
+
   return resolved.target;
 }
 
@@ -392,19 +410,26 @@ export const LIVE_MODEL_SPEND_FILE_ENV = 'KINU_EVAL_SPEND_FILE';
 // `usage` keeps its `Usage` type through accumulation and `liveModelSpend()` is
 // the single place the reported shape is assembled.
 let spendCalls = 0;
+
 let spendCallsWithoutUsage = 0;
+
 let spendUsage: Usage = {};
+
 let spendEpisodesUnmeasured = 0;
+
 let spendEpisodesWithoutModel = 0;
 
 /** Record one model call. Pass the AI SDK's `result.usage`. */
 export function recordLiveModelSpend(usage?: LanguageModelUsage): void {
   spendCalls += 1;
   const reported = normalizeUsage(usage);
+
   if (!usageReported(reported)) {
     spendCallsWithoutUsage += 1;
+
     return;
   }
+
   spendUsage = addUsage(spendUsage, reported);
 }
 
@@ -429,6 +454,7 @@ export function recordLiveModelSpend(usage?: LanguageModelUsage): void {
  */
 export function liveModelCallSink(sql: SqlExecutor, actor: ActorHandle): ModelCallSink {
   const events = new RunEventRecorder(sql, actor);
+
   return (report) => {
     events.emit(WORKSPACE_RUN_ID, {
       type: 'model_call', source: report.source, usage: report.usage,
@@ -482,8 +508,10 @@ export function recordLiveModelEpisode(sql: SqlExecutor, actor: ActorHandle): vo
 export function recordWorkspaceSpend(spend: WorkspaceSpend): void {
   if (spend.total.calls === 0) {
     spendEpisodesUnmeasured += 1;
+
     return;
   }
+
   spendCalls += spend.total.calls;
   spendCallsWithoutUsage += spend.total.callsWithoutUsage;
   spendUsage = addUsage(spendUsage, spend.total.usage);
@@ -502,6 +530,7 @@ export function recordNoModelEpisode(spend: WorkspaceSpend): void {
     throw new Error(`this case declared it drives no model and its store accounted for `
       + `${String(spend.total.calls)} model call(s)`);
   }
+
   spendEpisodesWithoutModel += 1;
 }
 
@@ -546,10 +575,13 @@ export type AdoptedSpendVerdict = 'accounted' | 'unaccounted';
 export function recordAdoptedLiveModelSpend(adopted: AdoptedCaseSpend): AdoptedSpendVerdict {
   if (adopted.calls <= 0 || !usageReported(adopted.usage)) {
     spendEpisodesUnmeasured += 1;
+
     return 'unaccounted';
   }
+
   spendCalls += adopted.calls;
   spendUsage = addUsage(spendUsage, adopted.usage);
+
   return 'accounted';
 }
 
@@ -612,7 +644,9 @@ export function reportLiveModelSpend(suite: string): LiveModelSpend {
       : ''),
   );
   const path = process.env[LIVE_MODEL_SPEND_FILE_ENV]?.trim();
+
   if (path) appendFileSync(path, `${JSON.stringify({ suite, ...total })}\n`);
   resetLiveModelSpend();
+
   return total;
 }

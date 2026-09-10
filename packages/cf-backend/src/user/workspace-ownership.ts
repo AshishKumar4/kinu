@@ -33,6 +33,7 @@ export interface WorkspaceOwnershipEnv extends OwnerCapabilityEnv {
 export type OwnedWorkspaceResult =
   | { ok: true; agent: DurableObjectStub<OrchestratorAgent> }
   | { ok: false; status: number; error: string };
+
 /** Positive registry-membership answers this Worker isolate has proven, keyed
  *  `${userId}\u0000${workspaceName}`. A proof is earned only by a real
  *  `hasWorkspace` answer, and `claimOwner` still verifies the caller IS the
@@ -81,30 +82,37 @@ export async function claimOwnedWorkspace(
   // crafted workspace name would wake an arbitrary OrchestratorAgent. A
   // proven member skips straight to the claim.
   const membershipKey = `${userId}\u0000${workspaceName}`;
+
   if (!membershipProven.has(membershipKey)) {
     const member = await retryTransientDO('hasWorkspace',
       () => userDO.hasWorkspace(owner, workspaceName));
+
     if (!member) {
       // A concurrent request may have proven membership moments ago; a fresh
       // removal answer outranks it.
       membershipProven.delete(membershipKey);
+
       return {
         ok: false,
         status: 404,
         error: `Workspace ${workspaceName} not in your registry. Create it via POST /api/user/workspaces first.`,
       };
     }
+
     if (membershipProven.size >= MEMBERSHIP_PROOF_LIMIT) membershipProven.clear();
     membershipProven.add(membershipKey);
   }
+
   const agent = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName));
   let claim: { owner: string; capabilityHash: string | null };
+
   try {
     claim = await retryTransientDO('claimOwner', () => agent.claimOwner(userId));
   } catch (e) {
     const message = renderThrownChain({ cause: e });
     const transient = classifyTransientDO({ cause: e });
     const status = /owned by a different user/i.test(message) ? 403 : transient !== null ? 503 : 500;
+
     if (status !== 403) {
       diagnostics.failure('workspace.claim_owner_failed', toKinuError({
         doing: 'claiming workspace ownership',
@@ -112,8 +120,10 @@ export async function claimOwnedWorkspace(
         otherwise: 'unavailable',
       }), { workspace: workspaceName, transient: transient ?? 'none' });
     }
+
     return { ok: false, status, error: message };
   }
+
   // Reconcile the workspace's identity with the registry on every touch. The
   // UserDO owns the whole decision (and serializes concurrent ones) because it
   // is the only place that can see both sides; it returns immediately when they
@@ -123,25 +133,30 @@ export async function claimOwnedWorkspace(
       () => userDO.ensureWorkspaceCapability(workspaceName, claim.capabilityHash));
   } catch (e) {
     const message = renderThrownChain({ cause: e });
+
     // The UserDO re-checks the registry on every reconcile; its contradiction
     // is the authoritative refutation of a cached proof — the workspace was
     // removed after this isolate proved membership. Evict and report 404 so
     // deletion sticks with no cross-isolate invalidation channel.
     if (/not in your registry/i.test(message)) {
       forgetWorkspaceMembership(userId, workspaceName);
+
       return { ok: false, status: 404, error: message };
     }
+
     const transient = classifyTransientDO({ cause: e });
     diagnostics.failure('workspace.capability_provisioning_failed', toKinuError({
       doing: "provisioning the workspace's capability token",
       cause: e,
       otherwise: 'unavailable',
     }), { workspace: workspaceName, transient: transient ?? 'none' });
+
     return {
       ok: false,
       status: transient !== null ? 503 : 500,
       error: `Could not issue this workspace's capability token: ${message}`,
     };
   }
+
   return { ok: true, agent };
 }

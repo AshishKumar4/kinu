@@ -75,6 +75,7 @@ export function subordinateDelegatesOf(
  */
 export function collectDynamicContext(input: DynamicContextInput): DynamicContext {
   const { rt, stores } = input;
+
   return agentDynamicContext({
     factsBlock: renderFactsForTurn(stores.facts),
     memoryTail: input.memoryTail,

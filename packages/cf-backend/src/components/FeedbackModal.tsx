@@ -62,6 +62,7 @@ const WORKSPACE_ROUTES: Readonly<Record<string, true>> = Object.freeze({
 
 function workspaceOf(pathname: string): string {
   const [head, name] = pathname.replace(/^\/+/, "").split("/");
+
   return head !== undefined && WORKSPACE_ROUTES[head] === true && name !== undefined ? name : "";
 }
 
@@ -101,14 +102,17 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
     const generation = ++captureGeneration.current;
     setShot({ phase: "capturing" });
     setMarks([]);
+
     const captureFailed = <Thrown,>(thrown: Thrown): void => {
       diagnostics.failure("feedback.capture_failed", toKinuError({
         doing: "capture the page for a feedback report", cause: thrown, otherwise: "unsupported",
       }));
+
       if (generation === captureGeneration.current) {
         setShot({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
       }
     };
+
     // One frame, so the dialog's own paint lands before the clone is taken —
     // otherwise the omit hook removes nodes the browser has not laid out and
     // the page underneath is captured mid-reflow.
@@ -132,6 +136,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   useEffect(() => {
     if (wanted) take();
     else setShot({ phase: "off" });
+
     return () => { captureGeneration.current += 1; };
   }, [wanted, take]);
 
@@ -140,20 +145,39 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   // after the state change, so a mark appeared late and an undo un-drew late.
   useEffect(() => {
     if (shot.phase !== "ready") {
-      setBitmap((current) => { current?.close(); return null; });
+      setBitmap((current) => {
+        current?.close();
+
+        return null;
+      });
+
       return;
     }
+
     let live = true;
+
     const decodeFailed = <Thrown,>(thrown: Thrown): void => {
       diagnostics.failure("feedback.decode_failed", toKinuError({
         doing: "decode the captured screenshot for preview", cause: thrown, otherwise: "bad_input",
       }));
+
       if (live) setShot({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
     };
+
     void createImageBitmap(shot.capture.blob).then((decoded) => {
-      if (!live) { decoded.close(); return; }
-      setBitmap((current) => { current?.close(); return decoded; });
+      if (!live) {
+        decoded.close();
+
+        return;
+      }
+
+      setBitmap((current) => {
+        current?.close();
+
+        return decoded;
+      });
     }, decodeFailed);
+
     return () => { live = false; };
   }, [shot]);
 
@@ -162,10 +186,12 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   // coordinates are image coordinates and stay correct at any dialog width.
   useEffect(() => {
     const canvas = canvasRef.current;
+
     if (bitmap === null || canvas === null) return;
     canvas.width = bitmap.width;
     canvas.height = bitmap.height;
     const context = canvas.getContext("2d");
+
     if (context === null) return;
     paint(context, bitmap, marks, { width: bitmap.width, height: bitmap.height });
     // The canvas EXISTS from the moment the ready state renders, but it is only
@@ -179,6 +205,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   const at = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     const canvas = event.currentTarget;
     const box = canvas.getBoundingClientRect();
+
     return {
       x: Math.round((event.clientX - box.left) * (canvas.width / box.width)),
       y: Math.round((event.clientY - box.top) * (canvas.height / box.height)),
@@ -193,8 +220,10 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   const onUp = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     const from = dragRef.current;
     dragRef.current = null;
+
     if (from === null) return;
     const to = at(event);
+
     const mark: Annotation = {
       kind: tool,
       x: Math.min(from.x, to.x),
@@ -202,6 +231,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       w: Math.abs(to.x - from.x),
       h: Math.abs(to.y - from.y),
     };
+
     // A click is not a zero-size annotation, it is a click.
     if (mark.w < 6 || mark.h < 6) return;
     setMarks((current) => [...current, mark]);
@@ -210,8 +240,10 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
   const onMove = useCallback((event: React.PointerEvent<HTMLCanvasElement>) => {
     const from = dragRef.current;
     const canvas = canvasRef.current;
+
     if (from === null || bitmap === null || canvas === null) return;
     const context = canvas.getContext("2d");
+
     if (context === null) return;
     const to = at(event);
     paint(context, bitmap, [...marks, {
@@ -239,6 +271,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
     // replaces can neither answer for it nor report against it.
     const attempt = new AbortController();
     inFlight.current = attempt;
+
     const sendFailed = <Thrown,>(thrown: Thrown): void => {
       // A stopped request is the reporter's own doing: `stop` has already said
       // so, and an abort is not a failure this product should record.
@@ -249,6 +282,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
       }));
       setSend({ phase: "failed", reason: renderThrownChain({ cause: thrown }) });
     };
+
     const form = new FormData();
     form.set(FEEDBACK_FIELDS.note, trimmed);
     form.set(FEEDBACK_FIELDS.route, location.pathname);
@@ -260,6 +294,7 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
         if (tooLarge(blob.size)) {
           throw new Error(`the annotated screenshot is ${String(Math.ceil(blob.size / (1024 * 1024)))} MiB, over the ${String(FEEDBACK_MAX_SCREENSHOT_BYTES >> 20)} MiB limit`);
         }
+
         form.set(FEEDBACK_FIELDS.screenshot, new File([blob], "feedback.png", { type: FEEDBACK_SCREENSHOT_TYPE }));
       })
       : Promise.resolve();
@@ -275,10 +310,13 @@ export function FeedbackModal({ onClose }: { onClose: () => void }) {
           FeedbackReplySchema,
           await tolerateAsync(() => response.json(), 'malformed-input'),
         );
+
         const reply = parsed.success ? parsed.output : {};
+
         if (!response.ok) {
           throw new Error(reply.error ?? `the server answered ${String(response.status)}`);
         }
+
         setSend({ phase: "sent", id: reply.id ?? "" });
       })
       .catch(sendFailed);

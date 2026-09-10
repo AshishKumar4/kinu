@@ -20,6 +20,7 @@ function truncateSource(code: string): string {
 }
 
 const CRAFTABLE_LANGUAGES: ReadonlySet<string> = new Set(['javascript', 'typescript']);
+
 const GeneralizedToolSchema = v.object({
   name: v.optional(v.string()),
   description: v.optional(v.string()),
@@ -62,8 +63,10 @@ export async function maybeStoreCraftedTool(
   // JSON", and the craft loop would look like it had simply declined to
   // generalize.
   const extracted = tolerate(() => extractJsonObject(generalized), 'malformed-input');
+
   if (extracted === undefined) return;
   const parsed = v.parse(GeneralizedToolSchema, extracted);
+
   if (!parsed.name || !parsed.code) return;
 
   await upsertCraftedTool(rt, {

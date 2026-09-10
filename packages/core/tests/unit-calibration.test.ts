@@ -23,6 +23,7 @@ function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db));
+
   // A real bound handle: the ledger is actor-scoped, so a fixture that could
   // not fail `assertCurrent` would not be exercising the store these tests read.
   return { db, sql, actor: testActorHandle(sql) };
@@ -36,6 +37,7 @@ function seedLedger(sql: ReturnType<typeof makeSql>, actor: ActorHandle, spec: {
 } = {}): void {
   const start = spec.startAt ?? 1_700_000_000_000;
   let n = 0;
+
   const write = (outcome: TurnOutcome, count: number): void => {
     for (let i = 0; i < count; i++) {
       recordTurnOutcome(sql, actor, {
@@ -51,6 +53,7 @@ function seedLedger(sql: ReturnType<typeof makeSql>, actor: ActorHandle, spec: {
       });
     }
   };
+
   write('accepted', spec.accepted ?? 0);
   write('corrected', spec.corrected ?? 0);
   write('frustrated', spec.frustrated ?? 0);
@@ -149,9 +152,11 @@ describe('sampleForLabeling', () => {
 
     const items = sampleForLabeling(sql, actor, { size: 100 });
     expect(items).toHaveLength(40);
+
     for (const item of items) {
       const row = sql<{ source: string; outcome: string }>`
         SELECT source, outcome FROM turn_outcomes WHERE id = ${item.outcomeId}`[0];
+
       expect(row.source).toBe('classifier');
       expect(row.outcome).not.toBe('abandoned');
     }
@@ -203,6 +208,7 @@ describe('the labeling file', () => {
     expect(rendered).toContain('deliberately NOT shown');
     // The only outcome words present are the legend's, which every item shares.
     const body = rendered.slice(rendered.indexOf('### 1/2'));
+
     for (const word of ['accepted', 'corrected', 'frustrated', 'abandoned']) {
       expect(body).not.toContain(word);
     }
@@ -229,6 +235,7 @@ describe('the labeling file', () => {
   test('round-trips every verdict key', () => {
     const many = Array.from({ length: 5 }, (_, i) => ({ ...items[0], outcomeId: `outc-${i}` }));
     let verdicts = 0;
+
     const filled = renderLabelingFile(many)
       .split('\n')
       .map((line) => (line === 'verdict:' ? `verdict: ${['a', 'c', 'f', 'b', '?'][verdicts++]}` : line))
@@ -266,6 +273,7 @@ describe('the labeling file', () => {
       '### 2/2 outc-1',
       'verdict: c',
     ].join('\n'));
+
     expect(parsed.errors).toHaveLength(3);
     expect(parsed.errors[0]).toContain('before any turn');
     expect(parsed.errors[1]).toContain('"q" is not a verdict');
@@ -305,6 +313,7 @@ describe('the gold label ledger', () => {
     // A windowed read would silently drop the turns the oldest labels speak
     // for, and the estimate would quietly narrow to the recent ones.
     const { sql, actor } = setup();
+
     for (let pass = 0; pass < 12; pass++) {
       recordOutcomeLabels(sql, actor, {
         labeler: 'owner',
@@ -312,6 +321,7 @@ describe('the gold label ledger', () => {
         now: 1000 + pass,
       });
     }
+
     expect(goldLabels(sql, actor).size).toBe(720);
     expect(listOutcomeLabels(sql, actor, 10)).toHaveLength(10);
   });
@@ -348,8 +358,10 @@ describe('calibrationReport', () => {
   test('a partially labeled ledger names the verdict it cannot correct', () => {
     const { sql, actor } = setup();
     seedLedger(sql, actor, { accepted: 200, corrected: 40, frustrated: 12 });
+
     const drawn = sampleForLabeling(sql, actor, { size: 200 })
       .filter((item) => predictionOf(sql, item.outcomeId) !== 'frustrated');
+
     recordOutcomeLabels(sql, actor, {
       labeler: 'owner',
       labels: drawn.map((item) => outcomeLabel(item.outcomeId, 'accepted')),
@@ -371,12 +383,15 @@ describe('calibrationReport', () => {
       labeler: 'owner',
       labels: drawn.map((item, i) => {
         const predicted = predictionOf(sql, item.outcomeId);
+
         if (predicted === 'accepted') {
           return outcomeLabel(item.outcomeId, i % 5 === 0 ? 'corrected' : 'accepted');
         }
+
         if (predicted === 'frustrated') {
           return outcomeLabel(item.outcomeId, i % 3 === 0 ? 'accepted' : 'frustrated');
         }
+
         return outcomeLabel(item.outcomeId, 'corrected');
       }),
     });

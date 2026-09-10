@@ -34,6 +34,7 @@ import {
 } from './first-run';
 
 const SUITE = 'First-run · files-outside-tree';
+
 const CASE = 'files-outside-tree' as const;
 
 /** The executor whose filesystem a hosted workspace lives on — the plane the
@@ -64,7 +65,9 @@ const BYTES = [
 const CODEGEN_REFUSAL = 'Code generation from strings';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
+
 const liveTest = test.skipIf(PLAN === null);
+
 const observations: EvalObservation[] = [];
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });

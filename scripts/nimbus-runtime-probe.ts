@@ -48,18 +48,22 @@ const runtimes: readonly RuntimePackage[] = process.argv.includes('--bare')
   : [bashRuntime, cpythonRuntime];
 
 const db = new Database(join(mkdtempSync(join(tmpdir(), 'nimbus-probe-')), 'probe.db'));
+
 const sql = nimbusSql(db);
 
 const opened = performance.now();
+
 const workspace = createWorkspace({
   sql,
   transactions: localTransactions(db),
   generation: nextWorkspaceGeneration(sql),
   runtimes,
 });
+
 // `createWorkspace` returns over a workspace that is still opening; the first
 // call is what awaits the boot, so time it separately from the probes.
 await workspace.stats();
+
 console.log(`runtimes supplied: ${runtimes.length}   open: ${(performance.now() - opened).toFixed(0)}ms\n`);
 
 for (const command of PROBES) {

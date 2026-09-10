@@ -37,7 +37,9 @@ import type { MeasurementContext } from '../src/strategy/objective';
 function liveContext(): MeasurementContext {
   const { rt } = createTestRuntime();
   const { shell } = rt;
+
   if (!shell) throw new Error('this runtime has no shell, so nothing can run a measurement in it');
+
   return { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
 }
 
@@ -46,6 +48,7 @@ function liveContext(): MeasurementContext {
  *  and the real reason on stderr. */
 function brokenShellContext(): MeasurementContext {
   const { rt } = createTestRuntime();
+
   return {
     vfs: rt.storage.vfs,
     exec: async () => ({
@@ -63,6 +66,7 @@ describe('a workspace that CAN run the instrument passes its preflight', () => {
   });
   test('the registry routes the named kind to its own preflight', async () => {
     const kind = registeredVerifierKind('exec-ratio');
+
     if (kind === null) throw new Error('exec-ratio must resolve');
     expect(await preflightVerifier(kind, liveContext())).toBeNull();
   });
@@ -84,16 +88,19 @@ describe('a workspace that CANNOT run the instrument says so, in the executor\'s
 
   test('a shell that throws is a fault, never an exception out of the preflight', async () => {
     const { rt } = createTestRuntime();
+
     const fault = await preflightRatioHarness({
       vfs: rt.storage.vfs,
       exec: async () => { throw new Error('no shell is attached to this workspace'); },
     });
+
     expect(fault).toContain('could not be run in this workspace\'s shell');
     expect(fault).toContain('no shell is attached to this workspace');
   });
 
   test('the preflight is independent of any spec — it is asked before one is validated', async () => {
     const kind = registeredVerifierKind('exec-ratio');
+
     if (kind === null) throw new Error('exec-ratio must resolve');
     expect(await preflightVerifier(kind, brokenShellContext())).not.toBeNull();
   });
@@ -113,7 +120,9 @@ describe('the reference rule is a spec complaint, not a faulted baseline', () =>
       kind: 'exec-ratio',
       spec: { ...wellFormed, reference: 'export default function go() { return 0; }' },
     });
+
     expect('reason' in refused).toBe(true);
+
     if (!('reason' in refused)) throw new Error('unreachable');
     // `bad_input`, so the caller knows the call is the thing to correct — a faulted
     // baseline reported this as `unavailable`, which reads as "not your fault".

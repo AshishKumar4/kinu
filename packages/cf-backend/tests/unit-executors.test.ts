@@ -10,6 +10,7 @@ import {
 } from "../src/lib/executors";
 
 const avail = (...names: string[]) => names.map((name) => ({ name, available: true }));
+
 const active = (...names: string[]) => names.map((name) => ({ name, available: true, active: true }));
 
 describe("pickDefaultExecutor", () => {
@@ -60,12 +61,14 @@ describe("releaseSubstrate", () => {
     const verdict = releaseSubstrate([
       exec({ available: false, status: "not_configured", reason: "Sandbox executor not configured." }),
     ]);
+
     expect(verdict).toEqual({ state: "unavailable", reason: "Sandbox executor not configured." });
   });
 
   test("a loaded list with no sandbox row at all is unavailable with a stated reason", () => {
     const verdict = releaseSubstrate([exec({ name: "workspace", kind: "workspace" })]);
     expect(verdict.state).toBe("unavailable");
+
     if (verdict.state === "unavailable") expect(verdict.reason.length).toBeGreaterThan(0);
   });
 
@@ -96,6 +99,7 @@ describe("executor labels name one environment each", () => {
     // `parent` is legitimately a workspace too — someone else's, and its label
     // says whose. What no other environment may do is answer to the bare word.
     expect(executorLabel("workspace")).toBe("Workspace");
+
     for (const name of NAMES) {
       if (name === "workspace") continue;
       expect(executorLabel(name)).not.toBe("Workspace");

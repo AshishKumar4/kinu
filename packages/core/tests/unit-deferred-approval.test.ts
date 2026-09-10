@@ -42,6 +42,7 @@ function approvalsDb() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initDeferredApprovalsTable(execRaw);
+
   return { db, sql, actor: createTestActors(sql, execRaw).main } satisfies {
     db: Database; sql: SqlExecutor; actor: ActorHandle;
   };
@@ -75,9 +76,14 @@ function setup(opts: {
   /** The durable audit trail a consumed grant must leave behind — what proves
    *  an approval was spent once the row that held it is gone. */
   const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
+
   const queue = new DeferredApprovalQueue({
     store,
-    signals: { deliver: async (signal) => { delivered.push(signal); return 'queued'; } },
+    signals: { deliver: async (signal) => {
+      delivered.push(signal);
+
+      return 'queued';
+    } },
     remember: (grants) => { for (const g of grants) granted.push(formatApprovalGrant(g)); },
     newId: () => `defer-${++seq}`,
     now: () => 1_000 + seq + elapsed,
@@ -85,25 +91,32 @@ function setup(opts: {
   });
 
   const executed: string[] = [];
+
   const rawShell: Shell = {
     exec: async (command: string) => {
       executed.push(String(command));
+
       return { stdout: 'ran', stderr: '', exitCode: 0 };
     },
   };
+
   const policy: ShellApprovalPolicy = {
     mode: () => opts.mode ?? 'strict',
     granted: (grant) => granted.includes(formatApprovalGrant(grant)),
   };
+
   if (opts.approve) policy.requestApproval = opts.approve;
+
   if (!opts.noQueue) policy.deferrals = queue.channel;
   const shell = withApprovalGatedShell(rawShell, policy);
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime });
+
   const run: RunTool = {
     execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
   };
+
   return {
     queue, store, shell, executed, delivered, granted, audited, run,
     advance: (ms: number) => { elapsed += ms; },
@@ -252,9 +265,11 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     // The point of bulk: five queued commands decided in one sitting must not
     // cost the agent five separate turns of being told about them.
     const { run, queue, delivered } = setup();
+
     for (const command of ['npm publish a', 'npm publish b', 'npm publish c', 'npm publish d', 'npm publish e']) {
       await expect(run.execute({ command })).rejects.toBeInstanceOf(KinuError);
     }
+
     expect(queue.list()).toHaveLength(5);
 
     const decided = await queue.decide(queue.list().map((a) => a.id), 'approved');
@@ -262,6 +277,7 @@ describe('the owner decides, in bulk, and the agent is woken', () => {
     expect(decided).toHaveLength(5);
     expect(delivered).toHaveLength(1);
     expect(delivered[0]!.metadata).toMatchObject({ decision: 'approved', count: 5 });
+
     for (const command of ['npm publish a', 'npm publish e']) expect(delivered[0]!.text).toContain(command);
     expect(queue.list()).toEqual([]);
   });
@@ -460,6 +476,7 @@ describe('the spent grant leaves an audit, and no row the gate did not close', (
     expect(spent?.action.id).toBe('defer-s');
     expect(store.spend('defer-s')).toBeNull();
     expect(store.standing(GATED, 'workspace', 3)).toBeNull();
+
     if (!spent) throw new Error('an approved grant must be spendable');
 
     expect(store.settle(spent.spend, 'spent')).toBe(true);
@@ -545,6 +562,7 @@ describe('durability — the wait is a night, not a prompt window', () => {
     const { sql, actor } = approvalsDb();
     const store = new DeferredApprovalStore(sql, actor);
     store.create({ id: 'defer-7', command: GATED, executor: 'workspace', reason: 'gate', requestedAt: 5 });
+
     const queue = new DeferredApprovalQueue({
       store,
       signals: { deliver: () => Promise.reject(new Error('no host')) },
@@ -581,6 +599,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     const store = new DeferredApprovalStore(sql, actor);
     let seq = 0;
     const audited: Array<{ approvalId: string; command: string; executor: string }> = [];
+
     const queue = new DeferredApprovalQueue({
       store,
       signals: { deliver: async () => 'queued' },
@@ -594,6 +613,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     /** What the machine answers. Swapped per phase: not connected, then
      *  connected. */
     let answer: () => CommandResult = () => 'ran';
+
     const provider: ExecutorProvider = {
       name: 'laptop',
       kind: 'laptop',
@@ -607,16 +627,20 @@ describe('an approval outlives an attempt that never reached the machine', () =>
           description: 'Run a shell command on the owner\'s machine',
           execute: async (...args: unknown[]) => {
             executed.push(String(args[0]));
+
             return answer();
           },
         },
       },
     };
+
     const gated = gateProviderExec(provider, {
       mode: () => 'strict',
       deferrals: queue.channel,
     });
+
     const exec = (command: string) => gated.tools.exec?.execute(command);
+
     return {
       queue, store, exec, executed, audited,
       answerWith: (next: () => CommandResult) => { answer = next; },
@@ -731,6 +755,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
     const spend = store.spend('defer-1');
     expect(spend).not.toBeNull();
+
     if (!spend) throw new Error('the approved grant must be spendable');
 
     queue.channel.settle(spend.spend, 'did-not-run');
@@ -742,6 +767,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
     // …and a replay that arrives after a LATER spend cannot undo it.
     const second = store.spend('defer-1');
     expect(second).not.toBeNull();
+
     if (!second) throw new Error('the refunded grant must be spendable again');
     queue.channel.settle(second.spend, 'spent');
     queue.channel.settle(spend.spend, 'did-not-run');
@@ -762,6 +788,7 @@ describe('an approval outlives an attempt that never reached the machine', () =>
 
     // Consumer A takes the grant and has not come back yet.
     const spend = store.spend('defer-1');
+
     if (!spend) throw new Error('the approved grant must be spendable');
     // Consumer B finds nothing standing and parks its own row.
     expect(await exec(GATED)).toMatchObject({ error: expect.stringContaining('NOT RUN — queued for owner approval (defer-2)') });

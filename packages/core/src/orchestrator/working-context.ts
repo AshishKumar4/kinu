@@ -55,6 +55,7 @@ import { sqlCheckList } from '../identity/schema';
 
 /** How a revision came to exist. */
 const WORKING_SOURCES = ['hydrate', 'turn', 'edit'] as const;
+
 export type WorkingSource = (typeof WORKING_SOURCES)[number];
 
 /**
@@ -66,15 +67,18 @@ export type WorkingSource = (typeof WORKING_SOURCES)[number];
  * `activatedAt` says so) or never became effective (`closedReason` says why).
  */
 const WORKING_STATUSES = ['staged', 'active', 'superseded'] as const;
+
 export type WorkingStatus = (typeof WORKING_STATUSES)[number];
 
 /** Which surface authored a revision. `runtime` is the host recording what the
  *  actor's own history now is; the other three are edits. */
 const WORKING_VIAS = ['runtime', 'file', 'session', 'owner'] as const;
+
 export type WorkingVia = (typeof WORKING_VIAS)[number];
 
 /** Why a staged edit was closed without ever becoming effective. */
 const WORKING_CLOSED_REASONS = ['history_rewritten', 'superseded_by_edit'] as const;
+
 export type WorkingClosedReason = (typeof WORKING_CLOSED_REASONS)[number];
 
 /** One revision's metadata — everything except the messages themselves, which
@@ -220,37 +224,45 @@ export class ActorWorkingContextStore {
    *  error: the surfaces above answer "revision 0, no messages yet". */
   head(): WorkingRevisionContent | null {
     this.actor.assertCurrent();
+
     const row = this.sql<WorkingRow>`
       SELECT * FROM actor_working_revisions WHERE actor_id = ${this.actorId}
       ORDER BY revision DESC LIMIT 1`[0];
+
     return row === undefined ? null : contentOf(row);
   }
 
   /** The revision the runtime builds requests from. */
   active(): WorkingRevisionContent | null {
     this.actor.assertCurrent();
+
     const row = this.sql<WorkingRow>`
       SELECT * FROM actor_working_revisions
       WHERE actor_id = ${this.actorId} AND status = 'active'
       ORDER BY revision DESC LIMIT 1`[0];
+
     return row === undefined ? null : contentOf(row);
   }
 
   /** The newest authored edit still waiting for a safe boundary. */
   staged(): WorkingRevisionContent | null {
     this.actor.assertCurrent();
+
     const row = this.sql<WorkingRow>`
       SELECT * FROM actor_working_revisions
       WHERE actor_id = ${this.actorId} AND status = 'staged'
       ORDER BY revision DESC LIMIT 1`[0];
+
     return row === undefined ? null : contentOf(row);
   }
 
   revision(revision: number): WorkingRevisionContent | null {
     this.actor.assertCurrent();
+
     const row = this.sql<WorkingRow>`
       SELECT * FROM actor_working_revisions
       WHERE actor_id = ${this.actorId} AND revision = ${revision} LIMIT 1`[0];
+
     return row === undefined ? null : contentOf(row);
   }
 
@@ -258,6 +270,7 @@ export class ActorWorkingContextStore {
    *  who changed what, from which base, whether it activated, and where. */
   history(limit = 200): readonly WorkingRevision[] {
     this.actor.assertCurrent();
+
     return this.sql<WorkingMetaRow>`
       SELECT revision, base_revision, base_message_count, source, status, via, author,
              digest, message_count, turn_id, activated_turn, activated_step, activated_at,
@@ -285,6 +298,7 @@ export class ActorWorkingContextStore {
     const encoded = encodeModelMessages(input.messages);
     const digest = modelMessagesDigest(encoded);
     const at = nowMs();
+
     return this.transactionSync(() => {
       const active = this.sql<WorkingMetaRow>`
         SELECT revision, base_revision, base_message_count, source, status, via, author,
@@ -293,13 +307,16 @@ export class ActorWorkingContextStore {
         FROM actor_working_revisions
         WHERE actor_id = ${this.actorId} AND status = 'active'
         ORDER BY revision DESC LIMIT 1`[0] ?? null;
+
       const lands = input.lands ?? null;
+
       if (lands === null
         && active !== null
         && active.digest === digest
         && active.base_message_count === input.messages.length) {
         return metaOf(active);
       }
+
       // A turn boundary FOLDS the edit into this snapshot rather than making
       // the edit row itself active: the snapshot re-anchors the offset to its
       // own length, which is what a turn needs (the admitted array is a
@@ -310,6 +327,7 @@ export class ActorWorkingContextStore {
       if (lands !== null) {
         this.markActivated(lands.revision, input.turnId, lands.stepIndex, at, 'superseded');
       }
+
       const revision = this.nextRevision();
       void this.sql`
         INSERT INTO actor_working_revisions (
@@ -321,6 +339,7 @@ export class ActorWorkingContextStore {
           ${digest}, ${input.messages.length}, ${encoded}, ${input.turnId},
           ${input.turnId}, ${lands?.stepIndex ?? null}, ${at}, NULL, NULL, NULL, ${at})`;
       this.supersede(revision);
+
       return this.requireMeta(revision);
     });
   }
@@ -348,6 +367,7 @@ export class ActorWorkingContextStore {
     const encoded = encodeModelMessages(input.messages);
     const digest = modelMessagesDigest(encoded);
     const at = nowMs();
+
     return this.transactionSync(() => {
       const head = this.sql<WorkingMetaRow>`
         SELECT revision, base_revision, base_message_count, source, status, via, author,
@@ -355,11 +375,14 @@ export class ActorWorkingContextStore {
                deferred_reason, deferred_at, closed_reason, recorded_at
         FROM actor_working_revisions WHERE actor_id = ${this.actorId}
         ORDER BY revision DESC LIMIT 1`[0] ?? null;
+
       const current = head?.revision ?? 0;
+
       if (current !== input.base) {
         throw new KinuError('denied',
           `this context edit was written against working revision ${input.base}, and revision ${current} is current`);
       }
+
       // Every pending edit at or below the base is written on top of: its
       // content is already inside this new revision, so landing both would
       // apply the same change twice. Retained with the reason, never deleted.
@@ -368,6 +391,7 @@ export class ActorWorkingContextStore {
         WHERE actor_id = ${this.actorId} AND status = 'staged' AND revision <= ${current}`) {
         this.close(row.revision, 'superseded_by_edit');
       }
+
       const revision = current + 1;
       void this.sql`
         INSERT INTO actor_working_revisions (
@@ -378,6 +402,7 @@ export class ActorWorkingContextStore {
           ${head?.base_message_count ?? 0}, 'edit', 'staged', ${input.via}, ${input.author},
           ${digest}, ${input.messages.length}, ${encoded}, ${input.turnId},
           NULL, NULL, NULL, NULL, NULL, NULL, ${at})`;
+
       return this.requireMeta(revision);
     });
   }
@@ -393,9 +418,11 @@ export class ActorWorkingContextStore {
    */
   activate(revision: number, at: { readonly turnId: string; readonly stepIndex: number | null }): WorkingRevision {
     this.actor.assertCurrent();
+
     return this.transactionSync(() => {
       this.markActivated(revision, at.turnId, at.stepIndex, nowMs(), 'active');
       this.supersede(revision);
+
       return this.requireMeta(revision);
     });
   }
@@ -407,6 +434,7 @@ export class ActorWorkingContextStore {
     void this.sql`
       UPDATE actor_working_revisions SET status = 'superseded', closed_reason = ${reason}
       WHERE actor_id = ${this.actorId} AND revision = ${revision} AND status = 'staged'`;
+
     return this.requireMeta(revision);
   }
 
@@ -433,9 +461,11 @@ export class ActorWorkingContextStore {
              digest, message_count, turn_id, activated_turn, activated_step, activated_at,
              deferred_reason, deferred_at, closed_reason, recorded_at
       FROM actor_working_revisions WHERE actor_id = ${this.actorId} AND revision = ${revision} LIMIT 1`[0];
+
     if (row === undefined) {
       throw new KinuError('io', `working revision ${revision} was written and cannot be read back`);
     }
+
     return metaOf(row);
   }
 
@@ -456,13 +486,16 @@ export class ActorWorkingContextStore {
     const row = this.sql<{ status: WorkingStatus }>`
       SELECT status FROM actor_working_revisions
       WHERE actor_id = ${this.actorId} AND revision = ${revision} LIMIT 1`[0];
+
     if (row === undefined) {
       throw new KinuError('missing', `working revision ${revision} does not exist for this actor`);
     }
+
     if (row.status !== 'staged') {
       throw new KinuError('denied',
         `working revision ${revision} is ${row.status} and cannot be activated again`);
     }
+
     void this.sql`
       UPDATE actor_working_revisions
       SET status = ${status}, activated_turn = ${turnId}, activated_step = ${stepIndex},
@@ -491,6 +524,7 @@ export class ActorWorkingContextStore {
     const latest = this.sql<{ revision: number | null }>`
       SELECT MAX(revision) AS revision FROM actor_working_revisions
       WHERE actor_id = ${this.actorId}`[0]?.revision;
+
     return (latest ?? 0) + 1;
   }
 }

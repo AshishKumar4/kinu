@@ -28,6 +28,7 @@ interface Hub {
 
 function makeSql(): Hub {
   const db = new Database(':memory:');
+
   return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
 }
 
@@ -51,6 +52,7 @@ const reportPayload: SubordinateReportPayload = {
 const taskDescriptor: IngressDescriptor = {
   ingress: 'subordinate', variant: 'subordinate_task', payload: taskPayload,
 };
+
 const reportDescriptor: IngressDescriptor = {
   ingress: 'subordinate', variant: 'subordinate_report', payload: reportPayload,
 };
@@ -83,6 +85,7 @@ describe('subordinate event derivation', () => {
     } satisfies Pick<KinuEvent,
       'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
       | 'payload_visibility' | 'received_at' | 'schema_version' | 'reply_channel' | 'dedupe_key'>;
+
     const taskEvent: KinuEvent = { ...base, variant: 'subordinate_task', payload: taskPayload };
     const reportEvent: KinuEvent = { ...base, variant: 'subordinate_report', payload: reportPayload };
     // An assignment DOWN is a one-shot facet RPC with no redelivery loop.

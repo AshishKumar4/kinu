@@ -15,22 +15,28 @@ export async function createCommand(name: string | undefined, opts: {
   join?: boolean;
 }): Promise<void> {
   ensureAgentHome();
+
   // Joining takes nothing: the agent inherits the mission of a peer already
   // here, and its first message names it. Asking for a name and a purpose is
   // exactly what this path exists to stop asking for.
   if (opts.join) {
     await joinWorkspace(opts);
+
     return;
   }
+
   const interactive = canPrompt() && (!name || !opts.mode);
+
   if (!name) {
     name = interactive
       ? await ask('Workspace name', 'jarvis')
       : undefined;
   }
+
   if (!name) throw new Error('Workspace name required.');
   const mode = await resolveMode(opts.mode, interactive);
   const purpose = opts.purpose ?? `A helpful AI assistant named ${name}.`;
+
   const alias = opts.aliasShim === false
     ? undefined
     : opts.alias ?? (interactive ? await ask('Alias command', name) : name);
@@ -38,12 +44,15 @@ export async function createCommand(name: string | undefined, opts: {
   if (mode === 'cloud') {
     const spinner = createSpinner('Creating cloud workspace...');
     spinner.start();
+
     try {
       const created = await createCliAgent({ ...opts, name, purpose, mode, alias, allowInteractiveAuth: true });
       spinner.stop('Cloud workspace created');
       console.log(`\n${OK('✓')} ${ACCENT(name)} ${DIM('cloud workspace')}`);
+
       if (alias) console.log(`${DIM('Alias:')} ${ACCENT(alias)} ${DIM(created.aliasPath ?? '')}`);
       const hint = pathHint();
+
       if (hint) console.log(DIM(hint));
       console.log(`\n${DIM('Run:')} ${ACCENT(alias || `kinu run ${name}`)} ${DIM('"do something"')}\n`);
     } catch (err) {
@@ -51,19 +60,23 @@ export async function createCommand(name: string | undefined, opts: {
       printFailure({ cause: err });
       process.exit(1);
     }
+
     return;
   }
 
   const spinner = createSpinner('Creating workspace...');
   spinner.start();
+
   try {
     const created = await createCliAgent({ ...opts, name, purpose, mode, alias, allowInteractiveAuth: true });
     spinner.stop('Workspace created');
     printCreatedCard(name, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
     const warningInput: ModelWarningInput = { agentName: name };
+
     if (opts.model) warningInput.model = opts.model;
     await warnUnusableModel(warningInput);
     const hint = pathHint();
+
     if (hint) console.log(DIM(hint));
   } catch (err) {
     spinner.fail('Create failed');
@@ -78,6 +91,7 @@ export async function createCommand(name: string | undefined, opts: {
 async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: string }): Promise<void> {
   const spinner = createSpinner('Adding an agent to this workspace...');
   spinner.start();
+
   try {
     const created = await createLocalPeerAgent();
     spinner.stop('Agent added');
@@ -98,6 +112,7 @@ async function joinWorkspace(opts: { model?: string; baseUrl?: string; auth?: st
  *  the model is unusable now and learning it when the first turn dies. */
 async function warnUnusableModel(opts: ModelWarningInput): Promise<void> {
   const unusable = await findUnusableModel(opts);
+
   if (!unusable) return;
   console.log(`\n${WARN('!')} ${unusable.spec} ${DIM('has no connected provider.')} ${unusable.reason}`);
   console.log(DIM(`  Connect one with: kinu provider connect <provider>, then set the model with /model in chat.`));
@@ -108,8 +123,11 @@ async function resolveMode(raw: string | undefined, interactive: boolean): Promi
     if (raw === 'local' || raw === 'cloud') return raw;
     throw new Error('--mode must be local or cloud');
   }
+
   if (!interactive) return 'cloud';
   const answer = (await ask('Mode (cloud/local)', 'cloud')).toLowerCase();
+
   if (answer === 'local' || answer === 'l') return 'local';
+
   return 'cloud';
 }

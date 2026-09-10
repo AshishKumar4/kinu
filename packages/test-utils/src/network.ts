@@ -46,7 +46,9 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
 
   const matches = (h: MockFetchHandler, req: RecordedRequest): boolean => {
     if (h.match instanceof RegExp) return h.match.test(req.url);
+
     if (isRequestMatcher(h.match)) return h.match(req);
+
     return req.url.includes(h.match);
   };
 
@@ -54,36 +56,47 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
     const url = input instanceof Request ? input.url
       : input instanceof URL ? input.toString()
       : input;
+
     const method = (init?.method ?? 'GET').toUpperCase();
     const headers: Record<string, string> = {};
+
     if (init?.headers) {
       copyHeaders(init.headers).forEach((v, k) => { headers[k] = v; });
     }
+
     const bodyParse = v.safeParse(v.string(), init?.body);
     const body = bodyParse.success ? bodyParse.output : undefined;
     const req: RecordedRequest = { url, method, headers };
+
     if (body !== undefined) req.body = body;
     requests.push(req);
 
     const handler = handlers.find(h => matches(h, req));
+
     if (!handler) {
       return new Response(
         JSON.stringify({ error: `MockFetch: no handler matched ${method} ${url}` }),
         { status: 500 },
       );
     }
+
     const callIndex = handlerCallCount.get(handler) ?? 0;
     handlerCallCount.set(handler, callIndex + 1);
 
     const resp = isResponder(handler.respond)
       ? handler.respond(req, callIndex)
       : handler.respond;
+
     const responseText = v.safeParse(v.string(), resp.body);
+
     const bodyOut = resp.body === undefined ? ''
       : responseText.success ? responseText.output
       : JSON.stringify(resp.body);
+
     const responseHeaders = new Headers(resp.headers);
+
     if (!responseHeaders.has('content-type')) responseHeaders.set('content-type', 'application/json');
+
     return new Response(bodyOut, {
       status: resp.status ?? 200,
       headers: responseHeaders,
@@ -95,6 +108,7 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
     requests,
     matching(pattern) {
       if (pattern instanceof RegExp) return requests.filter(r => pattern.test(r.url));
+
       return requests.filter(r => r.url.includes(pattern));
     },
     reset() {
@@ -154,6 +168,7 @@ export const ANTHROPIC_MESSAGE_BODY = {
 } as const;
 
 type MockResponseFactory = Extract<MockFetchHandler['respond'], (...args: never[]) => object>;
+
 type RequestMatcher = Extract<MockFetchHandler['match'], (...args: never[]) => boolean>;
 
 function isRequestMatcher(value: MockFetchHandler['match']): value is RequestMatcher {

@@ -35,6 +35,7 @@ function harnessActorId(db: Database): string {
 }
 
 const KINU_TIMER_CALLBACK = '_kinuTimerTick';
+
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** A schedule write that fails — the storage failure that would end the chain,
@@ -56,9 +57,11 @@ describe('the workspace keeps exactly one wake row', () => {
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
     const overdueSec = Math.floor((Date.now() - 2 * DAY_MS) / 1000);
+
     const insert = db.prepare(
       `INSERT INTO cf_agents_schedules (id, callback, payload, type, time) VALUES (?, ?, NULL, ?, ?)`,
     );
+
     insert.run('kinu-wake', KINU_TIMER_CALLBACK, 'scheduled', overdueSec);
     insert.run('dead-continuation', '_chatRecovery', 'delayed', overdueSec);
 
@@ -81,9 +84,11 @@ describe('the workspace keeps exactly one wake row', () => {
     // package — so nothing can ever make the row runnable.
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
+
     const insert = db.prepare(
       `INSERT INTO cf_agents_schedules (id, callback, payload, type, time) VALUES (?, ?, NULL, ?, ?)`,
     );
+
     const soonSec = Math.floor((Date.now() + 60_000) / 1000);
     // Every combination the horizon rule cannot see: future, recurring, fresh.
     insert.run('dead-future', 'snapshotWorkspaceIfDue', 'scheduled', soonSec);
@@ -108,9 +113,11 @@ describe('the workspace keeps exactly one wake row', () => {
     const { agent, db } = orchestratorHarness();
     await agent.listSchedules();
     const overdueSec = Math.floor((Date.now() - 2 * DAY_MS) / 1000);
+
     const insert = db.prepare(
       `INSERT INTO cf_agents_schedules (id, callback, payload, type, time) VALUES (?, ?, NULL, ?, ?)`,
     );
+
     for (let i = 0; i < 4096 + 50; i++) insert.run(`stale-${i}`, '_chatRecovery', 'delayed', overdueSec);
 
     await agent.activateActor();
@@ -120,6 +127,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const staleLeft = (): number => db
       .prepare(`SELECT COUNT(*) AS held FROM cf_agents_schedules WHERE callback = '_chatRecovery'`)
       .values()[0]?.[0] as number;
+
     // One budget spent, and the continuation armed durably.
     expect(staleLeft()).toBe(50);
     const armed = (await agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
@@ -135,10 +143,13 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.listSchedules();
     db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
       id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
+
     const insert = db.prepare(
       `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`,
     );
+
     const expired = Date.now() - 25 * 60 * 60 * 1000;
+
     for (let i = 0; i < 4096 + 40; i++) insert.run(`fiber-${i}`, 'bg:stale', expired);
 
     await agent.activateActor();
@@ -147,6 +158,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
     const fibersLeft = (): number => db
       .prepare(`SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'fiber-%'`).values()[0]?.[0] as number;
+
     expect(fibersLeft()).toBe(40);
     expect((await agent.listSchedules()).some((row) => row.callback === '_kinuTerminalRetryTick')).toBe(true);
 
@@ -159,21 +171,26 @@ describe('the workspace keeps exactly one wake row', () => {
     // create a second wake: the backlog below lives in the one database both
     // actors share, and the root's activation is what drains it.
     const workspace = orchestratorHarness();
+
     const child = await hostedSubordinateHarness(workspace, {
       name: 'wake-child',
       displayName: 'Wake Child',
       nameOrigin: 'user',
       mission: 'share one wake',
     });
+
     const rootId = harnessActorId(workspace.db);
     expect(child.actor.handle.actorId).not.toBe(rootId);
     await workspace.agent.listSchedules();
     workspace.db.exec(`CREATE TABLE IF NOT EXISTS cf_agents_runs (
       id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, snapshot TEXT, created_at INTEGER NOT NULL)`);
+
     const insert = workspace.db.prepare(
       `INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, NULL, ?)`,
     );
+
     const expired = Date.now() - 25 * 60 * 60 * 1000;
+
     for (let i = 0; i < 4096 + 12; i++) insert.run(`sub-fiber-${i}`, 'bg:stale', expired);
 
     await workspace.agent.activateActor();
@@ -184,6 +201,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
     const left = (): number => workspace.db
       .prepare(`SELECT COUNT(*) AS held FROM cf_agents_runs WHERE id LIKE 'sub-fiber-%'`).values()[0]?.[0] as number;
+
     expect(left()).toBe(12);
     const wakes = (await workspace.agent.listSchedules()).filter((row) => row.callback === '_kinuTerminalRetryTick');
     expect(wakes).toHaveLength(1);
@@ -202,12 +220,14 @@ describe('the workspace keeps exactly one wake row', () => {
     // that wake into the child's own instant, because the activation classifies
     // and the tick dispatches.
     const workspace = orchestratorHarness();
+
     const child = await hostedSubordinateHarness(workspace, {
       name: 'deferred-child',
       displayName: 'Deferred Child',
       nameOrigin: 'user',
       mission: 'wait for one wake',
     });
+
     await workspace.agent.activateActor();
     await workspace.agent.harnessSettleBackgroundTasks();
     // Nothing owed: the activation invents no wake.
@@ -232,10 +252,12 @@ describe('the workspace keeps exactly one wake row', () => {
       (await workspace.agent.listSchedules())
         .filter((row) => row.callback === '_kinuTerminalRetryTick')
         .map((row) => ({ id: row.id, time: row.time }));
+
     const owedAt = Math.ceil(resumeAt / 1000);
     const armed = await wakes();
     expect(armed).toHaveLength(1);
     const wake = armed[0];
+
     if (!wake) throw new Error('the activation armed no wake for the child\'s owed job');
     // IMMEDIATE, and named as not-the-instant. "A wake exists" was already true
     // before the chain was fixed — `hasLiveJobsInWorkspace` said so — so a case
@@ -289,12 +311,14 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.harnessSettleBackgroundTasks();
 
     const actorId = harnessActorId(db);
+
     const insertBranch = (id: string, spawnedAt: number): void => {
       db.prepare(
         `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
          VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
       ).run(actorId, id, `branch-${id}`, spawnedAt);
     };
+
     // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
     const status = (id: string): string => db
       .prepare(`SELECT status FROM head_journal WHERE actor_id = ? AND id = ?`)
@@ -326,6 +350,7 @@ describe('the workspace keeps exactly one wake row', () => {
     await agent.harnessSettleBackgroundTasks();
 
     const actorId = harnessActorId(db);
+
     const insertRun = (root: string, createdAt: number): void => {
       db.prepare(
         `INSERT INTO mcts_search_runs
@@ -333,6 +358,7 @@ describe('the workspace keeps exactly one wake row', () => {
          VALUES (?, ?, ?, 'search the space', 'swarm', 'running', '{}', 4, ?, ?)`,
       ).run(actorId, root, `msg-${root}`, createdAt, createdAt);
     };
+
     // SAFETY: the SELECT answers one text cell by the schema's NOT NULL.
     const status = (root: string): string => db
       .prepare(`SELECT status FROM mcts_search_runs WHERE actor_id = ? AND root_id = ?`)
@@ -354,12 +380,14 @@ describe('the workspace keeps exactly one wake row', () => {
     // An orchestrator binds the workspace main actor, so these rows are written
     // and read under the id the agent's own recorder uses.
     const actorId = harnessActorId(db);
+
     const start = (run: string, ts: number): void => {
       db.prepare(
         `INSERT INTO run_events (actor_id, run_id, event_index, type, ts, payload)
          VALUES (?, ?, 1, 'run_start', ?, '{}')`,
       ).run(actorId, run, new Date(ts).toISOString());
     };
+
     // SAFETY: COUNT(*) answers exactly one numeric cell by SQL contract.
     const ended = (run: string): boolean => (db
       .prepare('SELECT COUNT(*) AS held FROM run_events WHERE actor_id = ? AND run_id = ? AND type = \'run_end\'')
@@ -387,13 +415,17 @@ describe('the workspace keeps exactly one wake row', () => {
     const { agent, db } = orchestratorHarness();
     await agent.activateActor();
     await agent.harnessSettleBackgroundTasks();
+
     const insert = db.prepare(
       `INSERT INTO head_journal (actor_id, id, root_id, depth, task, status, spawned_at)
        VALUES (?, ?, ?, 0, 'take a branch', 'running', ?)`,
     );
+
     const actorId = harnessActorId(db);
     const stale = Date.now() - 60_000;
+
     for (let i = 0; i < 769; i++) insert.run(actorId, `floor-head-${i}`, `branch-floor-${i}`, stale);
+
     // ONE alarm, as the platform delivers it: the SDK deletes its own one-shot
     // row once the callback returns, so the next tick starts with no armed row
     // — and the delay the tick chose is what the platform waited. Modelled
@@ -402,11 +434,14 @@ describe('the workspace keeps exactly one wake row', () => {
     const fireArmedTick = async (): Promise<number> => {
       const before = (await agent.listSchedules())
         .filter((row) => row.callback === '_kinuTerminalRetryTick');
+
       for (const row of before) await agent.cancelSchedule(row.id);
       const firedAtSec = Math.floor(Date.now() / 1000);
       await agent._kinuTerminalRetryTick();
+
       const armed = (await agent.listSchedules())
         .filter((row) => row.callback === '_kinuTerminalRetryTick');
+
       return armed.length === 0 ? 0 : (armed[0]?.time ?? 0) - firedAtSec;
     };
 
@@ -434,6 +469,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const { agent } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
+
     if (!armed) throw new Error('the trigger did not arm a wake row');
     // With the row gone (the state KINU-N027 produced) the tick has a real
     // re-arm to do rather than a no-op dedup.
@@ -446,6 +482,7 @@ describe('the workspace keeps exactly one wake row', () => {
     // `toBeInstanceOf` below is what makes that case fail by name rather than
     // reading as `undefined` inside a `toContain`.
     let failure: Error | null = null;
+
     try {
       await agent._kinuTimerTick();
     } catch (thrown) {
@@ -471,6 +508,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const { agent } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
+
     if (!armed) throw new Error('the trigger did not arm a wake row');
     await agent.cancelSchedule(armed.id);
     expect(await agent.listSchedules()).toEqual([]);
@@ -501,6 +539,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const { agent, db } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
+
     if (!armed) throw new Error('the trigger did not arm a wake row');
     db.prepare(`UPDATE cf_agents_schedules SET time = ? WHERE id = ?`)
       .run(Math.floor((Date.now() - 2 * DAY_MS) / 1000), armed.id);
@@ -519,6 +558,7 @@ describe('the workspace keeps exactly one wake row', () => {
     const { agent, db } = orchestratorHarness();
     await agent.createTimerTrigger({ atMs: Date.now() + 4 * DAY_MS, label: 'far' });
     const [armed] = await agent.listSchedules();
+
     if (!armed) throw new Error('the trigger did not arm a wake row');
     const dueSec = Math.floor(Date.now() / 1000) - 5;
     db.prepare(`UPDATE cf_agents_schedules SET time = ? WHERE id = ?`).run(dueSec, armed.id);
@@ -556,6 +596,7 @@ describe('the workspace keeps exactly one wake row', () => {
 
     const wakes = (await agent.listSchedules())
       .filter((row) => row.callback === KINU_TIMER_CALLBACK);
+
     expect(wakes).toHaveLength(1);
     expect(wakes[0]?.time).toBe(Math.ceil(soonerMs / 1000));
   });

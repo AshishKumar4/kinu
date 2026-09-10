@@ -47,11 +47,13 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
       release: async () => {},
       async explore(priorHistory) {
         const context = priorHistory.map(m => `${m.role}: ${m.content}`).join('\n');
+
         const text = await branchLLM.complete(
           `You are an expert software engineer exploring one approach to solve a task.\n\n` +
           `Prior context:\n${context.slice(-500)}\n\n` +
           `Propose ONE specific concrete approach in 2-3 sentences. Be specific about what to change.`,
         );
+
         return { text };
       },
       async generateReflection(task) {
@@ -89,6 +91,7 @@ async function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
 
 function createE2ESession(): SessionWriter {
   const messages: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
+
   return {
     async appendMessage(msg: SessionMessage, parentId?: string | null) {
       messages.push({ id: msg.id, parentId, role: msg.role, content: msg.parts.map(p => p.text).join('') });
@@ -97,11 +100,13 @@ function createE2ESession(): SessionWriter {
       if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));
       const result: Array<{ role: string; content: string }> = [];
       let current = messages.find(m => m.id === leafId);
+
       while (current) {
         result.unshift({ role: current.role, content: current.content });
         const parentId = current.parentId;
         current = parentId ? messages.find(m => m.id === parentId) : undefined;
       }
+
       return result;
     },
   };
@@ -109,16 +114,19 @@ function createE2ESession(): SessionWriter {
 
 function printTree(db: Database) {
   const sql = makeSql(db);
+
   const nodes = sql<SearchNode & { action: string }>`
     SELECT id, parent_id, depth, visits, value, status, substr(action, 1, 80) as action
     FROM search_nodes ORDER BY depth, created_at`;
 
   console.log('\n--- MCTS SEARCH TREE ---');
+
   for (const n of nodes) {
     const indent = '  '.repeat(n.depth);
     const icon = n.status === 'open' ? 'O' : n.status === 'pruned' ? 'X' : n.status === 'terminal' ? 'V' : '!';
     console.log(`${indent}[${icon}] ${n.id.slice(0, 8)} v=${n.value.toFixed(3)} n=${n.visits} | ${n.action.replace(/\n/g, ' ').slice(0, 50)}`);
   }
+
   console.log('---');
 }
 
@@ -132,6 +140,7 @@ describe.skipIf(!isE2EConfigured())('E2E MCTS with real LLM', () => {
     initCraftedToolsTables(rt.storage.sql);
 
     const session = createE2ESession();
+
     const result = await runMCTS(rt, session, 'Write a function to validate email addresses', {
       budget: 1, branches: 2, maxCostUSD: 5,
     });
@@ -144,6 +153,7 @@ describe.skipIf(!isE2EConfigured())('E2E MCTS with real LLM', () => {
     expect(allNodes.length).toBe(3); // 1 root + 1 iteration * 2 branches
     const root = allNodes.find(n => n.parent_id === null);
     expect(root).toBeDefined();
+
     if (!root) throw new Error('MCTS root node was not persisted');
     expect(root.visits).toBeGreaterThan(0);
 
@@ -153,6 +163,7 @@ describe.skipIf(!isE2EConfigured())('E2E MCTS with real LLM', () => {
     }
 
     const memory = await rt.memory.read('memory/MEMORY.md');
+
     if (result.converged) expect(memory).toContain('Successful approach');
     else expect(memory).toContain('Failed task');
   }, 600_000); // 10 min — reasoning models take 10-30s per call, AI Gateway has variable latency

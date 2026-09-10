@@ -25,10 +25,12 @@ import { describe, expect, it } from 'vitest';
 import type { AlarmReport } from './worker';
 
 const ARM_MS = 200;
+
 /** Generous, because it is never spent on a passing run: the waits below stop at
  *  the condition. It bounds only how long a BROKEN platform is given before the
  *  assertion reports whatever state it reached. */
 const DEADLINE_MS = 10_000;
+
 const POLL_MS = 50;
 
 describe('DurableObjectStorage alarms', () => {
@@ -44,10 +46,12 @@ describe('DurableObjectStorage alarms', () => {
   const settle = async (name: string, done: (report: AlarmReport) => boolean): Promise<AlarmReport> => {
     const deadline = Date.now() + DEADLINE_MS;
     let report = await open(name).report();
+
     while (!done(report) && Date.now() < deadline) {
       await scheduler.wait(POLL_MS);
       report = await open(name).report();
     }
+
     return report;
   };
 

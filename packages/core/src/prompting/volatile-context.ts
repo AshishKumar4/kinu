@@ -259,6 +259,7 @@ export interface DynamicContextSources {
 export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
   const subordinateDelegates = sources.subordinateDelegates ?? [];
   const headDelegates = searchDelegates(sources.liveHeadRuns.items);
+
   const context: DynamicContext = {
     // Re-listed per step: a sandbox provisioned or a device connected mid-turn
     // flips availability, and the whole point of the block is to say so.
@@ -278,14 +279,21 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
       total: subordinateDelegates.length + sources.liveHeadRuns.total,
     },
   };
+
   if (sources.devices !== undefined && sources.devices.length > 0) context.devices = sources.devices;
+
   if (sources.approvals && sources.approvals.total > 0) context.approvals = sources.approvals;
+
   if (sources.factsBlock) context.factsBlock = sources.factsBlock;
+
   if (sources.memoryTail) context.memoryTail = sources.memoryTail;
+
   if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;
+
   if (sources.missingCapabilities.length > 0) {
     context.missingCapabilities = sources.missingCapabilities;
   }
+
   return context;
 }
 
@@ -333,8 +341,11 @@ const BACKGROUND_RESUME_NOTICE =
  *  dynamic-context block — never in the cacheable system prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   if (exec.name === 'laptop') return exec.active || exec.status === 'active' ? 'connected' : 'available';
+
   if (exec.active || exec.status === 'active') return 'active';
+
   if (exec.status === 'idle' || exec.configured) return 'ready on demand';
+
   return 'available';
 }
 
@@ -353,8 +364,11 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
   const parts: string[] = [];
   const cpus = exec.resourceLimits?.cpus;
   const memBytes = exec.resourceLimits?.memBytes;
+
   if (cpus !== undefined) parts.push(`cpus=${cpus}`);
+
   if (memBytes !== undefined) parts.push(`mem=${formatBytes(memBytes)}`);
+
   return parts.length > 0 ? ` (${parts.join(' ')})` : '';
 }
 
@@ -376,8 +390,10 @@ function executorLimitsSuffix(exec: PromptExecutorInfo): string {
 function executorCapabilitySuffix(exec: PromptExecutorInfo): string {
   const declared = new Set(exec.capabilities ?? []);
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => declared.has(capability));
+
   return ordered.length > 0 ? `, runs: ${ordered.join(', ')}` : '';
 }
+
 /**
  * The mount point this executor's files are served at inside the agent's own
  * file plane, when the plane mounts that environment (`/pc`, `/sandbox` —
@@ -390,6 +406,7 @@ function executorMountSuffix(exec: PromptExecutorInfo): string {
 	// mount, and the record shape keeps that lookup total.
 	const byName: Record<string, string | undefined> = EXECUTOR_MOUNTS;
 	const mount = byName[exec.name];
+
 	return mount ? `, files at ${mount}` : '';
 }
 
@@ -410,6 +427,7 @@ const NOT_MEASURED_LABEL = 'not measured here';
 function executorUnmeasuredSuffix(exec: PromptExecutorInfo): string {
   const unmeasured = new Set(exec.unmeasuredCapabilities ?? []);
   const ordered = EXECUTOR_CAPABILITIES.filter((capability) => unmeasured.has(capability));
+
   return ordered.length > 0 ? `, ${NOT_MEASURED_LABEL}: ${ordered.join(', ')}` : '';
 }
 
@@ -419,6 +437,7 @@ function formatBytes(bytes: number): string {
   for (const [unit, scale] of [['G', 1024 ** 3], ['M', 1024 ** 2], ['K', 1024]] as const) {
     if (bytes >= scale) return `${trimZero(Math.floor((bytes / scale) * 10) / 10)}${unit}`;
   }
+
   return `${bytes}B`;
 }
 
@@ -446,14 +465,18 @@ function describeActivationReason(r: ActivationReason): string {
  */
 function executorSandboxSuffix(exec: PromptExecutorInfo): string {
   const sandbox = exec.sandbox;
+
   if (sandbox === undefined) return '';
+
   switch (effectiveDeviceMode(sandbox)) {
     case 'sandboxed': {
       const writable = sandbox.roots.length > 0 ? `, writable: ${sandbox.roots.join(', ')}` : '';
+
       return `, sandboxed full bash, GPU: ${describeGpuNodes(sandbox.gpu)}`
         + `, agent home ${sandbox.agentHome ?? 'not reported'}${writable}`
         + '. No sudo, apt, dnf or brew: install into the agent home (uv, python -m venv, npm -g, bun, cargo, micromamba)';
     }
+
     case 'raw':
       return ', sandbox off for this device: commands run as the owner, with full access to the machine';
     case 'files_only':
@@ -475,20 +498,26 @@ function executorSandboxSuffix(exec: PromptExecutorInfo): string {
  */
 function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[]): string {
   const platform = device.os ? ` (${device.os})` : '';
+
   if (!device.connected) {
     return `- ${device.name}${platform}: registered, offline. The user can reconnect it with \`kinu connect\``;
   }
+
   const live = connectedDevices(fleet);
   const mount = live.length > 1 ? `/pc/${deviceMountSegment(device, fleet)}` : '/pc';
   const parts = [`- ${device.name}${platform}: connected, files at ${mount}`];
+
   if (device.granted === true) parts.push('this workspace holds its grant');
   else if (device.granted === false) parts.push('no grant yet for this workspace: the first call asks once');
+
   if (device.sandbox !== undefined) parts.push(executorSandboxSuffix({ name: 'laptop', sandbox: device.sandbox }).replace(/^, /, ''));
   // The hub re-asks a machine whose answer aged out, so what arrives here is
   // fresh or null by the hub's clock — no clock is consulted in a render.
   const present = device.toolchain?.present ?? [];
   const runs = EXECUTOR_CAPABILITIES.filter((capability) => present.includes(capability));
+
   if (runs.length > 0) parts.push(`runs: ${runs.join(', ')}`);
+
   return parts.join(', ');
 }
 
@@ -496,22 +525,29 @@ function renderDeviceLine(device: DeviceFleetEntry, fleet: readonly DeviceFleetE
  *  states its head and an honest count of the tail rather than growing without
  *  bound. */
 const MAX_JOBS = 8;
+
 /** Rows, not tasks — a task and its subtasks each cost a line. Larger than the
  *  other rosters because this one is the agent's own plan: the rest are things
  *  it can re-read on demand, and a plan cut off at its fourth step stops being
  *  a plan. Anything past this is still in `tasks({action:'list'})`. */
 const MAX_TASK_ROWS = 15;
+
 const MAX_DELEGATES = 8;
+
 const MAX_APPROVALS = 5;
+
 const MAX_MISSING_CAPABILITIES = 8;
+
 /** Render cap for recovery findings — the reader (listRecoveryFindings)
  *  already bounds what arrives to the same window; this is display policy
  *  like every other roster cap here. */
 const MAX_RECOVERIES = 5;
+
 /** A finding carries two bounded arg echoes (the failing call and the one
  *  that ran clean), so the one-line recognition budget above would cut the
  *  half that makes it usable. */
 const RECOVERY_ENTRY_CHARS = 480;
+
 /** Free text from a store (job labels, delegate tasks, gated commands) is one
  *  line at most — the model needs to recognize the item, not re-read it. */
 const ENTRY_CHARS = 120;
@@ -519,6 +555,7 @@ const ENTRY_CHARS = 120;
 /** Head+tail-free one-liner: collapse whitespace, cut at the bound. */
 function clip(text: string, max = ENTRY_CHARS): string {
   const oneLine = text.replace(/\s+/g, ' ').trim();
+
   return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
 }
 
@@ -534,7 +571,9 @@ function rosterSection<T>(
   if (roster.total === 0) return null;
   const lines = roster.items.slice(0, cap).map(row);
   const elided = roster.total - lines.length;
+
   if (elided > 0) lines.push(`- …and ${elided} more, not shown`);
+
   return [title, ...lines].join('\n');
 }
 
@@ -552,9 +591,11 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   const sections: Array<string | null> = [];
 
   const facts = ctx.factsBlock?.trim();
+
   if (facts) sections.push(`## World model (facts you remembered)\n${facts}`);
 
   const memoryTail = ctx.memoryTail?.trim();
+
   if (memoryTail) sections.push(`## Memory (newest MEMORY.md lessons and reflections)\n${memoryTail}`);
 
   sections.push(rosterSection(
@@ -564,10 +605,12 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   ));
 
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
+
   if (executors.length > 0) {
     const rows = executors.map((exec) =>
       `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorMountSuffix(exec)}${executorLimitsSuffix(exec)}`
       + `${executorCapabilitySuffix(exec)}${executorUnmeasuredSuffix(exec)}${executorSandboxSuffix(exec)}`);
+
     // The legend rides along only when a row actually carries an unknown, so
     // the common case pays nothing for it, and where it does appear, the model
     // needs telling that this is ignorance rather than a denial.
@@ -575,6 +618,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
       ? [`("${NOT_MEASURED_LABEL}" means nobody asked that environment. It may well work, `
         + 'so try it before ruling it out.)']
       : [];
+
     sections.push([
       '## Execution status',
       'Live availability for the runtimes described in the system prompt, and what each one declares it can run:',
@@ -584,14 +628,17 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   }
 
   const fleet = ctx.devices ?? [];
+
   if (fleet.length > 0) {
     const live = connectedDevices(fleet);
+
     // The rule the model has to act on, stated with the roster it applies to:
     // one live machine needs no name; several do, and the ask says so in the
     // same words the refusal uses.
     const doctrine = live.length > 1
       ? 'Several machines are connected: name the machine each `laptop` call and `run { runtime: "laptop" }` is for, with `device: "<name>"`. The runtime refuses a call that names none.'
       : 'One machine is connected: `laptop` calls reach it with no `device` needed.';
+
     sections.push([
       '## Your user\'s machines (the `laptop` runtime)',
       doctrine,
@@ -630,11 +677,14 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   ));
 
   const present = sections.filter((section): section is string => section !== null);
+
   if (present.length === 0) return null;
+
   const body = sealDelimiters(
     [DYNAMIC_CONTEXT_HEADER, ...present].join('\n\n'),
     DYNAMIC_CONTEXT_DELIMITER, 'dynamic_context',
   );
+
   return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}">\n${body}\n</dynamic_context>`;
 }
 
@@ -647,6 +697,7 @@ export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
   if (ctx.provenance === 'background_resume') sections.push(BACKGROUND_RESUME_NOTICE);
 
   const reasons = ctx.activeSkills?.reasons ?? [];
+
   if (reasons.length > 0) {
     sections.push([
       '## Skills activated this turn',
@@ -655,9 +706,11 @@ export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
   }
 
   const notice = ctx.deviceNotice?.trim();
+
   if (notice) sections.push(notice);
 
   if (sections.length === 0) return null;
+
   return [TURN_CONTEXT_HEADER, ...sections].join('\n\n');
 }
 
@@ -667,6 +720,7 @@ export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
  *  never sees turn-local state. */
 export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
   const text = renderTurnLocalContext(ctx);
+
   return text ? { role: 'user', content: text } : null;
 }
 
@@ -710,7 +764,9 @@ interface LedgerBlock {
  */
 function insertionPoint(history: ReadonlyArray<ModelMessage>, index: number): number {
   let at = index;
+
   while (history[at]?.role === 'tool') at += 1;
+
   return at;
 }
 
@@ -755,7 +811,9 @@ export class DynamicContextLedger {
    */
   get overheadTokens(): number {
     let tokens = 0;
+
     for (const block of this.blocks) tokens += block.tokens;
+
     return tokens;
   }
 
@@ -787,21 +845,27 @@ export class DynamicContextLedger {
     const superseded = this.blocks.slice(0, -1);
     this.blocks = this.blocks.slice(-1);
     let freed = 0;
+
     for (const block of superseded) freed += block.tokens;
+
     return freed;
   }
 
   weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext): ModelMessage[] {
     let previousIndex = -1;
+
     for (const block of this.blocks) {
       // History rewrites invalidate frozen positions even when their caller forgot to reset the ledger.
       if (block.index > history.length || block.index < previousIndex) {
         this.reset();
         break;
       }
+
       previousIndex = block.index;
     }
+
     const text = renderDynamicContextBlock(state);
+
     // A null render appends nothing; frozen blocks stay regardless (removing
     // a mid-array message would break the provider prefix cache).
     if (text !== null && this.blocks[this.blocks.length - 1]?.text !== text) {
@@ -812,14 +876,18 @@ export class DynamicContextLedger {
         message: { role: 'user', content: text },
       });
     }
+
     const woven: ModelMessage[] = [];
     let cursor = 0;
+
     for (const block of this.blocks) {
       const at = insertionPoint(history, Math.max(block.index, cursor));
       woven.push(...history.slice(cursor, at), block.message);
       cursor = at;
     }
+
     woven.push(...history.slice(cursor));
+
     return woven;
   }
 
@@ -850,6 +918,7 @@ export function observeSystemPromptHash(
   system: string,
 ): SystemPromptObservation {
   const hash = fnv1a64(system);
+
   return { hash, status: previous === null ? 'first' : previous === hash ? 'stable' : 'changed' };
 }
 
@@ -866,6 +935,7 @@ export function observeSystemPromptHash(
 export function fnv1a64(text: string): string {
   // Offset basis 0xcbf29ce484222325 split into 16-bit limbs, low → high.
   let v0 = 0x2325, v1 = 0x8422, v2 = 0x9ce4, v3 = 0xcbf2;
+
   for (let i = 0; i < text.length; i++) {
     v0 ^= text.charCodeAt(i);
     let t0 = v0 * 0x1b3;
@@ -880,6 +950,7 @@ export function fnv1a64(text: string): string {
     v2 = t2 & 0xffff;
     v3 = t3 & 0xffff;
   }
+
   return (
     v3.toString(16).padStart(4, '0') +
     v2.toString(16).padStart(4, '0') +

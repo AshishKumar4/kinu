@@ -110,6 +110,7 @@ export const UsageSchema = v.object({
  *  wrong type reads as not reported too, so one mistyped key cannot sink the
  *  parse and hide the counts beside it. */
 const ReportedCount = v.fallback(v.optional(v.nullable(v.number())), undefined);
+
 /** A detail object a provider may omit, send as null, or send malformed; the
  *  last reads as absent for the reason ReportedCount does. */
 const details = <const TEntries extends v.ObjectEntries>(entries: TEntries) =>
@@ -209,6 +210,7 @@ export function normalizeUsage(usage: LanguageModelUsage | undefined): Usage {
   if (usage === undefined) return {};
   const provider = v.safeParse(RawProviderUsageSchema, usage.raw);
   const fromProvider = provider.success ? reportedByProvider(provider.output) : undefined;
+
   const sdk: Usage = {
     input: usage.inputTokens,
     output: usage.outputTokens,
@@ -216,13 +218,18 @@ export function normalizeUsage(usage: LanguageModelUsage | undefined): Usage {
     cacheWrite: usage.inputTokenDetails?.cacheWriteTokens,
     reasoning: usage.outputTokenDetails?.reasoningTokens,
   };
+
   const out: { -readonly [K in keyof Usage]: number } = {};
+
   for (const field of USAGE_FIELDS) {
     const witness = fromProvider ?? sdk;
+
     if (witness[field] === undefined) continue;
     const value = sdk[field] ?? fromProvider?.[field];
+
     if (value !== undefined) out[field] = value;
   }
+
   return out;
 }
 
@@ -242,6 +249,7 @@ export function usageReported(usage: Usage): boolean {
  */
 export function usageTotal(usage: Usage): number | undefined {
   if (usage.input === undefined && usage.output === undefined) return undefined;
+
   return (usage.input ?? 0) + (usage.output ?? 0);
 }
 
@@ -253,11 +261,14 @@ export function usageTotal(usage: Usage): number | undefined {
  */
 export function addUsage(a: Usage, b: Usage): Usage {
   const out: { -readonly [K in keyof Usage]: number } = {};
+
   for (const field of USAGE_FIELDS) {
     const left = a[field];
     const right = b[field];
+
     if (left === undefined && right === undefined) continue;
     out[field] = (left ?? 0) + (right ?? 0);
   }
+
   return out;
 }

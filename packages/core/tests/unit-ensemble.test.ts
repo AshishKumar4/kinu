@@ -43,6 +43,7 @@ function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db));
+
   // A real bound handle: the ledger is actor-scoped, so a fixture that could
   // not fail `assertCurrent` would not be exercising the store these tests read.
   return { db, sql, actor: testActorHandle(sql) };
@@ -55,6 +56,7 @@ function seedLedger(
   sql: Sql, actor: ActorHandle, spec: { accepted?: number; corrected?: number; frustrated?: number },
 ): void {
   let n = 0;
+
   for (const outcome of ['accepted', 'corrected', 'frustrated'] as const) {
     for (let i = 0; i < (spec[outcome] ?? 0); i++) {
       recordTurnOutcome(sql, actor, {
@@ -73,6 +75,7 @@ function seedLedger(
 }
 
 interface LedgerRow { id: string; outcome: TurnOutcome; user_message: string }
+
 interface PromptTurn { verdict: TurnOutcome; index: number }
 
 function rows(sql: Sql): LedgerRow[] {
@@ -95,10 +98,13 @@ function judge(spec: string, answer: (prompt: string) => OutcomeLabel | null): E
     async *stream() { yield ''; },
     async complete(prompt: string) {
       const label = answer(prompt);
+
       if (label === null) throw new Error('judge unavailable');
+
       return JSON.stringify({ verdict: label });
     },
   };
+
   return { spec, llm };
 }
 
@@ -106,13 +112,17 @@ function judge(spec: string, answer: (prompt: string) => OutcomeLabel | null): E
  *  key into its fixture, never something a real judge would be shown. */
 function turnOfPrompt(prompt: string): PromptTurn {
   const match = /request (accepted|corrected|frustrated) (\d+)/.exec(prompt);
+
   if (!match) throw new Error(`no seeded turn in prompt: ${prompt.slice(0, 120)}`);
   const verdict = match[1];
   const index = match[2];
+
   if (!verdict || !index) throw new Error('seeded turn match omitted a capture');
+
   if (verdict !== 'accepted' && verdict !== 'corrected' && verdict !== 'frustrated') {
     throw new Error(`invalid seeded verdict: ${verdict}`);
   }
+
   return { verdict, index: Number(index) };
 }
 
@@ -134,6 +144,7 @@ describe('the judging prompt', () => {
     // The only outcome words are the verdict legend's, exactly as in the human
     // file. The evidence itself carries none.
     const evidence = prompt.slice(prompt.indexOf('USER  ('), prompt.indexOf('Verdicts:'));
+
     for (const word of ['accepted', 'corrected', 'frustrated', 'abandoned', 'unclear']) {
       expect(evidence).not.toContain(word);
     }
@@ -152,14 +163,17 @@ describe('the judging prompt', () => {
       });
       const id = rows(sql)[0].id;
       recordOutcomeLabels(sql, actor, { labeler: 'owner', labels: [{ outcomeId: id, label }], now: 1 });
+
       return buildEnsembleJudgePrompt({ ...item, outcomeId: id });
     };
+
     expect(build('accepted', 'accepted')).toBe(build('frustrated', 'corrected'));
   });
 
   test('gives the judges the same verdict definitions the human file gives', () => {
     const prompt = buildEnsembleJudgePrompt(item);
     const file = renderLabelingFile([item]);
+
     for (const help of ['the user moved on, or built on the answer', 'you genuinely cannot tell from what is here']) {
       expect(prompt).toContain(help);
       expect(file).toContain(help);
@@ -260,10 +274,12 @@ describe('running the panel', () => {
     const { sql, actor } = setup();
     seedLedger(sql, actor, { accepted: 3 });
     labelAll(sql, actor, () => 'accepted');
+
     const babbling: EnsembleJudge = {
       spec: 'b/1',
       llm: { async *stream() { yield ''; }, async complete() { return 'it seemed fine to me'; } },
     };
+
     const { run } = await runEnsemble(sql, actor, panelOf([judge('a/1', () => 'accepted'), babbling]));
     expect(run?.judged[1]).toEqual({ model: 'b/1', stored: 0, failed: 3 });
     expect(ensembleLabels(sql, actor).every((row) => row.model === 'a/1')).toBe(true);
@@ -276,10 +292,13 @@ describe('running the panel', () => {
     seedLedger(sql, actor, { accepted: 5 });
     labelAll(sql, actor, () => 'accepted');
     const seenMidRun: number[] = [];
+
     const watcher = judge('b/1', () => {
       seenMidRun.push(ensembleLabels(sql, actor).filter((row) => row.model === 'b/1').length);
+
       return 'accepted';
     });
+
     await runEnsemble(sql, actor, panelOf([judge('a/1', () => 'accepted'), watcher]));
     // Each of b's calls sees every verdict b gave before it.
     expect(seenMidRun).toEqual([0, 1, 2, 3, 4]);
@@ -322,6 +341,7 @@ async function panelOver(spec: {
     judge('anthropic/one', (p) => spec.says(turnOfPrompt(p), 0)),
     judge('codex/two', (p) => spec.says(turnOfPrompt(p), 1)),
   ]));
+
   return { sql, actor };
 }
 
@@ -332,6 +352,7 @@ describe('the panel report', () => {
       human: (row) => row.outcome,
       says: (turn) => turn.verdict,
     });
+
     const report = ensembleReport(sql, actor);
     expect(report.gap).toBeNull();
     expect(report.compared).toBe(300);
@@ -348,6 +369,7 @@ describe('the panel report', () => {
       human: (row) => row.outcome,
       says: () => 'accepted',
     });
+
     const report = ensembleReport(sql, actor);
     expect(report.kappa.humanEnsemble?.value).toBeCloseTo(0, 6);
     // It flags nothing, so it catches none of the negatives.
@@ -368,6 +390,7 @@ describe('the panel report', () => {
       human: (row, i) => row.outcome === 'corrected' && i % 3 === 0 ? 'accepted' : row.outcome,
       says: (turn) => turn.verdict === 'frustrated' ? 'accepted' : turn.verdict,
     });
+
     const report = ensembleReport(sql, actor);
     const coherence = report.standIn?.conditions[1];
     expect(coherence?.met).toBe(false);
@@ -383,6 +406,7 @@ describe('the panel report', () => {
       says: (turn, which) =>
         turn.verdict === 'frustrated' && which === 1 ? 'corrected' : turn.verdict,
     });
+
     const report = ensembleReport(sql, actor);
     expect(report.split).toBe(40);
     expect(report.confusion).toContainEqual({ ensemble: 'unclear', human: 'frustrated', count: 40 });
@@ -397,6 +421,7 @@ describe('the panel report', () => {
       human: (row) => row.outcome,
       says: (turn) => turn.verdict,
     });
+
     const report = ensembleReport(sql, actor);
     // Both raters are perfect on these turns, so both κ are 1 — the point is
     // that they are computed from the same `compared` set.
@@ -411,6 +436,7 @@ describe('the panel report', () => {
       human: (row) => row.outcome,
       says: (turn, which) => which === 0 ? turn.verdict : 'accepted',
     });
+
     const report = ensembleReport(sql, actor);
     expect(report.members.map((m) => m.model)).toEqual(['anthropic/one', 'codex/two']);
     expect(report.members[0].kappa!.value).toBeCloseTo(1, 10);
@@ -442,6 +468,7 @@ describe('an unmeasured panel', () => {
       human: () => 'unclear',
       says: () => 'accepted',
     });
+
     const report = ensembleReport(sql, actor);
     expect(report.covered).toBe(8);
     expect(report.compared).toBe(0);
@@ -460,14 +487,17 @@ describe('an unmeasured panel', () => {
  */
 function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: number; budget: number; seed: number }) {
   const random = seededRandom(spec.seed);
+
   const rows = Array.from({ length: 3000 }, () => {
     const negative = random() < 0.15;
     // The classifier is the one the sample is stratified on: 60% sensitive,
     // 95% specific — roughly what the real one measures at.
     const classifierFlags = negative ? random() < 0.6 : random() >= 0.95;
+
     const predicted: TurnOutcome = classifierFlags
       ? (random() < 0.7 ? 'corrected' : 'frustrated')
       : 'accepted';
+
     return {
       negative,
       predicted,
@@ -476,17 +506,20 @@ function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: numbe
   });
 
   const byVerdict = new Map<TurnOutcome, typeof rows>();
+
   for (const row of rows) {
     const bucket = byVerdict.get(row.predicted) ?? [];
     bucket.push(row);
     byVerdict.set(row.predicted, bucket);
   }
+
   const verdicts = [...byVerdict.keys()];
   const quotas = allocateLabelBudget(verdicts.map((v) => byVerdict.get(v)!.length), spec.budget);
   const compared: ComparedTurn[] = [];
   verdicts.forEach((verdict, i) => {
     const bucket = byVerdict.get(verdict)!;
     const take = Math.min(quotas[i], bucket.length);
+
     // Systematic, so the draw spans the stratum rather than a corner of it.
     for (let j = 0; j < take; j++) {
       const row = bucket[Math.floor(((j + 0.5) * bucket.length) / take)];
@@ -498,6 +531,7 @@ function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: numbe
       });
     }
   });
+
   return panelStrata(compared, new Map(verdicts.map((v) => [v, byVerdict.get(v)!.length])));
 }
 
@@ -507,6 +541,7 @@ function profiles(spec: { panelSensitivity: number; panelSpecificity: number; bu
       syntheticDraw({ ...spec, seed: 4000 + i }),
       { iterations: 300 },
     ).accuracy;
+
     return accuracy === null ? [] : [accuracy];
   }).flat();
 }
@@ -514,8 +549,10 @@ function profiles(spec: { panelSensitivity: number; panelSpecificity: number; bu
 describe('the panel’s error profile, against a known truth', () => {
   test('recovers the panel’s true sensitivity and specificity without bias', () => {
     const drawn = profiles({ panelSensitivity: 0.85, panelSpecificity: 0.97, budget: 100, reps: 60 });
+
     const mean = (pick: (a: (typeof drawn)[number]) => number): number =>
       drawn.reduce((sum, a) => sum + pick(a), 0) / drawn.length;
+
     expect(mean((a) => a.sensitivity.mean)).toBeCloseTo(0.85, 1);
     expect(mean((a) => a.specificity.mean)).toBeCloseTo(0.97, 2);
   });
@@ -526,6 +563,7 @@ describe('the panel’s error profile, against a known truth', () => {
     // sample as independent and reports an interval that is much too narrow.
     // This is the measurement that chose the bootstrap; see ppi.ts's note.
     const truth = { sensitivity: 0.7, specificity: 0.9 };
+
     const strata = Array.from({ length: 120 }, (_, i) =>
       syntheticDraw({ panelSensitivity: truth.sensitivity, panelSpecificity: truth.specificity, budget: 100, seed: 4000 + i }));
 
@@ -548,6 +586,7 @@ describe('the panel’s error profile, against a known truth', () => {
       { key: 'accepted', population: 800, draws: Array.from({ length: 40 }, () => ({ predictedEvent: false, event: false })) },
       { key: 'corrected', population: 200, draws: Array.from({ length: 40 }, () => ({ predictedEvent: true, event: true })) },
     ]).accuracy;
+
     expect(clean?.specificity.mean).toBeCloseTo(1, 10);
     expect(clean?.specificity.lo).toBeLessThan(1);
     expect(clean?.sensitivity.lo).toBeLessThan(1);
@@ -561,6 +600,7 @@ describe('the panel’s error profile, against a known truth', () => {
 function splitForClosedForm(strata: ReadonlyArray<AccuracyStratum>): PredictionStratum[] {
   return strata.flatMap((stratum) => [true, false].flatMap((predictedEvent) => {
     const cell = stratum.draws.filter((draw) => draw.predictedEvent === predictedEvent);
+
     return cell.length === 0 ? [] : [{
       key: `${stratum.key}/${predictedEvent}`,
       predictedEvent,
@@ -607,6 +647,7 @@ describe('the pre-registered bar', () => {
       human: (row) => row.outcome,
       says: (turn) => turn.verdict,
     });
+
     const printed = renderEnsembleReport(ensembleReport(sql, actor));
     expect(printed).toContain(STAND_IN_THRESHOLDS.kappa.toFixed(2));
     expect(printed).toContain(STAND_IN_THRESHOLDS.sensitivity.toFixed(2));
@@ -623,6 +664,7 @@ describe('the pre-registered bar', () => {
         ? (turn.index % 10 === 0 ? 'corrected' : 'accepted')
         : (turn.index % 2 === 0 ? 'accepted' : turn.verdict),
     });
+
     const report = ensembleReport(sql, actor);
     const recall = report.standIn!.conditions[2];
     expect(recall.met).toBe(false);

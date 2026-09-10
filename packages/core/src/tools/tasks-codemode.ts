@@ -18,7 +18,9 @@ import { createTasksDispatcher } from './tasks-tool';
 import { branchableToolCall } from './outcome';
 
 const TitlesSchema = v.array(v.string());
+
 const ParentSchema = v.optional(v.string());
+
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
 
 const STATUS_UNION = TASK_STATUSES.map((s) => `"${s}"`).join(' | ');
@@ -49,6 +51,7 @@ export function createTasksCodemodeProvider(
   roleAuthority?: () => ProfileCatalogEnvelope | null,
 ): CodemodeProvider {
   const run = createTasksDispatcher(taskList, config, roleAuthority);
+
   return {
     name: TOOL_REACH.tasks.codemode,
     types: TYPES,
@@ -60,9 +63,11 @@ export function createTasksCodemodeProvider(
         execute: (...args: unknown[]) => branchableToolCall(async () => {
           const titles = v.safeParse(TitlesSchema, args[0]);
           const parent = v.safeParse(ParentSchema, args[1]);
+
           if (!titles.success || !parent.success) {
             return { error: 'tasks.add requires string titles and an optional string parent' };
           }
+
           return decodeJsonValue({
             value: run({ action: 'add', titles: titles.output, parent: parent.output }),
           });
@@ -73,6 +78,7 @@ export function createTasksCodemodeProvider(
         description: 'Move one task to active/done/dropped by id.',
         execute: (...args: unknown[]) => branchableToolCall(async () => {
           const status = v.safeParse(TaskStatusSchema, args[1]);
+
           return decodeJsonValue({
             value: run({
               action: 'update',
@@ -93,6 +99,7 @@ export function createTasksCodemodeProvider(
         execute: (...args: unknown[]) => branchableToolCall(async () => {
           const parsedRole = v.safeParse(v.string(), args[0]);
           const role = parsedRole.success ? parsedRole.output : undefined;
+
           return decodeJsonValue({
             value: run({ action: 'mode', role }),
           });

@@ -23,6 +23,7 @@ import { TimeoutError, type HTTPRequest, type Page } from 'puppeteer';
 import { diagnosticsSettled, recordDiagnostics, withGallery, type DiagnosticLine } from './gallery-harness';
 
 const FEEDBACK = '/api/feedback';
+
 /** One sampled region of the captured image. */
 interface Region {
   /** Every sampled pixel was the redaction fill (#111111). */
@@ -67,21 +68,28 @@ interface SurfaceProbe {
  * well because the gate has to know them independently of the page — and the
  * live-presence check is what makes a mismatch fail instead of pass. */
 const LEAK_HMAC = 'whsec_hmacLEAKSifREDACTIONfails0001';
+
 const LEAK_BEARER = 'whsec_bearerLEAKSifREDACTIONfails0002';
+
 /** Typed into the create dialog's own field, which the reporter fills in before
  *  any secret has been issued. */
 const LEAK_TYPED = 'typedLEAKSifREDACTIONfails0003';
+
 /** Pasted into the MCP headers editor, which is a textarea and therefore cannot
  *  be a password field. */
 const LEAK_MCP = 'mcpLEAKSifREDACTIONfails0004';
+
 const MCP_HEADERS = `{"Authorization": "Bearer ${LEAK_MCP}"}`;
 
 /** The sabotage, chained TWO frames deep on purpose: the assertions can then
  *  tell a preserved chain from its outermost message — the exact loss
  *  `gate:silent-drop`'s `message_only` class exists to catch. */
 const CAPTURE_SABOTAGE = { outer: 'the encoder was sabotaged', inner: 'toBlob broken by this gate' };
+
 const CAPTURE_CHAIN = `${CAPTURE_SABOTAGE.outer}: ${CAPTURE_SABOTAGE.inner}`;
+
 const DECODE_SABOTAGE = { outer: 'the preview decoder was sabotaged', inner: 'createImageBitmap broken by this gate' };
+
 const DECODE_CHAIN = `${DECODE_SABOTAGE.outer}: ${DECODE_SABOTAGE.inner}`;
 
 /** One outgoing submission, as the client actually built it. */
@@ -141,8 +149,10 @@ async function recordSubmissions(page: Page): Promise<void> {
     window.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = input instanceof Request ? input.url : String(input);
       const body = init?.body;
+
       if (url.endsWith(endpoint) && body instanceof FormData) {
         const shot = body.get('screenshot');
+
         const record: Submission = {
           fields: [...body.keys()],
           note: String(body.get('note') ?? ''),
@@ -152,18 +162,22 @@ async function recordSubmissions(page: Page): Promise<void> {
           screenshot: shot instanceof File ? { size: shot.size, type: shot.type, name: shot.name } : null,
           outcome: 'pending',
         };
+
         seen.push(record);
+
         // The returned fetch promise owns the recording and preserves the
         // component's resolution or rejection.
         try {
           const response = await real(input, init);
           record.outcome = 'answered';
+
           return response;
         } catch (cause) {
           record.outcome = cause instanceof Error ? cause.name : 'unknown';
           throw cause;
         }
       }
+
       return real(input, init);
     }, { preconnect: real.preconnect });
   }, FEEDBACK);
@@ -193,14 +207,18 @@ type Attempt = 'answer' | 'refuse' | 'hold';
 async function serveFeedback(page: Page, options: { attempts?: readonly Attempt[] } = {}): Promise<void> {
   await page.evaluateOnNewDocument(() => {
     const Real = WebSocket;
+
     const Stub = function (url: string, protocols?: string | string[]) {
       const wanted = protocols === undefined ? [] : Array.isArray(protocols) ? protocols : [protocols];
+
       if (wanted.includes('vite-hmr')) {
         return { readyState: 3, close() { /* never opened */ }, send() { /* never opened */ },
           addEventListener() { /* never fires */ }, removeEventListener() { /* never fires */ } };
       }
+
       return new Real(url, protocols);
     };
+
     Object.assign(window, { WebSocket: Stub });
   });
   await recordSubmissions(page);
@@ -209,15 +227,21 @@ async function serveFeedback(page: Page, options: { attempts?: readonly Attempt[
   page.on('request', async (request: HTTPRequest) => {
     if (!request.url().endsWith(FEEDBACK)) {
       await request.continue();
+
       return;
     }
+
     const behaviour = options.attempts?.[attempt] ?? 'answer';
     attempt += 1;
+
     if (behaviour === 'hold') return;
+
     if (behaviour === 'refuse') {
       await request.abort('connectionrefused');
+
       return;
     }
+
     await request.respond({
       status: 201,
       contentType: 'application/json',
@@ -246,6 +270,7 @@ async function captureSettled(page: Page): Promise<void> {
     { timeout: 90_000 },
   );
 }
+
 /**
  * The checkbox's off state removes this marker. Observe that DOM-state
  * boundary through mutations rather than sampling on animation frames, which
@@ -254,12 +279,14 @@ async function captureSettled(page: Page): Promise<void> {
 async function waitForShotRemoval(page: Page): Promise<void> {
   await page.evaluate(() => {
     if (document.querySelector('[data-feedback-shot]') === null) return;
+
     return new Promise<void>((resolve) => {
       const observer = new MutationObserver(() => {
         if (document.querySelector('[data-feedback-shot]') !== null) return;
         observer.disconnect();
         resolve();
       });
+
       observer.observe(document.body, { childList: true, subtree: true });
     });
   });
@@ -282,6 +309,7 @@ async function openDialog(page: Page, selector = '[data-feedback-open]'): Promis
 async function openDialogInPlace(page: Page, selector = '[data-feedback-open]'): Promise<void> {
   await page.evaluate((target: string) => {
     const button = document.querySelector<HTMLElement>(target);
+
     if (button === null) throw new Error(`no ${target} to open the dialog with`);
     button.click();
   }, selector);
@@ -347,8 +375,10 @@ async function readRegion(page: Page, selector: string): Promise<Region> {
   return page.evaluate((target: string) => {
     const canvas = document.querySelector<HTMLCanvasElement>('[data-feedback-canvas]');
     const node = document.querySelector<HTMLElement>(target);
+
     if (canvas === null || node === null) throw new Error(`no canvas or no ${target}`);
     const context = canvas.getContext('2d');
+
     if (context === null) throw new Error('no 2d context');
     const scale = canvas.width / document.documentElement.clientWidth;
     const box = node.getBoundingClientRect();
@@ -361,11 +391,14 @@ async function readRegion(page: Page, selector: string): Promise<Region> {
     const colours = new Set<string>();
     let offFill = 0;
     let sampled = 0;
+
     for (let i = 0; i < pixels.length; i += 4) {
       sampled += 1;
       colours.add(`${String(pixels[i])},${String(pixels[i + 1])},${String(pixels[i + 2])}`);
+
       if (pixels[i] !== 17 || pixels[i + 1] !== 17 || pixels[i + 2] !== 17) offFill += 1;
     }
+
     return { uniformlyRedacted: sampled > 0 && offFill === 0, colours: colours.size, sampled, offFill };
   }, selector);
 }
@@ -375,7 +408,9 @@ async function readShot(page: Page): Promise<{ width: number; height: number; re
   return page.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>('[data-feedback-canvas]');
     const meta = document.querySelector<HTMLElement>('[data-feedback-shot-meta]');
+
     if (canvas === null) throw new Error('no preview canvas');
+
     return {
       width: canvas.width,
       height: canvas.height,
@@ -406,6 +441,7 @@ async function recordSerialized(page: Page): Promise<void> {
     XMLSerializer.prototype.serializeToString = function record(node: Node): string {
       const markup = real.call(this, node);
       seen.push(markup);
+
       return markup;
     };
   });
@@ -418,6 +454,7 @@ async function cloneLeaks(
 ): Promise<{ serializations: number; bytes: number; leaked: string[] }> {
   return page.evaluate((wanted: string[]) => {
     const seen = window.__serialized ?? [];
+
     return {
       serializations: seen.length,
       bytes: seen.reduce((total, markup) => total + markup.length, 0),
@@ -432,20 +469,26 @@ async function livePresence(page: Page, needles: readonly string[]): Promise<Liv
   return page.evaluate((wanted: string[]) => wanted.map((needle) => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     let inText = false;
+
     for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
       if ((node.textContent ?? '').includes(needle)) inText = true;
     }
+
     let inAttrs = false;
     let inValues = false;
+
     for (const element of document.body.querySelectorAll('*')) {
       for (const attribute of element.attributes) {
         if (attribute.value.includes(needle)) inAttrs = true;
       }
+
       const field = element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement
         ? element.value
         : '';
+
       if (field.includes(needle)) inValues = true;
     }
+
     return { needle, inText, inAttrs, inValues };
   }), [...needles]);
 }
@@ -472,12 +515,15 @@ async function livePresence(page: Page, needles: readonly string[]): Promise<Liv
 async function readSecretRegions(page: Page): Promise<NamedRegion[]> {
   return page.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>('[data-feedback-canvas]');
+
     if (canvas === null) throw new Error('no preview canvas');
     const context = canvas.getContext('2d');
+
     if (context === null) throw new Error('no 2d context');
     const scale = canvas.width / document.documentElement.clientWidth;
     const found: NamedRegion[] = [];
     let index = 0;
+
     for (const node of document.querySelectorAll<HTMLElement>('[data-feedback-redact], input[type="password"]')) {
       index += 1;
       // The painted box: the node's own, narrowed by every clipping ancestor to
@@ -486,17 +532,22 @@ async function readSecretRegions(page: Page): Promise<NamedRegion[]> {
       // block's redaction ends twelve pixels short of the `<pre>` it sits in.
       const box = node.getBoundingClientRect();
       let left = box.left; let top = box.top; let right = box.right; let bottom = box.bottom;
+
       for (let parent = node.parentElement; parent !== null; parent = parent.parentElement) {
         const style = getComputedStyle(parent);
+
         if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
         const clip = parent.getBoundingClientRect();
+
         const edge = (...widths: string[]): number =>
           widths.reduce((total, width) => total + (Number.parseFloat(width) || 0), 0);
+
         left = Math.max(left, clip.left + edge(style.borderLeftWidth, style.paddingLeft));
         top = Math.max(top, clip.top + edge(style.borderTopWidth, style.paddingTop));
         right = Math.min(right, clip.right - edge(style.borderRightWidth, style.paddingRight));
         bottom = Math.min(bottom, clip.bottom - edge(style.borderBottomWidth, style.paddingBottom));
       }
+
       const inset = Math.max(1, Math.min(6, Math.round(Math.min(right - left, bottom - top) * scale * 0.2)));
       // Document coordinates, so the sampling holds wherever the page is
       // scrolled: the capture spans the whole document and starts at its top.
@@ -505,21 +556,27 @@ async function readSecretRegions(page: Page): Promise<NamedRegion[]> {
       const w = Math.round((right - left) * scale) - inset * 2;
       const h = Math.round((bottom - top) * scale) - inset * 2;
       const label = `${String(index)}:${node.tagName.toLowerCase()}${node.getAttribute('type') ?? ''}`;
+
       if (w < 1 || h < 1 || y + h > canvas.height || x + w > canvas.width) {
         found.push({ label, uniformlyRedacted: false, colours: 0, sampled: 0, offFill: 0 });
         continue;
       }
+
       const pixels = context.getImageData(x, y, w, h).data;
       const colours = new Set<string>();
       let offFill = 0;
       let sampled = 0;
+
       for (let i = 0; i < pixels.length; i += 4) {
         sampled += 1;
         colours.add(`${String(pixels[i])},${String(pixels[i + 1])},${String(pixels[i + 2])}`);
+
         if (pixels[i] !== 17 || pixels[i + 1] !== 17 || pixels[i + 2] !== 17) offFill += 1;
       }
+
       found.push({ label, uniformlyRedacted: sampled > 0 && offFill === 0, colours: colours.size, sampled, offFill });
     }
+
     return found;
   });
 }
@@ -567,36 +624,48 @@ interface Pane {
 async function readScrollPanes(page: Page): Promise<Pane[]> {
   return page.evaluate(() => {
     const canvas = document.querySelector<HTMLCanvasElement>('[data-feedback-canvas]');
+
     if (canvas === null) throw new Error('no preview canvas');
     const context = canvas.getContext('2d');
+
     if (context === null) throw new Error('no 2d context');
     const scale = canvas.width / document.documentElement.clientWidth;
+
     const at = (selector: string): HTMLElement => {
       const node = document.querySelector<HTMLElement>(selector);
+
       if (node === null) throw new Error(`no ${selector} in the fixture`);
+
       return node;
     };
+
     /** `rgb(18, 64, 110)` and `rgba(18, 64, 110, 1)` both come back `18,64,110`,
      *  so a sampled pixel and a computed fill compare as themselves. */
     const triple = (css: string): string => (css.match(/\d+/gu) ?? []).slice(0, 3).join(',');
     const fill = (selector: string): string => triple(getComputedStyle(at(selector)).backgroundColor);
     const outer = at('[data-scroll-outer]').getBoundingClientRect();
     const inner = at('[data-scroll-inner]').getBoundingClientRect();
+
     const sample = (box: { x: number; y: number; w: number; h: number }) => {
       const pixels = context.getImageData(
         Math.round((box.x + window.scrollX) * scale), Math.round((box.y + window.scrollY) * scale),
         Math.max(1, Math.round(box.w * scale)), Math.max(1, Math.round(box.h * scale)),
       ).data;
+
       const colours = new Set<string>();
+
       for (let i = 0; i < pixels.length; i += 4) {
         colours.add(`${String(pixels[i])},${String(pixels[i + 1])},${String(pixels[i + 2])}`);
       }
+
       const only = [...colours];
+
       return {
         seen: only.length === 1 ? String(only[0]) : `${String(only.length)} colours`,
         sampled: pixels.length / 4,
       };
     };
+
     return [
       {
         label: 'the outer band, below the inner pane',
@@ -699,14 +768,19 @@ async function run(): Promise<Observed> {
     const colourCount = async (): Promise<number> => (await readRegion(draw, '[data-visible-copy]')).colours;
     const before = await colourCount();
     await draw.click('[data-feedback-tool="hide"]');
+
     const box = await draw.$eval('[data-feedback-canvas]', (node) => {
       const rect = node.getBoundingClientRect();
+
       return { x: rect.left, y: rect.top, w: rect.width, h: rect.height };
     });
+
     const target = await draw.$eval('[data-visible-copy]', (node) => {
       const rect = node.getBoundingClientRect();
+
       return { top: rect.top, height: rect.height };
     });
+
     // Drag across the control paragraph's own band of the image, in canvas
     // display coordinates: covering it is what a reporter does to something the
     // automatic redaction could not know about.
@@ -715,6 +789,7 @@ async function run(): Promise<Observed> {
     await draw.mouse.down();
     await draw.mouse.move(box.x + box.w * 0.9, bandTop + Math.max(12, (target.height / 900) * box.h), { steps: 8 });
     await draw.mouse.up();
+
     // Wait for the canvas's painted-mark count, not the undo button's enabled
     // state: button state proves the marks state, not that the canvas pixels
     // have been drawn.
@@ -725,6 +800,7 @@ async function run(): Promise<Observed> {
         { timeout: 30_000 }, count,
       );
     };
+
     await painted(1);
     const afterDrag = await colourCount();
     await draw.click('[data-feedback-undo]');
@@ -805,6 +881,7 @@ async function run(): Promise<Observed> {
     await broken.evaluate((outer: string, inner: string) => {
       const original = HTMLCanvasElement.prototype.toBlob;
       window.__restoreCapture = () => { HTMLCanvasElement.prototype.toBlob = original; };
+
       HTMLCanvasElement.prototype.toBlob = () => { throw new Error(outer, { cause: new Error(inner) }); };
     }, CAPTURE_SABOTAGE.outer, CAPTURE_SABOTAGE.inner);
     await openDialog(broken);
@@ -834,6 +911,7 @@ async function run(): Promise<Observed> {
     await undecodable.evaluate((outer: string, inner: string) => {
       const original = window.createImageBitmap.bind(window);
       window.__restoreDecode = () => { Object.assign(window, { createImageBitmap: original }); };
+
       Object.assign(window, {
         createImageBitmap: () => Promise.reject(new Error(outer, { cause: new Error(inner) })),
       });
@@ -858,15 +936,21 @@ async function run(): Promise<Observed> {
     await phone.setViewport({ width: 390, height: 844, deviceScaleFactor: 2 });
     await serveFeedback(phone);
     await phone.goto(`${origin}/gallery.html?frame=feedback`, { waitUntil: 'networkidle0' });
+
     const buttonVisible = await phone.$eval('[data-feedback-open]', (node) => {
       const rect = node.getBoundingClientRect();
+
       return rect.width > 0 && rect.height > 0 && rect.right <= window.innerWidth + 1;
     });
+
     await openDialog(phone);
+
     const dialogWithin = await phone.$eval('[role="dialog"]', (node) => {
       const rect = node.getBoundingClientRect();
+
       return rect.left >= -1 && rect.right <= window.innerWidth + 1;
     });
+
     const captureSucceeded = await phone.$('[data-feedback-shot="ready"]') !== null;
     await phone.close();
 
@@ -928,21 +1012,26 @@ async function run(): Promise<Observed> {
     await routedPage.evaluate(() => {
       const row = [...document.querySelectorAll<HTMLElement>('aside button')]
         .find((button) => (button.textContent ?? '').includes('@'));
+
       if (row === undefined) throw new Error('no account row in the rail');
       row.click();
     });
     await routedPage.waitForSelector('aside [data-feedback-open]', { timeout: 30_000 });
     const openedFromRail = await routedPage.$('aside [data-feedback-open]') !== null;
+
     // Two bands down and two cells across. The offsets are read BACK, so a
     // fixture that could not scroll fails here instead of passing by accident.
     const offsets = await routedPage.evaluate(() => {
       const outer = document.querySelector<HTMLElement>('[data-scroll-outer]');
       const inner = document.querySelector<HTMLElement>('[data-scroll-inner]');
+
       if (outer === null || inner === null) throw new Error('the nested panes are not in this frame');
       outer.scrollTop = outer.clientHeight * 2;
       inner.scrollLeft = inner.clientWidth * 2;
+
       return { outer: outer.scrollTop, inner: inner.scrollLeft };
     });
+
     await openDialog(routedPage, 'aside [data-feedback-open]');
     const panes = await readScrollPanes(routedPage);
     await routedPage.type('[data-feedback-note]', 'the panes were scrolled when this was taken');
@@ -978,19 +1067,23 @@ async function run(): Promise<Observed> {
     await stalledPage.evaluate(() => new Promise<void>((resolve) => {
       requestAnimationFrame(() => { requestAnimationFrame(() => { resolve(); }); });
     }));
+
     const whileSending = {
       cancelHook: await cancelHook(stalledPage),
       sendLabel: await textOf(stalledPage, '[data-feedback-send]'),
       dismissedByEscape: await stalledPage.$('[data-feedback-note]') === null,
     };
+
     await stalledPage.click('[data-feedback-cancel]');
     await stalledPage.waitForSelector('[data-feedback-error]', { timeout: 30_000 });
+
     const afterStop = {
       errorText: await textOf(stalledPage, '[data-feedback-error]'),
       cancelHook: await cancelHook(stalledPage),
       sendLabel: await textOf(stalledPage, '[data-feedback-send]'),
       canvasSurvived: await stalledPage.$('[data-feedback-canvas]') !== null,
     };
+
     await stalledPage.click('[data-feedback-send]');
     await stalledPage.waitForSelector('[data-feedback-sent]', { timeout: 30_000 });
     const stalledToast = await textOf(stalledPage, '[data-feedback-sent]');
@@ -1035,10 +1128,13 @@ async function run(): Promise<Observed> {
     await serveFeedback(downPage);
     await downPage.goto(`${origin}/gallery.html?frame=feedbacksecrets`, { waitUntil: 'networkidle0' });
     await downPage.waitForSelector('[data-visible-copy]');
+
     const scrollY = await downPage.evaluate(() => {
       window.scrollTo(0, document.documentElement.scrollHeight);
+
       return document.documentElement.scrollTop;
     });
+
     await openDialogInPlace(downPage);
     const downRegions = await readSecretRegions(downPage);
     const downControl = await readRegion(downPage, '[data-visible-copy]');
@@ -1081,6 +1177,7 @@ async function run(): Promise<Observed> {
 }
 
 let observed: Observed;
+
 beforeAll(async () => { observed = await run(); }, 600_000);
 
 describe('the screenshot never carries a secret', () => {
@@ -1282,6 +1379,7 @@ describe('a capture that fails', () => {
     // name, the class, and the WHOLE chain — the `doing` frame first, never
     // the head of the chain alone.
     expect(observed.captureFailure.diagnostics.length).toBeGreaterThanOrEqual(1);
+
     for (const line of observed.captureFailure.diagnostics) {
       expect(line.event).toBe('feedback.capture_failed');
       expect(line.code).toBe('unsupported');
@@ -1302,6 +1400,7 @@ describe('a preview that cannot be decoded', () => {
 
   test('every failed decode is recorded, classified, with the chain intact', () => {
     expect(observed.decodeFailure.diagnostics.length).toBeGreaterThanOrEqual(1);
+
     for (const line of observed.decodeFailure.diagnostics) {
       expect(line.event).toBe('feedback.decode_failed');
       expect(line.code).toBe('bad_input');
@@ -1358,6 +1457,7 @@ describe('a pane the reporter scrolled', () => {
 
   test('is photographed where they left it, vertically and horizontally', () => {
     expect(observed.routed.panes).toHaveLength(2);
+
     for (const pane of observed.routed.panes) {
       // `atRest` is the fill an ignored scroll offset shows. Asserting the two
       // differ is what stops this passing on a fixture that cannot tell them
@@ -1379,6 +1479,7 @@ describe('photographed part-way down a page that scrolls', () => {
     // moved with the reader would put a card where each block is expected and
     // fail every one of these.
     expect(observed.scrolledDocument.regions).toHaveLength(5);
+
     for (const region of observed.scrolledDocument.regions) {
       expect({ label: region.label, offFill: region.offFill, colours: region.colours })
         .toEqual({ label: region.label, offFill: 0, colours: 1 });
@@ -1443,6 +1544,7 @@ test('a capture completed after screenshot opt-out cannot attach to the report',
         }));
         window.__heldFeedbackEncodes = held.length;
       };
+
       window.__releaseFeedbackEncodes = async () => {
         HTMLCanvasElement.prototype.toBlob = encode;
         await Promise.all(held.map((release) => release()));

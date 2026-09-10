@@ -39,12 +39,14 @@ import {
   type NamedSwarmPreset,
   type SwarmPreset,
 } from './swarm-presets';
+
 export {
   NAMED_SWARM_PRESETS,
   SWARM_PRESETS,
   type NamedSwarmPreset,
   type SwarmPreset,
 } from './swarm-presets';
+
 import type { SwarmProfileSnapshot } from '../profiles/snapshot';
 import type { ExplorationRecordsReport } from './records';
 
@@ -75,6 +77,7 @@ import type { ExplorationRecordsReport } from './records';
  * surface instead of twice with two names. `step` never executed at all.
  */
 export const SWARM_UNITS = ['answer', 'thought'] as const;
+
 export type SwarmUnit = (typeof SWARM_UNITS)[number];
 
 /**
@@ -102,6 +105,7 @@ export type SwarmUnit = (typeof SWARM_UNITS)[number];
  * fifth arm.
  */
 export const SWARM_CONTEXTS = ['inherit', 'fresh'] as const;
+
 export type BranchContext = (typeof SWARM_CONTEXTS)[number];
 
 /**
@@ -119,6 +123,7 @@ export type BranchContext = (typeof SWARM_CONTEXTS)[number];
  * axis* exists to prevent, and `context` is the one that also binds the root.
  */
 export const SWARM_EXPANDS = ['sample', 'aggregate'] as const;
+
 export type SwarmExpand = (typeof SWARM_EXPANDS)[number];
 
 /**
@@ -132,6 +137,7 @@ export type SwarmExpand = (typeof SWARM_EXPANDS)[number];
  * parameter cannot exist unless the archive that owns it does.
  */
 export const SWARM_SCORES = ['verify', 'judge', 'none'] as const;
+
 export type SwarmScore = (typeof SWARM_SCORES)[number];
 
 /**
@@ -150,11 +156,13 @@ export type SwarmScore = (typeof SWARM_SCORES)[number];
 export const SWARM_ADVANCES = [
   'uct', 'best-first', 'pareto', 'archive', 'none',
 ] as const;
+
 export type SwarmAdvance = (typeof SWARM_ADVANCES)[number];
 
 /** What survives across iterations. `elites` and `artifacts` are what the records
  *  store persists; the store IS where this axis lands. */
 export const SWARM_CARRIES = ['none', 'reflections', 'elites', 'artifacts'] as const;
+
 export type SwarmCarry = (typeof SWARM_CARRIES)[number];
 
 /**
@@ -541,8 +549,11 @@ export interface SwarmRefusal {
  */
 export function settleOf(config: SwarmConfig): SwarmSettle {
   if (config.advance.kind === 'archive') return 'archive';
+
   if (config.advance.kind === 'pareto') return 'front';
+
   if (config.score.kind === 'none' && config.advance.kind === 'none') return 'merge';
+
   return 'best';
 }
 
@@ -817,6 +828,7 @@ export const UNMEASURED_JUDGE_SAMPLES = DEFAULT_CONFIG.mcts.judgeSamples;
  */
 export function unmeasuredPoint(row: SwarmPresetPoint): SwarmPresetPoint {
   if (row.config.score.kind !== 'verify') return row;
+
   return {
     ...row,
     config: {
@@ -878,11 +890,14 @@ export const SWARM_PRESET_DOCTRINE: readonly string[] = [
     + '"Sweep N" below is that width.',
   ...NAMED_SWARM_PRESETS.map((preset) => {
     const row = SWARM_PRESET_POINTS[preset];
+
     // A row that does not score by `verify` has no measured/unmeasured split to
     // explain, and `ideate`'s own clause already says it refuses an objective.
     if (row.config.score.kind !== 'verify') return `${preset} ${row.doctrine}`;
+
     const measured = ADVANCE_DOCTRINE[row.config.advance.kind](row)
       + CARRY_DOCTRINE[row.config.carry.kind];
+
     return `${preset} ${row.doctrine} Sweep ${String(row.branches)}; with an \`objective\`, ${measured}.`;
   }),
   'An `objective` is worth naming when the thing you want can be measured by RUNNING '
@@ -1062,7 +1077,9 @@ function resolveCap(
   supplied: number | undefined, row: number | undefined,
 ): ResolvedCap | null {
   if (supplied !== undefined) return { value: supplied, origin: 'call' };
+
   if (row !== undefined) return { value: row, origin: 'preset' };
+
   return null;
 }
 
@@ -1079,6 +1096,7 @@ function resolveCap(
  */
 function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
   const composed = input.preset === 'custom';
+
   // THE TWO WIDTH MODES ARE EXCLUSIVE, and this is refused rather than resolved by
   // precedence: `nodes.length` IS the width, so a call that also states `branches`
   // has named the same number twice and one of the two is going to be ignored. The
@@ -1089,23 +1107,29 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
       + 'well, and one of the two would be ignored. Drop `branches` to keep your own assignments, or '
       + 'drop `nodes` to let the engine hand out that many diversity angles.');
   }
+
   // EVERY ASSIGNED TASK DISTINCT. The count-based mode differentiates its siblings
   // with angles; this mode differentiates them by what the caller wrote, so two
   // nodes carrying one question is N answers bought for one question — the exact
   // duplication the field exists to remove, restated by the caller.
   const assigned = input.nodes;
+
   if (assigned) {
     const seen = new Set<string>();
+
     for (const node of assigned) {
       const task = node.task.trim();
+
       if (seen.has(task)) {
         return badInput('`nodes` gives every node its own question, and two of yours are the same: '
           + `${JSON.stringify(task.slice(0, 80))}. A search that asks one question twice pays twice for `
           + 'one answer. Make the tasks distinct, or use `branches` and let the engine vary the angle.');
       }
+
       seen.add(task);
     }
   }
+
   // A SPEC LIST, WHERE ONE WAS SUPPLIED, IS NON-EMPTY AND EVERY ENTRY IS. The
   // wire schema holds the shape (length and string-ness); THIS holds the semantics
   // the resolution depends on, because an empty spec routes nowhere and a blank one
@@ -1118,12 +1142,14 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
         + 'chose. Name a spec the resolver recognises, such as a `<provider>/<modelId>` route.');
     }
   }
+
   if (composed) {
     if (!input.config) {
       return badInput('`custom` is the statement that no preset is the base, so it needs the axes '
         + 'spelled out: supply `config`. Seed it from a tested path with `from` and override only '
         + `what differs, or name all ${String(AXES.length)} axes. A named preset needs no \`config\` at all.`);
     }
+
     if (!input.label?.trim()) {
       return badInput('a composed configuration needs `label`: a shape recorded repeatedly under one '
         + 'label is the evidence for a sixth preset, and that only works if composed runs are '
@@ -1136,14 +1162,17 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
         + `preset is not a tested path. Use preset:"custom" with from:"${input.preset}" and a \`label\`, `
         + 'which records the run as the composition it is.');
     }
+
     if (input.from) {
       return badInput('`from` names the base for a composition, so it belongs to preset:"custom" only. '
         + `preset "${input.preset}" already IS its configuration.`);
     }
+
     if (input.label) {
       return badInput('`label` is provenance for a composed configuration and is required exactly when '
         + `\`config\` is present. preset "${input.preset}" is recorded under its own name.`);
     }
+
     if (input.preset === 'ideate' && input.objective) {
       return badInput('`ideate` is flat and has no value signal by design; an objective here would be '
         + 'measured and then ignored, which is a silent lie about what the run did. Use '
@@ -1157,6 +1186,7 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
     // all score by `verify` too — to spell a rule the validity table already states
     // once.
   }
+
   return null;
 }
 
@@ -1171,16 +1201,19 @@ function requiredFieldRefusal(input: SwarmInput): SwarmRefusal | null {
  */
 export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
   const required = requiredFieldRefusal(input);
+
   if (required) return required;
 
   const baseName: NamedSwarmPreset | null = input.preset === 'custom'
     ? input.from ?? null
     : input.preset;
+
   // Every row is a point, so this is a lookup and not a decision. A decision here would
   // have a REFUSING arm, and that arm reaches `custom` too: a composition seeded from an
   // undeclared row would be refused for its base's gap rather than judged on the axes
   // the caller stated. See {@link SwarmPresetRow}.
   const row: SwarmPresetPoint | null = baseName ? SWARM_PRESET_POINTS[baseName] : null;
+
   // A NAMED preset that was handed no `objective` resolves to its UNMEASURED point:
   // `verify` needs an instrument and the call named none, so the row's judged fallback
   // is what it actually gets. See {@link unmeasuredPoint} for why this is a scorer
@@ -1197,8 +1230,10 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
     : row;
 
   const merged = { ...base?.config, ...input.config };
+
   if (!namesEveryAxis(merged)) {
     const missing = AXES.filter((axis) => merged[axis] === undefined);
+
     return badInput(`a resolved configuration names all ${String(AXES.length)} axes and this one is `
       + `missing ${missing.join(', ')}. `
       + (base
@@ -1206,6 +1241,7 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
         : 'With no `from` there is no row to inherit from, so `config` must name every axis — or name a '
           + 'base with `from` and override the rest.'));
   }
+
   const config = merged;
 
   return {
@@ -1256,6 +1292,7 @@ export function resolveSwarm(input: SwarmInput): ResolvedSwarm | SwarmRefusal {
  */
 export function configDigestOf(resolved: ResolvedSwarm): string {
   const { config, caps } = resolved;
+
   return argumentDigest({
     unit: config.unit.kind,
     context: config.context,
@@ -1292,7 +1329,9 @@ export function configDigestOf(resolved: ResolvedSwarm): string {
  *  its proxy's, so C1 cannot be written over a single field. */
 function floorsOf(objective: Objective): readonly { floor: Floor; direction: ObjectiveDirection }[] {
   if (objective.kind === 'vector') return objective.components.flatMap(floorsOf);
+
   if (objective.kind === 'witness') return objective.proxy ? floorsOf(objective.proxy) : [];
+
   return objective.floor ? [{ floor: objective.floor, direction: objective.direction }] : [];
 }
 
@@ -1309,9 +1348,11 @@ function floorsOf(objective: Objective): readonly { floor: Floor; direction: Obj
  */
 function verifierSpecsOf(objective: Objective): readonly VerifierSpec[] {
   if (objective.kind === 'vector') return objective.components.flatMap(verifierSpecsOf);
+
   const named = objective.kind === 'witness'
     ? [objective.check, ...(objective.proxy ? [objective.proxy.verify] : [])]
     : [objective.verify];
+
   // Narrowed on the DOMAIN and not on the representation: a `VerifierSpec` is the arm
   // that declares a `kind`, and the closure arm declares nothing.
   return named.filter((source): source is VerifierSpec => 'kind' in source);
@@ -1333,9 +1374,12 @@ function verifierSpecsOf(objective: Objective): readonly VerifierSpec[] {
  */
 function missingSpecFields(kind: VerifierKind, spec: JsonValue): readonly string[] {
   const fields = VERIFIER_KIND_DOC[kind].specFields;
+
   if (!isJsonObject(spec)) return fields;
+
   return fields.filter((field) => !Object.hasOwn(spec, field));
 }
+
 /**
  * The complete call that needs no instrument, named in a refusal that just rejected
  * one.
@@ -1352,7 +1396,9 @@ function instrumentFreeAlternative(resolved: ResolvedSwarm): string {
     return 'If nothing here can be measured by running code, set score:{kind:"none"} in `config` '
       + 'and take an unranked flat run, or name a preset and drop `config` entirely.';
   }
+
   const row = SWARM_PRESET_POINTS[resolved.preset];
+
   return 'If nothing here can be measured by running code, DROP `objective` and this same call '
     + `works as it stands: {action:"swarm", preset:"${resolved.preset}", task:"…"} runs a judged `
     + `sweep of ${String(row.branches)}, ranked, with no instrument and no other field required.`;
@@ -1375,8 +1421,11 @@ function instrumentFreeAlternative(resolved: ResolvedSwarm): string {
  */
 export function judgeMarginalisationRefusal(config: SwarmConfig): SwarmRefusal | null {
   if (!isTreeAdvance(config.advance.kind)) return null;
+
   if (config.score.kind !== 'judge') return null;
+
   if (config.score.samples >= JUDGE_MARGINALISATION_MIN) return null;
+
   return badInput(`a judged scalar is a noisy scorer and a tree amplifies scorer noise, so score:"judge" `
     + `down a tree needs samples ≥ ${String(JUDGE_MARGINALISATION_MIN)} and this composition has `
     + `${String(config.score.samples)}: at fixed node expansions a marginalised WEAKER judge beats an `
@@ -1400,6 +1449,7 @@ export function archiveRegionRefusal(
   config: SwarmConfig, caps: ResolvedSwarmCaps,
 ): SwarmRefusal | null {
   if (config.advance.kind !== 'archive') return null;
+
   if (config.score.kind !== 'verify') {
     // A cell is keyed by the objective's IDENTITY — the metric and the instrument — and
     // a cell's population is ordered by the objective's own direction. A judged or
@@ -1411,7 +1461,9 @@ export function archiveRegionRefusal(
       + 'run produced could be binned or ranked, and the coverage it reported would be over a store it '
       + 'never wrote. Use score:"verify" with an `objective`, or advance:"none" for a flat run.');
   }
+
   const { novelty } = config.advance;
+
   if (!(novelty >= 0 && novelty <= 1)) {
     // The unit, made unambiguous where getting it wrong is invisible. This parameter is a
     // DISTANCE floor a candidate must clear, and every published filter this axis was
@@ -1424,6 +1476,7 @@ export function archiveRegionRefusal(
       + 'Note the direction before transcribing one: a filter quoted as a similarity ceiling is one MINUS '
       + 'that number here. State a threshold inside [0,1].');
   }
+
   if (caps.depth && caps.depth.value > 1) {
     // An archive selects by CELL, and its cells are written at the settle barrier — so
     // within one run there is nothing to select from, and a second level would be
@@ -1437,6 +1490,7 @@ export function archiveRegionRefusal(
       + 'is a lie about what the run did. Pass depth:1 and carry:"elites", which is what makes the next '
       + "run start from this one's occupants.");
   }
+
   return null;
 }
 
@@ -1462,8 +1516,11 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'an `objective`, or score:"judge" with enough `samples` — or use advance:"none" and get honest '
       + 'parallel sampling.');
   }
+
   const marginalisation = judgeMarginalisationRefusal(config);
+
   if (marginalisation) return marginalisation;
+
   // A witness with no proxy scores 1 for a solution and 0 for everything else, so
   // until the first success the value signal is constant.
   if (tree && objective?.kind === 'witness' && objective.proxy === undefined) {
@@ -1473,12 +1530,14 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'or use advance:"none" and accept that this is parallel sampling, which for a witness hunt is '
       + 'honest and often correct.');
   }
+
   if (advance === 'pareto') {
     if (!objective) {
       return badInput('advance:"pareto" reports a frontier, and a frontier needs several axes to be a '
         + 'frontier at all: supply an `objective` of kind "instanced" (one metric across ≥2 instances) or '
         + '"vector" (≥2 metrics, each with its own unit and direction).');
     }
+
     if (objective.kind !== 'instanced' && objective.kind !== 'vector') {
       return badInput(`advance:"pareto" with an objective of kind "${objective.kind}" gives a front of size one, `
         + 'which is an argmax reported as a frontier. Use kind:"instanced" for one metric across ≥2 '
@@ -1486,10 +1545,12 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
         + 'direction (a score dict).');
     }
   }
+
   if (advance === 'pareto' && PUBLISHING_CARRIES.some((carry) => carry === config.carry.kind)) {
     return badInput('advance:"pareto" keeps its durable frontier in node evidence and cannot '
       + 'publish a vector through the scalar records store. Use carry:"none" or "reflections".');
   }
+
   if (config.score.kind === 'verify' && !objective) {
     // ONLY `custom` REACHES THIS NOW. A named preset handed no `objective` resolves to
     // its unmeasured point and scores by judge, so the composition that arrives here is
@@ -1503,6 +1564,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'Or set score:{kind:"none"} in `config` for a flat run with no value signal — and note '
       + 'that a NAMED preset needs neither: it falls back to a judged sweep on its own.');
   }
+
   // THE CHECKER IS NAMED AT CALL TIME, which is what `VerifierSpec.kind` already claims
   // ("an unregistered kind is a CALL-TIME `bad_input` naming the registered kinds") and
   // what nothing enforced: the registry was consulted at the top of `runSwarm`, so a
@@ -1517,20 +1579,25 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
   if (objective) {
     for (const spec of verifierSpecsOf(objective)) {
       const registered = VERIFIER_KINDS.find((kind) => kind === spec.kind);
+
       if (registered === undefined) {
         return badInput(`no verifier kind "${spec.kind}" is registered, so score:"verify" names an `
           + 'instrument that cannot run and this composition would measure nothing. `kind` must be one '
           + `of: ${VERIFIER_KINDS.join(', ')}. ${instrumentFreeAlternative(resolved)}`);
       }
+
       const missing = missingSpecFields(registered, spec.spec);
+
       if (missing.length > 0) {
         const doc = VERIFIER_KIND_DOC[registered];
+
         // "sent none of them" rather than re-listing every field it needs: the two lists
         // are identical when the spec is empty, and printing one twice reads as two
         // different requirements.
         const shortfall = missing.length === doc.specFields.length
           ? 'this one sent none of them'
           : `this one is missing ${missing.join(', ')}`;
+
         return badInput(`verify.kind:"${registered}" ${doc.summary}, and its \`spec\` is the whole `
           + `problem statement rather than a pointer at one: it needs ${doc.specFields.join(', ')}, and `
           + `${shortfall}. Send every field in one call — they are checked together, so adding them one `
@@ -1538,6 +1605,7 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       }
     }
   }
+
   if (advance === 'archive' && !resolved.key) {
     // WHAT THE KEY HAS TO NAME MOVED when the archive started running: the cell is
     // witnessed by the instrument that measured the candidate, so the key names one of the
@@ -1550,16 +1618,21 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
       + 'the quantities that verifier reports beside its value. A key that can only say "distinct idea" '
       + 'is a task with no coverage objective — that task wants preset:"ideate".');
   }
+
   if (resolved.key && advance !== 'archive') {
     return badInput(`\`key\` is the descriptor an archive bins elites into, and advance:"${advance}" `
       + 'keeps no archive, so this run would accept a coverage key and report no coverage — which is a '
       + 'silent lie about what it did rather than a harmless extra. Drop `key`, or use '
       + 'advance:"archive" if coverage is what you want.');
   }
+
   const archive = archiveRegionRefusal(config, caps);
+
   if (archive) return archive;
+
   for (const { floor, direction } of objective ? floorsOf(objective) : []) {
     const margin = floorMargin(floor, direction);
+
     if (margin < 0) {
       return badInput(`this floor of ${String(floor.value)} already exceeds the best honest cost anyone has `
         + `measured (${String(floor.bestKnownHonest)}), so it is refuted at declaration: margin `
@@ -1568,21 +1641,25 @@ export function swarmValidity(resolved: ResolvedSwarm): SwarmRefusal | null {
         + 'the cost actually measured.');
     }
   }
+
   if (advance === 'none' && caps.depth && caps.depth.value > 1) {
     return badInput(`advance:"none" has no selection step, so there is no second level to reach and `
       + `depth ${String(caps.depth.value)} cannot be run — it is refused rather than silently flattened, `
       + 'because a cap accepted and ignored is a lie about what the run did. Pass depth:1, or choose a '
       + 'tree selector such as advance:"uct".');
   }
+
   if (!tree && (config.pruneThreshold !== undefined || config.minVisitsForPrune !== undefined)) {
     const named = [
       ...(config.pruneThreshold !== undefined ? ['`pruneThreshold`'] : []),
       ...(config.minVisitsForPrune !== undefined ? ['`minVisitsForPrune`'] : []),
     ].join(' and ');
+
     return badInput(`${named} is pruning policy for a tree selector, and advance:"${advance}" does not `
       + `prune — it would be accepted and ignored, which is why it is refused. Drop ${named}, or use one of `
       + `${SWARM_TREE_ADVANCES.join('/')}.`);
   }
+
   return null;
 }
 
@@ -1650,6 +1727,7 @@ export const BRANCH_REFUSAL_POLICIES = [
   'does-not-expand-at-node', 'width-out-of-range', 'depth-exhausted',
   'budget-exhausted', 'context-conflict',
 ] as const;
+
 export type BranchRefusalPolicy = (typeof BRANCH_REFUSAL_POLICIES)[number];
 
 /**
@@ -1718,6 +1796,7 @@ export interface BranchArbitrationInput {
 export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitration {
   const { config, caps, atDepth, remainingChildren, proposal } = input;
   const width = proposal.branches.length;
+
   const refused = (policy: BranchRefusalPolicy, error: string): BranchArbitration =>
     ({ kind: 'refused', policy, error });
 
@@ -1731,31 +1810,37 @@ export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitratio
       + `${SWARM_TREE_ADVANCES.join('/')}; a new search with its own budget and its own objective is `
       + 'a nested `agents.swarm` call, which is a different thing and capped on a different counter.');
   }
+
   if (width < BRANCH_PROPOSAL_WIDTH.min || width > BRANCH_PROPOSAL_WIDTH.max) {
     return refused('width-out-of-range',
       `a branch proposal names ${String(BRANCH_PROPOSAL_WIDTH.min)}-${String(BRANCH_PROPOSAL_WIDTH.max)} `
       + `narrower sub-questions and this one names ${String(width)}. Propose between `
       + `${String(BRANCH_PROPOSAL_WIDTH.min)} and ${String(BRANCH_PROPOSAL_WIDTH.max)}.`);
   }
+
   if (!caps.depth) {
     return refused('depth-exhausted',
       'nothing states how deep this search may go — neither the call nor a preset row behind it — so '
       + 'there is no cap a branch could be granted inside. This is an absent depth rather than an '
       + 'exhausted one.');
   }
+
   if (caps.depth.value <= atDepth) {
     return refused('depth-exhausted',
       `depth exhausted at depth ${String(atDepth)}: this node sits at the cap of `
       + `${String(caps.depth.value)}, so its children would be depth ${String(atDepth + 1)}. The cap is `
       + 'the search\'s own `depth` and is not raisable from inside the search.');
   }
+
   if (remainingChildren < width) {
     return refused('budget-exhausted',
       `budget exhausted at depth ${String(atDepth)}: ${String(width)} children were asked for and `
       + `${String(remainingChildren)} remain in this search's expansion budget. The budget is the `
       + 'search\'s, shared by every node, and a proposal cannot mint children it cannot pay for.');
   }
+
   const widening = proposal.branches.filter((branch) => branch.context === 'inherit');
+
   if (config.context === 'fresh' && widening.length > 0) {
     return refused('context-conflict',
       `this search is resolved context:"fresh", which starts every child from its parent's REPORTED `
@@ -1765,6 +1850,7 @@ export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitratio
       + 'honoured quietly. Propose the same branches with context:"fresh" — they still receive your '
       + 'report, your candidate and their own focus, which is everything except your transcript.');
   }
+
   return { kind: 'accepted', width };
 }
 

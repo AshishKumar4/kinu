@@ -55,6 +55,7 @@ type ValueTag<Name extends string> =
 type BlockFlag<Name extends string> = Name extends `#if ${infer Flag}` ? Flag : never;
 
 type SlotName<Source extends string> = ValueTag<Tag<Source>>;
+
 type FlagName<Source extends string> = BlockFlag<Tag<Source>>;
 
 /**
@@ -76,6 +77,7 @@ type SlotValues = Readonly<Record<string, string | boolean>>;
  *  every source the compiler can see; these answer it for the sources it
  *  cannot — a promoted candidate read out of a table. */
 const TEXT_VALUE = v.string();
+
 const FLAG_VALUE = v.boolean();
 
 /**
@@ -128,23 +130,33 @@ function pushText(into: TemplateNode[], text: string): void {
 function compileTemplate(id: string, source: string): TemplateNode[] {
   const root: TemplateNode[] = [];
   const open: OpenBlock[] = [];
+
   const top = (): TemplateNode[] => {
     const block = open.at(-1);
+
     if (!block) return root;
+
     return block.branch === 'then' ? block.whenTrue : block.whenFalse;
   };
+
   let pos = 0;
+
   for (;;) {
     const start = source.indexOf('{{', pos);
+
     if (start === -1) {
       pushText(top(), source.slice(pos));
       const unclosed = open.at(-1);
+
       if (unclosed) {
         fail(id, `unclosed {{${IF_PREFIX}${unclosed.flag}}} — every conditional needs its {{/if}}`);
       }
+
       return root;
     }
+
     const end = source.indexOf('}}', start + 2);
+
     if (end === -1) fail(id, `unclosed {{ at index ${start}`);
     pushText(top(), source.slice(pos, start));
     const name = source.slice(start + 2, end);
@@ -152,46 +164,58 @@ function compileTemplate(id: string, source: string): TemplateNode[] {
 
     if (name.startsWith(IF_PREFIX)) {
       const flag = name.slice(IF_PREFIX.length);
+
       if (!SLOT_PATTERN.test(flag)) {
         fail(id, `malformed flag "{{${name}}}" at index ${start} — a flag is `
           + `{{${IF_PREFIX}name}} with one space and no expression, matching ${SLOT_PATTERN.source}`);
       }
+
       open.push({ flag, whenTrue: [], whenFalse: [], branch: 'then' });
       continue;
     }
+
     if (name === 'else') {
       const block = open.at(-1);
+
       if (!block) fail(id, `{{else}} at index ${start} with no {{#if}} open`);
+
       if (block.branch === 'else') {
         fail(id, `a second {{else}} at index ${start} in {{${IF_PREFIX}${block.flag}}}`);
       }
+
       block.branch = 'else';
       continue;
     }
+
     if (name === '/if') {
       const block = open.pop();
+
       if (!block) fail(id, `{{/if}} at index ${start} with no {{#if}} open`);
       top().push({
         kind: 'if', flag: block.flag, whenTrue: block.whenTrue, whenFalse: block.whenFalse,
       });
       continue;
     }
+
     if (name.startsWith('#') || name.startsWith('/')) {
       // Named rather than swept into "malformed slot": `{{#each}}` is the tag a
       // writer reaches for next, and the answer is a design decision, not a typo.
       fail(id, `unknown block tag "{{${name}}}" at index ${start} — `
         + `{{${IF_PREFIX}flag}} / {{else}} / {{/if}} are the only blocks; iteration stays in TypeScript`);
     }
+
     if (!SLOT_PATTERN.test(name)) {
       fail(id, `malformed slot "{{${name}}}" at index ${start} — `
         + `a slot is {{name}} with no spaces, matching ${SLOT_PATTERN.source}`);
     }
+
     top().push({ kind: 'slot', name });
   }
 }
 
 function supplied(values: SlotValues): string {
   const keys = Object.keys(values);
+
   return keys.length === 0 ? '(none)' : keys.join(', ');
 }
 
@@ -208,6 +232,7 @@ function renderNodes(
   out: string,
 ): string {
   let acc = out;
+
   for (const node of nodes) {
     switch (node.kind) {
       case 'text':
@@ -215,30 +240,38 @@ function renderNodes(
         break;
       case 'slot': {
         const value = values[node.name];
+
         if (value === undefined) {
           fail(id, `slot {{${node.name}}} has no value. Supplied: ${supplied(values)}`);
         }
+
         if (!v.is(TEXT_VALUE, value)) {
           fail(id, `slot {{${node.name}}} is a text slot but was given a boolean — `
             + `write {{${IF_PREFIX}${node.name}}} to branch on it`);
         }
+
         acc += value;
         break;
       }
+
       case 'if': {
         const value = values[node.flag];
+
         if (value === undefined) {
           fail(id, `flag {{${IF_PREFIX}${node.flag}}} has no value. Supplied: ${supplied(values)}`);
         }
+
         if (!v.is(FLAG_VALUE, value)) {
           fail(id, `flag {{${IF_PREFIX}${node.flag}}} is a boolean slot but was given a string — `
             + `write {{${node.flag}}} to substitute it`);
         }
+
         acc = renderNodes(id, value ? node.whenTrue : node.whenFalse, values, acc);
         break;
       }
     }
   }
+
   return acc;
 }
 
@@ -272,15 +305,18 @@ export function definePromptSection<const Source extends string>(
 ): PromptSection<Source> {
   const compiled = compileTemplate(id, source);
   let override: { source: string; nodes: readonly TemplateNode[] } | null = null;
+
   return {
     id,
     source,
     render: (slots) => renderNodes(id, compiled, slots, ''),
     renderFrom: (replacement, slots) => {
       if (replacement === source) return renderNodes(id, compiled, slots, '');
+
       if (override?.source !== replacement) {
         override = { source: replacement, nodes: compileTemplate(id, replacement) };
       }
+
       return renderNodes(id, override.nodes, slots, '');
     },
   };
@@ -304,6 +340,7 @@ export interface TemplateContract {
 export function templateContract(id: string, source: string): TemplateContract {
   const slots = new Set<string>();
   const flags = new Set<string>();
+
   const walk = (nodes: readonly TemplateNode[]): void => {
     for (const node of nodes) {
       if (node.kind === 'slot') slots.add(node.name);
@@ -314,6 +351,8 @@ export function templateContract(id: string, source: string): TemplateContract {
       }
     }
   };
+
   walk(compileTemplate(id, source));
+
   return { slots: [...slots].sort(), flags: [...flags].sort() };
 }

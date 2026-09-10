@@ -19,6 +19,7 @@ import { enumerateRepository, isTextSource, readRepositoryFile } from './sources
 import { scanText } from './secret-scan';
 
 const FAKE_TOKEN = ['pta', '0123456789abcdef0123456789abcdef'].join('_');
+
 const TRANSCRIPT = 'docs/requirements/OWNER-MESSAGES-VERBATIM.md';
 
 // No GIT_* scrubbing here, deliberately: the enumerator spawns git with
@@ -39,6 +40,7 @@ function incidentRepo(): string {
   writeFileSync(join(repo, '.gitignore'), `/${TRANSCRIPT}\n`);
   writeFileSync(join(repo, TRANSCRIPT), `the owner pasted ${FAKE_TOKEN} here\n`);
   git(repo, 'add', 'README.md', '.gitignore');
+
   return repo;
 }
 
@@ -47,6 +49,7 @@ describe('tracked-ness is authoritative', () => {
     const repo = incidentRepo();
     git(repo, 'add', '-f', TRANSCRIPT);
     const warn = spyOn(console, 'error').mockImplementation(() => {});
+
     try {
       const { files, trackedIgnored } = enumerateRepository(repo);
       expect(files).toContain(TRANSCRIPT);
@@ -73,6 +76,7 @@ describe('tracked-ness is authoritative', () => {
     git(repo, 'add', '-f', TRANSCRIPT);
     rmSync(join(repo, TRANSCRIPT));
     const warn = spyOn(console, 'error').mockImplementation(() => {});
+
     try {
       expect(enumerateRepository(repo).files).toContain(TRANSCRIPT);
       expect(readRepositoryFile(repo, TRANSCRIPT)).toContain(FAKE_TOKEN);
@@ -120,6 +124,7 @@ describe('tracked-ness is authoritative', () => {
     // SPAWNED bun process below, which is the shape a hook produces, and
     // `enumerateRepository` runs inside THAT process rather than this one.
     const probeSources = join(import.meta.dir, 'sources.ts');
+
     const probe = execFileSync('bun', ['-e', `
       import { enumerateRepository } from ${JSON.stringify(probeSources)};
       process.stdout.write(JSON.stringify(enumerateRepository(${JSON.stringify(target)}).files));
@@ -127,6 +132,7 @@ describe('tracked-ness is authoritative', () => {
       env: { ...process.env, GIT_DIR: join(decoy, '.git'), GIT_WORK_TREE: decoy },
       encoding: 'utf8',
     });
+
     const files: string[] = JSON.parse(probe);
     expect(files).toContain('TARGET-MARKER.txt');
     expect(files).not.toContain('DECOY-MARKER.txt');
@@ -142,6 +148,7 @@ test('a tracked+ignored credential with no disk copy is a secret-scan finding; u
   git(repo, 'add', '-f', TRANSCRIPT);
   rmSync(join(repo, TRANSCRIPT));
   const warn = spyOn(console, 'error').mockImplementation(() => {});
+
   try {
     const corpus = enumerateRepository(repo).files.filter(isTextSource);
     expect(corpus).toContain(TRANSCRIPT);

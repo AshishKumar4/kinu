@@ -77,15 +77,18 @@ export interface ExplorationScore {
  */
 export function scoreExploration(sql: SqlExecutor, actor: ActorHandle, limit = 1000): ExplorationScore {
   const searched = listForkRuns(sql, actor, null, limit).items.filter((run) => run.hasSearchTree);
+
   const runs = searched.map<SearchRunScore>((run) => {
     const terminal = sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM search_nodes
       WHERE actor_id = ${actor.actorId} AND root_id = ${run.id} AND status = 'terminal'`[0]?.n ?? 0;
+
     const take = sql<{ winner_node_id: string }>`
       SELECT t.winner_node_id FROM alternate_takes t
       JOIN search_nodes n ON n.id = t.winner_node_id
       WHERE n.actor_id = ${actor.actorId} AND t.actor_id = ${actor.actorId}
         AND n.root_id = ${run.id}`[0];
+
     return {
       id: run.id,
       branches: run.branches,
@@ -94,6 +97,7 @@ export function scoreExploration(sql: SqlExecutor, actor: ActorHandle, limit = 1
       takeWinnerId: take?.winner_node_id ?? null,
     };
   });
+
   return {
     searchRuns: runs.length,
     branchedRuns: runs.filter((r) => r.branches > 1).length,
@@ -172,6 +176,7 @@ export function scoreSettleVisibility(
   const notSteerBranch = `${STEER_BRANCH_RUN_ID_PREFIX}%`;
   const transcriptsPresent = tableExists(sql, 'head_journal');
   const treePresent = tableExists(sql, 'search_nodes');
+
   const written = [
     {
       half: 'transcripts' as const,
@@ -194,6 +199,7 @@ export function scoreSettleVisibility(
   ];
 
   const rootsWritten = written.reduce((total, half) => total + half.roots.length, 0);
+
   // Ask for more than was written: the reader pages its merged order, so the reader's
   // own page must not be mistaken for a missing row. One page rather than a walk,
   // deliberately — this scores whether both stores are READ AT ALL, and a walk would
@@ -205,6 +211,7 @@ export function scoreSettleVisibility(
 
   const stores = written.map<SettleStoreScore>(({ half, store, present, roots }) => {
     const invisibleRoots = roots.filter((root) => !visible.has(root));
+
     return {
       half,
       store,
@@ -214,6 +221,7 @@ export function scoreSettleVisibility(
       invisibleRoots,
     };
   });
+
   return {
     stores,
     rootsWritten,
@@ -297,10 +305,12 @@ function eventsOfType<K extends RunEvent['type']>(
   sql: SqlExecutor, actor: ActorHandle, type: K,
 ): Extract<RunEvent, { type: K }>[] {
   actor.assertCurrent();
+
   const rows = sql<{ payload: string }>`
     SELECT payload FROM run_events
     WHERE actor_id = ${actor.actorId} AND type = ${type}
     ORDER BY run_id ASC, event_index ASC`;
+
   return rows.map((row) => parseStoredRunEvent(row.payload))
     .filter((event): event is Extract<RunEvent, { type: K }> => event.type === type);
 }
@@ -335,10 +345,12 @@ export const steeringConversion: BehaviourScorer = {
   score(sql, actor) {
     const rows = eventsOfType(sql, actor, 'turn_steering');
     const converted = rows.filter((row) => row.converted === true).length;
+
     const byTrigger = STEERING_TRIGGERS
       .map((trigger) => ({ trigger, n: rows.filter((r) => r.trigger === trigger).length }))
       .filter((entry) => entry.n > 0)
       .map((entry) => `${entry.trigger}×${String(entry.n)}`);
+
     return verdict(rows.length, converted,
       `${String(converted)}/${String(rows.length)} steers converted` +
       (byTrigger.length > 0 ? ` (${byTrigger.join(', ')})` : ''));
@@ -367,6 +379,7 @@ export const craftReuse: BehaviourScorer = {
     const crafted = rows.reduce((n, row) => n + row.crafted.length, 0);
     const reused = rows.reduce((n, row) => n + row.reused.length, 0);
     const invoked = rows.reduce((n, row) => n + row.invoked.length, 0);
+
     return verdict(crafted, reused,
       `${String(reused)}/${String(crafted)} crafted tools reused, ` +
       `${String(invoked)} crafted-tool invocations across ${String(rows.length)} crafting turns`);
@@ -397,13 +410,16 @@ export const editLanding: BehaviourScorer = {
     const applied = rows.reduce((n, row) => n + row.applied, 0);
     const abandoned = rows.reduce((n, row) => n + row.abandonedPaths, 0);
     const modes = new Map<string, number>();
+
     for (const row of rows) {
       for (const [mode, count] of Object.entries(row.failures)) {
         if (count != null && count > 0) modes.set(mode, (modes.get(mode) ?? 0) + count);
       }
     }
+
     const worst = [...modes.entries()].sort((a, b) => b[1] - a[1])
       .map(([mode, n]) => `${mode}×${String(n)}`);
+
     return verdict(attempts, applied,
       `${String(applied)}/${String(attempts)} edits applied, ` +
       `${String(abandoned)} paths abandoned` +
@@ -434,18 +450,22 @@ export const recoveryDurability: BehaviourScorer = {
   score(sql, actor) {
     const findings = eventsOfType(sql, actor, 'execution_recovery')
       .flatMap((row) => row.recoveries);
+
     // Counted, not ordered. A signature recorded as recovered more than once
     // necessarily failed again after the first recovery, so multiplicity alone
     // is the falsifier and the scorer needs no cross-run event ordering — which
     // it could not rely on anyway, since runs are read newest-first.
     const seen = new Map<string, number>();
+
     for (const finding of findings) {
       const key = `${finding.tool}\u0000${finding.failedSignature}`;
       seen.set(key, (seen.get(key) ?? 0) + 1);
     }
+
     const held = [...seen.values()].filter((n) => n === 1).length;
     const recurring = [...seen.values()].filter((n) => n > 1).length;
     const streak = findings.reduce((n, f) => n + f.failures, 0);
+
     return verdict(seen.size, held,
       `${String(held)}/${String(seen.size)} recovery findings held ` +
       `(${String(recurring)} signatures failed again later), ` +
@@ -475,6 +495,7 @@ export const completionHonesty: BehaviourScorer = {
   score(sql, actor) {
     const rows = eventsOfType(sql, actor, 'completion_gate');
     const forced = rows.filter((row) => row.converted === true).length;
+
     return verdict(rows.length, rows.length - forced,
       `${String(rows.length - forced)}/${String(rows.length)} gated runs ended on an honest ` +
       `completion claim (${String(forced)} were forced back to work)`);
@@ -505,6 +526,7 @@ export const spillRetrieval: BehaviourScorer = {
     const referenced = rows.reduce((n, row) => n + row.referenced, 0);
     const followUps = rows.reduce((n, row) => n + row.followUps, 0);
     const omitted = rows.reduce((n, row) => n + row.omittedChars, 0);
+
     return verdict(referenced, Math.min(followUps, referenced),
       `${String(followUps)} follow-ups against ${String(referenced)} readable spills, ` +
       `${String(omitted)} chars withheld from the root`);
@@ -541,13 +563,17 @@ export function formatFailureMix(byKey: readonly (readonly [string, number])[]):
  */
 export function parseFailureMix(detail: string): readonly (readonly [string, number])[] {
   const segment = detail.split('; ').find((part) => part.startsWith(FAILURE_MIX_LABEL));
+
   if (segment === undefined) return [];
+
   return segment.slice(FAILURE_MIX_LABEL.length).split(', ').map((entry) => {
     const separator = entry.lastIndexOf('×');
     const count = Number.parseInt(entry.slice(separator + 1), 10);
+
     if (separator <= 0 || !Number.isInteger(count)) {
       throw new Error(`tool_outcomes failure mix is not "key×N": ${entry}`);
     }
+
     return [entry.slice(0, separator), count] as const;
   });
 }
@@ -565,12 +591,15 @@ export const toolOutcomes: BehaviourScorer = {
     const succeeded = rows.filter((row) => row.outcome?.success === true).length;
     const failed = census.failures.length;
     const unmeasured = rows.length - succeeded - failed;
+
     const detail = [
       `${String(succeeded)} succeeded, ${String(failed)} failed, ${String(unmeasured)} unmeasured / ${String(rows.length)} observed calls`,
       `${String(census.refused)} refused, ${String(census.workFailed)} work failed, `
         + `${String(census.runtimeMissing)} runtime absent, ${String(census.broke)} broke or unclassified`,
     ];
+
     if (census.byKey.length > 0) detail.push(formatFailureMix(census.byKey));
+
     return {
       eligible: rows.length, passed: succeeded,
       rate: rows.length === 0 || unmeasured > 0 ? null : succeeded / rows.length,

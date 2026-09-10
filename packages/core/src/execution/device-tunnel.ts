@@ -163,6 +163,7 @@ export const DEVICE_TOKEN_ROTATION_ACK = 'ROTATE_ACK';
  *  what {@link isWorkspaceUnattachedError} is for. */
 export function isDeviceNotConnectedError<T>(err: T): boolean {
   const message = renderThrownChain({ cause: err });
+
   return message.includes(NO_DEVICE_CONNECTED)
     || message.includes(TUNNEL_DISCONNECTED)
     || message.includes(WORKSPACE_HAS_NO_OWNER);
@@ -257,9 +258,13 @@ export const DEVICE_PTY_OPEN_METHOD = 'ptyOpen';
  * not a character.
  */
 export const DEVICE_PTY_INPUT = 'PTY_IN';
+
 export const DEVICE_PTY_RESIZE = 'PTY_RESIZE';
+
 export const DEVICE_PTY_CLOSE = 'PTY_CLOSE';
+
 export const DEVICE_PTY_OUTPUT = 'PTY_OUT';
+
 export const DEVICE_PTY_EXIT = 'PTY_EXIT';
 
 /** The frames a device sends about a live terminal. The hub reads these before
@@ -308,6 +313,7 @@ export const DeviceCancelResultSchema = v.object({
   requestId: v.string(),
   cancelled: v.picklist(['terminated', 'unknown']),
 });
+
 export type DeviceCancelResult = v.InferOutput<typeof DeviceCancelResultSchema>;
 
 /** A cancellation answer that names a different command than the one asked
@@ -329,11 +335,13 @@ export function parseDeviceCancelAnswer(
   requestId: string, answer: JsonValue | undefined,
 ): DeviceCancelResult {
   const parsed = v.parse(DeviceCancelResultSchema, answer);
+
   if (parsed.requestId !== requestId) {
     throw new Error(
       `${DEVICE_CANCEL_MISPAIRED}: asked about ${requestId}, answered for ${parsed.requestId}`,
     );
   }
+
   return parsed;
 }
 
@@ -354,6 +362,7 @@ export const DEVICE_DUPLICATE_REQUEST = 'device RPC id is already in flight';
 // therefore minted by the first actual RPC in this isolate; a reset evaluates
 // a fresh null slot and its first request receives a different epoch.
 let requestEpoch: string | null = null;
+
 let requestSeq = 0;
 
 /**
@@ -367,6 +376,7 @@ let requestSeq = 0;
 export function nextDeviceRequestId(): string {
   if (requestEpoch === null) requestEpoch = nanoid(10);
   requestSeq += 1;
+
   return `rpc-${requestEpoch}-${requestSeq}`;
 }
 
@@ -409,22 +419,38 @@ export class DeviceTunnel {
    */
   rpc(method: string, params: JsonValue[], opts?: DeviceRpcOptions): Promise<JsonValue | undefined> {
     return new Promise((resolve, reject) => {
-      if (!this.isConnected()) { reject(new Error(TUNNEL_DISCONNECTED)); return; }
+      if (!this.isConnected()) {
+        reject(new Error(TUNNEL_DISCONNECTED));
+
+        return;
+      }
+
       const id = opts?.requestId ?? nextDeviceRequestId();
-      if (this.pending.has(id)) { reject(new Error(`${DEVICE_DUPLICATE_REQUEST}: ${id}`)); return; }
+
+      if (this.pending.has(id)) {
+        reject(new Error(`${DEVICE_DUPLICATE_REQUEST}: ${id}`));
+
+        return;
+      }
+
       const deadline = opts?.timeoutMs ?? this.timeoutMs;
+
       const settle = (err: Error) => {
         const p = this.pending.get(id);
+
         if (!p) return;
         this.pending.delete(id);
         p.stop();
         reject(err);
       };
+
       let stop: () => void;
+
       if (deadline > 0) {
         const timer = setTimeout(() => settle(new Error(
           `device RPC timeout after ${deadline}ms: ${method} — the call may still be running on the device`,
         )), deadline);
+
         stop = () => clearTimeout(timer);
       } else {
         // No work deadline: the shared heartbeat guards this call instead, so
@@ -433,7 +459,9 @@ export class DeviceTunnel {
         this.armHeartbeat();
         stop = () => { this.openEnded.delete(id); this.disarmIdleHeartbeat(); };
       }
+
       this.pending.set(id, { resolve, reject, stop, onTerminal: opts?.onTerminal });
+
       try {
         this.socket.send(JSON.stringify({ ...opts?.extra, id, method, params }));
       } catch (err) {
@@ -469,18 +497,23 @@ export class DeviceTunnel {
    *  instead of looking like a frame that simply did not correlate. */
   handleMessage(raw: string): void {
     const decoded = tolerate(() => parseJsonValue(raw), 'malformed-input');
+
     if (decoded === undefined) return;
     const parsed = v.safeParse(RpcResponseSchema, decoded);
+
     if (!parsed.success) return;
     const msg = parsed.output;
     // Any well-formed frame — a result, an error, the daemon's HELLO — is the
     // device speaking, which is the only thing liveness actually asks about.
     this.lastFrameAt = Date.now();
+
     if (msg.id === undefined) return;
     const p = this.pending.get(msg.id);
+
     if (!p) return;
     this.pending.delete(msg.id);
     p.stop();
+
     try {
       p.onTerminal?.();
     } finally {
@@ -495,6 +528,7 @@ export class DeviceTunnel {
       p.stop();
       p.reject(new Error(reason));
     }
+
     this.pending.clear();
     this.openEnded.clear();
     this.disarmIdleHeartbeat();
@@ -523,12 +557,24 @@ export class DeviceTunnel {
    * running.
    */
   private probeLiveness(): void {
-    if (this.openEnded.size === 0) { this.disarmIdleHeartbeat(); return; }
-    if (!this.isConnected()) { this.failOpenEnded(TUNNEL_DISCONNECTED); return; }
-    if (this.probeSentAt > 0 && this.lastFrameAt < this.probeSentAt) {
-      this.failOpenEnded(DEVICE_UNRESPONSIVE);
+    if (this.openEnded.size === 0) {
+      this.disarmIdleHeartbeat();
+
       return;
     }
+
+    if (!this.isConnected()) {
+      this.failOpenEnded(TUNNEL_DISCONNECTED);
+
+      return;
+    }
+
+    if (this.probeSentAt > 0 && this.lastFrameAt < this.probeSentAt) {
+      this.failOpenEnded(DEVICE_UNRESPONSIVE);
+
+      return;
+    }
+
     this.probeSentAt = Date.now();
     // Fire-and-forget: the answer is irrelevant, its ARRIVAL is the signal,
     // and handleMessage records that for any frame. A rejection is not itself
@@ -544,11 +590,14 @@ export class DeviceTunnel {
   private failOpenEnded(reason: string): void {
     for (const id of this.openEnded) {
       const p = this.pending.get(id);
+
       if (!p) { this.openEnded.delete(id); continue; }
+
       this.pending.delete(id);
       p.stop();
       p.reject(new Error(`${reason}: the call was abandoned, and may still be running on the device`));
     }
+
     this.disarmIdleHeartbeat();
   }
 }

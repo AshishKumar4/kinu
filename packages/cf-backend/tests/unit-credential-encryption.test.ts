@@ -25,6 +25,7 @@ const NEXT_KEY = 'a-different-credential-encryption-key-9876';
 function storedValue(harness: ReturnType<typeof createTestUserDO>, key: string): string | undefined {
   const rows = sqlExec(harness.db).exec('SELECT value FROM user_credentials WHERE key = ?', key).toArray();
   const parsed = v.safeParse(v.string(), rows[0]?.value);
+
   return parsed.success ? parsed.output : undefined;
 }
 
@@ -105,6 +106,7 @@ describe('migration and rotation', () => {
       credentialEncryptionKey: NEXT_KEY,
       credentialEncryptionKeyPrevious: TEST_CREDENTIAL_ENCRYPTION_KEY,
     });
+
     sqlExec(rotated.db).exec(`
       CREATE TABLE IF NOT EXISTS user_credentials (
         key TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL,
@@ -179,6 +181,7 @@ describe('MCP server headers are sealed too', () => {
   function storedHeaders(harness: ReturnType<typeof createTestUserDO>, id: string): string | null {
     const row = sqlExec(harness.db).exec('SELECT headers FROM user_mcp_servers WHERE id = ?', id).toArray()[0];
     const parsed = v.safeParse(v.string(), row?.headers);
+
     return parsed.success ? parsed.output : null;
   }
 

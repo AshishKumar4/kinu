@@ -39,11 +39,14 @@ import { TurnContextBudget } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 
 const StringSchema = v.string();
+
 const OptionalPathSchema = v.optional(v.string());
+
 const FileEditsSchema = v.array(v.object({
   old_text: v.optional(v.string()),
   new_text: v.optional(v.string()),
 }));
+
 const FileWriteSuccessSchema = v.object({
   ok: v.literal(true),
   path: v.string(),
@@ -56,6 +59,7 @@ function parseInput<TSchema extends v.GenericSchema>(
   input: { value: unknown },
 ): v.InferOutput<TSchema> | undefined {
   const result = v.safeParse(schema, input.value);
+
   return result.success ? result.output : undefined;
 }
 
@@ -121,6 +125,7 @@ export interface InlineExecutorDeps {
   /** The owning workspace's slate operations; absent when this backend has no slate host. */
   slate?: (operation: SlateOperation) => Promise<SlateCallResult>;
 }
+
 /**
  * Every VFS error out of `workspace.*` carries the correction the model needs
  * (vfsAddressingHint — shared with the `file` tool, which addresses the same
@@ -129,6 +134,7 @@ export interface InlineExecutorDeps {
  */
 function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorProvider['tools'] {
   const guided: ExecutorProvider['tools'] = {};
+
   for (const [name, entry] of Object.entries(tools)) {
     guided[name] = {
       ...entry,
@@ -142,6 +148,7 @@ function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorPr
       },
     };
   }
+
   return guided;
 }
 
@@ -154,6 +161,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const fallbackBudget = new TurnContextBudget();
   const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
   const currentBudget = (): TurnContextBudget => deps.budget?.() ?? fallbackBudget;
+
   const currentFileDispatch = () => createFileDispatcher({
     vfs,
     ledger: currentLedger(),
@@ -167,15 +175,18 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Read a file from the agent workspace. Returns content as string.',
       execute: async (...args: unknown[]) => {
         const p = parseInput(StringSchema, { value: args[0] });
+
         if (p === undefined) {
           return refusalText(new KinuError('bad_input', 'workspace.readFile: path must be a string'));
         }
+
         const content = await vfs.readFile(p, { encoding: 'utf8' });
         const text = v.parse(v.string(), content);
         // The caller now has the WHOLE file, exactly like a native `file`
         // action=write's read-before-overwrite check would record — a
         // subsequent native `file` edit on this path is not refused as blind.
         currentLedger().observeWhole(p, text);
+
         return text;
       },
     },
@@ -185,10 +196,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       execute: async (...args: unknown[]) => {
         const p = parseInput(StringSchema, { value: args[0] });
         const text = parseInput(StringSchema, { value: args[1] });
+
         if (p === undefined) return refusalOf(new KinuError('bad_input', 'workspace.writeFile: path must be a string'));
+
         if (text === undefined) return refusalOf(new KinuError('bad_input', 'workspace.writeFile: content must be a string'));
         const result = await branchableToolCall(() => currentFileDispatch()({ action: 'write', path: p, content: text }));
         const success = v.safeParse(FileWriteSuccessSchema, result);
+
         return success.success
           ? `Written ${success.output.bytes} bytes to ${success.output.path}`
           : result;
@@ -199,12 +213,14 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Replace exact text inside a file — old_text must occur exactly once and match what a prior readFile/writeFile/editFile here showed; refused if the file was never read/written in this scope or has changed since.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
+
         // `refusalOf`, not `refusalText`: this tool's declared result is already an
         // OBJECT carrying `reason` then `error`, so the classification travels as
         // the field the dispatcher's own refusals use rather than as JSON in a
         // string. A bare `{ error }` would carry no reason at all.
         if (path === undefined) return refusalOf(new KinuError('bad_input', 'workspace.editFile: path must be a string'));
         const list = parseInput(FileEditsSchema, { value: args[1] }) ?? [];
+
         // Built per call: the SAME dispatcher and ledger the native `file`
         // tool's edit action uses (createFileDispatcher, tools/file-tool.ts),
         // read live so an edit gated here refuses identically to a
@@ -219,12 +235,14 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'List entries in a directory.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(OptionalPathSchema, { value: args[0] });
+
         // `[]` claimed the directory was empty. Nothing was read, so nothing is
         // known about the directory (AGENTS.md: an empty read stays
         // distinguishable from a failed one).
         if (args[0] !== undefined && path === undefined) {
           return refusalOf(new KinuError('bad_input', 'workspace.readdir: path must be a string'));
         }
+
         return vfs.readdir(path || '/');
       },
     },
@@ -234,10 +252,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Check if a path exists.',
       execute: async (...args: unknown[]) => {
         const path = parseInput(StringSchema, { value: args[0] });
+
         // `false` claimed the path was absent — the same lie one line up.
         if (path === undefined) {
           return refusalOf(new KinuError('bad_input', 'workspace.exists: path must be a string'));
         }
+
         return vfs.exists(path);
       },
     },
@@ -249,10 +269,13 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         + 'Available binaries and process features are listed in this workspace provider’s capabilities; use sandbox or laptop only when the task needs that separate machine.',
       execute: async (...args: unknown[]) => {
         const command = parseInput(StringSchema, { value: args[0] });
+
         if (command === undefined) {
           return refusalOf(new KinuError('bad_input', 'workspace.exec: command must be a string'));
         }
+
         const signal = readExecSignal({ context: args[1] });
+
         return commandResult(await shell.exec(command, signal ? { signal } : undefined));
       },
     },
@@ -262,11 +285,15 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Search long-term memory using FTS5 full-text search. Returns matching chunks.',
       execute: async (...args: unknown[]) => {
         const query = parseInput(StringSchema, { value: args[0] });
+
         if (query === undefined) {
           return refusalText(new KinuError('bad_input', 'workspace.searchMemory: query must be a string'));
         }
+
         const results = await memory.search(query, 10);
+
         if (results.length === 0) return 'No results found.';
+
         return results.map(r => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`).join('\n\n');
       },
     },
@@ -275,6 +302,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Save a note to long-term memory (MEMORY.md). The note is FTS5-indexed for search.',
       execute: async (...args: unknown[]) => {
         const content = parseInput(StringSchema, { value: args[0] });
+
         return content === undefined
           ? refusalText(new KinuError('bad_input', 'workspace.saveNote: content must be a string'))
           : appendMemoryNote(memory, content);
@@ -292,12 +320,15 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         // store just wrote (state/workspace-schema.ts ensures the shape),
         // so a read that fails is a broken database, not an unscored tool.
         const scoreByName = new Map<string, number>();
+
         if (sql) {
           const rows = sql<{ name: string; score: number }>`
             SELECT name, score FROM crafted_tools
           `;
+
           for (const r of rows) scoreByName.set(r.name, r.score);
         }
+
         return crafted.map(t => ({
           name: t.name,
           description: t.description,
@@ -317,29 +348,37 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const name = parseInput(StringSchema, { value: args[0] });
         const description = parseInput(StringSchema, { value: args[1] });
         const code = parseInput(StringSchema, { value: args[2] });
+
         if (!name || !description || !code) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
             'createTool requires name, description, and code arguments.')) };
         }
+
         let toolName = name.replace(/[^A-Za-z0-9_]/g, '_');
+
         if (!toolName) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
             'Tool name must contain at least one identifier character.')) };
         }
+
         if (/^[0-9]/.test(toolName)) toolName = '_' + toolName;
+
         if (isReservedCraftToolName(toolName)) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
             `Tool name "${toolName}" is reserved — it collides with a built-in tool or the mcp_ prefix owned by MCP tools. Pick a different name.`)) };
         }
+
         // Admission precedes every write: normalize the source to one
         // expression and prove that it parses. The per-tool loader checks that
         // the expression evaluates to a function and attributes a load failure
         // to that tool.
         const admitted = admitCraftedSource(code, toolName);
+
         if (!admitted.ok) {
           return { ok: false, ...refusalOf(new KinuError('bad_input',
             `createTool("${toolName}"): ${admitted.error}`)) };
         }
+
         try {
           // Exact-name update is an upsert. A different name that matches
           // case-insensitively is a collision — reject with an actionable
@@ -355,6 +394,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           // reusable, publishable tool that names the promotion tables, the
           // rollout knobs, the gate entry points, or the consent settings.
           const misevolution = checkMisevolutionForSurface(codeStr, 'craft_tool');
+
           if (!misevolution.ok) {
             if (sql && actor) {
               recordMisevolutionVeto(sql, actor, {
@@ -375,6 +415,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
                 'a misevolution veto fired with no actor-scoped store to record it against',
               ), { surface: 'craft_tool', criterion: misevolution.criterionId, tool: toolName });
             }
+
             // `denied`, which is the one code that exists for this: a GATE
             // refused and the work correctly never ran. It reached the census as
             // an unreasoned `{ ok: false, error }` — `returned_error`, filed under
@@ -387,13 +428,17 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
                 + `Rewrite the tool body without it and call createTool again.`)),
             };
           }
+
           if (existing) {
             craftStore.update(toolName, { description: desc, code: codeStr });
+
             return { ok: true, name: toolName, action: 'updated' };
           }
+
           const caseHit = craftStore.list().find(t =>
             t.name !== toolName && t.name.toLowerCase() === toolName.toLowerCase(),
           );
+
           if (caseHit) {
             return {
               ok: false,
@@ -404,6 +449,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
                 + `pick a genuinely different name.`)),
             };
           }
+
           craftStore.create({
             name: toolName,
             description: desc,
@@ -411,6 +457,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             scope: 'local',
             params: null,
           });
+
           // The column defaults seed the neutral prior inside the same INSERT,
           // so the decay + injection floor can see the new tool at all — one
           // statement, no second write to race it.
@@ -421,22 +468,27 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           const failure = toKinuError({
             doing: `workspace.createTool ${toolName}`, cause: err, otherwise: 'io',
           });
+
           return { ok: false, ...refusalOf(failure) };
         }
       },
     },
   };
+
   const slate = deps.slate;
+
   if (slate !== undefined) {
     tools.slate = {
       planAllowed: true,
       description: 'Manage an authored slate: list, preview, call a POST route, commit source, history, fork a version, or restore source.',
       execute: async <Input>(input: Input): Promise<JsonValue> => {
         const parsed = v.safeParse(SlateOperationSchema, input);
+
         if (!parsed.success) return { ok: false, ...refusalOf(new KinuError('bad_input',
           'workspace.slate expects a named op and its declared fields', { cause: new v.ValiError(parsed.issues) })) };
         requireSlateWorkMode(parsed.output, currentWorkMode());
         const result = await slate(parsed.output);
+
         return result.ok ? { ok: true, value: result.value } : { ok: false, reason: result.reason, error: result.error };
       },
     };
@@ -550,8 +602,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     async unexposePort() { /* nothing to do */ },
     async listExposedPorts() { return []; },
   };
+
   if (resourceLimits !== undefined) {
     Object.assign(provider, { resourceLimits });
   }
+
   return provider;
 }

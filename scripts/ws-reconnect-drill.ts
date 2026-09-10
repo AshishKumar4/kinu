@@ -46,22 +46,32 @@ import puppeteer, { type Browser, type HTTPRequest, type Page } from "puppeteer"
 /* ── configuration ─────────────────────────────────────────────────────────── */
 
 const UPSTREAM_PORT = Number(process.env.KINU_DRILL_UPSTREAM_PORT ?? 5199);
+
 const PROXY_PORT = Number(process.env.KINU_DRILL_PROXY_PORT ?? 5200);
+
 const UPSTREAM_ORIGIN = `http://127.0.0.1:${UPSTREAM_PORT}`;
+
 const ORIGIN = `http://127.0.0.1:${PROXY_PORT}`;
+
 const WORKSPACE = process.env.KINU_DRILL_WORKSPACE ?? "ws-reconnect-drill";
+
 const ARTIFACTS = process.env.KINU_DRILL_ARTIFACTS ?? "scripts/artifacts/ws-reconnect";
+
 const CF_BACKEND = "packages/cf-backend";
+
 /** How long the degraded banner may take to appear after the sever. */
 const BANNER_DEADLINE_MS = Number(process.env.KINU_DRILL_BANNER_MS ?? 180_000);
+
 /** How long recovery (banner gone + fresh title, no reload) may take after restore. */
 const RECOVERY_DEADLINE_MS = Number(process.env.KINU_DRILL_RECOVERY_MS ?? 240_000);
 
 const T0 = Date.now();
+
 function log(stage: string): void {
   const s = ((Date.now() - T0) / 1000).toFixed(1).padStart(6);
   console.log(`[${s}s] ${stage}`);
 }
+
 function fail(stage: string, detail: string): never {
   log(`FAIL ${stage}: ${detail}`);
   throw new Error(`${stage}: ${detail}`);
@@ -114,8 +124,11 @@ interface Pipe {
 function classifyPipe(firstChunk: Uint8Array): Pipe["kind"] {
   const head = new TextDecoder("latin1").decode(firstChunk.slice(0, 2048)).toLowerCase();
  const isWebSocket = head.includes("\r\nupgrade: websocket") || head.startsWith("upgrade: websocket");
+
   if (isWebSocket && head.includes(" /agents/")) return "agent-ws";
+
   if (head.startsWith("get /__vite_ping")) return "vite-ping";
+
   return "http";
 }
 
@@ -135,6 +148,7 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
 
   function endQuietly(why: string, socket: Socket<unknown> | null): void {
     if (!socket) return;
+
     try {
       socket.end();
     } catch (cause) {
@@ -151,6 +165,7 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
   async function dial(pipe: Pipe): Promise<void> {
     if (pipe.dialing || pipe.upstream) return;
     pipe.dialing = true;
+
     try {
       const up = await Bun.connect({
         hostname: "127.0.0.1",
@@ -167,10 +182,13 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
             if (!pipe.upstream) return;
             pipe.upstream = null;
             pipe.upstreamLost = true;
+
             if (pipe.kind === "agent-ws") {
               log("proxy: AGENT WS upstream lost — socket is now a corpse (no events reach the page)");
+
               return;
             }
+
             log(`proxy: ${pipe.kind} upstream closed — client held for redial`);
           },
           error(cause) {
@@ -178,7 +196,9 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
           },
         },
       });
+
       pipe.dialing = false;
+
       if (state === "severed") {
         // sever() swept while this dial was in flight; cut it too.
         try {
@@ -186,9 +206,12 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
         } catch (cause) {
           log(`proxy: post-sever cut failed: ${String(cause)}`);
         }
+
         return;
       }
+
       pipe.upstream = up;
+
       for (const chunk of pipe.queue.splice(0)) {
         try {
           up.write(chunk);
@@ -215,33 +238,43 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
     socket: {
       async data(socket, chunk) {
         let pipe = pipeBySocket.get(socket);
+
         if (!pipe) {
           const fresh: Pipe = {
             client: socket, upstream: null, dialing: false, queue: [],
             kind: classifyPipe(chunk), upstreamLost: false,
           };
+
           pipeBySocket.set(socket, fresh);
           pipes.add(fresh);
           pipe = fresh;
+
           if (fresh.kind === "agent-ws") log("proxy: agent websocket classified");
         }
+
         if (state === "severed") return; // the corpse swallows silently
+
         if (pipe.upstream) {
           try {
             pipe.upstream.write(chunk);
           } catch (cause) {
             log(`proxy: upstream write failed: ${String(cause)}`);
           }
+
           return;
         }
+
         // No upstream attached.
         if (pipe.kind === "agent-ws" && pipe.upstreamLost) return; // CORPSE: swallow forever
+
         if (pipe.kind === "vite-ping") return; // production has no HMR escape hatch
+
         if (pipe.queue.length < DIAL_QUEUE_CHUNKS) pipe.queue.push(chunk);
         await dial(pipe);
       },
       close(socket) {
         const pipe = pipeBySocket.get(socket);
+
         if (!pipe) return;
         pipes.delete(pipe);
         endQuietly("a client close", pipe.upstream);
@@ -255,11 +288,14 @@ async function createCorpseProxy(upstreamPort: number, port: number): Promise<Co
   return {
     severedCount() {
       let held = 0;
+
       for (const pipe of pipes) if (!pipe.upstream) held += 1;
+
       return held;
     },
     sever() {
       state = "severed";
+
       for (const pipe of pipes) {
         endQuietly("severing", pipe.upstream);
         pipe.upstream = null;
@@ -301,13 +337,17 @@ type RpcFrame = v.InferOutput<typeof RPC_FRAME_SCHEMA>;
 /** A parsed rpc-shaped frame, or null for anything else on the wire. */
 function parseRpcFrame(text: string): RpcFrame | null {
   let value: unknown;
+
   try {
     value = JSON.parse(text);
   } catch (cause) {
     if (!(cause instanceof SyntaxError)) throw cause;
+
     return null;
   }
+
   const parsed = v.safeParse(RPC_FRAME_SCHEMA, value);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -318,20 +358,25 @@ async function callAgentRpc(name: string, method: string, args: JsonValue[]): Pr
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error("rpc socket: open timeout")), 15_000);
     ws.onopen = () => { clearTimeout(timer); resolve(); };
+
     ws.onerror = () => { clearTimeout(timer); reject(new Error("rpc socket: error")); };
   });
+
   try {
     const reply = await new Promise<RpcReply>((resolve, reject) => {
       const id = `drill-${Math.random().toString(36).slice(2)}`;
       const timer = setTimeout(() => reject(new Error(`rpc ${method}: reply timeout`)), 20_000);
       ws.onmessage = (ev) => {
         const frame = parseRpcFrame(String(ev.data));
+
         if (!frame || frame.type !== "rpc" || frame.id !== id) return;
         clearTimeout(timer);
         resolve({ success: frame.success === true, error: frame.error });
       };
+
       ws.send(JSON.stringify({ type: "rpc", id, method, args }));
     });
+
     if (!reply.success) throw new Error(`rpc ${method} failed: ${reply.error ?? "no error given"}`);
   } finally {
     ws.close();
@@ -344,10 +389,13 @@ const DEV_VARS_PATH = join(CF_BACKEND, ".dev.vars");
 
 function ensureDevVars(): void {
   const existing = existsSync(DEV_VARS_PATH) ? readFileSync(DEV_VARS_PATH, "utf8") : "";
+
   if (existing.includes("DEV_USER_EMAIL=")) return;
+
   if (existing.trim()) {
     throw new Error(`${DEV_VARS_PATH} exists without DEV_USER_EMAIL — add it or move the file aside`);
   }
+
   const bytes = crypto.getRandomValues(new Uint8Array(32));
   const key = btoa(String.fromCharCode(...bytes));
   writeFileSync(DEV_VARS_PATH, `DEV_USER_EMAIL=drill@local.test\nCREDENTIAL_ENCRYPTION_KEY=${key}\n`);
@@ -374,7 +422,9 @@ async function waitForPortFree(port: number): Promise<void> {
         port,
         socket: { data() {}, close() {}, error() {} },
       });
+
       probe.stop(true);
+
       return;
     } catch (cause) {
       if (!(cause instanceof Error) || !cause.message.includes("EADDRINUSE")) throw cause;
@@ -383,6 +433,7 @@ async function waitForPortFree(port: number): Promise<void> {
       await Bun.sleep(1_000);
     }
   }
+
   fail("dev-server", `port ${port} never became free`);
 }
 
@@ -391,6 +442,7 @@ async function spawnDevServerOnce(): Promise<ReturnType<typeof Bun["spawn"]>> {
   // clear it so this bind succeeds.
   Bun.spawnSync(["pkill", "-f", `port ${UPSTREAM_PORT}`]);
   await waitForPortFree(UPSTREAM_PORT);
+
   return Bun.spawn(
     ["bun", "x", "vite", "dev", "--host", "127.0.0.1", "--port", String(UPSTREAM_PORT), "--strictPort"],
     { cwd: CF_BACKEND, stdin: "ignore", stdout: "ignore", stderr: "inherit" },
@@ -401,25 +453,33 @@ async function startDevServer(label: string): Promise<DevServer> {
   log(`starting dev server (${label}) on :${UPSTREAM_PORT}`);
   let proc: ReturnType<typeof Bun["spawn"]> | null = null;
   const started = Date.now();
+
   for (;;) {
     if (Date.now() - started > 300_000) fail("dev-server", `${label} never answered /api/health`);
+
     if (proc === null || proc.exitCode !== null) {
       if (proc !== null) {
         log(`dev server (${label}) exited with code ${proc.exitCode} before answering — sweeping and retrying`);
         Bun.spawnSync(["pkill", "-9", "-f", `port ${UPSTREAM_PORT}`]);
         await Bun.sleep(3_000);
       }
+
       proc = await spawnDevServerOnce();
     }
+
     try {
       const res = await fetch(`${UPSTREAM_ORIGIN}/api/health`, { signal: AbortSignal.timeout(2_000) });
+
       if (res.ok) break;
     } catch (cause) {
       if (!isStartupProbeFailure(cause)) throw cause;
     }
+
     await Bun.sleep(500);
   }
+
   log(`dev server up (${label})`);
+
   return {
     async kill() {
       proc.kill(9);
@@ -452,11 +512,13 @@ function startFailureServer(port: number): Promise<FailureServer> {
       if (new URL(request.url).pathname.startsWith("/agents/") && sup.upgrade(request)) {
         return undefined;
       }
+
       return new Response("draining", { status: 503 });
     },
     websocket: {
       message(ws, raw) {
         const frame = parseRpcFrame(String(raw));
+
         if (!frame || frame.type !== "rpc" || frame.id === undefined) return;
         ws.send(JSON.stringify({
           type: "rpc",
@@ -467,6 +529,7 @@ function startFailureServer(port: number): Promise<FailureServer> {
       },
     },
   });
+
   return Promise.resolve({
     async stop() {
       await server.stop(true);
@@ -483,8 +546,11 @@ async function api(path: string, init?: RequestInit): Promise<JsonValue | undefi
     headers: { "content-type": "application/json", ...init?.headers },
     signal: AbortSignal.timeout(10_000),
   });
+
   const text = await res.text();
+
   if (!res.ok) throw new Error(`${init?.method ?? "GET"} ${path} -> ${res.status}: ${text.slice(0, 200)}`);
+
   return text ? parseJsonValue(text) : undefined;
 }
 
@@ -497,10 +563,13 @@ async function ensureWorkspace(): Promise<void> {
   const parseWorkspaceList = v.parser(WORKSPACE_LIST_SCHEMA);
   const list = parseWorkspaceList(raw);
   const names = new Set((list.entries ?? []).map((w) => w.name));
+
   if (names.has(WORKSPACE)) {
     log(`workspace "${WORKSPACE}" exists`);
+
     return;
   }
+
   // Workspace creation refuses without a resolvable default model, and the
   // create route's schema admits only name/displayName/purpose — so the
   // default goes through the product's own config surface first.
@@ -518,7 +587,9 @@ async function ensureWorkspace(): Promise<void> {
 /* ── browser probes ────────────────────────────────────────────────────────── */
 
 const MOCK_SHA_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
 const MOCK_SHA_B = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
 let mockedSha = MOCK_SHA_A;
 
 /** Rolling capture of what the browser said — dumped on every failure. */
@@ -526,12 +597,14 @@ class BrowserLog {
   private lines: string[] = [];
   record(kind: string, text: string): void {
     this.lines.push(`${kind}: ${text}`.slice(0, 400));
+
     if (this.lines.length > 200) this.lines.shift();
   }
   dump(): string {
     return this.lines.slice(-30).join("\n  ");
   }
 }
+
 const browserLog = new BrowserLog();
 
 /** What the page surface says right now: alerts, statuses, body text, marker.
@@ -550,6 +623,7 @@ async function probe(page: Page): Promise<PageProbe> {
   // assigned window.__wsDrillReloadMarker itself right after navigation, and
   // a plain evaluate keeps that handoff free of a type assertion.
   const marker = Number(await page.evaluate("window.__wsDrillReloadMarker ?? 0"));
+
   return page.evaluate((reloadMarker: number) => ({
     alerts: [...document.querySelectorAll('[role="alert"]')].map((el) => el.textContent ?? ""),
     statuses: [...document.querySelectorAll('[role="status"]')].map((el) => el.textContent ?? ""),
@@ -561,6 +635,7 @@ async function probe(page: Page): Promise<PageProbe> {
 
 const hasDegradedBanner = (p: PageProbe): boolean =>
   p.alerts.some((t) => t.includes("Showing last known data"));
+
 const newVersionAffordances = (p: PageProbe): string[] =>
   p.statuses.filter((t) => t.toLowerCase().includes("new version"));
 
@@ -570,15 +645,19 @@ async function waitFor(
   predicate: () => Promise<boolean>,
 ): Promise<void> {
   const started = Date.now();
+
   for (;;) {
     if (await predicate()) {
       log(`${what} ✓ (after ${((Date.now() - started) / 1000).toFixed(1)}s)`);
+
       return;
     }
+
     if (Date.now() - started > deadlineMs) {
       log(`browser said, last words first:\n  ${browserLog.dump()}`);
       fail(what, `deadline ${deadlineMs}ms exceeded`);
     }
+
     await Bun.sleep(pollMs);
   }
 }
@@ -599,6 +678,7 @@ async function main(): Promise<void> {
     headless: true,
     args: ["--no-sandbox", "--disable-dev-shm-usage"],
   });
+
   try {
     const page = await browser.newPage();
     page.on("console", (msg) => browserLog.record(`console.${msg.type()}`, msg.text()));
@@ -623,8 +703,10 @@ async function main(): Promise<void> {
             timestamp: new Date().toISOString(),
           }),
         });
+
         return;
       }
+
       await req.continue();
     });
 
@@ -633,10 +715,13 @@ async function main(): Promise<void> {
     await page.evaluate("window.__wsDrillReloadMarker = 1");
     await waitFor("client connected (composer rendered, no reconnect strip)", 120_000, 500, async () => {
       const p = await probe(page);
+
       return p.hasComposer && !p.bodyText.includes("Reconnecting...");
     });
     const sane = await probe(page);
+
     if (hasDegradedBanner(sane)) fail("baseline", "degraded banner present on a healthy session");
+
     if (sane.marker !== 1) fail("baseline", "reload marker missing");
     await page.screenshot({ path: join(ARTIFACTS, "1-connected.png") });
     log("stage 1 complete: healthy session through the proxy");
@@ -683,6 +768,7 @@ async function main(): Promise<void> {
     log("stage 4: corpse established, world healed behind it");
     await waitFor("fresh data flowing: new title visible", RECOVERY_DEADLINE_MS, 2_000, async () => {
       const p = await probe(page);
+
       return p.bodyText.includes(newTitle);
     });
     // The title renders from the snapshot success; the per-source errors the
@@ -691,6 +777,7 @@ async function main(): Promise<void> {
     await waitFor("recovered: degraded banner cleared", 90_000, 1_000, async () =>
       !hasDegradedBanner(await probe(page)));
     const recovered = await probe(page);
+
     if (recovered.marker !== 1) fail("recovery", "page reloaded mid-drill (marker lost) — recovery must keep the page in place");
     await page.screenshot({ path: join(ARTIFACTS, "4-recovered.png") });
     log("stage 4 complete: session caught up without a reload");
@@ -706,7 +793,9 @@ async function main(): Promise<void> {
     await Bun.sleep(10_000);
     const final = await probe(page);
     const affordances = newVersionAffordances(final);
+
     if (affordances.length !== 1) fail("version-skew", `expected exactly 1 affordance, found ${affordances.length}`);
+
     if (final.marker !== 1) fail("version-skew", "page reloaded during skew phase");
     log("stage 5 complete: reload affordance shown exactly once");
     log("DRILL GREEN — session survived the supersede without a reload");
@@ -716,11 +805,13 @@ async function main(): Promise<void> {
     } catch (cause) {
       log(`cleanup: browser close failed: ${String(cause)}`);
     }
+
     try {
       await server.kill();
     } catch (cause) {
       log(`cleanup: dev server kill failed: ${String(cause)}`);
     }
+
     proxy.stop();
   }
 }

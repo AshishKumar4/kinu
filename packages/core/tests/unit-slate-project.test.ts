@@ -17,8 +17,10 @@ test('binding declarations constrain each capability plane without inherited obj
     NOTES: { kind: 'mcp', server: 'notes', tools: ['read_note'] },
     PEER: { kind: 'app', id: 'other' },
   } } });
+
   const call = async (name: string, member: string, args: JsonValue[] = [], chain: string[] = []) =>
     routeSlateBindingCall({ id: 'notes', project, name, request: { member, args, invocation: null }, chain });
+
   await expect(call('FILES', 'writeFile')).rejects.toMatchObject({ code: 'denied' });
   await expect(call('toString', 'readFile')).rejects.toMatchObject({ code: 'denied' });
   await expect(call('JOBS', 'listBackgroundJobs', [1])).rejects.toMatchObject({ code: 'bad_input' });

@@ -7,6 +7,7 @@ import { asFetchFunction, type LLMProviderConfig } from '@kinu.run/core';
 import { createLocalModelResolver } from '../src/model-resolver';
 
 const ORIGIN = 'https://kinu.example.com';
+
 const LLM: LLMProviderConfig = {
   name: 'openai-compat',
   baseURL: 'https://unused.example/v1',
@@ -44,12 +45,15 @@ function networkFetch(opts: {
 
   const upstream = (url: string, proxied: boolean): Response => {
     if (url.startsWith('https://models.dev/')) return Response.json(MODELS_DEV);
+
     if (url.startsWith('https://openrouter.ai/api/v1/models')) {
       return Response.json({ data: [{ id: 'anthropic/claude-x', name: 'Claude X', context_length: 200_000 }] });
     }
+
     if (url.startsWith('https://openrouter.ai/api/v1/chat/completions')) {
       return completion(proxied ? 'proxied' : 'direct', proxied ? 11 : 1);
     }
+
     return new Response(`unexpected ${url}`, { status: 500 });
   };
 
@@ -60,11 +64,14 @@ function networkFetch(opts: {
 
     if (url === `${ORIGIN}/api/user/ai/proxy/credentials`) {
       if (opts.credentialsStatus) return new Response('nope', { status: opts.credentialsStatus });
+
       return Response.json({ credentials });
     }
+
     if (url === `${ORIGIN}/api/user/ai/proxy/forward`) {
       return upstream(headers.get('x-kinu-proxy-target') ?? '', true);
     }
+
     return upstream(url, false);
   });
 }
@@ -75,7 +82,9 @@ function resolverWith(fetchImpl: typeof fetch, credentials?: Parameters<typeof c
     cloud: { origin: ORIGIN, token: 'ptc_test' },
     fetch: fetchImpl,
   };
+
   if (credentials) options.credentials = credentials;
+
   return createLocalModelResolver(options);
 }
 
@@ -124,6 +133,7 @@ describe('web-UI-connected providers reach local agents', () => {
 
   test('a local key overrides the proxy — the machine keeps working on its own terms', async () => {
     const recorded: Recorded[] = [];
+
     const resolver = resolverWith(
       networkFetch({ credentials: [{ key: 'openrouter.bearer' }], recorded }),
       { openrouterApiKey: 'sk-local' },

@@ -71,12 +71,16 @@ export class McpToolSurfaceCache<Tools> {
     const raw = await fetchSurface();
     const answer = v.parse(McpToolSurfaceSchema, JSON.parse(raw));
     const admission = admitMcpDescriptors(answer.descriptors, budget);
+
     const key = `${await sha256Hex(raw)}:${String(budget.contextWindow)}`
       + `:${String(budget.modelOutputLimit)}:${String(budget.nativeToolTokens)}`;
+
     this.lastUnavailable = [...answer.unavailable, ...admission.deferred];
+
     if (this.built !== null && key === this.key) return this.built;
     this.built = await this.build(admission.admitted);
     this.key = key;
+
     return this.built;
   }
 }
@@ -130,15 +134,18 @@ export interface McpServerConfig {
 }
 
 const McpTransportSchema = v.picklist(['auto', 'sse', 'streamable-http']);
+
 function isJsonRecord<Value>(value: Value): value is Value & JsonObject {
   return !Array.isArray(value) && v.is(JsonObjectSchema, value);
 }
 
 const RawMcpServerInputSchema = v.custom<JsonObject>(isJsonRecord, 'Expected a JSON object.');
+
 const HeaderRecordSchema = v.pipe(
   RawMcpServerInputSchema,
   v.record(v.string(), v.string()),
 );
+
 const StringArraySchema = v.array(v.string());
 
 /**
@@ -155,6 +162,7 @@ const StringArraySchema = v.array(v.string());
 function canonicalMcpUrl(serverUrl: string): string {
   const url = new URL(serverUrl);
   url.hash = '';
+
   return url.href;
 }
 
@@ -172,30 +180,38 @@ function canonicalMcpUrl(serverUrl: string): string {
  */
 export function validateMcpServerInput<Input>(input: Input): McpServerInput {
   const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
+
   if (!parsedInput.success) {
     throw new Error('Body must be a JSON object.');
   }
+
   const obj = parsedInput.output;
 
   const name = validateMcpServerName(obj.name);
 
   const parsedServerUrl = v.safeParse(v.string(), obj.serverUrl);
+
   if (!parsedServerUrl.success || !parsedServerUrl.output.trim()) {
     throw new Error('`serverUrl` is required.');
   }
+
   const serverUrl = parsedServerUrl.output;
+
   if (!URL.canParse(serverUrl)) throw new Error('`serverUrl` is not a valid URL.');
   const parsed = new URL(serverUrl);
   const isHttps = parsed.protocol === 'https:';
+
   const isLocalDev = parsed.protocol === 'http:' && (
     parsed.hostname === 'localhost'
     || parsed.hostname === '127.0.0.1'
     || parsed.hostname === '[::1]'
     || parsed.hostname === '::1'
   );
+
   if (!isHttps && !isLocalDev) {
     throw new Error('`serverUrl` must use https:// (http:// allowed only for localhost).');
   }
+
   // A credential belongs in `headers`, which is sealed at rest. `serverUrl` is
   // a plaintext column that every listing returns, and a Workers `fetch` refuses
   // a URL carrying credentials anyway, so a userinfo here is a secret stored in
@@ -205,39 +221,53 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
   }
 
   const parsedTransport = v.safeParse(v.nullish(McpTransportSchema), obj.transport);
+
   if (!parsedTransport.success) {
     throw new Error("`transport` must be one of 'auto', 'sse', 'streamable-http'.");
   }
+
   const transport = parsedTransport.output ?? 'auto';
 
   let headers: Record<string, string> | undefined;
+
   if (obj.headers !== undefined && obj.headers !== null) {
     const parsedHeaderObject = v.safeParse(RawMcpServerInputSchema, obj.headers);
+
     if (!parsedHeaderObject.success) {
       throw new Error('`headers` must be a flat object of string→string.');
     }
+
     const collected: Record<string, string> = {};
+
     for (const [k, value] of Object.entries(parsedHeaderObject.output)) {
       if (k.length === 0 || k.length > 128) throw new Error(`headers.${k} — key length out of range.`);
       const parsedValue = v.safeParse(v.string(), value);
+
       if (!parsedValue.success) throw new Error(`headers.${k} must be a string.`);
       collected[k] = parsedValue.output;
     }
+
     if (Object.keys(collected).length > 0) headers = collected;
   }
 
   let allowedTools: string[] | undefined;
+
   if (obj.allowedTools !== undefined && obj.allowedTools !== null) {
     const parsedAllowedTools = v.safeParse(JsonArraySchema, obj.allowedTools);
+
     if (!parsedAllowedTools.success) {
       throw new Error('`allowedTools` must be a string[] (or omitted to allow all).');
     }
+
     allowedTools = [];
+
     for (const toolName of parsedAllowedTools.output) {
       const parsedToolName = v.safeParse(v.pipe(v.string(), v.nonEmpty()), toolName);
+
       if (!parsedToolName.success) {
         throw new Error('`allowedTools` entries must be non-empty strings.');
       }
+
       allowedTools.push(parsedToolName.output);
     }
   }
@@ -256,9 +286,12 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
  */
 export function validateMcpServerName<Name>(name: Name): string {
   const parsed = v.safeParse(v.string(), name);
+
   if (!parsed.success || !parsed.output.trim()) throw new Error('`name` is required.');
   const trimmed = parsed.output.trim();
+
   if (trimmed.length > 64) throw new Error('`name` must be ≤ 64 characters.');
+
   return trimmed;
 }
 
@@ -267,6 +300,7 @@ export function validateMcpServerName<Name>(name: Name): string {
 export function parseAllowedTools(raw: string | null | undefined): string[] | null {
   if (!raw) return null;
   const parsed = v.safeParse(StringArraySchema, tolerate(() => JSON.parse(raw), 'malformed-input'));
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -275,6 +309,7 @@ export function parseAllowedTools(raw: string | null | undefined): string[] | nu
 export function parseMcpHeaders(raw: string | null | undefined): Record<string, string> | null {
   if (!raw) return null;
   const parsed = v.safeParse(HeaderRecordSchema, tolerate(() => JSON.parse(raw), 'malformed-input'));
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -310,13 +345,17 @@ export function mcpCredentialTransport(
   openHeaders: () => Promise<Record<string, string> | null>,
 ): McpCredentialTransport {
   const origin = new URL(serverUrl).origin;
+
   return {
     fetch: async (url: string | URL, init?: RequestInit): Promise<Response> => {
       if (new URL(url.toString()).origin !== origin) return fetch(url, init);
       const credential = await openHeaders();
+
       if (credential === null || Object.keys(credential).length === 0) return fetch(url, init);
       const headers = new Headers(init?.headers);
+
       for (const [name, value] of Object.entries(credential)) headers.set(name, value);
+
       return fetch(url, { ...init, headers, redirect: 'manual' });
     },
   };
@@ -372,13 +411,17 @@ const StoredMcpServerOptionsSchema = v.object({
  */
 export function storedMcpOptionsCarryCredential(raw: string | null | undefined): boolean {
   if (!raw) return false;
+
   const parsed = v.safeParse(
     StoredMcpServerOptionsSchema,
     tolerate(() => JSON.parse(raw), 'malformed-input'),
   );
+
   if (!parsed.success) return false;
   const transport = parsed.output.transport;
+
   if (!transport) return false;
+
   return [transport.headers, transport.requestInit, transport.eventSourceInit]
     .some((carried) => carried !== undefined && carried !== null);
 }
@@ -413,11 +456,15 @@ export function storedMcpOptionsCarryCredential(raw: string | null | undefined):
  */
 export function isMcpTransportUnauthorized(input: { cause: unknown }): boolean {
   const seen = new Set<unknown>();
+
   for (let error: unknown = input.cause; error instanceof Error && !seen.has(error); error = error.cause) {
     seen.add(error);
+
     if (error instanceof UnauthorizedError) return true;
+
     if ((error instanceof StreamableHTTPError || error instanceof SseError) && error.code === 401) return true;
   }
+
   return false;
 }
 

@@ -80,6 +80,7 @@ interface Entry {
 
 function normalizedEntry(input: { value: JsonValue }): Entry | null {
   const record = v.safeParse(JsonObjectSchema, input.value);
+
   if (!record.success) return null;
   const entry: Entry = {};
   const type = stringValue(record.output.type);
@@ -94,56 +95,82 @@ function normalizedEntry(input: { value: JsonValue }): Entry | null {
   const isSidechain = booleanValue(record.output.isSidechain);
   const isMeta = booleanValue(record.output.isMeta);
   const isCompactSummary = booleanValue(record.output.isCompactSummary);
+
   if (type !== undefined) entry.type = type;
+
   if (uuid !== undefined) entry.uuid = uuid;
+
   if (parentUuid !== undefined) entry.parentUuid = parentUuid;
+
   if (entrypoint !== undefined) entry.entrypoint = entrypoint;
+
   if (sessionKind !== undefined) entry.sessionKind = sessionKind;
+
   if (version !== undefined) entry.version = version;
+
   if (timestamp !== undefined) entry.timestamp = timestamp;
+
   if (interruptedMessageId !== undefined) entry.interruptedMessageId = interruptedMessageId;
+
   if (toolDenialKind !== undefined) entry.toolDenialKind = toolDenialKind;
+
   if (isSidechain !== undefined) entry.isSidechain = isSidechain;
+
   if (isMeta !== undefined) entry.isMeta = isMeta;
+
   if (isCompactSummary !== undefined) entry.isCompactSummary = isCompactSummary;
   const message = v.safeParse(JsonObjectSchema, record.output.message);
+
   if (message.success) {
     const normalizedMessage: Entry['message'] = {};
     const role = stringValue(message.output.role);
+
     if (role !== undefined) normalizedMessage.role = role;
     const content = v.safeParse(v.optional(JsonValueSchema), message.output.content);
+
     if (content.success && content.output !== undefined) normalizedMessage.content = content.output;
     entry.message = normalizedMessage;
   }
+
   return entry;
 }
 
 function normalizedBlock(input: { value: JsonValue }): ContentBlock | null {
   const record = v.safeParse(JsonObjectSchema, input.value);
+
   if (!record.success) return null;
   const block: ContentBlock = {};
   const type = stringValue(record.output.type);
   const text = stringValue(record.output.text);
   const name = stringValue(record.output.name);
   const isError = booleanValue(record.output.is_error);
+
   if (type !== undefined) block.type = type;
+
   if (text !== undefined) block.text = text;
+
   if (name !== undefined) block.name = name;
+
   if (isError !== undefined) block.is_error = isError;
   const parsedInput = v.safeParse(JsonObjectSchema, record.output.input);
+
   if (parsedInput.success) block.input = parsedInput.output;
   const content = v.safeParse(v.optional(JsonValueSchema), record.output.content);
+
   if (content.success && content.output !== undefined) block.content = content.output;
+
   return block;
 }
 
 function stringValue(value: JsonValue | undefined): string | undefined {
   const parsed = v.safeParse(v.string(), value);
+
   return parsed.success ? parsed.output : undefined;
 }
 
 function booleanValue(value: JsonValue | undefined): boolean | undefined {
   const parsed = v.safeParse(v.boolean(), value);
+
   return parsed.success ? parsed.output : undefined;
 }
 
@@ -151,9 +178,12 @@ function booleanValue(value: JsonValue | undefined): boolean | undefined {
  *  carry either a bare string or an array of text blocks. */
 function blockText(value: JsonValue | undefined): string {
   const text = v.safeParse(v.string(), value);
+
   if (text.success) return text.output;
   const parts = v.safeParse(JsonArraySchema, value);
+
   if (!parts.success) return '';
+
   return parts.output.map((part) => normalizedBlock({ value: part })?.text ?? '').join('');
 }
 
@@ -250,6 +280,7 @@ interface DraftTurn {
  *  rule needs the verb and its flags; a 40k-character heredoc in the corpus
  *  file would be all of the corpus. */
 const COMMAND_CHARS = 400;
+
 const COMMANDS_PER_TURN = 40;
 
 /**
@@ -262,6 +293,7 @@ export function mineTranscripts(opts: MineOptions): MineResult {
     unparsableLines: 0, emptyFiles: 0, nonInteractivePrompts: 0, sidechainEntries: 0,
     brokenChains: 0, unknownContent: 0, trivialTurns: 0,
   };
+
   const versions = new Set<string>();
   const turns: CorpusTurn[] = [];
   let files = 0;
@@ -271,11 +303,13 @@ export function mineTranscripts(opts: MineOptions): MineResult {
     for (const file of listSessions(join(opts.root, project))) {
       files++;
       const mined = mineSession(project, file, skips, versions);
+
       if (mined.length === 0) continue;
       sessions++;
       turns.push(...mined);
     }
   }
+
   return { turns, files, sessions, versions: [...versions].sort(), skips };
 }
 
@@ -285,6 +319,7 @@ function listProjects(root: string, wanted: ReadonlyArray<string> | undefined): 
   const dirents = tolerate(() => readdirSync(root, { withFileTypes: true }), 'enoent') ?? [];
   const entries = dirents.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
   const filters = (wanted ?? []).filter((filter) => filter !== '');
+
   return entries
     .filter((name) => filters.length === 0 || filters.some((filter) => name.includes(filter)))
     .sort();
@@ -296,6 +331,7 @@ function listProjects(root: string, wanted: ReadonlyArray<string> | undefined): 
 function listSessions(dir: string): string[] {
   // The root listed this directory a moment ago; ENOENT means a live session removed it since.
   const dirents = tolerate(() => readdirSync(dir, { withFileTypes: true }), 'enoent') ?? [];
+
   return dirents
     .filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl'))
     .map((entry) => join(dir, entry.name))
@@ -315,9 +351,11 @@ function listSessions(dir: string): string[] {
 function livePath(lines: ReadonlyArray<string>, skips: MineSkips, versions: Set<string>): Entry[] {
   const byUuid = new Map<string, Entry>();
   const order: Entry[] = [];
+
   for (const line of lines) {
     if (line.trim() === '') continue;
     let parsed: JsonValue;
+
     try {
       parsed = parseJsonValue(line);
     } catch (error) {
@@ -325,40 +363,54 @@ function livePath(lines: ReadonlyArray<string>, skips: MineSkips, versions: Set<
       skips.unparsableLines++;
       continue;
     }
+
     const entry = normalizedEntry({ value: parsed });
+
     if (!entry) {
       skips.unparsableLines++;
       continue;
     }
+
     if (entry.version !== undefined) versions.add(entry.version);
+
     if (entry.uuid === undefined) continue;
     byUuid.set(entry.uuid, entry);
     order.push(entry);
   }
+
   if (order.length === 0) return [];
 
   const path: Entry[] = [];
   let cursor: Entry | undefined = order[order.length - 1];
   const guard = new Set<string>();
+
   while (cursor !== undefined) {
     const uuid = cursor.uuid;
+
     if (uuid === undefined) break;
+
     if (guard.has(uuid)) break;
     guard.add(uuid);
     path.push(cursor);
     const parent = cursor.parentUuid;
+
     if (parent === undefined) break;
     cursor = byUuid.get(parent);
+
     if (cursor === undefined) skips.brokenChains++;
   }
+
   path.reverse();
 
   return path.filter((entry) => {
     if (entry.type !== 'user' && entry.type !== 'assistant') return false;
+
     if (entry.isSidechain === true) {
       skips.sidechainEntries++;
+
       return false;
     }
+
     return true;
   });
 }
@@ -378,17 +430,22 @@ function mineSession(
   versions: Set<string>,
 ): CorpusTurn[] {
   let lines: string[];
+
   try {
     lines = readFileSync(file, 'utf8').split('\n');
   } catch (error) {
     // A session listed moments ago can be gone before it is read.
     if (classify({ cause: error }) !== 'enoent') throw error;
     skips.emptyFiles++;
+
     return [];
   }
+
   const path = livePath(lines, skips, versions);
+
   if (path.length === 0) {
     skips.emptyFiles++;
+
     return [];
   }
 
@@ -400,21 +457,28 @@ function mineSession(
     const content = entry.message?.content;
     const contentArray = v.safeParse(JsonArraySchema, content);
     const contentText = v.safeParse(v.string(), content);
+
     if (entry.type === 'assistant') {
       if (current === null || !contentArray.success) continue;
+
       for (const raw of contentArray.output) {
         const block = normalizedBlock({ value: raw });
+
         if (!block) continue;
+
         if (block.type === 'text' && block.text !== undefined) current.texts.push(block.text);
+
         if (block.type === 'tool_use' && block.name !== undefined) {
           const args = block.input ?? {};
           current.toolCalls.push({ name: block.name, args, result: null });
           const command = stringValue(args.command);
+
           if (command !== undefined && current.commands.length < COMMANDS_PER_TURN) {
             current.commands.push(command.slice(0, COMMAND_CHARS));
           }
         }
       }
+
       continue;
     }
 
@@ -423,8 +487,11 @@ function mineSession(
     if (contentArray.success) {
       for (const raw of contentArray.output) {
         const block = normalizedBlock({ value: raw });
+
         if (!block) continue;
+
         if (block.type !== 'tool_result' || current === null) continue;
+
         if (entry.toolDenialKind === USER_DENIAL_KIND || USER_REJECTION.test(blockText(block.content))) {
           current.toolRejected = true;
         }
@@ -435,15 +502,20 @@ function mineSession(
     }
 
     let text: string | null;
+
     if (contentText.success) text = contentText.output;
     else if (contentArray.success) text = firstText(contentArray.output);
     else continue;
+
     if (text === null) continue;
+
     if (entry.interruptedMessageId !== undefined || INTERRUPT_MARKER.test(text)) {
       if (current !== null) current.interrupted = true;
       continue;
     }
+
     if (entry.isMeta === true || entry.isCompactSummary === true || SYNTHETIC_PROMPT.test(text)) continue;
+
     // A real prompt, but not one the owner typed. Closing the turn in flight
     // rather than skipping the line keeps the harness's work from being
     // attributed to the owner's previous request.
@@ -472,8 +544,10 @@ function mineSession(
 function firstText(content: ReadonlyArray<JsonValue>): string | null {
   const texts = content.flatMap((raw): string[] => {
     const block = normalizedBlock({ value: raw });
+
     return block?.type === 'text' && block.text !== undefined ? [block.text] : [];
   });
+
   return texts.length === 0 ? null : texts.join('\n');
 }
 
@@ -487,11 +561,13 @@ function firstText(content: ReadonlyArray<JsonValue>): string | null {
  */
 function finishTurns(drafts: ReadonlyArray<DraftTurn>, skips: MineSkips): CorpusTurn[] {
   const turns: CorpusTurn[] = [];
+
   for (const [index, draft] of drafts.entries()) {
     if (isTrivialTurn({ userMessage: draft.userMessage, toolCalls: draft.toolCalls })) {
       skips.trivialTurns++;
       continue;
     }
+
     const next = drafts[index + 1];
     const response = draft.texts.join('\n\n').trim();
     turns.push({
@@ -518,12 +594,14 @@ function finishTurns(drafts: ReadonlyArray<DraftTurn>, skips: MineSkips): Corpus
       },
     });
   }
+
   return turns;
 }
 
 /** The skip counts as report lines, in the order they matter. */
 export function renderMineSkips(result: MineResult): string[] {
   const { skips } = result;
+
   return [
     `- ${result.files} session files, ${result.sessions} of them yielding turns`,
     `- CLI versions: ${result.versions.length === 0 ? '(none recorded)' : result.versions.join(', ')}`,

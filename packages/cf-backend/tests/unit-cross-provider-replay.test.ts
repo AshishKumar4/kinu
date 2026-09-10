@@ -28,7 +28,9 @@ import { orchestratorHarness, type HarnessOrchestratorAgent } from './helpers/ac
 /** What the SOURCE provider named this call — Anthropic's own grammar, which no
  *  other family mints, so its presence on a request is unambiguous. */
 const SOURCE_ID = 'toolu_01SourceMinted';
+
 const SOURCE_REASONING = 'I should look this up.';
+
 const SOURCE_REASONING_SIGNATURE = 'anthropic-source-signature';
 
 /** The provider handle a live streamText also passes. `beforeStep` forwards only
@@ -83,7 +85,9 @@ async function stepMessages(
   const context: PrepareStepContext = {
     stepNumber: 0, messages, steps: [], model: HARNESS_MODEL, experimental_context: undefined,
   };
+
   const rewritten = v.safeParse(StepOverrideSchema, await agent.beforeStep(context));
+
   return rewritten.success ? rewritten.output.messages : messages;
 }
 
@@ -91,13 +95,17 @@ async function stepMessages(
 function pairing(messages: readonly ModelMessage[]) {
   const calls: string[] = [];
   const results: string[] = [];
+
   for (const message of messages) {
     if (!Array.isArray(message.content)) continue;
+
     for (const part of message.content) {
       if (part.type === 'tool-call') calls.push(part.toolCallId);
+
       if (part.type === 'tool-result') results.push(part.toolCallId);
     }
   }
+
   return { calls, results } as const;
 }
 
@@ -111,6 +119,7 @@ describe('a hosted step whose history came from another provider', () => {
     // the call is finished rather than pending.
     expect(carried.calls).toHaveLength(1);
     expect(carried.results).toEqual(carried.calls);
+
     for (const id of carried.calls) expect(isPortableToolCallId(id)).toBe(true);
     // And the id belongs to the request, not to the provider that is no longer
     // answering it.
@@ -121,8 +130,10 @@ describe('a hosted step whose history came from another provider', () => {
     const { agent } = orchestratorHarness();
 
     const messages = await stepMessages(agent, [...HISTORY]);
+
     const assistant = messages.find((message) =>
       message.role === 'assistant' && Array.isArray(message.content));
+
     const content = assistant?.role === 'assistant' && Array.isArray(assistant.content)
       ? assistant.content
       : [];

@@ -49,6 +49,7 @@ export async function findUnusableModel(opts: LocalModelResolverOptions = {}): P
   let resolver: LocalModelResolver;
   let spec: string;
   let provider: string;
+
   try {
     resolver = createConfiguredLocalModelResolver(opts).resolver;
     spec = resolver.normalizeSpecSync(opts.model ?? null);
@@ -61,8 +62,11 @@ export async function findUnusableModel(opts: LocalModelResolverOptions = {}): P
       reason: renderThrownChain({ cause: error }),
     };
   }
+
   const info = (await resolver.listProviders()).find((entry) => entry.id === provider);
+
   if (!info || info.available) return null;
+
   return { spec, provider, reason: info.unavailableReason ?? `No credential is connected for ${provider}.` };
 }
 
@@ -71,6 +75,7 @@ export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptio
   // explicit registry-only specs (claude/…, opencode/…) resolve regardless.
   const llmConfig = resolveLLMConfig(opts);
   const cloud = resolveCloudSession();
+
   const resolver = createLocalModelResolver({
     llm: llmConfig,
     credentials: resolveProviderCredentials(),
@@ -79,5 +84,6 @@ export function createConfiguredLocalModelResolver(opts: LocalModelResolverOptio
     sessionAffinity: opts.agentName ? agentAffinityKey(opts.agentName) : undefined,
     claudeCli: opts.claudeCli,
   });
+
   return { llmConfig, resolver };
 }

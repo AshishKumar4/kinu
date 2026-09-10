@@ -18,10 +18,12 @@ function setup() {
   const sql = base.storage.sql;
   initSearchTables(base.storage.execRaw);
   const aborted: Array<{ key: string; reason?: string }> = [];
+
   const rt: AgentRuntime = {
     ...base,
     abortBranch: async (key: string, reason?: string) => { aborted.push({ key, reason }); },
   };
+
   return { db, sql, rt, aborted };
 }
 
@@ -33,8 +35,10 @@ describe('pruneLowValueBranches — population + config-honoring gate', () => {
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
         VALUES (${rt.actor.actorId}, 'r', 'doomed', 't', 0.1, 3, 'open', 'agent-doomed')`;
     await pruneLowValueBranches(rt, 'r', 0.25, 2);
+
     const row = sql<{ status: string; branch_agent_key: string | null }>`
       SELECT status, branch_agent_key FROM search_nodes WHERE id = 'doomed'`[0]!;
+
     expect(row.status).toBe('pruned');
     expect(row.branch_agent_key).toBeNull();
     expect(aborted).toEqual([{ key: 'agent-doomed', reason: 'pruned' }]);
@@ -84,6 +88,7 @@ describe('pruneLowValueBranches — one abort failure never ends the sweep', () 
         VALUES (${rt.actor.actorId}, 'r', 'first', 't', 0.1, 3, 'open', 'agent-first')`;
     void sql`INSERT INTO search_nodes (actor_id, root_id, id, task, value, visits, status, branch_agent_key)
         VALUES (${rt.actor.actorId}, 'r', 'second', 't', 0.1, 3, 'open', 'agent-second')`;
+
     const failing: AgentRuntime = {
       ...rt,
       abortBranch: async (key: string, reason?: string) => {
@@ -97,6 +102,7 @@ describe('pruneLowValueBranches — one abort failure never ends the sweep', () 
     const original = console.error;
     const lines: string[] = [];
     console.error = (...args: unknown[]) => { lines.push(String(args[0])); };
+
     try {
       await pruneLowValueBranches(failing, 'r', 0.25, 2);
     } finally {
@@ -107,6 +113,7 @@ describe('pruneLowValueBranches — one abort failure never ends the sweep', () 
     // aborted, the failure named rather than propagated.
     const rows = sql<{ id: string; status: string }>`
       SELECT id, status FROM search_nodes ORDER BY id`;
+
     expect(rows).toEqual([
       { id: 'first', status: 'pruned' },
       { id: 'second', status: 'pruned' },

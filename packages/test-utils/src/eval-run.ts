@@ -163,7 +163,9 @@ export function projectRunEventProvenance(events: readonly RunEvent[]): EvalRunP
     const base = {
       runId: event.runId, timestamp: event.timestamp, eventIndex: event.eventIndex, type: event.type,
     };
+
     if (event.type !== 'tool_call_end') return base;
+
     // `undefined` for an unreported duration or a clean call: the interface
     // admits it, `JSON.stringify` drops it, and the wire copy in the behaviour
     // harness omits it — so a published row never carries the key.
@@ -173,6 +175,7 @@ export function projectRunEventProvenance(events: readonly RunEvent[]): EvalRunP
       outcome: event.outcome,
     };
   });
+
   return {
     totalEvents: projected.length,
     bound: PROVENANCE_EVENT_BOUND,
@@ -221,6 +224,7 @@ export function retainEpisodeTranscript(
   );
   writeFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), `${JSON.stringify(transcript.history, null, 2)}\n`);
   writeFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.subgoals), `${JSON.stringify(transcript.subgoals, null, 2)}\n`);
+
   return dir;
 }
 
@@ -246,11 +250,13 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
   const dir = join(options.transcripts, options.taskId);
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   let reader: Reader;
+
   try {
     reader = await open();
   } catch (error) {
     const failure = error instanceof Error ? error : new Error(String(error));
     recordUnmeasuredEpisode();
+
     try {
       writeFileSync(join(dir, 'failure.json'), JSON.stringify({
         taskId: options.taskId, phase: 'open', name: failure.name, message: failure.message,
@@ -261,36 +267,46 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     } catch (retentionError) {
       throw new AggregateError([failure, retentionError], failure.message, { cause: retentionError });
     }
+
     throw failure;
   }
+
   let collection: Promise<EpisodeEvidence> | null = null;
+
   const collect = (): Promise<EpisodeEvidence> => {
     collection ??= (async () => {
       const [events, history, spend] = await Promise.allSettled([
         reader.runEvents(), reader.history(), reader.spend(),
       ]);
+
       const errors: Error[] = [];
       const status: { channel: string; status: string; reason?: string }[] = [];
+
       if (spend.status === 'fulfilled') {
         if (options.modelCalls === 'none' && spend.value.total.calls === 0) {
           recordNoModelEpisode(spend.value);
         } else {
           recordWorkspaceSpend(spend.value);
+
           if (options.modelCalls === 'none' || spend.value.total.calls === 0) {
             errors.push(new Error(`${options.taskId}: expected model calls ${options.modelCalls}, observed ${spend.value.total.calls}`));
           }
         }
+
         writeFileSync(join(dir, 'spend.json'), JSON.stringify(spend.value, null, 2), { mode: 0o600 });
       } else {
         recordUnmeasuredEpisode();
       }
+
       if (events.status === 'fulfilled') {
         writeFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.events),
           events.value.map((event) => JSON.stringify(event)).join('\n'), { mode: 0o600 });
       }
+
       if (history.status === 'fulfilled') {
         writeFileSync(join(dir, EPISODE_TRANSCRIPT_FILES.history), JSON.stringify(history.value, null, 2), { mode: 0o600 });
       }
+
       for (const [channel, result] of [['events', events], ['history', history], ['spend', spend]] as const) {
         if (result.status === 'fulfilled') {
           status.push({ channel, status: 'retained' });
@@ -300,16 +316,23 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
           status.push({ channel, status: 'failed', reason: error.message });
         }
       }
+
       writeFileSync(join(dir, 'collection.json'), JSON.stringify(status, null, 2), { mode: 0o600 });
+
       if (errors.length > 0) throw new AggregateError(errors, errors.map((error) => error.message).join('; '));
+
       if (events.status !== 'fulfilled' || history.status !== 'fulfilled' || spend.status !== 'fulfilled') {
         throw new Error('Incomplete evidence collection');
       }
+
       return { events: events.value, history: history.value, spend: spend.value };
     })();
+
     return collection;
   };
+
   let result: { ok: true; value: T } | { ok: false; error: Error };
+
   try {
     result = { ok: true, value: await operation(reader, collect) };
   } catch (error) {
@@ -317,13 +340,16 @@ export async function withEpisodeEvidence<Reader extends EpisodeEvidenceReader, 
     result = { ok: false, error: failure };
     writeFileSync(join(dir, 'failure.json'), JSON.stringify({ name: failure.name, message: failure.message }), { mode: 0o600 });
   }
+
   try {
     await collect();
   } catch (error) {
     if (!result.ok) throw new AggregateError([result.error, error], result.error.message, { cause: error });
     throw error;
   }
+
   if (!result.ok) throw result.error;
+
   return result.value;
 }
 
@@ -524,9 +550,11 @@ export function preRegister(
   const pairsFor10pp = requiredPairs(0.10, { dispersion });
   const pairsFor20pp = requiredPairs(0.20, { dispersion });
   const canReachSignificance = tasks >= minimumPairs;
+
   const basis = dispersionMeasured
     ? `psi ${dispersion.toFixed(6)} MEASURED on this corpus`
     : `psi ${dispersion.toFixed(2)} ASSUMED — no same-arm pair measured yet`;
+
   return {
     tasks, repeats, pairs: tasks, minimumPairs, dispersion, dispersionMeasured,
     pairsFor10pp, pairsFor20pp, canReachSignificance,
@@ -551,6 +579,7 @@ export function scoreTrajectory(
 ): EvalScoreRow[] {
   return scorers.map((scorer) => {
     const score = scorer.score(sql, actor);
+
     return { ...score, name: scorer.name, asserts: scorer.asserts };
   });
 }
@@ -584,22 +613,29 @@ export function assessAdmissibility(
   // this set would put the primary metric back inside the mechanism-coverage
   // framing this field was just demoted out of.
   const exercised = new Set<string>();
+
   for (const o of scored) {
     for (const s of o.scores) if (s.eligible > 0 && isCovariateRow(s.name)) exercised.add(s.name);
   }
+
   const allNames = BEHAVIOUR_SCORERS.map((s) => s.name);
 
   const executed = new Set(observations.map((o) => o.taskId));
   const missing = declaredTasks.filter((id) => !executed.has(id));
 
   const failures: string[] = [];
+
   if (scored.length === 0) failures.push('no observation was scored — nothing to measure');
+
   if (gradedTurns === 0) failures.push('zero graded turns — the ledger recorded no closed turn');
+
   if (toolCalls === 0) failures.push('zero tool calls — no agent behaviour occurred');
+
   if (outcomesScored === 0 && scored.length > 0) {
     failures.push('no observation carried a task_outcome row — this run measured activity, '
       + 'not whether any task was solved, so it is not evidence about task performance');
   }
+
   // The set a run measures must equal the set it declares.
   if (missing.length > 0) {
     failures.push(`declared ${String(declaredTasks.length)} tasks but never attempted ${missing.join(', ')}`);
@@ -634,6 +670,7 @@ export interface GitProvenance {
 export function gitProvenance(cwd: string): GitProvenance {
   const git = (...args: string[]) =>
     execFileSync('git', args, { cwd, env: gitEnv(), encoding: 'utf8' }).trim();
+
   return { gitSha: git('rev-parse', 'HEAD'), gitDirty: git('status', '--porcelain') !== '' };
 }
 
@@ -724,12 +761,15 @@ export function publishRunRecord(inputs: RunRecordInputs): EvalRunRecord | null 
       + `${String(inputs.declaredTasks.length)} declared task(s), so it measured nothing and `
       + 'the corpus takes no record of it. Every case skipped — with no credential that is '
       + "the tier's normal credential-free pass, and `[skip]` above says which reason.\n");
+
     return null;
   }
+
   const record = assembleRunRecord(inputs);
   const out = process.env.KINU_EVAL_RECORD ?? join(inputs.transcripts, 'run-record.json');
   writeRunRecord(out, record);
   console.log(`\n${formatRunRecord(record)}\n\nrecord: ${out}\n`);
+
   return record;
 }
 
@@ -741,10 +781,12 @@ const RecordEnvelopeSchema = v.looseObject({ schema: v.literal(1) });
 export function readRunRecord(path: string): EvalRunRecord {
   const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
   const envelope = v.safeParse(RecordEnvelopeSchema, raw);
+
   if (!envelope.success) {
     throw new Error(`${path}: not an eval run record of schema 1 — `
       + envelope.issues.map((issue) => issue.message).join('; '));
   }
+
   // SAFETY: the envelope parse above has confirmed this file carries `schema: 1`,
   // and a schema-1 file is only ever produced by `writeRunRecord` in this module
   // from an `EvalRunRecord`. Re-validating every nested field would restate the
@@ -763,14 +805,17 @@ export function readRunRecord(path: string): EvalRunRecord {
 export function runRecordPaths(root: string): string[] {
   if (!existsSync(root)) return [];
   const paths: string[] = [];
+
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.isDirectory()) {
       const candidate = join(root, entry.name, 'run-record.json');
+
       if (existsSync(candidate)) paths.push(candidate);
     } else if (entry.name.endsWith('.json')) {
       paths.push(join(root, entry.name));
     }
   }
+
   return paths.sort();
 }
 
@@ -785,6 +830,7 @@ export function runRecordPaths(root: string): string[] {
  */
 export function formatRunRecord(record: EvalRunRecord): string {
   const a = record.admissibility;
+
   const lines = [
     `run ${record.runId} — ${record.family ?? '(pre-family record)'}, `
       + `${record.tier} (${record.modelId})`,
@@ -797,18 +843,24 @@ export function formatRunRecord(record: EvalRunRecord): string {
       + `${String(a.toolCalls)} tool calls, ${String(a.scored)} scored / ${String(a.inert)} inert`
       + (a.incomplete > 0 ? ` / ${String(a.incomplete)} INCOMPLETE (cancelled)` : ''),
   ];
+
   for (const failure of a.failures) lines.push(`    INADMISSIBLE: ${failure}`);
+
   if (a.mechanismsAbsent.length > 0) {
     lines.push(`  never exercised: ${a.mechanismsAbsent.join(', ')}`);
   }
+
   lines.push(`  spend: ${String(record.spend.calls)} calls, `
     + `${String(record.spend.tokensIn)} in / ${String(record.spend.tokensOut)} out tokens`);
+
   const scoredObs = record.observations
     .filter((o): o is Extract<EvalObservation, { outcome: 'scored' }> => o.outcome === 'scored');
+
   const totals = (name: string) => {
     const rows = scoredObs.flatMap((o) => o.scores.filter((s) => s.name === name));
     const eligible = rows.reduce((n, r) => n + r.eligible, 0);
     const passed = rows.reduce((n, r) => n + r.passed, 0);
+
     return { eligible, passed, unmeasured: rows.some((row) => row.eligible > 0 && row.rate === null) };
   };
 
@@ -823,6 +875,7 @@ export function formatRunRecord(record: EvalRunRecord): string {
   // Covariates, named as such. Every row kept: this telemetry is how a moved
   // outcome gets explained. None of it is a score.
   lines.push('  covariates (mechanism telemetry — explanatory, never a score):');
+
   for (const name of BEHAVIOUR_SCORERS.map((s) => s.name)) {
     const { eligible, passed, unmeasured } = totals(name);
     lines.push(`    ${name.padEnd(20)} ${unmeasured
@@ -830,5 +883,6 @@ export function formatRunRecord(record: EvalRunRecord): string {
       : eligible === 0 ? 'n/a — no eligible opportunity'
         : `${String(passed)}/${String(eligible)} = ${(passed / eligible).toFixed(3)}`}`);
   }
+
   return lines.join('\n');
 }

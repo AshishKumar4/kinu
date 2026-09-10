@@ -45,7 +45,9 @@ async function stepMessages(
   const context: PrepareStepContext = {
     stepNumber, messages, steps: [], model: STEP_MODEL, experimental_context: undefined,
   };
+
   const rewritten = v.safeParse(StepOverrideSchema, await agent.beforeStep(context));
+
   return rewritten.success ? rewritten.output.messages : messages;
 }
 
@@ -53,6 +55,7 @@ async function stepMessages(
 function isDynamicContextBlock(message: ModelMessage): boolean {
   if (message.role !== 'user') return false;
   const { content } = message;
+
   return !Array.isArray(content) && content.includes('<dynamic_context');
 }
 
@@ -68,9 +71,13 @@ const RoleResultSchema = v.object({ role: v.string() });
 // beforeTurn assembly, the BackendHost, the event-injection machinery) and
 // the orchestrator (onChatResponse sequencing, schema, callables).
 const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
+
 const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
+
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'head-runtime.ts'), 'utf8');
+
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
+
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration-hosting.ts'), 'utf8');
 
 /** Every cf-backend source that turns a reasoning-effort level into provider
@@ -78,16 +85,20 @@ const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration
  *  derivation added anywhere in the backend shows up as a new entry. */
 function effortDerivationSites(): string[] {
   const sites: string[] = [];
+
   const walk = (dir: string) => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const path = join(dir, entry.name);
+
       if (entry.isDirectory()) walk(path);
       else if (/\.tsx?$/.test(entry.name) && readFileSync(path, 'utf8').includes('reasoningEffortOptions(')) {
         sites.push(entry.name);
       }
     }
   };
+
   walk(join(import.meta.dir, '..', 'src'));
+
   return sites.sort();
 }
 
@@ -172,10 +183,12 @@ describe('turn-pipeline correctness wiring', () => {
       continuation: false,
       body: {},
     };
+
     const unreachable = orchestratorHarness({
       warmConnections: [], failWarm: null, titles: [],
       failDescriptors: new Error('socket hang up'),
     });
+
     unreachable.agent.setObservedSoul('You are Vesta. Answer on the tools you hold.');
     const config = await unreachable.agent.beforeTurn(turn);
     expect(config?.system ?? '').toContain('You are Vesta. Answer on the tools you hold.');
@@ -184,6 +197,7 @@ describe('turn-pipeline correctness wiring', () => {
       warmConnections: [], failWarm: null, titles: [],
       failDescriptors: new KinuError('denied', 'the caller holds no capability'),
     });
+
     await expect(denied.agent.beforeTurn(turn)).rejects.toMatchObject({ code: 'denied' });
   });
 
@@ -192,6 +206,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
       actor.indexOf('/** The settled turn\'s actor-generic front half'),
     );
+
     const policy = constructor.indexOf('this.isClientRpcMethodDenied(rpc.method)');
     const dispatch = constructor.indexOf('await dispatchMessage.call');
     expect(actor).toContain('protected isClientRpcMethodDenied(_method: string): boolean { return false; }');
@@ -264,6 +279,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(assembleIdx).toBeGreaterThan(-1);
     expect(sourceIdx).toBeGreaterThan(-1);
     expect(sourceIdx).toBeLessThan(assembleIdx);
+
     // Everything else the block carries is now read live inside core, at the
     // step the snapshot is called: WHICH planes exist is agentDynamicContext's
     // (pinned in core's unit-volatile-context.test.ts) and WHICH STORE feeds
@@ -274,6 +290,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('protected dynamicContextSnapshot(): DynamicContext {'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
+
     expect(snapshot).toContain('collectDynamicContext({');
     expect(snapshot).toContain('memoryTail: this._turnMemoryTail');
     expect(snapshot).toContain('...this._mcpUnavailable');
@@ -307,6 +324,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
+
     expect(beforeTurn).toContain('profile.tier.reasoningEffort');
     // Was `parseModelSpec(profile.tier.model).provider` — a RAW parse, and the
     // second of two in this method. Reasoning options for a provider spelled
@@ -335,11 +353,13 @@ describe('turn-pipeline correctness wiring', () => {
     // the first route's effort passes any single-call assertion and fails here.
     const asked: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
     let profile = mergePolicyProfile();
+
     const runtime = createHeadRuntime({
       host: noExplorationHost,
       models: {
         resolveModelWithEffort: (spec, effort) => {
           asked.push({ spec, effort });
+
           return { model: MERGE_ANSWER_MODEL, providerOptions: undefined };
         },
       },
@@ -408,24 +428,30 @@ describe('turn-pipeline correctness wiring', () => {
   test('no production source names an output-token cap', () => {
     const root = join(import.meta.dir, '..', '..');
     const offenders: string[] = [];
+
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const path = join(dir, entry.name);
+
         if (entry.isDirectory()) {
           if (entry.name !== 'node_modules') walk(path);
         } else if (/\.tsx?$/.test(entry.name)) {
           const text = readFileSync(path, 'utf8');
+
           for (const [line] of text.matchAll(/^.*\bmaxOutputTokens\b.*$/gm)) {
             offenders.push(`${path.slice(root.length + 1)}: ${line}`);
           }
         }
       }
     };
+
     for (const pkg of readdirSync(root, { withFileTypes: true })) {
       if (!pkg.isDirectory()) continue;
       const src = join(root, pkg.name, 'src');
+
       if (existsSync(src)) walk(src);
     }
+
     expect(offenders).toEqual([]);
   });
 
@@ -434,6 +460,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
       actor.indexOf('/** The settled turn\'s actor-generic front half'),
     );
+
     const dispatch = constructor.indexOf('await dispatchMessage.call');
     const reset = constructor.indexOf('this.dynamicLedger.reset()');
     const clearPlan = constructor.indexOf('this.compactionState.plans.save(this.name, null)');
@@ -479,10 +506,12 @@ describe('turn-pipeline correctness wiring', () => {
       role TEXT NOT NULL, content TEXT NOT NULL,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (actor_id, id))`);
+
     const append = harness.db.prepare(
       `INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
        VALUES (?, ?, '', ?, ?, ?, '2026-08-16 22:05:00')`,
     );
+
     append.run(actorId, 'u-live', null, 'user', JSON.stringify({
       id: 'u-live', role: 'user', parts: [{ type: 'text', text: 'do the thing' }],
     }));
@@ -493,6 +522,7 @@ describe('turn-pipeline correctness wiring', () => {
     const message: UIMessage = {
       id: 'a-live', role: 'assistant', parts: [{ type: 'text', text: 'partial answer' }],
     };
+
     await harness.agent.onChatResponse({
       message, requestId: 'req-interrupted', continuation: false, status: 'aborted',
     });
@@ -501,6 +531,7 @@ describe('turn-pipeline correctness wiring', () => {
     const mirrored = harness.db.prepare<{ c: number }, []>(
       `SELECT COUNT(*) AS c FROM messages WHERE session_id = 'default'`,
     ).get();
+
     expect(mirrored?.c).toBe(0);
 
     // The paged history read serves the interrupted turn straight from the
@@ -540,6 +571,7 @@ describe('turn-pipeline correctness wiring', () => {
     const recorded = harness.db.prepare<{ turn: string }, []>(
       `SELECT turn FROM completed_turns`,
     ).all();
+
     expect(recorded, 'an aborted turn left no evidence row').toHaveLength(1);
     expect(recorded[0]!.turn).toContain('partial');
   });
@@ -575,10 +607,12 @@ describe('turn-pipeline correctness wiring', () => {
         ]),
         Date.now() + 1_000,
       );
+
       if (!Reflect.set(harness.agent, '_cachedMessages', [{
         id: 'u-1', role: 'user', parts: [{ type: 'text', text: `${mode} this` }],
         metadata: { kinuMode: mode },
       }])) throw new Error('failed to seed the harness message array');
+
       return harness;
     }
 
@@ -660,6 +694,7 @@ describe('turn-pipeline correctness wiring', () => {
       for (let tick = 0; tick < 50 && lease(harness).consumed_at !== null; tick++) {
         await Bun.sleep(1);
       }
+
       return lease(harness);
     }
 
@@ -678,6 +713,7 @@ describe('turn-pipeline correctness wiring', () => {
       if (!Reflect.set(harness.agent, '_inFlight', true)) {
         throw new Error('failed to put the harness actor in a turn');
       }
+
       const signals = harness.agent.observeOrch().signals;
       expect(await signals.deliver({ kind: 'event_drain', text: 'a build finished', replyTurnId }))
         .toBe('mid-turn');
@@ -742,6 +778,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('protected get host(): BackendHost'),
       actor.indexOf('/** Executors whose tools ran this turn'),
     );
+
     expect(host).toContain("result.status === 'completed' ? 'queued' : 'skipped'");
     expect(host).toContain('this._activeDrainTurnId = drainTurnId');
     expect(host).toContain('this._activeProgrammaticUserMessage = message');
@@ -758,13 +795,16 @@ describe('turn-pipeline correctness wiring', () => {
     expect(settle).toContain('this.turnDrainTurnId()');
     // Behavioral: the driving text prefers the programmatic (drain) message.
     const drained = orchestratorHarness();
+
     const programmatic: UIMessage = {
       id: 'drain-1', role: 'user', parts: [{ type: 'text', text: 'the drain text' }],
     };
+
     const answered: ChatResponseResult = {
       message: { id: 'a-9', role: 'assistant', parts: [{ type: 'text', text: 'the answer' }] },
       requestId: 'req-drain', continuation: false, status: 'completed',
     };
+
     expect(drained.agent.observeTurnTextParts(answered, programmatic).userText).toBe('the drain text');
     expect(drained.agent.observeTurnTextParts(answered, null).assistantText).toBe('the answer');
     // Neither settle body derives the drain id from message metadata. The
@@ -772,10 +812,12 @@ describe('turn-pipeline correctness wiring', () => {
     // itself, which is what keeps one drain answerable as one turn.
     const response = source.slice(source.indexOf('async onChatResponse(result: ChatResponseResult)'));
     expect(response).not.toContain('metadata.drainTurnId');
+
     const preamble = actor.slice(
       actor.indexOf('protected turnTextParts('),
       actor.indexOf('protected transitionFor('),
     );
+
     expect(preamble).not.toContain('metadata.drainTurnId');
   });
 
@@ -784,6 +826,7 @@ describe('turn-pipeline correctness wiring', () => {
       source.indexOf('private async completeEventBatch'),
       source.indexOf('private _engine: EvolutionEngine | null = null;'),
     );
+
     expect(helper.indexOf('await dispatchEmailRepliesForTurn')).toBeGreaterThan(-1);
     expect(helper).toContain('if (replies.pending)');
     expect(helper).toContain('return false');
@@ -800,6 +843,7 @@ describe('turn-pipeline correctness wiring', () => {
       source.indexOf('event_reply: terminalEffect({'),
       source.indexOf('branches: terminalEffect({'),
     );
+
     // Registered for the QUEUED drain only: that identity has to outlive an
     // auto-continuation, while a spliced one is reported afresh on every
     // absorbed signal and has nothing to carry forward.
@@ -808,10 +852,12 @@ describe('turn-pipeline correctness wiring', () => {
     // The request id is part of the RECORDED input, so a replay on a later
     // activation re-registers under the same identity instead of inventing one.
     expect(replyEffect).toContain('requestId: v.string()');
+
     const clear = actor.slice(
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
       actor.indexOf('/** The settled turn\'s actor-generic front half'),
     );
+
     expect(clear).toContain('this._pendingDrainReplyTurns.clear()');
   });
 
@@ -830,6 +876,7 @@ describe('turn-pipeline correctness wiring', () => {
     const classify = memberBody(
       source, 'protected owedWorkExists(): boolean', 'orchestrator.ts',
     );
+
     expect(classify).toContain('hasOpenDrainLease()');
     expect(classify).toContain('hasIncomplete()');
     expect(classify).not.toContain('await');
@@ -842,6 +889,7 @@ describe('turn-pipeline correctness wiring', () => {
     const wake = memberBody(
       source, 'protected override async owedDeliveryWork(): Promise<void>', 'orchestrator.ts',
     );
+
     const owedAt = wake.indexOf('this.owedDrainReplies()');
     const sweptAt = wake.indexOf('this.eventLog.unbindStale(');
     const repliesAt = wake.indexOf('await this.completeEventBatch(');
@@ -865,6 +913,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
+
     const assemble = beforeTurn.indexOf('const assembly: Parameters<typeof assembleTurnMessages>[0] = {');
     expect(assemble).toBeGreaterThan(-1);
     const args = beforeTurn.slice(assemble);
@@ -925,6 +974,7 @@ describe('turn-pipeline correctness wiring', () => {
   // backend actually ships.
   test('the role rides the cacheable prefix; provenance never does', async () => {
     const { agent } = orchestratorHarness();
+
     const config = await agent.beforeTurn({
       system: 'sys',
       messages: [{ role: 'user', content: 'summarise this file' }],
@@ -933,6 +983,7 @@ describe('turn-pipeline correctness wiring', () => {
       continuation: false,
       body: {},
     });
+
     const system = config?.system ?? '';
     // The turn's resolved role is a prefix fact: it changes on a deliberate
     // agent event and nothing else.
@@ -950,6 +1001,7 @@ describe('turn-pipeline correctness wiring', () => {
     // prompt the model receives, so it is the one surface that must name the
     // ladder's middle rung.
     const { agent } = orchestratorHarness();
+
     const config = await agent.beforeTurn({
       system: 'sys',
       messages: [{ role: 'user', content: 'summarise this file' }],
@@ -958,12 +1010,14 @@ describe('turn-pipeline correctness wiring', () => {
       continuation: false,
       body: {},
     });
+
     expect(config?.system ?? '').toContain('`hire` with `lifetime:"task"` runs one agent for one question');
   });
 
   test('the role the agent set is in the next prompt the DO builds', async () => {
     const harness = orchestratorHarness();
     const agent = harness.agent;
+
     const turn = (content: string) => agent.beforeTurn({
       system: 'sys',
       messages: [{ role: 'user' as const, content }],
@@ -972,6 +1026,7 @@ describe('turn-pipeline correctness wiring', () => {
       continuation: false,
       body: {},
     });
+
     await turn('open the turn');
     const setMode = toolExecute<{ action: 'mode'; role: string }, unknown>(agent.getTools().tasks);
     const result = v.parse(RoleResultSchema, await setMode({ action: 'mode', role: 'auditor' }));
@@ -989,6 +1044,7 @@ describe('turn-pipeline correctness wiring', () => {
     const agent = harness.agent;
     const orch = agent.observeOrch();
     const prepare = orch.turnExtension.prepareStep;
+
     if (!prepare) throw new Error('Expected turn steering prepareStep extension');
 
     await agent.beforeTurn({
@@ -1031,13 +1087,16 @@ describe('improvement_lanes — one verdict gates the improvement lanes', () => 
   const NOTE = JSON.stringify({
     note: 'the staging cluster was never named', severity: 'nit', class: 'wrong-work',
   });
+
   const turnOf = (): CompletedTurn => ({
     userMessage: 'q', assistantResponse: 'a', toolCalls: [], durationMs: 1, steps: 1,
     hadError: false, feedback: null, turnId: 'spine-turn', sessionId: 'default', origin: 'user',
   });
+
   function advisorHarness() {
     const harness = orchestratorHarness();
     harness.agent.harnessAdvisorsOn(NOTE);
+
     return harness;
   }
 

@@ -53,6 +53,7 @@ import {
 import { SWARM_CARRIES } from '../src/strategy/swarm';
 
 const REPO = resolve(import.meta.dir, '../../..');
+
 const read = (path: string): string => readFileSync(resolve(REPO, path), 'utf8');
 
 const SETTLE = 'packages/core/src/mcts/convergence.ts';
@@ -70,7 +71,9 @@ const breach: FloorBreach = {
 };
 
 const open: PublicationState = { kind: 'open' };
+
 const sealed: PublicationState = { kind: 'sealed', breach, clearedBy: null };
+
 const cleared: PublicationState = {
   kind: 'sealed',
   breach,
@@ -106,10 +109,13 @@ describe('the seal is total over the enumerated publication surfaces', () => {
     // the enumeration with a gate exception is a set mismatch rather than an
     // assertion nobody wrote. Removing one gate makes this red.
     const refused = new Set<PublicationSurface>();
+
     for (const surface of PUBLICATION_SURFACES) {
       const verdict = admitsPublication(sealed, surface);
+
       if (verdict.kind === 'refused') refused.add(verdict.surface);
     }
+
     expect([...refused].sort()).toEqual([...PUBLICATION_SURFACES].sort());
   });
 
@@ -124,6 +130,7 @@ describe('the seal is total over the enumerated publication surfaces', () => {
     const admitted = PUBLICATION_SURFACES.filter(
       (surface) => admitsPublication(open, surface).kind === 'admitted',
     );
+
     expect([...admitted].sort()).toEqual([...PUBLICATION_SURFACES].sort());
   });
 
@@ -131,6 +138,7 @@ describe('the seal is total over the enumerated publication surfaces', () => {
     const admitted = PUBLICATION_SURFACES.filter(
       (surface) => admitsPublication(cleared, surface).kind === 'admitted',
     );
+
     expect([...admitted].sort()).toEqual([...PUBLICATION_SURFACES].sort());
   });
 
@@ -192,30 +200,39 @@ describe("the settle path's egress is classified, not discovered", () => {
   function observedEgress(): string[] {
     const source = read(SETTLE);
     const found = new Set<string>();
+
     for (const match of source.matchAll(/^import (?!type )\{([^}]+)\} from/gm)) {
       for (const raw of (match[1] ?? '').split(',')) {
         const name = raw.trim().replace(/^type\s+/, '');
+
         if (name.length > 0) found.add(name);
       }
     }
+
     const callable = callableSource(source);
     const WRITE = /\b(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\b|\bmemory\.(?:append|index)\s*\(/i;
     // Split at top-level declarations, so each segment is one function body.
     const segments = callable.split(/^(?:export )?(?:async )?function (\w+)/gm);
+
     for (let i = 1; i < segments.length; i += 2) {
       const name = segments[i] ?? '';
+
       if (name === ENTRY) continue;
+
       if (WRITE.test(segments[i + 1] ?? '')) found.add(name);
     }
+
     for (const match of callable.matchAll(/\bmemory\.(append|index)\s*\(/g)) {
       found.add(`memory.${match[1]}`);
     }
+
     for (const match of callable.matchAll(
       /\b(INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+([a-z_]+)/gi,
     )) {
       const verb = (match[1] ?? '').replace(/\s+/g, ' ').toUpperCase();
       found.add(`${verb} ${match[2]}`);
     }
+
     return [...found].sort();
   }
 
@@ -225,6 +242,7 @@ describe("the settle path's egress is classified, not discovered", () => {
 
   test('every publication classification names a member of the enumeration', () => {
     const surfaces = new Set<string>(PUBLICATION_SURFACES);
+
     for (const [egress, verdict] of Object.entries(EGRESS)) {
       if (isDisclosure(verdict)) continue;
       expect(surfaces.has(verdict), `${egress} classified as unknown surface ${verdict}`).toBe(true);
@@ -233,13 +251,16 @@ describe("the settle path's egress is classified, not discovered", () => {
 
   test('every surface the settle path reaches is refused under a seal', () => {
     const reached = new Set<PublicationSurface>();
+
     for (const verdict of Object.values(EGRESS)) {
       if (!isDisclosure(verdict)) reached.add(verdict);
     }
+
     // Three of the six, and every one of them is live code today: the audit
     // named only `experience_library`, which the settle path does not even reach
     // directly. Absence here is the defect, so the set is asserted whole.
     expect([...reached].sort()).toEqual(['craft', 'memory', 'task_history']);
+
     for (const surface of reached) {
       expect(admitsPublication(sealed, surface).kind).toBe('refused');
     }

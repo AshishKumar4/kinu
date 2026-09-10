@@ -27,15 +27,18 @@ const REPO = resolve(import.meta.dir, '../../..');
 
 /** Where broadcasts are produced: the core loop and the CF backend. */
 const PRODUCER_ROOTS = ['packages/core/src', 'packages/cf-backend/src'] as const;
+
 /** Where they are consumed: the browser client and the CLI, the two surfaces a
  *  `BackendHost` fans out to. */
 const CONSUMER_ROOTS = ['packages/cf-backend/src', 'packages/cli/src'] as const;
 
 function sourceFiles(root: string, exts: readonly string[]): string[] {
   const out: string[] = [];
+
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       const full = join(dir, entry.name);
+
       if (entry.isDirectory()) {
         if (entry.name !== 'node_modules' && entry.name !== 'dist') walk(full);
       } else if (exts.some((e) => entry.name.endsWith(e))) {
@@ -43,21 +46,27 @@ function sourceFiles(root: string, exts: readonly string[]): string[] {
       }
     }
   };
+
   walk(join(REPO, root));
+
   return out.sort();
 }
 
 /** The balanced argument text of a call whose `(` is at `open`. */
 function callArgument(text: string, open: number): string {
   let depth = 0;
+
   for (let i = open; i < text.length; i++) {
     const c = text[i]!;
+
     if (c === '(' || c === '[' || c === '{') depth++;
     else if (c === ')' || c === ']' || c === '}') {
       depth--;
+
       if (depth === 0) return text.slice(open + 1, i);
     }
   }
+
   return '';
 }
 
@@ -68,29 +77,35 @@ function channelsIn(argument: string): string[] {
   const found: string[] = [];
   let depth = 0;
   const token = /[{}]|type:\s*['"]([A-Za-z0-9_.-]+)['"]/g;
+
   for (let m = token.exec(argument); m; m = token.exec(argument)) {
     if (m[0] === '{') depth++;
     else if (m[0] === '}') depth--;
     else if (depth === 1 && m[1]) found.push(m[1]);
   }
+
   return found;
 }
 
 /** channel name → the files that broadcast it. */
 function broadcastChannels(): Map<string, string[]> {
   const channels = new Map<string, string[]>();
+
   for (const root of PRODUCER_ROOTS) {
     for (const file of sourceFiles(root, ['.ts'])) {
       const text = readFileSync(file, 'utf8');
+
       for (const m of text.matchAll(/\bbroadcast\s*\(/g)) {
         for (const name of channelsIn(callArgument(text, m.index + m[0].length - 1))) {
           const at = channels.get(name) ?? [];
+
           if (!at.includes(file)) at.push(file);
           channels.set(name, at);
         }
       }
     }
   }
+
   return channels;
 }
 
@@ -107,6 +122,7 @@ const CHANNELS = broadcastChannels();
  */
 function readsChannel(text: string, channel: string): boolean {
   const name = channel.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+
   return new RegExp(
     `[!=]==?\\s*['"]${name}['"]` +      // msg.type === 'x' / value.type !== "x"
     `|['"]${name}['"]\\s*[!=]==?` +     // 'x' === msg.type
@@ -136,10 +152,12 @@ describe('broadcast channels reach a consumer', () => {
     expect(readsChannel(`broadcast({ type: 'ghost_channel', x: 1 })`, 'ghost_channel')).toBe(false);
     expect(readsChannel(`interface P { type: 'ghost_channel'; }`, 'ghost_channel')).toBe(false);
     expect(readsChannel(`CREATE TABLE ghost_channel (id TEXT)`, 'ghost_channel')).toBe(false);
+
     // …and no file in the consumer roots reads a channel nobody broadcasts.
     const readers = CONSUMER_ROOTS
       .flatMap((root) => sourceFiles(root, ['.ts', '.tsx']))
       .filter((file) => readsChannel(readFileSync(file, 'utf8'), 'channel_nobody_ever_broadcast'));
+
     expect(readers).toEqual([]);
   });
 
@@ -150,6 +168,7 @@ describe('broadcast channels reach a consumer', () => {
         .filter((file) => !producers.includes(file))
         .filter((file) => {
           const text = readFileSync(file, 'utf8');
+
           return readsChannel(text, channel) || readsFrameworkChannel(text, channel);
         })
         .map((file) => relative(REPO, file));
@@ -186,9 +205,11 @@ describe('every open node transcript can recover a missed head_activity frame', 
     .flatMap((file) => {
       const text = readFileSync(file, 'utf8');
       const calls: Array<{ file: string; argument: string }> = [];
+
       for (let at = text.indexOf('useNodeTranscript('); at !== -1; at = text.indexOf('useNodeTranscript(', at + 1)) {
         calls.push({ file: relative(REPO, file), argument: callArgument(text, text.indexOf('(', at)) });
       }
+
       // The hook's own declaration is `useNodeTranscript({ … }: { … })`, not a call.
       return calls.filter((call) => !call.argument.includes(': {'));
     });

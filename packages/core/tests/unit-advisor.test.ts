@@ -56,6 +56,7 @@ async function lane(over: {
 } = {}) {
   const delivered: AgentSignal[] = [];
   const recorded: AdvisorNote[] = [];
+
   const disposition = await runAdvisorLane({
     turn: over.turn ?? aTurn(),
     llm: 'llm' in over ? over.llm : saying(JSON.stringify(NOTE)),
@@ -63,9 +64,14 @@ async function lane(over: {
     minSeverity: over.minSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
     recent: over.recent ?? [],
     gateOpen: over.gateOpen ?? false,
-    deliver: async (signal) => { delivered.push(signal); return 'queued'; },
+    deliver: async (signal) => {
+      delivered.push(signal);
+
+      return 'queued';
+    },
     record: (note) => { recorded.push(note); },
   });
+
   return { disposition, delivered, recorded };
 }
 
@@ -74,7 +80,13 @@ async function lane(over: {
 describe('the owner’s switch', () => {
   test('off means no review at all, so no advisor spend exists', async () => {
     let called = 0;
-    const counting: LLM = { async *stream() { yield ''; }, complete: async () => { called += 1; return '{}'; } };
+
+    const counting: LLM = { async *stream() { yield ''; }, complete: async () => {
+      called += 1;
+
+      return '{}';
+    } };
+
     const run = await lane({ enabled: false, llm: counting });
     expect(called).toBe(0);
     expect(run).toMatchObject({ disposition: null, delivered: [], recorded: [] });
@@ -98,6 +110,7 @@ describe('severity decides where a note goes', () => {
       llm: saying(JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
       minSeverity: 'concern',
     });
+
     expect(run.disposition).toBe('changelog');
     expect(run.delivered).toEqual([]);
     expect(run.recorded).toHaveLength(1);
@@ -120,6 +133,7 @@ describe('severity decides where a note goes', () => {
       llm: saying(JSON.stringify({ note: 'the variable name is inconsistent', severity: 'nit', class: 'wrong-work' })),
       minSeverity: 'nit',
     });
+
     expect(run.disposition).toBe('deliver');
   });
 
@@ -292,6 +306,7 @@ describe('what the model is allowed to answer', () => {
 
   test('every declared severity parses, and nothing else does', () => {
     for (const severity of ADVISOR_SEVERITIES) expect(isAdvisorSeverity(severity)).toBe(true);
+
     for (const other of ['critical', 'NIT', '', null, 2]) expect(isAdvisorSeverity(other)).toBe(false);
   });
 });
@@ -382,10 +397,16 @@ describe('the missed-capability class', () => {
 
   test('the lane forwards what the backend observed', async () => {
     let seen = '';
+
     const capturing: LLM = {
       async *stream() { yield ''; },
-      complete: async (prompt) => { seen = prompt; return '{}'; },
+      complete: async (prompt) => {
+        seen = prompt;
+
+        return '{}';
+      },
     };
+
     await runAdvisorLane({
       turn: aTurn(), llm: capturing, enabled: true, minSeverity: 'concern',
       recent: [], gateOpen: false, reachable: ['agents'],
@@ -411,6 +432,7 @@ describe('a capability reached through codemode counts as used', () => {
       swarmed("await agents.swarm({ preset: 'ideate', branches: 3 })"),
       ['agents', 'memory'],
     );
+
     expect(prompt).toContain('did not use: memory');
     expect(prompt).not.toContain('did not use: agents');
   });
@@ -456,10 +478,12 @@ describe('the user-dissatisfaction class', () => {
     const quoted = { note: 'the user asked you to "write better commit messages"', severity: 'concern', class: 'dissatisfaction' } as const;
     const first = await lane({ llm: saying(JSON.stringify(quoted)) });
     expect(first.disposition).toBe('deliver');
+
     const again = await lane({
       llm: saying(JSON.stringify(quoted)),
       recent: [normalizeNote(quoted.note)],
     });
+
     expect(again.disposition).toBe('drop');
   });
 });

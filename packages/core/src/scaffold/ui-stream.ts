@@ -42,12 +42,17 @@ async function forwardedUIChunk(
   sendReasoning: boolean | undefined,
 ): Promise<UIMessageChunk | undefined> {
   const validation = await uiMessageChunkSchema().validate?.(raw);
+
   if (validation === undefined || !validation.success) return undefined;
   const chunk = validation.value;
+
   if (chunk.type === 'start' || chunk.type === 'finish') return undefined;
+
   const reasoning = chunk.type === 'reasoning-start' || chunk.type === 'reasoning-delta'
     || chunk.type === 'reasoning-end';
+
   if (reasoning && sendReasoning === false) return undefined;
+
   return chunk;
 }
 
@@ -73,11 +78,13 @@ export async function* scaffoldEventsToUIStream(
 
   function* delta(kind: 'text' | 'reasoning', text: string): Generator<UIMessageChunk> {
     const current = part?.kind === kind ? part : { kind, id: `${idPrefix}-${kind}-${partSeq++}` };
+
     if (current !== part) {
       yield* closePart();
       part = current;
       yield kind === 'text' ? { type: 'text-start', id: current.id } : { type: 'reasoning-start', id: current.id };
     }
+
     yield kind === 'text'
       ? { type: 'text-delta', id: current.id, delta: text }
       : { type: 'reasoning-delta', id: current.id, delta: text };
@@ -85,13 +92,17 @@ export async function* scaffoldEventsToUIStream(
 
   function* modelOutputs(streamId: string, messages: readonly ModelMessage[]): Generator<UIMessageChunk> {
     const start = responseCursors.get(streamId) ?? 0;
+
     for (let index = start; index < messages.length; index++) {
       const message = messages[index];
+
       if (message?.role !== 'tool') continue;
+
       for (const content of message.content) {
         if (content.type !== 'tool-result') continue;
         const toolCallId = streamId + '/' + content.toolCallId;
         const output = content.output;
+
         switch (output.type) {
           case 'error-text': yield { type: 'tool-output-error', toolCallId, errorText: output.value }; break;
           case 'error-json': yield { type: 'tool-output-error', toolCallId, errorText: renderToolResult(output.value) }; break;
@@ -100,16 +111,21 @@ export async function* scaffoldEventsToUIStream(
         }
       }
     }
+
     responseCursors.set(streamId, messages.length);
   }
 
   if (opts.messageId) yield { type: 'start', messageId: opts.messageId };
   else yield { type: 'start' };
   let result: ScaffoldRunResult;
+
   for (;;) {
     const next = await pump.next();
+
     if (next.done) { result = next.value; break; }
+
     const ev = next.value;
+
     switch (ev.type) {
       case 'model_output':
         yield { ...ev.output, toolCallId: ev.streamId + '/' + ev.output.toolCallId };
@@ -117,6 +133,7 @@ export async function* scaffoldEventsToUIStream(
       case 'model_chunk':
       case 'chat_chunk': {
         const chunk = ev.chunk;
+
         switch (chunk.type) {
           case 'text-delta': yield* delta('text', chunk.delta); break;
           case 'reasoning-delta': if (opts.sendReasoning !== false) yield* delta('reasoning', chunk.delta); break;
@@ -139,13 +156,17 @@ export async function* scaffoldEventsToUIStream(
             break;
           case 'error': yield { type: 'error', errorText: chunk.message }; break;
         }
+
         break;
       }
+
       case 'ui_chunk': {
         const chunk = await forwardedUIChunk(ev.chunk, opts.sendReasoning);
+
         if (chunk !== undefined) yield chunk;
         break;
       }
+
       case 'text_delta': yield* delta('text', ev.text); break;
       case 'tool_call':
         yield* closePart();
@@ -164,6 +185,7 @@ export async function* scaffoldEventsToUIStream(
       case 'done': break;
     }
   }
+
   if (!result.ok && result.error) yield { type: 'error', errorText: result.error };
   yield* closePart();
   yield { type: 'finish' };

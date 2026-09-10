@@ -25,11 +25,14 @@ export interface ReadBarrier {
 export function readBarrier(width: number): ReadBarrier {
   let parked: (() => void)[] = [];
   let widest = 0;
+
   const admit = (): void => {
     const waiting = parked;
     parked = [];
+
     for (const resume of waiting) resume();
   };
+
   return {
     get widest(): number {
       return widest;
@@ -38,6 +41,7 @@ export function readBarrier(width: number): ReadBarrier {
       const { promise, resolve } = Promise.withResolvers<void>();
       parked.push(resolve);
       widest = Math.max(widest, parked.length);
+
       if (parked.length >= width) admit();
       else setImmediate(admit);
       await promise;

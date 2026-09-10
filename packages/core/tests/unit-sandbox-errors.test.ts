@@ -24,13 +24,16 @@ describe('explainNativeToolReferenceError', () => {
     for (const name of BUILTIN_TOOLS) {
       const namespace = TOOL_REACH[name].codemode;
       const out = explainNativeToolReferenceError(`${name} is not defined`);
+
       if (name === 'execute_tools') {
         // execute_tools IS the sandbox; a program cannot call it from inside itself.
         expect(out).toBe(`${name} is not defined`);
         continue;
       }
+
       expect(out).toContain(`"${name}" is a native Kinu tool`);
       expect(out).toContain(`call it as \`tools.${name}(input)\``);
+
       if (namespace) expect(out).toContain(`through the \`${namespace}\` namespace`);
     }
   });
@@ -40,6 +43,7 @@ describe('explainNativeToolReferenceError', () => {
     // by agreeing with a declaration that is itself wrong.
     expect(explainNativeToolReferenceError('run is not defined')).toContain('`workspace` namespace');
     expect(explainNativeToolReferenceError('file is not defined')).toContain('`workspace` namespace');
+
     for (const name of ['agents', 'memory', 'tasks', 'web', 'report'] as const) {
       expect(explainNativeToolReferenceError(`${name} is not defined`)).toContain(`\`${name}\` namespace`);
     }
@@ -72,6 +76,7 @@ describe('explainNativeToolReferenceError', () => {
       'run failed with exit code 1',
       'is not defined', // no identifier captured — malformed, must not match
     ];
+
     for (const m of messages) expect(explainNativeToolReferenceError(m)).toBe(m);
   });
 });

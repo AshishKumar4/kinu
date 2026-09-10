@@ -24,6 +24,7 @@ import {
 
 /** The build the page loaded, and the one the origin moved to. */
 const LOADED = 'abc1234';
+
 const LIVE = 'deadbee';
 
 /** The messages the four engines and Vite's preload helper really produce. */
@@ -36,7 +37,9 @@ const ENGINE_MESSAGES = {
 
 function store(seed: string | null = null): ChunkReloadStore & { read: () => string | null } {
   const cells = new Map<string, string>();
+
   if (seed !== null) cells.set(CHUNK_RELOAD_KEY, seed);
+
   return {
     getItem: (key) => cells.get(key) ?? null,
     setItem: (key, value) => { cells.set(key, value); },
@@ -60,11 +63,13 @@ function drive(options: { live?: string | null; baseline?: string | null; seed?:
   const reloadHappened = Promise.withResolvers<void>();
   let reloads = 0;
   let liveReads = 0;
+
   return {
     deps: {
       baseline: async () => options.baseline === undefined ? LOADED : options.baseline,
       live: async () => {
         liveReads += 1;
+
         return options.live === undefined ? LIVE : options.live;
       },
       session,
@@ -88,10 +93,12 @@ function drive(options: { live?: string | null; baseline?: string | null; seed?:
  */
 async function stillOpen(pending: Promise<unknown>): Promise<boolean> {
   const OPEN = Symbol('open');
+
   const first = await Promise.race([
     pending.then(() => 'settled', () => 'settled'),
     Promise.resolve(OPEN),
   ]);
+
   return first === OPEN;
 }
 

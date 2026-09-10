@@ -32,6 +32,7 @@
  *  Enumerated so a reader can assert every branch is exercised rather than
  *  assuming it — the same reason `WORKSPACE_RESTORE_OUTCOMES` is a list. */
 export const ESCALATION_OUTCOMES = ['ok', 'failed', 'refused'] as const;
+
 export type EscalationOutcome = (typeof ESCALATION_OUTCOMES)[number];
 
 /** One escalation decision, with however many times the turn repeated it. */
@@ -95,10 +96,13 @@ export class TurnEscalationLedger {
     const reason = stated ? stated.slice(0, ESCALATION_REASON_MAX_CHARS) : null;
     const key = `${input.runtime}\u0000${input.outcome}\u0000${reason ?? ''}`;
     const existing = this.decisions.get(key);
+
     if (existing) {
       existing.count += 1;
+
       return;
     }
+
     this.decisions.set(key, { runtime: input.runtime, reason, outcome: input.outcome, count: 1 });
   }
 

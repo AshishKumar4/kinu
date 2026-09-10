@@ -29,17 +29,23 @@ const tempDirs: string[] = [];
 function newProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "kinu-test-project-"));
   tempDirs.push(dir);
+
   return dir;
 }
 
 const repoRoot = resolve(__dirname, "../../..");
+
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
+
 const RequestBodySchema = v.object({ stream: v.optional(v.boolean()) });
+
 const SessionEventSchema = v.object({ id: v.string() });
+
 const RunEventEnvelopeSchema = v.object({
   type: v.literal("run_event"),
   event: v.object({ type: v.string(), runId: v.string() }),
 });
+
 // A steer that NAMES a call: `repeated_call` and `repeated_failure` carry the
 // tool they fired over, and requiring `tool` here is what proves which arm
 // fired rather than also accepting `no_progress`, which names nothing.
@@ -54,15 +60,18 @@ const SteeringEnvelopeSchema = v.object({
     converted: v.boolean(),
   }),
 });
+
 const ErrorEventSchema = v.object({
   type: v.literal("error"),
   message: v.string(),
   hint: v.string(),
 });
+
 /** The `--json` turn-end usage payload, parsed by the SAME schema the durable
  *  ledger uses. Every field is optional there because an absent field means the
  *  provider did not report it, so the tests below assert on the parsed KEYS. */
 const UsageEnvelopeSchema = v.object({ usage: UsageSchema });
+
 /** A ledger row on the `--json` stream, kept whole. `RunEventEnvelopeSchema`
  *  above narrows to two fields, which cannot answer "is this key absent?". */
 const LedgerRowSchema = v.object({
@@ -81,14 +90,18 @@ afterEach(() => {
  *  KINU_HOME; kill it before the temp home disappears under it. */
 function stopLocalDaemon(home: string): void {
   const pidfile = tolerate(() => readFileSync(join(home, "daemon.pid"), "utf-8"), "enoent");
+
   if (pidfile === undefined) return;
   const pid = parseInt(pidfile.trim(), 10);
+
   if (Number.isInteger(pid) && pid > 1) tolerate(() => process.kill(pid, "SIGTERM"), "esrch");
 }
 
 function runCli(args: string[], opts: { home?: string; stdin?: string; env?: Record<string, string> } = {}) {
   const env = { ...process.env, ...opts.env };
+
   if (opts.home) env.KINU_HOME = opts.home;
+
   return Bun.spawnSync({
     cmd: [process.execPath, cliBin, ...args],
     cwd: newProjectDir(),
@@ -104,7 +117,9 @@ async function runCliAsync(
   opts: { home?: string; stdin?: string; env?: Record<string, string> } = {},
 ) {
   const env = { ...process.env, ...opts.env };
+
   if (opts.home) env.KINU_HOME = opts.home;
+
   const proc = Bun.spawn({
     cmd: [process.execPath, cliBin, ...args],
     cwd: newProjectDir(),
@@ -113,11 +128,13 @@ async function runCliAsync(
     stderr: "pipe",
     env,
   });
+
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).arrayBuffer(),
     new Response(proc.stderr).arrayBuffer(),
     proc.exited,
   ]);
+
   return { stdout: Buffer.from(stdout), stderr: Buffer.from(stderr), exitCode };
 }
 
@@ -333,6 +350,7 @@ describe("kinu exec (headless)", () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-smoke-"));
     tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
+
     try {
       const env = {
         KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
@@ -368,8 +386,10 @@ describe("kinu exec (headless)", () => {
       // container-scoped run destroys on exit.
       const ledger = events.flatMap((event) => {
         const parsed = v.safeParse(RunEventEnvelopeSchema, event);
+
         return parsed.success ? [parsed.output.event] : [];
       });
+
       // Profile resolution lands before the step. The mock answers in one step
       // and nothing repeats, fails or stalls, so no `turn_steering` row is
       // written at all. Pin the whole sequence so a row that appears or
@@ -385,10 +405,12 @@ describe("kinu exec (headless)", () => {
       // carries the history, never a selectable JSONL artifact.
       const second = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello again"], { home, env });
       expect(second.exitCode).toBe(0);
+
       const secondHeader = v.parse(
         SessionEventSchema,
         parseJsonObject(toText(second.stdout).trim().split("\n")[0]!),
       );
+
       expect(secondHeader.id).not.toBe(v.parse(SessionEventSchema, events[0]).id);
     } finally {
       await server.stop();
@@ -400,18 +422,21 @@ describe("kinu exec (headless)", () => {
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startFailingLlm();
+
     try {
       const goodEnv = {
         KINU_BASE_URL: `http://127.0.0.1:${good.port}`,
         KINU_AUTH: "Bearer mock",
         KINU_MODEL: "mock-model",
       };
+
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env: goodEnv })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], {
         home,
         env: { ...goodEnv, KINU_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
+
       expect(proc.exitCode).toBe(1);
       const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
       expect(events.some((e) => e.type === "error" || (e.type === "turn_end" && e.hadError === true))).toBe(true);
@@ -427,12 +452,14 @@ describe("kinu exec (headless)", () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-noevolve-"));
     tempDirs.push(home);
     const server = startMockLlm("Hello from mock.");
+
     try {
       const env = {
         KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
         KINU_AUTH: "Bearer mock",
         KINU_MODEL: "mock-model",
       };
+
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "--no-auto-evolve", "Say hello"], { home, env });
@@ -474,18 +501,21 @@ describe("kinu run — a tool refusal is rendered for the person, not the model"
   test("a refused escalation prints prose under ✗ and its diagnostic lands in cli.log", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-run-refusal-"));
     tempDirs.push(home);
+
     // An unregistered runtime fails deterministically without touching a shell.
     const server = startToolLoopMockLlm(
       { name: "run", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
       1,
       "done",
     );
+
     try {
       const env = {
         KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
         KINU_AUTH: "Bearer mock",
         KINU_MODEL: "mock-model",
       };
+
       const created = await runCliAsync(["create", "refusy", "--mode", "local", "--purpose", "refusal render"], { home, env });
       expect(created.exitCode).toBe(0);
 
@@ -516,6 +546,7 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
   test("a turn reports the steering row it wrote, with trigger, tool and conversion", async () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-exec-nudge-"));
     tempDirs.push(home);
+
     // Three failures from the same tool is the `repeated_failure` trigger; an
     // unregistered runtime fails deterministically without touching a shell.
     const server = startToolLoopMockLlm(
@@ -523,12 +554,14 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
       3,
       "gave up",
     );
+
     try {
       const env = {
         KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
         KINU_AUTH: "Bearer mock",
         KINU_MODEL: "mock-model",
       };
+
       expect((await runCliAsync(["create", "nudgey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "nudgey", "--json", "--no-auto-evolve", "Fix it"], { home, env });
@@ -537,8 +570,10 @@ describe("kinu exec --json — a mechanical steer is observable from outside", (
 
       const steers = events.flatMap((event) => {
         const parsed = v.safeParse(SteeringEnvelopeSchema, event);
+
         return parsed.success ? [parsed.output.event] : [];
       });
+
       expect(steers).toHaveLength(1);
       expect(steers[0]).toMatchObject({
         // repeated_call, not repeated_failure: the mock grinds the SAME call
@@ -567,12 +602,14 @@ describe("kinu exec --json — the turn-end usage payload", () => {
     // completion — which @ai-sdk/openai-compatible turns into an all-undefined
     // report (dist/index.js:68-84) and `normalizeUsage` into {}.
     const server = startMockLlm("Hello from mock.", null);
+
     try {
       const env = {
         KINU_BASE_URL: `http://127.0.0.1:${server.port}`,
         KINU_AUTH: "Bearer mock",
         KINU_MODEL: "mock-model",
       };
+
       expect((await runCliAsync(["create", "quiet", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "quiet", "--json", "--no-auto-evolve", "Say hello"], { home, env });
@@ -589,8 +626,10 @@ describe("kinu exec --json — the turn-end usage payload", () => {
       // two copies of one fact cannot disagree about a silent turn.
       const ledger = events.flatMap((event) => {
         const parsed = v.safeParse(LedgerRowSchema, event);
+
         return parsed.success ? [parsed.output.event] : [];
       });
+
       const ledgerTurnEnd = ledger.find((row) => row.type === "turn_end");
       expect(ledgerTurnEnd).toBeDefined();
       expect(ledgerTurnEnd && "usage" in ledgerTurnEnd).toBe(false);
@@ -611,7 +650,9 @@ function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
+
       const body = v.parse(RequestBodySchema, await request.json());
+
       if (!body.stream) {
         const completion: JsonObject = {
           id: "chatcmpl-mock",
@@ -620,15 +661,21 @@ function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens
           model: "mock-model",
           choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: "stop" }],
         };
+
         if (usage) completion.usage = usage;
+
         return Response.json(completion);
       }
+
       const chunk = (data: JsonValue) => `data: ${JSON.stringify(data)}\n\n`;
+
       const finalChunk: JsonObject = {
         id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
         choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
       };
+
       if (usage) finalChunk.usage = usage;
+
       const sse = [
         chunk({
           id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
@@ -637,9 +684,11 @@ function startMockLlm(answer: string, usage: JsonObject | null = { prompt_tokens
         chunk(finalChunk),
         "data: [DONE]\n\n",
       ].join("");
+
       return new Response(sse, { headers: { "content-type": "text/event-stream" } });
     },
   });
+
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
@@ -651,6 +700,7 @@ function startToolLoopMockLlm(
   answer: string,
 ) {
   let streamed = 0;
+
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -658,8 +708,10 @@ function startToolLoopMockLlm(
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
+
       const body = v.parse(RequestBodySchema, await request.json());
       const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
+
       if (!body.stream) {
         return Response.json({
           id: "chatcmpl-mock", object: "chat.completion", created: 1, model: "mock-model",
@@ -667,12 +719,15 @@ function startToolLoopMockLlm(
           usage,
         });
       }
+
       const step = streamed++;
+
       const chunk = (choice: JsonObject, extra: JsonObject = {}) =>
         `data: ${JSON.stringify({
           id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
           choices: [choice], ...extra,
         })}\n\n`;
+
       const body_ = step < calls
         ? [
             chunk({
@@ -692,11 +747,13 @@ function startToolLoopMockLlm(
             chunk({ index: 0, delta: { role: "assistant", content: answer }, finish_reason: null }),
             chunk({ index: 0, delta: {}, finish_reason: "stop" }, { usage }),
           ];
+
       return new Response([...body_, "data: [DONE]\n\n"].join(""), {
         headers: { "content-type": "text/event-stream" },
       });
     },
   });
+
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
@@ -708,6 +765,7 @@ function startFailingLlm() {
       return Response.json({ error: { message: "mock outage" } }, { status: 500 });
     },
   });
+
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
@@ -725,12 +783,15 @@ function startInBandErrorLlm(payload: JsonValue) {
       // tests" and fails whichever neighbour happens to be running.
       if (request.method === 'GET') return Response.json({ data: [] });
       const body = v.parse(RequestBodySchema, await request.json());
+
       if (!body.stream) return Response.json(payload, { status: 400 });
+
       return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, {
         headers: { "content-type": "text/event-stream" },
       });
     },
   });
+
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
@@ -743,9 +804,11 @@ function startEmptyModelMenuOrigin() {
     hostname: "127.0.0.1",
     fetch(request) {
       if (new URL(request.url).pathname === "/api/cli/models") return Response.json({ models: [], failures: [] });
+
       return new Response("not found", { status: 404 });
     },
   });
+
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
@@ -754,6 +817,7 @@ describe("kinu create — an unusable model is named at creation", () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-create-unusable-"));
     tempDirs.push(home);
     const origin = startEmptyModelMenuOrigin();
+
     try {
       writeConfig(home, {
         origin: `http://127.0.0.1:${origin.port}`,
@@ -786,6 +850,7 @@ describe("kinu create — an unusable model is named at creation", () => {
     const home = mkdtempSync(join(tmpdir(), "kinu-cli-create-usable-"));
     tempDirs.push(home);
     const server = startMockLlm("ok");
+
     try {
       const proc = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
@@ -817,12 +882,14 @@ describe("kinu exec — provider failures are legible and actionable", () => {
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startInBandErrorLlm(BILLING_ERROR);
+
     try {
       const env = {
         KINU_BASE_URL: `http://127.0.0.1:${good.port}`,
         KINU_AUTH: "Bearer mock",
         KINU_MODEL: "mock-model",
       };
+
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "Say hello"], {
@@ -846,12 +913,14 @@ describe("kinu exec — provider failures are legible and actionable", () => {
     tempDirs.push(home);
     const good = startMockLlm("ok");
     const bad = startInBandErrorLlm(BILLING_ERROR);
+
     try {
       const env = {
         KINU_BASE_URL: `http://127.0.0.1:${good.port}`,
         KINU_AUTH: "Bearer mock",
         KINU_MODEL: "mock-model",
       };
+
       expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
       const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], {
@@ -861,10 +930,13 @@ describe("kinu exec — provider failures are legible and actionable", () => {
 
       expect(proc.exitCode).toBe(1);
       const events = toText(proc.stdout).trim().split("\n").map(parseJsonObject);
+
       const error = events.flatMap((event) => {
         const parsed = v.safeParse(ErrorEventSchema, event);
+
         return parsed.success ? [parsed.output] : [];
       })[0];
+
       expect(error).toBeDefined();
       expect(error?.message).toContain("Your account is not active.");
       expect(error?.hint).toContain("kinu provider");
@@ -884,6 +956,7 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
     const home = mkdtempSync(join(tmpdir(), "kinu-stdin-"));
     const started = Date.now();
+
     // stdin: 'pipe', never written to and never closed — exactly what a harness
     // that inherits an idle stdin hands the process.
     const proc = Bun.spawn(["bun", cli, "exec", "--workspace", "nonexistent", "hello"], {
@@ -892,6 +965,7 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
       stderr: "ignore",
       env: { ...process.env, KINU_HOME: home },
     });
+
     await proc.exited;
     rmSync(home, { recursive: true, force: true });
     // The assertion is that it terminates at all, rather than waiting on an
@@ -902,12 +976,14 @@ describe("kinu exec — stdin must not hang a scripted run", () => {
   test("a pipe that starts delivering within the grace is read to EOF — bytes are never dropped", async () => {
     const cli = join(import.meta.dir, "..", "bin", "cli.ts");
     const home = mkdtempSync(join(tmpdir(), "kinu-stdin-"));
+
     const proc = Bun.spawn(["bun", cli, "exec", "--workspace", "nonexistent", "hello"], {
       stdin: "pipe",
       stdout: "ignore",
       stderr: "pipe",
       env: { ...process.env, KINU_HOME: home },
     });
+
     // First chunk inside the grace window, second well past it: the old
     // whole-read race resolved '' at 250ms and dropped BOTH chunks silently.
     await proc.stdin.write("chunk-one ");

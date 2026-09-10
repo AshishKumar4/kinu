@@ -43,10 +43,12 @@ async function recordedFailure(pending: Promise<AgentsTestResult>, args: AgentsT
       timestamp: new Date().toISOString(), name: 'agents', toolCallId: 'tc-1',
       args: v.parse(JsonObjectSchema, args), error: renderThrownChain({ cause }), outcome: failedToolOutcome({ cause }) });
   }
+
   throw new Error('the native agents invocation did not fail');
 }
 
 interface Call { action: string; input: object }
+
 type AgentsTestResult = object | string | number | boolean | null | undefined;
 
 type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode'> & { mode?: AgentsToolDeps['mode'] };
@@ -60,6 +62,7 @@ function testProfile(): AgentsProfileContext {
       deep: { model: DEFAULT_WORKERS_AI_MODEL_SPEC },
     },
   };
+
   return {
     envelope: {
       authority: { kind: 'local' } as const,
@@ -79,7 +82,9 @@ function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
 
 function agentsTool(deps: TestAgentsToolDeps) {
   const entry = createAgentsTool(withBuildMode(deps));
+
   if (!entry) throw new Error('Expected agents tool to be created');
+
   return { ...entry, execute: toolExecute<AgentsToolInput, AgentsTestResult>(entry) };
 }
 
@@ -99,14 +104,18 @@ const testModel = scriptedTurnModel({
     warnings: [],
   }),
 });
+
 /** The briefs a STORED `fork` row carried. Kept as a fixture because the resume
  *  translation has to name them as dropped; no live call takes them. */
 const twoForks = [
   { task: 'survey prior art', rationale: 'establish baseline' },
   { task: 'sketch design', rationale: 'exercise constraints' },
 ];
+
 const DeliveryNoteSchema = v.object({ delivery: v.string(), note: v.string() });
+
 const WorkingResultSchema = v.object({ status: v.string(), agent: v.string(), note: v.string() });
+
 const HandoffResultSchema = v.object({
   event_id: v.string(),
   delivery: v.string(),
@@ -123,6 +132,7 @@ const HandoffResultSchema = v.object({
  *  the fan-out — which is what the seat map in `hostedSeatsOver` holds. */
 function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   const { rt, testSql } = createTestRuntime();
+
   return {
     rt, model: testModel,
     hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
@@ -176,6 +186,7 @@ function makeTeam(
   overrides: Partial<Pick<TeamToolDeps, 'assign' | 'message' | 'list'>> = {},
 ) {
   const calls: Call[] = [];
+
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
     temporary: temporaryPortStub,
@@ -188,6 +199,7 @@ function makeTeam(
     }),
     rename: async (input) => {
       calls.push({ action: 'rename', input });
+
       return {
         ok: true, name: input.name, displayName: input.displayName,
         subordinate: { ...rosterEntry, name: input.name, displayName: input.displayName },
@@ -195,47 +207,69 @@ function makeTeam(
     },
     recordTitle: async (input) => {
       calls.push({ action: 'recordTitle', input });
+
       return { ok: true, name: input.name, displayName: input.displayName, applied: true };
     },
     spawn: async (input) => {
       calls.push({ action: 'spawn', input });
+
       return { name: input.name ?? 'researcher', displayName: 'Researcher' };
     },
-    assign: async (input) => { calls.push({ action: 'assign', input }); return { ok: true, name: input.name, ...handoff('queued', true) }; },
+    assign: async (input) => {
+      calls.push({ action: 'assign', input });
+
+      return { ok: true, name: input.name, ...handoff('queued', true) };
+    },
     knows: async () => true,
-    status: async (input) => { calls.push({ action: 'status', input }); return { roster: [rosterEntry] }; },
-    message: async (input) => { calls.push({ action: 'message', input }); return { ok: true, name: input.name, ...handoff('starts_now', false) }; },
+    status: async (input) => {
+      calls.push({ action: 'status', input });
+
+      return { roster: [rosterEntry] };
+    },
+    message: async (input) => {
+      calls.push({ action: 'message', input });
+
+      return { ok: true, name: input.name, ...handoff('starts_now', false) };
+    },
     dismiss: async (input) => {
       calls.push({ action: 'dismiss', input });
+
       return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
     },
     ...overrides,
   };
+
   return { deps, calls };
 }
 
 function makePeers(overrides: Partial<PeersToolDeps> = {}) {
   const calls: Call[] = [];
+
   const deps: PeersToolDeps = {
     listPeers: async () => [{ name: 'scout', displayName: 'Scout' }],
     ask: async (input) => {
       calls.push({ action: 'ask', input });
+
       return { status: 'replied', from: input.agent, reply: 'answer' };
     },
     send: async (input) => {
       calls.push({ action: 'send', input });
+
       return { status: 'delivered', message_id: 'ox1' };
     },
     reply: async (input) => {
       calls.push({ action: 'reply', input });
+
       return { ok: true };
     },
     spawnWorkspace: async (input) => {
       calls.push({ action: 'spawn_workspace', input });
+
       return { agent: input.name ?? 'specialist', created: true, status: 'replied', from: 'specialist', reply: 'done' };
     },
     ...overrides,
   };
+
   return { deps, calls };
 }
 
@@ -282,6 +316,7 @@ describe('agents tool — registration and dep-gating', () => {
   test('the task lifetime is described only where the actor can run one', () => {
     const temporaryCapable = withBuildMode({ team: makeTeam().deps });
     const durableOnly = withBuildMode({ team: { ...makeTeam().deps, temporary: undefined } });
+
     const said = (deps: Parameters<typeof renderAgentsToolDescription>[0]): string =>
       renderAgentsToolDescription(deps);
 
@@ -303,10 +338,12 @@ describe('agents tool — registration and dep-gating', () => {
     // Still a usable account of the rung it does have.
     expect(said(durableOnly)).toContain('Hire a helper (action=hire)');
     expect(said(durableOnly)).toContain('stays in your roster');
+
     // And the schema agrees with each, which is the property the prose lies about.
     const props = (deps: Parameters<typeof agentsTool>[0]): string[] => Object.keys(
       v.parse(v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }), agentsTool(deps).inputSchema).jsonSchema.properties,
     );
+
     expect(props(temporaryCapable)).toContain('lifetime');
     expect(props(durableOnly)).not.toContain('lifetime');
   });
@@ -345,12 +382,14 @@ describe('agents tool — the field contract', () => {
 
   test('a camelCase cap is refused by the tool, naming the field it meant', async () => {
     const t = agentsTool({ swarm: swarmDeps() });
+
     /* SAFETY: a field `AgentsToolInput` does not declare, which is precisely what
        reaches `execute` in production — the AI SDK validates a tool call's TYPES
        against the JSON Schema and never its field NAMES. */
     const input: AgentsToolInput & { budgetUsd: number; budgetLabel: string } = {
       action: 'swarm', task: 'explore', budgetUsd: 5, budgetLabel: 'audit',
     };
+
     const pending = t.execute(input);
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('unknown field "budgetUsd" — did you mean "budget_usd"?');
@@ -385,8 +424,11 @@ describe('agents tool — the field contract', () => {
     const properties = v.parse(v.object({
       jsonSchema: v.object({ properties: v.record(v.string(), v.object({ description: v.string() })) }),
     }), input.value).jsonSchema.properties;
+
     const property = properties[field];
+
     if (!property) throw new Error(`the swarm surface advertises no \`${field}\``);
+
     return property.description;
   }
 
@@ -399,6 +441,7 @@ describe('agents tool — the field contract', () => {
     const t = agentsTool({ swarm: swarmDeps() });
     const preset = propertyDescription({ value: t.inputSchema }, 'preset');
     expect(preset).toContain(SWARM_PRESET_DOCTRINE.join(' '));
+
     for (const name of SWARM_PRESETS) expect(preset).toContain(name);
   });
 
@@ -474,6 +517,7 @@ describe('agents tool — the field contract', () => {
 describe('agents tool — delegation depth', () => {
   const depthDeps = (depth: number, extra: Partial<AgentsToolDeps> = {}) => {
     const team = makeTeam();
+
     return {
       team,
       deps: withBuildMode({ team: { ...team.deps, delegation: delegationBudgetAtDepth(depth) }, profile: () => testProfile(), ...extra }),
@@ -584,6 +628,7 @@ describe('agents tool — the swarm refusal seam', () => {
     const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
       task: v.object({ description: v.string() }),
     }) }) }), agentsTool({ swarm: swarmDeps() }).inputSchema);
+
     const { task } = schema.jsonSchema.properties;
     expect(task.description).toMatch(/what the search is for, in prose/);
     expect(task.description).toMatch(/never the measured quantity/);
@@ -603,6 +648,7 @@ describe('agents tool — subordinate actions', () => {
     await rt.storage.vfs.mkdir('/home/user', { recursive: true });
     await rt.storage.vfs.writeFile(path, 'original');
     const team = makeTeam();
+
     const childTransport: TeamToolDeps = {
       ...team.deps,
       temporary: {
@@ -610,18 +656,23 @@ describe('agents tool — subordinate actions', () => {
         run: async (request) => {
           const tools = buildToolSurface({ rt, workMode: request.mode });
           const file = tools.file;
+
           if (file === undefined) throw new Error('Child has no file tool');
           const execute = toolExecute(file);
           await execute({ action: 'read', path });
           const pending = execute({ action: 'write', path, content: 'changed' });
+
           if (request.mode === 'plan') {
             await expect(pending).rejects.toMatchObject({ code: 'denied' });
+
             return { ...await temporaryPortStub.run(), answer: 'denied' };
           }
+
           return { ...await temporaryPortStub.run(), answer: JSON.stringify(await pending) };
         },
       },
     };
+
     const parent = agentsTool({ mode: 'build', team: childTransport, profile: () => testProfile() });
     const planned = await inWorkMode('plan', () => parent.execute({ action: 'hire', lifetime: 'task', role: 'researcher', mission: 'Inspect' }));
     expect(planned).toMatchObject({ status: 'completed', answer: expect.stringContaining('denied') });
@@ -635,9 +686,11 @@ describe('agents tool — subordinate actions', () => {
   test('hire forwards role/mission (+ optional agent name/tier) to team.spawn', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps, profile: () => testProfile() });
+
     const result = await t.execute({
       action: 'hire', agent: 'scout', role: 'researcher', mission: 'Map the landscape',
     });
+
     expect(result).toEqual({ name: 'scout', displayName: 'Researcher' });
     expect(calls[0].input).toEqual({
       name: 'scout', role: 'researcher', mission: 'Map the landscape', mode: 'build',
@@ -655,9 +708,11 @@ describe('agents tool — subordinate actions', () => {
   test('a hire naming a roster name assigns the work and says the report arrives as an event', async () => {
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
+
     const result = v.parse(WorkingResultSchema, await t.execute({
       action: 'hire', agent: 'researcher', message: 'Survey auth', deliverable: 'a note',
     }));
+
     expect(result.status).toBe('working');
     expect(result.agent).toBe('researcher');
     expect(result.note).toContain('event');
@@ -728,6 +783,7 @@ describe('agents tool — subordinate actions', () => {
     const { deps } = makeTeam({
       assign: async (input) => ({ ok: true, name: input.name, ...handoff('starts_now', false) }),
     });
+
     const t = agentsTool({ team: deps });
 
     const result = v.parse(
@@ -743,6 +799,7 @@ describe('agents tool — subordinate actions', () => {
     const { deps } = makeTeam({
       assign: async (input) => ({ ok: true, name: input.name, ...handoff('queued', true) }),
     });
+
     const t = agentsTool({ team: deps });
 
     const result = v.parse(
@@ -774,6 +831,7 @@ describe('agents tool — subordinate actions', () => {
     const delivered = agentsTool({ team: makeTeam({
       message: async (input) => ({ ok: true, name: input.name, ...handoff('starts_now', false) }),
     }).deps });
+
     const backlogged = agentsTool({ team: makeTeam({
       message: async (input) => ({ ok: true, name: input.name, ...handoff('queued', true) }),
     }).deps });
@@ -789,10 +847,12 @@ describe('agents tool — subordinate actions', () => {
     // reporting completed. It must remain addressable, not evicted.
     const { deps, calls } = makeTeam();
     const t = agentsTool({ team: deps });
+
     const result = v.parse(
       v.object({ status: v.string() }),
       await t.execute({ action: 'hire', agent: 'researcher', message: 'one more thing' }),
     );
+
     expect(result.status).toBe('working');
     expect(calls[0].action).toBe('assign');
   });
@@ -803,9 +863,11 @@ describe('agents tool — subordinate actions', () => {
     expect(await t.execute({ action: 'list' })).toEqual({ subordinates: [rosterEntry] });
 
     const empty = agentsTool({ team: makeTeam({ list: async () => [] }).deps });
+
     const emptyResult = v.parse(v.object({
       subordinates: v.array(v.unknown()), note: v.optional(v.string()),
     }), await empty.execute({ action: 'list' }));
+
     expect(emptyResult.subordinates).toEqual([]);
     expect(emptyResult.note).toContain('hire');
   });
@@ -864,6 +926,7 @@ describe('agents tool — subordinate actions', () => {
     const { deps } = makeTeam({
       assign: async () => { throw new Error('subordinate "researcher" is dismissed'); },
     });
+
     const t = agentsTool({ team: deps });
     await expect(t.execute({ action: 'hire', agent: 'researcher', message: 'x' })).rejects.toThrow('dismissed');
   });
@@ -941,9 +1004,11 @@ describe('agents tool — peer workspace actions', () => {
   test('hire scope=workspace forwards mission as purpose + message (the old spawn_workspace, verbatim transport)', async () => {
     const { deps, calls } = makePeers();
     const t = agentsTool({ peers: deps });
+
     const result = await t.execute({
       action: 'hire', scope: 'workspace', mission: 'summarize research papers', message: 'Summarize X',
     });
+
     expect(result).toMatchObject({ agent: 'specialist', created: true, status: 'replied' });
     expect(calls[0].input).toEqual({
       purpose: 'summarize research papers', message: 'Summarize X', mode: 'build',
@@ -996,6 +1061,7 @@ describe('agents tool — resuming a stored delegation row', () => {
     const original = console.error;
     const lines: string[] = [];
     console.error = (...args: unknown[]) => { lines.push(String(args[0])); };
+
     try {
       return { result: run(), lines };
     } finally {
@@ -1021,6 +1087,7 @@ describe('agents tool — resuming a stored delegation row', () => {
     const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
       action: 'fork', task: 'search', forks: twoForks, merge_strategy: 'consensus', budget_usd: 5,
     }));
+
     expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search', budget_usd: 5 });
     const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
     expect(dropped).toHaveLength(1);
@@ -1038,6 +1105,7 @@ describe('agents tool — resuming a stored delegation row', () => {
     const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
       action: 'fork', task: 'search', settle: 'mcts', budget_tokens: 900,
     }));
+
     expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search', budget_tokens: 900 });
     const dropped = lines.filter((line) => line.includes('agents.resume.fields_dropped'));
     expect(dropped).toHaveLength(1);
@@ -1052,6 +1120,7 @@ describe('agents tool — resuming a stored delegation row', () => {
     const { result: resumed } = captureEvents(() => resumableAgentsInput('agents', {
       action: 'swarm', preset: 'custom', task: 'search', config: { context: 'fork' },
     }));
+
     expect(resumed).toEqual({ action: 'swarm', preset: 'custom', task: 'search', config: { context: 'inherit' } });
   });
 
@@ -1059,6 +1128,7 @@ describe('agents tool — resuming a stored delegation row', () => {
     const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
       action: 'swarm', preset: 'ideate', task: 'search', budgetUsd: 5,
     }));
+
     // Translated, not refused: `budgetUsd` never applied on the original
     // dispatch either, so the re-drive reproduces that run rather than failing.
     expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
@@ -1078,8 +1148,10 @@ describe('agents tool — resuming a stored delegation row', () => {
     const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
       action: 'swarm', preset: 'ideate', task: 'search', topic: 'stale',
     }));
+
     expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
     expect(lines.filter((line) => line.includes('agents.resume.fields_dropped'))).toHaveLength(1);
+
     if (!resumed) throw new Error('expected a resumable agents input');
     const replayed = v.parse(v.record(v.string(), v.unknown()), await agentsTool({ swarm: swarmDeps() }).execute(resumed));
     // Not refused, and positively so: the re-drive reached the engine and came

@@ -20,5 +20,6 @@ function isInlineExtension(value: string): value is keyof typeof INLINE_TYPES {
 export function inlineFileType(path: string): string | undefined {
   const name = path.slice(path.lastIndexOf('/') + 1);
   const ext = name.includes('.') ? name.slice(name.lastIndexOf('.') + 1).toLowerCase() : '';
+
   return isInlineExtension(ext) ? INLINE_TYPES[ext] : undefined;
 }

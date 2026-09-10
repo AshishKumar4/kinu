@@ -92,9 +92,11 @@ function buildSurface(opts?: {
 }) {
   const { rt } = createTestRuntime();
   const capture = new HeadCapture();
+
   const executeTool = tool({ description: 'execute_tools', inputSchema: jsonSchema<{ code: string }>({
     type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
   }), execute: async () => 'ran' });
+
   const tools = buildHeadToolSet({
     input: opts?.input ?? headInput(),
     capture,
@@ -105,12 +107,14 @@ function buildSurface(opts?: {
       narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0,
     })),
   });
+
   return { tools, capture };
 }
 
 describe('head tool surface — containment', () => {
   test('a head has no think / team / peers / report / release tool', () => {
     const { tools } = buildSurface();
+
     for (const forbidden of ['think', 'team', 'peers', 'report', 'release']) {
       expect(Object.keys(tools)).not.toContain(forbidden);
     }
@@ -135,6 +139,7 @@ describe('head tool surface — containment', () => {
     const { tools } = buildSurface();
     expect(tools.execute_tools).toBeDefined();
     expect(tools.run).toBeDefined();
+
     // The tools that lied about being a sandbox are gone — the real planes
     // are reached through execute_tools/run instead.
     for (const gone of ['sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list']) {
@@ -148,7 +153,9 @@ describe('head tool surface — containment', () => {
     const { tools } = buildSurface({
       input: headInput({ budget: { maxDepth: 0, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
     });
+
     expect(tools.split_subheads).toBeUndefined();
+
     // The work tools are untouched — this removes a dead option, not capability.
     for (const name of HEAD_BUILTIN_TOOLS) expect(tools[name]).toBeDefined();
   });
@@ -157,6 +164,7 @@ describe('head tool surface — containment', () => {
     const { tools } = buildSurface({
       input: headInput({ budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
     });
+
     expect(tools.split_subheads?.description).toContain('2 more level(s)');
   });
 
@@ -164,10 +172,16 @@ describe('head tool surface — containment', () => {
     // Wall-clock stays a runtime check: unlike depth it can pass mid-run, so the
     // tool is present and refuses when called.
     let splits = 0;
+
     const { tools, capture } = buildSurface({
       input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
-      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }; },
+      split: async () => {
+        splits++;
+
+        return { narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 };
+      },
     });
+
     const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
     await expect(split({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }))
       .rejects.toMatchObject({ code: 'denied', message: expect.stringContaining('budget exhausted (wall-clock)') });
@@ -176,6 +190,7 @@ describe('head tool surface — containment', () => {
     // head is stopped mid-plan could not be asked of the ledger.
     expect(capture.toolCalls).toHaveLength(1);
     const refusal = capture.toolCalls.at(0);
+
     if (!refusal) throw new Error('Expected split refusal to be recorded');
     expect(refusal.name).toBe('split_subheads');
     expect(refusal.result).toContain('wall-clock');
@@ -184,10 +199,16 @@ describe('head tool surface — containment', () => {
 
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
     let splits = 0;
+
     const { tools, capture } = buildSurface({
       input: headInput({ budget: { maxDepth: 3, spawnedAt: Date.now() - 60 * 60_000 } }),
-      split: async () => { splits++; return { narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 2 }; },
+      split: async () => {
+        splits++;
+
+        return { narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 2 };
+      },
     });
+
     // A head an hour in that has burned 2M tokens. Neither is a reason to refuse.
     capture.recordStepUsage({ input: 2_000_000, output: 500_000 });
     const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
@@ -255,6 +276,7 @@ describe('exploration actors write the workspace journal and acquire only their 
     const rows = workspace.db.prepare<{ actor_id: string; head_id: string; text: string }, []>(
       'SELECT actor_id, head_id, text FROM head_steps',
     ).all();
+
     expect(rows).toEqual([{ actor_id: root, head_id: 'head-1', text: 'read the parser' }]);
   });
 
@@ -266,11 +288,13 @@ describe('exploration actors write the workspace journal and acquire only their 
     // which is what lets the home assertion name the row the directory issued
     // instead of a key the fixture invented.
     const branchRecord = (await hostedExplorationHarness(workspace, 'branch', 'branch-1')).actor.record;
+
     const branch = await hostBranch(workspace.agent.observeExplorationSeams(), 'branch-1', {
       explorePrompt: ({ context }) => ({ system: 'score this rollout', user: `context: ${context}` }),
       reflectionPrompt: (task, traces) => `why did ${task} score badly after ${traces}`,
       complete: async (request) => {
         asked.push(request.user);
+
         return { text: 'the parser branch looks promising' };
       },
     });
@@ -334,9 +358,11 @@ describe('recursive split budget', () => {
     const actor = createTestActorsOver(db).main;
     initHeadsTables((ddl) => db.exec(ddl));
     const spawned: HeadInput[] = [];
+
     const runtime: HeadRuntime = {
       async spawnHead(input) {
         spawned.push(input);
+
         return {
           id: input.id,
           async run() { return report(input.id); },
@@ -345,6 +371,7 @@ describe('recursive split budget', () => {
       },
       async mergeLLM() { return mergeOutput; },
     };
+
     const controller = new HeadController(runtime, new HeadJournal(sql, actor));
 
     await controller.run({
@@ -398,8 +425,10 @@ describe('the mission ledger bounds a hosted head', () => {
 
   test('the port charges the ledger of the actor that declared the budget', async () => {
     const workspace = orchestratorHarness();
+
     const scoped = workspace.agent.observeExplorationSeams()
       .mission(headInput({ missionLabels: ['q3-migration'] }));
+
     if (!scoped) throw new Error('a head with labels is given a mission port');
 
     // Guarding an undeclared mission is not a refusal — there is no cap to

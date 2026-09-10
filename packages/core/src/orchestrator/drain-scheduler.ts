@@ -44,6 +44,7 @@ export class DrainScheduler {
     this.armed = true;
     this.setTimer(async () => {
       this.armed = false;
+
       try {
         await this.drain();
       } catch (err) {

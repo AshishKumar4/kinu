@@ -43,6 +43,7 @@ interface CapturedRef {
 function scrollHost(scrollHeight: number, clientHeight: number): TestScrollHost {
   const max = Math.max(0, scrollHeight - clientHeight);
   let top = 0;
+
   return {
     style: { overflowAnchor: '' },
     scrollHeight,
@@ -79,12 +80,16 @@ function reader(initialScroll: ConversationScroll | undefined, exhausted: boolea
       onReachEdge: () => { calls.edge += 1; },
       onScrollPosition: (position) => { reported.push(position); },
     });
+
     return null;
   }
+
   renderToStaticMarkup(createElement(Conversation));
 
   const ref = captured.ref;
+
   if (ref === undefined) throw new Error('useGrowingScroll returned no container ref');
+
   return { attach: ref, reported, calls };
 }
 

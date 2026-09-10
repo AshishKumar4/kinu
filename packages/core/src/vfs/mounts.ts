@@ -72,6 +72,7 @@ export function standardMounts(provider: (name: string) => MountableProvider | u
 			name: EXECUTOR_MOUNTS.laptop.slice(1),
 			files: () => {
 				const laptop = provider('laptop');
+
 				return laptop && laptop.isAvailable() ? laptop.files ?? null : null;
 			},
 			absentReason: () => 'no device connected',
@@ -134,6 +135,7 @@ export interface VfsNativeReads {
  *  members carry exactly these signatures. */
 function nativeOps(files: VFS): Partial<VfsNativeMutations & VfsNativeReads> {
 	const probed: VFS & Partial<VfsNativeMutations & VfsNativeReads> = files;
+
 	return probed;
 }
 
@@ -156,7 +158,9 @@ export async function readBoundedWithVfsOps(
 ): Promise<Uint8Array> {
 	if (limit <= 0) return new Uint8Array(0);
 	const native = nativeOps(files).readRange;
+
 	if (native) return native.call(files, path, 0, limit);
+
 	if (size === null || size > limit) {
 		throw makeVfsError(
 			'EPERM',
@@ -165,7 +169,9 @@ export async function readBoundedWithVfsOps(
 			path,
 		);
 	}
+
 	const raw = await files.readFile(path);
+
 	return raw instanceof Uint8Array ? raw : new TextEncoder().encode(raw);
 }
 
@@ -184,13 +190,17 @@ export async function readTailWithVfsOps(
 	files: VFS & Pick<VfsNativeReads, 'readRange'>, path: string, bytes: number,
 ): Promise<string | null> {
 	const stat = await files.stat(path);
+
 	if (!stat) return null;
 	const offset = Math.max(0, stat.size - bytes);
 	const length = stat.size - offset;
+
 	if (length === 0) return '';
 	const window = await files.readRange(path, offset, length);
 	let start = 0;
+
 	if (offset > 0) while (start < window.length && (window[start]! & 0xc0) === 0x80) start++;
+
 	return new TextDecoder().decode(start === 0 ? window : window.subarray(start));
 }
 
@@ -209,10 +219,13 @@ export async function readTailWithVfsOps(
  */
 export async function listWithVfsOps(files: VFS, dir: string): Promise<VfsListedEntry[]> {
 	const native = nativeOps(files).readdirStats;
+
 	if (native) return native.call(files, dir);
 	const names = await files.readdir(dir);
+
 	return Promise.all(names.map(async (name) => {
 		const child = dir === '/' ? `/${name}` : `${dir}/${name}`;
+
 		try {
 			return { name, stat: await files.stat(child) };
 		} catch (cause) {
@@ -233,12 +246,15 @@ export async function listWithVfsOps(files: VFS, dir: string): Promise<VfsListed
  */
 export async function removeTreeWithVfsOps(files: VFS, path: string): Promise<void> {
 	const st = await files.stat(path);
+
 	if (!st) throw makeVfsError('ENOENT', 'no such file or directory', path);
+
 	if (st.isDir) {
 		for (const name of await files.readdir(path)) {
 			await removeTreeWithVfsOps(files, path === '/' ? `/${name}` : `${path}/${name}`);
 		}
 	}
+
 	await files.unlink(path);
 }
 
@@ -268,7 +284,9 @@ export interface CarrySide {
  */
 export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promise<void> {
 	const sourceStat = await from.files.stat(from.path);
+
 	if (!sourceStat) throw makeVfsError('ENOENT', 'no such file or directory', from.path);
+
 	if (sourceStat.isDir) {
 		throw makeVfsError(
 			'EPERM',
@@ -276,6 +294,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 			from.path,
 		);
 	}
+
 	const payload = await from.files.readFile(from.path);
 	const temp = siblingPath(to.path, 'carry', nanoid(10));
 	const destinationExisted = await to.files.exists(to.path);
@@ -285,6 +304,7 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 	const destinationBytes = destinationExisted && !native ? await to.files.readFile(to.path) : null;
 
 	await to.files.writeFile(temp, payload);
+
 	if (!(await to.files.exists(temp))) {
 		throw makeVfsError('EIO', `the staged copy at ${temp} is not there after writing it`, from.path);
 	}
@@ -295,15 +315,18 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 		// destination is then replaced by one rename over it — never by moving it
 		// aside first, which would leave the name missing in between.
 		await from.files.unlink(from.path);
+
 		if (native) await native.call(to.files, temp, to.path);
 		else {
 			await to.files.writeFile(to.path, payload);
+
 			// The staged copy is the only remaining witness of these bytes, so the
 			// destination has to be confirmed before it goes — the same check the
 			// staged copy itself got, for the same reason.
 			if (!(await to.files.exists(to.path))) {
 				throw makeVfsError('EIO', `the copy at ${to.path} is not there after writing it`, to.path);
 			}
+
 			await to.files.unlink(temp);
 		}
 	} catch (cause) {
@@ -312,20 +335,25 @@ export async function carryFileWithVfsOps(from: CarrySide, to: CarrySide): Promi
 			// again: its old bytes if it had any, and no file at all if it did not.
 			if (destinationBytes !== null) await to.files.writeFile(to.path, destinationBytes);
 			else if (!destinationExisted && await to.files.exists(to.path)) await to.files.unlink(to.path);
+
 			if (!(await from.files.exists(from.path))) await from.files.writeFile(from.path, payload);
+
 			if (await to.files.exists(temp)) await to.files.unlink(temp);
 		} catch (rollback) {
 			throw makeVfsError('EIO', `the rename failed (${renderThrownChain({ cause })}) and rollback failed (${renderThrownChain({ cause: rollback })})`, to.path);
 		}
+
 		throw cause;
 	}
 }
+
 /** Containment-preserving temporary sibling. It never interprets user path
  * segments and cannot escape the destination parent. */
 function siblingPath(path: string, purpose: string, nonce: string): string {
 	const slash = path.lastIndexOf('/');
 	const parent = slash < 0 ? '' : path.slice(0, slash + 1);
 	const name = slash < 0 ? path : path.slice(slash + 1);
+
 	return `${parent}.${name}.kinu-${purpose}-${nonce}`;
 }
 
@@ -351,6 +379,7 @@ export function withMountTable(
 	base: VFS, mounts: readonly VfsMount[],
 ): VFS & VfsNativeMutations & VfsNativeReads {
 	const byName = new Map<string, VfsMount>();
+
 	for (const mount of mounts) {
 		if (
 			mount.name.length === 0
@@ -360,9 +389,11 @@ export function withMountTable(
 		) {
 			throw new Error(`'${mount.name}' is not a usable VFS mount name`);
 		}
+
 		if (byName.has(mount.name)) {
 			throw new Error(`duplicate VFS mount name '${mount.name}'`);
 		}
+
 		byName.set(mount.name, mount);
 	}
 
@@ -375,12 +406,16 @@ export function withMountTable(
 		const slash = path.indexOf('/', 1);
 		const head = slash === -1 ? path.slice(1) : path.slice(1, slash);
 		const mount = byName.get(head);
+
 		if (!mount) return { base: path };
+
 		if (slash === -1) return { mount, native: '/' };
 
 		const segments: string[] = [];
+
 		for (const segment of path.slice(slash).split('/')) {
 			if (segment === '' || segment === '.') continue;
+
 			if (segment === '..') {
 				if (segments.length === 0) {
 					throw makeVfsError(
@@ -389,25 +424,33 @@ export function withMountTable(
 						path,
 					);
 				}
+
 				segments.pop();
 				continue;
 			}
+
 			segments.push(segment);
 		}
+
 		return { mount, native: segments.length === 0 ? '/' : `/${segments.join('/')}` };
 	};
 
 	const delegate = async <T>(path: string, op: (files: VFS, native: string) => Promise<T>): Promise<T> => {
 		const routed = routeOf(path);
+
 		if (!('mount' in routed)) return op(base, path);
 		const files = routed.mount.files();
+
 		if (!files) throw absentError(routed.mount, path);
+
 		return op(files, routed.native);
 	};
 
 	const filesForMount = (mount: VfsMount, path: string): VFS => {
 		const files = mount.files();
+
 		if (!files) throw absentError(mount, path);
+
 		return files;
 	};
 
@@ -424,12 +467,17 @@ export function withMountTable(
 		path: string, operation: string, op: (files: VFS, native: string) => Promise<T>,
 	): Promise<T> => {
 		const routed = routeOf(path);
+
 		if (!('mount' in routed)) return op(base, path);
+
 		if (routed.native === '/') {
 			throw makeVfsError('EPERM', `a mount point cannot be ${operation}`, path);
 		}
+
 		const files = routed.mount.files();
+
 		if (!files) throw absentError(routed.mount, path);
+
 		return op(files, routed.native);
 	};
 
@@ -443,6 +491,7 @@ export function withMountTable(
 		writeFileIfRevision(path, data, expectedRevision) {
 			return mutate(path, 'written', (files, native) => {
 				const conditional = files.writeFileIfRevision;
+
 				if (!conditional) {
 					throw makeVfsError(
 						'ENOTSUP',
@@ -450,32 +499,39 @@ export function withMountTable(
 						path,
 					);
 				}
+
 				return conditional.call(files, native, data, expectedRevision);
 			});
 		},
 		readdir(path) {
 			return delegate(path, async (files, native) => {
 				const entries = await files.readdir(native);
+
 				// Only the true root carries the mount points themselves, and only
 				// LIVE ones: they are entries of THIS plane, not of any one tree
 				// behind it, and an absent mount is no entry at all.
 				if (path !== '/') return entries;
 				const mounted = [...byName.values()].filter((m) => m.files() !== null).map((m) => m.name);
+
 				return [...new Set([...entries, ...mounted])];
 			});
 		},
 		async stat(path) {
 			const routed = routeOf(path);
+
 			if (!('mount' in routed)) return base.stat(path);
 			const files = routed.mount.files();
+
 			// An absent mount names nothing: null, the VFS contract for absent,
 			// rather than an error that would fail a mere existence probe.
 			if (!files) return null;
+
 			// The mount point itself is a directory of this plane by construction.
 			// Some trees cannot stat their own root (the container derives stat
 			// from the parent listing, and '/' has no parent entry), which typed
 			// /sandbox as a file in the root listing.
 			if (routed.native === '/') return MOUNT_POINT_STAT;
+
 			return files.stat(routed.native);
 		},
 		unlink(path) {
@@ -491,21 +547,26 @@ export function withMountTable(
 			// re-thrown. A non-recursive mkdir of a mount point is still EPERM:
 			// nothing may create one.
 			const routed = routeOf(path);
+
 			if ('mount' in routed && routed.native === '/' && opts?.recursive === true) {
 				if (routed.mount.files() !== null) return;
 				throw absentError(routed.mount, path);
 			}
+
 			return mutate(path, 'created', (files, native) => files.mkdir(native, opts));
 		},
 		async exists(path) {
 			const routed = routeOf(path);
+
 			if (!('mount' in routed)) return base.exists(path);
 			const files = routed.mount.files();
+
 			return files ? files.exists(routed.native) : false;
 		},
 		async rename(oldPath, newPath) {
 			const from = routeOf(oldPath);
 			const to = routeOf(newPath);
+
 			if (('mount' in from && from.native === '/') || ('mount' in to && to.native === '/')) {
 				throw makeVfsError('EPERM', 'a mount point cannot be renamed', oldPath);
 			}
@@ -516,13 +577,16 @@ export function withMountTable(
 					filesForMount(to.mount, newPath);
 					throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 				}
+
 				const files = filesForMount(from.mount, oldPath);
 				const native = nativeOps(files).rename;
+
 				if (native) return native.call(files, from.native, to.native);
 				await carryFileWithVfsOps(
 					{ files, path: from.native },
 					{ files, path: to.native },
 				);
+
 				return;
 			}
 
@@ -530,18 +594,23 @@ export function withMountTable(
 				filesForMount(from.mount, oldPath);
 				throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 			}
+
 			if ('mount' in to) {
 				filesForMount(to.mount, newPath);
 				throw makeVfsError('EPERM', 'cannot rename across VFS mount boundaries', oldPath);
 			}
 
 			const native = nativeOps(base).rename;
+
 			if (native) return native.call(base, oldPath, newPath);
 			const st = await base.stat(oldPath);
+
 			if (!st) throw makeVfsError('ENOENT', 'no such file or directory', oldPath);
+
 			if (st.isDir) {
 				throw makeVfsError('EPERM', 'a directory cannot be renamed here — this route has no native rename, and only a file\'s bytes can be carried', oldPath);
 			}
+
 			await carryFileWithVfsOps(
 				{ files: base, path: oldPath },
 				{ files: base, path: newPath },
@@ -550,6 +619,7 @@ export function withMountTable(
 		removeRecursive(path) {
 			return mutate(path, 'removed', (files, native) => {
 				const remove = nativeOps(files).removeRecursive;
+
 				return remove ? remove.call(files, native) : removeTreeWithVfsOps(files, native);
 			});
 		},
@@ -565,17 +635,21 @@ export function withMountTable(
 		readRange(path, offset, length) {
 			return delegate(path, (files, native) => {
 				const range = nativeOps(files).readRange;
+
 				if (!range) throw makeVfsError('EPERM', 'this plane serves no ranged read', path);
+
 				return range.call(files, native, offset, length);
 			});
 		},
 		readdirStats(path) {
 			return delegate(path, async (files, native) => {
 				const listed = await listWithVfsOps(files, native);
+
 				// The rule `readdir` above states, once: only the true root carries
 				// the mount points themselves, and only the live ones.
 				if (path !== '/') return listed;
 				const named = new Set(listed.map((entry) => entry.name));
+
 				return [
 					...listed,
 					...[...byName.values()]

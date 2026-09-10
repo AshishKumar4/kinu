@@ -25,6 +25,7 @@ export interface OrphanedFiber {
 export function createLinuxFiber(sql: SqlExecutor, actor: ActorHandle): Schedule['fiber'] {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
+
   return async function fiber<T>(
     name: string,
     fn: (ctx: FiberCtx) => Promise<T>,
@@ -55,9 +56,11 @@ export function createLinuxFiber(sql: SqlExecutor, actor: ActorHandle): Schedule
 /** Orphans from a previous crashed run — THIS actor's lanes only. */
 export function detectOrphanedFibers(sql: SqlExecutor, actor: ActorHandle): OrphanedFiber[] {
   actor.assertCurrent();
+
   const rows = sql<{ id: string; name: string; snapshot: string | null }>`
     SELECT id, name, snapshot FROM fibers WHERE actor_id = ${actor.actorId}
   `;
+
   return rows.map(r => ({
     id: r.id,
     name: r.name,

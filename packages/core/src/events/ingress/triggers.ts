@@ -40,6 +40,7 @@ const TimerSpecSchema = v.object({
   payload: v.optional(JsonObjectSchema),
   mission_label: v.optional(v.string()),
 });
+
 type TimerSpec = v.InferOutput<typeof TimerSpecSchema>;
 
 /**
@@ -56,19 +57,27 @@ export async function createTimerTrigger(
 ): Promise<TimerTrigger> {
   const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
   const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
+
   if (opts.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${opts.cron}`);
+
   if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
   const triggerSpec: JsonObject = {};
+
   if (opts.cron !== undefined) Object.assign(triggerSpec, { cron: opts.cron });
+
   if (opts.label !== undefined) Object.assign(triggerSpec, { label: opts.label });
+
   if (opts.payload !== undefined) Object.assign(triggerSpec, { payload: opts.payload });
+
   if (opts.missionLabel !== undefined) Object.assign(triggerSpec, { mission_label: opts.missionLabel });
+
   const id = await registry.register({
     kind,
     spec: triggerSpec satisfies TimerSpec,
     creator_trust: opts.trust ?? 'authenticated',
     next_fire_at: nextFireAt ?? undefined,
   }, now);
+
   return { id, kind, nextFireAt };
 }
 
@@ -142,6 +151,7 @@ export function cancelTrigger(
   secrets?: Pick<WebhookSecretStore, 'deleteByTrigger'>,
 ): CancelTriggerResult {
   const trigger = registry.get(trigger_id);
+
   if (trigger && trigger.creator_trust === 'owner' && caller !== 'owner') {
     return {
       ok: false,
@@ -149,8 +159,11 @@ export function cancelTrigger(
       error: 'this trigger was created by the owner; only the owner can revoke it',
     };
   }
+
   const changed = registry.revoke(trigger_id, now);
+
   if (changed) secrets?.deleteByTrigger(trigger_id);
+
   return { ok: true, changed };
 }
 
@@ -168,6 +181,7 @@ export interface TimerFireDeps {
  */
 export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
   let fired = 0;
+
   for (const trigger of deps.registry.due(now)) {
     // Only timers produce timer events. No other kind carries a next_fire_at
     // today, and one that did must not be published as an alarm.
@@ -198,5 +212,6 @@ export async function fireDueTriggers(deps: TimerFireDeps, now: number) {
       deps.registry.revoke(trigger.id, now);
     }
   }
+
   return { fired };
 }

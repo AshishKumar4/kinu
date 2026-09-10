@@ -15,6 +15,7 @@ function createStore() {
 	const { sql } = createTestDb();
 	const store = new MemoryStore(createMemoryVfs(), sql);
 	store.ensureSchema();
+
 	return { store };
 }
 
@@ -37,6 +38,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 	test("fills to exactly the requested capacity and never past it", async () => {
 		const { store } = createStore();
 		await store.indexFile("memory/strict.md", "alpha beta together");
+
 		for (let i = 0; i < 8; i++) {
 			await store.indexFile(`memory/partial-${i}.md`, `alpha only number ${i}`);
 		}
@@ -60,9 +62,11 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 
 	test("a full strict page admits no partial", async () => {
 		const { store } = createStore();
+
 		for (let i = 0; i < 4; i++) {
 			await store.indexFile(`memory/pair-${i}.md`, `epsilon zeta pair ${i}`);
 		}
+
 		await store.indexFile("memory/partial.md", "epsilon on its own");
 
 		const hits = store.search("epsilon zeta", 2);
@@ -73,6 +77,7 @@ describe("MemoryStore.search fills an underfull strict page", () => {
 	test("the page is stable across repeated identical searches", async () => {
 		const { store } = createStore();
 		await store.indexFile("memory/pair.md", "gamma delta");
+
 		for (let i = 0; i < 4; i++) {
 			await store.indexFile(`memory/solo-${i}.md`, "gamma alone");
 		}

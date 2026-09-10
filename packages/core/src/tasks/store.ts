@@ -23,7 +23,9 @@ import { sqlCheckList } from '../identity/schema';
 import { taskPlanScope, type TaskPlan } from './plan-scope';
 
 export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;
+
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+
 const TaskStatusSchema = v.picklist(TASK_STATUSES);
 
 const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'active']);
@@ -44,6 +46,7 @@ export interface AgentTaskTree extends AgentTask {
 }
 
 const AgentTaskSchema = v.object({ id: v.string(), parentId: v.nullable(v.string()), title: v.string(), status: TaskStatusSchema, createdAt: v.number(), updatedAt: v.number() });
+
 export const AgentTaskTreeSchema = v.object({ ...AgentTaskSchema.entries, subtasks: v.array(AgentTaskSchema) });
 
 /** Read-only plan progress for ONE actor, also usable for retained actors
@@ -51,6 +54,7 @@ export const AgentTaskTreeSchema = v.object({ ...AgentTaskSchema.entries, subtas
  *  the approving actor's, and its rows are that actor's tasks. */
 export function readPlanTasks(sql: SqlExecutor, actor: ActorHandle, plan: TaskPlan): AgentTaskTree[] {
   actor.assertCurrent();
+
   return nest(sql<Row>`SELECT t.id,t.parent_id,t.title,t.status,t.created_at,t.updated_at
     FROM agent_tasks t INNER JOIN plan_task_links l ON l.task_id=t.id AND l.actor_id=t.actor_id
     WHERE t.actor_id=${actor.actorId} AND l.plan_id=${plan.id}
@@ -68,12 +72,14 @@ function toTask(r: Row): AgentTask {
   // while the open-filtered reads skip the same row shows one item in two
   // places at once. Refuse naming the value so the repair knows what to fix.
   const status = v.safeParse(TaskStatusSchema, r.status);
+
   if (!status.success) {
     throw new Error(
       `agent_tasks row '${r.id}' stores unknown status '${r.status}'`
       + ` — expected one of ${TASK_STATUSES.join(', ')}`,
     );
   }
+
   return {
     id: r.id,
     parentId: r.parent_id,
@@ -154,15 +160,18 @@ export class TaskListStore {
     this.actor.assertCurrent();
     const scope = taskPlanScope(this.sql);
     const write = () => this.addLinked(titles, parentId, now, scope?.plan ?? null);
+
     return this.transactionSync(write);
   }
 
   private addLinked(titles: readonly string[], parentId: string | null, now: number, plan: TaskPlan | null): TaskAddResult {
     if (parentId !== null) plan = this.sql<TaskPlan>`SELECT plan_id AS id, revision, session_id AS sessionId FROM plan_task_links WHERE actor_id=${this.actorId} AND task_id=${parentId}`[0] ?? null;
     const parent = parentId === null ? null : this.get(parentId);
+
     if (parentId !== null && !parent) {
       return { added: [], rejected: titles.map((title) => ({ title, reason: `no task ${parentId}` })) };
     }
+
     // One level, on purpose: a subtask of a subtask is a tree, and a tree is
     // the workflow engine this list refuses to become.
     if (parent && parent.parentId !== null) {
@@ -178,23 +187,29 @@ export class TaskListStore {
     const added: AgentTask[] = [];
     const rejected: TaskAddRejection[] = [];
     let seq = this.nextSeq();
+
     for (const raw of titles) {
       const title = raw.trim();
+
       if (title.length === 0) {
         rejected.push({ title: raw, reason: 'empty title' });
         continue;
       }
+
       if (title.length > MAX_TASK_TITLE_CHARS) {
         rejected.push({ title, reason: `title over ${MAX_TASK_TITLE_CHARS} characters` });
         continue;
       }
+
       const id = `t${seq}`;
       void this.sql`INSERT INTO agent_tasks (actor_id, id, seq, parent_id, title, status, created_at, updated_at)
         VALUES (${this.actorId}, ${id}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${now})`;
+
       if (plan) void this.sql`INSERT INTO plan_task_links(actor_id,task_id,plan_id,revision,session_id) VALUES (${this.actorId},${id},${plan.id},${plan.revision},${plan.sessionId})`;
       added.push({ id, parentId, title, status: 'open', createdAt: now, updatedAt: now });
       seq++;
     }
+
     return { added, rejected };
   }
 
@@ -202,16 +217,20 @@ export class TaskListStore {
    *  is another actor's, which this actor cannot see and so cannot close. */
   setStatus(id: string, status: TaskStatus, now: number): AgentTask | null {
     this.actor.assertCurrent();
+
     if (!this.get(id)) return null;
     void this.sql`UPDATE agent_tasks SET status=${status}, updated_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id}`;
+
     return this.get(id);
   }
 
   get(id: string): AgentTask | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<Row>`SELECT id, parent_id, title, status, created_at, updated_at
       FROM agent_tasks WHERE actor_id=${this.actorId} AND id=${id} LIMIT 1`;
+
     return rows[0] ? toTask(rows[0]) : null;
   }
 
@@ -219,9 +238,11 @@ export class TaskListStore {
    *  agent closing a parent cannot see from the parent row. */
   countOpenSubtasks(id: string): number {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM agent_tasks
       WHERE actor_id=${this.actorId} AND parent_id=${id} AND status IN ('open', 'active')`;
+
     return rows[0]?.n ?? 0;
   }
 
@@ -243,16 +264,20 @@ export class TaskListStore {
     const items: AgentTaskTree[] = [];
     let rowsShown = 0;
     let total = 0;
+
     for (const tree of trees) {
       const subtasks = tree.subtasks.filter((t) => OPEN_STATUSES.has(t.status));
+
       if (!OPEN_STATUSES.has(tree.status) && subtasks.length === 0) continue;
       const open = { ...tree, subtasks };
       total += 1 + subtasks.length;
+
       if (rowsShown < limit) {
         items.push(open);
         rowsShown += 1 + subtasks.length;
       }
     }
+
     return { items, total };
   }
 
@@ -260,6 +285,7 @@ export class TaskListStore {
   count(): number {
     this.actor.assertCurrent();
     const rows = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM agent_tasks WHERE actor_id=${this.actorId}`;
+
     return rows[0]?.n ?? 0;
   }
 
@@ -267,6 +293,7 @@ export class TaskListStore {
    *  `listOpen` reads unbounded so its filter runs before any bound. */
   private rows(limit = -1): AgentTask[] {
     this.actor.assertCurrent();
+
     return this.sql<Row>`SELECT id, parent_id, title, status, created_at, updated_at
       FROM agent_tasks WHERE actor_id=${this.actorId} ORDER BY seq ASC LIMIT ${limit}`.map(toTask);
   }
@@ -275,6 +302,7 @@ export class TaskListStore {
    *  run `t1, t2, …` independently and neither renumbers around the other. */
   private nextSeq(): number {
     const rows = this.sql<{ n: number | null }>`SELECT MAX(seq) AS n FROM agent_tasks WHERE actor_id=${this.actorId}`;
+
     return (rows[0]?.n ?? 0) + 1;
   }
 }
@@ -286,15 +314,19 @@ export class TaskListStore {
 function nest(tasks: readonly AgentTask[]): AgentTaskTree[] {
   const seen = new Map<string, AgentTaskTree>();
   const order: AgentTaskTree[] = [];
+
   for (const task of tasks) {
     const parent = task.parentId === null ? undefined : seen.get(task.parentId);
+
     if (parent) {
       parent.subtasks.push(task);
       continue;
     }
+
     const tree: AgentTaskTree = { ...task, subtasks: [] };
     seen.set(task.id, tree);
     order.push(tree);
   }
+
   return order;
 }

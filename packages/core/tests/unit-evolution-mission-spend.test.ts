@@ -29,6 +29,7 @@ import { listTurnOutcomes } from '../src/evolution/outcomes';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 
 const CLASSIFY = 'Classify what the follow-up reveals';
+
 const FOLLOWUP = 'No — that rotates production keys. I said STAGING.';
 
 function makeTurn(overrides: Partial<CompletedTurn> = {}): CompletedTurn {
@@ -53,13 +54,21 @@ function workspace() {
   const { rt } = createTestRuntime({
     llmResponses: { [CLASSIFY]: '{"outcome":"corrected","confidence":0.9,"evidence":"test"}' },
   });
+
   let completions = 0;
   const inner = rt.llm.complete.bind(rt.llm);
+
   const counted: AgentRuntime = {
     ...rt,
-    llm: { stream: rt.llm.stream.bind(rt.llm), complete: async (p) => { completions++; return inner(p); } },
+    llm: { stream: rt.llm.stream.bind(rt.llm), complete: async (p) => {
+      completions++;
+
+      return inner(p);
+    } },
   };
+
   const governor = new MissionGovernor({ storage: rt.storage, actor: rt.actor });
+
   return {
     rt: counted,
     governor,

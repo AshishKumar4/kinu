@@ -63,6 +63,7 @@ export function resetDatabases(): void {
  * single largest source of type assertions.
  */
 export const harnessExec: (db: Database) => SqlExec = makeSqlExec;
+
 export const harnessSql: (db: Database) => SqlExecutor = sqlOver;
 
 export interface HostedWorkspaceFixture {
@@ -174,6 +175,7 @@ export async function hostedWorkspace(
   // needed a binding the other did not have — the same reason a test helper must
   // not declare a table a production initializer owns.
   const env = makeEnv();
+
   // Both optional deps are ANSWERED, not cast past: `previewUrl` answers a
   // PROMISE of a preview verdict and `refreshPreview` a promise of void, and an
   // `as never` over them hides a signature mismatch nothing here would surface,
@@ -193,6 +195,7 @@ export async function hostedWorkspace(
   // with the root object's own runtime. A child released test below proves an
   // unhosted main still seeds, by releasing this handle again first.
   let rootRuntime: AgentRuntime | null = null;
+
   const seams: WorkspaceHostSeams = {
     env,
     ctx,
@@ -229,6 +232,7 @@ export async function hostedWorkspace(
     workspaceName: 'harness',
     rootRuntime: () => {
       if (rootRuntime === null) throw new Error('the harness root runtime is not ready');
+
       return rootRuntime;
     },
     installedBuild: () => 'harness-build',
@@ -258,6 +262,7 @@ export async function hostedWorkspace(
     chosenWriteObserver: () => null,
     ...overrides,
   };
+
   const host = createWorkspaceActorHost(seams);
   rootRuntime = (await host.acquire(main)).runtime;
 
@@ -265,12 +270,15 @@ export async function hostedWorkspace(
     db, sql, exec, host, directory, main,
     hire: async (parent, name, kind, loop) => {
       const parentHandle = directory.open(parent.actorId);
+
       const handle = directory.create({
         parent: parentHandle, name, creationId: name,
         kind: kind === 'main' ? 'subordinate' : kind,
         lifetime: kind === 'subordinate' ? 'durable' : 'task',
       });
+
       if (loop) chosen.set(handle.actorId, loop);
+
       return await host.acquire(actorReferenceOf(handle));
     },
     tables: () => db.query<{ name: string }, []>(

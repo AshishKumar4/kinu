@@ -49,6 +49,7 @@ import {
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/reachability.lock.json`;
 
 export interface Rpc {
@@ -74,14 +75,18 @@ export function declaredRpcs(file: string, text: string): Rpc[] {
   walk(parsed.root, (node) => {
     if (node.type !== 'ClassDeclaration') return;
     const owner = declaredName(node) ?? '(anonymous class)';
+
     for (const member of classMembers(node)) {
       if (member.type !== 'MethodDefinition') continue;
+
       if (!decoratorNames(member).includes('callable')) continue;
       const method = declaredName(member);
+
       if (method === undefined) continue;
       found.push({ file, line: parsed.lineAt(member.start), owner, method });
     }
   });
+
   return found;
 }
 
@@ -97,10 +102,13 @@ export function invokedNames(file: string, text: string): Set<string> {
   const names = new Set<string>();
   walk(parse(file, text).root, (node) => {
     if (node.type !== 'CallExpression') return;
+
     for (const argument of stringArguments(node)) names.add(argument);
     const member = memberCalleeName(node);
+
     if (member !== undefined) names.add(member);
   });
+
   return names;
 }
 
@@ -117,15 +125,25 @@ export function seamInstalledNames(file: string, text: string): Set<string> {
   const names = new Set<string>();
   walk(parse(file, text).root, (node) => {
     if (node.type !== 'CallExpression') return;
+
     if (node.raw.type !== 'CallExpression' || node.raw.callee.type !== 'MemberExpression') return;
+
     if (node.raw.callee.object.type !== 'ThisExpression') return;
     const name = memberCalleeName(node);
+
     if (name === undefined) return;
+
     for (let cursor = node.parent; cursor !== undefined; cursor = cursor.parent) {
-      if (cursor.type === 'Property' || cursor.type === 'ObjectProperty') { names.add(name); return; }
+      if (cursor.type === 'Property' || cursor.type === 'ObjectProperty') {
+        names.add(name);
+
+        return;
+      }
+
       if (cursor.type === 'ClassBody') return;
     }
   });
+
   return names;
 }
 
@@ -144,6 +162,7 @@ export function findUnreachable(
   tests: ReadonlyMap<string, string> = new Map(),
 ): Reachability {
   const rpcs: Rpc[] = [];
+
   for (const [file, text] of sources) {
     if (!text.includes('@callable')) continue;
     rpcs.push(...declaredRpcs(file, text));
@@ -166,6 +185,7 @@ export function findUnreachable(
   // the "correct, wired, dead" class, and a false positive there is what gets
   // a gate switched off.
   const declaredIn = new Map<string, Set<string>>();
+
   for (const rpc of rpcs) {
     const seen = declaredIn.get(rpc.method) ?? new Set<string>();
     seen.add(rpc.file);
@@ -173,20 +193,26 @@ export function findUnreachable(
   }
 
   const callersOf = new Map<string, string[]>();
+
   const record = (file: string, text: string): void => {
     const installed = seamInstalledNames(file, text);
+
     for (const name of invokedNames(file, text)) {
       const declarers = declaredIn.get(name);
+
       if (declarers === undefined) continue;
+
       if (declarers.has(file) && !installed.has(name)) continue;
       const list = callersOf.get(name) ?? [];
       list.push(file);
       callersOf.set(name, list);
     }
   };
+
   for (const [file, text] of sources) record(file, text);
 
   const testCallersOf = new Map<string, string[]>();
+
   for (const [file, text] of tests) {
     for (const name of invokedNames(file, text)) {
       if (!declaredIn.has(name)) continue;
@@ -200,6 +226,7 @@ export function findUnreachable(
     .filter((rpc) => (callersOf.get(rpc.method)?.length ?? 0) === 0)
     .map((rpc) => ({ rpc, testCallers: (testCallersOf.get(rpc.method) ?? []).sort() }))
     .sort((a, b) => a.rpc.method.localeCompare(b.rpc.method));
+
   return { declared: rpcs, unreachable };
 }
 
@@ -209,9 +236,11 @@ export function keyOf(entry: Unreachable): string {
 
 export function describe(entry: Unreachable): string {
   const { rpc, testCallers } = entry;
+
   const reach = testCallers.length === 0
     ? 'no caller anywhere'
     : `reachable only from ${testCallers.length} test file(s): ${testCallers.join(', ')}`;
+
   return `  ${rpc.file}:${rpc.line} ${rpc.owner}.${rpc.method}() — ${reach}`;
 }
 
@@ -254,6 +283,7 @@ if (import.meta.main) {
     console.log(`reachability: locked ${count} unreachable over ${measured}`);
   } else {
     const detail = new Map(unreachable.map((e) => [keyOf(e), describe(e)]));
+
     const code = report(
       'reachability',
       reconcile(unreachable.map(keyOf), LOCK),
@@ -261,9 +291,11 @@ if (import.meta.main) {
       'bun scripts/reachability.ts --lock',
       measured,
     );
+
     if (code === 0) {
       for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
     }
+
     process.exit(code);
   }
 }

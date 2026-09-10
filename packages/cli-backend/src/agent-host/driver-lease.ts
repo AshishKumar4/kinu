@@ -121,6 +121,7 @@ const OS_LEASE_PROCESS: LeaseProcess = {
   isAlive(pid: number): boolean {
     try {
       process.kill(pid, 0);
+
       return true;
     } catch (error) {
       // The signal's own failure is the I/O boundary here, so the errno is
@@ -129,7 +130,9 @@ const OS_LEASE_PROCESS: LeaseProcess = {
       // dead process.
       const errno = v.safeParse(ProcessSignalFailureSchema, error);
       const code = errno.success ? errno.output.code : undefined;
+
       if (code === 'ESRCH') return false;
+
       if (code === 'EPERM') return true;
       throw toKinuError({
         doing: `test whether process ${String(pid)} is still running`,
@@ -171,11 +174,13 @@ function initDriverLeaseTable(execRaw: RawSqlExec): void {
 function readRow(sql: SqlExecutor): DriverLeaseHolderRow | null {
   const rows = sql<LeaseRow>`SELECT pid, token, kind FROM driver_lease WHERE id = ${LEASE_ROW_ID}`;
   const row = rows[0];
+
   if (!row) return null;
   // A row whose kind this build does not recognise is treated as a live claim
   // by an unknown driver rather than ignored: the safe reading of "someone
   // wrote something here" is that someone is driving.
   const kind: DriverKind = row.kind === 'interactive' ? 'interactive' : 'daemon';
+
   return { pid: Number(row.pid), token: row.token, kind };
 }
 
@@ -206,6 +211,7 @@ function acquireDriverLease(
     // anyone, which is the only recovery path and the reason no deadline exists.
     const alive = proc.isAlive(current.pid);
     const mayTake = !alive || (kind === 'interactive' && current.kind === 'daemon');
+
     if (!mayTake) {
       return {
         // `unavailable`, not `denied`: nothing is forbidden here, the driver is
@@ -235,12 +241,15 @@ function acquireDriverLease(
   }
 
   const settled = readRow(deps.sql);
+
   if (settled?.token === token) {
     return { held: { token, kind, pid: proc.pid } };
   }
+
   // Someone else's write landed between our read and ours. Report THEM, not a
   // generic failure: the caller's next pass is the retry.
   const holder = settled ?? { pid: proc.pid, kind, token };
+
   return {
     refused: refusalOf(new KinuError(
       'unavailable',
@@ -271,8 +280,10 @@ function holdsDriverLease(deps: Pick<DriverLeaseDeps, 'sql'>, token: string): bo
  */
 function releaseDriverLease(deps: Pick<DriverLeaseDeps, 'sql'>, token: string): boolean {
   const held = holdsDriverLease(deps, token);
+
   if (!held) return false;
   void deps.sql`DELETE FROM driver_lease WHERE id = ${LEASE_ROW_ID} AND token = ${token}`;
+
   return true;
 }
 
@@ -305,11 +316,15 @@ export class DriverLeaseHold {
   acquire(): DriverLeaseRefusal | null {
     if (this.token !== null && holdsDriverLease(this.deps, this.token)) return null;
     const outcome = acquireDriverLease(this.deps, this.kind);
+
     if ('held' in outcome) {
       this.token = outcome.held.token;
+
       return null;
     }
+
     this.token = null;
+
     return { refused: outcome.refused, holder: outcome.holder };
   }
 

@@ -18,6 +18,7 @@ function setup() {
   const execRaw = makeExecRaw(db);
   initGepaTables(execRaw);
   const sql = makeSql(db);
+
   // Every gepa row is one actor's: the run ledger, the candidates and the front
   // are all keyed on the owner, so the fixture issues a real bound handle.
   return { sql, execRaw, db, actor: testActorHandle(sql) };
@@ -26,6 +27,7 @@ function setup() {
 function mkCandidate(id: string, source: string, scores: Record<string, number>): GepaCandidate {
   const m = new Map(Object.entries(scores));
   const total = Array.from(m.values()).reduce((a, b) => a + b, 0);
+
   return {
     id, parentId: null, source,
     scores: m, feedback: new Map([['i1', 'fb']]),
@@ -39,8 +41,10 @@ describe('initGepaTables', () => {
     const { sql, execRaw } = setup();
     initGepaTables(execRaw);
     initGepaTables(execRaw); // double-call OK
+
     const tables = sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'gepa_%'`;
+
     const names = tables.map(t => t.name).sort();
     expect(names).toEqual(['gepa_candidates', 'gepa_runs']);
   });
@@ -49,11 +53,13 @@ describe('initGepaTables', () => {
 describe('startGepaRun + finishGepaRun', () => {
   test('round-trips run metadata', () => {
     const { sql, actor } = setup();
+
     const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       targetRef: null,
       budget: { maxIterations: 5, maxMetricCalls: 50, minibatchSize: 2 },
     });
+
     expect(runId).toMatch(/^gepa-/);
 
     let runs = listGepaRuns(sql, actor);
@@ -83,10 +89,12 @@ describe('startGepaRun + finishGepaRun', () => {
 describe('persistGepaCandidate + loadGepaCandidates', () => {
   test('round-trips scores Map and feedback Map verbatim', () => {
     const { sql, actor } = setup();
+
     const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1 },
     });
+
     const cand = mkCandidate('c1', 'source-1', { i1: 0.7, i2: 0.3 });
     persistGepaCandidate(sql, actor, { runId, candidate: cand, iteration: 0, accepted: true });
 
@@ -102,10 +110,12 @@ describe('persistGepaCandidate + loadGepaCandidates', () => {
 
   test('orders by iteration then created_at', () => {
     const { sql, actor } = setup();
+
     const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       budget: { maxIterations: 5, maxMetricCalls: 50, minibatchSize: 1 },
     });
+
     const seed = mkCandidate('seed', 'src-0', { i1: 0.5 });
     const it1 = mkCandidate('it1', 'src-1', { i1: 0.6 });
     const it2 = mkCandidate('it2', 'src-2', { i1: 0.7 });
@@ -127,6 +137,7 @@ describe('loadGepaParetoFront — the derived front', () => {
     // membership at all.
     const a = mkCandidate('a', 'src-a', { i1: 0.9, i2: 0.3 });
     const b = mkCandidate('b', 'src-b', { i1: 0.3, i2: 0.9 });
+
     for (const cand of [a, b]) {
       persistGepaCandidate(sql, actor, { runId, candidate: cand, iteration: 0, accepted: true });
     }
@@ -148,9 +159,11 @@ describe('loadGepaParetoFront — the derived front', () => {
 describe('runGepa with makePersistingHooks end-to-end', () => {
   test('every accepted candidate ends up in gepa_candidates + run counters update', async () => {
     const { sql, actor } = setup();
+
     const evalSet: EvalInstance<string>[] = [
       { id: 'i1', input: 'a' }, { id: 'i2', input: 'b' },
     ];
+
     const runId = startGepaRun(sql, actor, {
       target: 'scaffold',
       budget: { maxIterations: 2, maxMetricCalls: 50, minibatchSize: 1 },
@@ -159,7 +172,13 @@ describe('runGepa with makePersistingHooks end-to-end', () => {
     const hooks = makePersistingHooks({ sql, actor, runId });
 
     let lmCall = 0;
-    const reflectionLm = async () => { lmCall++; return `improved-${lmCall}`; };
+
+    const reflectionLm = async () => {
+      lmCall++;
+
+      return `improved-${lmCall}`;
+    };
+
     const metric = async (source: string): Promise<MetricOutcome> => ({
       score: source.startsWith('improved') ? 0.9 : 0.5,
       feedback: source,
@@ -203,11 +222,16 @@ test('a fully measured seed is retained before the first reflection measurement 
   await expect(runGepa({ seed: 'seed', evalSet: [{ id: 'one', input: 'task' }],
     metric: async () => {
       if (++calls === 2) throw failure;
+
       return { score: 0.7, feedback: 'fully measured seed' };
     },
     reflectionLm: async () => 'candidate',
     ...hooks,
-    onIteration: state => { iterations.push(state.iteration); return hooks.onIteration(state); },
+    onIteration: state => {
+      iterations.push(state.iteration);
+
+      return hooks.onIteration(state);
+    },
     budget: { maxIterations: 1, maxMetricCalls: 10, minibatchSize: 1, useMerge: false },
   })).rejects.toBe(failure);
   expect(iterations).toEqual([]);

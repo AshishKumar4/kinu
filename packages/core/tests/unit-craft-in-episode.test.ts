@@ -110,10 +110,12 @@ function ledgerFixture() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initCraftedToolsTables(sql);
+
   const ledger = createCraftLedger({
     craftStore: { list: () => db.query<{ name: string }, []>('SELECT name FROM crafted_tools').all() },
     sql,
   });
+
   return { ledger, db };
 }
 
@@ -136,10 +138,12 @@ describe('the craft ledger — where an in-episode observation lands', () => {
 
   test('a store that cannot answer is a fault, not a runtime with no crafted tools', () => {
     const db = new Database(':memory:');
+
     const ledger = createCraftLedger({
       craftStore: { list: () => { throw new Error('not initialized'); } },
       sql: makeSql(db),
     });
+
     // `crafted_tools` belongs to the one workspace schema, so a store that
     // cannot list is a broken database. Answered as an empty set, the agent
     // re-crafts tools it already owns and every call to them goes unscored.
@@ -149,17 +153,21 @@ describe('the craft ledger — where an in-episode observation lands', () => {
   test('observations accumulate through the existing EMA, not a parallel score', () => {
     const { ledger, db } = ledgerFixture();
     db.run(`INSERT INTO crafted_tools (name) VALUES ('summarize')`);
+
     const before = db.query<{ score: number; uses: number }, []>(
       `SELECT score, uses FROM crafted_tools WHERE name='summarize'`,
     ).get();
+
     if (!before) throw new Error('expected seeded craft score');
     expect(before.score).toBe(CRAFT_NEUTRAL_PRIOR);
     expect(before.uses).toBe(0);
 
     ledger.observe(['summarize'], CRAFT_INVOCATION_QUALITY.returned);
+
     const after = db.query<{ score: number; uses: number }, []>(
       `SELECT score, uses FROM crafted_tools WHERE name='summarize'`,
     ).get();
+
     if (!after) throw new Error('expected observed craft score');
     expect(after.score).toBeGreaterThan(before.score);
     expect(after.uses).toBe(1);
@@ -170,9 +178,11 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     db.run(`INSERT INTO crafted_tools (name) VALUES ('broken')`);
 
     const dropped: string[] = [];
+
     for (let i = 0; i < 4; i++) {
       dropped.push(...ledger.observe(['broken'], CRAFT_INVOCATION_QUALITY.raised));
     }
+
     // Forgiving of a flake, decisive about a persistently broken artifact.
     expect(dropped).toEqual(['broken']);
   });
@@ -195,9 +205,11 @@ describe('the craft ledger — where an in-episode observation lands', () => {
   test('a creation carries its neutral prior in the same INSERT — nothing to seed', () => {
     const { db } = ledgerFixture();
     db.run(`INSERT INTO crafted_tools (name) VALUES ('fresh')`);
+
     const row = db.query<{ score: number; uses: number }, []>(
       `SELECT score, uses FROM crafted_tools WHERE name='fresh'`,
     ).get();
+
     expect(row).toEqual({ score: CRAFT_NEUTRAL_PRIOR, uses: 0 });
   });
 

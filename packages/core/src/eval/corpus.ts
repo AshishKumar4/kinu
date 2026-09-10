@@ -26,21 +26,28 @@ export function parseCorpus(jsonl: string): EvalCase[] {
   const lines = jsonl.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('#'));
   const out: EvalCase[] = [];
   const seen = new Set<string>();
+
   for (let i = 0; i < lines.length; i++) {
     let parsed: unknown;
+
     try { parsed = JSON.parse(lines[i]); }
     catch (error) {
       throw new Error(`Eval corpus line ${i + 1}: invalid JSON`, { cause: error });
     }
+
     const result = v.safeParse(CaseSchema, parsed);
+
     if (!result.success) {
       throw new Error(`Eval corpus line ${i + 1}: ${result.issues.map(x => x.message).join('; ')}`);
     }
+
     if (seen.has(result.output.id)) {
       throw new Error(`Eval corpus line ${i + 1}: duplicate id "${result.output.id}"`);
     }
+
     seen.add(result.output.id);
     out.push(result.output);
   }
+
   return out;
 }

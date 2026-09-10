@@ -205,6 +205,7 @@ export interface PlatformFact {
 }
 
 const KiB = 1024;
+
 const MiB = 1024 * 1024;
 
 /**
@@ -215,11 +216,15 @@ const MiB = 1024 * 1024;
  * over-reading a ceiling is the direction that fails in production.
  */
 const MB = 1000 * 1000;
+
 const GB = 1000 * 1000 * 1000;
 
 const CF_DO_LIMITS = 'https://developers.cloudflare.com/durable-objects/platform/limits/';
+
 const CF_DO_STATE = 'https://developers.cloudflare.com/durable-objects/api/state/';
+
 const CF_WORKER_LIMITS = 'https://developers.cloudflare.com/workers/platform/limits/';
+
 const NIMBUS_JIT_PROBE = '~/Nimbus/scratchpad/jit-limits-verification.md';
 
 /** Every documented entry was read from the live docs on this date. */

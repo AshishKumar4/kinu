@@ -28,9 +28,12 @@ export async function authenticateCli(
   // `expired` by itself, so the wait ends on that answer or on approval.
   const status = await waitForAnswer(async (): Promise<CliAuthPoll | undefined> => {
     const poll = await pollCliAuth(origin, flow.deviceToken);
+
     return poll.status === 'pending' ? undefined : poll;
   }, { intervalMs: Math.max(1, flow.intervalSeconds) * 1000, onWaiting: () => callbacks.pending?.() });
+
   if (status.status === 'expired') throw new Error(status.message ?? 'CLI auth expired.');
+
   if (!status.token || !status.user) throw new Error('Auth approved but no token returned.');
   updateConfigFile((config) => {
     config.origin = status.origin ?? origin;
@@ -65,6 +68,7 @@ export async function whoamiCommand(opts: { origin?: string }): Promise<void> {
   const config = loadConfigFile();
   const origin = defaultOrigin(opts);
   const token = config.accessToken;
+
   if (!token) throw new Error('Not authenticated. Run: kinu auth');
   const result = await whoami(origin, token);
   console.log(`${ACCENT(result.user.email)} ${DIM(result.user.id)}`);
@@ -73,8 +77,10 @@ export async function whoamiCommand(opts: { origin?: string }): Promise<void> {
 export async function logoutCommand(opts: { origin?: string }): Promise<void> {
   const config = loadConfigFile();
   const origin = defaultOrigin(opts);
+
   if (config.accessToken) {
     let revoked = true;
+
     try {
       await logout(origin, config.accessToken);
     } catch (error) {
@@ -94,13 +100,16 @@ export async function logoutCommand(opts: { origin?: string }): Promise<void> {
       });
       revoked = false;
     }
+
     if (!revoked) {
       bumpProviderRevision();
       console.log(`${OK('✓')} Logged out locally. Session NOT revoked`);
       console.log(DIM(`Run \`kinu logout\` again when reachable, or \`kinu sessions\` from any machine to revoke by inventory.`));
+
       return;
     }
   }
+
   updateConfigFile((current) => {
     delete current.accessToken;
     delete current.tokenExpiresAt;
@@ -125,28 +134,37 @@ export async function sessionsCommand(
   action: string | undefined, hash: string | undefined,
 ): Promise<void> {
   const sub = action ?? 'list';
+
   if (sub === 'revoke') {
     if (hash === undefined || hash === '--all') {
       const auth = requireAuthConfig();
       const result = await revokeAllCliSessions(auth.origin, auth.token);
       console.log(`${OK('✓')} Revoked ${ACCENT(String(result.revoked))} session(s)`);
+
       return;
     }
+
     return revokeSessionCommand(hash);
   }
+
   if (sub !== 'list') {
     throw new Error('Usage: kinu sessions [list | revoke <hash> | revoke --all]');
   }
+
   const auth = requireAuthConfig();
   const { sessions } = await listCliSessions(auth.origin, auth.token);
+
   if (sessions.length === 0) {
     console.log(DIM('No live CLI sessions. Sign in with: kinu auth'));
+
     return;
   }
+
   for (const session of sessions) {
     console.log(`${ACCENT(session.tokenHash.slice(0, 16))}…  ${DIM(session.label)}`);
     console.log(`  ${DIM('created')} ${formatWhen(session.createdAt)}  ${DIM('last used')} ${session.lastUsedAt ? formatWhen(session.lastUsedAt) : 'never'}  ${DIM('expires')} ${formatWhen(session.expiresAt)}`);
   }
+
   console.log(DIM('Revoke one: kinu sessions revoke <hash>   All: kinu sessions revoke --all'));
 }
 
@@ -156,6 +174,7 @@ export function openBrowser(url: string): void {
     : platform() === 'win32'
       ? 'cmd'
       : 'xdg-open';
+
   const args = platform() === 'win32' ? ['/c', 'start', '', url] : [url];
   const child = spawn(command, args, { detached: true, stdio: 'ignore' });
   child.on('error', () => {});

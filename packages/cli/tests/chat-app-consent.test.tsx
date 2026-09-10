@@ -8,22 +8,26 @@ afterEach(cleanupChats);
 describe('ChatApp consent ownership', () => {
   test('device consent owns every key until the decision closes it', async () => {
     const decisions: string[] = [];
+
     const pending = {
       consentId: 'consent-1',
       deviceLabel: 'Workstation',
       method: 'run',
       command: 'bun test',
     };
+
     const controlled = fakeClient({
       name: 'cloudish',
       consents: {
         listPending: async () => [pending],
         resolve: async (_id, decision) => {
           decisions.push(decision);
+
           return { ok: true };
         },
       },
     });
+
     const screen = await mountChat(controlled.client);
     await screen.mockInput.typeText('/settings');
     screen.mockInput.pressEnter();
@@ -46,6 +50,7 @@ describe('ChatApp consent ownership', () => {
 
   test('consent Return cannot activate the focused panel below it', async () => {
     const decisions: string[] = [];
+
     const controlled = fakeClient({
       name: 'cloudish',
       consents: {
@@ -57,10 +62,12 @@ describe('ChatApp consent ownership', () => {
         }],
         resolve: async (_id, decision) => {
           decisions.push(decision);
+
           return { ok: true };
         },
       },
     });
+
     const screen = await mountChat(controlled.client);
     await screen.mockInput.typeText('/settings');
     screen.mockInput.pressEnter();
@@ -75,6 +82,7 @@ describe('ChatApp consent ownership', () => {
   });
   test('an unseen consent tail cannot be approved', async () => {
     const decisions: string[] = [];
+
     const controlled = fakeClient({
       name: 'cloudish',
       consents: {
@@ -86,10 +94,12 @@ describe('ChatApp consent ownership', () => {
         }],
         resolve: async (_id, decision) => {
           decisions.push(decision);
+
           return { ok: true };
         },
       },
     });
+
     const screen = await mountChat(controlled.client);
     controlled.emit({ type: 'turn-start', kind: 'user', text: 'run it' });
     await screen.waitFor('the unapprovable consent warning', () =>
@@ -97,6 +107,7 @@ describe('ChatApp consent ownership', () => {
     screen.mockInput.pressKey('a');
     screen.mockInput.pressKey('y');
     screen.mockInput.pressEnter();
+
     for (let index = 0; index < 4; index += 1) await screen.renderOnce();
     expect(decisions).toEqual([]);
     screen.mockInput.pressKey('n');

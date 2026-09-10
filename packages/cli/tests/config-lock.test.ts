@@ -34,6 +34,7 @@ describe('cross-process config read-modify-write', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     return { code: proc.exitCode, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
   }
 
@@ -51,11 +52,13 @@ describe('cross-process config read-modify-write', () => {
   async function settle(proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>): Promise<{ code: number; stderr: string }> {
     const code = await proc.exited;
     const stderr = new TextDecoder().decode(await new Response(proc.stderr).arrayBuffer());
+
     return { code, stderr };
   }
 
   test('two processes contending on ONE counter lose no update', async () => {
     const home = mkdtempSync(join(tmpdir(), 'kinu-config-lock-race-'));
+
     try {
       // Both workers bump the SAME alias 25 times. Under a load-modify-write
       // without a lock the interleavings silently drop increments; the locked
@@ -70,10 +73,12 @@ describe('cross-process config read-modify-write', () => {
           });
         }
       `;
+
       const [a, b] = await Promise.all([
         settle(spawnIn(home, worker)),
         settle(spawnIn(home, worker)),
       ]);
+
       expect(a).toEqual({ code: 0, stderr: '' });
       expect(b).toEqual({ code: 0, stderr: '' });
 
@@ -81,6 +86,7 @@ describe('cross-process config read-modify-write', () => {
         const { loadConfigFile } = await import(${CONFIG_TS});
         console.log(JSON.stringify(loadConfigFile().aliases));
       `);
+
       expect(final.code).toBe(0);
       expect(JSON.parse(final.stdout)).toEqual({ count: '50' });
     } finally {
@@ -90,6 +96,7 @@ describe('cross-process config read-modify-write', () => {
 
   test('a throwing mutator changes nothing and releases the lock', () => {
     const home = mkdtempSync(join(tmpdir(), 'kinu-config-lock-crash-'));
+
     try {
       const result = runIn(home, `
         const { lstatSync } = await import('node:fs');
@@ -108,6 +115,7 @@ describe('cross-process config read-modify-write', () => {
           }));
         }
       `);
+
       expect(result.code).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({
         message: 'mutator blew up',
@@ -121,6 +129,7 @@ describe('cross-process config read-modify-write', () => {
         updateConfigFile((config) => { config.updateCheck = false; });
         console.log('ok');
       `);
+
       expect(again.code).toBe(0);
       expect(again.stdout.trim()).toBe('ok');
     } finally {
@@ -130,6 +139,7 @@ describe('cross-process config read-modify-write', () => {
 
   test('a lock left behind by a killed process is taken over', () => {
     const home = mkdtempSync(join(tmpdir(), 'kinu-config-lock-abandoned-'));
+
     try {
       const result = runIn(home, `
         const { lstatSync, symlinkSync } = await import('node:fs');
@@ -149,6 +159,7 @@ describe('cross-process config read-modify-write', () => {
           lockGone: !lstatSync(lock, { throwIfNoEntry: false }),
         }));
       `);
+
       expect(result.code).toBe(0);
       expect(JSON.parse(result.stdout)).toEqual({ origin: 'https://after.test', lockGone: true });
     } finally {

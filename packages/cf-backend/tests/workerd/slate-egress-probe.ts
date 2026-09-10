@@ -9,9 +9,11 @@ import { ROOT_SLATE_CALLER, slateCallerKey } from '../../src/slates/bindings';
 import { initWorkspaceSchema, type SqlValue, type WorkMode } from '@kinu.run/core';
 import { ContentRef } from '@agent-core/core';
 import { processes } from '@nimbus-sh/fabric/workerd-facet-host.js';
+
 export { CodemodeEgress } from '../../src/codemode-egress';
 
 export { SlateBinding } from '../../src/slates/bindings';
+
 const source = `
 const fetchFromModule = fetch;
 let calls = 0;
@@ -47,6 +49,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     });
     const files = this.vfs.as(CRED_KERNEL);
     const root = '/home/user/slates/network';
+
     if (!files.exists(root)) {
       files.mkdir(root, { recursive: true });
       files.writeFile(root + '/package.json', JSON.stringify({ main: 'server.js' }));
@@ -57,18 +60,22 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
   async request(mode: WorkMode, target: string, redirect: RequestRedirect = 'follow'): Promise<string> {
     this.prepare();
     const process = await this.host.ensure({ ...ROOT_SLATE_CALLER, workMode: mode }, 'network');
+
     return (await process.request(new Request('https://slate.invalid/?target=' + encodeURIComponent(target) + '&redirect=' + redirect))).text();
   }
 
   async publicPlanCall() {
     const result = await this.host.operation({ ...ROOT_SLATE_CALLER, workMode: 'plan' }, { op: 'call', id: 'network', method: 'example' });
+
     return result.ok ? { ok: true } : { ok: false, reason: result.reason };
   }
 
   async unmediatedThenMediated(): Promise<{ unmediated: string; mediated: string; reused: string }> {
     this.prepare();
+
     const committed = v.parse(v.object({ ok: v.literal(true), value: v.object({ source: v.string() }) }),
       await this.host.operation(ROOT_SLATE_CALLER, { op: 'commit', id: 'network' }));
+
     const digest = new ContentRef(committed.value.source).digest.value;
     // This fixed key models an already-cached image that does not include the
     // egress policy in its identity; the fixture seeds that cache entry
@@ -76,6 +83,7 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
     // for the same workspace, source and caller must not reuse it.
     const key = 'slate:' + this.ctx.id.toString() + ':' + slateCallerKey(ROOT_SLATE_CALLER) + '#network:' + digest;
     const writerId = crypto.randomUUID();
+
     const unmediated = processes(this.ctx, this.env).spawn(
       () => ({ readFile: async () => { throw new Error('This fixture has inline modules only'); } }),
       { doId: this.ctx.id.toString(), pid: 900000, writerId },
@@ -93,12 +101,14 @@ export class SlateEgressProbe extends Agent<Cloudflare.Env> {
           }` },
       } } },
     );
+
     try {
       await unmediated.started;
       const warm = await (await unmediated.handleHttpRequest(new Request('https://slate.invalid/'))).text();
       v.parse(v.object({ unmediated: v.literal(true), status: v.literal(200), body: v.literal('public control') }), JSON.parse(warm));
       const mediated = await this.request('build', 'http://169.254.169.254/forbidden');
       const reused = await this.request('build', 'https://example.com/control');
+
       return { unmediated: warm, mediated, reused };
     } finally { await unmediated.release(); }
   }

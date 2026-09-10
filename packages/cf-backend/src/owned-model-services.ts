@@ -77,9 +77,11 @@ export class OwnedModelServices {
     if (this.providerRegistryCache) return this.providerRegistryCache;
 
     const userId = this.options.getOwnerUserId();
+
     if (!userId && this.options.ownerRequired) {
       throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
     }
+
     // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
     const userDOStub = userId
       ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>
@@ -91,6 +93,7 @@ export class OwnedModelServices {
       appTitle: this.options.appTitle,
       workersAI: { sessionAffinity: this.affinityKey },
     });
+
     return this.providerRegistryCache;
   }
 
@@ -103,9 +106,11 @@ export class OwnedModelServices {
   resolveModel(spec?: string | null): LanguageModel {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
+
     if (this.modelCache?.spec === normalized) return this.modelCache.model;
     const model = registry.resolveModel(normalized);
     this.modelCache = { spec: normalized, model };
+
     return model;
   }
 
@@ -116,6 +121,7 @@ export class OwnedModelServices {
   resolveModelWithEffort(spec: string | null | undefined, effort: ReasoningEffort) {
     const registry = this.providerRegistry();
     const normalized = registry.normalizeSpecSync(spec);
+
     return {
       model: this.resolveModel(normalized),
       providerOptions: reasoningEffortOptions(effort, parseModelSpec(normalized).provider),
@@ -136,6 +142,7 @@ export class OwnedModelServices {
     // the cache alone here rather than fail the turn.
     try {
       const revision = await this.options.getCredentialsRevision();
+
       if (revision !== this.cachedCredentialsRevision) this.invalidate();
       this.cachedCredentialsRevision = revision;
     } catch (cause) {
@@ -148,6 +155,7 @@ export class OwnedModelServices {
         otherwise: 'unavailable',
       }), { agent: this.options.agentName() });
     }
+
     const { listing, cache } = await this.providerListings.read();
     // The assembly — dedupe, sort, `label ?? provider`, and the failure fold
     // into `revision` — is core's. `revision` is the key every other cache is
@@ -160,6 +168,7 @@ export class OwnedModelServices {
       unavailable: listing.failures.length,
       revision: snapshot.revision,
     });
+
     return { snapshot, cache };
   }
 
@@ -170,15 +179,18 @@ export class OwnedModelServices {
     const startedAt = Date.now();
     const { registry, deps } = this.providerRegistry();
     const menu = await registry.listAllModels(deps);
+
     const listing: ProviderListing = {
       models: menu.models.map((model) => `${model.provider}/${model.id}`),
       failures: menu.failures,
     };
+
     diagnostics.event('profile.provider_listing.swept', {
       ms: Date.now() - startedAt,
       models: listing.models.length,
       unavailable: listing.failures.length,
     });
+
     return listing;
   }
 
@@ -192,10 +204,12 @@ export class OwnedModelServices {
   async resolveJudgeModel(opts: { reviewSpec: string | null; chatSpec: string | null }): Promise<LanguageModel> {
     const registry = this.providerRegistry();
     const key = `${opts.reviewSpec ?? ''}\n${opts.chatSpec ?? ''}`;
+
     if (this.judgeSpecCache?.key !== key) {
       const { spec } = await resolveReviewingModelSelection({ registry, pinned: opts.reviewSpec, chatSpec: opts.chatSpec });
       this.judgeSpecCache = { key, spec };
     }
+
     return registry.resolveModel(this.judgeSpecCache.spec);
   }
 
@@ -205,6 +219,7 @@ export class OwnedModelServices {
       this.options.env,
       () => this.options.getOwnerUserId() ? this.providerRegistry().deps.getAuth : undefined,
     );
+
     return this.webSearchProviderCache;
   }
 

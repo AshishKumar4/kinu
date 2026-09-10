@@ -31,11 +31,13 @@ class RecordingAlarm implements AlarmScheduler {
 
   async scheduleAt(ts: number): Promise<void> {
     this.requested.push(ts);
+
     if (this.at === null || ts < this.at) this.at = ts;
   }
 }
 
 const NOW = 1_700_000_000_000;
+
 const TRIGGER_KINDS: TriggerKind[] = [
   'webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron',
   'process_watch', 'file_watch', 'peer_inbox', 'mcp_route', 'email_route',
@@ -43,6 +45,7 @@ const TRIGGER_KINDS: TriggerKind[] = [
 
 function timerPayload(event: KinuEvent): TimerPayload {
   if (event.variant !== 'timer') throw new Error('expected timer event');
+
   return v.parse(v.object({
     trigger_id: v.string(),
     scheduled_fire_at: v.number(),
@@ -61,6 +64,7 @@ function setup() {
   // to a real owner over this same database — `pauseAll` means "everything this
   // actor registered", which is unaskable without one.
   const actor = createTestActorsOver(db).main;
+
   return { registry: new TriggerRegistry(sql, actor, alarm), alarm, actor };
 }
 
@@ -376,16 +380,20 @@ describe('TriggerRegistry.forkPlan', () => {
     const { registry } = setup();
     const ids = new Map<TriggerKind, string>();
     expect(Object.keys(DEFAULT_FORK_POLICY)).toEqual(TRIGGER_KINDS);
+
     for (const kind of TRIGGER_KINDS) {
       ids.set(kind, await registry.register(spec({ kind }), NOW));
     }
 
     const { copy, share } = registry.forkPlan();
+
     const expected = (policy: string) => TRIGGER_KINDS
       .filter(k => DEFAULT_FORK_POLICY[k] === policy)
       .map((kind) => {
         const id = ids.get(kind);
+
         if (!id) throw new Error(`expected registered trigger id for ${kind}`);
+
         return id;
       })
       .sort();
@@ -394,6 +402,7 @@ describe('TriggerRegistry.forkPlan', () => {
     expect(share.map(t => t.id).sort()).toEqual(expected('share'));
     // Severed kinds appear in neither bucket.
     const planned = new Set([...copy, ...share].map(t => t.id));
+
     for (const kind of expected('sever')) expect(planned.has(kind)).toBe(false);
   });
 
@@ -447,6 +456,7 @@ describe('timer ingress', () => {
     const actor = createTestActorsOver(db).main;
     const registry = new TriggerRegistry(sql, actor, alarm);
     const log = new EventLog(sql, actor);
+
     return {
       registry, alarm, log,
       fire: (now: number) => fireDueTriggers({ registry, log }, now),
@@ -475,9 +485,11 @@ describe('timer ingress', () => {
 
   test('a one-shot fires once and revokes itself', async () => {
     const t = timers();
+
     const timer = await createTimerTrigger(t.registry, {
       atMs: NOW + 1000, payload: { task: 'ship' }, missionLabel: 'release', trust: 'owner',
     }, NOW);
+
     expect(timer).toMatchObject({ kind: 'timer_oneshot', nextFireAt: NOW + 1000 });
 
     expect(await t.fire(NOW + 1000)).toEqual({ fired: 1 });
@@ -501,6 +513,7 @@ describe('timer ingress', () => {
 
   test('a due trigger that is not a timer is left alone, not published as an alarm', async () => {
     const t = timers();
+
     const watch = await t.registry.register(
       { kind: 'file_watch', spec: {}, creator_trust: 'owner', next_fire_at: NOW }, NOW,
     );

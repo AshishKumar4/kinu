@@ -18,6 +18,7 @@ const BAND_DOT = {
 
 function ScoreBar({ value, className }: Props) {
   const color = BAND_DOT[scoreBand(value)];
+
   return (
     <div className={`flex items-center gap-2 ${className ?? ""}`}>
       <div className="flex-1 h-1.5 rounded-full overflow-hidden" style={{ background: "var(--c-border)" }}>

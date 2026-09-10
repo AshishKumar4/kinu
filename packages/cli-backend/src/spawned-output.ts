@@ -7,13 +7,16 @@ import * as v from 'valibot';
 async function readAll(stream: AsyncIterable<Uint8Array | string>): Promise<string> {
   const decoder = new TextDecoder();
   let out = '';
+
   for await (const chunk of stream) {
     const text = v.safeParse(v.string(), chunk);
     out += text.success
       ? text.output
       : decoder.decode(v.parse(v.instance(Uint8Array), chunk), { stream: true });
   }
+
   out += decoder.decode();
+
   return out;
 }
 

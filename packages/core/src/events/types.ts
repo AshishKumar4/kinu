@@ -81,12 +81,17 @@ export type RunEventType =
 /** Which surface authored the edit. `owner` is a human editing through the UI,
  *  which is a different authority from the agent editing its own history. */
 export const CONTEXT_EDIT_VIA = ['file', 'session', 'owner'] as const;
+
 export type ContextEditVia = (typeof CONTEXT_EDIT_VIA)[number];
+
 /** Accepted and numbered, or actually consumed by a boundary. */
 export const CONTEXT_EDIT_STATUSES = ['staged', 'activated'] as const;
+
 export type ContextEditStatus = (typeof CONTEXT_EDIT_STATUSES)[number];
+
 /** Which boundary takes it: the next step of the live turn, or the next turn. */
 export const CONTEXT_EDIT_BOUNDARIES = ['step', 'turn'] as const;
+
 export type ContextEditBoundary = (typeof CONTEXT_EDIT_BOUNDARIES)[number];
 
 export interface RunEventBase {

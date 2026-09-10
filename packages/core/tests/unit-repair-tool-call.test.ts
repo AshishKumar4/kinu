@@ -8,10 +8,15 @@ const tools = {
   Read_File: tool({ inputSchema: z.object({ path: z.string() }), execute: async () => 'ok' }),
   write_file: tool({ inputSchema: z.object({ path: z.string() }), execute: async () => 'ok' }),
 };
+
 const messages: ModelMessage[] = [];
+
 const call = (toolName: string, input: string) => ({ type: 'tool-call' as const, toolCallId: 'c1', toolName, input });
+
 const invalid = (toolName: string, input: string) => new InvalidToolInputError({ toolName, toolInput: input, cause: new Error('x') });
+
 const repair = repairToolCall<typeof tools>();
+
 const run = (toolName: string, input: string, error: InvalidToolInputError | NoSuchToolError) =>
   repair({ toolCall: call(toolName, input), tools, error, system: undefined, messages, inputSchema: async () => ({}) });
 

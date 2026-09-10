@@ -92,6 +92,7 @@ export class KinuSandbox extends Devbox<Env> {
    *  binding is what the chain PUTs and HEADs through. */
   protected override get store(): DevboxStore | undefined {
     const bucket = this.env.BACKUP_BUCKET;
+
     return bucket === undefined ? undefined : { binding: "BACKUP_BUCKET", bucket };
   }
 
@@ -124,7 +125,9 @@ export class KinuSandbox extends Devbox<Env> {
    *  stopping one that is still serving something. */
   protected override async hasBackgroundWork(): Promise<boolean> {
     const root = await this.#rootAgent();
+
     if (root === null) return false;
+
     try {
       return await root.hasSandboxBackgroundWork();
     } catch (error) {
@@ -133,6 +136,7 @@ export class KinuSandbox extends Devbox<Env> {
         cause: error,
         otherwise: 'unavailable',
       }));
+
       // Unreadable means possibly-busy. Never stop a container on a guess.
       return true;
     }
@@ -180,7 +184,9 @@ export class KinuSandbox extends Devbox<Env> {
     incident: DevboxIncident, attempt: number,
   ): Promise<IncidentDisposition> {
     const root = await this.#rootAgent();
+
     if (root === null) return 'rejected';
+
     // The root's schema is closed and takes plain JSON; a DevboxIncident is
     // exactly that shape, restated field by field so an added Devbox field
     // cannot silently ride along into a contract that would reject it. The
@@ -193,9 +199,12 @@ export class KinuSandbox extends Devbox<Env> {
       reason: incident.reason,
       attempts: attempt,
     };
+
     if (incident.processId !== undefined) report.processId = incident.processId;
+
     if (incident.port !== undefined) report.port = incident.port;
     const result = await root.acceptSandboxLifecycleFailure(report);
+
     return result.status;
   }
 
@@ -226,7 +235,9 @@ export class KinuSandbox extends Devbox<Env> {
 
   async #rootAgent(): Promise<SandboxRootClient | null> {
     const workspaceName = await this.ctx.storage.get<string>(WORKSPACE_NAME_KEY);
+
     if (workspaceName === undefined || this.env.OrchestratorAgent === undefined) return null;
+
     return await getAgentByName<Env, OrchestratorAgent>(
       this.env.OrchestratorAgent, workspaceName,
     );

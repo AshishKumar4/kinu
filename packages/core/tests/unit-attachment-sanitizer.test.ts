@@ -27,11 +27,16 @@ interface CountingVfs {
 function countingVfs(): CountingVfs {
   const inner = createMemoryVFS(new Database(':memory:'));
   let writes = 0;
+
   return {
     vfs: {
       ...inner,
       readFile: (p, o) => inner.readFile(p, o),
-      writeFile: (p, d) => { writes += 1; return inner.writeFile(p, d); },
+      writeFile: (p, d) => {
+        writes += 1;
+
+        return inner.writeFile(p, d);
+      },
       readdir: (p) => inner.readdir(p),
       stat: (p) => inner.stat(p),
       unlink: (p) => inner.unlink(p),
@@ -43,7 +48,9 @@ function countingVfs(): CountingVfs {
 }
 
 const PDF_BYTES = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 1, 2, 3, 250]);
+
 const PDF_DATA_URL = `data:application/pdf;base64,${btoa(String.fromCharCode(...PDF_BYTES))}`;
+
 const PNG_DATA_URL = `data:image/png;base64,${btoa('fake-png-bytes')}`;
 
 function pdfMessage(): ModelMessage {
@@ -73,7 +80,9 @@ function messageString(message: ModelMessage): string {
 
 function savedPath(text: string): string {
   const path = /saved to (\S+)/.exec(text)?.[1];
+
   if (!path) throw new Error('Expected replacement text to contain a saved attachment path');
+
   return path;
 }
 
@@ -144,6 +153,7 @@ describe('sanitizeAttachmentsForModel', () => {
 
   test('passes images through for image-capable models and replaces them for text-only ones', async () => {
     const { vfs } = countingVfs();
+
     const message: ModelMessage = {
       role: 'user',
       content: [
@@ -173,6 +183,7 @@ describe('sanitizeAttachmentsForModel', () => {
   test('inlines small text/* attachments verbatim instead of a VFS round-trip', async () => {
     const { vfs, writes } = countingVfs();
     const body = '# Notes\nplain markdown under 8KB';
+
     const message: ModelMessage = {
       role: 'user',
       content: [{
@@ -182,6 +193,7 @@ describe('sanitizeAttachmentsForModel', () => {
         filename: 'notes.md',
       }],
     };
+
     const out = await sanitizeAttachmentsForModel([message], { accepts: accepts('image'), vfs });
     const part = textParts(out[0]!)[0]!;
     expect(part.type).toBe('text');
@@ -193,6 +205,7 @@ describe('sanitizeAttachmentsForModel', () => {
   test('large text/* attachments get the VFS treatment', async () => {
     const { vfs, writes } = countingVfs();
     const body = 'x'.repeat(9 * 1024);
+
     const message: ModelMessage = {
       role: 'user',
       content: [{
@@ -202,6 +215,7 @@ describe('sanitizeAttachmentsForModel', () => {
         filename: 'dump.txt',
       }],
     };
+
     const out = await sanitizeAttachmentsForModel([message], { accepts: accepts('image'), vfs });
     const part = textParts(out[0]!)[0]!;
     expect(part.text).toContain('attachments/');
@@ -211,10 +225,12 @@ describe('sanitizeAttachmentsForModel', () => {
 
   test('remote-URL parts are referenced, never fetched or stored', async () => {
     const { vfs, writes } = countingVfs();
+
     const message: ModelMessage = {
       role: 'user',
       content: [{ type: 'file', data: new URL('https://example.com/a.pdf'), mediaType: 'application/pdf' }],
     };
+
     const out = await sanitizeAttachmentsForModel([message], { accepts: accepts(), vfs });
     const part = textParts(out[0]!)[0]!;
     expect(part.type).toBe('text');
@@ -224,11 +240,13 @@ describe('sanitizeAttachmentsForModel', () => {
 
   test('string and tool messages pass through by reference', async () => {
     const { vfs } = countingVfs();
+
     const input: ModelMessage[] = [
       { role: 'system', content: 'be helpful' },
       { role: 'user', content: 'plain text' },
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'run', output: { type: 'text', value: 'ok' } }] },
     ];
+
     const out = await sanitizeAttachmentsForModel(input, { accepts: accepts(), vfs });
     expect(out[0]).toBe(input[0]!);
     expect(out[1]).toBe(input[1]!);
@@ -265,10 +283,12 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
 
   test('the same treatment reaches a text PART of a multi-part user message', async () => {
     const { vfs } = countingVfs();
+
     const input: ModelMessage[] = [{
       role: 'user',
       content: [{ type: 'text', text: 'here is the log:' }, { type: 'text', text: HUGE_PASTE }],
     }];
+
     const output = await sanitizeAttachmentsForModel(input, { accepts: accepts('image'), vfs });
     const parts = textParts(output[0]!);
     expect(parts).toHaveLength(2);
@@ -280,10 +300,12 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const { vfs, writes } = countingVfs();
     const budget = new TurnContextBudget();
     const stackTrace = 'Error: boom\n' + '    at frame\n'.repeat(200);
+
     const input: ModelMessage[] = [
       { role: 'user', content: 'fix the auth bug' },
       { role: 'user', content: [{ type: 'text', text: stackTrace }] },
     ];
+
     const out = await sanitizeAttachmentsForModel(input, { accepts: accepts('image'), vfs, budget });
     expect(out[0]).toBe(input[0]!);
     expect(out[1]).toBe(input[1]!);
@@ -313,6 +335,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
   test('an accepted PDF past the inline ceiling is spilled; a small one still rides inline', async () => {
     const { vfs } = countingVfs();
     const budget = new TurnContextBudget();
+
     const bigPdf: ModelMessage = {
       role: 'user',
       content: [{
@@ -322,6 +345,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
         filename: 'thesis.pdf',
       }],
     };
+
     const policy = { accepts: accepts('image', 'pdf'), vfs, budget };
 
     const spilled = await sanitizeAttachmentsForModel([bigPdf], policy);
@@ -337,10 +361,12 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
 
   test('an oversize accepted IMAGE stays inline — a file it cannot see is not a reference', async () => {
     const { vfs, writes } = countingVfs();
+
     const bigImage: ModelMessage = {
       role: 'user',
       content: [{ type: 'image', image: new Uint8Array(4 * 1024 * 1024), mediaType: 'image/png' }],
     };
+
     const out = await sanitizeAttachmentsForModel([bigImage], { accepts: accepts('image', 'pdf'), vfs });
     expect(out[0]).toBe(bigImage);
     expect(writes()).toBe(0);
@@ -352,6 +378,7 @@ describe('the spill-directory mkdir failure is classified, not substring-matched
    *  workspace file plane and node fs raise: a code on an Error. */
   function vfsWhoseMkdirThrows(failure: Error): VFS {
     const inner = createMemoryVFS(new Database(':memory:'));
+
     return {
       ...inner,
       readFile: (p, o) => inner.readFile(p, o),
@@ -371,6 +398,7 @@ describe('the spill-directory mkdir failure is classified, not substring-matched
   test('a parent-directory mkdir failure propagates with its cause, not as a later writeFile error', async () => {
     const cause = Object.assign(new Error('parent directory does not exist'), { code: 'ENOENT' });
     const vfs = vfsWhoseMkdirThrows(cause);
+
     try {
       await sanitizeAttachmentsForModel([pdfMessage()], { accepts: accepts(), vfs });
     } catch (err) {
@@ -378,8 +406,10 @@ describe('the spill-directory mkdir failure is classified, not substring-matched
       expect(err.message).toBe('creating the attachments spill directory');
       expect(err.cause).toBe(cause);
       expect(renderCauseChain(err)).toContain('parent directory does not exist');
+
       return;
     }
+
     throw new Error('expected a classified KinuError');
   });
 });

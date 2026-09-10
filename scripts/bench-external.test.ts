@@ -66,11 +66,14 @@ function job(name: string, trials: readonly TrialSpec[]): string {
   const root = scratchDir('bench-external');
   const dir = join(root, name);
   mkdirSync(dir, { recursive: true });
+
   for (const [index, spec] of trials.entries()) {
     const trialDir = join(dir, `${spec.task}__${index}`);
     mkdirSync(trialDir);
+
     const event = (name: string, count: number) =>
       Array.from({ length: count }, () => ({ event: name, message: name }));
+
     // Shaped exactly as bench/harbor/kinu_agent.py writes it. `turn_grading`
     // is absent, not zeroed, when the probe reported nothing — which is the
     // distinction half these tests exist to hold.
@@ -85,6 +88,7 @@ function job(name: string, trials: readonly TrialSpec[]): string {
         user_graded: 0, execution_graded: spec.executionGraded, abandoned: 0,
       },
     };
+
     writeFileSync(join(trialDir, 'result.json'), JSON.stringify({
       task_name: `terminal-bench/${spec.task}`,
       task_checksum: spec.checksum ?? `sum-${spec.task}`,
@@ -99,9 +103,11 @@ function job(name: string, trials: readonly TrialSpec[]): string {
       exception_info: null,
     }));
   }
+
   // Job-level bookkeeping sits beside the trials and must not read as a trial.
   writeFileSync(join(dir, 'result.json'), JSON.stringify({ n_total_trials: trials.length }));
   writeFileSync(join(dir, 'job.log'), 'started\n');
+
   return dir;
 }
 
@@ -117,6 +123,7 @@ function arms(opts: {
     task, reward: i < 2 ? 1 : 0, evolve: opts.aEvolve,
     evolutionEvents: opts.aEvolutionEvents ?? 0, executionGraded: 1,
   }))));
+
   const b = readHarborJob(job('arm-b', FOUR.map((task, i) => ({
     task, reward: i < 3 ? 1 : 0, evolve: opts.bEvolve,
     evolutionEvents: opts.bEvolutionEvents ?? 0,
@@ -124,12 +131,15 @@ function arms(opts: {
     outputTokens: opts.bOutputTokens,
     checksum: opts.bChecksumShift && task === 'alpha' ? 'moved' : undefined,
   }))));
+
   return { a, b, paired: pairArms(a, b).paired };
 }
 
 function condition(verdict: Admissibility, name: string): AdmissibilityCondition {
   const found = verdict.conditions.find((c) => c.name === name);
+
   if (!found) throw new Error(`no condition named "${name}"`);
+
   return found;
 }
 
@@ -138,6 +148,7 @@ describe('readHarborJob', () => {
     const arm = readHarborJob(job('arm', [
       { task: 'alpha', reward: 1, evolve: true, evolutionEvents: 3, activityEvents: 9, executionGraded: 2, turnsCompleted: 2 },
     ]));
+
     expect(arm.trials).toHaveLength(1);
     const [trial] = arm.trials;
     expect(trial?.evolve).toBe(true);
@@ -162,6 +173,7 @@ describe('readHarborJob', () => {
       { task: 'alpha', reward: 1, evolve: false, executionGraded: 1 },
       { task: 'beta', reward: 0, evolve: false, executionGraded: 1 },
     ]));
+
     expect(arm.trials.map((t) => t.taskId)).toEqual(['alpha', 'beta']);
   });
 });
@@ -173,6 +185,7 @@ describe('armSpend', () => {
       { task: 'beta', reward: 0, evolve: true, evolutionEvents: 0, executionGraded: 1 },
       { task: 'gamma', reward: 0, evolve: true, evolutionEvents: 5, executionGraded: 3 },
     ]));
+
     const spend = armSpend(arm);
     expect(spend.trialsWithEvolution).toBe(2);
     expect(spend.totalEvolutionEvents).toBe(7);
@@ -185,6 +198,7 @@ describe('admissibility — asked before any effect is reported', () => {
     const { a, b, paired } = arms({
       aEvolve: false, bEvolve: true, bEvolutionEvents: 2, bExecutionGraded: 2,
     });
+
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(true);
     expect(verdict.conditions.every((c) => c.met)).toBe(true);
@@ -205,6 +219,7 @@ describe('admissibility — asked before any effect is reported', () => {
     const { a, b, paired } = arms({
       aEvolve: false, bEvolve: true, bEvolutionEvents: 0, bExecutionGraded: 2,
     });
+
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(false);
     expect(condition(verdict, 'the candidate mechanism was OBSERVED to act').met).toBe(false);
@@ -219,6 +234,7 @@ describe('admissibility — asked before any effect is reported', () => {
     const { a, b, paired } = arms({
       aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bExecutionGraded: 0,
     });
+
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(false);
     expect(condition(verdict, 'the candidate turns were GRADED').met).toBe(false);
@@ -228,6 +244,7 @@ describe('admissibility — asked before any effect is reported', () => {
     const { a, b, paired } = arms({
       aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bExecutionGraded: undefined,
     });
+
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(false);
     const graded = condition(verdict, 'the candidate turns were GRADED');
@@ -241,6 +258,7 @@ describe('admissibility — asked before any effect is reported', () => {
       aEvolve: false, bEvolve: true, aEvolutionEvents: 3,
       bEvolutionEvents: 4, bExecutionGraded: 2,
     });
+
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(false);
     expect(condition(verdict, 'the baseline mechanism stayed off').met).toBe(false);
@@ -251,6 +269,7 @@ describe('admissibility — asked before any effect is reported', () => {
       aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bExecutionGraded: 2,
       bChecksumShift: true,
     });
+
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(false);
     expect(condition(verdict, 'both arms scored the identical task').detail).toContain('alpha');
@@ -261,6 +280,7 @@ describe('admissibility — asked before any effect is reported', () => {
       aEvolve: false, bEvolve: true, bEvolutionEvents: 4, bExecutionGraded: 2,
       bOutputTokens: 200_000,
     });
+
     const verdict = admissibility(a, b, paired);
     expect(verdict.admissible).toBe(false);
     expect(condition(verdict, 'the arms spent comparably').detail).toContain('B/A');
@@ -285,6 +305,7 @@ describe('flipAccounting', () => {
     const { a, b, paired } = arms({
       aEvolve: false, bEvolve: true, bEvolutionEvents: 2, bExecutionGraded: 2,
     });
+
     expect(armSpend(a).trials).toBe(4);
     expect(armSpend(b).trials).toBe(4);
     const flips = flipAccounting(paired);
@@ -303,6 +324,7 @@ describe('spend coverage', () => {
       { task: 'alpha', reward: 1, evolve: true, executionGraded: 1, promptTokens: 100, outputTokens: 10 },
       { task: 'beta', reward: 0, evolve: true, executionGraded: 1, noUsage: true },
     ]));
+
     const spend = armSpend(arm);
     expect(spend.spendUnreported).toBe(1);
     // The arm's `usage` still carries what WAS measured...
@@ -322,10 +344,12 @@ describe('repeated-trial denominators', () => {
       { task: 'repeat', reward: 0, evolve: false },
       { task: 'repeat', reward: 1, evolve: false },
     ]));
+
     const b = readHarborJob(job('b', [
       { task: 'repeat', reward: 1, evolve: true },
       { task: 'repeat', reward: 1, evolve: true },
     ]));
+
     const row = pairArms(a, b).paired[0];
     expect(row?.aRewards).toEqual([0, 1]);
     expect(row?.bRewards).toEqual([1, 1]);
@@ -361,6 +385,7 @@ describe('repeated-trial denominators', () => {
   test('contradictory cached input cannot become a cheap complete trial', () => {
     const arm = readHarborJob(job('bad-cache-usage', [{ task: 'solved', reward: 1, evolve: false }]));
     const trial = arm.trials[0];
+
     if (!trial) throw new Error('missing trial fixture');
     trial.usage = { input: 0, output: 0, cacheRead: 40192 };
     const summary = armSpend(arm);
@@ -375,6 +400,7 @@ describe('repeated-trial denominators', () => {
       { task: 'failed', reward: 0, evolve: true, noAgentResult: true },
       { task: 'ungraded', reward: 1, evolve: true, noAgentResult: true, noVerifierResult: true },
     ]));
+
     const summary = armSpend(arm);
     expect(summary.verifiedSuccesses).toBe(1);
     expect(summary.verifierFailures).toBe(1);
@@ -407,11 +433,13 @@ describe('the Terminal-Bench arm before it spends anything', () => {
    *  script names, an absent variable satisfies. */
   function armEnv(home: string) {
     const env: Record<string, string> = {};
+
     for (const [key, value] of Object.entries(process.env)) {
       if (value !== undefined && !key.startsWith('KINU_') && key !== 'TBENCH_CORPUS') {
         env[key] = value;
       }
     }
+
     return { ...env, HOME: home };
   }
 
@@ -451,17 +479,20 @@ describe('the Terminal-Bench arm before it spends anything', () => {
       sourceCorpus: v.object({ content_hash: v.string() }),
       taskIds: v.array(v.string()),
     }), JSON.parse(readFileSync(join(REPO_ROOT, 'tests/bench/terminal-bench-2.1-population.json'), 'utf8')));
+
     const registered = readFileSync(join(REPO_ROOT, 'tests/bench/seal-ledger.jsonl'), 'utf8')
       .split('\n')
       .filter((line) => line.trim() !== '' && !line.startsWith('#'))
       .map((line) => v.safeParse(TbenchPrereg, JSON.parse(line)))
       .find((parsed) => parsed.success && parsed.output.ordinal === population.provenance.expectedSampleOrdinal);
+
     if (!registered?.success) throw new Error('the pinned Terminal-Bench pre-registration is missing');
     const { seed, size, tasks } = registered.output.sample;
     expect(population.sourceCorpus.content_hash).toBe(registered.output.manifestHash);
     expect(population.taskIds).toHaveLength(registered.output.corpus.nTasks);
     expect(new Set(population.taskIds).size).toBe(population.taskIds.length);
     const corpus = scratchDir('tbench-selection-population');
+
     for (const taskId of population.taskIds) {
       const task = join(corpus, taskId);
       mkdirSync(task);
@@ -471,6 +502,7 @@ describe('the Terminal-Bench arm before it spends anything', () => {
     const drawn = spawnSync('python3', ['-m', 'bench.harbor.corpus', 'sample', corpus,
       '--size', String(size), '--seed', String(seed)],
     { cwd: REPO_ROOT, env: { ...process.env, PYTHONPATH: REPO_ROOT }, encoding: 'utf8' });
+
     expect(drawn.status, drawn.stderr).toBe(0);
 
     expect(v.parse(DrawnSample, JSON.parse(drawn.stdout)).tasks).toEqual(tasks);

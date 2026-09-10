@@ -74,6 +74,7 @@ describe('indexScaffoldSites — the L2 scan of the live scaffold', () => {
       '/* and host.callTool() too */\n' +
       'async function* run(rt, task) {\n  await host.defaultInference();\n}\n',
     );
+
     expect(sites).toHaveLength(1);
     expect(sites[0]!.bridgeCalls).toEqual(['defaultInference']);
   });
@@ -84,6 +85,7 @@ describe('indexScaffoldSites — the L2 scan of the live scaffold', () => {
       '  const url = "https://x/y"; // a note\n' +
       '  await host.callTool("web_fetch", { url });\n}\n',
     );
+
     expect(sites[0]!.bridgeCalls).toEqual(['callTool']);
   });
 
@@ -96,6 +98,7 @@ describe('indexScaffoldSites — the L2 scan of the live scaffold', () => {
       '  await host.emit({ type: "done" });\n' +
       '  await host.emit({ type: "done" });\n}\n',
     );
+
     expect(sites.map((s) => [s.name, s.kind, s.bridgeCalls])).toEqual([
       ['plan', 'function', []],
       ['REVIEW', 'binding', []],
@@ -109,6 +112,7 @@ describe('indexScaffoldSites — the L2 scan of the live scaffold', () => {
       'await host.emit({ type: "chunk", data: "warming up" });\n' +
       'async function* run(rt, task) {\n  await host.defaultInference();\n}\n',
     );
+
     expect(sites.map((s) => s.name)).toEqual(['<module>', 'run']);
     expect(sites[0]!.kind).toBe('module');
   });

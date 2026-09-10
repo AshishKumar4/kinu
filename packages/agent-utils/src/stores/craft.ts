@@ -20,6 +20,7 @@ const StringDictionarySchema = v.record(v.string(), v.string());
 
 function parseParams(params: string): Record<string, string> {
 	const value: unknown = JSON.parse(params);
+
 	return v.parse(StringDictionarySchema, value, {
 		message: "crafted tool params must be a string dictionary",
 	});
@@ -31,6 +32,7 @@ function isCraftScope(scope: string): scope is CraftedTool["scope"] {
 
 function rowToTool(row: CraftRow): CraftedTool {
 	if (!isCraftScope(row.scope)) throw new Error(`invalid crafted tool scope: ${row.scope}`);
+
 	return {
 		name: row.name,
 		description: row.description,
@@ -129,6 +131,7 @@ export class CraftStore implements CraftedToolProvider {
 
 	update(name: string, patch: { description?: string; params?: Record<string, string> | null; code?: string; scope?: CraftedTool["scope"] }): CraftedTool | null {
 		const existing = this.get(name);
+
 		if (!existing) return null;
 
 		const now = Date.now();
@@ -147,21 +150,25 @@ export class CraftStore implements CraftedToolProvider {
 
 	delete(name: string): boolean {
 		const rows = [...this.sql`DELETE FROM crafted_tools WHERE name = ${name} RETURNING name`];
+
 		return rows.length > 0;
 	}
 
 	get(name: string): CraftedTool | null {
 		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools WHERE name = ${name}`;
+
 		return rows.length > 0 ? rowToTool(rows[0]) : null;
 	}
 
 	list(): CraftedTool[] {
 		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools ORDER BY updated_at DESC`;
+
 		return rows.map(rowToTool);
 	}
 
 	search(query: string, limit = 10): CraftedTool[] {
 		const safeQuery = `"${query.replace(/"/g, '""')}"`;
+
 		const rows = this.sql<CraftRow>`
 			SELECT t.* FROM crafted_tools t
 			JOIN crafted_tools_fts f ON t.rowid = f.rowid
@@ -169,11 +176,13 @@ export class CraftStore implements CraftedToolProvider {
 			ORDER BY rank
 			LIMIT ${limit}
 		`;
+
 		return rows.map(rowToTool);
 	}
 
 	getAll(): CraftedTool[] {
 		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools`;
+
 		return rows.map(rowToTool);
 	}
 }

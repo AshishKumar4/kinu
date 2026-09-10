@@ -12,10 +12,15 @@
  * /dev/dri present, native Linux (not WSL).
  */
 'use strict';
+
 const { describe, expect, test } = require('bun:test');
+
 const fs = require('node:fs');
+
 const os = require('node:os');
+
 const path = require('node:path');
+
 const { spawnSync } = require('node:child_process');
 
 const sandbox = require('../src/sandbox.js');
@@ -28,9 +33,11 @@ function runSandboxed(command, options = {}) {
   const agentHome = path.join(base, 'home');
   const agentTmp = path.join(base, 'tmp');
   const consented = path.join(base, 'consented');
+
   for (const dir of [agentHome, agentTmp, consented]) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
+
   const plan = sandbox.plan({
     tier: options.tier ?? 'sandboxed',
     home: options.home ?? os.homedir(),
@@ -42,9 +49,11 @@ function runSandboxed(command, options = {}) {
     command,
     source: options.source ?? {},
   });
+
   const run = spawnSync(plan.argv[0], plan.argv.slice(1), {
     env: plan.env, encoding: 'utf8',
   });
+
   return {
     base, agentHome, agentTmp, consented, plan,
     status: run.status,
@@ -60,6 +69,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     // Not `expect(ok)`: a box without bubblewrap is a legitimate state, and the
     // contract is that the status is a known word carrying an actionable line.
     expect(Object.values(sandbox.SANDBOX_STATUS)).toContain(result.status);
+
     if (result.status === sandbox.SANDBOX_STATUS.OK) {
       expect(result.detail).toBeNull();
       expect(sandbox.helloCapability(result)).toEqual({ capability: 'sandboxed', reason: null });
@@ -79,6 +89,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const planted = path.join(os.homedir(), '.kinu-sandbox-planted-secret');
     fs.writeFileSync(planted, 'owner-private-material', { mode: 0o600 });
     const run = runSandboxed(`cat ${JSON.stringify(planted)} 2>&1; echo ---; ls -a "$HOME" | tr '\\n' ' '`);
+
     try {
       expect(run.stdout).not.toContain('owner-private-material');
       expect(run.stdout).toContain('No such file or directory');
@@ -101,6 +112,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const planted = path.join(os.homedir(), '.kinu-sandbox-planted-secret');
     fs.writeFileSync(planted, 'owner-private-material', { mode: 0o600 });
     const run = runSandboxed(`cat ${JSON.stringify(planted)} 2>&1`, { tier: 'raw' });
+
     try {
       expect(run.stdout).toContain('owner-private-material');
     } finally {
@@ -113,6 +125,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
     const deviceHome = path.join(os.homedir(), '.kinu');
     const run = runSandboxed(`cat ${JSON.stringify(path.join(deviceHome, 'device.json'))} 2>&1 | head -1`);
+
     try {
       // The kernel says the same thing the file methods say, because neither is
       // asked to make an exception: ~/.kinu is never bound in.
@@ -123,11 +136,13 @@ describe('the device sandbox, as the kernel enforces it', () => {
 
   test('writes land in the agent home and the consented directory, and nowhere else', () => {
     if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+
     const run = runSandboxed([
       'touch "$HOME/in-agent-home" && echo home-ok',
       'touch /usr/local/should-not-exist 2>&1 | head -1',
       'touch /etc/should-not-exist 2>&1 | head -1',
     ].join('; '), {});
+
     try {
       expect(run.stdout).toContain('home-ok');
       expect(run.stdout).toContain('Read-only file system');
@@ -146,13 +161,17 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const agentHome = path.join(base, 'home');
     const agentTmp = path.join(base, 'tmp');
     const consented = path.join(base, 'work');
+
     for (const dir of [agentHome, agentTmp, consented]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+
     const plan = sandbox.plan({
       tier: 'sandboxed', home: os.homedir(), agentHome, agentTmp,
       deviceHome: path.join(os.homedir(), '.kinu'), roots: [consented],
       cwd: consented, command: 'printf agent-wrote-this > report.txt; pwd', source: {},
     });
+
     const run = spawnSync(plan.argv[0], plan.argv.slice(1), { env: plan.env, encoding: 'utf8' });
+
     try {
       expect(run.status).toBe(0);
       // `--chdir` names the directory as the COMMAND sees it, which for a
@@ -166,8 +185,10 @@ describe('the device sandbox, as the kernel enforces it', () => {
     if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
     const nodes = sandbox.gpuNodes();
     const run = runSandboxed('set -o pipefail; [[ 1 == 1 ]] && ls -d /dev/nvidia* /dev/dri 2>/dev/null | tr "\\n" " "');
+
     try {
       expect(run.status).toBe(0);
+
       // Only what this box actually has: `--dev /dev` alone is an empty
       // devtmpfs, which is why a sandbox that stops there has no GPU.
       for (const node of nodes) {
@@ -180,6 +201,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
 
   test('the command environment is the allow-list, with the sandbox\'s own values', () => {
     if (!LINUX || sandbox.probe().status !== sandbox.SANDBOX_STATUS.OK) return;
+
     const run = runSandboxed('env | sort | tr "\\n" " "', {
       source: {
         PATH: '/usr/bin:/bin', LANG: 'C.UTF-8',
@@ -187,6 +209,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
         SSH_AUTH_SOCK: '/tmp/leaked-agent.sock', NODE_OPTIONS: '--require /tmp/x.js',
       },
     });
+
     try {
       expect(run.stdout).not.toContain('ptc_leaked_cli_bearer');
       expect(run.stdout).not.toContain('ghp_leaked_pat');
@@ -216,6 +239,7 @@ describe('the device sandbox, as the kernel enforces it', () => {
     // and this is the order the policy needs.
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-tmp-home-'));
     const run = runSandboxed('pwd; touch "$HOME/marker"; echo reached', { home });
+
     try {
       expect(run.stderr).toBe('');
       expect(run.status).toBe(0);
@@ -242,21 +266,26 @@ describe('the device sandbox, as the kernel enforces it', () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-shim-home-'));
     const agentHome = path.join(home, '.kinu', 'agents', 'ws', 'home');
     const agentTmp = path.join(home, '.kinu', 'agents', 'ws', 'tmp');
+
     for (const dir of [agentHome, agentTmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const shimDir = path.join(home, '.local', 'bin');
     fs.mkdirSync(shimDir, { recursive: true, mode: 0o700 });
     fs.writeFileSync(path.join(shimDir, 'hostname'),
       '#!/usr/bin/env bash\nprintf \'%s\\n\' kinu-first-run-alpha\n', { mode: 0o700 });
+
     try {
       const plan = sandbox.plan({
         tier: 'sandboxed', home, agentHome, agentTmp,
         deviceHome: path.join(home, '.kinu'), roots: [home],
         cwd: agentHome, command: 'hostname', source: {},
       });
+
       let pathValue = null;
+
       for (let i = 0; i < plan.argv.length - 2; i++) {
         if (plan.argv[i] === '--setenv' && plan.argv[i + 1] === 'PATH') pathValue = plan.argv[i + 2];
       }
+
       expect(pathValue).not.toBeNull();
       const entries = String(pathValue).split(':');
       expect(entries[0]).toBe(path.join(home, '.local', 'bin'));
@@ -277,12 +306,15 @@ describe('the device sandbox, as the kernel enforces it', () => {
     // real home and pass on any tree. The tier spawns the daemon with a
     // scratch HOME in its environment, and so does this.
     const home = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-tmp-home-'));
+
     try {
       const script = 'const s = require(process.argv[1]); '
         + 'process.stdout.write(JSON.stringify(s.probe({ deviceHome: process.env.KINU_HOME })))';
+
       const run = spawnSync(process.execPath, ['-e', script, require.resolve('../src/sandbox.js')], {
         env: { ...process.env, HOME: home, KINU_HOME: home }, encoding: 'utf8',
       });
+
       expect(run.stderr).toBe('');
       expect(JSON.parse(run.stdout)).toEqual({ status: sandbox.SANDBOX_STATUS.OK, detail: null });
     } finally {
@@ -303,6 +335,7 @@ describe('one policy, two enforcers', () => {
 
   test('a path the sandbox cannot see is a path the file methods refuse', () => {
     const policy = view();
+
     for (const invisible of ['/home/other/notes', '/root/.ssh/id_rsa', '/run/user/1000/keyring', '/mnt/c/Users/me/x']) {
       expect(policy.classify(invisible).access).toBe(sandbox.VIEW_INVISIBLE);
       expect(() => policy.resolvePath(invisible, 'read')).toThrow('does not expose');
@@ -383,6 +416,7 @@ describe('the macOS profile, as generated text', () => {
       deviceHome: '/Users/dev/.kinu', roots: [], command: 'echo hi',
       cwd: '/Users/dev/.kinu/agents/ws-1/home', source: {},
     });
+
     expect(plan.argv[0]).toBe('/usr/bin/sandbox-exec');
     expect(plan.argv[1]).toBe('-p');
     expect(plan.argv.slice(-3)).toEqual(['bash', '-c', 'echo hi']);

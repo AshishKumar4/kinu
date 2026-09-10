@@ -70,23 +70,28 @@ export function compareSurface(
 
   for (const plane of CONFORMANCE_PLANES) {
     const seen = observed.planes[plane];
+
     if (!seen) {
       unmeasured.push(plane);
       continue;
     }
+
     const declared = declaredEntries(plane, manifest);
 
     for (const [name, statuses] of declared) {
       const status: CapabilityStatus | undefined = statuses[observed.root];
+
       if (status === undefined) {
         findings.push({ kind: 'undeclared', plane, root: observed.root, name });
       } else if ('wired' in status && !seen.has(name)) {
         findings.push({ kind: 'missing', plane, root: observed.root, name });
       }
     }
+
     for (const name of [...seen].sort()) {
       const statuses = declared.find(([declaredName]) => declaredName === name)?.[1];
       const status: CapabilityStatus | undefined = statuses?.[observed.root];
+
       if (status === undefined) {
         findings.push({ kind: 'undeclared', plane, root: observed.root, name });
       } else if ('absent' in status) {
@@ -108,6 +113,7 @@ export function renderConformanceFindings(report: ConformanceReport): string {
   return report.findings
     .map((f) => {
       const stale = f.staleReason ? ` (recorded reason now stale: "${f.staleReason}")` : '';
+
       return `[${f.root}] ${f.plane} "${f.name}" ${f.kind}${stale} — ${FINDING_ADVICE[f.kind]}`;
     })
     .join('\n');
@@ -121,19 +127,24 @@ export function renderConformanceFindings(report: ConformanceReport): string {
 export function normalizeObservedTables(names: Iterable<string>): Set<string> {
   const all = new Set(names);
   const out = new Set<string>();
+
   for (const name of all) {
     if (name === 'sqlite_sequence' || name.startsWith('sqlite_')) continue;
+
     if (/_(data|idx|content|docsize|config)$/.test(name) && all.has(name.replace(/_(data|idx|content|docsize|config)$/, ''))) {
       continue;
     }
+
     out.add(name);
   }
+
   return out;
 }
 
 /** The action enum of a builtin tool's input schema — the artifact the model
  *  actually sees, from the ToolSet the composition root actually built. */
 const ToolSchema = v.object({ inputSchema: v.optional(v.unknown()) });
+
 const ActionEnumSchema = v.object({
   properties: v.object({
     action: v.object({ enum: v.array(v.string()) }),
@@ -142,9 +153,11 @@ const ActionEnumSchema = v.object({
 
 export function observedActionEnum<Tool>(tool: Tool): Set<string> {
   const parsedTool = v.safeParse(ToolSchema, tool);
+
   if (!parsedTool.success) return new Set();
   const raw = schemaJson(parsedTool.output.inputSchema);
   const parsedAction = v.safeParse(ActionEnumSchema, raw);
+
   return new Set(parsedAction.success ? parsedAction.output.properties.action.enum : []);
 }
 
@@ -161,8 +174,11 @@ export function wiredProducers(rt: {
   judgeModel?: unknown; advisorLlm?: unknown;
 }): Set<string> {
   const wired = new Set<string>();
+
   if (rt.judgeModel !== undefined) wired.add('judge');
+
   if (rt.advisorLlm !== undefined) wired.add('advisor');
+
   return wired;
 }
 
@@ -170,8 +186,10 @@ export function wiredProducers(rt: {
  *  jsonSchema; a plain object schema is already raw). */
 function schemaJson<Schema>(schema: Schema): JsonObject | null {
   const wrapped = v.safeParse(v.object({ jsonSchema: JsonObjectSchema }), schema);
+
   if (wrapped.success) return wrapped.output.jsonSchema;
   const direct = v.safeParse(JsonObjectSchema, schema);
+
   return direct.success ? direct.output : null;
 }
 
@@ -188,20 +206,26 @@ function schemaJson<Schema>(schema: Schema): JsonObject | null {
  */
 export function phantomCallables(text: string, callables: ReadonlySet<string>): string[] {
   const phantoms = new Set<string>();
+
   for (const m of text.matchAll(/\b([a-z][a-z0-9_]*(?:\.[a-z][a-zA-Z0-9_]*)*)\(/g)) {
     const name = m[1];
+
     if (name === undefined) continue;
+
     // Membership first: a name the caller wires is real whatever its shape,
     // so a wired single-word tool is never prose. Past that, a single word
     // is prose ("do(", "call(") — unless it names a real tool, in which case
     // an instruction meant it and a root that did not wire it must hear so.
     if (callables.has(name)) continue;
+
     if (!name.includes('.') && !name.includes('_') && !isBuiltinToolName(name)) continue;
     // A namespaced call resolves if its namespace root is a real callable
     // surface (`workspace.readdir(...)` under a wired `workspace` namespace).
     const root = name.split('.', 1)[0];
+
     if (root !== undefined && name.includes('.') && callables.has(`${root}.*`)) continue;
     phantoms.add(name);
   }
+
   return [...phantoms].sort();
 }

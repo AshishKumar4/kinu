@@ -55,6 +55,7 @@ interface FakeOrigin {
 function fakeOrigin(initial: Record<string, string> = {}): FakeOrigin {
   const at = new Map(Object.entries(initial));
   const transactions: (readonly MemberFileChange[])[] = [];
+
   return {
     at,
     transactions,
@@ -64,11 +65,14 @@ function fakeOrigin(initial: Record<string, string> = {}): FakeOrigin {
       // Staged then committed, so a throw mid-way leaves nothing behind — the
       // property `writeBatch` has and a per-file loop does not.
       const staged = new Map(at);
+
       for (const file of files) {
         if (file.after === null) staged.delete(file.path);
         else staged.set(file.path, file.after);
       }
+
       at.clear();
+
       for (const [path, content] of staged) at.set(path, content);
     },
   };
@@ -93,6 +97,7 @@ async function memberOf(
 ): Promise<MergeMember> {
   const { provenance, ...rest } = over;
   const diff = diffOf(nodeId, files, provenance);
+
   return {
     nodeId,
     diff,
@@ -127,6 +132,7 @@ interface Harness {
 function harness(initial: Record<string, string> = {}): Harness {
   const origin = fakeOrigin(initial);
   const log = createRecordingLogger();
+
   return {
     origin,
     log,
@@ -170,6 +176,7 @@ describe('the policy is derived from settle, never chosen', () => {
     // types, so `toContain` would otherwise be comparing types instead of values and
     // could not fail even if a precondition were added to the spec's list.
     const rules: readonly string[] = SETTLE_RULES;
+
     for (const precondition of APPLY_PRECONDITIONS) {
       expect(rules).not.toContain(precondition);
     }
@@ -181,6 +188,7 @@ describe('the policy is derived from settle, never chosen', () => {
 describe('apply-winner', () => {
   test("the winner's diff reaches the origin", async () => {
     const h = harness({ 'a.ts': 'old\n' });
+
     const winner = await memberOf(h.origin, 'n1', [
       { path: 'a.ts', base: 'old\n', after: 'new\n' },
       { path: 'b.ts', base: null, after: 'added\n' },
@@ -199,6 +207,7 @@ describe('apply-winner', () => {
   // size bound exists.
   test('a member rides exactly one transaction, whatever its file count', async () => {
     const h = harness({ 'a.ts': 'old\n' });
+
     const winner = await memberOf(h.origin, 'n1', [
       { path: 'a.ts', base: 'old\n', after: '1\n' },
       { path: 'b.ts', base: null, after: '2\n' },
@@ -296,6 +305,7 @@ describe('sequential-rebase', () => {
     expect(report.stoppedAt).toBeNull();
     const [, outcome] = report.outcomes;
     expect(outcome?.kind).toBe('refused');
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('verdict-stale');
     expect(outcome.refusal.reason).toBe('unavailable');
@@ -308,15 +318,18 @@ describe('sequential-rebase', () => {
   test('a base change forces re-verification through the registry before apply', async () => {
     const h = harness({ 'shared.ts': 'V0\n', 'own.ts': 'O0\n' });
     const first = await memberOf(h.origin, 'n1', [{ path: 'shared.ts', base: 'V0\n', after: 'V1\n' }]);
+
     const second = await memberOf(h.origin, 'n2', [
       { path: 'shared.ts', base: 'V0\n', after: 'V1\n' },
       { path: 'own.ts', base: 'O0\n', after: 'O1\n' },
     ]);
 
     const asked: string[] = [];
+
     const report = await h.run('sequential-rebase', [first, second], {
       reverify: async ({ member, baseDigest }) => {
         asked.push(member.nodeId);
+
         return { memberDigest: memberDigestOf(member.diff), baseDigest, clean: true };
       },
     });
@@ -337,6 +350,7 @@ describe('sequential-rebase', () => {
     await h.run('sequential-rebase', [first, second], {
       reverify: async ({ member, baseDigest }) => {
         asked.push(member.nodeId);
+
         return { memberDigest: memberDigestOf(member.diff), baseDigest, clean: true };
       },
     });
@@ -359,6 +373,7 @@ describe('sequential-rebase', () => {
     });
 
     const [, outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('verdict-stale');
     expect(outcome.refusal.error).toContain('did not pass');
@@ -378,6 +393,7 @@ describe('sequential-rebase', () => {
     });
 
     const [, outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('verdict-stale');
     expect(outcome.refusal.error).toContain('different base');
@@ -393,6 +409,7 @@ describe('sequential-rebase', () => {
     });
 
     const [, outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.reason).toBe('unsupported');
     expect(outcome.refusal.cause).toBe('verdict-stale');
@@ -461,6 +478,7 @@ describe('a refused member is skipped, not stopped at', () => {
 
     // The settle record names the refusal beside the apply that followed it...
     const [first] = report.outcomes;
+
     if (first?.kind !== 'refused') throw new Error('expected a refusal');
     expect(first.refusal.cause).toBe('verdict-unclean');
     // ...and so does the event stream: a skip is a reported fact, not a silent one.
@@ -485,6 +503,7 @@ describe('a refused member is skipped, not stopped at', () => {
     // whatever the origin still holds there.
     expect(report.outcomes.map((o) => o.kind)).toEqual(['refused', 'refused']);
     const [, outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('base-drift');
     expect(outcome.refusal.error).toContain('a.ts');
@@ -494,6 +513,7 @@ describe('a refused member is skipped, not stopped at', () => {
   test('a member that declares the skipped one is refused by rule 1', async () => {
     const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
     const skipped = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+
     const dependent = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }], {
       deps: ['n1'],
     });
@@ -507,6 +527,7 @@ describe('a refused member is skipped, not stopped at', () => {
     expect(report.order).toEqual(['n1', 'n2']);
     expect(report.outcomes.map((o) => o.kind)).toEqual(['refused', 'refused']);
     const [, outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-unsettled');
     expect(outcome.refusal.error).toContain('n1');
@@ -526,6 +547,7 @@ describe('the members are applied in the dependency order they declare', () => {
     const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n', 'c.ts': 'C0\n' });
     const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
     const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }]);
+
     // The fan-in vertex: it consumed both, so its work goes on top of theirs.
     const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
       deps: ['n1', 'n2'],
@@ -554,6 +576,7 @@ describe('the members are applied in the dependency order they declare', () => {
 
   test('a dependency this run already landed is settled, and its dependent applies', async () => {
     const h = harness({ 'c.ts': 'C0\n' });
+
     const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
       deps: ['n1'],
     });
@@ -568,6 +591,7 @@ describe('the members are applied in the dependency order they declare', () => {
 
   test('the same dependent refuses by name when nothing says the dependency landed', async () => {
     const h = harness({ 'c.ts': 'C0\n' });
+
     const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
       deps: ['n1'],
     });
@@ -575,6 +599,7 @@ describe('the members are applied in the dependency order they declare', () => {
     const report = await h.run('sequential-rebase', [c]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-unsettled');
     expect(outcome.refusal.error).toContain('n1');
@@ -586,9 +611,11 @@ describe('the members are applied in the dependency order they declare', () => {
 
   test('a cycle is refused by name, naming the cycle, and nothing is applied', async () => {
     const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n' });
+
     const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }], {
       deps: ['n2'],
     });
+
     const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }], {
       deps: ['n1'],
     });
@@ -596,6 +623,7 @@ describe('the members are applied in the dependency order they declare', () => {
     const report = await h.run('sequential-rebase', [a, b]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-cycle');
     expect(outcome.refusal.reason).toBe('bad_input');
@@ -617,9 +645,11 @@ describe('the members are applied in the dependency order they declare', () => {
   test('a cycle is refused whatever order it is offered in', async () => {
     const h = harness({ 'a.ts': 'A0\n', 'b.ts': 'B0\n', 'c.ts': 'C0\n' });
     const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+
     const b = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: 'B0\n', after: 'B1\n' }], {
       deps: ['n3'],
     });
+
     const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
       deps: ['n2'],
     });
@@ -630,6 +660,7 @@ describe('the members are applied in the dependency order they declare', () => {
     const report = await h.run('sequential-rebase', [a, b, c]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-cycle');
     expect(outcome.refusal.error).toContain('n2 -> n3 -> n2');
@@ -639,6 +670,7 @@ describe('the members are applied in the dependency order they declare', () => {
   test('only sequential-rebase orders — apply-winner applies the member it was handed', async () => {
     const h = harness({ 'a.ts': 'A0\n', 'c.ts': 'C0\n' });
     const a = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: 'A0\n', after: 'A1\n' }]);
+
     const c = await memberOf(h.origin, 'n3', [{ path: 'c.ts', base: 'C0\n', after: 'C1\n' }], {
       deps: ['n1'],
     });
@@ -650,6 +682,7 @@ describe('the members are applied in the dependency order they declare', () => {
     // only one policy reorders.
     const winner = await h.run('apply-winner', [c, a]);
     const [outcome] = winner.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-unsettled');
     expect(winner.order).toEqual(['n3', 'n1']);
@@ -715,6 +748,7 @@ describe('conflict-spawns-a-merge-node', () => {
 
     const [, outcome] = report.outcomes;
     expect(outcome?.kind).toBe('merge-node');
+
     if (outcome?.kind !== 'merge-node') throw new Error('expected a merge node');
     expect(outcome.request.parents).toEqual(['n1', 'n2']);
     expect(outcome.request.paths).toEqual(['shared.ts']);
@@ -758,6 +792,7 @@ describe('conflict-spawns-a-merge-node', () => {
     });
 
     const [, outcome] = report.outcomes;
+
     if (outcome?.kind !== 'merge-node') throw new Error('expected a merge node');
     expect(outcome.request.task).toContain('n1');
     expect(outcome.request.task).toContain('n2');
@@ -776,7 +811,11 @@ describe('conflict-spawns-a-merge-node', () => {
 
     let spawns = 0;
     await h.run('sequential-rebase', [first, second], {
-      spawnMergeNode: async () => { spawns += 1; return 'm1'; },
+      spawnMergeNode: async () => {
+        spawns += 1;
+
+        return 'm1';
+      },
       reverify: async ({ member, baseDigest }) => ({
         memberDigest: memberDigestOf(member.diff), baseDigest, clean: true,
       }),
@@ -793,6 +832,7 @@ describe('conflict-spawns-a-merge-node', () => {
     const report = await h.run('sequential-rebase', [first, second]);
 
     const [, outcome] = report.outcomes;
+
     if (outcome?.kind !== 'merge-node') throw new Error('expected a merge node');
     // Null records that the conflict was found and named but nothing was there to
     // grade it — which is a different fact from there being no conflict.
@@ -852,8 +892,13 @@ describe('synthesis', () => {
     const two = await memberOf(h.origin, 'n2', [{ path: 'a.ts', base: 'A0\n', after: 'A2\n' }]);
 
     let spawns = 0;
+
     const report = await h.run('synthesis', [one, two], {
-      spawnMergeNode: async () => { spawns += 1; return 'm1'; },
+      spawnMergeNode: async () => {
+        spawns += 1;
+
+        return 'm1';
+      },
     });
 
     expect(spawns).toBe(0);
@@ -864,6 +909,7 @@ describe('synthesis', () => {
   // unverified member is still part of the combination.
   test('an unscored, unverified member is not refused', async () => {
     const h = harness({});
+
     const unjudged = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: null, after: 'A\n' }], {
       verdict: null, score: null,
     });
@@ -902,6 +948,7 @@ describe('the size refusal', () => {
 
   test('a member over the byte ceiling is refused, and the bound is named', async () => {
     const h = harness({});
+
     const huge = await memberOf(h.origin, 'n1', [
       { path: 'huge.bin', base: null, after: 'x'.repeat(MAX_TX_BLOB_BYTES + 1) },
     ]);
@@ -909,6 +956,7 @@ describe('the size refusal', () => {
     const report = await h.run('apply-winner', [huge]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('oversized');
     // THE BOUND IS NAMED, not merely "too large" — a thousand-tiny-files member and a
@@ -921,6 +969,7 @@ describe('the size refusal', () => {
   // so the assertion is that the substrate was never reached at all.
   test('the check happens before the apply, so nothing is written', async () => {
     const h = harness({ 'keep.ts': 'untouched\n' });
+
     const huge = await memberOf(h.origin, 'n1', [
       { path: 'keep.ts', base: 'untouched\n', after: 'x'.repeat(MAX_TX_BLOB_BYTES + 1) },
     ]);
@@ -933,6 +982,7 @@ describe('the size refusal', () => {
 
   test('a member over the row ceiling is refused, naming that bound instead', async () => {
     const h = harness({});
+
     const many = await memberOf(h.origin, 'n1', Array.from(
       { length: MAX_TX_LOGICAL_ROWS + 1 },
       (_unused, index) => ({ path: `f${String(index)}.ts`, base: null, after: 'x\n' }),
@@ -941,6 +991,7 @@ describe('the size refusal', () => {
     const report = await h.run('apply-winner', [many]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('oversized');
     expect(outcome.refusal.error).toContain('logicalRows');
@@ -949,6 +1000,7 @@ describe('the size refusal', () => {
 
   test('the refusal emits swarm.merge_oversized with the bound as fields', async () => {
     const h = harness({});
+
     const huge = await memberOf(h.origin, 'n1', [
       { path: 'huge.bin', base: null, after: 'x'.repeat(MAX_TX_BLOB_BYTES + 1) },
     ]);
@@ -967,6 +1019,7 @@ describe('the size refusal', () => {
 
   test('a member at exactly the ceiling is not refused', async () => {
     const h = harness({});
+
     const exact = await memberOf(h.origin, 'n1', [
       { path: 'big.bin', base: null, after: 'x'.repeat(MAX_TX_BLOB_BYTES) },
     ]);
@@ -1000,6 +1053,7 @@ describe('an absent atomic write refuses rather than tearing', () => {
     const report = await h.run('apply-winner', [member], { applyMember: undefined });
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('apply-unwired');
     expect(outcome.refusal.reason).toBe('unavailable');
@@ -1024,6 +1078,7 @@ describe('an absent atomic write refuses rather than tearing', () => {
     });
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('apply-failed');
     const [failed] = named(h.log, 'swarm.merge_apply_failed');
@@ -1040,6 +1095,7 @@ describe('the settle gate', () => {
   // merge back.
   test('a diff observed on the shared plane has nothing attributable to merge', async () => {
     const h = harness({});
+
     const member = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: null, after: 'A\n' }], {
       provenance: 'shared-plane',
     });
@@ -1047,6 +1103,7 @@ describe('the settle gate', () => {
     const report = await h.run('apply-winner', [member]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('no-boundary');
     expect(outcome.refusal.error).toContain('already in the origin');
@@ -1060,6 +1117,7 @@ describe('the settle gate', () => {
   // no production caller at all.
   test('a reported diff merges even though the node had no private home', async () => {
     const h = harness({ 'candidate/answer.js': 'old\n' });
+
     const member = await memberOf(h.origin, 'n1', [
       { path: 'candidate/answer.js', base: 'old\n', after: 'reported\n' },
     ], { provenance: 'reported' });
@@ -1072,6 +1130,7 @@ describe('the settle gate', () => {
 
   test('a member whose dependency has not merged is refused', async () => {
     const h = harness({});
+
     const dependent = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: null, after: 'B\n' }], {
       deps: ['n1'],
     });
@@ -1079,6 +1138,7 @@ describe('the settle gate', () => {
     const report = await h.run('sequential-rebase', [dependent]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-unsettled');
     expect(outcome.refusal.error).toContain('n1');
@@ -1087,6 +1147,7 @@ describe('the settle gate', () => {
   test('a dependency that merged first satisfies the edge', async () => {
     const h = harness({});
     const first = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: null, after: 'A\n' }]);
+
     const second = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: null, after: 'B\n' }], {
       deps: ['n1'],
     });
@@ -1100,18 +1161,22 @@ describe('the settle gate', () => {
   // the two get different causes so a reader can tell them apart.
   test('no verdict and an unclean verdict are different refusals', async () => {
     const h = harness({});
+
     const unchecked = await memberOf(h.origin, 'n1', [{ path: 'a.ts', base: null, after: 'A\n' }], {
       verdict: null,
     });
+
     const failed = await memberOf(h.origin, 'n2', [{ path: 'b.ts', base: null, after: 'B\n' }]);
 
     const first = await h.run('apply-winner', [unchecked]);
+
     const second = await h.run('apply-winner', [{
       ...failed, verdict: { ...failed.verdict!, clean: false },
     }]);
 
     const one = first.outcomes[0];
     const two = second.outcomes[0];
+
     if (one?.kind !== 'refused' || two?.kind !== 'refused') throw new Error('expected refusals');
     expect(one.refusal.cause).toBe('no-verdict');
     expect(two.refusal.cause).toBe('verdict-unclean');
@@ -1119,6 +1184,7 @@ describe('the settle gate', () => {
 
   test('a member that wrote outside its declared scope is refused', async () => {
     const h = harness({});
+
     const member = await memberOf(h.origin, 'n1', [
       { path: 'src/a.ts', base: null, after: 'A\n' },
       { path: 'secrets/key', base: null, after: 'leaked\n' },
@@ -1127,6 +1193,7 @@ describe('the settle gate', () => {
     const report = await h.run('apply-winner', [member]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('scope-escape');
     expect(outcome.refusal.error).toContain('secrets/key');
@@ -1135,6 +1202,7 @@ describe('the settle gate', () => {
 
   test('a declared scope admits the paths inside it', async () => {
     const h = harness({});
+
     const member = await memberOf(h.origin, 'n1', [
       { path: 'src/a.ts', base: null, after: 'A\n' },
     ], { scope: ['src'] });
@@ -1148,6 +1216,7 @@ describe('the settle gate', () => {
   // treating it as "nothing permitted" would refuse every member that declared none.
   test('an undeclared scope cannot be escaped', async () => {
     const h = harness({});
+
     const member = await memberOf(h.origin, 'n1', [
       { path: 'anywhere.ts', base: null, after: 'A\n' },
     ], { scope: null });
@@ -1172,6 +1241,7 @@ describe('the settle gate', () => {
     });
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('base-drift');
     expect(outcome.refusal.error).toContain('a.ts');
@@ -1288,6 +1358,7 @@ describe('carry admission', () => {
         at: Date.now(),
       },
     };
+
     expect(admitCarry({
       carry: { kind: 'artifacts', threshold: 0.5 }, score: 0.9, publication: cleared,
     })).toEqual({ kind: 'admitted' });

@@ -89,8 +89,10 @@ const SteerRowSchema = v.looseObject({
  */
 function steerRowStep<Metadata>(metadata: Metadata): number | null {
   const parsed = v.safeParse(SteerRowSchema, metadata ?? {});
+
   if (!parsed.success || parsed.output[STEER_METADATA_KEY] !== true) return null;
   const step = parsed.output[STEER_STEP_METADATA_KEY];
+
   return step === undefined || !Number.isInteger(step) || step < 0 ? null : step;
 }
 
@@ -132,22 +134,26 @@ export function extendTranscript(
 
   for (const message of messages) {
     const step = message.role === 'user' ? steerRowStep(message.metadata) : null;
+
     if (step !== null) {
       steerRowIds.add(message.id);
       pending.push({ id: message.id, text: messageText(message), atStep: step, state: 'landed' });
       continue;
     }
+
     if (message.role === 'assistant' && pending.length > 0) {
       entries.push({ message, steers: pending });
       pending = [];
       continue;
     }
+
     // A steer with no turn after it — the turn failed before its assistant
     // message was persisted. Show it where it is rather than losing it.
     for (const orphan of pending) entries.push({ message: steerMessage(orphan), steers: NO_STEERS });
     pending = [];
     entries.push({ message, steers: NO_STEERS });
   }
+
   return { entries, pending, steerRowIds };
 }
 
@@ -162,9 +168,11 @@ export function sealTranscript(
   const entries = fold.pending.length === 0
     ? fold.entries
     : [...fold.entries, ...fold.pending.map((orphan) => ({ message: steerMessage(orphan), steers: NO_STEERS }))];
+
   const unseen = live.filter((steer) => !fold.steerRowIds.has(steer.id));
   const placeable = unseen.filter(isPlaced);
   const trailing = unseen.filter((steer) => !isPlaced(steer));
+
   return { entries: attachLive(entries, placeable), trailing };
 }
 
@@ -197,7 +205,9 @@ function attachLive(
 ): readonly TranscriptEntry[] {
   if (live.length === 0) return entries;
   const last = entries.length - 1;
+
   if (last < 0 || entries[last]!.message.role !== 'assistant') return entries;
+
   return entries.map((entry, index) => index === last
     ? { message: entry.message, steers: [...entry.steers, ...live] }
     : entry);
@@ -229,13 +239,16 @@ export function segmentBySteers(
   const segments: TurnSegment[] = [];
   let cursor = 0;
   let steer: PlacedSteer | null = null;
+
   for (const next of [...steers].sort((a, b) => a.atStep - b.atStep)) {
     const at = Math.max(cursor, boundaries[next.atStep] ?? parts.length);
     segments.push({ steer, parts: parts.slice(cursor, at) });
     cursor = at;
     steer = next;
   }
+
   segments.push({ steer, parts: parts.slice(cursor) });
+
   return segments;
 }
 

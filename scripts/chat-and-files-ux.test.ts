@@ -148,14 +148,19 @@ interface Observed {
 
 /** The gallery ids the provenance assertions address (gallery.tsx MESSAGES). */
 const UNSTAMPED_FORK_ROW = 'f8798675-5e9a-4d13-aac2-293f4557f1c1';
+
 const STAMPED_GATE_ROW = 'programmatic:completion-gate-1';
+
 const TYPED_ROW = 'u1';
+
 const DRAIN_ROW = 'd1';
 
 /** The two endings the node rows are read for (gallery.tsx RUNNING_RUN): one
  *  turn the provider rate-limited, one the operator stopped. */
 const RATE_LIMITED_NODE = 'lv008';
+
 const ABORTED_NODE = 'lv005';
+
 /** A node simply at work on the same run — the state a rate-limited node has to
  *  be distinguishable FROM. */
 const RUNNING_NODE = 'lv003';
@@ -165,6 +170,7 @@ async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
     const measured: Record<string, {
       userBubbles: number; systemEvent: string | null; folded: boolean; offsetFromCentrePx: number;
     }> = {};
+
     for (const row of rows) {
       const card = row.querySelector('[data-system-event]');
       // The drawn box, not the full-width row: a centred card and a
@@ -183,6 +189,7 @@ async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
         ),
       };
     }
+
     return measured;
   });
 }
@@ -190,6 +197,7 @@ async function readChatRows(page: Page): Promise<Record<string, ChatRow>> {
 async function readRunNodes(page: Page): Promise<Record<string, RunNode>> {
   return page.$$eval('[data-run-node]', (rows) => {
     const measured: Record<string, { reason: string | null; reasonText: string; dot: string }> = {};
+
     for (const row of rows) {
       const line = row.querySelector('[data-node-reason]');
       const dot = row.querySelector('span.rounded-full');
@@ -199,6 +207,7 @@ async function readRunNodes(page: Page): Promise<Record<string, RunNode>> {
         dot: [...(dot?.classList ?? [])].find((name) => name.startsWith('p-dot-')) ?? '',
       };
     }
+
     return measured;
   });
 }
@@ -206,16 +215,19 @@ async function readRunNodes(page: Page): Promise<Record<string, RunNode>> {
 async function readTails(page: Page): Promise<Record<string, TailFrame>> {
   return page.$$eval('[data-stream-id]', (rows) => {
     const measured: Record<string, TailFrame> = {};
+
     for (const row of rows) {
       const streaming = row.querySelector('.p-streaming');
       const last = streaming?.lastElementChild ?? null;
       let heightCostPx = 0;
+
       if (streaming !== null) {
         const withCaret = streaming.getBoundingClientRect().height;
         streaming.classList.remove('p-streaming');
         heightCostPx = Math.round(withCaret - streaming.getBoundingClientRect().height);
         streaming.classList.add('p-streaming');
       }
+
       measured[row.getAttribute('data-stream-id') ?? ''] = {
         caretWidth: last === null ? 'none' : getComputedStyle(last, '::after').width,
         heightCostPx,
@@ -225,6 +237,7 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
         runningIndicators: row.querySelectorAll('[data-tool-state="running"]').length,
       };
     }
+
     return measured;
   });
 }
@@ -238,6 +251,7 @@ async function readTails(page: Page): Promise<Record<string, TailFrame>> {
 async function pasteIntoTerminal(page: Page, text: string): Promise<void> {
   await page.evaluate((pasted) => {
     const textarea = document.querySelector<HTMLTextAreaElement>('.xterm-helper-textarea');
+
     if (textarea === null) throw new Error('the terminal has no input to paste into');
     textarea.focus();
     const clipboardData = new DataTransfer();
@@ -291,6 +305,7 @@ async function run(): Promise<Observed> {
     // panes, which such a regression does not touch. The named assertions below
     // carry the failure instead, and say which wire broke.
     const toggle = `[data-chat-row="${UNSTAMPED_FORK_ROW}"] [data-system-event] button`;
+
     if (await chatPage.$(toggle) !== null) {
       await chatPage.click(toggle);
       await chatPage.waitForFunction(
@@ -298,7 +313,9 @@ async function run(): Promise<Observed> {
         { timeout: 10_000 }, toggle,
       );
     }
+
     const forkInterruptedAfterClick = (await readChatRows(chatPage))[UNSTAMPED_FORK_ROW]!;
+
     const chatErrorHeadings = Object.fromEntries(await chatPage.$$eval(
       '[data-chat-error]',
       (cards) => cards.map((card) => [
@@ -306,6 +323,7 @@ async function run(): Promise<Observed> {
         card.querySelector('.font-medium')?.textContent ?? '',
       ]),
     ));
+
     await chatPage.close();
 
     const tools = await browser.newPage();
@@ -321,15 +339,22 @@ async function run(): Promise<Observed> {
     // really rendered rather than an element that merely exists.
     await tools.setRequestInterception(true);
     tools.on('request', async (request) => {
-      if (!new URL(request.url()).hostname.endsWith('.preview.example.test')) { await request.continue(); return; }
+      if (!new URL(request.url()).hostname.endsWith('.preview.example.test')) {
+        await request.continue();
+
+        return;
+      }
+
       await request.respond({ status: 200, contentType: 'text/html', body: '<!doctype html><p data-run-preview>the running app</p>' });
     });
     await tools.reload({ waitUntil: 'networkidle0' });
     await tools.waitForSelector('[data-tool-group]');
+
     const collapsedActivity = await tools.$eval('[data-tool-group]', (group) => {
       const rows = [...group.querySelectorAll<HTMLElement>('[data-tool-state]')];
       const mutation = rows.find((row) => row.dataset.toolEffect === 'mutate');
       const compact = rows.find((row) => row.dataset.toolEffect === 'observe');
+
       return {
         total: Number(group.getAttribute('data-tool-count') ?? 0),
         collapsedRows: rows.length,
@@ -341,26 +366,33 @@ async function run(): Promise<Observed> {
         mode: document.documentElement.dataset.mode ?? null,
       };
     });
+
     // The preview card, read while the group is still folded: the reader has
     // clicked nothing, and the app the turn started is on screen.
     const previewFrameHandle = await tools.waitForSelector('[data-tool-group] iframe');
+
     if (previewFrameHandle === null) throw new Error('the collapsed run drew no preview frame');
     const previewDocument = await previewFrameHandle.contentFrame();
+
     if (!previewDocument) throw new Error('the preview frame created no document');
     await previewDocument.waitForSelector('[data-run-preview]');
+
     const collapsedPreview = {
       text: await previewDocument.$eval('[data-run-preview]', (element) => element.textContent),
       height: Math.round(await previewFrameHandle.evaluate((element) => element.getBoundingClientRect().height)),
       folded: await tools.$eval('[data-tool-group-toggle]', (element) => element.getAttribute('aria-expanded')),
     };
+
     await tools.click('[data-tool-group-toggle]');
     await tools.waitForFunction(
       () => document.querySelector('[data-tool-group-toggle]')?.getAttribute('aria-expanded') === 'true',
     );
+
     const expandedRows = await tools.$$eval(
       '[data-tool-group] [data-tool-state]',
       (rows) => rows.length,
     );
+
     const toolActivity = { ...collapsedActivity, expandedRows, collapsedPreview };
     await tools.close();
 
@@ -377,12 +409,15 @@ async function run(): Promise<Observed> {
       '[data-files-crumb]',
       (bs) => bs.map((b) => b.textContent ?? '').join('/'),
     );
+
     const rowNames = () => files.$$eval(
       '[data-files-entry]',
       (rows) => rows.map((r) => r.getAttribute('title') ?? ''),
     );
+
     const rowSelector = (name: string) => `[data-files-entry][title="${name}"]`;
     const waitForRow = (name: string) => files.waitForSelector(rowSelector(name), { timeout: 20_000 });
+
     const waitForRowGone = (name: string) => files.waitForFunction(
       (sel: string) => document.querySelector(sel) === null,
       { timeout: 20_000 }, rowSelector(name),
@@ -391,6 +426,7 @@ async function run(): Promise<Observed> {
     // The drive opens at the plane's root: the workspace tree beside the
     // mounted folders, each mount wearing its origin badge.
     await waitForRow('sandbox');
+
     const filesRoot = {
       crumbs: await crumbs(),
       entries: await rowNames(),
@@ -433,6 +469,7 @@ async function run(): Promise<Observed> {
     await files.waitForSelector('[data-files-tree-node="/home/user"]', { timeout: 20_000 });
     await files.click('[data-files-tree-node="/home/user"] button');
     await files.waitForSelector('[data-files-tree-file]', { timeout: 20_000 });
+
     const treeFileNames = await files.$$eval(
       '[data-files-tree-file]', (els) => els.map((el) => el.getAttribute('title') ?? ''),
     );
@@ -441,10 +478,12 @@ async function run(): Promise<Observed> {
     // Source toggle shows the bytes it was rendered from.
     await files.click(rowSelector('notes.md'));
     await files.waitForSelector('[data-files-preview-body] h1', { timeout: 20_000 });
+
     const filesMarkdownRendered = await files.$eval('[data-files-preview-body]', (el) => ({
       heading: el.querySelector('h1')?.textContent ?? '',
       showsSource: el.querySelector('pre') !== null,
     }));
+
     await files.click('[data-files-render-toggle]');
     await files.waitForSelector('[data-files-preview-body] pre', { timeout: 20_000 });
     const filesPreviewText = await files.$eval('[data-files-preview-body] pre', (el) => el.textContent ?? '');
@@ -454,6 +493,7 @@ async function run(): Promise<Observed> {
     await files.waitForSelector('[data-files-edit]', { timeout: 20_000 });
     await files.click('[data-files-edit]');
     await files.waitForSelector('[data-files-editor]', { timeout: 20_000 });
+
     const filesEditorSeedsFromTheFile = await files.$eval(
       '[data-files-editor]', (el) => el instanceof HTMLTextAreaElement ? el.value : '',
     );
@@ -504,11 +544,13 @@ async function run(): Promise<Observed> {
     await env.goto(`${origin}/gallery.html?frame=environment`, { waitUntil: 'networkidle0' });
     await env.reload({ waitUntil: 'networkidle0' });
     await env.waitForSelector('[data-env-card]', { timeout: 20_000 });
+
     const envCards = await env.$$eval('[data-env-card]', (cards) => cards.map((card) => ({
       name: card.querySelector('.font-medium')?.textContent ?? '',
       status: card.querySelector('[data-env-status]')?.textContent ?? '',
       durability: card.querySelector('[data-env-durability]')?.textContent ?? '',
     })));
+
     const envCapabilityChips = await env.$$eval('[data-capability-chip]', (els) => els.length);
     const envCapabilityAbsences = await env.$$eval('[data-capability-absences]', (els) => els.length);
 
@@ -527,14 +569,17 @@ async function run(): Promise<Observed> {
     await terminalSettled(env, 'ran: one');
     await pasteIntoTerminal(env, 'two\nthree\n');
     await terminalSettled(env, 'ran: three');
+
     const terminalRows = await env.$$eval(
       '.xterm-rows > div',
       (rows) => rows.map((line) => (line.textContent ?? '').replace(/\u00a0/gu, ' ').trimEnd()).filter((line) => line !== ''),
     );
+
     await env.click('[data-env-card="workspace"] [data-env-files]');
     // Tolerate exactly the timeout (the boolean under test); anything else is
     // a broken instrument, not a "did not land" — plan-review-ux.test.ts idiom.
     let envFilesJumpLandsOnDrive: boolean;
+
     try {
       await env.waitForSelector('[data-files-surface]', { timeout: 20_000 });
       envFilesJumpLandsOnDrive = true;
@@ -542,6 +587,7 @@ async function run(): Promise<Observed> {
       if (!(cause instanceof TimeoutError)) throw cause;
       envFilesJumpLandsOnDrive = false;
     }
+
     await env.close();
 
     const explore = await browser.newPage();
@@ -563,15 +609,22 @@ async function run(): Promise<Observed> {
     };
   });
 }
+
 /** Stable fixture identities from `STREAMING_MESSAGES` (gallery.tsx). */
 const TEXT = 'st-text';
+
 const AFTER_TOOLS = 'st-after-tools';
+
 const TOOL_IN_FLIGHT = 'st-tool';
+
 const REASONING = 'st-reasoning';
+
 const CODE_FENCE = 'st-fence';
+
 const NO_PARTS = 'st-empty';
 
 let observed: Observed;
+
 beforeAll(async () => { observed = await run(); }, 240_000);
 
 describe('the streaming turn, as a browser lays it out', () => {
@@ -865,6 +918,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
         () => !(document.querySelector('aside')?.textContent ?? '').includes('loading...'),
         { timeout: 8000 },
       );
+
       const shell = await page.evaluate(() => ({
         footer: document.querySelector('aside')?.textContent ?? '',
         chatWidth: Math.round(document.querySelector('[data-gallery-chat] > *')?.getBoundingClientRect().width ?? 0),
@@ -872,6 +926,7 @@ describe('the gallery shell photographs a healthy neighbour', () => {
         headerSettings: document.querySelectorAll('[aria-label="Workspace settings"]').length,
         rosterSettings: document.querySelectorAll('[aria-label^="Workspace settings for"]').length,
       }));
+
       await page.close();
       expect(shell.footer).not.toContain('Profile unavailable');
       expect(shell.footer).toContain('@');
@@ -888,9 +943,11 @@ describe('the gallery shell photographs a healthy neighbour', () => {
       await page.setViewport({ width: 390, height: 844 });
       await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
       await page.waitForSelector('[data-composer-root]');
+
       const chatPanels = await page.evaluate(
         () => [...document.querySelectorAll('[data-panel]')].map((panel) => Math.round(panel.getBoundingClientRect().width)),
       );
+
       const workspaceButton = await page.$('button[aria-pressed="false"]');
       await workspaceButton?.click();
       await page.waitForFunction(
@@ -898,9 +955,11 @@ describe('the gallery shell photographs a healthy neighbour', () => {
           index === 1 && Math.round(panel.getBoundingClientRect().width) === 390
         )),
       );
+
       const workspacePanels = await page.evaluate(
         () => [...document.querySelectorAll('[data-panel]')].map((panel) => Math.round(panel.getBoundingClientRect().width)),
       );
+
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
       await page.close();
       expect(chatPanels).toEqual([390, 0]);
@@ -941,6 +1000,7 @@ describe('an additional agent, as an ordinary conversation', () => {
     await page.goto(`${origin}/gallery.html?frame=agentchats${query}`, { waitUntil: 'networkidle0' });
     await page.reload({ waitUntil: 'networkidle0' });
     await page.waitForSelector('[data-agentchats] nav[aria-label="Workspace agents"]');
+
     return {
       page,
       activeTab: () => page.$eval(
@@ -950,11 +1010,14 @@ describe('an additional agent, as an ordinary conversation', () => {
       clickTab: async (label: string) => {
         for (const link of await page.$$('nav[aria-label="Workspace agents"] a')) {
           const text = await link.evaluate((el) => el.textContent ?? '');
+
           if (text.includes(label)) {
             await link.click();
+
             return;
           }
         }
+
         throw new Error(`no tab labelled ${label}`);
       },
       // Puppeteer types the handle from the selector's trailing tag, so the
@@ -1010,10 +1073,12 @@ describe('an additional agent, as an ordinary conversation', () => {
         (document.querySelector('nav[aria-label="Workspace agents"] [aria-current="page"]')?.textContent ?? '')
           .includes('Fix the coupon flow properly')
       ), { timeout: 10_000 });
+
       const sentLogAfterFirst = await page.$eval(
         '[data-sent-log]',
         (el) => el.getAttribute('data-sent-log') ?? '[]',
       );
+
       const sentAfterFirst: unknown = JSON.parse(sentLogAfterFirst);
       expect(sentAfterFirst).toEqual([{ agent: 'agent-1', mode: 'plan', text: 'Fix the coupon flow properly' }]);
 
@@ -1051,10 +1116,12 @@ describe('an additional agent, as an ordinary conversation', () => {
       // (without the restore, an "up" scroller pins to the bottom on mount).
       await rig.clickTab('Checkout scout');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/scout"]');
+
       const geometry = await page.$eval('[data-agent-scroll]', (el) => ({
         scrollable: el.scrollHeight > el.clientHeight,
         atBottom: el.scrollHeight - el.scrollTop - el.clientHeight < 60,
       }));
+
       expect(geometry.scrollable).toBe(true);
       expect(geometry.atBottom).toBe(true);
       await page.$eval('[data-agent-scroll]', (el) => { el.scrollTop = 0; });
@@ -1064,10 +1131,12 @@ describe('an additional agent, as an ordinary conversation', () => {
       await page.waitForSelector('[data-agent-pane="checkout-fixes/main"]');
       await rig.clickTab('Checkout scout');
       await page.waitForSelector('[data-agent-pane="checkout-fixes/agents/scout"]');
+
       const restored = await page.$eval('[data-agent-scroll]', (el) => ({
         scrollTop: el.scrollTop,
         scrollable: el.scrollHeight > el.clientHeight,
       }));
+
       expect(restored.scrollable).toBe(true);
       expect(restored.scrollTop).toBeLessThan(60);
 
@@ -1237,12 +1306,14 @@ describe('an empty transcript waits for the history store to speak', () => {
       expect((await page.content()).includes('Send the first message to start.')).toBe(false);
 
       await page.click('[data-history-release]');
+
       try {
         await page.waitForSelector('aria/Retry');
       } catch (cause) {
         const state = await page.$eval('[data-history-authority]', (root) => root.textContent ?? '');
         throw new Error(`History authority never exposed Retry: ${state}`, { cause });
       }
+
       expect(await page.$eval('[data-history-authority]', (root) => root.textContent ?? ''))
         .toContain('Could not load earlier messages.');
       expect((await page.content()).includes('Send the first message to start.')).toBe(false);
@@ -1279,6 +1350,7 @@ describe('chat send admission at the actual WorkspacePage boundary', () => {
         document.documentElement.dataset.galleryChatSends = '0';
         document.documentElement.dataset.galleryChatHold = '1';
         const send = document.querySelector<HTMLButtonElement>('[aria-label="Send"]');
+
         if (send === null) throw new Error('gallery WorkspacePage has no Send button');
         // Same JavaScript task, which is the old failure window.
         send.click();
@@ -1374,6 +1446,7 @@ describe('history and roster request generations at actual hook boundaries', () 
       await page.click('[data-history-release]');
       await page.waitForFunction(() => {
         const raw = document.querySelector('[data-history-probe]')?.textContent ?? '';
+
         return raw.includes('"loading":false') && raw.includes('"error":null') && raw.includes('"exhausted":false');
       }, { timeout: 10_000 });
       expect(await page.$('[data-testid="conversation-skeleton"]')).not.toBeNull();
@@ -1410,6 +1483,7 @@ describe('history and roster request generations at actual hook boundaries', () 
       // running out means "never"; a crashed page or a detached frame is a
       // different failure and must not read as a pass.
       let clobbered = true;
+
       try {
         await page.waitForFunction(
           () => document.querySelector('[data-roster-probe]')?.textContent?.includes('Checkout coupon bug') === true,
@@ -1419,6 +1493,7 @@ describe('history and roster request generations at actual hook boundaries', () 
         if (!(cause instanceof TimeoutError)) throw cause;
         clobbered = false;
       }
+
       expect(clobbered).toBe(false);
       expect(await page.$eval('[data-roster-probe]', (el) => el.textContent ?? ''))
         .toBe('checkout-fixes:Renamed locally');
@@ -1661,6 +1736,7 @@ describe('linking a machine happens on the surface that asked for it', () => {
       const readsAtHandover = await page.evaluate(
         () => Number(document.documentElement.dataset.galleryRosterReads ?? '0'),
       );
+
       await page.waitForFunction(
         (base: number) => Number(document.documentElement.dataset.galleryRosterReads ?? '0') >= base + 3,
         { timeout: 60_000 },
@@ -1768,10 +1844,13 @@ describe('composer and message continuity at browser boundaries', () => {
 
       const paste = (kind: 'plain' | 'html' | 'file' | 'same-metadata') => textarea!.evaluate((input, flavor) => {
         const data = new DataTransfer();
+
         const file = new File(['abc'], 'notes.txt', {
           type: 'text/plain', lastModified: 7,
         });
+
         data.items.add(file);
+
         // Repeating the SAME object is the clipboard duplication the component
         // removes. Two separate File objects with the same metadata are not
         // identity-equal and must both survive.
@@ -1782,13 +1861,18 @@ describe('composer and message continuity at browser boundaries', () => {
         } else {
           data.items.add(file);
         }
+
         if (flavor === 'plain') data.items.add('notes.txt', 'text/plain');
+
         if (flavor === 'html') data.items.add('<strong>Rich note</strong>', 'text/html');
         input.focus();
+
         const event = new ClipboardEvent('paste', {
           clipboardData: data, bubbles: true, cancelable: true,
         });
+
         input.dispatchEvent(event);
+
         return {
           defaultPrevented: event.defaultPrevented,
           plain: data.getData('text/plain'),
@@ -1835,28 +1919,34 @@ describe('composer and message continuity at browser boundaries', () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.goto(`${origin}/gallery.html?frame=clientcontinuity`, { waitUntil: 'networkidle0' });
+
       for (const viewport of [{ width: 1280, height: 1000 }, { width: 360, height: 800 }]) {
         await page.setViewport(viewport);
+
         const measured = await page.evaluate(() => {
           const read = (selector: string) => {
             const bubble = document.querySelector<HTMLElement>(`${selector} .p-user-bubble`);
+
             return {
               clientWidth: bubble?.clientWidth ?? 0,
               scrollWidth: bubble?.scrollWidth ?? 0,
             };
           };
+
           return {
             user: read('[data-wrap-user]'),
             steer: read('[data-wrap-steer]'),
             tokenLength: Number(document.querySelector('[data-continuity-probe]')?.getAttribute('data-token-length') ?? 0),
           };
         });
+
         expect(measured.tokenLength).toBeGreaterThan(500);
         expect(measured.user.clientWidth).toBeGreaterThan(0);
         expect(measured.user.scrollWidth).toBeLessThanOrEqual(measured.user.clientWidth);
         expect(measured.steer.clientWidth).toBeGreaterThan(0);
         expect(measured.steer.scrollWidth).toBeLessThanOrEqual(measured.steer.clientWidth);
       }
+
       await page.close();
     });
   }, 240_000);
@@ -1869,6 +1959,7 @@ describe('composer and message continuity at browser boundaries', () => {
       await page.waitForSelector('[data-image-failure] [data-markdown-image-error]');
       await page.waitForFunction(() => {
         const image = document.querySelector<HTMLImageElement>('[data-image-success] [data-markdown-image]');
+
         return image?.complete === true && image.naturalWidth > 0;
       });
 
@@ -1877,6 +1968,7 @@ describe('composer and message continuity at browser boundaries', () => {
         text: note.textContent ?? '',
         href: note.querySelector('a')?.getAttribute('href') ?? '',
       }));
+
       expect(failed.role).toBe('note');
       expect(failed.text).toContain('Image failed to load: Checkout diagram');
       expect(failed.href).toBe('/assets/missing-continuity-image.png');
@@ -1929,7 +2021,9 @@ describe('the tool preview redacts through the one canonical policy', () => {
       // pass repeats until nothing is left collapsed.
       for (let pass = 0; pass < 3; pass += 1) {
         const collapsed = await page.$$('button[aria-expanded="false"]');
+
         if (collapsed.length === 0) break;
+
         for (const toggle of collapsed) await toggle.click();
         await page.waitForFunction(() => document.querySelectorAll('pre').length > 0, { timeout: 8000 });
       }
@@ -1938,6 +2032,7 @@ describe('the tool preview redacts through the one canonical policy', () => {
         previews: [...document.querySelectorAll('pre')].map((node) => node.textContent ?? ''),
         body: document.body.textContent ?? '',
       }));
+
       await page.close();
 
       // Every preview that is JSON must already be what the canonical policy
@@ -1952,8 +2047,10 @@ describe('the tool preview redacts through the one canonical policy', () => {
       const structured = rendered.previews
         .filter((text) => text.startsWith('{') || text.startsWith('['))
         .map((text) => parseJsonValue(text));
+
       expect(structured.length, 'no structured preview rendered, so the oracle read nothing')
         .toBeGreaterThan(0);
+
       for (const preview of structured) {
         expect(redactPayload(preview), 'a rendered preview is not a fixed point of redactPayload')
           .toEqual(preview);
@@ -1964,9 +2061,11 @@ describe('the tool preview redacts through the one canonical policy', () => {
       expect(rendered.body).toContain('<redacted:apiKey>');
       // Not a blanket mask: an ordinary sibling of a secret survives.
       expect(rendered.body).toContain('visible');
+
       // The value itself reaches no pixel of the structured path.
       const secretsInStructured = structured
         .filter((preview) => JSON.stringify(preview).includes('sk-live-REDACTME'));
+
       expect(secretsInStructured, 'a credential value survived into a structured preview').toEqual([]);
 
       // THE RESIDUAL, asserted rather than described. `run` renders its command
@@ -1984,25 +2083,32 @@ test('file navigation does not pair a new breadcrumb with the old directory', as
     const page = await browser.newPage();
     await page.goto(`${origin}/gallery.html?frame=files`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[data-files-entry][title="sandbox"]');
+
     const mismatches = await page.evaluate(() => new Promise<string[]>((resolve) => {
       const seen: string[] = [];
+
       const observe = (): void => {
         const crumbs = [...document.querySelectorAll('[data-files-crumb]')]
           .map((node) => node.textContent ?? '').join('/');
+
         if (crumbs.includes('pc') && document.querySelector('[data-files-entry][title="sandbox"]')) {
           seen.push(crumbs);
         }
+
         if (document.querySelector('[data-files-entry][title="quarterly-report.txt"]')) {
           changes.disconnect();
           resolve(seen);
         }
       };
+
       const changes = new MutationObserver(observe);
       changes.observe(document.body, { childList: true, subtree: true, characterData: true });
       const target = document.querySelector<HTMLElement>('[data-files-entry][title="pc"]');
+
       if (target === null) throw new Error('the pc mount row is absent');
       target.click();
     }));
+
     expect(mismatches).toEqual([]);
   });
 }, 240_000);
@@ -2018,6 +2124,7 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
         readText: async () => clipboard,
       } });
     });
+
     try {
       for (const mode of ['light', 'dark']) {
         await page.evaluateOnNewDocument((theme) => localStorage.setItem('theme', theme), mode);
@@ -2025,52 +2132,73 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
         await page.waitForSelector('[data-code-sample="js"] code');
         await page.waitForFunction(() => document.fonts.status === 'loaded');
         await page.waitForFunction(() => [...document.querySelectorAll('[data-code-sample]')].every((sample) => sample.getAttribute('data-code-sample') === 'unknown-language' || sample.querySelectorAll('code span').length > 1));
+
         const colors = await page.evaluate(() => [...document.querySelectorAll('[data-code-sample]')].map((sample) => {
           const code = sample.querySelector('code');
           const walker = document.createTreeWalker(code ?? sample, NodeFilter.SHOW_TEXT);
           const ink = new Set<string>();
+
           while (walker.nextNode()) {
             const parent = walker.currentNode.parentElement;
+
             if (parent !== null && walker.currentNode.textContent?.trim()) ink.add(getComputedStyle(parent).color);
           }
+
           return { language: sample.getAttribute('data-code-sample'), colors: [...ink] };
         }));
+
         for (const sample of colors.filter((item) => item.language !== 'unknown-language')) {
           expect(sample.colors.length, `${mode} ${sample.language} syntax colors`).toBeGreaterThan(1);
         }
+
         const ages = await page.$$eval('aside ul > li', (rows) => rows.flatMap((row) => {
           const link = row.querySelector('a[href^="/workspace/"]');
           const age = link?.lastElementChild;
+
           if (age === null || age === undefined) return [];
           const range = document.createRange();
           range.selectNodeContents(age);
+
           return [{ text: age.textContent, right: range.getBoundingClientRect().right, rowRight: row.getBoundingClientRect().right }];
         }));
+
         expect(new Set(ages.map((age) => age.text?.length)).size).toBeGreaterThan(1);
+
         for (const age of ages) expect(age.rowRight - age.right).toBeLessThan(28);
         const firstAge = ages[0];
+
         if (firstAge === undefined) throw new Error('no sidebar ages');
+
         for (const age of ages) expect(Math.abs(age.right - firstAge.right)).toBeLessThan(1);
         const firstRow = 'aside ul > li:first-child';
         expect(await page.$eval(firstRow + ' a[href^="/workspace/"]', (link) => {
           const title = link.children[1];
+
           if (title === undefined) throw new Error('workspace title absent');
+
           return title.scrollWidth > title.clientWidth;
         })).toBeTrue();
+
         for (const action of ['a[href^="/settings/"]', 'button[title="Rename"]', 'button[title="Remove"]']) {
           await page.focus(firstRow + ' ' + action);
           await page.waitForFunction(() => {
             const age = document.querySelector('aside ul > li:first-child a[href^="/workspace/"]')?.lastElementChild;
+
             return age !== null && age !== undefined && getComputedStyle(age).opacity === '0';
           });
+
           const bounds = await page.$eval(firstRow, (row) => {
             const title = row.querySelector('a[href^="/workspace/"]')?.children[1];
             const active = document.activeElement;
+
             if (title === undefined || active === null) throw new Error('focused row missing');
+
             return { titleRight: title.getBoundingClientRect().right, actionLeft: active.getBoundingClientRect().left };
           });
+
           expect(bounds.titleRight).toBeLessThan(bounds.actionLeft);
         }
+
         const updated = 'export const finished = "' + 'stream complete '.repeat(20) + '";\nconsole.log(finished);';
         await page.focus('textarea');
         await page.keyboard.down('Control');
@@ -2078,16 +2206,21 @@ test('code retains syntax colors through streaming and sidebar ages share a righ
         await page.keyboard.up('Control');
         await page.keyboard.sendCharacter(updated);
         await page.waitForFunction((text) => document.querySelector('[data-code-sample="stream"] .shiki code')?.textContent === text, {}, updated);
+
         const streamed = await page.$eval('[data-code-sample="stream"]', (sample) => {
           const colors = new Set([...sample.querySelectorAll('code span')].map((token) => getComputedStyle(token).color));
           let scrollable = false;
+
           for (const element of sample.querySelectorAll('div, pre')) {
             element.scrollLeft = 50;
+
             if (element.scrollLeft > 0) scrollable = true;
             element.scrollLeft = 0;
           }
+
           return { colors: colors.size, scrollable };
         });
+
         expect(streamed.colors).toBeGreaterThan(1);
         expect(streamed.scrollable).toBeTrue();
         expect(await page.$eval('[data-code-sample="unknown-language"] code', (code) => code.textContent)).toBe('<script>unknown & safe</script>');
@@ -2108,14 +2241,17 @@ test('workspace tabs keep scrolling horizontal and suppress the scrollbar', asyn
     await page.setViewport({ width: 390, height: 844 });
     await page.goto(`${origin}/gallery.html?frame=work`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('[aria-label="Work"]');
+
     const strip = await page.$eval('.p-tabstrip', (element) => {
       const style = getComputedStyle(element);
       element.scrollLeft = 50;
+
       return {
         names: [...element.querySelectorAll('button[aria-label]')].map((button) => button.getAttribute('aria-label')),
         overflowY: style.overflowY, scrollbarWidth: style.scrollbarWidth, scrollLeft: element.scrollLeft,
       };
     });
+
     expect(strip.names).toContain('Files');
     expect(['hidden', 'clip']).toContain(strip.overflowY);
     expect(strip.scrollbarWidth).toBe('none');

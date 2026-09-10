@@ -16,6 +16,7 @@ import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } fro
 import { forkFilePaths } from '../src/identity/fork';
 import type { VFS } from '../src/types/primitives';
 import { WorkspaceActorDirectory, openWorkspaceMainActor } from '../src/identity/workspace-actors';
+
 /** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools.
  *  A message with no explicit `parent_id` is linked to the previous one, which
  *  is what the SDK's session provider does (`parentId ?? latestLeaf`) — a
@@ -33,16 +34,19 @@ async function seedSource(
   const actor = new WorkspaceActorDirectory(sql, { workspaceId: opts.identity.id, ownerUserId: '' }).createMain({ name: opts.identity.name });
   await writeSoul(vfs, sql, opts.purpose);
   let previousId: string | null = null;
+
   for (const m of opts.messages) {
     const parent = m.parent_id !== undefined ? m.parent_id : previousId;
     void sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
         VALUES (${actor.actorId}, ${m.id}, ${'default'}, ${parent}, ${m.role}, ${m.content}, ${m.created_at})`;
     previousId = m.id;
   }
+
   for (const t of opts.craftedTools ?? []) {
     void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
         VALUES (${t.name}, ${t.description}, ${null}, ${t.code}, ${t.scope}, ${t.created_at}, ${t.updated_at})`;
   }
+
   actor.config.setModel('@cf/moonshotai/kimi-k2.6');
   actor.config.setDisplayName(opts.identity.name);
 }
@@ -84,6 +88,7 @@ describe('forkWorkspaceStorage', () => {
       SELECT id, parent_id, role, content FROM messages
       WHERE role != 'system' ORDER BY created_at ASC
     `;
+
     expect(targetMsgs.length).toBe(3);
     expect(targetMsgs.map(m => m.id)).toEqual(['msg-1', 'msg-2', 'msg-3']);
     expect(targetMsgs[0]!.parent_id).toBeNull();
@@ -117,6 +122,7 @@ describe('forkWorkspaceStorage', () => {
     const copied = tgt.sql<{ name: string; description: string; code: string; scope: string; created_at: number; updated_at: number }>`
       SELECT name, description, code, scope, created_at, updated_at FROM crafted_tools ORDER BY name
     `;
+
     expect(copied.length).toBe(2);
     expect(copied[0]!.name).toBe('doubleIt');
     expect(copied[0]!.code).toBe('async (n) => n * 2');
@@ -240,6 +246,7 @@ describe('forkWorkspaceStorage', () => {
     // C inherits b4's ancestry: a1, a2, b3, b4 (its own marker excluded).
     const cMsgs = c.sql<{ id: string }>`
       SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC`;
+
     expect(cMsgs.map(m => m.id)).toEqual(['a1', 'a2', 'b3', 'b4']);
 
     // C's lineage points to B (immediate parent), not A
@@ -283,6 +290,7 @@ describe('forkWorkspaceStorage', () => {
 
     const ids = tgt.sql<{ id: string }>`
       SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC, id ASC`.map(r => r.id);
+
     expect(ids).toEqual(['m1', 'm2']);
   });
 
@@ -305,6 +313,7 @@ describe('forkWorkspaceStorage', () => {
 
     const ids = tgt.sql<{ id: string }>`
       SELECT id FROM messages WHERE role != 'system' ORDER BY created_at ASC, id ASC`.map(r => r.id);
+
     expect(ids).toEqual(['m1', 'left']);
   });
 
@@ -324,6 +333,7 @@ describe('forkWorkspaceStorage', () => {
     const ident = tgt.sql<{ id: string; name: string; created_at: number }>`
       SELECT id, name, created_at FROM workspace_identity
     `;
+
     expect(ident.length).toBe(1);
     expect(ident[0]!.id).toBe('NEW-UUID');
     expect(ident[0]!.name).toBe('fork-name');
@@ -349,6 +359,7 @@ describe('forkWorkspaceStorage', () => {
     const rows = tgt.sql<{ id: string; parent_id: string | null; role: string; created_at: number; content: string }>`
       SELECT id, parent_id, role, created_at, content FROM messages ORDER BY created_at ASC, id ASC
     `;
+
     expect(rows.map((r) => r.role)).toEqual(['user', 'assistant', 'system']);
     const marker = rows[2]!;
     expect(marker.parent_id).toBe('m2');
@@ -374,6 +385,7 @@ describe('forkWorkspaceStorage', () => {
     const cfg = tgt.sql<{ key: string; value: string }>`
       SELECT key, value FROM actor_config ORDER BY key
     `;
+
     const map = new Map(cfg.map(r => [r.key, r.value]));
     expect(map.get('model')).toBe('@cf/moonshotai/kimi-k2.6');
     expect(map.get('display_name')).toBe('forked-display');
@@ -400,6 +412,7 @@ describe('forkWorkspaceStorage', () => {
     });
     src.execRaw(SDK_SESSION_DDL);
     const srcActor = openWorkspaceMainActor(src.sql).actorId;
+
     // Both messages land in the SAME second, which is all the SDK's
     // `DATETIME DEFAULT CURRENT_TIMESTAMP` can record. A cut comparing
     // `strftime('%s', created_at) * 1000` against the fork point cannot tell m2
@@ -422,6 +435,7 @@ describe('forkWorkspaceStorage', () => {
     const carried = tgt.sql<{ id: string; role: string; parent_id: string | null; content: string }>`
       SELECT id, role, parent_id, content FROM messages WHERE role != 'system' ORDER BY rowid
     `;
+
     expect(carried.map((r) => r.id)).toEqual(['m1', 'm2']);
     expect(carried[1]!.parent_id).toBe('m1');
     expect(carried[1]!.content).toBe('hi');
@@ -440,9 +454,11 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
+
     const result = await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
     });
+
     // The skip is a no-op: the cut lands whole in `messages`...
     expect(result.messagesCopied).toBe(1);
     expect(tgt.sql<{ id: string }>`
@@ -478,6 +494,7 @@ describe('forkWorkspaceStorage', () => {
     const rows = tgt.sql<{ id: string; role: string; content: string; parent_id: string | null }>`
       SELECT id, role, content, parent_id FROM assistant_messages WHERE role = 'system'
     `;
+
     expect(rows.length).toBe(1);
     expect(rows[0]!.role).toBe('system');
     expect(rows[0]!.parent_id).toBe('m1');
@@ -583,6 +600,7 @@ async function paneSourceWorkspace(
     await snapshotWorkspaceForFork(plain.sql, plain.vfs, lastId),
     { workspaceId: 'PANE-ID', workspaceName: 'pane-src', targetAuthority: 'pane' },
   );
+
   return pane;
 }
 
@@ -591,6 +609,7 @@ describe('fork snapshot payload', () => {
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
     const TURNS = 200;
+
     const rows = Array.from({ length: TURNS }, (_, i) => ({
       id: `m${i}`,
       role: i % 2 === 0 ? 'user' : 'assistant',
@@ -598,6 +617,7 @@ describe('fork snapshot payload', () => {
       parent_id: i === 0 ? null : `m${i - 1}`,
       created_at: 1000 + i,
     }));
+
     const src = await paneSourceWorkspace(rows);
 
     const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, `m${TURNS - 1}`);
@@ -621,8 +641,10 @@ describe('fork snapshot payload', () => {
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
       workspaceId: 'T', workspaceName: 'forked', targetAuthority: 'pane',
     });
+
     const landed = tgt.sql<{ id: string; content: string }>`
       SELECT id, content FROM assistant_messages WHERE role != 'system' ORDER BY rowid`;
+
     expect(landed.map((r) => r.id)).toEqual(rows.map((r) => r.id));
     const plainLanded = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c;
     expect(plainLanded).toBe(0);
@@ -660,10 +682,12 @@ describe('fork snapshot payload', () => {
       .toEqual(['display_name', 'model']);
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+
     const landed = Object.fromEntries(
       tgt.sql<{ key: string; value: string }>`SELECT key, value FROM actor_config`
         .map((row) => [row.key, row.value]),
     );
+
     // The child asks the owner from scratch, and the preference it may inherit
     // still arrives — this withholds authority, not configuration.
     expect(landed['shell_approval_mode']).toBeUndefined();
@@ -692,8 +716,10 @@ describe('fork snapshot payload', () => {
     expect(snapshot.messages.map((m) => m.content)).toEqual(['first', 'second']);
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+
     const landed = tgt.sql<{ content: string }>`
       SELECT content FROM messages WHERE role != 'system' ORDER BY rowid`;
+
     expect(landed.map((r) => r.content)).toEqual(['first', 'second']);
   });
 
@@ -739,8 +765,10 @@ describe('fork snapshot payload', () => {
     expect(snapshot.messages.length).toBe(40);
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+
     const rows = tgt.sql<{ id: string; content: string }>`
       SELECT id, content FROM messages WHERE role != 'system' ORDER BY created_at`;
+
     expect(rows.map((r) => r.id)).toEqual(snapshot.messages.map((m) => m.id));
     expect(rows[39]!.content).toBe(`39:${CHUNK}`);
   });
@@ -772,28 +800,37 @@ describe('forkFilePaths carries the whole memory tree', () => {
   function fakeVfs(files: string[]): VFS {
     const children = new Map<string, string[]>();
     const fileSet = new Set(files);
+
     for (const path of files) {
       const parts = path.split('/');
+
       for (let i = 1; i < parts.length; i++) {
         const dir = parts.slice(0, i).join('/');
         const list = children.get(dir) ?? [];
+
         if (!list.includes(parts[i])) list.push(parts[i]);
         children.set(dir, list);
       }
     }
+
     const missing = (op: string, path: string) =>
       Object.assign(new Error(`ENOENT: ${op} ${path}`), { code: 'ENOENT' });
+
     return {
       readFile: async (path) => { throw missing('read', path); },
       writeFile: async () => undefined,
       readdir: async (path) => {
         const list = children.get(path);
+
         if (list === undefined) throw missing('readdir', path);
+
         return [...list];
       },
       stat: async (path) => {
         if (fileSet.has(path)) return { size: 1, mtimeMs: 0, isDir: false };
+
         if (children.has(path)) return { size: 0, mtimeMs: 0, isDir: true };
+
         return null;
       },
       unlink: async () => undefined,
@@ -804,7 +841,9 @@ describe('forkFilePaths carries the whole memory tree', () => {
 
   async function collect(vfs: VFS): Promise<string[]> {
     const out: string[] = [];
+
     for await (const path of forkFilePaths(vfs)) out.push(path);
+
     return out;
   }
 
@@ -814,11 +853,14 @@ describe('forkFilePaths carries the whole memory tree', () => {
     // units. A fork that reused the walker's bounds would refuse or truncate
     // here; a fork carries every file and no directory.
     let deep = 'memory';
+
     for (let i = 0; i < 40; i++) deep += `/d${i}`;
     const files = [`${deep}/note.md`];
+
     for (let d = 0; d < 200; d++) {
       for (let f = 0; f < 60; f++) files.push(`memory/dir${d}/note${f}.md`);
     }
+
     const carried = await collect(fakeVfs(files));
     expect(carried.length).toBe(files.length);
     expect(new Set(carried)).toEqual(new Set(files));

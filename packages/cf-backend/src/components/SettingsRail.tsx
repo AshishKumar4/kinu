@@ -37,6 +37,7 @@ function isSettingsSection(id: string): id is SettingsSection {
  *  one rather than an empty page. */
 export function settingsSection(hash: string): SettingsSection {
   const id = hash.startsWith("#") ? hash.slice(1) : hash;
+
   return isSettingsSection(id) ? id : "account";
 }
 

@@ -24,7 +24,9 @@ const EVOLUTION: EvolutionConfigView = {
   advisorEnabled: false,
   advisorMinSeverity: 'concern',
 };
+
 export const TURN = { text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
+
 /** Teardowns run synchronously: the unmount they flush must complete before
  *  the renderer that owns those renderables is destroyed. */
 const mounted: Array<() => void> = [];
@@ -78,6 +80,7 @@ export function fakeClient(options: FakeClientOptions) {
   const state = { closed: 0 };
   let evolution: EvolutionConfigView = { ...EVOLUTION };
   const mode = options.mode ?? 'local';
+
   const client: AgentClient = {
     mode,
     agentName: options.name,
@@ -100,6 +103,7 @@ export function fakeClient(options: FakeClientOptions) {
     connect: options.connect ?? (async () => {}),
     subscribe: (listener) => {
       listeners.add(listener);
+
       return () => { listeners.delete(listener); };
     },
     send: options.send ?? (async () => TURN),
@@ -135,6 +139,7 @@ export function fakeClient(options: FakeClientOptions) {
     getEvolutionConfig: async () => evolution,
     setEvolutionConfig: async (next) => {
       evolution = { ...evolution, ...next };
+
       return evolution;
     },
     listModels: options.listModels ?? (async () => ({
@@ -147,10 +152,13 @@ export function fakeClient(options: FakeClientOptions) {
       failures: [],
     })),
   };
+
   const rename = options.rename ?? (mode === 'local'
     ? async (displayName: string) => ({ name: options.name, displayName })
     : undefined);
+
   if (rename) Object.assign(client, { rename });
+
   return {
     client,
     state,
@@ -192,15 +200,19 @@ export async function mountChat(
     maxFps: Number.POSITIVE_INFINITY,
     kittyKeyboard: options.kittyKeyboard === true,
   });
+
   const root = createRoot(testRenderer.renderer);
+
   const workspaceSource: TuiAgentSource | undefined = options.listWorkspaces
     ? {
         load: () => {
           const items = options.listWorkspaces?.() ?? [];
+
           return { items, total: items.length, nextCursor: null };
         },
       }
     : undefined;
+
   root.render(
     <ChatApp
       client={client}
@@ -217,14 +229,18 @@ export async function mountChat(
     />,
   );
   const frame = () => testRenderer.captureCharFrame();
+
   const waitFor = async (what: string, predicate: () => boolean, rounds = 400) => {
     for (let index = 0; index < rounds; index += 1) {
       await testRenderer.renderOnce();
+
       if (predicate()) return;
       await Bun.sleep(10);
     }
+
     throw new Error(`timed out waiting for ${what}`);
   };
+
   const settled = options.settled ?? ((view: string) => view.includes('Send a message'));
   await waitFor('the chat surface to settle', () => settled(frame()));
   mounted.push(() => {
@@ -238,6 +254,7 @@ export async function mountChat(
     flushSync(() => { root.unmount(); });
     testRenderer.renderer.destroy();
   });
+
   return { ...testRenderer, frame, waitFor };
 }
 

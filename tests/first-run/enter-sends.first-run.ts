@@ -38,6 +38,7 @@ import {
 } from './first-run';
 
 const SUITE = 'First-run · enter-sends';
+
 const CASE = 'enter-sends' as const;
 
 /** The product path this case drives, as a file a pty child can execute. */
@@ -53,6 +54,7 @@ const READY_SECONDS = 60;
  *  recorded when the DO accepts it, which is long before the model answers, so
  *  this waits on the transcript rather than on the reply. */
 const LANDING_MS = 60_000;
+
 const LANDING_PROBES = 30;
 
 /** One spelling of Enter, and the words the run types before pressing it. */
@@ -68,7 +70,9 @@ const SPELLINGS: readonly Spelling[] = [
 ];
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
+
 const liveTest = test.skipIf(PLAN === null);
+
 const observations: EvalObservation[] = [];
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
@@ -93,9 +97,11 @@ describe(SUITE, () => {
         };
 
         const subgoals: EvalSubgoal[] = [];
+
         for (const spelling of SPELLINGS) {
           const draft = `${spelling.marker} reply with only OK`;
           const runsBefore = (await session.runEvents()).filter((event) => event.type === 'run_end').length;
+
           // The keystrokes a person makes, each after the screen fact a person
           // would wait for. The driver reads the SCREEN — the cell grid the
           // terminal shows — so a word the renderer painted by rewriting only
@@ -134,6 +140,7 @@ describe(SUITE, () => {
               { wait: TUI_COMPOSER_STEERING_PLACEHOLDER, timeout: READY_SECONDS },
             ],
           });
+
           const unmet = run.waits.find((wait) => !wait.met);
           // THE DEPLOYMENT'S OWN RECORD, not the screen. A composer that painted
           // the text and sent nothing is exactly the defect, and the screen
@@ -161,6 +168,7 @@ describe(SUITE, () => {
                   : `${spelling.marker} landed as a user row and its turn ended without a reply: ${outcome.ended}`,
           });
         }
+
         return subgoals;
       },
     }, observations);
@@ -176,9 +184,12 @@ async function turnLanded(
 ): Promise<boolean> {
   const deadline = Date.now() + LANDING_MS;
   const between = Math.floor(LANDING_MS / LANDING_PROBES);
+
   for (;;) {
     const history = await session.history();
+
     if (history.some((row) => row.role === 'user' && row.text.includes(marker))) return true;
+
     if (Date.now() >= deadline) return false;
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, between);
@@ -203,11 +214,14 @@ async function turnSettled(
   for (;;) {
     const history = await session.history();
     const user = history.findIndex((row) => row.role === 'user' && row.text.includes(marker));
+
     if (user >= 0 && history.slice(user + 1).some((row) => row.role === 'assistant')) return 'replied';
     const end = (await session.runEvents()).filter((event) => event.type === 'run_end')[runsBefore];
+
     if (end !== undefined && end.type === 'run_end') {
       return { ended: `${end.reason ?? 'ended'}${end.error === undefined ? '' : `: ${end.error}`}` };
     }
+
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, Math.floor(LANDING_MS / LANDING_PROBES));
     await tick.promise;

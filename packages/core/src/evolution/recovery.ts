@@ -101,6 +101,7 @@ export function recordRecoveryFinding(
   sql: SqlExecutor, actor: ActorHandle, finding: RecoveryFinding, now?: number,
 ): boolean {
   const text = recoveryFindingText(finding);
+
   if (listRecoveryFindings(sql, actor).includes(text)) return false;
   recordLesson(sql, actor, {
     turnIds: [],
@@ -109,6 +110,7 @@ export function recordRecoveryFinding(
     status: 'provisional',
     now,
   });
+
   return true;
 }
 

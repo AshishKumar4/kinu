@@ -11,11 +11,13 @@
  */
 
 import type { AgentRuntime } from '../types/agent-runtime';
+
 // Re-exported, not re-declared: the DATA lives in a module with no value
 // import so a type-only reference to it cannot drag this file's own imports
 // onto a caller's graph. See `loop-origin.ts` for the nine layer-gate
 // violations that taught us the difference.
 export { defaultLoopOrigin, type LoopOrigin } from './loop-origin';
+
 import type { LoopOrigin } from './loop-origin';
 import { KinuError } from '../obs/error';
 import { initScaffoldTables } from './schemas';
@@ -66,16 +68,19 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
     await vfs.writeFile(versionedPath(0), INITIAL_SCAFFOLD_SOURCE);
     insertV0Row(rt);
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
+
     return;
   }
 
   // Preserved workspace — seed the pointer's version file from the live
   // source exactly once; the view is the only source such a workspace has.
   const seededVersion = current ?? 0;
+
   if (!(await vfs.exists(versionedPath(seededVersion)))) {
     if (!liveExists) return; // no source anywhere — surfaces at execution read
     await vfs.writeFile(versionedPath(seededVersion), await readScaffoldFileText(vfs, path));
   }
+
   if (current === null) {
     insertV0Row(rt);
     current = getCurrentScaffoldVersion(sql, rt.actor);
@@ -83,8 +88,10 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
 
   // Activation refresh: converge the live view onto the current pointer.
   const activeVersion = current;
+
   if (activeVersion === null || !(await vfs.exists(versionedPath(activeVersion)))) return;
   const canonical = await readScaffoldFileText(vfs, versionedPath(activeVersion));
+
   if (!liveExists || (await readScaffoldFileText(vfs, path)) !== canonical) {
     await rt.identity.scaffold.write(canonical);
   }
@@ -112,14 +119,19 @@ export async function seedActorLoop(
 ): Promise<{ version: number }> {
   initScaffoldTables(child.storage.execRaw);
   const seeded = getCurrentScaffoldVersion(child.storage.sql, child.actor);
+
   if (seeded !== null) return { version: seeded };
+
   if (origin.kind === 'builtin') {
     await bootstrapScaffold(child);
+
     return { version: getCurrentScaffoldVersion(child.storage.sql, child.actor) ?? 0 };
   }
+
   if (parent === null) {
     throw new KinuError('bad_input', `a '${origin.kind}' loop origin needs the parent actor whose loop it names`);
   }
+
   const inherited = await inheritedSource(parent, origin);
   const version = 1;
   const vfs = child.agentStateVfs ?? child.storage.vfs;
@@ -130,6 +142,7 @@ export async function seedActorLoop(
     VALUES (${child.actor.actorId}, ${version}, ${nowMs()},
       ${`inherited from actor ${parent.actor.actorId} v${inherited.version}`}, 'current', ${inherited.version})`;
   await child.identity.scaffold.write(inherited.source);
+
   return { version };
 }
 
@@ -141,18 +154,25 @@ async function inheritedSource(
 ): Promise<{ readonly version: number; readonly source: string }> {
   if (origin.kind === 'version') {
     parent.actor.assertCurrent();
+
     const known = parent.storage.sql<{ version: number }>`
       SELECT version FROM scaffold_versions
       WHERE actor_id = ${parent.actor.actorId} AND version = ${origin.version}`.length > 0;
+
     const source = known ? await readVersionedScaffoldSource(parent, origin.version) : null;
+
     if (source === null) {
       throw new KinuError('missing', `the parent actor retains no version ${origin.version} to inherit`);
     }
+
     return { version: origin.version, source };
   }
+
   const version = getCurrentScaffoldVersion(parent.storage.sql, parent.actor) ?? 0;
   const source = await readScaffoldVersion(parent, version);
+
   if (source !== null) return { version, source };
+
   // A PARENT AT v0 IS ON THE SHIPPED LOOP, and inheriting from it means
   // starting there — not refusing. The row and the file only appear once the
   // parent has been bootstrapped, so a workspace whose root has never taken a

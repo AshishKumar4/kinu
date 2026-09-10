@@ -16,8 +16,11 @@
 import { evalTargetVerdict, evalWorkspaceName } from '../packages/test-utils/src/eval-identity';
 
 const args = process.argv.slice(2);
+
 const origin = args[0];
+
 const nameFlag = args.indexOf('--name');
+
 const subject = nameFlag === -1 ? undefined : args[nameFlag + 1];
 
 if (!origin || !subject) {
@@ -26,10 +29,12 @@ if (!origin || !subject) {
 }
 
 const verdict = evalTargetVerdict(origin);
+
 if (verdict.kind === 'refused') {
   console.error(`REFUSING: ${verdict.reason}`);
   process.exit(1);
 }
 
 console.error(`eval target: ${verdict.origin} (${verdict.why})`);
+
 console.log(evalWorkspaceName(subject));

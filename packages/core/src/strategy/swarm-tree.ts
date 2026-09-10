@@ -112,6 +112,7 @@ export interface TreeNode {
    */
   readonly aggregated: readonly string[];
 }
+
 /**
  * HOW A NODE STOPPED SHORT: the report's own status, and the line a reader gets.
  *
@@ -299,16 +300,21 @@ export function selectParetoFrontierNode(
   axes: readonly ParetoAxis[],
 ): TreeNode | null {
   const root = [...nodes.values()].find((node) => node.parentId === null);
+
   if (root && ![...nodes.values()].some((node) => node.parentId === root.id)) return root;
+
   const leaves = [...nodes.values()]
     .filter((node) => node.depth < maxDepth
       && node.pareto !== null
       && ![...nodes.values()].some((child) => child.parentId === node.id))
     .sort((left, right) => left.id.localeCompare(right.id));
+
   const candidates = leaves.flatMap((node) =>
     node.pareto === null ? [] : [{ node, evidence: node.pareto }]);
+
   const front = candidates.filter((candidate, index) => !candidates.some((other, otherIndex) =>
     otherIndex !== index && dominatesPareto(axes, other.evidence, candidate.evidence)));
+
   return front[0]?.node ?? null;
 }
 
@@ -325,6 +331,7 @@ export function selectParetoFrontierNode(
 export async function readArtifact(ctx: MeasurementContext, path: string): Promise<string | null> {
   if (!await ctx.vfs.exists(path)) return null;
   const text = v.safeParse(v.string(), await ctx.vfs.readFile(path, { encoding: 'utf8' }));
+
   return text.success ? text.output : null;
 }
 
@@ -335,11 +342,13 @@ export function pathTo(nodes: ReadonlyMap<string, TreeNode>, node: TreeNode): Tr
   const path: TreeNode[] = [];
   const seen = new Set<string>();
   let current: TreeNode | undefined = node;
+
   while (current && !seen.has(current.id)) {
     seen.add(current.id);
     path.unshift(current);
     current = current.parentId === null ? undefined : nodes.get(current.parentId);
   }
+
   return path;
 }
 
@@ -367,8 +376,10 @@ export function reportVerdict(log: Logger, input: {
       preset: input.preset, node: input.nodeId, depth: input.atDepth,
       children: input.verdict.nodeIds.length,
     });
+
     return;
   }
+
   log.event('swarm.branch_refused', {
     preset: input.preset, node: input.nodeId, depth: input.atDepth,
     // The token as well as the prose: the prose is for the node, the token is what
@@ -399,13 +410,16 @@ export function answerProposal(input: {
 }): BranchDecision | null {
   const { node, resolved } = input;
   const proposal = node.proposal;
+
   if (!proposal) return null;
+
   const decision = input.budget.arbitrate({
     config: resolved.config,
     caps: resolved.caps,
     atDepth: node.depth,
     proposal,
   });
+
   if (decision.kind === 'refused') {
     reportVerdict(input.log, {
       verdict: { kind: 'refused', reason: 'denied', error: decision.error },
@@ -413,5 +427,6 @@ export function answerProposal(input: {
       policy: decision.policy,
     });
   }
+
   return decision;
 }

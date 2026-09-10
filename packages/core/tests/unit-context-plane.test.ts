@@ -42,10 +42,13 @@ interface Bound {
  *  provably came from the mount rather than from a workspace file. */
 function emptyTree(): VFS {
   const files = new Map<string, string>();
+
   return {
     async readFile(path, opts) {
       const text = files.get(path);
+
       if (text === undefined) throw makeVfsError('ENOENT', 'no such file', path);
+
       return opts?.encoding === undefined ? new TextEncoder().encode(text) : text;
     },
     async writeFile(path, data) {
@@ -55,6 +58,7 @@ function emptyTree(): VFS {
     async readdir() { return [...files.keys()]; },
     async stat(path) {
       const text = files.get(path);
+
       return text === undefined ? null : { size: text.length, mtimeMs: 1, isDir: false };
     },
     async unlink(path) { files.delete(path); },
@@ -72,10 +76,12 @@ function workspace(): Workspace {
   const { sql, execRaw, close } = createTestSql();
   initActorClaimTables(execRaw);
   const transactionSync = <T>(write: () => T): T => write();
+
   return {
     bind: (actorId) => {
       const handle = testActorHandle(sql, { actorId });
       const claims = new ActorClaimStore(sql, handle, transactionSync);
+
       // `events: null` here: the emission contract has its own test with a
       // capture port, and every OTHER test in this file is about the bytes and
       // the rows, which are the durable record either way.
@@ -103,6 +109,7 @@ function fileTool(vfs: VFS): (input: {
 async function readText(vfs: VFS, path: string): Promise<string> {
   const raw = await vfs.readFile(path, { encoding: 'utf8' });
   const text = v.safeParse(v.string(), raw);
+
   return text.success ? text.output : new TextDecoder().decode(v.parse(v.instance(Uint8Array), raw));
 }
 
@@ -130,6 +137,7 @@ function servedHeader(text: string): ServedHeader {
  *  in. */
 function servedMessages(text: string): ModelMessage[] {
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
+
   return decodeModelMessages(`[${lines.slice(1).join(',')}]`);
 }
 
@@ -139,6 +147,7 @@ function servedMessages(text: string): ModelMessage[] {
 function appended(text: string, extra: readonly ModelMessage[]): string {
   const encoded = v.parse(v.array(v.unknown()), JSON.parse(encodeModelMessages(extra)));
   const head = text.endsWith('\n') ? text : `${text}\n`;
+
   return head + encoded.map((message) => `${JSON.stringify(message)}\n`).join('');
 }
 
@@ -206,6 +215,7 @@ test('a header naming another actor is refused, and the caller cannot retarget b
   const retargeted = (await readText(vfs, '/context/working.jsonl'))
     .replace('actor-self', 'actor-other')
     .replace('mine', 'written through the wrong plane');
+
   await expect(vfs.writeFile('/context/working.jsonl', retargeted))
     .rejects.toMatchObject({ code: 'EACCES' });
 
@@ -243,10 +253,12 @@ test('evidence under /context is readable and not writable, and the plane invent
   const vfs = planeFor(actor);
   const plane = createActorContextPlane({ claims: actor.claims });
   const admitted = plane.startTurn({ turnId: 'turn-1', history: [{ role: 'user', content: 'q' }] });
+
   const claim = actor.claims.admit({
     runId: 'run-1', turnId: 'turn-1', workMode: 'build', program: PROGRAM,
     context: admitted.messages, workingRevision: admitted.workingRevision,
   });
+
   plane.steps(claim).consume({
     stepNumber: 0, messages: admitted.messages, base: null, deferred: null,
   });
@@ -319,6 +331,7 @@ test('an authorized parent edits a child through the child\'s own store; a sibli
     list: () => ['agent:child'],
     resolve: (key) => (key === 'agent:child' ? child.stores : null),
   };
+
   const vfs = planeFor(parent, resolver);
 
   expect(await vfs.readdir('/context/agents')).toEqual(['agent:child']);
@@ -348,9 +361,11 @@ test('a retired actor stops authorising context reads and writes at its own hand
   let live = true;
   const handle = testActorHandle(sql, { actorId: 'actor-retired', live: () => live });
   const claims = new ActorClaimStore(sql, handle, (write) => write());
+
   const vfs = withMountTable(emptyTree(), [contextMount({
     stores: () => ({ actorId: 'actor-retired', claims, events: null }),
   })]);
+
   createActorContextPlane({ claims }).hydrate([{ role: 'user', content: 'while live' }]);
   const served = await readText(vfs, '/context/working.jsonl');
 
@@ -385,6 +400,7 @@ test('the native file tool reads, edits and re-reads the working history over th
     path: '/context/working.jsonl',
     edits: [{ old_text: 'remember the wrong fact', new_text: 'remember the RIGHT fact' }],
   });
+
   expect(applied).toMatchObject({ ok: true });
 
   const staged = plane.read().staged;
@@ -429,6 +445,7 @@ test('binary and tool-result parts survive a read/write round trip through the f
   const parts = Array.isArray(roundTripped[0]?.content) ? roundTripped[0].content : [];
   const attached = parts.find((part) => part.type === 'file');
   const data = attached && 'data' in attached ? attached.data : undefined;
+
   if (!(data instanceof Uint8Array)) throw new Error('the attachment must decode to its own bytes');
   expect([...data]).toEqual([...attachment]);
   expect(roundTripped[2]).toEqual({
@@ -448,10 +465,12 @@ test('the owner UI path gets a real conditional write, and a conflicting revisio
   expect(stat?.revision).toBe(1);
   const served = await readText(vfs, '/context/working.jsonl');
   const conditional = vfs.writeFileIfRevision;
+
   if (conditional === undefined) throw new Error('the context plane must offer a conditional write');
 
   const saved = await conditional.call(vfs, '/context/working.jsonl',
     new TextEncoder().encode(served.replace('from the browser', 'edited in the browser')), 1);
+
   expect(saved).toMatchObject({ ok: true, revision: 2 });
 
   await expect(conditional.call(vfs, '/context/working.jsonl',
@@ -492,12 +511,15 @@ test('a landed edit preserves the raw tail exactly, with a woven block and a pru
     { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'old', toolName: 'probe', input: { path: 'old' } }] },
     { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'old', toolName: 'probe', output: { type: 'text', value: bulky } }] },
   ];
+
   const admitted = plane.startTurn({ turnId: 'turn-coord', history: older });
   expect(admitted.messages).toHaveLength(3);
+
   const claim = actor.claims.admit({
     runId: 'run-coord', turnId: 'turn-coord', workMode: 'build', program: PROGRAM,
     context: admitted.messages, workingRevision: admitted.workingRevision,
   });
+
   const steps = plane.steps(claim);
 
   // STEP 0 — the array the turn was admitted with. The rendered request is
@@ -505,6 +527,7 @@ test('a landed edit preserves the raw tail exactly, with a woven block and a pru
   // between the two counts is the whole premise of the defect.
   const first = composePrepareStep({ prune, dynamic, context: steps },
     { stepNumber: 0, messages: [...admitted.messages], steps: [] });
+
   if (first instanceof Promise) throw new Error('this pipeline is synchronous');
   expect(first?.messages).toHaveLength(4);
   const renderedFirst = actor.claims.consumedContext('turn-coord');
@@ -520,6 +543,7 @@ test('a landed edit preserves the raw tail exactly, with a woven block and a pru
     { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'probe', input: { path: 'a' } }] },
     { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'probe', output: { type: 'text', value: 'fresh output' } }] },
   ];
+
   // The edit keeps the old exchange (it is real work that happened) and
   // rewrites only the question that framed it.
   plane.edit({
@@ -531,6 +555,7 @@ test('a landed edit preserves the raw tail exactly, with a woven block and a pru
   // STEP 1 — the edit lands here.
   const second = composePrepareStep({ prune, dynamic, context: steps },
     { stepNumber: 1, messages: [...live], steps: [] });
+
   if (second instanceof Promise) throw new Error('this pipeline is synchronous');
   const request = second?.messages ?? [];
   // The edited message replaced the original, and BOTH tail messages rode
@@ -563,6 +588,7 @@ test('a landed edit preserves the raw tail exactly, with a woven block and a pru
   // input, so an edit that landed once has to keep landing.
   const third = composePrepareStep({ prune, dynamic, context: steps },
     { stepNumber: 2, messages: [...live], steps: [] });
+
   if (third instanceof Promise) throw new Error('this pipeline is synchronous');
   expect(third?.messages?.[0]).toEqual({ role: 'user', content: 'corrected question' });
   ws.close();
@@ -573,10 +599,12 @@ test('an edit mid-exchange is deferred with its reason, then lands at the next s
   const actor = ws.bind('actor-defer');
   const plane = createActorContextPlane({ claims: actor.claims });
   const admitted = plane.startTurn({ turnId: 'turn-defer', history: [{ role: 'user', content: 'ask' }] });
+
   const claim = actor.claims.admit({
     runId: 'run-defer', turnId: 'turn-defer', workMode: 'build', program: PROGRAM,
     context: admitted.messages, workingRevision: admitted.workingRevision,
   });
+
   const steps = plane.steps(claim);
   plane.edit({ base: 1, messages: [{ role: 'user', content: 'edited ask' }], author: 'actor-defer', via: 'session' });
 
@@ -586,7 +614,9 @@ test('an edit mid-exchange is deferred with its reason, then lands at the next s
     { role: 'user', content: 'ask' },
     { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c2', toolName: 'probe', input: {} }] },
   ];
+
   const deferred = composePrepareStep({ context: steps }, { stepNumber: 1, messages: [...midExchange], steps: [] });
+
   if (deferred instanceof Promise) throw new Error('this pipeline is synchronous');
   // The request went out on the UNEDITED history — the pipeline changed
   // nothing, so it returns no override at all — and the edit is still staged
@@ -603,7 +633,9 @@ test('an edit mid-exchange is deferred with its reason, then lands at the next s
     role: 'tool',
     content: [{ type: 'tool-result', toolCallId: 'c2', toolName: 'probe', output: { type: 'json', value: { ok: true } } }],
   }];
+
   const landed = composePrepareStep({ context: steps }, { stepNumber: 2, messages: [...settled], steps: [] });
+
   if (landed instanceof Promise) throw new Error('this pipeline is synchronous');
   expect(landed?.messages?.map((message) => message.role)).toEqual(['user', 'assistant', 'tool']);
   expect(landed?.messages?.[0]).toEqual({ role: 'user', content: 'edited ask' });
@@ -619,14 +651,18 @@ test('an edit authored between turns is consumed by the next turn with the new i
 
   // A settled turn leaves the working history it produced.
   const first = plane.startTurn({ turnId: 'turn-one', history: [{ role: 'user', content: 'first question' }] });
+
   const claim = actor.claims.admit({
     runId: 'run-one', turnId: 'turn-one', workMode: 'build', program: PROGRAM,
     context: first.messages, workingRevision: first.workingRevision,
   });
+
   actor.claims.settle(claim, 'completed');
+
   const settled = plane.endTurn({ turnId: 'turn-one', history: [
     { role: 'user', content: 'first question' }, { role: 'assistant', content: 'first answer' },
   ] });
+
   expect(settled.messages).toHaveLength(2);
 
   // Between turns: the file serves the settled history, and an edit of it says
@@ -643,6 +679,7 @@ test('an edit authored between turns is consumed by the next turn with the new i
     { role: 'assistant', content: 'first answer' },
     { role: 'user', content: 'second question' },
   ] });
+
   expect(next.messages).toEqual([
     { role: 'user', content: 'first question, corrected' },
     { role: 'assistant', content: 'first answer' },
@@ -689,16 +726,19 @@ test('an edit emits its authoring and its activation, and a refused edit emits n
   const ws = workspace();
   const actor = ws.bind('actor-events');
   const emitted: Array<{ runId: string; event: ContextEditEvent }> = [];
+
   const plane = createActorContextPlane({
     claims: actor.claims,
     events: { emit: (runId, event) => { emitted.push({ runId, event }); } },
   });
 
   const admitted = plane.startTurn({ turnId: 'turn-ev', history: [{ role: 'user', content: 'ask' }] });
+
   const claim = actor.claims.admit({
     runId: 'run-ev', turnId: 'turn-ev', workMode: 'build', program: PROGRAM,
     context: admitted.messages, workingRevision: admitted.workingRevision,
   });
+
   // Authoring: one event, naming the author, both revisions and where it lands.
   plane.edit({ base: 1, messages: [{ role: 'user', content: 'edited ask' }], author: 'actor-events', via: 'file' });
   expect(emitted).toHaveLength(1);

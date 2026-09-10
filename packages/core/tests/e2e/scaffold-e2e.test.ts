@@ -27,6 +27,7 @@ function createScaffoldTestRuntime(llm: LLM) {
   const vfs = createMemoryVFS(db);
 
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'scaffold-test');
+
   const rt: AgentRuntime = {
     actor,
     storage: { vfs, sql, execRaw, transactionSync: write => db.transaction(write)() },
@@ -48,6 +49,7 @@ function createScaffoldTestRuntime(llm: LLM) {
     spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }), release: async () => {} }),
     abortBranch: async () => {},
   };
+
   return { rt };
 }
 
@@ -82,19 +84,23 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
 
     if (result.ok) {
       const { version } = result;
+
       // An accept with no version is a promotion nothing can address.
       if (version === undefined) throw new Error(`accepted with no version: ${JSON.stringify(result)}`);
       expect(version).toBeGreaterThan(0);
       expect(result.error).toBeUndefined();
       expect(await rt.identity.scaffold.version()).toBe(version);
+
       // The proposal is on disk as a pending version, and it is the model's text.
       const pending = await rt.storage.vfs.readFile(
         `${rt.identity.scaffold.path}.v${String(version)}`, { encoding: 'utf8' },
       );
+
       expect(pending).toBe(generated);
       expect(pending).not.toBe(INITIAL_SCAFFOLD_SOURCE);
     } else {
       const { stage } = result;
+
       // A refusal that names no gate is a verdict the pipeline cannot explain.
       if (stage === undefined) throw new Error(`refused with no stage: ${JSON.stringify(result)}`);
       expect([1, 2, 3]).toContain(stage);
@@ -117,11 +123,13 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
     const validCode = `async function* run(rt, task) {
   yield { type: "chunk", data: "Processing: " + task.slice(0, 100) };
 }`;
+
     const modResult = await modifyScaffold(
       rt,
       'Evolved scaffold with task classification: simple tasks get quick answers, complex get structured processing.',
       validCode,
     );
+
     expect(modResult.ok).toBe(true);
     expect(modResult.version).toBe(1);
 

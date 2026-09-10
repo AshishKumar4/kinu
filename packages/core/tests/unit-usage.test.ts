@@ -75,6 +75,7 @@ function jsonReply(serialized: string): FetchFunction {
     status: 200,
     headers: { 'content-type': 'application/json' },
   });
+
   // `FetchFunction` is the platform `typeof fetch`, which carries `preconnect`.
   // The SDK never calls it; the type requires it to exist.
   return Object.assign(stub, { preconnect: async (): Promise<void> => {} });
@@ -97,7 +98,9 @@ async function usageFromOpenAICompat(usage: OpenAICompatUsage): Promise<Usage> {
       usage,
     })),
   });
+
   const r = await generateText({ model: provider('@cf/deepseek-ai/deepseek-v4-pro-0813'), prompt: 'hi' });
+
   return normalizeUsage(r.usage);
 }
 
@@ -115,7 +118,9 @@ async function usageFromAnthropic(usage: AnthropicUsage): Promise<Usage> {
       usage,
     })),
   });
+
   const r = await generateText({ model: provider('claude-sonnet-4-5'), prompt: 'hi' });
+
   return normalizeUsage(r.usage);
 }
 
@@ -135,7 +140,9 @@ async function usageFromOpenAIResponses(usage: OpenAIResponsesUsage): Promise<Us
       usage,
     })),
   });
+
   const r = await generateText({ model: provider.responses('gpt-5-codex'), prompt: 'hi' });
+
   return normalizeUsage(r.usage);
 }
 
@@ -162,6 +169,7 @@ describe('normalizeUsage over the OpenAI-compatible family (Workers AI)', () => 
         usage: WORKERS_AI_USAGE,
       })),
     });
+
     const r = await generateText({ model: provider('m'), prompt: 'hi' });
     // The defect, demonstrated: the SDK hands over a 0 the provider never sent.
     expect(r.usage.outputTokenDetails?.reasoningTokens).toBe(0);
@@ -188,6 +196,7 @@ describe('normalizeUsage over the OpenAI-compatible family (Workers AI)', () => 
       ...WORKERS_AI_USAGE,
       completion_tokens_details: { reasoning_tokens: 7 },
     });
+
     expect(u.reasoning).toBe(7);
   });
 
@@ -196,6 +205,7 @@ describe('normalizeUsage over the OpenAI-compatible family (Workers AI)', () => 
       ...WORKERS_AI_USAGE,
       completion_tokens_details: { reasoning_tokens: 0 },
     });
+
     expect(u.reasoning).toBe(0);
     expect('reasoning' in u).toBe(true);
   });
@@ -250,6 +260,7 @@ describe('normalizeUsage over Anthropic', () => {
         usage: { input_tokens: 12, output_tokens: 5 },
       })),
     });
+
     const r = await generateText({ model: provider('claude-sonnet-4-5'), prompt: 'hi' });
     // The mirror-image defect: this family fabricates the cache zeros.
     expect(r.usage.inputTokenDetails?.cacheWriteTokens).toBe(0);
@@ -264,6 +275,7 @@ describe('normalizeUsage over Anthropic', () => {
     const u = await usageFromAnthropic({
       input_tokens: 12, output_tokens: 5, cache_creation_input_tokens: 1024,
     });
+
     expect(u.cacheWrite).toBe(1024);
     expect('cacheWrite1h' in u).toBe(false);
   });
@@ -273,6 +285,7 @@ describe('normalizeUsage over Anthropic', () => {
       ...ANTHROPIC_USAGE,
       cache_creation: { ephemeral_5m_input_tokens: 1024, ephemeral_1h_input_tokens: 0 },
     });
+
     expect(u.cacheWrite1h).toBe(0);
     expect('cacheWrite1h' in u).toBe(true);
   });
@@ -287,6 +300,7 @@ describe('normalizeUsage over the OpenAI Responses API (the Codex path)', () => 
       input_tokens_details: { cached_tokens: 384 },
       output_tokens_details: { reasoning_tokens: 32 },
     });
+
     expect(u.input).toBe(500);
     expect(u.output).toBe(40);
     expect(u.cacheRead).toBe(384);
@@ -317,6 +331,7 @@ describe('normalizeUsage without a provider report', () => {
       outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
       totalTokens: 14,
     });
+
     expect(u).toEqual({ input: 10, output: 4 });
   });
 
@@ -328,6 +343,7 @@ describe('normalizeUsage without a provider report', () => {
       outputTokenDetails: { textTokens: undefined, reasoningTokens: undefined },
       totalTokens: undefined,
     });
+
     expect(usageReported(u)).toBe(false);
   });
 });
@@ -348,6 +364,7 @@ describe('normalizeUsage with one mistyped provider field', () => {
         neurons: '19.2',
       },
     });
+
     expect(u.input).toBe(88);
     expect(u.output).toBe(24);
     expect(u.cacheRead).toBe(0);

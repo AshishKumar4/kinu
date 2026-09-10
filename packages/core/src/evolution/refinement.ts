@@ -66,6 +66,7 @@ import { NEGATIVE_TURN_OUTCOMES, listTurnOutcomes } from './outcomes';
 
 /** Why a refinement request exists. */
 export const REFINEMENT_TRIGGERS = ['explicit', 'evolution_debt'] as const;
+
 export type RefinementTrigger = (typeof REFINEMENT_TRIGGERS)[number];
 
 /**
@@ -79,17 +80,20 @@ export type RefinementTrigger = (typeof REFINEMENT_TRIGGERS)[number];
  * quietly become a local one.
  */
 export const REFINEMENT_SCOPES = ['workspace', 'account'] as const;
+
 export type RefinementScope = (typeof REFINEMENT_SCOPES)[number];
 
 export const REFINEMENT_STAGES = [
   'requested', 'planning', 'gated', 'evaluating', 'applied', 'rolled_back', 'refused',
 ] as const;
+
 export type RefinementStage = (typeof REFINEMENT_STAGES)[number];
 
 /** The artifact owners a refinement may address, one per authority. */
 export const REFINEMENT_EDIT_KINDS = [
   'fact', 'prompt_section', 'skill', 'subagent_spec',
 ] as const;
+
 export type RefinementEditKind = (typeof REFINEMENT_EDIT_KINDS)[number];
 
 /** Same bar as a scaffold or section proposal: the operator reads one
@@ -97,6 +101,7 @@ export type RefinementEditKind = (typeof REFINEMENT_EDIT_KINDS)[number];
 const MIN_EDIT_RATIONALE = 40;
 
 const RationaleSchema = v.pipe(v.string(), v.minLength(MIN_EDIT_RATIONALE));
+
 const NonEmpty = v.pipe(v.string(), v.nonEmpty());
 
 /**
@@ -209,6 +214,7 @@ export const RefinementProposalSchema: v.GenericSchema<unknown, RefinementPropos
 export const REFINEMENT_DISPOSITIONS = [
   'applied', 'pending_trials', 'pending_owner_approval', 'refused', 'rejected',
 ] as const;
+
 export type RefinementDisposition = (typeof REFINEMENT_DISPOSITIONS)[number];
 
 /** What the lane needs from whichever host is driving it. */
@@ -508,6 +514,7 @@ interface Row {
 }
 
 const TurnIdsSchema = v.array(v.string());
+
 const RoutesSchema = v.array(RefinementRouteSchema);
 
 /** Decode one JSON column, or the empty value when the bytes will not parse.
@@ -516,6 +523,7 @@ const RoutesSchema = v.array(RefinementRouteSchema);
  *  not wedge the lane behind it. */
 function decodeColumn<T>(schema: v.GenericSchema<unknown, T>, raw: string, empty: T, id: string): T {
   const parsed = v.safeParse(schema, tolerate(() => parseJsonValue(raw), 'malformed-input'));
+
   if (parsed.success) return parsed.output;
   diagnostics.failure(
     'evolution.refinement_row_unreadable',
@@ -526,6 +534,7 @@ function decodeColumn<T>(schema: v.GenericSchema<unknown, T>, raw: string, empty
     }),
     { id },
   );
+
   return empty;
 }
 
@@ -533,6 +542,7 @@ function toRequest(row: Row): RefinementRequest {
   const proposal = row.proposal === null
     ? null
     : decodeColumn(RefinementProposalSchema, row.proposal, null, row.id);
+
   return {
     id: row.id,
     trigger: v.parse(v.picklist(REFINEMENT_TRIGGERS), row.trigger),
@@ -575,17 +585,21 @@ const liveClaims = new Set<string>();
 export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): RefinementStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
+
   const one = (id: string): RefinementRequest | null => {
     authorize();
+
     const rows = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
              proposal, routes, detail, created_at, updated_at
       FROM refinement_requests WHERE actor_id = ${actorId} AND id = ${id} LIMIT 1`;
+
     return rows[0] ? toRequest(rows[0]) : null;
   };
 
   /** The stage the row is in and the pass holding it, or undefined for no row. */
   const lease = (id: string): { stage: string; claim: string | null } | undefined => {
     authorize();
+
     return sql<{ stage: string; claim: string | null }>`
       SELECT stage, claim FROM refinement_requests
       WHERE actor_id = ${actorId} AND id = ${id} LIMIT 1`[0];
@@ -611,6 +625,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
     patch: SettleRefinementPatch,
   ): boolean => {
     const current = lease(id);
+
     if (current?.stage !== guard.stage || current.claim !== guard.claim) return false;
     const proposal = patch.proposal === undefined ? null : JSON.stringify(patch.proposal);
     const routes = patch.routes === undefined ? null : JSON.stringify([...patch.routes]);
@@ -623,19 +638,23 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
         updated_at = ${patch.now ?? nowMs()}
       WHERE actor_id = ${actorId} AND id = ${id}
         AND stage = ${guard.stage} AND claim IS ${guard.claim}`;
+
     return true;
   };
 
   return {
     open(input) {
       authorize();
+
       if (input.debtKey !== undefined) {
         const existing = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
                  proposal, routes, detail, created_at, updated_at
           FROM refinement_requests
           WHERE actor_id = ${actorId} AND debt_key = ${input.debtKey} LIMIT 1`;
+
         if (existing[0]) return { request: toRequest(existing[0]), created: false };
       }
+
       const id = `refine-${nanoid()}`;
       const at = input.now ?? nowMs();
       void sql`INSERT INTO refinement_requests
@@ -645,6 +664,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
                 ${JSON.stringify([...input.turnIds])}, ${input.debtKey ?? null}, ${null}, '[]', '',
                 ${at}, ${at})`;
       const opened = one(id);
+
       if (!opened) {
         throw toKinuError({
           doing: 'open a refinement request',
@@ -652,6 +672,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
           otherwise: 'io',
         });
       }
+
       return { request: opened, created: true };
     },
 
@@ -659,6 +680,7 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
 
     list(limit = 50) {
       authorize();
+
       return sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
         FROM refinement_requests WHERE actor_id = ${actorId}
@@ -667,15 +689,18 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
 
     nextRequested() {
       authorize();
+
       const rows = sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
         FROM refinement_requests WHERE actor_id = ${actorId} AND stage = 'requested'
         ORDER BY created_at ASC, id ASC LIMIT 1`;
+
       return rows[0] ? toRequest(rows[0]) : null;
     },
 
     settleable() {
       authorize();
+
       return sql<Row>`SELECT id, trigger, scope, stage, session_id, turn_ids, debt_key,
                proposal, routes, detail, created_at, updated_at
         FROM refinement_requests
@@ -701,21 +726,28 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
           updated_at = ${nowMs()}
         WHERE actor_id = ${actorId} AND id = ${id} AND stage = 'requested'`;
       const claimed = one(id);
+
       if (!claimed) {
         liveClaims.delete(token);
+
         return null;
       }
+
       const guard = { stage: 'planning' as const, claim: token };
+
       return {
         request: claimed,
         held() {
           const current = lease(id);
+
           return current?.stage === 'planning' && current.claim === token;
         },
         record: (patch) => write(id, guard, null, patch),
         advance(to, patch = {}) {
           const moved = write(id, guard, to, patch);
+
           if (moved) liveClaims.delete(token);
+
           return moved;
         },
         release: () => { liveClaims.delete(token); },
@@ -724,12 +756,15 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
 
     resetStalePlanning() {
       authorize();
+
       const stale = sql<{ id: string; claim: string | null }>`
         SELECT id, claim FROM refinement_requests
         WHERE actor_id = ${actorId} AND stage = 'planning'`
         .filter((row) => row.claim === null || !liveClaims.has(row.claim));
+
       if (stale.length === 0) return 0;
       const at = nowMs();
+
       for (const row of stale) {
         // On the token it read, not merely on the stage: a re-queue that cleared
         // whatever claim it found could wipe a SUCCESSOR's token instead of the
@@ -738,18 +773,21 @@ export function createRefinementStore(sql: SqlExecutor, actor: ActorHandle): Ref
           WHERE actor_id = ${actorId} AND id = ${row.id}
             AND stage = 'planning' AND claim IS ${row.claim}`;
       }
+
       return stale.length;
     },
 
     coveredTurnIds() {
       authorize();
       const covered = new Set<string>();
+
       for (const row of sql<{ id: string; turn_ids: string }>`
         SELECT id, turn_ids FROM refinement_requests WHERE actor_id = ${actorId}`) {
         for (const turnId of decodeColumn<string[]>(TurnIdsSchema, row.turn_ids, [], row.id)) {
           covered.add(turnId);
         }
       }
+
       return covered;
     },
   };
@@ -817,6 +855,7 @@ export function evolutionDebt(
   const covered = createRefinementStore(sql, actor).coveredTurnIds();
   const seen = new Set<string>();
   const unresolved: string[] = [];
+
   // Unbounded, then filtered: see the note above. `listTurnOutcomes` resolves
   // one effective verdict per turn, so an old classifier `corrected` a later
   // thumb overruled is already gone from this set.
@@ -827,6 +866,7 @@ export function evolutionDebt(
     seen.add(row.turnId);
     unresolved.push(row.turnId);
   }
+
   // Ledger order is newest-first; a trajectory is read forwards and the oldest
   // unresolved failure is the one owed.
   unresolved.reverse();
@@ -834,6 +874,7 @@ export function evolutionDebt(
   const batch = unresolved.slice(0, cap);
   const owed = batch.length >= MIN_REFINEMENT_DEBT;
   const backlog = unresolved.length - batch.length;
+
   return {
     turnIds: batch,
     owed,

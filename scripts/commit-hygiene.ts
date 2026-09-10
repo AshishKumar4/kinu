@@ -364,11 +364,14 @@ export interface Violation {
  * stripping there would blind the rule to its commonest spelling.
  */
 const QUOTATION = /`[^`\n]*`|"[^"\n]*"|(?<![\w'])'[^'\n]{0,300}'(?![\w'])/g;
+
 const FENCE = /^[ \t]*```/;
+
 const SHOWN_AS_CODE = /^(?: {4,}|\t)/;
 
 export function proseOnly(text: string): string {
   let inFence = false;
+
   // Indentation is decided on the ORIGINAL line, before quotations are blanked.
   // The other order is a silent hole: blanking a leading code span leaves the line
   // starting with spaces, so `` `readNodeTranscript` and my earlier claim `` read
@@ -376,9 +379,12 @@ export function proseOnly(text: string): string {
   return text.split('\n').map((line) => {
     if (FENCE.test(line)) {
       inFence = !inFence;
+
       return ' '.repeat(line.length);
     }
+
     if (inFence || SHOWN_AS_CODE.test(line)) return ' '.repeat(line.length);
+
     return line.replace(QUOTATION, (span) => ' '.repeat(span.length));
   }).join('\n');
 }
@@ -392,6 +398,7 @@ function declaresIdentifier(file: string, text: string, name: string): boolean {
   walk(parse(file, text).root, (node) => {
     if (identifierText(node) === name) found = true;
   });
+
   return found;
 }
 
@@ -406,18 +413,24 @@ function declaresIdentifier(file: string, text: string, name: string): boolean {
  */
 export function codeIdentifierTest(corpus: ReadonlyMap<string, string>): (name: string) => boolean {
   const answered = new Map<string, boolean>();
+
   return (name: string): boolean => {
     const cached = answered.get(name);
+
     if (cached !== undefined) return cached;
     let found = false;
+
     for (const [file, text] of corpus) {
       if (!text.includes(name)) continue;
+
       if (declaresIdentifier(file, text, name)) {
         found = true;
         break;
       }
     }
+
     answered.set(name, found);
+
     return found;
   };
 }
@@ -430,6 +443,7 @@ function excerpt(text: string, offset: number, length: number): string {
   const start = text.lastIndexOf('\n', offset) + 1;
   const end = text.indexOf('\n', offset + length);
   const line = text.slice(start, end === -1 ? text.length : end).trim();
+
   return line.length <= 100 ? line : `${line.slice(0, 99)}…`;
 }
 
@@ -438,6 +452,7 @@ function subjectViolations(subject: string): Violation[] {
   const found: Violation[] = [];
   const match = SUBJECT_PREFIX.exec(subject);
   const token = match?.[1];
+
   if (token === undefined || match?.[3] === '') {
     found.push({
       rule: 'subject-prefix',
@@ -475,6 +490,7 @@ function subjectViolations(subject: string): Violation[] {
         + `\`fix(${token}): …\` — or one of ${ALLOWED_PREFIXES.slice(0, 7).join(', ')}`,
     });
   }
+
   if (subject.length > SUBJECT_CEILING) {
     found.push({
       rule: 'subject-length',
@@ -487,12 +503,14 @@ function subjectViolations(subject: string): Violation[] {
       fix: 'the rest belongs in the body, which is read in full.',
     });
   }
+
   return found;
 }
 
 function actorViolations(message: string, isCode: (name: string) => boolean): Violation[] {
   const found: Violation[] = [];
   const seen = new Set<string>();
+
   const flag = (name: string, offset: number, why: string): void => {
     if (seen.has(name)) return;
     seen.add(name);
@@ -509,32 +527,40 @@ function actorViolations(message: string, isCode: (name: string) => boolean): Vi
         + `to NAMES_WITHOUT_CODE in ${GATE_PROGRAM} with the fact that makes it one.`,
     });
   };
+
   for (const name of ROSTER) {
     for (const pattern of ATTRIBUTIONS) {
       const scoped = new RegExp(pattern.source.replace(`(${CAMEL})`, `(${name})`), 'g');
       const hit = scoped.exec(message);
+
       if (hit !== null) flag(name, hit.index, `\`${name}\` is a declared agent name.`);
     }
   }
+
   for (const pattern of ATTRIBUTIONS) {
     pattern.lastIndex = 0;
+
     for (const hit of message.matchAll(pattern)) {
       const name = hit[1] ?? '';
+
       if (NAMES_WITHOUT_CODE.includes(name) || isCode(name)) continue;
       flag(name, hit.index, `No tracked source file uses \`${name}\` as an identifier, so it names `
         + 'no code in this repository.');
     }
   }
+
   return found;
 }
 
 function narrationViolations(message: string): Violation[] {
   const prose = proseOnly(message);
   const found: Violation[] = [];
+
   for (const rule of NARRATION) {
     const text = rule.prose ? prose : message;
     rule.pattern.lastIndex = 0;
     const hit = rule.pattern.exec(text);
+
     if (hit === null) continue;
     found.push({
       rule: 'narration',
@@ -546,6 +572,7 @@ function narrationViolations(message: string): Violation[] {
       fix: rule.instead,
     });
   }
+
   return found;
 }
 
@@ -562,6 +589,7 @@ function narrationViolations(message: string): Violation[] {
 export function subjectOf(message: string): string {
   const lines = message.split('\n');
   const blank = lines.findIndex((line) => line.trim().length === 0);
+
   return (blank === -1 ? lines : lines.slice(0, blank)).join(' ').trim();
 }
 
@@ -572,7 +600,9 @@ export function subjectOf(message: string): string {
  */
 export function inspect(message: string, isCode: (name: string) => boolean): Violation[] {
   const text = message.trim();
+
   if (text.length === 0) return [];
+
   return [
     ...subjectViolations(subjectOf(text)),
     ...actorViolations(text, isCode),
@@ -587,7 +617,9 @@ export function inspect(message: string, isCode: (name: string) => boolean): Vio
  */
 export function sizeViolations(message: string): Violation[] {
   const lines = message.trim().split('\n').filter((line) => line.trim().length > 0);
+
   if (lines.length <= MESSAGE_LINE_CEILING) return [];
+
   return [{
     rule: 'message-size',
     line: MESSAGE_LINE_CEILING + 1,
@@ -609,6 +641,7 @@ export function sizeViolations(message: string): Violation[] {
 export function cleanMessage(raw: string): string {
   const scissors = raw.indexOf('# ------------------------ >8 ------------------------');
   const kept = scissors === -1 ? raw : raw.slice(0, scissors);
+
   return kept.split('\n').filter((line) => !line.startsWith('#')).join('\n').trim();
 }
 
@@ -643,25 +676,30 @@ function treePathsContaining(repo: string, tree: string, name: string): readonly
     ['-C', repo, 'grep', '--files-with-matches', '-z', '--fixed-strings', '-e', name, tree, '--'],
     { encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26 },
   );
+
   if (grep.status === 1) return [];
+
   if (grep.status !== 0) {
     throw new Error(
       `commit-hygiene: could not search ${tree} for \`${name}\` `
       + `(git grep exit ${String(grep.status)}): ${grep.stderr.trim()}`,
     );
   }
+
   // `<tree-ish>:<path>\0` per match, the tree-ish echoed exactly as passed. A
   // path may hold a colon, so the prefix is stripped by length rather than by
   // splitting — and asserted, because a mis-stripped path fails `isParseable`,
   // takes the name out of the corpus and produces a named-actor finding about a
   // real type. Wrong quietly is the failure mode this whole path removes.
   const prefix = `${tree}:`;
+
   return grep.stdout.split('\0')
     .filter((line) => line.length > 0)
     .map((line) => {
       if (!line.startsWith(prefix)) {
         throw new Error(`commit-hygiene: git grep answered about ${line}, not about ${tree}`);
       }
+
       return line.slice(prefix.length);
     });
 }
@@ -670,9 +708,11 @@ function treePathsContaining(repo: string, tree: string, name: string): readonly
 function treeDeclares(repo: string, tree: string, name: string): boolean {
   for (const path of treePathsContaining(repo, tree, name)) {
     if (!isParseable(path)) continue;
+
     const text = execFileSync('git', ['-C', repo, 'cat-file', 'blob', `${tree}:${path}`], {
       encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
     });
+
     // A blob frozen months ago cannot be re-parsed by whoever reads this, so the
     // live wording ("someone is mid-edit, re-run") would send them after a file
     // that no longer exists. Name the tree instead.
@@ -686,6 +726,7 @@ function treeDeclares(repo: string, tree: string, name: string): boolean {
       );
     }
   }
+
   return false;
 }
 
@@ -721,17 +762,22 @@ export function committedIdentifierTest(repo: string, commit: string): (name: st
   // Resolved on the first name a message actually asks about, so a clean range
   // spawns no git at all: 1,449 governed commits raise 14 questions between them.
   let spanned: readonly string[] | undefined;
+
   const trees = (): readonly string[] => {
     spanned ??= [commit, ...execFileSync('git', ['-C', repo, 'log', '-1', '--format=%P', commit], {
       encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
     }).trim().split(/\s+/u).filter((sha) => sha.length > 0)];
+
     return spanned;
   };
+
   return (name: string): boolean => {
     const cached = answered.get(name);
+
     if (cached !== undefined) return cached;
     const found = trees().some((tree) => treeDeclares(repo, tree, name));
     answered.set(name, found);
+
     return found;
   };
 }
@@ -763,7 +809,9 @@ export function truncatedHistoryRefusal(repo: string): Finding | undefined {
   const shallow = execFileSync('git', ['-C', repo, 'rev-parse', '--is-shallow-repository'], {
     encoding: 'utf8', env: scrubbedEnv(), maxBuffer: 1 << 26,
   }).trim();
+
   if (shallow !== 'true') return undefined;
+
   return {
     at: `${repo} — git rev-parse --is-shallow-repository says true`,
     invariant: 'history mode reads every commit since the convention landed, from this clone',
@@ -784,6 +832,7 @@ export function truncatedHistoryRefusal(repo: string): Finding | undefined {
  *  rather than "clean". */
 export function conventionBoundary(): string | undefined {
   const log = git('log', 'HEAD', '--diff-filter=A', '--format=%H', '--follow', '--', GATE_PROGRAM);
+
   return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
 }
 
@@ -792,6 +841,7 @@ export function conventionBoundary(): string | undefined {
  *  committed and on a branch without it, both meaning "no commit is sized here". */
 export function sizeRuleBoundary(): string | undefined {
   const log = git('log', 'HEAD', '--format=%H', "-S'message-size'", '--', GATE_PROGRAM);
+
   return log.trim().split('\n').filter((line) => line.length > 0).at(-1);
 }
 
@@ -806,6 +856,7 @@ export function sizeRuleBoundary(): string | undefined {
 export function commitsFrom(boundary: string): ReadonlySet<string> {
   const since = Number(git('log', '-1', '--format=%at', boundary).trim());
   const log = git('log', '--format=%H%x1f%at', `${boundary}^..HEAD`);
+
   return new Set(log.trim().split('\n')
     .filter((line) => line.length > 0)
     .map((line) => line.split('\u001f'))
@@ -822,11 +873,13 @@ export interface GovernedCommit {
  *  subjects are exempt by shape, their hand-written bodies are not. */
 export function governedCommits(boundary: string): GovernedCommit[] {
   const log = git('log', '--format=%H%x1f%B%x1e', `${boundary}..HEAD`);
+
   return log.split('\u001e')
     .map((entry) => entry.replace(/^\n+/, ''))
     .filter((entry) => entry.trim().length > 0)
     .map((entry) => {
       const [sha, message] = entry.split('\u001f');
+
       return { sha: (sha ?? '').slice(0, 10), message: message ?? '' };
     });
 }
@@ -910,12 +963,15 @@ if (import.meta.main) {
   // Only history mode: the hook reads the working tree and the message file, and
   // nothing below this point, so a shallow checkout commits normally.
   const refusal = messageFile === undefined ? truncatedHistoryRefusal(root) : undefined;
+
   if (refusal !== undefined) {
     console.error(`${gate}: this clone cannot answer history mode\n`);
     console.error(finding(refusal));
     process.exit(1);
   }
+
   const boundary = messageFile === undefined ? conventionBoundary() : undefined;
+
   const governed: readonly GovernedCommit[] = messageFile === undefined
     ? (boundary === undefined ? [] : governedCommits(boundary))
     : [{ sha: messageFile, message: cleanMessage(readFileSync(messageFile, 'utf8')) }];
@@ -924,6 +980,7 @@ if (import.meta.main) {
   // commits written under it; in the hook it reads the message being written.
   const sizeBoundary = messageFile === undefined ? sizeRuleBoundary() : undefined;
   const sized: ReadonlySet<string> = sizeBoundary === undefined ? new Set() : commitsFrom(sizeBoundary);
+
   // WHICH TREE ANSWERS "is this name code". The hook is judging a message about
   // the tree on disk, so the working corpus is the tree it describes. A governed
   // commit is judging a message about the tree that commit shipped, so its own
@@ -943,13 +1000,16 @@ if (import.meta.main) {
         ? 'the convention has not landed on this branch yet, so no commit is governed'
         : `${String(governed.length)} commit(s) since ${boundary.slice(0, 10)}`)
       : messageFile;
+
     console.log(`${gate}: ok — ${scope}; ${measured}`);
     console.log(`\n${gate}: what this does NOT catch — review criteria, not gate criteria:`);
+
     for (const spot of BLIND_SPOTS) console.log(`  - ${spot}`);
     process.exit(0);
   }
 
   console.error(`${gate}: ${String(violations.length)} violation(s)\n`);
+
   for (const { commit, violation } of violations) {
     console.error(finding({
       at: `${commit.sha} line ${String(violation.line)} [${violation.rule}]`,
@@ -959,6 +1019,7 @@ if (import.meta.main) {
       fix: violation.fix,
     }));
   }
+
   console.error(
     messageFile === undefined
       ? '\nThese commits are not pushed history yet. Fold the branch and rewrite the messages:'

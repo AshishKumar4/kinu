@@ -24,6 +24,7 @@ import * as v from 'valibot';
 /** The From identity of alert mail. A dot is not legal in a workspace name, so
  *  this address can never be confused for a workspace's mission inbox. */
 const MONITOR_SENDER = 'ops.monitor';
+
 const MONITOR_DISPLAY_NAME = 'Kinu Monitor';
 
 const MONITOR_INCIDENTS_DDL = `
@@ -43,6 +44,7 @@ interface IncidentRow {
   alerted_at: number | null;
   failures: number;
 }
+
 const IncidentRowSchema = v.object({
   probe: v.string(),
   detail: v.string(),
@@ -93,6 +95,7 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
 
   for (const outcome of failing) {
     const existing = open.get(outcome.probe);
+
     if (existing) {
       // Still broken. Record what it looks like now, but never re-alert: the
       // owner already has the mail that says this check is down.
@@ -112,25 +115,30 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
   const recovered = passing
     .map((outcome) => open.get(outcome.probe))
     .filter((row): row is IncidentRow => row !== undefined);
+
   const unalerted = listIncidents(deps.sql).filter((row) => row.alerted_at === null);
 
   // Only incidents the owner was told about are worth a recovery notice.
   const announced = recovered.filter((row) => row.alerted_at !== null);
   const canEmail = Boolean(deps.email && deps.emailDomain && deps.alertEmail);
   let emails = 0;
+
   if (canEmail) {
     if (unalerted.length > 0 && await send(deps, openedNotice(deps, unalerted))) {
       emails++;
+
       for (const row of unalerted) {
         deps.sql.exec(`UPDATE monitor_incidents SET alerted_at = ? WHERE probe = ?`, deps.now, row.probe);
       }
     }
+
     if (announced.length > 0 && await send(deps, recoveredNotice(deps, announced))) emails++;
   }
 
   for (const row of recovered) {
     deps.sql.exec(`DELETE FROM monitor_incidents WHERE probe = ?`, row.probe);
   }
+
   // Re-drive any alert whose send failed earlier. Delivery retries belong to
   // the outbox; the ledger only decides what deserves an email.
   if (deps.email) await deps.outbox.reconcile(deps.email, deps.now);
@@ -141,14 +149,17 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
     recovered: recovered.map((row) => row.probe),
     emails,
   };
+
   if (!canEmail && (unalerted.length > 0 || announced.length > 0)) {
     result.skipped = 'email not configured';
   }
+
   return result;
 }
 
 export function listIncidents(sql: SqlExec): IncidentRow[] {
   ensureMonitorSchema(sql);
+
   return v.parse(v.array(IncidentRowSchema), sql.exec(
     `SELECT probe, detail, opened_at, alerted_at, failures FROM monitor_incidents ORDER BY opened_at`,
   ).toArray());
@@ -159,6 +170,7 @@ interface Notice { subject: string; text: string; key: string }
 function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
   const [single] = rows;
   const what = rows.length === 1 && single !== undefined ? `${single.probe} is failing` : `${rows.length} checks are failing`;
+
   const body = [
     `${deps.origin} — synthetic monitoring found a problem.`,
     '',
@@ -173,6 +185,7 @@ function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
     '',
     'This is the only email for these checks until they recover.',
   ].join('\n');
+
   return {
     subject: `Health: ${what}`,
     // Keyed on the incidents themselves (probe + when it opened), so a retry
@@ -186,6 +199,7 @@ function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
 function recoveredNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
   const [single] = rows;
   const what = rows.length === 1 && single !== undefined ? `${single.probe} recovered` : `${rows.length} checks recovered`;
+
   return {
     subject: `Health: ${what}`,
     key: argumentDigest({ kind: 'recovered', rows: rows.map((r) => [r.probe, r.opened_at]) }),
@@ -219,8 +233,11 @@ async function send(deps: MonitorDeps, notice: Notice): Promise<boolean> {
 
 function duration(ms: number): string {
   const minutes = Math.max(1, Math.round(ms / 60_000));
+
   if (minutes < 60) return `${minutes} minute${minutes === 1 ? '' : 's'}`;
   const hours = Math.round(minutes / 60);
+
   if (hours < 48) return `${hours} hour${hours === 1 ? '' : 's'}`;
+
   return `${Math.round(hours / 24)} days`;
 }

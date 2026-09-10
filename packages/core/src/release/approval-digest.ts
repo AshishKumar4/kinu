@@ -23,6 +23,7 @@ import type { ReleaseApproval, ReleaseDeployment } from './types';
  *  reviewable command an approval binds — never an argument passed at deploy. */
 export function deployTargetAsCommand(deployTarget: string | null): string | null {
   if (!deployTarget) return null;
+
   return /\s/.test(deployTarget.trim()) ? deployTarget.trim() : null;
 }
 
@@ -31,7 +32,9 @@ export function approvalTypeForEnvironment(
   environment: ReleaseDeployment['environment'],
 ): ReleaseApproval['approvalType'] {
   if (environment === 'production') return 'deploy_production';
+
   if (environment === 'staging') return 'deploy_staging';
+
   return 'apply';
 }
 

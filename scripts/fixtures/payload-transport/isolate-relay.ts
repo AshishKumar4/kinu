@@ -30,6 +30,7 @@ import { describeThrown } from '../../../packages/devbox/src/lifecycle';
  *  platform number: one buffered copy of that size fits well under the isolate
  *  ceiling (`worker.isolate.memory` in the platform catalog). */
 const SMALL_PUT_BYTES = 8 * 1024 * 1024;
+
 /** The size of every non-final part of a multipart upload. R2 rejects a
  *  `complete()` whose parts are not uniform except for the last, so every part
  *  but the final short one is exactly this many bytes. */
@@ -77,13 +78,16 @@ export async function putStream(
   let held = 0;
   let multipart: R2MultipartUpload | undefined;
   let slicer: PartSlicer | undefined;
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
+
       if (done === true || value === undefined) break;
       // HASHED ON THE WAY PAST, before anything routes it, so one byte is
       // hashed exactly once whichever route it takes.
       digest.update(value);
+
       if (slicer === undefined) {
         // The small route holds at most SMALL_PUT_BYTES in memory. `size`
         // ROUTES, IT DOES NOT BOUND: it is a measurement of a file the caller
@@ -97,22 +101,30 @@ export async function putStream(
           held += value.byteLength;
           continue;
         }
+
         multipart = await bucket.createMultipartUpload(key);
         slicer = new PartSlicer(multipart);
+
         for (const chunk of buffered) await slicer.push(chunk);
       }
+
       await slicer.push(value);
     }
+
     if (slicer !== undefined) {
       const landed = await slicer.finish();
+
       return { ...landed, digest: digest.digest('hex') };
     }
+
     const buffer = new Uint8Array(held);
     let at = 0;
+
     for (const chunk of buffered) {
       buffer.set(chunk, at);
       at += chunk.byteLength;
     }
+
     // THE STORE VERIFIES THIS ROUTE ITSELF. A single PUT may carry the digest,
     // so R2 checks the bytes it received against it and refuses the object
     // rather than storing something else under this key — and it then REPORTS
@@ -124,6 +136,7 @@ export async function putStream(
     // travels for a large archive.
     const hex = digest.digest('hex');
     const stored = await bucket.put(key, buffer, { sha256: hex });
+
     return { bytes: held, digest: hex, objectVersion: stored.version };
   } catch (error) {
     // THE ORIGINAL ERROR IS THE ONE THAT MATTERS. Abandoning the upload is
@@ -140,6 +153,7 @@ export async function putStream(
         );
       }
     }
+
     throw error;
   }
 }
@@ -160,11 +174,13 @@ class PartSlicer {
    *  it completes, keeping only the tail in memory. */
   async push(value: Uint8Array): Promise<void> {
     let merged = value;
+
     if (this.#carry.byteLength > 0) {
       merged = new Uint8Array(this.#carry.byteLength + value.byteLength);
       merged.set(this.#carry);
       merged.set(value, this.#carry.byteLength);
     }
+
     while (merged.byteLength >= MULTIPART_PART_BYTES) {
       const part = merged.subarray(0, MULTIPART_PART_BYTES);
       this.#parts.push(await this.upload.uploadPart(this.#partNumber, part));
@@ -172,6 +188,7 @@ class PartSlicer {
       this.#partNumber += 1;
       merged = merged.slice(MULTIPART_PART_BYTES);
     }
+
     this.#carry = merged;
   }
 
@@ -184,7 +201,9 @@ class PartSlicer {
       this.#landed += this.#carry.byteLength;
       this.#carry = new Uint8Array(0);
     }
+
     const stored = await this.upload.complete(this.#parts);
+
     return { bytes: this.#landed, objectVersion: stored.version };
   }
 }

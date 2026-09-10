@@ -13,6 +13,7 @@ describe('forkCandidates', () => {
       { role: 'assistant', content: 'fixed' },
       { role: 'user', content: 'continue' },
     ]);
+
     expect(candidates).toEqual([
       { text: 'continue', occurrenceFromEnd: 1 },
       { text: 'fix the tests', occurrenceFromEnd: 1 },
@@ -27,6 +28,7 @@ describe('forkCandidates', () => {
       { role: 'user', content: 'real input' },
       { role: 'tool_call', content: 'run' },
     ], 1);
+
     expect(candidates).toEqual([{ text: 'real input', occurrenceFromEnd: 1 }]);
   });
 });

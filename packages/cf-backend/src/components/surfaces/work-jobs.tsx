@@ -39,11 +39,14 @@ function statusMeta(status: BackgroundJob["status"]) {
  */
 function interruptionNote(job: BackgroundJob, now: number): string | null {
   const attempts = job.resumeAttempts ?? 0;
+
   if (attempts === 0) return null;
   const times = attempts === 1 ? "once" : `${attempts} times`;
+
   const waiting = job.resumeAfter != null && job.resumeAfter > now
     ? ` Next attempt ${timeUntil(job.resumeAfter - now)}.`
     : "";
+
   return `Interrupted and re-driven ${times}. The work was not lost.${waiting}`;
 }
 
@@ -51,7 +54,9 @@ function interruptionNote(job: BackgroundJob, now: number): string | null {
  *  elsewhere. Rounded up, so a wait that exists never reads as "in 0s". */
 function timeUntil(ms: number): string {
   const seconds = Math.ceil(ms / 1000);
+
   if (seconds < 60) return `in ${seconds}s`;
+
   return `in ${Math.ceil(seconds / 60)}m`;
 }
 
@@ -76,12 +81,16 @@ export function JobCard({ job, grouped = false, onRefresh, rpc }: JobCardProps) 
   const act = useCallback(async (method: string) => {
     setBusy(true);
     setErr(null);
+
     try {
       const outcome = await rpc<JobControlOutcome>(method, [job.id]);
+
       if (!outcome.ok) {
         setErr(outcome.error ?? `${method.replace("BackgroundJob", "")} was refused`);
+
         return;
       }
+
       onRefresh();
     }
     catch (error) {

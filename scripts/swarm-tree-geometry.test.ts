@@ -97,14 +97,18 @@ function readGeometry(page: Page): Promise<FrameGeometry> {
     const guides = [...document.querySelectorAll('g.mcts-guides line')]
       .map((line) => Number(line.getAttribute('x1')))
       .filter((x) => Number.isFinite(x));
+
     const [firstGuide, secondGuide] = [...new Set(guides)].sort((a, b) => a - b);
+
     const pitch = firstGuide === undefined || secondGuide === undefined
       ? null
       : secondGuide - firstGuide;
 
     const labels: LabelFit[] = [];
+
     for (const group of document.querySelectorAll('g.mcts-label')) {
       const text = group.querySelector<SVGTextElement>('text');
+
       if (text === null) continue;
       labels.push({
         x: Number(text.getAttribute('x') ?? 0),
@@ -116,6 +120,7 @@ function readGeometry(page: Page): Promise<FrameGeometry> {
 
     const count = [...document.querySelectorAll('span')]
       .find((span) => /^\d+ (search|searches)$/.test((span.textContent ?? '').trim()));
+
     const leading = count === undefined ? 0 : Number.parseFloat(getComputedStyle(count).lineHeight);
 
     return {
@@ -143,7 +148,9 @@ function readGeometry(page: Page): Promise<FrameGeometry> {
           const runId = band.dataset.run ?? '';
           const caption = document.querySelector(`[data-band-title="${CSS.escape(runId)}"]`);
           const rect = band.querySelector('rect');
+
           if (caption === null || rect === null) return [];
+
           return [caption.getBoundingClientRect().right - rect.getBoundingClientRect().right];
         }),
     };
@@ -223,11 +230,15 @@ interface Observed {
 }
 
 const FRAMES = ['forks', 'forkmerge', 'forkbig'] as const;
+
 const WIDTHS = [640, 1280] as const;
+
 const MODES = ['dark', 'light'] as const;
+
 /** The frame's own stage count. Kept in step by the frame reading the same
  *  list; a stage added there and not here simply goes unwatched. */
 const LIVE_STAGES = 5;
+
 /**
  * What the push path is allowed, measured from the beat that wrote the ledger
  * row on a page that was already open.
@@ -238,6 +249,7 @@ const LIVE_STAGES = 5;
  * waited for the clock cannot.
  */
 const PUSH_BUDGET_MS = 1_500;
+
 /** `WORKING_MS` in the component is 2.5s. */
 const DECAY_WAIT_MS = 3_200;
 
@@ -263,22 +275,27 @@ function readBeat(page: Page): Promise<Beat> {
 async function settled(page: Page): Promise<void> {
   await page.waitForFunction(async () => {
     const scene = document.querySelector('svg > g');
+
     if (scene === null) return false;
     const before = scene.getAttribute('transform') ?? '';
+
     if (before === '') return false;
     const { promise, resolve } = Promise.withResolvers<void>();
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     await promise;
+
     return (scene.getAttribute('transform') ?? '') === before;
   });
 }
 
 async function readGeometryFrames(browser: Browser, origin: string): Promise<Geometry> {
   const observed: Geometry = {};
+
   for (const frame of FRAMES) {
     for (const width of WIDTHS) {
       for (const mode of MODES) {
         const page = await browser.newPage();
+
         try {
           await page.setViewport({ width, height: 1238 });
           await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: mode }]);
@@ -288,9 +305,11 @@ async function readGeometryFrames(browser: Browser, origin: string): Promise<Geo
           // state this file exists to stop being green.
           await page.waitForSelector('g.mcts-band');
           await page.waitForSelector('[data-tree-legend]', { timeout: 20_000 });
+
           if (frame === 'forkmerge') {
             await page.waitForSelector('[data-tree-card]', { timeout: 20_000 });
           }
+
           await settled(page);
           observed[key(frame, width, mode)] = await readGeometry(page);
         } finally {
@@ -299,6 +318,7 @@ async function readGeometryFrames(browser: Browser, origin: string): Promise<Geo
       }
     }
   }
+
   return observed;
 }
 
@@ -313,19 +333,24 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
   const pinned: Beat[] = [];
   let workingOnArrival = 0;
   let workingAfterDecay = 0;
+
   for (let stage = 0; stage < LIVE_STAGES; stage += 1) {
     const page = await browser.newPage();
+
     try {
       await page.setViewport({ width: 1280, height: 1238 });
       await page.goto(`${origin}/gallery.html?frame=forklive&stage=${stage}`, {
         waitUntil: 'domcontentloaded',
       });
+
       if (stage > 0) {
         await page.waitForSelector('[data-fork-run]');
         await page.waitForSelector('g.mcts-node');
         await settled(page);
       }
+
       pinned.push(await readBeat(page));
+
       if (stage === LIVE_STAGES - 2) {
         workingOnArrival = (await readBeat(page)).working;
         await page.waitForFunction(
@@ -343,6 +368,7 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
   const watched: Beat[] = [];
   let navigations = 0;
   let rowAppearedMs = Number.POSITIVE_INFINITY;
+
   try {
     await page.setViewport({ width: 1280, height: 1238 });
     await page.goto(`${origin}/gallery.html?frame=forklive`, { waitUntil: 'domcontentloaded' });
@@ -359,6 +385,7 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
     const advanced = Date.now();
     await page.waitForSelector('[data-fork-run]', { timeout: 20_000 });
     rowAppearedMs = Date.now() - advanced;
+
     // Watched by the CONDITION, not by a clock: read a beat each time the node
     // count changes, until the whole tree has landed or the frame has cycled.
     for (let seen = 0; seen < LIVE_STAGES; seen += 1) {
@@ -369,11 +396,13 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
         before,
       );
       watched.push(await readBeat(page));
+
       if ((watched.at(-1)?.outcome ?? null) === 'completed') break;
     }
   } finally {
     await page.close();
   }
+
   return { pinned, watched, navigations, rowAppearedMs, workingOnArrival, workingAfterDecay };
 }
 
@@ -391,15 +420,18 @@ async function readLiveness(browser: Browser, origin: string): Promise<Liveness>
 async function readControls(browser: Browser, origin: string): Promise<ControlEffect> {
   const effects: ControlEffect = {};
   const page = await browser.newPage();
+
   try {
     await page.setViewport({ width: 1280, height: 1238 });
     await page.goto(`${origin}/gallery.html?frame=forks`, { waitUntil: 'networkidle0' });
     await page.waitForSelector('g.mcts-band');
     await settled(page);
+
     const scene = () => page.evaluate(() => ({
       zoom: document.querySelector('g.mcts-bands')?.parentElement?.getAttribute('transform') ?? '',
       nodes: document.querySelectorAll('g.mcts-node').length,
     }));
+
     const press = async (label: string) => {
       const before = await scene();
       await page.click(`button[aria-label="${label}"]`);
@@ -410,8 +442,10 @@ async function readControls(browser: Browser, origin: string): Promise<ControlEf
         nodesBefore: before.nodes,
         nodesAfter: after.nodes,
       };
+
       return after;
     };
+
     const fitted = (await scene()).zoom;
     // One zoom, then the refit, then the other zoom. Pressing both zooms first
     // would land exactly back on the fit — the factors are reciprocal and the
@@ -429,6 +463,7 @@ async function readControls(browser: Browser, origin: string): Promise<ControlEf
   } finally {
     await page.close();
   }
+
   return effects;
 }
 
@@ -441,6 +476,7 @@ async function run(): Promise<Observed> {
 }
 
 let observed: Observed;
+
 beforeAll(async () => { observed = await run(); }, 240_000);
 
 const every = (): [string, FrameGeometry][] => Object.entries(observed.geometry);
@@ -451,6 +487,7 @@ describe('the swarm trees, as a browser lays them out', () => {
       expect(frame.nodes, `${where}: no nodes drawn`).toBeGreaterThan(0);
       expect(frame.mode, `${where}: palette not pinned`).toBe(where.split('/')[1]);
     }
+
     // The scale probe is the one the view has to survive, and the frame that
     // was blank: name its size so a fixture shrinking to nothing cannot pass.
     for (const mode of MODES) {
@@ -464,7 +501,9 @@ describe('the swarm trees, as a browser lays them out', () => {
     for (const [where, frame] of every()) {
       const pitch = frame.pitch;
       expect(pitch, `${where}: no depth guides to measure the pitch from`).not.toBeNull();
+
       if (pitch === null) continue;
+
       for (const label of frame.labels) {
         // A node WITH children shares its row with them, so its label has one
         // pitch. A leaf has the row to itself and is bounded by reading width,
@@ -487,6 +526,7 @@ describe('the swarm trees, as a browser lays them out', () => {
         const where = key('forks', width, mode);
         const frame = observed.geometry[where];
         expect(frame, `${where} missing`).toBeDefined();
+
         if (frame === undefined) continue;
         const longest = frame.labels.reduce((best, label) => Math.max(best, label.text.length), 0);
         expect(longest, `${where}: longest label is ${longest} characters`).toBeGreaterThan(24);
@@ -505,6 +545,7 @@ describe('the swarm trees, as a browser lays them out', () => {
     for (const [where, frame] of every()) {
       const { legend, scene, card } = frame;
       expect(legend, `${where}: no docked row`).not.toBeNull();
+
       if (legend === null || scene === null || card === null) continue;
       // Sub-pixel layout: a hairline of tolerance, not a gutter.
       expect(legend.top, `${where}: the key overlaps the scene`).toBeGreaterThanOrEqual(scene.bottom - 1);
@@ -521,10 +562,12 @@ describe('the swarm trees, as a browser lays them out', () => {
         const where = key('forkmerge', width, mode);
         const frame = observed.geometry[where];
         expect(frame, `${where} missing`).toBeDefined();
+
         if (frame === undefined) continue;
         const { card, cellHeight } = frame;
         expect(card, `${where}: no card`).not.toBeNull();
         expect(cellHeight, `${where}: no column to measure against`).not.toBeNull();
+
         if (card === null || cellHeight === null) continue;
         expect(cellHeight).toBeGreaterThan(400);
         expect(
@@ -538,7 +581,9 @@ describe('the swarm trees, as a browser lays them out', () => {
   test('an unselected search recedes without becoming illegible', () => {
     for (const [where, frame] of every()) {
       const [selected, ...rest] = frame.bandOpacity;
+
       if (selected !== undefined) expect(selected, `${where}: selected band dimmed`).toBe(1);
+
       for (const opacity of rest) {
         // Half opacity on 11px type is not recession. The floor is the contrast
         // at which an unselected band's labels are still readable, which is the
@@ -555,6 +600,7 @@ describe('the swarm trees, as a browser lays them out', () => {
     // ran the full width of the card over a search one node wide.
     for (const [where, frame] of every()) {
       expect(frame.captionOverflow.length, `${where}: no caption paired to a band`).toBeGreaterThan(0);
+
       for (const past of frame.captionOverflow) {
         expect(Math.round(past), `${where}: a caption runs ${Math.round(past)}px past its band`)
           .toBeLessThanOrEqual(0);
@@ -614,6 +660,7 @@ describe('a search, as it happens', () => {
     // the ledger has no row for it yet.
     expect(pinned[0]?.rows, 'stage 0 should have no ledger row').toBe(0);
     expect(pinned[0]?.nodes, 'stage 0 should draw no nodes').toBe(0);
+
     for (let stage = 1; stage < LIVE_STAGES; stage += 1) {
       const beat = pinned[stage];
       expect(beat?.rows, `stage ${stage}: no run row`).toBe(1);
@@ -623,12 +670,14 @@ describe('a search, as it happens', () => {
 
   test('the tree grows a stage at a time and the run settles at the end', () => {
     const { pinned } = observed.live;
+
     for (let stage = 2; stage < LIVE_STAGES; stage += 1) {
       const before = pinned[stage - 1]?.nodes ?? 0;
       const after = pinned[stage]?.nodes ?? 0;
       expect(after, `stage ${stage} drew ${after} nodes, stage ${stage - 1} drew ${before}`)
         .toBeGreaterThan(before);
     }
+
     // Running while it runs, completed when it has. A run that reads
     // "completed" throughout is the defect the owner hit from the other side:
     // a dead-looking swarm and a live-looking one must not render the same.
@@ -645,6 +694,7 @@ describe('a search, as it happens', () => {
     const last = watched.at(-1);
     expect(first).toBeDefined();
     expect(last).toBeDefined();
+
     if (first === undefined || last === undefined) return;
     expect(last.nodes, `nodes went ${first.nodes} -> ${last.nodes} in one page`)
       .toBeGreaterThan(first.nodes);

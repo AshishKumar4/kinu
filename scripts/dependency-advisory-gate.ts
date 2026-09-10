@@ -73,17 +73,22 @@ export const UNREACHABLE_ACK = 'KINU_ADVISORY_FEED_BLOCKED';
  */
 export function configuredScanner(bunfig: string): string | undefined {
   let table = '';
+
   for (const raw of bunfig.split('\n')) {
     const line = raw.trim();
     const header = /^\[([^\]]+)\]$/.exec(line);
+
     if (header?.[1] !== undefined) {
       table = header[1];
       continue;
     }
+
     if (table !== 'install.security') continue;
     const key = /^scanner\s*=\s*"([^"]*)"/.exec(line);
+
     if (key?.[1] !== undefined) return key[1];
   }
+
   return undefined;
 }
 
@@ -128,8 +133,10 @@ export function scanViaBun(cwd: string = REPO_ROOT): AdvisoryScan {
     stderr: 'pipe',
     env: { ...process.env, [REPORT_ENV]: '1' },
   });
+
   const stdout = proc.stdout.toString();
   const line = stdout.split('\n').find((each) => each.startsWith(REPORT_SENTINEL));
+
   if (line === undefined) {
     throw new Error(
       `${GATE}: bun pm scan produced no ${REPORT_SENTINEL} line (exit ${String(proc.exitCode)}). `
@@ -139,6 +146,7 @@ export function scanViaBun(cwd: string = REPO_ROOT): AdvisoryScan {
       + `  stderr: ${proc.stderr.toString().trim().slice(0, 300)}`,
     );
   }
+
   return v.parse(ScanSchema, JSON.parse(line.slice(REPORT_SENTINEL.length)));
 }
 
@@ -165,6 +173,7 @@ export function judgeAdvisories(
 ): AdvisoryVerdict {
   const matched = new Set<string>();
   const packagesSeen = new Set<string>();
+
   for (const exposure of exposures) {
     matched.add(`${exposure.pkg}#${String(exposure.id)}`);
     packagesSeen.add(exposure.pkg);
@@ -172,12 +181,15 @@ export function judgeAdvisories(
 
   const findings: AdvisoryFinding[] = [];
   let accepted = 0;
+
   for (const exposure of exposures) {
     const entry = reviewed[exposure.pkg];
+
     if (entry !== undefined && entry.ids.includes(exposure.id)) {
       accepted += 1;
       continue;
     }
+
     const at = `${exposure.pkg}@${exposure.version} — advisory ${String(exposure.id)}`;
     findings.push({
       at,
@@ -219,6 +231,7 @@ export function judgeAdvisories(
       });
     }
   }
+
   return { findings, accepted };
 }
 
@@ -226,6 +239,7 @@ export function judgeAdvisories(
 
 function main(): number {
   const wired = configuredScanner(readFileSync(join(REPO_ROOT, 'bunfig.toml'), 'utf8'));
+
   if (wired !== SCANNER_PATH) {
     console.error(`${GATE}: 1 finding\n`);
     console.error(finding({
@@ -238,10 +252,12 @@ function main(): number {
         + 'over a scan that never ran',
       fix: `set scanner = "${SCANNER_PATH}" in bunfig.toml`,
     }));
+
     return 1;
   }
 
   const scan = scanViaBun();
+
   if (scan.status === 'unreachable') {
     return blocked(
       GATE,
@@ -253,8 +269,10 @@ function main(): number {
   }
 
   const reviewedPackages = Object.keys(REVIEWED_ADVISORIES).length;
+
   const reviewedIds = Object.values<ReviewedPackage>(REVIEWED_ADVISORIES)
     .reduce((total, entry) => total + entry.ids.length, 0);
+
   const measured = assertMeasured(GATE, [
     ['lockfile packages scanned', scan.scanned],
     ['reviewed packages', reviewedPackages],
@@ -262,19 +280,25 @@ function main(): number {
   ]);
 
   const { findings, accepted } = judgeAdvisories(scan.exposures);
+
   if (findings.length > 0) {
     console.error(`${GATE}: ${String(findings.length)} finding(s)\n`);
+
     for (const each of findings) {
       console.error(`::error::${GATE}: ${each.at}`);
       console.error(each.rendered);
     }
+
     console.error(`\n${GATE}: ${measured}`);
+
     return 1;
   }
+
   console.log(
     `${GATE}: ok — ${measured}, ${String(scan.exposures.length)} exposure(s) matched and all `
     + `${String(accepted)} accounted for by review, 0 recorded id(s) stale`,
   );
+
   return 0;
 }
 

@@ -6,6 +6,7 @@ import type { JsonValue } from '../utils/json';
 import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
 
 const RefusalSchema = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
+
 /** A verdict the file plane answered with (`tools/file-tool.ts` `failure()`): the
  *  caller did not meet the operation's precondition. Not an error class. */
 const FileVerdictSchema = v.object({ reason: v.picklist(FILE_REFUSAL_REASONS), error: v.string() });
@@ -19,6 +20,7 @@ export interface ExecOutcome {
 }
 
 export const STDOUT_LABEL = '--- stdout ---';
+
 export const STDERR_LABEL = '--- stderr ---';
 
 /** What a command that wrote nothing anywhere reads as. */
@@ -44,9 +46,12 @@ export function refusalText(error: KinuError | Refusal): string {
  */
 export function answeredRefusal(payload: JsonValue): Refusal | null {
   const classified = v.safeParse(RefusalSchema, payload);
+
   if (classified.success) return { reason: classified.output.reason, error: classified.output.error };
   const verdict = v.safeParse(FileVerdictSchema, payload);
+
   if (verdict.success) return { reason: 'bad_input', error: `${verdict.output.reason}: ${verdict.output.error}` };
+
   return null;
 }
 
@@ -55,13 +60,16 @@ export const CommandResultSchema = v.union([v.string(), v.object({
   ...RefusalSchema.entries,
   execution: v.optional(v.object({ exitCode: v.number() })),
 })]);
+
 export type CommandResult = v.InferOutput<typeof CommandResultSchema>;
+
 export const COMMAND_RESULT_TYPE = 'string | { reason: '
   + ERROR_CODES.map((code) => JSON.stringify(code)).join(' | ') + '; error: string; execution?: { exitCode: number } }';
 
 export function commandResult(result: ExecOutcome): CommandResult {
   if (result.refusal !== undefined) return result.refusal;
   const output = formatExecResult(result);
+
   return (result.exitCode ?? 0) === 0 ? output : { reason: 'io', error: output, execution: { exitCode: result.exitCode ?? 0 } };
 }
 
@@ -73,14 +81,20 @@ export function formatExecResult(result: ExecOutcome): string {
 
   if (exitCode === 0) {
     if (!stderr.trim()) return stdout || NO_OUTPUT;
+
     if (!stdout.trim()) return stderr;
+
     return `${stdout}\n${STDERR_LABEL}\n${stderr}`;
   }
 
   const sections = [`Error (exit ${exitCode})`];
+
   if (stdout.trim()) sections.push(`${STDOUT_LABEL}\n${stdout}`);
+
   if (stderr.trim()) sections.push(`${STDERR_LABEL}\n${stderr}`);
+
   if (sections.length === 1) sections.push(NO_OUTPUT);
+
   return sections.join('\n');
 }
 

@@ -26,6 +26,7 @@ import { describe, expect, it } from 'vitest';
 /** Long enough that a fast return is unambiguous, short enough to stay far from
  *  the 30s `blockConcurrencyWhile` cancel threshold. */
 const ARM_DELAY_MS = 700;
+
 /** Past the arm delay, so "the write never landed" cannot mean "we looked
  *  early". */
 const SETTLE_MS = ARM_DELAY_MS * 2;

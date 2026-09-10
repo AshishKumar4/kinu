@@ -28,10 +28,13 @@ export type ExpectedFailure =
  * tolerating it is almost always the wrong answer and creating the table is the right one.
  */
 const SQLITE_MISSING_TABLE = /\bno such table\b/u;
+
 /** `duplicate column name: X` — the one genuinely idempotent-by-exception schema case. */
 const SQLITE_DUPLICATE_COLUMN = /\bduplicate column name\b/u;
+
 /** `there is already another table or index with this name: X`, raised by `RENAME TO`. */
 const SQLITE_TABLE_EXISTS = /\bthere is already another table or index with this name\b/u;
+
 /** `"x" cannot be parsed as a URL.` — WHATWG URL's TypeError, which carries no `code` in browsers. */
 const UNPARSEABLE_URL = /cannot be parsed as a URL/u;
 
@@ -47,6 +50,7 @@ const UNPARSEABLE_URL = /cannot be parsed as a URL/u;
 export function errnoCode(error: Error): string | null {
   if (!('code' in error)) return null;
   const code = error.code;
+
   return code === undefined || code === null ? null : String(code);
 }
 
@@ -58,21 +62,32 @@ export function errnoCode(error: Error): string | null {
  */
 export function classify(options: { cause: unknown }): ExpectedFailure | null {
   const caught = options.cause;
+
   if (caught instanceof SyntaxError) return 'malformed-input';
+
   if (!(caught instanceof Error)) return null;
   const code = errnoCode(caught);
+
   if (code === 'ENOENT') return 'enoent';
+
   // `EEXIST` is the idempotent-creation failure: both engines that raise it —
   // node's fs and the workspace file plane's VfsError — carry it on `code`.
   if (code === 'EEXIST') return 'eexist';
+
   if (code === 'ESRCH') return 'esrch';
+
   if (code === 'ERR_INVALID_URL') return 'malformed-input';
 
   const message = caught.message;
+
   if (SQLITE_MISSING_TABLE.test(message)) return 'sqlite-missing-table';
+
   if (SQLITE_DUPLICATE_COLUMN.test(message)) return 'sqlite-duplicate-column';
+
   if (SQLITE_TABLE_EXISTS.test(message)) return 'sqlite-table-exists';
+
   if (UNPARSEABLE_URL.test(message)) return 'malformed-input';
+
   return null;
 }
 
@@ -90,6 +105,7 @@ export function tolerate<T>(operation: () => T, expected: ExpectedFailure): T | 
     return operation();
   } catch (caught) {
     if (classify({ cause: caught }) !== expected) throw caught;
+
     return undefined;
   }
 }
@@ -103,6 +119,7 @@ export async function tolerateAsync<T>(
     return await operation();
   } catch (caught) {
     if (classify({ cause: caught }) !== expected) throw caught;
+
     return undefined;
   }
 }

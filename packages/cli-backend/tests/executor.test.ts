@@ -32,10 +32,12 @@ describe('createSandboxedExecutor', () => {
 
   test('refuses module metadata in the in-process function context before side effects', async () => {
     let calls = 0;
+
     const result = await createSandboxedExecutor().execute(
       'await probe.seed(); return import.meta.main',
       [{ name: 'probe', fns: { seed: async () => ++calls } }],
     );
+
     expect(result.result).toBeUndefined();
     expect(result.error).toMatch(/import\.meta/);
     expect(calls).toBe(0);
@@ -44,6 +46,7 @@ describe('createSandboxedExecutor', () => {
     const executor = createSandboxedExecutor();
     const installed = Bun.which('python3') !== null;
     expect(executor.languages.includes('python')).toBe(installed);
+
     if (!installed) return;
     const result = await executor.execute('print(40 + 2)', [], { language: 'python' });
     expect(result).toEqual({ result: '42' });
@@ -66,6 +69,7 @@ describe('createSandboxedExecutor', () => {
       'const c = Bun.spawn(["sleep", "30"], { stdout: "inherit", stderr: "inherit" });\nc.unref();\n"done"',
       [],
     );
+
     expect(result).toEqual({ result: 'done' });
   });
 
@@ -75,10 +79,12 @@ describe('createSandboxedExecutor', () => {
   test('a throwing expression runs its side effect once, and the throw is reported', async () => {
     const marker = join(scratchDir('executor-once'), 'count.txt');
     const append = JSON.stringify(`echo x >> ${marker}`);
+
     const result = await createSandboxedExecutor().execute(
       `await (async () => { Bun.spawnSync(["sh", "-c", ${append}]); throw new Error("boom"); })()`,
       [],
     );
+
     expect(result).toEqual({ result: undefined, error: 'boom' });
     expect(readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(1);
   });

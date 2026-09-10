@@ -85,9 +85,11 @@ export async function controlPlaneMetrics(
 ): Promise<ControlMetrics> {
   const windowHours = resolveWindow(request.hours);
   const missing = analyticsMissingSettings(env);
+
   if (missing.length > 0) return { windowHours, missing, panels: {} };
 
   const workspace = request.workspace?.trim();
+
   // Built in two statements rather than with a conditional spread: an unset
   // filter must leave the property ABSENT, and `analyticsDigest('')` returns ''
   // rather than a hash, so a spread that guessed would send an empty digest and
@@ -99,9 +101,12 @@ export async function controlPlaneMetrics(
     // panel with production's numbers.
     datasetSuffix: env.ANALYTICS_DATASET_SUFFIX ?? '',
   };
+
   if (workspace) ask.workspaceDigest = analyticsDigest(workspace);
   const queries = new Map(Object.entries(controlPlaneMetricsQueries(ask)));
+
   if (request.forceRefresh === true) clearAnalyticsCache();
+
   return { windowHours, missing, panels: await runAnalyticsBatch(env, queries) };
 }
 

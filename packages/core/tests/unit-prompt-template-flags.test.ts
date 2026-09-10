@@ -32,7 +32,9 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 const here = dirname(fileURLToPath(import.meta.url));
+
 const repoRoot = join(here, '..', '..', '..');
+
 const fixtureProject = join(here, 'fixtures', 'template-flags');
 
 interface Diagnostic {
@@ -58,23 +60,30 @@ interface CompileReport {
  */
 function compileFixtures(): CompileReport {
   const tsc = join(repoRoot, 'node_modules', '.bin', 'tsc');
+
   const run = spawnSync(tsc, ['--noEmit', '--pretty', 'false', '-p', fixtureProject], {
     cwd: repoRoot,
     encoding: 'utf8',
   });
+
   if (run.error) throw new Error(`could not run ${tsc}`, { cause: run.error });
   const diagnostics: Diagnostic[] = [];
+
   for (const raw of `${run.stdout}${run.stderr}`.split('\n')) {
     const match = /^(.*?)\((\d+),\d+\): error (.*)$/u.exec(raw);
+
     if (match?.[1] && match[2] && match[3]) {
       diagnostics.push({ file: match[1], line: Number.parseInt(match[2], 10), text: match[3] });
       continue;
     }
+
     const previous = diagnostics.at(-1);
+
     if (previous && raw.startsWith('  ')) {
       diagnostics[diagnostics.length - 1] = { ...previous, text: `${previous.text}\n${raw.trim()}` };
     }
   }
+
   return { status: run.status ?? -1, diagnostics };
 }
 
@@ -85,11 +94,14 @@ function markedLines(file: string): ReadonlyMap<number, number> {
   const byCase = new Map<number, number>();
   source.forEach((text, index) => {
     const marker = /^\/\/ \[(\d+)\]/u.exec(text);
+
     if (!marker?.[1]) return;
     let cursor = index + 1;
+
     while (cursor < source.length && source[cursor]?.trimStart().startsWith('//')) cursor += 1;
     byCase.set(Number.parseInt(marker[1], 10), cursor + 1);
   });
+
   return byCase;
 }
 

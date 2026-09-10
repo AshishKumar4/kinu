@@ -24,10 +24,12 @@ const FOLDED: LanguageModelV3GenerateResult = {
 function deferredModel() {
   const deferred = Promise.withResolvers<LanguageModelV3GenerateResult>();
   const started = Promise.withResolvers<void>();
+
   return {
     model: () => new MockLanguageModelV3({
       doGenerate: () => {
         started.resolve();
+
         return deferred.promise;
       },
     }),
@@ -47,14 +49,18 @@ function failingModel(): LanguageModel {
 describe('createModelSummarizer', () => {
   test('waits for provider completion without an elapsed deadline', async () => {
     vi.useFakeTimers();
+
     try {
       const deferred = deferredModel();
       let settled = false;
+
       const pending = createModelSummarizer(deferred.model)('summarize this')
         .then((result) => {
           settled = true;
+
           return result;
         });
+
       await deferred.started;
       vi.advanceTimersByTime(600_001);
       expect(settled).toBe(false);
@@ -71,6 +77,7 @@ describe('createModelSummarizer', () => {
     // The producer fires precisely when a conversation got expensive, so the
     // workspace total understated exactly the sessions an owner asks about.
     const reports: ModelCallReport[] = [];
+
     const summarize = createModelSummarizer(
       () => new MockLanguageModelV3({ doGenerate: async () => FOLDED }),
       { source: 'compaction', report: (report) => { reports.push(report); } },
@@ -85,9 +92,11 @@ describe('createModelSummarizer', () => {
 
   test('a provider failure reports no model_call usage', async () => {
     const reports: ModelCallReport[] = [];
+
     const summarize = createModelSummarizer(failingModel, {
       source: 'compaction', report: (report) => { reports.push(report); },
     });
+
     await expect(summarize('fold this')).rejects.toThrow('provider connection failed');
     expect(reports).toEqual([]);
   });

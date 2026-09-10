@@ -29,6 +29,7 @@ export interface ExplorerSelection {
  */
 export function cleanNodeLabel(value: string | null | undefined, fallback: string): string {
 	const raw = (value || fallback || "").split("\n").find((line) => line.trim().length > 0) ?? fallback;
+
 	const cleaned = raw
 		.replace(/^\s{0,3}#{1,6}\s*/, "")
 		.replace(/^\s*[-*>]+\s*/, "")
@@ -36,6 +37,7 @@ export function cleanNodeLabel(value: string | null | undefined, fallback: strin
 		.replace(/`/g, "")
 		.replace(/\s+/g, " ")
 		.trim();
+
 	return cleaned.length > 0 ? cleaned : fallback;
 }
 
@@ -56,17 +58,21 @@ export function cleanNodeLabel(value: string | null | undefined, fallback: strin
  */
 export function clipToWidth(text: string, room: number, advance: (text: string) => number): string {
 	if (room <= 0) return "";
+
 	if (advance(text) <= room) return text;
 	// The ellipsis is part of what has to fit, so the search is over the kept
 	// prefix. Bisection rather than a ratio: one measurement is not a scale
 	// factor for a proportional face, and a ratio overshoots on wide glyphs.
 	let keep = 0;
 	let high = text.length;
+
 	while (keep < high) {
 		const mid = (keep + high + 1) >> 1;
+
 		if (advance(`${text.slice(0, mid)}…`) <= room) keep = mid;
 		else high = mid - 1;
 	}
+
 	return keep === 0 ? "" : `${text.slice(0, keep)}…`;
 }
 
@@ -95,16 +101,21 @@ export function principalVariation(root: ForkNode): Set<string> {
 	if (!isCompeted(root)) return new Set<string>();
 	const ids = new Set<string>([root.id]);
 	let node = root;
+
 	while (node.children.length > 0) {
 		let best = node.children[0]!;
+
 		for (const child of node.children) {
 			const cv = child.visits ?? 0, bv = best.visits ?? 0;
+
 			if (cv > bv || (cv === bv && (child.value ?? 0) > (best.value ?? 0))) best = child;
 		}
+
 		if (ids.has(best.id)) break; // a malformed tree must not spin here
 		ids.add(best.id);
 		node = best;
 	}
+
 	return ids;
 }
 
@@ -116,12 +127,16 @@ export function ancestorIds(root: ForkNode, id: string): string[] {
 	const walk = (node: ForkNode, trail: string[]): string[] | null => {
 		if (node.id === id) return trail;
 		const next = [...trail, node.id];
+
 		for (const child of node.children) {
 			const found = walk(child, next);
+
 			if (found) return found;
 		}
+
 		return null;
 	};
+
 	return walk(root, []) ?? [];
 }
 
@@ -129,10 +144,13 @@ export function ancestorIds(root: ForkNode, id: string): string[] {
  * stores ids, never node objects, so live polling cannot leave details stale. */
 export function findForkNode(root: ForkNode, id: string): ForkNode | null {
 	if (root.id === id) return root;
+
 	for (const child of root.children) {
 		const found = findForkNode(child, id);
+
 		if (found) return found;
 	}
+
 	return null;
 }
 
@@ -140,6 +158,7 @@ export function findForkNode(root: ForkNode, id: string): ForkNode | null {
  * callers must not turn a provisional score into a winner label. */
 export function terminalForkNode(root: ForkNode): ForkNode | null {
 	let chosen: ForkNode | null = null;
+
 	const walk = (node: ForkNode): void => {
 		if (
 			node.status === "terminal"
@@ -147,9 +166,12 @@ export function terminalForkNode(root: ForkNode): ForkNode | null {
 		) {
 			chosen = node;
 		}
+
 		for (const child of node.children) walk(child);
 	};
+
 	walk(root);
+
 	return chosen;
 }
 
@@ -157,12 +179,17 @@ export function terminalForkNode(root: ForkNode): ForkNode | null {
 export function treeStats(root: ForkNode) {
 	let nodes = 0;
 	let depth = 0;
+
 	const walk = (node: ForkNode): void => {
 		nodes++;
+
 		if (node.depth > depth) depth = node.depth;
+
 		for (const child of node.children) walk(child);
 	};
+
 	walk(root);
+
 	return { nodes, depth };
 }
 
@@ -171,11 +198,15 @@ export function treeStats(root: ForkNode) {
  *  no branch there was rolled out more than any other. */
 export function maxVisits(root: ForkNode): number {
 	let max = 0;
+
 	const walk = (node: ForkNode): void => {
 		if ((node.visits ?? 0) > max) max = node.visits ?? 0;
+
 		for (const child of node.children) walk(child);
 	};
+
 	walk(root);
+
 	return max;
 }
 
@@ -199,14 +230,19 @@ export function subtreeCount(node: ForkNode): number {
  */
 export function losingBranchIds(root: ForkNode): Set<string> {
 	const ids = new Set<string>();
+
 	const walk = (node: ForkNode): void => {
 		if (node.children.length > 0 && (node.status === "pruned" || node.status === "failed")) {
 			ids.add(node.id);
+
 			return; // the topmost abandoned node hides the rest of its cluster
 		}
+
 		for (const child of node.children) walk(child);
 	};
+
 	for (const child of root.children) walk(child);
+
 	return ids;
 }
 
@@ -215,18 +251,23 @@ export function losingBranchIds(root: ForkNode): Set<string> {
 /** Radii bracket: small enough that a hundred rows stay distinct, large
  *  enough that a heavily-rolled-out node is unmistakable. */
 const NODE_R_MIN = 3.5;
+
 export const NODE_R_MAX = 11;
+
 /** Every branch of an unscored fork is the same size, because none of them was
  *  paid for more than another. Mid-bracket rather than the floor: a handful of
  *  3.5px specks reads as a broken render, not as a merge. */
 export const NODE_R_UNSCORED = 6.5;
+
 const LINK_W_MIN = 0.7;
+
 const LINK_W_MAX = 4.5;
 
 /** Area, not radius, tracks visits — a diameter ramp reads a 4-visit node as
  *  four times the weight of a 1-visit one. */
 function sqrtScale(value: number, max: number, lo: number, hi: number): number {
 	if (max <= 0) return lo;
+
 	return lo + (hi - lo) * Math.sqrt(Math.min(Math.max(value, 0), max) / max);
 }
 
@@ -266,8 +307,12 @@ export function viewNoteFor(
 ): string | null {
 	const illegible = k < LABEL_MIN_SCALE;
 	const tooWide = (band.x1 - band.x0) * k > availW;
+
 	if (illegible && tooWide) return "too small to label · deeper columns pan right";
+
 	if (illegible) return "too small to label · zoom in to read";
+
 	if (tooWide) return "deeper columns continue right · drag to pan";
+
 	return null;
 }

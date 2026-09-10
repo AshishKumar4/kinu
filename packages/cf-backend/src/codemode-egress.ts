@@ -62,17 +62,20 @@ export const EGRESS_FAILURE_HEADER = 'x-kinu-egress-failure';
 async function forwardCodemodeEgress(request: Request): Promise<Response> {
   const url = new URL(request.url);
   const refusal = refusedHostname(url.hostname);
+
   if (refusal !== null) {
     diagnostics.failure(
       'egress.private_destination',
       new KinuError('denied', refusal.error),
       { host: url.hostname, seam: 'codemode' },
     );
+
     return Response.json(refusal, {
       status: 403,
       headers: { [EGRESS_FAILURE_HEADER]: '1' },
     });
   }
+
   try {
     return await fetch(new Request(request, {
       redirect: request.redirect === 'error' ? 'error' : 'manual',

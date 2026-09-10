@@ -86,6 +86,7 @@ async function settleInterruptedRuns(
   for (const { input, resolve } of pendingHeads) {
     resolve(completedReport(input));
   }
+
   await Promise.all(runs);
 }
 
@@ -97,6 +98,7 @@ function freshJournal() {
   initMctsSearchTable(execRaw);
   const sql = makeSql(db);
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'fork-identity-test');
+
   return { db, sql, actor, journal: new HeadJournal(sql, actor) };
 }
 
@@ -111,16 +113,20 @@ function runtime(opts: { settles: boolean; spawned: HeadInput[]; pendingHeads?: 
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       opts.spawned.push(input);
+
       return {
         id: input.id,
         run: async () => {
           if (!opts.settles) {
             const pendingHeads = opts.pendingHeads;
+
             if (!pendingHeads) throw new Error('Unsettled test head must have an owner');
             const pending = Promise.withResolvers<HeadReport>();
             pendingHeads.push({ input, resolve: pending.resolve });
+
             return pending.promise;
           }
+
           return completedReport(input);
         },
         async abort() {},
@@ -128,6 +134,7 @@ function runtime(opts: { settles: boolean; spawned: HeadInput[]; pendingHeads?: 
     },
     async mergeLLM(prompt: string): Promise<MergeOutput> {
       opts.compiled?.push(prompt);
+
       return MERGE;
     },
   };
@@ -162,6 +169,7 @@ describe('a re-driven fork job stays one run', () => {
     const { sql, actor, journal } = freshJournal();
     const spawned: HeadInput[] = [];
     const pendingHeads: PendingHead[] = [];
+
     const interruptedRuns = Array.from(
       { length: 3 },
       () => drive(journal, spawned, false, 5, pendingHeads),
@@ -196,11 +204,13 @@ describe('a re-driven fork job stays one run', () => {
       { length: 3 },
       () => drive(journal, spawned, false, 5, pendingHeads),
     );
+
     await drive(journal, spawned, true);
 
     const rows = sql<{ id: string; status: string; error_message: string | null }>`
       SELECT id, status, error_message FROM head_journal
       WHERE actor_id = ${actor.actorId} AND root_id = ${spawned[0]?.rootId ?? ''} ORDER BY rowid`;
+
     // FIVE ROWS FOR FIVE BRANCHES, after four drives. The incident produced twenty.
     expect(rows).toHaveLength(5);
     // …and they are the same five ids every attempt spawned.
@@ -244,6 +254,7 @@ describe('a re-driven fork job stays one run', () => {
       parentBudget: { maxDepth: 2, spawnedAt: Date.now() },
     });
     const [firstParent, secondParent] = spawned;
+
     if (!firstParent || !secondParent) throw new Error('Expected the root split to spawn two heads');
     await controller.run({
       ...shared, parentHeadId: firstParent.id, parentDepth: 1, parentBudget: firstParent.budget,
@@ -278,6 +289,7 @@ describe('a re-driven fork job stays one run', () => {
         parentBudget: { maxDepth: 1, spawnedAt: Date.now() },
       }),
     );
+
     expect(compiled).toEqual([]);
 
     await new HeadController(runtime({ settles: true, spawned, compiled }), journal).run({
@@ -294,8 +306,10 @@ describe('a re-driven fork job stays one run', () => {
       SELECT COUNT(*) AS n FROM head_merge_results WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
     expect(sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM head_runs WHERE actor_id = ${actor.actorId}`[0]?.n).toBe(1);
+
     const [row] = sql<{ merged_narrative: string }>`
       SELECT merged_narrative FROM head_merge_results WHERE actor_id = ${actor.actorId}`;
+
     expect(row?.merged_narrative).toBe(MERGE.narrative);
     await settleInterruptedRuns(pendingHeads, interruptedRuns);
   });
@@ -346,9 +360,11 @@ describe('a re-driven fork job stays one run', () => {
     const pendingHeads: PendingHead[] = [];
 
     const interruptedRuns = [drive(journal, spawned, false, 5, pendingHeads)];
+
     for (let turn = 0; turn < 100 && pendingHeads.length < 5; turn += 1) {
       await Promise.resolve();
     }
+
     expect(pendingHeads).toHaveLength(5);
     // Nothing retried it: the reconciliation that retires stale heads has run,
     // which is the state a workspace reopens in.
@@ -356,6 +372,7 @@ describe('a re-driven fork job stays one run', () => {
 
     const [run] = listForkRuns(sql, actor, null, 30).items;
     expect(run).toMatchObject({ task: TASK, hasSearchTree: false, hasNodeTranscripts: true, status: 'partial' });
+
     if (!run) throw new Error('Expected an interrupted fork run');
     expect(run.winnerScore).toBeNull();
     await settleInterruptedRuns(pendingHeads, interruptedRuns);

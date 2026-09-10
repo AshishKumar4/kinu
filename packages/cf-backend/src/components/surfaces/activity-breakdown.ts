@@ -35,8 +35,10 @@ export function breakdownView(context: ContextComposition): BreakdownView {
 		const segments = context.segments
 			.filter((s: ContextSegment) => s.plane === plane)
 			.sort((a, b) => b.chars - a.chars);
+
 		if (segments.length === 0) return [];
 		const chars = segments.reduce((sum, s) => sum + s.chars, 0);
+
 		return [{
 			plane,
 			chars,
@@ -47,6 +49,7 @@ export function breakdownView(context: ContextComposition): BreakdownView {
 			})),
 		}];
 	});
+
 	return {
 		planes,
 		measuredChars: context.measuredChars,

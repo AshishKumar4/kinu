@@ -11,7 +11,9 @@
  * program passing here and failing there IS the capability this adds.
  */
 'use strict';
+
 const { afterEach, describe, expect, test } = require('bun:test');
+
 const { createSessions, MAX_AXIS, TERMINAL_NAME, parseSessionName } = require('../src/pty.js');
 
 /** Long enough for a shell to start, read a command and answer it on a loaded
@@ -44,13 +46,17 @@ function harness(options = {}) {
   const logged = [];
   const sessions = createSessions({ log: (...args) => logged.push(args), ...options });
   opened.push(sessions);
+
   const send = (frame) => {
     frames.push(frame);
+
     return options.congested === true ? false : true;
   };
+
   const output = () => Buffer.concat(
     frames.filter((f) => f.type === 'PTY_OUT').map((f) => Buffer.from(f.data, 'base64')),
   ).toString('utf8');
+
   return { sessions, frames, logged, send, output };
 }
 
@@ -58,9 +64,12 @@ function harness(options = {}) {
  *  clock: the assertion that follows is then about a state that was reached. */
 async function until(predicate, what, budgetMs = SETTLE_MS) {
   const started = Date.now();
+
   for (;;) {
     const value = predicate();
+
     if (value) return value;
+
     if (Date.now() - started > budgetMs) throw new Error(`${what} did not happen within ${budgetMs} ms`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -96,9 +105,11 @@ async function ready(h, session) {
 describe('a device terminal is a real one', () => {
   test('a full-screen program runs, and the same program cannot run without a terminal', async () => {
     const h = harness();
+
     const session = h.sessions.open({
       session: 'pane-1', cols: 100, rows: 30, argv: ['bash', '-c', 'exec top'], env: shellEnv(), send: h.send,
     });
+
     expect(session.pid).toBeGreaterThan(0);
 
     // top's own header. It draws this only after asking the terminal for its
@@ -112,6 +123,7 @@ describe('a device terminal is a real one', () => {
     const withoutTerminal = Bun.spawnSync(['bash', '-c', 'exec top'], {
       env: shellEnv(), stdin: 'ignore', stdout: 'pipe', stderr: 'pipe',
     });
+
     expect(withoutTerminal.exitCode).toBe(1);
     expect(withoutTerminal.stderr.toString()).toContain('failed tty get');
   }, TEST_MS);
@@ -206,12 +218,14 @@ describe('a device terminal is a real one', () => {
     const gone = (candidate) => {
       try {
         process.kill(candidate, 0);
+
         return false;
       } catch (err) {
         if (err && err.code === 'ESRCH') return true;
         throw err;
       }
     };
+
     await until(() => gone(pid), 'the shell is gone');
     await until(() => gone(descendant), 'the background job is gone');
   }, TEST_MS);
@@ -243,9 +257,11 @@ describe('the session registry answers for what it holds', () => {
 
   test('a window outside what the kernel carries is a malformed frame', () => {
     const h = harness();
+
     const open = (cols, rows) => () => h.sessions.open({
       session: 'pane-bad', cols, rows, argv: shellArgv(), env: shellEnv(), send: h.send,
     });
+
     expect(open(0, 24)).toThrow('width must be a whole number from 1 to 1000');
     expect(open(80, 0)).toThrow('height must be a whole number from 1 to 1000');
     expect(open(MAX_AXIS + 1, 24)).toThrow('width must be a whole number');
@@ -315,12 +331,15 @@ describe('the terminal is asked for the way that gives it signals', () => {
   // one names the reason, so a reader knows why the shape matters.
   test('the spawn creates the terminal, rather than receiving one', () => {
     const asked = [];
+
     const sessions = createSessions({
       spawn(argv, options) {
         asked.push({ argv, options });
+
         return { pid: 4242, terminal: { write() {}, resize() {}, close() {} }, exited: new Promise(() => {}), kill() {} };
       },
     });
+
     sessions.open({ session: 'pane-shape', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: () => true });
     const { terminal } = asked[0].options;
     expect(terminal).not.toBeInstanceOf(Bun.Terminal);
@@ -334,6 +353,7 @@ describe('the terminal is asked for the way that gives it signals', () => {
     const sessions = createSessions({
       spawn: () => ({ pid: 4242, exited: new Promise(() => {}), kill() {} }),
     });
+
     expect(() => sessions.open({
       session: 'pane-none', cols: 80, rows: 24, argv: shellArgv(), env: shellEnv(), send: () => true,
     })).toThrow('spawned no terminal');

@@ -16,8 +16,11 @@ import { listModelsDevProviderModels } from './models-dev';
 import { countAnthropicInputTokens } from './anthropic-count';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
+
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
+
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
+
 /** The small tier the evolution engine's mechanical calls run on. */
 export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
@@ -52,7 +55,9 @@ export function createAnthropicProvider(): ModelProvider {
         credKey: ANTHROPIC_CRED_KEY,
         missingCredentialError: 'Anthropic API key not configured',
       });
+
       const provider = createAnthropic({ apiKey: 'placeholder', fetch: customFetch });
+
       return provider.languageModel(modelId);
     },
     countInputTokens(modelId, deps: ProviderDeps, request: CountableRequest): Promise<InputTokenCount> {

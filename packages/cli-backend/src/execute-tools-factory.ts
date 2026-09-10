@@ -53,15 +53,20 @@ export interface NodeExecuteToolFactoryDeps {
 const FIXED_NAMESPACES: readonly string[] = [
   'workspace', CRAFTED_TOOL_NAMESPACE, 'console', 'require',
 ];
+
 const machineRequire = createRequire(import.meta.url);
+
 const abortOptionsSchema = v.object({ abortSignal: v.optional(v.instance(AbortSignal)) });
 
 type CodemodeExecute = CodemodeProvider['tools'][string]['execute'];
+
 type CraftedExecute = CraftedToolSet[string]['execute'];
+
 interface ExecuteSuccess {
   result: JsonValue;
   logs?: string[];
 }
+
 /**
  * Build the CLI's `execute_tools` builder. Pass as `executeTools` to
  * `buildActorTools`, or call it with a finished confined surface (heads).
@@ -72,10 +77,12 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
       ...surface.providers.map(adaptExecutorProvider),
       ...(deps.extraProviders ?? []),
     ];
+
     // Native tools dispatch to the finished surface; the crafted set is read
     // per call below, and a crafted name shadows a native one the way the CF
     // prelude's own definitions do.
     const nativeBindings = nativeToolFunctions(surface.native);
+
     const toolsDeclaration = renderToolsDeclaration(
       surface.native,
       Object.entries(surface.craftedTools()).map(([name, entry]) => ({ name, description: entry.description })),
@@ -113,33 +120,43 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         // output produced before a throw.
         const logs: string[] = [];
         const pendingCalls: Promise<void>[] = [];
+
         const capture: Console['log'] = (...values) => {
           logs.push(values.map((value) => formatLogArg({ value })).join(' '));
         };
+
         const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
+
         try {
           const signal = readAbortSignal({ options });
           const context = signal ? { signal } : undefined;
           const toolBindings: Record<string, CodemodeExecute | CraftedExecute> = {};
+
           for (const [name, entry] of Object.entries(nativeBindings)) {
             toolBindings[name] = (...toolArgs: unknown[]) => containRejection(() => entry.execute(...toolArgs), pendingCalls);
           }
+
           // Resolved here, not at construction: the CraftStore is read for
           // THIS call, so a tool the model crafted a step ago is callable now.
           for (const [name, entry] of Object.entries(surface.craftedTools())) {
             toolBindings[name] = (arg: JsonValue) => containRejection(() => entry.execute(arg), pendingCalls);
           }
+
           const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
+
           for (const p of providers) {
             const nsp: Record<string, CodemodeExecute> = {};
+
             for (const [toolName, t] of Object.entries(p.tools)) {
               nsp[toolName] = (...toolArgs) => containRejection(
                 () => t.execute(...toolArgs, context),
                 pendingCalls,
               );
             }
+
             providerBindings[p.name] = nsp;
           }
+
           // The `workspace` namespace comes from the execution router's inline
           // executor, always registered by createCLIRuntime.
           const workspace = providerBindings['workspace'] ?? {};
@@ -150,6 +167,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           // duplicate one of them (a `new Function` duplicate-parameter crash).
           const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
           const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
+
           const argValues: object[] = [
             workspace, toolBindings, sandboxConsole, machineRequire,
             ...extraNamespaces.map(n => providerBindings[n]),
@@ -160,13 +178,17 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
             ...argNames,
             `return (\n${normalizeCode(args.code)}\n)()`,
           );
+
           const rawResult = await fn(...argValues);
+
           const payload: ExecuteSuccess = {
             result: rawResult === undefined
               ? '(no return value)'
               : decodeJsonValue({ value: rawResult }),
           };
+
           if (logs.length > 0) payload.logs = logs;
+
           return payload;
         } catch (error) {
           // A bare `run(...)` etc. inside the model's code throws a plain V8
@@ -187,15 +209,18 @@ function adaptExecutorProvider(
   provider: Pick<ExecutorProvider, 'name' | 'tools' | 'types' | 'positionalArgs'>,
 ): CodemodeProvider {
   const tools: CodemodeProvider['tools'] = {};
+
   for (const [name, tool] of Object.entries(provider.tools)) {
     tools[name] = {
       description: tool.description,
       execute: async (...args) => {
         const result = await tool.execute(...args);
+
         return result === undefined ? undefined : decodeJsonValue({ value: result });
       },
     };
   }
+
   return {
     name: provider.name,
     tools,
@@ -222,11 +247,13 @@ function adaptExecutorProvider(
  */
 function containRejection<T>(run: () => Promise<T>, pendingCalls: Promise<void>[]): Promise<T> {
   let call: Promise<T>;
+
   try {
     call = run();
   } catch (cause) {
     call = Promise.reject(cause);
   }
+
   pendingCalls.push((async () => {
     try {
       await call;
@@ -237,6 +264,7 @@ function containRejection<T>(run: () => Promise<T>, pendingCalls: Promise<void>[
       );
     }
   })());
+
   return call;
 }
 
@@ -245,7 +273,9 @@ function containRejection<T>(run: () => Promise<T>, pendingCalls: Promise<void>[
  *  object it printed, not "[object Object]"). */
 function formatLogArg(input: { value: unknown }): string {
   const text = v.safeParse(v.string(), input.value);
+
   if (text.success) return text.output;
+
   try { return JSON.stringify(input.value) ?? String(input.value); }
   catch (error) {
     // Clamp precedent: String() on a cyclic value is "[object Object]" — nothing carried — so the reason takes its place.
@@ -255,5 +285,6 @@ function formatLogArg(input: { value: unknown }): string {
 
 function readAbortSignal(input: { options: unknown }): AbortSignal | undefined {
   const parsed = v.safeParse(abortOptionsSchema, input.options);
+
   return parsed.success ? parsed.output.abortSignal : undefined;
 }

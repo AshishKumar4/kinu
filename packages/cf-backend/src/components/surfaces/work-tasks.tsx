@@ -37,6 +37,7 @@ export function isClosedTree(task: AgentTaskTree): boolean {
 function TaskRow({ task, depth }: { task: AgentTask; depth: number }) {
   const meta = STATUS_META[task.status];
   const Icon = meta.icon;
+
   return (
     <div
       className={`flex items-start gap-2 py-1 ${depth > 0 ? "ml-4 pl-3 border-l p-border" : ""}`}
@@ -77,6 +78,7 @@ export function PlanProgress({ tasks }: { tasks: AgentTaskTree[] }) {
   // of the denominator entirely — counting it would report a plan as bigger
   // than the agent ever committed to.
   const counted = rows.filter((task) => task.status !== "dropped").length;
+
   return (
     <div className="flex items-center gap-2">
       <span className="text-xs p-text-2 font-medium">{remaining.length} of {counted} still to do</span>

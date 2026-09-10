@@ -27,6 +27,8 @@ import { makeSql } from '../src/runtime';
 export function leaseHolder(db: Database): DriverLeaseHolder | null {
   const rows = makeSql(db)<{ pid: number; kind: DriverKind }>`
     SELECT pid, kind FROM driver_lease WHERE id = 'local'`;
+
   const row = rows[0];
+
   return row ? { pid: Number(row.pid), kind: row.kind } : null;
 }

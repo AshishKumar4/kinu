@@ -50,6 +50,7 @@ import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow 
 
 /** Live surface: a turn in flight re-measures every step. */
 const STREAMING_POLL_MS = 1500;
+
 const IDLE_POLL_MS = 10_000;
 
 /** Planes read as one brass ramp rather than five hues — this is one quantity
@@ -60,9 +61,11 @@ const PLANE_LABEL = {
   messages: "Conversation",
   ephemeral: "Live-state blocks",
 } satisfies Record<ContextPlane, string>;
+
 const PLANE_ALPHA = {
   system: 1, tools: 0.72, messages: 0.46, ephemeral: 0.26,
 } satisfies Record<ContextPlane, number>;
+
 const planeFill = (plane: ContextPlane): string =>
   `color-mix(in srgb, var(--c-accent) ${Math.round(PLANE_ALPHA[plane] * 100)}%, transparent)`;
 
@@ -146,6 +149,7 @@ function Warning({ children }: { children: React.ReactNode }) {
 
 function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
   const { latest, contextWindow } = snap;
+
   if (latest === null) {
     return (
       <section>
@@ -158,6 +162,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
   // Absent, not zero: `latest` is only non-null because the provider reported
   // SOMETHING, which need not have included a prompt-token count.
   const { input, cacheRead } = latest.usage;
+
   const windowShare = input !== undefined && contextWindow !== null && contextWindow > 0
     ? input / contextWindow
     : null;
@@ -205,6 +210,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
 function Meter({ value }: { value: number }) {
   const pct = Math.min(Math.max(value, 0), 1) * 100;
   const tone = value >= 0.9 ? "var(--c-danger)" : value >= 0.7 ? "var(--c-warning)" : "var(--c-accent)";
+
   return (
     <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--c-neutral-tint)" }}>
       <div className="h-full rounded-full" style={{ width: `${pct}%`, background: tone }} />
@@ -318,6 +324,7 @@ function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredCh
 function CostBlock({ snap }: { snap: ActivitySnapshot }) {
   const { telemetry, spend } = snap;
   const priced = telemetry.pricedSteps > 0;
+
   return (
     <section>
       <BlockHeader
@@ -402,6 +409,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
   const measuredTokens = usageTotal(total.usage);
   const neurons = total.usage.neurons !== undefined;
   const caveat = spendCaveat(spend);
+
   return (
     <div className="mt-3 pt-2.5 border-t p-border">
       <div className="flex items-baseline gap-2 mb-2">
@@ -591,6 +599,7 @@ function WorkspaceSpendBlock({ spend }: { spend: WorkspaceSpend }) {
 function spendCaveat(spend: WorkspaceSpend): string | null {
   const { total, coverage } = spend;
   const clauses: string[] = [];
+
   // Passive, so one producer and four read the same. `Judges measured nothing`
   // and `Judges, MCTS rollouts measured nothing` cannot both be grammatical with
   // a pronoun in the clause, and a list this short is not worth an Oxford comma
@@ -598,12 +607,15 @@ function spendCaveat(spend: WorkspaceSpend): string | null {
   if (coverage.silent.length > 0) {
     clauses.push(`nothing at all was measured from ${sourceList(coverage.silent)}`);
   }
+
   if (coverage.partial.length > 0) {
     clauses.push(`only some calls from ${sourceList(coverage.partial)} were measured`);
   }
+
   if (total.unpricedCalls > 0) {
     clauses.push(`${total.unpricedCalls} measured call${total.unpricedCalls === 1 ? "" : "s"} carried no models.dev rate`);
   }
+
   // Priced, and priced short: the catalog publishes ONE cache-write rate and
   // these calls used the longer retention tier, which costs more. Named beside
   // the missing-rate clause because both bound the same dollar figure, and a
@@ -611,6 +623,7 @@ function spendCaveat(spend: WorkspaceSpend): string | null {
   if (total.floorPricedCalls > 0) {
     clauses.push(`${total.floorPricedCalls} priced call${total.floorPricedCalls === 1 ? "" : "s"} wrote cache at a retention tier the catalog does not rate`);
   }
+
   return clauses.length === 0 ? null : clauses.join("; ");
 }
 
@@ -640,6 +653,7 @@ function SpendCells(
 ) {
   const tokens = usageTotal(row.usage);
   const unpriced = usdNote(row);
+
   return (
     <>
       <td className="py-1 text-right w-20">
@@ -701,6 +715,7 @@ function countNote(
       ? `The provider reported no usage for these ${row.calls} calls.`
       : missing;
   }
+
   return row.callsWithoutUsage === 0
     ? undefined
     : `${row.callsWithoutUsage} of ${row.calls} calls reported no usage, so this count is a floor.`;
@@ -711,11 +726,16 @@ function countNote(
  *  named; an absent figure is unpriced, never free. */
 function usdNote(row: Omit<ProducerSpend, "source">): string | undefined {
   const gaps: string[] = [];
+
   if (row.unpricedCalls > 0) gaps.push(`${row.unpricedCalls} carried no models.dev rate`);
+
   if (row.floorPricedCalls > 0) gaps.push(`${row.floorPricedCalls} wrote cache at an unrated retention tier`);
+
   if (row.callsWithoutUsage > 0) gaps.push(`${row.callsWithoutUsage} reported no usage to price`);
+
   if (gaps.length === 0) return undefined;
   const missing = `Of ${row.calls} calls, ${gaps.join(" and ")}.`;
+
   return row.usd === undefined ? `${missing} Unpriced.` : `${missing} This figure is a floor.`;
 }
 
@@ -737,6 +757,7 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
   const { cacheHit } = snap.telemetry;
+
   return (
     <section>
       <BlockHeader
@@ -793,10 +814,12 @@ export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
   // Walked backwards rather than reversed into a copy: the display order is
   // newest-first, and the node list React needs is the only array built.
   const rows: React.ReactNode[] = [];
+
   for (let i = log.length - 1; i >= 0; i -= 1) {
     const row = log[i]!;
     rows.push(<LogRow key={`${String(row.createdAt)}:${String(i)}`} row={row} />);
   }
+
   return (
     <section>
       <BlockHeader
@@ -820,6 +843,7 @@ export function LogBlock({ log }: { log: readonly ActivityLogEntry[] }) {
 
 function LogRow({ row }: { row: ActivityLogEntry }) {
   const outsideTurn = row.elapsedMs === 0;
+
   return (
     <li className="flex items-baseline gap-2 px-2 py-1 border-b p-border last:border-0">
       <Num className="text-[10px] p-text-3 shrink-0">

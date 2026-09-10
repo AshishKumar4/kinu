@@ -6,6 +6,7 @@ export {
   type BackgroundJobStatus,
   type JobClaim,
 } from './store';
+
 export {
   withBackgroundThreshold,
   withSpawnDetach,
@@ -25,6 +26,7 @@ export {
   type InvocationSurface,
   type ThresholdDeps,
 } from './threshold';
+
 export {
   BackgroundJobRunner,
   BACKGROUND_FIBER_PREFIX,
@@ -35,8 +37,11 @@ export {
   type BackgroundJobRunnerDeps,
   type JobResumer,
 } from './runner';
+
 export { AgentWakeQueue } from './wake-queue';
+
 export { DeviceRequestOwnership, type DeviceRequestChannel } from './device-ownership';
+
 export {
   wrapToolsForBackground,
   CONFINED_BACKGROUNDABLE_TOOLS,

@@ -17,8 +17,11 @@ import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
+
 const CI_TOKEN = `pta_${USER_ID}_${'c'.repeat(44)}`;
+
 const CredentialListSchema = v.array(v.object({ key: v.string(), kind: v.string() }));
 
 interface TestNamespace<Stub> {
@@ -35,6 +38,7 @@ interface CredentialRouteTestBindings<Stub, AgentStub> {
 function testEnv<Stub, AgentStub>(bindings: CredentialRouteTestBindings<Stub, AgentStub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: CLI credential handlers read exactly the constructed UserDO
   // namespace and credential key; every reachable binding is present.
   return env as Env;
@@ -42,6 +46,7 @@ function testEnv<Stub, AgentStub>(bindings: CredentialRouteTestBindings<Stub, Ag
 
 function handled(response: Response | null): Response {
   if (!response) throw new Error('credential route did not handle the request');
+
   return response;
 }
 
@@ -49,6 +54,7 @@ function setupEnv() {
   const stored = new Map<string, { kind: string; value: { kind?: string } }>();
   /** Workspaces told to drop their cached provider state, in fan-out order. */
   const notified: string[] = [];
+
   const userDO = {
     async listActiveWorkspaces(_caller: UserCaller) {
       return [{ name: 'jarvis', displayName: 'Jarvis', createdAt: 1 }];
@@ -62,6 +68,7 @@ function setupEnv() {
     },
     async verifyAccessToken(_caller: UserCaller, token: string) {
       if (token !== CI_TOKEN) return { ok: false, error: 'invalid token' };
+
       return {
         ok: true,
         tokenHash: 'ci-hash',
@@ -78,16 +85,22 @@ function setupEnv() {
     },
     async deleteCredential(_caller: UserCaller, key: string) { stored.delete(key); },
   };
+
   const env = testEnv({
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
     OrchestratorAgent: {
       idFromName: (n: string) => n,
       get: (name: string) => ({
-        async onCredentialsChanged() { notified.push(name); return { ok: true as const }; },
+        async onCredentialsChanged() {
+          notified.push(name);
+
+          return { ok: true as const };
+        },
       }),
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+
   // The request's own ExecutionContext owns the fan-out, so the suite holds the
   // promises it hands over and joins them where the assertion is.
   const pending: Promise<unknown>[] = [];
@@ -96,11 +109,13 @@ function setupEnv() {
   // SAFETY: the credential fan-out reads exactly the `waitUntil` constructed
   // above; no other ExecutionContext member is reachable from these routes.
   const ctx = partialCtx as ExecutionContext;
+
   return { env, stored, ctx, notified, settled: () => Promise.all(pending) };
 }
 
 function credentialRequest(opts: { token?: string; key?: string; method?: string; body?: JsonValue }) {
   const path = opts.key ? `/api/cli/credentials/${encodeURIComponent(opts.key)}` : '/api/cli/credentials';
+
   const init: RequestInit = {
     method: opts.method ?? 'GET',
     headers: {
@@ -108,13 +123,16 @@ function credentialRequest(opts: { token?: string; key?: string; method?: string
       'content-type': 'application/json',
     },
   };
+
   if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+
   return new Request(`https://kinu.example.com${path}`, init);
 }
 
 describe('CLI provider credentials', () => {
   test('a session token can store a key in the account, and every live workspace hears about it', async () => {
     const { env, stored, ctx, notified, settled } = setupEnv();
+
     const res = await handleCliRequest(credentialRequest({
       key: 'openrouter.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-or-real' },
     }), env, ctx);
@@ -131,6 +149,7 @@ describe('CLI provider credentials', () => {
 
   test('a CI access token cannot — writing a provider key is interactive-only', async () => {
     const { env, stored, ctx, notified, settled } = setupEnv();
+
     const res = await handleCliRequest(credentialRequest({
       token: CI_TOKEN, key: 'openrouter.bearer', method: 'POST', body: { kind: 'bearer', token: 'sk-or-real' },
     }), env, ctx);
@@ -172,6 +191,7 @@ describe('CLI provider credentials', () => {
 
   test("a key the store refuses reports the store's own reason, and notifies nobody", async () => {
     const { env, ctx, notified, settled } = setupEnv();
+
     const res = await handleCliRequest(credentialRequest({
       key: 'cloudflare.ai-gateway', method: 'POST', body: { kind: 'bearer', token: 'x' },
     }), env, ctx);

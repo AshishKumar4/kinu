@@ -3,12 +3,17 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
+
 const hook = source('src/hooks/use-kinu.ts');
+
 const page = source('src/pages/WorkspacePage.tsx');
+
 // The composer is one shared component: the mode control and the
 // Steer-as-Branch gate live in it, not in WorkspacePage.
 const composer = source('src/components/Composer.tsx');
+
 const review = source('src/components/surfaces/PlanReviewView.tsx');
+
 const css = source('src/index.css');
 
 describe('Plan mode browser contract', () => {
@@ -72,9 +77,11 @@ describe('Plan mode browser contract', () => {
   test('the patched document viewer excludes diagram engines from Kinu', () => {
     const viewer = readFileSync(join(import.meta.dir, '../../../node_modules/@plannotator/ui/components/Viewer.tsx'), 'utf8');
     const patch = readFileSync(join(import.meta.dir, '../../../patches/@plannotator%2Fui@0.30.0.patch'), 'utf8');
+
     for (const feature of ['Tater', 'Attachments', 'QuickLabel', 'Pinpoint', 'Vim', 'Graphviz', 'Mermaid']) {
       expect(viewer).not.toContain(feature);
     }
+
     expect(viewer).toContain('applyAnnotations(eligible)');
     expect(viewer).toContain('computeListIndices(blocks)');
     expect(viewer).toContain("split(/(?<!\\\\)\\|/)");

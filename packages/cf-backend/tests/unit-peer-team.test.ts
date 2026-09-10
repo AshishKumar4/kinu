@@ -56,6 +56,7 @@ const PeerAgentPayloadSchema: v.GenericSchema<PeerAgentPayload> = v.object({
 });
 
 const RejectionErrorSchema = v.instance(Error);
+
 const PeerOutboxRowSchema = v.object({
   id: v.string(),
   message: v.string(),
@@ -65,6 +66,7 @@ const PeerOutboxRowSchema = v.object({
   next_attempt_at: v.number(),
   last_error: v.nullable(v.string()),
 });
+
 const QueuedPeerMessageSchema = v.object({ receiver_agent_name: v.string() });
 
 function makeNetwork() {
@@ -80,6 +82,7 @@ function makeNetwork() {
     const replyChannels = new ReplyChannelStore(sql, actor, dispatchers);
     const { vfs, files } = createMemoryVfs();
     let agent: TestAgent | null = null;
+
     const hub = new PeerHub({
       sql, log, replyChannels,
       vfs: () => vfs,
@@ -87,12 +90,15 @@ function makeNetwork() {
       selfUserId: () => userId,
       deliver: async (receiverName: string, msg: PeerMessage): Promise<ReceiveResult> => {
         const peer = network.get(receiverName);
+
         if (!peer || !peer.online) throw new Error(`receiver DO unreachable: ${receiverName}`);
+
         return peer.hub.receive(msg);
       },
       isSameOwner: async (uid) => uid === userId,
       hasGrant: async (senderAgent, senderUserId) => {
         if (!agent) throw new Error('agent network fixture not initialized');
+
         return agent.grants.has(`${senderUserId}:${senderAgent}`);
       },
       scheduleDispatch: async (at) => {
@@ -105,9 +111,11 @@ function makeNetwork() {
       },
       now: () => {
         if (!agent) throw new Error('agent network fixture not initialized');
+
         return agent.clock ?? Date.now();
       },
     });
+
     agent = {
       name, userId, sql, log, replyChannels, files, hub,
       wakes: 0, retries: [], grants: new Set(), online: true, clock: null,
@@ -116,6 +124,7 @@ function makeNetwork() {
     // (exactly how the orchestrator registers it, lazily bound).
     dispatchers.peer_back = { dispatch: (ch, p) => agent.hub.dispatchPeerBack(ch, p) };
     network.set(name, agent);
+
     return agent;
   }
 
@@ -128,6 +137,7 @@ function pendingPeerEvents(agent: TestAgent): KinuEvent[] {
 
 function peerPayload(event: KinuEvent): PeerAgentPayload {
   if (event.variant !== 'peer_agent') throw new Error(`expected peer event ${event.id}`);
+
   return v.parse(PeerAgentPayloadSchema, event.payload);
 }
 
@@ -147,6 +157,7 @@ async function until(fact: () => boolean, what: string): Promise<void> {
     if (fact()) return;
     await Promise.resolve();
   }
+
   throw new Error(`${what} did not happen within 100 microtask turns`);
 }
 
@@ -190,6 +201,7 @@ describe('send-and-await (ask) round-trip', () => {
       agent: 'bob', userId: bob.userId, topic: 'research',
       message: 'What changed upstream?',
     });
+
     await until(() => pendingPeerEvents(bob).length === 1, 'the ask delivery');
 
     // Bob was woken; his drained turn carries the mechanical reply route.
@@ -236,9 +248,11 @@ describe('trust-grant enforcement (cross-owner)', () => {
     const { addAgent } = makeNetwork();
     const alice = addAgent('alice', userA);
     const mallory = addAgent('mallory', userB);
+
     const result = await mallory.hub.ask({ mode: 'build',
       agent: 'alice', userId: userA, topic: 'probe', message: 'let me in',
     });
+
     expect(result).toEqual({ status: 'rejected', reason: 'no grant from receiver for cross-owner sender' });
     expect(pendingPeerEvents(alice)).toHaveLength(0);
     expect(alice.wakes).toBe(0);
@@ -254,6 +268,7 @@ describe('trust-grant enforcement (cross-owner)', () => {
     const askPromise = carol.hub.ask({ mode: 'build',
       agent: 'alice', userId: userA, topic: 'question', message: 'What is your uptime?',
     });
+
     await until(() => pendingPeerEvents(alice).length === 1, 'the cross-owner ask delivery');
     const events = pendingPeerEvents(alice);
     expect(events).toHaveLength(1);
@@ -278,6 +293,7 @@ describe('trust-grant enforcement (cross-owner)', () => {
       topic: 'peer_reply',
       body: { in_reply_to: 'no-such-ask', content: 'gotcha' },
     });
+
     expect(result).toEqual({ admitted: false, reason: 'no grant from receiver for cross-owner sender' });
     expect(pendingPeerEvents(alice)).toHaveLength(0);
   });
@@ -310,21 +326,26 @@ describe('timer-less ask waiter + cancellation', () => {
       agent: 'bob', userId: bob.userId, topic: 'slow', message: 'take your time',
       signal: abort.signal,
     });
+
     let settled = false;
+
     const settledPending = pending.finally(() => {
       settled = true;
     });
+
     await until(() => pendingPeerEvents(bob).length === 1, 'the pending ask delivery');
     expect(settled).toBe(false);
 
     abort.abort(new Error('cancelled by user'));
     let cancellation: Error | null = null;
+
     try {
       await settledPending;
     } catch (cause) {
       const parsed = v.safeParse(RejectionErrorSchema, cause);
       cancellation = parsed.success ? parsed.output : new Error(String(cause));
     }
+
     expect(cancellation?.message).toBe('cancelled by user');
 
     const events = pendingPeerEvents(bob);
@@ -357,6 +378,7 @@ describe('redelivery dedupe (crash between deliver and mark)', () => {
 
     expect(pendingPeerEvents(bob)).toHaveLength(1);          // deduped
     const redelivered = pendingPeerEvents(bob)[0];
+
     if (!redelivered) throw new Error('expected redelivered peer event');
     expect(peerPayload(redelivered).kinu_mode).toBe('plan');
     expect(outboxRows(alice)[0].state).toBe('sent');    // settled again
@@ -450,6 +472,7 @@ describe('per-receiver ordering + retry backoff', () => {
     alice.clock = 0;
 
     await alice.hub.send({ mode: 'build', agent: 'bob', userId: bob.userId, topic: 'ping', message: 'anyone?' });
+
     for (let sweep = 1; sweep < 10; sweep++) {
       await alice.hub.dispatchOutbox(sweep * 1_000_000);
     }
@@ -470,10 +493,12 @@ describe('spawn a specialist (fresh peer joins mid-flight)', () => {
     // The orchestrator's spawn action: create the agent (registry +
     // claimOwner — here: joins the network under the same owner), then ask.
     const specialist = addAgent('paper-summarizer', alice.userId);
+
     const askPromise = alice.hub.ask({ mode: 'build',
       agent: specialist.name, userId: alice.userId, topic: 'task',
       message: 'Summarize the three latest papers',
     });
+
     await until(() => pendingPeerEvents(specialist).length === 1, 'the specialist ask delivery');
 
     const events = pendingPeerEvents(specialist);
@@ -510,6 +535,7 @@ describe('oversize peer bodies stay reachable', () => {
     // …and the drained turn is told where to look.
     expect(renderForLLM(events[0]).brief).toEndWith(` — full message: ${path}`);
     const batch = buildDrainBatch(events);
+
     if (!batch) throw new Error('expected peer drain batch');
     expect(batch.text).toContain(path);
   });

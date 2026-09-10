@@ -27,11 +27,14 @@ import { execFileSync } from 'node:child_process';
  */
 export function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
+
   for (const [key, value] of Object.entries(process.env)) {
     if (!key.startsWith('GIT_')) env[key] = value;
   }
+
   env.GIT_CONFIG_GLOBAL = '/dev/null';
   env.GIT_CONFIG_SYSTEM = '/dev/null';
+
   return env;
 }
 

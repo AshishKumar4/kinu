@@ -9,17 +9,21 @@ export type {
   ReleaseSource,
   ReleaseSourceKind,
 } from './types';
+
 export { RELEASE_STATUSES } from './types';
+
 export {
   assertReleaseTransition,
   isEngineOwnedTransitionTarget,
 } from './lifecycle';
+
 export {
   approvalTypeForEnvironment,
   deployApprovalDigest,
   deployTargetAsCommand,
   type DeployApprovalBinding,
 } from './approval-digest';
+
 export {
   ReleaseEngine,
   parseDeployOutput,
@@ -33,7 +37,9 @@ export {
   type RollbackResult,
   type RunChecksResult,
 } from './engine';
+
 export { createSandboxReleaseExec } from './sandbox-exec';
+
 export {
   isSecretReleasePath,
   normalizeReleasePath,
@@ -43,6 +49,7 @@ export {
   assertGithubRepoUrl,
   type ReleasePathValidation,
 } from './path-safety';
+
 export {
   ReleaseStore,
   createReleaseStore,

@@ -42,6 +42,7 @@ export function initExperienceLibraryTables(sql: SqlExec): void {
       published_at     INTEGER NOT NULL,
       UNIQUE (source_workspace, kind, key)
     )`;
+
   sql.exec(`CREATE TABLE IF NOT EXISTS experience_library ${ddl}`);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_experience_library_published
               ON experience_library (published_at DESC)`);
@@ -107,11 +108,14 @@ const LibraryRowSchema = v.object({
   evidence: v.string(),
   published_at: v.number(),
 });
+
 type LibraryRow = v.InferOutput<typeof LibraryRowSchema>;
 
 function toEntry(row: LibraryRow): ExperienceEntry | null {
   const payload = parseExperiencePayload(row.payload_json);
+
   if (!payload || payload.kind !== row.kind) return null;
+
   return {
     id: row.id,
     kind: row.kind,
@@ -129,7 +133,9 @@ function toEntry(row: LibraryRow): ExperienceEntry | null {
  *  ranks rather than requires. */
 function ftsQuery(query: string): string | null {
   const terms = query.split(/[^\p{L}\p{N}_]+/u).filter((t) => t.length > 0);
+
   if (terms.length === 0) return null;
+
   return terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
 }
 
@@ -158,13 +164,17 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
         JSON.stringify(candidate.payload), candidate.evidence,
         experienceSearchText(candidate), publishedAt,
       );
+
       const stored = rows(
         `SELECT * FROM experience_library
           WHERE source_workspace = ? AND kind = ? AND key = ? LIMIT 1`,
         sourceWorkspace, candidate.kind, candidate.key,
       )[0];
+
       const entry = stored ? toEntry(stored) : null;
+
       if (!entry) throw new Error('experience entry did not survive publication');
+
       return entry;
     },
 
@@ -178,6 +188,7 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
       // the filtered and unfiltered cases without string-built SQL.
       const kind = options.kind ?? '';
       const exclude = options.excludeWorkspace ?? '';
+
       const found = match
         ? rows(
             `SELECT e.* FROM experience_library e
@@ -194,11 +205,13 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
               ORDER BY published_at DESC LIMIT ?`,
             kind, kind, exclude, limit,
           );
+
       return found.map(toEntry).filter((e): e is ExperienceEntry => e !== null);
     },
 
     get(id) {
       const row = rows(`SELECT * FROM experience_library WHERE id = ? LIMIT 1`, id)[0];
+
       return row ? toEntry(row) : null;
     },
   };

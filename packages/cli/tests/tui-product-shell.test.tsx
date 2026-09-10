@@ -24,6 +24,7 @@ import {
 } from '../src/tui/tui-shell';
 
 const ROOT = canonicalProjectRoot();
+
 const FRAME_DIR = process.env.TUI_FRAME_DIR ?? '/tmp/grouped-tui-frames';
 
 /** Two virtual workspaces in this directory, one unplaced agent, and a cloud
@@ -54,7 +55,9 @@ function saveFrame(name: string, frame: string): void {
 
 
 let probeTextarea: TextareaRenderable | null = null;
+
 let probeSetNavigationOpen: ((open: boolean) => void) | null = null;
+
 let probeSetNavigationFocused: ((focused: boolean) => void) | null = null;
 
 function GroupedShellProbe(props: {
@@ -69,6 +72,7 @@ function GroupedShellProbe(props: {
   probeSetNavigationOpen = setNavigationOpen;
   probeSetNavigationFocused = setNavigationFocused;
   const textareaRef = useRef<TextareaRenderable | null>(null);
+
   const roster: TuiAgentRoster = {
     page: props.page,
     loading: false,
@@ -76,6 +80,7 @@ function GroupedShellProbe(props: {
     reload: async () => {},
     loadMore: props.loadMore ?? (async () => {}),
   };
+
   return (
     <TuiProductProvider runtime={{ preferenceStore: props.store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
       <TuiShell
@@ -122,6 +127,7 @@ async function mountProbe(options: {
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
   });
+
   const root = createRoot(testRenderer.renderer);
   const store = createMemoryTuiPreferenceStore();
   const activations: Array<{ name: string; mode: 'local' | 'cloud' }> = [];
@@ -135,6 +141,7 @@ async function mountProbe(options: {
     />,
   );
   await renderSettled(testRenderer.renderOnce);
+
   return {
     ...testRenderer,
     root,
@@ -157,6 +164,7 @@ describe('grouped workspace navigator', () => {
   test('wide layouts pin the grouped sidebar with peers, nesting, and a collapsed cloud section (desktop frames at 160 and 120)', async () => {
     for (const [width, label] of [[160, 'desktop-160'], [120, 'desktop-120']] as const) {
       const probe = await mountProbe({ width, page: pageOf(GROUPED_ITEMS) });
+
       try {
         const frame = probe.frame();
         saveFrame(`chat-${label}`, frame);
@@ -184,12 +192,16 @@ describe('grouped workspace navigator', () => {
         'page-2',
       ),
     });
+
     try {
       const frame = probe.frame();
       const lines = frame.split('\n');
+
       const at = (text: string) => {
         const index = lines.findIndex((line) => line.includes(text));
+
         if (index < 0) throw new Error(`No frame line containing ${text}`);
+
         return index;
       };
 
@@ -223,6 +235,7 @@ describe('grouped workspace navigator', () => {
       width: 160,
       page: pageOf([{ name: 'oldbot', label: 'oldbot', mode: 'local' }]),
     });
+
     try {
       const frame = probe.frame();
       expect(frame).toContain('Unplaced · 1');
@@ -236,6 +249,7 @@ describe('grouped workspace navigator', () => {
 
   test('keyboard walks the grouped overlay: Enter toggles headers and opens agents, duplicates stay apart, focus returns (80 columns)', async () => {
     const probe = await mountProbe({ width: 80, page: pageOf(GROUPED_ITEMS) });
+
     try {
       probeSetNavigationOpen?.(true);
       await probe.settle();
@@ -284,6 +298,7 @@ describe('grouped workspace navigator', () => {
 
       probeSetNavigationOpen?.(true);
       await probe.settle();
+
       for (let step = 0; step < 8; step += 1) probe.mockInput.pressArrow('up');
       probe.mockInput.pressEnter();
       await probe.settle();
@@ -312,18 +327,23 @@ describe('grouped workspace navigator', () => {
 
   test('mouse toggles headers, opens agents, and pages the roster (wide)', async () => {
     let loaded = 0;
+
     const probe = await mountProbe({
       width: 160,
       page: pageOf(GROUPED_ITEMS, 'page-2'),
       loadMore: async () => { loaded += 1; },
     });
+
     try {
       const lineAt = (text: string, occurrence = 0) => {
         const hits = probe.frame().split('\n')
           .map((line, index) => ({ line, index }))
           .filter(({ line }) => line.includes(text));
+
         const hit = hits[occurrence];
+
         if (hit === undefined) throw new Error(`No frame line ${occurrence} containing ${text}`);
+
         return hit.index;
       };
 
@@ -370,13 +390,16 @@ describe('grouped workspace navigator', () => {
       })),
       { name: 'jarvis', label: 'Jarvis', mode: 'cloud' as const },
     ];
+
     let loaded = 0;
+
     const probe = await mountProbe({
       width: 40,
       height: 14,
       page: { items: many, total: 40, nextCursor: 'page-2' },
       loadMore: async () => { loaded += 1; },
     });
+
     try {
       probeSetNavigationOpen?.(true);
       await probe.settle();
@@ -413,6 +436,7 @@ describe('grouped workspace navigator', () => {
       page: pageOf(GROUPED_ITEMS),
       currentAgent: { name: 'audit', mode: 'cloud' },
     });
+
     try {
       // The cloud section expanded on its own because the open agent lives there.
       expect(probe.frame()).toContain('Jarvis');
@@ -447,8 +471,10 @@ describe('adaptive TUI shell renderer', () => {
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
     const store = createMemoryTuiPreferenceStore();
+
     try {
       root.render(<ShellProbe store={store} />);
       await renderSettled(renderOnce);
@@ -502,9 +528,13 @@ describe('adaptive TUI shell renderer', () => {
     }
   });
 });
+
 let shellTextarea: TextareaRenderable | null = null;
+
 let shellScroll: ScrollBoxRenderable | null = null;
+
 let shellSetNavigationOpen: ((open: boolean) => void) | null = null;
+
 let shellScrollAnchor: ScrollAnchorController | null = null;
 
 function ShellProbe(props: {
@@ -516,6 +546,7 @@ function ShellProbe(props: {
   const textareaRef = useRef<TextareaRenderable | null>(null);
   const scrollRef = useRef<ScrollBoxRenderable | null>(null);
   shellScrollAnchor = usePreservedScrollAnchor(scrollRef);
+
   const roster: TuiAgentRoster = {
     page: {
       items: [
@@ -533,6 +564,7 @@ function ShellProbe(props: {
     reload: async () => {},
     loadMore: async () => {},
   };
+
   return (
     <TuiProductProvider runtime={{ preferenceStore: props.store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
       <TuiShell
@@ -589,6 +621,7 @@ let failingRoster: TuiAgentRoster | null = null;
 function RosterFailureProbe(props: { readonly store: TuiPreferenceStore; readonly source: TuiAgentSource }) {
   const roster = useAgentRoster(props.source);
   failingRoster = roster;
+
   return (
     <TuiProductProvider runtime={{ preferenceStore: props.store, terminalAppearance: 'dark', colorCapability: 'truecolor' }}>
       <TuiShell
@@ -610,9 +643,11 @@ async function mountRosterProbe(source: TuiAgentSource) {
     useThread: false,
     maxFps: Number.POSITIVE_INFINITY,
   });
+
   const root = createRoot(testRenderer.renderer);
   root.render(<RosterFailureProbe store={createMemoryTuiPreferenceStore()} source={source} />);
   await renderSettled(testRenderer.renderOnce);
+
   return {
     frame: () => testRenderer.captureCharFrame(),
     async settle() {
@@ -620,6 +655,7 @@ async function mountRosterProbe(source: TuiAgentSource) {
     },
     async clickLine(text: string) {
       const index = testRenderer.captureCharFrame().split('\n').findIndex((line) => line.includes(text));
+
       if (index < 0) throw new Error(`No frame line containing ${text}`);
       await testRenderer.mockMouse.click(4, index);
     },
@@ -638,15 +674,20 @@ const rosterItem = (name: string): TuiAgentSummary => ({
 describe('agent roster failure ownership', () => {
   test('a failed page shows the whole cause chain and keeps Load more retryable', async () => {
     let pageReads = 0;
+
     const source: TuiAgentSource = {
       load(cursor) {
         if (cursor === null) return { items: [rosterItem('alpha'), rosterItem('beta')], total: 4, nextCursor: 'p2' };
         pageReads += 1;
+
         if (pageReads === 1) throw new Error('page failed', { cause: new Error('boom') });
+
         return { items: [rosterItem('gamma'), rosterItem('delta')], total: 4, nextCursor: null };
       },
     };
+
     const probe = await mountRosterProbe(source);
+
     try {
       expect(probe.frame()).toContain('Load more');
       await probe.clickLine('Load more');
@@ -675,7 +716,9 @@ describe('agent roster failure ownership', () => {
         throw new Error('roster failed', { cause: new Error('locked') });
       },
     };
+
     const probe = await mountRosterProbe(source);
+
     try {
       expect(probe.frame()).toContain('roster failed: locked');
     } finally {
@@ -687,13 +730,17 @@ describe('agent roster failure ownership', () => {
     const recorder = createRecordingLogger();
     const restore = setDiagnosticsSink(recorder);
     const pending = Promise.withResolvers<TuiAgentPage>();
+
     const source: TuiAgentSource = {
       load(cursor) {
         if (cursor === null) return { items: [rosterItem('alpha')], total: 2, nextCursor: 'p2' };
+
         return pending.promise;
       },
     };
+
     const probe = await mountRosterProbe(source);
+
     try {
       await probe.clickLine('Load more');
       await probe.settle();

@@ -15,9 +15,11 @@ const PACKAGES = join(import.meta.dir, '..', '..');
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
     const path = join(dir, entry);
+
     if (statSync(path).isDirectory()) sourceFiles(path, out);
     else if (path.endsWith('.ts') || path.endsWith('.tsx')) out.push(path);
   }
+
   return out;
 }
 
@@ -43,6 +45,7 @@ describe('BackendHost contract', () => {
       .flatMap((pkg) => sourceFiles(join(PACKAGES, pkg, 'src')))
       .map((f) => readFileSync(f, 'utf8'))
       .join('\n');
+
     const unreachable = members.filter((m) => !new RegExp(`host\\.${m}\\b`).test(consumers));
     expect(unreachable).toEqual([]);
   });
