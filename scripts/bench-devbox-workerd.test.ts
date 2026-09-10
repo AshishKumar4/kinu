@@ -6,7 +6,9 @@ import * as v from 'valibot';
 import { fixtureConfigForArms, resourceNames } from './bench-devbox-strategies';
 
 const ROOT = dirname(import.meta.dir);
+
 const ARM = 'snapshot-chain';
+
 const CLASSES = ['SnapshotChainBox', 'BenchOpCounter'];
 
 const GeneratedConfig = v.looseObject({
@@ -24,13 +26,16 @@ const GeneratedConfig = v.looseObject({
 describe('bench fixture Durable Object bindings', () => {
   test('captures one arm\'s generated config before disposal', () => {
     const directory = mkdtempSync(join(tmpdir(), 'kinu-devbox-workerd-'));
+
     try {
       const configPath = join(directory, 'wrangler.jsonc');
+
       const captured = fixtureConfigForArms(
         readFileSync(join(ROOT, 'packages/devbox/bench/wrangler.jsonc'), 'utf8'),
         resourceNames('workerd-binding-probe', ARM),
         [ARM],
       );
+
       writeFileSync(configPath, captured);
       expect(readFileSync(configPath, 'utf8')).toBe(captured);
 

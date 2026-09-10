@@ -44,6 +44,7 @@ import {
 } from './first-run';
 
 const SUITE = 'First-run · two-machines';
+
 const CASE = 'two-machines' as const;
 
 /**
@@ -54,10 +55,13 @@ const CASE = 'two-machines' as const;
  * substring check pass on the wrong machine.
  */
 const ALPHA = 'kinu-first-run-alpha';
+
 const BETA = 'kinu-first-run-beta';
 
 const PLAN = firstRunCasePlan(SUITE, CASE);
+
 const liveTest = test.skipIf(PLAN === null);
+
 const observations: EvalObservation[] = [];
 
 afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observations); });
@@ -65,12 +69,15 @@ afterAll(() => { publishFirstRunRecord(SUITE, PLAN?.llm.model, [CASE], observati
 describe(SUITE, () => {
   liveTest(`MEASURED: ${CASE}`, async () => {
     if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
+
     const account: DeviceAccount = {
       origin: PLAN.origin,
       cliToken: workerSession(PLAN.llm).token,
       identity: PLAN.identity,
     };
+
     const attached: AttachedMachine[] = [];
+
     try {
       await runFirstRunCase(PLAN, {
         id: CASE,
@@ -85,6 +92,7 @@ describe(SUITE, () => {
             const machine = await attachMachine({
               account, name, home: scratchDir(`first-run-${name}`),
             });
+
             attached.push(machine);
             // Named: with two live the fleet refuses an unnamed call with the
             // ask and raises no card, so the second grant can never mint one
@@ -92,7 +100,9 @@ describe(SUITE, () => {
             // fleet"). The name is what the owner would tap.
             await grantDeviceConsent(account, machine.deviceId, session.workspace, name);
           }
+
           const [alpha, beta] = attached;
+
           if (alpha === undefined || beta === undefined) {
             throw new Error('both machines must attach before this case can ask either of them '
               + 'anything');
@@ -111,6 +121,7 @@ describe(SUITE, () => {
             + 'Do not run it on more than one machine: if my words do not settle which one, '
             + 'ask me which one.',
           );
+
           const unnamedReply = await lastAnswer(session, unnamed.text);
           // The ask the executor is required to raise, by its own words
           // (`deviceFleetAsk`): both machines named, so the person or the model
@@ -128,6 +139,7 @@ describe(SUITE, () => {
             `Run the command hostname on my machine called ${ALPHA}, and reply with exactly what `
             + 'it printed and nothing else.',
           );
+
           const namedReply = await lastAnswer(session, named.text);
           const alphaLog = alpha.execLog();
           const betaLog = beta.execLog();
@@ -176,6 +188,7 @@ describe(SUITE, () => {
       // is a real machine a workspace can still reach.
       for (const machine of attached) {
         const left = await detachMachine(account, machine);
+
         if (left !== null) console.warn(`    [first-run] ${CASE} teardown: ${left}`);
       }
     }
@@ -190,6 +203,7 @@ async function lastAnswer(
   streamed: string,
 ): Promise<string> {
   const history = await session.history();
+
   return history.filter((row) => row.role === 'assistant').at(-1)?.text ?? streamed;
 }
 

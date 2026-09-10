@@ -161,6 +161,7 @@ describe('corpusStats counts what fired and what did not', () => {
     turn({ id: 'b/s/0', project: 'b', followup: 'and then add the index' }),
     turn({ id: 'b/s/1', project: 'b', signals: { interrupted: true }, followup: 'continue' }),
   ];
+
   const stats = corpusStats(turns, turns.map(weakLabel));
 
   test('labeled, abstained and conflicted are three distinct findings', () => {
@@ -201,6 +202,7 @@ describe('runCorpusEval scores raters against the rules', () => {
   test('a rater that agrees on every turn scores κ = 1', async () => {
     const labels = scoredTurns.map(weakLabel);
     const answers = labels.map((label) => `{"outcome":"${label.label}","confidence":0.9,"evidence":"x"}`);
+
     const report = await runCorpusEval({
       turns: scoredTurns,
       labels,
@@ -219,6 +221,7 @@ describe('runCorpusEval scores raters against the rules', () => {
     // Raw agreement would flatter it at 50% here. κ is the number precisely
     // because a constant rater carries no information.
     const labels = scoredTurns.map(weakLabel);
+
     const report = await runCorpusEval({
       turns: scoredTurns,
       labels,
@@ -228,6 +231,7 @@ describe('runCorpusEval scores raters against the rules', () => {
       },
       judges: [],
     });
+
     expect(report.classifier?.kappa?.value).toBeCloseTo(0, 6);
     expect(report.classifier?.accuracy?.sensitivity.mean).toBeCloseTo(0, 6);
   });
@@ -237,6 +241,7 @@ describe('runCorpusEval scores raters against the rules', () => {
     // a question. A scripted LLM with exactly six answers throws on a seventh.
     const withAbstentions = [...scoredTurns, turn({ id: 'p/s/6', followup: 'and now the docs' })];
     const labels = withAbstentions.map(weakLabel);
+
     const report = await runCorpusEval({
       turns: withAbstentions,
       labels,
@@ -247,6 +252,7 @@ describe('runCorpusEval scores raters against the rules', () => {
       },
       judges: [],
     });
+
     expect(report.stats.turns).toBe(7);
     expect(report.classifier?.answered).toBe(6);
   });
@@ -255,6 +261,7 @@ describe('runCorpusEval scores raters against the rules', () => {
     const labels = scoredTurns.map(weakLabel);
     const agree = labels.map((l) => `{"verdict":"${l.label}"}`);
     const disagreeOnFirst = [`{"verdict":"accepted"}`, ...agree.slice(1)];
+
     const report = await runCorpusEval({
       turns: scoredTurns,
       labels,
@@ -275,6 +282,7 @@ describe('runCorpusEval scores raters against the rules', () => {
 
   test('a rater that fails on a turn is counted, not scored as a disagreement', async () => {
     const labels = scoredTurns.map(weakLabel);
+
     const report = await runCorpusEval({
       turns: scoredTurns,
       labels,
@@ -285,6 +293,7 @@ describe('runCorpusEval scores raters against the rules', () => {
       },
       judges: [],
     });
+
     expect(report.classifier?.failed).toBe(1);
     expect(report.classifier?.answered).toBe(5);
     expect(report.classifier?.kappa?.value).toBeCloseTo(1, 6);
@@ -292,18 +301,21 @@ describe('runCorpusEval scores raters against the rules', () => {
 
   test('one judge is not a panel', async () => {
     const labels = scoredTurns.map(weakLabel);
+
     const report = await runCorpusEval({
       turns: scoredTurns,
       labels,
       classifier: null,
       judges: [{ spec: 'vendor-a/model', llm: createScriptedLLM(labels.map((l) => `{"verdict":"${l.label}"}`)) }],
     });
+
     expect(report.panel).toBeNull();
     expect(report.judges).toHaveLength(1);
   });
 
   test('the pass reports what it spent, per rater', async () => {
     const labels = scoredTurns.map(weakLabel);
+
     const report = await runCorpusEval({
       turns: scoredTurns,
       labels,
@@ -318,6 +330,7 @@ describe('runCorpusEval scores raters against the rules', () => {
     });
 
     expect(report.cost.map((row) => row.name)).toEqual(['classifier', 'a/m', 'b/m']);
+
     for (const row of report.cost) {
       expect(row.usage.calls).toBe(6);
       expect(row.usage.promptChars).toBeGreaterThan(0);
@@ -331,6 +344,7 @@ describe('runCorpusEval scores raters against the rules', () => {
 describe('the report says what it cannot say', () => {
   test('every rendering carries the selection-bias and off-distribution caveats', () => {
     const labels = scoredTurns.map(weakLabel);
+
     const markdown = renderCorpusReport({
       stats: corpusStats(scoredTurns, labels),
       classifier: null, panel: null, judges: [], panelSplit: 0, cost: [],

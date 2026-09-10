@@ -96,8 +96,10 @@ export function galleryServerPush(raw: string): void {
 export function useAgent(options: AgentHandlers): GalleryAgent {
 	const handlers = useRef(options);
 	handlers.current = options;
+
 	const agent = useMemo<GalleryAgent>(() => {
 		const listeners = new Map<string, Set<EventListener>>();
+
 		return {
 			readyState: 1,
 			connectionError: terminalClose,
@@ -117,34 +119,42 @@ export function useAgent(options: AgentHandlers): GalleryAgent {
 			reopen: () => {
 				handlers.current.onClose?.(new CloseEvent("close", { code: 1006 }));
 				handlers.current.onOpen?.(new Event("open"));
+
 				for (const listener of listeners.get("open") ?? []) listener(new Event("open"));
 			},
 			deliver: (raw) => {
 				const message = new MessageEvent("message", { data: raw });
 				handlers.current.onMessage?.(message);
+
 				for (const listener of listeners.get("message") ?? []) listener(message);
 			},
 		};
 	}, []);
+
 	useEffect(() => {
 		if (terminalClose !== null) {
 			handlers.current.onClose?.(new CloseEvent("close", {
 				code: terminalClose.code,
 				reason: terminalClose.reason,
 			}));
+
 			return;
 		}
+
 		handlers.current.onOpen?.(new Event("open"));
 		const reconnect = () => { agent.reopen(); };
+
 		window.addEventListener("gallery-reconnect", reconnect);
 		// Only an OPEN connection is reachable by a push: the terminal fixture
 		// returned above never opens, so it never joins the registry.
 		live.add(agent);
+
 		return () => {
 			live.delete(agent);
 			window.removeEventListener("gallery-reconnect", reconnect);
 		};
 	}, [agent]);
+
 	return agent;
 }
 
@@ -168,7 +178,9 @@ export function useAgentChat(_options: { agent: GalleryAgent }): {
 		sendMessage: () => {
 			const root = document.documentElement;
 			root.dataset.galleryChatSends = String(Number(root.dataset.galleryChatSends ?? "0") + 1);
+
 			if (root.dataset.galleryChatHold !== "1") return Promise.resolve();
+
 			return new Promise<void>(() => {});
 		},
 		regenerate: () => Promise.resolve(),

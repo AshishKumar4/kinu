@@ -109,11 +109,14 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
   const beginStatusRefresh = (): StatusRefresh => {
     if (inFlight?.promise) return inFlight;
     const hub = opts.hub();
+
     if (!hub) {
       snapshot = DISCONNECTED;
       checkedAt = Date.now();
+
       return { promise: Promise.resolve(snapshot) };
     }
+
     const owner: StatusRefresh = { promise: null };
     inFlight = owner;
     owner.promise = (async (): Promise<DeviceStatus> => {
@@ -131,12 +134,16 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         }));
       } finally {
         checkedAt = Date.now();
+
         if (inFlight === owner) inFlight = null;
       }
+
       return snapshot;
     })();
+
     return owner;
   };
+
   const refreshStatus = (): Promise<DeviceStatus> => (
     beginStatusRefresh().promise ?? Promise.resolve(snapshot)
   );
@@ -152,11 +159,13 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
      */
     status: (): DeviceStatus => {
       if (!inFlight && Date.now() - checkedAt >= DEVICE_STATUS_TTL_MS) beginStatusRefresh();
+
       return snapshot;
     },
     refreshStatus,
     rpc: async (method, params, rpcOpts) => {
       const hub = opts.hub();
+
       if (!hub) {
         // A null hub is an UNATTACHED WORKSPACE, never an unlinked machine: the
         // stub resolves off the owner id, so there was no hub to ask and no
@@ -167,30 +176,41 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         checkedAt = Date.now();
         throw new Error(WORKSPACE_HAS_NO_OWNER);
       }
+
       try {
         const cwd = opts.cliCwd();
+
         const effectiveParams: JsonValue[] = method === 'exec' && cwd
           ? [`cd ${shellQuote(cwd)} && ${String(params[0] ?? '')}`]
           : params;
+
         // Mutating methods carry the pre-mutation snapshot hint; the daemon
         // checkpoints the target dir before executing (invisible, per-turn).
         const meta = (method === 'exec' || method === 'writeFile') ? opts.checkpointMeta?.() ?? null : null;
+
         const checkpoint: DeviceCheckpointHint | undefined = meta ? {
           agent: opts.agentName,
           turnId: meta.turnId,
           sessionId: meta.sessionId,
           dir: method === 'exec' ? cwd : null,
         } : undefined;
+
         const requestId = method === 'exec' ? rpcOpts?.requestId ?? nextDeviceRequestId() : undefined;
         const deviceOptions: DeviceRpcOptions = { agentName: opts.agentName, checkpoint };
+
         if (rpcOpts?.deviceId !== undefined) deviceOptions.deviceId = rpcOpts.deviceId;
+
         if (rpcOpts?.timeoutMs !== undefined) deviceOptions.timeoutMs = rpcOpts.timeoutMs;
+
         if (requestId !== undefined) deviceOptions.requestId = requestId;
+
         if (rpcOpts?.backgroundJobId !== undefined) {
           deviceOptions.backgroundJobId = rpcOpts.backgroundJobId;
         }
+
         const caller = await opts.caller();
         const rawResult = await hub.deviceRpc(caller, method, effectiveParams, deviceOptions);
+
         // The actor has received the UserDO result at this point. A normal
         // supervisor result remains replayable until this separate durable ACK
         // succeeds; a reset between the two calls leaves the UserDO row and
@@ -198,12 +218,14 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
         if (requestId !== undefined) {
           await hub.acknowledgeDeviceRequest(caller, requestId);
         }
+
         // A call getting through re-proves presence and nothing else: the
         // toolchain answer is the machine's, not this call's, so it is carried
         // forward rather than dropped. Overwriting it here would blank the row
         // the moment the agent used the device.
         snapshot = { ...snapshot, connected: true, registered: true };
         checkedAt = Date.now();
+
         return rawResult === undefined
           ? undefined
           : v.parse(JsonValueSchema, JSON.parse(rawResult));
@@ -212,12 +234,14 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           snapshot = { ...snapshot, connected: false };
           checkedAt = Date.now();
         }
+
         // Several machines are live and the call named none. The hub's
         // message already names them; the class is the caller's, not the
         // transport's, so it is fixed here before the executor's `io` wrap.
         if (isDeviceAmbiguityError(err)) {
           throw new KinuError('bad_input', renderThrownChain({ cause: err }), { cause: err });
         }
+
         throw err;
       }
     },

@@ -33,6 +33,7 @@ describe('a hosted subordinate runs as its own home', () => {
     // facts a hosted actor rebuilds from; the third, the credential, is what the
     // refused write below proves.
     const shell = child.actor.runtime.shell;
+
     if (!shell) throw new Error('a hosted subordinate runtime carries a shell');
     const identity = await shell.exec('printf "%s %s" "$HOME" "$TMPDIR"');
     expect(identity.exitCode).toBe(0);

@@ -31,6 +31,7 @@ function enterSubmits(label: string, enterBytes: string) {
         { sleep: 3 },
       ],
     });
+
     expect(run.screen).toContain('agent prose reply');
   }, 60_000);
 }
@@ -51,6 +52,7 @@ describe('the composer on a real terminal', () => {
         { sleep: 2 },
       ],
     });
+
     expect(run.screen).toContain('line two');
     expect(run.screen).not.toContain('agent prose reply');
   }, 60_000);

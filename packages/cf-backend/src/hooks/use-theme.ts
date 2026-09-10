@@ -28,6 +28,7 @@ const mql = window.matchMedia("(prefers-color-scheme: dark)");
 
 function storedMode(): ThemeMode | null {
   const v = localStorage.getItem(MODE_KEY);
+
   return v === "light" || v === "dark" ? v : null;
 }
 
@@ -48,6 +49,7 @@ const listeners = new Set<() => void>();
 function commit(next: Theme): void {
   snapshot = next;
   apply(next);
+
   for (const l of listeners) l();
 }
 
@@ -69,6 +71,7 @@ export function useTheme(): Theme {
   return useSyncExternalStore(
     (cb) => {
       listeners.add(cb);
+
       return () => listeners.delete(cb);
     },
     () => snapshot,

@@ -14,17 +14,20 @@ function setup() {
   // that creates fewer tables than a real workspace is what made tolerating
   // their absence look reasonable in shipped code.
   initWorkspaceSchema({ execRaw: rt.storage.execRaw, sql: rt.storage.sql, exec: makeSqlExec(db) });
+
   return { rt };
 }
 
 describe('Voyager curriculum proposer', () => {
   test('parses LLM response + filters by learnability window', async () => {
     const { rt } = setup();
+
     const judge = createJSONLLM([
       { task: 'easy A',     rationale: 'r1', predictedSuccess: 0.9, targetsSkills: ['x'] },
       { task: 'goldilocks', rationale: 'r2', predictedSuccess: 0.5, targetsSkills: ['y'] },
       { task: 'hard',       rationale: 'r3', predictedSuccess: 0.1, targetsSkills: ['z'] },
     ]);
+
     const proposals = await proposeNextTasks({ rt, judge });
     expect(proposals.length).toBe(1);
     expect(proposals[0].task).toBe('goldilocks');
@@ -59,10 +62,12 @@ describe('Voyager curriculum proposer', () => {
 
   test('respects custom learnability window', async () => {
     const { rt } = setup();
+
     const judge = createJSONLLM([
       { task: 'a', rationale: '', predictedSuccess: 0.2, targetsSkills: [] },
       { task: 'b', rationale: '', predictedSuccess: 0.8, targetsSkills: [] },
     ]);
+
     const proposals = await proposeNextTasks({ rt, judge, learnabilityWindow: [0.1, 0.3] });
     expect(proposals.length).toBe(1);
     expect(proposals[0].task).toBe('a');
@@ -83,7 +88,9 @@ describe('Voyager curriculum proposer', () => {
       await expect(proposeNextTasks({ rt, judge, count })).rejects.toThrow(/count/);
       expect(judge.callCount).toBe(0);
     }
+
     const windows: Array<[number, number]> = [[0.7, 0.3], [-0.1, 0.5], [0.3, 1.5], [Number.NaN, 0.5]];
+
     for (const learnabilityWindow of windows) {
       const { rt } = setup();
       const judge = createScriptedLLM(['[]']);
@@ -121,6 +128,7 @@ describe('Voyager curriculum proposer', () => {
     const { rt } = setup();
     const realNow = Date.now;
     Date.now = () => 1_700_000_000_000;
+
     try {
       const first = await proposeNextTasks({ rt, judge: createJSONLLM([{ task: 'a', rationale: 'r', predictedSuccess: 0.5, targetsSkills: [] }]) });
       const second = await proposeNextTasks({ rt, judge: createJSONLLM([{ task: 'b', rationale: 'r', predictedSuccess: 0.5, targetsSkills: [] }]) });
@@ -140,10 +148,12 @@ describe('Voyager curriculum proposer', () => {
 
   test('status-filtered list is capped at 50, newest first', () => {
     const { rt } = setup();
+
     for (let i = 1; i <= 55; i++) {
       void rt.storage.sql`INSERT INTO proposed_tasks (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
           VALUES (${rt.actor.actorId}, ${`seed-${i}`}, ${`task ${i}`}, 'r', 0.5, '[]', ${i}, 'pending')`;
     }
+
     const listed = listProposedTasks(rt, 'pending');
     expect(listed.length).toBe(50);
     expect(listed[0]?.proposedAt).toBe(55);
@@ -151,10 +161,12 @@ describe('Voyager curriculum proposer', () => {
 
   test('equal timestamps order by id', () => {
     const { rt } = setup();
+
     for (const id of ['tie-a', 'tie-b']) {
       void rt.storage.sql`INSERT INTO proposed_tasks (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
           VALUES (${rt.actor.actorId}, ${id}, ${id}, 'r', 0.5, '[]', 10, 'pending')`;
     }
+
     void rt.storage.sql`INSERT INTO proposed_tasks (actor_id, id, task, rationale, predicted_success, targets_skills, proposed_at, status)
         VALUES (${rt.actor.actorId}, 'older', 'older', 'r', 0.5, '[]', 9, 'pending')`;
     expect(listProposedTasks(rt).map((p) => p.id)).toEqual(['tie-b', 'tie-a', 'older']);

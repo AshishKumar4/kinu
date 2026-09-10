@@ -54,6 +54,7 @@ function StatusMark({ subordinate }: { subordinate: SubordinateRosterEntry }) {
   if (subordinate.status === "awaiting_input") {
     return <span className="rounded-sm px-1.5 py-0.5 text-[9px] font-medium p-badge-warning">input</span>;
   }
+
   return (
     <span
       className={`size-1.5 shrink-0 rounded-full ${subordinate.status === "working" ? "p-dot-success p-dot-pulse" : "p-dot-neutral"}`}
@@ -95,6 +96,7 @@ export function SubordinateTabs({
           {subordinates.map((subordinate) => {
             const active = activeName === subordinate.name;
             const title = agentTitle(subordinate.displayName);
+
             return (
               <div key={subordinate.name} className="group/tab relative shrink-0">
                 <Link
@@ -157,8 +159,10 @@ export function SubordinateTabs({
               onClick={async () => {
                 setDismissing(true);
                 setDismissError(null);
+
                 try {
                   await onDismiss(dismissTarget.name);
+
                   if (dismissTarget.name === activeName) await navigate(mainPath);
                   setDismissTarget(null);
                 } catch (cause) {

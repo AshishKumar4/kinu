@@ -32,6 +32,7 @@ export function loginDocument(providers: readonly LoginProvider[]): string {
     : `<div class="providers">${providers.map((provider) => (
       `<a class="provider" href="${provider.href}">Continue with ${escapeHtml(provider.label)}</a>`
     )).join('')}</div>`;
+
   return authDocument('Sign in to Kinu.run', body);
 }
 

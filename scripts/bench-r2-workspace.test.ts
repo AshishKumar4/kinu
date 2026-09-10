@@ -99,6 +99,7 @@ describe('the workload is the same workload on every arm', () => {
     const second = randomOffsets(fileBytes, block, 256, 99);
     expect(first).toEqual(second);
     expect(first).toHaveLength(256);
+
     for (const offset of first) {
       // Unaligned reads span two blocks and measure a different thing on every
       // filesystem in the comparison, so alignment is load-bearing.
@@ -135,6 +136,7 @@ describe('key scoping is containment, not convention', () => {
     expect(layouts.map((l) => l.id)).toEqual(['native', 'r2-uncached', 'r2-tuned', 'overlay']);
     const native = layouts.find((l) => l.id === 'native');
     expect(native?.mount).toBeUndefined();
+
     for (const layout of layouts.filter((l) => l.mount !== undefined)) {
       expect(layout.mount?.prefix).toBe(mountPrefixFor(runId));
     }
@@ -170,11 +172,13 @@ describe('the option sets say what they do', () => {
 
   test('the tuned arm asks for nothing the SDK would override or refuse', () => {
     const names = TUNED_S3FS_OPTIONS.map((option) => option.split('=')[0]);
+
     for (const forced of SDK_FORCED_S3FS_OPTIONS) {
       // An option the SDK applies AFTER the caller's cannot take effect, so
       // requesting it would be a tuning claim the run cannot support.
       expect(names).not.toContain(forced);
     }
+
     for (const refused of SDK_REFUSED_S3FS_OPTIONS) {
       expect(names).not.toContain(refused);
     }
@@ -182,8 +186,10 @@ describe('the option sets say what they do', () => {
 
   test('the tuned arm does not contain anything it declared rejected', () => {
     const names = new Set(TUNED_S3FS_OPTIONS.map((option) => option.split('=')[0]));
+
     for (const { option } of REJECTED_S3FS_OPTIONS) {
       const name = option.split('=')[0]!.split(' ')[0]!;
+
       if (name === 'use_cache' || name === 'parallel_count') continue; // rejected at a VALUE, present at another
       expect(names.has(name)).toBe(false);
     }
@@ -202,6 +208,7 @@ describe('the option sets say what they do', () => {
 
   test('every rejected option carries a reason', () => {
     expect(REJECTED_S3FS_OPTIONS.length).toBeGreaterThan(0);
+
     for (const rejected of REJECTED_S3FS_OPTIONS) {
       expect(rejected.reason.length).toBeGreaterThan(40);
     }
@@ -282,6 +289,7 @@ function artifactOf(layouts: readonly LayoutResult[]): RunArtifact {
     teardown: { objectsDeleted: 42, objectsRemaining: 0, bucketDeleted: true },
     conditions: ['readOnly mount refuses writes: yes'],
   };
+
   return {
     ...artifact,
     admission: evaluateRun(recordFromR2Artifact(artifact, {
@@ -371,6 +379,7 @@ describe('the rendered section', () => {
       layout('native', [probeRun({ create: 1, stat: 1 })]),
       layout('r2-uncached', [probeRun({ create: 400, stat: 60 })]),
     ]);
+
     const ops = withOps.layouts[1]!.ops!;
     expect(ops.classA).toBe(7);
     expect(ops.classB).toBe(5);
@@ -397,6 +406,7 @@ describe('the rendered section', () => {
       layout('native', [probeRun({ create: 1, stat: 1 })]),
       layout('r2-tuned', [], { mountError: 'InvalidMountConfigError: option "url" cannot be overridden' }),
     ]));
+
     expect(withRefusal).toContain('Arms that refused');
     expect(withRefusal).toContain('cannot be overridden');
   });
@@ -406,6 +416,7 @@ describe('the rendered section', () => {
       layout('native', [probeRun({ create: 1, stat: 1 }), probeRun({ create: 1, stat: 1 })]),
       layout('r2-uncached', [probeRun({ create: 5, stat: 1 }), probeRun({ create: 500, stat: 1 })]),
     ]));
+
     expect(unstable).toContain('!');
     expect(unstable).toMatch(/not ranked/);
   });
@@ -414,7 +425,9 @@ describe('the rendered section', () => {
 describe('the recommendation follows the numbers', () => {
   const aggregatesOf = (layouts: readonly LayoutResult[]): LayoutAggregates => {
     const map: LayoutAggregates = new Map();
+
     for (const item of layouts) map.set(item.id, aggregate(item.reps));
+
     return map;
   };
 
@@ -424,6 +437,7 @@ describe('the recommendation follows the numbers', () => {
       layout('r2-uncached', [probeRun({ create: 400, stat: 60, fsync: true })]),
       layout('r2-tuned', [probeRun({ create: 200, stat: 30, fsync: true })]),
     ];
+
     const verdict = recommend(artifactOf(layouts), aggregatesOf(layouts));
     expect(verdict).toContain('R2-PRIMARY IS REJECTED');
     expect(verdict).toMatch(/container disk/);
@@ -435,6 +449,7 @@ describe('the recommendation follows the numbers', () => {
       layout('r2-uncached', [probeRun({ create: 3, stat: 2 })]),
       layout('r2-tuned', [probeRun({ create: 2, stat: 1.5 })]),
     ];
+
     const verdict = recommend(artifactOf(layouts), aggregatesOf(layouts));
     expect(verdict).toContain('DEFENSIBLE');
   });
@@ -451,6 +466,7 @@ describe('the recommendation follows the numbers', () => {
       // stat >= 5 makes the fixture's fsync-directory verdict false.
       layout('r2-uncached', [probeRun({ create: 400, stat: 60 })]),
     ];
+
     expect(() => recommend(artifactOf(layouts), aggregatesOf(layouts))).toThrow('fsync-directory');
   });
 
@@ -459,7 +475,9 @@ describe('the recommendation follows the numbers', () => {
       layout('native', [probeRun({ create: 1, stat: 1 })]),
       layout('r2-uncached', [probeRun({ create: 3, stat: 2 })]),
     ];
+
     const base = artifactOf(layouts);
+
     const extras = {
       declaredStages: [] as const,
       confirmatoryPlan: null,
@@ -475,13 +493,16 @@ describe('the recommendation follows the numbers', () => {
       },
       restore: [],
     };
+
     const cleanCleanup = {
       attempted: true, kept: false, workerAbsent: true, runtimeAbsent: true,
       bucketAndMultipartEmpty: true, boxDurableStateEmpty: true,
       localSecretsProcessesAbsent: true, countersReconciled: true,
       replayIdempotent: true, multipartResidue: 0, errors: [],
     };
+
     const missingDraft = { ...base, versions: { ...base.versions, commit: '' } };
+
     const missingProvenance = {
       ...missingDraft,
       admission: evaluateRun(recordFromR2Artifact(missingDraft, {
@@ -489,6 +510,7 @@ describe('the recommendation follows the numbers', () => {
         cleanup: cleanCleanup,
       })),
     };
+
     expect(() => recommend(missingProvenance, aggregatesOf(layouts))).toThrow('not a git revision');
     expect(renderMarkdown(missingProvenance)).toContain('RECOMMENDATION REFUSED');
 
@@ -499,6 +521,7 @@ describe('the recommendation follows the numbers', () => {
         cleanup: { ...cleanCleanup, bucketAndMultipartEmpty: false, multipartResidue: 1 },
       })),
     };
+
     expect(() => recommend(dirtyTeardown, aggregatesOf(layouts))).toThrow('multipart upload');
   });
 });

@@ -174,20 +174,27 @@ export function isControlPlaneSurface(pathname: string): boolean {
  */
 function accessTeamOrigin(raw: string | undefined): string | null {
   const trimmed = (raw ?? '').trim().replace(/\/+$/u, '');
+
   if (trimmed.length === 0) return null;
   const candidate = /^[a-z][a-z0-9+.-]*:\/\//iu.test(trimmed) ? trimmed : `https://${trimmed}`;
   let url: URL;
+
   try {
     url = new URL(candidate);
   } catch (cause) {
     // `URL` throws exactly one thing for an unparseable input, and a value the
     // operator typed wrong is a configuration answer rather than a crash.
     if (!(cause instanceof TypeError)) throw cause;
+
     return null;
   }
+
   if (url.protocol !== 'https:') return null;
+
   if (url.pathname !== '/' || url.search !== '' || url.hash !== '') return null;
+
   if (url.username !== '' || url.password !== '') return null;
+
   return url.origin;
 }
 
@@ -212,9 +219,11 @@ const keySets = new Map<string, JWTVerifyGetKey>();
 
 function accessKeySet(teamOrigin: string): JWTVerifyGetKey {
   const cached = keySets.get(teamOrigin);
+
   if (cached !== undefined) return cached;
   const created = createRemoteJWKSet(new URL(`${teamOrigin}/cdn-cgi/access/certs`));
   keySets.set(teamOrigin, created);
+
   return created;
 }
 
@@ -251,14 +260,17 @@ export async function verifyControlPlaneAccess(
 ): Promise<AccessVerification> {
   const teamOrigin = accessTeamOrigin(env.CONTROL_PLANE_ACCESS_TEAM_DOMAIN);
   const audience = (env.CONTROL_PLANE_ACCESS_AUD ?? '').trim();
+
   if (teamOrigin === null || audience.length === 0) {
     return { ok: false, denial: 'access_unconfigured' };
   }
 
   const token = request.headers.get(ACCESS_ASSERTION_HEADER)?.trim() ?? '';
+
   if (token.length === 0) return { ok: false, denial: 'access_missing' };
 
   let claims: v.InferOutput<typeof AccessClaimsSchema>;
+
   try {
     const verified = await jwtVerify(token, accessKeySet(teamOrigin), {
       algorithms: ['RS256'],
@@ -270,7 +282,9 @@ export async function verifyControlPlaneAccess(
       requiredClaims: ['exp', 'nbf', 'email'],
       clockTolerance: 0,
     });
+
     const parsed = v.safeParse(AccessClaimsSchema, verified.payload);
+
     if (!parsed.success) return { ok: false, denial: 'access_no_email' };
     claims = parsed.output;
   } catch (caught) {
@@ -283,6 +297,7 @@ export async function verifyControlPlaneAccess(
     diagnostics.event('control_plane.access_assertion_rejected', {
       failure: caught instanceof Error ? caught.name : 'non_error_rejection',
     });
+
     return { ok: false, denial: 'access_invalid' };
   }
 

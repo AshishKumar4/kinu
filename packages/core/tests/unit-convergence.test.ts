@@ -58,6 +58,7 @@ describe('Convergence', () => {
     const statuses = rt.storage.sql<{ id: string; status: string }>`
         SELECT id, status FROM search_nodes
         WHERE actor_id = ${rt.actor.actorId} ORDER BY id`;
+
     expect(statuses.map((r) => r.status)).toEqual(['failed', 'failed']);
 
     // And the close fabricates nothing: a search with no acceptable candidate
@@ -66,6 +67,7 @@ describe('Convergence', () => {
     const terminals = rt.storage.sql<{ id: string }>`
         SELECT id FROM search_nodes
         WHERE actor_id = ${rt.actor.actorId} AND status = 'terminal'`;
+
     expect(terminals).toHaveLength(0);
   });
 
@@ -97,6 +99,7 @@ describe('Convergence', () => {
     const terminals = rt.storage.sql<{ id: string }>`
         SELECT id FROM search_nodes
         WHERE actor_id = ${rt.actor.actorId} AND status = 'terminal'`;
+
     expect(terminals).toHaveLength(0);
   });
 
@@ -135,8 +138,10 @@ describe('Convergence', () => {
 
     const best = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND id = 'best'`[0]!;
+
     const other = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND id = 'other'`[0]!;
+
     expect(best.status).toBe('terminal');
     expect(other.status).toBe('pruned');
   });
@@ -159,9 +164,11 @@ describe('Convergence', () => {
     // The set snapshots the choice the close erased: the rival is now pruned…
     const rival = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND id = 'rival'`[0]!;
+
     expect(rival.status).toBe('pruned');
     // …but lives on as a comparable take next to the winner.
     const set = latestAlternateTakeSet(rt.storage.sql, rt.actor);
+
     if (!set) throw new Error('expected alternate-takes set');
     expect(set.winnerNodeId).toBe('best');
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['best', 'rival']);
@@ -173,6 +180,7 @@ describe('Convergence', () => {
       // so the discriminating test actually runs.
       llmResponses: { 'verification harness': '```js\ncheck();\n```' },
     });
+
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
@@ -198,10 +206,13 @@ describe('Convergence', () => {
 
     // The test-passer wins regardless of the marginal value gap.
     expect(result.winnerId).toBe('passer');
+
     const passer = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND id = 'passer'`[0]!;
+
     const argmax = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} AND id = 'argmax'`[0]!;
+
     expect(passer.status).toBe('terminal');
     expect(argmax.status).toBe('pruned');
   });
@@ -210,6 +221,7 @@ describe('Convergence', () => {
     const { rt } = createTestRuntime({
       llmResponses: { 'verification harness': '```js\ncheck();\n```' },
     });
+
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
@@ -260,6 +272,7 @@ describe('Convergence', () => {
     const rows = rt.storage.sql<{ task: string; outcome: string; score: number }>`
         SELECT task, outcome, score FROM task_history
         WHERE actor_id = ${rt.actor.actorId}`;
+
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ task: 'ship the feature', outcome: 'success', score: 0.8 });
   });
@@ -275,6 +288,7 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     const { rt } = createTestRuntime({
       llmResponses: { 'verification harness': '```js\ncheck();\n```' },
     });
+
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
@@ -300,9 +314,11 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     const result = await converge(rt, session, 'r');
     expect(result.converged).toBe(true);
     expect(result.winnerId).toBe('prose');
+
     const statuses = rt.storage.sql<{ id: string; status: string }>`
         SELECT id, status FROM search_nodes
         WHERE actor_id = ${rt.actor.actorId} ORDER BY id`;
+
     expect(statuses).toEqual([
       { id: 'prose', status: 'terminal' },
       { id: 'rival-fail', status: 'pruned' },
@@ -334,6 +350,7 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     const original = console.error;
     const lines: string[] = [];
     console.error = (...args: unknown[]) => { lines.push(String(args[0])); };
+
     try {
       const result = await converge(rt, session, 'r');
       expect(result.converged).toBe(true);
@@ -341,6 +358,7 @@ describe('DO-NOW #3: test-selection fallback keeps the argmax winner', () => {
     } finally {
       console.error = original;
     }
+
     expect(lines.some((line) => line.includes('mcts.test_selection_failed'))).toBe(true);
   });
 });

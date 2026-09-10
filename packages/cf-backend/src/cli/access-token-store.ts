@@ -25,6 +25,7 @@ import * as v from 'valibot';
 // on the owner's account — and the general proxy admits only inference
 // endpoints, never a provider's account-management routes.
 export const ACCESS_TOKEN_SCOPES = ['workspace.read', 'workspace.exec', 'ai.proxy'] as const;
+
 export type AccessTokenScope = (typeof ACCESS_TOKEN_SCOPES)[number];
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -63,6 +64,7 @@ export function initAccessTokenTable(sql: SqlExec): void {
  *  edge routes use to reach the owning UserDO before verification. */
 export function parseAccessTokenUserId(token: string): string | null {
   const match = /^pta_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
+
   return match?.[1] ?? null;
 }
 
@@ -72,14 +74,17 @@ export function normalizeAccessTokenScopes(
   scopes: readonly string[],
 ): { ok: true; scopes: AccessTokenScope[] } | { ok: false; error: string } {
   const requested = new Set(scopes.map((s) => s.trim()).filter(Boolean));
+
   if (requested.size === 0) {
     return { ok: false, error: `At least one scope is required. Valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')}.` };
   }
+
   for (const scope of requested) {
     if (!v.is(v.picklist(ACCESS_TOKEN_SCOPES), scope)) {
       return { ok: false, error: `Unknown scope "${scope}". Valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')}.` };
     }
   }
+
   return { ok: true, scopes: ACCESS_TOKEN_SCOPES.filter((scope) => requested.has(scope)) };
 }
 
@@ -91,15 +96,20 @@ export async function mintAccessToken(
 ): Promise<AccessTokenMint> {
   if (!/^[a-f0-9]{32}$/.test(userId)) return { ok: false, error: 'invalid user id' };
   const cleanName = name.trim();
+
   if (!NAME_RE.test(cleanName)) {
     return { ok: false, error: 'Token name must be 1-64 characters: letters, numbers, dots, dashes, or underscores; it must start with a letter or number.' };
   }
+
   const normalized = normalizeAccessTokenScopes(scopes);
+
   if (!normalized.ok) return normalized;
+
   const duplicate = sql.exec(
     `SELECT 1 AS x FROM user_access_tokens WHERE name = ? AND revoked_at IS NULL LIMIT 1`,
     cleanName,
   ).toArray()[0];
+
   if (duplicate) {
     return { ok: false, error: `An active access token named "${cleanName}" already exists. Revoke it first or choose another name.` };
   }
@@ -111,6 +121,7 @@ export async function mintAccessToken(
     `INSERT INTO user_access_tokens (token_hash, name, scopes, created_at) VALUES (?, ?, ?, ?)`,
     tokenHash, cleanName, JSON.stringify(normalized.scopes), createdAt,
   );
+
   return {
     ok: true,
     token,
@@ -120,16 +131,21 @@ export async function mintAccessToken(
 
 export async function verifyAccessToken(sql: SqlExec, token: string): Promise<AccessTokenVerification> {
   const userId = parseAccessTokenUserId(token);
+
   if (!userId) return { ok: false, error: 'malformed token' };
   const tokenHash = await sha256Hex(token);
+
   const row = v.parse(v.optional(v.object({ scopes: v.string(), revoked_at: v.nullable(v.number()) })), sql.exec(
     `SELECT scopes, revoked_at FROM user_access_tokens WHERE token_hash = ? LIMIT 1`,
     tokenHash,
   ).toArray()[0]);
+
   if (!row || row.revoked_at !== null) return { ok: false, error: 'invalid token' };
   const scopes = parseScopeList(row.scopes);
+
   if (scopes.length === 0) return { ok: false, error: 'invalid token' };
   sql.exec(`UPDATE user_access_tokens SET last_used_at = ? WHERE token_hash = ?`, Date.now(), tokenHash);
+
   return { ok: true, userId, tokenHash, scopes };
 }
 
@@ -152,18 +168,22 @@ export interface AccessTokenRevocation { ok: true; revoked: boolean }
 
 export function revokeAccessToken(sql: SqlExec, ref: string): AccessTokenRevocation {
   const cleanRef = ref.trim();
+
   if (!cleanRef) return { ok: true, revoked: false };
+
   const hit = sql.exec(
     `SELECT 1 AS x FROM user_access_tokens
       WHERE revoked_at IS NULL AND (name = ? OR token_hash = ?) LIMIT 1`,
     cleanRef, cleanRef,
   ).toArray()[0];
+
   if (!hit) return { ok: true, revoked: false };
   sql.exec(
     `UPDATE user_access_tokens SET revoked_at = ?
       WHERE revoked_at IS NULL AND (name = ? OR token_hash = ?)`,
     Date.now(), cleanRef, cleanRef,
   );
+
   return { ok: true, revoked: true };
 }
 
@@ -176,8 +196,10 @@ export function getActiveAccessTokenScopes(sql: SqlExec, tokenHash: string): Acc
     `SELECT scopes FROM user_access_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
     tokenHash,
   ).toArray()[0]);
+
   if (!row) return null;
   const scopes = parseScopeList(String(row.scopes));
+
   return scopes.length > 0 ? scopes : null;
 }
 
@@ -189,5 +211,6 @@ export function getActiveAccessTokenScopes(sql: SqlExec, tokenHash: string): Acc
  *  nothing. */
 function parseScopeList(value: string): AccessTokenScope[] {
   const granted = v.parse(v.array(v.string()), JSON.parse(value));
+
   return ACCESS_TOKEN_SCOPES.filter((scope) => granted.includes(scope));
 }

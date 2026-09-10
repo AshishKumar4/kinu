@@ -51,8 +51,10 @@ export type ProfileAuthoritySource = { kind: 'local' } | { kind: 'account'; acco
  */
 export function resolveProfileAuthority(): ProfileAuthoritySource {
   const config = loadConfigFile();
+
   if (!config.accessToken || sessionExpired(config)) return { kind: 'local' };
   const accountId = config.user?.id;
+
   return accountId ? { kind: 'account', accountId } : { kind: 'local' };
 }
 
@@ -65,13 +67,17 @@ export function resolveProfileAuthority(): ProfileAuthoritySource {
  */
 export function loadLocalProfileAuthority(): ProfileCatalogEnvelope | null {
   const local = loadConfigFile().localProfile;
+
   if (!local) return null;
+
   if (local.authority.kind !== 'local') {
     throw new Error(
       `config.json localProfile carries authority kind "${local.authority.kind}"; the local slot holds only locally authored catalogs`,
     );
   }
+
   assertDigestMatches(local);
+
   return local;
 }
 
@@ -92,6 +98,7 @@ function writeLocalProfile(catalog: ProfileCatalog): ProfileCatalogEnvelope {
     };
     config.localProfile = envelope;
   });
+
   return envelope;
 }
 
@@ -111,13 +118,16 @@ interface AccountProfileCache {
 
 function readAccountCache(): AccountProfileCache {
   const path = profileCachePath();
+
   if (!existsSync(path)) return { accounts: {} };
   let raw: unknown;
+
   try {
     raw = JSON.parse(readFileSync(path, 'utf-8'));
   } catch (error) {
     throw new Error(`${path} is not valid JSON; fix or remove the profile cache.`, { cause: error });
   }
+
   try {
     return v.parse(AccountProfileCacheSchema, raw);
   } catch (error) {
@@ -132,8 +142,10 @@ function readAccountCache(): AccountProfileCache {
  */
 export function loadCachedAccountProfile(accountId: string): ProfileCatalogEnvelope | null {
   const entry = readAccountCache().accounts[accountId];
+
   if (!entry) return null;
   assertCachedEntry(accountId, entry);
+
   return entry;
 }
 
@@ -147,13 +159,17 @@ function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope
   withConfigLock(path, () => {
     const cache = readAccountCache();
     const existing = cache.accounts[accountId];
+
     if (existing) {
       assertCachedEntry(accountId, existing);
+
       if (existing.version > envelope.version) return;
+
       if (existing.version === envelope.version && existing.digest !== envelope.digest) {
         throw new Error(`profile cache received two catalogs for account ${accountId} at version ${envelope.version}`);
       }
     }
+
     ensureSecretDir(AGENT_HOME);
     writeSecretFile(path, `${JSON.stringify({ accounts: { ...cache.accounts, [accountId]: envelope } }, null, 2)}\n`);
   });
@@ -161,10 +177,12 @@ function cacheAccountProfile(accountId: string, envelope: ProfileCatalogEnvelope
 
 function assertCachedEntry(accountId: string, envelope: ProfileCatalogEnvelope): void {
   const authority = envelope.authority;
+
   if (authority.kind !== 'account' || authority.accountId !== accountId) {
     const carried = authority.kind === 'account' ? authority.accountId : authority.kind;
     throw new Error(`profile cache entry for ${accountId} carries mismatching authority "${carried}"`);
   }
+
   assertDigestMatches(envelope);
 }
 
@@ -189,18 +207,22 @@ interface AccountRead {
  */
 async function readAccountProfile(accountId: string): Promise<AccountRead> {
   const auth = requireStoredAuthConfig();
+
   try {
     const envelope = await getCloudProfile(auth.origin, auth.token);
     cacheAccountProfile(accountId, envelope);
+
     return { envelope, source: 'server' };
   } catch (error) {
     const cached = loadCachedAccountProfile(accountId);
+
     if (!cached) throw error;
     diagnostics.failure(
       'profile.account_cache_served',
       toKinuError({ doing: 'reading the account profile catalog', cause: error, otherwise: 'unavailable' }),
       { account: accountId, cachedVersion: cached.version, cachedDigest: cached.digest },
     );
+
     return { envelope: cached, source: 'cache' };
   }
 }
@@ -214,16 +236,21 @@ async function readAccountProfile(accountId: string): Promise<AccountRead> {
  */
 export async function loadActiveProfile(): Promise<ProfileCatalogEnvelope> {
   const authority = resolveProfileAuthority();
+
   if (authority.kind === 'local') {
     const existing = loadLocalProfileAuthority();
+
     if (existing) return existing;
     const model = resolveLLMConfig()?.model;
+
     if (!model) throw new Error('Set a default model first with /model <spec>.');
+
     return writeLocalProfile({
       roles: BUILTIN_PROFILE_CATALOG.roles,
       tiers: { default: { model } },
     });
   }
+
   return (await readAccountProfile(authority.accountId)).envelope;
 }
 
@@ -231,13 +258,18 @@ export function createProfileAuthorityReader(): ProfileEnvelopeSource {
   return async () => {
     const startedAt = Date.now();
     const authority = resolveProfileAuthority();
+
     if (authority.kind === 'local') {
       const local = loadLocalProfileAuthority();
+
       if (local) reportResolution('local', startedAt);
+
       return local;
     }
+
     const read = await readAccountProfile(authority.accountId);
     reportResolution(read.source, startedAt);
+
     return read.envelope;
   };
 }
@@ -262,37 +294,47 @@ export async function updateDefaultTier(
   patch: { model?: string; reasoningEffort?: ReasoningEffort },
 ): Promise<ProfileCatalogEnvelope> {
   const authority = resolveProfileAuthority();
+
   if (authority.kind === 'local' && loadLocalProfileAuthority() === null && patch.model) {
     const defaultTier = patch.reasoningEffort === undefined
       ? { model: patch.model }
       : { model: patch.model, reasoningEffort: patch.reasoningEffort };
+
     return writeLocalProfile({
       roles: BUILTIN_PROFILE_CATALOG.roles,
       tiers: { default: defaultTier },
     });
   }
+
   const current = await loadActiveProfile();
+
   const defaultTier = {
     ...current.catalog.tiers.default,
     ...patch,
   };
+
   const catalog: ProfileCatalog = {
     roles: current.catalog.roles,
     tiers: { ...current.catalog.tiers, default: defaultTier },
   };
+
   if (current.authority.kind === 'local') return writeLocalProfile(catalog);
   const auth = requireStoredAuthConfig();
+
   const result = await updateCloudProfile(auth.origin, auth.token, {
     catalog,
     expectedVersion: current.version,
   });
+
   if ('conflict' in result) {
     throw new Error(
       `the account profile changed while this edit was open `
       + `(current version ${result.currentVersion}, digest ${result.currentDigest}); run the same command again`,
     );
   }
+
   cacheAccountProfile(current.authority.accountId, result.envelope);
+
   return result.envelope;
 }
 
@@ -300,6 +342,7 @@ export async function updateDefaultTier(
 
 function assertDigestMatches(envelope: ProfileCatalogEnvelope): void {
   const actual = profileCatalogDigest(envelope.catalog);
+
   if (actual !== envelope.digest) {
     throw new Error(`profile catalog digest mismatch: envelope says "${envelope.digest}", catalog hashes to "${actual}"`);
   }

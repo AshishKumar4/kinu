@@ -5,7 +5,9 @@ import type { WorkMode } from '../types/turn';
 import { KinuError, refusalOf, type Refusal } from '../obs/error';
 
 import type { CodemodeProvider } from '../tools/sandbox-contract';
+
 const invocationMode = new AsyncLocalStorage<WorkMode>();
+
 const PlanPermission = v.object({ planAllowed: v.literal(true) });
 
 export function hasPlanPermission(operation: ToolSet[string]): boolean {
@@ -31,6 +33,7 @@ export function runWorkModeInvocation<Result>(mode: WorkMode, operation: () => R
 /** The producer declares this operation safe for Plan; nothing infers it from its name. */
 export function permitInPlan<Operation extends ToolSet[string]>(operation: Operation): Operation & { planAllowed: true } {
   const permission = { planAllowed: true } satisfies { planAllowed: true };
+
   return Object.assign(operation, permission);
 }
 
@@ -39,11 +42,13 @@ export function workModeRefusal(mode: WorkMode, planAllowed: boolean, operation:
   if ((mode === 'plan' || currentWorkMode() === 'plan') && !planAllowed) {
     return refusalOf(new KinuError('denied', operation + ' has no Plan-safe execution capability'));
   }
+
   return null;
 }
 
 export function requireWorkModePermission(mode: WorkMode, planAllowed: boolean, operation: string): void {
   const refusal = workModeRefusal(mode, planAllowed, operation);
+
   if (refusal !== null) throw new KinuError(refusal.reason, refusal.error);
 }
 
@@ -55,41 +60,50 @@ export function requireBuild(operation: string): void {
 export function toolsInWorkMode(mode: WorkMode, tools: ToolSet): ToolSet {
   if (mode === 'build') return tools;
   const narrowed: ToolSet = {};
+
   for (const [name, entry] of Object.entries(tools)) {
     const execute = entry.execute;
+
     if (execute === undefined) continue;
     const permitted = hasPlanPermission(entry);
     narrowed[name] = {
       ...entry,
       execute: (input, options) => inWorkMode(mode, async () => {
         requireWorkModePermission(mode, permitted, name);
+
         return await execute(input, options);
       }),
     };
   }
+
   return narrowed;
 }
 
 /** Every introduced host operation is checked; unclassified producers stay closed in Plan. */
 export function providersInWorkMode(mode: WorkMode, providers: CodemodeProvider[]): CodemodeProvider[] {
   if (mode === 'build') return providers;
+
   return providers.map((provider) => {
     const tools: CodemodeProvider['tools'] = {};
+
     for (const [name, entry] of Object.entries(provider.tools)) {
       tools[name] = {
         ...entry,
         execute: (...args) => inWorkMode(mode, async () => {
           try {
             requireWorkModePermission(mode, entry.planAllowed === true, provider.name + '.' + name);
+
             return await entry.execute(...args);
           }
           catch (cause) {
             if (!(cause instanceof KinuError)) throw cause;
+
             return refusalOf(cause);
           }
         }),
       };
     }
+
     return { ...provider, tools };
   });
 }
@@ -98,6 +112,7 @@ export function providersInWorkMode(mode: WorkMode, providers: CodemodeProvider[
 export function toolsForInvocation(mode: WorkMode, tools: ToolSet): ToolSet {
   const permitted = toolsInWorkMode(mode, tools);
   const bound: ToolSet = {};
+
   for (const [name, entry] of Object.entries(permitted)) {
     const execute = entry.execute;
     bound[name] = execute === undefined ? entry : {
@@ -105,5 +120,6 @@ export function toolsForInvocation(mode: WorkMode, tools: ToolSet): ToolSet {
       execute: (input, options) => runWorkModeInvocation(mode, () => execute(input, options)),
     };
   }
+
   return bound;
 }

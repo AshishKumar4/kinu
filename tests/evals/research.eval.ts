@@ -74,21 +74,28 @@ import { resolveArtifactRoot } from '../../scripts/bench-retention';
 import { CANARY, ENTRIES, PLANTED, RESEARCH_PROMPT, RESEARCH_TASK_ID } from './fixtures/veldmar-corpus';
 
 const SUITE = 'Research Evals';
+
 const TARGET = liveModelTarget(SUITE);
+
 const liveTest = test.skipIf(!TARGET);
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
+
 const SERVER_PATH = join(import.meta.dirname, 'fixtures/veldmar-mcp-server.ts');
+
 /** The config key is what the tool keys derive from (`mcpToolKey`), so these two
  *  spellings and the server entry below must agree — they are named once here. */
 const SERVER_NAME = 'veldmar';
+
 const SEARCH_TOOL = `mcp_${SERVER_NAME}_archive_search`;
+
 const READ_TOOL = `mcp_${SERVER_NAME}_archive_read`;
 
 /** The workspace the child CLI is told to create, and the wall the child gets.
  *  A hung child must become a named red rather than a runner timeout, so the
  *  driver kills it and the outcome says `timedOut`. */
 const WORKSPACE = 'research-eval';
+
 const EPISODE_TIMEOUT_MS = 900_000;
 
 /** The `mcpServers` block written into the scratch home's config.json — the
@@ -97,6 +104,7 @@ const EPISODE_TIMEOUT_MS = 900_000;
 const MCP_SERVERS = { [SERVER_NAME]: { command: 'bun', args: [SERVER_PATH] } } as const;
 
 const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+
 const LLM: LLMProviderConfig = TARGET === null
   ? UNCONFIGURED_LLM
   : { ...TARGET.llm, model: EVAL_MODELS[TIER] };
@@ -121,6 +129,7 @@ const TRANSCRIPTS = join(
 );
 
 const opened: Database[] = [];
+
 const observations: EvalObservation[] = [];
 
 /** The reply contract, exactly as the prompt states it. `looseObject` because a
@@ -133,6 +142,7 @@ const OkAnswerSchema = v.looseObject({
   bell_tower_height_m: v.number(),
   audit_token: v.string(),
 });
+
 type OkAnswer = v.InferOutput<typeof OkAnswerSchema>;
 
 /** The numeric fields scored against PLANTED. `satisfies` holds every name to
@@ -158,12 +168,15 @@ function latestContractAnswer(
   if (texts.length === 0) {
     return { refusal: 'the episode printed no assistant message at all — the CLI produced no answer' };
   }
+
   for (const text of [...texts].reverse()) {
     for (const candidate of jsonCandidates(text)) {
       const parsed = v.safeParse(OkAnswerSchema, candidate);
+
       if (parsed.success) return { answer: parsed.output };
     }
   }
+
   return {
     refusal: `no assistant message carried the {"status":"OK",...} reply shape over `
       + `${String(texts.length)} message(s) — the agent did not follow the reply contract, `
@@ -175,14 +188,19 @@ function latestContractAnswer(
  *  block, then the outermost brace span. */
 function jsonCandidates(text: string): unknown[] {
   const raw: string[] = [text.trim()];
+
   for (const match of text.matchAll(/```(?:json)?\s*([\s\S]*?)```/g)) {
     const fenced = match[1];
+
     if (fenced !== undefined) raw.push(fenced.trim());
   }
+
   const first = text.indexOf('{');
   const last = text.lastIndexOf('}');
+
   if (first !== -1 && last > first) raw.push(text.slice(first, last + 1));
   const parsed: unknown[] = [];
+
   for (const candidate of raw) {
     try {
       parsed.push(JSON.parse(candidate));
@@ -192,6 +210,7 @@ function jsonCandidates(text: string): unknown[] {
       if (!(error instanceof SyntaxError)) throw error;
     }
   }
+
   return parsed;
 }
 
@@ -202,6 +221,7 @@ afterAll(() => {
     arm: ARM, declaredTasks: [RESEARCH_TASK_ID], observations, spend,
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
+
   for (const db of opened) db.close();
 });
 
@@ -229,6 +249,7 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
         `planted ${field}=${String(value)} LEAKED into the prompt — the eval would pass without the source`)
         .toBe(false);
     }
+
     expect([...PLANTED_FIELDS].sort(),
       'the scored field list and the planted corpus diverged — a planted fact nobody scores is dead '
       + 'weight, and a scored field nobody plants can never pass')
@@ -248,6 +269,7 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
     const conn = await connectMcpServers({
       [SERVER_NAME]: { command: 'bun', args: [SERVER_PATH] },
     });
+
     try {
       const failed = conn.diagnostics.filter((d) => d.status === 'failed');
       expect(failed, `MCP server(s) failed to start: ${JSON.stringify(failed)}`).toEqual([]);
@@ -255,9 +277,12 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
 
       const call = async (key: string, args: Record<string, string>): Promise<string> => {
         const descriptor = conn.descriptors.find((d) => d.toolKey === key);
+
         if (!descriptor) throw new Error(`${key} was not discovered`);
+
         return String(await conn.call(descriptor.serverName, descriptor.name, args));
       };
+
       // The search names the provenance entry, the read serves the canary: the
       // exact two hops the live episode is scored on.
       expect(await call(SEARCH_TOOL, { query: 'audit token provenance' })).toContain('archive-provenance');
@@ -270,6 +295,7 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
   liveTest('MEASURED: the agent reads the archive and its report carries the planted facts and the canary', async () => {
     mkdirSync(TRANSCRIPTS, { recursive: true });
     const home = join(TRANSCRIPTS, 'home');
+
     const workspace = {
       home, workspace: WORKSPACE, llm: LLM, mcpServers: MCP_SERVERS,
       purpose: 'A careful researcher who reads sources before reporting and never invents a figure.',
@@ -284,6 +310,7 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
 
     const startedAt = Date.now();
     let outcome;
+
     try {
       outcome = await execCliTask({
         ...workspace, prompt: RESEARCH_PROMPT,
@@ -296,6 +323,7 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
       });
       throw error;
     }
+
     const ms = Date.now() - startedAt;
 
     // The child's own store, opened AFTER it exited: its ledgers are the second
@@ -313,11 +341,13 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
 
     // EVERY verdict, computed before ANY assertion throws.
     const parsed = latestContractAnswer(outcome.assistantTexts);
+
     const fieldVerdicts = PLANTED_FIELDS.map((field) => ({
       field,
       expected: PLANTED[field],
       reported: 'answer' in parsed ? parsed.answer[field] : undefined,
     }));
+
     const fieldsRight = fieldVerdicts.filter((verdict) => verdict.reported === verdict.expected).length;
     const canaryRight = 'answer' in parsed && parsed.answer.audit_token === CANARY;
     const reached = fieldsRight + (canaryRight ? 1 : 0);
@@ -344,6 +374,7 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
       },
       cap,
     ];
+
     // The observation FIRST, so a failed retrieval still reaches the record
     // with what it did retrieve.
     observations.push({
@@ -393,6 +424,7 @@ describe('Research evals — a live retrieval from a controlled MCP source', () 
         + `${String(verdict.expected)} — a figure that is not the source's is a fabricated one`)
         .toBe(verdict.expected);
     }
+
     expect(parsed.answer.audit_token,
       `the canary ${CANARY} is missing from the answer: without it the run cannot prove the `
       + 'provenance entry was read rather than the numbers guessed')

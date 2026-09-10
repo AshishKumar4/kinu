@@ -27,9 +27,11 @@ function evalExecutor(): Executor {
       const arr: ResolvedProvider[] = Array.isArray(providers)
         ? providers
         : [{ name: 'workspace', fns: providers }];
+
       try {
         const fn = new Function(...arr.map((p) => p.name), `return (async () => {\n${code}\n})();`);
         const result = await fn(...arr.map((p) => p.fns));
+
         return {
           result: result === undefined ? undefined : decodeJsonValue({ value: result }),
         };
@@ -56,6 +58,7 @@ const TOOL_SCAFFOLD = `async function run({ task }) {
 function runtime(): AgentRuntime {
   const { rt } = createTestRuntime();
   rt.executor = evalExecutor();
+
   return rt;
 }
 
@@ -66,20 +69,25 @@ async function selected(version: number, scaffoldCode: string,
   await files.mkdir('scaffold', { recursive: true });
   await files.writeFile(rt.identity.scaffold.path + '.v' + version, scaffoldCode);
   const program = await prepareActorProgram({ runtime: rt, mode: 'build', version });
+
   const run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'> = {
     rt, task: 'the task',
     llmStream: () => { throw new Error('this fixture must not start a model'); },
   };
+
   if (callTool) run.callTool = callTool;
+
   return { program, run };
 }
 
 /** A default turn, plus a flag recording whether anything ever started it. */
 function defaultTurn(events: ChatEvent[]) {
   let started = false;
+
   return {
     chat: (async function* () {
       started = true;
+
       for (const ev of events) yield ev;
     })(),
     started: () => started,
@@ -95,7 +103,9 @@ const DEFAULT_EVENTS: ChatEvent[] = [
 
 async function collect(stream: AsyncIterable<ChatEvent>): Promise<ChatEvent[]> {
   const out: ChatEvent[] = [];
+
   for await (const ev of stream) out.push(ev);
+
   return out;
 }
 
@@ -118,6 +128,7 @@ describe('scaffoldChatTransform', () => {
 
     const done = events.at(-1);
     expect(done?.type).toBe('done');
+
     if (done?.type !== 'done') throw new Error('unreachable');
     expect(done.text).toBe('scaffold answer for: the task');
     // The reply the user saw must survive into the durable history.
@@ -136,6 +147,7 @@ describe('scaffoldChatTransform', () => {
     expect(events.filter((e) => e.type === 'done')).toHaveLength(1);
 
     const done = events.at(-1);
+
     if (done?.type !== 'done') throw new Error('expected a trailing done');
     expect(done.text).toBe('default answer');
     // The delegated turn's response messages are what the caller persists.
@@ -148,6 +160,7 @@ describe('scaffoldChatTransform', () => {
       content: 'default answer',
       providerOptions: undefined,
     };
+
     const { chat } = defaultTurn([
       {
         type: 'step-finish',
@@ -177,9 +190,11 @@ describe('scaffoldChatTransform', () => {
     const call = events.find(
       (event): event is Extract<ChatEvent, { type: 'tool-call' }> => event.type === 'tool-call',
     );
+
     const result = events.find(
       (event): event is Extract<ChatEvent, { type: 'tool-result' }> => event.type === 'tool-result',
     );
+
     expect(call).toEqual({
       type: 'tool-call', toolName: 'search', toolCallId: expect.any(String), args: { q: 'the task' },
     });

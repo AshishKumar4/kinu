@@ -166,6 +166,7 @@ export class KinuError extends Error {
     options?: ErrorOptions & { execution?: { readonly exitCode: number } },
   ) {
     super(message, options);
+
     if (options?.execution !== undefined) this.execution = options.execution;
   }
 }
@@ -205,6 +206,7 @@ export function refusalOf(error: KinuError): Refusal {
 export function renderCauseChain(error: Error): string {
   const parts: string[] = [];
   const seen = new Set<Error>();
+
   // A wrapper is allowed to EMBED its cause's words — `toProviderError` puts
   // the refined provider text in its own message and keeps the raw cause for
   // sinks — so a link whose message the chain already ends with adds nothing:
@@ -214,10 +216,13 @@ export function renderCauseChain(error: Error): string {
   const push = (text: string): void => {
     if (text.length === 0) return;
     const tail = parts.at(-1);
+
     if (tail !== undefined && tail.endsWith(text)) return;
     parts.push(text);
   };
+
   let link: Error | null = error;
+
   while (link !== null && !seen.has(link)) {
     seen.add(link);
     push(link.message);
@@ -225,13 +230,16 @@ export function renderCauseChain(error: Error): string {
     // types are mutually recursive and both resolve to `any` (TS7022).
     // `Error.cause` is declared `unknown`, so this narrows nothing away.
     const cause: unknown = link.cause;
+
     if (cause instanceof Error) {
       link = cause;
       continue;
     }
+
     if (cause !== undefined && cause !== null) push(String(cause));
     link = null;
   }
+
   return parts.join(': ');
 }
 
@@ -380,25 +388,32 @@ const OOM_SIGNATURES: readonly RegExp[] = [
 export function classifyErrorCode(input: { cause: unknown }): ErrorCode | null {
   const seen = new Set<Error>();
   let caught: unknown = input.cause;
+
   for (;;) {
     if (caught instanceof KinuError) return caught.code;
+
     // `classify` owns the malformed-input signatures, and at this layer malformed
     // input is what it says: the value handed in does not parse.
     if (classify({ cause: caught }) === 'malformed-input') return 'bad_input';
+
     if (!(caught instanceof Error) || seen.has(caught)) break;
     seen.add(caught);
 
     const byName = CODE_BY_ERROR_NAME.get(caught.name);
+
     if (byName !== undefined) return byName;
 
     const errno = errnoCode(caught);
     const byErrno = errno === null ? undefined : CODE_BY_ERRNO.get(errno);
+
     if (byErrno !== undefined) return byErrno;
 
     caught = caught.cause;
   }
+
   if (!(input.cause instanceof Error)) return null;
   const chain = renderCauseChain(input.cause);
+
   return OOM_SIGNATURES.some((signature) => signature.test(chain)) ? 'oom' : null;
 }
 
@@ -422,5 +437,6 @@ export function toKinuError(
   input: { doing: string; cause: unknown; otherwise: ErrorCode },
 ): KinuError {
   const code = classifyErrorCode({ cause: input.cause }) ?? input.otherwise;
+
   return new KinuError(code, input.doing, { cause: input.cause });
 }

@@ -161,9 +161,12 @@ export class ActorSession {
     if (this.active === null) {
       this.messages.splice(0, this.messages.length, ...messages);
       this.context.hydrate(this.messages);
+
       return null;
     }
+
     const state = this.context.read();
+
     return this.context.edit({
       base: state.head?.revision ?? 0,
       messages,
@@ -192,9 +195,11 @@ export class ActorSession {
   ): ActorTurnLease {
     if (this.active !== null) throw new KinuError('denied', 'this actor already has an admitted turn');
     const abort = new AbortController();
+
     const lease: ActorTurnLease = Object.freeze({
       actorId: this.actorId, runId: ids.runId, turnId: ids.turnId, signal: abort.signal,
     });
+
     this.active = {
       lease, abort, phase: 'preparing', profile: null, profileInputs: null,
       claim: null, claimSettled: false,
@@ -204,12 +209,15 @@ export class ActorSession {
     this.userSteer.beginTurn();
     this.orchestrator.beginTurn(startedAt, metadata);
     this.orchestrator.restrictTurnWorkMode(mode);
+
     return lease;
   }
 
   bindProfile(lease: ActorTurnLease, profile: ResolvedTurnProfile, inputs: ProfileAuthorityInputs): void {
     const turn = this.requireTurn(lease);
+
     if (turn.phase !== 'preparing' || turn.profile !== null) throw new KinuError('denied', 'an actor turn profile is bound exactly once before execution');
+
     if (this.mode === 'plan' && profile.workMode !== 'plan') throw new KinuError('denied', 'an actor profile cannot widen an admitted Plan turn');
     turn.profile = profile;
     turn.profileInputs = inputs;
@@ -220,15 +228,19 @@ export class ActorSession {
   steer(steer: UserSteer & { readonly id: string }): boolean {
     if (this.userSteer.accept(steer) !== 'mid-turn') return false;
     this.options.orchestration.host.broadcast({ type: 'steer_status', status: 'queued', steerId: steer.id, text: steer.text });
+
     return true;
   }
 
   interrupt(): readonly UserSteer[] {
     const dropped = this.userSteer.interrupt();
+
     for (const steer of dropped) if (steer.id) {
       this.options.orchestration.host.broadcast({ type: 'steer_status', status: 'returned', steerId: steer.id, text: steer.text });
     }
+
     if (this.active?.phase !== 'settling') this.active?.abort.abort();
+
     return dropped;
   }
 
@@ -245,7 +257,9 @@ export class ActorSession {
    */
   finishTurn(lease: ActorTurnLease): void {
     const active = this.requireTurn(lease);
+
     if (active.phase === 'running') throw new KinuError('denied', 'cannot release an actor while its program is running');
+
     if (active.claim !== null && !active.claimSettled) this.settleClaim(active, 'indeterminate');
     this.active = null;
   }
@@ -255,6 +269,7 @@ export class ActorSession {
    *  what closes it is a fact about the turn, not about the activation. */
   settleTurnClaim(lease: ActorTurnLease, outcome: ClaimOutcome): void {
     const active = this.requireTurn(lease);
+
     if (active.claim === null) throw new KinuError('denied', 'this actor turn holds no durable claim to settle');
     this.settleClaim(active, outcome);
   }
@@ -280,8 +295,10 @@ export class ActorSession {
    */
   async execute(lease: ActorTurnLease, input: ActorExecutionInput, emit: (event: ChatEvent) => void): Promise<ActorExecutionResult> {
     const active = this.requireTurn(lease);
+
     if (active.phase !== 'preparing' || active.profile === null) throw new KinuError('denied', 'a profiled actor turn executes once');
     const extensions = new ExtensionHost();
+
     for (const extension of input.extensions) extensions.register(extension);
     extensions.register({ name: 'kinu.steering', prepareStep: ctx => this.userSteer.prepareStep(ctx) });
     extensions.register(this.orchestrator.turnExtension);
@@ -290,6 +307,7 @@ export class ActorSession {
     let completed = false;
     let program: ActorTurnProgram | null = null;
     let failure: Error | null = null;
+
     try {
       active.phase = 'running';
       active.abort.signal.throwIfAborted();
@@ -304,6 +322,7 @@ export class ActorSession {
       // recovery reads back what the first step actually started from.
       const admitted = this.context.startTurn({ turnId: lease.turnId, history: this.messages });
       this.messages.splice(0, this.messages.length, ...admitted.messages);
+
       const claim = this.options.claims.admit({
         runId: lease.runId,
         turnId: lease.turnId,
@@ -312,7 +331,9 @@ export class ActorSession {
         context: this.messages,
         workingRevision: admitted.workingRevision,
       });
+
       active.claim = claim;
+
       const events = startActorTurn({
         runtime: this.runtime, mode: this.mode, task: input.task, loopVersion: input.loopVersion,
         program, scaffoldSpend: input.scaffoldSpend,
@@ -322,13 +343,16 @@ export class ActorSession {
           meter: this.orchestrator.acc.composition, dynamicContext: { ledger: this.dynamic, snapshot: input.dynamic },
           stepContext: this.context.steps(claim) },
       });
+
       for await (const event of events) {
         this.requireTurn(lease);
+
         switch (event.type) {
           case 'text-delta': this.orchestrator.acc.onFirstChunk(); text += event.delta; break;
           case 'tool-call': pending.push(event); break;
           case 'tool-result': {
             let index = pending.length - 1;
+
             while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
             const call = index < 0 ? undefined : pending.splice(index, 1)[0];
             this.orchestrator.acc.recordToolCall(event.success
@@ -337,9 +361,11 @@ export class ActorSession {
                   execution: event.execution, error: event.error ?? event.result });
             break;
           }
+
           case 'step-finish': this.orchestrator.acc.recordStep({ response: { messages: event.responseMessages }, usage: event.usage }); break;
           case 'error': {
             this.orchestrator.acc.hadError = true;
+
             // AN `error` EVENT IS A FAILURE, not a note beside a successful turn.
             // A thrown cause reaches the catch below and becomes `failure`, but
             // the scaffold loop reports a dead provider by PUSHING this event
@@ -359,23 +385,29 @@ export class ActorSession {
               && event.message !== INTERRUPTED_TURN) {
               failure = new Error(event.message);
             }
+
             break;
           }
+
           case 'done':
             this.messages.push(...this.userSteer.replayInto(event.responseMessages));
+
             if (!text.trim() && event.text.trim()) text = event.text;
             completed = true;
             break;
         }
+
         emit(event);
       }
     } catch (cause) {
       if (!completed) this.messages.push(...this.userSteer.recordedMessages());
       failure = cause instanceof Error ? cause : new Error(renderThrownChain({ cause }), { cause });
+
       if (failure.message !== INTERRUPTED_TURN && !active.abort.signal.aborted) this.orchestrator.acc.hadError = true;
       emit({ type: 'error', message: renderThrownChain({ cause }) });
     } finally {
       active.phase = 'settling';
+
       // The working history the turn leaves behind, recorded once the turn's
       // messages are final — including a failed or interrupted turn, whose
       // partial tail is just as much the history the next request builds on.
@@ -387,6 +419,7 @@ export class ActorSession {
         this.messages.splice(0, this.messages.length, ...settled.messages);
       }
     }
+
     return {
       text, failure, program, claim: active.claim,
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
@@ -395,6 +428,7 @@ export class ActorSession {
 
   private requireTurn(lease: ActorTurnLease): ActiveTurn {
     if (this.active?.lease !== lease) throw new KinuError('denied', 'the actor turn lease is no longer active');
+
     return this.active;
   }
 }

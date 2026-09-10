@@ -37,9 +37,11 @@ const REGISTRY = [
 /** A barrel over a barrel, which is how `packages/core` publishes everything:
  *  `index.ts` -> `strategy/index.ts` -> the declaring file. */
 const ROOT_BARREL = `export * from './strategy/index';`;
+
 const STRATEGY_BARREL = `export * from './provisioner';\nexport * from './wired';\nexport * from './run';`;
 
 const PROVISIONER = `export function provisionHome(): string { return '/home/node'; }`;
+
 const WIRED = `export function usedThroughBarrel(): string { return 'live'; }`;
 
 const RUN = `
@@ -104,6 +106,7 @@ function census(
   const entrypoints = findEntrypoints(reachers, graph.modules, builtinNames);
   const reach = measureReach(graph, entrypoints);
   const facts = measureFields(reachers, graph.modules);
+
   return [
     ...findUnreached(graph, reach, tests, read),
     ...findUnsupplied(graph, reach, facts, read),
@@ -111,8 +114,11 @@ function census(
 }
 
 const PROVISION_HOME = `${BASE}strategy/provisioner.ts#provisionHome (unreached-export)`;
+
 const BARREL_SYMBOL = `${BASE}strategy/wired.ts#usedThroughBarrel (unreached-export)`;
+
 const MISSION = `${BASE}strategy/run.ts#RunDeps.mission (unsupplied-field)`;
+
 const LOGGER = `${BASE}strategy/run.ts#RunDeps.logger (unsupplied-field)`;
 
 /** Every case supplies a `RunDeps`, so field findings are separable from
@@ -128,6 +134,7 @@ describe('an exported value with no production consumer', () => {
     const tests = new Map([['packages/probe/tests/unit-home.test.ts', `
       import { provisionHome } from '../src/index';
       test('provisions', () => { expect(provisionHome()).toBe('/home/node'); });`]]);
+
     expect(census(fixture(SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`)), tests))
       .toEqual([PROVISION_HOME]);
   });
@@ -138,6 +145,7 @@ describe('an exported value with no production consumer', () => {
     const wired = builtins(`${SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`)}
   tools.home = provisionHome();`)
       .replace(`import { usedThroughBarrel,`, `import { provisionHome, usedThroughBarrel,`);
+
     expect(census(replacing('', `${BASE}tools/builtins.ts`, wired))).toEqual([]);
   });
 
@@ -145,13 +153,16 @@ describe('an exported value with no production consumer', () => {
     const tests = new Map([
       ['packages/probe/tests/unit-home.test.ts', 'import { provisionHome } from "../src/index";'],
     ]);
+
     const reachers = fixture(SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`));
     const graph = buildGraph(reachers);
     const read = (file: string): string => reachers.get(file) ?? '';
     const entrypoints = findEntrypoints(reachers, graph.modules, builtinToolNames(graph.modules, read));
+
     const [finding] = findUnreached(
       graph, measureReach(graph, entrypoints), tests, read,
     );
+
     expect(finding?.reason).toContain('packages/probe/tests/unit-home.test.ts');
   });
 });
@@ -161,6 +172,7 @@ describe('awaited dynamic import consumers', () => {
   const lazySource = 'export function highlightCode() { return "html"; } export const unused = 1;';
   const unused = `${lazyFile}#unused (unreached-export)`;
   const highlight = `${lazyFile}#highlightCode (unreached-export)`;
+
   const inspect = (body: string) => census(new Map([
     [lazyFile, lazySource],
     [`${BASE}main.ts`, `if (import.meta.main) void main(); async function main() { ${body} }`],
@@ -183,14 +195,17 @@ describe('awaited dynamic import consumers', () => {
     const source = `if (import.meta.main) void first();
       async function first() { const { highlightCode: render } = await import("./lazy"); return render(); }
       async function second() { const { unused: render } = await import("./lazy"); }`;
+
     expect(census(new Map([[lazyFile, lazySource], [`${BASE}main.ts`, source]]))).toEqual([unused]);
   });
   test('a local shadow cannot use an imported binding', () => {
     expect(inspect('const { highlightCode } = await import("./lazy"); function nested(highlightCode: () => string) { return highlightCode(); }'))
       .toEqual([highlight, unused]);
+
     const source = `import { unused as render } from "./lazy";
       if (import.meta.main) void main();
       async function main() { const { highlightCode: render } = await import("./lazy"); return render(); }`;
+
     expect(census(new Map([[lazyFile, lazySource], [`${BASE}main.ts`, source]]))).toEqual([unused]);
   });
   test('block and catch bindings shadow imported names', () => {
@@ -212,10 +227,12 @@ describe('awaited dynamic import consumers', () => {
   test('React.lazy reaches exactly the default export of the module it imports', () => {
     const lazyDefault = 'export default function Frame() { return "frame"; } export const unused = 1;';
     const frameDefault = `${lazyFile}#Frame (unreached-export)`;
+
     const withLazy = (body: string) => census(new Map([
       [lazyFile, lazyDefault],
       [`${BASE}main.ts`, `import { lazy } from "react"; if (import.meta.main) console.log(main()); function main() { ${body} }`],
     ]));
+
     expect(withLazy('return lazy(() => import("./lazy"));')).toEqual([unused]);
     expect(withLazy('return React.lazy(() => import("./lazy"));')).toEqual([unused]);
     // A dynamic import handed anywhere else says nothing about which member is read.
@@ -239,6 +256,7 @@ describe('a barrel', () => {
     const orphaned = builtins(SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`))
       .replace('usedThroughBarrel, ', '')
       .replace('usedThroughBarrel()', 'null');
+
     expect(census(replacing('', `${BASE}tools/builtins.ts`, orphaned)))
       .toEqual([PROVISION_HOME, BARREL_SYMBOL]);
   });
@@ -282,8 +300,10 @@ describe('an optional field production reads', () => {
     // `runIt` stays reached through a second, plain call so the case measures
     // field supply and not reachability.
     const alias = `${BASE}strategy/wide.ts`;
+
     const body = "  const deps: Wide = { rt: 'x', mission: 'm', extra: 1 };\n  void deps;\n"
       + "  runIt({ rt: 'r' });";
+
     const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type Wide = RunDeps & { extra: number };\n"]]);
     expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER]);
   });
@@ -297,6 +317,7 @@ describe('an optional field production reads', () => {
     const body = `${SUPPLY(`{ rt: 'x' }`)}\n`
       + "  type Other = { rt: string; mission: string } & { extra: number };\n"
       + "  const other: Other = { rt: 'y', mission: 'm', extra: 1 };\n  void other;";
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
 
@@ -325,6 +346,7 @@ describe('an optional field production reads', () => {
   }
   void scope;
 ${SUPPLY(`{ rt: 'x' }`)}`;
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
 
@@ -338,6 +360,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     const body = `${SUPPLY(`{ rt: 'x' }`)}
   const draft: Omit<RunDeps, 'rt'> = { mission: 'm', logger: 'l' };
   runIt(fromSomewhereElse(draft));`;
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
 
@@ -347,6 +370,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     // the keys outside its set, so it is no construction site of the whole.
     const body = `  function seed(): Pick<RunDeps, 'rt'> { return { rt: 'x' }; }
   runIt(fromSomewhereElse(seed()));`;
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
 
@@ -356,6 +380,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     const body = `  const byName: Record<string, RunDeps> = {};
   void byName;
 ${SUPPLY(`{ rt: 'x' }`)}`;
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
 
@@ -373,8 +398,10 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     // its fields read as supplied by nothing. `runIt` supplies `rt` only, so
     // the interface is judged and the alias is the only route to the rest.
     const alias = `${BASE}strategy/opts.ts`;
+
     const body = "  const opts: TurnOpts = { mission: 'm', logger: 'l' };\n  void opts;\n"
       + "  runIt({ rt: 'r' });";
+
     const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = Omit<RunDeps, 'rt'>;\n"]]);
     expect(census(corpus)).toEqual([PROVISION_HOME]);
   });
@@ -384,8 +411,10 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     // B's keys, so an alias to a union must not credit either member — only an
     // intersection and a single reference can.
     const alias = `${BASE}strategy/opts.ts`;
+
     const body = "  const opts: TurnOpts = { mission: 'm', logger: 'l' };\n  void opts;\n"
       + "  runIt({ rt: 'r' });";
+
     const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = RunDeps | { extra: number };\n"]]);
     expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
@@ -396,8 +425,10 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     // `Omit<…>` alias — so the assignment has to credit the BASE, exactly as a
     // literal annotated with a subtype does.
     const alias = `${BASE}strategy/opts.ts`;
+
     const body = "  const opts: TurnOpts = { mission: 'm' };\n  opts.logger = 'l';\n"
       + "  runIt({ rt: 'r' });";
+
     const corpus = fixture(body, [[alias, "import type { RunDeps } from './run';\nexport type TurnOpts = Omit<RunDeps, 'rt'>;\n"]]);
     expect(census(corpus)).toEqual([PROVISION_HOME]);
   });
@@ -413,6 +444,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     const body = "  type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"
       + "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
       + "  runIt({ rt: 'r' });";
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
 
@@ -425,6 +457,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     const body = "  type Subset<T, K extends keyof T> = { [P in K]: T[P] };\n"
       + "  const opts: Subset<RunDeps, 'mission'> = { mission: 'm' };\n  opts.logger = 'l';\n"
       + "  runIt({ rt: 'r' });";
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
 
@@ -434,8 +467,10 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     // lend this one its meaning — breaking exactly that key is how the three
     // collisions `8c313fcb1` repaired got in.
     const alias = `${BASE}strategy/shape.ts`;
+
     const body = "  const opts: Writable<RunDeps> = { mission: 'm' };\n  opts.logger = 'l';\n"
       + "  runIt({ rt: 'r' });";
+
     const corpus = fixture(body, [[alias, "export type Writable<T> = { -readonly [K in keyof T]: T[K] };\n"]]);
     expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
@@ -446,16 +481,20 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     // at once: crediting `ActorExecutionInput` and withholding the credit from
     // the interface the key actually names.
     const holder = `${BASE}strategy/holder.ts`;
+
     const body = "  const chat: Holder['deps'] = { rt: 'x', mission: 'm', logger: 'l' };\n  void chat;\n"
       + "  runIt({ rt: 'r' });";
+
     const corpus = fixture(body, [[holder, "import type { RunDeps } from './run';\nexport interface Holder { readonly deps: RunDeps }\n"]]);
     expect(census(corpus)).toEqual([PROVISION_HOME]);
   });
 
   test('an indexed access naming a key the interface does not declare credits nothing', () => {
     const holder = `${BASE}strategy/holder.ts`;
+
     const body = "  const chat: Holder['missing'] = { rt: 'x', mission: 'm', logger: 'l' };\n  void chat;\n"
       + "  runIt({ rt: 'r' });";
+
     const corpus = fixture(body, [[holder, "import type { RunDeps } from './run';\nexport interface Holder { readonly deps: RunDeps }\n"]]);
     expect(census(corpus)).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
@@ -468,6 +507,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     const body = "  type RunSink = (deps: RunDeps) => void;\n"
       + "  function emitTo(report: RunSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"
       + "  void emitTo;\n  runIt({ rt: 'r' });";
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME]);
   });
 
@@ -475,6 +515,7 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     const body = "  type OtherSink = (row: { emit: string }) => void;\n"
       + "  function emitTo(report: OtherSink): void { report({ rt: 'x', mission: 'm', logger: 'l' }); }\n"
       + "  void emitTo;\n  runIt({ rt: 'r' });";
+
     expect(census(fixture(body))).toEqual([PROVISION_HOME, LOGGER, MISSION]);
   });
 
@@ -496,9 +537,11 @@ ${SUPPLY(`{ rt: 'x' }`)}`;
     // `@cloudflare/sandbox`'s, which `packages/devbox` imports and BUILDS: one
     // key, two shapes, three findings against an interface commander fills.
     const foreign = `${BASE}foreign.ts`;
+
     const corpus = fixture(SUPPLY(`{ rt: 'x' }`), [
       [foreign, "import type { RunDeps } from 'some-dependency';\nexport function useIt(deps: RunDeps): string { return deps.rt; }\n"],
     ]);
+
     expect(census(corpus)).toEqual([`${foreign}#useIt (unreached-export)`, PROVISION_HOME]);
   });
 });
@@ -514,6 +557,7 @@ function kindsOf(reachers: ReadonlyMap<string, string>): Set<EntrypointKind> {
   const graph = buildGraph(reachers);
   const read = (file: string): string => reachers.get(file) ?? '';
   const found = findEntrypoints(reachers, graph.modules, builtinToolNames(graph.modules, read));
+
   return new Set(found.map((entry) => entry.kind));
 }
 
@@ -572,8 +616,10 @@ describe('entrypoint discovery', () => {
       import { provisionHome } from './strategy/provisioner';
       export function unusedInTheChild(): string { return 'nobody calls this'; }
       process.stdout.write(provisionHome());`;
+
     const forking = (call: string): string => `${SUPPLY(`{ rt: 'x', mission: 'm', logger: 'l' }`)}
   ${call}`;
+
     const orphan = `${BASE}worker.ts#unusedInTheChild (unreached-export)`;
 
     test('is a process root, so what it imports and calls is production reach', () => {
@@ -613,6 +659,7 @@ describe('entrypoint discovery', () => {
         import { BUILTIN_TOOLS } from './tools/registry';
         export const options = { run: BUILTIN_TOOLS[0], file: 'x' };`],
     ]));
+
     expect(kinds.has('builtin-tool')).toBe(false);
   });
 
@@ -624,6 +671,7 @@ describe('entrypoint discovery', () => {
           private async helper(): Promise<void> {}
         }`],
     ]));
+
     expect(kinds.has('platform-hook')).toBe(false);
   });
 });
@@ -687,10 +735,12 @@ describe('over the live tree', () => {
 
   test('every finding sits in the set the gate governs', () => {
     const facts = measureFields(reachers, graph.modules);
+
     const findings = [
       ...findUnreached(graph, reach, readTests(), read),
       ...findUnsupplied(graph, reach, facts, read),
     ];
+
     expect(findings.length).toBeGreaterThan(0);
     expect(findings.filter((finding) => !inScope(finding.file))).toEqual([]);
   // Measured 8.5 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
@@ -700,9 +750,11 @@ describe('over the live tree', () => {
 
   test('no finding is also reported reached', () => {
     const findings = findUnreached(graph, reach, readTests(), read);
+
     const contradictions = findings
       .map((finding) => `${finding.file}#${finding.name}`)
       .filter((key) => reach.reached.has(key));
+
     expect(contradictions).toEqual([]);
   });
 

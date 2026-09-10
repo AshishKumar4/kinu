@@ -61,13 +61,19 @@ import { readSources } from './sources';
 import { declaredName, identifierText, literalText, parse, type SyntaxNode, walk } from './syntax';
 
 const AGENTS_TOOL = 'packages/core/src/delegation/agents-tool.ts';
+
 const REGISTRY = 'packages/core/src/tools/registry.ts';
+
 /** The handler, the picklist, the per-action map and the schema entries — the
  *  four names this gate is a relation between. */
 const HANDLER = 'dispatchAgentsAction';
+
 const PICKLIST = 'AGENTS_TOOL_ACTIONS';
+
 const FIELD_MAP = 'AGENTS_ACTION_FIELDS';
+
 const INPUT_ENTRIES = 'AgentsInputEntries';
+
 /** The discriminant is declared by the picklist itself, so it is never one of an
  *  action's fields. */
 const DISCRIMINANT = 'action';
@@ -120,11 +126,13 @@ interface Source {
  *  corpus of its own. */
 export function parseSources(sources: ReadonlyMap<string, string>): Map<string, Source> {
   const parsed = new Map<string, Source>();
+
   for (const [file, text] of sources) {
     if (!file.startsWith('packages/core/src/')) continue;
     const tree = parse(file, text);
     parsed.set(file, { file, root: tree.root, lineAt: tree.lineAt });
   }
+
   return parsed;
 }
 
@@ -134,8 +142,10 @@ function declarationNamed(source: Source, name: string): SyntaxNode | undefined 
   let found: SyntaxNode | undefined;
   walk(source.root, (node) => {
     if (found !== undefined || node.type !== 'VariableDeclarator') return;
+
     if (declaredName(node) === name) found = node;
   });
+
   return found;
 }
 
@@ -144,54 +154,70 @@ function firstOfType(node: SyntaxNode, type: string): SyntaxNode | undefined {
   walk(node, (child) => {
     if (found === undefined && child.type === type) found = child;
   });
+
   return found;
 }
 
 /** Property names of the object literal inside `node`. */
 function objectKeys(node: SyntaxNode): readonly string[] {
   const object = firstOfType(node, 'ObjectExpression');
+
   if (object === undefined) return [];
   const keys: string[] = [];
+
   for (const property of object.children) {
     if (property.type !== 'Property') continue;
     const key = declaredName(property);
+
     if (key !== undefined) keys.push(key);
   }
+
   return keys;
 }
 
 /** String elements of the array literal inside `node`. */
 function stringElements(node: SyntaxNode): readonly string[] {
   const array = firstOfType(node, 'ArrayExpression');
+
   if (array === undefined) return [];
   const values: string[] = [];
+
   for (const element of array.children) {
     const text = literalText(element);
+
     if (text !== undefined) values.push(text);
   }
+
   return values;
 }
 
 export function readDeclarations(parsed: ReadonlyMap<string, Source>): Declarations {
   const registry = parsed.get(REGISTRY);
   const tool = parsed.get(AGENTS_TOOL);
+
   if (registry === undefined || tool === undefined) {
     throw new Error(`agents-fields: ${REGISTRY} or ${AGENTS_TOOL} is not in the enumerated product source`);
   }
+
   const picklist = declarationNamed(registry, PICKLIST);
   const entries = declarationNamed(tool, INPUT_ENTRIES);
   const map = declarationNamed(tool, FIELD_MAP);
+
   if (picklist === undefined || entries === undefined || map === undefined) {
     throw new Error(`agents-fields: could not find ${PICKLIST}, ${INPUT_ENTRIES} and ${FIELD_MAP}`
       + ' — one of them was renamed, and this gate governs nothing until it names the new one');
   }
+
   const actionFields = new Map<string, readonly string[]>();
   const mapObject = firstOfType(map, 'ObjectExpression');
+
   for (const property of mapObject?.children ?? []) {
     if (property.type !== 'Property') continue;
     const action = declaredName(property);
+
     if (action !== undefined) actionFields.set(action, stringElements(property));
   }
+
   return {
     actions: stringElements(picklist),
     parseFields: objectKeys(entries).filter((field) => field !== DISCRIMINANT),
@@ -208,12 +234,15 @@ function functionsOf(source: Source): Map<string, SyntaxNode> {
   walk(source.root, (node) => {
     const isFunction = node.type === 'FunctionDeclaration'
       || node.type === 'ArrowFunctionExpression' || node.type === 'FunctionExpression';
+
     if (!isFunction) return;
     const own = declaredName(node);
     const bound = node.parent?.type === 'VariableDeclarator' ? declaredName(node.parent) : undefined;
     const name = own ?? bound;
+
     if (name !== undefined && !functions.has(name)) functions.set(name, node);
   });
+
   return functions;
 }
 
@@ -221,10 +250,13 @@ function functionsOf(source: Source): Map<string, SyntaxNode> {
 function paramsOf(node: SyntaxNode): readonly { readonly type: string; readonly node: SyntaxNode }[] {
   const params: { type: string; node: SyntaxNode }[] = [];
   const raw = 'params' in node.raw ? node.raw.params : [];
+
   for (const parameter of raw) {
     const matched = firstMatching(node, (child) => child.raw === parameter);
+
     if (matched !== undefined) params.push({ type: parameter.type, node: matched });
   }
+
   return params;
 }
 
@@ -233,6 +265,7 @@ function firstMatching(node: SyntaxNode, predicate: (child: SyntaxNode) => boole
   walk(node, (child) => {
     if (found === undefined && predicate(child)) found = child;
   });
+
   return found;
 }
 
@@ -241,6 +274,7 @@ function firstMatching(node: SyntaxNode, predicate: (child: SyntaxNode) => boole
 function walkExcept(node: SyntaxNode, skip: SyntaxNode | undefined, visit: (n: SyntaxNode) => void): void {
   if (node === skip) return;
   visit(node);
+
   for (const child of node.children) walkExcept(child, skip, visit);
 }
 
@@ -248,15 +282,20 @@ function walkExcept(node: SyntaxNode, skip: SyntaxNode | undefined, visit: (n: S
 function resolveLocal(from: string, specifier: string, parsed: ReadonlyMap<string, Source>): string | undefined {
   if (!specifier.startsWith('.')) return undefined;
   const segments = from.split('/').slice(0, -1);
+
   for (const part of specifier.split('/')) {
     if (part === '.') continue;
+
     if (part === '..') segments.pop();
     else segments.push(part);
   }
+
   const base = segments.join('/');
+
   for (const candidate of [`${base}.ts`, `${base}/index.ts`]) {
     if (parsed.has(candidate)) return candidate;
   }
+
   return undefined;
 }
 
@@ -265,13 +304,16 @@ function importedFrom(source: Source, name: string): string | undefined {
   let specifier: string | undefined;
   walk(source.root, (node) => {
     if (specifier !== undefined || node.type !== 'ImportDeclaration') return;
+
     const binds = node.children.some((child) =>
       (child.type === 'ImportSpecifier' || child.type === 'ImportDefaultSpecifier')
       && child.children.some((part) => identifierText(part) === name));
+
     if (!binds) return;
     const from = node.children.find((child) => literalText(child) !== undefined);
     specifier = from === undefined ? undefined : literalText(from);
   });
+
   return specifier;
 }
 
@@ -299,33 +341,44 @@ function collectReads(
   walkExcept(scope, skip, (node) => {
     if (node.type === 'MemberExpression') {
       const [object, property] = node.children;
+
       if (object === undefined || identifierText(object) !== param) return;
       const field = property === undefined ? undefined : identifierText(property);
+
       if (field === undefined) {
         into.opaque.push(`${at(node)} — a computed read of \`${param}\` cannot be attributed to a field name`);
+
         return;
       }
+
       into.fields.add(field);
+
       return;
     }
+
     if (node.type === 'CallExpression') {
       const [callee, ...args] = node.children;
+
       for (const [index, argument] of args.entries()) {
         if (identifierText(argument) !== param) continue;
         followHop(source, node, callee, index, parsed, functions, into, at);
       }
+
       return;
     }
+
     if (node.type !== 'Identifier' || identifierText(node) !== param) return;
     const parent = node.parent;
     const asMemberObject = parent?.type === 'MemberExpression' && parent.children[0] === node;
     const asArgument = parent?.type === 'CallExpression' && parent.children[0] !== node;
+
     // The binding itself, not a use of it: every function this walk enters names
     // its own parameter, and reading that as "used whole" would report every hop
     // as unfollowable at exactly the moment it was followed.
     const isBinding = parent !== undefined
       && (parent.type === 'FunctionDeclaration' || parent.type === 'ArrowFunctionExpression'
         || parent.type === 'FunctionExpression');
+
     if (asMemberObject || asArgument || isBinding) return;
     into.opaque.push(`${at(node)} — \`${param}\` is used whole here, not read field by field`);
   });
@@ -342,45 +395,64 @@ function followHop(
   at: (node: SyntaxNode) => string,
 ): void {
   const name = callee === undefined ? undefined : identifierText(callee);
+
   if (name === undefined) {
     into.opaque.push(`${at(call)} — the whole input is handed to a callee this gate cannot name`);
+
     return;
   }
+
   let target = functions.get(source.file)?.get(name);
   let targetSource = source;
+
   if (target === undefined) {
     const specifier = importedFrom(source, name);
     const resolved = specifier === undefined ? undefined : resolveLocal(source.file, specifier, parsed);
     const imported = resolved === undefined ? undefined : parsed.get(resolved);
+
     if (imported !== undefined) {
       target = functions.get(imported.file)?.get(name);
       targetSource = imported;
     }
   }
+
   if (target === undefined) {
     into.opaque.push(`${at(call)} — cannot follow \`${name}(…)\`: not a function declared here`
       + ' or imported from product source, so what it reads off the input is unknown');
+
     return;
   }
+
   const parameter = paramsOf(target)[index];
+
   if (parameter === undefined) {
     into.opaque.push(`${at(call)} — \`${name}(…)\` has no parameter at position ${String(index)}`);
+
     return;
   }
+
   if (parameter.type === 'ObjectPattern') {
     for (const property of parameter.node.children) {
       const key = property.type === 'Property' ? declaredName(property) : undefined;
+
       if (key !== undefined) into.fields.add(key);
     }
+
     into.hops.push(`${name}(…) [destructured]`);
+
     return;
   }
+
   const bound = identifierText(parameter.node);
+
   if (parameter.type !== 'Identifier' || bound === undefined) {
     into.opaque.push(`${at(call)} — \`${name}(…)\` binds position ${String(index)} to a pattern this gate cannot read`);
+
     return;
   }
+
   const key = `${targetSource.file}#${name}#${bound}`;
+
   if (into.visited.has(key)) return;
   into.visited.add(key);
   into.hops.push(`${name}(…)`);
@@ -390,25 +462,33 @@ function followHop(
 
 export function readHandler(parsed: ReadonlyMap<string, Source>): HandlerReads {
   const tool = parsed.get(AGENTS_TOOL);
+
   if (tool === undefined) throw new Error(`agents-fields: ${AGENTS_TOOL} is not in the enumerated product source`);
   const functions = new Map<string, Map<string, SyntaxNode>>();
+
   for (const source of parsed.values()) functions.set(source.file, functionsOf(source));
 
   const handler = functions.get(AGENTS_TOOL)?.get(HANDLER);
+
   if (handler === undefined) {
     throw new Error(`agents-fields: ${AGENTS_TOOL} declares no ${HANDLER} — the handler was renamed`);
   }
+
   const input = paramsOf(handler).map((param) => identifierText(param.node)).find((name) =>
     name !== undefined && name !== 'deps' && name !== 'toolOptions');
+
   if (input === undefined) throw new Error(`agents-fields: cannot tell which parameter of ${HANDLER} is the input`);
 
   const dispatch = firstMatching(handler, (node) => {
     if (node.type !== 'SwitchStatement') return false;
     const [discriminant] = node.children;
+
     if (discriminant?.type !== 'MemberExpression') return false;
     const [object, property] = discriminant.children;
+
     return identifierText(object) === input && identifierText(property) === DISCRIMINANT;
   });
+
   if (dispatch === undefined) {
     throw new Error(`agents-fields: ${HANDLER} has no \`switch (${input}.${DISCRIMINANT})\``
       + ' — the per-action relation cannot be derived from anything else');
@@ -421,6 +501,7 @@ export function readHandler(parsed: ReadonlyMap<string, Source>): HandlerReads {
   // it is a finding rather than a silent attribution to all seven.
   const before: Collector = { fields: new Set(), opaque, hops, visited: new Set() };
   collectReads(tool, handler, input, parsed, functions, before, dispatch);
+
   for (const field of before.fields) {
     if (field === DISCRIMINANT) continue;
     opaque.push(`${AGENTS_TOOL} — \`${input}.${field}\` is read outside the switch, so no action owns it;`
@@ -428,21 +509,27 @@ export function readHandler(parsed: ReadonlyMap<string, Source>): HandlerReads {
   }
 
   const byAction = new Map<string, ReadonlySet<string>>();
+
   for (const clause of dispatch.children) {
     if (clause.type !== 'SwitchCase') continue;
     const [test] = clause.children;
     const action = test === undefined ? undefined : literalText(test);
+
     if (action === undefined) {
       opaque.push(`${AGENTS_TOOL}:${String(tool.lineAt(clause.start))} — a switch arm with no string test`);
       continue;
     }
+
     const collector: Collector = { fields: new Set(), opaque, hops, visited: new Set() };
+
     for (const statement of clause.children.slice(1)) {
       collectReads(tool, statement, input, parsed, functions, collector);
     }
+
     collector.fields.delete(DISCRIMINANT);
     byAction.set(action, collector.fields);
   }
+
   return { byAction, opaque, hops };
 }
 
@@ -455,6 +542,7 @@ export function audit(declarations: Declarations, reads: HandlerReads): Finding[
 
   for (const action of declarations.actions) {
     const read = reads.byAction.get(action);
+
     if (read === undefined) {
       findings.push({
         kind: 'unhandled-action',
@@ -462,7 +550,9 @@ export function audit(declarations: Declarations, reads: HandlerReads): Finding[
           + ' an action nothing dispatches',
       });
     }
+
     const declared = declarations.actionFields.get(action);
+
     if (declared === undefined) {
       findings.push({
         kind: 'undeclared-action',
@@ -472,7 +562,9 @@ export function audit(declarations: Declarations, reads: HandlerReads): Finding[
       });
       continue;
     }
+
     for (const field of declared) claimed.add(field);
+
     for (const field of read ?? []) {
       if (declared.includes(field)) continue;
       findings.push({
@@ -481,6 +573,7 @@ export function audit(declarations: Declarations, reads: HandlerReads): Finding[
           + ' declare it',
       });
     }
+
     for (const field of declared) {
       if (read?.has(field)) continue;
       findings.push({
@@ -489,6 +582,7 @@ export function audit(declarations: Declarations, reads: HandlerReads): Finding[
           + ' a caller that sets it would be told the call is fine and get nothing',
       });
     }
+
     for (const field of declared) {
       if (parsedFields.has(field)) continue;
       findings.push({
@@ -500,6 +594,7 @@ export function audit(declarations: Declarations, reads: HandlerReads): Finding[
   }
 
   const actions = new Set(declarations.actions);
+
   for (const action of declarations.actionFields.keys()) {
     if (actions.has(action)) continue;
     findings.push({
@@ -507,6 +602,7 @@ export function audit(declarations: Declarations, reads: HandlerReads): Finding[
       detail: `${FIELD_MAP} declares fields for "${action}", which is not on ${PICKLIST}`,
     });
   }
+
   for (const field of declarations.parseFields) {
     if (claimed.has(field)) continue;
     findings.push({
@@ -515,7 +611,9 @@ export function audit(declarations: Declarations, reads: HandlerReads): Finding[
         + ' and read by nothing',
     });
   }
+
   for (const detail of reads.opaque) findings.push({ kind: 'opaque', detail });
+
   return findings;
 }
 
@@ -528,14 +626,20 @@ if (import.meta.main) {
   // Denominators first: a gate that found nothing because it read nothing is the
   // failure this instrument exists to prevent.
   const blank: string[] = [];
+
   if (declarations.actions.length === 0) blank.push(`read 0 actions from ${PICKLIST}`);
+
   if (declarations.parseFields.length === 0) blank.push(`read 0 fields from ${INPUT_ENTRIES}`);
+
   if (reads.byAction.size === 0) blank.push(`derived 0 case arms from ${HANDLER}`);
   const totalReads = [...reads.byAction.values()].reduce((sum, fields) => sum + fields.size, 0);
+
   if (totalReads === 0) blank.push('derived 0 field reads from the handler — the walk is not matching');
+
   if (reads.hops.length === 0) {
     blank.push('followed 0 whole-input hand-offs, so the fork arm\'s fields cannot have been seen');
   }
+
   if (blank.length > 0) {
     for (const problem of blank) console.error(`agents-fields: ${problem}`);
     process.exit(1);
@@ -557,6 +661,7 @@ if (import.meta.main) {
   }
 
   console.error(`agents-fields: ${findings.length} finding(s)\n`);
+
   for (const finding of findings) console.error(`  [${finding.kind}] ${finding.detail}`);
   console.error(
     '\nAn action\'s fields must be declared where they are read and parsed where they are sent.'

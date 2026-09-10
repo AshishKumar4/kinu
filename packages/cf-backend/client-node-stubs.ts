@@ -10,15 +10,19 @@
 export function createHash(): never {
   throw new Error("node:crypto is not available in browser code");
 }
+
 export function createHmac(): never {
   throw new Error("node:crypto is not available in browser code");
 }
+
 export function randomBytes(): never {
   throw new Error("node:crypto is not available in browser code");
 }
+
 export function timingSafeEqual(): never {
   throw new Error("node:crypto is not available in browser code");
 }
+
 export default { createHash, createHmac, randomBytes, timingSafeEqual };
 
 /**

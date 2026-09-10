@@ -42,7 +42,9 @@ function TuiPreview(): ReactElement {
       tools: [['web', '{"action":"fetch","url":"https://example.com/rollout-study"}', '3 sources'], ['agents', '{"action":"swarm","preset":"redteam","task":"independent risk review"}', 'settled'], ['report', '{"action":"write","title":"Owner decision"}', 'ready']],
     },
   } as const;
+
   type AgentId = keyof typeof agents;
+
   const LOCAL_AGENTS: readonly AgentId[] = ['audit', 'migrations'];
   const CLOUD_AGENTS: readonly AgentId[] = ['jarvis'];
   const [agentId, setAgentId] = useState<AgentId>('audit');
@@ -55,18 +57,23 @@ function TuiPreview(): ReactElement {
   // The open agent's section never renders collapsed.
   const cloudExpanded = cloudOpen || agentId === 'jarvis';
   const checkoutExpanded = checkoutOpen || agentId !== 'jarvis';
+
   const closeDrawer = () => {
     setDrawerOpen(false);
     queueMicrotask(() => drawerTriggerRef.current?.focus());
   };
+
   const chooseAgent = (id: AgentId) => {
     setAgentId(id);
     closeDrawer();
   };
+
   const filter = drawerFilter.trim().toLowerCase();
+
   const drawerMatches = (id: AgentId) => (
     `${agents[id].label} ${agents[id].location}`.toLowerCase().includes(filter)
   );
+
   // NavigatorRow: the selected row carries the `›` marker on the raised ground;
   // the dot says running (accent) or idle (muted), never selection.
   const agentRows = (ids: readonly AgentId[], onChoose: (id: AgentId) => void, filtered: boolean): ReactElement[] => (
@@ -83,11 +90,13 @@ function TuiPreview(): ReactElement {
       </div>
     ))
   );
+
   const groupHeader = (label: string, count: number, expanded: boolean, onToggle: () => void) => (
     <button type="button" aria-expanded={expanded} onClick={onToggle} className="block w-full whitespace-pre px-2 text-left leading-6 p-text-2 hover:p-text">
       <span className="p-text-4">{`  ${expanded ? '▾' : '▸'} `}</span><strong className="font-semibold">{label}</strong><span className="p-text-4">{` · ${String(count)}`}</span>
     </button>
   );
+
   const workspaceGroups = (filtered: boolean, onChoose: (id: AgentId) => void) => (
     <>
       {groupHeader('checkout', LOCAL_AGENTS.length, checkoutExpanded, () => setCheckoutOpen(!checkoutExpanded))}
@@ -96,7 +105,9 @@ function TuiPreview(): ReactElement {
       {(filtered || cloudExpanded) && agentRows(CLOUD_AGENTS, onChoose, filtered)}
     </>
   );
+
   const hint = TUI_ADVERTISED_HINTS[1];
+
   return (
     <div data-tui-agent={agentId} aria-label="Kinu terminal interface preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)] font-mono text-xs leading-6 shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)]">
       <div className="grid h-10 grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--c-border-strong)] p-sidebar px-4 text-[10px] p-text-4">
@@ -179,12 +190,15 @@ function TuiPreview(): ReactElement {
     </div>
   );
 }
+
 function CliPreview(): ReactElement {
   const { status, copy } = useCopy();
   const [mode, setMode] = useState('run');
+
   const command = mode === 'run'
     ? 'kinu run workshop "Review this diff. Check the changed paths and report evidence." --mode json'
     : 'kinu exec --workspace workshop --json "Review this diff. Check the changed paths and report evidence."';
+
   return (
     <div data-cli-mode={mode} aria-label="Kinu command line preview" className="overflow-hidden rounded-xl border border-[var(--c-border-strong)] bg-[var(--c-input-bg)]">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b p-border p-recessed px-5 py-3">

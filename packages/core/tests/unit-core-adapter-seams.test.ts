@@ -38,9 +38,11 @@ describe('EVENT_VARIANTS — the array and the type cannot disagree', () => {
   // REFUSED at that route. The array is now the single declaration.
   test('every declared variant is accepted by a picklist built from the array', () => {
     const schema = v.picklist(EVENT_VARIANTS);
+
     for (const variant of EVENT_VARIANTS) {
       expect(v.parse(schema, variant)).toBe(variant);
     }
+
     expect(() => v.parse(schema, 'not_a_variant')).toThrow();
   });
 
@@ -63,6 +65,7 @@ describe('buildModelCallEvent — usage is always present, pricing is guarded', 
   // Per-1M-token rates, which is what priceCall divides by. One million input
   // and one million output tokens therefore cost 1 + 2 = $3.
   const pricing: ModelPricing = { input: 1, output: 2 };
+
   const report = (over: Partial<ModelCallReport> = {}): ModelCallReport => ({
     source: 'judge', usage: { input: 1_000_000, output: 1_000_000 }, spec: 'openai/gpt-x', ...over,
   });
@@ -145,6 +148,7 @@ describe('classifyRunEnd — a user Stop is aborted on every backend', () => {
       completed: false, interrupted: true,
       errorText: 'The turn was interrupted before it finished.',
     });
+
     expect(classified).toEqual({ reason: 'aborted' });
     expect('error' in classified).toBe(false);
   });
@@ -187,6 +191,7 @@ describe('the mid-work invariant is loud when it breaks', () => {
   function classifyWithLog(facts: Parameters<typeof classifyRunEnd>[0]) {
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
+
     try {
       return { classified: classifyRunEnd(facts), emitted: log.emitted };
     } finally {
@@ -198,6 +203,7 @@ describe('the mid-work invariant is loud when it breaks', () => {
     const { emitted } = classifyWithLog({
       completed: true, interrupted: false, lastFinishReason: TOOL_CALLS_PENDING,
     });
+
     const tripped = emitted.filter((row) => row.event === TURN_ENDED_MID_WORK);
     expect(tripped).toHaveLength(1);
     // A failure with a classification, not a bare event: the state is impossible,
@@ -214,6 +220,7 @@ describe('the mid-work invariant is loud when it breaks', () => {
     const { classified } = classifyWithLog({
       completed: true, interrupted: false, lastFinishReason: TOOL_CALLS_PENDING,
     });
+
     expect(classified).toEqual({ reason: 'completed' });
   });
 
@@ -223,6 +230,7 @@ describe('the mid-work invariant is loud when it breaks', () => {
     const { classified, emitted } = classifyWithLog({
       completed: true, interrupted: false, lastFinishReason: 'stop',
     });
+
     expect(classified).toEqual({ reason: 'completed' });
     expect(emitted.filter((row) => row.event === TURN_ENDED_MID_WORK)).toHaveLength(0);
   });
@@ -236,6 +244,7 @@ describe('the mid-work invariant is loud when it breaks', () => {
     const { classified, emitted } = classifyWithLog({
       completed: true, interrupted: true, lastFinishReason: TOOL_CALLS_PENDING,
     });
+
     expect(classified).toEqual({ reason: 'aborted' });
     expect(emitted.filter((row) => row.event === TURN_ENDED_MID_WORK)).toHaveLength(0);
   });
@@ -245,6 +254,7 @@ describe('the mid-work invariant is loud when it breaks', () => {
       completed: false, interrupted: false,
       errorText: 'provider 500', lastFinishReason: TOOL_CALLS_PENDING,
     });
+
     expect(classified).toEqual({ reason: 'error', error: 'provider 500' });
     expect(emitted.filter((row) => row.event === TURN_ENDED_MID_WORK)).toHaveLength(0);
   });
@@ -265,6 +275,7 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
   const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
+
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
     sessionWindow: store,
@@ -281,26 +292,36 @@ function seamOrchestrator(opts?: { enabled?: boolean }) {
     // an empty drain would make the recording look like it lost the review.
     runDeferredTurnReviews: async () => {
       const taken = store.takeQueuedReviews(8);
+
       for (const row of taken.reviews) {
         recorded.push(row.turn);
         store.settleReview(row.id);
       }
+
       return { reviewed: taken.reviews.length, refused: taken.refused };
     },
   };
+
   const broadcasts: BroadcastEvent[] = [];
   const enqueued: ProgrammaticTurn[] = [];
+
   const host: BackendHost = {
     broadcast: (event) => { broadcasts.push(event); },
-    enqueueTurn: async (i) => { enqueued.push(i); return { status: 'queued' }; },
+    enqueueTurn: async (i) => {
+      enqueued.push(i);
+
+      return { status: 'queued' };
+    },
     turnInFlight: () => false,
     setTimer: () => {},
   };
+
   const eventDb = new Database(':memory:');
   const eventSql: SqlExec = makeSqlExec(eventDb);
   initEventsHubTables(eventSql);
   const eventActor = createTestActorsOver(eventDb).main;
   const orch = new AgentOrchestrator({ host, engine, eventLog: new EventLog(eventSql, eventActor) });
+
   return { orch, recorded };
 }
 
@@ -416,6 +437,7 @@ describe('buildProviderCatalogSnapshot — one formula, deterministic', () => {
       { provider: 'z', reason: 'r' },
       { provider: 'a', label: 'Ay', reason: 'r' },
     ]);
+
     expect(snapshot.unavailableProviders).toEqual([
       { provider: 'a', label: 'Ay', reason: 'r' },
       { provider: 'z', label: 'z', reason: 'r' },
@@ -443,7 +465,13 @@ describe('ProviderListingCache — complete listings only, guarded by generation
 
   test('a complete listing is memoized; the second read is a hit', async () => {
     let sweeps = 0;
-    const cache = new ProviderListingCache(async () => { sweeps += 1; return clean; });
+
+    const cache = new ProviderListingCache(async () => {
+      sweeps += 1;
+
+      return clean;
+    });
+
     expect((await cache.read()).cache).toBe('miss');
     expect((await cache.read()).cache).toBe('hit');
     expect(sweeps).toBe(1);
@@ -453,10 +481,13 @@ describe('ProviderListingCache — complete listings only, guarded by generation
   // one would hold that window open past the fault it came from.
   test('a degraded listing is returned but never cached', async () => {
     let sweeps = 0;
+
     const cache = new ProviderListingCache(async () => {
       sweeps += 1;
+
       return { models: ['a/1'], failures: [{ provider: 'b', reason: '503' }] };
     });
+
     expect((await cache.read()).cache).toBe('miss');
     expect((await cache.read()).cache).toBe('miss');
     expect(sweeps).toBe(2);
@@ -465,7 +496,14 @@ describe('ProviderListingCache — complete listings only, guarded by generation
   test('concurrent callers join ONE sweep', async () => {
     let sweeps = 0;
     const gate = Promise.withResolvers<void>();
-    const cache = new ProviderListingCache(async () => { sweeps += 1; await gate.promise; return clean; });
+
+    const cache = new ProviderListingCache(async () => {
+      sweeps += 1;
+      await gate.promise;
+
+      return clean;
+    });
+
     const first = cache.read();
     const second = cache.read();
     gate.resolve();
@@ -480,7 +518,14 @@ describe('ProviderListingCache — complete listings only, guarded by generation
   test('a listing whose sweep straddled an invalidation is returned but not cached', async () => {
     let sweeps = 0;
     const gate = Promise.withResolvers<void>();
-    const cache = new ProviderListingCache(async () => { sweeps += 1; await gate.promise; return clean; });
+
+    const cache = new ProviderListingCache(async () => {
+      sweeps += 1;
+      await gate.promise;
+
+      return clean;
+    });
+
     const inFlight = cache.read();
     cache.invalidate();
     gate.resolve();
@@ -491,7 +536,13 @@ describe('ProviderListingCache — complete listings only, guarded by generation
 
   test('invalidate drops the cached listing so the next read sweeps again', async () => {
     let sweeps = 0;
-    const cache = new ProviderListingCache(async () => { sweeps += 1; return clean; });
+
+    const cache = new ProviderListingCache(async () => {
+      sweeps += 1;
+
+      return clean;
+    });
+
     await cache.read();
     expect((await cache.read()).cache).toBe('hit');
     cache.invalidate();
@@ -505,7 +556,13 @@ describe('ProviderListingCache — complete listings only, guarded by generation
     // passes for the wrong reason. Repeated reads with no invalidation between
     // them is the observable form of "only a signal expires this".
     let sweeps = 0;
-    const cache = new ProviderListingCache(async () => { sweeps += 1; return clean; });
+
+    const cache = new ProviderListingCache(async () => {
+      sweeps += 1;
+
+      return clean;
+    });
+
     for (let i = 0; i < 5; i++) await cache.read();
     expect(sweeps).toBe(1);
   });
@@ -568,6 +625,7 @@ describe('the sandbox contract — one namespace for every tool', () => {
         execute: async () => 'x',
       }),
     };
+
     const rendered = renderToolsDeclaration(native, [{ name: 'summarize', description: 'Folds a report' }]);
     expect(rendered).toContain('export declare const tools: {');
     expect(rendered).toContain('file(input: { action: "read" | "edit" | "write"; /** A workspace path. */ path: string }): Promise<unknown>;');
@@ -578,14 +636,21 @@ describe('the sandbox contract — one namespace for every tool', () => {
 
   test('a native tool takes exactly one JSON object through the sandbox', async () => {
     const seen: unknown[] = [];
+
     const bound = nativeToolFunctions({
       file: tool({
         description: 'The file plane.',
         inputSchema: jsonSchema<{ action: string; path?: string }>({ type: 'object' }),
-        execute: async (input) => { seen.push(input); return { ok: true }; },
+        execute: async (input) => {
+          seen.push(input);
+
+          return { ok: true };
+        },
       }),
     });
+
     const file = bound.file;
+
     if (!file) throw new Error('file was not bound');
     expect(await file.execute({ action: 'read', path: 'a' })).toEqual({ ok: true });
     expect(await file.execute()).toEqual({ ok: true });
@@ -614,6 +679,7 @@ async function rejectionOf(work: Promise<unknown>): Promise<Error> {
     if (err instanceof Error) return err;
     throw new Error(`expected an Error rejection, got ${String(err)}`, { cause: err });
   }
+
   throw new Error('expected a rejection, got a resolved value');
 }
 
@@ -650,10 +716,12 @@ describe('craft failure attribution — the same marker in both substrates', () 
   // "simplify" them back into one.
   test('the label replaces an empty description; the codec preserves it', () => {
     expect(craftedToolDescription('f', '')).toBe('Crafted tool: f');
+
     const stored: CraftedTool = {
       name: 'f', description: '', code: 'async () => 1',
       params: null, scope: 'local', createdAt: 0, updatedAt: 0,
     };
+
     expect(toCraftedToolSource(stored)?.description).toBe('');
   });
 });
@@ -686,6 +754,7 @@ describe('the post-settle lane verdict is ONE core decision', () => {
     ['error', 'build', false],
     ['aborted', 'build', false],
   ] as const;
+
   for (const [status, mode, open] of cases) {
     test(`a ${status} ${mode} turn ${open ? 'opens' : 'closes'} the improvement lanes`, () => {
       const { orch } = seamOrchestrator();

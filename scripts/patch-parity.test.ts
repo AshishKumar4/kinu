@@ -44,6 +44,7 @@ import {
 } from './patch-parity';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const MARKER = '// patch-parity fixture drift';
 
 interface Fixture {
@@ -68,6 +69,7 @@ function rootWithPatch(label: string, entry: PatchedDependency, patch: string): 
   const target = join(root, entry.patch);
   mkdirSync(dirname(target), { recursive: true });
   writeFileSync(target, patch);
+
   return root;
 }
 
@@ -80,24 +82,28 @@ function rootWithPatch(label: string, entry: PatchedDependency, patch: string): 
  */
 function buildFixture(): Fixture {
   const entry = patchedDependencies(REPO_ROOT)[0];
+
   if (entry === undefined) throw new Error('package.json declares no patchedDependencies');
 
   const pristine = pristineTree(bunCacheDir(REPO_ROOT), entry.pkg, entry.version);
   const committed = readFileSync(join(REPO_ROOT, entry.patch), 'utf8');
   const files = parsePatch(committed);
   const modified = files.find((f) => f.from !== undefined && f.to !== undefined);
+
   if (modified?.to === undefined || modified.from === undefined) {
     throw new Error(`${entry.patch} modifies no existing file, so it cannot exercise drift`);
   }
 
   // A repository holding the upstream bytes of exactly the files the patch names.
   const repo = scratchDir('patch-parity-repo');
+
   for (const file of files) {
     if (file.from === undefined) continue;
     const target = join(repo, file.from);
     mkdirSync(dirname(target), { recursive: true });
     cpSync(join(pristine, file.from), target);
   }
+
   const pristineModules = scratchDir('patch-parity-pristine');
   cpSync(repo, join(pristineModules, entry.pkg), { recursive: true });
 
@@ -130,12 +136,14 @@ function buildFixture(): Fixture {
 }
 
 const fixture = buildFixture();
+
 const cache = bunCacheDir(REPO_ROOT);
 
 describe('patch-parity — the governed set comes from package.json', () => {
   test('every declared patch exists and the set is not empty', () => {
     const declared = patchedDependencies(REPO_ROOT);
     expect(declared.length).toBeGreaterThan(0);
+
     for (const entry of declared) {
       expect(Bun.file(join(REPO_ROOT, entry.patch)).size).toBeGreaterThan(0);
       expect(entry.version).toMatch(/^\d/);
@@ -147,6 +155,7 @@ describe('patch-parity — the governed set comes from package.json', () => {
       v.object({ patchedDependencies: v.record(v.string(), v.string()) }),
       JSON.parse(readFileSync(join(REPO_ROOT, 'package.json'), 'utf8')),
     );
+
     const read = patchedDependencies(REPO_ROOT).map((e) => `${e.pkg}@${e.version}`).sort();
     expect(read).toEqual(Object.keys(manifest.patchedDependencies).sort());
   });

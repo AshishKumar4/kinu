@@ -38,7 +38,9 @@ const infrastructure = deriveInfrastructure();
 function authStore(environment: string): Resource {
   const found = infrastructure.resources.find((resource) =>
     resource.kind === 'kv' && resource.environments.includes(environment));
+
   if (found === undefined) throw new Error(`fixture lost ${environment}'s auth store`);
+
   return found;
 }
 
@@ -107,6 +109,7 @@ describe('the inventory is derived from the manifest, not written beside it', ()
   test('requiredness comes from `Env`, not from an opinion here', () => {
     const required = (id: string): boolean | undefined =>
       infrastructure.resources.find((resource) => resource.id === id)?.required;
+
     // AUTH_KV is not optional in Env; BACKUP_BUCKET and MEMORY_VECTORS are.
     expect(authStore('production').required).toBe(true);
     expect(required('r2.kinu-backups')).toBe(false);
@@ -140,12 +143,15 @@ describe('the inventory is derived from the manifest, not written beside it', ()
 describe('the supply census is pinned to `Env`, one environment at a time', () => {
   function environmentNamed(key: string): InfraEnvironment {
     const found = infrastructure.environments.find((entry) => entry.key === key);
+
     if (found === undefined) throw new Error(`fixture lost the ${key} environment`);
+
     return found;
   }
 
   const production = environmentNamed('production');
   const staging = environmentNamed('staging');
+
   const names = (fields: readonly { readonly name: string }[]): readonly string[] =>
     fields.map((field) => field.name);
 
@@ -212,6 +218,7 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
   test('a classified value that every environment supplies is a stale entry', () => {
     const everywhere = withVars((environment) =>
       new Map([...environment.vars, ['ANALYTICS_SQL_API_TOKEN', 'set-as-a-var']]));
+
     const drift = supplyDrift(everywhere);
     expect(drift).toHaveLength(1);
     expect(drift[0]).toStartWith('ANALYTICS_SQL_API_TOKEN');
@@ -223,6 +230,7 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
     // `continue`ing the loop on every `config-var` entry would leave nothing
     // checking them at all, in any environment.
     const listed = { state: 'present', detail: 'fixture', names: [] } as const;
+
     const verdictOf = (environment: InfraEnvironment, name: string): string | undefined =>
       supplyRows(environment, listed).find((entry) => entry.name === name)?.verdict;
 
@@ -237,6 +245,7 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
 
   test('a required value missing from one environment fails that environment by name', () => {
     const held = (names: readonly string[]) => ({ state: 'present', detail: 'fixture', names } as const);
+
     for (const environment of [production, staging]) {
       const missing = audit(infrastructure, [], supplyRows(environment, held([])), []);
       expect(missing.findings.some((entry) =>
@@ -254,14 +263,17 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
     // A gate that says "ok" without naming what it looked at is a gate nobody
     // can tell from a gate that looked at nothing.
     const fields = envFields();
+
     for (const environment of [production, staging]) {
       const summary = supplySummary(environment, fields);
       expect(summary).toStartWith(`${environment.key} supplies `);
       expect(summary).toContain(`of ${String(fields.length)} \`Env\` fields`);
+
       for (const field of supplyCensus(environment, fields)) {
         expect(summary).toContain(field.name);
       }
     }
+
     // And the two environments' governed sets genuinely differ, which is the
     // property a union destroyed.
     expect(supplySummary(staging, fields)).toContain('EMAIL_DOMAIN');
@@ -292,9 +304,12 @@ describe('the supply census is pinned to `Env`, one environment at a time', () =
 describe('the control plane\'s outer Access gate is declared and proved, not assumed', () => {
   function environmentNamed(key: string): InfraEnvironment {
     const found = infrastructure.environments.find((entry) => entry.key === key);
+
     if (found === undefined) throw new Error(`fixture lost the ${key} environment`);
+
     return found;
   }
+
   const production = environmentNamed('production');
   const staging = environmentNamed('staging');
   const ids = infrastructure.resources.map((resource) => resource.id);
@@ -318,6 +333,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
     expect(ids).toContain('access-application.kinu.run');
     expect(ids).toContain('access-policy.kinu.run');
     expect(ids).toContain('access-scope.kinu.run');
+
     for (const id of ['access-organization', 'access-application', 'access-policy', 'access-scope']) {
       const resource = infrastructure.resources.find((entry) => entry.id === `${id}.kinu.run`);
       expect(resource?.required).toBe(true);
@@ -396,6 +412,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
       { id: 'ui', aud, destinations: [{ uri: 'kinu.run/control*' }] },
       { id: 'api', aud: 'c'.repeat(64), destinations: [{ uri: 'kinu.run/api/control*' }] },
     ];
+
     expect(accessCovering(split, 'kinu.run', aud, CONTROL_PLANE_ACCESS_PATHS).covering).toBe(undefined);
     // The failure still reports what the matching aud DOES cover, which is the
     // only thing that tells an operator which half is missing.
@@ -408,6 +425,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
       id: 'narrow', aud,
       destinations: [{ uri: 'kinu.run/control' }, { uri: 'kinu.run/api/control' }],
     }];
+
     expect(accessCovering(exact, 'kinu.run', aud, CONTROL_PLANE_ACCESS_PATHS).covering).toBe(undefined);
 
     // An application on a different aud is not ours, however well it covers.
@@ -433,6 +451,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
         [{ name: 'Everything', aud: 'z', destinations: [{ uri: destination }] }],
         'kinu.run', ['kinu.run'], CONTROL_PLANE_ACCESS_PATHS,
       );
+
       expect(found).toHaveLength(1);
       expect(found[0]).toContain('Everything');
       expect(found[0]).toContain(destination);
@@ -448,6 +467,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
         [{ name: 'Previews', destinations: [{ uri: destination }] }],
         'kinu.run', ['kinu.run'], CONTROL_PLANE_ACCESS_PATHS,
       );
+
       expect(found).toHaveLength(1);
       expect(found[0]).toContain('Previews');
     }
@@ -474,6 +494,7 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
     // passed and the alternative is shipping an unprotected admin plane from a
     // machine that had no credential.
     const deployed = row('worker.kinu', 'present', true, 'wrangler-deploy');
+
     for (const id of ['access-organization.kinu.run', 'access-application.kinu.run',
       'access-policy.kinu.run', 'access-scope.kinu.run']) {
       const missing = audit(infrastructure, [deployed, row(id, 'absent', true)], [], []);
@@ -494,9 +515,11 @@ describe('the control plane\'s outer Access gate is declared and proved, not ass
     // scope finding, and a string written before the run cannot say it.
     const scope = infrastructure.resources.find((entry) => entry.id === 'access-scope.kinu.run');
     const manual = scope?.manual;
+
     if (scope === undefined || manual === undefined) {
       throw new Error('fixture lost the scope resource or its manual step');
     }
+
     expect(observedRow(scope, { state: 'absent', detail: '"Everything" → kinu.run/*' }).detail)
       .toBe('"Everything" → kinu.run/*');
     // With no detail it falls back to the manual step, exactly as every other
@@ -554,11 +577,13 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
 
   test('a deploy-created absence is tolerated only before the Worker exists', () => {
     const missing = row('durable-object.x:New', 'absent', true, 'wrangler-deploy');
+
     const preDeploy = audit(infrastructure, [
       ...clean,
       row('worker.kinu', 'absent', true, 'wrangler-deploy'),
       missing,
     ], [], []);
+
     expect(preDeploy.findings).toEqual([]);
     expect(preDeploy.notes.map((note) => note.includes('created by the deploy itself')))
       .toEqual([true, true]);
@@ -568,6 +593,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
       row('worker.kinu', 'present', true, 'wrangler-deploy'),
       missing,
     ], [], []);
+
     expect(deployed.notes).toEqual([]);
     expect(deployed.findings).toHaveLength(1);
     expect(deployed.findings[0]).toContain('durable-object.x:New');
@@ -593,6 +619,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
     // failed on production's cron entry), while an entry whose row IS declared
     // and observable is stale and fails.
     const gatewayId = [...UNOBSERVABLE.keys()].find((id) => id.startsWith('ai-gateway.'));
+
     if (gatewayId === undefined) throw new Error('fixture expects the ai-gateway blind entry');
     const stale = audit(infrastructure, [row(gatewayId, 'present', true)], [], []);
     expect(stale.findings.length).toBe(1);
@@ -613,6 +640,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
       environment: 'production', name: 'CREDENTIAL_ENCRYPTION_KEY',
       verdict: 'absent' as const, required, detail: 'absent',
     }];
+
     expect(audit(infrastructure, clean, secret(true), []).findings.length).toBe(1);
     expect(audit(infrastructure, clean, secret(false), []).findings).toEqual([]);
   });
@@ -622,6 +650,7 @@ describe('the verdict keeps absent, unknown and unobservable apart', () => {
       environment: 'production', name: '(all secrets)', verdict: 'unknown', required: true,
       detail: 'token expired',
     }], []);
+
     expect(unreadable.findings.length).toBe(1);
     expect(unreadable.findings[0]).toContain('token expired');
   });
@@ -645,13 +674,16 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     row(authStore('staging').id, 'present', true),
     ...[...UNOBSERVABLE.keys()].map((id) => row(id, 'unobservable', true)),
   ];
+
   /** Staging's Worker EXISTS. That is what makes this the red case rather than
    *  the first-deploy case the `full` phase already tolerates: the Worker has
    *  been deployed for months and the namespace is new. */
   const deployedWorker = row('worker.kinu-staging', 'present', true, 'wrangler-deploy');
+
   const absentNamespace = row(
     'durable-object.kinu-staging:ControlPlaneDO', 'absent', true, 'wrangler-deploy',
   );
+
   const at = (phase: Phase, rows: readonly Row[], supplied: Parameters<typeof audit>[2] = []) =>
     audit(infrastructure, rows, supplied, [], phase);
 
@@ -724,6 +756,7 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
       // Nothing here can create it at all.
       row('dns-record.staging.kinu.run', 'absent', true, 'manual'),
     ];
+
     const secrets = ['WEBHOOK_ROUTE_SECRET', 'DEV_IDENTITY_SECRET'].map((name) => ({
       environment: 'staging', name, verdict: 'absent' as const, required: true,
       detail: 'prompt — absent ⇒ the feature it names is off',
@@ -753,6 +786,7 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
         deployedWorker,
         row('durable-object.kinu-staging:ControlPlaneDO', 'unknown', true, 'wrangler-deploy'),
       ]);
+
       expect(verdict.notes, `${phase} deferred a failed lookup`).toEqual([]);
       expect(verdict.findings, `${phase} tolerated a failed lookup`).toHaveLength(1);
       expect(verdict.findings[0]).toContain('lookup failed');
@@ -769,6 +803,7 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
         deployedWorker,
         row('binding.kinu-staging:EMAIL', 'absent', false, 'wrangler-deploy'),
       ]);
+
       expect(verdict.findings, `${phase} failed on an optional resource`).toEqual([]);
       expect(verdict.notes, `${phase} deferred an optional resource`).toEqual([]);
     }
@@ -793,12 +828,14 @@ describe('the phases differ in exactly one tolerance, and only one direction', (
     // create, which is what keeps the check above from passing vacuously.
     const bucket = at('full', [...clean, deployedWorker,
       row('r2.kinu-backups-staging', 'absent', true, 'wrangler-cli')]).findings.join('\n');
+
     expect(bucket).toContain('bun run infra:provision');
   });
 });
 
 describe('provisioning is idempotent, and refuses what it cannot see', () => {
   const bucket = infrastructure.resources.find((resource) => resource.id === 'r2.kinu-backups');
+
   if (bucket === undefined) throw new Error('fixture lost r2.kinu-backups');
 
   test('a resource that exists is a no-op that says so', () => {
@@ -828,6 +865,7 @@ describe('provisioning is idempotent, and refuses what it cannot see', () => {
   test('a resource no wrangler command creates is refused, not skipped silently', () => {
     // A silently-skipped resource is how the assetless deploy shipped.
     const gateway = infrastructure.resources.find((resource) => resource.id === 'ai-gateway.kinu-ai-gateway');
+
     if (gateway === undefined) throw new Error('fixture lost the AI Gateway');
     const refused = plan(gateway, { state: 'absent' }, undefined);
     expect(refused.action).toBe('refuse');
@@ -873,10 +911,12 @@ describe('teardown refuses by default and never takes a shared resource', () => 
 
     const sweptIds = fate.swept.map((resource) => resource.id);
     expect(sweptIds).toContain('durable-object.kinu:UserDO');
+
     for (const resource of fate.swept) {
       if (resource.kind !== 'durable-object') continue;
       expect(resource.holds).toContain('SQLite storage');
     }
+
     // And nothing that carries data is filed under "survives".
     expect(fate.outlives.every((resource) => resource.holds === undefined)).toBe(true);
   });
@@ -894,7 +934,9 @@ describe('teardown refuses by default and never takes a shared resource', () => 
     // cannot say what would be lost makes the confirmation decorative.
     const bearing = infrastructure.resources.filter((resource) => resource.holds !== undefined);
     expect(bearing.length).toBeGreaterThan(4);
+
     for (const resource of bearing) expect((resource.holds ?? '').length).toBeGreaterThan(40);
+
     for (const kind of ['kv', 'r2', 'vectorize', 'durable-object']) {
       expect(bearing.some((resource) => resource.kind === kind)).toBe(true);
     }
@@ -904,6 +946,7 @@ describe('teardown refuses by default and never takes a shared resource', () => 
 describe('what the manifest cannot express is recorded rather than assumed', () => {
   test('every uncaptured dependency carries evidence and a re-check', () => {
     expect(UNCAPTURED.length).toBeGreaterThan(5);
+
     for (const item of UNCAPTURED) {
       expect(item.what.length).toBeGreaterThan(40);
       expect(item.evidence.length).toBeGreaterThan(40);
@@ -914,6 +957,7 @@ describe('what the manifest cannot express is recorded rather than assumed', () 
   test('every manual resource says what a human must do', () => {
     const manual = infrastructure.resources.filter((resource) => resource.origin === 'manual');
     expect(manual.length).toBeGreaterThan(0);
+
     for (const resource of manual) expect((resource.manual ?? '').length).toBeGreaterThan(30);
   });
 
@@ -927,8 +971,10 @@ describe('what the manifest cannot express is recorded rather than assumed', () 
       'r2.kinu-feedback', 'r2.kinu-feedback-staging', 'r2.nimbus-runtime-cache',
       'vectorize.kinu-memory', 'vectorize.kinu-memory-staging',
     ]);
+
     for (const resource of creatable) {
       expect((resource.create ?? []).length).toBeGreaterThan(1);
+
       // No shell, so no quoting: a name reaches wrangler as one argv element.
       for (const word of resource.create ?? []) expect(word).not.toContain(' ');
     }

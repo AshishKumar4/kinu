@@ -88,7 +88,9 @@ interface ProbeArgs {
 
 function surfaceUnder(rt: AgentRuntime, surface: DispatchSurface) {
   const entry = surface.build(rt)[surface.tool];
+
   if (!entry) throw new Error(`expected the ${surface.tool} tool to be registered`);
+
   return toolExecute<ProbeArgs, unknown>(entry);
 }
 
@@ -96,6 +98,7 @@ function runtime(): AgentRuntime {
   const { rt, testSql } = createTestRuntime();
   initAllTables(testSql.execRaw, rt.storage.sql);
   initTaskListTable(testSql.execRaw);
+
   return rt;
 }
 
@@ -105,6 +108,7 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
       const exec = surfaceUnder(runtime(), surface);
       const pending = exec({ [surface.field]: MALFORMED, content: 'body', query: 'q', path: 'a.txt' });
       await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
+
       // Every reachable value is offered, so one retry can succeed.
       for (const word of surface.vocabulary) await expect(pending).rejects.toThrow(word);
       await expect(pending).rejects.toThrow(surface.field);
@@ -116,26 +120,33 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
     // native tool whose schema declares an enum'd discriminant must appear
     // above.
     const rt = runtime();
+
     const tools = buildBuiltinTools({
       rt,
       webSearch: noopWebSearch,
       report: { report: async () => ({ ok: true }) },
     });
+
     const named = SURFACES.map((surface) => surface.tool);
+
     const dispatching = Object.keys(tools).filter((name) => {
       const parsed = v.safeParse(
         v.object({ jsonSchema: v.object({ properties: v.record(v.string(), v.unknown()) }) }),
         tools[name]?.inputSchema,
       );
+
       if (!parsed.success) return false;
       const properties = parsed.output.jsonSchema.properties;
+
       return Object.keys(properties).some((key) => {
         const enumerated = v.safeParse(v.object({ enum: v.array(v.string()) }), properties[key]);
+
         // Only the DISCRIMINANT counts: `tasks.status`/`tasks.stance` are enum'd
         // arguments of an action, not the choice of action itself.
         return enumerated.success && (key === 'action' || key === 'status');
       });
     });
+
     expect(dispatching.filter((name) => !named.includes(name))).toEqual([]);
     expect(dispatching.length).toBeGreaterThanOrEqual(4);
   });
@@ -144,10 +155,12 @@ describe('a model-supplied discriminant is refused with its vocabulary', () => {
 describe('a well-formed call is unaffected', () => {
   test('the vocabulary check does not stand between the model and a real call', async () => {
     const exec = surfaceUnder(runtime(), SURFACES[0]!);
+
     const added = v.parse(
       v.object({ added: v.array(v.object({ id: v.string() })) }),
       await exec({ action: 'add', titles: ['ship it'] }),
     );
+
     expect(added.added.map((t) => t.id)).toEqual(['t1']);
   });
 });

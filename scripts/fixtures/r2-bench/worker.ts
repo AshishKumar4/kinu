@@ -68,7 +68,9 @@ const CLASS_A: readonly string[] = [
   'put', 'list', 'createMultipartUpload', 'resumeMultipartUpload',
   'multipart.uploadPart', 'multipart.complete',
 ];
+
 const CLASS_B: readonly string[] = ['get', 'head'];
+
 /**
  * Counted, billed at nothing, and reported anyway.
  *
@@ -124,19 +126,25 @@ export class BenchOpCounter extends DurableObject {
     let classB = 0;
     let classFree = 0;
     let total = 0;
+
     for (const [method, count] of this.#calls) {
       calls[method] = count;
       total += count;
+
       if (CLASS_A.includes(method)) classA += count;
+
       if (CLASS_B.includes(method)) classB += count;
+
       if (CLASS_FREE.includes(method)) classFree += count;
     }
+
     return { calls, classA, classB, classFree, total };
   }
 
   async reset(): Promise<OpTally> {
     const tally = await this.read();
     this.#calls.clear();
+
     return tally;
   }
 }
@@ -173,16 +181,19 @@ class CountingMultipartUpload implements R2MultipartUpload {
 
   uploadPart(...args: Parameters<R2MultipartUpload['uploadPart']>): Promise<R2UploadedPart> {
     this.#count('multipart.uploadPart');
+
     return this.#upload.uploadPart(...args);
   }
 
   complete(...args: Parameters<R2MultipartUpload['complete']>): Promise<R2Object> {
     this.#count('multipart.complete');
+
     return this.#upload.complete(...args);
   }
 
   abort(): Promise<void> {
     this.#count('multipart.abort');
+
     return this.#upload.abort();
   }
 }
@@ -207,32 +218,38 @@ class CountingBucket implements R2Bucket {
 
   readonly head: R2Bucket['head'] = (key) => {
     this.#count('head');
+
     return this.#bucket.head(key);
   };
 
   readonly get: R2Bucket['get'] = (key, options) => {
     this.#count('get');
+
     return this.#bucket.get(key, options);
   };
 
   readonly put: R2Bucket['put'] = (key, value, options) => {
     this.#count('put');
+
     return this.#bucket.put(key, value, options);
   };
 
   readonly delete: R2Bucket['delete'] = (keys) => {
     this.#count('delete');
+
     return this.#bucket.delete(keys);
   };
 
   readonly list: R2Bucket['list'] = (options) => {
     this.#count('list');
+
     return this.#bucket.list(options);
   };
 
   readonly createMultipartUpload: R2Bucket['createMultipartUpload'] = async (key, options) => {
     this.#count('createMultipartUpload');
     const upload = await this.#bucket.createMultipartUpload(key, options);
+
     return new CountingMultipartUpload(upload, this.#count);
   };
 
@@ -241,6 +258,7 @@ class CountingBucket implements R2Bucket {
   // would leave `.complete` undefined on every part of every multipart upload.
   readonly resumeMultipartUpload: R2Bucket['resumeMultipartUpload'] = (key, uploadId) => {
     this.#count('resumeMultipartUpload');
+
     return new CountingMultipartUpload(this.#bucket.resumeMultipartUpload(key, uploadId), this.#count);
   };
 }
@@ -268,11 +286,13 @@ function countingBucket(
       pending.clear();
       await counter.add(batch);
     }
+
     inFlight = null;
   };
 
   return new CountingBucket(bucket, (op) => {
     pending.set(op, (pending.get(op) ?? 0) + 1);
+
     if (inFlight === null) {
       inFlight = drain();
       ctx.waitUntil(inFlight);
@@ -302,14 +322,18 @@ function countingBucket(
 class BenchContainerProxy extends SdkContainerProxy {
   constructor(ctx: ExecutionContext, env: BenchEnv) {
     const counter = env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops'));
+
     const wrapped: BenchEnv = {
       ...env,
       BACKUP_BUCKET: countingBucket(env.BACKUP_BUCKET, counter, ctx),
     };
+
     super(ctx, wrapped);
   }
 }
+
 Object.defineProperty(BenchContainerProxy, 'name', { value: 'ContainerProxy' });
+
 export { BenchContainerProxy as ContainerProxy };
 
 // ── the driver-facing API ───────────────────────────────────────────────────
@@ -325,10 +349,15 @@ interface MountBody {
   readOnly?: boolean;
   s3fsOptions?: string[];
 }
+
 interface UnmountBody { mountPath: string }
+
 interface ExecBody { command: string; cwd?: string; timeoutMs?: number }
+
 interface SpawnBody { command: string; cwd?: string }
+
 interface WriteBody { path: string; content: string }
+
 interface PurgeBody { prefix: string; whole?: boolean }
 
 /**
@@ -361,9 +390,12 @@ function authorized(request: Request, expected: string | undefined): boolean {
   if (expected === undefined || expected.length === 0) return false;
   const header = request.headers.get('authorization') ?? '';
   const presented = header.startsWith('Bearer ') ? header.slice(7) : '';
+
   if (presented.length !== expected.length) return false;
   let diff = 0;
+
   for (let i = 0; i < expected.length; i++) diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
+
   return diff === 0;
 }
 
@@ -371,9 +403,11 @@ function authorized(request: Request, expected: string | undefined): boolean {
 async function purgePrefix(bucket: R2Bucket, prefix: string): Promise<{ deleted: number; passes: number }> {
   let deleted = 0;
   let passes = 0;
+
   for (;;) {
     const listed = await bucket.list({ prefix, limit: 1000 });
     passes++;
+
     if (listed.objects.length === 0) return { deleted, passes };
     await bucket.delete(listed.objects.map((object) => object.key));
     deleted += listed.objects.length;
@@ -384,14 +418,17 @@ async function inventory(bucket: R2Bucket, prefix: string): Promise<{ objects: n
   let objects = 0;
   let bytes = 0;
   let cursor: string | undefined;
+
   for (;;) {
     const listed = await bucket.list(
       cursor === undefined ? { prefix, limit: 1000 } : { prefix, limit: 1000, cursor },
     );
+
     for (const object of listed.objects) {
       objects++;
       bytes += object.size;
     }
+
     if (!listed.truncated) return { objects, bytes };
     cursor = listed.cursor;
   }
@@ -422,6 +459,7 @@ export default {
             + 'tar --version | head -1; fuse-overlayfs --version 2>&1 | head -1; '
             + 'echo "SANDBOX_VERSION=${SANDBOX_VERSION:-unset}"',
           );
+
           return json({ ok: true, stdout: probe.stdout, stderr: probe.stderr, exitCode: probe.exitCode });
         }
 
@@ -435,11 +473,13 @@ export default {
           // Nothing is mounted before the first arm, so a refusal is expected
           // here; it is reported so that a refusal which is NOT that is visible.
           let preUnmountError = '';
+
           try {
             await sandbox.unmountBucket(body.mountPath);
           } catch (error) {
             preUnmountError = error instanceof Error ? error.message : String(error);
           }
+
           const started = Date.now();
           await sandbox.mountBucket('BACKUP_BUCKET', body.mountPath, {
             prefix: body.prefix,
@@ -454,6 +494,7 @@ export default {
           // "the call returned" into "the mount is present", which are
           // different claims after a remount.
           const check = await sandbox.exec(`mountpoint -q ${body.mountPath} && echo MOUNTED || echo ABSENT`);
+
           return json({
             ok: check.stdout.trim() === 'MOUNTED',
             mountMs,
@@ -465,8 +506,10 @@ export default {
         case 'POST /unmount': {
           const body = await request.json<UnmountBody>();
           const started = Date.now();
+
           try {
             await sandbox.unmountBucket(body.mountPath);
+
             return json({ ok: true, unmountMs: Date.now() - started, reason: '' });
           } catch (error) {
             return json({
@@ -481,6 +524,7 @@ export default {
           const body = await request.json<ExecBody>();
           const started = Date.now();
           const result = await sandbox.exec(body.command, { cwd: body.cwd, timeout: body.timeoutMs });
+
           return json({
             ok: result.exitCode === 0,
             exitCode: result.exitCode,
@@ -498,12 +542,14 @@ export default {
           // probe's sentinel with tiny execs instead of holding one request open.
           const body = await request.json<SpawnBody>();
           const started = await sandbox.startProcess(body.command, { cwd: body.cwd });
+
           return json({ ok: true, processId: started.id, ms: 0 });
         }
 
         case 'POST /write': {
           const body = await request.json<WriteBody>();
           await sandbox.writeFile(body.path, body.content);
+
           return json({ ok: true, path: body.path, bytes: body.content.length });
         }
 
@@ -512,12 +558,15 @@ export default {
           // the next start has completed before the driver verifies anything.
           const stopped = Date.now();
           let stopError = '';
+
           try {
             await sandbox.stop();
           } catch (error) {
             stopError = error instanceof Error ? error.message : String(error);
           }
+
           const probe = await sandbox.exec('echo restarted');
+
           return json({
             ok: probe.stdout.trim() === 'restarted',
             restartMs: Date.now() - stopped,
@@ -530,21 +579,25 @@ export default {
           // requests, so a read taken the instant a phase ends can miss the last
           // batch. The delay sits outside every measured window.
           await scheduler.wait(750);
+
           return json({ ok: true, tally: await counter.read() });
         }
 
         case 'POST /ops/reset': {
           await scheduler.wait(750);
+
           return json({ ok: true, tally: await counter.reset() });
         }
 
         case 'GET /inventory': {
           const prefix = url.searchParams.get('prefix') ?? '';
+
           return json({ ok: true, prefix, ...(await inventory(env.BACKUP_BUCKET, prefix)) });
         }
 
         case 'POST /purge': {
           const body = await request.json<PurgeBody>();
+
           // An empty prefix means the whole bucket, which is only ever correct
           // when the caller created the bucket for this run. Requiring the
           // intent to be stated keeps a typo'd prefix from becoming a
@@ -552,6 +605,7 @@ export default {
           if (body.prefix.length === 0 && body.whole !== true) {
             return json({ error: 'refusing to purge an empty prefix without whole:true' }, 400);
           }
+
           return json({ ok: true, prefix: body.prefix, ...(await purgePrefix(env.BACKUP_BUCKET, body.prefix)) });
         }
 

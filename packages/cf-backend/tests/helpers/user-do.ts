@@ -25,6 +25,7 @@ import * as v from 'valibot';
 mockAgentsSdk();
 
 const { UserDO } = await import('../../src/user/user-do');
+
 type UserDOInstance = InstanceType<typeof UserDO>;
 
 /** A `SqlExec` over bun:sqlite — the same seam the Durable Object provides. */
@@ -32,22 +33,30 @@ export function sqlExec(db: Database): SqlExec {
   return {
     exec(query: string, ...bindings: SqlValue[]) {
       type NativeSqlValue = string | number | boolean | null | Uint8Array;
+
       type NativeSqlRow = Record<string, NativeSqlValue>;
+
       const bound: SQLQueryBindings[] = bindings.map((value) =>
         value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+
       const statement = db.prepare<NativeSqlRow, SQLQueryBindings[]>(query);
+
       if (statement.columnNames.length === 0) {
         statement.run(...bound);
+
         return { toArray: () => [] };
       }
+
       const rows: SqlExecRow[] = statement.all(...bound).map((row) => Object.fromEntries(
         Object.entries(row).map(([column, value]) => {
           if (!(value instanceof Uint8Array)) return [column, value];
           const copy = new Uint8Array(value.byteLength);
           copy.set(value);
+
           return [column, copy.buffer];
         }),
       ));
+
       return { toArray: () => rows };
     },
   };
@@ -258,6 +267,7 @@ function installRecordingSocketPair(): void {
       constructor() {
         const sent: string[] = [];
         let attachment: JsonValue = null;
+
         const server = {
           readyState: 1,
           send: (data: string) => { sent.push(data); },
@@ -265,6 +275,7 @@ function installRecordingSocketPair(): void {
           serializeAttachment: (value: JsonValue) => { attachment = value; },
           deserializeAttachment: () => attachment,
         };
+
         // Delegates every member to `server`, so `drop` below is visible
         // through it. Same construction as the fixture socket further down:
         // the UserDO reads a device socket only through send, close,
@@ -290,6 +301,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const consentPrompts: TestUserDO['consentPrompts'] = [];
   const raisedConsentIds: TestUserDO['raisedConsentIds'] = [];
   const deviceFrames: DeviceFrame[] = [];
+
   // Bound after construction: the socket answers THROUGH the object that owns
   // it, exactly as the runtime's own message handler does.
   /** Late-bound self reference: the socket answers THROUGH the object that
@@ -301,20 +313,26 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   // The device hub reads liveness off hibernatable sockets tagged by device id.
   // Which device this socket belongs to is settable, because the id only exists
   let attached = options.connectedDeviceId ?? null;
+
   const socketBody = {
     readyState: 1,
     deserializeAttachment: () => ({ device: attached }),
     serializeAttachment: () => {},
     send: (data: string) => {
       const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
+
       if (!frame.success) return;
       const call: DeviceFrame = { id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [] };
+
       if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
+
       if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
       deviceFrames.push(call);
       const responder = options.deviceResponder;
       const owner = hub.current;
+
       if (!responder || !owner) return;
+
       // The daemon answers a method that throws with an error frame, so a double
       // that can only ever answer `result` cannot exercise a failing device call.
       // The harness fiber owns a delayed answer through the same durable lifecycle
@@ -332,6 +350,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     },
     close: () => {},
   };
+
   // Unchecked and named: the platform socket interface is wide and hibernation
   // is workerd-only, so a test cannot construct one. The double rides the
   // prototype the way helpers/jsrpc-stub.ts builds stubs; the hub reads only
@@ -354,26 +373,34 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
    */
   const registries = new Map<string, DeviceConsentRegistry>();
   let mintedConsents = 0;
+
   const registryFor = (name: string): DeviceConsentRegistry => {
     const existing = registries.get(name);
+
     if (existing) return existing;
+
     const registry: DeviceConsentRegistry = new DeviceConsentRegistry({
       newId: () => `cons-${++mintedConsents}`,
       announce: (notice) => {
         if (notice.kind !== 'raised') return;
         const consent = notice.consent;
         raisedConsentIds.push(consent.consentId);
+
         const prompt: TestUserDO['consentPrompts'][number] = {
           workspace: name,
           method: consent.method,
           command: consent.command,
         };
+
         if (consent.workspaceName) prompt.workspaceName = consent.workspaceName;
         consentPrompts.push(prompt);
+
         if (consentDecision !== 'hold') registry.resolve(consent.consentId, consentDecision);
       },
     });
+
     registries.set(name, registry);
+
     return registry;
   };
 
@@ -383,13 +410,16 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const live: Array<{ ws: typeof socket; tags: string[] }> = [];
   /** The fleet's fake daemons, by device id, each with its own socket. */
   const daemons: Array<{ deviceId: string; ws: WebSocket; frames: DeviceFrame[] }> = [];
+
   /** The tags a socket answers to, as the platform would report them: the
    *  ones it was accepted with, or — for the attachment-bound fakes — the
    *  device tag its attachment implies. */
   const tagsOf = (ws: WebSocket): string[] => {
     const accepted = live.find((entry) => entry.ws === ws);
+
     if (accepted) return accepted.tags;
     const attachment = v.safeParse(v.object({ device: v.nullable(v.string()) }), ws.deserializeAttachment());
+
     return attachment.success && attachment.output.device !== null ? [`device:${attachment.output.device}`] : [];
   };
 
@@ -410,10 +440,12 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     // does not have, so the harness must not have it either.
     getWebSockets: (tag?: string) => {
       const all = [...(attached === null ? [] : [socket]), ...live.map((entry) => entry.ws), ...daemons.map((d) => d.ws)];
+
       return tag === undefined ? all : all.filter((ws) => tagsOf(ws).includes(tag));
     },
     acceptWebSocket: (ws: typeof socket, tags: string[] = []) => { live.push({ ws, tags }); },
   };
+
   const env: TestUserEnvironment = {
     // The credential store refuses to operate without its key, so a harness
     // exercising the real methods has to supply one exactly as a deployment does.
@@ -423,11 +455,13 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       get: (name: string) => ({
         async destroyAgent() {
           if (options.destroyWorkspaceGate) await options.destroyWorkspaceGate(name);
+
           if (options.destroyWorkspaceError) throw new Error(options.destroyWorkspaceError);
           destroyedWorkspaces.push(name);
         },
         async installWorkspaceCapability(token: string) {
           installed.set(name, token);
+
           return { ok: true as const, missed: options.capabilityPushMissed?.() ?? 0 };
         },
         /** The root re-running its own subtree push with the token it already
@@ -435,10 +469,12 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
          *  same hash, one more attempt at the replicas that missed it. */
         async repushWorkspaceCapability() {
           capabilityRepushes.push(name);
+
           return { missed: options.capabilityPushMissed?.() ?? 0 };
         },
         async getWorkspaceCapabilityHash() {
           const token = installed.get(name);
+
           return token ? sha256Hex(token) : null;
         },
         awaitDeviceConsent(request: DeviceConsentRequest) {
@@ -446,18 +482,22 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         },
         async closeRevokedCliSockets(generation: number) {
           revokedSocketPushes.push(`${name}:${generation}`);
+
           return { closed: 0 };
         },
         async closeRevokedSessionSockets(tokenHash: string) {
           revokedSessionPushes.push(`${name}:${tokenHash}`);
+
           return { closed: 0 };
         },
       }),
     },
   };
+
   if (options.credentialEncryptionKeyPrevious) {
     env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS = options.credentialEncryptionKeyPrevious;
   }
+
   const partialContext: Partial<AgentContext> = {};
   Object.assign(partialContext, ctx);
   // SAFETY: the Agent constructor contract stores this locally constructed
@@ -471,6 +511,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const userDO = new UserDO(agentContext, userEnv);
   rememberMcpManager(inheritedMcpManager(userDO));
   hub.current = userDO;
+
   return {
     userDO, db, sql, installed, destroyedWorkspaces, revokedSocketPushes,
     revokedSessionPushes, capabilityRepushes,
@@ -484,7 +525,9 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     },
     sendDeviceHello: (hello, deviceId) => {
       const target = deviceId === undefined ? socket : daemons.find((d) => d.deviceId === deviceId)?.ws;
+
       if (!target) throw new Error(`no fake daemon is attached for ${deviceId}`);
+
       return userDO.webSocketMessage(target, JSON.stringify(hello));
     },
     attachDevice: (deviceId) => { attached = deviceId; },
@@ -497,23 +540,30 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       // probe THERE: a no-op store would make every status read ask the
       // machine again, and two reads of one unchanged fleet would differ.
       let attachment: JsonValue = { device: deviceId };
+
       const body = {
         readyState: 1,
         deserializeAttachment: () => attachment,
         serializeAttachment: (value: JsonValue) => { attachment = value; },
         send: (data: string) => {
           const frame = v.safeParse(DeviceFrameSchema, JSON.parse(data));
+
           if (!frame.success) return;
+
           const call: DeviceFrame = {
             id: frame.output.id, method: frame.output.method, params: frame.output.params ?? [], device: deviceId,
           };
+
           if (frame.output.sandbox !== undefined) call.sandbox = frame.output.sandbox;
+
           if (frame.output.deviceId !== undefined) call.deviceId = frame.output.deviceId;
           frames.push(call);
           deviceFrames.push(call);
           const responder = options.deviceResponder;
           const owner = hub.current;
+
           if (!responder || !owner) return;
+
           return owner.runFiber('test:device-responder', async () => {
             try {
               const result = await responder(call);
@@ -527,16 +577,19 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         },
         close: () => { body.readyState = 3; },
       };
+
       // Same construction as the harness socket above: the hub reads only the
       // members the body declares, which is the boundary under test.
       const ws: WebSocket = Object.create(body);
       daemons.push({ deviceId, ws, frames });
+
       return {
         deviceId,
         frames,
         close: async () => {
           body.readyState = 3;
           const at = daemons.findIndex((d) => d.ws === ws);
+
           if (at !== -1) daemons.splice(at, 1);
           await userDO.webSocketClose(ws, 1000, 'daemon left', true);
         },
@@ -554,7 +607,9 @@ export async function provisionTestWorkspace(harness: TestUserDO, name: string, 
   await harness.userDO.registerWorkspace(await testOwner(), name, displayName ?? name);
   await harness.userDO.ensureWorkspaceCapability(name, null);
   const token = harness.installed.get(name);
+
   if (!token) throw new Error(`workspace ${name} was not provisioned`);
+
   return token;
 }
 
@@ -565,5 +620,6 @@ export function createdWorkspace(registration: WorkspaceRegistration): Workspace
   if (registration.status !== 'created') {
     throw new Error(`expected registerWorkspace to insert a row, got "${registration.status}"`);
   }
+
   return registration.entry;
 }

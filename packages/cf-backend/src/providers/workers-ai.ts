@@ -30,6 +30,7 @@ export function createWorkersAIProvider(
     async isAvailable(deps) {
       if (developmentBinding) return true;
       const auth = await deps.getAuth(CLOUDFLARE_OAUTH_CRED_KEY);
+
       return !!auth?.baseURL;
     },
     unavailableReason: () => 'Cloudflare OAuth login is required for Workers AI billing.',
@@ -45,7 +46,9 @@ export function createWorkersAIProvider(
           fetch: createDirectWorkersAIFetch(developmentBinding),
         }).chatModel(modelId);
       }
+
       const placeholder = 'https://kinu-workers-ai.invalid';
+
       const customFetch = createCloudflareAIFetch({
         credKey: CLOUDFLARE_OAUTH_CRED_KEY,
         getAuth: deps.getAuth,

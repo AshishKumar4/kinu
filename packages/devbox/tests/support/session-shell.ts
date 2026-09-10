@@ -58,18 +58,23 @@ const parsed = new Map<string, string | undefined>();
  *  when it parses. */
 function syntaxRefusal(command: string): string | undefined {
   const held = parsed.get(command);
+
   if (held !== undefined || parsed.has(command)) return held;
   const checked = spawnSync('sh', ['-n', '-c', command], { encoding: 'utf8' });
+
   if (checked.error !== undefined) {
     // No `sh` means this check cannot be made, and a check that quietly stops
     // checking is how the defect above survived a green suite in the first
     // place. Refusing loudly is the only honest answer.
     throw new Error(`the session-shell parse gate could not run sh: ${checked.error.message}`);
   }
+
   const refusal = checked.status === 0
     ? undefined
     : (checked.stderr.trim() || `sh -n exited ${String(checked.status)}`);
+
   parsed.set(command, refusal);
+
   return refusal;
 }
 
@@ -84,7 +89,9 @@ function syntaxRefusal(command: string): string | undefined {
 export function sessionShellRefusal(command: string): Error | undefined {
   if (SHELL_EXIT.test(command)) return sessionTerminated(0);
   const refusal = syntaxRefusal(command);
+
   if (refusal === undefined) return undefined;
+
   // The exit code a POSIX shell answers a parse failure with, and the code the
   // deployed stops really reported.
   return Object.assign(sessionTerminated(2), { shellRefusal: refusal });
@@ -94,6 +101,7 @@ export function sessionShellRefusal(command: string): Error | undefined {
  *  template directly rather than running it through a fake. */
 export function requireSessionShellAccepts(command: string): void {
   const refused = sessionShellRefusal(command);
+
   if (refused !== undefined) {
     throw new Error(`the container's session shell would refuse this command: ${refused.message}\n${command}`);
   }

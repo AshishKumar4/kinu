@@ -60,16 +60,21 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
 
   raw.split('\n').forEach((line, i) => {
     const text = line.trim();
+
     if (!text || text.startsWith('#')) return;
     let parsedJson: unknown;
+
     try {
       parsedJson = JSON.parse(text);
     } catch (err) {
       throw new Error(`${path}:${i + 1}: not valid JSON`, { cause: err });
     }
+
     const parsed = v.safeParse(SpecLineSchema, parsedJson);
+
     if (!parsed.success) throw new Error(`${path}:${i + 1}: ${parsed.issues.map((x) => x.message).join('; ')}`);
     const line_ = parsed.output;
+
     const spec: LongHorizonSpec = {
       mode: line_.mode, seed: line_.seed, entries: line_.entries,
       filler: line_.filler, markers: line_.markers, parts: line_.parts,
@@ -77,6 +82,7 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
 
     const { asks } = buildLongHorizonAsks(spec);
     const leak = longHorizonAsksLeakAnswer(asks, buildLongHorizonQuestions(spec));
+
     if (leak) throw new Error(`${path}:${i + 1}: an ask quotes the answer ("${leak}") — that is not a task`);
 
     specs.set(line_.id, spec);
@@ -94,12 +100,15 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
   });
 
   if (tasks.length === 0) throw new Error(`${path}: no tasks — an empty corpus proves nothing`);
+
   return { corpus: partitionCorpus(tasks, opts), specs, path };
 }
 
 export function specFor(specs: ReadonlyMap<string, LongHorizonSpec>, taskId: string): LongHorizonSpec {
   const spec = specs.get(taskId);
+
   if (!spec) throw new Error(`no long-horizon spec for task ${taskId}`);
+
   return spec;
 }
 
@@ -124,6 +133,7 @@ export function createLongHorizonOracleSolver(specs: ReadonlyMap<string, LongHor
     description: 'writes the generated answers — must pass every task',
     async solve(ctx: SolverContext): Promise<SolverResult> {
       writeAnswerFile(ctx.sandboxDir, specFor(specs, ctx.task.id));
+
       return { modelCalls: 0 };
     },
   };
@@ -138,6 +148,7 @@ export function createLongHorizonNoisySolver(
   label: string,
 ): Solver {
   if (!(rate >= 0 && rate <= 1)) throw new Error(`noisy oracle rate must be in [0,1], got ${rate}`);
+
   return {
     id: label,
     description: `synthetic solver with a ${(rate * 100).toFixed(0)}% success rate`,
@@ -145,6 +156,7 @@ export function createLongHorizonNoisySolver(
       if (unitHash(`${label}:${ctx.seed}:${ctx.task.id}:${ctx.repeat}`) < rate) {
         writeAnswerFile(ctx.sandboxDir, specFor(specs, ctx.task.id));
       }
+
       return { modelCalls: 0 };
     },
   };
@@ -176,6 +188,7 @@ export function createLongHorizonPiSolver(opts: LongHorizonPiSolverOptions): Sol
     description: opts.description,
     async solve(ctx: SolverContext): Promise<SolverResult> {
       const { asks, removeAfterAsk } = buildLongHorizonAsks(specFor(opts.specs, ctx.task.id));
+
       return runPiWorker({
         ctx,
         llm: opts.llm,
@@ -197,6 +210,7 @@ export function createLongHorizonAgentSolver(opts: LongHorizonAgentSolverOptions
     description: opts.description,
     async solve(ctx: SolverContext): Promise<SolverResult> {
       const { asks, removeAfterAsk } = buildLongHorizonAsks(specFor(opts.specs, ctx.task.id));
+
       const worker: AgentWorkerOptions = {
         ctx,
         repoRoot: opts.repoRoot,
@@ -207,7 +221,9 @@ export function createLongHorizonAgentSolver(opts: LongHorizonAgentSolverOptions
         removeAfterAsk,
         purpose: 'Answer questions about a log corpus that is far larger than one request, and carry what you learn across turns.',
       };
+
       if (opts.sharedHome) worker.sharedHome = opts.sharedHome;
+
       return runAgentWorker(worker);
     },
   };

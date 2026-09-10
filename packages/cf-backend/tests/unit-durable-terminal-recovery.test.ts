@@ -42,10 +42,15 @@ const installedAgentModule = [
   '../../../node_modules/agents/dist/index.js',
   'fiber-recovery-sql-probe',
 ].join('?');
+
 const { Agent: InstalledAgent } = await import(installedAgentModule);
+
 const InstalledRecoveryMethodsSchema = v.object({ _checkRunFibers: v.function() });
+
 const installedRecoveryMethods = v.parse(InstalledRecoveryMethodsSchema, InstalledAgent.prototype);
+
 const installedCheckRunFibers = installedRecoveryMethods._checkRunFibers;
+
 // The wake's own callback name, from the module that arms it — DYNAMICALLY,
 // after the harness above has replaced `agents`. A static import here would pull
 // the actor module (and the real SDK behind it) in before the stand-in is
@@ -58,15 +63,19 @@ const FiberRecoveryEventSchema = v.object({
   fiberId: v.string(),
   fiberName: v.string(),
 });
+
 type FiberRecoveryEvent = v.InferOutput<typeof FiberRecoveryEventSchema>;
 
 const ManagedRecoveryRowSchema = v.nullable(v.object({ fiber_id: v.string() }));
+
 type ManagedRecoveryRow = v.InferOutput<typeof ManagedRecoveryRowSchema>;
 
 const RecoverySnapshotSchema = v.nullable(v.object({}));
+
 type RecoverySnapshot = v.InferOutput<typeof RecoverySnapshotSchema>;
 
 const RecoveryMetadataSchema = v.object({});
+
 type RecoveryMetadata = v.InferOutput<typeof RecoveryMetadataSchema>;
 
 /** One admitted event bound to a synthetic drain turn with its recovery lease
@@ -117,16 +126,19 @@ function persistedDrainTurn(
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (actor_id, id))`);
+
   const append = harness.db.prepare(
     `INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
      VALUES (?, ?, 'default', ?, ?, ?, '2026-08-16 22:05:00')`,
   );
+
   append.run(actorId, `u-${drainTurnId}`, null, 'user', JSON.stringify({
     id: `u-${drainTurnId}`,
     role: 'user',
     parts: [{ type: 'text', text: '1 event arrived while you were idle.' }],
     metadata: { kinuEvent: 'event_drain', drainTurnId },
   }));
+
   if (answer === null) return;
   append.run(actorId, `a-${drainTurnId}`, `u-${drainTurnId}`, 'assistant', JSON.stringify({
     id: `a-${drainTurnId}`,
@@ -355,8 +367,10 @@ function tracedSql(database: Database, trace: SqlTrace[]) {
     const query = strings.join('?');
     trace.push({ query, bindings });
     const statement = database.prepare(query);
+
     if (statement.columnNames.length > 0) return statement.all(...bindings);
     statement.run(...bindings);
+
     return [];
   };
 }
@@ -387,9 +401,11 @@ function installedFiberRecoveryScene() {
   const recovered: string[] = [];
   const events: Array<{ name: string; payload: FiberRecoveryEvent }> = [];
   const terminalNotifications: string[] = [];
+
   const terminalWaiters = new Map([
     ['terminal-managed', new Set([() => { terminalNotifications.push('terminal-managed'); }])],
   ]);
+
   const subject = {
     _runFiberRecoveryInProgress: false,
     _resolvedOptions: {
@@ -424,20 +440,24 @@ function installedFiberRecoveryScene() {
       snapshot: string | null,
     ): RecoverySnapshot {
       if (snapshot === null) return null;
+
       return v.parse(RecoverySnapshotSchema, JSON.parse(snapshot));
     },
     _parseFiberJsonObject(metadata: string | null): RecoveryMetadata | undefined {
       if (metadata === null) return undefined;
+
       return v.parse(RecoveryMetadataSchema, JSON.parse(metadata));
     },
     async _runFiberRecoveryHook(ctx: { id: string }): Promise<boolean> {
       recovered.push(ctx.id);
+
       return true;
     },
     _hasPendingFiberRecovery(): boolean {
       return false;
     },
   };
+
   return { database, queries, recovered, events, terminalNotifications, subject };
 }
 
@@ -447,9 +467,11 @@ describe('the installed Agents recovery scan', () => {
     const now = Date.now();
     const expiredRuns = 128;
     const largeSnapshot = JSON.stringify({ stash: 'x'.repeat(64 * 1024) });
+
     const insertRun = scene.database.prepare(
       'INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, ?, ?)',
     );
+
     const insertFiber = scene.database.prepare(`
       INSERT INTO cf_agents_fibers (
         fiber_id, idempotency_key, name, status, snapshot, metadata_json,
@@ -466,6 +488,7 @@ describe('the installed Agents recovery scan', () => {
           now - FIBER_RECOVERY_MAX_AGE_MS - 1,
         );
       }
+
       insertRun.run('terminal-managed', 'terminal managed', '{not-json', now);
       insertRun.run('fresh-control', 'fresh control', '{}', now);
       insertFiber.run(
@@ -482,6 +505,7 @@ describe('the installed Agents recovery scan', () => {
       const snapshotReads = scene.queries.filter(({ query }) => (
         query.trimStart().startsWith('SELECT') && query.includes('snapshot')
       ));
+
       // The corrupt terminal payload and every large expired payload are never
       // fetched. The two survivors are fetched exactly at their own ids.
       expect(snapshotReads.map(({ bindings }) => bindings[0]))
@@ -490,6 +514,7 @@ describe('the installed Agents recovery scan', () => {
       const runMetadataPages = scene.queries.filter(({ query }) => (
         query.includes('SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs')
       ));
+
       expect(runMetadataPages.length).toBeGreaterThan(expiredRuns);
       expect(runMetadataPages.every(({ query }) => (
         !query.includes('snapshot') && query.includes('ORDER BY rowid ASC LIMIT 1')
@@ -499,12 +524,14 @@ describe('the installed Agents recovery scan', () => {
         query.includes('SELECT fiber_id, idempotency_key, status, metadata_json')
         && query.includes('FROM cf_agents_fibers')
       ));
+
       expect(managedMetadata.length).toBeGreaterThan(0);
       expect(managedMetadata.every(({ query }) => !query.includes('snapshot'))).toBe(true);
 
       const ledgerMetadataPages = scene.queries.filter(({ query }) => (
         query.includes('SELECT f.rowid AS rowid, f.fiber_id, f.idempotency_key, f.name')
       ));
+
       expect(ledgerMetadataPages).toHaveLength(2);
       expect(ledgerMetadataPages.every(({ query }) => (
         !query.includes('snapshot') && query.includes('ORDER BY f.rowid ASC LIMIT 1')
@@ -513,21 +540,27 @@ describe('the installed Agents recovery scan', () => {
       const runBoundary = scene.queries.findIndex(({ query }) => (
         query.trim() === 'SELECT MAX(rowid) AS boundary FROM cf_agents_runs'
       ));
+
       const firstRunPage = scene.queries.findIndex(({ query }) => (
         query.includes('SELECT rowid AS rowid, id, name, created_at FROM cf_agents_runs')
       ));
+
       const freshSnapshot = scene.queries.findIndex(({ query, bindings }) => (
         query.includes('snapshot') && bindings[0] === 'fresh-control'
       ));
+
       const ledgerBoundary = scene.queries.findIndex(({ query }) => (
         query.trim() === 'SELECT MAX(rowid) AS boundary FROM cf_agents_fibers'
       ));
+
       const ledgerPage = scene.queries.findIndex(({ query }) => (
         query.includes('SELECT f.rowid AS rowid, f.fiber_id, f.idempotency_key, f.name')
       ));
+
       const ledgerSnapshot = scene.queries.findIndex(({ query, bindings }) => (
         query.includes('snapshot') && bindings[0] === 'ledger-only'
       ));
+
       expect(runBoundary).toBeGreaterThanOrEqual(0);
       expect(firstRunPage).toBeGreaterThan(runBoundary);
       expect(freshSnapshot).toBeGreaterThan(firstRunPage);
@@ -574,9 +607,11 @@ function scriptedFibers(
 ) {
   const asked: string[] = [];
   const table = new Map(rows.map((row) => [row.id, row]));
+
   const store: FiberRowStore = {
     present: () => {
       asked.push('present');
+
       return true;
     },
     upperBoundary: () => {
@@ -584,10 +619,12 @@ function scriptedFibers(
       const live = [...table.values()];
       const boundary = live.length === 0 ? null : Math.max(...live.map((row) => row.rowid));
       onBoundaryRead?.(table);
+
       return boundary;
     },
     page: (after, through, cutoff) => {
       asked.push('page');
+
       return [...table.values()]
         .filter((row) => row.rowid > after && row.rowid <= through && row.created_at <= cutoff)
         .sort((a, b) => a.rowid - b.rowid)
@@ -596,11 +633,14 @@ function scriptedFibers(
     dropIfExpired: (id, cutoff) => {
       asked.push('dropIfExpired');
       const row = table.get(id);
+
       if (!row || row.created_at > cutoff) return false;
       table.delete(id);
+
       return true;
     },
   };
+
   return { store, asked, survivors: () => [...table.keys()].sort() };
 }
 
@@ -671,6 +711,7 @@ const NOW = 1_700_000_000_000;
     const rows = Array.from({ length: 600 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
+
     const scene = scriptedFibers(rows);
 
     const result = sweepUnrecoverableFibers(scene.store, NOW);
@@ -706,6 +747,7 @@ const NOW = 1_700_000_000_000;
     const rows = Array.from({ length: SWEEP_MAX_ROWS + 200 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
+
     const scene = scriptedFibers(rows);
 
     const result = sweepUnrecoverableFibers(scene.store, NOW);
@@ -728,6 +770,7 @@ const NOW = 1_700_000_000_000;
     const rows = Array.from({ length: SWEEP_MAX_ROWS + 300 }, (_unused, index) => ({
       rowid: index + 1, id: `old-${index}`, created_at: overAge(index + 1),
     }));
+
     const scene = scriptedFibers(rows);
 
     const first = sweepUnrecoverableFibers(scene.store, NOW);
@@ -750,6 +793,7 @@ const NOW = 1_700_000_000_000;
       })),
       { rowid: SWEEP_MAX_ROWS + 11, id: 'expired-behind-the-wall', created_at: overAge(1) },
     ];
+
     const scene = scriptedFibers(rows);
 
     const result = sweepUnrecoverableFibers(scene.store, NOW);
@@ -767,11 +811,14 @@ const NOW = 1_700_000_000_000;
     // budget is the last one the scan names. Sized from the imported sweep
     // budget because the patch exists to carry that same bound.
     const scene = installedFiberRecoveryScene();
+
     try {
       const insert = scene.database.prepare(
         'INSERT INTO cf_agents_runs (id, name, snapshot, created_at) VALUES (?, ?, ?, ?)',
       );
+
       const expiredAt = Date.now() - FIBER_RECOVERY_MAX_AGE_MS - 1;
+
       for (let index = 0; index < SWEEP_MAX_ROWS + 10; index++) {
         insert.run(`old-${index}`, 'old', '{}', expiredAt);
       }
@@ -781,6 +828,7 @@ const NOW = 1_700_000_000_000;
       const skippedIds = scene.events
         .filter(({ name }) => name === 'fiber:recovery:skipped')
         .map(({ payload }) => payload.fiberId);
+
       expect(skippedIds).toHaveLength(SWEEP_MAX_ROWS + 1);
       expect(skippedIds[SWEEP_MAX_ROWS]).toBe(`old-${SWEEP_MAX_ROWS}`);
       expect(scene.recovered).toEqual([]);

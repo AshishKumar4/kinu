@@ -106,6 +106,7 @@ import { toolsInWorkMode, permitInPlan, requireBuild } from '../execution/work-m
 import type { WorkMode } from '../types/turn';
 
 type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
+
 type ExecutableToolEntry = NonNullable<ToolSet[string]>;
 
 /** The crafted tools a sandbox may call, keyed by name. */
@@ -277,10 +278,12 @@ function buildCraftedToolSetFromExecute(
 ) {
   const out: CraftedToolSet = {};
   let list;
+
   try {
     list = rt.craftStore.list();
   } catch (error) {
     diagnostics.event('craft.list_unreadable', { error: renderThrownChain({ cause: error }) });
+
     return out;
   }
 
@@ -294,10 +297,12 @@ function buildCraftedToolSetFromExecute(
   // selection. In 'relevant' mode we fetch top-K via FTS5 over the current
   // user message, then union with the top-K most frequently used recent tools.
   let relevantNames: Set<string> | null = null;
+
   if (surfacing?.mode === 'relevant') {
     const maxRelevant = surfacing.maxRelevant ?? 20;
     const half = Math.max(5, Math.floor(maxRelevant / 2));
     relevantNames = new Set();
+
     // Neither read is guarded: `crafted_tools_fts` and the crafted_tools
     // quality columns are both part of the one workspace schema
     // (state/workspace-schema.ts, asserted per root by conformance/
@@ -308,14 +313,17 @@ function buildCraftedToolSetFromExecute(
     if (surfacing.query && surfacing.query.length > 0) {
       for (const hit of rt.craftStore.search(surfacing.query, half)) relevantNames.add(hit.name);
     }
+
     const top = rt.storage.sql<{ name: string }>`
       SELECT name FROM crafted_tools
       ORDER BY uses DESC, last_used_at DESC LIMIT ${maxRelevant}`;
+
     for (const r of top) relevantNames.add(r.name);
   }
 
   for (const t of list) {
     if (!t.code || t.code.startsWith('//')) continue;
+
     if (isReservedCraftToolName(t.name)) {
       diagnostics.failure(
         CRAFT_TOOL_SKIPPED,
@@ -328,9 +336,12 @@ function buildCraftedToolSetFromExecute(
       );
       continue;
     }
+
     if (relevantNames && !relevantNames.has(t.name)) continue;
+
     if (!scorePassing.has(t.name)) continue;
     const description = craftedToolDescription(t.name, t.description);
+
     try {
       const execute = factory({ name: t.name, description, code: t.code });
       out[t.name] = {
@@ -361,11 +372,14 @@ function buildCraftedToolSetFromExecute(
  *  and it now happens once per `execute_tools` call rather than once per turn. */
 function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute {
   const compiled = new Map<string, { code: string; execute: CraftedToolExecuteFn }>();
+
   return (tool) => {
     const hit = compiled.get(tool.name);
+
     if (hit && hit.code === tool.code) return hit.execute;
     const execute = factory(tool);
     compiled.set(tool.name, { code: tool.code, execute });
+
     return execute;
   };
 }
@@ -388,8 +402,11 @@ interface WebToolInput {
  * logged here, because whoever catches it classifies it there.
  */
 const RUN_SHELL_ABSENT = 'run.shell_absent';
+
 const RUN_ESCALATION_REFUSED = 'run.escalation_refused';
+
 const RUN_ESCALATION_FAILED = 'run.escalation_failed';
+
 const CRAFT_TOOL_SKIPPED = 'craft.tool_skipped';
 
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
@@ -397,10 +414,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const memory = rt.memory;
   const router = rt.executionRouter;
   const shell = rt.shell;
+
   const runRuntimes = [...new Set([
     'workspace',
     ...(router?.listExecutors().map(({ name }) => name) ?? []),
   ])];
+
   // A toolset built without a budget still budgets — a fresh one, scoped to
   // whatever root owns this toolset. Never absent, so there is one policy.
   const budget = deps.contextBudget ?? new TurnContextBudget();
@@ -510,25 +529,33 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // uses that shape (run-file-steer.ts) — outside the clamp, so the note is
       // never the part that gets truncated.
       const steer = fileToolSteer(args.command);
+
       const clamp = async (result: CommandResult): Promise<string> => {
         const text = v.is(v.string(), result) ? result : result.error;
         const clamped = await clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
+
         if (!v.is(v.string(), result)) throw new KinuError(result.reason, clamped, { execution: result.execution });
+
         return steer ? `${steer}\n\n${clamped}` : clamped;
       };
+
       const defaultRuntime = 'workspace';
       const runtimeKey = args.runtime ?? defaultRuntime;
+
       if (runtimeKey === 'workspace') {
         if (!shell) {
           const refusal = new KinuError(
             'unsupported',
             'no workspace shell available in this runtime',
           );
+
           logger.failure(RUN_SHELL_ABSENT, refusal, { runtime: runtimeKey });
           throw refusal;
         }
+
         return clamp(commandResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
+
       // Everything below this line is an ESCALATION: the work is leaving this
       // agent's own shell for an environment that must be provisioned, costs a
       // cold start, and shares a hard `max_instances` ceiling with every other
@@ -537,6 +564,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // one, since "the runtime was never there" and "the command failed" are
       // different findings that a single failure count would merge.
       const provider = router?.getProvider(runtimeKey);
+
       if (!provider) {
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
         // Caller asked for a runtime that hasn't been provisioned. Do NOT
@@ -558,7 +586,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               : 'Runtime "' + runtimeKey + '" is not registered.'
         ), { cause: refusal });
       }
+
       const execTool = provider.tools.exec;
+
       if (!execTool) {
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
         // `unsupported`, not `unavailable`: this environment is here and does
@@ -568,11 +598,13 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         logger.failure(RUN_ESCALATION_REFUSED, refusal, { runtime: runtimeKey });
         throw new KinuError(refusal.code, refusal.message + ': Runtime "' + runtimeKey + '" is provisioned but does not expose shell exec.', { cause: refusal });
       }
+
       // The trailing context every executor's exec reads: the abort signal,
       // and — for a device runtime — which of the user's machines the command
       // is for. An executor with no fleet ignores the device.
       const context = { signal, device: args.device };
       let result: CommandResult;
+
       try {
         result = v.parse(CommandResultSchema, await execTool.execute(args.command, context));
       } catch (caught) {
@@ -587,15 +619,18 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           cause: caught,
           otherwise: 'io',
         });
+
         escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'failed' });
         logger.failure(RUN_ESCALATION_FAILED, failure, { runtime: runtimeKey });
         throw failure;
       }
+
       escalations.observe({
         runtime: runtimeKey,
         reason: args.why,
         outcome: v.is(v.string(), result) ? 'ok' : 'failed',
       });
+
       return clamp(result);
     },
   });
@@ -622,9 +657,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // Dispatch lives in memory-tool.ts, shared verbatim with the `memory.*`
   // codemode namespace (memory-codemode.ts) — one implementation, two callers.
   const facts = deps.facts;
+
   const runMemoryAction = createMemoryDispatcher({
     memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql, actor: rt.actor,
   });
+
   tools.memory = permitInPlan(tool({
     description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
     inputSchema: jsonSchema<MemoryToolInput>({
@@ -718,6 +755,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // capability as `web.search()` / `web.fetch()` via createWebCodemodeProvider,
   // wired in each backend's execute_tools assembly.
   const webSearch = deps.webSearch;
+
   if (webSearch) {
     tools.web = permitInPlan(tool({
       description: BUILTIN_TOOL_DESCRIPTIONS.web,
@@ -741,15 +779,19 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         // a jsonSchema-declared input. Refused WITH the vocabulary, so the
         // model's next call can succeed.
         const action = v.safeParse(WebActionSchema, args.action);
+
         if (!action.success) {
           throw new KinuError('bad_input', unknownActionError('web', 'action', args.action, WEB_TOOL_ACTIONS));
         }
+
         switch (action.output) {
           case 'search': {
             if (!args.query) throw new KinuError('bad_input', 'web.search requires `query`');
             const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
+
             return formatSearchResults(res);
           }
+
           case 'fetch': {
             if (!args.url) throw new KinuError('bad_input', 'web.fetch requires `url`');
             const res = await webSearch.fetch(args.url);
@@ -757,9 +799,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             // workspace VFS and reduced to a re-readable head (see
             // clamp.ts), so a big page never rots the session.
             const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
+
             const body = await clampToolResult(res.markdown, {
               vfs: rt.storage.vfs, budget, producer: 'web_fetch',
             });
+
             return header + body;
           }
         }
@@ -825,7 +869,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       }),
       execute: async ({ edits }: { edits: PlanEdit[] }) => {
         const result = await deps.submitPlan!.submit(edits);
+
         if (!result.ok) return result;
+
         return {
           ok: true,
           planId: result.plan.id,
@@ -858,13 +904,18 @@ function formatSearchResults(res: WebSearchResponse): string {
   if (res.results.length === 0) {
     return `No web results for "${res.query}".`;
   }
+
   const lines: string[] = [];
+
   if (res.answer) lines.push(`Answer: ${res.answer}`, '');
+
   for (const r of res.results) {
     const date = r.date ? ` (${r.date})` : '';
     lines.push(`${r.position}. ${r.title}${date}\n   ${r.url}\n   ${r.snippet}`);
   }
+
   lines.push('', `[${res.results.length} results via ${res.source}]`);
+
   return lines.join('\n');
 }
 
@@ -894,9 +945,11 @@ export function installExecuteTools(
   deps: BuiltinToolDeps,
 ): void {
   const { rt } = deps;
+
   const craftedToolExecute = deps.craftedToolExecute
     ? memoizeCraftedExecute(deps.craftedToolExecute)
     : undefined;
+
   const craftedTools = (): CraftedToolSet => craftedToolExecute
     ? buildCraftedToolSetFromExecute(
         rt,
@@ -905,6 +958,7 @@ export function installExecuteTools(
         deps.toolSurfacing,
       )
     : {};
+
   const built = build({ native: toolsInWorkMode(deps.workMode ?? 'build', surface), craftedTools, providers: rt.executionRouter?.getProviders() ?? [] });
   const clamp = { vfs: rt.storage.vfs, producer: 'execute_tools' as const };
   surface.execute_tools = withClampedToolResult(
@@ -945,28 +999,37 @@ export interface ToolSurfaceDeps extends BuiltinToolDeps {
 
 export function buildToolSurface(deps: ToolSurfaceDeps): ToolSet {
   let builtin: BuiltinToolDeps = deps;
+
   if (builtin.preBuiltExecuteTool === undefined && deps.executeTool !== undefined) {
     const direct = { value: deps.executeTool };
+
     if (isExecutableToolEntry(direct)) builtin = { ...deps, preBuiltExecuteTool: deps.executeTool };
   }
+
   const built = buildBuiltinTools(builtin.workMode === 'plan' ? { ...builtin, workMode: 'build' } : builtin);
   const narrowed = deps.admitted === undefined ? built : keepBuiltins(built, deps.admitted);
   const recorded = deps.wrapAdmitted === undefined ? narrowed : deps.wrapAdmitted(narrowed);
   const merged = deps.extra === undefined ? recorded : { ...recorded, ...deps.extra };
   const allow = deps.allowed === undefined ? undefined : new Set(deps.allowed);
+
   const surface = allow === undefined
     ? merged
     : Object.fromEntries(Object.entries(merged).filter(([name]) => allow.has(name)));
+
   if (deps.executeTools !== undefined) {
     installExecuteTools(surface, deps.executeTools, deps);
   } else {
     const buildFromSurface = v.safeParse(v.function(), deps.executeTool);
+
     if (buildFromSurface.success && 'execute_tools' in surface) {
       const entry = { value: buildFromSurface.output(surface) };
+
       if (isExecutableToolEntry(entry)) surface.execute_tools = entry.value;
     }
   }
+
   const finished = deps.post === undefined ? surface : { ...surface, ...deps.post };
   const modeBound = toolsInWorkMode(deps.workMode ?? 'build', finished);
+
   return deps.wrapFinished === undefined ? modeBound : deps.wrapFinished(modeBound);
 }

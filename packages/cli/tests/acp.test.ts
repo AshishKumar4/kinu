@@ -56,6 +56,7 @@ interface FakeState {
 function fakeClient(opts: FakeOptions = {}): Fake {
   const listeners = new Set<(e: AgentClientEvent) => void>();
   const state: FakeState = { sent: [], stopped: 0, closed: 0, approval: null };
+
   const agentClient: AgentClient = {
     mode: 'local',
     agentName: 'test',
@@ -70,6 +71,7 @@ function fakeClient(opts: FakeOptions = {}): Fake {
       setShellApprovalMode: (mode) => mode,
       setShellApprovalHandler: (handler: ShellApprovalHandler | null) => {
         state.approval = handler;
+
         return () => { state.approval = null; };
       },
       listModelProviders: async () => [],
@@ -81,18 +83,26 @@ function fakeClient(opts: FakeOptions = {}): Fake {
     connect: async () => {},
     subscribe: (listener: (e: AgentClientEvent) => void) => {
       listeners.add(listener);
+
       return () => listeners.delete(listener);
     },
     send: async (prompt, sendOpts) => {
       state.sent.push({ prompt, cwd: sendOpts?.cwd });
+
       if (opts.hold) await opts.hold;
+
       for (const event of opts.events ?? []) for (const listener of listeners) listener(event);
+
       return TURN;
     },
     steer: () => false,
     branch: () => false,
     fork: async () => ({ client: agentClient, label: 'test' }),
-    stop: () => { state.stopped += 1; return []; },
+    stop: () => {
+      state.stopped += 1;
+
+      return [];
+    },
     close: async () => { state.closed += 1; },
     history: async () => (opts.history ?? []).map((m, i) => ({ id: String(i), role: m.role, content: m.content })),
     status: async () => ({ name: 'test', purpose: 'test', model: null, reasoningEffort: null }),
@@ -142,11 +152,14 @@ async function withConnection<T>(
     version: '0.0.0-test',
     openClient: async () => fake.client,
   });
+
   const agentConnection = agentApp.connect(ndJsonStream(toClient.writable, toAgent.readable));
 
   const updates: SessionNotification[] = [];
+
   const clientApp = client({ name: 'test-editor' })
     .onNotification(CLIENT_METHODS.session_update, (ctx) => { updates.push(ctx.params); });
+
   if (onPermission) {
     clientApp.onRequest(CLIENT_METHODS.session_request_permission, () => onPermission());
   }
@@ -168,12 +181,14 @@ async function newSession(ctx: ClientContext, cwd = '/work'): Promise<string> {
     clientCapabilities: {},
   });
   const session = await ctx.request(AGENT_METHODS.session_new, { cwd, mcpServers: [] });
+
   return session.sessionId;
 }
 
 describe('kinu acp — initialization', () => {
   test('reports the protocol version and the capabilities it actually implements', async () => {
     const fake = fakeClient();
+
     const result = await withConnection(fake, async (ctx) => ctx.request(AGENT_METHODS.initialize, {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: {},
@@ -199,17 +214,21 @@ describe('kinu acp — prompt turn', () => {
 
     const { stop, updates } = await withConnection(fake, async (ctx, collected) => {
       const sessionId = await newSession(ctx);
+
       const response = await ctx.request(AGENT_METHODS.session_prompt, {
         sessionId,
         prompt: [{ type: 'text', text: 'hi' }],
       });
+
       return { stop: response.stopReason, updates: collected };
     });
 
     expect(stop).toBe('end_turn');
+
     const chunks = updates
       .map((u) => u.update)
       .filter((u) => u.sessionUpdate === 'agent_message_chunk');
+
     expect(chunks.map((chunk) => v.parse(v.object({ text: v.string() }), chunk.content).text))
       .toEqual(['Hello', ' world']);
     // The prompt reached the real session, carrying the ACP session's cwd.
@@ -227,6 +246,7 @@ describe('kinu acp — prompt turn', () => {
     const updates = await withConnection(fake, async (ctx, collected) => {
       const sessionId = await newSession(ctx);
       await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
+
       return collected.map((u) => u.update);
     });
 
@@ -256,6 +276,7 @@ describe('kinu acp — prompt turn', () => {
     const updates = await withConnection(fake, async (ctx, collected) => {
       const sessionId = await newSession(ctx);
       await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
+
       return collected.map((u) => u.update);
     });
 
@@ -277,6 +298,7 @@ describe('kinu acp — prompt turn', () => {
     const updates = await withConnection(fake, async (ctx, collected) => {
       const sessionId = await newSession(ctx);
       await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
+
       return collected.map((u) => u.update);
     });
 
@@ -295,6 +317,7 @@ describe('kinu acp — prompt turn', () => {
     const updates = await withConnection(fake, async (ctx, collected) => {
       const sessionId = await newSession(ctx);
       await ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt: [{ type: 'text', text: 'go' }] });
+
       return collected.map((u) => u.update);
     });
 
@@ -306,6 +329,7 @@ describe('kinu acp — prompt turn', () => {
 describe('kinu acp — prompt content', () => {
   test('text, resource context and an image all cross into one Kinu prompt', async () => {
     const fake = fakeClient();
+
     const prompt: ContentBlock[] = [
       { type: 'text', text: 'explain this' },
       { type: 'resource', resource: { uri: 'file:///a.ts', mimeType: 'text/plain', text: 'const a = 1;' } },
@@ -314,6 +338,7 @@ describe('kinu acp — prompt content', () => {
 
     await withConnection(fake, async (ctx) => {
       const sessionId = await newSession(ctx);
+
       return ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt });
     });
 
@@ -321,6 +346,7 @@ describe('kinu acp — prompt content', () => {
       text: v.string(),
       files: v.array(v.object({ url: v.string(), mediaType: v.string() })),
     }), fake.sent[0]!.prompt);
+
     expect(sent.text).toContain('explain this');
     expect(sent.text).toContain('const a = 1;');
     expect(sent.text).toContain('file:///a.ts');
@@ -334,19 +360,23 @@ describe('kinu acp — prompt content', () => {
 describe('kinu acp — cancellation', () => {
   test('session/cancel stops the live turn and the prompt reports cancelled', async () => {
     let release = () => {};
+
     const hold = new Promise<void>((resolve) => { release = resolve; });
     const fake = fakeClient({ hold });
 
     const stop = await withConnection(fake, async (ctx) => {
       const sessionId = await newSession(ctx);
+
       const pending = ctx.request(AGENT_METHODS.session_prompt, {
         sessionId,
         prompt: [{ type: 'text', text: 'long job' }],
       });
+
       // Cancel only once the turn is genuinely in flight.
       while (fake.sent.length === 0) await new Promise((r) => setTimeout(r, 1));
       await ctx.notify(AGENT_METHODS.session_cancel, { sessionId });
       release();
+
       return (await pending).stopReason;
     });
 
@@ -358,10 +388,12 @@ describe('kinu acp — cancellation', () => {
 describe('kinu acp — permission', () => {
   test('a gated command is put to the client and an allow answer comes back', async () => {
     const fake = fakeClient();
+
     const outcome = await withConnection(
       fake,
       async (ctx) => {
         await newSession(ctx);
+
         // The adapter installed the channel; drive it as the shell tool would.
         return fake.approval!({
           command: 'sudo systemctl restart nginx',
@@ -377,10 +409,12 @@ describe('kinu acp — permission', () => {
 
   test('a rejected command comes back as deny', async () => {
     const fake = fakeClient();
+
     const outcome = await withConnection(
       fake,
       async (ctx) => {
         await newSession(ctx);
+
         return fake.approval!({
           command: 'rm -rf build',
           executor: 'laptop',
@@ -395,10 +429,12 @@ describe('kinu acp — permission', () => {
 
   test('a cancelled permission request denies the command', async () => {
     const fake = fakeClient();
+
     const outcome = await withConnection(
       fake,
       async (ctx) => {
         await newSession(ctx);
+
         return fake.approval!({
           command: 'sudo reboot', executor: 'laptop', review: { decision: 'gate', hits: [] },
         });
@@ -422,6 +458,7 @@ describe('kinu acp — session lifecycle', () => {
     const updates = await withConnection(fake, async (ctx, collected) => {
       const sessionId = await newSession(ctx);
       await ctx.request(AGENT_METHODS.session_load, { sessionId, cwd: '/work', mcpServers: [] });
+
       return collected.map((u) => u.update);
     });
 
@@ -435,6 +472,7 @@ describe('kinu acp — session lifecycle', () => {
     const fake = fakeClient();
     await withConnection(fake, async (ctx) => {
       const sessionId = await newSession(ctx);
+
       return ctx.request(AGENT_METHODS.session_close, { sessionId });
     });
 
@@ -444,13 +482,16 @@ describe('kinu acp — session lifecycle', () => {
 
   test('prompting an unknown session is a protocol error, not a crash', async () => {
     const fake = fakeClient();
+
     const failure = await withConnection(fake, async (ctx) => {
       await newSession(ctx);
+
       try {
         await ctx.request(AGENT_METHODS.session_prompt, {
           sessionId: 'nope',
           prompt: [{ type: 'text', text: 'hi' }],
         });
+
         return null;
       } catch (cause) {
         return cause instanceof Error ? cause : new Error(String(cause));

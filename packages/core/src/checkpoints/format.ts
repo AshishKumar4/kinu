@@ -39,6 +39,7 @@ export const CHECKPOINT_EXCLUDES = [
  *  Null meta marks out-of-turn snapshots (pre-restore). */
 export function checkpointSubject(meta: CheckpointTurnMeta | null, reason: string): string {
   const clean = (s: string) => s.replace(/[\r\n|]/g, ' ').trim() || '-';
+
   return `turn=${clean(meta?.turnId ?? '-')} session=${clean(meta?.sessionId ?? '-')} ${clean(reason)}`;
 }
 
@@ -48,13 +49,16 @@ export function parseCheckpointSubject(
   subject: string,
 ) {
   const m = /^turn=(\S+) session=(\S+) (.*)$/.exec(subject);
+
   if (!m) return { turnId: null, sessionId: null, reason: subject };
   const turn = m[1];
   const session = m[2];
   const reason = m[3];
+
   if (turn === undefined || session === undefined || reason === undefined) {
     return { turnId: null, sessionId: null, reason: subject };
   }
+
   return {
     turnId: turn === '-' ? null : turn,
     sessionId: session === '-' ? null : session,
@@ -89,8 +93,11 @@ export function parseCheckpointSubject(
  * Both engines run under `LC_ALL=C` so these are the strings git actually emits.
  */
 const UNREADABLE_DIR = /^warning: could not open directory '(.+?)\/?': Permission denied$/;
+
 const UNREADABLE_FILE = /^error: open\("(.+)"\): Permission denied$/;
+
 const UNINDEXED_FILE = /^error: unable to index file '(.+?)'$/;
+
 const ADD_FAILED = /^fatal: adding files failed$/;
 
 export interface StagingDiagnosis {
@@ -105,11 +112,14 @@ export interface StagingDiagnosis {
 export function diagnoseStaging(stderr: string): StagingDiagnosis {
   const lines = stderr.split('\n').map((line) => line.trim()).filter(Boolean);
   const unreadable = new Set<string>();
+
   for (const line of lines) {
     const denied = UNREADABLE_DIR.exec(line) ?? UNREADABLE_FILE.exec(line);
     const path = denied?.[1];
+
     if (path !== undefined) unreadable.add(path);
   }
+
   return {
     unreadable: [...unreadable].sort(),
     // Two passes, so a consequence line is judged against the whole denial set
@@ -125,10 +135,13 @@ function isDenial(line: string, unreadable: ReadonlySet<string>): boolean {
   // some file was denied. Neither is tolerated without the denial it follows —
   // `unable to index file` also covers failures that are not permission ones.
   const unindexed = UNINDEXED_FILE.exec(line);
+
   if (unindexed) {
     const path = unindexed[1];
+
     return path !== undefined && unreadable.has(path);
   }
+
   return ADD_FAILED.test(line) && unreadable.size > 0;
 }
 
@@ -148,6 +161,7 @@ export function checkpointReason(reason: string, unreadable: readonly string[]):
   const shown = unreadable.slice(0, REASON_UNREADABLE_LIMIT);
   const rest = unreadable.length - shown.length;
   const more = rest > 0 ? ` +${String(rest)} more` : '';
+
   return `${reason} [skipped ${String(unreadable.length)} unreadable: ${shown.join(' ')}${more}]`;
 }
 
@@ -155,5 +169,6 @@ export function checkpointReason(reason: string, unreadable: readonly string[]):
 export function checkpointRefTimestampMs(ref: string): number {
   const m = /(\d{13})-[0-9a-z]+$/.exec(ref);
   const stamp = m?.[1];
+
   return stamp === undefined ? 0 : Number(stamp);
 }

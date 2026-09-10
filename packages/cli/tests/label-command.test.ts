@@ -23,10 +23,12 @@ const tempDirs: string[] = [];
 function newProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
   tempDirs.push(dir);
+
   return dir;
 }
 
 const repoRoot = resolve(__dirname, '../../..');
+
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
 afterEach(() => {
@@ -41,6 +43,7 @@ function runCli(home: string, args: string[]) {
     stderr: 'pipe',
     env: { ...process.env, KINU_HOME: home, NO_COLOR: '1' },
   });
+
   return {
     stdout: `${result.stdout.toString()}${result.stderr.toString()}`.replace(
       new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '',
@@ -74,6 +77,7 @@ function seedWorkspace(name: string, size = 600): World {
 
   const random = seededRandom(4242);
   const truthByTurn = new Map<string, 'accepted' | 'corrected'>();
+
   for (let i = 0; i < size; i++) {
     const reallyNegative = random() < 0.22;
     const flagged = reallyNegative ? random() < 0.65 : random() >= 0.96;
@@ -92,25 +96,34 @@ function seedWorkspace(name: string, size = 600): World {
   }
 
   const truth = new Map<string, 'accepted' | 'corrected'>();
+
   for (const row of sql<{ id: string; turn_id: string }>`SELECT id, turn_id FROM turn_outcomes`) {
     truth.set(row.id, truthByTurn.get(row.turn_id) ?? 'accepted');
   }
+
   db.close();
+
   return { home, truth };
 }
 
 /** Stand in for the owner: answer each blind item from the ground truth. */
 function fillFile(path: string, truth: World['truth'], answer = (t: string): string => (t === 'corrected' ? 'c' : 'a')): void {
   let current = '';
+
   const filled = readFileSync(path, 'utf8').split('\n').map((line) => {
     const header = /^###\s+\d+\/\d+\s+(\S+)$/.exec(line);
+
     if (header) {
       current = header[1];
+
       return line;
     }
+
     if (line !== 'verdict:') return line;
+
     return `verdict: ${answer(truth.get(current) ?? 'accepted')}`;
   });
+
   writeFileSync(path, filled.join('\n'));
 }
 
@@ -127,6 +140,7 @@ describe('kinu label', () => {
     // The file must not tell the labeler what the classifier already thinks.
     const drawn = readFileSync(file, 'utf8');
     const body = drawn.slice(drawn.indexOf('### 1/100'));
+
     for (const verdict of ['accepted', 'corrected', 'frustrated']) expect(body).not.toContain(verdict);
 
     fillFile(file, truth);
@@ -136,6 +150,7 @@ describe('kinu label', () => {
     expect(ingested.stdout).toMatch(/You disagreed with the classifier on \d+ of 100\./);
 
     const report = runCli(home, ['label', 'report', 'demo', '--json']);
+
     const { calibration: parsed, ensemble } = v.parse(v.object({
       calibration: v.object({
         universe: v.number(), labeled: v.number(), gap: v.nullable(v.object({})),
@@ -154,6 +169,7 @@ describe('kinu label', () => {
         standIn: v.nullable(v.object({})),
       }),
     }), JSON.parse(report.stdout));
+
     // The panel has not been run, and the report says so rather than implying
     // the classifier has been checked by anything but the owner.
     expect(ensemble.gap?.kind).toBe('not_run');
@@ -211,6 +227,7 @@ describe('kinu label', () => {
 
     const ids = (path: string): string[] =>
       [...readFileSync(path, 'utf8').matchAll(/^###\s+\d+\/\d+\s+(\S+)$/gm)].map((m) => m[1]);
+
     const answered = new Set(ids(first));
     expect(ids(second)).toHaveLength(30);
     expect(ids(second).some((id) => answered.has(id))).toBe(false);

@@ -12,7 +12,9 @@ const LANGUAGE_ALIASES: ReadonlyMap<string, string> = new Map([
 
 export function canonicalLanguage(tag: string | null | undefined): string | null {
   const normalized = tag?.trim().toLowerCase();
+
   if (!normalized) return null;
+
   return LANGUAGE_ALIASES.get(normalized) ?? normalized;
 }
 
@@ -40,13 +42,17 @@ export function readProposalCode(
 ): ProposalCode {
   const blocks = fencedBlocks(text);
   let unrunnable: string | null = null;
+
   for (let index = blocks.length - 1; index >= 0; index--) {
     const block = blocks[index]!;
     const language = block.language ?? languages[0];
+
     if (languages.includes(language)) {
       return { kind: 'runnable', language, code: block.code };
     }
+
     unrunnable ??= language;
   }
+
   return unrunnable === null ? null : { kind: 'unrunnable', language: unrunnable };
 }

@@ -25,13 +25,16 @@ const thinkBundle = readFileSync(Bun.resolveSync('@cloudflare/think', import.met
 function methodBody(source: string, name: string): string | null {
   const declaration = new RegExp(`^\\t*(?:async\\s+)?${name}\\s*\\([^)]*\\)\\s*\\{`, 'm');
   const match = declaration.exec(source);
+
   if (!match) return null;
   const start = match.index + match[0].length - 1;
   let depth = 0;
+
   for (let i = start; i < source.length; i++) {
     if (source[i] === '{') depth++;
     else if (source[i] === '}' && --depth === 0) return source.slice(start, i + 1);
   }
+
   return null;
 }
 
@@ -136,6 +139,7 @@ describe('the turn loop this actor hands Think carries no step cap the caller ca
     // must never be true.
     const { agent } = orchestratorHarness();
     const cap = stepCountIs(agent.maxSteps);
+
     for (const steps of [10, 11, 500]) {
       // SAFETY: `stepCountIs` only ever reads the array's LENGTH — verified
       // against the installed SDK bundle by the pin below, which fails if the

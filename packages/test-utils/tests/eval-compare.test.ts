@@ -24,6 +24,7 @@ import { TASK_OUTCOME } from '../src/eval-outcome';
 const OPTS = { seed: 1, iterations: 500 };
 
 const SCORER = 'tool_outcomes';
+
 const ABSENT = 'craft_reuse';
 
 function score(name: string, eligible: number, passed: number): EvalScoreRow {
@@ -46,6 +47,7 @@ function scored(
   const withOutcome = scores.some((s) => s.name === TASK_OUTCOME)
     ? scores
     : [...scores, score(TASK_OUTCOME, 1, 1)];
+
   return {
     taskId, repetition, outcome: 'scored', scores: withOutcome,
     toolNames: ['run', 'file'],
@@ -67,6 +69,7 @@ function run(
   overrides: { repeats?: number; modelId?: string; arm?: EvalArmState } = {},
 ): EvalRunRecord {
   const declaredTasks = [...new Set(observations.map((o) => o.taskId))];
+
   return {
     schema: 1, runId, createdAt: '2026-08-17T00:00:00.000Z',
     gitSha: 'a'.repeat(40), gitDirty: false,
@@ -95,6 +98,7 @@ function repeatRun(
   const observations = passedPerTask.flatMap((passed, i) =>
     Array.from({ length: repeats }, (_, r) =>
       scored(`task-${String(i)}`, r + 1, [score(SCORER, 4, passed)])));
+
   return run(runId, observations, { repeats });
 }
 
@@ -102,12 +106,15 @@ function attributable(comparison: EvalComparison): AttributableComparison {
   if (!comparison.comparable) {
     throw new Error(`refused: ${comparison.refusals.map((r) => r.field).join(', ')}`);
   }
+
   return comparison;
 }
 
 function scorerOf(comparison: AttributableComparison, name = SCORER): ScorerComparison {
   const found = comparison.scorers.find((s) => s.name === name);
+
   if (found === undefined) throw new Error(`no scorer named ${name} in the comparison`);
+
   return found;
 }
 
@@ -116,10 +123,12 @@ test('missing outcome attribution withholds a covariate without dropping observe
     scored('known', 0, [score(SCORER, 4, 2)]),
     scored('unmeasured', 0, [{ ...score(SCORER, 4, 0), rate: null }]),
   ]);
+
   const candidate = run('candidate', [
     scored('known', 0, [score(SCORER, 4, 4)]),
     scored('unmeasured', 0, [score(SCORER, 4, 4)]),
   ]);
+
   const comparison = attributable(compareRuns(baseline, candidate, OPTS));
   const covariance = scorerOf(comparison);
   expect(covariance.baselineEligible).toBe(8);
@@ -137,6 +146,7 @@ describe('compareRuns — a clean improvement', () => {
       scorerRun('cand', [4, 4, 4, 4, 4, 4, 4, 4]),
       OPTS,
     ));
+
     const s = scorerOf(comparison);
 
     expect(s.reach).toBe('both');
@@ -163,6 +173,7 @@ describe('compareRuns — a clean improvement', () => {
       scorerRun('cand', [4, 4, 4, 4, 4, 4, 4, 4]),
       OPTS,
     ));
+
     const s = scorerOf(comparison);
     expect(s.verdict).toContain('CI ');
     expect(s.verdict).toContain('7 of 8 paired tasks differed');
@@ -176,6 +187,7 @@ describe('compareRuns — decidability sits on the DIFFERING pairs', () => {
       scorerRun('cand', [4, 4, 4, 4, 4]),
       OPTS,
     ));
+
     const s = scorerOf(comparison);
 
     expect(s.pairedTasks).toBe(5);
@@ -193,6 +205,7 @@ describe('compareRuns — decidability sits on the DIFFERING pairs', () => {
     const baseline = scorerRun('base', [
       0, 0, 0, 0, 0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
     ]);
+
     const candidate = scorerRun('cand', Array.from({ length: 20 }, () => 4));
     const s = scorerOf(attributable(compareRuns(baseline, candidate, OPTS)));
 
@@ -239,6 +252,7 @@ describe('compareRuns — decidability sits on the DIFFERING pairs', () => {
       repeatRun('cand', [4, 4, 4, 4, 4, 4], 3),
       OPTS,
     ));
+
     expect(comparison.headline.pairs).toBe(6);
     expect(comparison.headline.repeats).toBe(3);
     expect(comparison.headline.attemptsPerVariant).toBe(18);
@@ -265,14 +279,17 @@ describe('compareRuns — a regression is not readable as an improvement', () =>
 describe('compareRuns — refuses what it cannot attribute', () => {
   const observations = [0, 0, 0, 4, 4, 4].map((passed, i) =>
     scored(`task-${String(i)}`, 1, [score(SCORER, 4, passed)]));
+
   const baseline = run('base', observations);
 
   test('a different model is refused, and the reason names modelId', () => {
     const comparison = compareRuns(
       baseline, run('cand', observations, { modelId: EVAL_MODELS.pro }), OPTS,
     );
+
     expect(comparison.comparable).toBe(false);
     expect('headline' in comparison).toBe(false);
+
     if (comparison.comparable) throw new Error('expected a refusal');
     expect(comparison.refusals.map((r) => r.field)).toContain('modelId');
     expect(comparison.refusals[0].detail).toContain(EVAL_MODELS.pro);
@@ -281,6 +298,7 @@ describe('compareRuns — refuses what it cannot attribute', () => {
   test('a different evolution position is refused', () => {
     const arm: EvalArmState = { evolution: false, settle: 'first', tools: FULL_TOOL_SURFACE };
     const comparison = compareRuns(baseline, run('cand', observations, { arm }), OPTS);
+
     if (comparison.comparable) throw new Error('expected a refusal');
     expect(comparison.refusals.map((r) => r.field)).toContain('arm.evolution');
   });
@@ -288,6 +306,7 @@ describe('compareRuns — refuses what it cannot attribute', () => {
   test('a different settle policy is refused', () => {
     const arm: EvalArmState = { evolution: true, settle: 'best', tools: FULL_TOOL_SURFACE };
     const comparison = compareRuns(baseline, run('cand', observations, { arm }), OPTS);
+
     if (comparison.comparable) throw new Error('expected a refusal');
     expect(comparison.refusals.map((r) => r.field)).toContain('arm.settle');
   });
@@ -296,6 +315,7 @@ describe('compareRuns — refuses what it cannot attribute', () => {
     const tools = FULL_TOOL_SURFACE.slice(0, 3);
     const arm: EvalArmState = { evolution: true, settle: 'first', tools };
     const comparison = compareRuns(baseline, run('cand', observations, { arm }), OPTS);
+
     if (comparison.comparable) throw new Error('expected a refusal');
     const refusal = comparison.refusals.find((r) => r.field === 'arm.tools');
     expect(refusal).toBeDefined();
@@ -306,6 +326,7 @@ describe('compareRuns — refuses what it cannot attribute', () => {
     const comparison = compareRuns(
       baseline, repeatRun('cand', [0, 0, 0, 4, 4, 4], 3), OPTS,
     );
+
     if (comparison.comparable) throw new Error('expected a refusal');
     expect(comparison.refusals.map((r) => r.field)).toContain('repeats');
   });
@@ -313,11 +334,13 @@ describe('compareRuns — refuses what it cannot attribute', () => {
   test('an inadmissible run is refused, not compared: zero graded turns', () => {
     const inert = [0, 1, 2, 3, 4, 5].map((i) =>
       scored(`task-${String(i)}`, 1, [score(SCORER, 4, 4)], { turns: 0, toolCalls: 0 }));
+
     const candidate = run('cand', inert);
     expect(candidate.admissibility.admissible).toBe(false);
 
     const comparison = compareRuns(baseline, candidate, OPTS);
     expect(comparison.comparable).toBe(false);
+
     if (comparison.comparable) throw new Error('expected a refusal');
     const refusal = comparison.refusals.find((r) => r.field === 'candidate.admissibility');
     expect(refusal?.detail).toContain('zero graded turns');
@@ -327,6 +350,7 @@ describe('compareRuns — refuses what it cannot attribute', () => {
     const report = formatComparison(compareRuns(
       baseline, run('cand', observations, { modelId: EVAL_MODELS.pro }), OPTS,
     ));
+
     expect(report.split('\n')[1]).toContain('REFUSED');
     expect(report).toContain('modelId:');
     expect(report).not.toContain('pass@1');
@@ -356,6 +380,7 @@ describe('compareRuns — an empty denominator is not a zero rate', () => {
   test('exercised on one side only is a corpus-reach change, not a behaviour change', () => {
     const baseline = run('base', [0, 1, 2, 3].map((i) =>
       scored(`task-${String(i)}`, 1, [score(SCORER, 4, 2)])));
+
     const candidate = run('cand', [0, 1, 2, 3].map((i) =>
       scored(`task-${String(i)}`, 1, [score(SCORER, 4, 2), score(ABSENT, 2, 1)])));
 
@@ -379,6 +404,7 @@ describe('compareRuns — ragged and ungradable observations', () => {
       scored('task-b', 1, scoresFor(1)), scored('task-b', 2, scoresFor(1)),
       scored('task-c', 1, scoresFor(1)), scored('task-c', 2, scoresFor(1)),
     ], { repeats: 2 });
+
     const candidate = run('cand', [
       scored('task-a', 1, scoresFor(4)), scored('task-a', 2, scoresFor(4)),
       scored('task-b', 1, scoresFor(4)),
@@ -417,6 +443,7 @@ describe('compareRuns — ragged and ungradable observations', () => {
       scored('task-bad', 1, scoresFor(0)),
       scored('task-filler', 1, scoresFor(4)),
     ]);
+
     const candidate = run('cand', [
       scored('task-good', 1, scoresFor(4)),
       unscored('task-bad', 1, 'errored', 'provider 500'),
@@ -445,9 +472,11 @@ describe('compareRuns — ragged and ungradable observations', () => {
     const baseline = run('base', [
       scored('task-a', 1, scoresFor(4)), scored('task-skip', 1, scoresFor(4)),
     ]);
+
     const candidate = run('cand', [
       scored('task-a', 1, scoresFor(4)), unscored('task-skip', 1, 'skipped', 'budget'),
     ]);
+
     const comparison = attributable(compareRuns(baseline, candidate, OPTS));
     expect(comparison.raggedTasks).toEqual([
       { taskId: 'task-skip', pairedRepetitions: 0, repeats: 1 },
@@ -503,6 +532,7 @@ describe('compareRuns — the binary headline is the OUTCOME', () => {
     // A missing verifier is a gap in the corpus. Scoring it as a loss would turn
     // that gap into a fact about the agent.
     const baseline = solvedRun('base', 8);
+
     const candidate = run('cand', Array.from({ length: 8 }, (_, i) =>
       i === 0
         ? scored('task-0', 1, [score(SCORER, 4, 4), score(TASK_OUTCOME, 0, 0)])
@@ -533,6 +563,7 @@ describe('compareRuns — paired cost and latency', () => {
   test('"did it get cheaper" is answerable with an interval', () => {
     const baseline = run('base', Array.from({ length: 8 }, (_, i) =>
       scored(`task-${String(i)}`, 1, [score(SCORER, 4, 2)], { tokensIn: 1000, tokensOut: 400, ms: 9000 })));
+
     const candidate = run('cand', Array.from({ length: 8 }, (_, i) =>
       scored(`task-${String(i)}`, 1, [score(SCORER, 4, 2)], { tokensIn: 600, tokensOut: 300, ms: 4000 })));
 
@@ -553,6 +584,7 @@ describe('compareRuns — paired cost and latency', () => {
       scored(taskId, 1, [score(SCORER, 4, 2)], { ms: 1000 }),
       scored(taskId, 2, [score(SCORER, 4, 2)], { ms: 3000 }),
     ]), { repeats: 2 });
+
     const candidate = run('cand', ['task-a', 'task-b'].flatMap((taskId) => [
       scored(taskId, 1, [score(SCORER, 4, 2)], { ms: 1000 }),
       scored(taskId, 2, [score(SCORER, 4, 2)], { ms: 1000 }),

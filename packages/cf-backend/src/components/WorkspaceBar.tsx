@@ -52,9 +52,11 @@ export interface WorkspaceBarProps {
 /** `<provider>/<modelId>` → the wire id the mock's chip shows (`deepseek-v4-pro-0813`). */
 function modelChipLabel(spec: string): string {
   const withoutCompatPrefix = spec.replace(/^openai-compat:[^/]+\//, "");
+
   const idPart = withoutCompatPrefix.includes("/")
     ? withoutCompatPrefix.slice(withoutCompatPrefix.indexOf("/") + 1)
     : withoutCompatPrefix;
+
   return idPart.startsWith("@cf/") ? idPart.slice(4) : idPart;
 }
 
@@ -66,6 +68,7 @@ function LivePill({ status, working }: { status: ConnectionStatus; working: bool
       : status === "connecting"
         ? { cls: "p-text-3 p-border p-fill", dot: "p-dot-neutral p-dot-pulse", word: "Connecting" }
         : { cls: "p-danger border p-border p-fill", dot: "p-dot-danger", word: "Offline" };
+
   return (
     <span className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11.5px] font-medium ${tone.cls}`}>
       <span className={`size-1.5 rounded-full ${tone.dot}`} />
@@ -79,6 +82,7 @@ export function WorkspaceBar({
   altitude, onAltitude,
 }: WorkspaceBarProps) {
   const { mode } = useTheme();
+
   return (
     // Fixed 56px like the mock; below ~30rem it wraps rather than clipping —
     // a phone cannot hold a name, a pill and a switch on one line.
@@ -154,9 +158,11 @@ export function InlineRenameTitle({ title, onRename, subject, textClass = "text-
   const save = async (event: FormEvent) => {
     event.preventDefault();
     const displayName = value.trim();
+
     if (!displayName || saving) return;
     setSaving(true);
     setError(null);
+
     try {
       await onRename(displayName);
       setEditing(false);

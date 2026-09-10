@@ -64,12 +64,16 @@ const ORIGIN_REPO = '/home/user/repo';
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.byteLength);
     const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
+
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
+
     return bytes;
   }
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
@@ -86,21 +90,27 @@ interface Fixture {
 async function openFixture(): Promise<Fixture> {
   const database = new Database(':memory:');
   databases.push(database);
+
   const sql: SqlDatabase = {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
       const bound = bindings.map(sqlBinding);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
+
   const workspace = await NimbusWorkspace.create({
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
   });
+
   const durable = new Map<string, unknown>();
+
   const host: ProgrammaticHost = {
     _w1SessionDestroyed: false,
     env: {},
@@ -128,8 +138,10 @@ async function openFixture(): Promise<Fixture> {
     ensureFacetManager: () => undefined,
     initSession: async () => { throw new Error('workspace is already composed'); },
   };
+
   await ensureProgrammaticReady(host);
   const wiring = { root: workspace.vfs.as(ROOT), confiner: workspace.vfs, sql };
+
   return {
     workspace,
     host,
@@ -153,7 +165,9 @@ function node(nodeId: string): NodeIdentity {
  *  permission bits so a comparison is against `0o755` and not the file type. */
 function statOf(workspace: NimbusWorkspace, path: string) {
   const stat = workspace.vfs.as(ROOT).stat(path);
+
   if (stat === null) throw new Error(`no inode at ${path}`);
+
   return { uid: stat.uid, gid: stat.gid, mode: stat.mode & 0o777 };
 }
 
@@ -161,6 +175,7 @@ function statOf(workspace: NimbusWorkspace, path: string) {
  *  that silently accepted `undefined` would pass against no boundary at all. */
 function credOf(workspace: NodeWorkspace): VfsCred {
   if (!workspace.cred) throw new Error(`node at ${workspace.home} was given no credential`);
+
   return workspace.cred;
 }
 
@@ -412,8 +427,10 @@ function hostedSql(database: Database): SqlDatabase {
   return {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bindings.map(sqlBinding));
       statement.run(...bindings.map(sqlBinding));
+
       return [];
     },
   };
@@ -427,6 +444,7 @@ function nimbusBox(nimbus: RootExecNimbus): NimbusSandboxHandle {
     ready: async () => undefined,
     exec: async (command, options) => {
       nimbus.calls.push({ command, options: options ?? {} });
+
       return { command, success: true, exitCode: 0, stdout: '', stderr: '' };
     },
     files: {
@@ -449,10 +467,12 @@ const HOSTED_NODE: HostedNodeHome = {
 describe('hosted node execution', () => {
   test('binds the node credential, its home and its own scratch to every command', async () => {
     const nimbus = new RootExecNimbus();
+
     const base: NimbusSandboxHandle = {
       ...nimbusBox(nimbus),
       startProcess: async (command, options) => {
         nimbus.calls.push({ command, options: options ?? {} });
+
         return {
           command, pid: 1, startedAt: 0, ports: [],
           process: { pid: 1, command, state: 'running', exitCode: null, longRunning: true },
@@ -460,9 +480,11 @@ describe('hosted node execution', () => {
       },
       runCode: async (code, options) => {
         nimbus.calls.push({ command: code, options: options ?? {} });
+
         return { command: code, success: true, exitCode: 0, stdout: '', stderr: '' };
       },
     };
+
     const execution = withHostedNodeExecution(base, HOSTED_NODE);
     // A credential is HOST-INJECTED: an option arriving from anywhere else must
     // not be able to choose one.
@@ -490,8 +512,10 @@ function sessionBox(host: ProgrammaticHost, cred: VfsCred): NimbusSandboxHandle 
       // stay an ABSENT KEY, because the runner reads presence to decide whether
       // it was handed a request at all.
       const forwarded: Parameters<typeof rpcExec>[2] = { cred: options?.cred ?? cred };
+
       if (options?.env !== undefined) forwarded.env = options.env;
       const result = await rpcExec(host, rawCommand, forwarded);
+
       return {
         command: rawCommand,
         success: result.exitCode === 0,
@@ -519,6 +543,7 @@ function sessionBox(host: ProgrammaticHost, cred: VfsCred): NimbusSandboxHandle 
  * request fails here instead of reading as `{}`.
  */
 const RequestEnvSchema = v.object({ KINU_AGENT_FS_REQUEST: v.string() });
+
 const RequestSchema = v.object({
   op: v.string(),
   path: v.optional(v.string()),
@@ -530,10 +555,12 @@ const RequestSchema = v.object({
   len: v.optional(v.number()),
   recursive: v.optional(v.boolean()),
 });
+
 type AgentFsRequest = v.InferOutput<typeof RequestSchema>;
 
 function requestOf(call: RootExecCall | undefined): AgentFsRequest {
   const carried = v.parse(RequestEnvSchema, call?.options.env);
+
   return v.parse(RequestSchema, JSON.parse(carried.KINU_AGENT_FS_REQUEST));
 }
 
@@ -544,6 +571,7 @@ function scriptedBox(
   answer: (op: string, index: number) => string,
 ): NimbusSandboxHandle {
   let index = 0;
+
   return {
     ...nimbusBox(nimbus),
     exec: async (rawCommand, options) => {
@@ -551,6 +579,7 @@ function scriptedBox(
       nimbus.calls.push(call);
       const stdout = answer(requestOf(call).op, index);
       index += 1;
+
       return { command: rawCommand, success: true, exitCode: 0, stdout, stderr: '' };
     },
   };
@@ -559,6 +588,7 @@ function scriptedBox(
 describe('the hosted file plane acts as the node, or the home is unwritable', () => {
   test('the request is JSON in the environment; no path and no payload is shell text', async () => {
     const nimbus = new RootExecNimbus();
+
     const files = nimbusSessionFiles(
       scriptedBox(nimbus, () => JSON.stringify({ ok: true })), HOSTED_NODE.cred,
     );
@@ -583,6 +613,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
   });
   test('a refusal carries the substrate’s own errno, and absent is not refused', async () => {
     const nimbus = new RootExecNimbus();
+
     const refusing = (code: string) => nimbusSessionFiles(
       scriptedBox(nimbus, (op) => JSON.stringify(
         op === 'discard'
@@ -608,6 +639,7 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
 
   test('a write that fails mid-stream discards its temp and never touches the target', async () => {
     const nimbus = new RootExecNimbus();
+
     const files = nimbusSessionFiles(
       scriptedBox(nimbus, (op) => JSON.stringify(
         op === 'commit' ? { ok: false, code: 'EACCES', message: 'EACCES: home/node-node-A/target' } : { ok: true },
@@ -717,17 +749,21 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const a = credOf(await f.provision(node('aX9')));
     const nimbus = new RootExecNimbus();
     const counted = sessionBox(f.host, a);
+
     const box: NimbusSandboxHandle = {
       ...counted,
       exec: async (rawCommand, options) => {
         nimbus.calls.push({ command: rawCommand, options: options ?? {} });
+
         return await counted.exec(rawCommand, options);
       },
     };
+
     const asA = nimbusSessionFiles(box, a);
     // Straddling the chunk boundary, with a non-repeating tail so a lost or
     // reordered chunk cannot pass.
     const big = new Uint8Array(AGENT_FS_CHUNK_BYTES + 4096);
+
     for (let at = 0; at < big.length; at += 1) big[at] = (at * 31 + (at >> 8)) & 0xff;
 
     await asA.writeFile('/home/head-aX9/big.bin', big);
@@ -781,6 +817,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const first = createWorkspace({ sql, transactions, generation: 1 });
     const provision = facetHomeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
     const identity = await provision(headAgentName(node('reset').nodeId));
+
     if (identity.isolation !== 'private-home') throw new Error('node needs its own home');
     const child = await first.asAgent(identity);
     expect(await first.shell.exec('echo main > /tmp/note; echo shared > /home/user/shared')).toMatchObject({ exitCode: 0 });
@@ -800,16 +837,20 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const database = new Database(':memory:');
     databases.push(database);
     const sql = hostedSql(database);
+
     const workspace = createWorkspace({
       sql,
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
       generation: 1,
     });
+
     const provision = facetHomeProvisioner(
       workspace.privileged().then((privileged) => ({ ...privileged, sql })),
     );
+
     const a = await provision(headAgentName(node('aX9').nodeId));
     const b = await provision(headAgentName(node('bK2').nodeId));
+
     if (a.isolation !== 'private-home' || b.isolation !== 'private-home') {
       throw new Error('the in-isolate seam must provision credentials');
     }

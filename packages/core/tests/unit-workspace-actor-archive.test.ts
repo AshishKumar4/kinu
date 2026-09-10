@@ -40,6 +40,7 @@ function sqlOver(db: Database): SqlExecutor {
   return <Row = unknown>(strings: TemplateStringsArray, ...values: readonly SqlValue[]): Row[] => {
     const query = strings.reduce((acc, part, index) => acc + part + (index < values.length ? '?' : ''), '');
     const bound = values.map((value) => (value instanceof ArrayBuffer ? new Uint8Array(value) : value));
+
     return db.prepare<Row, SQLQueryBindings[]>(query).all(...bound);
   };
 }
@@ -51,6 +52,7 @@ function workspace(): Workspace {
   const workspaceId = crypto.randomUUID();
   void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'hosted')`;
   const directory = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' });
+
   return { db, sql, directory, main: directory.createMain({ name: 'hosted' }) };
 }
 
@@ -89,6 +91,7 @@ describe('a workspace snapshot covers every actor', () => {
     expect(restored.actors).toBe(3);
     const there = sqlOver(target);
     expect(there<{ n: number }>`SELECT COUNT(*) AS n FROM workspace_actors`[0]?.n).toBe(3);
+
     for (const [actor, text, runId, version] of [
       [ws.main, 'the main actor said this', 'run-main', 4],
       [hire, 'alpha said this', 'run-alpha', 1],
@@ -103,6 +106,7 @@ describe('a workspace snapshot covers every actor', () => {
         SELECT version FROM scaffold_versions WHERE actor_id = ${actor.actorId} AND status = 'current'`[0]?.version)
         .toBe(version);
     }
+
     // No child database and no second object was needed to produce any of it.
     expect(there<{ n: number }>`
       SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'messages'`[0]?.n).toBe(1);
@@ -138,6 +142,7 @@ describe('a workspace snapshot covers every actor', () => {
 
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'local' });
     const end = JSON.parse(lines[lines.length - 1] ?? '{}');
+
     // Drop the head's ROSTER row and repair the row total the way a truncation
     // nobody noticed would leave it. Every other check this archive faces now
     // passes; without the declared actor count it restores a workspace that is
@@ -147,6 +152,7 @@ describe('a workspace snapshot covers every actor', () => {
       .map((line) => (JSON.parse(line).t === 'end'
         ? JSON.stringify({ ...JSON.parse(line), rows: end.rows - 1 })
         : line));
+
     expect(short.length).toBe(lines.length - 1);
     await expect(restoreWorkspaceArchive(makeSqlExec(new Database(':memory:')), short))
       .rejects.toThrow(/declares 2 actors but restored 1/);
@@ -170,6 +176,7 @@ describe('a workspace snapshot covers every actor', () => {
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       PRIMARY KEY (actor_id, id)
     )`);
+
     for (const [actor, text] of [[ws.main, 'main pane line'], [hire, 'gamma pane line']] as const) {
       void ws.sql`INSERT INTO assistant_messages (actor_id, id, role, content, created_at)
         VALUES (${actor.actorId}, ${`p-${actor.actorId}`}, 'user', ${text}, '2026-01-02 03:04:05')`;

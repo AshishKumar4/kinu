@@ -59,6 +59,7 @@ describe('memberBody', () => {
       '}',
       'after();',
     ].join('\n');
+
     const body = memberBody(src, 'foo()');
     expect(body).toContain('done();');
     expect(body).not.toContain('after();');

@@ -33,6 +33,7 @@ export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
       secret TEXT NOT NULL,
       created_at INTEGER NOT NULL
     )`);
+
   // One orphan sweep beside the DDL: a secret whose trigger is revoked or no
   // longer exists is plaintext with no door left to unlock, and without this
   // sweep a revocation leaks exactly those rows. Guarded from JS because SQLite
@@ -41,6 +42,7 @@ export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
   const hasTriggers = sql.exec(
     `SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'triggers'`,
   ).toArray().length > 0;
+
   if (hasTriggers) {
     // DELIBERATELY NOT ACTOR-SCOPED, and the reason is a property this schema does
     // not enforce. `triggers` is keyed `(actor_id, id)`, but `webhook_secrets`
@@ -62,12 +64,15 @@ export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
         WHERE t.id = webhook_secrets.trigger_id AND t.state != 'revoked'
       )`);
   }
+
   return {
     async get(secretId) {
       const row = sql.exec(
         `SELECT secret FROM webhook_secrets WHERE secret_id = ?`, secretId,
       ).toArray()[0];
+
       const parsed = v.safeParse(SecretRowSchema, row);
+
       return parsed.success ? parsed.output.secret : null;
     },
     put(secretId, triggerId, secret, now) {

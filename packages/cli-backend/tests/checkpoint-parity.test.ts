@@ -15,17 +15,21 @@ import { createHostCheckpoints } from '../src/checkpoints';
 import * as v from 'valibot';
 
 const require = createRequire(import.meta.url);
+
 const rawDaemonModule: unknown = require('../../pc-agent/src/index.js');
+
 const daemon = v.parse(v.object({ createCheckpoints: v.function() }), rawDaemonModule);
 
 const checkpointEntrySchema = v.object({
   id: v.string(), dir: v.string(), at: v.number(),
   turnId: v.nullable(v.string()), sessionId: v.nullable(v.string()), reason: v.string(),
 });
+
 const checkpointPlanSchema = v.object({
   dir: v.string(), id: v.string(),
   files: v.array(v.object({ path: v.string(), kind: v.string() })),
 });
+
 const checkpointRestoreSchema = v.object({
   dir: v.string(), id: v.string(), preRestoreId: v.nullable(v.string()),
 });
@@ -47,6 +51,7 @@ function createDeviceCheckpoints(options?: DeviceCheckpointOptions) {
   const raw = v.parse(v.object({
     ensure: v.function(), list: v.function(), plan: v.function(), restore: v.function(),
   }), daemon.createCheckpoints(options));
+
   return {
     ensure: (hint: DeviceCheckpointHint, fallbackDir?: string) =>
       v.parse(v.nullable(v.string()), raw.ensure(hint, fallbackDir)),
@@ -68,12 +73,14 @@ function setup() {
   const base = join(root, 'shadow');
   const host = createHostCheckpoints({ agent: AGENT, base });
   const device = createDeviceCheckpoints({ base });
+
   return { root, work, host, device, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
   test('a host-engine snapshot is listed, planned, and restored by the daemon', async () => {
     const { work, host, device, cleanup } = setup();
+
     try {
       writeFileSync(join(work, 'a.txt'), 'host wrote this');
       host.beginTurn({ turnId: 'turn-ts', sessionId: 'sess-1' });
@@ -105,6 +112,7 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
 
   test('a daemon snapshot is listed, planned, and restored by the host engine', async () => {
     const { work, host, device, cleanup } = setup();
+
     try {
       writeFileSync(join(work, 'b.txt'), 'daemon wrote this');
       const id = device.ensure({ agent: AGENT, dir: work, turnId: 'turn-js', sessionId: 'sess-2' });
@@ -127,6 +135,7 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
 
   test('both engines write byte-identical store scaffolding (marker + excludes)', async () => {
     const { root, work, host, device, cleanup } = setup();
+
     try {
       // Two separate dirs so each engine inits its own store from scratch.
       const workB = join(root, 'project-b');
@@ -156,8 +165,10 @@ describe('shadow-git store parity (TS engine ↔ pc-agent daemon)', () => {
     const { root, work, host, device, cleanup } = setup();
     const workB = join(root, 'project-b');
     const foreign = [join(work, 'systemd-private-1'), join(workB, 'systemd-private-1')];
+
     try {
       mkdirSync(workB);
+
       for (const [index, dir] of [work, workB].entries()) {
         writeFileSync(join(dir, 'mine.txt'), 'kept');
         mkdirSync(foreign[index]!);

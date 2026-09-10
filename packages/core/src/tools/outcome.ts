@@ -19,14 +19,19 @@ export function failedToolOutcome(input: Parameters<typeof renderThrownChain>[0]
   const outcome: Extract<ToolOutcome, { success: false }> = { success: false, reason: null };
   const seen = new Set<Error>();
   let error = input.cause;
+
   while (error instanceof Error && !seen.has(error)) {
     seen.add(error);
+
     if (error instanceof KinuError) {
       outcome.reason ??= error instanceof FileRefusalError ? error.verdict : error.code;
+
       if (error.execution !== undefined) outcome.execution ??= error.execution;
     }
+
     error = error.cause;
   }
+
   return outcome;
 }
 
@@ -37,8 +42,10 @@ export async function branchableToolCall<Result>(call: () => Promise<Result>) {
   } catch (cause) {
     if (cause instanceof McpToolError) return cause.response;
     const outcome = failedToolOutcome({ cause });
+
     if (outcome.reason === null) throw cause;
     const refusal = { reason: outcome.reason, error: renderThrownChain({ cause }) };
+
     return outcome.execution === undefined ? refusal : { ...refusal, execution: outcome.execution };
   }
 }

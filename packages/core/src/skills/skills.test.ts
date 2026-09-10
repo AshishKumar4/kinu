@@ -55,13 +55,16 @@ function memoryVfs(
 ): MemoryVfs {
   const files = new Map<string, string>(Object.entries(initial));
   const calls: VfsCalls = { readFile: [], stat: [], readdir: [] };
+
   return {
     calls,
     async exists(p) { return files.has(p); },
     async readFile(p) {
       calls.readFile.push(p);
       const v = files.get(p);
+
       if (v === undefined) throw new Error(`ENOENT: ${p}`);
+
       return v;
     },
     async writeFile(p, data) {
@@ -70,19 +73,24 @@ function memoryVfs(
     async stat(p) {
       calls.stat.push(p);
       const v = files.get(p);
+
       if (v === undefined) return null;
+
       return { size: opts.sizes?.[p] ?? v.length, mtimeMs: 0, isDir: false };
     },
     async readdir(p) {
       calls.readdir.push(p);
       const prefix = p.replace(/\/$/, '') + '/';
       const out: string[] = [];
+
       for (const k of files.keys()) {
         if (!k.startsWith(prefix)) continue;
         const rest = k.slice(prefix.length);
+
         if (rest.includes('/')) continue;
         out.push(rest);
       }
+
       return opts.entryOrder ? opts.entryOrder(out) : out;
     },
     async unlink(p) { files.delete(p); },
@@ -102,6 +110,7 @@ function skillFile(name: string, body: string): string {
  *  that body would cost, which is all the admission needs to decide. */
 function fakeSkill(name: string, opts: Partial<ActiveSkill> = {}): DiscoveredSkill {
   const body = opts.body ?? 'body';
+
   return {
     name,
     description: opts.description ?? `desc ${name}`,
@@ -139,7 +148,9 @@ description: A trivial workflow.
 
 Do the thing.
 `);
+
     expect(r.ok).toBe(true);
+
     if (!r.ok) return;
     expect(r.skill.name).toBe('hello-world');
     expect(r.skill.description).toBe('A trivial workflow.');
@@ -158,6 +169,7 @@ allowed-tools: [run, memory]
 ---
 body
 `);
+
     const snake = parseSkillFile(`---
 name: a
 description: x
@@ -165,7 +177,9 @@ allowed_tools: [run, memory]
 ---
 body
 `);
+
     expect(hyphen.ok && snake.ok).toBe(true);
+
     if (hyphen.ok && snake.ok) {
       expect(hyphen.skill.allowed_tools).toEqual(snake.skill.allowed_tools);
       expect(hyphen.skill.allowed_tools).toEqual(['run', 'memory']);
@@ -184,7 +198,9 @@ allowed-tools: Bash(git:*) Read
 ---
 body
 `);
+
     expect(r.ok).toBe(true);
+
     if (r.ok) expect(r.skill.allowed_tools).toEqual(['Bash(git:*)', 'Read']);
   });
 
@@ -195,6 +211,7 @@ description: x
 ---
 body
 `);
+
     expect(r.ok).toBe(false);
   });
 
@@ -204,6 +221,7 @@ name: x
 ---
 body
 `);
+
     expect(r.ok).toBe(false);
   });
 
@@ -213,7 +231,9 @@ description: A skill authored without an explicit name.
 ---
 body
 `, 'vfs', 'my-skill-from-dir');
+
     expect(r.ok).toBe(true);
+
     if (r.ok) expect(r.skill.name).toBe('my-skill-from-dir');
   });
 
@@ -224,35 +244,41 @@ description: x
 ---
 body
 `);
+
     const c = parseSkillFile(`---
 name: claude-thing
 description: x
 ---
 body
 `);
+
     expect(a.ok).toBe(false);
     expect(c.ok).toBe(false);
   });
 
   test('rejects names exceeding 64 characters', () => {
     const tooLong = 'a' + '-b'.repeat(40); // 81 chars
+
     const r = parseSkillFile(`---
 name: ${tooLong}
 description: x
 ---
 body
 `);
+
     expect(r.ok).toBe(false);
   });
 
   test('rejects descriptions exceeding 1024 characters', () => {
     const longDesc = 'x'.repeat(1025);
+
     const r = parseSkillFile(`---
 name: a
 description: ${longDesc}
 ---
 body
 `);
+
     expect(r.ok).toBe(false);
   });
 
@@ -263,6 +289,7 @@ description: "Has <tool>tags</tool> inside"
 ---
 body
 `);
+
     expect(r.ok).toBe(false);
   });
 
@@ -276,7 +303,9 @@ disable-model-invocation: true
 ---
 body
 `);
+
     expect(r.ok).toBe(true);
+
     if (!r.ok) return;
     expect(r.skill.disable_model_invocation).toBe(true);
     // Coerced false because disable_model_invocation overrides.
@@ -291,7 +320,9 @@ user-invocable: false
 ---
 body
 `);
+
     expect(r.ok).toBe(true);
+
     if (r.ok) expect(r.skill.user_invocable).toBe(false);
   });
 
@@ -306,7 +337,9 @@ user-invocable: "false"
 ---
 body
 `);
+
     expect(quoted.ok).toBe(true);
+
     if (!quoted.ok) return;
     expect(quoted.skill.auto_activate).toBe(false);
     expect(quoted.skill.disable_model_invocation).toBe(false);
@@ -320,7 +353,9 @@ description: x
 ---
 body
 `);
+
     expect(r.ok).toBe(true);
+
     if (r.ok) expect(r.skill.user_invocable).toBe(true);
   });
 
@@ -333,7 +368,9 @@ also_custom: 42
 ---
 body
 `);
+
     expect(r.ok).toBe(true);
+
     if (!r.ok) return;
     expect(r.skill.ext.custom_field).toBe('hello');
     expect(r.skill.ext.also_custom).toBe(42);
@@ -347,7 +384,9 @@ keywords: [Audit, REVIEW, refactor]
 ---
 body
 `);
+
     expect(r.ok).toBe(true);
+
     if (r.ok) expect(r.skill.keywords).toEqual(['audit', 'review', 'refactor']);
   });
 
@@ -364,11 +403,14 @@ auto_activate: true
 
 Body content with **markdown**.
 `);
+
     expect(original.ok).toBe(true);
+
     if (!original.ok) return;
     const ser = stringifySkillFile(original.skill);
     const reparsed = parseSkillFile(ser);
     expect(reparsed.ok).toBe(true);
+
     if (!reparsed.ok) return;
     expect(reparsed.skill.name).toBe(original.skill.name);
     expect(reparsed.skill.description).toBe(original.skill.description);
@@ -385,8 +427,11 @@ description: x
 ---
 body
 `);
+
     expect(base.ok).toBe(true);
+
     if (!base.ok) return;
+
     const skill = {
       ...base.skill,
       ext: {
@@ -399,8 +444,10 @@ body
         tags: ['123', 'false', 'hello'],
       },
     };
+
     const reparsed = parseSkillFile(stringifySkillFile(skill));
     expect(reparsed.ok).toBe(true);
+
     if (!reparsed.ok) return;
     expect(reparsed.skill.ext.flag).toBe('true');
     expect(reparsed.skill.ext.count).toBe('123');
@@ -445,6 +492,7 @@ describe('resolveActiveSkills', () => {
     const set = resolveActiveSkills({
       available: [fakeSkill('a')], explicit: ['a'], userMessage: '', alwaysActive: [],
     });
+
     expect(set.map(a => a.skill.name)).toEqual(['a']);
     expect(set[0]?.reason.kind).toBe('explicit');
   });
@@ -453,15 +501,18 @@ describe('resolveActiveSkills', () => {
     const set = resolveActiveSkills({
       available: [fakeSkill('a')], explicit: ['nonexistent'], userMessage: '', alwaysActive: [],
     });
+
     expect(set).toEqual([]);
   });
 
   test('keyword auto-activation requires auto_activate: true', () => {
     const a = fakeSkill('a', { keywords: ['audit'], auto_activate: true });
     const b = fakeSkill('b', { keywords: ['audit'], auto_activate: false });
+
     const set = resolveActiveSkills({
       available: [a, b], explicit: [], userMessage: 'please audit my code', alwaysActive: [],
     });
+
     const names = set.map(s => s.skill.name);
     expect(names).toContain('a');
     expect(names).not.toContain('b');
@@ -469,9 +520,11 @@ describe('resolveActiveSkills', () => {
 
   test('keyword match is whole-word (no substring traps)', () => {
     const a = fakeSkill('a', { keywords: ['audit'], auto_activate: true });
+
     const set = resolveActiveSkills({
       available: [a], explicit: [], userMessage: 'auditorium', alwaysActive: [],
     });
+
     expect(set).toEqual([]);
   });
 
@@ -479,23 +532,28 @@ describe('resolveActiveSkills', () => {
     const set = resolveActiveSkills({
       available: [fakeSkill('a')], explicit: [], userMessage: '', alwaysActive: ['a'],
     });
+
     expect(set.map(a => a.skill.name)).toEqual(['a']);
     expect(set[0]?.reason.kind).toBe('always_active');
   });
 
   test('explicit overrides keyword and always_active reasons', () => {
     const a = fakeSkill('a', { keywords: ['audit'], auto_activate: true });
+
     const set = resolveActiveSkills({
       available: [a], explicit: ['a'], userMessage: 'audit please', alwaysActive: ['a'],
     });
+
     expect(set[0]?.reason.kind).toBe('explicit');
   });
 
   test('the same skill cannot be activated twice', () => {
     const a = fakeSkill('a', { keywords: ['audit'], auto_activate: true });
+
     const set = resolveActiveSkills({
       available: [a], explicit: ['a'], userMessage: 'audit', alwaysActive: ['a'],
     });
+
     expect(set.length).toBe(1);
   });
 
@@ -503,34 +561,42 @@ describe('resolveActiveSkills', () => {
     const a = fakeSkill('a', {
       keywords: ['audit'], auto_activate: true, disable_model_invocation: true,
     });
+
     const set = resolveActiveSkills({
       available: [a], explicit: [], userMessage: 'please audit my code', alwaysActive: [],
     });
+
     expect(set).toEqual([]);
   });
 
   test('disable_model_invocation does NOT block explicit user invocation', () => {
     const a = fakeSkill('a', { disable_model_invocation: true });
+
     const set = resolveActiveSkills({
       available: [a], explicit: ['a'], userMessage: '/a', alwaysActive: [],
     });
+
     expect(set.map(s => s.skill.name)).toEqual(['a']);
     expect(set[0]?.reason.kind).toBe('explicit');
   });
 
   test('user_invocable: false blocks /skill-name explicit invocation', () => {
     const a = fakeSkill('a', { user_invocable: false });
+
     const set = resolveActiveSkills({
       available: [a], explicit: ['a'], userMessage: '/a', alwaysActive: [],
     });
+
     expect(set).toEqual([]);
   });
 
   test('user_invocable: false does NOT block always-active activation', () => {
     const a = fakeSkill('a', { user_invocable: false });
+
     const set = resolveActiveSkills({
       available: [a], explicit: [], userMessage: '', alwaysActive: ['a'],
     });
+
     expect(set.map(s => s.skill.name)).toEqual(['a']);
     expect(set[0]?.reason.kind).toBe('always_active');
   });
@@ -539,24 +605,29 @@ describe('resolveActiveSkills', () => {
     const pinned = fakeSkill('aaa-pinned');
     const keyword = fakeSkill('bbb-keyword', { keywords: ['ship'], auto_activate: true });
     const invoked = fakeSkill('zzz-invoked');
+
     const set = resolveActiveSkills({
       available: [pinned, keyword, invoked],
       explicit: ['zzz-invoked'],
       userMessage: '/zzz-invoked time to ship',
       alwaysActive: ['aaa-pinned'],
     });
+
     // Alphabetically the pinned skill leads; by priority it comes last.
     expect(set.map(s => s.skill.name)).toEqual(['zzz-invoked', 'bbb-keyword', 'aaa-pinned']);
   });
 
   test('inside one tier the order is by name, whatever order the tier arrived in', () => {
     const available = [fakeSkill('m'), fakeSkill('a'), fakeSkill('z')];
+
     const forward = resolveActiveSkills({
       available, explicit: [], userMessage: '', alwaysActive: ['z', 'a', 'm'],
     });
+
     const reversed = resolveActiveSkills({
       available: [...available].reverse(), explicit: [], userMessage: '', alwaysActive: ['m', 'a', 'z'],
     });
+
     expect(forward.map(s => s.skill.name)).toEqual(['a', 'm', 'z']);
     expect(reversed.map(s => s.skill.name)).toEqual(['a', 'm', 'z']);
   });
@@ -571,10 +642,12 @@ describe('renderActiveSkillsSection + tool gating', () => {
 
   test('renders the skill body and a "tool surface restricted" line when allow_tools is non-empty', () => {
     const a = activeSkill('a', { allowed_tools: ['run', 'memory'] });
+
     const out = renderActiveSkillsSection({
       active: [a],
       reasons: [{ name: 'a', reason: { kind: 'explicit', matched_token: 'a' } }],
     }, 'system');
+
     expect(out).toContain('## Active skills');
     expect(out).toContain('run');
     expect(out).toContain('### a (explicit /a)');
@@ -609,10 +682,12 @@ describe('renderActiveSkillsSection + tool gating', () => {
       trust: 'unverified',
       body: null,
     };
+
     const out = renderActiveSkillsSection({
       active: [deferred],
       reasons: [{ name: 'giant', reason: { kind: 'explicit', matched_token: 'giant' } }],
     }, 'unverified');
+
     expect(out).toContain('### giant (explicit /giant)');
     expect(out).toContain('(50000 chars)');
     expect(out).toContain(`read it with workspace.readFile("${SKILLS_DIR}/giant.md")`);
@@ -625,6 +700,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
       trust: 'builtin',
       body: null,
     };
+
     const out = renderActiveSkillsSection({ active: [builtin], reasons: [] }, 'system');
     expect(out).toContain('built in and has no VFS path');
     expect(out).not.toContain('workspace.readFile');
@@ -639,10 +715,12 @@ describe('renderActiveSkillsSection + tool gating', () => {
 
   test('admitted bodies render unchanged', () => {
     const a = activeSkill('a', { body: 'short body' });
+
     const out = renderActiveSkillsSection({
       active: [a],
       reasons: [{ name: 'a', reason: { kind: 'explicit', matched_token: 'a' } }],
     }, 'system');
+
     expect(out).toContain('short body');
     expect(out).not.toContain('not admitted');
   });
@@ -661,6 +739,7 @@ describe('renderSkillsIndexSection', () => {
       ],
       unread: [],
     }, ROOMY_TOKENS));
+
     expect(out).toContain('## Skills');
     // File descriptions are agent-writable bytes. The system index names a
     // validated filename but never embeds that prose before owner approval.
@@ -678,6 +757,7 @@ describe('renderSkillsIndexSection', () => {
       skills: [],
       unread: [{ name: 'huge', path: `${SKILLS_DIR}/huge.md`, bytes: 4_000_000 }],
     }, ROOMY_TOKENS));
+
     expect(out).toContain('**huge**');
     expect(out).toContain('4000000 bytes');
     expect(out).toContain(`workspace.readFile("${SKILLS_DIR}/huge.md")`);
@@ -686,10 +766,12 @@ describe('renderSkillsIndexSection', () => {
   test('elides under allocation pressure with an honest count and where to look, never a silent cut', () => {
     const skills = Array.from({ length: 50 }, (_, i) =>
       fakeSkill(`skill-${String(i).padStart(2, '0')}`, { description: 'd'.repeat(150) }));
+
     // A small window is the only way to squeeze the index now — there is no char
     // cap left to turn down.
     const index = admitSkillsIndex({ skills, unread: [] },
       stepContextLimit({ contextWindow: 2_000, modelOutputLimit: 1_000 }));
+
     const out = renderSkillsIndexSection(index);
     expect(out).toMatch(/… and \d+ more skills? this turn's skills allocation did not reach/);
     expect(out).toContain(`workspace.readdir("${SKILLS_DIR}")`);
@@ -704,6 +786,7 @@ describe('renderSkillsIndexSection', () => {
     const skills = Array.from({ length: 5 }, (_, i) => fakeSkill(`skill-${i}`));
     const out = renderSkillsIndexSection(admitSkillsIndex({ skills, unread: [] }, ROOMY_TOKENS));
     expect(out).not.toContain('did not reach');
+
     for (const s of skills) expect(out).toContain(`**${s.name}**`);
   });
 });
@@ -724,6 +807,7 @@ describe('discoverSkills', () => {
     const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
     const names = found.skills.map(s => s.name);
     expect(names).toContain('audit-implementation');
+
     for (const b of BUILTIN_SKILLS) expect(names).toContain(b.name);
     // A built-in body is already in memory, so nothing was read for it.
     expect(v.calls.readFile).toEqual([]);
@@ -731,14 +815,17 @@ describe('discoverSkills', () => {
 
   test('skips malformed files via onParseError instead of throwing', async () => {
     const errors: Array<{ path: string; err: string }> = [];
+
     const v = memoryVfs({
       [`${SKILLS_DIR}/good.md`]: skillFile('good', 'body'),
       [`${SKILLS_DIR}/bad.md`]: `not a valid skill file at all`,
     });
+
     const found = await discoverSkills(v, {
       admissionTokens: ROOMY_TOKENS,
       onParseError: (path, err) => errors.push({ path, err }),
     });
+
     expect(found.skills.find(s => s.name === 'good')).toBeTruthy();
     expect(errors.length).toBeGreaterThan(0);
   });
@@ -747,10 +834,13 @@ describe('discoverSkills', () => {
     const v = memoryVfs({
       [`${SKILLS_DIR}/wrong-filename.md`]: `---\nname: actual-name\ndescription: ok\n---\nbody`,
     });
+
     const errors: string[] = [];
+
     const found = await discoverSkills(v, {
       admissionTokens: ROOMY_TOKENS, onParseError: (_p, e) => errors.push(e),
     });
+
     expect(found.skills.find(s => s.name === 'actual-name')).toBeFalsy();
     expect(errors.some(e => e.includes('does not match'))).toBe(true);
   });
@@ -758,9 +848,11 @@ describe('discoverSkills', () => {
   test('an illegal filename stem is rejected without opening the file', async () => {
     const v = memoryVfs({ [`${SKILLS_DIR}/Not_A_Skill.md`]: skillFile('x', 'body') });
     const errors: string[] = [];
+
     const found = await discoverSkills(v, {
       admissionTokens: ROOMY_TOKENS, onParseError: (_p, e) => errors.push(e),
     });
+
     expect(found.skills.every(s => s.source === 'builtin')).toBe(true);
     expect(errors.some(e => e.includes('filename stem'))).toBe(true);
     expect(v.calls.readFile).toEqual([]);
@@ -772,19 +864,24 @@ describe('discoverSkills', () => {
       [`${SKILLS_DIR}/apex.md`]: skillFile('apex', 'A'),
       [`${SKILLS_DIR}/zulu.md`]: skillFile('zulu', 'Z'),
     };
+
     const views = [
       memoryVfs(files, { entryOrder: (n) => [...n].sort() }),
       memoryVfs(files, { entryOrder: (n) => [...n].sort().reverse() }),
       memoryVfs(files, { entryOrder: (n) => [n[1]!, n[2]!, n[0]!] }),
     ];
+
     const orders = await Promise.all(views.map(async (v) => {
       const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+
       return {
         names: found.skills.map(s => s.name),
         rendered: renderSkillsIndexSection(admitSkillsIndex(found, ROOMY_TOKENS)),
       };
     }));
+
     expect(orders[0]!.names).toEqual(['apex', 'audit-implementation', 'mid', 'zulu']);
+
     for (const o of orders) {
       expect(o.names).toEqual(orders[0]!.names);
       expect(o.rendered).toBe(orders[0]!.rendered);
@@ -796,7 +893,9 @@ describe('discoverSkills', () => {
       [`${SKILLS_DIR}/one.md`]: skillFile('one', 'BODY-ONE'),
       [`${SKILLS_DIR}/two.md`]: skillFile('two', 'BODY-TWO'),
     });
+
     const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
+
     for (const skill of found.skills) expect('body' in skill).toBe(false);
     expect(v.calls.readFile.sort()).toEqual([`${SKILLS_DIR}/one.md`, `${SKILLS_DIR}/two.md`]);
     // Size is consulted before bytes, for every candidate.
@@ -807,10 +906,12 @@ describe('discoverSkills', () => {
 
   test('a file whose reported size alone exceeds the allocation is named from its filename and never opened', async () => {
     const path = `${SKILLS_DIR}/whale.md`;
+
     const v = memoryVfs(
       { [path]: skillFile('whale', 'W'), [`${SKILLS_DIR}/minnow.md`]: skillFile('minnow', 'm') },
       { sizes: { [path]: 40_000_000 } },
     );
+
     const found = await discoverSkills(v, { admissionTokens: ROOMY_TOKENS });
     expect(found.unread).toEqual([{ name: 'whale', path, bytes: 40_000_000 }]);
     expect(found.skills.map(s => s.name)).not.toContain('whale');
@@ -827,6 +928,7 @@ describe('skills admission', () => {
   function corpus(count: number, bodyChars: number): DiscoveredSkill[] {
     return Array.from({ length: count }, (_, i) => {
       const name = `skill-${String(i).padStart(2, '0')}`;
+
       return fakeSkill(name, {
         bodyRef: { kind: 'file', path: `${SKILLS_DIR}/${name}.md`, chars: bodyChars },
       });
@@ -838,18 +940,23 @@ describe('skills admission', () => {
     limits: { contextWindow: number; modelOutputLimit: number },
   ) {
     const files: Record<string, string> = {};
+
     for (const s of skills) {
       if (s.bodyRef.kind === 'file') files[s.bodyRef.path] = skillFile(s.name, 'b'.repeat(s.bodyRef.chars));
     }
+
     const vfs = memoryVfs(files);
     const admissionTokens = stepContextLimit(limits);
     const index = admitSkillsIndex({ skills, unread: [] }, admissionTokens);
+
     const activated = resolveActiveSkills({
       available: skills, explicit: [], userMessage: '', alwaysActive: skills.map(s => s.name),
     });
+
     const set = await admitActiveSkills({
       vfs, activated, admissionTokens: admissionTokens - index.tokens, trust: APPROVED,
     });
+
     return { index, set, vfs, admittedBodies: set.active.filter(s => s.body !== null) };
   }
 
@@ -872,19 +979,25 @@ describe('skills admission', () => {
 
   test('only the bodies the allocation admitted are ever read', async () => {
     const skills = corpus(6, 20_000);
+
     const { vfs, admittedBodies, set } = await admitAll(skills,
       { contextWindow: 24_000, modelOutputLimit: 8_000 });
+
     expect(admittedBodies.length).toBeGreaterThan(0);
     expect(admittedBodies.length).toBeLessThan(skills.length);
+
     const readPaths = admittedBodies
       .map(s => s.bodyRef.kind === 'file' ? s.bodyRef.path : s.name).sort();
+
     expect(vfs.calls.readFile.sort()).toEqual(readPaths);
     // Nothing was dropped: every activated skill is still in the set, the
     // deferred ones with a null body and a pointer — in the reference tier,
     // because an unread body has no bytes for the owner to have approved.
     expect(set.active.length).toBe(skills.length);
+
     const rendered = renderActiveSkillsSection(set, 'system')
       + renderActiveSkillsSection(set, 'unverified');
+
     for (const skill of skills) expect(rendered).toContain(`### ${skill.name}`);
   });
 
@@ -894,8 +1007,10 @@ describe('skills admission', () => {
     const { index, set } = await admitAll(skills, limits);
     expect(index.tokens).toBeGreaterThan(0);
     expect(index.lines.length).toBe(skills.length);
+
     const bodyTokens = set.active
       .reduce((n, s) => n + (s.body === null ? 0 : estimateTokens(s.body.length)), 0);
+
     expect(index.tokens + bodyTokens).toBeLessThanOrEqual(stepContextLimit(limits));
   });
 
@@ -903,23 +1018,28 @@ describe('skills admission', () => {
     const giant = fakeSkill('aaa-pinned-giant', {
       bodyRef: { kind: 'file', path: `${SKILLS_DIR}/aaa-pinned-giant.md`, chars: 30_000 },
     });
+
     const invoked = fakeSkill('zzz-invoked', {
       bodyRef: { kind: 'file', path: `${SKILLS_DIR}/zzz-invoked.md`, chars: 400 },
     });
+
     const vfs = memoryVfs({
       [`${SKILLS_DIR}/aaa-pinned-giant.md`]: skillFile('aaa-pinned-giant', 'G'.repeat(30_000)),
       [`${SKILLS_DIR}/zzz-invoked.md`]: skillFile('zzz-invoked', 'I'.repeat(400)),
     });
+
     const activated = resolveActiveSkills({
       available: [giant, invoked],
       explicit: ['zzz-invoked'],
       userMessage: '/zzz-invoked',
       alwaysActive: ['aaa-pinned-giant'],
     });
+
     const set = await admitActiveSkills({
       vfs, activated, trust: APPROVED,
       admissionTokens: stepContextLimit({ contextWindow: 4_000, modelOutputLimit: 500 }),
     });
+
     const byName = new Map(set.active.map(s => [s.name, s]));
     expect(byName.get('zzz-invoked')?.body).toContain('I');
     expect(byName.get('aaa-pinned-giant')?.body).toBeNull();
@@ -934,33 +1054,42 @@ describe('skills admission', () => {
     const whale = `${SKILLS_DIR}/whale.md`;
     const files: Record<string, string> = {};
     files[whale] = skillFile('whale', 'W');
+
     for (let i = 0; i < 12; i++) {
       files[`${SKILLS_DIR}/skill-${i}.md`] = skillFile(`skill-${i}`, 'b'.repeat(2_000));
     }
+
     const vfs = memoryVfs(files, { sizes: { [whale]: 90_000_000 } });
     const admissionTokens = stepContextLimit({ contextWindow: 3_000, modelOutputLimit: 400 });
     const discovery = await discoverSkills(vfs, { admissionTokens });
     const index = admitSkillsIndex(discovery, admissionTokens);
+
     const activated = resolveActiveSkills({
       available: discovery.skills, explicit: [], userMessage: '',
       alwaysActive: discovery.skills.map(s => s.name),
     });
+
     const set = await admitActiveSkills({
       vfs, activated, admissionTokens: admissionTokens - index.tokens, trust: APPROVED,
     });
 
     const indexText = renderSkillsIndexSection(index);
+
     const activeText = renderActiveSkillsSection(set, 'system')
       + renderActiveSkillsSection(set, 'unverified');
+
     const discovered = [...discovery.skills.map(s => s.name), ...discovery.unread.map(u => u.name)];
     expect(discovered.length).toBe(14); // 12 authored + the built-in + the whale
+
     for (const name of discovered) {
       expect(indexText.includes(`**${name}**`) || activeText.includes(`### ${name}`)).toBe(true);
     }
+
     // The index accounts for every discovered skill: what it named plus what it
     // says it could not reach is the whole catalogue, never a shorter list.
     const named = (indexText.match(/^- \*\*/gm) ?? []).length;
     expect(named + index.omitted).toBe(discovered.length);
+
     // Every body that missed the cut still says where it is.
     for (const skill of set.active) {
       if (skill.body !== null) continue;
@@ -972,16 +1101,20 @@ describe('skills admission', () => {
 
   test('a built-in body is admitted without any read at all', async () => {
     const vfs = memoryVfs();
+
     const activated = resolveActiveSkills({
       available: [...BUILTIN_SKILL_HEADERS],
       explicit: [],
       userMessage: '',
       alwaysActive: BUILTIN_SKILL_HEADERS.map(s => s.name),
     });
+
     const set = await admitActiveSkills({
       vfs, activated, admissionTokens: ROOMY_TOKENS, trust: APPROVED,
     });
+
     expect(set.active.length).toBe(BUILTIN_SKILL_HEADERS.length);
+
     for (const skill of set.active) expect(skill.body).toBeTruthy();
     expect(vfs.calls.readFile).toEqual([]);
   });
@@ -989,13 +1122,16 @@ describe('skills admission', () => {
   test('an over-budget built-in body keeps trusted policy and its activation reason', async () => {
     const vfs = memoryVfs();
     const [builtin] = BUILTIN_SKILL_HEADERS;
+
     if (!builtin) throw new Error('expected a built-in skill');
+
     const activated = resolveActiveSkills({
       available: [builtin],
       explicit: [],
       userMessage: '',
       alwaysActive: [builtin.name],
     });
+
     const set = await admitActiveSkills({
       vfs,
       activated,
@@ -1021,24 +1157,29 @@ describe('skills admission', () => {
   test('a skill whose stat or read throws defers itself instead of failing the turn', async () => {
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
+
     try {
       const vfs: SkillsVfs = {
         async exists() { return true; },
         async readFile(p) {
           if (p === `${SKILLS_DIR}/bad-read.md`) throw new Error('boom-read');
+
           return skillFile(p.includes('good') ? 'good' : 'bad-stat', 'hello body');
         },
         async writeFile() {},
         async stat(p) {
           if (p === `${SKILLS_DIR}/bad-stat.md`) throw new Error('boom-stat');
+
           return { size: 60, mtimeMs: 0, isDir: false };
         },
         async readdir() { return []; },
       };
+
       const activated = ['bad-stat', 'bad-read', 'good'].map((name) => ({
         skill: fakeSkill(name),
         reason: { kind: 'explicit', matched_token: name } as const,
       }));
+
       const set = await admitActiveSkills({ vfs, activated, admissionTokens: ROOMY_TOKENS, trust: APPROVED });
       const byName = new Map(set.active.map((s) => [s.name, s]));
       expect(set.active.length).toBe(3);

@@ -30,5 +30,6 @@ const DEFAULT_WINDOW = 128_000;
 
 export function contextWindowForModel(spec: string): number {
   for (const [re, n] of WINDOWS) if (re.test(spec)) return n;
+
   return DEFAULT_WINDOW;
 }

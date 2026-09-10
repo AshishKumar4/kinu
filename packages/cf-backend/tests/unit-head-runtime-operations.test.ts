@@ -37,6 +37,7 @@ function mergeModel(text: string, calls?: LanguageModelV3CallOptions[]): MockLan
   return new MockLanguageModelV3({
     doGenerate: async (options) => {
       calls?.push(options);
+
       return {
         content: [{ type: 'text' as const, text }],
         finishReason: { unified: 'stop' as const, raw: undefined },
@@ -96,11 +97,13 @@ function runtimeWith(text: string) {
   const resolved: Array<{ spec: string | null | undefined; effort: ReasoningEffort }> = [];
   /** The provider requests this backend built, options and all. */
   const calls: LanguageModelV3CallOptions[] = [];
+
   const runtime = createHeadRuntime({
     host: neverHost,
     models: {
       resolveModelWithEffort: (spec, effort) => {
         resolved.push({ spec, effort });
+
         return { model: mergeModel(text, calls), providerOptions: undefined };
       },
     },
@@ -108,6 +111,7 @@ function runtimeWith(text: string) {
     reportModelCall: (report) => reports.push(report),
     operations: (event) => operations.push(event),
   });
+
   return { calls, operations, reports, resolved, runtime };
 }
 

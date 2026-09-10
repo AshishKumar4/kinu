@@ -26,6 +26,7 @@ import {
 } from './bench-fuse-probe';
 
 const attemptId = 'fuse-attempt';
+
 const DRIVER_SOURCE = readFileSync(new URL('./bench-fuse-probe.ts', import.meta.url), 'utf8');
 
 function stage1(overrides: Partial<Stage1Report> = {}) {
@@ -67,6 +68,7 @@ function stage1(overrides: Partial<Stage1Report> = {}) {
     execMetadata: { mode0755Preserved: true, execAttempted: true, execOk: true },
     overlay: { attempted: true, composed: true, readVerified: true }, mountsPresentAtExit: [],
   };
+
   return v.parse(Stage1ReportSchema, { ...base, ...overrides });
 }
 
@@ -147,6 +149,7 @@ function stage3(overrides: Partial<Stage3Report> = {}): Stage3Report {
     ...overrides,
   });
 }
+
 function controls() {
   return ([
     ['reply-before-log', { loggedBeforeReply: false }],
@@ -159,6 +162,7 @@ function controls() {
     ['skip-recovery', { journalPendingEmpty: false, recoveryAbortDurable: false, pendingEffectExcluded: false }],
   ] as const).map(([mutation, failure]) => {
     const report = stage3({ mutation, linearizable: false, ...failure });
+
     return { mutation, exitCode: 86 as const, report, verdict: classifyWritableMmap(report) };
   });
 }
@@ -240,12 +244,14 @@ test('writable negative mutations each become typed mmap-not-linearizable NO_GOs
     ['restart-truncation', { restartRemountReadOk: false, restartTruncationRefused: true, linearizable: false }],
     ['skip-recovery', { journalPendingEmpty: false, recoveryAbortDurable: false, pendingEffectExcluded: false, linearizable: false }],
   ];
+
   for (const [mutation, failure] of controls) {
     const verdict = classifyWritableMmap(stage3({ mutation, ...failure }));
     expect(verdict.outcome).toBe('no_go');
     expect(verdict.noGo[0]?.kind).toBe('mmap-not-linearizable');
     expect(verdict.noGo[0]?.detail).toContain(mutation);
   }
+
   for (const field of [
     'restartDaemonKilled',
     'restartDeadMountDetached',
@@ -256,15 +262,19 @@ test('writable negative mutations each become typed mmap-not-linearizable NO_GOs
     expect(classifyWritableMmap(report).outcome).toBe('no_go');
   }
 });
+
 test('writable control evidence requires each real mutation exit/report refusal pair', () => {
   expect(classifyWritableMmapControls(controls())).toEqual({ outcome: 'pass', noGo: [], detections: [] });
   expect(classifyWritableMmapControls(controls().slice(0, 3)).noGo[0]?.detail)
     .toContain('post-fence-contamination');
+
   const falselyPassing = controls().map((control) => control.mutation === 'omit-msync'
     ? { ...control, exitCode: 0 as const }
     : control);
+
   expect(classifyWritableMmapControls(falselyPassing).noGo[0]?.detail).toContain('omit-msync');
 });
+
 test('classifier rejects an event stream that contradicts closed admission', () => {
   for (const field of [
     'controlFenceOk',
@@ -281,6 +291,7 @@ test('classifier rejects an event stream that contradicts closed admission', () 
     expect(classifyWritableMmap(stage3({ [field]: false, linearizable: false })).outcome).toBe('no_go');
   }
 });
+
 test('driver persists every live mutation exit/report pair before stage one', () => {
   const controls = DRIVER_SOURCE.indexOf('const writableControls: WritableMmapControl[] = []');
   const loop = DRIVER_SOURCE.indexOf('for (const mutation of [');
@@ -288,6 +299,7 @@ test('driver persists every live mutation exit/report pair before stage one', ()
   expect(controls).toBeGreaterThanOrEqual(0);
   expect(loop).toBeGreaterThan(controls);
   expect(firstStage).toBeGreaterThan(loop);
+
   for (const mutation of [
     'reply-before-log',
     'fence-closes-request-loop',
@@ -301,6 +313,7 @@ test('driver persists every live mutation exit/report pair before stage one', ()
   ]) expect(DRIVER_SOURCE).toContain(`'${mutation}'`);
   expect(DRIVER_SOURCE.indexOf('writableControls.push', loop)).toBeGreaterThan(loop);
 });
+
 test('writable process is watchdog-bounded while driver polling has no elapsed deadline', () => {
   expect(writableProbeCommand()).toContain('timeout -k 5s 90s');
   expect(writableProbeCommand()).toContain('/tmp/fuse-mmap-probe.*/events.ndjson');
@@ -391,6 +404,7 @@ test('runtime bundle closes every repository-relative import', async () => {
 
 test('artifact writes are immutable and plan names the openat2 and cleanup proof', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'fuse-probe-test-'));
+
   const artifact = {
     schemaVersion: 1 as const,
     command: 'bun scripts/bench-fuse-probe.ts --run' as const,
@@ -402,6 +416,7 @@ test('artifact writes are immutable and plan names the openat2 and cleanup proof
     writableImage: `registry.example/fuse-mmap@sha256:${'a'.repeat(64)}`,
     stage1: stage1(), stage2: stage2(), stage3: stage3(),
   };
+
   try {
     const output = await persistFuseProbeArtifact(dir, artifact);
     expect(output).toBe(fuseProbeArtifactPath(dir, 'unique'));
@@ -431,11 +446,14 @@ const unitDeployment: Deployment = {
  *  exercised through the pure contract fakes below. */
 test('FuseProbeBox wiring: super-first onStart proof, typed mismatch, process-owning destroy', () => {
   const source = readFileSync(join(import.meta.dir, 'fixtures', 'fuse-probe', 'worker.ts'), 'utf8');
+
   const indexOf = (needle: string): number => {
     const at = source.indexOf(needle);
     expect(at, `worker.ts must contain ${JSON.stringify(needle)}`).toBeGreaterThanOrEqual(0);
+
     return at;
   };
+
   indexOf('class FuseProbeBox extends Sandbox');
   // onStart: super first, then version proof that throws the typed error.
   const superOnStart = indexOf('await super.onStart();');
@@ -460,6 +478,7 @@ test('FuseProbeBox wiring: super-first onStart proof, typed mismatch, process-ow
   expect(health).toBeLessThan(bodyParse);
   expect(bodyParse).toBeLessThan(dispatch);
 });
+
 test('container restart reinstalls the immutable probe before stage two', () => {
   const restart = DRIVER_SOURCE.indexOf('await stopAndProveRestart');
   const reupload = DRIVER_SOURCE.indexOf('await uploadProbeBundle', restart);
@@ -468,6 +487,7 @@ test('container restart reinstalls the immutable probe before stage two', () => 
   expect(reupload).toBeGreaterThan(restart);
   expect(stage2).toBeGreaterThan(reupload);
 });
+
 test('driver waits for authenticated propagation before container setup', () => {
   const readiness = DRIVER_SOURCE.indexOf('await awaitFixtureReady(deployment.origin, token)');
   const setup = DRIVER_SOURCE.indexOf("await setupExec(deployment.origin, token, 'mkdir -p /tmp/fuse-probe')");
@@ -494,16 +514,26 @@ interface RecordingHooks {
 
 function recordingHooks(options: { destroyFails?: boolean; workerDeleteFails?: boolean } = {}): RecordingHooks {
   const order: string[] = [];
+
   return {
     order,
     hooks: {
       destroyRuntime: async () => {
         order.push('destroy-runtime');
+
         if (options.destroyFails) throw new Error('runtime destroy exploded');
       },
       listContainerApps: () => [],
-      deleteContainerApps: () => { order.push('delete-container-apps'); return ['absent']; },
-      deleteWorker: () => { order.push('delete-worker'); return !options.workerDeleteFails; },
+      deleteContainerApps: () => {
+        order.push('delete-container-apps');
+
+        return ['absent'];
+      },
+      deleteWorker: () => {
+        order.push('delete-worker');
+
+        return !options.workerDeleteFails;
+      },
       removeConfig: async () => { order.push('remove-config'); },
       sleep: async () => undefined,
     },
@@ -512,6 +542,7 @@ function recordingHooks(options: { destroyFails?: boolean; workerDeleteFails?: b
 
 test('/destroy is the teardown route and /stop stays restart-evidence-only', async () => {
   const calls: string[] = [];
+
   const box: ProbeBox = {
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFile: async () => undefined,
@@ -526,6 +557,7 @@ test('/destroy is the teardown route and /stop stays restart-evidence-only', asy
     startProcess: async () => ({ id: 'unused', status: 'completed', exitCode: 0, getLogs: async () => ({ stdout: '', stderr: '' }) }),
     getProcess: async () => null,
   };
+
   expect((await handleProbeOp('/destroy', box, {})).status).toBe(200);
   expect(calls).toEqual(['destroy']);
   await handleProbeOp('/stop', box, {});
@@ -534,26 +566,34 @@ test('/destroy is the teardown route and /stop stays restart-evidence-only', asy
 
 test('process control preserves a running operation across redrive and returns complete settled logs', async () => {
   let starts = 0;
+
   const running = {
     id: 'writable-run-positive',
     status: 'running',
     getLogs: async () => ({ stdout: 'partial', stderr: 'partial-error' }),
   };
+
   const complete = {
     id: 'writable-run-positive',
     status: 'completed',
     exitCode: 0,
     getLogs: async () => ({ stdout: '{"linearizable":true}\n', stderr: '' }),
   };
+
   const box: ProbeBox = {
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFile: async () => undefined,
     stop: async () => undefined,
     destroy: async () => undefined,
     prepare: async () => ({ configuredImage: SANDBOX_IMAGE, expectedVersion: SANDBOX_IMAGE_VERSION, actualVersion: SANDBOX_IMAGE_VERSION, actualVersionDigest: 'digest' }),
-    startProcess: async () => { starts += 1; return running; },
+    startProcess: async () => {
+      starts += 1;
+
+      return running;
+    },
     getProcess: async () => starts === 0 ? null : running,
   };
+
   const request = { operationId: 'writable-run-positive', command: 'probe' };
   expect(await handleProbeOp('/start', box, request).then((response) => response.json()))
     .toEqual({ operationId: request.operationId, status: 'running', exitCode: null, started: true });
@@ -578,6 +618,7 @@ test('process control preserves the exit-86 report and reports missing processes
     exitCode: 86,
     getLogs: async () => ({ stdout: '{"linearizable":false}\n', stderr: 'proof refused' }),
   };
+
   const box: ProbeBox = {
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFile: async () => undefined,
@@ -587,6 +628,7 @@ test('process control preserves the exit-86 report and reports missing processes
     startProcess: async () => refused,
     getProcess: async () => refused,
   };
+
   expect(await handleProbeOp('/poll', box, { operationId: refused.id }).then((response) => response.json()))
     .toEqual({
       operationId: refused.id, status: 'failed', exitCode: 86,
@@ -608,23 +650,28 @@ test('process control request schemas are closed and the writable driver uses st
 
   const requests: string[] = [];
   const report = stage3({ linearizable: true });
+
   const completed = new Response(JSON.stringify({
     operationId: 'fuse-run-42-positive', status: 'completed', exitCode: 0,
     stdout: `${JSON.stringify(report)}\n`, stderr: '',
   }));
+
   const deployment = { ...unitDeployment, origin: 'https://fixture.example' };
+
   const evidence = await awaitWritableMmapResult(
     deployment,
     'fuse-run-42-positive',
     undefined,
     async (input) => {
       requests.push(new URL(String(input)).pathname);
+
       return requests.at(-1) === '/start'
         ? new Response(JSON.stringify({ operationId: 'fuse-run-42-positive', status: 'running', exitCode: null, started: true }))
         : completed.clone();
     },
     async () => undefined,
   );
+
   expect(evidence).toEqual({ exitCode: 0, report });
   expect(requests).toEqual(['/start', '/poll']);
 });
@@ -632,11 +679,13 @@ test('process control request schemas are closed and the writable driver uses st
 test('runtime destroy kills every process before teardown and retains failures after storage clearance', async () => {
   const calls: string[] = [];
   let failure: unknown;
+
   try {
     await destroyProbeRuntime(
       async () => [{ id: 'one' }, { id: 'two' }, { id: 'three' }],
       async (id) => {
         calls.push(`kill:${id}`);
+
         if (id === 'two') throw new Error('kill failed');
       },
       async () => { calls.push('destroy'); },
@@ -645,6 +694,7 @@ test('runtime destroy kills every process before teardown and retains failures a
   } catch (error) {
     failure = error;
   }
+
   expect(calls).toEqual(['kill:one', 'kill:two', 'kill:three', 'destroy', 'clear']);
   expect(failure).toBeInstanceOf(AggregateError);
 });
@@ -657,6 +707,7 @@ test('/prepare returns evidence under the shared RunIdentity contract', async ()
     actualVersionDigest: sha256Hex(new TextEncoder().encode(SANDBOX_IMAGE_VERSION)),
     bunVersion: '1.3.7',
   };
+
   const box: ProbeBox = {
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFile: async () => undefined,
@@ -666,10 +717,12 @@ test('/prepare returns evidence under the shared RunIdentity contract', async ()
     startProcess: async () => ({ id: 'unused', status: 'completed', exitCode: 0, getLogs: async () => ({ stdout: '', stderr: '' }) }),
     getProcess: async () => null,
   };
+
   const body = v.parse(
     RunIdentitySchema,
     await handleProbeOp('/prepare', box, {}).then((response) => response.json()),
   );
+
   expect(body).toEqual(evidence);
 });
 
@@ -683,13 +736,17 @@ test('/destroy tolerates only explicit absence; transport and server failures pr
 
   const refused = (async () => new Response(JSON.stringify({ error: 'ImageIdentityError: boom' }), { status: 500 }))();
   let caught500: unknown;
+
   try { await destroyRuntime(unitDeployment.origin, unitDeployment.token, log, () => refused); } catch (error) { caught500 = error; }
+
   expect(String(caught500)).toContain('/destroy failed (500)');
 
   let caughtTransport: unknown;
+
   try {
     await destroyRuntime(unitDeployment.origin, unitDeployment.token, log, async () => { throw new Error('connection reset'); });
   } catch (error) { caughtTransport = error; }
+
   expect(String(caughtTransport)).toContain('/destroy unreachable');
 });
 
@@ -709,7 +766,9 @@ test('teardown destroys twice, then releases application-before-Worker-config, a
 test('teardown preserves failures from every pass instead of abandoning the rest', async () => {
   const { hooks, order } = recordingHooks({ destroyFails: true, workerDeleteFails: true });
   let caught: unknown;
+
   try { await teardown(unitDeployment, hooks); } catch (error) { caught = error; }
+
   const message = String(caught);
   expect(message).toContain('destroy pass 1');
   expect(message).toContain('destroy pass 2');
@@ -720,10 +779,12 @@ test('teardown preserves failures from every pass instead of abandoning the rest
 test('absence wait polls until the application disappears and reports when it never does', async () => {
   let listings = 0;
   let sleeps = 0;
+
   const gone = await awaitContainerAppAbsent(
     () => (++listings <= 2 ? [{ id: 'app-1', name: unitDeployment.workerName }] : []),
     async () => { sleeps++; },
   );
+
   expect(gone).toBe(true);
   expect(listings).toBe(3);
   expect(sleeps).toBe(2);
@@ -733,6 +794,7 @@ test('absence wait polls until the application disappears and reports when it ne
     async () => undefined,
     4,
   );
+
   expect(stuck).toBe(false);
 });
 
@@ -744,20 +806,25 @@ test('a failed deploy releases application-before-Worker with no runtime destroy
 
 test('worker deletion treats an already-absent Worker as success on both routes', () => {
   const log = (): void => undefined;
+
   // Explicit absence on the first route is success without a fallback call.
   const absentOnFirstRoute = (): string =>
     'WRANGLER_FAILED: A request to the Cloudflare API failed. workers.api.error.script_not_found [code: 10021]';
+
   expect(deleteWorkerBothRoutes('/repo', '/cfg.jsonc', 'w', log, absentOnFirstRoute)).toBe(true);
 
   // A different failure falls back to the second route, whose explicit
   // absence is also success.
   let calls = 0;
+
   const absentOnFallbackRoute = (): string => {
     calls++;
+
     return calls === 1
       ? 'WRANGLER_FAILED: something route-specific exploded'
       : 'WRANGLER_FAILED: could not find script w';
   };
+
   expect(deleteWorkerBothRoutes('/repo', '/cfg.jsonc', 'w', log, absentOnFallbackRoute)).toBe(true);
   expect(calls).toBe(2);
 
@@ -767,6 +834,7 @@ test('worker deletion treats an already-absent Worker as success on both routes'
 
 test('a mismatched image identity censors every measured cell and names the mismatch', () => {
   const fingerprintOf = (version: string): string => sha256Hex(new TextEncoder().encode(version));
+
   const mismatched: RunIdentity = v.parse(RunIdentitySchema, {
     configuredImage: SANDBOX_IMAGE,
     expectedVersion: SANDBOX_IMAGE_VERSION,
@@ -774,6 +842,7 @@ test('a mismatched image identity censors every measured cell and names the mism
     actualVersionDigest: fingerprintOf('0.12.7'),
     bunVersion: '1.3.7',
   });
+
   expect(imageMismatchVerdict(mismatched)?.noGo[0]?.kind).toBe('image-mismatch');
   expect(imageMismatchVerdict(undefined)).toBeUndefined();
 
@@ -781,6 +850,7 @@ test('a mismatched image identity censors every measured cell and names the mism
     runId: 'censored', startedAt: '2026-08-26T00:00:00.000Z', finishedAt: '2026-08-26T00:05:00.000Z',
     workerName: 'kinu-fuse-probe-censored', identity: mismatched, stage1: stage1(), stage2: stage2(),
   });
+
   expect(censored.stage1).toBeUndefined();
   expect(censored.stage2).toBeUndefined();
   expect(censored.verdict.outcome).toBe('no_go');
@@ -798,6 +868,7 @@ test('a mismatched image identity censors every measured cell and names the mism
     }),
     stage1: stage1(), stage2: stage2(), stage3: stage3(), writableControls: controls(),
   });
+
   const missingControls = composeFuseProbeArtifact({
     runId: 'missing-controls', startedAt: '2026-08-26T00:00:00.000Z', finishedAt: '2026-08-26T00:05:00.000Z',
     workerName: 'kinu-fuse-probe-missing-controls',
@@ -808,6 +879,7 @@ test('a mismatched image identity censors every measured cell and names the mism
     }),
     stage1: stage1(), stage2: stage2(), stage3: stage3(),
   });
+
   expect(missingControls.verdict.outcome).toBe('no_go');
   expect(missingControls.verdict.noGo[0]?.detail).toContain('reply-before-log');
 
@@ -820,6 +892,7 @@ test('a mismatched image identity censors every measured cell and names the mism
     runId: 'unproven', startedAt: '2026-08-26T00:00:00.000Z', finishedAt: '2026-08-26T00:05:00.000Z',
     workerName: 'kinu-fuse-probe-unproven', stage1: stage1(), failure: 'deploy died before /prepare',
   });
+
   expect(unproven.identity).toBeUndefined();
   expect(unproven.stage1).toBeDefined();
   expect(unproven.verdict.outcome).toBe('no_go');

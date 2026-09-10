@@ -76,7 +76,9 @@ const repo = new URL('..', import.meta.url).pathname;
  * that.
  */
 const MEASURED_INODES_PER_RUN = 3_968 + 2_079;
+
 const INODES_PER_FULL_RUN = 24_000;
+
 const BYTES_PER_FULL_RUN = 1024 * 1024 * 1024;
 
 if (INODES_PER_FULL_RUN < MEASURED_INODES_PER_RUN) {
@@ -97,6 +99,7 @@ if (INODES_PER_FULL_RUN < MEASURED_INODES_PER_RUN) {
  * and a number in a diff nobody reads.
  */
 const MIN_FREE_INODES = 60_000;
+
 const MIN_FREE_BYTES = 3 * BYTES_PER_FULL_RUN;
 
 if (MIN_FREE_INODES < 2 * INODES_PER_FULL_RUN) {
@@ -106,6 +109,7 @@ if (MIN_FREE_INODES < 2 * INODES_PER_FULL_RUN) {
     + 'reason instead of with ENOSPC in an unrelated test; lowering it defeats the check.',
   );
 }
+
 if (MIN_FREE_BYTES < 2 * BYTES_PER_FULL_RUN) {
   throw new Error(
     `preflight: MIN_FREE_BYTES (${String(MIN_FREE_BYTES)}) is below two full suite runs.`,
@@ -123,13 +127,16 @@ export type WriteProbe = { readonly ok: true } | { readonly ok: false; readonly 
 
 function probeWrite(temp: string): WriteProbe {
   const path = join(temp, `kinu-preflight-probe-${String(process.pid)}`);
+
   try {
     writeFileSync(path, Buffer.alloc(PROBE_BYTES));
+
     return { ok: true };
   } catch (error) {
     if (error instanceof Error && 'code' in error && (error.code === 'EDQUOT' || error.code === 'ENOSPC')) {
       return { ok: false, code: error.code };
     }
+
     throw error;
   } finally {
     rmSync(path, { force: true });
@@ -185,6 +192,7 @@ const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
 export function engineBoundsTempWalk(source: string): boolean {
   const walk = source.slice(source.indexOf('workdirForPath(path: string): string {'));
   const body = walk.slice(0, walk.indexOf('\n    },'));
+
   return body.includes('resolve(tmpdir())')
     && /if \(probe === temp \|\| real === realTemp\) break;/u.test(body);
 }
@@ -219,10 +227,12 @@ export function unboundedWorkdirsAbove(from: string, home: string): string[] {
   const hits: string[] = [];
   let probe = resolve(from);
   const stop = resolve(home);
+
   while (probe !== dirname(probe) && probe !== stop) {
     if (PROJECT_MARKERS.some((marker) => existsSync(join(probe, marker)))) hits.push(probe);
     probe = dirname(probe);
   }
+
   return hits;
 }
 
@@ -231,9 +241,11 @@ export function observe(): Environment {
   const fs = statfsSync(temp);
   const entries = readdirSync(temp);
   let orphans = 0;
+
   for (const name of entries) {
     if (SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix))) orphans += 1;
   }
+
   return {
     temp,
     freeInodes: fs.ffree,
@@ -360,11 +372,14 @@ export function reclaim(temp: string, olderThanMs: number): ReclaimResult {
   const cutoff = Date.now() - olderThanMs;
   let removed = 0;
   let kept = 0;
+
   for (const name of readdirSync(temp)) {
     if (!SCRATCH_PREFIXES.some((prefix) => name.startsWith(prefix))) continue;
     const path = join(temp, name);
+
     try {
       if (statSync(path).mtimeMs >= cutoff) { kept += 1; continue; }
+
       Bun.spawnSync(['rm', '-rf', path]);
       removed += 1;
     } catch (error) {
@@ -372,6 +387,7 @@ export function reclaim(temp: string, olderThanMs: number): ReclaimResult {
       kept += 1;
     }
   }
+
   return { removed, kept };
 }
 
@@ -399,6 +415,7 @@ if (import.meta.main) {
     ['entries in the temp directory', env.tempEntries],
     ['project markers probed per ancestor', PROJECT_MARKERS.length],
   ]);
+
   // On the SUCCESS path, because a limitation visible only in red output is
   // invisible exactly when the tree is green: markers above a shared temp
   // directory are tolerated solely because the engine bounds its own walk.
@@ -412,7 +429,9 @@ if (import.meta.main) {
       + `harmless while ${ENGINE} bounds its walk at the temp directory\n`,
     );
   }
+
   const problems = judge(env);
+
   if (problems.length === 0) {
     console.log(`preflight: ok — ${measured}, `
       + `${String(env.scratchOrphans)} of them our own leaked test scratch, no merge in progress; `
@@ -420,7 +439,9 @@ if (import.meta.main) {
       + '(its remaining headroom is unmeasured: statfs reports the filesystem, not the user)');
     process.exit(0);
   }
+
   console.error(`preflight: ${String(problems.length)} environment fault(s)\n`);
+
   for (const problem of problems) console.error(problem);
   console.error(
     '\nThese are not defects in the change under test. Every gate after this one would '

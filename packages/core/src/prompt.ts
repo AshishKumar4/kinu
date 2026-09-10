@@ -59,12 +59,14 @@ import { WORKSPACE_ROOT } from './vfs/workspace-path';
 import { PLATFORM_CATALOG } from './platform-catalog';
 
 export type { TurnProvenance, WorkMode } from './types/turn';
+
 export type {
   PromptBackend,
   PromptExecutorInfo,
   PromptExternalToolInfo,
   PromptIdentity,
 } from './prompting/surface';
+
 export type {
   PromptModelCapability,
   PromptModelContext,
@@ -119,15 +121,21 @@ export const FALLBACK_PURPOSE = DEFAULT_SOUL_MD;
 // which is prose anybody would rewrite.
 function renderRuntimeContext(opts: SystemPromptOptions): string {
   const lines: string[] = [];
+
   if (opts.backend) lines.push(`- Backend: ${opts.backend}`);
+
   if (opts.model?.id) lines.push(`- Model: ${opts.model.provider ? `${opts.model.provider}/` : ''}${opts.model.id}`);
+
   if (opts.cwd) lines.push(`- Working directory: ${opts.cwd}`);
+
   if (opts.currentDate) lines.push(`- Current date: ${opts.currentDate}`);
+
   return lines.length ? `## Runtime context\n${lines.join('\n')}` : '';
 }
 
 function renderOperatingGuidance(surface: PromptSurface, render: RenderSection): string {
   const family = surface.model.family;
+
   return render(OPERATING_GUIDANCE, {
     kimi: family === 'kimi',
     gpt: family === 'gpt',
@@ -143,7 +151,9 @@ function renderOperatingGuidance(surface: PromptSurface, render: RenderSection):
  *  `handwrought-walnut-4166c321` is what this line exists to stop. */
 function renderAgentNames(surface: PromptSurface, render: RenderSection): string {
   const { workspace, agent } = surface.identity;
+
   if (workspace === null && agent === null) return '';
+
   return render(AGENT_NAMES_LINE, {
     isSubagent: agent !== null,
     hasWorkspace: workspace !== null,
@@ -157,6 +167,7 @@ function renderAgentNames(surface: PromptSurface, render: RenderSection): string
  *  place a role's instructions reach the model. */
 function renderRoleSection(surface: PromptSurface, render: RenderSection): string {
   if (!surface.roleSection || surface.roleSection.instructions.trim() === '') return '';
+
   return render(ROLE_SECTION, {
     id: surface.roleSection.id,
     label: surface.roleSection.label,
@@ -166,6 +177,7 @@ function renderRoleSection(surface: PromptSurface, render: RenderSection): strin
 
 function renderBuiltinToolLine(name: BuiltinToolName, render: RenderSection): string {
   const spec = BUILTIN_TOOL_SPECS[name];
+
   // No `summary`: it is line 1 of this tool's own schema description, which
   // rides the same request (BUILTIN_TOOL_LINE says why). The index renders the
   // name and the one real call, which nothing else carries.
@@ -175,6 +187,7 @@ function renderBuiltinToolLine(name: BuiltinToolName, render: RenderSection): st
 function renderExternalToolLine(tool: PromptExternalToolInfo, render: RenderSection): string {
   const source = tool.source === 'mcp' ? 'MCP' : tool.source ?? 'external';
   const description = tool.description ? ` — ${tool.description}` : '';
+
   return render(EXTERNAL_TOOL_LINE, { name: tool.name, source, description });
 }
 
@@ -209,6 +222,7 @@ function renderExecutorLine(
   backend?: PromptBackend,
 ): string {
   const cliLocal = backend === 'cli-local';
+
   switch (exec.name) {
       case 'workspace':
         return render(WORKSPACE_EXECUTOR_LINE, { cliLocal, memoryMb: String(WORKSPACE_MEMORY_MB) });
@@ -228,19 +242,23 @@ function offlineLaptop(executors: readonly PromptExecutorInfo[]): PromptExecutor
 
 function renderExecutorSection(surface: PromptSurface, render: RenderSection): string {
   const tools = surface.builtinTools;
+
   if (!hasTool(tools, 'execute_tools') && !hasTool(tools, 'run')) return '';
 
   const executors = surface.selectableExecutors;
   const laptopOffline = offlineLaptop(surface.executors);
+
   if (executors.length === 0 && !laptopOffline) return '';
 
   const workspace = executors.find((exec) => exec.name === 'workspace');
   const devices = executors.filter((exec) => exec.name !== 'workspace');
+
   const lines = [
     ...devices.map((exec) => renderExecutorLine(exec, render, surface.backend)),
     ...(laptopOffline ? [render(OFFLINE_LAPTOP_LINE, { deviceName: deviceDisplayName(laptopOffline) })] : []),
     ...(workspace ? [renderExecutorLine(workspace, render, surface.backend)] : []),
   ];
+
   const previewExecutors = executors.filter((exec) => exec.capabilities?.includes('net_inbound'));
 
   return render(EXECUTORS_SECTION, {
@@ -329,6 +347,7 @@ function stableActiveSkills(activeSkills: ActiveSkillSet): ActiveSkillSet {
  *  tokens, and the one place that question is asked. */
 function hasUnverifiedInstructions(opts: SystemPromptOptions): boolean {
   if (opts.agentsMd?.admitted.some((file) => file.trust === 'unverified')) return true;
+
   return opts.activeSkills?.active.some((skill) => skill.trust === 'unverified') ?? false;
 }
 
@@ -364,12 +383,14 @@ export function renderUnverifiedInstructions(ctx: UnverifiedInstructions): strin
     ctx.agentsMd ? renderAgentsMdSection(ctx.agentsMd, 'unverified') : '',
     ctx.activeSkills ? renderActiveSkillsSection(ctx.activeSkills, 'unverified').trim() : '',
   ].filter(Boolean);
+
   if (parts.length === 0) return null;
 
   const body = sealDelimiters(
     [WORKSPACE_INSTRUCTIONS_HEADER, ...parts].join('\n\n'),
     WORKSPACE_INSTRUCTIONS_DELIMITER, WORKSPACE_INSTRUCTIONS_TAG,
   );
+
   return `<${WORKSPACE_INSTRUCTIONS_TAG}>\n${body}\n</${WORKSPACE_INSTRUCTIONS_TAG}>`;
 }
 
@@ -378,6 +399,7 @@ export function renderUnverifiedInstructions(ctx: UnverifiedInstructions): strin
  *  it — the same reason the turn-local tail is one. */
 export function unverifiedInstructionsMessage(ctx: UnverifiedInstructions): ModelMessage | null {
   const text = renderUnverifiedInstructions(ctx);
+
   return text ? { role: 'user', content: text } : null;
 }
 
@@ -391,6 +413,7 @@ export function buildSystemPromptSync(
 ): string {
   const surface = compilePromptSurface(opts);
   const render = sectionRenderer(opts.sectionOverrides);
+
   return [
     // Identity, then the hard rules, then the doctrine that bounds every tool
     // call — in that order, at the front, where the model reads them first.

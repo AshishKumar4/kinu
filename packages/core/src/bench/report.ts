@@ -69,6 +69,7 @@ export interface BenchCaseScore {
  *  unstable task averaged into a pass rate is a finding being hidden. */
 export function caseIsUnstable(c: BenchCaseScore): boolean {
   const unstable = (passes: number) => passes > 0 && passes < c.attempts;
+
   return unstable(c.passesA) || unstable(c.passesB);
 }
 
@@ -117,18 +118,24 @@ export interface BenchDecision {
 export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecision {
   if (!sealed) return { accept: false, reason: 'no held-out measurement — dev-split results alone never justify keeping a variant' };
   const s = sealed.stats;
+
   if (s.pairs === 0) return { accept: false, reason: 'held-out split was empty' };
+
   // "Never disagreed" comes first because it is the more specific diagnosis of
   // the same fact: with no differing pair the floor is 1, so the rule below
   // fires too and says "the split has only N tasks", which names the wrong
   // quantity. The task count is an upper bound on what can decide; the differing
   // pairs are what decides.
   if (s.discordant === 0) return { accept: false, reason: `variants never disagreed on ${s.pairs} held-out tasks — no evidence either way` };
+
   if (!s.canReachSignificance) {
     return { accept: false, reason: `only ${s.discordant} of ${s.pairs} held-out tasks differed between the variants — the smallest p that many differing pairs can produce is ${s.floorPValue.toFixed(4)} > ${s.alpha}, so no outcome here could have accepted anything` };
   }
+
   if (s.effect <= 0) return { accept: false, reason: `held-out effect ${fmtPp(s.effect)} is not an improvement` };
+
   if (!s.significant) return { accept: false, reason: `held-out effect ${fmtPp(s.effect)} is not significant (p=${s.pValue.toFixed(4)})` };
+
   return {
     accept: true,
     reason: `held-out effect ${fmtPp(s.effect)} is significant (exact McNemar p=${s.pValue.toFixed(4)})`,
@@ -158,6 +165,7 @@ function foldRepeats(attempts: readonly AttemptOutcome[]) {
   const calls = attempts.map((attempt) => attempt.modelCalls);
   const tokens = attempts.map((attempt) => attempt.tokens);
   const peaks = attempts.map((attempt) => attempt.peakPromptTokens);
+
   return {
     passes: attempts.filter((x) => x.passed).length,
     durationMs: Math.round(attempts.reduce((s, x) => s + x.durationMs, 0) / n),
@@ -184,16 +192,21 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
   const { config } = input;
   const byTask = new Map<string, { a: AttemptOutcome[]; b: AttemptOutcome[] }>();
   const seen = new Set<string>();
+
   for (const attempt of input.devAttempts) {
     const entry = byTask.get(attempt.taskId) ?? { a: [], b: [] };
+
     if (attempt.variantId === config.variantA) entry.a.push(attempt);
     else if (attempt.variantId === config.variantB) entry.b.push(attempt);
     else throw new Error(`attempt for unknown variant "${attempt.variantId}" on task ${attempt.taskId}`);
+
     if (!Number.isInteger(attempt.repeat) || attempt.repeat < 0 || attempt.repeat >= config.repeats) {
       throw new Error(`out-of-range repeat ${attempt.repeat} for ${attempt.taskId} (variant ${attempt.variantId}) — expected 0..${config.repeats - 1}`);
     }
+
     const key = `${attempt.variantId}:${attempt.taskId}:${attempt.repeat}`;
     const slotKey = `${attempt.slot}:${attempt.taskId}:${attempt.repeat}`;
+
     if (seen.has(key)) throw new Error(`duplicate repeat attempt ${key} (slot ${slotKey})`);
     seen.add(key);
     byTask.set(attempt.taskId, entry);
@@ -202,10 +215,12 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
   const cases: BenchCaseScore[] = [];
   const outcomes: PairedOutcome[] = [];
   let budgetBreaches = 0;
+
   for (const [taskId, { a, b }] of byTask) {
     if (a.length !== config.repeats || b.length !== config.repeats) {
       throw new Error(`unpaired task ${taskId}: expected ${config.repeats} attempt(s) per variant, got ${a.length} and ${b.length} — a paired design cannot drop half a pair`);
     }
+
     // Repeat order is the pairing order for pass^k and flakiness alike; sorting
     // makes a report byte-identical whatever order the runner emitted in.
     const byRepeat = (x: AttemptOutcome, y: AttemptOutcome) => x.repeat - y.repeat;
@@ -228,11 +243,13 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
     });
     outcomes.push({ taskId, a: a.map((x) => x.passed), b: b.map((x) => x.passed) });
   }
+
   cases.sort((x, y) => x.taskId.localeCompare(y.taskId));
 
   const stats = pairedBinaryComparison(outcomes, { seed: config.seed, ...input.bootstrap });
   const decision = decideBenchOutcome(input.sealed);
   const sealedStats = input.sealed?.stats;
+
   return {
     ranAt: input.ranAt ?? Date.now(),
     runId: input.runId,
@@ -262,37 +279,46 @@ export function renderBenchSummary(report: BenchReport): string {
   lines.push(`DEV split (${dev.tasks} paired tasks) — adaptation may see this`);
   lines.push(renderPairedStats(dev.stats));
   lines.push(renderCost(dev.cases));
+
   for (const c of dev.cases) lines.push(`  ${renderCase(c)}`);
   lines.push('');
   const unstable = dev.cases.filter(caseIsUnstable);
+
   if (unstable.length > 0) {
     // Surfaced rather than averaged into the pass rate: a task whose repeats
     // disagree is reporting instability, and instability read as a score is how
     // a marginal result becomes an artifact.
     lines.push(`UNSTABLE on dev (repeats disagreed): ${unstable.length}/${dev.tasks} task(s)`);
+
     for (const c of unstable) lines.push(`  ${renderCase(c)}`);
     lines.push('');
   } else if (k > 1) {
     lines.push(`UNSTABLE on dev: none — every task agreed across all ${k} repeats`);
     lines.push('');
   }
+
   if (report.sealed) {
     lines.push(`SEALED split (${report.sealed.tasks} paired tasks) — aggregates only, opened ${report.sealAccessOrdinal ?? '?'} time(s)`);
     lines.push(renderPairedStats(report.sealed.stats));
   } else {
     lines.push('SEALED split: not opened');
   }
+
   lines.push('');
   lines.push(`DECISION: ${report.decision.accept ? 'KEEP' : 'REJECT'} — ${report.decision.reason}`);
+
   if (report.decision.caveat) lines.push(`  caveat: ${report.decision.caveat}`);
+
   return lines.join('\n');
 }
 
 function renderCase(c: BenchCaseScore): string {
   const mark = (passes: number, breach: BudgetBreach | null): string => {
     const score = c.attempts === 1 ? (passes === 1 ? 'pass' : 'FAIL') : `${passes}/${c.attempts}`;
+
     return `${score}${breach ? `(${breach})` : ''}`;
   };
+
   return `${c.taskId.padEnd(28)} A=${mark(c.passesA, c.breachA).padEnd(14)} B=${mark(c.passesB, c.breachB)}` +
     (caseIsUnstable(c) ? '  ~unstable' : '');
 }
@@ -308,24 +334,33 @@ function renderCase(c: BenchCaseScore): string {
  *  a missing measurement averaged in as zero is how an arm comes to look cheap. */
 function renderCost(cases: readonly BenchCaseScore[]): string {
   if (cases.length === 0) return '  cost: no attempts';
+
   const mean = (of: (c: BenchCaseScore) => number | null, digits: number): string => {
     let total = 0;
+
     for (const entry of cases) {
       const value = of(entry);
+
       if (value === null) return 'unreported';
       total += value;
     }
+
     return (total / cases.length).toFixed(digits);
   };
+
   const peak = (of: (c: BenchCaseScore) => number | null): string => {
     let max = 0;
+
     for (const entry of cases) {
       const value = of(entry);
+
       if (value === null) return 'unreported';
       max = Math.max(max, value);
     }
+
     return String(max);
   };
+
   return `  tokens/task A=${mean((c) => c.tokensA, 0)}  B=${mean((c) => c.tokensB, 0)}` +
     `   model calls/task A=${mean((c) => c.modelCallsA, 1)}  B=${mean((c) => c.modelCallsB, 1)}` +
     `   peak prompt tokens A=${peak((c) => c.peakPromptTokensA)}  B=${peak((c) => c.peakPromptTokensB)}`;
@@ -345,9 +380,11 @@ function renderPairedStats(s: PairedBinaryStats): string {
     `  detectable at this n: ${fmtPp(s.mde)}  resolution=${s.resolutionRatio.toFixed(2)}x` +
       `  → ${s.verdict}`,
   ];
+
   if (s.repeats > 1) {
     lines.splice(2, 0, `  unstable: ${s.flakyEither}/${s.pairs} task(s) (A=${s.flakyA}, B=${s.flakyB})`);
   }
+
   return lines.join('\n');
 }
 
@@ -417,15 +454,20 @@ export interface BuildGainReportInput {
 
 function gainArmCost(attempts: readonly AttemptOutcome[]): GainArmCostSummary {
   const reportedTokens = attempts.map((attempt) => attempt.tokens);
+
   const totalTokens = reportedTokens.every((tokens) => tokens !== undefined)
     ? reportedTokens.reduce((sum, tokens) => sum + tokens, 0)
     : null;
+
   const reportedCalls = attempts.map((attempt) => attempt.modelCalls);
   const hasCompleteCallEvidence = reportedCalls.every((calls) => calls !== undefined);
+
   const totalModelCalls = hasCompleteCallEvidence
     ? reportedCalls.reduce((sum, calls) => sum + calls, 0)
     : null;
+
   const reportedPeaks = attempts.map((attempt) => attempt.peakPromptTokens);
+
   return {
     attempts: attempts.length,
     totalTokens,
@@ -450,34 +492,44 @@ function gainCostSummary(
   const expectedPerArm = perTask.length * config.repeats;
   const taskIds = new Set(perTask.map((task) => task.taskId));
   const seen = new Set<string>();
+
   for (const attempt of attempts) {
     if (!taskIds.has(attempt.taskId)) {
       throw new Error(`gain accounting contains unknown task ${attempt.taskId}`);
     }
+
     const expectedVariant = attempt.slot === 'a' ? config.variantA : config.variantB;
+
     if (attempt.variantId !== expectedVariant) {
       throw new Error(`gain accounting slot ${attempt.slot} contains variant ${attempt.variantId}; expected ${expectedVariant}`);
     }
+
     if (attempt.repeat < 0 || attempt.repeat >= config.repeats) {
       throw new Error(`gain accounting has out-of-range repeat ${attempt.repeat} for ${attempt.taskId}`);
     }
+
     const key = `${attempt.slot}:${attempt.taskId}:${attempt.repeat}`;
+
     if (seen.has(key)) throw new Error(`gain accounting repeats attempt ${key}`);
     seen.add(key);
   }
+
   const stateless = attempts.filter((attempt) => attempt.slot === 'a');
   const stateful = attempts.filter((attempt) => attempt.slot === 'b');
+
   if (stateless.length !== expectedPerArm || stateful.length !== expectedPerArm) {
     throw new Error(
       `gain accounting expected ${expectedPerArm} attempt per arm; got ${stateless.length} stateless and ${stateful.length} stateful`,
     );
   }
+
   return { stateless: gainArmCost(stateless), stateful: gainArmCost(stateful) };
 }
 
 export function buildGainReport(input: BuildGainReportInput): GainReport {
   const perTask = [...input.perTask].sort((a, b) => a.index - b.index);
   const stats = computeGain(perTask, { seed: input.config.seed, ...input.bootstrap });
+
   return {
     ranAt: input.ranAt ?? Date.now(),
     runId: input.runId,
@@ -513,12 +565,15 @@ export function renderGainSummary(report: GainReport): string {
   lines.push(`  normalized gain ${s.normalizedGain === null ? 'undefined (no headroom)' : `${(s.normalizedGain * 100).toFixed(1)}% of headroom`}`);
   lines.push('');
   lines.push('  seq  task                          stateless  stateful');
+
   for (const t of report.perTask) {
     lines.push(`  ${String(t.index).padStart(3)}  ${t.taskId.padEnd(28)}  ${t.stateless.toFixed(2).padStart(9)}  ${t.stateful.toFixed(2).padStart(8)}`);
   }
+
   lines.push('');
   lines.push(`VERDICT: ${s.verdict}`);
   lines.push(report.calibration);
+
   return lines.join('\n');
 }
 

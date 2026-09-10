@@ -48,8 +48,10 @@ const NO_TREE: ForkNode = {
 function linkVertices(vertices: readonly ForkNode[]): ForkNode | null {
   const byId = new Map(vertices.map((vertex) => [vertex.id, vertex]));
   let root: ForkNode | null = null;
+
   for (const vertex of vertices) {
     const parent = vertex.parentId === null ? undefined : byId.get(vertex.parentId);
+
     if (parent) {
       parent.children.push(vertex);
     } else if (
@@ -60,6 +62,7 @@ function linkVertices(vertices: readonly ForkNode[]): ForkNode | null {
       root = vertex;
     }
   }
+
   return root;
 }
 
@@ -82,6 +85,7 @@ function linkVertices(vertices: readonly ForkNode[]): ForkNode | null {
 export function buildTree(nodes: MctsRow[]): ForkNode {
   const vertices = nodes.map((n): ForkNode => {
     const unevaluated = n.visits === 0 && n.value === 0;
+
     return {
       id: n.id, parentId: n.parent_id, depth: n.depth,
       visits: unevaluated ? null : n.visits,
@@ -91,6 +95,7 @@ export function buildTree(nodes: MctsRow[]): ForkNode {
       children: [],
     };
   });
+
   return linkVertices(vertices) ?? NO_TREE;
 }
 
@@ -109,6 +114,7 @@ export function buildTree(nodes: MctsRow[]): ForkNode {
  */
 function journalStatus(status: string): ForkNode["status"] {
   if (status === "running") return "running";
+
   return status === "completed" ? "open" : "failed";
 }
 
@@ -124,6 +130,7 @@ function journalStatus(status: string): ForkNode["status"] {
  */
 function journalLifecycle(status: string): ForkNodeLifecycle | undefined {
   if (headStatusUnsettled(status)) return status;
+
   return storedHeadReportStatus(status) ?? undefined;
 }
 
@@ -137,6 +144,7 @@ function journalLifecycle(status: string): ForkNodeLifecycle | undefined {
  */
 function journalVertex(head: HeadRunView["heads"][number], parent: ForkNode): ForkNode {
   const lifecycle = journalLifecycle(head.status);
+
   const vertex: ForkNode = {
     id: head.id,
     parentId: parent.id,
@@ -152,10 +160,12 @@ function journalVertex(head: HeadRunView["heads"][number], parent: ForkNode): Fo
     createdAt: head.spawnedAt,
     children: [],
   };
+
   // Assigned rather than declared: an unrecognised status must leave the key
   // ABSENT, because a reader distinguishes "this store recorded no word I know"
   // from "this node has no journal row at all".
   if (lifecycle !== undefined) vertex.lifecycle = lifecycle;
+
   return vertex;
 }
 
@@ -182,7 +192,9 @@ export function explorationForkTree(entry: {
   readonly head: HeadRunView | null;
 }): ForkNode | null {
   const settled = entry.tree.length > 0 ? buildTree([...entry.tree]) : null;
+
   if (entry.head === null) return settled;
+
   // The run header's own row is the tree's root, not one of its nodes: a swarm
   // journals a header keyed on the root id, and a recursive sub-split journals
   // the parent head that IS the run.
@@ -199,9 +211,12 @@ export function explorationForkTree(entry: {
     createdAt: entry.head.spawnedAt,
     children: [],
   } satisfies ForkNode;
+
   const held = new Set(entry.tree.map((row) => row.id));
   const byId = new Map<string, ForkNode>();
+
   for (const vertex of [root, ...descendants(root)]) byId.set(vertex.id, vertex);
+
   // Parent before child: the journal reads in `(depth, spawned_at)` order, so a
   // provisional node's provisional parent is already placed when it arrives.
   for (const head of entry.head.heads) {
@@ -213,6 +228,7 @@ export function explorationForkTree(entry: {
     parent.children.push(vertex);
     byId.set(vertex.id, vertex);
   }
+
   return root;
 }
 

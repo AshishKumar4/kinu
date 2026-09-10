@@ -8,6 +8,7 @@ export async function aliasCommand(agentName: string, aliasName: string | undefi
   const path = writeAliasShim(canonical, alias);
   console.log(`${OK('✓')} ${ACCENT(alias)} ${DIM('→')} ${ACCENT(canonical)} ${DIM(path)}`);
   const hint = pathHint();
+
   if (hint) console.log(DIM(hint));
 }
 
@@ -19,10 +20,13 @@ export async function unaliasCommand(aliasName: string): Promise<void> {
 export async function aliasesCommand(): Promise<void> {
   const aliases = loadConfigFile().aliases ?? {};
   const entries = Object.entries(aliases);
+
   if (entries.length === 0) {
     console.log(DIM('No aliases configured.'));
+
     return;
   }
+
   for (const [alias, agent] of entries) {
     console.log(`${ACCENT(alias)} ${DIM('→')} ${agent}`);
   }

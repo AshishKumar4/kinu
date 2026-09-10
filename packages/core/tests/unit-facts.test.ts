@@ -86,6 +86,7 @@ describe('agent_facts', () => {
 
   test('renderFactsBlock truncates at maxChars and DISCLOSES what it dropped', () => {
     const { facts } = createTestFactsStore();
+
     for (let i = 0; i < 100; i++) facts.upsert(`k${i}`, `v${i}`.repeat(20));
     const block = renderFactsBlock(facts.recentTopK(50), { maxChars: 200 });
     const [disclosure, ...factLines] = block.split('\n').reverse();

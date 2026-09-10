@@ -9,6 +9,7 @@ function columns(db: Database, table: string): string[] {
 
 function required<Row>(row: Row | null): Row {
   if (row === null) throw new Error('expected query to return one row');
+
   return row;
 }
 
@@ -25,8 +26,10 @@ describe('UserDO schema bootstrap', () => {
     expect(ticketColumns).toContain('cli_token_hash');
     expect(ticketColumns).toContain('capabilities');
     expect(ticketColumns).not.toContain('ticket');
+
     const indexes = db.prepare<{ name: string }, []>(`PRAGMA index_list(cli_agent_connect_tickets)`).all()
       .map((row) => row.name);
+
     expect(indexes).toContain('idx_cli_agent_connect_tickets_exp');
     db.close();
   });
@@ -40,13 +43,17 @@ describe('UserDO schema bootstrap', () => {
     );
 
     expect(columns(db, 'user_config')).toEqual(['key', 'value', 'updated_at', 'version']);
+
     const row = required(db.query<{ value: string; version: number }, []>(
       `SELECT value, version FROM user_config WHERE key = 'default_model'`,
     ).get());
+
     expect(row).toEqual({ value: 'workers-ai/example', version: 0 });
+
     const tables = db.query<{ name: string }, []>(
       `SELECT name FROM sqlite_master WHERE type = 'table'`,
     ).all().map((entry) => entry.name);
+
     expect(tables).not.toContain('profile_catalog');
     db.close();
   });
@@ -57,6 +64,7 @@ describe('UserDO schema bootstrap', () => {
 
     const has = (u: string, a: string) =>
       !!db.prepare(`SELECT 1 FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`).get(u, a);
+
     const grant = db.prepare(
       `INSERT INTO user_peer_grants (sender_user_id, sender_agent_name, created_at) VALUES (?, ?, ?)
        ON CONFLICT(sender_user_id, sender_agent_name) DO NOTHING`,
@@ -113,6 +121,7 @@ describe('UserDO schema bootstrap', () => {
 
     const indexes = db.prepare<{ name: string }, []>(`PRAGMA index_list(user_mcp_servers)`).all()
       .map((row) => row.name);
+
     expect(indexes).toContain('idx_user_mcp_servers_name_unique');
     expect(indexes).not.toContain('idx_user_mcp_servers_name');
     db.close();
@@ -129,6 +138,7 @@ describe('UserDO schema bootstrap', () => {
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
     db.run(`DROP INDEX idx_user_mcp_servers_name_unique`);
+
     for (const [id, name] of [['a', 'GitHub'], ['b', 'github']]) {
       db.run(
         `INSERT INTO user_mcp_servers (id, name, server_url, transport) VALUES (?, ?, ?, ?)`,
@@ -142,6 +152,7 @@ describe('UserDO schema bootstrap', () => {
     // server names is not something a schema pass decides.
     const indexes = db.prepare<{ name: string }, []>(`PRAGMA index_list(user_mcp_servers)`).all()
       .map((row) => row.name);
+
     expect(indexes).not.toContain('idx_user_mcp_servers_name_unique');
     expect(db.prepare<{ n: number }, []>(`SELECT COUNT(*) AS n FROM user_mcp_servers`).get()?.n).toBe(2);
 

@@ -44,6 +44,7 @@ function forkStore(): ForkStore {
   initMctsSearchTable(store.execRaw);
   initAlternateTakesTable(store.execRaw);
   initHeadsTables(store.execRaw);
+
   return { ...store, actor: createTestActors(store.sql, store.execRaw).main };
 }
 
@@ -65,6 +66,7 @@ function seedSearch(store: ForkStore, opts: {
   void sql`INSERT INTO search_nodes
     (actor_id, id, parent_id, root_id, task, depth, status, created_at)
     VALUES (${actorId}, ${root}, ${null}, ${root}, ${'task ' + root}, ${0}, ${'open'}, ${1_000})`;
+
   for (let i = 0; i < branches; i++) {
     const id = `${root}-n${String(i)}`;
     const terminal = winner === i;
@@ -74,6 +76,7 @@ function seedSearch(store: ForkStore, opts: {
               ${terminal ? 'terminal' : winner === null ? 'open' : 'pruned'},
               ${terminal ? (opts.value ?? 0.8) : 0.2}, ${1}, ${1_001 + i})`;
   }
+
   if (winner !== null) {
     const winnerNode = `${root}-n${String(winner)}`;
     void sql`INSERT INTO alternate_takes
@@ -90,6 +93,7 @@ function seedHeads(store: ForkStore, opts: { root: string; heads: number }): voi
   const actorId = store.actor.actorId;
   void sql`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at)
     VALUES (${actorId}, ${opts.root}, ${'why ' + opts.root}, ${2_000})`;
+
   for (let i = 0; i < opts.heads; i++) {
     void sql`INSERT INTO head_journal
       (actor_id, id, parent_id, root_id, depth, task, status, spawned_at, completed_at)
@@ -179,10 +183,12 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
 
     expect(score.rootsWritten).toBe(2);
     expect(score.invisibleRoots).toEqual([]);
+
     for (const half of score.stores) {
       expect(half.rootsWritten).toBe(1);
       expect(half.rootsVisible).toBe(1);
     }
+
     store.close();
   });
 
@@ -191,6 +197,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
     // journalled runs, a real search would read as invisible — the scorer must not
     // be able to blame the reader's limit.
     const store = forkStore();
+
     for (let i = 0; i < 25; i++) seedHeads(store, { root: `merge-${String(i)}`, heads: 1 });
     seedSearch(store, { root: 'search-late', branches: 2, winner: 0 });
 
@@ -212,6 +219,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
 
     const transcriptsOnly = (sql: SqlExecutor, limit: number) =>
       listForkRuns(sql, store.actor, null, limit).items.filter((run) => !run.hasSearchTree);
+
     const score = scoreSettleVisibility(store.sql, store.actor, transcriptsOnly);
 
     expect(score.rootsWritten).toBe(2);
@@ -233,6 +241,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
 
     const treeOnly = (sql: SqlExecutor, limit: number) =>
       listForkRuns(sql, store.actor, null, limit).items.filter((run) => run.hasSearchTree);
+
     const score = scoreSettleVisibility(store.sql, store.actor, treeOnly);
 
     expect(score.invisibleRoots).toEqual(['merge-a']);
@@ -290,6 +299,7 @@ describe('scoreSettleVisibility — every half a run writes is where the reader 
 function eventStore(): TestSql & { actor: ActorHandle } {
   const store = createTestSql();
   initRunEventTables(store.execRaw);
+
   return { ...store, actor: testActorHandle(store.sql) };
 }
 
@@ -310,9 +320,11 @@ function emit(
   sql: SqlExecutor, actor: ActorHandle, runId: string, type: string, payload: JsonObject,
 ): void {
   eventIndex += 1;
+
   const event = {
     ...payload, type, runId, eventIndex, timestamp: new Date().toISOString(),
   };
+
   void sql`INSERT INTO run_events (actor_id, run_id, event_index, type, payload, ts)
     VALUES (${actor.actorId}, ${runId}, ${eventIndex}, ${type},
             ${JSON.stringify(event)}, ${event.timestamp})`;
@@ -332,6 +344,7 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
     const names = BEHAVIOUR_SCORERS.map((s) => s.name);
     expect(new Set(names).size).toBe(names.length);
     expect(BEHAVIOUR_SCORERS.length).toBeGreaterThanOrEqual(6);
+
     for (const scorer of BEHAVIOUR_SCORERS) {
       const score = scorer.score(store.sql, store.actor);
       expect(score.eligible, `${scorer.name} denominator`).toBe(0);
@@ -340,6 +353,7 @@ describe('BEHAVIOUR_SCORERS — the panel contract', () => {
       expect(score.rate, `${scorer.name} rate`).toBeNull();
       expect(scorer.asserts.length, `${scorer.name} asserts`).toBeGreaterThan(0);
     }
+
     store.close();
   });
 
@@ -369,11 +383,13 @@ describe('steeringConversion — every mechanical trigger', () => {
 
   test('RED: steers that fired and did not convert score below 1', () => {
     const store = eventStore();
+
     for (let i = 0; i < 3; i++) {
       emit(store.sql, store.actor, `run-${String(i)}`, 'turn_steering', {
         trigger: 'repeated_failure', step: 5, tool: 'run', converted: false,
       });
     }
+
     emit(store.sql, store.actor, 'run-x', 'turn_steering', { trigger: 'repeated_failure', step: 5, tool: 'run', converted: true });
 
     const score = steeringConversion.score(store.sql, store.actor);
@@ -637,6 +653,7 @@ describe('toolOutcomes — structural attribution with an observed denominator',
 
   test('failure attribution uses recorded refusal reasons and process exits', () => {
     const store = eventStore();
+
     for (const id of ['t1', 't2']) emit(store.sql, store.actor, 'run-a', 'tool_call_end', {
       name: 'file', toolCallId: id, args: { action: 'edit' }, outcome: { success: false, reason: 'not_found' }, result: 'no details',
     });

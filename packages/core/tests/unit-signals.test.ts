@@ -13,7 +13,9 @@ import { JsonObjectSchema } from '../src/utils/json';
 import { WORKSPACE_CREATED_EVENT, workspaceGenesisSignal } from '../src/identity/soul';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
+
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
+
 const texts = (messages: ReadonlyArray<ModelMessage>) => messages.map((m) => m.content);
 
 const SignalCardEventSchema: v.GenericSchema<SignalCardEvent> = v.variant('state', [
@@ -39,34 +41,42 @@ function setup(opts: {
   const queued: ProgrammaticTurn[] = [];
   const activity: Array<{ event: string; detail?: string }> = [];
   const cards: SignalCardEvent[] = [];
+
   const host: BackendHost = {
     broadcast: (event: BroadcastEvent) => { cards.push(v.parse(SignalCardEventSchema, event)); },
     enqueueTurn: async (turn) => {
       queued.push(turn);
+
       if (opts.enqueue === 'throw') throw new Error('queue unavailable');
+
       return { status: opts.enqueue === 'skipped' ? 'skipped' : 'queued' };
     },
     turnInFlight: () => opts.turnInFlight === true,
     setTimer: () => {},
   };
+
   const signals = new SignalDelivery(
     host,
     (event, detail) => activity.push({ event, detail }),
     () => opts.activeMode ?? 'build',
   );
+
   return { signals, queued, activity, cards };
 }
 
 /** The card's journey, without its (random) id: [state, …]. */
 const lifecycle = (cards: readonly SignalCardEvent[]) => cards.map((c) => c.state);
+
 /** The signal id a queued turn carries — the round trip a backend reads back. */
 const carriedSignalId = (turn: ProgrammaticTurn) => {
   const parsed = v.safeParse(v.string(), turn.metadata?.signalId);
+
   return parsed.success ? parsed.output : undefined;
 };
 
 const wake = (text: string, over: Partial<AgentSignal> = {}): AgentSignal => {
   const signal: AgentSignal = { kind: 'event_drain', text };
+
   return Object.assign(signal, over);
 };
 
@@ -263,11 +273,13 @@ describe('SignalDelivery — the mid-turn splice', () => {
     await signals.deliver(wake('turn text', { stepText: 'mid-turn: mail from bob' }));
     const step1 = signals.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a1')] });
     expect(texts(step1!)).toEqual(['q', 'a1', 'mid-turn: mail from bob']);
+
     // Later steps rebuild from scratch — the injection re-applies at the same
     // base-coordinate position, keeping the cached prefix stable.
     const step2 = signals.prepareStep({
       stepNumber: 2, messages: [user('q'), assistant('a1'), assistant('a2')],
     });
+
     expect(texts(step2!)).toEqual(['q', 'a1', 'mid-turn: mail from bob', 'a2']);
   });
 
@@ -354,9 +366,11 @@ describe('SignalDelivery — settlement', () => {
     // once — not be swallowed into a second 'failed' compensation.
     const { signals } = setup({ turnInFlight: false, enqueue: 'skipped' });
     const reasons: string[] = [];
+
     const attempt = signals.deliver(wake('drain', {
       compensate: (reason) => { reasons.push(reason); throw new Error('retry publish failed'); },
     }));
+
     await expect(attempt).rejects.toThrow('retry publish failed');
     expect(reasons).toEqual(['preempted']);
   });

@@ -35,6 +35,7 @@ function peer(id: string, replyExpected = false): KinuEvent {
     from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
     body: 'What changed upstream?', sender_event_id: 'ox1', kinu_mode: 'build',
   } satisfies PeerAgentPayload;
+
   return replyExpected
     ? {
         ...EVENT_BASE, id, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
@@ -56,6 +57,7 @@ describe('buildDrainBatch', () => {
       internal('a', 'self_emit', 'x'),
       internal('b', 'sandbox_cb', 'y'),
     ];
+
     expect(buildDrainBatch(events)).toBeNull();
   });
 
@@ -64,6 +66,7 @@ describe('buildDrainBatch', () => {
       webhook('wh1'),
       timer('tm1'),
     ];
+
     const batch = buildDrainBatch(events)!;
     expect(batch).not.toBeNull();
     expect(batch.ids).toEqual(['wh1', 'tm1']);
@@ -87,6 +90,7 @@ describe('buildDrainBatch', () => {
       webhook('ext'),
       internal('self', 'self_emit', 'z'),
     ];
+
     const batch = buildDrainBatch(events)!;
     expect(batch.ids).toEqual(['ext']);
     expect(batch.text).toContain('1 event arrived');
@@ -126,6 +130,7 @@ describe('a sender cannot write its own drain entries', () => {
     };
 
     const batch = buildDrainBatch([hostile]);
+
     if (!batch) throw new Error('the hostile event was not drainable');
 
     // One event in, one entry out — the count and the list agree.

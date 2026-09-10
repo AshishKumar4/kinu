@@ -14,6 +14,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC, parseJsonObject, type JsonObject } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -21,6 +22,7 @@ afterEach(() => {
 });
 
 const CLOUD_ORIGIN = 'https://kinu.example.com';
+
 const CLOUD_TOKEN = ['ptc_', '0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz'].join('');
 
 /** A signed-in machine that had been pinned to a paid BYO provider. */
@@ -38,6 +40,7 @@ function home(config: JsonObject): string {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-setup-home-'));
   tempDirs.push(dir);
   writeFileSync(join(dir, 'config.json'), JSON.stringify(config), { mode: 0o600 });
+
   return dir;
 }
 
@@ -50,6 +53,7 @@ function runSetup(opts: JsonObject, kinuHome: string) {
     const { setupCommand } = await import('./packages/cli/src/commands/setup.ts');
     await setupCommand({ ...${JSON.stringify(opts)}, skipCloud: true });
   `;
+
   const proc = Bun.spawnSync({
     cmd: [process.execPath, '-e', runner],
     cwd: repoRoot,
@@ -62,6 +66,7 @@ function runSetup(opts: JsonObject, kinuHome: string) {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   return {
     stdout: proc.stdout.toString(),
     stderr: proc.stderr.toString(),

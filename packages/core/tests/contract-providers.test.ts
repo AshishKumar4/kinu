@@ -32,11 +32,13 @@ const CodexRequestBodySchema = v.object({
   store: v.optional(v.boolean()),
   input: v.optional(v.array(v.object({ role: v.optional(v.string()) }))),
 });
+
 const CodexStoredBodySchema = v.object({
   instructions: v.optional(v.string()),
   store: v.optional(v.boolean()),
   input: v.optional(v.unknown()),
 });
+
 const CodexFailureSurfaceSchema = v.object({
   message: v.optional(v.string()),
   responseBody: v.optional(v.string()),
@@ -45,6 +47,7 @@ const CodexFailureSurfaceSchema = v.object({
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));
+
   return {
     env: {},
     fetch: fetchFn,
@@ -71,9 +74,11 @@ describe('OpenAI provider contract', () => {
     const mock = createMockFetch([
       { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
+
     const deps = makeDeps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
     }, mock.fetch);
+
     const provider = createOpenAIProvider();
     const model = provider.createModel('gpt-5.5', deps);
     await call(model);
@@ -86,6 +91,7 @@ describe('OpenAI provider contract', () => {
     const mock = createMockFetch([
       { match: 'api.openai.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
+
     const deps = makeDeps({}, mock.fetch);
     const provider = createOpenAIProvider();
     const model = provider.createModel('gpt-5.5', deps);
@@ -98,15 +104,19 @@ describe('OpenAI provider contract', () => {
 
   test('routes model requests through the patient rate-limit fetch', async () => {
     let calls = 0;
+
     const fetchImpl = asFetchFunction(async () => {
       calls++;
+
       return calls === 1
         ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
         : Response.json(OPENAI_RESPONSES_BODY);
     });
+
     const deps = makeDeps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
     }, fetchImpl);
+
     const model = createOpenAIProvider().createModel('gpt-5.5', deps);
 
     await generateText({ model, prompt: 'hello', maxOutputTokens: 16, maxRetries: 0 });
@@ -122,13 +132,16 @@ describe('OpenRouter provider contract', () => {
     const mock = createMockFetch([
       { match: 'openrouter.ai', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
+
     const deps = makeDeps({
       [OPENROUTER_CRED_KEY]: { headers: { Authorization: 'Bearer sk-or-test' } },
     }, mock.fetch);
+
     const provider = createOpenRouterProvider({
       refererURL: 'https://kinu.test',
       appTitle: 'Kinu-Contract-Test',
     });
+
     const model = provider.createModel('anthropic/claude-3.5-sonnet', deps);
     await call(model);
 
@@ -148,12 +161,14 @@ describe('OpenAI-compat provider contract', () => {
     const mock = createMockFetch([
       { match: 'api.groq.com', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
+
     const deps = makeDeps({
       'openai-compat.default': {
         headers: { Authorization: 'Bearer gsk_test', 'X-Custom': 'value' },
         baseURL: 'https://api.groq.com/openai/v1',
       },
     }, mock.fetch);
+
     const provider = createOpenAICompatProvider();
     const model = provider.createModel('llama-3', deps);
     await call(model);
@@ -174,11 +189,13 @@ describe('Anthropic provider contract', () => {
     const mock = createMockFetch([
       { match: 'api.anthropic.com', respond: { status: 200, body: ANTHROPIC_MESSAGE_BODY } },
     ]);
+
     const deps = makeDeps({
       [ANTHROPIC_CRED_KEY]: {
         headers: { 'x-api-key': 'sk-ant-test', 'anthropic-version': '2023-06-01' },
       },
     }, mock.fetch);
+
     const provider = createAnthropicProvider();
     const model = provider.createModel('claude-opus-4-7', deps);
     await call(model);
@@ -198,6 +215,7 @@ describe('Codex provider contract', () => {
     const mock = createMockFetch([
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
+
     const deps = makeDeps({
       [CODEX_CRED_KEY]: {
         headers: {
@@ -208,6 +226,7 @@ describe('Codex provider contract', () => {
         },
       },
     }, mock.fetch);
+
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
     await call(model);
@@ -224,9 +243,11 @@ describe('Codex provider contract', () => {
     const mock = createMockFetch([
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
+
     const deps = makeDeps({
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } },
     }, mock.fetch);
+
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
     await generateText({ model, system: 'You are concise.', prompt: 'hello', maxOutputTokens: 16 });
@@ -242,9 +263,11 @@ describe('Codex provider contract', () => {
     const mock = createMockFetch([
       { match: 'chatgpt.com/backend-api/codex', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
+
     const deps = makeDeps({
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } },
     }, mock.fetch);
+
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
     await generateText({
@@ -274,27 +297,33 @@ describe('Codex provider contract', () => {
   test('refreshes on 401 by calling getAuth with forceRefresh', async () => {
     let calls = 0;
     let forceRefreshSeen = false;
+
     const deps: ProviderDeps = {
       env: {},
       async getAuth(key, opts) {
         if (key !== CODEX_CRED_KEY) return null;
+
         if (opts?.forceRefresh) forceRefreshSeen = true;
+
         return { headers: { Authorization: opts?.forceRefresh ? 'Bearer refreshed' : 'Bearer stale' } };
       },
       async hasCredential() { return true; },
       fetch: undefined,
     };
+
     const mock = createMockFetch([
       {
         match: 'chatgpt.com',
         respond: () => {
           calls++;
+
           return calls === 1
             ? { status: 401, body: { error: 'token expired' } }
             : { status: 200, body: OPENAI_RESPONSES_BODY };
         },
       },
     ]);
+
     deps.fetch = mock.fetch;
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
@@ -310,10 +339,12 @@ describe('Codex provider contract', () => {
     // it throws out of getAuth BEFORE any request exists. The user-visible
     // answer must be the reconnection remedy, not a raw thrown chain.
     let wireCalls = 0;
+
     const deps: ProviderDeps = {
       env: {},
       fetch: asFetchFunction(async () => {
         wireCalls += 1;
+
         return new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 401 });
       }),
       async getAuth(key) {
@@ -322,9 +353,11 @@ describe('Codex provider contract', () => {
       },
       async hasCredential() { return true; },
     };
+
     const model = createCodexProvider().createModel('gpt-5.5', deps);
 
     let failure = '';
+
     try {
       await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
     } catch (rejection) {
@@ -333,6 +366,7 @@ describe('Codex provider contract', () => {
         ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
         : String(rejection);
     }
+
     expect(failure).toContain('Your ChatGPT login is no longer valid');
     expect(failure).toContain('kinu setup');
     // The opaque chain the resolver threw must not survive to the surface.
@@ -345,8 +379,10 @@ describe('Codex provider contract', () => {
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-dead' } },
     }, asFetchFunction(async () =>
       new Response(JSON.stringify({ detail: 'Unauthorized' }), { status: 401 })));
+
     const model = createCodexProvider().createModel('gpt-5.5', deps);
     let failure = '';
+
     try {
       await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
     } catch (rejection) {
@@ -355,6 +391,7 @@ describe('Codex provider contract', () => {
         ? `${surface.output.message ?? ''}\n${surface.output.responseBody ?? ''}`
         : String(rejection);
     }
+
     expect(failure).toContain('Your ChatGPT login is no longer valid');
     // The bare upstream word is what the owner was shown for the Cloudflare
     // credential; it must not survive here either.
@@ -365,6 +402,7 @@ describe('Codex provider contract', () => {
     const mock = createMockFetch([
       { match: 'chatgpt.com', respond: { status: 200, body: OPENAI_RESPONSES_BODY } },
     ]);
+
     const deps = makeDeps({}, mock.fetch);
     const provider = createCodexProvider();
     const model = provider.createModel('gpt-5.5', deps);
@@ -381,6 +419,7 @@ describe('Codex OAuth client', () => {
       JSON.stringify({ error: 'invalid_grant', error_description: 'The provided authorization grant is invalid' }),
       { status: 400, headers: { 'content-type': 'application/json' } },
     )));
+
     try {
       await client.refresh('codex-refresh-revoked');
     } catch (err) {
@@ -388,21 +427,26 @@ describe('Codex OAuth client', () => {
       expect(err.oauthError).toBe('invalid_grant');
       // The message must never quote the credential it failed on.
       expect(err.message).not.toContain('codex-refresh-revoked');
+
       return;
     }
+
     throw new Error('expected CodexOAuthTokenError');
   });
 
   test('a transient refresh failure carries no OAuth code a caller could treat as terminal', async () => {
     const client = createCodexOAuthClient(asFetchFunction(async () =>
       new Response('upstream exploded', { status: 502 })));
+
     try {
       await client.refresh('codex-refresh');
     } catch (err) {
       if (!(err instanceof CodexOAuthTokenError)) throw err;
       expect(err.oauthError).toBe('unknown');
+
       return;
     }
+
     throw new Error('expected CodexOAuthTokenError');
   });
 });
@@ -417,6 +461,7 @@ describe('listModels cache invalidation on credential change', () => {
 
   function makeSwappableDeps(fetchFn: typeof fetch): SwappableDeps {
     const store = new Map<string, AuthResolution>();
+
     return {
       deps: {
         env: {},
@@ -435,6 +480,7 @@ describe('listModels cache invalidation on credential change', () => {
     const mock = createMockFetch([
       { match: 'openrouter.ai', respond: { status: 200, body: { data: [{ id: 'meta/m1' }] } } },
     ]);
+
     const { deps, set } = makeSwappableDeps(mock.fetch);
     const provider = createOpenRouterProvider();
 
@@ -453,6 +499,7 @@ describe('listModels cache invalidation on credential change', () => {
     const mock = createMockFetch([
       { match: 'openrouter.ai', respond: { status: 200, body: { data: [{ id: 'meta/m1' }] } } },
     ]);
+
     const { deps, set } = makeSwappableDeps(mock.fetch);
     const provider = createOpenRouterProvider();
 
@@ -467,6 +514,7 @@ describe('listModels cache invalidation on credential change', () => {
     const mock = createMockFetch([
       { match: 'chatgpt.com', respond: { status: 200, body: { models: [{ slug: 'gpt-5.5', visibility: 'list' }] } } },
     ]);
+
     const { deps, set } = makeSwappableDeps(mock.fetch);
     const provider = createCodexProvider();
 

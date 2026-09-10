@@ -76,6 +76,7 @@ export interface ControlCaller {
 }
 
 const INGEST_LABEL = 'kinu.control-plane.ingest.v1';
+
 const ADMIN_LABEL = 'kinu.control-plane.admin.v1';
 
 /** Derived tokens, cached per (secret, label). The derivation is deterministic,
@@ -84,13 +85,16 @@ const derived = new Map<string, Promise<string>>();
 
 function controlToken(env: ControlSecretEnv, label: string): Promise<string> {
   const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
+
   if (!secret) throw new ControlPlaneUnconfiguredError();
   const key = `${label}\u0000${secret}`;
   let pending = derived.get(key);
+
   if (!pending) {
     pending = hmacSha256Hex(secret, label);
     derived.set(key, pending);
   }
+
   return pending;
 }
 
@@ -153,12 +157,14 @@ export async function requireControl(
 ): Promise<ControlGrade> {
   const grade = await resolveGrade(env, caller);
   const required = CONTROL_PLANE_CAPABILITIES[capability];
+
   if (grade === null || GRADE_RANK[grade] < GRADE_RANK[required]) {
     throw new ControlDeniedError(
       `${capability} requires the control plane's ${required} capability. `
       + `This caller ${grade === null ? 'presented no recognized capability' : `holds only ${grade}`}.`,
     );
   }
+
   return grade;
 }
 
@@ -186,14 +192,19 @@ async function resolveGrade(
   env: ControlSecretEnv, caller: PresentedCaller,
 ): Promise<ControlGrade | null> {
   const parsed = v.safeParse(ControlCallerSchema, caller);
+
   if (!parsed.success) return null;
   const token = parsed.output.controlToken;
+
   const [ingest, admin] = await Promise.all([
     controlToken(env, INGEST_LABEL),
     controlToken(env, ADMIN_LABEL),
   ]);
+
   if (token === admin) return 'admin';
+
   if (token === ingest) return 'ingest';
+
   return null;
 }
 

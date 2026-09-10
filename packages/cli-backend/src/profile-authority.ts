@@ -93,6 +93,7 @@ export function staticModelPlane(): LocalProfileModelPlane {
   return {
     normalizeSpec(spec) {
       const trimmed = (spec ?? '').trim();
+
       if (!trimmed || trimmed === STATIC_MODEL_SPEC) return STATIC_MODEL_SPEC;
       throw new Error(
         'Model switching is unavailable for this local runtime; open it with a modelResolver.',
@@ -116,12 +117,14 @@ export function resolverModelPlane(
     normalizeSpec: (spec) => resolver.normalizeSpecSync(spec),
     async listModels() {
       const menu = await resolver.listModels();
+
       return {
         models: menu.models.map((model) => `${model.provider}/${model.id}`),
         failures: menu.failures,
       };
     },
   };
+
   return revision ? { ...plane, revision } : plane;
 }
 
@@ -188,6 +191,7 @@ export function createLocalProfileAuthority(deps: {
       roles: BUILTIN_PROFILE_CATALOG.roles,
       tiers: { default: { model: normalizeSpec(deps.config.getModel()) } },
     };
+
     return {
       authority: { kind: 'local' },
       version: 0,
@@ -215,6 +219,7 @@ export function createLocalProfileAuthority(deps: {
     const revision = plane.revision();
     const previous = observedRevision;
     observedRevision = revision;
+
     if (previous === null || previous === revision) return;
     diagnostics.event('provider.listing_invalidated', { from: previous, to: revision });
     listings.invalidate();
@@ -231,6 +236,7 @@ export function createLocalProfileAuthority(deps: {
   const providerSnapshot = async (): Promise<ProviderSnapshotRead> => {
     const { listing, cache } = await listings.read();
     const configured = normalizeSpec(deps.config.getModel());
+
     return {
       snapshot: buildProviderCatalogSnapshot([configured, ...listing.models], listing.failures),
       cache,
@@ -241,11 +247,14 @@ export function createLocalProfileAuthority(deps: {
     // Before the loads below, so a provider mutation made in another process
     // reaches THIS resolution rather than the next one.
     observeRevision();
+
     const load: Parameters<typeof loadProfileAuthorityInputs>[0] = {
       envelope,
       provider: providerSnapshot,
     };
+
     if (record) load.record = record;
+
     return loadProfileAuthorityInputs(load);
   };
 
@@ -255,6 +264,7 @@ export function createLocalProfileAuthority(deps: {
     inputs,
     async resolvePreTurn() {
       const role = deps.config.getRoleSelection();
+
       return resolveAgentTurnProfile({
         ...(await inputs()),
         activeRoleId: role,
@@ -273,7 +283,9 @@ export function createLocalProfileAuthority(deps: {
         observedRevision = null;
         listings.invalidate();
       }
+
       if (refinement.envelope) envelopeSource = refinement.envelope;
+
       if (refinement.record) record = refinement.record;
     },
   };

@@ -20,6 +20,7 @@ function createStore() {
   const store = new MemoryStore(files, sql);
   store.ensureSchema();
   const config = createTestActor(sql, makeExecRaw(database), crypto.randomUUID(), 'memory-test').config;
+
   return { sql, store, files, config };
 }
 
@@ -28,6 +29,7 @@ function fakeVectorStore(available = true) {
   const upserted: IndexedChunk[] = [];
   const deleted: string[] = [];
   const live = new Map<string, IndexedChunk>();
+
   const store: VectorStore = {
     available,
     async upsertChunk(c) { upserted.push(c); live.set(c.id, c); },
@@ -35,10 +37,12 @@ function fakeVectorStore(available = true) {
     async deleteChunks(ids) { for (const id of ids) { deleted.push(id); live.delete(id); } },
     async search() { return []; },
   };
+
   return { store, upserted, deleted, live };
 }
 
 const PATH = 'memory/MEMORY.md';
+
 const doc = (count: number, fill = 'x') =>
   Array.from({ length: count }, (_, i) => `note line ${i + 1} ${fill.repeat(40)}`).join('\n');
 
@@ -52,10 +56,12 @@ describe('adaptMemory — semantic index sync on write', () => {
     await memory.index(PATH);
 
     expect(vs.upserted.length).toBeGreaterThan(1);
+
     for (const c of vs.upserted) {
       expect(c.id).toBe(`${PATH}:${c.startLine}-${c.endLine}`);
       expect(c.text.length).toBeGreaterThan(0);
     }
+
     expect(vs.deleted).toEqual([]);
   });
 
@@ -72,13 +78,16 @@ describe('adaptMemory — semantic index sync on write', () => {
     await memory.index(PATH);
 
     expect(vs.deleted.length).toBeGreaterThan(0);
+
     for (const id of vs.deleted) expect(embeddedIds.has(id)).toBe(true);
+
     // The surviving chunk's vector is still live; the deleted ones are gone.
     for (const id of vs.deleted) expect(vs.live.has(id)).toBe(false);
   });
 
   test('a Vectorize outage does not fail the memory write, and does not claim the chunks were indexed', async () => {
     const { store, files, config } = createStore();
+
     const throwing: VectorStore = {
       available: true,
       async upsertChunk() { throw new Error('vectorize down'); },
@@ -86,6 +95,7 @@ describe('adaptMemory — semantic index sync on write', () => {
       async deleteChunks() { throw new Error('vectorize down'); },
       async search() { return []; },
     };
+
     // A completed backfill: without invalidation the marker would keep claiming
     // a complete semantic index over chunks that never reached the vector store.
     config.set('memory_vector_backfill_done', 'true');
@@ -160,9 +170,11 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
 
     // Keep booting until done; ids must be embedded exactly once, in order.
     let guard = 0;
+
     while (config.get('memory_vector_backfill_done') !== 'true' && guard++ < 100) {
       await backfillMemoryVectors(store, config, vs.store, 1);
     }
+
     expect(config.get('memory_vector_backfill_done')).toBe('true');
     expect(vs.upserted.map((c) => c.id)).toEqual(all.map((c) => c.id));
   });
@@ -176,22 +188,35 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
     // The real store over a Vectorize index that is down — it must not advance
     // the cursor or set the marker over chunks it never embedded.
     let down = true;
+
     const index: VectorizeIndex = {
       async insert() { return {}; },
-      async upsert() { if (down) throw new Error('vectorize down'); return {}; },
+      async upsert() {
+        if (down) throw new Error('vectorize down');
+
+        return {};
+      },
       async query() { return { matches: [] }; },
       async deleteByIds() { return {}; },
       async getByIds() { return []; },
     };
+
     const embedded: string[] = [];
+
     const embedder: Embedder = {
       dimensions: 1,
-      async embed(text) { embedded.push(text); return [1]; },
+      async embed(text) {
+        embedded.push(text);
+
+        return [1];
+      },
     };
+
     const vectorStore = createCloudflareVectorStore({ index, embedder });
 
     const start = Date.now();
     setSystemTime(new Date(start));
+
     try {
       await backfillMemoryVectors(store, config, vectorStore, 1);
       expect(config.get('memory_vector_backfill_done')).toBeNull();
@@ -204,9 +229,11 @@ describe('backfillMemoryVectors — one-time embed of pre-existing chunks', () =
       embedded.length = 0;
       setSystemTime(new Date(start + VECTOR_BACKEND_COOLDOWN_MS));
       let guard = 0;
+
       while (config.get('memory_vector_backfill_done') !== 'true' && guard++ < 100) {
         await backfillMemoryVectors(store, config, vectorStore, 1);
       }
+
       expect(config.get('memory_vector_backfill_done')).toBe('true');
       expect(embedded).toEqual(all.map((c) => c.text));
     } finally {

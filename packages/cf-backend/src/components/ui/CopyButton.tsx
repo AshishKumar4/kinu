@@ -18,6 +18,7 @@ export interface CopyButtonProps {
 export function CopyButton({ value, what, size = 12, className }: CopyButtonProps) {
   const { status, copy } = useCopy();
   const Icon = status === "copied" ? CheckIcon : status === "failed" ? WarningCircleIcon : CopyIcon;
+
   return (
     <button
       type="button"

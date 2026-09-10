@@ -38,6 +38,7 @@ const ProposedTaskSchema = v.object({
   targetsSkills: v.array(v.string()), proposedAt: v.number(),
   status: v.picklist(["pending", "accepted", "rejected", "completed"]),
 });
+
 type ProposedTask = v.InferOutput<typeof ProposedTaskSchema>;
 
 const RunSummarySchema = v.object({
@@ -60,6 +61,7 @@ const TriggerRowSchema = v.object({
   last_fire_at: v.optional(v.nullable(v.number())),
   fire_count: v.optional(v.number()),
 });
+
 type TriggerRow = v.InferOutput<typeof TriggerRowSchema>;
 
 const AuthModeSchema = v.picklist(["hmac", "bearer", "mtls"]);
@@ -147,14 +149,17 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
 
   const load = useCallback(async () => {
     const result = await rpc("listCurriculumTasks", []);
+
     return v.parse(v.object({ tasks: v.array(ProposedTaskSchema) }), result).tasks;
   }, [rpc]);
+
   const { resource, reload } = useAsyncResource(load);
   const tasks = lastValue(resource);
 
   const propose = useCallback(async () => {
     setBusy(true);
     setActionErr(null);
+
     try { await rpc("proposeCurriculumTasks", [5]); reload(); }
     catch (e) { setActionErr(`Could not propose tasks: ${describeError(e)}`); }
     finally { setBusy(false); }
@@ -166,12 +171,15 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
    *  forced to silence a rejection. */
   const setStatus = useCallback(async (id: string, status: ProposedTask["status"]): Promise<boolean> => {
     setActionErr(null);
+
     try {
       await rpc("setCurriculumTaskStatus", [id, status]);
       reload();
+
       return true;
     } catch (e) {
       setActionErr(`Could not mark the task ${status}: ${describeError(e)}`);
+
       return false;
     }
   }, [rpc, reload]);
@@ -251,6 +259,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
     async () => v.parse(RunPageSchema, await rpc("getRunSummaries", [{ limit: RUN_HISTORY_PAGE }])),
     [rpc],
   );
+
   const { resource, reload } = useAsyncResource(load);
   const first = lastValue(resource);
 
@@ -260,18 +269,21 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
     ),
     [rpc],
   );
+
   // The first page's own `next`, never an anchor built here: this read's cursor
   // is opaque and only the server knows how to spell it.
   const startFrom = useCallback(
     () => (first !== null && first.status === "more" ? first.next : null),
     [first],
   );
+
   const tail = usePagedScroll<v.InferOutput<typeof RunSummarySchema>>({ grows: "down", fetchPage, startFrom });
 
   const runs = first === null ? null : [...first.items, ...tail.fetched];
   // A first page that already said 'end' is exhausted before the pager ever
   // runs, and the pager cannot know that.
   const exhausted = first !== null && (first.status === "end" || tail.exhausted);
+
   const containerRef = useGrowingScroll<HTMLDivElement>({
     grows: "down", content: runs, fetched: tail.fetched, onReachEdge: tail.loadMore,
   });
@@ -284,6 +296,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   // The denominator for the totals above: runs the provider went quiet on.
   const silentRuns = (runs ?? []).filter((r) => r.turnsWithoutUsage > 0).length;
   const covers = exhausted ? "" : " so far";
+
   return (
     <section className="min-w-0">
       <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -310,6 +323,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
           <div ref={containerRef} className="max-h-[28rem] overflow-y-auto rounded-md border p-border text-xs">
             {runs.map((r) => {
               const tokens = usageTotal(r.usage);
+
               return (
                 <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border">
                   <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "aborted" ? "p-dot-danger" : "p-dot-neutral"}`} />
@@ -341,24 +355,31 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
 
   const load = useCallback(async () => {
     const result = await rpc("listTriggers", []);
+
     return v.parse(v.object({ triggers: v.array(TriggerRowSchema) }), result).triggers;
   }, [rpc]);
+
   const { resource, reload } = useAsyncResource(load);
   const triggers = lastValue(resource);
 
   const revoke = useCallback(async (triggerId: string) => {
     if (!agentId) return;
+
     if (!confirm("Revoke this trigger? Its URL will stop working.")) return;
     setErr(null);
+
     try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr(renderThrownChain({ cause: e })); }
+
     reload();
   }, [agentId, reload]);
 
   const active = (triggers ?? []).filter((t) => t.state === "active").length;
+
   const nextFire = (triggers ?? [])
     .map((t) => t.next_fire_at)
     .filter((ts): ts is number => ts !== undefined && ts !== null && ts > Date.now())
     .sort((a, b) => a - b)[0];
+
   return (
     <section className="min-w-0">
       <div className="flex flex-wrap items-center gap-2 mb-3">
@@ -404,6 +425,7 @@ function TriggerLine({ trigger, onRevoke }: {
   const isWebhook = trigger.kind === "webhook_durable" || trigger.kind === "webhook_ephemeral";
   const url = trigger.url ? `${window.location.origin}${trigger.url}` : null;
   const spec = trigger.spec ?? {};
+
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
       <span className={`size-1.5 rounded-full shrink-0 ${trigger.state === "active" ? "p-dot-success" : trigger.state === "paused" ? "p-dot-warning" : "p-dot-neutral"}`} />
@@ -453,6 +475,7 @@ function curlCommand(url: string, result: CreateWebhookResult): CurlCommand {
   // Empty whenever the credential is real, because the credential is then
   // rendered as its own redacted region rather than as text in this string.
   const placeholder = result.secret === null ? "<your-secret>" : "";
+
   switch (result.auth_mode) {
     case "hmac": return {
       before: `# HMAC test (compute SIGNATURE = HMAC-SHA256 of "<ts>.<body>")
@@ -549,8 +572,14 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
   const [err, setErr] = useState<string | null>(null);
 
   const submit = useCallback(async () => {
-    if (!label.trim()) { setErr("label required"); return; }
+    if (!label.trim()) {
+      setErr("label required");
+
+      return;
+    }
+
     setSubmitting(true); setErr(null);
+
     try {
       // Blank means "mint one": the server decides and stores the secret for
       // every hmac/bearer webhook, so a browser-side generator here would be a
@@ -562,9 +591,11 @@ export function CreateWebhookModal({ agentName, onClose, onCreated }: {
         secret: authMode === "mtls" ? undefined : (secret.trim() || undefined),
         accepted_content_type: contentType.trim() || "application/json",
       });
+
       onCreated(r);
     } catch (e) {
       const msg = renderThrownChain({ cause: e });
+
       if (msg.includes("step-up")) {
         if (confirm("Your login is too old. Sign in again?")) {
           const login = new URL("/login", window.location.origin);

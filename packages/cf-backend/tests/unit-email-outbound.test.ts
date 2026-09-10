@@ -39,8 +39,11 @@ const SentEmailSchema = v.object({
   text: v.optional(v.string()),
   headers: v.optional(v.record(v.string(), v.string())),
 });
+
 type SentEmail = v.InferOutput<typeof SentEmailSchema>;
+
 type SendEmailBuilder = Parameters<SendEmail['send']>[0];
+
 const ReplyAttemptSchema = v.object({
   kind: v.string(),
   outcome: v.object({ outcome: v.string() }),
@@ -54,9 +57,12 @@ function fakeSendBinding(opts: { fail?: boolean } = {}) {
   async function send(message: EmailMessage | SendEmailBuilder): Promise<EmailSendResult> {
     if (opts.fail) throw new Error('E_SENDER_NOT_VERIFIED');
     sent.push(v.parse(SentEmailSchema, message));
+
     return { messageId: `out-${sent.length}` };
   }
+
   const binding: SendEmail = { send };
+
   return { binding, sent };
 }
 
@@ -70,11 +76,13 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const log = new EventLog(exec, actor);
     const { binding, sent } = fakeSendBinding(sendOpts);
     const outbox = new EmailOutbox(exec);
+
     const replies = new ReplyChannelStore(exec, actor, {
       email_thread: createEmailThreadDispatcher(() => ({
         email: binding, agentDisplayName: 'Scout', outbox,
       })),
     });
+
     return { sql: exec, log, replies, sent };
   }
 
@@ -96,7 +104,9 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       attachments: [],
       now: 1_000,
     });
+
     if (!result.admitted) throw new Error('setup: email not admitted');
+
     return result.event_id;
   }
 
@@ -110,6 +120,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const result = await dispatchEmailRepliesForTurn(
       { log, replies }, 'evt-turn-1', 'Yes — staging is green. All 1,470 tests pass.', 2_000,
     );
+
     expect(result).toEqual({ delivered: 1, pending: false });
 
     expect(sent).toHaveLength(1);
@@ -129,9 +140,11 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
     // The channel is settled and an audit row exists.
     expect(replies.findOpenByEvent(eventId)).toBeNull();
+
     const attempts = sql.exec(
       `SELECT payload FROM agent_log WHERE kind = 'reply_attempt'`,
     ).toArray();
+
     expect(attempts).toHaveLength(1);
     expect(v.parse(ReplyAttemptSchema, JSON.parse(String(attempts[0].payload)))).toMatchObject({
       kind: 'email_thread', outcome: { outcome: 'delivered' },
@@ -156,13 +169,17 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       turnInFlight: () => true,
       setTimer: () => {},
     };
+
     const { rt } = createTestRuntime();
+
     const orch = new AgentOrchestrator({
       host, eventLog: log, engine: new EvolutionEngine(rt, { enabled: false }),
     });
+
     await orch.drainPendingEvents();
 
     const step = orch.signals.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
+
     if (!step?.[1]) throw new Error('expected injected signal step');
     expect(String(step[1].content)).toContain('Is staging green?');
 
@@ -171,6 +188,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { absorbed } = orch.signals.settle({ completed: true });
     expect(absorbed).toHaveLength(1);
     const absorbedSignal = absorbed[0];
+
     if (!absorbedSignal?.replyTurnId) throw new Error('expected absorbed reply turn');
     expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbedSignal.replyTurnId, 'Green.', 2_000))
       .toEqual({ delivered: 1, pending: false });
@@ -181,6 +199,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('an existing Re: subject is not double-prefixed', async () => {
     const { log, replies, sent } = setup();
+
     const result = await acceptInboundEmail({
       log, replies, owner_email: 'owner@example.com', allowlist: [], tryConsumeRateLimit: () => true,
       vfs: createMemoryVfs().vfs,
@@ -190,6 +209,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       message_id: '<def@mail.example.com>', in_reply_to: '<out-1@x>', references: null,
       attachments: [], now: 1_000,
     });
+
     if (!result.admitted) throw new Error('not admitted');
     log.markConsumed(result.event_id, 'evt-turn-2', 0);
     await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-2', 'still green', 2_000);
@@ -231,11 +251,13 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 describe('sendOwnerEmail — changelog digests + job completions', () => {
   test('sends from the agent address to the owner with a tagged subject + stable Message-ID', async () => {
     const { binding, sent } = fakeSendBinding();
+
     const ok = await sendOwnerEmail({
       email: binding, emailDomain: 'agents.example.com',
       agentName: 'scout-a1b2c3', agentDisplayName: 'Scout',
       ownerEmail: 'owner@example.com', outbox: freshOutbox(),
     }, { subject: 'Evolution changelog digest', text: 'Self-change digest: 3 entries…', key: 'digest-1' });
+
     expect(ok).toBe(true);
     expect(sent[0]).toMatchObject({
       from: { email: 'scout-a1b2c3@agents.example.com', name: 'Scout' },
@@ -250,10 +272,12 @@ describe('sendOwnerEmail — changelog digests + job completions', () => {
 
   test('skips quietly when the platform email pieces are missing', async () => {
     const { binding, sent } = fakeSendBinding();
+
     const base = {
       email: binding, emailDomain: 'agents.example.com',
       agentName: 'a', agentDisplayName: 'A', ownerEmail: 'o@e.com', outbox: freshOutbox(),
     };
+
     const note = { subject: 's', text: 't', key: 'k' };
     expect(await sendOwnerEmail({ ...base, email: undefined }, note)).toBe(false);
     expect(await sendOwnerEmail({ ...base, emailDomain: undefined }, note)).toBe(false);
@@ -285,9 +309,11 @@ describe('the receipt an accepted message gets immediately', () => {
 
   test('it threads onto the inbound message and marks itself auto-replied', async () => {
     const { binding, sent } = fakeSendBinding();
+
     const ok = await sendInboundEmailReceipt(
       { email: binding, agentDisplayName: 'Scout', outbox: freshOutbox() }, THREAD, 'evt-1',
     );
+
     expect(ok).toBe(true);
     expect(sent[0]).toMatchObject({
       from: { email: 'scout-a1b2c3@agents.example.com', name: 'Scout' },
@@ -330,11 +356,13 @@ describe('the receipt an accepted message gets immediately', () => {
 
   test('a thread with no usable Message-ID carries no threading headers', async () => {
     const { binding, sent } = fakeSendBinding();
+
     const ok = await sendInboundEmailReceipt(
       { email: binding, agentDisplayName: 'Scout', outbox: freshOutbox() },
       { ...THREAD, message_id: null },
       'evt-noid',
     );
+
     expect(ok).toBe(true);
     expect(sent[0].headers?.['In-Reply-To']).toBeUndefined();
     expect(sent[0].headers?.['References']).toBeUndefined();
@@ -346,9 +374,11 @@ describe('the receipt an accepted message gets immediately', () => {
     const { binding, sent } = fakeSendBinding();
     const outbox = freshOutbox();
     await sendInboundEmailReceipt({ email: binding, agentDisplayName: 'Scout', outbox }, THREAD, 'evt-1');
+
     const dispatcher = createEmailThreadDispatcher(() => ({
       email: binding, agentDisplayName: 'Scout', outbox,
     }));
+
     const delivered = await dispatcher.dispatch({
       id: 'chan-1',
       event_id: 'evt-1',
@@ -362,6 +392,7 @@ describe('the receipt an accepted message gets immediately', () => {
       created_at: 1_000,
       updated_at: 1_000,
     }, 'Staging is green.');
+
     expect(delivered).toEqual({ delivered: true });
     expect(sent).toHaveLength(2);
     expect(sent[1].text).toBe('Staging is green.');
@@ -388,14 +419,17 @@ describe('threading headers stay inside the line a receiver must accept', () => 
       },
       eventId,
     );
+
     return sent[0].headers ?? {};
   }
 
   test('a long inherited chain is trimmed from the middle, never from either end', async () => {
     const chain = Array.from({ length: 200 }, (_, i) => `<r${String(i).padStart(3, '0')}@x>`);
+
     const headers = await receiptHeaders(
       { message_id: '<answered@x>', references: chain.join(' ') }, 'evt-long',
     );
+
     expect(headers['In-Reply-To']).toBe('<answered@x>');
 
     const references = headers['References'] ?? '';
@@ -410,6 +444,7 @@ describe('threading headers stay inside the line a receiver must accept', () => 
     const headers = await receiptHeaders(
       { message_id: `<${'x'.repeat(1_200)}@x>`, references: '<a@x>' }, 'evt-wide',
     );
+
     expect(headers['In-Reply-To']).toBeUndefined();
     expect(headers['References']).toBeUndefined();
   });

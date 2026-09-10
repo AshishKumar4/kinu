@@ -1,4 +1,5 @@
 const DEFAULT_CHUNK_TARGET_CHARS = 1600;
+
 const DEFAULT_CHUNK_OVERLAP_CHARS = 320;
 
 export interface Chunk {
@@ -12,6 +13,7 @@ async function hashText(text: string): Promise<string> {
 	const data = new TextEncoder().encode(text);
 	const buf = await crypto.subtle.digest("SHA-256", data);
 	const arr = new Uint8Array(buf);
+
 	return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
@@ -42,16 +44,21 @@ export async function chunkMarkdown(
 		if (overlapChars <= 0 || current.length === 0) {
 			current = [];
 			currentChars = 0;
+
 			return;
 		}
+
 		let acc = 0;
 		const kept: Array<{ line: string; lineNo: number }> = [];
+
 		for (let i = current.length - 1; i >= 0; i--) {
 			const entry = current[i];
 			acc += entry.line.length + 1;
 			kept.unshift(entry);
+
 			if (acc >= overlapChars) break;
 		}
+
 		current = kept;
 		currentChars = kept.reduce((sum, e) => sum + e.line.length + 1, 0);
 	};

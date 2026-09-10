@@ -59,10 +59,13 @@ export async function createCloudWorkspaceForUser(
   options: CreateCloudWorkspaceOptions = {},
 ): Promise<WorkspaceEntry> {
   const purpose = input.purpose?.trim() || undefined;
+
   if (input.reasoningEffort !== undefined && !isReasoningEffort(input.reasoningEffort)) {
     throw new Error(`Invalid reasoning effort: ${String(input.reasoningEffort)}`);
   }
+
   const menu = await listAvailableModels(env, userId, caller);
+
   // The CHOICE is core's (`defaultSpecFor`): a configured default wins only if
   // the account can actually serve it, else the native Workers AI model, else
   // nothing — never the first entry in the menu, which would sign new
@@ -72,6 +75,7 @@ export async function createCloudWorkspaceForUser(
     input.model ?? await userDO.getConfig(caller, 'default_model'),
     menu.models.map((entry) => entry.spec),
   );
+
   if (!model) {
     throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
   }
@@ -79,13 +83,16 @@ export async function createCloudWorkspaceForUser(
   const identity = createInitialCloudAgentIdentity(input, purpose);
 
   const registered = await userDO.registerWorkspace(caller, identity.name, identity.displayName, purpose);
+
   // A name an uncommitted fork transfer is holding is not a name a create may
   // take: the roster row IS that reservation, and the workspace it will become
   // is still being streamed into.
   if (registered.status === 'reserved') {
     throw new Error(`Workspace name conflict: "${identity.name}" is being created by a transfer that has not finished. Choose another name or try again once it lands.`);
   }
+
   const entry = registered.entry;
+
   // ALREADY SOMEBODY'S. Running the whole birth sequence over a live workspace
   // re-seeds SOUL.md from this request's mission, resets the Output baseline
   // the workspace measures its diff against, and opens a SECOND genesis turn
@@ -94,13 +101,17 @@ export async function createCloudWorkspaceForUser(
   // name is taken by a workspace this owner already has, so the honest answer
   // is that workspace, unchanged and byte-stable across retries.
   if (registered.status === 'active') return entry;
+
   try {
     const initialization: InitializeOrchestratorInput = {
       env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
       nameOrigin: identity.nameOrigin, model,
     };
+
     if (purpose) initialization.mission = purpose;
+
     if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
+
     if (input.role) initialization.role = input.role;
     await initializeOrchestrator(initialization);
     // AFTER the workspace's own object has accepted this account as its owner,
@@ -115,6 +126,7 @@ export async function createCloudWorkspaceForUser(
     await indexNewWorkspace(env, {
       userId, name: entry.name, displayName: entry.displayName, createdAt: entry.createdAt,
     });
+
     if (identity.nameOrigin === 'auto' && purpose && options.waitUntil) {
       // A Worker request owns this pre-turn generation. Callers without that
       // request owner already queued the genesis turn, whose durable
@@ -123,6 +135,7 @@ export async function createCloudWorkspaceForUser(
         env, userDO, caller, entry.name, purpose, model, options,
       ));
     }
+
     return entry;
   } catch (err) {
     // Only a row THIS create inserted is rolled back, which is now a fact about
@@ -145,6 +158,7 @@ export async function createCloudWorkspaceForUser(
         otherwise: 'unavailable',
       }), { workspace: entry.name });
     }
+
     throw err;
   }
 }
@@ -183,6 +197,7 @@ async function rollbackRegistration(input: {
 }): Promise<void> {
   const { env, userId, userDO, caller, entry } = input;
   const contested = OWNED_BY_ANOTHER.test(renderThrownChain({ cause: input.cause }));
+
   try {
     if (contested) {
       await userDO.releaseWorkspaceReservation(caller, entry.name, entry.createdAt);
@@ -197,12 +212,15 @@ async function rollbackRegistration(input: {
       cause,
       otherwise: 'unavailable',
     });
+
     if (contested) throw failure;
     diagnostics.failure('workspace.create_rollback_failed', failure, {
       workspace: entry.name, contested,
     });
+
     return;
   }
+
   // The index row this create published, if it got that far. A tombstone for a
   // row that was never written is a no-op, which is why this is unconditional
   // rather than guarded by a flag that could disagree with the truth.
@@ -226,20 +244,25 @@ function createInitialCloudAgentIdentity(
   purpose: string | undefined,
 ): InitialCloudAgentIdentity {
   const requestedName = input.name?.trim();
+
   if (requestedName) {
     // A workspace's name is its object's address and cannot change after
     // creation, so a name no preview hostname could carry is refused here, with
     // the limit, rather than admitted as a workspace whose ports never preview.
     const refusal = workspaceAddressRefusal(requestedName);
+
     if (refusal !== null) throw new Error(`Invalid workspace name: ${refusal}`);
+
     return {
       name: requestedName,
       displayName: input.displayName?.trim() || requestedName,
       nameOrigin: 'user',
     };
   }
+
   const requestedDisplayName = input.displayName?.trim();
   const fallback = fallbackWorkspaceIdentity(purpose ?? '', crypto.randomUUID());
+
   return {
     name: fallback.name,
     displayName: requestedDisplayName || fallback.displayName,
@@ -281,10 +304,13 @@ async function applyGeneratedDisplayName(
   const displayName = suggestDisplayName
     ? await suggestDisplayName(mission)
     : await suggestCloudAgentDisplayName(env, userDO, caller, mission, modelSpec, agentName);
+
   if (!displayName) return;
+
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
   );
+
   await orchestrator.setAutoDisplayName(displayName);
 }
 
@@ -306,6 +332,7 @@ async function suggestCloudAgentDisplayName(
   agentName: string,
 ): Promise<string | null> {
   const provider = createAgentProviderRegistry({ env, userDO: { stub: userDO, caller }, fetch });
+
   const result = await generateText({
     model: provider.resolveModel(modelSpec),
     system: WORKSPACE_TITLE_SYSTEM_PROMPT,
@@ -314,14 +341,17 @@ async function suggestCloudAgentDisplayName(
     // JSON, so a cap starves them into empty text and the generic name wins.
     ...effortFor('reflection'),
   });
+
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
   );
+
   const modelId = result.response?.modelId;
   const usage = normalizeUsage(result.usage);
   await orchestrator.reportFacetModelCall(modelId
     ? { source: 'fast', usage, spec: modelSpec, modelId }
     : { source: 'fast', usage, spec: modelSpec });
+
   return parseWorkspaceTitle(result.text);
 }
 
@@ -343,9 +373,11 @@ async function initializeOrchestrator(input: InitializeOrchestratorInput): Promi
     env, userId, userDO, agentName, displayName, nameOrigin,
     mission, model, reasoningEffort, role,
   } = input;
+
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
   );
+
   const claim = await orchestrator.claimOwner(userId);
   // Before anything else touches it: a new workspace runs its first turn (its
   // own genesis turn, a peer's task, an auto-title, an inbound email) without
@@ -358,8 +390,11 @@ async function initializeOrchestrator(input: InitializeOrchestratorInput): Promi
   // somebody happens to open the tab. Capture after identity seeding and
   // before any user/peer turn can change files.
   await orchestrator.resetWorkspaceBaseline();
+
   if (model) await orchestrator.setModel(model);
+
   if (reasoningEffort) await orchestrator.setReasoningEffort(reasoningEffort);
+
   if (role && role !== DEFAULT_ROLE_ID) await orchestrator.setRole(role);
   // The agent takes the first turn. Last, so the soul, model and effort it runs
   // under are all already durable — and the mission it reads is the one the row

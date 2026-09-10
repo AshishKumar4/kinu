@@ -45,6 +45,7 @@ const ArchiveHeaderSchema = v.object({
   t: v.optional(v.string()),
   workspace: v.optional(v.string()),
 });
+
 const ArchivePageSchema: v.GenericSchema<ArchivePage> = v.object({
   lines: v.array(v.string()),
   next: v.nullable(ArchiveCursorSchema),
@@ -53,19 +54,23 @@ const ArchivePageSchema: v.GenericSchema<ArchivePage> = v.object({
 export async function exportCommand(name: string, opts: { output?: string }): Promise<void> {
   const target = resolveAgentTarget(name);
   const output = opts.output ?? `${target.name}${WORKSPACE_ARCHIVE_EXTENSION}`;
+
   const pages = target.mode === 'cloud'
     ? cloudArchivePages(target.cloudName)
     : localArchivePages(target.localName);
 
   writeFileSync(output, '');
   let lines = 0;
+
   for await (const page of pages) {
     appendFileSync(output, page.lines.map((line) => `${line}\n`).join(''));
     lines += page.lines.length;
+
     if (page.next && process.stdout.isTTY) {
       process.stdout.write(DIM(`\r  exporting ${target.name}… ${lines} records`));
     }
   }
+
   if (process.stdout.isTTY) process.stdout.write('\r\x1b[K');
   const size = statSync(output).size;
   console.log(
@@ -79,14 +84,17 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     printError(`File not found: ${file}`);
     process.exit(1);
   }
+
   const bareDatabase = isSqliteDatabaseFile(file);
   const name = opts.name ?? (bareDatabase ? nameFromFilename(file) : archiveWorkspaceName(file) ?? nameFromFilename(file));
   ensureAgentHome();
   const dbPath = agentDbPath(name);
+
   if (existsSync(dbPath)) {
     printError(`Workspace "${name}" already exists.`, 'Use --name to choose a different name');
     process.exit(1);
   }
+
   mkdirSync(agentDir(name), { recursive: true });
 
   // Restore into a partial file and rename on success, so a damaged archive
@@ -94,6 +102,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   const partial = `${dbPath}.partial`;
   rmSync(partial, { force: true });
   let restored: RestoredArchiveCounts;
+
   try {
     if (bareDatabase) {
       // A bare SQLite workspace database, not an archive: copying the file IS
@@ -103,11 +112,14 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
       restored = countRestored(partial);
     } else {
       const db = new Database(partial, { create: true });
+
       try {
         let files: ReturnType<typeof createInlineWorkspace>['vfs'] | null = null;
+
         const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), {
           files: () => (files ??= createInlineWorkspace(db).vfs),
         });
+
         restored = { rows: result.rows, tables: result.tables };
       } finally {
         db.close();
@@ -117,6 +129,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     rmSync(partial, { force: true });
     throw err;
   }
+
   renameSync(partial, dbPath);
   console.log(
     `\n${OK('✓')} Imported workspace ${ACCENT(name)} from ${DIM(file)}`
@@ -128,11 +141,14 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   // workspace already answers to cannot also name this copy: say what that
   // costs rather than overwriting the ref that is already there.
   const claimed = resolveAgentRef(name);
+
   if (claimed && claimed.mode !== 'local') {
     console.log(`  ${WARN('!')} "${name}" already names a cloud workspace here, so the restored copy has no local name.`);
     console.log(`  ${DIM('Re-run with --name to give it one.')}\n`);
+
     return;
   }
+
   const placed = adoptUnplacedLocalAgent(name);
   console.log(`  ${DIM('workspace:')} ${placed.workspaceId} ${DIM('in')} ${placed.cwd}\n`);
 }
@@ -140,11 +156,13 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
 async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage> {
   const auth = requireStoredAuthConfig();
   let cursor: ArchiveCursor | null = null;
+
   do {
     const page: ArchivePage = await callAgentRpc(
       auth.origin, auth.token, name, 'exportWorkspaceArchive', ArchivePageSchema,
       [cursor === null ? null : decodeJsonValue({ value: cursor })],
     );
+
     yield page;
     cursor = page.next;
   } while (cursor);
@@ -153,9 +171,11 @@ async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage> {
 async function* localArchivePages(name: string): AsyncGenerator<ArchivePage> {
   const { dbPath } = resolveLocalAgent(name, { adopt: false });
   const db = new Database(dbPath, { readonly: true });
+
   try {
     const sql = archiveSqlFromDatabase(db);
     let cursor: ArchiveCursor | null = null;
+
     do {
       const page = await readWorkspaceArchivePage(sql, { workspace: name, source: 'local', cursor });
       yield page;
@@ -172,26 +192,33 @@ async function* localArchivePages(name: string): AsyncGenerator<ArchivePage> {
  *  characters halfway through a transcript. */
 function* readLines(path: string): Generator<string> {
   const fd = openSync(path, 'r');
+
   try {
     const buffer = Buffer.allocUnsafe(64 * 1024);
     const decoder = new TextDecoder();
     let pending = '';
+
     const emit = function* (): Generator<string> {
       let cut = pending.indexOf('\n');
+
       while (cut >= 0) {
         yield pending.slice(0, cut);
         pending = pending.slice(cut + 1);
         cut = pending.indexOf('\n');
       }
     };
+
     for (;;) {
       const read = readSync(fd, buffer, 0, buffer.length, null);
+
       if (read === 0) break;
       pending += decoder.decode(buffer.subarray(0, read), { stream: true });
       yield* emit();
     }
+
     pending += decoder.decode();
     yield* emit();
+
     if (pending) yield pending;
   } finally {
     closeSync(fd);
@@ -202,9 +229,11 @@ function* readLines(path: string): Generator<string> {
  *  the pre-archive `kinu export` is recognized. */
 function isSqliteDatabaseFile(path: string): boolean {
   const fd = openSync(path, 'r');
+
   try {
     const header = Buffer.allocUnsafe(16);
     const read = readSync(fd, header, 0, 16, 0);
+
     return read === 16 && header.toString('latin1') === 'SQLite format 3\0';
   } finally {
     closeSync(fd);
@@ -217,11 +246,15 @@ function isSqliteDatabaseFile(path: string): boolean {
 function archiveWorkspaceName(path: string): string | null {
   for (const line of readLines(path)) {
     const value: unknown = tolerate(() => JSON.parse(line), 'malformed-input');
+
     if (value === undefined) return null;
     const parsed = v.safeParse(ArchiveHeaderSchema, value);
+
     if (!parsed.success || parsed.output.t !== 'header') return null;
+
     return parsed.output.workspace ?? null;
   }
+
   return null;
 }
 
@@ -234,16 +267,21 @@ function nameFromFilename(file: string): string {
 
 function countRestored(dbPath: string): RestoredArchiveCounts {
   const db = new Database(dbPath, { readonly: true });
+
   try {
     const tables = db.query<{ name: string }, []>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
     ).all();
+
     let rows = 0;
+
     for (const table of tables) {
       const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM "${table.name.replace(/"/g, '""')}"`).get();
+
       if (!row) throw new Error(`Could not count restored table ${table.name}`);
       rows += row.n;
     }
+
     return { rows, tables: tables.length };
   } finally {
     db.close();

@@ -66,9 +66,12 @@ interface DerivedOnboardingState {
 function deriveOnboardingState(readiness: OnboardingReadiness): DerivedOnboardingState {
   for (let index = 0; index < ONBOARDING_STEP_IDS.length; index += 1) {
     const step = ONBOARDING_STEP_IDS[index]!;
+
     if (readiness.skippedSteps.includes(step) || onboardingStepReady(step, readiness)) continue;
+
     return Object.freeze({ activeStep: step, activeIndex: index, ready: false });
   }
+
   return Object.freeze({ activeStep: null, activeIndex: ONBOARDING_STEP_IDS.length, ready: true });
 }
 
@@ -78,8 +81,11 @@ function onboardingStepReady(step: OnboardingStepId, readiness: OnboardingReadin
       return readiness.location !== undefined;
     case 'connection':
       if (readiness.location === 'cloud') return readiness.accountConnected;
+
       if (readiness.location === 'local') return readiness.providerConnected;
+
       if (readiness.location === 'both') return readiness.accountConnected && readiness.providerConnected;
+
       return false;
     case 'tiers':
       return readiness.defaultModel !== undefined && readiness.tierAliasesResolved;
@@ -115,6 +121,7 @@ export function GuidedOnboarding(props: {
   const refresh = useCallback(async () => {
     const next = await props.operations.readReadiness();
     setReadiness(next);
+
     if (deriveOnboardingState(next).ready) props.onReady();
   }, [props.onReady, props.operations]);
 
@@ -137,6 +144,7 @@ export function GuidedOnboarding(props: {
     startTransition(async () => {
       setBusy(true);
       setError(null);
+
       try {
         await operation();
         await refresh();
@@ -149,10 +157,12 @@ export function GuidedOnboarding(props: {
   }, [busy, refresh, startTransition]);
 
   const { registry } = useTuiTheme();
+
   const themeChoices = useMemo<ReadonlyArray<{ readonly label: string; readonly selection: ThemeSelection }>>(() => [
     { label: 'Follow the terminal', selection: SYSTEM_TUI_THEME_SELECTION },
     ...registry.themes.map((theme) => ({ label: theme.label, selection: { mode: 'theme' as const, themeId: theme.id } })),
   ], [registry]);
+
   const choices = activeStep === 'location'
     ? (['cloud', 'local', 'both'] as const)
     : activeStep === 'theme'
@@ -165,37 +175,51 @@ export function GuidedOnboarding(props: {
 
   const activate = useCallback(() => {
     if (readiness === null || activeStep === null) return;
+
     switch (activeStep) {
       case 'location': {
         const locations: readonly WorkspaceLocationChoice[] = ['cloud', 'local', 'both'];
         const location = locations[selectedIndex];
+
         if (location !== undefined) run(() => props.operations.chooseLocation(location));
+
         return;
       }
+
       case 'connection':
         if ((readiness.location === 'cloud' || readiness.location === 'both') && !readiness.accountConnected) {
           run(props.operations.connectAccount);
         } else if ((readiness.location === 'local' || readiness.location === 'both') && !readiness.providerConnected) {
           run(props.operations.connectProvider);
         }
+
         return;
       case 'tiers':
         run(props.operations.configureTiers);
+
         return;
       case 'theme': {
         const choice = themeChoices[selectedIndex];
+
         if (choice !== undefined) run(() => props.operations.selectTheme(choice.selection));
+
         return;
       }
+
       case 'keymap': {
         const presetId = KEYMAP_PRESET_IDS[selectedIndex];
+
         if (presetId !== undefined) run(() => props.operations.selectKeymap(presetId));
+
         return;
       }
+
       case 'workspace': {
         const role = props.roles[roleIndex];
         const text = (missionRef.current?.plainText ?? mission).trim();
+
         if (role !== undefined && text !== '') run(() => props.operations.createWorkspace({ mission: text, roleId: role.id }));
+
         return;
       }
     }
@@ -203,39 +227,48 @@ export function GuidedOnboarding(props: {
 
   useKeyboard((event) => {
     const result = dispatcher.feed(event, ['home']);
+
     if (result.pending) {
       event.preventDefault();
+
       return;
     }
+
     switch (result.actionId) {
       case 'home.exit':
         event.preventDefault();
         props.onExit();
+
         return;
       case 'onboarding.skip':
         if (activeStep === null) return;
         event.preventDefault();
         run(() => props.operations.skip(activeStep));
+
         return;
       case 'home.previous':
         if (activeStep === 'workspace') return;
         event.preventDefault();
         setSelectedIndex((current) => (current - 1 + Math.max(1, choices.length)) % Math.max(1, choices.length));
+
         return;
       case 'home.next':
         if (activeStep === 'workspace') return;
         event.preventDefault();
         setSelectedIndex((current) => (current + 1) % Math.max(1, choices.length));
+
         return;
       case 'home.focus-next':
         if (activeStep !== 'workspace' || props.roles.length === 0) return;
         event.preventDefault();
         setRoleIndex((current) => (current + 1) % props.roles.length);
+
         return;
       case 'home.activate':
         if (activeStep === 'workspace') return;
         event.preventDefault();
         activate();
+
         return;
       default:
         return;
@@ -255,6 +288,7 @@ export function GuidedOnboarding(props: {
   if (activeStep === null) return null;
   const stepNumber = derived.activeIndex + 1;
   const selectedRole = props.roles[roleIndex];
+
   return (
     <box flexDirection="column" style={{ width: '100%', height: '100%', paddingLeft: 2, paddingRight: 2, paddingTop: 1, backgroundColor: colors.background.canvas }}>
       <text>
@@ -338,6 +372,7 @@ export function GuidedOnboarding(props: {
 
 function ChoiceRow(props: { readonly label: string; readonly selected: boolean }) {
   const { colors } = useTuiTheme();
+
   return (
     <text>
       <span fg={props.selected ? colors.intent.accent : colors.text.muted}>{props.selected ? '› ' : '  '}</span>
@@ -348,6 +383,7 @@ function ChoiceRow(props: { readonly label: string; readonly selected: boolean }
 
 function ReadinessRow(props: { readonly label: string; readonly ready: boolean }) {
   const { colors } = useTuiTheme();
+
   return (
     <text>
       <span fg={props.ready ? colors.intent.success : colors.intent.warning}>{props.ready ? '✓ ' : '○ '}</span>

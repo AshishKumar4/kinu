@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { SANDBOX_TRANSPORT } from '../src/sandbox-exec-lane';
 
 const ROOT = join(import.meta.dir, '..');
+
 const read = (relative: string): string => readFileSync(join(ROOT, relative), 'utf8');
 
 /** Every module that acquires a sandbox for a Kinu workspace. */
@@ -84,6 +85,7 @@ describe('the constant and the deployed configuration agree', () => {
   test('both environments declare the same value the code passes', () => {
     const declared = [...wrangler.matchAll(/"SANDBOX_TRANSPORT"\s*:\s*"([^"]+)"/g)]
       .map((match) => match[1]);
+
     // Production and staging. A third would be a new environment that has to be
     // read, not silently averaged into a pass.
     expect(declared).toEqual([SANDBOX_TRANSPORT, SANDBOX_TRANSPORT]);

@@ -101,6 +101,7 @@ describe('admissibility rests on the outcome, not on mechanism coverage', () => 
   const behaved = {
     turns: 3, toolCalls: 9, toolNames: ['run', 'file'], tokensIn: 100, tokensOut: 10, ms: 1,
   };
+
   const row = (name: string, eligible: number, passed: number) =>
     ({ name, asserts: `${name} fixture`, eligible, passed, rate: eligible === 0 ? null : passed / eligible, detail: 'fixture' });
 
@@ -109,6 +110,7 @@ describe('admissibility rests on the outcome, not on mechanism coverage', () => 
       taskId: 't', repetition: 0, outcome: 'scored',
       scores: [row('tool_outcomes', 9, 9), row('edit_landing', 2, 2)], ...behaved,
     }];
+
     const verdict = assessAdmissibility(['t'], obs);
     expect(verdict.admissible).toBe(false);
     expect(verdict.outcomesScored).toBe(0);
@@ -120,6 +122,7 @@ describe('admissibility rests on the outcome, not on mechanism coverage', () => 
       taskId: 't', repetition: 0, outcome: 'scored',
       scores: [row(TASK_OUTCOME, 4, 0)], ...behaved,
     }];
+
     const verdict = assessAdmissibility(['t'], obs);
     expect(verdict.admissible).toBe(true);
     expect(verdict.outcomesScored).toBe(1);
@@ -133,6 +136,7 @@ describe('admissibility rests on the outcome, not on mechanism coverage', () => 
       scores: [row(TASK_OUTCOME, 2, 1), ...BEHAVIOUR_SCORERS.map((s) => row(s.name, 0, 0))],
       ...behaved,
     }];
+
     const verdict = assessAdmissibility(['t'], obs);
     expect(verdict.admissible).toBe(true);
     expect(verdict.mechanismsExercised).toEqual([]);
@@ -181,6 +185,7 @@ describe('budgetRow — cost beside the outcome, never instead of it', () => {
   test('measuredToolErrorRate reads the scorer row, never recomputes it', () => {
     const row = (name: string, eligible: number, passed: number, rate: number | null) =>
       ({ name, asserts: `${name} fixture`, eligible, passed, rate, detail: 'fixture' });
+
     expect(measuredToolErrorRate([row('tool_outcomes', 9, 6, 2 / 3)])).toBeCloseTo(1 / 3, 10);
     expect(measuredToolErrorRate([row('edit_landing', 2, 2, 1)])).toBeNull();
     expect(measuredToolErrorRate([row('tool_outcomes', 0, 0, null)])).toBeNull();

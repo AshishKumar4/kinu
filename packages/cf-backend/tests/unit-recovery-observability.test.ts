@@ -77,12 +77,14 @@ function ledger(script: Partial<LedgerScript> = {}): Ledger {
   initSandboxLifecycleTable(execRaw);
   const settlements: Settlement[] = [];
   const delivered: AgentSignal[] = [];
+
   return {
     deps: {
       sql,
       signals: {
         deliver: async (signal: AgentSignal) => {
           delivered.push(signal);
+
           return await deliver();
         },
       },
@@ -177,6 +179,7 @@ describe('a durable recovery settlement', () => {
 
   test('the duration is measured from the FIRST report, not from this attempt', async () => {
     let landed = false;
+
     const { deps, settlements } = ledger({
       deliver: async () => (landed ? 'queued' : 'undelivered'),
     });
@@ -241,9 +244,11 @@ describe('a durable recovery settlement', () => {
 
   test('a thrown delivery leaves the incident re-deliverable, so the retry is still the recovery', async () => {
     let fail = true;
+
     const { deps, settlements, delivered } = ledger({
       deliver: async () => {
         if (fail) throw new KinuError('io', 'the signal seam broke');
+
         return 'queued';
       },
     });
@@ -315,6 +320,7 @@ describe('the versioned envelope', () => {
  */
 function incidentLedger(): IncidentStore & { rows(): readonly IncidentRow[] } {
   const rows = new Map<string, IncidentRow>();
+
   return {
     get: async (key) => rows.get(key),
     put: async (key, value) => { rows.set(key, value); },
@@ -339,6 +345,7 @@ describe('the answer the box acts on', () => {
         reason: incident.reason,
         attempts: attempt,
       }, now);
+
       return answer.status;
     });
   }
@@ -406,6 +413,7 @@ async function withDiagnostics<T>(body: () => Promise<T>): Promise<{
 }> {
   const logger = createRecordingLogger();
   const restore = setDiagnosticsSink(logger);
+
   try {
     return { value: await body(), logs: logger.emitted };
   } finally {

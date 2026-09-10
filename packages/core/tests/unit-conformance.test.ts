@@ -59,8 +59,10 @@ describe('compareSurface can fail (canaries)', () => {
       table: {},
       producer: { ...BACKEND_CONFORMANCE.producer },
     };
+
     const wiredOnCli = (record: Readonly<Record<string, RootStatuses>>): Set<string> =>
       new Set(Object.entries(record).filter(([, s]) => 'wired' in s.cli).map(([n]) => n));
+
     const report = compareSurface(observing({
       tool: wiredOnCli(manifest.tool),
       'agents-action': wiredOnCli(manifest['agents-action']),
@@ -68,6 +70,7 @@ describe('compareSurface can fail (canaries)', () => {
       table: new Set(),
       producer: wiredOnCli(manifest.producer),
     }), manifest);
+
     expect(renderConformanceFindings(report)).toBe('');
     expect(report.unmeasured).toEqual([]);
   });
@@ -86,9 +89,12 @@ describe('compareSurface can fail (canaries)', () => {
       },
       producer: { ...BACKEND_CONFORMANCE.producer },
     };
+
     const cloud = (table: Set<string>): ObservedSurface => ({ root: 'cf-orchestrator', planes: { table } });
+
     const tableFindings = (table: Set<string>) =>
       compareSurface(cloud(table), manifest).findings.filter((f) => f.plane === 'table');
+
     expect(tableFindings(new Set())).toEqual([]);
     expect(tableFindings(new Set(['built_on_first_use']))).toEqual([]);
   });
@@ -100,9 +106,11 @@ describe('manifest hygiene', () => {
   test('every deliberate absence names a reason', () => {
     for (const plane of CONFORMANCE_PLANES) {
       const statusesByName: Readonly<Record<string, RootStatuses>> = BACKEND_CONFORMANCE[plane];
+
       for (const [name, statuses] of Object.entries(statusesByName)) {
         for (const root of CONFORMANCE_ROOTS) {
           const status = statuses[root];
+
           if ('absent' in status) {
             expect({ plane, name, root, reason: status.absent.length > 10 })
               .toEqual({ plane, name, root, reason: true });
@@ -130,6 +138,7 @@ describe('manifest hygiene', () => {
   test('no capability is declared absent everywhere (dead declaration)', () => {
     for (const plane of CONFORMANCE_PLANES) {
       const statusesByName: Readonly<Record<string, RootStatuses>> = BACKEND_CONFORMANCE[plane];
+
       for (const [name, statuses] of Object.entries(statusesByName)) {
         expect({ plane, name, held: heldSomewhere(statuses) }).toEqual({ plane, name, held: true });
       }
@@ -142,6 +151,7 @@ describe('manifest hygiene', () => {
       'cf-subordinate': { absent: 'never built on a subordinate' },
       cli: { absent: 'never built on the local root' },
     };
+
     expect(heldSomewhere(nowhere)).toBe(false);
     expect(heldSomewhere({ ...nowhere, 'cf-orchestrator': { lazy: 'created on first use by a registration' } })).toBe(true);
   });
@@ -156,6 +166,7 @@ describe('normalizeObservedTables', () => {
       'memory_chunks_fts', 'memory_chunks_fts_data', 'memory_chunks_fts_idx',
       'memory_chunks_fts_content', 'memory_chunks_fts_docsize', 'memory_chunks_fts_config',
     ]);
+
     expect([...observed].sort()).toEqual(['memory_chunks_fts', 'messages']);
   });
 

@@ -178,6 +178,7 @@ export const observedThen = Promise.resolve()
 `);
   writeFileSync(join(green, "case.ts"), `declare function closeDb(): void;
 declare function work(): Promise<number>;
+
 export async function withLocalWritableDb(): Promise<number> {
   try {
     return await work();
@@ -185,14 +186,17 @@ export async function withLocalWritableDb(): Promise<number> {
     closeDb();
   }
 }
+
 export async function ownedPromises(): Promise<void> {
   await Promise.resolve();
+
   try {
     await Promise.reject(new Error("failed"));
   } catch (reason) {
     String(reason);
   }
 }
+
 export async function plainReturn(): Promise<number> {
   return work();
 }

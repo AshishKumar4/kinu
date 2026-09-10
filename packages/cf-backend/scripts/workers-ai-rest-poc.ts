@@ -22,10 +22,13 @@ import {
 } from '@kinu.run/core';
 
 const accountId = cleanEnv("CLOUDFLARE_ACCOUNT_ID");
+
 const token = cleanEnv("CLOUDFLARE_API_TOKEN")
   ?? cleanEnv("CLOUDFLARE_OAUTH_ACCESS_TOKEN")
   ?? cleanEnv("AI_GATEWAY_AUTH")?.replace(/^Bearer\s+/i, "");
+
 const gatewayId = cleanEnv("CLOUDFLARE_AI_GATEWAY_ID") ?? "default";
+
 const model = cleanEnv("CLOUDFLARE_AI_MODEL") ?? DEFAULT_WORKERS_AI_MODEL_ID;
 
 if (!accountId || !token) {
@@ -62,7 +65,9 @@ const response = await fetch(endpoint, {
 });
 
 const text = await response.text();
+
 const decoded = tolerate(() => parseJsonValue(text), 'malformed-input');
+
 const body: JsonValue = decoded === undefined ? text : decoded;
 
 console.log(JSON.stringify({
@@ -79,6 +84,7 @@ if (!response.ok) process.exit(1);
 
 function cleanEnv(name: string): string | null {
   const value = process.env[name]?.trim();
+
   return value ? value : null;
 }
 
@@ -89,6 +95,7 @@ function summarize(value: JsonValue): JsonValue {
   const firstObject = first !== undefined && isJsonObject(first) ? first : null;
   const message = firstObject?.message;
   const messageObject = message !== undefined && isJsonObject(message) ? message : null;
+
   return {
     id: value.id ?? null,
     object: value.object ?? null,

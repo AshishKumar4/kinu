@@ -19,12 +19,16 @@ const nimbusAssets = join(
   dirname(createRequire(import.meta.url).resolve("@nimbus-sh/worker/package.json")),
   "public/_assets",
 );
+
 const staged = resolve(__dirname, "public/_assets");
+
 const stagedLink = lstatSync(staged, { throwIfNoEntry: false });
+
 if (!stagedLink?.isSymbolicLink() || readlinkSync(staged) !== nimbusAssets) {
   rmSync(staged, { recursive: true, force: true });
   symlinkSync(nimbusAssets, staged, "dir");
 }
+
 if (!existsSync(staged)) {
   throw new Error(`Nimbus runtime assets missing at ${nimbusAssets} — is @nimbus-sh/worker installed?`);
 }
@@ -46,7 +50,9 @@ const stubClientNodeBuiltins = {
   // with them); only the browser graph gets stubs.
   resolveId(this: { environment?: { name: string } }, source: string): string | null {
     if (this.environment !== undefined && this.environment.name !== "client") return null;
+
     if (source === "node:crypto" || source === "node:async_hooks") return clientNodeStubs;
+
     return null;
   },
 };
@@ -73,6 +79,7 @@ const workerSourceMaps = {
   name: "kinu:worker-source-maps",
   configEnvironment(name: string) {
     if (name === "client") return null;
+
     return { build: { sourcemap: true } };
   },
 };

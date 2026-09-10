@@ -201,6 +201,7 @@ describe('fork revalidation policy', () => {
     const embedded = readFileSync(
       join(import.meta.dir, '..', 'src/components/surfaces/ExplorationSurface.tsx'), 'utf8',
     );
+
     // The third pane is the RUN, and a branch opens INSIDE it. Two defects are
     // pinned here at once. A branch that REPLACES the canvas
     // — `opened ? <ForkBranchView …> : <ForkCanvas …>` — answers "what did this
@@ -237,13 +238,16 @@ describe('fork revalidation policy', () => {
     const transcript = readFileSync(
       join(import.meta.dir, '..', 'src/components/NodeTranscript.tsx'), 'utf8',
     );
+
     // One renderer, not two: the steps go through the chat's component, and the
     // user affordances are absent because they are simply not passed.
     expect(transcript).toContain('import { MessageView } from "@/components/MessageView"');
     expect(transcript).toContain('<MessageView');
+
     for (const affordance of ['onFork', 'onFeedback', 'onRestoreFiles', 'takesChip']) {
       expect(transcript).not.toContain(`${affordance}=`);
     }
+
     // One read model, not a client-side choice of store.
     expect(transcript).toContain('rpc<NodeTranscriptView | null>("getNodeTranscript", [runId, nodeId])');
   });
@@ -284,10 +288,12 @@ describe('a merge is a tree of depth 1', () => {
 
   test('no branch carries a score or a rollout count — the merge ranked none of them', () => {
     const tree = journalTree(headRun());
+
     for (const node of [tree, ...tree.children]) {
       expect(node.value).toBeNull();
       expect(node.visits).toBeNull();
     }
+
     expect(isCompeted(tree)).toBe(false);
     expect(maxVisits(tree)).toBe(0);
   });
@@ -312,6 +318,7 @@ describe('a merge is a tree of depth 1', () => {
         usage: {}, wallClockMs: 0, spawnedAt: 0, lastStepAt: null, decisions: [],
       }],
     }));
+
     expect(tree.status).toBe('running');
     expect(tree.children[0]!.status).toBe('running');
   });

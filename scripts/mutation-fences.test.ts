@@ -35,9 +35,11 @@ describe('the declaration is measurable', () => {
     // The denominator. A gate over an empty list reports a clean tree.
     expect(FENCES.length).toBeGreaterThan(0);
     const tracked = new Set(trackedFiles());
+
     const unknown = FENCES
       .filter((fence) => !tracked.has(fence.file) || !tracked.has(fence.owner.suite))
       .map((fence) => fence.name);
+
     expect(unknown).toEqual([]);
   });
 
@@ -53,6 +55,7 @@ describe('the declaration is measurable', () => {
     // Guards the guard: the check above is only worth its green if it can fail.
     const anchor = FENCES[0];
     expect(anchor).toBeDefined();
+
     if (anchor === undefined) return;
     expect(snippetSitsExactlyOnce({ ...anchor, snippet: 'a line no source file contains' }))
       .toBe(false);
@@ -66,9 +69,11 @@ describe('the declaration is measurable', () => {
     // a different test and report it as proved.
     const missing = FENCES.filter((fence) => {
       const source = readFileSync(resolve(REPO, fence.owner.suite), 'utf8');
+
       return source.split(`test('${fence.owner.grep}'`).length - 1
         + source.split(`test("${fence.owner.grep}"`).length - 1 !== 1;
     }).map((fence) => `${fence.owner.suite}: ${fence.owner.grep}`);
+
     expect(missing).toEqual([]);
   });
 

@@ -20,6 +20,7 @@ import { boundEventQuery, type IngressDescriptor } from '@kinu.run/core';
  *  route crosses `boundEventQuery`, so its answers ARE the default page and
  *  the untrusted ceiling this suite asserts the route holds to. */
 const DEFAULT_PAGE = boundEventQuery().limit;
+
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
 
 import { orchestratorHarness } from './helpers/actor-harness';
@@ -32,6 +33,7 @@ const { handleHubRequest } = await import('../src/events/routes');
 
 /** The workspace the harness names, which is also the path the route matches. */
 const WORKSPACE = 'harness-actor';
+
 /** Seeded past the untrusted ceiling, so an unbounded read is distinguishable
  *  from a clamped one AND from a full page. */
 const SEEDED_EVENTS = 700;
@@ -48,9 +50,11 @@ function chatDescriptor(text: string): IngressDescriptor {
  *  the route resolves through exactly the way production does. */
 function seededWorkspace() {
   const harness = orchestratorHarness();
+
   for (let i = 0; i < SEEDED_EVENTS; i++) {
     harness.agent.publishHarnessEvent(chatDescriptor(`event ${i}`), 1000 + i);
   }
+
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     OrchestratorAgent: {
@@ -62,6 +66,7 @@ function seededWorkspace() {
   // SAFETY: this suite reaches only the locally constructed orchestrator
   // namespace and credential secret.
   const env = partialEnv as Env;
+
   return { env, harness };
 }
 
@@ -71,8 +76,10 @@ async function eventsVia(env: Env, query: string): Promise<{ status: number; cou
     env,
     WORKSPACE,
   );
+
   if (!res) throw new Error('the route did not claim the request');
   const body: unknown = await res.json();
+
   return { status: res.status, count: Array.isArray(body) ? body.length : -1 };
 }
 
@@ -141,6 +148,7 @@ describe('a direct RPC cannot ask for more than the route may', () => {
   // the bypass a route-only fix leaves open.
   test('the RPC applies the same bounds with no route in the path', async () => {
     const { harness } = seededWorkspace();
+
     const countOf = async (opts: { variant?: string; since?: number; limit?: number }) =>
       (await harness.agent.listRecentEvents(opts)).length;
 
@@ -158,10 +166,13 @@ describe('a direct RPC cannot ask for more than the route may', () => {
 
   test('the wire form carries the same ceiling', async () => {
     const { harness } = seededWorkspace();
+
     const countOf = async (opts: { limit?: number }): Promise<number> => {
       const parsed: unknown = JSON.parse(await harness.agent.listRecentEventsWire(opts));
+
       return Array.isArray(parsed) ? parsed.length : -1;
     };
+
     expect(await countOf({ limit: -1 })).toBe(1);
     expect(await countOf({ limit: 1e9 })).toBe(UNTRUSTED_CEILING);
   });

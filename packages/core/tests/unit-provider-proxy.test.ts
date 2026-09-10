@@ -47,15 +47,19 @@ describe('proxied auth resolution', () => {
 describe('provider proxy fetch', () => {
   function capture() {
     const seen: Array<{ url: string; init?: RequestInit }> = [];
+
     const impl = asFetchFunction(async (input, init) => {
       seen.push({ url: String(input), init });
+
       return new Response('ok');
     });
+
     return { seen, fetch: impl };
   }
 
   test('relocates a marked request and swaps in the caller bearer', async () => {
     const { seen, fetch: base } = capture();
+
     const proxied = createProviderProxyFetch({
       forwardURL: providerProxyForwardURL('https://kinu.example.com/'),
       authorization: 'Bearer ptc_test',
@@ -85,6 +89,7 @@ describe('provider proxy fetch', () => {
 
   test('leaves an unmarked request exactly as it was — a local key still goes direct', async () => {
     const { seen, fetch: base } = capture();
+
     const proxied = createProviderProxyFetch({
       forwardURL: 'https://kinu.example.com/api/user/ai/proxy/forward',
       authorization: 'Bearer ptc_test',
@@ -99,12 +104,14 @@ describe('provider proxy fetch', () => {
 
   test('attaches session headers to proxied requests', async () => {
     const { seen, fetch: base } = capture();
+
     const proxied = createProviderProxyFetch({
       forwardURL: 'https://kinu.example.com/api/user/ai/proxy/forward',
       authorization: 'Bearer ptc_test',
       headers: { 'x-session-affinity': 'kinu-alpha' },
       fetch: base,
     });
+
     await proxied('https://openrouter.ai/api/v1/models', { headers: { [PROXY_CRED_HEADER]: 'openrouter.bearer' } });
     expect(new Headers(seen[0]?.init?.headers).get('x-session-affinity')).toBe('kinu-alpha');
   });
@@ -152,6 +159,7 @@ describe('proxyTargetAllowed', () => {
     ]) {
       expect(proxyTargetAllowed(`${base}${endpoint}`, base, 'POST')).toBe(true);
     }
+
     expect(proxyTargetAllowed(`${base}/models`, base, 'GET')).toBe(true);
     expect(proxyTargetAllowed(`${base}/models/gpt-5.5`, base, 'GET')).toBe(true);
     expect(proxyTargetAllowed(`${base}/models?x=1`, base, 'GET')).toBe(true);

@@ -23,8 +23,11 @@ import { DiffLines } from "./shared";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
+
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
+
 interface ShadowTrial { id: string; task: string; currentScore: number | null; pendingScore: number | null; winner: "current" | "pending" | "tie" | null; rationale: string | null; evaluatedAt: number }
+
 interface ShadowVerdict { version: number | null; trials: ShadowTrial[]; summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number } }
 
 function statusTone(status: string): string {
@@ -52,6 +55,7 @@ function DiffView({ diff }: { diff: ScaffoldDiff }) {
 function VerdictGrid({ verdict }: { verdict: ShadowVerdict }) {
   if (verdict.trials.length === 0) return null;
   const s = verdict.summary;
+
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-xs">
@@ -97,6 +101,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
   const loadDetail = useCallback(async (version: number) => {
     setDetail({ status: "loading" });
+
     // An absent verdict is an ordinary empty result, not a failure, so either
     // read failing here is the surface's failure rather than a blank grid.
     try {
@@ -104,6 +109,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
         rpc<ScaffoldDiff>("getScaffoldDiff", [version]),
         rpc<ShadowVerdict>("getShadowVerdict", [version]),
       ]);
+
       setDetail(loadSucceeded({ diff, verdict }));
     } catch (cause) {
       setDetail((prev) => loadFailed(prev, cause));
@@ -112,15 +118,18 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
 
   const select = useCallback((version: number) => {
     setSelected(version); setPreviewOut(null); setDecideErr(null);
+
     return loadDetail(version);
   }, [loadDetail]);
 
   const decide = useCallback(async (mode: "promote" | "rollback") => {
     setBusy(mode);
     setDecideErr(null);
+
     try {
       await rpc("applyScaffoldDecision", [mode]);
       reload();
+
       if (selected != null) await loadDetail(selected);
     }
     catch (e) { setDecideErr(`${mode} failed: ${renderThrownChain({ cause: e })}`); }
@@ -130,6 +139,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const runPreview = useCallback(async () => {
     if (selected == null || !previewTask.trim()) return;
     setBusy("preview"); setPreviewOut(null);
+
     try {
       const r = await rpc<{ ok?: boolean; error?: string; events?: Array<{ type: string; text?: string }> }>("previewScaffoldLive", [selected, previewTask.trim()]);
       const text = (r.events ?? []).filter((e) => e.type === "text_delta").map((e) => e.text ?? "").join("");

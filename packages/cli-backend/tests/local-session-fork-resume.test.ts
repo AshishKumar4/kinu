@@ -33,6 +33,7 @@ const DUMMY_LLM: LLMProviderConfig = {
  *  wake to the signal seam — but a session is not constructible without one. */
 function fakeModel(): TestLanguageModelV2 {
   const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -53,7 +54,9 @@ function fakeModel(): TestLanguageModelV2 {
 }
 
 const HEADS = 4;
+
 const ROOT = 'root-research';
+
 const RATIONALE = 'four angles on the research question';
 
 /** A workspace a previous process left mid-fork: four head rows still marked
@@ -77,6 +80,7 @@ function interruptedWorkspace() {
   const journal = new HeadJournal(makeSql(db), rt.actor);
   const now = Date.now();
   journal.recordSplit(ROOT, RATIONALE, now);
+
   for (let i = 1; i <= HEADS; i++) {
     journal.insertSpawn({
       id: `h${i}`, parentId: null, rootId: ROOT, depth: 1,
@@ -85,10 +89,12 @@ function interruptedWorkspace() {
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: now },
     });
   }
+
   db.exec(
     `INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, error, settled_at, created_at)
      VALUES ('${rt.actor.actorId}', 'bgjob-fork', 'agents', 'build', 'cancelled', 'cancelled by operator', ${now + 1000}, ${now})`,
   );
+
   return { db, rt, journal };
 }
 
@@ -96,6 +102,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
   test('the journal is settled and the agent is told, on the one signal seam', async () => {
     const { db, rt, journal } = interruptedWorkspace();
     const events: SessionEvent[] = [];
+
     const session = new LocalAgentSession({
       rt, db, model: fakeModel(), onEvent: (e) => events.push(e), noAutoEvolve: true,
     });
@@ -110,6 +117,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
 
     // After: nothing claims to be running, and every head carries why.
     expect(journal.listLive()).toEqual({ items: [], total: 0 });
+
     for (const head of journal.readTree(ROOT)) {
       expect(head.status).toBe('aborted');
       expect(head.error_message).toContain('no executor');
@@ -124,6 +132,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
       (e): e is { type: 'evolution'; event: string; message: string } =>
         e.type === 'background' && e.event === 'fork_runs_abandoned',
     );
+
     expect(abandoned).toHaveLength(1);
     expect(abandoned[0]!.message).toContain(ROOT);
     expect(abandoned[0]!.message).toContain(`${HEADS}/${HEADS}`);
@@ -139,6 +148,7 @@ describe('resuming a workspace whose fork was interrupted', () => {
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     const events: SessionEvent[] = [];
+
     const session = new LocalAgentSession({
       rt, db, model: fakeModel(), onEvent: (e) => events.push(e), noAutoEvolve: true,
     });

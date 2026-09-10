@@ -28,6 +28,7 @@ export function toolMessage(results: ToolResultPart[]): ToolModelMessage {
 /** One user→assistant→tool exchange with a fat tool output. */
 export function exchange(i: number, outputChars: number): ModelMessage[] {
   const id = `call_${i}`;
+
   return [
     user(`Task ${i}: please run step ${i} of the plan.`),
     assistant([
@@ -40,7 +41,9 @@ export function exchange(i: number, outputChars: number): ModelMessage[] {
 
 export function history(exchanges: number, outputChars = 3_000): ModelMessage[] {
   const messages: ModelMessage[] = [];
+
   for (let i = 0; i < exchanges; i++) messages.push(...exchange(i, outputChars));
+
   return messages;
 }
 
@@ -62,6 +65,7 @@ const silentLogger: Logger = { info() {}, debug() {}, warn() {}, error() {} };
 export function memoryPorts(): MemoryPorts {
   const writes = new Map<string, string>();
   const snapshots = new Map<string, PlanSnapshot>();
+
   return {
     transcripts: {
       writes,
@@ -69,6 +73,7 @@ export function memoryPorts(): MemoryPorts {
       citablePath: (sessionKey, rangeHash) => `.kinu/compaction/${sessionKey}/${rangeHash}.md`,
       write: async (relativePath, content) => {
         writes.set(relativePath, content);
+
         return { absolutePath: relativePath };
       },
     },
@@ -90,11 +95,13 @@ export interface MemoryArchiveStore extends ArchiveIndexStore {
 
 export function memoryArchive(): MemoryArchiveStore {
   const ranges = new Map<string, ArchiveRange[]>();
+
   return {
     ranges,
     list: (sessionKey) => [...(ranges.get(sessionKey) ?? [])],
     append: (sessionKey, range) => {
       const existing = ranges.get(sessionKey) ?? [];
+
       if (existing.some((entry) => entry.rangeHash === range.rangeHash)) return;
       ranges.set(sessionKey, [...existing, range]);
     },

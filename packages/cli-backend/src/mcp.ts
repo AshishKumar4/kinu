@@ -93,20 +93,25 @@ export async function connectMcpServers(
   for (const [serverName, cfg] of Object.entries(servers)) {
     const client = new Client({ name: 'kinu-cli', version: '0.1.0' });
     let stderr = '';
+
     try {
       signal?.throwIfAborted();
+
       const transport = new StdioClientTransport({
         command: cfg.command,
         args: cfg.args ?? [],
         env: cfg.env,
         stderr: 'pipe',
       });
+
       transport.stderr?.on('data', (chunk) => {
         stderr = `${stderr}${String(chunk)}`.slice(-4_000);
       });
       await client.connect(transport, { timeout: NO_TIMER_DEADLINE_MS, signal });
       const { tools: mcpTools } = await client.listTools(undefined, { timeout: NO_TIMER_DEADLINE_MS, signal });
+
       if (cfg.timeoutMs !== undefined) callTimeoutByServer.set(serverName, cfg.timeoutMs);
+
       for (const t of mcpTools) {
         // One bad tool must not take down its server's good ones: describe the
         // rest and state the loss on the background channel, the way a server
@@ -125,6 +130,7 @@ export async function connectMcpServers(
           onLog?.(`mcp: ${serverName} tool '${t.name}' skipped: ${renderThrownChain({ cause: err })}`);
         }
       }
+
       clients.set(serverName, client);
       diagnostics.push({ server: serverName, status: 'connected', toolCount: mcpTools.length });
       onLog?.(`mcp: ${serverName} → ${mcpTools.length} tool(s)`);
@@ -134,11 +140,13 @@ export async function connectMcpServers(
       // still running — so it is appended to the reason instead of dropped,
       // which is what made a leaked server read as a clean skip.
       const reasons = [renderThrownChain({ cause: err })];
+
       try {
         await client.close();
       } catch (closeError) {
         reasons.push(`closing it also failed: ${renderThrownChain({ cause: closeError })}`);
       }
+
       const reason = reasons.join('; ');
       const stderrText = stderr.trim();
       diagnostics.push({
@@ -157,14 +165,18 @@ export async function connectMcpServers(
     diagnostics,
     async call(serverName, toolName, args, callSignal) {
       const client = clients.get(serverName);
+
       if (!client) throw new Error(`Unknown MCP server: ${serverName}`);
       const timeout = callTimeoutByServer.get(serverName) ?? NO_TIMER_DEADLINE_MS;
+
       const res = await client.callTool(
         { name: toolName, arguments: v.parse(JsonObjectSchema, args ?? {}) },
         undefined,
         { timeout, signal: callSignal },
       );
+
       if (res.isError === true) throw new McpToolError(decodeJsonValue({ value: res }));
+
       return formatMcpResult(res);
     },
     async close() {
@@ -172,6 +184,7 @@ export async function connectMcpServers(
       // not shut down must not leave the other children running — but a close
       // that failed is a surviving child process, not a completed teardown.
       const failures: unknown[] = [];
+
       for (const c of clients.values()) {
         try {
           await c.close();
@@ -179,6 +192,7 @@ export async function connectMcpServers(
           failures.push(error);
         }
       }
+
       if (failures.length > 0) {
         throw new AggregateError(
           failures,
@@ -195,6 +209,7 @@ type McpToolResult = Awaited<ReturnType<Client['callTool']>>;
 function formatMcpResult(res: McpToolResult): string {
   const content = Array.isArray(res?.content) ? res.content : [];
   const text = content.map((c) => (c.type === 'text' ? c.text ?? '' : `[${c.type}]`)).join('\n');
+
   return text || '(no output)';
 }
 

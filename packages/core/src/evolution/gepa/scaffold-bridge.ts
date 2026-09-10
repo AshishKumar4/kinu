@@ -119,6 +119,7 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
     `over ${gepa.history.length - 1} mutations (seed: ${formatScoreInterval(seedScore, 3)}).`;
 
   const modResult = await modifyScaffold(opts.rt, rationale, winner.source);
+
   if (!modResult.ok) {
     return {
       gepa, ...scores, proposed: false, pendingVersion: null,
@@ -126,6 +127,7 @@ export async function runScaffoldGepa<I = unknown, E = unknown>(
       modifyError: { stage: modResult.stage ?? 0, error: modResult.error ?? 'unknown' },
     };
   }
+
   return {
     gepa, ...scores, proposed: true, pendingVersion: modResult.version ?? null,
   };

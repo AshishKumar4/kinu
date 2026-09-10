@@ -14,12 +14,15 @@ const SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
 function crc32(bytes: Uint8Array): number {
   let c = 0xffffffff;
+
   for (const byte of bytes) {
     c ^= byte;
+
     for (let bit = 0; bit < 8; bit += 1) {
       c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
     }
   }
+
   return (c ^ 0xffffffff) >>> 0;
 }
 
@@ -31,6 +34,7 @@ function be32(value: number): number[] {
 function chunk(type: string, data: readonly number[] = []): number[] {
   const typed = [...type].map((ch) => ch.charCodeAt(0));
   const crc = crc32(new Uint8Array([...typed, ...data]));
+
   return [...be32(data.length), ...typed, ...data, ...be32(crc)];
 }
 
@@ -57,6 +61,7 @@ const PIXELS = chunk('IDAT', [0x78, 0x9c, 0x01, 0x02, 0x03]);
 
 function accepted(result: SanitizedPng | { fault: string }): SanitizedPng {
   if ('fault' in result) throw new Error(`expected an accepted image, got fault ${result.fault}`);
+
   return result;
 }
 
@@ -76,15 +81,19 @@ describe('sanitizePng — what it accepts', () => {
     // this fixture is a decodable PNG by construction instead of a base64
     // string someone remembered.
     const raw: number[] = [];
+
     for (let y = 0; y < 2; y += 1) {
       raw.push(0);
+
       for (let x = 0; x < 2; x += 1) raw.push(0xe0, 0xa4, 0x58, 0xff);
     }
+
     const real = png(
       chunk('IHDR', ihdr(2, 2)),
       chunk('IDAT', [...deflateSync(Buffer.from(raw))]),
       chunk('IEND'),
     );
+
     const out = accepted(sanitizePng(real));
     expect([out.width, out.height]).toEqual([2, 2]);
     expect(out.bytes).toEqual(real);
@@ -94,6 +103,7 @@ describe('sanitizePng — what it accepts', () => {
     const out = accepted(sanitizePng(png(
       chunk('IHDR', ihdr(2, 2)), chunk('sRGB', [0]), chunk('gAMA', be32(45455)), PIXELS, chunk('IEND'),
     )));
+
     expect(out.stripped).toEqual([]);
   });
 });
@@ -101,6 +111,7 @@ describe('sanitizePng — what it accepts', () => {
 describe('sanitizePng — metadata never survives', () => {
   test('text, EXIF and timestamp chunks are dropped and the pixels are not', () => {
     const secret = [...'GPS: 51.5,-0.1'].map((ch) => ch.charCodeAt(0));
+
     const out = accepted(sanitizePng(png(
       chunk('IHDR', ihdr(2, 2)),
       chunk('tEXt', secret),
@@ -111,6 +122,7 @@ describe('sanitizePng — metadata never survives', () => {
       chunk('iTXt', secret),
       chunk('IEND'),
     )));
+
     expect(out.stripped).toEqual(['tEXt', 'eXIf', 'tIME', 'pHYs', 'iTXt']);
     expect(out.bytes).toEqual(png(chunk('IHDR', ihdr(2, 2)), PIXELS, chunk('IEND')));
     // The strongest form of the claim: the bytes are gone, not merely unread.
@@ -123,6 +135,7 @@ describe('sanitizePng — metadata never survives', () => {
     const out = accepted(sanitizePng(png(
       chunk('IHDR', ihdr(1, 1)), chunk('zzZz', [1, 2, 3]), PIXELS, chunk('IEND'),
     )));
+
     expect(out.stripped).toEqual(['zzZz']);
   });
 });
@@ -168,6 +181,7 @@ describe('sanitizePng — what it refuses', () => {
       ...png(chunk('IHDR', ihdr(1, 1)), PIXELS, chunk('IEND')),
       ...[...'<?php echo 1;'].map((ch) => ch.charCodeAt(0)),
     ]);
+
     expect(sanitizePng(bytes)).toMatchObject({ fault: 'bad-structure' });
   });
 

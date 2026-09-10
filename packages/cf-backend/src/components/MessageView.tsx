@@ -54,6 +54,7 @@ const ProvisionErrorSchema = v.object({
 
 function messageCreatedAt<Message>(message: Message): string | number | Date | undefined {
   const parsed = v.safeParse(MessageCreatedAtSchema, message);
+
   return parsed.success ? parsed.output.createdAt : undefined;
 }
 
@@ -72,7 +73,9 @@ function FilePartView({ part }: { part: FileUIPart }) {
 function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date }) {
   if (!createdAt) return null;
   const d = createdAt instanceof Date ? createdAt : new Date(createdAt);
+
   if (isNaN(d.getTime())) return null;
+
   return <span className="p-annotation p-text-3 mt-1 block">{formatTime(d)}</span>;
 }
 
@@ -97,6 +100,7 @@ function ThinkingRow() {
 
 function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }) {
   const [expanded, setExpanded] = useState(false);
+
   return (
     // The mock's thought: a dim block ruled off the column by a 2px dashed
     // line, the first words inline, the affordance the word "expand" in gold.
@@ -120,13 +124,16 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
 function parseProvisionError<Output>(output: Output):
   { runtime: string; message: string } | null {
   const text = v.safeParse(v.string(), output);
+
   if (!text.success || !text.output.includes('runtime_not_provisioned')) return null;
+
   // Output that names the runtime but isn't JSON is not this error shape; any
   // other failure here is real and must not read as "not a provision error".
   const parsed = v.safeParse(
     ProvisionErrorSchema,
     tolerate<unknown>(() => JSON.parse(text.output), 'malformed-input'),
   );
+
   return parsed.success
     ? { runtime: parsed.output.runtime, message: parsed.output.message ?? 'Runtime not available.' }
     : null;
@@ -134,6 +141,7 @@ function parseProvisionError<Output>(output: Output):
 
 function jsonString(input: JsonObject | undefined, key: string): string | null {
   const value = input?.[key];
+
   return v.is(v.string(), value) ? value : null;
 }
 
@@ -158,13 +166,21 @@ function toolLabel(toolName: string): string {
 
 function toolIcon(toolName: string): ReactNode {
   if (toolName === "run") return <TerminalWindowIcon size={15} />;
+
   if (toolName === "execute_tools") return <LightningIcon size={15} />;
+
   if (toolName === "file") return <FileTextIcon size={15} />;
+
   if (toolName === "agents") return <UsersThreeIcon size={15} />;
+
   if (toolName === "memory") return <BrainIcon size={15} />;
+
   if (toolName === "tasks") return <ListChecksIcon size={15} />;
+
   if (toolName === "web") return <GlobeIcon size={15} />;
+
   if (toolName === "report") return <ChartLineUpIcon size={15} />;
+
   return <DotsThreeCircleIcon size={15} />;
 }
 
@@ -203,6 +219,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
   const runtime = toolName === 'run'
     ? (jsonString(input, "runtime") ?? 'workspace')
     : null;
+
   const provisionErr = parseProvisionError(output);
   // What this call is actually about, from its own arguments — without it a
   // row of `agents` chips is six identical rows for six different calls.
@@ -212,6 +229,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
   const failed = isError || !!provisionErr;
   const effect = toolCallEffect(toolName, input);
   const prominent = effect === 'mutate' || isRunning || failed;
+
   return (
     <div className={prominent ? "m-2 overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_24%,var(--c-border))] bg-[color-mix(in_srgb,var(--c-accent)_4%,var(--c-recessed))]" : ""}>
       <button
@@ -324,11 +342,13 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
 function partOutput(part: AnyToolPart): JsonValue | undefined {
   if (part.state !== "output-available") return undefined;
   const parsed = v.safeParse(JsonValueSchema, part.output);
+
   return parsed.success ? parsed.output : undefined;
 }
 
 function partInput(part: AnyToolPart): JsonObject | undefined {
   const parsed = v.safeParse(JsonObjectSchema, part.input);
+
   return parsed.success ? parsed.output : undefined;
 }
 
@@ -346,6 +366,7 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
   const failedCount = parts.filter(partFailed).length;
   const mutationCount = parts.filter((part) => partEffect(part) === 'mutate').length;
   const collapsedIds = new Set<string>();
+
   if (parts.length <= 8) {
     for (const part of parts) collapsedIds.add(part.toolCallId);
   } else {
@@ -356,19 +377,27 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
     // lose a failure to make room for them.
     for (const part of parts) if (extractPreviewUrl(partOutput(part)) !== null) collapsedIds.add(part.toolCallId);
     let budget = 6;
+
     for (const part of parts) {
       if (budget === 0) break;
+
       if (collapsedIds.has(part.toolCallId)) continue;
+
       if (partFailed(part) || partEffect(part) === 'mutate') { collapsedIds.add(part.toolCallId); budget -= 1; }
     }
+
     const first = parts[0];
     const last = parts.at(-1);
+
     if (first !== undefined) collapsedIds.add(first.toolCallId);
+
     if (last !== undefined) collapsedIds.add(last.toolCallId);
   }
+
   const collapsed = parts.filter((part) => collapsedIds.has(part.toolCallId));
   const shown = showAll ? parts : collapsed;
   const hiddenCount = parts.length - collapsed.length;
+
   return (
     <div data-tool-group data-tool-count={parts.length} data-tool-mutations={mutationCount} className="overflow-hidden rounded-xl border p-border bg-[var(--c-recessed)]">
       <div className="flex flex-wrap items-center gap-2 border-b p-border p-sidebar px-3.5 py-2">
@@ -395,11 +424,13 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
     </div>
   );
 }
+
 /** One tool part: its row, plus the live preview a tool can return. */
 function ToolCallPart({ part }: { part: AnyToolPart }) {
   const output = partOutput(part);
   const input = partInput(part);
   const previewUrl = extractPreviewUrl(output);
+
   return (
     <div>
       <ToolCallBlock
@@ -440,6 +471,7 @@ function BackgroundEventCard({ kind, status, state }: { kind: string; status: st
   const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" }
     : status === "cancelled" ? { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" }
     : { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
+
   return (
     <div className="animate-fade-in">
       <div className="flex w-full items-baseline gap-2.5 rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
@@ -458,6 +490,7 @@ function BackgroundEventCard({ kind, status, state }: { kind: string; status: st
  *  the body the agent read on demand. */
 function DrainedEventRow({ event }: { event: DrainedEvent }) {
   const [expanded, setExpanded] = useState(false);
+
   return (
     <button
       type="button"
@@ -489,6 +522,7 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
  *  captioned, quieter event card. */
 function DrainedEventsCard({ text, state }: { text: string; state: CardState }) {
   const events = parseDrainedEvents(text);
+
   return (
     <div className="animate-fade-in">
       {/* The mock's System notice: a full-width gold-tinted row in the
@@ -519,6 +553,7 @@ function DeferredApprovalCard({ decision, count, state }: {
 }) {
   const approved = decision === "approved";
   const Icon = approved ? CheckCircleIcon : ProhibitIcon;
+
   return (
     <div className="flex justify-center animate-fade-in py-1">
       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
@@ -563,6 +598,7 @@ function SystemEventCard({ event, text, state }: {
   event: string; text: string; state: CardState;
 }) {
   const [expanded, setExpanded] = useState(false);
+
   return (
     <div className="animate-fade-in" data-system-event={event}>
       <div className="w-full rounded-lg border border-[rgba(224,164,88,.25)] bg-[rgba(224,164,88,.05)] px-4 py-2.5">
@@ -604,6 +640,7 @@ function AdvisorCard({ severity, text, state }: {
   severity: AdvisorSeverity; text: string; state: CardState;
 }) {
   const tone = ADVISOR_TONES[severity];
+
   return (
     <div className="flex justify-center animate-fade-in py-1" data-advisor-severity={severity}>
       <div className={`w-full max-w-[85%] rounded-xl px-3 py-2 ${tone.panel}`}>
@@ -628,18 +665,23 @@ export function ProgrammaticTurnCard({ turn, text, state }: {
   if (turn.kind === "background_job") {
     return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;
   }
+
   if (turn.kind === "workspace_created") {
     return <WorkspaceCreatedCard state={state} />;
   }
+
   if (turn.kind === "deferred_approval") {
     return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;
   }
+
   if (turn.kind === "advisor") {
     return <AdvisorCard severity={turn.severity} text={text} state={state} />;
   }
+
   if (turn.kind === "system_event") {
     return <SystemEventCard event={turn.event} text={text} state={state} />;
   }
+
   return <DrainedEventsCard text={text} state={state} />;
 }
 
@@ -741,6 +783,7 @@ export const MessageView = memo(function MessageView({
   // The id goes in too: it is the provenance marker on rows written before the
   // author stamp existed, and the owner's oldest workspaces are full of them.
   const programmatic = classifyProgrammaticTurn(message.metadata, message.id);
+
   if (programmatic) {
     return (
       <ProgrammaticTurnCard
@@ -759,6 +802,7 @@ export const MessageView = memo(function MessageView({
 
   if (isUser) {
     const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
+
     return (
       <div className="flex flex-col items-end animate-fade-in group">
         <div className={USER_BUBBLE_CLASS}>
@@ -825,20 +869,28 @@ export const MessageView = memo(function MessageView({
               {groupMessageParts(segment.parts).map((block, i) => {
                 if (block.kind === "tool-run") {
                   const first = block.parts[0];
+
                   return first ? <ToolCallGroup key={first.toolCallId} parts={block.parts} /> : null;
                 }
+
                 const part = block.part;
                 const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
+
                 if (part.type === "reasoning") {
                   const t = part.text;
+
                   return t ? <ReasoningBlock key={i} text={t} live={isTailPart} /> : null;
                 }
+
                 if (part.type === "file") {
                   return <div key={i} className="my-1.5"><FilePartView part={part} /></div>;
                 }
+
                 if (part.type === "text") {
                   const t = part.text;
+
                   if (!t) return null;
+
                   // `p-streaming` draws the caret inside the last block the markdown
                   // emitted. As a sibling element it landed on a line of its own below
                   // the paragraph, which is the misplacement that was reported.
@@ -848,9 +900,11 @@ export const MessageView = memo(function MessageView({
                     </div>
                   );
                 }
+
                 if (isToolUIPart(part)) {
                   return <ToolCallPart key={part.toolCallId} part={part} />;
                 }
+
                 return null;
               })}
             </div>
@@ -885,11 +939,13 @@ function MessageFeedback({
 }) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
+
   const toggle = useCallback(async (next: 'positive' | 'negative') => {
     if (busy) return;
     setBusy(true);
     setFailed(false);
     const apply = current === next ? null : next; // click again to clear
+
     try {
       await onFeedback(messageId, apply);
     } catch (error) {

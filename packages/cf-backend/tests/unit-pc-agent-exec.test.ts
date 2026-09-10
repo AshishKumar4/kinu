@@ -28,16 +28,20 @@ import {
 } from '@kinu.run/core';
 
 const TEST_INFLIGHT_ROOT = mkdtempSync(join(tmpdir(), 'pc-agent-inflight-'));
+
 process.env.KINU_INFLIGHT_ROOT = TEST_INFLIGHT_ROOT;
+
 const require_ = createRequire(import.meta.url);
 
 
 const WatchableFileSystemSchema = v.object({ watch: v.function() });
+
 interface DaemonMessage {
   readonly id: string;
   readonly method: string;
   readonly params: readonly (string | number)[];
 }
+
 interface ReplySocket { send(data: string): void }
 
 /** One frame as the tunnel writes it onto the device socket — the shape the
@@ -56,6 +60,7 @@ const DaemonFrameSchema = v.object({
  *  `terminated` stays unparsed here and is parsed once awaited, because a
  *  pending promise carries no shape to check yet. */
 const SweepSchema = v.array(v.object({ requestId: v.string(), terminated: v.unknown() }));
+
 const ConfirmedCancellationSchema = v.object({ requestId: v.string(), cancelled: v.string() });
 
 const PcAgentModuleSchema = v.object({
@@ -82,16 +87,19 @@ const PcAgentModuleSchema = v.object({
   waitForFile: v.function(),
   waitForSupervisorState: v.function(),
 });
+
 /** The registry surface the unregistered-window test drives, which is the
  *  same `createInFlight` the daemon builds its own from. */
 const SupervisorRegistrySchema2 = v.object({
   terminateUnanswered: v.function(),
 });
+
 const SupervisorRegistrySchema = v.object({
   reconcile: v.function(),
   cancel: v.function(),
   acknowledge: v.function(),
 });
+
 const pcAgent = v.parse(PcAgentModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/index.js')));
 
 afterAll(() => rmSync(TEST_INFLIGHT_ROOT, { recursive: true, force: true }));
@@ -101,11 +109,13 @@ function handle(message: DaemonMessage, socket: ReplySocket): void {
 }
 
 const ExecResultSchema = v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() });
+
 const ExecReplySchema = v.object({
   id: v.string(),
   result: v.optional(ExecResultSchema),
   error: v.optional(v.string()),
 });
+
 type ExecReply = v.InferOutput<typeof ExecReplySchema>;
 
 /** Any frame the daemon writes back, narrowed by the caller that knows which
@@ -116,6 +126,7 @@ const DaemonReplySchema = v.object({
   result: v.optional(JsonValueSchema),
   error: v.optional(v.string()),
 });
+
 type DaemonReply = v.InferOutput<typeof DaemonReplySchema>;
 
 let execSequence = 0;
@@ -128,12 +139,15 @@ function rpcId(sequence: number): string {
 function exec(command: string): Promise<{ reply: ExecReply; elapsed: number }> {
   const { promise, resolve } = Promise.withResolvers<{ reply: ExecReply; elapsed: number }>();
   const started = Date.now();
+
   const ws = {
     send(data: string) {
       resolve({ reply: v.parse(ExecReplySchema, JSON.parse(data)), elapsed: Date.now() - started });
     },
   };
+
   handle({ id: rpcId(++execSequence), method: 'exec', params: [command] }, ws);
+
   return promise;
 }
 
@@ -191,6 +205,7 @@ describe('pc-agent exec RPC', () => {
 function recorder() {
   const replies: DaemonReply[] = [];
   const awaited = new Map<string, (reply: DaemonReply) => void>();
+
   return {
     replies,
     socket: {
@@ -206,9 +221,11 @@ function recorder() {
      *  needs this to race, or it can only end by giving up. */
     answerTo(id: string): Promise<DaemonReply> {
       const arrived = replies.find((reply) => reply.id === id);
+
       if (arrived) return Promise.resolve(arrived);
       const { promise, resolve } = Promise.withResolvers<DaemonReply>();
       awaited.set(id, resolve);
+
       return promise;
     },
   };
@@ -223,10 +240,13 @@ function recorder() {
 function alive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+
     return true;
   } catch (err) {
     const code = err instanceof Error && 'code' in err ? String(err.code) : '';
+
     if (code === 'ESRCH') return false;
+
     if (code === 'EPERM') return true;
     throw err;
   }
@@ -244,9 +264,12 @@ function alive(pid: number): boolean {
  */
 async function settled<T>(read: () => T | undefined, what: string): Promise<T> {
   const deadline = Date.now() + 10_000;
+
   for (;;) {
     const value = read();
+
     if (value !== undefined) return value;
+
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -265,6 +288,7 @@ function gone(pid: number): Promise<true> {
 }
 
 const PidSchema = v.pipe(v.number(), v.integer(), v.minValue(1));
+
 const SupervisorStateSchema = v.object({ pid: PidSchema, group: PidSchema });
 
 /**
@@ -277,17 +301,22 @@ const SupervisorStateSchema = v.object({ pid: PidSchema, group: PidSchema });
  */
 function supervisorState(requestId: string): Promise<v.InferOutput<typeof SupervisorStateSchema>> {
   const file = join(pcAgent.INFLIGHT_ROOT, requestId, 'state');
+
   return settled(() => {
     if (!existsSync(file)) return undefined;
+
     const fields: Record<string, string> = Object.fromEntries(
       readFileSync(file, 'utf8').trimEnd().split('\n').map((line) => {
         const separator = line.indexOf('=');
+
         return [line.slice(0, separator), line.slice(separator + 1)];
       }),
     );
+
     const parsed = v.safeParse(SupervisorStateSchema, {
       pid: Number(fields.pid), group: Number(fields.group),
     });
+
     return parsed.success ? parsed.output : undefined;
   }, `the published supervisor state for ${requestId}`);
 }
@@ -304,6 +333,7 @@ function supervisorState(requestId: string): Promise<v.InferOutput<typeof Superv
  */
 function commandWithDescendant(dir: string, name: string) {
   const pidFile = join(dir, `${name}.pid`);
+
   return {
     command: `(sleep 30 & echo $! > ${pidFile}.part && mv ${pidFile}.part ${pidFile}); sleep 30`,
     /**
@@ -323,15 +353,19 @@ function commandWithDescendant(dir: string, name: string) {
      */
     async pidOf(answer: Promise<unknown>): Promise<number> {
       const watching = new AbortController();
+
       const refused = async (): Promise<never> => {
         let answered: unknown;
+
         try {
           answered = await answer;
         } catch (err) {
           throw new Error(`the daemon refused the command: ${err instanceof Error ? err.message : String(err)}`, { cause: err });
         }
+
         throw new Error(`the daemon answered ${JSON.stringify(answered)} instead of running the command`);
       };
+
       try {
         const published: Promise<unknown> = Promise.resolve(pcAgent.waitForFile(pidFile, watching.signal));
         await Promise.race([published, refused()]);
@@ -340,6 +374,7 @@ function commandWithDescendant(dir: string, name: string) {
         // instance out of the 128 the kernel allows the whole user.
         watching.abort();
       }
+
       return v.parse(PidSchema, Number(readFileSync(pidFile, 'utf8').trim()));
     },
   };
@@ -417,6 +452,7 @@ describe('pc-agent command cancellation', () => {
     expect(pcAgent.inFlight.size()).toBe(sizeBefore);
 
     const server = Number(readFileSync(pidFile, 'utf8').trim());
+
     if (alive(server)) process.kill(server, 'SIGKILL');
   }, 30_000);
 
@@ -430,6 +466,7 @@ describe('pc-agent command cancellation', () => {
     cancel(cancellations[0], runId, ws.socket);
     cancel(cancellations[1], runId, ws.socket);
     cancel(cancellations[2], rpcId(999), ws.socket);
+
     for (const id of cancellations) {
       const answer = await settled(() => ws.of(id)[0], `the answer to ${id}`);
       expect(v.parse(DeviceCancelResultSchema, answer.result).cancelled).toBe('unknown');
@@ -467,6 +504,7 @@ describe('pc-agent command cancellation', () => {
     for (const id of ['.', '..', 'rpc-short-1', 'rpc-testepoch0-0', 'rpc-testepoch0-1/child']) {
       expect(() => pcAgent.requestDirectory(pcAgent.INFLIGHT_ROOT, id)).toThrow('request id');
     }
+
     const ws = recorder();
     cancel(rpcId(240), '..', ws.socket);
     expect(ws.of(rpcId(240))[0].error).toContain('request id');
@@ -596,9 +634,11 @@ describe('pc-agent supervisor guards', () => {
     const root = mkdtempSync(join(tmpdir(), 'pc-agent-watch-'));
     const target = join(root, 'state');
     const rawAgentFs: unknown = require_('node:fs');
+
     if (!v.is(WatchableFileSystemSchema, rawAgentFs)) throw new Error('node:fs must provide watch');
     const agentFs = rawAgentFs;
     const originalWatch = agentFs.watch;
+
     try {
       agentFs.watch = (...args) => {
         const [, listener] = v.parse(v.tuple([v.string(), v.function()]), args);
@@ -607,15 +647,19 @@ describe('pc-agent supervisor guards', () => {
           writeFileSync(target, 'ready');
           listener('rename', null);
         });
+
         return watcher;
       };
+
       await pcAgent.waitForFile(target);
 
       agentFs.watch = () => {
         const watcher = Object.assign(new EventEmitter(), { close() {} });
         queueMicrotask(() => watcher.emit('error', new Error('watch failed')));
+
         return watcher;
       };
+
       await expect(pcAgent.waitForFile(join(root, 'result'))).rejects.toThrow('watch failed');
     } finally {
       agentFs.watch = originalWatch;
@@ -634,9 +678,11 @@ describe('pc-agent supervisor guards', () => {
 
   test('refuses unsupported hosts before creating a command directory', () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+
     if (!originalPlatform) throw new Error('missing process platform descriptor');
     const id = rpcId(330);
     const requestDir = join(pcAgent.INFLIGHT_ROOT, id);
+
     try {
       Object.defineProperty(process, 'platform', { value: 'freebsd', configurable: true });
       const ws = recorder();
@@ -668,6 +714,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
    *  it until the first frame, which is after the assignment below. */
   function deviceChain() {
     let tunnel: DeviceTunnel;
+
     const socket: TunnelSocket = {
       readyState: 1,
       send: (data: string) => {
@@ -676,13 +723,16 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
         });
       },
     };
+
     tunnel = new DeviceTunnel(socket);
     const connected: DeviceStatus = { connected: true, registered: true, toolchain: null };
+
     const transport: DeviceTransport = {
       rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
       status: () => connected,
       refreshStatus: async () => connected,
     };
+
     return { provider: createDeviceTunnelExecutor(transport), tunnel };
   }
 
@@ -728,6 +778,7 @@ describe('stopping a turn reaches the process on the user\'s machine', () => {
       signal: controller.signal,
       onDeviceRequest: (requestId: string) => { issued.push(requestId); },
     });
+
     const descendant = await pidOf(pending);
     const supervisor = await supervisorState(issued[0]);
 
@@ -776,6 +827,7 @@ describe('pc-agent cancellation racing a command\'s own completion', () => {
 
     const answer = await settled(() => ws.of(rpcId(271))[0], 'the cancellation answer');
     const claim = v.safeParse(DeviceCancelResultSchema, answer.result);
+
     // Never a claimed kill — this cancellation stopped nothing, because there
     // was nothing left to stop.
     if (claim.success) expect(claim.output).toEqual({ requestId: runId, cancelled: 'unknown' });

@@ -35,6 +35,7 @@ import { createProviderRegistry } from '@kinu.run/core';
 import type { AgentProviderRegistry } from '../src/providers/agent-registry';
 import { hostBranch, type BranchCompletionRequest } from '../src/exploration-hosting';
 import { hostedMainActor, orchestratorHarness } from './helpers/actor-harness';
+
 /** The tier the search runs on; a tier pinned outside the registry default, so
  *  "did the branch use the profile" has an observable answer. */
 const TIER_MODEL = 'fake-branch/m1';
@@ -81,23 +82,28 @@ async function makeBranch(answer = 'Parse the grammar with a Pratt parser.'): Pr
     normalizeSpecSync: (spec) => spec ?? 'test/model',
   } satisfies AgentProviderRegistry);
   const seams = workspace.agent.observeExplorationSeams();
+
   const complete = async (request: BranchCompletionRequest) => {
     specs.push(request.spec);
+
     const result = await generateText({
       model: seams.resolveModel(request.spec),
       system: request.system,
       prompt: request.user,
     });
+
     return {
       text: result.text,
       usage: { input: result.usage.inputTokens ?? undefined, output: result.usage.outputTokens ?? undefined },
     };
   };
+
   const branch = await hostBranch(seams, 'branch-1', {
     explorePrompt: ({ context }) => ({ system: 'Explore.', user: context }),
     reflectionPrompt: (task, traces) => `${task}\n${traces}`,
     complete,
   });
+
   return {
     explore: () => branch.explore([{ role: 'user', content: 'ship a parser' }], [], ['javascript'], 'plan', []),
     reflect: () => branch.generateReflection('ship a parser', 'the fixture corpus still fails'),
@@ -144,6 +150,7 @@ describe('the seat files nothing; the usage it returns is what the engine files'
       tiers: { default: { model: TIER_MODEL } },
       availableModels: [TIER_MODEL],
     });
+
     const failing = scriptedTurnModel({
       provider: 'fake',
       modelId: 'fake-branch',
@@ -151,6 +158,7 @@ describe('the seat files nothing; the usage it returns is what the engine files'
         throw new APICallError({ message: 'malformed request', url: 'https://fake-gateway.example/v1', requestBodyValues: {}, statusCode: 400, responseHeaders: {} });
       },
     });
+
     workspace.agent.overrideProviderRegistry({
       registry: createProviderRegistry(),
       deps: { env: {}, getAuth: async () => null, hasCredential: async () => false },
@@ -158,6 +166,7 @@ describe('the seat files nothing; the usage it returns is what the engine files'
       normalizeSpecSync: (spec) => spec ?? 'test/model',
     } satisfies AgentProviderRegistry);
     const seams = workspace.agent.observeExplorationSeams();
+
     const branch = await hostBranch(seams, 'branch-fail', {
       explorePrompt: ({ context }) => ({ system: 'Explore.', user: context }),
       reflectionPrompt: (task, traces) => `${task}\n${traces}`,
@@ -167,6 +176,7 @@ describe('the seat files nothing; the usage it returns is what the engine files'
           system: request.system,
           prompt: request.user,
         });
+
         return { text: result.text };
       },
     });

@@ -26,7 +26,9 @@ import { withGallery, type Gallery } from './gallery-harness';
 import { CHUNK_FIXED_KEY, CHUNK_RELOAD_KEY } from '../packages/cf-backend/src/lazy-route';
 
 const LOADED_SHA = 'abc1234';
+
 const LATER_SHA = 'deadbee';
+
 const STAMP = { version: '0.1.0+abc1234', sha: LOADED_SHA, builtAt: '2026-08-07T00:00:00.000Z' };
 
 /** What one drive observed. */
@@ -73,8 +75,10 @@ async function serve(page: Page, mode: 'stable' | 'moves', served: { count: numb
     if (new URL(request.url()).pathname !== '/api/health') {
       return request.continue();
     }
+
     served.count += 1;
     const sha = mode === 'moves' && served.count > 1 ? LATER_SHA : LOADED_SHA;
+
     return request.respond({
       status: 200,
       contentType: 'application/json',
@@ -93,6 +97,7 @@ async function tryAgain(page: Page): Promise<void> {
   await page.evaluate(() => {
     const retry = [...document.querySelectorAll('button')]
       .find((node) => (node.textContent ?? '').trim() === 'Try again');
+
     retry?.click();
   });
 }
@@ -144,17 +149,20 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
   const query = options.appFailure === true ? '&failure=app' : '';
   await page.goto(`${origin}/gallery.html?frame=lazyroute${query}`, { waitUntil: 'load' });
   await chunkSettled(page);
+
   if (options.retry === true) {
     // The chunk is declared present before the retry, so the retry has something
     // to succeed at. Without it a re-attempt is indistinguishable from no attempt:
     // both end on the same error screen.
     await page.evaluate((key: string) => { sessionStorage.setItem(key, '1'); }, CHUNK_FIXED_KEY);
   }
+
   // Read AFTER the declaration and before the click, so "the retry re-attempted"
   // cannot pass on an attempt the declaration itself provoked.
   const staleAttemptsBeforeRetry = await readAttempt(page, 'lazyStaleAttempts');
   const healthyAttemptsBeforeRetry = await readAttempt(page, 'lazyHealthyAttempts');
   const loadedBeforeRetry = await page.$('[data-lazy-loaded]') !== null;
+
   if (options.retry === true) {
     await tryAgain(page);
     await chunkSettled(page);
@@ -177,9 +185,13 @@ async function drive(gallery: Gallery, options: Scenario): Promise<Observed> {
 }
 
 let recovered: Observed;
+
 let noSkew: Observed;
+
 let retried: Observed;
+
 let spent: Observed;
+
 let appError: Observed;
 
 beforeAll(async () => {

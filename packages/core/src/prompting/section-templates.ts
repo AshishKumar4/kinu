@@ -401,8 +401,10 @@ export type RenderSection =
 
 export function sectionRenderer(overrides?: PromptSectionOverrides): RenderSection {
   if (!overrides) return (section, slots) => section.render(slots);
+
   return (section, slots) => {
     const replacement = overrides[section.id];
+
     return replacement === undefined ? section.render(slots) : section.renderFrom(replacement, slots);
   };
 }

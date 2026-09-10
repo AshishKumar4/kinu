@@ -35,14 +35,18 @@ function cleanManifest() {
     { kind: 'local-path', name: '/tmp/token-a' },
     { kind: 'process-marker', name: 'pid-a' },
   ]);
+
   manifest.counters = { put: 2, get: 1 };
+
   for (const entry of manifest.entries) entry.done = true;
+
   return manifest;
 }
 
 describe('durable teardown manifest', () => {
   test('persists every resource before cleanup starts', () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       const manifest = cleanManifest();
       writeManifest(root, manifest);
@@ -55,17 +59,22 @@ describe('durable teardown manifest', () => {
 
   test('a signal-interrupted replay resumes from its persisted completed prefix', async () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       const manifest = createManifest('recover', [
         { kind: 'worker', name: 'worker' },
         { kind: 'r2-bucket', name: 'bucket' },
       ]);
+
       writeManifest(root, manifest);
       let calls = 0;
+
       const first = await replayTeardown(root, manifest, async () => {
         calls += 1;
+
         return calls === 1 ? { ok: true } : { ok: false, error: 'SIGTERM interrupted deletion' };
       });
+
       expect(first.failures).toHaveLength(1);
       expect(loadManifest(root, 'recover')?.entries.map((entry) => entry.done)).toEqual([true, false]);
 
@@ -82,14 +91,18 @@ describe('durable teardown manifest', () => {
 
   test('a completed replay is idempotent and executes nothing twice', async () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       const manifest = cleanManifest();
       writeManifest(root, manifest);
       let calls = 0;
+
       const replay = await replayTeardown(root, manifest, async () => {
         calls += 1;
+
         return { ok: true };
       });
+
       expect(replay.failures).toEqual([]);
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -120,6 +133,7 @@ function killedAfterDeploy(runId: string): TeardownManifest {
 describe('a fresh driver finishes what a killed one started', () => {
   test('an abandoned run is reported by name and every entry replayed', async () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       writeManifest(root, killedAfterDeploy('20260901010101'));
       // The run doing the scanning. Its own manifest is unfinished by
@@ -128,11 +142,13 @@ describe('a fresh driver finishes what a killed one started', () => {
 
       const deleted: string[] = [];
       const reported: string[] = [];
+
       const recovered = await recoverAbandonedRuns(
         root,
         '20260901020202',
         async (entry: TeardownEntry) => {
           deleted.push(`${entry.kind}:${entry.name}`);
+
           return { ok: true };
         },
         (line) => reported.push(line),
@@ -162,6 +178,7 @@ describe('a fresh driver finishes what a killed one started', () => {
 
   test('a run retained with --keep is reported and deliberately left alone', async () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       const kept = killedAfterDeploy('20260901030303');
       kept.kept = true;
@@ -169,8 +186,10 @@ describe('a fresh driver finishes what a killed one started', () => {
 
       const reported: string[] = [];
       let calls = 0;
+
       const recovered = await recoverAbandonedRuns(root, 'other', async () => {
         calls += 1;
+
         return { ok: true };
       }, (line) => reported.push(line));
 
@@ -185,22 +204,29 @@ describe('a fresh driver finishes what a killed one started', () => {
 
   test('a recovery interrupted again leaves strictly less work, and the next one finishes it', async () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       writeManifest(root, killedAfterDeploy('20260901040404'));
       let calls = 0;
+
       const first = await recoverAbandonedRuns(root, 'other', async () => {
         calls += 1;
+
         return calls <= 2 ? { ok: true } : { ok: false, error: 'SIGKILL' };
       }, () => {});
+
       expect(first[0]?.failures).toHaveLength(3);
       expect(loadManifest(root, '20260901040404')?.entries.map((entry) => entry.done))
         .toEqual([true, true, false, false, false]);
 
       const replayed: string[] = [];
+
       const second = await recoverAbandonedRuns(root, 'other', async (entry) => {
         replayed.push(entry.name);
+
         return { ok: true };
       }, () => {});
+
       expect(second[0]?.failures).toEqual([]);
       // The two already-deleted resources are NOT deleted a second time.
       expect(replayed).toHaveLength(3);
@@ -215,11 +241,13 @@ describe('a fresh driver finishes what a killed one started', () => {
 
   test('a manifest a kill truncated is reported rather than silently skipped', async () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       writeManifest(root, killedAfterDeploy('20260901050505'));
       writeFileSync(manifestPath(root, '20260901060606'), '{"schema":"storage-matrix/tear');
 
       const reported: string[] = [];
+
       const recovered = await recoverAbandonedRuns(
         root, 'other', async () => ({ ok: true }), (line) => reported.push(line),
       );
@@ -238,6 +266,7 @@ describe('a fresh driver finishes what a killed one started', () => {
     // that does not parse, which is worse than no manifest at all because the
     // resources are real and the only list of them is unreadable.
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       const manifest = killedAfterDeploy('20260901070707');
       writeManifest(root, manifest);
@@ -253,6 +282,7 @@ describe('a fresh driver finishes what a killed one started', () => {
 
   test('a directory that never held a manifest scans clean instead of throwing', () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       expect(scanUnfinishedManifests(root, 'any')).toEqual({ unfinished: [], unreadable: [] });
     } finally {
@@ -268,6 +298,7 @@ describe('cleanup C1-C7', () => {
     configure?: (manifest: TeardownManifest) => void,
   ): Promise<void> {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       const manifest = cleanManifest();
       configure?.(manifest);
@@ -317,6 +348,7 @@ describe('cleanup C1-C7', () => {
 
   test('all seven checks pass only after the dedicated bucket is deleted and replay is empty', async () => {
     const root = mkdtempSync(`${tmpdir()}/storage-matrix-`);
+
     try {
       const manifest = cleanManifest();
       writeManifest(root, manifest);

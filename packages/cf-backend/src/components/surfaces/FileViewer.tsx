@@ -66,7 +66,9 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
   const load = useCallback((): Promise<FileText> => (
     kind === "text" ? rpc<FileText>("readExecutorFile", [PLANE, path]) : Promise.resolve({})
   ), [kind, path, rpc]);
+
   const { resource, reload } = useAsyncResource(load, undefined, `${path}\u0000${revision}`);
+
   /** `null` IS the loading state: the body must never paint before the answer,
    *  or a reader (and the browser gate) sees an empty file that is not empty. */
   const file: FileText | null =
@@ -86,6 +88,7 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
     setSaving(true);
     setSaveError(null);
     setConflict(false);
+
     try {
       await putFileBytes(rawHref, text, file.revision);
       setDraft(null);

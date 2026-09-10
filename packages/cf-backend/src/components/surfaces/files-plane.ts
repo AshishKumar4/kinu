@@ -34,7 +34,9 @@ export type ViewerKind = "image" | "pdf" | "text";
  * exactly a type this shows inline. */
 export function viewerKindOf(path: string): ViewerKind {
   const inlineType = inlineFileType(path);
+
   if (inlineType?.startsWith("image/")) return "image";
+
   return inlineType === "application/pdf" ? "pdf" : "text";
 }
 
@@ -50,8 +52,11 @@ export type TextRender = "markdown" | "html" | "source";
 
 export function textRenderOf(path: string): TextRender {
   const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
+
   if (name.endsWith(".md") || name.endsWith(".markdown")) return "markdown";
+
   if (name.endsWith(".html") || name.endsWith(".htm")) return "html";
+
   return "source";
 }
 
@@ -111,22 +116,30 @@ export function nextTreeCache(
     entries.filter((entry) => entry.type === "dir")
       .map((entry) => [dir === "/" ? `/${entry.name}` : `${dir}/${entry.name}`, entryRevision(entry)]),
   );
+
   // shape this replaced deleted from the map it was iterating.
   const contradicted: string[] = [];
+
   for (const [path, cached] of cache) {
     if (path === dir) continue;
     const revision = fresh.get(path);
     // A child of `dir` the fresh listing does not name is gone from this plane.
     const gone = revision === undefined && isChildOf(dir, path);
+
     if (gone || (revision !== undefined && revision !== cached.revision)) contradicted.push(path);
   }
+
   const next = new Map<string, CachedDir>();
+
   for (const [path, cached] of cache) {
     if (path === dir) continue;
+
     if (contradicted.some((root) => isUnder(root, path))) continue;
     next.set(path, cached);
   }
+
   next.set(dir, { entries, revision: cache.get(dir)?.revision ?? "" });
+
   return next;
 }
 
@@ -148,6 +161,7 @@ const isChildOf = (dir: string, path: string): boolean =>
  */
 export function sandboxedHtml(source: string): string {
   const csp = "default-src 'none'; style-src 'unsafe-inline'; img-src data: blob:";
+
   return `<meta http-equiv="Content-Security-Policy" content="${csp}">${source}`;
 }
 
@@ -160,16 +174,21 @@ export async function putFileBytes(
   const headers = expectedRevision === undefined
     ? undefined
     : { "If-Match": String(expectedRevision) };
+
   const response = await fetch(href, { method: "PUT", body, headers });
+
   if (response.ok) return;
   const text = await response.text();
+
   const parsed = v.safeParse(
     v.object({ error: v.optional(v.string()), revision: v.optional(v.number()) }),
     tolerate<unknown>(() => JSON.parse(text), "malformed-input"),
   );
+
   if (response.status === 412 && parsed.success && parsed.output.revision !== undefined) {
     throw new FileWriteConflict(parsed.output.revision);
   }
+
   const detail = parsed.success ? parsed.output.error : text.trim() || undefined;
   throw new Error(detail ?? `the write was refused (${String(response.status)})`);
 }

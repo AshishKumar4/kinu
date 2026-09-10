@@ -71,14 +71,17 @@ describe('role, tier, and agent hubs', () => {
         allowedRoleIds: ['general', 'auditor'],
       },
     };
+
     const { renderer, renderOnce, captureCharFrame } = await createTestRenderer({
       width: 100,
       height: 30,
       useThread: false,
       maxFps: Number.POSITIVE_INFINITY,
     });
+
     const root = createRoot(renderer);
     const store = createMemoryTuiPreferenceStore();
+
     try {
       for (const [view, expected] of [
         ['agents', 'Reviewer · agent · auditor/slow'],
@@ -93,6 +96,7 @@ describe('role, tier, and agent hubs', () => {
           </TuiProductProvider>,
         );
         await waitForFrame(renderOnce, captureCharFrame, expected);
+
         if (view !== 'agents') continue;
         expect(captureCharFrame().toLowerCase()).not.toContain('subordinate');
         // Entries group under their workspace heading; subordinates indent
@@ -121,8 +125,10 @@ async function waitForFrame(
 ): Promise<void> {
   for (let attempt = 0; attempt < 40; attempt += 1) {
     await renderOnce();
+
     if (capture().includes(expected)) return;
     await Bun.sleep(1);
   }
+
   expect(capture()).toContain(expected);
 }

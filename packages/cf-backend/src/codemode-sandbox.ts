@@ -37,6 +37,7 @@ import { EGRESS_FAILURE_HEADER } from './codemode-egress';
 
 /** Codemode's resolved provider shape. */
 type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
+
 type ResolvedProvider = Extract<DynamicProviderInput, object[]>[number];
 
 export interface InjectableCraftedTool {
@@ -60,6 +61,7 @@ export function selectInjectableCraftedTools(
     code: (row.code ?? '').trim(),
     description: row.description ?? '',
   })).filter((row) => row.name && row.code && !row.code.startsWith('//'));
+
   return filterByEffectiveScore(sql, rows);
 }
 
@@ -79,6 +81,7 @@ export interface SandboxIdentity {
 export function renderToolsPrelude(crafted: readonly InjectableCraftedTool[], identity: SandboxIdentity): string {
   const definitions = crafted.map((entry) => {
     const parseError = parsesAsExpression(entry.code);
+
     const factory = parseError === null
       // ASYNC, because a stored body may await at its top level: `parsesAsExpression`
       // runs acorn with `allowAwaitOutsideFunction`, so `await foo()` passes the gate
@@ -88,8 +91,10 @@ export function renderToolsPrelude(crafted: readonly InjectableCraftedTool[], id
       // still fails by name at call time rather than at module load.
       ? `async () => (\n${entry.code}\n)`
       : `() => { throw new Error(${JSON.stringify(`stored source does not parse: ${parseError}`)}); }`;
+
     return `      ${JSON.stringify(entry.name)}: __kinu.defineCrafted(${JSON.stringify(entry.name)}, ${factory}),`;
   });
+
   return [
     `    const __kinu = await import(${JSON.stringify(`./${KINU_NODE_MODULE_NAME}`)});`,
     '    const __kinuWorkspace = typeof workspace === "undefined" ? null : workspace;',
@@ -112,6 +117,7 @@ export function renderToolsPrelude(crafted: readonly InjectableCraftedTool[], id
 function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
   return providers.map((provider) => {
     const fns: ResolvedProvider['fns'] = {};
+
     for (const [name, fn] of Object.entries(provider.fns)) {
       const invoke = bindTaskPlan(fn);
       fns[name] = async (...args: unknown[]) => {
@@ -122,8 +128,11 @@ function attributeProviders(providers: ResolvedProvider[]): ResolvedProvider[] {
         }
       };
     }
+
     const attributed: ResolvedProvider = { name: provider.name, fns };
+
     if (provider.prelude !== undefined) attributed.prelude = provider.prelude;
+
     return attributed;
   });
 }
@@ -158,8 +167,10 @@ export class KinuSandboxExecutor {
     const providerArr: ResolvedProvider[] = Array.isArray(providers)
       ? providers
       : [{ name: 'codemode', fns: providers }];
+
     try {
       const result = await this.#inner.execute(code, attributeProviders(providerArr));
+
       // DWE never throws for sandbox-internal failures (a bare `ReferenceError:
       // run is not defined` from code that reached for a native tool as if it
       // were in scope lands here as a string). Rewrite exactly that shape into

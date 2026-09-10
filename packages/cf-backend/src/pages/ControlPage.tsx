@@ -67,9 +67,11 @@ export default function ControlPage(): ReactNode {
 
   const go = useCallback((next: Partial<Record<'tab' | 'user' | 'workspace', string | null>>) => {
     const merged = new URLSearchParams(params);
+
     for (const [key, value] of Object.entries(next)) {
       if (value === null) merged.delete(key); else merged.set(key, value);
     }
+
     setParams(merged, { replace: false });
   }, [params, setParams]);
 
@@ -150,6 +152,7 @@ function TabBody(
 
 function OverviewView(): ReactNode {
   const { load, reload } = useControlRead(fetchOverview, []);
+
   return (
     <div className="space-y-3">
       <SectionHeader
@@ -177,6 +180,7 @@ function UsersView({ onOpen }: { onOpen: (userId: string) => void }): ReactNode 
   const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const { load, reload } = useControlRead(() => fetchUsers(cursor), [cursor]);
+
   return (
     <div className="space-y-3">
       <SectionHeader title="Accounts" hint="Most recently seen first." onRefresh={reload} />
@@ -230,6 +234,7 @@ function UserDetailView(
   const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const { load, reload } = useControlRead(() => fetchUserDetail(userId, cursor), [userId, cursor]);
+
   return (
     <div className="space-y-3">
       <button onClick={onBack} className="text-xs p-text-3 hover:p-text flex items-center gap-1">
@@ -288,9 +293,11 @@ function WorkspacesView(
   const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const [includeRemoved, setIncludeRemoved] = useState(false);
+
   const { load, reload } = useControlRead(
     () => fetchWorkspaces({ cursor, includeRemoved }), [cursor, includeRemoved],
   );
+
   return (
     <div className="space-y-3">
       <SectionHeader
@@ -343,6 +350,7 @@ function WorkspacesView(
 
 function IncidentsView(): ReactNode {
   const { load, reload } = useControlRead(fetchIncidents, []);
+
   return (
     <div className="space-y-3">
       <SectionHeader
@@ -380,6 +388,7 @@ function FeedbackView(): ReactNode {
   const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const { load, reload } = useControlRead(() => fetchFeedback(cursor), [cursor]);
+
   return (
     <div className="space-y-3">
       <SectionHeader
@@ -424,6 +433,7 @@ function FeedbackView(): ReactNode {
 
 function MetricsView(): ReactNode {
   const [hours, setHours] = useState(24);
+
   // A refresh re-asks the server, and `refresh=1` makes the server re-ask
   // Analytics: without it, the button would answer from the same 30-second-old
   // batch and look broken while being correct.
@@ -431,6 +441,7 @@ function MetricsView(): ReactNode {
     (refresh?: boolean) => fetchMetrics(hours, undefined, refresh),
     [hours],
   );
+
   return (
     <div className="space-y-3">
       <SectionHeader
@@ -481,7 +492,9 @@ function MetricsView(): ReactNode {
  *  than hard-coding a set the builder owns. */
 function MetricTable({ rows }: { rows: Extract<AnalyticsPanel, { status: 'ok' }>['rows'] }): ReactNode {
   const columns = useMemo(() => Object.keys(rows[0] ?? {}), [rows]);
+
   if (rows.length === 0) return <div className="text-xs p-text-3">No events in this window.</div>;
+
   return (
     <table className="w-full text-xs">
       <thead className="p-text-3 border-b p-border">
@@ -508,6 +521,7 @@ function AuditView(): ReactNode {
   const [cursor, setCursor] = useState<string | null>(null);
   const [page, setPage] = useState(0);
   const { load, reload } = useControlRead(() => fetchAudit(cursor), [cursor]);
+
   return (
     <div className="space-y-3">
       <SectionHeader
@@ -563,6 +577,7 @@ function Table(
   if (rows.length === 0) {
     return <section className="p-card p-8 text-center text-xs p-text-3">{empty}</section>;
   }
+
   return (
     <section className="p-card overflow-x-auto">
       <table className="w-full text-sm">

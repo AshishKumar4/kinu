@@ -103,6 +103,7 @@ import {
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/dead-code.lock.json`;
 
 /** knip's candidates, narrowed to what this gate governs. Both halves are named
@@ -123,6 +124,7 @@ export interface DeadExport {
 
 /** knip's report is external tool output, so it is parsed rather than asserted. */
 const KnipExportSchema = v.object({ name: v.string(), line: v.number() });
+
 const KnipReportSchema = v.object({
   issues: v.optional(v.array(v.object({
     file: v.string(),
@@ -155,20 +157,28 @@ export function exportedDeclarations(file: string, text: string, tree?: SyntaxNo
 
   for (const statement of (tree ?? parse(file, text).root).children) {
     for (const name of importedNames(statement)) imported.add(name);
+
     if (statement.type === 'ImportDeclaration') continue;
+
     // `export … from '…'` never declares a local name; see {@link isReExport}.
     if (isReExport(statement)) continue;
+
     for (const name of exportedLocalNames(statement)) specifiers.add(name);
 
     const { node, exported } = declarationOf(statement);
+
     if (node.type === 'VariableDeclaration') {
       for (const name of declaredBindings(node, false)) declared.add(name);
+
       if (exported) for (const name of declaredBindings(node, true)) exportedHere.add(name);
       continue;
     }
+
     const name = declaredName(node);
+
     if (name !== undefined) {
       declared.add(name);
+
       if (exported) exportedHere.add(name);
     }
   }
@@ -176,6 +186,7 @@ export function exportedDeclarations(file: string, text: string, tree?: SyntaxNo
   for (const name of specifiers) {
     if (declared.has(name) && !imported.has(name)) exportedHere.add(name);
   }
+
   return exportedHere;
 }
 
@@ -186,24 +197,32 @@ function knip(production: boolean): KnipFindings {
     '--reporter', 'json',
     ...(production ? ['--production'] : []),
   ];
+
   const run = spawnSync(`${root}node_modules/.bin/knip`, args, {
     cwd: root,
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
+
   // knip exits 1 when it has findings, which is the normal case here.
   if (run.error !== undefined) throw run.error;
+
   if (run.stdout.length === 0) {
     throw new Error(`knip produced no report (exit ${String(run.status)}): ${run.stderr}`);
   }
+
   const parsed = v.parse(KnipReportSchema, JSON.parse(run.stdout));
   const symbols = new Map<string, KnipExport[]>();
   const files: string[] = [];
+
   for (const entry of parsed.issues) {
     const all = [...entry.exports, ...entry.types, ...entry.nsExports, ...entry.nsTypes];
+
     if (all.length > 0) symbols.set(entry.file, all);
+
     for (const f of entry.files) files.push(f.name);
   }
+
   return { symbols, files };
 }
 
@@ -213,13 +232,17 @@ export function classify(
   read: (file: string) => string,
 ): DeadExport[] {
   const unreferenced = new Set<string>();
+
   for (const [file, names] of everywhere) {
     for (const e of names) unreferenced.add(`${file}#${e.name}`);
   }
+
   const found: DeadExport[] = [];
+
   for (const [file, names] of productionOnly) {
     if (!inScope(file)) continue;
     const declarations = exportedDeclarations(file, read(file));
+
     for (const e of names) {
       if (!declarations.has(e.name)) continue;
       found.push({
@@ -230,6 +253,7 @@ export function classify(
       });
     }
   }
+
   return found.sort((a, b) => a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
 }
 
@@ -285,6 +309,7 @@ const ManifestSchema = v.object({
 export const servedBy = (manifest: string): ((file: string) => boolean) => {
   if (manifest === 'package.json') return () => true;
   const directory = manifest.slice(0, -'package.json'.length);
+
   return (file) => file.startsWith(directory);
 };
 
@@ -316,6 +341,7 @@ export function typedRuntime(name: string): string | undefined {
   if (!name.startsWith('@types/')) return undefined;
   const rest = name.slice('@types/'.length);
   const [scope, scoped] = rest.split('__');
+
   return scoped === undefined ? rest : `@${scope}/${scoped}`;
 }
 
@@ -349,19 +375,24 @@ export function referencesPackage(file: string, text: string, forms: ReferenceFo
   const specifiers = forms.specifiers.map(escaped);
   const commands = forms.commands.map(escaped);
   const spawnsBinary = commands.some((c) => new RegExp(`node_modules/\\.bin/${c}\\b`).test(text));
+
   if (isParseable(file)) {
     const names = specifiers.map((n) => new RegExp(`^(?:[^'"\`]*node_modules/)?${n}${subpath}$`));
+
     return spawnsBinary || namedModules(file, text).some((m) => names.some((re) => re.test(m)));
   }
+
   if (isStylesheet(file)) {
     return specifiers.some((n) => new RegExp(`@[a-z]+\\s+['"]${n}${subpath}['"]`).test(text));
   }
+
   // Configuration: a text source that is neither code nor prose.
   if (isTextSource(file) && !isDocument(file)) {
     return spawnsBinary
       || specifiers.some((n) => new RegExp(`['"]${n}${subpath}['"]`).test(text))
       || commands.some((c) => new RegExp(`(?:^|[\\s;&|("'])${c}(?:[\\s;&|)"']|$)`, 'm').test(text));
   }
+
   return false;
 }
 
@@ -373,6 +404,7 @@ function namedModules(file: string, text: string): readonly string[] {
   walk(tree, (node) => {
     if (node.raw.type === 'CallExpression' && identifierCalleeName(node) === 'require') out.push(...stringArguments(node));
   });
+
   return out;
 }
 
@@ -402,6 +434,7 @@ const LockMeta = v.looseObject({
   bin: v.optional(v.union([v.string(), v.record(v.string(), v.string())])),
   peerDependencies: v.optional(v.record(v.string(), v.string()), {}),
 });
+
 const LockSchema = v.looseObject({
   packages: v.optional(v.record(v.string(), v.array(v.unknown())), {}),
 });
@@ -410,17 +443,22 @@ export function readInstalled(lockText: string): Installed {
   const lock = parseJsonc(lockText, LockSchema, 'bun.lock');
   const binaries = new Map<string, readonly string[]>();
   const peerRequirers = new Map<string, string[]>();
+
   for (const [name, row] of Object.entries(lock.packages)) {
     const parsed = v.safeParse(LockMeta, row[2]);
+
     if (!parsed.success) continue;
     const named = v.safeParse(v.record(v.string(), v.string()), parsed.output.bin);
     const single = v.safeParse(v.string(), parsed.output.bin);
+
     if (named.success) binaries.set(name, Object.keys(named.output));
     else if (single.success) binaries.set(name, [name.split('/').at(-1) ?? name]);
+
     for (const peer of Object.keys(parsed.output.peerDependencies)) {
       peerRequirers.set(peer, [...(peerRequirers.get(peer) ?? []), name]);
     }
   }
+
   return { binaries, peerRequirers };
 }
 
@@ -449,6 +487,7 @@ export function manifestCommands(text: string): string {
     v.object({ scripts: v.optional(v.record(v.string(), v.string()), {}) }),
     JSON.parse(text),
   );
+
   return parsed.success ? Object.values(parsed.output.scripts).join('\n') : '';
 }
 
@@ -465,13 +504,18 @@ export function unusedDependencies(
 ): DeadDependency[] {
   const corpus = files.filter((file) => (isTextSource(file) || isStylesheet(file))
     && !isLockfile(file));
+
   const found: DeadDependency[] = [];
+
   for (const manifest of manifests) {
     const declared = v.parse(ManifestSchema, JSON.parse(read(manifest)));
+
     const here = new Set([
       ...Object.keys(declared.dependencies), ...Object.keys(declared.devDependencies),
     ]);
+
     const serves = servedBy(manifest);
+
     // A manifest is read WITHOUT its declaration blocks, and as a `.json`
     // whatever its path: the file name carries the format, and every manifest
     // in the corpus is one.
@@ -479,6 +523,7 @@ export function unusedDependencies(
       file: isManifest(file) ? 'manifest.json' : file,
       text: isManifest(file) ? manifestCommands(read(file)) : read(file),
     }));
+
     for (const [kind, block] of [
       ['dependency', declared.dependencies], ['devDependency', declared.devDependencies],
     ] as const) {
@@ -487,15 +532,19 @@ export function unusedDependencies(
         // the requirer, and the requirer will not resolve without this line.
         if (peers(name).some((requirer) => here.has(requirer))) continue;
         const runtime = typedRuntime(name);
+
         const forms: ReferenceForms = {
           specifiers: runtime === undefined ? [name] : [name, runtime],
           commands: [name, ...binaries(name)],
         };
+
         const used = reachable.some((entry) => referencesPackage(entry.file, entry.text, forms));
+
         if (!used) found.push({ manifest, name, kind });
       }
     }
   }
+
   return found.sort((a, b) => a.manifest.localeCompare(b.manifest) || a.name.localeCompare(b.name));
 }
 
@@ -568,6 +617,7 @@ if (import.meta.main) {
   const tracked = trackedFiles();
   const manifests = tracked.filter(isManifest);
   const installed = readInstalled(read(tracked.filter(isLockfile)[0] ?? 'bun.lock'));
+
   const dependencies = unusedDependencies(
     manifests, tracked, read,
     (name) => installed.binaries.get(name) ?? [],
@@ -580,10 +630,13 @@ if (import.meta.main) {
   // each filter every candidate away and report a clean tree.
   const declarations = [...production.symbols.keys()].filter(inScope)
     .reduce((n, file) => n + exportedDeclarations(file, read(file)).size, 0);
+
   const declaredPackages = manifests.reduce((n, manifest) => {
     const parsed = v.parse(ManifestSchema, JSON.parse(read(manifest)));
+
     return n + Object.keys(parsed.dependencies).length + Object.keys(parsed.devDependencies).length;
   }, 0);
+
   const measured = assertMeasured('dead-code', [
     ['candidate files from knip', production.symbols.size],
     ['references seen in dev mode', everywhere.symbols.size],
@@ -593,20 +646,24 @@ if (import.meta.main) {
   ]);
 
   const detail = new Map<string, string>();
+
   for (const d of symbols) {
     detail.set(keyOf(d), `  ${d.file}:${d.line} ${d.name} — ${d.kind === 'test-only'
       ? 'exported and referenced only by tests; wire it or delete it with its test'
       : 'exported and referenced nowhere'}`);
   }
+
   for (const f of files) {
     detail.set(`${f} (unreachable-file)`, `  ${f} — no entry point reaches this file at all`);
   }
+
   for (const d of dependencies) {
     const key = dependencyKeyOf(d);
     const reason = dependencyReason(key);
     detail.set(key, `  ${d.manifest} declares ${d.name} and no file it serves imports it`
       + `${reason === undefined ? '' : `\n    kept because: ${reason}`}`);
   }
+
   const keys = [...detail.keys()];
 
   if (process.argv.includes('--lock')) {
@@ -620,9 +677,12 @@ if (import.meta.main) {
   // entry that outlives its row. Both directions, so neither can rot.
   const ratchet = reconcile(keys, LOCK);
   const isNew = new Set(ratchet.added);
+
   const unreasoned = dependencies.map(dependencyKeyOf)
     .filter((key) => !isNew.has(key) && dependencyReason(key) === undefined);
+
   const orphaned = Object.keys(DEPENDENCY_REASONS).filter((key) => !detail.has(key));
+
   const faults = [
     ...unreasoned.map((key) => finding({
       at: key,
@@ -642,17 +702,22 @@ if (import.meta.main) {
       fix: 'delete the entry from DEPENDENCY_REASONS in scripts/dead-code.ts',
     })),
   ];
+
   if (faults.length > 0) {
     console.error(`dead-code: ${faults.length} reason fault(s)\n`);
+
     for (const fault of faults) console.error(fault);
   }
 
   const verdict = report(
     'dead-code', ratchet, detail, 'bun scripts/dead-code.ts --lock', measured,
   );
+
   const code = faults.length > 0 ? 1 : verdict;
+
   if (code === 0) {
     for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
+
   process.exit(code);
 }

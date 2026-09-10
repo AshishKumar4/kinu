@@ -18,14 +18,17 @@ const NOW = Date.now();
 
 /** `retryBackgroundJob(id)` and `dismissBackgroundJob(id)`, as the Work tab calls them. */
 const JobIdArgsSchema = v.tuple([v.string()]);
+
 /** `decidePlanReview(planId, revision, decision, feedback?)`, as the plan review calls it. */
 const DecideArgsSchema = v.tuple([v.string(), v.number(), v.picklist(['request_changes', 'approve']), v.optional(v.string())]);
 
 export const LANDING_MODEL = 'anthropic/claude-opus-4';
+
 export const LANDING_MODELS: ModelMenuEntry[] = [
   { spec: LANDING_MODEL, label: 'Claude Opus 4', provider: 'Anthropic' },
   { spec: 'workers-ai/llama-4', label: 'Llama 4 (Workers AI)', provider: 'Workers AI' },
 ];
+
 export const LANDING_WORKSPACE = 'checkout-fixes';
 
 export const LANDING_SUBORDINATES: readonly SubordinateRosterEntry[] = [
@@ -122,18 +125,27 @@ export interface WorkFixture {
 export function checkoutWorkFixture(onChange: () => void): WorkFixture {
   let jobs = CHECKOUT_JOBS;
   let pending = CHECKOUT_PENDING;
+
   const rpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
+
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
+
     if (method === 'inspectSubordinate') {
       const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
+
       return answer({ view: request.view, path: request.path, page: { status: 'end', items: [] } });
     }
+
     if (method === 'listAgentTasks') return answer(CHECKOUT_TASKS);
+
     if (method === 'getEvolutionChangelog') return answer(CHECKOUT_CHANGELOG);
+
     if (method === 'listBackgroundJobs') return answer(jobs);
+
     if (method === 'retryBackgroundJob' || method === 'dismissBackgroundJob') {
       const named = v.safeParse(JobIdArgsSchema, args);
+
       if (!named.success) return answer({ ok: false, error: 'no job named' });
       const [id] = named.output;
       const retryId = `bgjob-${id.slice(-8)}r`;
@@ -145,12 +157,17 @@ export function checkoutWorkFixture(onChange: () => void): WorkFixture {
         : jobs.filter((job) => job.id !== id);
       pending = pending.filter((action) => action.id !== id);
       onChange();
+
       return answer({ ok: true });
     }
+
     if (method === 'getExposedPorts') return answer({ ports: [] });
+
     if (method.startsWith('list') || method.startsWith('get')) return answer([]);
+
     return answer({ ok: true });
   };
+
   return { rpc, jobs: () => jobs, pending: () => pending };
 }
 
@@ -175,6 +192,7 @@ const SUPERVISE_RUNS: RunSummary[] = [
   ...Array.from({ length: 12 }, (_, index): RunSummary => {
     const asked = ['Which migration dropped the coupon index?', 'Show me every reader of rules[kind]', 'Run the checkout suite against the fix', null];
     const asking = asked[index % asked.length] ?? null;
+
     return {
       runId: `run_8${String(99 - index).padStart(2, '0')}`,
       startedAt: NOW - (7 + index) * 36e5,
@@ -207,17 +225,24 @@ const PageRequestSchema: v.GenericSchema<PageRequest> = v.object({
 
 export const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
+
   if (method === 'listCurriculumTasks') return answer({ tasks: SUPERVISE_TASKS });
+
   if (method === 'getRunSummaries') {
     const request = v.parse(PageRequestSchema, args?.[0] ?? {});
     const limit = request.limit ?? 30;
     const after = request.cursor?.after;
     const start = after === undefined ? 0 : SUPERVISE_RUNS.findIndex((run) => run.runId === after) + 1;
+
     return answer(seekPage(SUPERVISE_RUNS.slice(start, start + limit + 1), limit, (run) => run.runId));
   }
+
   if (method === 'listTriggers') return answer({ triggers: SUPERVISE_TRIGGERS });
+
   if (method === 'listBackgroundJobs') return answer(CHECKOUT_JOBS);
+
   if (method.startsWith('list') || method.startsWith('get')) return answer([]);
+
   return answer({ ok: true });
 };
 
@@ -275,16 +300,24 @@ export const PLAN_FIXTURE: PlanReview = {
 export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview = PLAN_FIXTURE): Rpc {
   return async <T,>(method: string, args?: unknown[]): Promise<T> => {
     const answer = <Value,>(value: Value): Promise<T> => new Response(JSON.stringify(v.parse(JsonValueSchema, value))).json<T>();
+
     if (method === 'getExecutorDiff') return answer({ files: [], mode: 'vfs-baseline' });
+
     if (method === 'inspectSubordinate') {
       const request = v.parse(SubordinateInspectionRequestSchema, args?.[0]);
+
       if (request.view === 'planTasks') return answer({ view: 'planTasks', path: request.path, tasks: [] });
+
       return answer({ view: request.view, path: request.path, page: { status: 'end', items: request.view === 'plans' ? [base] : [] } });
     }
+
     if (method === 'getEvolutionChangelog') return answer({ seenAt: NOW, unseenCount: 0, entries: [] });
+
     if (method === 'savePlanReviewAnnotations') return answer({ ok: true, plan: base });
+
     if (method === 'decidePlanReview') {
       const [, , decision, feedback] = v.parse(DecideArgsSchema, args);
+
       const decided: PlanReview = {
         ...base,
         status: decision === 'approve' ? 'approved' : 'changes_requested',
@@ -293,11 +326,16 @@ export function planRpc(onDecide: (plan: PlanReview) => void, base: PlanReview =
         updatedAt: Date.now(),
         decidedAt: Date.now(),
       };
+
       onDecide(decided);
+
       return answer({ ok: true, plan: decided, queued: true });
     }
+
     if (method === 'getExposedPorts') return answer({ ports: [] });
+
     if (method.startsWith('list') || method.startsWith('get')) return answer([]);
+
     return answer({ ok: true });
   };
 }

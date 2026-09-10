@@ -26,6 +26,7 @@ export const SlateBindingRequestSchema = v.strictObject({
    */
   invocation: v.nullable(v.pipe(v.string(), v.minLength(1))),
 });
+
 export type SlateBindingRequest = v.InferOutput<typeof SlateBindingRequestSchema>;
 
 /** One app invocation the host is running: which slate it entered, and the
@@ -51,16 +52,20 @@ export function resolveSlateChain(input: {
   readonly invocation: string | null;
 }): readonly string[] {
   const { invocations, id, invocation } = input;
+
   if (invocation === null) return [];
   const issued = invocations.get(invocation);
+
   if (issued === undefined) {
     throw new KinuError('denied',
       `Slate ${id} named app invocation ${invocation}, which this host is not running; a finished invocation cannot lend its call chain`);
   }
+
   if (issued.id !== id) {
     throw new KinuError('denied',
       `Slate ${id} named app invocation ${invocation}, which was issued to slate ${issued.id}`);
   }
+
   return issued.chain;
 }
 
@@ -88,41 +93,55 @@ export function routeSlateBindingCall(input: {
   const { id, name, request } = input;
   const bindings = input.project.slate.bindings;
   const binding = Object.hasOwn(bindings, name) ? bindings[name] : undefined;
+
   if (binding === undefined) throw new KinuError('denied', `Slate ${id} no longer declares binding ${name}`);
   const { member, args } = request;
+
   switch (binding.kind) {
     case 'namespace':
       if (binding.members !== undefined && !binding.members.includes(member)) {
         throw new KinuError('denied', `${name} does not offer ${binding.namespace}.${member}`);
       }
+
       return { kind: 'namespace', namespace: binding.namespace, member, args };
     case 'rpc': {
       const method = binding.methods.find((declared) => declared === member);
+
       if (method === undefined) throw new KinuError('denied', `${name} does not offer ${member}`);
+
       if (args.length !== 0) throw new KinuError('bad_input', `${name}.${member} is a read model and takes no arguments`);
+
       return { kind: 'rpc', method };
     }
+
     case 'mcp': {
       if (binding.tools !== undefined && !binding.tools.includes(member)) {
         throw new KinuError('denied', `${name} does not offer ${member} on ${binding.server}`);
       }
+
       const argumentsObject = args.length === 0 ? {} : args[0];
+
       if (args.length > 1 || !isJsonObject(argumentsObject)) throw new KinuError('bad_input', `${name}.${member} takes one JSON object of arguments`);
+
       return { kind: 'mcp', server: binding.server, tool: member, args: argumentsObject };
     }
+
     case 'app': {
       if (!isSlateMethodName(member)) {
         throw new KinuError('bad_input', `"${member}" is not a method name the bridge forwards`);
       }
+
       // An app hop ends because it must name a slate that is not already
       // running above it. A workspace holds finitely many slates, so a chain of
       // distinct ones is finite and no hop count has to bound it. A repeat is a
       // cycle: the callee is waiting on its own caller and cannot answer.
       const chain = [...input.chain, id];
+
       if (chain.includes(binding.id)) {
         throw new KinuError('denied',
           `${name}.${member} re-enters slate ${binding.id}, which is already running in this call chain: ${[...chain, binding.id].join(' -> ')}`);
       }
+
       return { kind: 'app', id: binding.id, method: member, args, chain };
     }
   }

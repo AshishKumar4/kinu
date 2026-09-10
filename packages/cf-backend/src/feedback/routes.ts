@@ -60,10 +60,12 @@ async function attributeWorkspace(
   workspace: string,
 ): Promise<WorkspaceAttribution> {
   if (!isWorkspaceName(workspace)) return { kind: 'refused' };
+
   try {
     const caller = await ownerCaller(env);
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
     const owned = await retryTransientDO('hasWorkspace', () => userDO.hasWorkspace(caller, workspace));
+
     return owned ? { kind: 'owned', workspace } : { kind: 'refused' };
   } catch (cause) {
     // Every failure here is ours to explain, never a refusal: a deployment with
@@ -82,6 +84,7 @@ export async function handleFeedbackRequest(
   identity: AuthIdentity | null,
 ): Promise<Response | null> {
   const bucket = env.FEEDBACK_BUCKET;
+
   return routeFeedback(request, identity, {
     store: bucket === undefined ? null : {
       async put(key, bytes) {

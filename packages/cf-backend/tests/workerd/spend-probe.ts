@@ -61,6 +61,7 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
 
   private recorder(): RunEventRecorder {
     initRunEventTables((ddl) => { this.ctx.storage.sql.exec(ddl); });
+
     return new RunEventRecorder(this.sql, this.actor());
   }
 
@@ -75,10 +76,12 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
    */
   measure(steps: number, judges: number, silent: number): ProbeTally[] {
     const recorder = this.recorder();
+
     const messages = [
       { role: 'user' as const, content: 'x'.repeat(600) },
       { role: 'assistant' as const, content: 'y'.repeat(1200) },
     ];
+
     for (let i = 0; i < steps; i++) {
       recorder.emit('run-1', {
         type: 'step_finish', stepIndex: i, messages,
@@ -86,16 +89,19 @@ export class SpendProbeDO extends DurableObject<Cloudflare.Env> {
         usd: 0.002,
       });
     }
+
     for (let i = 0; i < judges; i++) {
       recorder.emit(WORKSPACE_RUN_ID, {
         type: 'model_call', source: 'judge', usage: { input: 900, output: 60 },
       });
     }
+
     // A provider that returns no usage field of any kind — the Workers AI
     // utility bindings. Counted in calls, absent from tokens.
     for (let i = 0; i < silent; i++) {
       recorder.emit(WORKSPACE_RUN_ID, { type: 'model_call', source: 'platform' });
     }
+
     return [...recorder.spendByProducer()].map(([source, tally]) => ({
       source,
       calls: tally.calls,

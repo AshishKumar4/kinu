@@ -181,6 +181,7 @@ export function declareTerminalRoster(
   }
 
   const craftNames = durablyAnswered ? parts.craftedToolsUsed ?? [] : [];
+
   if (craftNames.length > 0) {
     owed.push({
       name: 'craft_usage', scope: messageId, lane: 'inline',
@@ -234,11 +235,13 @@ export function declareTerminalRoster(
       input: { messageId, text: assistantText, message: parts.turnEndExtensions.message },
     });
   }
+
   if (parts.overflowRetry) {
     owed.push({
       name: 'overflow_retry', scope: messageId, lane: 'inline', input: {},
     });
   }
+
   // Beside the retry, and never with it: one answers a turn that failed, the
   // other a turn that finished with more to say, and `completed` decides which.
   if (parts.outputContinuation) {
@@ -246,6 +249,7 @@ export function declareTerminalRoster(
       name: 'output_continuation', scope: messageId, lane: 'inline', input: {},
     });
   }
+
   owed.push({
     name: 'turn_record', scope: messageId, lane: 'inline',
     input: {
@@ -302,6 +306,7 @@ export function declareTerminalRoster(
       },
     });
   }
+
   // The between-turn lanes. Each is durably gated at its own boundary — a config
   // flag, a `name_origin` stamp, a turn-count cadence — which is what makes each
   // replayable from its recorded input.
@@ -315,14 +320,17 @@ export function declareTerminalRoster(
       },
     });
   }
+
   if (parts.autoTitle) {
     owed.push({
       name: 'auto_title', scope: messageId, lane: 'detached',
       input: { subject: parts.autoTitle.subject },
     });
   }
+
   if (parts.autoGepa) {
     owed.push({ name: 'auto_gepa', scope: messageId, lane: 'detached', input: {} });
   }
+
   return owed;
 }

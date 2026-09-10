@@ -23,39 +23,51 @@ import type {
 import { SqliteVFS } from '../../../node_modules/@nimbus-sh/core/dist/vfs/sqlite-vfs.js';
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
+
 const A: VfsCred = { uid: 2001, gid: 2001, groups: [2001], umask: 0o022 };
+
 const B: VfsCred = { uid: 2002, gid: 2002, groups: [2002], umask: 0o022 };
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.byteLength);
     const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
+
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
+
     return bytes;
   }
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
 test('dist carries the per-credential /tmp, the list reverse-map, and confined chmod', () => {
   const database = new Database(':memory:');
+
   const sql: SqlDatabase = {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
       const bound = bindings.map(sqlBinding);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
+
   const ctx: TransactionHost = {
     storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() },
   };
+
   const vfs = new SqliteVFS(sql, ctx);
 
   const root = vfs.as(ROOT);
   root.mkdir('tmp', { recursive: true });
   root.chmod('tmp', 0o755);
+
   for (const [cred, name] of [[A, 'agent-a'], [B, 'agent-b']] as const) {
     root.mkdir(`tmp/${name}`, { recursive: true });
     root.chown(`tmp/${name}`, cred.uid, cred.gid);
@@ -81,6 +93,7 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
   const seen = vfs.as(A).list(null, 500).entries
     .map((e: { path: string }) => e.path)
     .filter((p: string) => p.startsWith('tmp'));
+
   expect(seen).toContain('tmp/note.txt');
   expect(seen.some((p: string) => p.includes('agent-b'))).toBe(false);
 
@@ -111,28 +124,36 @@ test('dist carries the per-credential /tmp, the list reverse-map, and confined c
 
 test('dist keeps file bytes coherent across an embedder transaction rollback', () => {
   const database = new Database(':memory:');
+
   try {
     const sql: SqlDatabase = {
       exec(query: string, ...bindings: SqlValue[]) {
         const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
         const bound = bindings.map(sqlBinding);
+
         if (statement.columnNames.length > 0) return statement.all(...bound);
         statement.run(...bound);
+
         return [];
       },
     };
+
     const vfs = new SqliteVFS(sql, {
       storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() },
     });
+
     const files = vfs.as(ROOT);
     const original = new TextEncoder().encode('committed source bytes');
     const replacement = new TextEncoder().encode('replacement source bytes that must roll back');
     expect(vfs.withTransaction).toBeFunction();
     const atomic = <T,>(body: () => T): T => vfs.withTransaction(body);
+
     const committed = atomic(() => {
       files.writeFile('server.js', original);
+
       return files.readFile('server.js');
     });
+
     expect(committed).toEqual(original);
     expect(files.readFile('server.js')).toEqual(original);
 

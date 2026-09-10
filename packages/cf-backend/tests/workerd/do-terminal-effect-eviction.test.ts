@@ -36,6 +36,7 @@ import { HELD_EFFECT, PROBE_SEQUENCE, type ProbeClaim } from './terminal-effect-
  *  reports the state actually reached. The condition is a REAL alarm delivery
  *  after a real eviction, which is why it is wall-clock and not a fake timer. */
 const WAKE_DEADLINE_MS = 30_000;
+
 const POLL_MS = 50;
 
 /** Distinctive, because it is the thing that has to survive: every effect writes
@@ -60,9 +61,12 @@ const keys = (messageId: string) => PROBE_SEQUENCE.map((name) => terminalEffectK
  */
 async function untilSettled(name: string, deadlineMs: number): Promise<ProbeClaim[]> {
   const started = Date.now();
+
   for (;;) {
     const claims = await probe(name).claims();
+
     if (claims.every((claim) => claim.settled) && claims.length > 0) return claims;
+
     if (Date.now() - started > deadlineMs) return claims;
     await scheduler.wait(POLL_MS);
   }

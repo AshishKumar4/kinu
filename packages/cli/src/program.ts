@@ -48,10 +48,15 @@ import { printFailure, VERSION } from './display';
 /** Help groups, in the order the branded help renders them (first registration
  *  of a group fixes its position). */
 const ACCOUNT = 'Account:';
+
 const WORKSPACES = 'Workspaces:';
+
 const RUNNING = 'Running:';
+
 const CONFIGURE = 'Configure:';
+
 const INSPECT = 'Inspect & evolve:';
+
 const THIS_COMPUTER = 'This computer:';
 
 export function buildProgram(): Command {

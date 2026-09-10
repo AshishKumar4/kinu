@@ -75,6 +75,7 @@ describe('explorationForkTree — a running swarm', () => {
         head('n4', 'running'), head('n5', 'running'),
       ]),
     });
+
     expect(tree).not.toBeNull();
     expect(tree!.id).toBe(ROOT);
     expect(vertices(tree)).toHaveLength(6);
@@ -100,6 +101,7 @@ describe('explorationForkTree — a running swarm', () => {
       tree: [rootRow(), settledRow('n1', 0.71)],
       head: journal([head('n1', 'completed'), head('n2', 'running')]),
     });
+
     expect(vertices(tree)).toHaveLength(3);
     const settled = tree!.children.find((child) => child.id === 'n1')!;
     expect(settled.value).toBe(0.71);
@@ -118,6 +120,7 @@ describe('explorationForkTree — a running swarm', () => {
         head('n1a', 'running', { parentId: 'n1', depth: 2 }),
       ]),
     });
+
     const parent = tree!.children.find((child) => child.id === 'n1')!;
     expect(parent.children.map((child) => child.id)).toEqual(['n1a']);
     expect(parent.children[0]!.depth).toBe(2);
@@ -130,6 +133,7 @@ describe('explorationForkTree — a running swarm', () => {
       tree: [rootRow()],
       head: journal([head('orphan', 'running', { parentId: 'gone', depth: 3 })]),
     });
+
     expect(vertices(tree)).toHaveLength(2);
     expect(tree!.children[0]!.id).toBe('orphan');
   });
@@ -138,6 +142,7 @@ describe('explorationForkTree — a running swarm', () => {
     const tree = explorationForkTree({
       tree: [], head: journal([head('n1', 'running'), head('n2', 'completed')]),
     });
+
     expect(vertices(tree)).toHaveLength(3);
   });
 
@@ -176,6 +181,7 @@ function productionCensus(): HeadRunView {
     // their spawn. That is the fact the canvas had and did not draw.
     lastStepAt: generation.status === 'running' ? 1_787_285_894_585 : null,
   })));
+
   return journal([
     ...heads,
     head('cbf7hl3o5n0r52j716zeh', 'completed', {
@@ -213,9 +219,11 @@ describe('explorationForkTree — the run as production held it', () => {
   test('the dead rows are drawn dead — six aborted and two errored, none of them live', () => {
     const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
     const byStatus = new Map<string, number>();
+
     for (const child of tree!.children) {
       byStatus.set(child.status, (byStatus.get(child.status) ?? 0) + 1);
     }
+
     // `aborted` and `errored` are both terminal and both failures, so the tree's
     // own vocabulary has one word for them. What matters is that eight rows are
     // NOT running: replacing an invisible node with a fake live one would be a
@@ -228,6 +236,7 @@ describe('explorationForkTree — the run as production held it', () => {
 
   test('no node claims a score, because none of these rows carries one', () => {
     const tree = explorationForkTree({ tree: [rootRow()], head: productionCensus() });
+
     for (const child of tree!.children) {
       expect(child.value).toBeNull();
       expect(child.visits).toBeNull();
@@ -260,6 +269,7 @@ describe('a node nothing has been backpropagated through has no score', () => {
     const scored: MctsRow = {
       ...rootRow(), id: 'n1', parent_id: ROOT, depth: 1, visits: 3, value: 0,
     };
+
     const tree = explorationForkTree({ tree: [rootRow(), scored], head: null });
     const child = tree?.children[0];
     // Three rollouts that all returned 0 is a measurement and must survive: this
@@ -274,6 +284,7 @@ describe('a node nothing has been backpropagated through has no score', () => {
     const odd: MctsRow = {
       ...rootRow(), id: 'n2', parent_id: ROOT, depth: 1, visits: 0, value: 0.7,
     };
+
     const tree = explorationForkTree({ tree: [rootRow(), odd], head: null });
     expect(tree?.children[0]?.value).toBe(0.7);
   });

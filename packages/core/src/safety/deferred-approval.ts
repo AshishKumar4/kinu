@@ -153,6 +153,7 @@ interface SpendRow extends Row { spend_seq: number }
 
 function toAction(r: Row): DeferredApproval {
   const status = v.safeParse(v.picklist(['queued', 'approved', 'denied', 'spent']), r.status);
+
   return {
     id: r.id,
     command: r.command,
@@ -185,6 +186,7 @@ export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE INDEX IF NOT EXISTS idx_deferred_approvals_command
     ON deferred_approvals(actor_id, command, executor, requested_at DESC)`);
 }
+
 /**
  * The durable rows. Pure storage — what the words say and who gets woken is
  * {@link DeferredApprovalQueue}'s.
@@ -219,6 +221,7 @@ export class DeferredApprovalStore {
    */
   standing(command: string, executor: string, now: number): DeferredApproval | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<Row>`
       SELECT id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals
@@ -227,6 +230,7 @@ export class DeferredApprovalStore {
           OR (status = 'denied' AND decided_at > ${now - DENIAL_STANDING_MS}))
       ORDER BY CASE WHEN status = 'queued' THEN 1 ELSE 0 END, requested_at DESC
       LIMIT 1`;
+
     return rows[0] ? toAction(rows[0]) : null;
   }
 
@@ -235,6 +239,7 @@ export class DeferredApprovalStore {
    *  still live; reports how many rows went. */
   sweepDenials(now: number): number {
     this.actor.assertCurrent();
+
     return this.sql<{ id: string }>`
       DELETE FROM deferred_approvals
       WHERE actor_id = ${this.actorId} AND status = 'denied'
@@ -248,6 +253,7 @@ export class DeferredApprovalStore {
         (actor_id, id, command, executor, reason, status, requested_at, decided_at)
       VALUES (${this.actorId}, ${action.id}, ${action.command}, ${action.executor}, ${action.reason},
         'queued', ${action.requestedAt}, NULL)`;
+
     return { ...action, status: 'queued', decidedAt: null };
   }
 
@@ -262,12 +268,14 @@ export class DeferredApprovalStore {
    */
   decide(id: string, answer: DeferredApprovalAnswer, now: number): DeferredApproval | null {
     this.actor.assertCurrent();
+
     if (this.get(id)?.status !== 'queued') return null;
     // 'always' is 'approved' plus a grant the QUEUE records; the row only ever
     // holds a status this module can honestly write about this one command.
     const status = answer === 'always' ? 'approved' : answer;
     void this.sql`UPDATE deferred_approvals SET status=${status}, decided_at=${now}
       WHERE actor_id=${this.actorId} AND id=${id} AND status='queued'`;
+
     return this.get(id);
   }
 
@@ -287,12 +295,16 @@ export class DeferredApprovalStore {
    */
   spend(id: string): { readonly action: DeferredApproval; readonly spend: ApprovalSpend } | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<SpendRow>`
       UPDATE deferred_approvals SET status='spent', spend_seq = spend_seq + 1
       WHERE actor_id = ${this.actorId} AND id = ${id} AND status = 'approved'
       RETURNING id, command, executor, reason, status, requested_at, decided_at, spend_seq`;
+
     const row = rows[0];
+
     if (!row) return null;
+
     return {
       action: toAction(row),
       spend: { approvalId: row.id, spend: row.spend_seq },
@@ -313,6 +325,7 @@ export class DeferredApprovalStore {
    */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
     this.actor.assertCurrent();
+
     const rows = outcome === 'did-not-run'
       ? this.sql<{ id: string }>`
           UPDATE deferred_approvals SET status='approved'
@@ -324,14 +337,17 @@ export class DeferredApprovalStore {
           WHERE actor_id = ${this.actorId} AND id = ${spent.approvalId}
             AND status='spent' AND spend_seq = ${spent.spend}
           RETURNING id`;
+
     return rows.length > 0;
   }
 
   get(id: string): DeferredApproval | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<Row>`
       SELECT id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals WHERE actor_id = ${this.actorId} AND id = ${id} LIMIT 1`;
+
     return rows[0] ? toAction(rows[0]) : null;
   }
 
@@ -339,6 +355,7 @@ export class DeferredApprovalStore {
    *  been blocked longest matters most. */
   listQueued(limit = 100): DeferredApproval[] {
     this.actor.assertCurrent();
+
     return this.sql<Row>`
       SELECT id, command, executor, reason, status, requested_at, decided_at
       FROM deferred_approvals WHERE actor_id = ${this.actorId} AND status='queued'
@@ -386,6 +403,7 @@ export function deniedActionMessage(action: DeferredApproval): string {
  *  the gate. */
 function ruleNames(action: DeferredApproval): string {
   const names = [...action.reason.matchAll(/^• ([\w-]+) \(/gm)].map((m) => m[1]);
+
   return names.length > 0 ? names.join(', ') : 'needs approval';
 }
 
@@ -396,16 +414,19 @@ export function decisionWakeMessage(decided: readonly DeferredApproval[]): strin
   const lines: string[] = [];
   const approved = decided.filter((a) => a.status === 'approved');
   const denied = decided.filter((a) => a.status === 'denied');
+
   // "Still not run" is the one thing worth repeating here: it is the exact
   // mistake an agent makes on waking, and the prompt cannot say it per-id.
   if (approved.length > 0) {
     lines.push('APPROVED, still not run — re-issue once:',
       ...approved.map((a) => `  ${a.id} — ${clip(a.command)}`));
   }
+
   if (denied.length > 0) {
     lines.push('DENIED — do not re-issue:',
       ...denied.map((a) => `  ${a.id} — ${clip(a.command)}`));
   }
+
   return lines.join('\n');
 }
 
@@ -462,7 +483,9 @@ export class DeferredApprovalQueue {
     return {
       park: (req) => {
         const verdict = this.park(req);
+
         if (verdict.outcome === 'run') return { run: true, spent: verdict.spend };
+
         return {
           run: false,
           // A parked action is an absence of decision, not a refusal: the owner can still approve it.
@@ -490,15 +513,19 @@ export class DeferredApprovalQueue {
     // answering is deleted here rather than left for a sweep nobody schedules.
     this.deps.store.sweepDenials(now);
     const standing = this.deps.store.standing(req.command, req.executor, now);
+
     if (standing?.status === 'denied') return { outcome: 'denied', action: standing };
+
     if (standing?.status === 'approved') {
       // The grant leaves `standing()` HERE, before the command runs, so a crash
       // between the two costs an approval rather than granting one twice. The
       // row survives the spend so {@link settle} can close it either way.
       const spent = this.deps.store.spend(standing.id);
+
       if (spent) return { outcome: 'run', action: spent.action, spend: spent.spend };
       // Lost the race to a concurrent re-issue: fall through and park again.
     }
+
     if (standing?.status === 'queued') return { outcome: 'queued', action: standing };
 
     const action = this.deps.store.create({
@@ -508,7 +535,9 @@ export class DeferredApprovalQueue {
       reason: formatApproval(req.review),
       requestedAt: now,
     });
+
     this.notify({ kind: 'queued', action });
+
     return { outcome: 'queued', action };
   }
 
@@ -532,12 +561,15 @@ export class DeferredApprovalQueue {
    */
   settle(spent: ApprovalSpend, outcome: ApprovalSpendOutcome): boolean {
     const action = this.deps.store.get(spent.approvalId);
+
     if (!this.deps.store.settle(spent, outcome)) return false;
+
     if (outcome === 'spent' && action) {
       this.deps.audit?.({
         approvalId: action.id, command: action.command, executor: action.executor,
       });
     }
+
     return true;
   }
 
@@ -556,13 +588,17 @@ export class DeferredApprovalQueue {
     const now = this.now();
     this.deps.store.sweepDenials(now);
     const decided: DeferredApproval[] = [];
+
     // Deduped: a UI that sends an id twice must not report it twice, or the
     // wake would name one command as two decisions.
     for (const id of new Set(ids)) {
       const action = this.deps.store.decide(id, answer, now);
+
       if (action) decided.push(action);
     }
+
     if (decided.length === 0) return decided;
+
     if (answer === 'always') {
       // Recomputed from the command and its executor rather than stored: the
       // rule table is the one source of truth for what a command trips, and
@@ -570,12 +606,14 @@ export class DeferredApprovalQueue {
       this.deps.remember(decided.flatMap(
         (a) => gatedGrants(reviewCommand(a.command, a.executor), a.executor)));
     }
+
     this.notify({ kind: 'decided', actions: decided });
     await this.deps.signals.deliver({
       kind: DEFERRED_APPROVAL_SIGNAL,
       text: decisionWakeMessage(decided),
       metadata: { decision: answer, count: decided.length, ids: decided.map((a) => a.id) },
     });
+
     return decided;
   }
 

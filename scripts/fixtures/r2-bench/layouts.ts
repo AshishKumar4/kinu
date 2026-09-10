@@ -34,9 +34,13 @@
 
 /** Where each layout puts the tree the workloads run against. */
 export const NATIVE_ROOT = '/workspace';
+
 export const R2_MOUNT_PATH = '/r2bench';
+
 export const OVERLAY_LOWER_MOUNT = '/r2lower';
+
 export const OVERLAY_MERGED = '/overlay';
+
 export const S3FS_CACHE_DIR = '/var/cache/s3fs-bench';
 
 /**
@@ -225,6 +229,7 @@ export function mountPrefixFor(runId: string): string {
 
 export function layoutsFor(runId: string): readonly LayoutSpec[] {
   const prefix = mountPrefixFor(runId);
+
   return [
     {
       id: 'native',
@@ -288,5 +293,6 @@ export function layoutsFor(runId: string): readonly LayoutSpec[] {
 export function mountSignature(spec: LayoutSpec): string | null {
   if (spec.mount === undefined) return null;
   const options = [...spec.mount.s3fsOptions].sort().join(',');
+
   return `${spec.mount.mountPath}|${spec.mount.prefix}|${spec.mount.readOnly}|${options}`;
 }

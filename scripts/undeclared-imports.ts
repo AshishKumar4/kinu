@@ -64,6 +64,7 @@ import { isManifest, isParseable, isTypescriptConfig, readMatching } from './sou
 import { moduleSpecifiers, parse } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/undeclared-imports.lock.json`;
 
 export const GATE = 'undeclared-imports';
@@ -120,11 +121,15 @@ export interface OwningPackage {
 export function workspaceGlobMatches(pattern: string, directory: string): boolean {
   const wanted = pattern.split('/');
   const actual = directory.split('/');
+
   for (let i = 0; i < wanted.length; i += 1) {
     if (wanted[i] === '**') return true;
+
     if (i >= actual.length) return false;
+
     if (wanted[i] !== '*' && wanted[i] !== actual[i]) return false;
   }
+
   return wanted.length === actual.length;
 }
 
@@ -133,6 +138,7 @@ export function workspaceGlobMatches(pattern: string, directory: string): boolea
  *  must carry to be resolved by it rather than by `node_modules`. */
 export function aliasPrefixes(tsconfig: string): string[] {
   const { compilerOptions } = parseJsonc(tsconfig, TsconfigSchema, 'tsconfig.json');
+
   return Object.keys(compilerOptions.paths)
     .map((pattern) => (pattern.includes('*') ? pattern.slice(0, pattern.indexOf('*')) : pattern))
     .sort((a, b) => b.length - a.length);
@@ -152,7 +158,9 @@ export function isPackageSpecifier(specifier: string): boolean {
   if (specifier.startsWith('.') || specifier.startsWith('/') || specifier.startsWith('#')) return false;
   const scheme = specifier.indexOf(':');
   const subpath = specifier.indexOf('/');
+
   if (scheme >= 0 && (subpath < 0 || scheme < subpath)) return false;
+
   return !isBuiltin(specifier);
 }
 
@@ -160,6 +168,7 @@ export function isPackageSpecifier(specifier: string): boolean {
  *  package, the first segment otherwise. `ai/mcp-stdio` is `ai`. */
 export function packageOf(specifier: string): string {
   const segments = specifier.split('/');
+
   return specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0] ?? specifier;
 }
 
@@ -169,10 +178,13 @@ export function packageOf(specifier: string): string {
  *  this gate reports. */
 export function ownerOf(file: string, packages: readonly OwningPackage[]): OwningPackage | undefined {
   let owner: OwningPackage | undefined;
+
   for (const candidate of packages) {
     if (!file.startsWith(candidate.directory)) continue;
+
     if (owner === undefined || candidate.directory.length > owner.directory.length) owner = candidate;
   }
+
   return owner;
 }
 
@@ -194,6 +206,7 @@ const NAMED_IMPORTERS = 3;
 export function describe(edge: UndeclaredImport): string {
   const shown = edge.importers.slice(0, NAMED_IMPORTERS);
   const rest = edge.importers.length - shown.length;
+
   return `  ${edge.manifest} does not declare ${edge.name}, and ${String(edge.importers.length)} `
     + `of its file(s) import it\n    ${shown.join('\n    ')}`
     + `${rest > 0 ? `\n    …and ${String(rest)} more` : ''}`;
@@ -224,21 +237,28 @@ export function census(
 
   for (const [file, text] of sources) {
     const owner = ownerOf(file, packages);
+
     if (owner === undefined) continue;
+
     for (const specifier of moduleSpecifiers(parse(file, text).root)) {
       specifiers += 1;
+
       if (!isPackageSpecifier(specifier)) continue;
+
       if (owner.aliases.some((prefix) => specifier.startsWith(prefix))) continue;
       examined += 1;
       const name = packageOf(specifier);
+
       if (name === owner.name || owner.declared.has(name)) continue;
       const edge: UndeclaredImport = { manifest: owner.manifest, name, importers: [] };
       const key = keyOf(edge);
       let row = importers.get(key);
+
       if (row === undefined) {
         row = { edge, files: new Set<string>() };
         importers.set(key, row);
       }
+
       row.files.add(file);
     }
   }
@@ -269,16 +289,21 @@ export function readPackages(
 
   return parsed.map(({ manifest, directory, parsed: own }) => {
     const declared = new Set(DECLARATION_FIELDS.flatMap((field) => Object.keys(own[field])));
+
     for (const member of parsed) {
       // `directory` carries a trailing slash and the root's is empty, so the
       // root never claims itself as one of its own members.
       const at = member.directory.slice(0, -1);
+
       if (member.parsed.name === undefined || at.length === 0) continue;
+
       if (own.workspaces.some((pattern) => workspaceGlobMatches(pattern, at))) {
         declared.add(member.parsed.name);
       }
     }
+
     const tsconfig = tsconfigOf(directory);
+
     return {
       manifest,
       directory,
@@ -320,6 +345,7 @@ if (import.meta.main) {
   // would each report a clean tree over a population nobody looked at — and the
   // ratchet hides that particularly well, because an empty scan locks nothing.
   const declarations = packages.reduce((n, pkg) => n + pkg.declared.size, 0);
+
   const measured = assertMeasured(GATE, [
     ['manifests read', manifests.size],
     ['source files parsed', sources.size],
@@ -339,9 +365,12 @@ if (import.meta.main) {
   const code = report(
     GATE, reconcile(keys, LOCK), detail, 'bun scripts/undeclared-imports.ts --lock', measured,
   );
+
   if (code === 0) {
     console.log(`  ${String(keys.length)} locked edge(s) still resolve only through hoisting`);
+
     for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
   }
+
   process.exit(code);
 }

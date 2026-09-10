@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { findViolations, keyOf, layerOf } from './core-layering';
 
 const C = 'packages/core/src/';
+
 const corpus = (files: Record<string, string>): Map<string, string> =>
   new Map(Object.entries(files).map(([f, t]) => [`${C}${f}`, t]));
 
@@ -18,6 +19,7 @@ describe('core-layering', () => {
       'tools/c.ts': "import { x } from '../vfs/b';",
       'vfs/b.ts': 'export const x = 1;',
     }));
+
     expect(v).toEqual([]);
   });
 
@@ -26,6 +28,7 @@ describe('core-layering', () => {
       'vfs/b.ts': "// moved\n\nimport { y } from '../orchestrator/a';",
       'orchestrator/a.ts': 'export const y = 1;',
     }));
+
     expect(v.map(keyOf)).toEqual([`${C}vfs/b.ts -> ${C}orchestrator/a.ts (value)`]);
     expect(v[0]?.line).toBe(3);
   });
@@ -37,6 +40,7 @@ describe('core-layering', () => {
       'mcts/m.ts': 'export type B = 1;',
       'tools/t.ts': 'export type C = 1;',
     }));
+
     expect(v.map((x) => [x.to.slice(C.length), x.typeOnly])).toEqual([['heads/h.ts', true], ['mcts/m.ts', false], ['tools/t.ts', true]]);
   });
 
@@ -51,6 +55,7 @@ describe('core-layering', () => {
       'events/e.ts': "import { type A, b } from '../prompting/p';",
       'prompting/p.ts': 'export type A = 1; export const b = 1;',
     }));
+
     expect(v.map((x) => x.typeOnly)).toEqual([false]);
   });
 

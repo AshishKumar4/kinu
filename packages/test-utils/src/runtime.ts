@@ -116,6 +116,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   initAgentConfigTable(testSql.execRaw);
   initCodemodeStateTable(testSql.execRaw);
   const actor = new WorkspaceActorDirectory(testSql.sql, { workspaceId, ownerUserId: '' }).createMain({ name: 'test' });
+
   const rt: AgentRuntime = {
     actor,
     storage: {
@@ -134,6 +135,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     abortBranch: async () => {},
     executionRouter: opts.executionRouter ?? emptyRouter(),
   };
+
   return { rt, testSql, llm };
 }
 
@@ -164,6 +166,7 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
  */
 export function assertExecutableRuntime(rt: AgentRuntime, context: string): void {
   const router = rt.executionRouter;
+
   if (!router) {
     throw new Error(
       `${context}: this runtime has NO executionRouter, so nothing the agent does can execute. `
@@ -171,7 +174,9 @@ export function assertExecutableRuntime(rt: AgentRuntime, context: string): void
       + 'openWorkspaceCLI (createCLIRuntime) to get one that can run commands.',
     );
   }
+
   const providers = router.getProviders();
+
   if (providers.length === 0) {
     throw new Error(
       `${context}: the executionRouter has ZERO registered providers, so every workspace and `

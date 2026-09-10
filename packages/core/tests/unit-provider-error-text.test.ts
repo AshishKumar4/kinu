@@ -58,6 +58,7 @@ async function rejectionOf(action: () => Promise<void>): Promise<Error> {
     if (error instanceof Error) return error;
     throw new Error(`expected Error rejection, received ${String(error)}`, { cause: error });
   }
+
   throw new Error('expected action to reject');
 }
 
@@ -126,12 +127,14 @@ describe('describeProviderError', () => {
 
   test('an empty Error message falls through to the error name, and an empty body does not displace it', () => {
     expect(describeProviderError({ cause: new TypeError('') })).toBe('TypeError');
+
     const blank = new APICallError({
       message: '',
       url: 'https://example.invalid/v1/chat/completions',
       requestBodyValues: {},
       responseBody: '""',
     });
+
     expect(describeProviderError({ cause: blank })).toBe('AI_APICallError');
   });
 
@@ -160,6 +163,7 @@ describe('describeProviderError', () => {
         statusCode,
       }),
     });
+
     expect(statusOnly(401).code).toBe('denied');
     expect(statusOnly(402).code).toBe('denied');
     expect(statusOnly(404).code).toBe('missing');
@@ -216,6 +220,7 @@ describe('runChat provider failures', () => {
 
   test('does not dump the raw payload to the console', async () => {
     const consoleError = spyOn(console, 'error').mockImplementation(() => {});
+
     try {
       await rejectionOf(() => runToCompletion(inBandErrorModel({ message: 'nope', code: 'billing_not_active' })));
       expect(consoleError).not.toHaveBeenCalled();

@@ -32,6 +32,7 @@ export default {
         inner.fail(new Error('probe: a tolerated failure, recorded not swallowed'));
       });
     });
+
     return Response.json(observed);
   },
 };

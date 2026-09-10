@@ -24,13 +24,17 @@ import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 function annotationType(value: PlanReviewAnnotation["type"]): AnnotationType {
   if (value === "DELETION") return AnnotationType.DELETION;
+
   if (value === "GLOBAL_COMMENT") return AnnotationType.GLOBAL_COMMENT;
+
   return AnnotationType.COMMENT;
 }
 
 function parsePlanAnnotations<Values>(values: Values): Annotation[] {
   const admission = admitPlanReviewAnnotations(values);
+
   if (!admission.ok) return [];
+
   return admission.annotations.map((annotation) => ({
     ...annotation,
     type: annotationType(annotation.type),
@@ -43,9 +47,11 @@ const FILE_TREE_BRANCH = /^\s*(?:[│|]\s*)*(?:├──|└──|\|--|`--)\s+\
 
 function looksLikeFileTree(content: string): boolean {
   let branches = 0;
+
   for (const line of content.split("\n")) {
     if (FILE_TREE_BRANCH.test(line) && ++branches === 2) return true;
   }
+
   return false;
 }
 
@@ -54,14 +60,18 @@ function looksLikeFileTree(content: string): boolean {
 function planReviewBlocks(markdown: string): Block[] {
   return parseMarkdownToBlocks(markdown).map((block) => {
     if (block.type === "html") return { ...block, type: "code", language: "html" };
+
     if (block.type === "code") {
       const plainText = block.language === undefined
         || block.language === ""
         || block.language === "text"
         || block.language === "plaintext";
+
       return plainText && looksLikeFileTree(block.content) ? { ...block, language: "tree" } : block;
     }
+
     if (block.type === "math") return block;
+
     return { ...block, content: omitMarkdownImages(block.content) };
   });
 }
@@ -69,24 +79,34 @@ function planReviewBlocks(markdown: string): Block[] {
 function omitMarkdownImages(markdown: string): string {
   let output = "";
   let cursor = 0;
+
   while (cursor < markdown.length) {
     const start = markdown.indexOf("![", cursor);
+
     if (start < 0) return output + markdown.slice(cursor);
     output += markdown.slice(cursor, start);
     const labelEnd = markdown.indexOf("](", start + 2);
+
     if (labelEnd < 0) { output += markdown.slice(start); break; }
+
     let end = labelEnd + 2;
     let depth = 1;
+
     for (; end < markdown.length && depth > 0; end++) {
       if (markdown[end] === "\\") { end++; continue; }
+
       if (markdown[end] === "(") depth++;
+
       if (markdown[end] === ")") depth--;
     }
+
     if (depth !== 0) { output += markdown.slice(start); break; }
+
     const alt = markdown.slice(start + 2, labelEnd).trim();
     output += alt ? `[Image omitted: ${alt}]` : "[Image omitted]";
     cursor = end;
   }
+
   return output;
 }
 
@@ -117,12 +137,15 @@ function footerNote(
   },
 ): string {
   if (readOnly) return "Read-only plan history.";
+
   if (editable) return "Approve this revision, or annotate the text that needs work.";
+
   if (handoffPending) {
     return approved
       ? "Kinu saved your approval. Implementation has not started."
       : "Kinu saved your review. The revision has not started.";
   }
+
   return approved
     ? "Implementation started from this revision."
     : "The agent is preparing the next revision.";
@@ -152,18 +175,24 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
 
   const annotationSaves = useMemo(() => createPlanAnnotationSaveQueue<Annotation>(async (next) => {
     if (planId === null || planRevision === null) return false;
+
     if (activePlanKey.current === planKey) setError(null);
+
     try {
       const result = await rpc<PlanReviewResult>("savePlanReviewAnnotations", [planId, planRevision, next]);
+
       if (!result.ok) {
         if (activePlanKey.current === planKey) setError(result.error);
+
         return false;
       }
+
       return true;
     } catch (cause) {
       if (activePlanKey.current === planKey) {
         setError(renderThrownChain({ cause: cause }));
       }
+
       return false;
     }
   }), [planId, planKey, planRevision, rpc]);
@@ -180,31 +209,39 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
 
   const blocks = useMemo(() => planReviewBlocks(plan?.content ?? ""), [plan?.content]);
   const frontmatter = useMemo(() => extractFrontmatter(plan?.content ?? "").frontmatter, [plan?.content]);
+
   /* A title is the first block or it is not a title. A later h1 stays where
    * the agent wrote it. The header uses Viewer for the promoted block so its
    * Markdown and annotation anchors follow the same path as the document. */
   const titleBlock = useMemo(() => {
     const lead = blocks[0];
+
     return lead?.type === "heading" && (lead.level ?? 1) === 1 ? lead : null;
   }, [blocks]);
+
   const titleBlocks = useMemo(() => titleBlock === null ? [] : [titleBlock], [titleBlock]);
+
   const titleAnnotations = useMemo(
     () => titleBlock === null
       ? []
       : annotations.filter((annotation) => annotation.blockId === titleBlock.id),
     [annotations, titleBlock],
   );
+
   const documentAnnotations = useMemo(
     () => titleBlock === null
       ? annotations
       : annotations.filter((annotation) => annotation.blockId !== titleBlock.id),
     [annotations, titleBlock],
   );
+
   const documentBlocks = useMemo(
     () => titleBlock === null ? blocks : blocks.slice(1),
     [blocks, titleBlock],
   );
+
   const editable = !readOnly && plan?.status === "pending";
+
   const handoffPending = !readOnly && plan != null && !plan.handoffAccepted
     && (plan.status === "approved" || plan.status === "changes_requested");
 
@@ -213,9 +250,11 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     setAnnotations(next);
     setSaving(true);
     const saved = await annotationSaves.enqueue(next);
+
     if (annotationSaves.pending() === 0 && activePlanKey.current === planKey) {
       setSaving(false);
     }
+
     return saved;
   }, [annotationSaves, planKey, readOnly]);
 
@@ -226,13 +265,16 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     // failure belonged to is gone. Both are decided after the handler, so a
     // superseded revision cannot read the same as a save that never failed.
     let thrown: { readonly cause: unknown } | undefined;
+
     try {
       await save(next);
     } catch (cause) {
       thrown = { cause };
     }
+
     if (thrown !== undefined && activePlanKey.current === planKey) {
       setError(renderThrownChain({ cause: thrown.cause }));
+
       if (annotationSaves.pending() === 0) setSaving(false);
     }
   }, [annotationSaves, planKey, save]);
@@ -242,11 +284,13 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     const next = [...annotations, annotation];
     setSelected(annotation.id);
     setPanelOpen(true);
+
     return changeAnnotations(next);
   }, [annotations, changeAnnotations]);
 
   const selectAnnotation = useCallback((id: string | null) => {
     setSelected(id);
+
     if (id !== null) setPanelOpen(true);
   }, []);
 
@@ -255,18 +299,24 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     decisionInFlight.current = true;
     setDecisionBusy(decision === "approve" ? "approve" : "request");
     setError(null);
+
     try {
       if (editable) {
         const saved = await save(annotations);
+
         if (!saved) return;
       }
+
       const feedback = editable && decision === "request_changes"
         ? exportAnnotations(blocks, annotations, [], "Plan Feedback", "plan")
         : undefined;
+
       const result = await rpc<PlanReviewResult & { queued?: boolean; queueError?: string }>(
         "decidePlanReview", [plan.id, plan.revision, decision, feedback],
       );
+
       if (!result.ok) throw new Error(result.error);
+
       if (result.queued === false) {
         setError(`Decision saved, but the next turn could not start${result.queueError ? `: ${result.queueError}` : "."}`);
       }
@@ -294,6 +344,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
     setPanelOpen(false);
     setSelected(null);
   };
+
   const updatedAt = new Date(plan.updatedAt);
 
   return (
@@ -434,6 +485,7 @@ export default function PlanReviewView({ plan, rpc, readOnly = false }: PlanRevi
           onSelect={setSelected}
           onDelete={(id) => {
             if (selected === id) setSelected(null);
+
             return changeAnnotations(annotations.filter((annotation) => annotation.id !== id));
           }}
           onEdit={(id, updates) => changeAnnotations(annotations.map((annotation) => annotation.id === id ? { ...annotation, ...updates } : annotation))}

@@ -108,11 +108,13 @@ export function reciprocalRankFusion<T extends { id: string }>(
   k: number = 60,
 ): Array<{ id: string; rrfScore: number; sources: T[] }> {
   const byId = new Map<string, { id: string; rrfScore: number; sources: T[] }>();
+
   for (const list of lists) {
     list.forEach((item, idx) => {
       const rank = idx + 1;
       const inc = 1 / (k + rank);
       const existing = byId.get(item.id);
+
       if (existing) {
         existing.rrfScore += inc;
         existing.sources.push(item);
@@ -121,6 +123,7 @@ export function reciprocalRankFusion<T extends { id: string }>(
       }
     });
   }
+
   return Array.from(byId.values()).sort((a, b) => b.rrfScore - a.rrfScore);
 }
 
@@ -166,6 +169,7 @@ export function createCloudflareVectorStore(opts: {
   // empty list. `available` tells the search arm to skip the backend while
   // the cooldown holds; the next use after it re-probes the backend.
   let unavailableUntil = 0;
+
   const trip = (op: string, input: { error: unknown }): void => {
     diagnostics.failure(
       'vector.backend_tripped',
@@ -183,6 +187,7 @@ export function createCloudflareVectorStore(opts: {
     if (!namespace) return chunkId;
     const data = new TextEncoder().encode(`${namespace}\u0000${chunkId}`);
     const digest = await crypto.subtle.digest('SHA-256', data);
+
     return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 40);
   }
 
@@ -190,6 +195,7 @@ export function createCloudflareVectorStore(opts: {
     const vectors = embedder.embedBatch
       ? await embedder.embedBatch(chunks.map((c) => c.text))
       : await Promise.all(chunks.map((c) => embedder.embed(c.text)));
+
     return Promise.all(chunks.map(async (c, i) => ({
       id: await storageId(c.id),
       values: vectors[i],
@@ -213,11 +219,13 @@ export function createCloudflareVectorStore(opts: {
   async function safeQuery(text: string, topK: number): Promise<VectorSearchHit[]> {
     try {
       const vec = await embedder.embed(text);
+
       const res = await index.query(vec, {
         topK,
         returnMetadata: true,
         namespace,
       });
+
       return (res.matches ?? []).map((m) => ({
         // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
         // fuses the two sources. Falls back to the raw id for un-namespaced stores.
@@ -230,6 +238,7 @@ export function createCloudflareVectorStore(opts: {
     } catch (err) {
       // Reads degrade to lexical-only rather than failing the turn.
       trip('query', { error: err });
+
       return [];
     }
   }
@@ -248,6 +257,7 @@ export function createCloudflareVectorStore(opts: {
 
     async deleteChunks(ids: readonly string[]) {
       if (ids.length === 0) return;
+
       try {
         await index.deleteByIds(await Promise.all(ids.map(storageId)));
       } catch (err) {
@@ -286,6 +296,7 @@ export function createWorkersAIEmbedder(opts: {
 }): Embedder {
   const model = opts.model ?? '@cf/baai/bge-small-en-v1.5';
   const dimensions = opts.dimensions ?? 384;
+
   const report = (): void => opts.reportModelCall?.({
     source: 'platform', usage: {}, spec: `workers-ai/${model}`, modelId: model,
   });
@@ -294,9 +305,11 @@ export function createWorkersAIEmbedder(opts: {
     const result = await opts.aiBinding.run(model, { text });
     report();
     const vec = result?.data?.[0];
+
     if (!vec || vec.length === 0) {
       throw new Error(`Workers AI embed returned no vector for model ${model}`);
     }
+
     return vec;
   }
 
@@ -308,11 +321,13 @@ export function createWorkersAIEmbedder(opts: {
       const result = await opts.aiBinding.run(model, { text: [...texts] });
       report();
       const vectors = result?.data ?? [];
+
       if (vectors.length !== texts.length) {
         // Fallback: one-by-one (slow but correct). Each of those requests
         // reports itself, so the count stays one-per-request either way.
         return Promise.all(texts.map((t) => runOne(t)));
       }
+
       return vectors;
     },
   };

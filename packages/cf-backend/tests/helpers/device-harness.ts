@@ -16,6 +16,7 @@ import {
 import type { UserCaller } from '../../src/user/workspace-capability';
 
 export const WORKSPACE = 'workspace-a';
+
 export const OTHER_WORKSPACE = 'workspace-b';
 
 /** A daemon that answers `exec` with an exit-0 result and the toolchain probe
@@ -24,9 +25,11 @@ export const OTHER_WORKSPACE = 'workspace-b';
  *  answer about that command rather than about some other one. */
 export function daemon(frame: DeviceFrame): JsonValue {
   if (frame.method === 'which') return { present: [] };
+
   if (frame.method === DEVICE_CANCEL_METHOD) {
     return { requestId: String(frame.params[0]), cancelled: 'terminated' };
   }
+
   return { stdout: 'ok', stderr: '', exitCode: 0 };
 }
 
@@ -73,9 +76,11 @@ export async function deviceHarness(
   const { deviceId } = await harness.userDO.registerDevice(await testOwner(), name);
   harness.attachDevice(deviceId);
   const hello = options.hello === undefined ? CAPABLE_HELLO : options.hello;
+
   if (hello !== null) await harness.sendDeviceHello(hello);
   const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
   const sibling = await provisionTestWorkspace(harness, OTHER_WORKSPACE, 'Workspace B');
+
   return Object.assign(harness, {
     deviceId,
     workspace: { workspaceToken: workspace } satisfies UserCaller,

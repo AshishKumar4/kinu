@@ -46,6 +46,7 @@ describe('parseModelSpec', () => {
 describe('ProviderRegistry', () => {
   function fakeProvider(id: string, modelId: string, available: boolean): ModelProvider {
     const model = new MockLanguageModelV3({ provider: id, modelId });
+
     return {
       id,
       defaultModel: modelId,
@@ -103,12 +104,14 @@ describe('ProviderRegistry', () => {
       defaultModel?: string,
     ): ModelProvider {
       const model = new MockLanguageModelV3({ provider: id });
+
       return {
         id,
         label: `${id} label`,
         defaultModel,
         isAvailable: () => {
           if (where === 'isAvailable') throw new Error(`${id} credential is revoked`);
+
           return true;
         },
         listModels: () => { throw new Error(`${id} credential is revoked`); },
@@ -181,14 +184,17 @@ describe('ProviderRegistry', () => {
      *  hanging on a clock. */
     function tracedProvider(id: string, ticks: number, trace: string[]): ModelProvider {
       const model = new MockLanguageModelV3({ provider: id });
+
       return {
         id,
         label: `${id} label`,
         isAvailable: () => true,
         listModels: async () => {
           trace.push(`${id}:start`);
+
           for (let i = 0; i < ticks; i += 1) await Promise.resolve();
           trace.push(`${id}:end`);
+
           return [{ id: `${id}-model` }];
         },
         createModel: () => model,
@@ -249,18 +255,22 @@ describe('ProviderRegistry', () => {
 
     test('listProviders overlaps its availability probes too', async () => {
       const trace: string[] = [];
+
       const probing = (id: string, ticks: number): ModelProvider => ({
         id,
         label: `${id} label`,
         isAvailable: async () => {
           trace.push(`${id}:start`);
+
           for (let i = 0; i < ticks; i += 1) await Promise.resolve();
           trace.push(`${id}:end`);
+
           return true;
         },
         listModels: () => [{ id: `${id}-model` }],
         createModel: () => new MockLanguageModelV3({ provider: id }),
       });
+
       const r = createProviderRegistry();
       r.register(probing('slow', 8));
       r.register(probing('quick', 0));
@@ -291,13 +301,16 @@ describe('OpenAI-compat provider', () => {
       'openai-compat.default',
       { headers: { Authorization: 'Bearer local' }, baseURL: 'http://127.0.0.1:4111/v1' },
     ]]);
+
     const provider = createOpenAICompatProvider();
+
     const models = await provider.listModels({
       env: {},
       ...createTestAuth(store),
       fetch: asFetchFunction(async (input, init) => {
         expect(String(input)).toBe('http://127.0.0.1:4111/v1/models');
         expect(new Headers(init?.headers).get('authorization')).toBe('Bearer local');
+
         return Response.json({
           object: 'list',
           data: [
@@ -308,6 +321,7 @@ describe('OpenAI-compat provider', () => {
         });
       }),
     });
+
     expect(models).toEqual([
       { id: 'model-a', label: 'Model A', contextWindow: 131072 },
       { id: 'model-b', label: 'model-b' },
@@ -319,12 +333,15 @@ describe('OpenAI-compat provider', () => {
       'openai-compat.default',
       { headers: {}, baseURL: 'http://127.0.0.1:4111/v1' },
     ]]);
+
     const provider = createOpenAICompatProvider();
+
     const models = await provider.listModels({
       env: {},
       ...createTestAuth(store),
       fetch: asFetchFunction(async () => new Response('not found', { status: 404 })),
     });
+
     expect(models).toEqual([]);
   });
 });

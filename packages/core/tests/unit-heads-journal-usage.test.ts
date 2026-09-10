@@ -28,6 +28,7 @@ import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 function storedUsageColumns(db: Database, actorId: string, id: string): Record<string, number | null> {
   const columns = USAGE_FIELDS.map((field) => HEAD_USAGE_COLUMNS[field]);
+
   return db.prepare<Record<string, number | null>, [string, string]>(
     `SELECT ${columns.join(', ')} FROM head_journal WHERE actor_id = ? AND id = ?`,
   ).all(actorId, id)[0] ?? {};
@@ -42,6 +43,7 @@ function newJournal() {
   initHeadsTables(execRaw);
   const sql = makeSql(db);
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'usage-test');
+
   return { db, sql, actor, journal: new HeadJournal(sql, actor) };
 }
 
@@ -83,6 +85,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
   test('every Usage field has a column, nullable and with no default', () => {
     const db = new Database(':memory:');
     initHeadsTables(makeExecRaw(db));
+
     const info = db.prepare<{ name: string; type: string; notnull: number; dflt_value: string | null }, []>(
       `SELECT name, type, "notnull", dflt_value FROM pragma_table_info('head_journal')`,
     ).all();
@@ -99,6 +102,7 @@ describe('a fresh journal cannot fabricate a cost it was never told', () => {
       expect(column?.notnull).toBe(0);
       expect(column?.dflt_value).toBeNull();
     }
+
     // A neuron count is fractional; INTEGER affinity would round the one figure
     // here that a provider actually bills in. Token counts are whole.
     expect(info.find((c) => c.name === HEAD_USAGE_COLUMNS.neurons)?.type).toBe('REAL');

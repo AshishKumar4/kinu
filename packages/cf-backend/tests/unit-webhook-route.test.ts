@@ -25,15 +25,22 @@ import {
 // The route's module graph reaches `cloudflare:email` through `agents`, so the
 // stub has to be installed before it loads.
 mockAgentsSdk();
+
 const { handleWebhookDeliveryRequest, handleHubRequest } = await import('../src/events/routes');
+
 const { default: worker } = await import('../src/server');
 
 const ROUTE_SECRET = 'test-webhook-route-secret-0123456789';
+
 const OTHER_SECRET = 'another-deployments-route-secret-0001';
+
 const WORKSPACE = 'kinu-main';
+
 /** A real ULID, the shape `TriggerRegistry.register` mints. */
 const TRIGGER = '01HZY6QK9N4T7M2P8V3XABCDEF';
+
 const SIBLING_TRIGGER = '01HZY6QK9N4T7M2P8V3XABCDEG';
+
 const ORIGIN = 'https://app.example';
 
 interface DeliveryProbe {
@@ -55,15 +62,18 @@ interface Harness {
 
 function harness(options: { secret?: string | null; reject?: boolean } = {}): Harness {
   const probe: DeliveryProbe = { activations: [], deliveries: [], bodyText: undefined };
+
   const agent = jsrpcStub({
     acceptWebhookDelivery: async (opts: { trigger_id: string; body_text: string }) => {
       probe.deliveries.push(opts.trigger_id);
       probe.bodyText = opts.body_text;
+
       return options.reject === true
         ? { status: 'rejected' as const, http_status: 401, reason: 'signature mismatch' }
         : { status: 'accepted' as const, event_id: 'evt_1', admitted: true };
     },
   });
+
   const kv = makeKv();
   // The doubles are deliberately NOT typed as the bindings they stand in for: a
   // fake `idFromName` returning the name can never satisfy `DurableObjectId`,
@@ -76,15 +86,18 @@ function harness(options: { secret?: string | null; reject?: boolean } = {}): Ha
     OrchestratorAgent: {
       idFromName: (name: string) => {
         probe.activations.push(`idFromName:${name}`);
+
         return name;
       },
       get: (name: string) => {
         probe.activations.push(`get:${name}`);
+
         return agent;
       },
     },
     WEBHOOK_ROUTE_SECRET: options.secret === undefined ? ROUTE_SECRET : options.secret ?? undefined,
   });
+
   // SAFETY: the delivery route reads exactly the three members constructed by
   // the `Object.assign` above — the knock budget's KV, the Orchestrator
   // namespace and the route secret — verified against the bodies of
@@ -181,6 +194,7 @@ describe('no unminted route reaches a Durable Object', () => {
 
   test('a name or trigger id outside the grammar that mints them', async () => {
     const minted = await mintedPath();
+
     for (const path of [
       minted.replace(`/${WORKSPACE}/`, `/${'w'.repeat(65)}/`),
       minted.replace(TRIGGER, 'not-a-ulid'),
@@ -194,6 +208,7 @@ describe('no unminted route reaches a Durable Object', () => {
   test('a re-spelled capability: case, encoding, prefix, shape', async () => {
     const minted = await mintedPath();
     const token = minted.slice(minted.lastIndexOf('/v1-') + 4);
+
     const rewrites = {
       'upper-case token': minted.replace(token, token.toUpperCase()),
       'percent-escaped trigger': minted.replace(`/${TRIGGER}/`, `/%30${TRIGGER.slice(1)}/`),
@@ -239,6 +254,7 @@ describe('the delivery route claims exactly its own paths', () => {
 
   test('a non-delivery path is left to the rest of the route table', async () => {
     const { env } = harness();
+
     for (const path of [
       `/api/workspaces/${WORKSPACE}/triggers`,
       `/api/workspaces/${WORKSPACE}/events`,
@@ -316,6 +332,7 @@ describe('the builder and the matcher are one contract', () => {
       await mintedPath(ROUTE_SECRET, `${WORKSPACE}1`, TRIGGER),
       await mintedPath(OTHER_SECRET, WORKSPACE, TRIGGER),
     ]);
+
     expect(tokens.size).toBe(4);
   });
 
@@ -327,6 +344,7 @@ describe('the builder and the matcher are one contract', () => {
       webhookRoutePath(ROUTE_SECRET, { workspaceName: 'ab', triggerId: TRIGGER }),
       webhookRoutePath(ROUTE_SECRET, { workspaceName: 'a', triggerId: TRIGGER }),
     ]);
+
     expect(left.slice(left.lastIndexOf('/v1-'))).not.toBe(right.slice(right.lastIndexOf('/v1-')));
   });
 
@@ -369,6 +387,7 @@ describe('the Worker entry serves delivery before the auth gate', () => {
     });
     const partialCtx: Partial<ExecutionContext> = {};
     Object.assign(partialCtx, { waitUntil() {}, passThroughOnException() {} });
+
     // SAFETY: both members are constructed by the `Object.assign` above, and the
     // entry's own contract declares them — verified against `server.ts`'s route
     // table, which returns at step 7b for every request in this block.
@@ -385,6 +404,7 @@ describe('the Worker entry serves delivery before the auth gate', () => {
 
   test('an unsigned delivery is 404 and never reaches the gate or the SPA', async () => {
     const { env, ctx, probe } = entryHarness();
+
     const response = await worker.fetch(
       delivery(`/api/workspaces/${WORKSPACE}/webhook/${TRIGGER}`), env, ctx,
     );

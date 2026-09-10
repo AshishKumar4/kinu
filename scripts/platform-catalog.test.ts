@@ -62,6 +62,7 @@ describe('a platform sentence must name the entry it comes from', () => {
 // Deadline for a CONTROL round-trip into a Durable Object.
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 `;
+
     expect(findProseMentions('device-tunnel.ts', timeout)).toEqual([]);
   });
 
@@ -70,6 +71,7 @@ const DEFAULT_RPC_TIMEOUT_MS = 30_000;
 // A container reporting the HOST's cores forks 32 compilers into 2GB.
 const MAX_JOBS = 8;
 `;
+
     expect(findProseMentions('registry.ts', policy)).toEqual([]);
   });
 });
@@ -103,6 +105,7 @@ describe('an entry without evidence is the artefact being replaced', () => {
       provenance,
       observable: [{ context: 'the write', message: 'SQLITE_TOOBIG' }],
     });
+
     expect(reasons(probed('~/Nimbus/scratchpad/report.md §1.x')))
       .toEqual(['provenance "~/Nimbus/scratchpad/report.md §1.x" names nothing a reader can open']);
     expect(reasons(probed('~/Nimbus/scratchpad/report.md §4'))).toEqual([]);
@@ -192,10 +195,12 @@ describe('the fault set a simulator may inject', () => {
   test('is exactly the first-hand evidence, and nothing documented or inferred', () => {
     const injectable = injectableFaults();
     expect(injectable.length).toBeGreaterThan(0);
+
     for (const id of injectable) {
       expect(['proven-by-probe', 'proven-by-source', 'observed-in-production'])
         .toContain(platformFact(id).evidence);
     }
+
     for (const id of PLATFORM_FACT_IDS) {
       if (injectable.includes(id)) continue;
       expect(['documented', 'inferred', 'speculative']).toContain(platformFact(id).evidence);
@@ -209,6 +214,7 @@ describe('the fault set a simulator may inject', () => {
     const silent = injectableFaults().filter((id) => !platformFact(id).firstPartySignal);
     expect(silent.length).toBeGreaterThan(0);
     expect(silent).toContain('do.isolate.reset_silent');
+
     for (const id of silent) expect(platformFact(id).observable).toEqual([]);
   });
 });
@@ -254,9 +260,11 @@ describe('against the real tree', () => {
     // own source map rather than a second read, so the input is the same bytes
     // the audit above judged.
     const catalog = sources.get('packages/core/src/platform-catalog.ts');
+
     if (catalog === undefined) throw new Error('sources lost packages/core/src/platform-catalog.ts');
     const exempt = findProseMentions('packages/core/src/platform-catalog.ts', catalog);
     const held = new Map<string, number>();
+
     for (const mention of audit.mentions) held.set(mention.file, (held.get(mention.file) ?? 0) + 1);
     expect(exempt.length).toBeGreaterThan(Math.max(0, ...held.values()));
   });
@@ -279,11 +287,14 @@ describe('against the real tree', () => {
     const { createTestRuntime } = await import('../packages/test-utils/src/index');
     const { buildSystemPromptSync } = await import('../packages/core/src/prompt');
     const { rt } = createTestRuntime();
+
     const rendered = buildSystemPromptSync(rt, {
       backend: 'cf',
       executors: [{ name: 'workspace', status: 'ready' }],
     });
+
     const limit = platformFact('worker.isolate.memory').limit;
+
     if (limit === null) throw new Error('Workspace memory fact has no limit');
     const reported = rendered.match(/~([0-9.]+) MB/);
     expect(Number(reported?.[1])).toBe(limit.value / (1000 * 1000));

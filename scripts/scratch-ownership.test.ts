@@ -31,6 +31,7 @@ describe('the shapes that leaked', () => {
         `const dir = \`/tmp/kinu-test-\${${unique}}\`;`,
         'mkdirSync(dir, { recursive: true });',
       ].join('\n'));
+
       expect(found.problems.map((p) => p.rule)).toEqual(['unowned-unique']);
     }
   });
@@ -46,6 +47,7 @@ describe('the shapes that leaked', () => {
       "const dir = mkdtempSync(join(tmpdir(), 'totally-new-thing-'));",
       'afterAll(() => { rmSync(dir, { recursive: true, force: true }); });',
     ].join('\n'));
+
     expect(found.problems.map((p) => p.rule)).toEqual(['catalogued']);
   });
 
@@ -56,6 +58,7 @@ describe('the shapes that leaked', () => {
       "import { join } from 'node:path';",
       "const dir = mkdtempSync(join(tmpdir(), 'kinu-thing-'));",
     ].join('\n'));
+
     expect(found.problems.map((p) => p.rule)).toEqual(['released']);
   });
 
@@ -68,6 +71,7 @@ describe('the shapes that leaked', () => {
       "import { tmpdir } from 'node:os';",
       "mkdirSync(`${tmpdir()}/branches`, { recursive: true });",
     ].join('\n'));
+
     expect(found.problems.map((p) => p.rule)).toEqual(['released']);
   });
 });
@@ -81,6 +85,7 @@ describe('the fixes are accepted', () => {
       "import { scratchDir } from '@kinu.run/test-utils';",
       "const dir = scratchDir('a-suite');",
     ].join('\n'));
+
     expect(found.problems).toEqual([]);
   });
 
@@ -92,6 +97,7 @@ describe('the fixes are accepted', () => {
       "const dir = mkdtempSync(join(tmpdir(), 'kinu-thing-'));",
       'afterAll(() => { rmSync(dir, { recursive: true, force: true }); });',
     ].join('\n'));
+
     expect(found.problems).toEqual([]);
   });
 });
@@ -108,6 +114,7 @@ describe('what it must NOT fire on', () => {
       "import { scratchDir } from '@kinu.run/test-utils';",
       "const dir = scratchDir('a-suite');",
     ].join('\n'));
+
     expect(found.problems).toEqual([]);
   });
 
@@ -120,6 +127,7 @@ describe('what it must NOT fire on', () => {
       'const authFile = `/tmp/${changeId}.gitauth`;',
       'await exec.writeFile(authFile, header);',
     ].join('\n'));
+
     expect(src.problems).toEqual([]);
 
     // And the suite that asserts on such a path writes nothing here: its only
@@ -130,6 +138,7 @@ describe('what it must NOT fire on', () => {
       "const db = new Database(':memory:');",
       'expect(s.sandbox.files.get(`/tmp/${s.changeId}.patch`)).toBe(PATCH);',
     ].join('\n'));
+
     expect(suite.problems).toEqual([]);
   });
 
@@ -143,6 +152,7 @@ describe('what it must NOT fire on', () => {
       "import { join } from 'node:path';",
       "const db = join(mkdtempSync(join(tmpdir(), 'nimbus-probe-')), 'probe.db');",
     ].join('\n'));
+
     expect(found.problems).toEqual([]);
   });
 });
@@ -166,6 +176,7 @@ describe('the tree it governs', () => {
     // mints is one preflight can see" would be true of nothing — the gate's whole
     // subject silently gone while it printed ok.
     expect(audited.prefixes.length).toBeGreaterThan(20);
+
     for (const prefix of audited.prefixes) {
       expect(SCRATCH_PREFIXES.some((known) => prefix.startsWith(known))).toBe(true);
     }

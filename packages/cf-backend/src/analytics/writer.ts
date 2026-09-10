@@ -125,6 +125,7 @@ export interface AnalyticsWindow {
 function createAnalyticsWindow(capacity = MAX_WRITES_PER_INVOCATION): AnalyticsWindow {
   let remaining = capacity;
   let refused = 0;
+
   return {
     open() {
       remaining = capacity;
@@ -132,15 +133,19 @@ function createAnalyticsWindow(capacity = MAX_WRITES_PER_INVOCATION): AnalyticsW
     take() {
       if (remaining <= 0) {
         refused += 1;
+
         // Once per window, not once per refusal: a unit of work producing
         // thousands of rows would otherwise report the overflow thousands of
         // times, on the sink the overflow is already crowding.
         if (refused === 1) {
           diagnostics.event('analytics.window_exhausted', { capacity });
         }
+
         return false;
       }
+
       remaining -= 1;
+
       return true;
     },
     get remaining() {
@@ -153,6 +158,7 @@ function createAnalyticsWindow(capacity = MAX_WRITES_PER_INVOCATION): AnalyticsW
 }
 
 const ENCODER = new TextEncoder();
+
 /** Non-fatal: the input is already valid UTF-16, so the only ill-formed bytes a
  *  decode can meet are the ones this module's own cut created, and it backs off
  *  to a code-point boundary before decoding. */
@@ -160,6 +166,7 @@ const DECODER = new TextDecoder();
 
 /** UTF-8 continuation bytes are `10xxxxxx`. */
 const CONTINUATION_MASK = 0xc0;
+
 const CONTINUATION_BITS = 0x80;
 
 /** A value cut to a slot's byte bound, and whether the cut happened. Named
@@ -178,9 +185,12 @@ interface ClampedText {
  */
 function clampToBytes(value: string, maxBytes: number): ClampedText {
   const bytes = ENCODER.encode(value);
+
   if (bytes.length <= maxBytes) return { text: value, clamped: false };
   let cut = maxBytes;
+
   while (cut > 0 && (bytes[cut] & CONTINUATION_MASK) === CONTINUATION_BITS) cut -= 1;
+
   return { text: DECODER.decode(bytes.subarray(0, cut)), clamped: true };
 }
 
@@ -211,40 +221,53 @@ function createAnalyticsWriter<S extends AnalyticsSchema>(
   window: AnalyticsWindow,
 ): AnalyticsWriter<S> {
   const stats: MutableStats = { written: 0, skipped: 0, refused: 0, clamped: 0, coerced: 0 };
+
   return {
     stats,
     write(row: AnalyticsRow<S>): void {
       if (!dataset) {
         stats.skipped += 1;
+
         return;
       }
+
       if (!window.take()) {
         stats.refused += 1;
+
         return;
       }
+
       const index = clampToBytes(
         String(slotOf(row, schema.index.name) ?? ''), schema.index.maxBytes,
       );
+
       if (index.clamped) stats.clamped += 1;
       const blobs: string[] = [];
+
       for (const slot of schema.blobs) {
         const held = clampToBytes(String(slotOf(row, slot.name) ?? ''), slot.maxBytes);
+
         if (held.clamped) stats.clamped += 1;
         blobs.push(held.text);
       }
+
       const doubles: number[] = [];
+
       for (const slot of schema.doubles) {
         const held = slotOf(row, slot.name);
+
         if (v.is(FiniteNumber, held)) {
           doubles.push(held);
           continue;
         }
+
         // A NaN reaches here from arithmetic over an absent usage field, and
         // writing it would make one row's absence indistinguishable from the
         // whole column being broken. Zero, counted.
         stats.coerced += 1;
         doubles.push(0);
       }
+
       dataset.writeDataPoint({ indexes: [index.text], blobs, doubles });
       stats.written += 1;
     },
@@ -275,8 +298,10 @@ const PLANES = new WeakMap<AnalyticsEnv, AnalyticsPlane>();
 
 export function analyticsPlane(env: AnalyticsEnv): AnalyticsPlane {
   const existing = PLANES.get(env);
+
   if (existing) return existing;
   const window = createAnalyticsWindow();
+
   // Built FROM the census rather than beside it: a dataset added to
   // `ANALYTICS_SCHEMAS` lands here, and a binding the env declares that no
   // schema claims is a type error on `AnalyticsEnv` itself.
@@ -287,7 +312,9 @@ export function analyticsPlane(env: AnalyticsEnv): AnalyticsPlane {
     ops: createAnalyticsWriter(env.CONTROL_PLANE_OPS, CONTROL_PLANE_OPS_SCHEMA, window),
     schemas: ANALYTICS_SCHEMAS,
   } satisfies AnalyticsPlane;
+
   PLANES.set(env, plane);
+
   return plane;
 }
 

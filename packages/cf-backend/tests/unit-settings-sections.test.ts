@@ -39,6 +39,7 @@ function rail(active: SettingsSection): string {
  *  other is exactly the drift these assertions exist to catch. */
 const RAW_IDS = [...rail('account').matchAll(/data-settings-section="([a-z]+)"/g)]
   .map((match) => match[1] ?? '');
+
 /** The same ids as sections. Narrowed through the module's own reader, which
  *  the first assertion below pins to the identity on this set. */
 const SECTION_IDS = RAW_IDS.map(settingsSection);
@@ -47,6 +48,7 @@ const SECTION_IDS = RAW_IDS.map(settingsSection);
 function entry(html: string, id: string): string {
   const match = new RegExp(`<a[^>]*data-settings-section="${id}"[^>]*>`).exec(html);
   expect(match).not.toBeNull();
+
   return match![0];
 }
 
@@ -85,8 +87,10 @@ describe('the rail says which section is open', () => {
   test('the active entry is the only one marked current', () => {
     for (const active of SECTION_IDS) {
       const html = rail(active);
+
       const current = [...html.matchAll(/data-settings-section="([a-z]+)"[^>]*aria-current="true"/g)]
         .map((m) => m[1]);
+
       expect(current).toEqual([active]);
     }
   });
@@ -100,9 +104,11 @@ describe('the rail says which section is open', () => {
 
   test('every section is one click away, each link changing only the hash', () => {
     const html = rail('account');
+
     for (const id of SECTION_IDS) {
       expect(entry(html, id)).toContain(`href="/user/settings#${id}"`);
     }
+
     // The entries are readable words, not ids: the rail is what a person picks
     // a section from.
     expect(html).toContain('Devices');

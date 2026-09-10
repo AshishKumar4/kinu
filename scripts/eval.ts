@@ -35,6 +35,7 @@ import { createConfiguredLocalModelResolver } from '../packages/cli/src/local-mo
 import { createTestRuntime } from '@kinu.run/test-utils';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const DEFAULT_CORPUS = join(REPO_ROOT, 'tests/eval/corpus/seed.jsonl');
 
 export interface EvalOptions {
@@ -59,13 +60,18 @@ export function parseArgs(argv: string[]): EvalOptions {
     out: process.env.EVAL_OUT ?? null,
     help: false,
   };
+
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+
     const next = () => {
       const v = argv[++i];
+
       if (v === undefined) throw new Error(`missing value for ${arg}`);
+
       return v;
     };
+
     switch (arg) {
       case '--corpus': opts.corpus = next(); break;
       case '--model': opts.model = next(); break;
@@ -77,9 +83,11 @@ export function parseArgs(argv: string[]): EvalOptions {
       default: throw new Error(`unknown argument: ${arg}`);
     }
   }
+
   if (!Number.isFinite(opts.threshold) || opts.threshold < 0 || opts.threshold > 1) {
     throw new Error(`--min-score must be in [0,1], got ${opts.threshold}`);
   }
+
   return opts;
 }
 
@@ -117,10 +125,12 @@ export interface RunnablePartition {
 export function partitionRunnable(cases: readonly EvalCase[]): RunnablePartition {
   const runnable: EvalCase[] = [];
   const excluded: EvalCase[] = [];
+
   for (const c of cases) {
     const blocked = c.tags?.some((tag) => UNRUNNABLE_TAGS.has(tag)) ?? false;
     (blocked ? excluded : runnable).push(c);
   }
+
   return { runnable, excluded };
 }
 
@@ -137,12 +147,15 @@ function pinnedSingleShot(id: string, model: LanguageModel): PinnedStrategy {
     id,
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
+
       const { text, usage } = await generateText({
         model,
         prompt: ctx.task,
         abortSignal: ctx.signal,
       });
+
       const out = text.trim();
+
       return {
         strategy: id,
         best: { text: out, score: 1, source: id },
@@ -155,6 +168,7 @@ function pinnedSingleShot(id: string, model: LanguageModel): PinnedStrategy {
       };
     },
   };
+
   return { strategy, model };
 }
 
@@ -165,9 +179,11 @@ function makeJudge(model: LanguageModel): JudgeFn {
     const full = `${prompt}\n\nJSON shape: {"winner":"a"|"b"|"tie","scoreA":<0..1>,"scoreB":<0..1>,"rationale":"<terse>"}\n${jsonObjectOnlyInstruction()}`;
     const { text } = await generateText({ model, prompt: full });
     const parsed = safeParse(VerdictSchema, extractJsonObject(text));
+
     if (!parsed.success) {
       throw new Error(`judge output failed schema: ${parsed.issues.map((x) => x.message).join('; ')}`);
     }
+
     return parsed.output;
   });
 }
@@ -196,20 +212,29 @@ export async function runBenchmark(deps: BenchmarkDeps) {
     buildContext: deps.buildContext,
     judge: deps.judge,
   });
+
   const report = buildEvalReport(results, {
     ...deps.meta,
     strategyA: deps.strategyA.id,
     strategyB: deps.strategyB.id,
   });
+
   const gate = evaluateGate(report, deps.threshold);
+
   return { report, gate };
 }
 
 async function main(): Promise<void> {
   const opts = parseArgs(process.argv.slice(2));
-  if (opts.help) { console.log(USAGE); return; }
+
+  if (opts.help) {
+    console.log(USAGE);
+
+    return;
+  }
 
   let cases: EvalCase[];
+
   try {
     cases = parseCorpus(readFileSync(opts.corpus, 'utf8'));
   } catch (err) {
@@ -221,6 +246,7 @@ async function main(): Promise<void> {
   // message when neither env keys, ~/.kinu config, nor a signed-in session
   // are present. Never hardcode a key.
   let resolver;
+
   try {
     resolver = createConfiguredLocalModelResolver({ model: opts.model ?? undefined }).resolver;
   } catch (err) {
@@ -247,12 +273,14 @@ async function main(): Promise<void> {
   }
 
   const { runnable, excluded } = partitionRunnable(cases);
+
   if (runnable.length === 0) {
     console.error(`Refusing to run: all ${cases.length} corpus cases need capabilities this single-shot benchmark does not have.`);
     process.exit(1);
   }
 
   console.error(`Running ${runnable.length} cases · candidate=${candidateSpec} · baseline=${baselineSpec} · judge=${judgeSpec}`);
+
   if (excluded.length > 0) {
     console.error(
       `Excluded ${excluded.length} case(s) needing tools or multiple turns, which this `
@@ -281,11 +309,14 @@ async function main(): Promise<void> {
   });
 
   const json = JSON.stringify({ ...report, gate }, null, 2);
+
   if (opts.out) {
     writeFileSync(opts.out, json);
     console.error(`Wrote ${opts.out}`);
   }
+
   console.log(renderEvalSummary(report, gate));
+
   if (!gate.pass) process.exit(1);
 }
 

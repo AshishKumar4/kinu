@@ -20,18 +20,23 @@ function setup() {
   const execRaw = makeExecRaw(db);
   initSearchTables(execRaw);
   const actor = createTestActors(sql, execRaw).main;
+
   const insert = (node: { id: string; parentId?: string | null; rootId: string }): void => {
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, value, visits)
       VALUES (${actor.actorId}, ${node.id}, ${node.parentId ?? null}, ${node.rootId}, 'test', 0, 0)`;
   };
+
   /** One node's running mean. An absent row is a broken fixture, so it raises
    *  rather than reading as a node nobody visited. */
   const read = (id: string): { value: number; visits: number } => {
     const row = sql<{ value: number; visits: number }>`
       SELECT value, visits FROM search_nodes WHERE actor_id = ${actor.actorId} AND id = ${id}`[0];
+
     if (!row) throw new Error(`this actor holds no search node ${id}`);
+
     return row;
   };
+
   return { db, sql, actor, insert, read };
 }
 
@@ -92,6 +97,7 @@ describe('Backpropagation', () => {
 
     const ids = sql<{ id: string }>`
       SELECT id FROM search_nodes WHERE actor_id = ${actor.actorId} ORDER BY id`;
+
     expect(ids.map(r => r.id)).toEqual(['a', 'b']);
   });
 

@@ -19,10 +19,15 @@ import { REASONING_EFFORTS } from '../strategy/effort';
 import { ADVISOR_SEVERITIES, type AdvisorSeverity } from '../advisor/review';
 
 const SHELL_APPROVAL_MODES: readonly ShellApprovalMode[] = ['strict', 'allow_all', 'deny_all'];
+
 const ReasoningEffortSchema = v.picklist(REASONING_EFFORTS);
+
 const ShellApprovalModeSchema = v.picklist(SHELL_APPROVAL_MODES);
+
 const ArrayBoundarySchema = v.array(v.unknown());
+
 const SkillNamesSchema = v.array(v.string());
+
 const AdvisorSeveritySchema = v.picklist(ADVISOR_SEVERITIES);
 
 export interface SetModelDeps {
@@ -73,6 +78,7 @@ export function setModel(deps: SetModelDeps, spec: string) {
     const normalized = deps.normalize(spec);
     deps.config.setModel(normalized);
     deps.onChanged();
+
     return { ok: true, spec: normalized };
   } catch (error) {
     throw new Error(`setModel(${spec}) failed`, { cause: error });
@@ -85,8 +91,10 @@ export function getReasoningEffort(config: AgentConfigStore) {
 
 export function setReasoningEffort<Effort>(config: AgentConfigStore, effort: Effort) {
   const parsed = v.safeParse(ReasoningEffortSchema, effort);
+
   if (!parsed.success) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
   config.setReasoningEffort(parsed.output);
+
   return { ok: true, effort: parsed.output };
 }
 
@@ -113,9 +121,11 @@ export function setShellApprovalMode(
   mode: string,
 ) {
   const parsed = v.safeParse(ShellApprovalModeSchema, mode);
+
   if (!parsed.success) throw new Error(`invalid mode: ${mode}`);
   deps.config.setShellApprovalMode(parsed.output);
   deps.onChanged();
+
   return { ok: true, mode: parsed.output };
 }
 
@@ -138,8 +148,10 @@ export function getShellApprovalGrants(config: AgentConfigStore) {
  *  effect on the very next command. */
 export function revokeShellApprovalGrants<Grants>(config: AgentConfigStore, grants: Grants) {
   const parsed = v.safeParse(v.array(v.object({ rule: v.string(), executor: v.string() })), grants);
+
   if (!parsed.success) throw new Error('grants must be an array of { rule, executor }');
   config.revokeShellApproval(parsed.output);
+
   return { ok: true, grants: config.getShellApprovalGrants() };
 }
 
@@ -151,10 +163,13 @@ export function getAlwaysActiveSkills(config: AgentConfigStore) {
 /** Pin a set of skills. An empty list clears the pin. */
 export function setAlwaysActiveSkills<Names>(config: AgentConfigStore, names: Names) {
   const array = v.safeParse(ArrayBoundarySchema, names);
+
   if (!array.success) throw new Error('names must be a string array');
   const parsed = v.safeParse(SkillNamesSchema, array.output);
+
   if (!parsed.success) throw new Error('names must contain only strings');
   config.setAlwaysActiveSkills(parsed.output);
+
   return { ok: true, names: config.getAlwaysActiveSkills() };
 }
 
@@ -163,6 +178,7 @@ export function setAlwaysActiveSkills<Names>(config: AgentConfigStore, names: Na
 export function getMctsConfig(config: AgentConfigStore): MctsConfigView {
   const o = config.getMctsOverrides();
   const d = DEFAULT_CONFIG.mcts;
+
   return {
     explorationConstant: o.explorationWeight ?? d.explorationWeight,
     maxIterations: o.budget ?? d.budget,
@@ -178,6 +194,7 @@ export function setMctsConfig(config: AgentConfigStore, view: Partial<MctsConfig
     budget: view.maxIterations,
     branches: view.branchBudget,
   });
+
   return getMctsConfig(config);
 }
 
@@ -201,13 +218,19 @@ export function setEvolutionConfig(
   view: Partial<EvolutionConfigView>,
 ): EvolutionConfigView {
   if (view.autoPromoteScaffold !== undefined) config.setAutoPromoteScaffold(view.autoPromoteScaffold);
+
   if (view.gepaEvalBudget !== undefined) config.setGepaEvalBudget(view.gepaEvalBudget);
+
   if (view.shadowSampleRate !== undefined) config.setShadowSampleRate(view.shadowSampleRate);
+
   if (view.scaffoldExploreShare !== undefined) config.setScaffoldExploreShare(view.scaffoldExploreShare);
+
   if (view.advisorEnabled !== undefined) config.setAdvisorEnabled(view.advisorEnabled);
+
   if (view.advisorMinSeverity !== undefined) {
     config.setAdvisorMinSeverity(v.parse(AdvisorSeveritySchema, view.advisorMinSeverity));
   }
+
   return getEvolutionConfig(config);
 }
 

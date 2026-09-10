@@ -80,13 +80,17 @@ describe('what the gate reports', () => {
 describe('the state the harness observes', () => {
   test('every probe runs and is labelled with the command that produced it', async () => {
     const seen: string[] = [];
+
     const observed = await observeCompletionState({
       exec: async (command) => {
         seen.push(command);
+
         return { stdout: `out:${command}`, stderr: '', exitCode: 0 };
       },
     });
+
     expect(seen).toEqual([...COMPLETION_PROBE_COMMANDS]);
+
     for (const command of COMPLETION_PROBE_COMMANDS) {
       expect(observed).toContain(`$ ${command}`);
       expect(observed).toContain(`out:${command}`);
@@ -99,6 +103,7 @@ describe('the state the harness observes', () => {
         ? { stdout: '', stderr: 'fatal: not a git repository', exitCode: 128 }
         : { stdout: 'ok', stderr: '', exitCode: 0 },
     });
+
     expect(observed).not.toContain('not a git repository');
     expect(observed).toContain('$ ls -la');
   });
@@ -107,6 +112,7 @@ describe('the state the harness observes', () => {
     const observed = await observeCompletionState({
       exec: async () => ({ stdout: '', stderr: 'ls: cannot open directory', exitCode: 2 }),
     });
+
     expect(observed).toContain('Error (exit 2)');
     expect(observed).toContain('cannot open directory');
   });
@@ -115,6 +121,7 @@ describe('the state the harness observes', () => {
     const observed = await observeCompletionState({
       exec: () => Promise.reject(new Error('no shell')),
     });
+
     expect(observed).toBeNull();
   });
 
@@ -122,6 +129,7 @@ describe('the state the harness observes', () => {
     const observed = await observeCompletionState({
       exec: async () => ({ stdout: 'F'.repeat(50_000), stderr: '', exitCode: 0 }),
     });
+
     expect(observed!.length).toBeLessThan(20_000);
     expect(observed).toContain('chars omitted');
   });

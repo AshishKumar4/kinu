@@ -62,24 +62,30 @@ export interface DeviceTransferOutcome {
 }
 
 const StoredOutcomeSchema = v.nullable(v.picklist(['terminated', 'unknown'] as const));
+
 const ClaimedRowSchema = v.object({
   request_id: v.string(),
   device_id: v.string(),
   claim: v.string(),
   cancel_outcome: StoredOutcomeSchema,
 });
+
 const SweptRowSchema = v.object({
   request_id: v.string(),
   cancel_outcome: StoredOutcomeSchema,
 });
+
 const OutcomeRowSchema = v.object({ cancel_outcome: StoredOutcomeSchema });
+
 /** The answer a settle statement just made authoritative. NOT nullable: the
  *  write COALESCEs one in, so a NULL back would mean the row lost its answer,
  *  which is a broken invariant rather than an absence to tolerate. */
 const SettledOutcomeRowSchema = v.object({
   cancel_outcome: v.picklist(['terminated', 'unknown'] as const),
 });
+
 const DeviceRowSchema = v.object({ device_id: v.string() });
+
 const OwnershipRowSchema = v.object({
   background_job_id: v.nullable(v.string()),
   cancel_claim: v.nullable(v.string()),
@@ -207,6 +213,7 @@ export class DeviceRequestLedger {
       nextDeviceRequestId(), deviceId,
     ).toArray().map((row) => {
       const parsed = v.parse(SweptRowSchema, row);
+
       return { requestId: parsed.request_id, settled: parsed.cancel_outcome };
     });
   }
@@ -223,6 +230,7 @@ export class DeviceRequestLedger {
         WHERE request_id = ? AND cancel_claim = ?`,
       requestId, claim,
     ).toArray()[0];
+
     return row === undefined ? null : { settled: v.parse(OutcomeRowSchema, row).cancel_outcome };
   }
 
@@ -247,6 +255,7 @@ export class DeviceRequestLedger {
         WHERE request_id = ? AND cancel_claim = ? RETURNING cancel_outcome`,
       outcome, requestId, claim,
     ).toArray()[0];
+
     return row === undefined ? null : v.parse(SettledOutcomeRowSchema, row).cancel_outcome;
   }
 
@@ -303,6 +312,7 @@ export class DeviceRequestLedger {
         WHERE request_id = ? AND workspace = ? AND cancel_claim IS NULL`,
       requestId, workspace,
     ).toArray()[0];
+
     return row === undefined ? null : { deviceId: v.parse(DeviceRowSchema, row).device_id };
   }
 
@@ -343,6 +353,7 @@ export class DeviceRequestLedger {
           AND device_id IN (SELECT id FROM user_devices WHERE revoked_at IS NULL)`,
       input.jobId, input.requestId, input.workspace,
     );
+
     const row = this.sql.exec(
       `SELECT r.background_job_id, r.cancel_claim, r.cancel_outcome,
               EXISTS (SELECT 1 FROM user_devices d
@@ -351,8 +362,10 @@ export class DeviceRequestLedger {
         WHERE r.request_id = ? AND r.workspace = ?`,
       input.requestId, input.workspace,
     ).toArray()[0];
+
     if (row === undefined) return { transferred: false };
     const owned = v.parse(OwnershipRowSchema, row);
+
     return {
       transferred: owned.background_job_id === input.jobId && owned.live_device === 1
         && owned.cancel_claim === null && owned.cancel_outcome === null,
@@ -361,6 +374,7 @@ export class DeviceRequestLedger {
 
   private claim(ownership: string, workspace: string, owner: string): ClaimedDeviceRequest[] {
     const claim = nextDeviceRequestId();
+
     return this.sql.exec(
       `UPDATE device_inflight_requests
           SET cancel_claim = ?
@@ -369,6 +383,7 @@ export class DeviceRequestLedger {
       claim, workspace, owner,
     ).toArray().map((row) => {
       const parsed = v.parse(ClaimedRowSchema, row);
+
       return {
         requestId: parsed.request_id,
         deviceId: parsed.device_id,

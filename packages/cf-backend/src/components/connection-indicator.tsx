@@ -9,6 +9,7 @@ const STATUS_MAP = {
 
 export function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   const s = STATUS_MAP[status];
+
   return (
     <div className="flex shrink-0 items-center gap-2" role="status" aria-label={s.label}>
       <span className={`size-2 rounded-full ${s.dot}`} />

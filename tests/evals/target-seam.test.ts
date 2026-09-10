@@ -42,6 +42,7 @@ import { provisionLocalTarget } from './target-local';
  *  bare write: a write that "succeeded" into a filesystem nothing can read is
  *  the degraded-runtime shape this suite exists to catch. */
 const NOTE_PATH = 'seam-note.txt';
+
 const NOTE_BODY = 'the seam wrote this';
 
 /**
@@ -54,6 +55,7 @@ const NOTE_BODY = 'the seam wrote this';
  */
 function threeStepAgent(): LanguageModel {
   let step = 0;
+
   // The V3 usage shape, spelled once. Every step reports the same cost, because
   // what these numbers have to prove is that the usage CHANNEL is live end to
   // end — provider to ledger to spend read model — not that any particular
@@ -62,21 +64,26 @@ function threeStepAgent(): LanguageModel {
     inputTokens: { total: 100, noCache: 100, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 20, text: 20, reasoning: undefined },
   };
+
   const fileCall = (id: string, input: Record<string, string>): ScriptedTurnResult => ({
     content: [{ type: 'tool-call', toolCallId: id, toolName: 'file', input: JSON.stringify(input) }],
     finishReason: { unified: 'tool-calls', raw: undefined },
     usage,
     warnings: [],
   });
+
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'seam-probe',
     doGenerate: (): ScriptedTurnResult => {
       step += 1;
+
       if (step === 1) {
         return fileCall('call-1', { action: 'write', path: NOTE_PATH, content: NOTE_BODY });
       }
+
       if (step === 2) return fileCall('call-2', { action: 'read', path: NOTE_PATH });
+
       return {
         content: [{ type: 'text', text: `I wrote and read ${NOTE_PATH}.` }],
         finishReason: { unified: 'stop', raw: undefined },
@@ -134,12 +141,15 @@ describe('AgentEvalTarget — the local target is really wired', () => {
     // that returned `unavailable` with an empty reason would be the old
     // existence check wearing a new name.
     expect(['runs', 'unavailable']).toContain(probe.verifier.kind);
+
     if (probe.verifier.kind === 'unavailable') {
       expect(probe.verifier.reason.length).toBeGreaterThan(20);
       console.warn(`[seam] the local workspace shell cannot run an exec-ratio harness: `
         + `${probe.verifier.reason}`);
+
       return;
     }
+
     expect(probe.verifier.evidence.length).toBeGreaterThan(0);
   });
 

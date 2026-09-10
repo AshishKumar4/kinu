@@ -31,6 +31,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 import type { VFS } from '../src/types/primitives';
 
 const CRED: VfsCred = { uid: 1000, gid: 1000, groups: [1000], umask: 0o022 };
+
 const TARGET = '/home/user/report.bin';
 
 const RequestSchema = v.object({
@@ -44,6 +45,7 @@ const RequestSchema = v.object({
   from: v.optional(v.string()),
   to: v.optional(v.string()),
 });
+
 type Request = v.InferOutput<typeof RequestSchema>;
 
 /**
@@ -92,37 +94,51 @@ function session(options: SessionOptions = {}): Session {
   const requests: Request[] = [];
   const seen = new Map<string, number>();
   const encoder = new TextEncoder();
+
   for (const [path, content] of Object.entries(options.seed ?? {})) {
     files.set(path, encoder.encode(content));
   }
+
   const decode = (b64: string): Uint8Array => Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const encode = (bytes: Uint8Array): string => btoa(String.fromCharCode(...bytes));
 
   const apply = (request: Request): RunnerAnswer => {
     const refuse = options.refuse;
+
     if (refuse && request.op === refuse.op) {
       const nth = (seen.get(refuse.op) ?? 0) + 1;
       seen.set(refuse.op, nth);
+
       if (nth === (refuse.nth ?? 1)) return { ok: false, code: refuse.code, message: refuse.message };
     }
+
     const temp = request.temp ?? '';
     const path = request.path ?? '';
+
     switch (request.op) {
       case 'stat': {
         const file = files.get(path);
+
         if (!file) return { ok: false, code: 'ENOENT', message: `no such file: ${path}` };
+
         return { ok: true, size: file.byteLength, mtimeMs: 1, dir: false };
       }
+
       case 'read': {
         const file = files.get(path);
+
         if (!file) return { ok: false, code: 'ENOENT', message: `no such file: ${path}` };
         const slice = file.subarray(request.off ?? 0, (request.off ?? 0) + (request.len ?? 0));
+
         return { ok: true, b64: encode(slice), n: slice.byteLength };
       }
+
       case 'stage': {
         files.set(temp, decode(request.b64 ?? ''));
+
         return { ok: true };
       }
+
       case 'append': {
         const held = files.get(temp) ?? new Uint8Array(0);
         const added = decode(request.b64 ?? '');
@@ -130,23 +146,32 @@ function session(options: SessionOptions = {}): Session {
         joined.set(held, 0);
         joined.set(added, held.byteLength);
         files.set(temp, joined);
+
         return { ok: true };
       }
+
       case 'commit': {
         const staged = files.get(temp);
+
         if (!staged) return { ok: false, code: 'ENOENT', message: `no such file: ${temp}` };
         files.set(path, staged);
         files.delete(temp);
+
         return { ok: true };
       }
+
       case 'discard': {
         files.delete(temp);
+
         return { ok: true };
       }
+
       case 'unlink': {
         files.delete(path);
+
         return { ok: true };
       }
+
       default:
         return { ok: false, code: 'EIO', message: `unknown operation ${request.op}` };
     }
@@ -155,6 +180,7 @@ function session(options: SessionOptions = {}): Session {
   const unreached = (member: string) => async (): Promise<never> => {
     throw new Error(`the credentialed plane reached box.files.${member}, which it must not`);
   };
+
   const box: NimbusSandboxHandle = {
     ready: async () => {},
     exec: async (command, execOptions) => {
@@ -162,6 +188,7 @@ function session(options: SessionOptions = {}): Session {
       const [raw] = Object.values(execOptions?.env ?? {});
       const request = v.parse(v.pipe(v.string(), v.parseJson(), RequestSchema), raw ?? '');
       requests.push(request);
+
       return {
         command, success: true, stdout: JSON.stringify(apply(request)), stderr: '', exitCode: 0,
       };
@@ -177,6 +204,7 @@ function session(options: SessionOptions = {}): Session {
       delete: unreached('delete'),
     },
   };
+
   return { box, requests, files };
 }
 
@@ -190,12 +218,14 @@ interface OriginSession {
 function originSession(): OriginSession {
   const files = new Map<string, Uint8Array>();
   const encoder = new TextEncoder();
+
   const box: NimbusSandboxHandle = {
     ready: async () => {},
     exec: async (command) => ({ command, success: false, stdout: '', stderr: 'no shell here', exitCode: 1 }),
     files: {
       read: async (path) => {
         const held = files.get(path);
+
         return held === undefined ? null : new TextDecoder().decode(held);
       },
       readBytes: async (path) => files.get(path)?.slice() ?? null,
@@ -207,6 +237,7 @@ function originSession(): OriginSession {
       // And its stat's shape exactly: no revision to compare against.
       stat: async (path) => {
         const held = files.get(path);
+
         return held === undefined ? null : { type: 'file', size: held.byteLength, mtime: 1 };
       },
       list: async () => [],
@@ -214,6 +245,7 @@ function originSession(): OriginSession {
       delete: async (path) => { files.delete(path); },
     },
   };
+
   return { box, files };
 }
 
@@ -225,7 +257,9 @@ function lookupFor(vfs: VFS): ExecutorFileLookup {
 /** A payload that cannot cross in one call, so the staging loop is real. */
 function payload(bytes: number): Uint8Array {
   const out = new Uint8Array(bytes);
+
   for (let at = 0; at < bytes; at++) out[at] = at % 251;
+
   return out;
 }
 
@@ -262,11 +296,13 @@ describe('an unconditional write publishes with a rename', () => {
     await vfs.writeFile(TARGET, big);
 
     expect(rail.requests.map((request) => request.op)).toEqual(['stage', 'append', 'append', 'commit']);
+
     // Every call stays under the wire bound, which is what the loop is for.
     for (const request of rail.requests) {
       if (request.b64 === undefined) continue;
       expect(atob(request.b64).length).toBeLessThanOrEqual(AGENT_FS_CHUNK_BYTES);
     }
+
     expect([...(rail.files.get(TARGET) ?? [])]).toEqual([...big]);
     expect([...rail.files.keys()]).toEqual([TARGET]);
   // Measured 4.4 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
@@ -281,6 +317,7 @@ describe('a publication that never happens leaves the previous file', () => {
       seed: { [TARGET]: 'the previous file' },
       refuse: { op: 'append', code: 'EIO', message: 'the session went away' },
     });
+
     const vfs = nimbusSessionFiles(rail.box, CRED);
 
     await expect(vfs.writeFile(TARGET, payload(AGENT_FS_CHUNK_BYTES + 7)))
@@ -296,6 +333,7 @@ describe('a publication that never happens leaves the previous file', () => {
       seed: { [TARGET]: 'the previous file' },
       refuse: { op: 'commit', code: 'EIO', message: 'the rename failed' },
     });
+
     const vfs = nimbusSessionFiles(rail.box, CRED);
 
     await expect(vfs.writeFile(TARGET, new TextEncoder().encode('the replacement')))
@@ -357,6 +395,7 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
     const refused = await writeExecutorFileOp(
       router, 'workspace', '/home/user/notes.md', new TextEncoder().encode('an edit'), 7,
     );
+
     if (!('unsupported' in refused)) throw new Error('expected the unsupported refusal');
 
     const viewed = await readExecutorFile(router, 'workspace', '/home/user/notes.md');
@@ -379,9 +418,11 @@ describe('a plane with no compare-and-write says so, once, in one voice', () => 
  */
 function runnerOf(command: string): string {
   const program = command.slice('node -e '.length);
+
   if (!program.startsWith("'") || !program.endsWith("'")) {
     throw new Error(`the plane did not send a quoted program: ${command.slice(0, 40)}`);
   }
+
   return program.slice(1, -1).replaceAll("'\\''", "'");
 }
 
@@ -419,9 +460,11 @@ function driveRunner(
   files: Map<string, Uint8Array>,
 ): RunnerRun {
   const calls: FsCall[] = [];
+
   const fs = {
     readFileSync: (path: string) => {
       calls.push({ name: 'readFileSync', path });
+
       return Buffer.from(files.get(path) ?? new Uint8Array(0));
     },
     writeFileSync: (path: string, data: Uint8Array) => {
@@ -443,15 +486,18 @@ function driveRunner(
     renameSync: (from: string, to: string) => {
       calls.push({ name: 'renameSync', path: from });
       const held = files.get(from);
+
       if (held === undefined) throw Object.assign(new Error(`ENOENT: ${from}`), { code: 'ENOENT' });
       files.set(to, held);
       files.delete(from);
     },
     statSync: (path: string) => {
       calls.push({ name: 'statSync', path });
+
       return { size: files.get(path)?.byteLength ?? 0, mtimeMs: 1, isDirectory: () => false };
     },
   };
+
   const stdout: string[] = [];
   // The program is a `node -e` body: `require`, `process` and `Buffer` are the
   // whole of its world, and each is supplied here rather than inherited.
@@ -459,11 +505,13 @@ function driveRunner(
   body(
     (name: string) => {
       if (name !== 'fs') throw new Error(`the runner now requires ${name}`);
+
       return fs;
     },
     { env, stdout: { write: (chunk: string) => stdout.push(chunk) } },
     Buffer,
   );
+
   return {
     answer: v.parse(v.pipe(v.string(), v.parseJson(), RunnerAnswerSchema), stdout.join('')),
     calls,
@@ -484,16 +532,21 @@ async function publicationCall(
 ): Promise<PublicationCall> {
   const sent: Array<{ command: string; env: Record<string, string> }> = [];
   const rail = session({ seed });
+
   const recorded: NimbusSandboxHandle = {
     ...rail.box,
     exec: async (command, options) => {
       sent.push({ command, env: { ...options?.env } });
+
       return rail.box.exec(command, options);
     },
   };
+
   await write(nimbusSessionFiles(recorded, CRED));
   const publication = sent.at(-1);
+
   if (!publication) throw new Error('the plane issued no request');
+
   return { ...publication, files: rail.files };
 }
 
@@ -503,6 +556,7 @@ describe('the runner program, executed', () => {
       (vfs) => vfs.writeFile(TARGET, new TextEncoder().encode('the replacement')),
       { [TARGET]: 'the previous file' },
     );
+
     const files = new Map([[`${TARGET}.staged`, new TextEncoder().encode('the replacement')]]);
     files.set(TARGET, new TextEncoder().encode('the previous file'));
     const env = { ...call.env };
@@ -522,6 +576,7 @@ describe('the runner program, executed', () => {
       (vfs) => vfs.writeFile(TARGET, new TextEncoder().encode('the replacement')),
       { [TARGET]: 'the previous file' },
     );
+
     const files = new Map([[TARGET, new TextEncoder().encode('the previous file')]]);
 
     const run = driveRunner(call.command, { ...call.env }, files);

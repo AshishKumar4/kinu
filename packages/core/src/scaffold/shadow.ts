@@ -290,8 +290,10 @@ export const SHADOW_TRIAL_CONTEXT_CHARS = 64_000;
 export function trimTrialContext(messages: readonly ModelMessage[]): ModelMessage[] {
   const kept: ModelMessage[] = [];
   let spent = 0;
+
   for (let i = messages.length - 1; i >= 0; i--) {
     const size = JSON.stringify(messages[i]).length;
+
     // A single message over the whole budget is DROPPED, not kept as the one
     // exception. Keeping it was the reason this bound could still be exceeded:
     // one pasted file in the last user turn made the row that carries this
@@ -299,10 +301,13 @@ export function trimTrialContext(messages: readonly ModelMessage[]): ModelMessag
     if (spent + size > SHADOW_TRIAL_CONTEXT_CHARS) {
       if (kept.length > 0 || size > SHADOW_TRIAL_CONTEXT_CHARS) break;
     }
+
     spent += size;
     kept.unshift(messages[i]);
   }
+
   while (kept.length > 0 && kept[0].role !== 'user') kept.shift();
+
   return kept;
 }
 
@@ -334,9 +339,11 @@ export function queueShadowTrial(
   },
 ): 'queued' | 'queue_full' {
   actor.assertCurrent();
+
   // Ahead of the depth check: a trial that has already run is not competing for
   // a queue slot, and `queue_full` would be a false refusal.
   if (args.id !== undefined && effectAlreadyDone(sql, actor, TRIAL_SCOPE, args.id)) return 'queued';
+
   if (countQueuedShadowTrials(sql, actor, args.pendingVersion) >= MAX_QUEUED_SHADOW_TRIALS) return 'queue_full';
   // DO NOTHING, not a replace: the row the first queueing wrote is the one the
   // runner may already have taken, and overwriting it would re-open work that
@@ -345,6 +352,7 @@ export function queueShadowTrial(
       VALUES (${actor.actorId}, ${args.id ?? `trial-${nanoid()}`}, ${args.pendingVersion}, ${args.task}, ${args.currentOutput},
               ${JSON.stringify(trimTrialContext(args.context))}, ${args.now ?? nowMs()})
       ON CONFLICT(actor_id, id) DO NOTHING`;
+
   return 'queued';
 }
 
@@ -353,15 +361,18 @@ export function listQueuedShadowTrials(
   sql: SqlExecutor, actor: ActorHandle, pendingVersion: number,
 ): QueuedShadowTrial[] {
   actor.assertCurrent();
+
   type Row = {
     id: string; pending_version: number; task: string; current_output: string;
     context: string; queued_at: number;
   };
+
   const rows = sql<Row>`
     SELECT id, pending_version, task, current_output, context, queued_at
     FROM scaffold_trial_queue
     WHERE actor_id = ${actor.actorId} AND pending_version = ${pendingVersion}
     ORDER BY queued_at ASC`;
+
   return rows.map((r) => ({
     id: r.id,
     pendingVersion: r.pending_version,
@@ -380,6 +391,7 @@ export function listQueuedShadowTrials(
  *  database and propagates instead of quietly becoming an empty replay. */
 function parseTrialContext(raw: string): ModelMessage[] {
   const parsed = modelMessageSchema.array().safeParse(parseJsonValue(raw));
+
   return parsed.success ? parsed.data : [];
 }
 
@@ -389,9 +401,11 @@ export function countQueuedShadowTrials(
   sql: SqlExecutor, actor: ActorHandle, pendingVersion: number,
 ): number {
   actor.assertCurrent();
+
   const rows = sql<{ n: number }>`
     SELECT COUNT(*) AS n FROM scaffold_trial_queue
     WHERE actor_id = ${actor.actorId} AND pending_version = ${pendingVersion}`;
+
   return rows[0]?.n ?? 0;
 }
 
@@ -415,6 +429,7 @@ export function purgeQueuedShadowTrials(
   sql: SqlExecutor, actor: ActorHandle, keepVersion: number | null,
 ): void {
   actor.assertCurrent();
+
   if (keepVersion === null) {
     void sql`DELETE FROM scaffold_trial_queue WHERE actor_id = ${actor.actorId}`;
   } else {
@@ -430,25 +445,34 @@ export function purgeQueuedShadowTrials(
  */
 export function getPendingScaffold(sql: SqlExecutor, actor: ActorHandle): PendingScaffold | null {
   actor.assertCurrent();
+
   type Row = { version: number; written_at: number; rationale: string };
+
   const rows = sql<Row>`
     SELECT version, written_at, rationale FROM scaffold_versions
     WHERE actor_id = ${actor.actorId} AND status = 'pending'
     ORDER BY version DESC LIMIT 1`;
+
   if (rows.length === 0) return null;
   const r = rows[0];
+
   type CountRow = { winner: string | null; n: number };
+
   const counts = sql<CountRow>`
     SELECT winner, COUNT(*) AS n FROM scaffold_evaluations
     WHERE actor_id = ${actor.actorId} AND pending_version = ${r.version}
     GROUP BY winner`;
+
   let trials = 0, pendingWins = 0, currentWins = 0, ties = 0;
+
   for (const c of counts) {
     trials += c.n;
+
     if (c.winner === 'pending') pendingWins = c.n;
     else if (c.winner === 'current') currentWins = c.n;
     else if (c.winner === 'tie') ties = c.n;
   }
+
   return {
     version: r.version, writtenAt: r.written_at, rationale: r.rationale,
     trialsSoFar: trials, pendingWins, currentWins, ties,
@@ -463,10 +487,12 @@ export function getPendingScaffold(sql: SqlExecutor, actor: ActorHandle): Pendin
  */
 export function getCurrentScaffoldVersion(sql: SqlExecutor, actor: ActorHandle): number | null {
   actor.assertCurrent();
+
   const rows = sql<{ version: number }>`
     SELECT version FROM scaffold_versions
     WHERE actor_id = ${actor.actorId} AND status = 'current'
     ORDER BY version DESC LIMIT 1`;
+
   return rows[0]?.version ?? null;
 }
 
@@ -497,25 +523,32 @@ export function readShadowVerdict(
   sql: SqlExecutor, actor: ActorHandle, version: number | null,
 ): ShadowVerdict {
   actor.assertCurrent();
+
   if (version == null) {
     return { version: null, trials: [], summary: { trials: 0, pendingWins: 0, currentWins: 0, ties: 0, winRate: 0 } };
   }
+
   type Row = {
     id: string; task: string; current_score: number | null; pending_score: number | null;
     winner: 'current' | 'pending' | 'tie' | null; judge_rationale: string | null; evaluated_at: number;
   };
+
   const rows = sql<Row>`
     SELECT id, task, current_score, pending_score, winner, judge_rationale, evaluated_at
     FROM scaffold_evaluations
     WHERE actor_id = ${actor.actorId} AND pending_version = ${version}
     ORDER BY CASE winner WHEN 'current' THEN 0 WHEN 'tie' THEN 1 ELSE 2 END, evaluated_at DESC`;
+
   let pendingWins = 0, currentWins = 0, ties = 0;
+
   for (const r of rows) {
     if (r.winner === 'pending') pendingWins++;
     else if (r.winner === 'current') currentWins++;
     else if (r.winner === 'tie') ties++;
   }
+
   const decisive = pendingWins + currentWins;
+
   return {
     version,
     trials: rows.map((r) => ({
@@ -531,7 +564,9 @@ export function readShadowVerdict(
 export async function readVersionedScaffoldSource(rt: AgentRuntime, version: number): Promise<string | null> {
   const versioned = `${rt.identity.scaffold.path}.v${version}`;
   const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
+
   if (!await scaffoldVfs.exists(versioned)) return null;
+
   return v.parse(v.string(), await scaffoldVfs.readFile(versioned, { encoding: 'utf8' }));
 }
 
@@ -548,7 +583,9 @@ export async function readVersionedScaffoldSource(rt: AgentRuntime, version: num
  */
 export async function readScaffoldVersion(rt: AgentRuntime, version: number): Promise<string | null> {
   const versioned = await readVersionedScaffoldSource(rt, version);
+
   if (versioned !== null) return versioned;
+
   // No versioned backup — happens for v0 (the bootstrap writes the live file
   // but not a versioned backup). Fall back to live ONLY for the version the
   // live file actually IS, which is the status='current' row. Asked (`exists`)
@@ -565,6 +602,7 @@ export async function readScaffoldVersion(rt: AgentRuntime, version: number): Pr
   // and with autoApply promote a version whose source does not exist. That is
   // the same defect modify.ts's gate 4 is written to avoid.
   if (version !== getCurrentScaffoldVersion(rt.storage.sql, rt.actor)) return null;
+
   return await rt.identity.scaffold.read();
 }
 
@@ -584,6 +622,7 @@ export function scoredShadowTrial(
   sql: SqlExecutor, actor: ActorHandle, trialId: string,
 ): ShadowTrialVerdict | null {
   actor.assertCurrent();
+
   const rows = sql<{
     current_score: number; pending_score: number;
     winner: ShadowTrialVerdict['winner']; judge_rationale: string;
@@ -591,8 +630,11 @@ export function scoredShadowTrial(
     SELECT current_score, pending_score, winner, judge_rationale
     FROM scaffold_evaluations
     WHERE actor_id = ${actor.actorId} AND id = ${`eval-${trialId}`} LIMIT 1`;
+
   const row = rows[0];
+
   if (row === undefined) return null;
+
   return {
     currentScore: row.current_score,
     pendingScore: row.pending_score,
@@ -620,6 +662,7 @@ export function recordShadowEvaluation(
 ): ShadowEvaluationRow {
   actor.assertCurrent();
   const id = args.trialId === undefined ? `eval-${nanoid()}` : `eval-${args.trialId}`;
+
   const row: ShadowEvaluationRow = {
     id,
     current_version: args.currentVersion,
@@ -631,6 +674,7 @@ export function recordShadowEvaluation(
     judge_rationale: args.judgeResult.rationale,
     evaluated_at: nowMs(),
   };
+
   void sql`INSERT INTO scaffold_evaluations
     (actor_id, id, current_version, pending_version, task, current_output, pending_output,
      current_score, pending_score, winner, judge_rationale, evaluated_at)
@@ -639,6 +683,7 @@ export function recordShadowEvaluation(
             ${row.current_score}, ${row.pending_score},
             ${row.winner}, ${row.judge_rationale}, ${row.evaluated_at})
     ON CONFLICT(actor_id, id) DO NOTHING`;
+
   return row;
 }
 
@@ -673,12 +718,14 @@ export function decidePromotion(
   config: ShadowConfig,
 ): PromotionDecision {
   const decisiveTrials = pending.pendingWins + pending.currentWins;
+
   if (decisiveTrials === 0) {
     // All ties so far carries no signal in either direction — keep observing,
     // even past maxTrials. The ceiling below is NOT a guaranteed stopping
     // point; a run of pure ties legitimately extends the window.
     return { decision: 'continue', winRate: 0.5 };
   }
+
   const winRate = pending.pendingWins / decisiveTrials;
 
   // Regression veto (hard, checked first): if the pending has LOST more decisive
@@ -692,8 +739,10 @@ export function decidePromotion(
 
   if (pending.trialsSoFar >= config.minTrials && decisiveTrials >= config.minDecisiveTrials) {
     if (winRate >= config.promoteThreshold) return { decision: 'promote', winRate };
+
     if (winRate <= config.rollbackThreshold) return { decision: 'rollback', winRate };
   }
+
   if (pending.trialsSoFar >= config.maxTrials) {
     // Hard ceiling. The regression veto already passed (currentWins ≤
     // maxRegressions), so promote iff genuinely ahead, else rollback. This
@@ -702,6 +751,7 @@ export function decidePromotion(
     // decisive YIELD rather than raw turns (see DEFAULT_SHADOW_CONFIG).
     return { decision: winRate > 0.5 ? 'promote' : 'rollback', winRate };
   }
+
   return { decision: 'continue', winRate };
 }
 
@@ -724,24 +774,30 @@ export async function applyPromotionDecision(
 ): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
   rt.actor.assertCurrent();
   const sql = rt.storage.sql;
+
   if (decision === 'promote') {
     // The pending's canonical source is its version file, written before the
     // pending row existed (modifyScaffold gate 4). Verify it, re-check the
     // misevolution gate against the bytes that will actually run, then flip
     // the pointer.
     const pendingCode = await readScaffoldVersion(rt, pending.version);
+
     if (pendingCode == null) {
       throw new Error(`promote failed: no scaffold code found for v${pending.version}`);
     }
+
     const misevolution = checkMisevolution(pendingCode);
+
     if (!misevolution.ok) {
       recordMisevolutionVeto(sql, rt.actor, {
         surface: 'scaffold', violation: misevolution,
         detail: `promotion of v${pending.version} vetoed; rolled back instead`,
       });
       const result = await applyPromotionDecision(rt, pending, 'rollback');
+
       return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
     }
+
     // One statement — the old-current retirement and the pending promotion
     // are a single atomic write on every backend, so no crash window can
     // leave zero or two current rows.
@@ -756,16 +812,20 @@ export async function applyPromotionDecision(
     // Pointer committed. The live file is the rebuildable view, refreshed
     // after; execution reads the pointer's version file either way.
     await rt.identity.scaffold.write(pendingCode);
+
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
+
   // Rollback: the pointer never moved, so retiring the pending IS the whole
   // state change. The view refresh afterwards only heals drift.
   void sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE actor_id = ${rt.actor.actorId} AND version = ${pending.version}`;
   const currentVersion = getCurrentScaffoldVersion(sql, rt.actor) ?? (pending.version - 1);
   const currentCode = await readScaffoldVersion(rt, currentVersion);
+
   if (currentCode != null) {
     await rt.identity.scaffold.write(currentCode);
   }
+
   return { newCurrentVersion: currentVersion, action: 'rollback' };
 }

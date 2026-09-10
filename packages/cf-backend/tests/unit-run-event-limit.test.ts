@@ -21,6 +21,7 @@ import { makeSql, makeExecRaw } from '../../core/tests/helpers';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
+
 // Dynamic on purpose: the route module resolves the Agent SDK at import time, so
 // it may only load AFTER the stub is installed. Same seam as unit-sse-disconnect.
 const { handleRunEventsRequest } = await import('../src/run-events-routes');
@@ -34,14 +35,17 @@ function runEventsEnv() {
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
   const recorder = new RunEventRecorder(sql, testActorHandle(sql));
+
   for (let i = 0; i < SEEDED_EVENTS; i++) {
     recorder.emit('run-1', { type: 'error', message: `event ${i}` });
   }
+
   const stub = {
     async getRunEventsWire(runId: string, opts?: RunEventQuery) {
       return JSON.stringify(getRunEvents(recorder, runId, opts));
     },
   };
+
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, {
     OrchestratorAgent: { idFromName: (n: string) => n, get: () => stub },
@@ -50,6 +54,7 @@ function runEventsEnv() {
   // SAFETY: this suite reaches only the locally constructed orchestrator
   // namespace and credential secret.
   const env = partialEnv as Env;
+
   return { env, stub };
 }
 
@@ -57,8 +62,10 @@ async function eventsVia(env: Env, query: string): Promise<{ status: number; cou
   const res = await handleRunEventsRequest(new Request(
     `https://kinu.example.com/api/workspaces/jarvis/runs/run-1/events${query}`,
   ), env);
+
   if (!res) throw new Error('the route did not claim the request');
   const body: unknown = await res.json();
+
   return { status: res.status, count: Array.isArray(body) ? body.length : -1 };
 }
 
@@ -111,10 +118,13 @@ describe('the run-events route closes `limit` before it can reach SQL', () => {
 describe('a direct RPC cannot ask for more than the route may', () => {
   test('the RPC applies the same bounds with no route in the path', async () => {
     const { stub } = runEventsEnv();
+
     const countOf = async (opts: RunEventQuery): Promise<number> => {
       const parsed: unknown = JSON.parse(await stub.getRunEventsWire('run-1', opts));
+
       return Array.isArray(parsed) ? parsed.length : -1;
     };
+
     // No route in this path — the same query strings a caller would smuggle
     // past it, handed straight to the RPC.
     expect(await countOf({ limit: -1 })).toBe(1);

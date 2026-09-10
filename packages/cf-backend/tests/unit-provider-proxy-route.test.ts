@@ -16,16 +16,21 @@ import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
+
 const AI_TOKEN = `pta_${USER_ID}_${'a'.repeat(44)}`;
+
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
 const FORWARD_URL = 'https://kinu.example.com/api/user/ai/proxy/forward';
+
 const CREDENTIALS_URL = 'https://kinu.example.com/api/user/ai/proxy/credentials';
 
 const CATALOG = {
   groq: { id: 'groq', name: 'Groq', npm: '@ai-sdk/groq', models: {} },
 };
+
 const CredentialListSchema = v.object({
   credentials: v.array(v.object({
     key: v.string(),
@@ -34,12 +39,14 @@ const CredentialListSchema = v.object({
 });
 
 const originalFetch = globalThis.fetch;
+
 afterEach(() => { globalThis.fetch = originalFetch; });
 
 interface StoredCredential { key: string; baseURL?: string; headers?: Record<string, string> }
 
 function setupEnv(stored: StoredCredential[]) {
   const byKey = new Map(stored.map((c) => [c.key, c]));
+
   const userDO = {
     async verifyCliToken(_caller: UserCaller, bearer: string) {
       return {
@@ -50,7 +57,9 @@ function setupEnv(stored: StoredCredential[]) {
     },
     async verifyAccessToken(_caller: UserCaller, bearer: string) {
       const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['workspace.read'] : null;
+
       if (!scopes) return { ok: false, error: 'invalid token' };
+
       return {
         ok: true,
         tokenHash: `${scopes.join('+')}-hash`,
@@ -68,11 +77,13 @@ function setupEnv(stored: StoredCredential[]) {
       return byKey.get(key)?.headers ?? null;
     },
   };
+
   const env: Partial<Env> = {};
   Object.assign(env, {
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   });
+
   // SAFETY: Provider proxy tests reach only the constructed UserDO namespace
   // and credential key; both bindings are exact and present above.
   return env as Env;
@@ -88,13 +99,19 @@ function forwardRequest(opts: {
 }) {
   const token = opts.token === undefined ? SESSION_TOKEN : opts.token;
   const headers = new Headers();
+
   if (token) headers.set('authorization', `Bearer ${token}`);
+
   if (opts.cred) headers.set('x-kinu-proxy-cred', opts.cred);
+
   if (opts.target) headers.set('x-kinu-proxy-target', opts.target);
   headers.set('content-type', 'application/json');
+
   for (const [name, value] of Object.entries(opts.headers ?? {})) headers.set(name, value);
   const init: RequestInit = { method: opts.method ?? 'POST', headers };
+
   if (opts.method !== 'GET') init.body = opts.body ?? '{"model":"x"}';
+
   return new Request(FORWARD_URL, init);
 }
 
@@ -104,6 +121,7 @@ function captureUpstream(respond: () => Response): Upstream[] {
   const captured: Upstream[] = [];
   globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
+
     if (url.startsWith('https://models.dev/')) return Response.json(CATALOG);
     captured.push({
       url,
@@ -111,13 +129,16 @@ function captureUpstream(respond: () => Response): Upstream[] {
       headers: new Headers(init?.headers),
       body: init?.body instanceof ArrayBuffer ? new TextDecoder().decode(init.body) : String(init?.body ?? ''),
     });
+
     return respond();
   });
+
   return captured;
 }
 
 function handled(response: Response | null): Response {
   if (!response) throw new Error('Provider proxy route did not handle the request');
+
   return response;
 }
 
@@ -135,11 +156,13 @@ describe('provider proxy auth gate', () => {
     const denied = await handleCliRequest(forwardRequest({
       token: READ_TOKEN, cred: 'openrouter.bearer', target: 'https://openrouter.ai/api/v1/chat/completions',
     }), env);
+
     expect(denied?.status).toBe(403);
 
     const allowed = await handleCliRequest(forwardRequest({
       token: AI_TOKEN, cred: 'openrouter.bearer', target: 'https://openrouter.ai/api/v1/chat/completions',
     }), env);
+
     expect(allowed?.status).toBe(200);
   });
 });
@@ -151,11 +174,13 @@ describe('GET /credentials', () => {
       { key: 'openai-compat.default', baseURL: 'https://host.example/v1', headers: { Authorization: 'Bearer sk-c' } },
       { key: 'groq.bearer', headers: { Authorization: 'Bearer gsk-real' } },
     ]);
+
     captureUpstream(() => new Response('unused'));
 
     const res = await handleCliRequest(new Request(CREDENTIALS_URL, {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
+
     const body = v.parse(CredentialListSchema, await handled(res).json());
 
     expect(body.credentials.map((c) => c.key).sort())
@@ -171,11 +196,13 @@ describe('GET /credentials', () => {
       { key: 'cloudflare.oauth', baseURL: 'https://api.cloudflare.com/client/v4/accounts/a/ai/v1', headers: { authorization: 'Bearer cf' } },
       { key: 'openai.bearer', headers: { Authorization: 'Bearer sk-o' } },
     ]);
+
     captureUpstream(() => new Response('unused'));
 
     const res = await handleCliRequest(new Request(CREDENTIALS_URL, {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
+
     const body = v.parse(CredentialListSchema, await handled(res).json());
     expect(body.credentials.map((c) => c.key)).toEqual(['openai.bearer']);
   });
@@ -258,9 +285,11 @@ describe('POST /forward', () => {
   test('a credential that is not connected is a 401 naming the key', async () => {
     const env = setupEnv([]);
     captureUpstream(() => new Response('should not happen'));
+
     const res = await handleCliRequest(forwardRequest({
       cred: 'openai.bearer', target: 'https://api.openai.com/v1/chat/completions',
     }), env);
+
     expect(res?.status).toBe(401);
     expect(await handled(res).text()).toContain('openai.bearer');
   });
@@ -268,15 +297,18 @@ describe('POST /forward', () => {
   test('an unroutable credential key is a 400, not a silent direct send', async () => {
     const env = setupEnv([{ key: 'github', headers: { Authorization: 'Bearer ghp' } }]);
     const seen = captureUpstream(() => new Response('should not happen'));
+
     const res = await handleCliRequest(forwardRequest({
       cred: 'github', target: 'https://api.github.com/user',
     }), env);
+
     expect(res?.status).toBe(400);
     expect(seen).toHaveLength(0);
   });
 
   test('a redirect is handed back, never followed with the credential attached', async () => {
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
+
     const seen = captureUpstream(() => new Response(null, {
       status: 302, headers: { location: 'https://attacker.example/collect' },
     }));
@@ -294,6 +326,7 @@ describe('POST /forward', () => {
   test('a target that only looks like the provider is refused', async () => {
     const env = setupEnv([{ key: 'openai.bearer', headers: { Authorization: 'Bearer sk-real' } }]);
     const seen = captureUpstream(() => new Response('should not happen'));
+
     for (const target of [
       'https://api.openai.com@attacker.example/v1/chat/completions',  // userinfo
       'https://api.openai.com.attacker.example/v1/chat/completions',  // suffix
@@ -303,6 +336,7 @@ describe('POST /forward', () => {
       const res = await handleCliRequest(forwardRequest({ cred: 'openai.bearer', target }), env);
       expect(res?.status).toBe(403);
     }
+
     expect(seen).toHaveLength(0);
   });
 
@@ -333,6 +367,7 @@ describe('POST /forward', () => {
       token: AI_TOKEN, cred: 'openai.bearer',
       target: 'https://api.openai.com/v1/models', method: 'GET',
     }), env);
+
     const inferred = await handleCliRequest(forwardRequest({
       token: AI_TOKEN, cred: 'openai.bearer',
       target: 'https://api.openai.com/v1/chat/completions',

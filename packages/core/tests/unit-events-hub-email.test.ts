@@ -31,6 +31,7 @@ interface Hub {
 
 function makeSql(): Hub {
   const db = new Database(':memory:');
+
   return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
 }
 
@@ -94,18 +95,23 @@ describe('email dedupe', () => {
     const r2 = log.publish({ descriptor: emailDescriptor('owner'), now: 5000 });
     expect(r2.admitted).toBe(false);
     expect(r2.id).toBe(r1.id);
+
     // A different message admits.
     const r3 = log.publish({
       descriptor: emailDescriptor('owner', { message_id: '<msg-2@example.com>' }), now: 6000,
     });
+
     expect(r3.admitted).toBe(true);
   });
 
   test('missing Message-ID falls back to a content hash bucket', () => {
     const base = emailPayload({ message_id: null });
+
     const mk = (received_at: number, body?: string): KinuEvent => {
       const payload: EmailPayload = { ...base };
+
       if (body) payload.body_text = body;
+
       return {
         id: 'e', trace_id: 't', caused_by: null,
         ingress: 'email_inbound', variant: 'email',
@@ -114,6 +120,7 @@ describe('email dedupe', () => {
         payload,
       };
     };
+
     const k1 = dedupeKeyFor(mk(1000));
     const k2 = dedupeKeyFor(mk(2000));                    // same 5-min bucket
     const k3 = dedupeKeyFor(mk(6 * 60 * 1000));           // next bucket
@@ -129,12 +136,14 @@ describe('email rendering for the LLM', () => {
     const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
+
     const { id } = log.publish({
       descriptor: emailDescriptor('owner', {
         attachments: [{ filename: 'report.pdf', content_type: 'application/pdf', size: 123 }],
       }),
       now: 1000,
     });
+
     const event = log.get(id)!;
     const r = renderForLLM(event);
     expect(r.variant).toBe('email');
@@ -161,15 +170,22 @@ describe('email_thread reply channels', () => {
     const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     const sent: unknown[] = [];
+
     const dispatcher: ReplyDispatcher = {
-      async dispatch(_channel, payload) { sent.push(payload); return { delivered: true }; },
+      async dispatch(_channel, payload) {
+        sent.push(payload);
+
+        return { delivered: true };
+      },
     };
+
     const store = new ReplyChannelStore(sql, actor, { email_thread: dispatcher });
 
     const id = store.open({
       event_id: 'pending', kind: 'email_thread',
       holder_addr: JSON.stringify({ to: 'owner@example.com' }), payload_policy: 'full',
     }, 1000)!;
+
     store.bindEvent(id, 'evt-1');
 
     const found = store.findOpenByEvent('evt-1');
@@ -188,9 +204,11 @@ describe('email_thread reply channels', () => {
     const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     const store = new ReplyChannelStore(sql, actor, {});
+
     const id = store.open({
       event_id: 'e', kind: 'email_thread', holder_addr: '{}', payload_policy: 'full',
     }, 0)!;
+
     const outcome = await store.reply(id, 'late', 25 * 60 * 60 * 1000);
     expect(outcome).toEqual({ outcome: 'channel_closed', state: 'expired' });
   });
@@ -211,6 +229,7 @@ describe('the agent inbox', () => {
     const triggers = new TriggerRegistry(sql, actor, { scheduleAt: async () => {} });
     const { vfs } = createMemoryVfs();
     let drains = 0;
+
     return {
       log, triggers,
       drains: () => drains,
@@ -254,6 +273,7 @@ describe('the agent inbox', () => {
 
   test('past the rate window the agent is told once, and told it is deaf until it resets', async () => {
     const scene = inbox();
+
     for (let n = 0; n <= EMAIL_INBOUND_RATE_PER_MIN; n += 1) {
       await scene.inbox.accept(mail('owner@example.com', n));
     }

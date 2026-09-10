@@ -30,14 +30,17 @@ export const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
  *  `openai-compat:groq` → `openai-compat.groq` */
 function credKeyFor(providerId: string): string {
   if (providerId === 'openai-compat') return `${OPENAI_COMPAT_KEY_PREFIX}default`;
+
   if (providerId.startsWith('openai-compat:')) {
     return OPENAI_COMPAT_KEY_PREFIX + providerId.slice('openai-compat:'.length);
   }
+
   return providerId;
 }
 
 export function createOpenAICompatProvider(providerId: string = 'openai-compat'): ModelProvider {
   const credKey = credKeyFor(providerId);
+
   return {
     id: providerId,
     label: providerId === 'openai-compat'
@@ -55,6 +58,7 @@ export function createOpenAICompatProvider(providerId: string = 'openai-compat')
       // customFetch (which re-reads the credential each call, so a UI-side
       // change to baseURL takes effect without rebuilding the model).
       const placeholder = 'https://openai-compat.invalid';
+
       const customFetch = createAuthedFetch(deps, {
         credKey,
         missingCredentialError: `openai-compat credential ${credKey} not configured (baseURL required)`,
@@ -63,6 +67,7 @@ export function createOpenAICompatProvider(providerId: string = 'openai-compat')
           ? auth.baseURL.replace(/\/+$/, '') + url.slice(placeholder.length)
           : url,
       });
+
       return createOpenAICompatible({
         name: providerId,
         baseURL: placeholder,
@@ -80,17 +85,23 @@ export async function discoverOpenAICompatibleModels(
   fetchImpl: typeof fetch = fetch,
 ): Promise<ModelInfo[]> {
   if (!auth?.baseURL) return [];
+
   const response = await fetchImpl(`${auth.baseURL.replace(/\/+$/, '')}/models`, {
     headers: { ...auth.headers, accept: 'application/json' },
   });
+
   if (!response.ok) return [];
   const body = v.safeParse(ModelListSchema, await response.json());
+
   if (!body.success) return [];
+
   return body.output.data.flatMap((value): ModelInfo[] => {
     const id = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.id);
+
     if (!id.success) return [];
     const contextWindow = positiveInteger(value.context_window);
     const name = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.name);
+
     return [{
       id: id.output,
       label: name.success ? name.output : id.output,

@@ -61,6 +61,7 @@ function ledgerDb() {
   const execRaw = makeExecRaw(db);
   initTurnOutcomeTables(execRaw);
   const actors = createTestActors(sql, execRaw);
+
   return { sql, db, actor: actors.main, sibling: actors.sibling };
 }
 
@@ -88,9 +89,11 @@ describe('the ledger', () => {
   test('a finding that recurred after falling out of the window records again — the recurrence is signal', () => {
     const { sql, actor } = ledgerDb();
     expect(recordRecoveryFinding(sql, actor, finding(), 1_000)).toBe(true);
+
     for (let i = 0; i < MAX_RECOVERY_FINDINGS; i++) {
       expect(recordRecoveryFinding(sql, actor, finding({ tool: `tool_${i}` }), 2_000 + i)).toBe(true);
     }
+
     expect(listRecoveryFindings(sql, actor)).not.toContain(recoveryFindingText(finding()));
     expect(recordRecoveryFinding(sql, actor, finding(), 9_000)).toBe(true);
     expect(listRecoveryFindings(sql, actor)[0]).toBe(recoveryFindingText(finding()));
@@ -98,9 +101,11 @@ describe('the ledger', () => {
 
   test('the injection window is bounded at MAX_RECOVERY_FINDINGS', () => {
     const { sql, actor } = ledgerDb();
+
     for (let i = 0; i < MAX_RECOVERY_FINDINGS + 3; i++) {
       recordRecoveryFinding(sql, actor, finding({ tool: `tool_${i}` }), 1_000 + i);
     }
+
     expect(listRecoveryFindings(sql, actor)).toHaveLength(MAX_RECOVERY_FINDINGS);
   });
 
@@ -158,6 +163,7 @@ function eventLog(): EventLog {
   const db = new Database(':memory:');
   const exec = makeSqlExec(db);
   initEventsHubTables(exec);
+
   return new EventLog(exec, createTestActors(makeSql(db), makeExecRaw(db)).main);
 }
 
@@ -166,13 +172,16 @@ function eventLog(): EventLog {
  *  backends register. */
 async function grindThenRecover(orch: AgentOrchestrator): Promise<void> {
   const onToolResult = orch.turnExtension.onToolResult;
+
   if (!onToolResult) throw new Error('Expected an onToolResult extension');
+
   for (let attempt = 0; attempt < 3; attempt++) {
     await onToolResult({
       toolName: 'run', args: { command: 'npm test', attempt }, result: 'Error (exit 1): npm not found',
       success: false, reason: 'io', execution: { exitCode: 1 },
     });
   }
+
   await onToolResult({
     toolName: 'run', args: { command: 'bun test' }, result: '12 tests passed', success: true,
   });
@@ -211,6 +220,7 @@ describe('the loop, through the production seams', () => {
       liveHeadRuns: { items: [], total: 0 },
       missingCapabilities: [],
     }));
+
     if (!block) throw new Error('Expected an execution recovery context block');
     expect(block).toContain('## Proven by execution');
     expect(block).toContain('bun test');
@@ -229,6 +239,7 @@ describe('the loop, through the production seams', () => {
     // The per-step pipeline exactly as both backends wire it: the ledger lives
     // for the activation, the snapshot re-reads the lessons ledger per step.
     const ledger = new DynamicContextLedger();
+
     const step = async (stepNumber: number) => composePrepareStep({
       dynamic: {
         ledger,

@@ -100,6 +100,7 @@ export interface UniverseRow {
  */
 export function calibrationUniverse(sql: SqlExecutor, actor: ActorHandle): UniverseRow[] {
   actor.assertCurrent();
+
   return sql<{
     id: string; outcome: TurnOutcome; scaffold_version: number | null;
     user_message: string; assistant_response: string; followup: string | null; created_at: number;
@@ -142,6 +143,7 @@ const EVEN_BUDGET_SHARE = 0.5;
  */
 export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number): number[] {
   const total = sizes.reduce((n, s) => n + s, 0);
+
   if (sizes.length === 0 || total === 0 || budget <= 0) return sizes.map(() => 0);
 
   const even = Math.floor((budget * EVEN_BUDGET_SHARE) / sizes.length);
@@ -152,6 +154,7 @@ export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number
   const shares = sizes.map((size) => (proportional * size) / total);
   const quotas = shares.map((share) => even + Math.floor(share));
   let unassigned = proportional - shares.reduce((n, share) => n + Math.floor(share), 0);
+
   for (const { i } of shares
     .map((share, i) => ({ i, remainder: share - Math.floor(share) }))
     .sort((a, b) => b.remainder - a.remainder)) {
@@ -159,13 +162,17 @@ export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number
     quotas[i]++;
     unassigned--;
   }
+
   for (let i = 0; i < quotas.length; i++) quotas[i] = Math.min(quotas[i], sizes[i]);
 
   // Give away whatever the caps left over, until nobody has headroom.
   let spare = budget - quotas.reduce((n, q) => n + q, 0);
+
   while (spare > 0) {
     const headroom = sizes.map((size, i) => size - quotas[i]);
+
     if (headroom.every((h) => h <= 0)) break;
+
     for (let i = 0; i < quotas.length && spare > 0; i++) {
       if (headroom[i] > 0) {
         quotas[i]++;
@@ -173,6 +180,7 @@ export function allocateLabelBudget(sizes: ReadonlyArray<number>, budget: number
       }
     }
   }
+
   return quotas;
 }
 
@@ -210,10 +218,12 @@ const SHUFFLE_SEED = 1;
 function shuffled<T>(items: ReadonlyArray<T>, seed: number): T[] {
   const out = [...items];
   const random = seededRandom(seed);
+
   for (let i = out.length - 1; i > 0; i--) {
     const j = Math.floor(random() * (i + 1));
     [out[i], out[j]] = [out[j], out[i]];
   }
+
   return out;
 }
 
@@ -221,6 +231,7 @@ function shuffled<T>(items: ReadonlyArray<T>, seed: number): T[] {
  *  so the sample spans the whole range instead of a corner of it. */
 function spread<T>(rows: ReadonlyArray<T>, n: number): T[] {
   const take = Math.min(n, rows.length);
+
   return Array.from({ length: take }, (_, j) => rows[Math.floor(((j + 0.5) * rows.length) / take)]);
 }
 
@@ -236,21 +247,26 @@ export function sampleForLabeling(
 ): LabelingItem[] {
   const already = goldLabels(sql, actor);
   const universe = calibrationUniverse(sql, actor).filter((row) => !already.has(row.id));
+
   if (universe.length === 0) return [];
 
   const byVerdict = new Map<TurnOutcome, UniverseRow[]>();
+
   for (const row of universe) {
     const bucket = byVerdict.get(row.predicted) ?? [];
     bucket.push(row);
     byVerdict.set(row.predicted, bucket);
   }
+
   const verdicts = [...byVerdict.keys()];
+
   const quotas = allocateLabelBudget(
     verdicts.map((v) => byVerdict.get(v)?.length ?? 0),
     opts.size ?? DEFAULT_LABEL_BUDGET,
   );
 
   const drawn = verdicts.flatMap((verdict, i) => spread(byVerdict.get(verdict) ?? [], quotas[i]));
+
   return shuffled(drawn, SHUFFLE_SEED).map(labelingItem);
 }
 
@@ -263,10 +279,12 @@ const SHOWN = { user: 400, response: 500, followup: 700 } as const;
 
 function clip(text: string, limit: number): string {
   const trimmed = text.trim();
+
   return trimmed.length <= limit ? trimmed : `${trimmed.slice(0, limit)}… [truncated]`;
 }
 
 const BLOCK_HEADER = /^###\s+\d+\s*\/\s*\d+\s+(\S+)\s*$/;
+
 const VERDICT_LINE = /^verdict:\s*(\S*)\s*$/;
 
 /**
@@ -310,6 +328,7 @@ export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
     '#     kinu label ingest <agent> <this file>',
     '',
   ];
+
   items.forEach((item, index) => {
     lines.push(
       `### ${index + 1}/${items.length} ${item.outcomeId}`,
@@ -319,6 +338,7 @@ export function renderLabelingFile(items: ReadonlyArray<LabelingItem>): string {
       '',
     );
   });
+
   return lines.join('\n');
 }
 
@@ -349,31 +369,44 @@ export function parseLabelingFile(text: string): ParsedLabelFile {
 
   text.split('\n').forEach((line, i) => {
     const header = BLOCK_HEADER.exec(line);
+
     if (header) {
       current = header[1];
       blocks++;
+
       if (seen.has(current)) errors.push(`line ${i + 1}: turn ${current} appears more than once`);
       seen.add(current);
+
       return;
     }
+
     const verdict = VERDICT_LINE.exec(line);
+
     if (!verdict) return;
+
     if (current === null) {
       errors.push(`line ${i + 1}: a verdict before any turn`);
+
       return;
     }
+
     verdicts++;
     const raw = verdict[1];
+
     if (raw === '') return;
     const label = byKey.get(raw.toLowerCase());
+
     if (label === undefined) {
       errors.push(`line ${i + 1}: "${raw}" is not a verdict — use ${[...byKey.keys()].join(', ')}`);
+
       return;
     }
+
     labels.push({ outcomeId: current, label });
   });
 
   if (blocks === 0) errors.push('no turns found — is this a Kinu labeling file?');
+
   return { labels, skipped: verdicts - labels.length, errors };
 }
 
@@ -405,11 +438,13 @@ export function ingestOutcomeLabels(
 ): LabelIngestResult {
   const predicted = new Map(calibrationUniverse(sql, actor).map((row) => [row.id, row.predicted]));
   const known = input.labels.filter((entry) => predicted.has(entry.outcomeId));
+
   const unknown = input.labels
     .filter((entry) => !predicted.has(entry.outcomeId))
     .map((entry) => entry.outcomeId);
 
   recordOutcomeLabels(sql, actor, { labeler: input.labeler, labels: known, now: input.now });
+
   return {
     stored: known.length,
     unknown,
@@ -488,18 +523,22 @@ export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): Calibra
   let lastLabeledAt: number | null = null;
   /** predicted verdict → the labeler's verdicts for it. */
   const judged = new Map<TurnOutcome, TurnOutcome[]>();
+
   for (const label of gold.values()) {
     labelers.add(label.labeler);
     lastLabeledAt = Math.max(lastLabeledAt ?? 0, label.createdAt);
     const row = byId.get(label.outcomeId);
+
     if (!row) {
       orphaned++;
       continue;
     }
+
     if (label.label === 'unclear') {
       unclear++;
       continue;
     }
+
     judged.set(row.predicted, [...(judged.get(row.predicted) ?? []), label.label]);
   }
 
@@ -507,6 +546,7 @@ export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): Calibra
     .filter((verdict) => verdict !== 'abandoned')
     .map((verdict) => {
       const actuals = judged.get(verdict) ?? [];
+
       return {
         predicted: verdict,
         population: universe.filter((row) => row.predicted === verdict).length,
@@ -537,6 +577,7 @@ export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): Calibra
   };
 
   const measured = classifierAccuracy(prediction);
+
   if (measured.accuracy === null) {
     return {
       ...base,
@@ -549,10 +590,12 @@ export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): Calibra
   }
 
   const accuracy = measured.accuracy;
+
   const overall = correctedRate(
     { events: universe.filter((row) => isNegativeOutcome(row.predicted)).length, population: universe.length },
     accuracy,
   );
+
   const segments = segmentObservations(universe).map((segment) => ({
     ...segment,
     rate: correctedRate(segment.observed, accuracy).rate,
@@ -576,11 +619,13 @@ export function calibrationReport(sql: SqlExecutor, actor: ActorHandle): Calibra
 /** What the classifier reported per scaffold version, oldest first. */
 function segmentObservations(universe: ReadonlyArray<UniverseRow>): Array<Omit<CalibratedSegment, 'rate'>> {
   const byVersion = new Map<number | null, UniverseRow[]>();
+
   for (const row of universe) {
     const bucket = byVersion.get(row.scaffoldVersion) ?? [];
     bucket.push(row);
     byVersion.set(row.scaffoldVersion, bucket);
   }
+
   return [...byVersion]
     .map(([scaffoldVersion, rows]) => ({
       scaffoldVersion,
@@ -612,6 +657,7 @@ export function renderCalibrationReport(report: CalibrationReport): string {
   const lines = [
     'Judge calibration — the turn-outcome classifier, measured against hand labels',
   ];
+
   if (report.gap !== null || report.accuracy === null || report.overall === null) {
     const gap = report.gap;
     lines.push(
@@ -620,6 +666,7 @@ export function renderCalibrationReport(report: CalibrationReport): string {
         `${report.labeled} labeled so far.`,
       '  Draw a calibration set with:  kinu label export <agent>',
     );
+
     return lines.join('\n');
   }
 
@@ -639,13 +686,17 @@ export function renderCalibrationReport(report: CalibrationReport): string {
       : `  Cohen's κ: ${report.kappa.value.toFixed(2)} (95% CI ${report.kappa.lo.toFixed(2)}–${report.kappa.hi.toFixed(2)})`,
     `  Corrected correction rate: ${renderRate(report.overall)}`,
   );
+
   if (report.segments.length > 1) {
     lines.push('  By scaffold version (oldest first):');
+
     for (const segment of report.segments) {
       lines.push(`    v${segment.scaffoldVersion ?? '?'}  n=${segment.observed.population}  ` +
         (segment.rate === null ? 'uncalibrated' : renderRate(segment.rate)));
     }
   }
+
   lines.push('  Sensitivity is a ratio estimate and runs ~1–2 points high at 100 labels; the corrected rate does not.');
+
   return lines.join('\n');
 }

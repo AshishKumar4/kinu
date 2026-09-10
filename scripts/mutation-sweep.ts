@@ -136,6 +136,7 @@ const OUT_OF_SCOPE = {
 const DEADLINE_FACTOR = 4;
 
 type Outcome = 'killed' | 'survived' | 'timeout' | 'crashed';
+
 type Reach = 'unreached' | 'untested';
 
 interface Verdict {
@@ -167,6 +168,7 @@ function git(...args: readonly string[]): string {
 function requireOwnWorktree(): void {
   const tree = git('rev-parse', '--show-toplevel');
   const main = dirname(git('rev-parse', '--path-format=absolute', '--git-common-dir'));
+
   if (tree === main) {
     throw new Error(
       `Refusing to mutate ${tree}: this is the main checkout, which every other agent, `
@@ -185,6 +187,7 @@ function requireOwnWorktree(): void {
  *  able to destroy work. */
 function requireCleanTargets(files: readonly string[]): void {
   const dirty = git('status', '--porcelain', '--', ...files);
+
   if (dirty !== '') {
     throw new Error(
       `Refusing to mutate: these targets have uncommitted changes, and the recovery from `
@@ -202,10 +205,12 @@ function requireCleanTargets(files: readonly string[]): void {
  */
 function requireTotalScope(): void {
   const roots = [CORE_TIER, ...OTHER_TIERS].map((tier) => tier.root);
+
   const orphans = trackedFiles()
     .filter(isRunnableSuite)
     .filter((suite) => !roots.some((r) => suite.startsWith(r)))
     .filter((suite) => !Object.keys(OUT_OF_SCOPE).some((r) => suite.startsWith(r)));
+
   if (orphans.length > 0) {
     throw new Error(
       `${String(orphans.length)} runnable suites sit under neither a sweep tier nor a `
@@ -245,6 +250,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
 function readAndLocate(mutation: Mutation): string {
   const source = readFileSync(join(root, mutation.file), 'utf8');
   const occurrences = source.split(mutation.find).length - 1;
+
   if (occurrences !== 1) {
     throw new Error(
       `mutation "${mutation.id}" expected exactly one occurrence of `
@@ -253,6 +259,7 @@ function readAndLocate(mutation: Mutation): string {
       + 'nothing — update the snippet rather than the assertion.',
     );
   }
+
   return source;
 }
 
@@ -264,11 +271,13 @@ function applyMutation(mutation: Mutation): void {
 
 function revertMutation(mutation: Mutation): void {
   const text = pristine.get(mutation.file);
+
   if (text === undefined) throw new Error(`${mutation.file} was never mutated`);
   const path = join(root, mutation.file);
   writeFileSync(path, text);
   pristine.delete(mutation.file);
   const now = readFileSync(path, 'utf8');
+
   if (now !== text) {
     throw new Error(
       `${mutation.file} did not restore to its pristine bytes after mutation `
@@ -304,6 +313,7 @@ interface Run {
  */
 function runSuites(paths: readonly string[], deadlineMs: number | undefined): Run {
   const started = Date.now();
+
   // `timeout: undefined` is how the baseline says it has no bound to derive one from —
   // it is the run that MEASURES the bound every later mutant is held to.
   const spawned = Bun.spawnSync({
@@ -315,9 +325,11 @@ function runSuites(paths: readonly string[], deadlineMs: number | undefined): Ru
     timeout: deadlineMs,
     killSignal: 'SIGKILL',
   });
+
   const ms = Date.now() - started;
   const bySignal = spawned.exitCode === null;
   const reachedDeadline = deadlineMs !== undefined && ms >= deadlineMs;
+
   return {
     failed: spawned.exitCode !== 0,
     timedOut: bySignal && reachedDeadline,
@@ -339,16 +351,20 @@ function candidateDefenders(mutation: Mutation): readonly string[] {
   const suites = readMatching((file) => isRunnableSuite(file) && file.endsWith('.ts'));
   const target = join(root, mutation.file);
   const found: string[] = [];
+
   for (const [file, text] of suites) {
     if (text.includes(mutation.symbol)) {
       found.push(file);
       continue;
     }
+
     const imports = moduleSpecifiers(parse(file, text).root)
       .filter((spec) => spec.startsWith('.'))
       .map((spec) => join(root, dirname(file), spec));
+
     if (imports.some((spec) => target === spec || target === `${spec}.ts`)) found.push(file);
   }
+
   return found;
 }
 
@@ -373,38 +389,50 @@ function candidateDefenders(mutation: Mutation): readonly string[] {
  */
 function productionReaders(symbol: string, mutatedIn: string): readonly string[] {
   const readers: string[] = [];
+
   for (const [file, text] of readMatching((f) => isProductSource(f) && f.endsWith('.ts'))) {
     if (file === mutatedIn || !text.includes(symbol)) continue;
     let reads = 0;
+
     for (const statement of parse(file, text).root.children) {
       if (statement.raw.type === 'ImportDeclaration' || isReExport(statement)) continue;
+
       // A type-only declaration names members without depending on any value.
       if (declarationOf(statement).node.raw.type.startsWith('TS')) continue;
       walk(statement, (node) => {
         if (node.raw.type !== 'Identifier' || node.raw.name !== symbol) return;
+
         if (isReadPosition(node)) reads += 1;
       });
     }
+
     if (reads > 0) readers.push(file);
   }
+
   return readers;
 }
 
 /** False where the identifier names a member in order to declare or fill it. */
 function isReadPosition(node: SyntaxNode): boolean {
   const parent = node.parent;
+
   if (parent === undefined) return true;
   const raw = parent.raw;
+
   if ((raw.type === 'Property' || raw.type === 'PropertyDefinition'
     || raw.type === 'MethodDefinition' || raw.type === 'TSPropertySignature'
     || raw.type === 'TSMethodSignature') && raw.key === node.raw) {
     return false;
   }
+
   if (raw.type === 'AssignmentExpression' && raw.left === node.raw) return false;
+
   if (raw.type === 'MemberExpression' && raw.property === node.raw) {
     const grandparent = parent.parent?.raw;
+
     return !(grandparent?.type === 'AssignmentExpression' && grandparent.left === parent.raw);
   }
+
   return true;
 }
 
@@ -414,6 +442,7 @@ function sweepOne(mutation: Mutation, baselineMs: number): Verdict {
   const readers = productionReaders(mutation.symbol, mutation.file);
   const reach: Reach = readers.length === 0 ? 'unreached' : 'untested';
   const narrow = candidateDefenders(mutation);
+
   const stages: readonly { readonly label: string; readonly paths: readonly string[] }[] = [
     { label: `${String(narrow.length)} candidate defenders`, paths: narrow },
     { label: CORE_TIER.root, paths: [CORE_TIER.root] },
@@ -423,30 +452,40 @@ function sweepOne(mutation: Mutation, baselineMs: number): Verdict {
   applyMutation(mutation);
   const deadlineMs = baselineMs * DEADLINE_FACTOR;
   let spent = 0;
+
   for (const stage of stages) {
     if (stage.paths.length === 0) continue;
     let run = runSuites(stage.paths, deadlineMs);
     spent += run.ms;
+
     // One retry, because an intermittent runtime fault is not a finding — and if it
     // reproduces, that is a fact about the runtime rather than about the mutation.
     if (run.crashed) {
       run = runSuites(stage.paths, deadlineMs);
       spent += run.ms;
     }
+
     if (run.crashed) {
       revertMutation(mutation);
+
       return { mutation, outcome: 'crashed', by: stage.label, reach, readers, ms: spent };
     }
+
     if (run.timedOut) {
       revertMutation(mutation);
+
       return { mutation, outcome: 'timeout', by: stage.label, reach, readers, ms: spent };
     }
+
     if (run.failed) {
       revertMutation(mutation);
+
       return { mutation, outcome: 'killed', by: stage.label, reach, readers, ms: spent };
     }
   }
+
   revertMutation(mutation);
+
   return { mutation, outcome: 'survived', by: 'every tier', reach, readers, ms: spent };
 }
 
@@ -463,12 +502,14 @@ function list(): void {
   console.log(`${String(CATALOGUE.length)} mutations over `
     + `${String(new Set(CATALOGUE.map((m) => m.file)).size)} files, `
     + `${String(controls)} of them controls that must be killed.`);
+
   for (const mutation of CATALOGUE) {
     readAndLocate(mutation);
     const kind = mutation.control === undefined ? 'asks    ' : 'control ';
     console.log(`  ${kind} ${mutation.id.padEnd(32)} ${mutation.file}`);
     console.log(`  ${' '.repeat(41)} ${mutation.decision}`);
   }
+
   console.log('\nEvery snippet still occurs exactly once, so every mutation would land.');
   console.log(`\nA killed mutant costs seconds; a survivor costs ${String(worst)} s, `
     + 'the whole repository. Worst case, every mutation surviving: '
@@ -489,21 +530,25 @@ function report(verdicts: readonly Verdict[], wallMs: number): number {
   for (const verdict of killed) {
     console.log(`  KILLED    ${verdict.mutation.id.padEnd(34)} by ${verdict.by}`);
   }
+
   for (const verdict of timeouts) {
     console.log(`  TIMEOUT   ${verdict.mutation.id.padEnd(34)} in ${verdict.by} — read this `
       + 'by hand; a clock cannot tell a blocked suite from a slow one.');
   }
+
   for (const verdict of crashes) {
     console.log(`  CRASHED   ${verdict.mutation.id.padEnd(34)} in ${verdict.by} — the runtime `
       + 'died by a signal, twice, well inside the deadline. That is a fact about the runtime, '
       + 'not evidence about the suite, so this mutation is unmeasured rather than surviving.');
   }
+
   for (const verdict of survivors) {
     const where = verdict.reach === 'unreached'
       ? 'nothing in production reads it — wire it or delete it, because a new test would '
         + 'only defend a seam nothing reaches'
       : `read by ${String(verdict.readers.length)} production `
         + `file(s) and asserted by none — ${verdict.readers.slice(0, 3).join(', ')}`;
+
     console.log(`\n  SURVIVED  ${verdict.mutation.id}  [${verdict.reach.toUpperCase()}]`);
     console.log(`            ${verdict.mutation.file}: ${verdict.mutation.decision}`);
     console.log(`            ${verdict.mutation.find}`);
@@ -514,33 +559,42 @@ function report(verdicts: readonly Verdict[], wallMs: number): number {
   // A control that survives is not a finding, it is a broken harness — and every other
   // verdict in the same run was measured by the same broken thing.
   const brokenControls = survivors.filter((v) => v.mutation.control !== undefined);
+
   if (brokenControls.length > 0) {
     console.log(`\n${String(brokenControls.length)} CONTROL(S) SURVIVED, so this run proves `
       + 'nothing: a decision a named suite already pins came back undefended. Read these '
       + 'before reading any survivor above.');
+
     for (const verdict of brokenControls) {
       console.log(`  ${verdict.mutation.id} should have been killed by `
         + `${String(verdict.mutation.control)}`);
     }
+
     return 1;
   }
+
   if (survivors.length > 0 || timeouts.length > 0) {
     console.log('\nA survivor is undefended behaviour, not a failing build. This program '
       + 'reports; it does not gate.');
   }
+
   return 0;
 }
 
 if (import.meta.main) {
   const args = process.argv.slice(2);
+
   if (args.includes('--list')) {
     list();
     process.exit(0);
   }
+
   const only = args.indexOf('--only');
+
   const selected = only === -1
     ? CATALOGUE
     : CATALOGUE.filter((m) => m.id === args[only + 1]);
+
   if (selected.length === 0) {
     throw new Error(`no mutation matches --only ${String(args[only + 1])}`);
   }
@@ -553,21 +607,26 @@ if (import.meta.main) {
   // kill meaningless — the suite was already failing — and it is also where the
   // mutant deadline comes from, so no clock in this program is a hardcoded guess.
   const baseline = runSuites([CORE_TIER.root], undefined);
+
   if (baseline.failed) {
     throw new Error(
       'The pristine baseline is not green, so a kill would prove nothing about the '
       + `mutation. Fix the suite first.\n${baseline.output.slice(-4000)}`,
     );
   }
+
   console.log(`baseline ${CORE_TIER.root} green in ${String(Math.round(baseline.ms / 1000))} s; `
     + `each mutant stops at ${String(DEADLINE_FACTOR)}x that.`);
 
   const started = Date.now();
+
   const verdicts = selected.map((mutation) => {
     const verdict = sweepOne(mutation, baseline.ms);
     console.log(`  ${verdict.outcome.padEnd(9)} ${verdict.mutation.id.padEnd(34)} `
       + `${String(Math.round(verdict.ms / 1000))} s`);
+
     return verdict;
   });
+
   process.exit(report(verdicts, Date.now() - started));
 }

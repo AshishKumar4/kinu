@@ -37,6 +37,7 @@ describe('model fallbacks track new releases', () => {
       id: 'moonshotai/kimi-k3',
       capabilities: ['tools', 'streaming'],
     });
+
     expect([...profile.capabilities].sort()).toEqual(['streaming', 'tools']);
   });
 });
@@ -48,7 +49,9 @@ describe('model fallbacks track new releases', () => {
 describe('ModelCatalogSession.pricing', () => {
   test('null until the lookup lands, then the catalog rates', async () => {
     let resolveLookup: (info: ModelInfo | null) => void = () => {};
+
     const landed = new Promise<ModelInfo | null>((r) => { resolveLookup = r; });
+
     const session = new ModelCatalogSession({
       effectiveSpec: () => 'anthropic/claude-sonnet-4-6',
       lookup: () => landed,
@@ -65,6 +68,7 @@ describe('ModelCatalogSession.pricing', () => {
       effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
       lookup: async () => ({ id: '@cf/moonshotai/kimi-k2.6', contextWindow: 262_144 }),
     });
+
     session.pricing();
     await Promise.resolve();
     expect(session.pricing()).toBeNull();
@@ -83,14 +87,17 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
         id: 'claude-opus-4-7', contextWindow: 1_000_000, modelOutputLimit: 128_000,
       }),
     });
+
     session.info();
     await Promise.resolve();
 
     expect(session.modelOutputLimit()).toBe(128_000);
+
     const limits = {
       contextWindow: session.contextWindow(),
       modelOutputLimit: session.modelOutputLimit(),
     };
+
     expect(outputReserveTokens(limits)).toBe(128_000);
     expect(stepContextLimit(limits)).toBe(872_000);
   });
@@ -104,6 +111,7 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
       effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
       lookup: async () => null,
     });
+
     session.info();
     await Promise.resolve();
 
@@ -120,6 +128,7 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
       effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
       lookup: async () => ({ id: '@cf/moonshotai/kimi-k2.6', contextWindow: 262_144 }),
     });
+
     session.info();
     await Promise.resolve();
 

@@ -35,23 +35,28 @@ function chatCompletionResponse(): Response {
 
 async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string }) {
   const captured: Array<{ url: string; headers: Headers }> = [];
+
   const reg = createAgentProviderRegistry({
     env: {},
     userDO: fakeUserDOStub(),
     fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new Request(input).url;
       captured.push({ url, headers: new Headers(init?.headers) });
+
       return chatCompletionResponse();
     }),
     workersAI,
   });
+
   await generateText({
     model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
     prompt: 'ping',
   });
   expect(captured).toHaveLength(1);
   const request = captured[0];
+
   if (!request) throw new Error('Workers AI request was not captured');
+
   return request;
 }
 
@@ -75,11 +80,13 @@ describe('Workers AI session affinity (REST path)', () => {
 
   test('agent-registry model fetches use the patient rate-limit retry', async () => {
     let calls = 0;
+
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: fakeUserDOStub(),
       fetch: asFetchFunction(async () => {
         calls++;
+
         return calls === 1
           ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
           : chatCompletionResponse();

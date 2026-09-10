@@ -148,6 +148,7 @@ export function writeFeedbackMarker(env: AnalyticsEnv, marker: FeedbackMarker): 
     noteLength: marker.noteLength,
     annotated: marker.annotated ? 1 : 0,
   };
+
   try {
     analyticsPlane(env).feedback.write(row);
   } catch (err) {
@@ -194,8 +195,10 @@ const ROUTE_FAMILIES = {
  */
 export function feedbackRouteFamily(route: string): FeedbackRouteFamily {
   const [, first = ''] = route.split('/', 2);
+
   for (const [segment, family] of Object.entries(ROUTE_FAMILIES)) {
     if (segment === first) return family;
   }
+
   return 'other';
 }

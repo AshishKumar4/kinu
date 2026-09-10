@@ -20,6 +20,7 @@ function setup() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
+
   return { db, recorder: new RunEventRecorder(sql, testActorHandle(sql)), sql };
 }
 
@@ -52,11 +53,13 @@ describe('beginModelOperation — the start row exists while the call runs', () 
   test('usage lands on the end row, joined to its start by the operation id', () => {
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => 'run-1');
+
     const op = beginModelOperation(
       { source: 'judge', report: () => {}, operations: sink },
       'generate_json',
       { spec: 'anthropic/claude-x' },
     );
+
     op.completed({ usage: { input: 41, output: 7 }, modelId: 'claude-x' });
 
     const rows = operationsOf(recorder, 'run-1');
@@ -73,9 +76,11 @@ describe('beginModelOperation — the start row exists while the call runs', () 
   test('a failed call ends failed, with a bounded cause and no usage', () => {
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => 'run-1');
+
     const op = beginModelOperation(
       { source: 'reflection', report: () => {}, operations: sink }, 'complete',
     );
+
     op.failed({ cause: new Error(`provider boom ${'x'.repeat(500)}`) });
 
     const rows = operationsOf(recorder, 'run-1');
@@ -90,9 +95,11 @@ describe('beginModelOperation — the start row exists while the call runs', () 
   test('exactly one end row is written however many times the frame settles', () => {
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => 'run-1');
+
     const op = beginModelOperation(
       { source: 'fast', report: () => {}, operations: sink }, 'stream',
     );
+
     op.completed({ usage: {} });
     op.failed({ cause: new Error('after the fact') });
     expect(operationsOf(recorder, 'run-1').map((row) => row.phase)).toEqual(['start', 'end']);
@@ -135,6 +142,7 @@ describe('the production seams open the frame before the request', () => {
     return new MockLanguageModelV3({
       doGenerate: async () => {
         if (overrides?.throwError) throw new Error(overrides.throwError);
+
         return {
           content: [{ type: 'text' as const, text: 'done' }],
           finishReason: { unified: 'stop' as const, raw: undefined },
@@ -151,12 +159,14 @@ describe('the production seams open the frame before the request', () => {
   test('createCompletionLLM writes the pair, with the resolved spec on both rows', async () => {
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
+
     const llm = createCompletionLLM({
       model: textModel(),
       spec: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813',
       stage: 'judge',
       spend: { source: 'judge', report: () => {}, operations: sink },
     });
+
     await llm.complete('grade this');
 
     const rows = operationsOf(recorder, WORKSPACE_RUN_ID);
@@ -170,6 +180,7 @@ describe('the production seams open the frame before the request', () => {
     // close, naming the fault, and leave nothing unterminated.
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
+
     const llm = createVercelAILLM({
       name: 'workers-ai',
       baseURL: 'https://kinu-operation-test.invalid/',
@@ -177,6 +188,7 @@ describe('the production seams open the frame before the request', () => {
       model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
       spend: { source: 'reflection', report: () => {}, operations: sink },
     });
+
     await expect(llm.complete('reflect')).rejects.toThrow();
 
     const rows = operationsOf(recorder, WORKSPACE_RUN_ID);
@@ -188,12 +200,14 @@ describe('the production seams open the frame before the request', () => {
   test('a provider fault still closes the frame as failed', async () => {
     const { recorder } = setup();
     const sink = recordModelOperations(recorder, () => WORKSPACE_RUN_ID);
+
     const llm = createCompletionLLM({
       model: textModel({ throwError: 'socket hung up' }),
       spec: 'openai/gpt-x',
       stage: 'reflection',
       spend: { source: 'fast', report: () => {}, operations: sink },
     });
+
     await expect(llm.complete('classify')).rejects.toThrow('socket hung up');
 
     const rows = operationsOf(recorder, WORKSPACE_RUN_ID);

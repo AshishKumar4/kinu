@@ -23,12 +23,16 @@ import { createWorkspaceBundle } from './helpers';
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.byteLength);
     const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
+
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
+
     return bytes;
   }
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
@@ -37,12 +41,15 @@ function bundleSql(database: Database): SqlDatabase {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
       const bound = bindings.map(sqlBinding);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
 }
+
 describe('facet agent names share one namespace without colliding', () => {
   test('each kind prefixes its own id', () => {
     expect(subordinateAgentName('researcher-abc123')).toBe('sub-researcher-abc123');
@@ -55,6 +62,7 @@ describe('facet agent names share one namespace without colliding', () => {
       agentHome(subordinateAgentName('worker-1')),
       agentHome(headAgentName('worker-1')),
     ]);
+
     expect(homes.size).toBe(2);
   });
 
@@ -76,12 +84,14 @@ describe('facet agent names share one namespace without colliding', () => {
 describe('a subordinate and a head provision like a node', () => {
   test('own-home writes pass, siblings are refused, hardcoded /tmp stays private', async () => {
     const database = new Database(':memory:');
+
     try {
       const bundle = createWorkspaceBundle(database);
       const privileged = await bundle.privileged();
       const provision = facetHomeProvisioner({ ...privileged, sql: bundleSql(database) });
       const sub = await provision(subordinateAgentName('researcher-abc123'));
       const head = await provision(headAgentName('aX9bK2cD3eF4gH5iJ6kL7m'));
+
       if (sub.isolation !== 'private-home' || head.isolation !== 'private-home') {
         throw new Error('a facet provisioner must hand back a credential');
       }

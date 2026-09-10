@@ -29,7 +29,9 @@ import type { JsonObject, JsonValue } from '../utils/json';
 import { renderThrownChain } from '../obs/index';
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
+
 const NAME_MAX_LEN = 64;
+
 const DESCRIPTION_MAX_LEN = 1024;
 
 /** Names containing these substrings are rejected by Anthropic's spec.
@@ -48,11 +50,13 @@ export function parseSkillFile(
   fallbackName?: string,
 ): SkillParseResult {
   let doc;
+
   try { doc = parseMarkdownFrontmatter(src); }
   catch (err) {
     if (err instanceof MarkdownFrontmatterError) {
       return { ok: false, error: err.detail.message, line: err.detail.line };
     }
+
     return { ok: false, error: renderThrownChain({ cause: err }) };
   }
 
@@ -64,19 +68,26 @@ export function parseSkillFile(
 
   // name — optional, falls back to provided file/dir stem.
   let name = asString(fm.name).trim();
+
   if (!name && fallbackName) name = fallbackName.trim();
+
   if (!name) {
     return { ok: false, error: 'front-matter `name` is required when no fallback name (filename) is supplied' };
   }
+
   const nameProblem = skillNameProblem(name);
+
   if (nameProblem) return { ok: false, error: `front-matter \`name\` ${nameProblem}` };
 
   // description — required, ≤1024 chars, no XML tags.
   const description = asString(fm.description).trim();
+
   if (!description) return { ok: false, error: 'front-matter `description` is required' };
+
   if (description.length > DESCRIPTION_MAX_LEN) {
     return { ok: false, error: `front-matter \`description\` exceeds ${DESCRIPTION_MAX_LEN} characters (${description.length})` };
   }
+
   if (/<[a-zA-Z][^>]*>/.test(description)) {
     return { ok: false, error: 'front-matter `description` must not contain XML tags' };
   }
@@ -94,12 +105,14 @@ export function parseSkillFile(
   // string, so Boolean() reads it as true.
   const disable_model_invocation =
     (fm['disable-model-invocation'] ?? fm.disable_model_invocation ?? false) === true;
+
   // `user-invocable: false` blocks `/skill-name` from the user's message.
   // Default true (matches Anthropic spec).
   const user_invocable =
     fm['user-invocable'] !== undefined ? fm['user-invocable'] !== false
     : fm.user_invocable !== undefined  ? fm.user_invocable !== false
     : true;
+
   // auto_activate is the Kinu-only keyword-fire flag. We force it false
   // when the author asked us not to model-invoke — the two contradict
   // otherwise.
@@ -112,7 +125,9 @@ export function parseSkillFile(
     'disable-model-invocation', 'disable_model_invocation',
     'user-invocable', 'user_invocable',
   ]);
+
   const ext: JsonObject = {};
+
   for (const [k, v] of Object.entries(fm)) if (!known.has(k)) ext[k] = v;
 
   return {
@@ -131,12 +146,19 @@ export function stringifySkillFile(skill: ParsedSkill): string {
     name: skill.name,
     description: skill.description,
   };
+
   if (skill.allowed_tools.length > 0) fm['allowed-tools'] = skill.allowed_tools;
+
   if (skill.keywords.length > 0) fm.keywords = skill.keywords;
+
   if (skill.auto_activate) fm.auto_activate = true;
+
   if (skill.disable_model_invocation) fm['disable-model-invocation'] = true;
+
   if (!skill.user_invocable) fm['user-invocable'] = false;
+
   for (const [k, v] of Object.entries(skill.ext)) fm[k] = v;
+
   return stringifyMarkdownFrontmatter({ frontmatter: fm, body: skill.body });
 }
 
@@ -148,16 +170,21 @@ export function stringifySkillFile(skill: ParsedSkill): string {
  *  and illegal to the other. */
 export function skillNameProblem(name: string): string | null {
   if (name.length === 0) return 'must be a non-empty string';
+
   if (name.length > NAME_MAX_LEN) return `exceeds ${NAME_MAX_LEN} characters (${name.length})`;
+
   if (!NAME_RE.test(name)) {
     return `must be kebab-case (${NAME_RE.source}); got ${JSON.stringify(name)}`;
   }
+
   const lc = name.toLowerCase();
+
   for (const reserved of RESERVED_WORDS) {
     if (lc.includes(reserved)) {
       return `contains reserved word "${reserved}" (Anthropic SKILL.md spec)`;
     }
   }
+
   return null;
 }
 
@@ -165,6 +192,7 @@ export function skillNameProblem(name: string): string | null {
 
 function asString(value: JsonValue | undefined): string {
   const parsed = v.safeParse(v.string(), value);
+
   return parsed.success ? parsed.output : value == null ? '' : String(value);
 }
 
@@ -181,6 +209,8 @@ function asString(value: JsonValue | undefined): string {
 function asStringArray(value: JsonValue): string[] {
   if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
   const parsed = v.safeParse(v.string(), value);
+
   if (parsed.success && parsed.output.trim()) return parsed.output.trim().split(/\s+/).filter(Boolean);
+
   return [];
 }

@@ -146,9 +146,11 @@ export class TurnFileLedger {
   observeEdited(path: string, before: string, after: string): void {
     const previous = this.seen.get(fnv1a64(before));
     const total = lineCount(after);
+
     const covered = previous && previous.coveredTo >= previous.total
       ? total
       : Math.min(previous?.coveredTo ?? 0, total);
+
     this.record(path, after, covered, total);
   }
 
@@ -163,10 +165,13 @@ export class TurnFileLedger {
    *  and a file that moved underneath one is caught instead of edited blind. */
   seenState(path: string, content: string, need: FileSeenNeed): FileSeenVerdict {
     const entry = this.seen.get(fnv1a64(content));
+
     if (!entry) {
       return { state: this.seenPaths.has(path) ? 'stale' : 'never', coveredTo: 0, total: lineCount(content) };
     }
+
     const state: FileSeenState = need === 'whole' && entry.coveredTo < entry.total ? 'partial' : 'seen';
+
     return { state, coveredTo: entry.coveredTo, total: entry.total };
   }
 
@@ -187,21 +192,28 @@ export class TurnFileLedger {
    */
   recordEdit(path: string, reason: FileEditOutcomeReason | null): void {
     this.attempts++;
+
     if (reason === null) {
       this.applied++;
       countSharedWrite(this.author, path);
+
       if (this.failedPaths.has(path)) this.recoveredPaths.add(path);
+
       return;
     }
+
     this.failures.set(reason, (this.failures.get(reason) ?? 0) + 1);
     this.failedPaths.add(path);
   }
 
   snapshot(): FileEditSnapshot {
     let abandoned = 0;
+
     for (const path of this.failedPaths) if (!this.recoveredPaths.has(path)) abandoned++;
     const failures: Partial<Record<FileEditOutcomeReason, number>> = {};
+
     for (const [reason, count] of this.failures) failures[reason] = count;
+
     return {
       attempts: this.attempts,
       applied: this.applied,
@@ -236,5 +248,6 @@ export class TurnFileLedger {
  *  than starting a phantom one. */
 function lineCount(content: string): number {
   if (content.length === 0) return 0;
+
   return content.split('\n').length - (content.endsWith('\n') ? 1 : 0);
 }

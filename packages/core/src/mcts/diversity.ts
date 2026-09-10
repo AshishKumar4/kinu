@@ -62,13 +62,16 @@ const DIVERSITY_STARTING_POINTS: readonly string[] = [
 export function diversityAngle(i: number, n: number): string {
   if (n <= 1) return DIVERSITY_APPROACHES[0] ?? '';
   const approach = DIVERSITY_APPROACHES[i % DIVERSITY_APPROACHES.length] ?? '';
+
   // The first pass over the approaches carries no starting point: those six are the
   // honest distinctions on their own, and pinning a starting point onto them would
   // narrow six angles that every run this engine has ever done has read.
   if (i < DIVERSITY_APPROACHES.length) return approach;
+
   const startingPoint = DIVERSITY_STARTING_POINTS[
     Math.floor(i / DIVERSITY_APPROACHES.length) % DIVERSITY_STARTING_POINTS.length
   ] ?? '';
+
   return `${approach}, ${startingPoint}`;
 }
 
@@ -77,9 +80,11 @@ export function diversityAngle(i: number, n: number): string {
 export function siblingAngles(i: number, n: number): string[] {
   if (n <= 1) return [];
   const angles: string[] = [];
+
   for (let sibling = 0; sibling < n; sibling++) {
     if (sibling !== i) angles.push(diversityAngle(sibling, n));
   }
+
   return angles;
 }
 
@@ -89,6 +94,7 @@ export function siblingAngles(i: number, n: number): string[] {
 export function diversityDirective(siblings: readonly string[]): string {
   if (siblings.length === 0) return '';
   const listed = siblings.map((angle, index) => `${index + 1}. ${angle}`).join('\n');
+
   return (
     `\n\nYou are ONE of several approaches explored in parallel for this task. ` +
     `Sibling approaches are pursuing these DISTINCT angles:\n${listed}\n` +

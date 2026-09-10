@@ -32,6 +32,7 @@ import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY } from '../li
  *  SHAPE: a future non-model credential must not be stored under that suffix,
  *  or it would silently inherit model-tier reach. */
 const MODEL_CREDENTIAL_KEY_RE = /^([a-z0-9][a-z0-9._-]*\.bearer|openai-compat\..+)$/;
+
 const MODEL_CREDENTIAL_KEYS: readonly string[] = [
   CODEX_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CLOUDFLARE_AI_GATEWAY_CRED_KEY,
 ];
@@ -50,27 +51,34 @@ export function isModelInferenceCredentialKey(key: string): boolean {
 export function credentialToHeaders(key: string, cred: Credential): CredentialHeaders {
   if (key === 'codex.oauth') {
     if (cred.kind !== 'oauth') throw new Error('codex.oauth credential must be oauth kind');
+
     return codexCredentialToHeaders(cred);
   }
+
   if (key === 'anthropic.bearer') {
     if (cred.kind !== 'bearer') throw new Error('anthropic.bearer credential must be bearer kind');
+
     return {
       'x-api-key': cred.token,
       'anthropic-version': '2023-06-01',
     };
   }
+
   // openai.bearer, openrouter.bearer, generic bearer → Authorization header.
   if (cred.kind === 'bearer') {
     return { Authorization: `Bearer ${cred.token}` };
   }
+
   // openai-compat: Bearer + extraHeaders, baseURL is handled at provider construction.
   if (cred.kind === 'openai-compat') {
     return { Authorization: `Bearer ${cred.apiKey}`, ...cred.extraHeaders };
   }
+
   // OAuth without a special header bundle — just Bearer the access token.
   if (cred.kind === 'oauth') {
     return { Authorization: `Bearer ${cred.accessToken}` };
   }
+
   throw new Error(`unhandled credential kind for key=${key}`);
 }
 

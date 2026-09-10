@@ -38,12 +38,16 @@ function delegatedEventMode(event: KinuEvent): WorkMode | null {
     && event.variant !== 'subordinate_task'
     && event.variant !== 'subordinate_report'
   ) return null;
+
   if (event.payload_visibility === 'full' || event.payload_visibility === 'redact') {
     return event.payload.kinu_mode;
   }
+
   const payload = v.safeParse(JsonObjectSchema, event.payload);
+
   if (!payload.success) return null;
   const mode = v.safeParse(v.picklist(['plan', 'build']), payload.output.kinu_mode);
+
   return mode.success ? mode.output : null;
 }
 
@@ -74,14 +78,17 @@ export function wakesADrain(event: KinuEvent): boolean {
  *  none (the agent's own self-emitted/internal events never wake a new turn). */
 export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
   const pending = events.filter(wakesADrain);
+
   if (pending.length === 0) return null;
   // A delegated Plan event can never share a turn with Build or neutral work.
   // Select the oldest event's homogeneous mode group; the post-turn drain
   // immediately picks up the remaining groups in arrival order.
   const mode = delegatedEventMode(pending[0]!);
   const drainable = pending.filter((event) => delegatedEventMode(event) === mode);
+
   const lines = drainable.map((e) => {
     const r = renderForLLM(e);
+
     // Peer asks carry a mechanical reply route: the sender opened a peer-back
     // channel keyed on this event id and is awaiting the answer.
     const replyHint = (
@@ -91,6 +98,7 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
     )
       ? ` [the sender awaits your answer — answer it with agents({action:'msg', event_id:'${e.id}', message:...})]`
       : '';
+
     // ONE LINE PER EVENT, and the boundary is ours rather than the sender's.
     // These entries are joined with '\n' below, and several briefs embed
     // plain-text sender-controlled bodies: an email body, a subordinate's
@@ -101,8 +109,10 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
     // the count above and the list below agree.
     return `- [${r.variant}] from ${oneLine(r.triggered_by)}: ${oneLine(r.brief)}${replyHint}`;
   });
+
   const count = `${drainable.length} event${drainable.length === 1 ? '' : 's'}`;
   const listing = lines.join('\n');
+
   const missions = [...new Set(
     drainable.flatMap((event) => {
       if (
@@ -110,9 +120,11 @@ export function buildDrainBatch(events: KinuEvent[]): DrainBatch | null {
         || event.variant !== 'timer'
         || !event.payload.mission_label
       ) return [];
+
       return [event.payload.mission_label];
     }),
   )];
+
   return {
     ids: drainable.map((e) => e.id),
     missions,

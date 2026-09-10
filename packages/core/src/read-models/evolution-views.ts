@@ -55,6 +55,7 @@ export function getEvolutionChangelog(
   // actor's ledgers, and nothing in the types could catch it.
   const seenAt = actor.config.getChangelogSeenAt();
   const page = boundedInt(limit, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
+
   return {
     entries: buildChangelog(sql, actor, { limit: page }),
     unseenCount: countUnseenChangelog(sql, actor, seenAt),
@@ -74,6 +75,7 @@ export function getUnseenChangelog(sql: SqlExecutor, actor: ActorHandle): Change
 export function markChangelogSeen(config: AgentConfigStore) {
   const seenAt = Date.now();
   config.setChangelogSeenAt(seenAt);
+
   return { ok: true, seenAt };
 }
 
@@ -100,10 +102,12 @@ export async function pickAlternateTake(
   if (!takeId || !nodeId) {
     throw new Error('pickAlternateTake requires takeId and nodeId');
   }
+
   const record = recordTakePick(deps.sql, deps.actor, {
     takeId, nodeId,
     scaffoldVersion: getCurrentScaffoldVersion(deps.sql, deps.actor),
   });
+
   try {
     await deps.engine.applyTakePick(record.set.turnId, record.outcome);
   } catch (err) {
@@ -113,14 +117,18 @@ export async function pickAlternateTake(
       { takeId, nodeId },
     );
   }
+
   let continuationQueued = false;
+
   if (record.changedAnswer) {
     const outcome = await deps.signals.deliver({
       kind: 'take_pick',
       text: buildTakeContinuationPrompt(record.set, record.chosen),
     });
+
     continuationQueued = outcome !== 'undelivered';
   }
+
   return { ...record, continuationQueued };
 }
 

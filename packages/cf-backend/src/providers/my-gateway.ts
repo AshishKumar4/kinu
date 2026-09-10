@@ -40,9 +40,11 @@ const GATEWAY_SLUG_TO_CATALOG = new Map([
   ['perplexity', 'perplexity'],
   ['cohere', 'cohere'],
 ]);
+
 const ProviderConfigsSchema = v.object({
   result: v.optional(v.array(v.object({ provider_slug: v.optional(v.string()) }))),
 });
+
 const CreditBalanceSchema = v.object({
   result: v.optional(v.object({ balance: v.optional(v.number()) })),
 });
@@ -53,6 +55,7 @@ const CreditBalanceSchema = v.object({
 const UNIFIED_BILLING_SLUGS = ['openai', 'anthropic', 'google-ai-studio', 'xai', 'groq'] as const;
 
 const CATALOG_TTL_MS = 60_000;
+
 const catalogCache = new Map<string, { at: number; models: ModelInfo[] }>();
 
 export function createMyGatewayProvider(): ModelProvider {
@@ -61,6 +64,7 @@ export function createMyGatewayProvider(): ModelProvider {
     label: 'Your AI Gateway',
     async isAvailable(deps) {
       const auth = await deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY);
+
       return !!auth?.baseURL;
     },
     unavailableReason: () =>
@@ -68,12 +72,15 @@ export function createMyGatewayProvider(): ModelProvider {
 
     async listModels(deps): Promise<ModelInfo[]> {
       const auth = await deps.getAuth(CLOUDFLARE_AI_GATEWAY_CRED_KEY);
+
       if (!auth?.baseURL) return [];
       const cacheKey = authCacheKey(auth);
       const cached = catalogCache.get(cacheKey);
+
       if (cached && Date.now() - cached.at < CATALOG_TTL_MS) return cloneModelInfos(cached.models);
 
       const discovered = await servableProviderSlugs(auth.baseURL, auth.headers, deps);
+
       if (!discovered.authoritative) {
         // A gateway that answered 429/5xx said nothing about which providers it
         // serves, so neither the menu nor the cache may be narrowed by it. The
@@ -87,20 +94,27 @@ export function createMyGatewayProvider(): ModelProvider {
           otherwise: 'unavailable',
         });
       }
+
       const models: ModelInfo[] = [];
+
       for (const slug of discovered.slugs) {
         const catalogId = GATEWAY_SLUG_TO_CATALOG.get(slug);
+
         if (!catalogId) continue; // slug the OpenAI-compat surface can't serve
+
         for (const model of await listModelsDevProviderModels(catalogId, deps)) {
           models.push({ ...model, id: `${catalogId}/${model.id}` });
         }
       }
+
       catalogCache.set(cacheKey, { at: Date.now(), models });
+
       return cloneModelInfos(models);
     },
 
     createModel(modelId, deps): LanguageModel {
       const placeholder = 'https://kinu-my-gateway.invalid';
+
       const customFetch = createCloudflareAIFetch({
         credKey: CLOUDFLARE_AI_GATEWAY_CRED_KEY,
         getAuth: deps.getAuth,
@@ -152,8 +166,11 @@ async function readGatewayManagement(
   headers: Record<string, string>,
 ): Promise<ManagementRead> {
   const response = await fetchImpl(url, { headers });
+
   if (response.ok) return { kind: 'observed', body: await response.json() };
+
   if (response.status === 401 || response.status === 403) return { kind: 'denied' };
+
   return { kind: 'transient', reason: `AI Gateway management answered HTTP ${String(response.status)}` };
 }
 
@@ -171,6 +188,7 @@ async function servableProviderSlugs(
 ): Promise<GatewayDiscovery> {
   const account = cloudflareAccountAPIRoot(baseURL);
   const gatewayId = authHeaders['cf-aig-gateway-id'];
+
   if (!account || !gatewayId) return { authoritative: true, slugs: [] };
   const fetchImpl = deps.fetch ?? fetch;
   const headers = { ...authHeaders, accept: 'application/json' };
@@ -181,9 +199,12 @@ async function servableProviderSlugs(
     `${account}/ai-gateway/gateways/${encodeURIComponent(gatewayId)}/provider_configs?per_page=100`,
     headers,
   );
+
   if (configs.kind === 'transient') return { authoritative: false, reason: configs.reason };
+
   if (configs.kind === 'observed') {
     const body = v.parse(ProviderConfigsSchema, configs.body);
+
     for (const row of body.result ?? []) {
       if (row.provider_slug !== undefined) slugs.add(row.provider_slug);
     }
@@ -192,9 +213,12 @@ async function servableProviderSlugs(
   const credit = await readGatewayManagement(
     fetchImpl, `${account}/ai-gateway/billing/credit-balance`, headers,
   );
+
   if (credit.kind === 'transient') return { authoritative: false, reason: credit.reason };
+
   if (credit.kind === 'observed') {
     const body = v.parse(CreditBalanceSchema, credit.body);
+
     if (body.result?.balance !== undefined && body.result.balance > 0) {
       for (const slug of UNIFIED_BILLING_SLUGS) slugs.add(slug);
     }

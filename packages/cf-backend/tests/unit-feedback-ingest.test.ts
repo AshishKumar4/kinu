@@ -26,32 +26,42 @@ import {
 } from '../src/feedback/contract';
 
 const ME: AuthIdentity = { userId: 'user-7', email: 'me@example.com', sub: 'sub-7' };
+
 const URL_ = `https://kinu.run${FEEDBACK_ENDPOINT}`;
 
 // ── a real PNG, built rather than pasted ───────────────────────────────────
 function crc32(bytes: Uint8Array): number {
   let c = 0xffffffff;
+
   for (const byte of bytes) {
     c ^= byte;
+
     for (let bit = 0; bit < 8; bit += 1) c = (c & 1) !== 0 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
   }
+
   return (c ^ 0xffffffff) >>> 0;
 }
+
 function be32(value: number): number[] {
   return [(value >>> 24) & 0xff, (value >>> 16) & 0xff, (value >>> 8) & 0xff, value & 0xff];
 }
+
 function chunk(type: string, data: readonly number[]): number[] {
   const typed = [...type].map((ch) => ch.charCodeAt(0));
+
   return [...be32(data.length), ...typed, ...data, ...be32(crc32(new Uint8Array([...typed, ...data])))];
 }
 
 /** A decodable 2x2 image, optionally carrying metadata chunks to be stripped. */
 function realPng(extra: number[][] = []): Uint8Array<ArrayBuffer> {
   const raw: number[] = [];
+
   for (let y = 0; y < 2; y += 1) {
     raw.push(0);
+
     for (let x = 0; x < 2; x += 1) raw.push(0x20, 0x30, 0x40, 0xff);
   }
+
   return new Uint8Array([
     0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
     ...chunk('IHDR', [...be32(2), ...be32(2), 8, 6, 0, 0, 0]),
@@ -91,6 +101,7 @@ function recorder(options: {
   const marks: FeedbackMarker[] = [];
   const asked: { userId: string; workspace: string }[] = [];
   let minted = 0;
+
   const deps: FeedbackDeps = {
     store: options.bucket === false ? null : {
       async put(key, bytes) {
@@ -100,6 +111,7 @@ function recorder(options: {
       },
       async delete(key) {
         deleted.push(key);
+
         if (options.deleteThrows === true) throw new Error('R2 refused the delete');
         objects.delete(key);
         await Promise.resolve();
@@ -108,22 +120,30 @@ function recorder(options: {
     record: async (row) => {
       rows.push(row);
       await Promise.resolve();
+
       return options.rowError === undefined ? { id: row.id } : { error: options.rowError };
     },
     attributeWorkspace: async (userId, workspace) => {
       asked.push({ userId, workspace });
       await Promise.resolve();
+
       if (options.authorityDown !== undefined) {
         return { kind: 'unavailable', error: options.authorityDown };
       }
+
       return options.owns === undefined || options.owns.includes(workspace)
         ? { kind: 'owned', workspace }
         : { kind: 'refused' };
     },
     mark: (marker) => { marks.push(marker); },
-    newId: () => { minted += 1; return `id-${String(minted)}`; },
+    newId: () => {
+      minted += 1;
+
+      return `id-${String(minted)}`;
+    },
     now: () => 1_700_000_000_000,
   };
+
   return { deps, objects, deleted, rows, marks, asked };
 }
 
@@ -148,19 +168,26 @@ function submit(fields: {
   headers?: Record<string, string>;
 }): Request {
   const form = new FormData();
+
   if (fields.note !== undefined) form.set(FEEDBACK_FIELDS.note, fields.note);
+
   if (fields.route !== undefined) form.set(FEEDBACK_FIELDS.route, fields.route);
+
   if (fields.workspace !== undefined) form.set(FEEDBACK_FIELDS.workspace, fields.workspace);
+
   if (fields.annotated !== undefined) form.set(FEEDBACK_FIELDS.annotated, fields.annotated);
+
   if (fields.screenshotText !== undefined) {
     form.set(FEEDBACK_FIELDS.screenshot, fields.screenshotText);
   }
+
   if (fields.screenshot !== undefined) {
     form.set(
       FEEDBACK_FIELDS.screenshot,
       new File([fields.screenshot], fields.filename ?? 'shot.png', { type: fields.screenshot.type }),
     );
   }
+
   return new Request(URL_, { method: 'POST', body: form, headers: fields.headers });
 }
 
@@ -181,7 +208,9 @@ function rawMultipart(total: number) {
   const head = `--${boundary}\r\nContent-Disposition: form-data; name="${FEEDBACK_FIELDS.note}"\r\n\r\n`;
   const tail = `\r\n--${boundary}--\r\n`;
   const padding = total - head.length - tail.length;
+
   if (padding < 1) throw new Error(`${String(total)} bytes cannot hold this body's own framing`);
+
   return {
     contentType: `multipart/form-data; boundary=${boundary}`,
     bytes: new TextEncoder().encode(`${head}${'n'.repeat(padding)}${tail}`),
@@ -210,14 +239,18 @@ interface BodySource {
 function chunked(bytes: Uint8Array, chunk: number) {
   const source: BodySource = { pulls: 0, delivered: 0, reachedEnd: false, cancelled: false };
   let at = 0;
+
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
       source.pulls += 1;
+
       if (at >= bytes.length) {
         source.reachedEnd = true;
         controller.close();
+
         return;
       }
+
       const slice = bytes.slice(at, Math.min(at + chunk, bytes.length));
       at += slice.length;
       source.delivered += slice.length;
@@ -225,6 +258,7 @@ function chunked(bytes: Uint8Array, chunk: number) {
     },
     cancel() { source.cancelled = true; },
   }, { highWaterMark: 0 });
+
   return { body, source };
 }
 
@@ -259,11 +293,13 @@ describe('what the endpoint refuses', () => {
 
   test('a body that is not multipart is a 415', async () => {
     const rec = recorder();
+
     const response = await routeFeedback(new Request(URL_, {
       method: 'POST',
       body: JSON.stringify({ note: 'hi' }),
       headers: { 'content-type': 'application/json' },
     }), ME, rec.deps);
+
     expect(response?.status).toBe(415);
     expect(rec.marks[0]?.rejectReason).toBe('bad_content_type');
   });
@@ -281,11 +317,13 @@ describe('what the endpoint refuses', () => {
     // same object literal that consumes it.
     const contentType = honest.headers.get('content-type') ?? '';
     const bytes = await honest.arrayBuffer();
+
     const response = await routeFeedback(new Request(URL_, {
       method: 'POST',
       body: bytes,
       headers: { 'content-type': contentType, 'content-length': String(FEEDBACK_MAX_REQUEST_BYTES + 1) },
     }), ME, rec.deps);
+
     expect(response?.status).toBe(413);
     expect(rec.rows).toEqual([]);
     expect(rec.marks[0]?.rejectReason).toBe('too_large');
@@ -304,12 +342,14 @@ describe('what the endpoint refuses', () => {
 
   test('a part NAMED as something other than a PNG is a 415 before its bytes are read', async () => {
     const rec = recorder();
+
     // Genuine PNG bytes under the filename `screenshot.jpg`. The parser derives
     // `File.type` from that extension, so this is the reachable form of the
     // declared-type refusal — and the courtesy it buys is a clear message
     // instead of "those bytes are corrupt".
     const response = await routeFeedback(
       submit({ note: 'x', screenshot: pngPart(realPng()), filename: 'screenshot.jpg' }), ME, rec.deps);
+
     expect(response?.status).toBe(415);
     expect(rec.objects.size).toBe(0);
     expect(rec.marks[0]?.rejectReason).toBe('bad_content_type');
@@ -370,8 +410,10 @@ describe('what the endpoint refuses', () => {
 
   test('with no bucket bound a screenshot is a 503 that blames the deployment', async () => {
     const rec = recorder({ bucket: false });
+
     const response = await routeFeedback(
       submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps);
+
     expect(response?.status).toBe(503);
     expect((await replyOf(response!)).error).toContain('note');
     expect(rec.marks[0]?.rejectReason).toBe('storage_unavailable');
@@ -396,8 +438,10 @@ describe('how much of a body it will read', () => {
   test('one byte past the limit, with nothing declaring a length, is refused', async () => {
     const rec = recorder();
     const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES + 1);
+
     const response = await routeFeedback(
       new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body: bytes }), ME, rec.deps);
+
     expect(response?.status).toBe(413);
     expect(rec.rows).toEqual([]);
     expect(rec.marks).toHaveLength(1);
@@ -433,8 +477,10 @@ describe('how much of a body it will read', () => {
     const rec = recorder();
     const { contentType, bytes } = rawMultipart(FEEDBACK_MAX_REQUEST_BYTES);
     const { body, source } = chunked(bytes, 64 * 1024);
+
     const response = await routeFeedback(
       new Request(URL_, { method: 'POST', headers: { 'content-type': contentType }, body }), ME, rec.deps);
+
     expect(response?.status).toBe(201);
     expect(source.reachedEnd).toBe(true);
     expect(source.cancelled).toBe(false);
@@ -444,11 +490,13 @@ describe('how much of a body it will read', () => {
     const rec = recorder();
     const { contentType, bytes } = rawMultipart(4096);
     const { body, source } = chunked(bytes, 1024);
+
     const response = await routeFeedback(new Request(URL_, {
       method: 'POST',
       headers: { 'content-type': contentType, 'content-length': String(FEEDBACK_MAX_REQUEST_BYTES + 1) },
       body,
     }), ME, rec.deps);
+
     expect(response?.status).toBe(413);
     // Not one pull: a refusal that reads nothing is why the header is checked at all.
     expect(source.pulls).toBe(0);
@@ -459,11 +507,13 @@ describe('how much of a body it will read', () => {
     setDiagnosticsSink(recording);
     const rec = recorder();
     const body = new TextEncoder().encode('plain bytes, no parts, no final boundary');
+
     const response = await routeFeedback(new Request(URL_, {
       method: 'POST',
       headers: { 'content-type': 'multipart/form-data; boundary=nothing-like-this' },
       body,
     }), ME, rec.deps);
+
     expect(response?.status).toBe(400);
     expect(rec.marks).toHaveLength(1);
     expect(rec.marks[0]?.rejectReason).toBe('malformed');
@@ -483,6 +533,7 @@ describe('how much of a body it will read', () => {
 describe('what the endpoint stores', () => {
   test('a note-only report is a first-class row with every screenshot column null', async () => {
     const rec = recorder();
+
     const response = await routeFeedback(submit({
       note: '  the exploration tab is blank  ',
       route: '/workspace/checkout-fixes',
@@ -560,6 +611,7 @@ describe('what the endpoint stores', () => {
 describe('when the row write fails, the object does not survive it', () => {
   test('the orphan is deleted and the answer is a 500 named as our failure', async () => {
     const rec = recorder({ rowError: 'control plane unreachable' });
+
     const response = await routeFeedback(
       submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps);
 
@@ -581,6 +633,7 @@ describe('when the row write fails, the object does not survive it', () => {
     const recording = createRecordingLogger();
     setDiagnosticsSink(recording);
     const rec = recorder({ rowError: 'control plane unreachable', deleteThrows: true });
+
     const response = await routeFeedback(
       submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps);
 
@@ -600,6 +653,7 @@ describe('when the object store refuses the write', () => {
     const recording = createRecordingLogger();
     setDiagnosticsSink(recording);
     const rec = recorder({ putThrows: true });
+
     const response = await routeFeedback(
       submit({ note: 'x', screenshot: pngPart(realPng()) }), ME, rec.deps);
 
@@ -657,11 +711,13 @@ describe('the analytics marker', () => {
     // A distinctive slug, so the last assertion is about the slug and not about
     // a letter that happens to occur in a family name.
     const slug = 'zzslugzz';
+
     for (const route of ['/', `/workspace/${slug}`, `/mcts/${slug}`, `/settings/${slug}`, '/user/settings', `/triggers/${slug}`]) {
       const rec = recorder();
       await routeFeedback(submit({ note: 'x', route }), ME, rec.deps);
       seen.push(rec.marks.at(-1)!.routeFamily);
     }
+
     // Families, never slugs: `/settings/:agent` and `/user/settings` are both
     // the settings surface, and `/triggers/:agent` has its own family rather
     // than falling into the bucket that means "we do not know".
@@ -690,12 +746,14 @@ describe('the analytics marker', () => {
     // they describe.
     const png = realPng();
     const forged = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, ...Array.from({ length: 128 }, () => 0x41)]);
+
     const arms: { request: Request; reason: FeedbackMarker['rejectReason']; bytes: number }[] = [
       // Named as something else.
       { request: submit({ note: 'x', screenshot: pngPart(png), filename: 'shot.jpg' }), reason: 'bad_content_type', bytes: png.length },
       // Declared PNG, bytes are not.
       { request: submit({ note: 'x', screenshot: pngPart(forged) }), reason: 'malformed', bytes: forged.length },
     ];
+
     for (const arm of arms) {
       const rec = recorder();
       await routeFeedback(arm.request, ME, rec.deps);
@@ -704,6 +762,7 @@ describe('the analytics marker', () => {
         rejectReason: arm.reason, hasScreenshot: true, screenshotBytes: arm.bytes,
       });
     }
+
     // And the arm that is the deployment's fault rather than the reporter's.
     const noBucket = recorder({ bucket: false });
     await routeFeedback(submit({ note: 'x', screenshot: pngPart(png) }), ME, noBucket.deps);
@@ -743,6 +802,7 @@ describe('the analytics marker', () => {
 describe('the workspace a report claims to be about', () => {
   test('a workspace the reporter owns is accepted, and the row carries the authority’s answer', async () => {
     const rec = recorder({ owns: ['checkout-fixes'] });
+
     const response = await routeFeedback(submit({
       note: 'the exploration tab is blank',
       route: '/workspace/checkout-fixes',
@@ -757,6 +817,7 @@ describe('the workspace a report claims to be about', () => {
 
   test('a workspace somebody else owns is refused, and nothing is stored or recorded', async () => {
     const rec = recorder({ owns: ['checkout-fixes'] });
+
     const response = await routeFeedback(submit({
       note: 'filing this against a workspace that is not mine',
       route: '/workspace/someone-elses',
@@ -782,12 +843,14 @@ describe('the workspace a report claims to be about', () => {
 
   test('a refused attribution is answered before the screenshot is even read', async () => {
     const rec = recorder({ owns: [], putThrows: true });
+
     // The store would THROW if it were reached. It is not: the gate runs before
     // the bytes, so this arm's answer is the attribution refusal rather than the
     // 503 an unreachable bucket produces.
     const response = await routeFeedback(submit({
       note: 'x', route: '/workspace/theirs', workspace: 'theirs', screenshot: pngPart(realPng()),
     }), ME, rec.deps);
+
     expect(response?.status).toBe(403);
     expect(rec.marks[0]?.rejectReason).toBe('unowned_workspace');
   });
@@ -796,6 +859,7 @@ describe('the workspace a report claims to be about', () => {
     const recording = createRecordingLogger();
     setDiagnosticsSink(recording);
     const rec = recorder({ authorityDown: 'the registry did not answer' });
+
     const response = await routeFeedback(submit({
       note: 'x', route: '/workspace/checkout-fixes', workspace: 'checkout-fixes',
     }), ME, rec.deps);
@@ -851,24 +915,34 @@ interface RegistryStub {
 function registryEnv(options: { owns?: readonly string[]; throws?: string; secret?: boolean }) {
   const asked: { caller: UserCaller; workspace: string }[] = [];
   const ids: string[] = [];
+
   const stub: RegistryStub = {
     hasWorkspace: async (caller, name) => {
       asked.push({ caller, workspace: name });
       await Promise.resolve();
+
       if (options.throws !== undefined) throw new Error(options.throws);
+
       return options.owns?.includes(name) ?? false;
     },
   };
+
   const env: Partial<FeedbackEnv> = {};
   Object.assign(env, {
     UserDO: {
-      idFromName(name: string) { ids.push(name); return name; },
+      idFromName(name: string) {
+        ids.push(name);
+
+        return name;
+      },
       get() { return stub; },
     },
   });
+
   // A deployment without the root secret is a real state, and the one that
   // proves an unanswerable question is answered as an outage.
   if (options.secret !== false) env.CREDENTIAL_ENCRYPTION_KEY = 'test-root-secret';
+
   // SAFETY: this function CONSTRUCTED every member the endpoint reads.
   // `UserDO.idFromName` and `get().hasWorkspace` are the stub above;
   // `CREDENTIAL_ENCRYPTION_KEY` is set on the line above unless the test is
@@ -882,7 +956,9 @@ function registryEnv(options: { owns?: readonly string[]; throws?: string; secre
 async function fileAgainst(env: FeedbackEnv, workspace: string): Promise<Response> {
   const response = await handleFeedbackRequest(
     submit({ note: 'x', route: `/workspace/${workspace}`, workspace }), env, ME);
+
   if (response === null) throw new Error('the feedback endpoint did not answer its own path');
+
   return response;
 }
 
@@ -917,12 +993,14 @@ describe('asking the reporter’s own registry', () => {
 
   test('a name the registry could never hold is refused without asking it', async () => {
     const { env, asked } = registryEnv({ owns: ['checkout-fixes'] });
+
     // Path traversal, spaces, and a name past the 64-character bound: none of
     // these is a workspace name, and `hasWorkspace` THROWS on each. Asking would
     // turn a caller's typo into something no caller can tell from an outage.
     for (const name of ['../secrets', 'has spaces', 'w'.repeat(65), 'semi;colon']) {
       expect((await fileAgainst(env, name)).status).toBe(403);
     }
+
     expect(asked).toEqual([]);
   });
 
@@ -944,8 +1022,10 @@ describe('asking the reporter’s own registry', () => {
 
   test('a report naming no workspace is answered without the registry at all', async () => {
     const { env, asked, ids } = registryEnv({ owns: [] });
+
     const response = await handleFeedbackRequest(
       submit({ note: 'the sign-in page is broken', route: '/' }), env, ME);
+
     // Past the gate, into the same absent control plane.
     expect(response?.status).toBe(500);
     expect(asked).toEqual([]);

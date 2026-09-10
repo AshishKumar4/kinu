@@ -54,6 +54,7 @@ const STRUCTURAL: readonly ExecutorCapability[] = [
 export function hostToolchainCapabilities(): readonly ExecutorCapability[] {
   const PATH = process.env.PATH ?? '';
   const found = TOOLCHAIN_PROBE_BINARIES.filter((binary) => Bun.which(binary, { PATH }) !== null);
+
   return [...STRUCTURAL, ...toolchainCapabilities(found)];
 }
 

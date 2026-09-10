@@ -73,7 +73,9 @@ export interface ModelMenu {
 }
 
 const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
+
 const OkSchema = v.object({ ok: v.boolean() });
+
 const UserProfileSchema = v.nullable(v.object({
   email: v.string(), displayName: v.nullable(v.string()), createdAt: v.number(), lastSeenAt: v.number(),
   /** Whether this session may reach the admin control plane. Optional so a
@@ -81,27 +83,34 @@ const UserProfileSchema = v.nullable(v.object({
    *  entry, rather than failing to parse a profile it otherwise understands. */
   controlPlane: v.optional(v.boolean()),
 }));
+
 const WorkspaceEntrySchema = v.object({
   name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(),
   archivedAt: v.nullable(v.number()),
 });
+
 const CliSetupSchema = v.object({
   publicOrigin: v.string(), installCommand: v.string(), setupCommand: v.optional(v.string()), authCommand: v.string(),
 });
+
 const CredentialSummarySchema = v.object({
   key: v.string(), kind: v.picklist(['bearer', 'oauth', 'openai-compat']),
   createdAt: v.number(), updatedAt: v.number(),
 });
+
 const ModelMenuEntrySchema = v.object({
   spec: v.string(), label: v.string(), provider: v.string(),
   capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
 });
+
 const ProviderFailureSchema = v.object({
   provider: v.string(), label: v.optional(v.string()), reason: v.string(),
 });
+
 const ModelMenuSchema = v.object({
   models: v.array(ModelMenuEntrySchema), failures: v.array(ProviderFailureSchema),
 });
+
 const ConfigEntrySchema = v.object({ key: v.string(), value: v.nullable(v.string()) });
 
 export interface DeviceFlowStart {
@@ -128,6 +137,7 @@ export interface PollResult {
  *  not a JSON error envelope. */
 async function errorDetail(res: Response): Promise<string> {
   const parsed = v.safeParse(ErrorBodySchema, await tolerateAsync(() => res.json(), 'malformed-input'));
+
   return parsed.success ? parsed.output.error ?? '' : '';
 }
 
@@ -145,22 +155,28 @@ async function api<Schema extends v.GenericSchema, Body>(
     // as a failure its surface can show and retry (KINU-073).
     signal: method === 'GET' ? AbortSignal.timeout(DEFAULT_CALL_TIMEOUT_MS) : undefined,
   });
+
   if (!res.ok) throw new Error(`${method} /api/user${path} → ${res.status} ${await errorDetail(res)}`);
+
   return v.parse(schema, await res.json());
 }
 
 // ── Profile ────────────────────────────────────────────────────────
 export const getProfile = () => api(UserProfileSchema, 'GET', '/profile');
+
 export const getCliSetup = () => api(CliSetupSchema, 'GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────
 export const listWorkspaces     = () => api(v.object({ entries: v.array(WorkspaceEntrySchema), total: v.number() }), 'GET', '/workspaces');
+
 // `purpose` is the initial mission. When `name` is omitted the server creates
 // the agent identity using the user's connected model.
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
   api(WorkspaceEntrySchema, 'POST', '/workspaces', { name, displayName, purpose });
+
 export const touchWorkspace     = (name: string) =>
   api(OkSchema, 'POST', `/workspaces/${encodeURIComponent(name)}/touch`);
+
 export const removeWorkspace    = (name: string) =>
   api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`);
 
@@ -193,11 +209,14 @@ export interface UserDevice {
    *  own home and roots are not here — they live on the runtime status. */
   sandbox: UserDeviceSandbox;
 }
+
 export type UserDeviceSandbox = Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
+
 export interface RegisteredDevice {
   origin: string;
   installCommand: string;
 }
+
 const DeviceSandboxSchema = v.object({
   tier: v.picklist(DEVICE_TIERS),
   capability: v.picklist(DEVICE_SANDBOX_CAPABILITIES),
@@ -205,11 +224,13 @@ const DeviceSandboxSchema = v.object({
   detail: v.optional(v.nullable(v.string()), null),
   gpu: v.array(v.string()),
 });
+
 /** A row written before the registry recorded a sandbox: the switch is on by
  *  default, and a machine that has not proved it can sandbox has not proved
  *  it can sandbox — the same reading `parseSandboxCapability` gives silence. */
 const UNREPORTED_SANDBOX: v.InferOutput<typeof DeviceSandboxSchema> =
   { tier: 'sandboxed', capability: 'files_only', reason: null, detail: null, gpu: [] };
+
 const UserDeviceSchema = v.object({
   id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
   connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),
@@ -217,16 +238,23 @@ const UserDeviceSchema = v.object({
   revokedAt: v.nullable(v.number()), unstoppedAt: v.nullable(v.number()),
   sandbox: v.optional(DeviceSandboxSchema, UNREPORTED_SANDBOX),
 });
+
 const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });
+
 export const listDevices    = () => api(v.array(UserDeviceSchema), 'GET', '/devices');
+
 export const registerDevice = (label?: string) =>
   api(RegisteredDeviceSchema, 'POST', '/devices', { label });
+
 export const renameDevice   = (id: string, name: string) =>
   api(OkSchema, 'PATCH', `/devices/${encodeURIComponent(id)}`, { name });
+
 export const revokeDevice   = (id: string) =>
   api(v.object({ ok: v.literal(true), unstoppedCommands: v.number() }), 'DELETE', `/devices/${encodeURIComponent(id)}`);
+
 export const acknowledgeUnstoppedDevice = (id: string) =>
   api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}/unstopped`);
+
 /** Set a device's Sandbox switch. Owner-session only; the server answers 403
  *  to anyone else. What a command may then reach is decided by the machine,
  *  not by any workspace's binding. */
@@ -240,8 +268,11 @@ const DeviceConsentSchema = v.object({
   agentName: v.string(), deviceId: v.string(), policy: v.string(),
   lastMethod: v.nullable(v.string()), lastSummary: v.nullable(v.string()),
 });
+
 export type DeviceConsent = v.InferOutput<typeof DeviceConsentSchema>;
+
 export const listDeviceConsents = () => api(v.array(DeviceConsentSchema), 'GET', '/devices/consents');
+
 /** Revoke a workspace's binding on a device. The row is deleted, so the next
  *  device call asks again rather than reading as a standing refusal. */
 export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
@@ -249,39 +280,65 @@ export const revokeDeviceConsent = (deviceId: string, agentName: string) =>
 
 // ── Credentials ────────────────────────────────────────────────────
 export const listCredentials  = () => api(v.array(CredentialSummarySchema), 'GET', '/credentials');
+
 export const setCredential    = (key: string, value: Credential) =>
   api(OkSchema, 'POST', `/credentials/${encodeURIComponent(key)}`, value)
-    .then((r) => { invalidateModelsCache(); return r; });
+    .then((r) => {
+      invalidateModelsCache();
+
+      return r;
+    });
+
 export const deleteCredential = (key: string) =>
   api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`)
-    .then((r) => { invalidateModelsCache(); return r; });
+    .then((r) => {
+      invalidateModelsCache();
+
+      return r;
+    });
 
 // ── Codex device flow ──────────────────────────────────────────────
 const DeviceFlowStartSchema = v.object({
   userCode: v.string(), deviceAuthId: v.string(), pollIntervalSec: v.number(), portalURL: v.string(),
 });
+
 const CodexStatusSchema = v.object({
   connected: v.boolean(), accountId: v.nullable(v.string()), expiresAt: v.nullable(v.number()),
   startedFlow: v.nullable(v.object({ userCode: v.string(), portalURL: v.string(), pollIntervalSec: v.number() })),
 });
+
 const PollResultSchema = v.object({
   connected: v.boolean(), accountId: v.optional(v.string()), error: v.optional(v.string()),
 });
+
 export const codexStatus      = () => api(CodexStatusSchema, 'GET', '/codex');
+
 export const startCodexFlow   = () => api(DeviceFlowStartSchema, 'POST', '/codex/start');
+
 export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll')
-  .then((r) => { if (r.connected) invalidateModelsCache(); return r; });
+  .then((r) => {
+    if (r.connected) invalidateModelsCache();
+
+    return r;
+  });
+
 export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
-  .then((r) => { invalidateModelsCache(); return r; });
+  .then((r) => {
+    invalidateModelsCache();
+
+    return r;
+  });
 
 // ── Config / defaults ──────────────────────────────────────────────
 export const getConfig        = (key: string) => api(ConfigEntrySchema, 'GET', `/config/${encodeURIComponent(key)}`);
+
 export const setConfig        = (key: string, value: string) =>
   api(OkSchema, 'PUT', `/config/${encodeURIComponent(key)}`, { value });
 
 // ── Account roles and model tiers ─────────────────────────────────
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
   api(ProfileCatalogEnvelopeSchema, 'GET', '/profile-catalog');
+
 export const updateProfileCatalog = (
   catalog: ProfileCatalog,
   expectedVersion: number,
@@ -292,12 +349,15 @@ export const updateProfileCatalog = (
 // The model menu only changes when a provider is connected/disconnected, so it
 // is cached for the SPA session and invalidated by the provider mutators above.
 let _modelsCache: Promise<ModelMenu> | null = null;
+
 export function listAvailableModels(): Promise<ModelMenu> {
   if (!_modelsCache) {
     _modelsCache = api(ModelMenuSchema, 'GET', '/models').catch((...rejection: [unknown]) => { _modelsCache = null; throw rejection[0]; });
   }
+
   return _modelsCache;
 }
+
 function invalidateModelsCache(): void { _modelsCache = null; }
 
 /** One connectable provider (BYO API key) from the models.dev catalog. */
@@ -309,6 +369,7 @@ export interface ProviderCatalogEntry {
   envVar?: string;
   connected: boolean;
 }
+
 export const listProviderCatalog = () =>
   api(v.array(v.object({
     id: v.string(), credKey: v.string(), name: v.string(), doc: v.optional(v.string()),
@@ -320,19 +381,26 @@ export interface CloudflareAccountSummary {
   id: string;
   name: string;
 }
+
 export interface CloudflareAccountStatus {
   connected: boolean;
   selectedId: string | null;
   accounts: CloudflareAccountSummary[];
 }
+
 export const listCloudflareAccounts = () =>
   api(v.object({
     connected: v.boolean(), selectedId: v.nullable(v.string()),
     accounts: v.array(v.object({ id: v.string(), name: v.string() })),
   }), 'GET', '/cloudflare/accounts');
+
 export const selectCloudflareAccount = (id: string) =>
   api(OkSchema, 'PUT', '/cloudflare/account', { id })
-    .then((r) => { invalidateModelsCache(); return r; });
+    .then((r) => {
+      invalidateModelsCache();
+
+      return r;
+    });
 
 // ── Cloudflare AI Gateway (the user's own gateway) ─────────────────
 export interface CloudflareGatewaySummary {
@@ -340,33 +408,42 @@ export interface CloudflareGatewaySummary {
   authenticated: boolean;
   createdAt: string | null;
 }
+
 export interface CloudflareGatewayStatus {
   connected: boolean;
   selectedId: string | null;
   gateways: CloudflareGatewaySummary[];
   error: string | null;
 }
+
 export const listCloudflareGateways = () =>
   api(v.object({
     connected: v.boolean(), selectedId: v.nullable(v.string()),
     gateways: v.array(v.object({ id: v.string(), authenticated: v.boolean(), createdAt: v.nullable(v.string()) })),
     error: v.nullable(v.string()),
   }), 'GET', '/cloudflare/gateways');
+
 export const selectCloudflareGateway = (id: string | null) =>
   api(OkSchema, 'PUT', '/cloudflare/gateway', { id })
-    .then((r) => { invalidateModelsCache(); return r; });
+    .then((r) => {
+      invalidateModelsCache();
+
+      return r;
+    });
 
 export function cloudflareReconnectPath(returnTo: string): string {
   const params = new URLSearchParams({
     return_to: returnTo || '/',
     prompt: 'login',
   });
+
   return `/auth/cloudflare/start?${params.toString()}`;
 }
 
 // ── MCP servers ────────────────────────────────────────────────────
 
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
+
 export type McpConnectionStatus =
   | 'connecting' | 'authenticating' | 'connected'
   | 'ready' | 'discovering' | 'failed' | 'unknown';
@@ -402,8 +479,10 @@ const McpServerSummarySchema = v.object({
 });
 
 export const listMcpServers = () => api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers');
+
 export const addMcpServer   = (input: McpServerInput) =>
   api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input);
+
 export const removeMcpServer = (id: string) =>
   api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`);
 
@@ -433,9 +512,11 @@ async function agentApi<Schema extends v.GenericSchema, Body>(
     headers: { 'content-type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
+
   if (!res.ok) {
     throw new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${await errorDetail(res)}`);
   }
+
   return v.parse(schema, await res.json());
 }
 

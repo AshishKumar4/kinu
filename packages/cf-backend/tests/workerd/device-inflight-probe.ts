@@ -48,6 +48,7 @@ export interface ProbeClaim {
 }
 
 const WORKSPACE = 'workspace-a';
+
 const DEVICE = 'dev-probe';
 
 export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
@@ -65,6 +66,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
       // platform's `SqlStorageValue` declares, so the checked binding widens
       // nothing — the cast renames the union, it does not add members.
       const cursor = this.ctx.storage.sql.exec(query, ...bindings as SqlStorageValue[]);
+
       return { toArray: () => cursor.toArray() };
     },
   };
@@ -111,6 +113,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
    *  activation that dies mid-sweep leaves behind. */
   claimTurn(turnId: string): ProbeClaim[] {
     this.activate();
+
     return this.ledger.claimTurnRequests(WORKSPACE, turnId).map((row) => ({
       requestId: row.requestId,
       deviceId: row.deviceId,
@@ -122,6 +125,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
   /** Whether this claim still holds the row, and what answer it carries. */
   held(requestId: string, claim: string): { settled: DeviceCancelOutcome | null } | null {
     this.activate();
+
     return this.ledger.held(requestId, claim);
   }
 
@@ -130,6 +134,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
    *  precedence rule in one value. */
   settle(requestId: string, claim: string, outcome: DeviceCancelOutcome): DeviceCancelOutcome | null {
     this.activate();
+
     return this.ledger.settleHeld(requestId, claim, outcome);
   }
 
@@ -142,6 +147,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
 
   release(requestId: string, claim: string): boolean {
     this.activate();
+
     return this.ledger.releaseClaim(requestId, claim);
   }
 
@@ -150,6 +156,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
    *  still this workspace's to acknowledge. */
   acknowledgeable(requestId: string): { deviceId: string } | null {
     this.activate();
+
     return this.ledger.acknowledgeable(requestId, WORKSPACE);
   }
 
@@ -167,6 +174,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
 
   transfer(requestId: string, jobId: string): { transferred: boolean } {
     this.activate();
+
     return this.ledger.transferToBackgroundJob({ requestId, workspace: WORKSPACE, jobId });
   }
 
@@ -174,6 +182,7 @@ export class DeviceLedgerProbeDO extends DurableObject<Cloudflare.Env> {
    *  ledger's, because a test asserting survival has to see the raw record. */
   rows(): ProbeRequest[] {
     this.activate();
+
     return this.ctx.storage.sql.exec(
       `SELECT request_id, cancel_claim, cancel_outcome FROM device_inflight_requests
         ORDER BY request_id`,

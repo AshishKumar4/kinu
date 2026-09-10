@@ -38,6 +38,7 @@ export class AgentWakeQueue implements SignalDeliverer {
     const waiting = this.resume;
     this.resume = null;
     waiting?.();
+
     // 'queued', never 'mid-turn': this seam hands work to the NEXT turn, because
     // an agent driven by a step loop has no channel into the request already in
     // flight. The runner ignores the outcome. Compensation travels on the
@@ -61,7 +62,9 @@ export class AgentWakeQueue implements SignalDeliverer {
   async next(holding: () => boolean): Promise<readonly ModelMessage[] | null> {
     for (;;) {
       const wakes = this.drain();
+
       if (wakes.length > 0) return wakes;
+
       if (!holding()) return null;
       // Nothing runs between the drain above and this executor — one synchronous
       // stretch on one thread — so a wake cannot land in the gap and find no
@@ -73,6 +76,7 @@ export class AgentWakeQueue implements SignalDeliverer {
   private drain(): ModelMessage[] {
     const wakes = this.arrived.map((signal): ModelMessage => ({ role: 'user', content: signal.text }));
     this.arrived.length = 0;
+
     return wakes;
   }
 }

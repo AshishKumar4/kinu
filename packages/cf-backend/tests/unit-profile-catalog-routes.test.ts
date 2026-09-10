@@ -24,6 +24,7 @@ import {
 } from './helpers/user-do';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const IDENTITY: AuthIdentity = {
   userId: USER_ID,
   email: 'ashish@example.com',
@@ -71,8 +72,10 @@ function routeEnv(userDO: TestUserDO['userDO']): Env {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
   };
+
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: Profile catalog handlers read exactly the constructed UserDO
   // namespace and credential key; every reachable binding is present.
   return env as Env;
@@ -83,20 +86,24 @@ async function setup() {
   const owner = await testOwner();
   await harness.userDO.ensureProfile(owner, IDENTITY.email, IDENTITY.displayName ?? undefined);
   const session = await harness.userDO.mintCliToken(owner, USER_ID, "a".repeat(64), "profile route test");
+
   return { harness, owner, token: session.token, env: routeEnv(harness.userDO) };
 }
 
 function handled(response: Response | null): Response {
   if (!response) throw new Error('profile route did not handle the request');
+
   return response;
 }
 
 function userRequest(method = 'GET', body?: ProfileCatalogWriteRequest): Request {
   const init: RequestInit = { method, headers: { 'content-type': 'application/json' } };
+
   if (body !== undefined) init.body = JSON.stringify(v.parse(ProfileCatalogWriteRequestSchema, {
     catalog: decodeJsonValue({ value: body.catalog }),
     expectedVersion: body.expectedVersion,
   }));
+
   return new Request('https://kinu.example.com/api/user/profile-catalog', init);
 }
 
@@ -105,10 +112,12 @@ function cliRequest(token: string, method = 'GET', body?: ProfileCatalogWriteReq
     method,
     headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
   };
+
   if (body !== undefined) init.body = JSON.stringify(v.parse(ProfileCatalogWriteRequestSchema, {
     catalog: decodeJsonValue({ value: body.catalog }),
     expectedVersion: body.expectedVersion,
   }));
+
   return new Request('https://kinu.example.com/api/cli/profile', init);
 }
 
@@ -130,6 +139,7 @@ describe('browser profile catalog route', () => {
       catalog: CUSTOM_CATALOG,
       expectedVersion: 0,
     }), env, IDENTITY));
+
     const written = validateProfileCatalogEnvelope(await putResponse.json());
     expect(putResponse.status).toBe(200);
     expect(written.version).toBe(1);
@@ -145,6 +155,7 @@ describe('browser profile catalog route', () => {
       catalog: BUILTIN_PROFILE_CATALOG,
       expectedVersion: 0,
     }), env, IDENTITY));
+
     const body = v.parse(v.object({
       error: v.string(), currentVersion: v.number(), currentDigest: v.string(),
     }), await response.json());
@@ -171,6 +182,7 @@ describe('browser profile catalog route', () => {
 
   test('the generic config route cannot become a second catalog path', async () => {
     const { harness, env } = await setup();
+
     const response = handled(await handleUserRequest(
       new Request('https://kinu.example.com/api/user/config/profile_catalog'),
       env,
@@ -196,6 +208,7 @@ describe('CLI profile catalog route', () => {
       catalog: CUSTOM_CATALOG,
       expectedVersion: read.version,
     }), env));
+
     const written = validateProfileCatalogEnvelope(await put.json());
     expect(put.status).toBe(200);
     expect(written.version).toBe(1);
@@ -206,6 +219,7 @@ describe('CLI profile catalog route', () => {
   test('a scoped access token cannot reach the owner-only profile route', async () => {
     const { harness, env, owner } = await setup();
     const minted = await harness.userDO.mintAccessToken(owner, USER_ID, 'CI', ['workspace.read']);
+
     if (!minted.ok) throw new Error(minted.error);
 
     const response = handled(await handleCliRequest(cliRequest(minted.token), env));

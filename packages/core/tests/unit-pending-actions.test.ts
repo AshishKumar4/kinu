@@ -50,6 +50,7 @@ describe('buildPendingActions', () => {
       approvals: [{ id: 'apr_1', changeId: 'chg_4f2', approvalType: 'deploy_production', decision: 'pending', createdAt: 5000 }],
       changes: [{ id: 'chg_4f2', userPrompt: 'Warm up the empty-state copy' }],
     });
+
     expect(action).toEqual({
       id: 'apr_1',
       kind: 'release_approval',
@@ -77,6 +78,7 @@ describe('buildPendingActions', () => {
         { version: 7, status: 'current', rationale: 'the live one', written_at: 8000 },
       ],
     });
+
     expect(action).toMatchObject({
       id: 'scaffold-v8', kind: 'scaffold_version', detail: 'shorter tool preamble', at: 9000,
     });
@@ -92,6 +94,7 @@ describe('buildPendingActions', () => {
         job({ id: 'bgjob-bad', status: 'failed', error: 'exit 1 — binding VECTORIZE not found', settledAt: 7000 }),
       ],
     });
+
     expect(actions).toHaveLength(1);
     expect(actions[0]).toMatchObject({
       id: 'bgjob-bad', kind: 'failed_job', detail: 'exit 1 — binding VECTORIZE not found', at: 7000,
@@ -102,6 +105,7 @@ describe('buildPendingActions', () => {
     const actions = buildPendingActions({
       ...EMPTY, unseenChanges: { count: 3, revertable: 3, latestAt: 6000 },
     });
+
     expect(actions).toHaveLength(1);
     expect(actions[0]!.kind).toBe('unseen_changes');
     expect(actions[0]!.title).toBe('3 self-changes you have not seen');
@@ -112,6 +116,7 @@ describe('buildPendingActions', () => {
     const [action] = buildPendingActions({
       ...EMPTY, unseenChanges: { count: 1, revertable: 1, latestAt: 1 },
     });
+
     expect(action!.title).toBe('1 self-change you have not seen');
   });
 
@@ -123,6 +128,7 @@ describe('buildPendingActions', () => {
     const [action] = buildPendingActions({
       ...EMPTY, unseenChanges: { count: 1, revertable: 0, latestAt: 1 },
     });
+
     expect(action!.detail).toBe('Read them in the journal below.');
   });
 
@@ -130,6 +136,7 @@ describe('buildPendingActions', () => {
     const [action] = buildPendingActions({
       ...EMPTY, unseenChanges: { count: 4, revertable: 1, latestAt: 1 },
     });
+
     expect(action!.detail).toBe('Keep or revert 1 of them in the journal below.');
   });
 
@@ -141,6 +148,7 @@ describe('buildPendingActions', () => {
         { id: 'cur_2', task: 'Already accepted', status: 'accepted', proposedAt: 4500 },
       ],
     });
+
     expect(actions.map((a) => a.id)).toEqual(['cur_1']);
   });
 
@@ -177,6 +185,7 @@ describe('buildPendingActions', () => {
       unseenChanges: { count: 2, revertable: 2, latestAt: 4000 },
       curriculum: [{ id: 'cur', task: 't', status: 'pending', proposedAt: 2000 }],
     });
+
     expect(actions.map((a) => a.kind)).toEqual([
       'deferred_action', 'scaffold_version', 'unseen_changes', 'release_approval',
       'curriculum_task', 'failed_job',

@@ -32,12 +32,16 @@ const UNDEFINED_IDENTIFIER = /^([A-Za-z_$][\w$]*) is not defined$/;
  */
 export function explainNativeToolReferenceError(error: string): string {
   const name = UNDEFINED_IDENTIFIER.exec(error)?.[1];
+
   if (!name || !isBuiltinToolName(name)) return error;
+
   // execute_tools IS the sandbox; a program cannot call it from inside itself.
   if (name === 'execute_tools') return error;
   const namespace = TOOL_REACH[name].codemode;
+
   const projection = namespace
     ? ` or through the \`${namespace}\` namespace declared in this sandbox's type block`
     : '';
+
   return `${error} — "${name}" is a native Kinu tool. In a program call it as \`${CRAFTED_TOOL_NAMESPACE}.${name}(input)\` with the same input object the native call takes${projection}.`;
 }

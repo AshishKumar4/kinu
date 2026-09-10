@@ -188,6 +188,7 @@ export interface HeadStep {
  * Four statuses, none of them a lump.
  */
 const HEAD_REPORT_STATUSES = ['completed', 'budget_exceeded', 'aborted', 'errored'] as const;
+
 export type HeadReportStatus = (typeof HEAD_REPORT_STATUSES)[number];
 
 /**
@@ -201,6 +202,7 @@ export type HeadReportStatus = (typeof HEAD_REPORT_STATUSES)[number];
  * what makes a caller owing work on these two terminate.
  */
 const HEAD_UNSETTLED_STATUSES = ['running', 'interrupted'] as const;
+
 export type HeadUnsettledStatus = (typeof HEAD_UNSETTLED_STATUSES)[number];
 
 /** Is this stored status one a head is still executing under? */
@@ -427,6 +429,7 @@ export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()):
   if (parent.maxWallClockMs === undefined) {
     return { maxDepth: parent.maxDepth - 1, spawnedAt: now };
   }
+
   return {
     maxDepth: parent.maxDepth - 1,
     maxWallClockMs: Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt)),
@@ -440,9 +443,12 @@ export function budgetExhausted(b: HeadBudget) {
   if (b.maxWallClockMs !== undefined && Date.now() - b.spawnedAt >= b.maxWallClockMs) {
     return { exhausted: true, reason: 'wall-clock' };
   }
+
   return { exhausted: false };
 }
+
 import type { WorkMode } from '../types/turn';
+
 /** The builtin tools a head keeps. `file` is the runtime's native file plane,
  *  `execute_tools` its executor namespaces, `run` its shell router, and `web`
  *  live research. Hosted `file` reaches the canonical workspace; local `file`
@@ -463,10 +469,13 @@ export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as con
  */
 export function keepBuiltins(builtin: ToolSet, names: readonly string[]): ToolSet {
   const kept: ToolSet = {};
+
   for (const name of names) {
     const entry = builtin[name];
+
     if (entry) kept[name] = entry;
   }
+
   return kept;
 }
 

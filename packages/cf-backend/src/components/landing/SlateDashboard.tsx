@@ -17,7 +17,9 @@ const LABELS = [
 ] as const;
 
 const WEEKS = ['W28', 'W29', 'W30', 'W31', 'W32', 'W33', 'W34', 'W35'] as const;
+
 const OPENED = [12, 15, 11, 18, 14, 16, 13, 17] as const;
+
 const CLOSED = [10, 13, 12, 16, 15, 14, 15, 16] as const;
 
 const OLDEST = [
@@ -27,12 +29,16 @@ const OLDEST = [
 ] as const;
 
 const OPEN_NOW = LABELS.reduce((sum, [, count]) => sum + count, 0);
+
 const CHART_WIDTH = 240;
+
 const CHART_HEIGHT = 72;
+
 const MAX_WEEKLY = 20;
 
 function polyline(values: readonly number[]): string {
   const step = CHART_WIDTH / (values.length - 1);
+
   return values
     .map((value, index) => `${String(index * step)},${String(CHART_HEIGHT - (value / MAX_WEEKLY) * CHART_HEIGHT)}`)
     .join(' ');
@@ -47,14 +53,19 @@ function Counter({ value, duration = 900 }: { value: number; duration?: number }
     if (reduced.current) return;
     const start = performance.now();
     let frame = 0;
+
     const tick = (now: number): void => {
       const progress = Math.min(1, (now - start) / duration);
       setShown(Math.round(value * (1 - (1 - progress) ** 3)));
+
       if (progress < 1) frame = window.requestAnimationFrame(tick);
     };
+
     frame = window.requestAnimationFrame(tick);
+
     return () => window.cancelAnimationFrame(frame);
   }, [value, duration]);
+
   return <>{shown}</>;
 }
 

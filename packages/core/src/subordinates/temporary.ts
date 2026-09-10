@@ -52,6 +52,7 @@ import { finishSubordinateBirth, type SubordinateBirth } from './birth';
  * row working on an assignment are indistinguishable by state.
  */
 export const SUBORDINATE_LIFETIMES = ['durable', 'task'] as const;
+
 export type SubordinateLifetime = (typeof SUBORDINATE_LIFETIMES)[number];
 
 /** The lifetime a task-lifetime hire is listed under. */
@@ -204,6 +205,7 @@ export const TASK_TURN_ENDINGS = [
   'interrupted',
   'recovered',
 ] as const;
+
 export type TaskTurnEnding = (typeof TASK_TURN_ENDINGS)[number];
 
 /** What a task child reports for one end state. `null` for `answered`, whose
@@ -254,6 +256,7 @@ export function terminalTaskReport(input: {
 }): { readonly status: SubordinateReportStatus; readonly content: string } | null {
   if (input.lifetime !== TEMPORARY_LIFETIME) return null;
   const text = input.assistantText.trim();
+
   if (input.ending === 'answered') {
     // An `answered` ending with nothing in it is a `silent` one that mislabelled
     // itself; the CONTENT decides, so no caller can produce an empty answer by
@@ -262,7 +265,9 @@ export function terminalTaskReport(input: {
       ? { status: 'completed', content: text }
       : { status: 'blocked', content: TASK_ENDING_REPORT.silent };
   }
+
   const reason = TASK_ENDING_REPORT[input.ending];
+
   // The child's own words still ride along when it managed any: a failing turn
   // often says something useful before it fails.
   return { status: 'blocked', content: text.length > 0 ? `${text}\n\n${reason}` : reason };
@@ -304,17 +309,20 @@ export function renderTemporaryTaskBrief(input: {
   readonly contextRefs?: readonly string[];
 }): string {
   const parts = [input.task];
+
   if (input.contextRefs && input.contextRefs.length > 0) {
     parts.push(
       'Material for this question, by workspace path — read it yourself, in ranges when it is '
       + `large: ${input.contextRefs.join(', ')}.`,
     );
   }
+
   parts.push(
     'You exist for this one question. Your answer is returned directly to the agent that asked, '
     + 'and there is no second exchange: put the whole finished answer in one reply, and say what '
     + 'you could not establish rather than leaving it out.',
   );
+
   return parts.join('\n\n');
 }
 
@@ -354,14 +362,17 @@ export function createTemporaryAgentPort(deps: {
 
   const registerWaiter = (name: string, signal?: AbortSignal) => {
     const { promise, resolve } = Promise.withResolvers<TemporarySettlement | 'cancelled'>();
+
     const cleanup = () => {
       waiters.delete(name);
       signal?.removeEventListener('abort', onAbort);
     };
+
     const onAbort = () => {
       cleanup();
       resolve('cancelled');
     };
+
     if (signal?.aborted) {
       onAbort();
     } else {
@@ -371,32 +382,41 @@ export function createTemporaryAgentPort(deps: {
       });
       signal?.addEventListener('abort', onAbort, { once: true });
     }
+
     return { promise, cancel: onAbort };
   };
 
   return {
     settle: (input) => {
       const entry = deps.roster.get(input.name);
+
       // Only a TASK-lifetime row's report is a return value. A durable
       // subordinate's report is its parent's event however it arrives, which is
       // the behaviour this rung must not touch.
       if (!entry || entry.lifetime !== TEMPORARY_LIFETIME) return false;
+
       if (input.taskEventId !== entry.taskEventId) return false;
+
       if (!temporaryRunSettles(input)) return false;
       const waiter = waiters.get(input.name);
+
       if (!waiter) return false;
       waiter({ status: input.status, content: input.content });
+
       return true;
     },
 
     run: async (request) => {
       const task = request.task.trim();
+
       if (!task) return { reason: 'bad_input', error: 'hire requires a non-empty mission' };
       const refs = request.contextRefs ?? [];
       const roleLabel = request.roleLabel.trim();
+
       if (!roleLabel) return { reason: 'bad_input', error: 'hire requires a role' };
       const name = deps.createName(`ask-${roleLabel}`);
       const startedAt = deps.now();
+
       const failure = (
         reason: ErrorCode,
         answer: string,
@@ -411,21 +431,27 @@ export function createTemporaryAgentPort(deps: {
         elapsed_ms: deps.now() - startedAt,
         reason,
       });
+
       /** Archive the row and retire the actor. History is ALWAYS kept: a
        *  temporary agent is not a temporary transcript. */
       const release = async (): Promise<void> => {
         const actor = deps.roster.requireExisting(name).actorReference;
+
         if (!actor) throw new KinuError('missing', 'The temporary actor has no confirmed identity.');
         deps.roster.dismiss(name, deps.now());
         await deps.runtime.dismiss(name, true, actor);
       };
 
       const creationId = crypto.randomUUID();
+
       const assignment: NonNullable<SubordinateBirth['assignment']> = {
         body: renderTemporaryTaskBrief({ task, contextRefs: refs }), mode: request.mode,
       };
+
       const inherited = deps.renderInheritedContext();
+
       if (inherited) assignment.inheritedContext = inherited;
+
       if (deps.roster.get(name)) return failure('denied', 'The generated actor name is already in use.', 'none');
       deps.roster.create({
         name, actorReference: null, deleteRequested: false,
@@ -435,20 +461,25 @@ export function createTemporaryAgentPort(deps: {
       });
       // A child can report before its assignment acknowledgement returns.
       const waiter = registerWaiter(name, request.signal);
+
       try {
         await finishSubordinateBirth(deps.roster, deps.runtime, name);
       } catch (cause) {
         waiter.cancel();
         const error = toKinuError({ doing: 'completing an admitted temporary actor birth', cause, otherwise: 'unavailable' });
+
         return failure(error.code, renderCauseChain(error));
       }
 
       const settlement = await waiter.promise;
       await release();
+
       if (settlement === 'cancelled') {
         return failure('cancelled', 'the caller cancelled this hire before the agent answered.');
       }
+
       if (settlement.status === 'blocked') return failure('unavailable', settlement.content);
+
       return {
         status: 'completed',
         agent: name,

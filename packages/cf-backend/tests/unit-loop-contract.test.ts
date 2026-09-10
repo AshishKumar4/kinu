@@ -80,6 +80,7 @@ async function installVersion(
     "UPDATE scaffold_versions SET status = 'historical' WHERE actor_id = ? AND version != ? AND status = 'current'",
   ).run(rt.actor.actorId, version);
   rt.identity.scaffold.read = () => Promise.resolve(markerSource('POISONED-LIVE-ALIAS'));
+
   return sha256Hex(source);
 }
 
@@ -96,12 +97,14 @@ async function claimTurnOn(actor: HostedActor, turnId: string): Promise<{
     runtime: actor.runtime, mode: 'build',
     version: await actor.runtime.identity.scaffold.version(),
   });
+
   const claim = actor.stores.claims.admit({
     runId: `run-${turnId}`, turnId, workMode: 'build',
     program: programIdentityOf(program, 'harness-build'),
     context: [],
     workingRevision: 0,
   });
+
   return {
     selectedVersion: program.version,
     selectedSource: program.kind === 'scaffold' ? program.source : null,
@@ -124,6 +127,7 @@ async function subjects(fixture: HostedWorkspaceFixture): Promise<readonly Subje
   const temporary = await fixture.hire(fixture.main, 'sub-temp-2', 'subordinate');
   const head = await fixture.hire(fixture.main, 'exp:head-a1', 'head');
   const node = await fixture.hire(fixture.main, 'exp:node-b2', 'head');
+
   return [
     { label: 'root', actor: main, record: main.record, expectedOrigin: 'builtin' },
     { label: 'hired', actor: hired, record: hired.record, expectedOrigin: 'builtin' },
@@ -139,6 +143,7 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
   test('each kind selects its OWN pinned version with the live alias poisoned', async () => {
     const fixture = await hostedWorkspace();
     const roster = await subjects(fixture);
+
     for (const subject of roster) {
       const digest = await installVersion(fixture, subject.actor, 1, `v1:${subject.label}`);
       const claimed = await claimTurnOn(subject.actor, `${subject.label}-first`);
@@ -156,6 +161,7 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
       expect(claimed.version).toBe(1);
       expect(claimed.digest).toBe(digest);
     }
+
     // FIVE actors, five pinned pointers, one database — a shared pointer would
     // make one promotion move all five, and this is the read that would catch
     // it. Asserted NON-EMPTY first: a mismatched actor id returns an empty set
@@ -163,12 +169,14 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
     // would otherwise sail through every assertion above.
     const current = fixture.sql<{ actor_id: string; version: number }>`
       SELECT actor_id, version FROM scaffold_versions WHERE status = 'current'`;
+
     expect(current.length).toBe(5);
     expect(new Set(current.map((row) => row.actor_id)).size).toBe(5);
   });
 
   test('a promotion does not move the claim already admitted, per actor', async () => {
     const fixture = await hostedWorkspace();
+
     for (const subject of await subjects(fixture)) {
       await installVersion(fixture, subject.actor, 1, `v1:${subject.label}`);
       const inFlight = await claimTurnOn(subject.actor, `${subject.label}-inflight`);
@@ -203,9 +211,11 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
     const expected: readonly (readonly [WorkspaceActor['kind'], 'builtin' | 'inherit'])[] = [
       ['main', 'builtin'], ['subordinate', 'builtin'], ['head', 'inherit'], ['branch', 'inherit'],
     ];
+
     for (const [kind, origin] of expected) {
       expect(defaultLoopOrigin(kind).kind).toBe(origin);
     }
+
     // And the OBSERVABLE CONSEQUENCE of `inherit`. Promote the parent TWICE
     // first, so "the parent's promoted loop" is non-vacuous: inheriting when
     // only v1 exists cannot distinguish a copy from a fresh bootstrap.
@@ -216,6 +226,7 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
     const head = await fixture.hire(fixture.main, 'exp:head-b1', 'head');
     const node = await fixture.hire(fixture.main, 'exp:node-b2', 'head');
     const hired = await fixture.hire(fixture.main, 'sub-hired-b3', 'subordinate');
+
     // An inheriting child runs the parent's PROMOTED bytes as its own v1 and
     // NAMES the parent version it was cut from — a copy, not a pointer. A
     // child that read its parent's row would run bytes its own claim could
@@ -224,20 +235,25 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
       const row = fixture.sql<{ version: number; parent_version: number | null }>`
         SELECT version, parent_version FROM scaffold_versions
         WHERE actor_id = ${child.handle.actorId} AND status = 'current'`[0];
+
       expect(row?.version).toBe(1);
       expect(row?.parent_version).toBe(2);
       const rt = child.runtime;
+
       const raw = await (rt.agentStateVfs ?? rt.storage.vfs)
         .readFile(`${rt.identity.scaffold.path}.v1`, { encoding: 'utf8' });
+
       // Parsed, not sniffed: `encoding: 'utf8'` was requested, so anything but
       // a string is the plane breaking its own contract and must say so here.
       const source = v.parse(v.string(), raw);
       expect(source).toContain('v2:root');
     }
+
     // A hire starts builtin: a fresh bootstrap with no parent version named.
     const hiredRow = fixture.sql<{ parent_version: number | null }>`
       SELECT parent_version FROM scaffold_versions
       WHERE actor_id = ${hired.handle.actorId} AND status = 'current'`[0];
+
     expect(hiredRow?.parent_version).toBeNull();
   });
 });

@@ -23,6 +23,7 @@ export function createSandboxReleaseExec(
       // adapter contract says it kills the container process and waits for it
       // to be gone, so a cancelled release command is a stopped one.
       const res = await withSandboxRetry(() => handle.exec(command, { cwd: opts?.cwd, signal: opts?.signal }));
+
       return {
         stdout: res.stdout ?? res.output ?? '',
         stderr: res.stderr ?? '',
@@ -36,6 +37,7 @@ export function createSandboxReleaseExec(
     async exposePort(port, name) {
       if (!provider.exposePort) return { error: 'sandbox executor has no port exposure' };
       const result = await provider.exposePort(port, name ? { name } : undefined);
+
       return result.supported ? { url: result.url } : { error: result.reason };
     },
   };

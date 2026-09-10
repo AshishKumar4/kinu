@@ -80,6 +80,7 @@ export const FIRST_RUN_CASES = [
   'preview-address',
   'workspace-title',
 ] as const;
+
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
 
 /**
@@ -234,11 +235,15 @@ const TRANSCRIPTS = join(
  */
 export function firstRunPlan(suite: string): PublicSessionPlan | null {
   const resolution = resolvePublicSessionPlan(suite, EVAL_MODELS[FIRST_RUN_TIER]);
+
   if (resolution.kind === 'unavailable') {
     console.warn(`[skip] ${suite} — ${resolution.remedy}`);
+
     return null;
   }
+
   console.warn(`[live] ${suite} — ${resolution.plan.describe}`);
+
   return resolution.plan;
 }
 
@@ -256,7 +261,9 @@ export function firstRunPlan(suite: string): PublicSessionPlan | null {
  */
 export function firstRunCasePlan(suite: string, caseId: FirstRunCase): PublicSessionPlan | null {
   const plan = firstRunPlan(suite);
+
   if (plan === null) return null;
+
   return {
     ...plan,
     open: (request) => plan.open({ ...request, subject: SHORT_SUBJECT[caseId] }),
@@ -284,6 +291,7 @@ const SHORT_SUBJECT = {
   'preview-address': 'address',
   'workspace-title': 'title',
 } satisfies Record<FirstRunCase, string>;
+
 /** What a case's body is handed, and what it hands back. */
 export interface FirstRunSession extends EpisodeEvidenceReader {
   readonly describe: string;
@@ -345,9 +353,11 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
 ): Promise<void> {
   const startedAt = Date.now();
   let opened: Session | undefined;
+
   try {
     await withEpisodeEvidence(async () => {
       opened = await plan.open({ subject: spec.id, purpose: spec.purpose });
+
       return opened;
     }, { transcripts: TRANSCRIPTS, taskId: spec.id, modelCalls: spec.modelCalls }, async (session, collect) => {
     console.warn(`    [first-run] ${spec.id} on ${session.describe}`);
@@ -370,6 +380,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
     console.warn(`    [first-run] ${spec.id}: ${String(totals.turns)} turn(s), `
       + `${String(totals.toolCalls)} tool call(s), ${String(outcome.reached)}/${String(outcome.total)} `
       + `subgoals — retained at ${retained}`);
+
     for (const subgoal of subgoals) {
       console.warn(`    [first-run] ${spec.id}/${subgoal.what}: `
         + `${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`);
@@ -392,6 +403,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
     // Measured on 2026-09-06: the `slate` record carried `scored` (3/4) AND
     // `errored: slate/replied …` for the same pairing key.
     const thrown = error instanceof Error ? error : new Error(String(error));
+
     if (!observations.some((o) => o.taskId === spec.id)) {
       observations.push({
         taskId: spec.id, repetition: 0,
@@ -399,6 +411,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
         reason: thrown.message,
       });
     }
+
     throw error;
   } finally {
     await opened?.teardown();

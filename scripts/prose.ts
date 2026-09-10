@@ -97,11 +97,14 @@ export interface Sentence {
 export function pieces(text: string, breaks: RegExp): Piece[] {
   const found: Piece[] = [];
   let at = 0;
+
   for (const match of text.matchAll(breaks)) {
     found.push({ raw: text.slice(at, match.index), at });
     at = match.index + match[0].length;
   }
+
   found.push({ raw: text.slice(at), at });
+
   return found;
 }
 
@@ -120,6 +123,7 @@ function cut(piece: Piece): Piece[] {
   if (piece.raw.length <= REACH) return [piece];
   const found: Piece[] = [];
   let at = 0;
+
   while (piece.raw.length - at > REACH) {
     // The last line or word break inside the reach; a hard cut only where the text
     // offers neither, which is a single token longer than the reach.
@@ -128,7 +132,9 @@ function cut(piece: Piece): Piece[] {
     found.push({ raw: piece.raw.slice(at, end), at: piece.at + at });
     at = end;
   }
+
   found.push({ raw: piece.raw.slice(at), at: piece.at + at });
+
   return found;
 }
 
@@ -137,6 +143,7 @@ function cut(piece: Piece): Piece[] {
  *  citation. */
 export function sentences(text: string): Sentence[] {
   const held = text.replace(ABBREVIATION, (found) => found.split('.').join(MASK));
+
   return pieces(held, SENTENCE_BREAK)
     .flatMap(cut)
     .map(({ raw, at }) => ({

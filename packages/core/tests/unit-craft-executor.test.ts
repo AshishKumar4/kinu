@@ -30,7 +30,9 @@ const ExecuteResultSchema = v.object({
 
 const createTestCraftedExecute = (): CraftedToolExecute => (source) => async (arg) => {
   if (source.name === 'double') return v.parse(v.number(), arg) * 2;
+
   if (source.name === 'exploder') throw new Error('inner boom');
+
   if (source.name === 'quiet') return 'ok';
   throw new Error(`unexpected crafted tool ${source.name}`);
 };
@@ -66,7 +68,9 @@ function actorTools(rt: ActorToolsetDeps['rt'], deps: Pick<ActorToolsetDeps, 'cr
 
 function requiredCraftedTool(tools: CraftedToolSet, name: string) {
   const entry = tools[name];
+
   if (!entry) throw new Error(`missing crafted tool ${name}`);
+
   return entry;
 }
 
@@ -90,9 +94,11 @@ describe('crafted-tool execution integration', () => {
     });
 
     const execTool = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
+
     const res = v.parse(ExecuteResultSchema, await execTool({
       code: 'return await tools.double(21);',
     }));
+
     expect(res.error).toBeUndefined();
     expect(res.result).toBe(42);
   });
@@ -112,6 +118,7 @@ describe('crafted-tool execution integration', () => {
       executeTools: createTestExecBuilder(async (crafted) =>
         requiredCraftedTool(crafted, 'exploder').execute(null)),
     });
+
     const execTool = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
 
     const res = v.parse(ExecuteResultSchema, await execTool({ code: 'return await tools.exploder();' }));
@@ -127,14 +134,17 @@ describe('crafted-tool execution integration', () => {
       name: 'quiet', description: 'fine', params: null,
       code: 'async () => "ok"', scope: 'local',
     });
+
     const tools = actorTools(rt, {
       craftedToolExecute: createTestCraftedExecute(),
       executeTools: createTestExecBuilder(async (crafted) =>
         requiredCraftedTool(crafted, 'quiet').execute(null)),
     });
+
     const res = v.parse(ExecuteResultSchema, await toolExecute<{ code: string }, JsonValue>(tools.execute_tools)(
       { code: 'return await tools.quiet();' },
     ));
+
     expect(res.error).toBeUndefined();
     expect(res.result).toBe('ok');
   });
@@ -150,24 +160,30 @@ describe('crafted-tool execution integration', () => {
     });
 
     let factoryCalls = 0;
+
     const factory: CraftedToolExecute = (tool) => {
       factoryCalls++;
+
       return async (arg) => `${tool.name}:${JSON.stringify(arg)}`;
     };
 
     let resolve: (() => CraftedToolSet) | undefined;
+
     const captureBuilder: ExecuteToolsBuilder = (surface) => {
       resolve = surface.craftedTools;
+
       return tool({
         description: 'capture crafted tools',
         inputSchema: jsonSchema({ type: 'object' }),
         execute: async () => null,
       });
     };
+
     actorTools(rt, { craftedToolExecute: factory, executeTools: captureBuilder });
     // Building resolves nothing — the sandbox asks per execute, which is what
     // makes a tool crafted mid-turn callable on the next call.
     expect(factoryCalls).toBe(0);
+
     if (!resolve) throw new Error('execute-tools factory was not built');
     resolve();
     resolve();
@@ -192,15 +208,19 @@ describe('crafted-tool execution integration', () => {
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'noisy'`;
 
     let factoryCalls = 0;
+
     const factory: CraftedToolExecute = () => {
       factoryCalls++;
+
       return async () => 'never';
     };
+
     let resolve: (() => CraftedToolSet) | undefined;
     actorTools(rt, {
       craftedToolExecute: factory,
       executeTools: (surface) => {
         resolve = surface.craftedTools;
+
         return tool({
           description: 'capture crafted tools',
           inputSchema: jsonSchema({ type: 'object' }),
@@ -208,6 +228,7 @@ describe('crafted-tool execution integration', () => {
         });
       },
     });
+
     if (!resolve) throw new Error('execute-tools builder was not called');
     expect(Object.keys(resolve())).toEqual([]);
     expect(factoryCalls).toBe(0);

@@ -41,22 +41,29 @@ import type { SandboxOptions } from '@cloudflare/sandbox';
 // workerd. proxyToSandbox is the seam the Worker delegates preview routing to,
 // so standing in for it here leaves everything Kinu owns under test.
 let sdkResponse: Response | null = null;
+
 let sdkRequest: Request | null = null;
+
 // Successive answers, for the one test shape a repair needs: a BEFORE and an
 // AFTER. Empty means every forward gets `sdkResponse`.
 let sdkQueue: Response[] = [];
+
 let sdkForwards = 0;
+
 // What the repair path did. The stale-preview repair is the one caller in this
 // suite that reaches `getSandbox`, and WHICH object it reaches is the property
 // that matters most.
 /** The id the repair addressed and the options it passed. Every Kinu call
  *  site passes the same ones or the SDK drops in-flight requests for that id. */
 let repairs: Array<{ id: string; options?: SandboxOptions }> = [];
+
 let repairFailure: Error | null = null;
+
 // The suite's doubles for the preview forward and the stale-preview repair:
 // the shared stand-in owns the module, this file only points it. Reset in
 // `afterAll`, so a later file meets the real SDK.
 await installSandboxSdkMock();
+
 setSandboxSdk({
   proxyToSandbox: async (request: Request) => {
     sdkRequest = request;
@@ -67,31 +74,43 @@ setSandboxSdk({
     // disturbed. A scripted null stays null: that is the SDK's own "no
     // exposed port" answer.
     const scripted = sdkQueue.shift() ?? sdkResponse;
+
     return scripted === null ? null : scripted.clone();
   },
   getSandbox: (_namespace: NonNullable<Env['Sandbox']>, id: string, options?: SandboxOptions) => ({
     ensureReady: async () => {
       repairs.push({ id, options });
+
       if (repairFailure) throw repairFailure;
     },
   }),
 });
+
 afterAll(() => { setSandboxSdk(null); });
+
 const { servePreviewRequest } =
   await import('../src/preview-proxy');
 
 const root = join(import.meta.dir, '..');
+
 const source = (path: string): string => readFileSync(join(root, path), 'utf8');
 
 const APP = 'https://kinu.example.com';
+
 const SUFFIX = 'previews.example';
+
 /** The three parts of one exposed port, named because both the hostname under
  *  test and the published record are built from them. */
 const PREVIEW_SANDBOX_ID = 'kinu-hello';
+
 const PREVIEW_PORT = 8080;
+
 const PREVIEW_TOKEN = 'p8080_ab12cd34';
+
 const PREVIEW_HOST = `${String(PREVIEW_PORT)}-${PREVIEW_SANDBOX_ID}-${PREVIEW_TOKEN}.${SUFFIX}`;
+
 const PREVIEW_URL = `https://${PREVIEW_HOST}/`;
+
 const OWNER = '0123456789abcdef0123456789abcdef';
 
 /**
@@ -105,6 +124,7 @@ const OWNER = '0123456789abcdef0123456789abcdef';
  * end to end against the real SDK in `unit-preview-forgery.test.ts`.
  */
 const PREVIEW_STORE = makeKv();
+
 await sandboxPreviewExposures(PREVIEW_STORE, PREVIEW_SANDBOX_ID).publish(PREVIEW_PORT, PREVIEW_TOKEN);
 
 const ENV = {
@@ -145,14 +165,18 @@ interface PreviewTestBindings {
 function testEnv(bindings: PreviewTestBindings): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: Preview tests construct every preview binding their selected route
   // reads; the Sandbox SDK is mocked above and no other Env member is reached.
   return env as Env;
 }
 
 const NIMBUS_CAPABILITY = '0123456789abcdef01234567';
+
 const configuredNimbusUrl = (await nimbusPreviewUrl(testEnv(ENV), 'hello', 4321, NIMBUS_CAPABILITY)).url;
+
 if (!configuredNimbusUrl) throw new Error('Nimbus preview test URL is not configured');
+
 const NIMBUS_URL = configuredNimbusUrl;
 
 async function serve(url: string, response: Response | null): Promise<Response> {
@@ -162,6 +186,7 @@ async function serve(url: string, response: Response | null): Promise<Response> 
   sdkForwards = 0;
   repairs = [];
   repairFailure = null;
+
   return servePreviewRequest(new Request(url), testEnv(ENV));
 }
 
@@ -178,6 +203,7 @@ async function serveWithRepair(
   sdkForwards = 0;
   repairs = [];
   repairFailure = failure;
+
   return servePreviewRequest(request, testEnv({ ...ENV, Sandbox: {} }));
 }
 
@@ -207,6 +233,7 @@ describe('preview sandbox policy', () => {
     const contained = containPreviewResponse(new Response('<h1>hi</h1>', {
       headers: { 'content-type': 'text/html' },
     }));
+
     expect(contained.headers.get('content-security-policy')).toBe(`sandbox ${PREVIEW_SANDBOX}`);
   });
 
@@ -214,6 +241,7 @@ describe('preview sandbox policy', () => {
     const contained = containPreviewResponse(new Response('body', {
       headers: { 'content-security-policy': 'sandbox allow-scripts allow-same-origin allow-top-navigation' },
     }));
+
     const csp = contained.headers.get('content-security-policy');
     expect(csp).toContain('allow-same-origin');
     expect(csp).not.toContain('allow-top-navigation');
@@ -223,6 +251,7 @@ describe('preview sandbox policy', () => {
     const contained = containPreviewResponse(new Response('body', {
       headers: { 'content-security-policy-report-only': "default-src 'none'" },
     }));
+
     expect(contained.headers.get('content-security-policy-report-only')).toBeNull();
   });
 
@@ -272,6 +301,7 @@ describe('preview host resolution', () => {
       expect(answer.unavailable).toContain(`"${name}"`);
       expect(answer.unavailable).toContain('31 characters');
     }
+
     // The longest name the slug minter produces, and the 31-character budget itself, both fit.
     for (const name of ['balanced-elephant-0123abcd', 'a'.repeat(31)]) {
       expect((await nimbusPreviewUrl(testEnv(ENV), name, 4321, NIMBUS_CAPABILITY)).url).toContain(`-${name}.${SUFFIX}/`);
@@ -312,6 +342,7 @@ describe('preview host resolution', () => {
       CLI_PUBLIC_ORIGIN: 'https://kinu.example.com',
       PREVIEW_HOST_SUFFIX: 'kinu.example.com',
     });
+
     expect(previewHostSuffix(env)).toBe('kinu.example.com');
     expect(isPreviewHostRequest(new URL('https://kinu.example.com/'), env)).toBe(false);
     expect(isPreviewHostRequest(
@@ -354,6 +385,7 @@ describe('serving the preview host', () => {
   test('strips Kinu credentials before the Sandbox SDK reaches guest code', async () => {
     sdkResponse = new Response(null, { status: 204 });
     sdkRequest = null;
+
     const res = await servePreviewRequest(new Request(PREVIEW_URL, {
       headers: {
         cookie: [
@@ -389,6 +421,7 @@ describe('serving the preview host', () => {
     await servePreviewRequest(new Request(PREVIEW_URL, {
       headers: { authorization: 'Bearer guest-token' },
     }), testEnv(ENV));
+
     if (!sdkRequest) throw new Error('Sandbox preview request was not forwarded');
     const forwarded: Request = sdkRequest;
     expect(forwarded.headers.get('authorization')).toBe('Bearer guest-token');
@@ -421,6 +454,7 @@ describe('serving the preview host', () => {
       JSON.stringify({ error: 'Access denied', code: 'INVALID_TOKEN' }),
       { status: 404, headers: { 'content-type': 'application/json' } },
     ));
+
     expect(sdkForwards).toBe(1);
     expect(res.status).toBe(404);
     expect(await res.json()).toMatchObject({ code: 'INVALID_TOKEN' });
@@ -550,6 +584,7 @@ describe('repairing a stale preview', () => {
       join(root, '../../node_modules/@cloudflare/sandbox/dist/sandbox-CPj2jsbz.js'),
       'utf8',
     );
+
     expect(sdk).toContain('Preview URL is stale because the sandbox runtime is not active');
     expect(sdk).toContain('STALE_PREVIEW_URL');
     expect(sdk).toContain('status: 410');
@@ -563,10 +598,15 @@ describe('serving a Nimbus preview host', () => {
     let routedPort = 0;
     let routedCapability = '';
     let routedPath = '';
+
     const env = testEnv({
       ...ENV,
       OrchestratorAgent: {
-        idFromName(name: string) { durableObjectName = name; return name; },
+        idFromName(name: string) {
+          durableObjectName = name;
+
+          return name;
+        },
         get() {
           return {
             async routeWorkspacePreview(port: number, handle: string, request: Request, pathname: string) {
@@ -574,6 +614,7 @@ describe('serving a Nimbus preview host', () => {
               routedCapability = handle;
               routedPath = pathname;
               forwarded = request;
+
               return new Response(JSON.stringify({ ok: true }), {
                 headers: { 'content-type': 'application/json' },
               });
@@ -582,6 +623,7 @@ describe('serving a Nimbus preview host', () => {
         },
       },
     });
+
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}api/items?x=1`, {
       method: 'POST',
       headers: {
@@ -622,6 +664,7 @@ describe('serving a Nimbus preview host', () => {
 
   test('passes guest-owned bearer auth into the capability-authenticated Nimbus RPC', async () => {
     let forwarded: Request | null = null;
+
     const env = testEnv({
       ...ENV,
       OrchestratorAgent: {
@@ -630,15 +673,18 @@ describe('serving a Nimbus preview host', () => {
           return {
             async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
               forwarded = request;
+
               return new Response(null, { status: 204 });
             },
           };
         },
       },
     });
+
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}private`, {
       headers: { authorization: 'Bearer guest-token' },
     }), env);
+
     if (!response || !forwarded) throw new Error('Nimbus request was not forwarded');
     expect(response.status).toBe(204);
     const routed: Request = forwarded;
@@ -647,6 +693,7 @@ describe('serving a Nimbus preview host', () => {
 
   test('strips a CLI session bearer before forwarding to a guest app', async () => {
     let forwarded: Request | null = null;
+
     const env = testEnv({
       ...ENV,
       OrchestratorAgent: {
@@ -655,18 +702,21 @@ describe('serving a Nimbus preview host', () => {
           return {
             async routeWorkspacePreview(_port: number, _handle: string, request: Request) {
               forwarded = request;
+
               return new Response(null, { status: 204 });
             },
           };
         },
       },
     });
+
     // The other token kind the CLI authenticator routes; the POST case above
     // carries the scoped `pta_` kind. A device token is not a bearer format
     // and has no case here: the daemon presents it in a request body.
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}private`, {
       headers: { authorization: `Bearer ptc_${OWNER}_${'c'.repeat(44)}` },
     }), env);
+
     if (!response || !forwarded) throw new Error('Nimbus request was not forwarded');
     expect(response.status).toBe(204);
     const routed: Request = forwarded;
@@ -676,6 +726,7 @@ describe('serving a Nimbus preview host', () => {
   test('routes a guest WebSocket through the capability-authenticated fetch boundary', async () => {
     let forwarded: Request | null = null;
     let rpcCalled = false;
+
     const env = testEnv({
       ...ENV,
       OrchestratorAgent: {
@@ -684,16 +735,19 @@ describe('serving a Nimbus preview host', () => {
           return {
             async fetch(request: Request) {
               forwarded = request;
+
               return new Response(null, { status: 204 });
             },
             async routeWorkspacePreview() {
               rpcCalled = true;
+
               return new Response(null, { status: 500 });
             },
           };
         },
       },
     });
+
     const response = await handleNimbusPreviewHostRequest(new Request(`${NIMBUS_URL}socket?channel=hmr`, {
       headers: {
         upgrade: 'websocket',
@@ -716,13 +770,23 @@ describe('serving a Nimbus preview host', () => {
 
   test('rejects a forged capability without touching Nimbus', async () => {
     let touched = false;
+
     const env = testEnv({
       ...ENV,
       OrchestratorAgent: {
-        idFromName(name: string) { touched = true; return name; },
-        get() { touched = true; return {}; },
+        idFromName(name: string) {
+          touched = true;
+
+          return name;
+        },
+        get() {
+          touched = true;
+
+          return {};
+        },
       },
     });
+
     const labelEnd = NIMBUS_URL.indexOf(`.${SUFFIX}`);
     const forged = `${NIMBUS_URL.slice(0, labelEnd - 1)}a${NIMBUS_URL.slice(labelEnd)}`;
     const response = await handleNimbusPreviewHostRequest(new Request(forged), env);
@@ -739,16 +803,27 @@ describe('serving a Nimbus preview host', () => {
    *  an alphabet change along. These break loudly instead. */
   const RAW_KEY_V3_TOKEN = 'wed3oyud2twt3et';
   const RAW_KEY_V4_TOKEN = '446kx4mrl653aua';
+
   /** An env whose Durable Object namespace records whether it was touched. */
   function untouchableEnv(bindings: PreviewTestBindings) {
     let touched = false;
+
     const env = testEnv({
       ...bindings,
       OrchestratorAgent: {
-        idFromName(name: string) { touched = true; return name; },
-        get() { touched = true; return {}; },
+        idFromName(name: string) {
+          touched = true;
+
+          return name;
+        },
+        get() {
+          touched = true;
+
+          return {};
+        },
       },
     });
+
     return { env, touched: () => touched };
   }
 
@@ -776,19 +851,26 @@ describe('serving a Nimbus preview host', () => {
       CREDENTIAL_ENCRYPTION_KEY: 'a-second-credential-encryption-key-9876543210',
       CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: TEST_CREDENTIAL_ENCRYPTION_KEY,
     };
+
     const minted = (await nimbusPreviewUrl(testEnv(rotated), 'hello', 4321, NIMBUS_CAPABILITY)).url;
     expect(minted).toBeDefined();
     expect(minted).not.toBe(NIMBUS_URL);
     let routed = 0;
+
     const env = testEnv({
       ...rotated,
       OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() {
-          return { async routeWorkspacePreview() { routed += 1; return new Response(null, { status: 204 }); } };
+          return { async routeWorkspacePreview() {
+            routed += 1;
+
+            return new Response(null, { status: 204 });
+          } };
         },
       },
     });
+
     // The URL minted under the OLD secret, and the one minted under the new.
     expect((await handleNimbusPreviewHostRequest(new Request(NIMBUS_URL), env))?.status).toBe(204);
     expect((await handleNimbusPreviewHostRequest(new Request(String(minted)), env))?.status).toBe(204);
@@ -854,6 +936,7 @@ function cspOf(previewOrigin: string | null): string {
     new URL(APP),
     previewOrigin,
   );
+
   return res.headers.get('content-security-policy') ?? '';
 }
 
@@ -864,6 +947,7 @@ describe('the app document policy', () => {
       new URL(APP),
       `https://*.${SUFFIX}`,
     );
+
     const csp = res.headers.get('content-security-policy');
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("base-uri 'none'");
@@ -907,6 +991,7 @@ describe('the app document policy', () => {
 
 describe('CSRF on cookie-authenticated requests', () => {
   const cookie = { cookie: '__Host-kinu_session=abc' };
+
   const post = (headers: Record<string, string>) =>
     new Request(`${APP}/api/user/credentials/anthropic`, { method: 'POST', headers, body: '{}' });
 
@@ -936,6 +1021,7 @@ describe('CSRF on cookie-authenticated requests', () => {
     const upgrade = (origin: string) => new Request(`${APP}/agents/orchestrator-agent/hello`, {
       headers: { ...cookie, origin, upgrade: 'websocket' },
     });
+
     expect(crossSiteRejection(upgrade(APP))).toBeNull();
     expect(crossSiteRejection(upgrade('https://evil.example'))?.status).toBe(403);
   });
@@ -989,13 +1075,16 @@ describe('worker wiring', () => {
     // Comments are stripped: the note above the var shows an example zone, and
     // it must not be mistaken for the configured one.
     const wrangler = source('wrangler.jsonc').replace(/^\s*\/\/.*$/gm, '');
+
     // Production is the first of each — the staging environment follows.
     const first = (key: string): string =>
       wrangler.match(new RegExp(`"${key}"\\s*:\\s*"([^"]*)"`))![1];
+
     const vars = {
       PREVIEW_HOST_SUFFIX: first('PREVIEW_HOST_SUFFIX'),
       CLI_PUBLIC_ORIGIN: first('CLI_PUBLIC_ORIGIN'),
     };
+
     const suffix = previewHostSuffix(vars);
     const appHost = new URL(vars.CLI_PUBLIC_ORIGIN).hostname;
     expect(suffix).toBe(appHost);

@@ -13,6 +13,7 @@ const program = buildProgram();
 // No args in a real terminal opens the interactive agent flow. Root --help
 // remains branded help, and subcommand help is left to Commander.
 const topLevelArgs = process.argv.slice(2);
+
 if (topLevelArgs.length === 0) {
   if (process.stdin.isTTY && process.stdout.isTTY) {
     try {
@@ -24,6 +25,7 @@ if (topLevelArgs.length === 0) {
   } else {
     printHelp(program);
   }
+
   process.exit(0);
 }
 

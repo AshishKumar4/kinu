@@ -25,6 +25,7 @@ function freshDb() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initSearchTables(execRaw);
+
   return { db, sql, actor: createTestActors(sql, execRaw).main };
 }
 

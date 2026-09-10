@@ -21,6 +21,7 @@ import { nimbusSql, localTransactions } from '../src/runtime';
 const RUNTIMES: readonly RuntimePackage[] = [bashRuntime, cpythonRuntime];
 
 const databases: Database[] = [];
+
 afterEach(() => {
   for (const database of databases.splice(0)) database.close();
 });
@@ -32,6 +33,7 @@ function open(path: string, runtimes: readonly RuntimePackage[] = RUNTIMES): Wor
   // The same SQL and transaction adapters `createCLIRuntime` opens the real
   // workspace with, so this measures the production seam rather than a shim.
   const sql = nimbusSql(database);
+
   return createWorkspace({
     sql,
     transactions: localTransactions(database),

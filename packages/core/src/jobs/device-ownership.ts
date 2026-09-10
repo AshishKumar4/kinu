@@ -73,6 +73,7 @@ export class DeviceRequestOwnership implements DeviceRequestChannel {
     this.#owningJobId = jobId;
     const issued = this.#issued;
     this.#issued = [];
+
     return issued;
   }
 }

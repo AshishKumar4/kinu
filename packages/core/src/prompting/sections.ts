@@ -28,6 +28,7 @@ export const WORKSPACE_INSTRUCTIONS_TAG = 'workspace_instructions';
 
 /** Each block's own delimiter, wherever it appears inside that block's body. */
 export const DYNAMIC_CONTEXT_DELIMITER = /<(\/?)dynamic_context/g;
+
 export const WORKSPACE_INSTRUCTIONS_DELIMITER = /<(\/?)workspace_instructions/g;
 
 /**
@@ -70,8 +71,10 @@ export function sealDelimiters(body: string, delimiter: RegExp, tag: string): st
  */
 export function splitPromptSections(prompt: string): PromptSection[] {
   if (prompt === '') return [];
+
   return prompt.split(/\n(?=## )/).map((block) => {
     const first = block.split('\n', 1)[0] ?? '';
+
     return {
       title: first.startsWith('## ') ? first.slice(3) : SOUL_SECTION_TITLE,
       chars: block.length,

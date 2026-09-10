@@ -20,6 +20,7 @@ describe('gallery builds under the temp directory', () => {
     expect(exited.status).toBe(0);
     const deadBuild = mkdtempSync(join(tmpdir(), `kinu-gallery-dist-${String(exited.pid)}-`));
     const liveBuild = mkdtempSync(join(tmpdir(), `kinu-gallery-dist-${String(process.pid)}-`));
+
     try {
       expect(reclaimLeakedBuilds()).toBeGreaterThanOrEqual(1);
       expect(existsSync(deadBuild)).toBe(false);

@@ -24,6 +24,7 @@ import { dirname } from 'node:path';
 
 /** Owner read/write only. */
 const SECRET_FILE_MODE = 0o600;
+
 /** Owner traverse only. */
 const SECRET_DIR_MODE = 0o700;
 
@@ -46,7 +47,9 @@ export function enforceOwnerOnly(path: string, mode: number = SECRET_FILE_MODE):
       { cause: caught },
     );
   }
+
   const observed = statSync(path).mode & 0o777;
+
   if ((observed & SHARED_BITS) !== 0) {
     throw new Error(
       `${path} is readable beyond its owner (mode ${observed.toString(8)}) — refusing to leave a secret there`,
@@ -64,6 +67,7 @@ export function enforceOwnerOnly(path: string, mode: number = SECRET_FILE_MODE):
 export function writeSecretFile(path: string, content: string): void {
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.${process.pid}.${Date.now()}.tmp`;
+
   try {
     writeFileSync(tmp, content, { mode: SECRET_FILE_MODE });
     enforceOwnerOnly(tmp);
@@ -74,8 +78,10 @@ export function writeSecretFile(path: string, content: string): void {
     } catch (cleanup) {
       throw new Error(`failed to write ${path} and could not remove ${tmp}`, { cause: cleanup });
     }
+
     throw caught;
   }
+
   enforceOwnerOnly(path);
 }
 

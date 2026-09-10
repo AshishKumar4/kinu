@@ -36,6 +36,7 @@ import { stableStringify } from '../safety/argument-digest';
 /** How strongly a note asks to be weighed. ORDERED: a floor is a comparison of
  *  positions in this array, so inserting a severity in the middle re-ranks it. */
 export const ADVISOR_SEVERITIES = ['nit', 'concern', 'blocker'] as const;
+
 export type AdvisorSeverity = (typeof ADVISOR_SEVERITIES)[number];
 
 export function isAdvisorSeverity<Value>(value: Value): value is Value & AdvisorSeverity {
@@ -71,6 +72,7 @@ export const ADVISOR_SEVERITY_LABEL = {
  *                       the note quotes.
  */
 const ADVISOR_NOTE_CLASSES = ['wrong-work', 'missed-capability', 'dissatisfaction'] as const;
+
 export type AdvisorNoteClass = (typeof ADVISOR_NOTE_CLASSES)[number];
 
 function isAdvisorNoteClass<Value>(value: Value): value is Value & AdvisorNoteClass {
@@ -214,6 +216,7 @@ export const CONTENT_FREE_NOTES: readonly string[] = [
 /** A note that says nothing. */
 export function isContentFree(note: string): boolean {
   const normalized = normalizeNote(note);
+
   return normalized.length === 0 || CONTENT_FREE_NOTES.includes(normalized);
 }
 
@@ -244,12 +247,16 @@ export function judgeNote(opts: {
   readonly gateOpen: boolean;
 }): NoteVerdict {
   if (isContentFree(opts.note.note)) return { disposition: 'drop', rule: 'content-free' };
+
   if (isDuplicateNote(opts.note.note, opts.recent)) return { disposition: 'drop', rule: 'duplicate' };
+
   if (opts.gateOpen) return { disposition: 'changelog', rule: 'gate-open' };
   const rank = (severity: AdvisorSeverity): number => ADVISOR_SEVERITIES.indexOf(severity);
+
   if (rank(opts.note.severity) < rank(opts.minSeverity)) {
     return { disposition: 'changelog', rule: 'below-floor' };
   }
+
   return { disposition: 'deliver', rule: null };
 }
 
@@ -272,10 +279,13 @@ const AdvisorReplySchema = v.object({
  *  by the same per-call budget the pattern extractor uses. */
 function renderToolCall(call: ToolCallRecord): string {
   const args = evidenceWindow(stableStringify(call.args), EVIDENCE_BUDGETS.patternToolCall);
+
   const result = call.result === undefined
     ? ''
     : `\n    → ${evidenceWindow(stableStringify(call.result), EVIDENCE_BUDGETS.patternToolCall)}`;
+
   const outcome = call.outcome === undefined ? 'unmeasured' : stableStringify(call.outcome);
+
   return `  - ${call.name}(${args}) outcome=${outcome}${result}`;
 }
 
@@ -312,12 +322,16 @@ export function buildAdvisorPrompt(turn: CompletedTurn, reachable: readonly stri
   const tools = turn.toolCalls.length === 0
     ? '  (none)'
     : turn.toolCalls.map(renderToolCall).join('\n');
+
   const called = new Set(turn.toolCalls.map((call) => call.name));
+
   const programs = turn.toolCalls
     .map((call) => codemodeProgramOf(call.name, call.args))
     .filter((program) => program !== '');
+
   const unused = reachable.filter((name) => !called.has(name)
     && !programs.some((program) => codemodeReaches(program, name)));
+
   return [
     'You are reviewing one finished turn of an autonomous coding agent, for the agent itself.',
     '',
@@ -397,14 +411,20 @@ export const ADVISOR_NOTE_MAX_CHARS = 240;
 
 export function parseAdvisorReply(raw: string): AdvisorNote | null {
   const extracted = tolerate(() => extractJsonObject(raw), 'malformed-input');
+
   if (extracted === undefined) return null;
   const parsed = v.safeParse(AdvisorReplySchema, extracted);
+
   if (!parsed.success) return null;
   const reply = parsed.output;
   const note = reply.note?.trim();
+
   if (note === undefined || note.length === 0) return null;
+
   if (!isAdvisorSeverity(reply.severity)) return null;
+
   if (!isAdvisorNoteClass(reply.class)) return null;
+
   return {
     note: note.slice(0, ADVISOR_NOTE_MAX_CHARS),
     severity: reply.severity,
@@ -431,6 +451,7 @@ export async function reviewCompletedTurn(deps: {
   readonly reachable?: readonly string[];
 }): Promise<AdvisorNote | null> {
   const raw = await deps.llm.complete(buildAdvisorPrompt(deps.turn, deps.reachable ?? []));
+
   return parseAdvisorReply(raw);
 }
 
@@ -527,35 +548,44 @@ export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapsh
  */
 export async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition | null> {
   if (!deps.enabled || deps.llm === undefined) return null;
+
   const note = await reviewCompletedTurn({
     llm: deps.llm, turn: deps.turn, reachable: deps.reachable ?? [],
   });
+
   if (note === null) return null;
+
   const verdict = judgeNote({
     note,
     minSeverity: deps.minSeverity,
     recent: deps.recent,
     gateOpen: deps.gateOpen,
   });
+
   if (verdict.disposition === 'drop') return 'drop';
   // Recorded FIRST, and on both remaining paths. The row is what the next
   // turn's dedupe window reads, so a delivered note that skipped it would be
   // sayable again on the very next turn — which is the nagging this exists to
   // prevent, arriving through the one path that looks like it is working.
   deps.record(note, deps.turn.turnId);
+
   if (verdict.disposition === 'changelog') return 'changelog';
+
   const signal: AgentSignal = {
     kind: ADVISOR_SIGNAL_KIND,
     text: advisorSignalText(note),
     severity: note.severity,
     metadata: { [ADVISOR_SEVERITY_METADATA_KEY]: note.severity },
   };
+
   // Keyed on the FACT: one note per turn, so a re-delivery of the same turn's
   // review collapses onto the row it already opened. Absent on a turn with no
   // durable id, because a fabricated key would collide two different turns.
   const keyed: AgentSignal = deps.turn.turnId === undefined || deps.turn.turnId === ''
     ? signal
     : { ...signal, idempotencyKey: `advisor:${deps.turn.turnId}` };
+
   await deps.deliver(keyed);
+
   return 'deliver';
 }

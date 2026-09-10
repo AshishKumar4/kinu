@@ -34,6 +34,7 @@ describe("synthesizeHeadSummary", () => {
       evidence: [{ body: "Postgres has mature JSONB" }],
       toolCalls: [{ name: "record_decision" }],
     });
+
     expect(s).toContain("Best DB? → Postgres");
     expect(s).toContain("Postgres has mature JSONB");
   });
@@ -42,6 +43,7 @@ describe("synthesizeHeadSummary", () => {
     const s = synthesizeHeadSummary({
       decisions: [], evidence: [], toolCalls: [{ name: "sandbox_exec" }, { name: "sandbox_read" }],
     });
+
     expect(s).toContain("sandbox_exec");
   });
 
@@ -63,6 +65,7 @@ describe("live head trace", () => {
         { output: "A", toolCallId: "a" },
       ],
     });
+
     expect(step?.toolCalls).toEqual([
       { name: "file", input: { path: "/a.ts" }, output: "A" },
       { name: "file", input: { path: "/b.ts" }, output: "B" },

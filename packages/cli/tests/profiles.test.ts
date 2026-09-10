@@ -80,6 +80,7 @@ const ParsedAuthoritySource = v.looseObject({
 });
 
 const ParsedCacheModes = v.object({ cache: v.number(), dir: v.number() });
+
 /**
  * Runs one disk-bound scenario in a clean subprocess with its own KINU_HOME,
  * optionally seeded before the script starts. The `body` script executes via
@@ -94,6 +95,7 @@ function runScenario(body: string, opts: {
   const kinuHome = mkdtempSync(join(tmpdir(), 'kinu-cli-profiles-'));
   tempDirs.push(kinuHome);
   opts.setup?.(kinuHome);
+
   const script = `
     const steps = {};
     async function step(name, fn) {
@@ -103,10 +105,13 @@ function runScenario(body: string, opts: {
     ${body}
     console.log(JSON.stringify(steps));
   `;
+
   const env: NodeJS.ProcessEnv = { ...process.env, HOME: kinuHome, KINU_HOME: kinuHome, ...opts.env };
+
   for (const name of ['KINU_TOKEN', 'KINU_ORIGIN']) {
     if (!(name in (opts.env ?? {}))) delete env[name];
   }
+
   const proc = Bun.spawnSync({
     cmd: [process.execPath, '-e', script],
     cwd: resolve(__dirname, '../../..'),
@@ -114,14 +119,17 @@ function runScenario(body: string, opts: {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   if (proc.exitCode !== 0) {
     throw new Error(`scenario subprocess failed (${proc.exitCode}): ${proc.stderr.toString()}`);
   }
+
   return v.parse(v.record(v.string(), StepOutcomeSchema), JSON.parse(proc.stdout.toString()));
 }
 
 function expectOk(step: StepOutcome | undefined): JsonValue {
   expect(step?.ok, step?.error ?? 'scenario returned no step result').toBe(true);
+
   return step?.value ?? null;
 }
 
@@ -212,6 +220,7 @@ describe('local profile authority', () => {
         return readFileSync(process.env.KINU_HOME + '/config.json', 'utf-8');
       });
     `);
+
     const seeded = v.parse(ParsedEnvelope, expectOk(steps.seeded));
     expect(seeded.authority).toEqual({ kind: 'local' });
     expect(seeded.version).toBe(1);
@@ -237,6 +246,7 @@ describe('local profile authority', () => {
         KINU_AUTH: 'Bearer profile-test',
       },
     });
+
     const loaded = v.parse(ParsedEnvelope, expectOk(steps.load));
     expect(loaded.catalog.tiers.default.model).toBe('test/model');
   });
@@ -253,6 +263,7 @@ describe('local profile authority', () => {
         return readFileSync(process.env.KINU_HOME + '/config.json', 'utf-8');
       });
     `);
+
     expect(v.parse(ParsedEnvelope, expectOk(steps.first)).version).toBe(1);
     expect(v.parse(ParsedEnvelope, expectOk(steps.second)).version).toBe(2);
     const reloaded = v.parse(ParsedEnvelope, expectOk(steps.reloaded));
@@ -300,6 +311,7 @@ describe('account cache isolation', () => {
         return readFileSync(process.env.KINU_HOME + '/profile-cache.json', 'utf-8');
       });
     `);
+
     const a = v.parse(ParsedEnvelope, expectOk(steps.readA));
     expect(a.authority).toEqual({ kind: 'account', accountId: 'acc-a' });
     expect(a.version).toBe(3);
@@ -326,6 +338,7 @@ describe('account cache isolation', () => {
         };
       });
     `);
+
     const modes = v.parse(ParsedCacheModes, expectOk(steps.modes));
     expect(modes.cache).toBe(0o600);
     expect(modes.dir).toBe(0o700);
@@ -374,29 +387,36 @@ describe('account cache isolation', () => {
         };
       });
     `);
+
     expect(expectOk(steps.signedOutSource)).toEqual({ kind: 'local' });
+
     const signedIn = v.parse(v.object({
       source: ParsedAuthoritySource,
       localStillNull: v.null(),
     }), expectOk(steps.signInA));
+
     expect(signedIn.source).toEqual({ kind: 'account', accountId: 'acc-a' });
     // Signing in promotes nothing into the local slot.
     expect(signedIn.localStillNull).toBeNull();
+
     const switched = v.parse(v.object({
       source: ParsedAuthoritySource,
       cachedRoles: v.array(v.string()),
       local: v.null(),
     }), expectOk(steps.switchToB));
+
     expect(switched.source).toEqual({ kind: 'account', accountId: 'acc-b' });
     // Resolution under B reads only B's entry — A's cache never leaks in.
     expect(switched.cachedRoles).toEqual(['auditor']);
     expect(switched.local).toBeNull();
+
     const loggedOut = v.parse(v.object({
       source: ParsedAuthoritySource,
       local: v.null(),
       cacheStillHoldsA: v.boolean(),
       cacheStillHoldsB: v.boolean(),
     }), expectOk(steps.logout));
+
     expect(loggedOut.source).toEqual({ kind: 'local' });
     // Logout promotes nothing: local authority stays absent while both
     // cached entries survive on disk, keyed to their accounts.
@@ -422,6 +442,7 @@ describe('account cache isolation', () => {
       `,
       { env: { KINU_TOKEN: 'ptc_env_only' } },
     );
+
     expect(expectOk(steps.expiredSession)).toEqual({ kind: 'local' });
   });
 });
@@ -465,6 +486,7 @@ describe('the turn profile authority reader', () => {
         return { envelope, diagnostics: recorder.emitted };
       });
     `);
+
     const served = v.parse(ParsedFallback, expectOk(steps.resolved));
     // The turn completed, under this account's own catalog.
     expect(served.envelope.authority).toEqual({ kind: 'account', accountId: 'acc-a' });
@@ -521,6 +543,7 @@ describe('the turn profile authority reader', () => {
         .filter((line) => line.event === 'profile.authority_read')
         .map((line) => line.fields.source));
     `);
+
     // A resident reader never latches an earlier server answer: every turn
     // checks the account authority, so edits from another machine are visible.
     expect(v.parse(
@@ -552,6 +575,7 @@ describe('the turn profile authority reader', () => {
         };
       });
     `);
+
     // acc-a's entry is on disk and stays unread: a cache is keyed to its
     // account, so an unrelated one is a miss rather than a fallback, and the
     // connect failure the fetch raised is what reaches the caller.
@@ -572,6 +596,7 @@ describe('the turn profile authority reader', () => {
       });
       await step('reported', async () => recorder.emitted.length);
     `);
+
     expectError(steps.resolved, 'Unable to connect');
     expect(expectOk(steps.reported)).toBe(0);
   });
@@ -607,6 +632,7 @@ describe('the turn profile authority reader', () => {
         return await read();
       });
     `);
+
     const startup = v.parse(ParsedDefaultTier, expectOk(steps.atStartup));
     expect(startup.catalog.tiers.default.model).toBe('model-at-startup');
     const afterModel = v.parse(ParsedDefaultTier, expectOk(steps.afterModel));
@@ -630,6 +656,7 @@ describe('the turn profile authority reader', () => {
         return await read();
       });
     `);
+
     // Nothing imported yet: the workspace's own configuration decides, and the
     // reader must not seed a catalog from the global default model.
     expect(expectOk(steps.beforeAnyAuthority)).toBeNull();
@@ -643,6 +670,7 @@ describe('the turn profile authority reader', () => {
 interface SeededConfig {
   localProfile: unknown;
 }
+
 function seedConfig(home: string, config: SeededConfig): void {
   mkdirSync(home, { recursive: true });
   writeFileSync(join(home, 'config.json'), JSON.stringify(config), { mode: 0o600 });
@@ -670,18 +698,22 @@ describe('malformed profile data fails loudly', () => {
     const schemaInvalidCache = runScenario(LOAD_CACHE, {
       setup: seedCacheFile(JSON.stringify({ accounts: { 'acc-a': { version: 'one' } } })),
     });
+
     expectError(schemaInvalidCache.load, 'not a valid Kinu profile cache');
   });
 
   test('a tampered catalog fails its digest check on read', () => {
     const envelope = accountEnvelope('acc-a', catalogA());
+
     const tampered = {
       ...envelope,
       catalog: { ...envelope.catalog, tiers: { ...envelope.catalog.tiers, default: { model: 'swapped-model' } } },
     };
+
     const steps = runScenario(LOAD_CACHE, {
       setup: seedCacheFile(JSON.stringify({ accounts: { 'acc-a': tampered } })),
     });
+
     expectError(steps.load, 'digest mismatch');
   });
 
@@ -703,6 +735,7 @@ describe('malformed profile data fails loudly', () => {
         return existsSync(process.env.KINU_HOME + '/profile-cache.json');
       });
     `);
+
     expectError(steps.misKeyed, 'mismatching authority');
     // Refused means nothing landed: no entry under either account id.
     expect(expectOk(steps.cacheFile)).toBe(false);
@@ -719,6 +752,7 @@ describe('malformed profile data fails loudly', () => {
         }),
       ),
     });
+
     expectError(localKindInCache.load, 'mismatching authority');
 
     const accountKindInConfig = runScenario(`
@@ -736,6 +770,7 @@ describe('malformed profile data fails loudly', () => {
         },
       }),
     });
+
     expectError(accountKindInConfig.load, 'kind "account"');
 
     const schemaInvalidInConfig = runScenario(`
@@ -753,6 +788,7 @@ describe('malformed profile data fails loudly', () => {
         },
       }),
     });
+
     expectError(schemaInvalidInConfig.loadConfig, 'not a valid Kinu config');
   });
 });
@@ -778,6 +814,7 @@ interface SeenRequest {
 /** Serves canned /api/cli/profile responses while recording each request. */
 function serveProfile(handler: (body: JsonValue | null) => Response | Promise<Response>): ProfileServerStub {
   const seen: SeenRequest[] = [];
+
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
@@ -789,9 +826,11 @@ function serveProfile(handler: (body: JsonValue | null) => Response | Promise<Re
         auth: req.headers.get('authorization'),
         body: raw === null ? null : v.parse(JsonValueSchema, raw),
       });
+
       return handler(raw);
     },
   });
+
   return {
     origin: `http://localhost:${server.port}`,
     seenRequests: () => [...seen],
@@ -803,6 +842,7 @@ describe('cloud-api profile methods', () => {
   test('getCloudProfile fetches and parses the account envelope', async () => {
     const { getCloudProfile } = await import('../src/cloud-api');
     const fake = serveProfile(() => Response.json(SERVED_ENVELOPE));
+
     try {
       const envelope = await getCloudProfile(fake.origin, 'ptc_tok');
       expect(envelope).toEqual(SERVED_ENVELOPE);
@@ -816,16 +856,20 @@ describe('cloud-api profile methods', () => {
   test('updateCloudProfile PUTs the whole catalog with expectedVersion and returns the fresh envelope', async () => {
     const { updateCloudProfile } = await import('../src/cloud-api');
     const next = accountEnvelope('srv-account', catalogB(), 8);
+
     const fake = serveProfile((body) => {
       const parsed = v.parse(v.object({ expectedVersion: v.number() }), body);
+
       if (parsed.expectedVersion !== 7) {
         return Response.json(
           { error: 'profile catalog changed underneath you', currentVersion: 7, currentDigest: SERVED_ENVELOPE.digest },
           { status: 409 },
         );
       }
+
       return Response.json(next);
     });
+
     try {
       const input = { catalog: catalogB(), expectedVersion: 7 };
       const result = await updateCloudProfile(fake.origin, 'ptc_tok', input);
@@ -840,11 +884,13 @@ describe('cloud-api profile methods', () => {
 
   test('a stale expectedVersion surfaces as a structured conflict carrying current version and digest', async () => {
     const { updateCloudProfile } = await import('../src/cloud-api');
+
     const fake = serveProfile(() =>
       Response.json(
         { error: 'conflict', currentVersion: 9, currentDigest: SERVED_ENVELOPE.digest },
         { status: 409 },
       ));
+
     try {
       const result = await updateCloudProfile(fake.origin, 'ptc_tok', { catalog: catalogB(), expectedVersion: 4 });
       expect(result).toEqual({ conflict: true, currentVersion: 9, currentDigest: SERVED_ENVELOPE.digest });
@@ -856,13 +902,16 @@ describe('cloud-api profile methods', () => {
   test('server rejections keep their message; non-JSON bodies surface the body text', async () => {
     const { getCloudProfile, updateCloudProfile } = await import('../src/cloud-api');
     const invalidCatalog = serveProfile(() => Response.json({ error: 'invalid profile catalog: roles.Bad_Id' }, { status: 400 }));
+
     try {
       await expect(getCloudProfile(invalidCatalog.origin, 't'))
         .rejects.toThrow('invalid profile catalog');
     } finally {
       invalidCatalog.stop();
     }
+
     const htmlError = serveProfile(() => new Response('<html>bad gateway</html>', { status: 502 }));
+
     try {
       // A non-JSON body becomes the message itself: the server's own words
       // outrank the status line whenever they are readable.
@@ -948,6 +997,7 @@ describe('control commands route model/effort by session state', () => {
         return loadConfigFile().localProfile?.catalog.tiers.default ?? null;
       });
     `);
+
     expect(expectOk(steps.model)).toBe('set');
     expect(expectOk(steps.effort)).toBe('set');
     const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
@@ -1030,6 +1080,7 @@ describe('control commands route model/effort by session state', () => {
         return 'stopped';
       });
     `);
+
     expect(expectOk(steps.model)).toBe('set');
     const tier = v.parse(ParsedControlTier, expectOk(steps.nextTurn)).catalog.tiers.default;
     expect(tier.model).toBe('account-gateway/custom-model');

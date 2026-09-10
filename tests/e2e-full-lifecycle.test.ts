@@ -42,11 +42,13 @@ import {
 // which target and cost basis this run used, or why it is skipping — and throws
 // on a half-configured environment rather than skipping green.
 const TARGET = liveModelTarget('E2E Full Lifecycle');
+
 const liveTest = test.skipIf(!TARGET);
 
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-e2e-full-' + Date.now());
+
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 /** The note steps 5 and 6 write and then read back. One constant, because a
@@ -83,8 +85,10 @@ function storedMemoryFact(db: Database, memoryFile: string | null): string | nul
   // actor, issued through the production directory. That is the actor the
   // session above drove.
   const sql = makeSql(db);
+
   const fact = createFactsStore(sql, openWorkspaceMainActor(sql)).all()
     .find((row) => JSON.stringify(row.value).includes(MEMORY_FACT));
+
   return fact ? `agent_facts[${fact.key}]` : null;
 }
 
@@ -165,6 +169,7 @@ describe('E2E Full Lifecycle', () => {
       model: liveChatModel(LLM_CONFIG),
       evolution: true,
     });
+
     db = target.db;
     rt = target.runtime;
 
@@ -203,6 +208,7 @@ describe('E2E Full Lifecycle', () => {
     const identity = db.query<{ id: string; name: string }, []>(
       'SELECT id, name FROM workspace_identity LIMIT 1',
     ).get();
+
     if (!identity) throw new Error('workspace identity row was not created');
     expect(identity.id).toBeTruthy();
     expect(identity.name).toBe('lifecycle-test');
@@ -223,17 +229,23 @@ describe('E2E Full Lifecycle', () => {
     // union element type. Widening by assignment rather than by assertion — the
     // point of the check is that each built name IS one of those literals.
     const canonical: readonly string[] = BUILTIN_TOOLS;
+
     for (const name of names) expect(canonical).toContain(name);
+
     for (const core of ['execute_tools', 'run', 'file', 'memory', 'agents']) {
       expect(names).toContain(core);
     }
+
     for (const ungated of ['skills', 'release']) expect(names).not.toContain(ungated);
     console.log(`  Tools: ${names.join(', ')}`);
     const execute = tools.execute_tools;
+
     if (!execute) throw new Error('execute_tools is absent');
+
     const result = await toolExecute<{ code: string }, unknown>(execute)({
       code: 'return 6 * 7;',
     });
+
     // Structural: the dispatcher answers `{result}`, the same shape the
     // harness-wiring and evolution-proof suites hold it to.
     expect(result).toEqual({ result: 42 });
@@ -259,6 +271,7 @@ describe('E2E Full Lifecycle', () => {
       'Use execute_tools to write and run a JS prime checker for 7, 10, and 13. '
         + 'Print exactly JSON.stringify({7:true,10:false,13:true}), then summarize.',
     );
+
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
@@ -276,11 +289,13 @@ describe('E2E Full Lifecycle', () => {
       model, rt, tools,
       `Use the memory tool to save this exact fact: ${MEMORY_FACT}`,
     );
+
     console.log(`  Response (${turn.assistantResponse.length} chars): ${turn.assistantResponse.slice(0, 200)}`);
     console.log(`  Steps: ${turn.steps}, Tools: ${turn.toolCalls.map(t => t.name).join(', ') || 'none'}`);
 
     const wrote = turn.toolCalls.find((call) => call.name === 'memory'
       && (call.args.action === 'save' || call.args.action === 'remember'));
+
     expect(wrote, 'the model never wrote through the memory tool — it called '
       + (turn.toolCalls.map((call) => `${call.name}.${String(call.args.action ?? '?')}`).join(', ')
         || 'nothing'))
@@ -350,12 +365,14 @@ describe('E2E Full Lifecycle', () => {
 
     for (const table of tables) {
       const count = db.query<{ c: number }, []>(`SELECT COUNT(*) as c FROM "${table}"`).get()?.c ?? 0;
+
       if (count > 0) console.log(`  ${table}: ${count} rows`);
     }
 
     const identity = db.query<{ id: string; name: string }, []>(
       'SELECT id, name FROM workspace_identity',
     ).get();
+
     console.log(`\n  Identity: ${JSON.stringify(identity)}`);
 
     const soul = await readSoul(rt.storage.vfs) ?? '';
@@ -364,13 +381,17 @@ describe('E2E Full Lifecycle', () => {
     const vfsFiles = db.query<{ path: string; size: number }, []>(
       'SELECT path, size FROM inodes WHERE kind = 0 ORDER BY path',
     ).all();
+
     console.log(`\n  VFS files:`);
+
     for (const f of vfsFiles) console.log(`    ${f.path} (${f.size} bytes)`);
 
     const messages = db.query<{ role: string; preview: string }, []>(
       'SELECT role, substr(content, 1, 80) as preview FROM messages ORDER BY created_at',
     ).all();
+
     console.log(`\n  Messages (${messages.length}):`);
+
     for (const m of messages) console.log(`    [${m.role}] ${m.preview}...`);
 
     console.log('  ═══ END SUMMARY ═══\n');

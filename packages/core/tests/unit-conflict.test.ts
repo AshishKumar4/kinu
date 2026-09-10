@@ -17,6 +17,7 @@ describe('CraftStore conflict detection', () => {
     const result = checkConflictsBeforeAdding(rt, {
       name: 'parse_csv', description: 'Different desc', code: 'other()', score: 0.9,
     });
+
     expect(result.conflicting).toContain('parse_csv');
   });
 
@@ -32,6 +33,7 @@ describe('CraftStore conflict detection', () => {
       description: 'parse and extract CSV data from files with headers and delimiters',
       code: 'other()', score: 0.9,
     });
+
     // High word overlap → should detect conflict
     expect(result.conflicting.length).toBeGreaterThan(0);
   });
@@ -47,6 +49,7 @@ describe('CraftStore conflict detection', () => {
       name: 'send_email', description: 'send transactional email via SMTP',
       code: 'other()', score: 0.9,
     });
+
     expect(result.conflicting).toHaveLength(0);
   });
 });
@@ -64,6 +67,7 @@ function evaluatingExecutor(): Executor {
     async execute(code: string): Promise<ExecuteResult> {
       try {
         const compile = new Function(`return (${code})`);
+
         return { result: await compile()() };
       } catch (err) {
         return { result: undefined, error: err instanceof Error ? err.message : String(err) };
@@ -80,6 +84,7 @@ describe('upsertCraftedTool — the admission check', () => {
   function runtime(): AgentRuntime {
     const { rt } = createTestRuntime();
     initCraftedToolsTables(rt.storage.sql);
+
     return { ...rt, executor: evaluatingExecutor() };
   }
 
@@ -88,6 +93,7 @@ describe('upsertCraftedTool — the admission check', () => {
 
   test('rejects the verbatim production body that calls an object literal', async () => {
     const rt = runtime();
+
     const result = await upsertCraftedTool(rt, {
       name: 'run_command', description: 'run a shell command',
       code: 'await ({ runtime })(command)', score: 0.7,
@@ -101,6 +107,7 @@ describe('upsertCraftedTool — the admission check', () => {
 
   test('rejects code that cannot parse', async () => {
     const rt = runtime();
+
     const result = await upsertCraftedTool(rt, {
       name: 'broken_parse', description: 'half a tool',
       code: 'async (args) => { return args.', score: 0.9,
@@ -112,6 +119,7 @@ describe('upsertCraftedTool — the admission check', () => {
 
   test('rejects code that parses but is not a function', async () => {
     const rt = runtime();
+
     const result = await upsertCraftedTool(rt, {
       name: 'not_a_tool', description: 'a statement, not a tool',
       code: '42', score: 0.9,
@@ -124,6 +132,7 @@ describe('upsertCraftedTool — the admission check', () => {
 
   test('a tool the runtime can actually call is stored and scored', async () => {
     const rt = runtime();
+
     const result = await upsertCraftedTool(rt, {
       name: 'fetch_changelog', description: 'read a changelog',
       code: 'async (args) => args.url', score: 0.8,

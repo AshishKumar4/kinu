@@ -39,10 +39,12 @@ export async function rolloutMinibatch<I, E>(
   metric: GepaMetric<I, E>,
 ): Promise<MutationRollout> {
   const outcomes: MutationRollout['outcomes'] = [];
+
   for (const inst of minibatch) {
     const o = v.parse(MetricOutcomeSchema, await metric(candidate, inst));
     outcomes.push({ instanceId: inst.id, outcome: o });
   }
+
   return { outcomes, metricCalls: minibatch.length };
 }
 
@@ -67,8 +69,10 @@ export function renderReflectionPrompt<I, E>(opts: {
 
   const outcomeById = new Map(opts.rollout.outcomes.map(o => [o.instanceId, o.outcome]));
   const traceLines: string[] = [];
+
   for (const inst of opts.minibatch) {
     const o = outcomeById.get(inst.id);
+
     if (!o) continue;
     const inputStr = renderInput(inst.input);
     traceLines.push(
@@ -112,10 +116,13 @@ export async function proposeMutation<I, E>(
   artifactDescription?: string,
 ): Promise<{ source: string; rollout: MutationRollout }> {
   const { rollout } = ctx;
+
   const prompt = renderReflectionPrompt({
     parent: ctx.parent, minibatch: ctx.minibatch, rollout, artifactDescription,
   });
+
   const raw = await ctx.reflectionLm(prompt);
   const source = stripMarkdownFences(raw);
+
   return { source, rollout };
 }

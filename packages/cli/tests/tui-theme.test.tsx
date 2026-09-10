@@ -30,13 +30,16 @@ const MID_TONE_TERMINALS = {
 function luminance(hex: string): number {
   const channel = (index: number): number => {
     const value = Number.parseInt(hex.slice(1 + index * 2, 3 + index * 2), 16) / 255;
+
     return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
   };
+
   return 0.2126 * channel(0) + 0.7152 * channel(1) + 0.0722 * channel(2);
 }
 
 function contrast(foreground: string, background: string): number {
   const [light, dark] = [luminance(foreground), luminance(background)].sort((a, b) => b - a);
+
   return (light + 0.05) / (dark + 0.05);
 }
 
@@ -48,8 +51,10 @@ describe('TUI theme', () => {
     // selectable, but should never make first paint depend on terminal state.
     expect(store.read().theme).toEqual({ mode: 'theme', themeId: 'kinu-light-solid' });
     expect(DEFAULT_TUI_THEME_SELECTION).toEqual(store.read().theme);
+
     for (const id of ['kinu-dark-solid', 'kinu-light-solid']) {
       const theme = BUILTIN_TUI_THEMES.find((candidate) => candidate.id === id);
+
       if (theme === undefined) throw new Error(`missing preset ${id}`);
       // Solid presets paint the canvas, so every ground is a literal opaque
       // fill — an undefined or transparent one leaves the panel edgeless.
@@ -73,6 +78,7 @@ describe('TUI theme', () => {
       'kinu-light-solid', 'kinu-dark-solid', 'kinu-light', 'kinu-dark', 'kinu-dusk', 'kinu-paper', 'high-contrast',
     ]);
     const lines: string[] = [];
+
     for (const theme of registry.themes) {
       const { text, background } = theme.colors;
       const bubble = contrast(text.strong, background.user);
@@ -80,6 +86,7 @@ describe('TUI theme', () => {
       expect(bubble, `${theme.id} bubble ink`).toBeGreaterThanOrEqual(4.5);
       expect(onAccent, `${theme.id} ink on accent`).toBeGreaterThanOrEqual(4.5);
       lines.push(`${theme.id}: bubble ink ${bubble.toFixed(2)} · ink on accent ${onAccent.toFixed(2)}`);
+
       if (background.canvas === undefined) {
         // Blind spot, printed on the green path: the gate measures the web
         // canvas and the extreme, never the mid-tone terminals in between.
@@ -88,16 +95,19 @@ describe('TUI theme', () => {
         lines.push(`  not gated — text.muted on ${dim.join(', ')}`);
       }
     }
+
     console.log(lines.join('\n'));
   });
 
   test('the registry refuses a theme whose ink vanishes into its own ground, naming the pair', () => {
     const [light] = BUILTIN_TUI_THEMES;
+
     const invisible = {
       ...light,
       id: 'invisible-ink',
       colors: { ...light.colors, text: { ...light.colors.text, strong: light.colors.background.user } },
     };
+
     expect(() => createThemeRegistry([invisible])).toThrow(/text\.strong\/background\.user contrast/);
   });
 
@@ -105,6 +115,7 @@ describe('TUI theme', () => {
     const light = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-light')!;
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 16, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-light' }} terminalAppearance="light" colorCapability="truecolor">
@@ -122,16 +133,21 @@ describe('TUI theme', () => {
       // opentui paints markdown prose only after an async grammar load, so a
       // frame count is not a settled frame: wait for the spans read below.
       let spans = captureSpans().lines.flatMap((line) => line.spans);
+
       for (let index = 0; index < 60; index += 1) {
         await renderOnce();
         spans = captureSpans().lines.flatMap((line) => line.spans);
+
         if (['USERTURN', 'ASSISTANTTURN', 'exec'].every((text) => spans.some((span) => span.text.includes(text)))) break;
         await Bun.sleep(20);
       }
+
       const hex = (color: { toInts(): [number, number, number, number] }) => {
         const [red, green, blue] = color.toInts();
+
         return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
       };
+
       const gutter = spans.find((span) => span.text.includes('YOU'))!;
       const user = spans.find((span) => span.text.includes('USERTURN'))!;
       const assistant = spans.find((span) => span.text.includes('ASSISTANTTURN'))!;
@@ -154,6 +170,7 @@ describe('TUI theme', () => {
     const dark = BUILTIN_TUI_THEMES.find((theme) => theme.id === 'kinu-dark-solid')!;
     const { renderer, renderOnce, captureSpans } = await createTestRenderer({ width: 80, height: 20, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
+
     try {
       root.render(
         <TuiThemeProvider selection={{ mode: 'theme', themeId: 'kinu-dark-solid' }} terminalAppearance="dark" colorCapability="truecolor">
@@ -171,16 +188,21 @@ describe('TUI theme', () => {
       );
       const wanted = ['USERTURN', 'PROSETURN', 'SYSTEMNOTE', 'THINKINGLABEL'];
       let spans = captureSpans().lines.flatMap((line) => line.spans);
+
       for (let index = 0; index < 60; index += 1) {
         await renderOnce();
         spans = captureSpans().lines.flatMap((line) => line.spans);
+
         if (wanted.every((text) => spans.some((span) => span.text.includes(text)))) break;
         await Bun.sleep(20);
       }
+
       const hex = (color: { toInts(): [number, number, number, number] }) => {
         const [red, green, blue] = color.toInts();
+
         return `#${[red, green, blue].map((channel) => channel.toString(16).padStart(2, '0')).join('')}`.toUpperCase();
       };
+
       const span = (text: string) => spans.find((candidate) => candidate.text.includes(text))!;
       const { text } = dark.colors;
       expect(hex(span('USERTURN').fg)).toBe(text.strong);
@@ -200,15 +222,18 @@ describe('TUI theme', () => {
 
   test('no colour literal lives outside the theme registry', () => {
     const offenders: string[] = [];
+
     for (const name of readdirSync(TUI_SOURCES)) {
       if (name === 'theme.ts' || !/\.tsx?$/u.test(name)) continue;
       const source = readFileSync(join(TUI_SOURCES, name), 'utf8');
+
       for (const [index, line] of source.split('\n').entries()) {
         if (/#[0-9A-Fa-f]{6}\b|\b(?:fg|bg|color|backgroundColor|borderColor)=?["'\s:]+(?:red|green|blue|yellow|cyan|magenta|white|black|gr[ae]y)\b/u.test(line)) {
           offenders.push(`${name}:${String(index + 1)}: ${line.trim()}`);
         }
       }
     }
+
     expect(offenders).toEqual([]);
   });
 });

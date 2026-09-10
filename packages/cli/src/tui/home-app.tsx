@@ -72,7 +72,9 @@ export interface HomeTuiOptions {
 }
 
 let finishHome: ((action: HomeTuiAction) => void) | null = null;
+
 type HomeFocus = 'agents' | 'mission' | 'mode' | 'model' | 'effort';
+
 const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
 
 export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
@@ -89,24 +91,30 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const { colors } = useTuiTheme();
   const { keybindings, preferences, updatePreferences } = useTuiProduct();
   const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
+
   const workspaceSource = useMemo(
     () => opts.workspaceSource ?? agentSourceFromList(listSidebarAgents),
     [opts.workspaceSource],
   );
+
   const roster = useAgentRoster(workspaceSource);
   const agents = roster.page.items;
   const [navigationOpen, setNavigationOpen] = useState(false);
+
   const initialDefaults = useMemo(() => {
     const config = loadConfigFile();
     const authority = resolveProfileAuthority();
+
     const profile = authority.kind === 'local'
       ? loadLocalProfileAuthority()
       : loadCachedAccountProfile(authority.accountId);
+
     return {
       model: profile?.catalog.tiers.default.model ?? config.model ?? '',
       reasoningEffort: profile?.catalog.tiers.default.reasoningEffort ?? config.reasoningEffort ?? 'medium',
     };
   }, []);
+
   const [mode, setMode] = useState<AgentMode>(() => defaultCreateMode());
   const [defaultModel, setDefaultModelState] = useState(initialDefaults.model);
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(initialDefaults.reasoningEffort);
@@ -130,9 +138,11 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const localReady = isLocalModelConfigured();
   const setupRequired = !cloudReady && !localReady;
   const defaultOnboarding = useMemo(() => createDefaultOnboarding(opts), [opts]);
+
   const defaultOnboardingRef = useRef(
     opts.onboarding ?? (setupRequired && agents.length === 0 ? defaultOnboarding : undefined),
   );
+
   const onboarding = defaultOnboardingRef.current;
   const [onboardingReady, setOnboardingReady] = useState(onboarding === undefined);
   const compactHome = height < 34;
@@ -167,10 +177,13 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
       // has anywhere to land is this effect's fact — its own cleanup is the only
       // thing that aborts the signal — and not the error's.
       let failure: { readonly cause: unknown } | undefined;
+
       try {
         const sync = await syncCloudAgentRefs();
+
         if (abort.signal.aborted) return;
         await roster.reload();
+
         if (abort.signal.aborted) return;
         // A contested name reached the roster as neither store's cloud row.
         // Saying nothing would read as "you have no such cloud workspace".
@@ -179,8 +192,10 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         failure = { cause };
       } finally {
         settled = true;
+
         if (task !== null && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
       }
+
       // A list that could not be refreshed must not read as the list itself —
       // and a scene the cleanup already tore down has no notice to show.
       if (failure !== undefined && !abort.signal.aborted) {
@@ -188,12 +203,15 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
       }
     })();
     cloudSyncTaskRef.current = task;
+
     if (settled && cloudSyncTaskRef.current === task) cloudSyncTaskRef.current = null;
+
     return () => { abort.abort(); };
   }, [cloudReady, roster.reload]);
 
   const modeLabel = useMemo(() => {
     if (mode === 'cloud') return cloudReady ? 'Cloud workspace' : 'Cloud workspace - sign in required';
+
     return localReady ? 'Local workspace' : 'Local workspace - provider required';
   }, [cloudReady, localReady, mode]);
 
@@ -203,13 +221,16 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     setFocusArea('model');
     setCatalogHint(null);
     setModelPicker({ menu: EMPTY_MODEL_MENU, loading: true, error: null });
+
     try {
       const menu = await loadHomeModelCatalog(mode, opts);
+
       // A menu with failures explains itself in the picker; only a menu with
       // nothing at all to show is a catalog error.
       if (menu.models.length === 0 && menu.failures.length === 0) {
         throw new Error(`No ${mode} models are available.`);
       }
+
       if (modelPickerRequestRef.current !== request) return;
       setModelPicker({ menu, loading: false, error: null });
     } catch (err) {
@@ -248,21 +269,27 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const moveReasoningEffort = useCallback((delta: number) => {
     const index = REASONING_EFFORTS.indexOf(reasoningEffort);
     const next = REASONING_EFFORTS[(index + delta + REASONING_EFFORTS.length) % REASONING_EFFORTS.length] ?? reasoningEffort;
+
     return selectReasoningEffort(next);
   }, [reasoningEffort, selectReasoningEffort]);
 
   const submit = useCallback(async () => {
     const mission = (textareaRef.current?.plainText ?? draft).trim();
+
     if (!mission || busy) return;
     setBusy(true);
     setError(null);
+
     try {
       if (setupRequired) throw new Error('Run kinu setup to connect your account or a local model provider.');
+
       if (mode === 'cloud' && !cloudReady) throw new Error('Sign in first with kinu auth, then create a cloud workspace.');
+
       if (mode === 'local' && !localReady) throw new Error('Connect a local provider with kinu provider connect, or switch to cloud after sign-in.');
       // Cloud naming is server-side (async display-name generation after
       // create); only local agents need a locally generated identity.
       const identity = mode === 'local' ? await suggestAgentIdentityFromMission(mission, opts) : undefined;
+
       const created = await createCliAgent({
         ...opts,
         name: identity?.name,
@@ -272,6 +299,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         mode,
         allowInteractiveAuth: false,
       });
+
       // A new cloud agent with no connected PC: offer to connect this one
       // before the chat opens (the modal resolves immediately otherwise).
       if (created.mode === 'cloud') await deviceConnect.offerIfUnconnected();
@@ -284,69 +312,97 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
 
   useKeyboard((key) => {
     if (deviceConnect.handleKey(key) || busy) return;
+
     if (overlayNavigation) return;
     const result = dispatcher.feed(key, modelPicker ? ['modal'] : focusArea === 'mission' ? ['editor', 'home', 'global'] : ['home', 'global']);
+
     if (result.pending) {
       key.preventDefault();
+
       return;
     }
+
     const actionId = result.actionId;
+
     if (actionId === null) return;
+
     if (modelPicker) {
       if (actionId === 'modal.close') {
         key.preventDefault();
         modelPickerRequestRef.current += 1;
         setModelPicker(null);
       }
+
       return;
     }
+
     if (actionId === 'workspace.toggle') {
       key.preventDefault();
+
       if (layout === 'wide') {
         updatePreferences((current) => ({ ...current, wideSidebarOpen: !current.wideSidebarOpen }));
       } else {
         setNavigationOpen((open) => !open);
       }
+
       return;
     }
+
     if (actionId === 'model.open') {
       key.preventDefault();
+
       return openModelPicker();
     }
+
     if (actionId === 'home.exit') {
       key.preventDefault();
       finishHome?.({ type: 'exit' });
+
       return;
     }
+
     if (actionId === 'home.focus-next') {
       key.preventDefault();
       setFocusArea((current) => nextFocus(current, sidebarFocusable));
+
       return;
     }
+
     if (focusArea === 'mission' || focusArea === 'agents') return;
     const direction = actionId === 'home.previous' ? -1 : actionId === 'home.next' ? 1 : 0;
+
     if (direction !== 0) {
       key.preventDefault();
+
       if (focusArea === 'mode') {
         setMode((current) => current === 'cloud' ? 'local' : 'cloud');
+
         return;
       }
+
       if (focusArea === 'model') return openModelPicker();
+
       return moveReasoningEffort(direction);
     }
+
     if (actionId !== 'home.activate') return;
     key.preventDefault();
+
     if (focusArea === 'mode') {
       setMode((current) => current === 'cloud' ? 'local' : 'cloud');
+
       return;
     }
+
     if (focusArea === 'model') return openModelPicker();
+
     if (focusArea === 'effort') return moveReasoningEffort(1);
   });
 
   const openAgent = (agent: TuiAgentSummary) => {
     finishHome?.({ type: 'open-agent', name: agent.name });
   };
+
   if (!onboardingReady && onboarding !== undefined) {
     return (
       <TuiShell
@@ -517,6 +573,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
               }}
               onMouseDown={(event) => {
                 event.stopPropagation();
+
                 return openModelPicker();
               }}
             >
@@ -540,6 +597,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
                   onMouseDown={(event) => {
                     event.stopPropagation();
                     setFocusArea('effort');
+
                     return selectReasoningEffort(effort);
                   }}
                 >
@@ -596,12 +654,15 @@ function ModeSegment(props: {
   onSelect: () => void;
 }) {
   const { colors } = useTuiTheme();
+
   const borderColor = props.selected
     ? props.focused ? colors.intent.accent : colors.border.focus
     : colors.border.default;
+
   const textColor = props.ready
     ? props.selected ? colors.text.strong : colors.text.primary
     : colors.intent.warning;
+
   return (
     <box
       style={{
@@ -633,24 +694,29 @@ function createDefaultOnboarding(
   opts: HomeTuiOptions,
 ): NonNullable<HomeTuiOptions['onboarding']> {
   const preferences = createFileTuiPreferenceStore();
+
   const roles: OnboardingRoleChoice[] = Object.entries(BUILTIN_ROLE_DEFINITIONS)
     .map(([id, role]) => ({
       id,
       label: deriveRoleLabel(id),
       description: role.description,
     }));
+
   const operations: TuiOnboardingOperations = {
     async readReadiness() {
       const current = preferences.read();
       const accountConnected = isCloudAuthConfigured();
       const localConnected = isLocalModelConfigured();
       const location = current.onboardingLocation;
+
       const providerConnected = location === 'cloud'
         ? accountConnected
         : location === 'local'
           ? localConnected
           : accountConnected || localConnected;
+
       const profile = providerConnected ? await loadActiveProfile() : null;
+
       return {
         location,
         accountConnected,
@@ -669,7 +735,9 @@ function createDefaultOnboarding(
     },
     async connectProvider() {
       const location = preferences.read().onboardingLocation;
+
       if ((location === 'cloud' || location === 'both') && isCloudAuthConfigured()) return;
+
       if (isLocalModelConfigured()) return;
       throw new Error('No local provider is connected. Sign in with kinu auth, or run kinu provider connect codex.');
     },
@@ -687,14 +755,17 @@ function createDefaultOnboarding(
     async createWorkspace(input) {
       const current = preferences.read();
       const location = current.onboardingLocation;
+
       const mode: AgentMode = location === 'cloud'
         ? 'cloud'
         : location === 'local'
           ? 'local'
           : defaultCreateMode();
+
       const identity = mode === 'local'
         ? await suggestAgentIdentityFromMission(input.mission, opts)
         : null;
+
       const created = await createCliAgent({
         ...opts,
         purpose: input.mission,
@@ -704,6 +775,7 @@ function createDefaultOnboarding(
         nameOrigin: identity?.nameOrigin,
         role: input.roleId,
       });
+
       finishHome?.({ type: 'open-agent', name: created.name });
     },
     skip(step) {
@@ -714,6 +786,7 @@ function createDefaultOnboarding(
       });
     },
   };
+
   return { operations, roles };
 }
 
@@ -726,6 +799,7 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
   await renderer.waitForThemeMode(250);
   const root = createRoot(renderer);
   const { promise, resolve } = Promise.withResolvers<HomeTuiAction>();
+
   const complete = (action: HomeTuiAction) => {
     process.off('SIGINT', onSigint);
     // Unmount synchronously BEFORE the renderer frees its native state.
@@ -741,10 +815,12 @@ export async function runHomeTui(opts: HomeTuiOptions = {}): Promise<HomeTuiActi
     renderer.destroy();
     resolve(action);
   };
+
   const onSigint = () => complete({ type: 'exit' });
   finishHome = complete;
   process.on('SIGINT', onSigint);
   root.render(<HomeApp opts={opts} />);
+
   return await promise.finally(() => {
     finishHome = null;
   });
@@ -754,7 +830,9 @@ function nextFocus(current: HomeFocus, sidebarFocusable: boolean): HomeFocus {
   const order: HomeFocus[] = sidebarFocusable
     ? ['mission', 'agents', 'mode', 'model', 'effort']
     : ['mission', 'mode', 'model', 'effort'];
+
   const index = order.indexOf(current);
+
   return order[(index + 1) % order.length] ?? order[0]!;
 }
 
@@ -768,6 +846,7 @@ function nextFocus(current: HomeFocus, sidebarFocusable: boolean): HomeFocus {
  */
 function collisionNotice(collisions: readonly CloudRefCollision[]): string {
   const names = collisions.map((hit) => hit.name).join(', ');
+
   return collisions.length === 1
     ? `${names}: a local workspace holds this name, so the cloud one is not listed. Rename one of them.`
     : `${names}: local workspaces hold these names, so their cloud ones are not listed. Rename one side.`;
@@ -783,7 +862,9 @@ async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Prom
 
 async function loadCloudHomeModels(originOverride: string | undefined) {
   const config = loadConfigFile();
+
   if (!config.accessToken) throw new Error('Sign in with kinu auth to browse cloud models.');
+
   return listCloudAvailableModels(resolveCloudOrigin({ origin: originOverride }), config.accessToken);
 }
 

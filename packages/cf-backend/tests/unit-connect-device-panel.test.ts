@@ -61,10 +61,16 @@ interface Recorder {
 function recorder(command = SERVER_COMMAND): Recorder {
   const registrations: string[] = [];
   const settled: UserDevice[] = [];
+
   const flow = new DeviceConnectFlow({
-    register: async (label) => { registrations.push(label ?? '(unnamed)'); return { installCommand: command }; },
+    register: async (label) => {
+      registrations.push(label ?? '(unnamed)');
+
+      return { installCommand: command };
+    },
     onConnected: (arrived) => { settled.push(arrived); },
   });
+
   return { flow, registrations, settled };
 }
 
@@ -95,14 +101,18 @@ describe('the connect panel registers exactly once', () => {
   test('a registration that failed may be asked for again — that one is a retry', async () => {
     const registrations: string[] = [];
     let fail = true;
+
     const flow = new DeviceConnectFlow({
       register: async () => {
         registrations.push(fail ? 'rejected' : 'accepted');
+
         if (fail) throw new Error('UserDO unreachable');
+
         return { installCommand: SERVER_COMMAND };
       },
       onConnected: () => {},
     });
+
     await flow.start(undefined, []);
     expect(flow.snapshot().kind).toBe('failed');
     expect(render(flow, [])).toContain('UserDO unreachable');
@@ -128,9 +138,11 @@ describe('the command on screen is the one the server handed over', () => {
     // an origin joined client-side would differ by a flag, a quote or the
     // PATH tail.
     const shown = /data-connect-command[^>]*>([\s\S]*?)<\/code>/.exec(html)?.[1] ?? '';
+
     const decoded = shown
       .replaceAll('&quot;', '"').replaceAll('&#x27;', "'")
       .replaceAll('&lt;', '<').replaceAll('&gt;', '>').replaceAll('&amp;', '&');
+
     expect(decoded).toBe(SERVER_COMMAND);
   });
 
@@ -143,9 +155,11 @@ describe('the command on screen is the one the server handed over', () => {
   test('before anything is registered the panel states what connecting means', () => {
     const { flow } = recorder();
     const html = render(flow, []);
+
     for (const line of DEVICE_CONNECT_DISCLOSURE) {
       expect(html).toContain(line.replaceAll('&', '&amp;'));
     }
+
     // And it has NOT asked for a command yet: the disclosure comes first.
     expect(html).not.toContain('data-connect-command');
   });

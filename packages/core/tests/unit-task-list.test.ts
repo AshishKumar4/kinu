@@ -11,6 +11,7 @@ import { createTestActorsOver } from '@kinu.run/test-utils';
 function newStore(): TaskListStore {
   const db = new Database(':memory:');
   initTaskListTable(makeExecRaw(db));
+
   return new TaskListStore(makeSql(db), createTestActorsOver(db).main, write => db.transaction(write)());
 }
 
@@ -112,6 +113,7 @@ describe('TaskListStore', () => {
   test('listOpen filters BEFORE its bound: an open task behind 200 closed ones is still visible', () => {
     const s = newStore();
     s.add(Array.from({ length: 200 }, (_, i) => `closed ${i + 1}`), null, 1);
+
     for (let i = 1; i <= 200; i++) s.setStatus(`t${i}`, 'done', 2);
     s.add(['the one open task'], null, 3);
 
@@ -122,10 +124,13 @@ describe('TaskListStore', () => {
 
   test('listOpen reports the true open row count even past its page bound', () => {
     const s = newStore();
+
     for (let batch = 0; batch < 5; batch++) {
       const { added } = s.add(Array.from({ length: 5 }, (_, i) => `task ${batch}-${i}`), null, batch + 1);
+
       if (batch % 2 === 0) for (const t of added) s.setStatus(t.id, 'done', 100);
     }
+
     // 2 open batches of 5 = 10 open rows; the default bound is far larger,
     // so shrink it to prove the split between page and total.
     const page = s.listOpen(4);
@@ -177,10 +182,13 @@ describe('TaskListStore', () => {
     const actor = createTestActorsOver(db).main;
     const inner = makeSql(db);
     let statement = '';
+
     const capturing: typeof inner = <T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
       statement = strings.join('?');
+
       return inner<T>(strings, ...values);
     };
+
     const s = new TaskListStore(capturing, actor, write => db.transaction(write)());
     s.add(['parent'], null, 1);
     s.add(['a', 'b'], 't1', 2);

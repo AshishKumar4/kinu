@@ -78,11 +78,13 @@ export function workspaceToolchainCapabilities(
   runtimes: readonly RuntimePackage[],
 ): readonly ExecutorCapability[] {
   const capabilities: ExecutorCapability[] = ['npm'];
+
   // `python` is the catalog name users type; `cpython` is the wasm32-wasi
   // interpreter that supersedes it and the name its manifest carries.
   if (runtimes.some((pkg) => pkg.manifest.name === 'cpython' || pkg.manifest.name === 'python')) {
     capabilities.push('python');
   }
+
   return capabilities;
 }
 
@@ -112,6 +114,7 @@ interface RuntimeToolkit {
 }
 
 let toolkitOnce: Promise<RuntimeToolkit> | null = null;
+
 const runtimeToolkit = (): Promise<RuntimeToolkit> => {
   toolkitOnce ??= (async () => {
     try {
@@ -122,6 +125,7 @@ const runtimeToolkit = (): Promise<RuntimeToolkit> => {
         import('@nimbus-sh/core/runtime/runtime-package.js'),
         import('@nimbus-sh/core/substrate/lifo/commands/system/npm.js'),
       ]);
+
       return {
         makeBashRunnerFactory: bash.makeBashRunnerFactory,
         makeCPythonRunnerFactory: cpython.makeCPythonRunnerFactory,
@@ -136,6 +140,7 @@ const runtimeToolkit = (): Promise<RuntimeToolkit> => {
       throw error;
     }
   })();
+
   return toolkitOnce;
 };
 
@@ -172,12 +177,14 @@ export async function provisionWorkspaceRuntimes(deps: {
   // it, and `python3` stays "command not found" instead of becoming a command
   // that throws.
   const runnerDeps = deps.facets ? { facets: deps.facets, vfs: workspace.vfs } : null;
+
   const runners: Record<string, RunnerFactory> = runnerDeps
     ? {
       'bash-runner': kit.makeBashRunnerFactory(runnerDeps),
       'cpython-runner': kit.makeCPythonRunnerFactory(runnerDeps),
     }
     : {};
+
   const runnerFor = (key: string): RunnerFactory | undefined => runners[key];
 
   const installed = kit.rehydrateInstalledRuntimesView(kernelFs, registry, home, runnerFor);
@@ -189,6 +196,7 @@ export async function provisionWorkspaceRuntimes(deps: {
     onStdout: (data) => ctx.stdout.write(data),
     onStderr: (data) => ctx.stderr.write(data),
   })).exitCode;
+
   // Nimbus's own npm: it resolves against registry.npmjs.org, extracts tarballs
   // into this filesystem and registers each package's bins as commands. Free to
   // register — nothing is fetched until a subcommand runs.
@@ -206,6 +214,7 @@ export async function provisionWorkspaceRuntimes(deps: {
 
   for (const runtimePackage of runtimes) {
     const install = provisionOnce({ kit, kernelFs, home, registry, runnerFor, runtimePackage });
+
     for (const entrypoint of kit.runtimeEntrypoints(runtimePackage.manifest)) {
       // Installed already, or a name the workspace answers for other reasons.
       if (alreadyRegistered.has(entrypoint.binName) || registry.has(entrypoint.binName)) continue;
@@ -250,14 +259,17 @@ export function wireWorkspaceLoopback(workspace: NimbusWorkspace): void {
   // the Worker's cold start included.
   registry.registerLazy('node', async () => {
     const node = await import('@nimbus-sh/core/substrate/lifo/commands/system/node.js');
+
     return { default: workspaceNodeCommand(node.createNodeCommand(kernel)) };
   });
   registry.registerLazy('curl', async () => {
     const curl = await import('@nimbus-sh/core/substrate/lifo/commands/net/curl.js');
+
     return { default: curl.createCurlCommand(kernel) };
   });
   registry.registerLazy('wget', async () => {
     const wget = await import('@nimbus-sh/core/substrate/lifo/commands/net/wget.js');
+
     return { default: workspaceWgetCommand(wget.default) };
   });
 }
@@ -281,6 +293,7 @@ const WORKSPACE_NODE_SANDBOX_HINT =
 function hostBlocksCodegen(): boolean {
   try {
     new Function('return 1')();
+
     return false;
   } catch (error) {
     // Any Error from a one-line probe means the host cannot compile: the
@@ -298,17 +311,22 @@ function hostBlocksCodegen(): boolean {
  */
 function workspaceNodeCommand(real: Command): Command {
   let blocked: boolean | null = null;
+
   return async (ctx) => {
     const args = ctx.args;
+
     if (
       args.length === 0 || args[0] === '-v' || args[0] === '--version'
       || args[0] === '-h' || args[0] === '--help'
     ) {
       return real(ctx);
     }
+
     blocked ??= hostBlocksCodegen();
+
     if (!blocked) return real(ctx);
     ctx.stderr.write(`${WORKSPACE_NODE_SANDBOX_HINT}\n`);
+
     return 127;
   };
 }
@@ -322,13 +340,16 @@ function workspaceNodeCommand(real: Command): Command {
 function workspaceWgetCommand(real: Command): Command {
   return async (ctx) => {
     const candidate = ctx.args.find((arg) => !arg.startsWith('-'));
+
     if (candidate !== undefined) {
       let host: string | null = null;
       let port = '';
+
       try {
         const url = new URL(
           candidate.startsWith('http://') || candidate.startsWith('https://') ? candidate : `https://${candidate}`,
         );
+
         host = url.hostname;
         port = url.port || (url.protocol === 'http:' ? '80' : '443');
       } catch (error) {
@@ -337,13 +358,16 @@ function workspaceWgetCommand(real: Command): Command {
         void error;
         host = null;
       }
+
       if (host === 'localhost' || host === '127.0.0.1' || host === '0.0.0.0' || host === '[::1]') {
         ctx.stderr.write(
           `wget: unable to connect to ${host} port ${port} (connection refused: no server is listening on that port in this workspace)\n`,
         );
+
         return 1;
       }
     }
+
     return real(ctx);
   };
 }
@@ -365,10 +389,12 @@ function provisionOnce(deps: {
   runtimePackage: RuntimePackage;
 }): () => Promise<readonly string[]> {
   let running: Promise<readonly string[]> | null = null;
+
   return () => {
     running ??= (async () => {
       try {
         await deps.kit.seedRuntimePackage(deps.kernelFs, deps.home, deps.runtimePackage);
+
         return deps.kit.rehydrateInstalledRuntimesView(deps.kernelFs, deps.registry, deps.home, deps.runnerFor).bins;
       } catch (error) {
         // A failed install must not become a permanently poisoned command: clear
@@ -378,6 +404,7 @@ function provisionOnce(deps: {
         throw new Error(`${deps.runtimePackage.manifest.name} runtime install failed`, { cause: error });
       }
     })();
+
     return running;
   };
 }
@@ -402,15 +429,21 @@ function provisioningStub(deps: {
     } catch (error) {
       ctx.stderr.write(`${deps.binName}: installing the ${deps.runtimeName} runtime failed: `
         + `${renderThrownChain({ cause: error })}\n`);
+
       return 127;
     }
+
     const command = await deps.registry.resolve(deps.binName);
+
     if (!command || command === stub) {
       ctx.stderr.write(`${deps.binName}: the ${deps.runtimeName} runtime installed but provides no `
         + `runnable ${deps.binName} in this workspace\n`);
+
       return 127;
     }
+
     return command(ctx);
   };
+
   return stub;
 }

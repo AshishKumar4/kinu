@@ -50,49 +50,65 @@ export function normalizeReplayForDestination(
     if (message.role === 'assistant' && Array.isArray(message.content)) {
       let contentChanged = false;
       const content: Exclude<AssistantContent, string> = [];
+
       for (const part of message.content) {
         if (part.type === 'reasoning') {
           const anthropic = v.safeParse(
             AnthropicReasoningOptionsSchema,
             part.providerOptions?.anthropic,
           );
+
           const sourceIsAnthropic = anthropic.success
             && (anthropic.output.signature !== undefined
               || anthropic.output.redactedData !== undefined);
+
           if (sourceIsAnthropic !== destinationIsAnthropic) {
             contentChanged = true;
+
             if (part.text) content.push({ type: 'text', text: part.text });
             continue;
           }
         }
+
         if (part.type === 'tool-call') {
           const id = ids.get(part.toolCallId) ?? toolCallIdFor({ scope: 'kinu', index: calls++ });
           ids.set(part.toolCallId, id);
+
           if (id !== part.toolCallId) {
             contentChanged = true;
             content.push({ ...part, toolCallId: id });
             continue;
           }
         }
+
         content.push(part);
       }
+
       if (!contentChanged) return message;
       changed = true;
+
       return { ...message, content } satisfies AssistantModelMessage;
     }
+
     if (message.role === 'tool') {
       let contentChanged = false;
+
       const content = message.content.map((part) => {
         if (part.type !== 'tool-result') return part;
         const id = ids.get(part.toolCallId);
+
         if (id === undefined || id === part.toolCallId) return part;
         contentChanged = true;
+
         return { ...part, toolCallId: id };
       });
+
       if (!contentChanged) return message;
       changed = true;
+
       return { ...message, content } satisfies ToolModelMessage;
     }
+
     return message;
   });
 

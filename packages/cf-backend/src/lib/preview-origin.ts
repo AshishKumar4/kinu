@@ -56,6 +56,7 @@ const PREVIEW_SUFFIX_META = 'kinu-preview-host-suffix';
 /** The host an origin var names, lowercased, or null when it names none. */
 export function hostOf(origin: string | undefined): string | null {
   if (!origin || !URL.canParse(origin)) return null;
+
   return new URL(origin).hostname.toLowerCase() || null;
 }
 
@@ -66,11 +67,13 @@ export function hostOf(origin: string | undefined): string | null {
  */
 export function previewHostSuffix(env: PreviewHostEnv): string | null {
   const suffix = env.PREVIEW_HOST_SUFFIX?.trim().toLowerCase().replace(/^\.+|\.+$/g, '');
+
   if (!suffix || !suffix.includes('.')
     || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])$/.test(suffix)
     || suffix.split('.').some((label) => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) {
     return null;
   }
+
   return suffix;
 }
 
@@ -81,6 +84,7 @@ export function previewSuffixMetaName(): string {
 function browserPreviewHostSuffix(): string | null {
   if (globalThis.document === undefined) return null;
   const configured = globalThis.document.querySelector<HTMLMetaElement>(`meta[name="${PREVIEW_SUFFIX_META}"]`)?.content;
+
   return previewHostSuffix({ PREVIEW_HOST_SUFFIX: configured });
 }
 
@@ -92,9 +96,12 @@ function browserPreviewHostSuffix(): string | null {
  */
 export function isPreviewHostRequest(url: URL, env: PreviewHostEnv): boolean {
   const suffix = previewHostSuffix(env);
+
   if (!suffix) return false;
   const host = url.hostname.toLowerCase();
+
   if (host === hostOf(env.CLI_PUBLIC_ORIGIN)) return false;
+
   return host.endsWith(`.${suffix}`);
 }
 
@@ -122,11 +129,13 @@ export function containPreviewResponse(response: Response): Response {
 
   const headers = new Headers(response.headers);
   headers.delete('set-cookie');
+
   for (const cookie of keptCookies) headers.append('set-cookie', cookie);
   headers.delete('content-security-policy');
   headers.delete('content-security-policy-report-only');
   headers.set('content-security-policy', `sandbox ${PREVIEW_SANDBOX}`);
   headers.set('referrer-policy', 'no-referrer');
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -147,6 +156,7 @@ const PREVIEW_HOST_LABEL = /^(\d{1,5})-([a-z0-9][a-z0-9-]*)-([a-z0-9_]+)$/i;
 
 function validPort(value: string | undefined): boolean {
   const port = Number(value);
+
   return Number.isInteger(port) && port >= 1 && port <= 65_535;
 }
 
@@ -160,16 +170,22 @@ function validPort(value: string | undefined): boolean {
 export function isPreviewUrl(value: string, configuredSuffix: string | null = browserPreviewHostSuffix()): boolean {
   if (!URL.canParse(value)) return false;
   const url = new URL(value);
+
   if (url.username || url.password) return false;
+
   if (url.protocol !== 'https:') return false;
   const suffix = previewHostSuffix({ PREVIEW_HOST_SUFFIX: configuredSuffix ?? undefined });
+
   if (!suffix) return false;
   const host = url.hostname.toLowerCase();
   const suffixWithDot = `.${suffix}`;
+
   if (!host.endsWith(suffixWithDot)) return false;
   const label = host.slice(0, -suffixWithDot.length);
+
   if (!label || label.includes('.')) return false;
   const sandbox = PREVIEW_HOST_LABEL.exec(label);
+
   return (sandbox !== null && validPort(sandbox[1])) || parseWorkspacePreviewLabel(label) !== null;
 }
 
@@ -196,16 +212,22 @@ export interface SandboxPreviewLabel {
 
 export function sandboxPreviewLabelOf(url: URL, env: PreviewHostEnv): SandboxPreviewLabel | null {
   const suffix = previewHostSuffix(env);
+
   if (!suffix) return null;
   const host = url.hostname.toLowerCase();
   const suffixWithDot = `.${suffix}`;
+
   if (!host.endsWith(suffixWithDot)) return null;
   const label = host.slice(0, -suffixWithDot.length);
+
   if (label.includes('.')) return null;
   const parsed = PREVIEW_HOST_LABEL.exec(label);
+
   if (parsed === null || !validPort(parsed[1])) return null;
   const [, port, sandboxId, token] = parsed;
+
   if (port === undefined || sandboxId === undefined || token === undefined) return null;
+
   return { port: Number(port), sandboxId, token };
 }
 
@@ -228,7 +250,9 @@ export function extractPreviewUrl<Output>(
 
   if (v.is(v.string(), output)) return scan(output);
   const withUrl = v.safeParse(v.object({ url: v.string() }), output);
+
   if (withUrl.success) return scan(withUrl.output.url);
   const serialized = JSON.stringify(output);
+
   return serialized === undefined ? null : scan(serialized);
 }

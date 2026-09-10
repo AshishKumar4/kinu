@@ -28,6 +28,7 @@ function setupRt(): AgentRuntime {
   const { rt } = createTestRuntime();
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
+
   return rt;
 }
 
@@ -136,12 +137,20 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
     //   v2 (0.75 + 0.2 = 0.95), v1 (0 + 1/3 ≈ 0.33), v0 (0.5 + 1 = 1.5).
     // Sample the policy's distribution with a deterministic LCG.
     let s = 7;
-    const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
+
+    const rng = () => {
+      s = (s * 1664525 + 1013904223) % 0xffffffff;
+
+      return s / 0xffffffff;
+    };
+
     const picks = new Map([[0, 0], [1, 0], [2, 0]]);
+
     for (let i = 0; i < 600; i++) {
       const pick = selectEvolutionBase(archive, { exploreShare: 1, random: rng })!;
       picks.set(pick.version, (picks.get(pick.version) ?? 0) + 1);
     }
+
     // The untried root (max novelty bonus) and the strong v2 must both beat
     // the twice-beaten v1 — yet v1 stays reachable (DGM: no variant is dead).
     expect(picks.get(0) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
@@ -159,6 +168,7 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
       entry({ version: 1, parentVersion: 0, status: 'current', trials: 9, wins: 9, losses: 0, winRate: 1 }),
       entry({ version: 0, parentVersion: null, status: 'historical', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
     ];
+
     expect(selectEvolutionBase(deadEndTrunk, { exploreShare: 0.2, random: () => 0.9 }))
       .toEqual({ version: 1, mode: 'current' });
   });
@@ -180,6 +190,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
    *  roll, draw 2 is the weighted sample. No test touches real randomness. */
   function seq(...rolls: number[]): () => number {
     let i = 0;
+
     return () => rolls[i++] ?? 0;
   }
 
@@ -191,10 +202,13 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
     const weight = (e: ScaffoldArchiveEntry): number => (e.winRate ?? 0.5) + 1 / (1 + e.trials);
     const total = explorable.reduce((acc, e) => acc + weight(e), 0);
     let r = roll * total;
+
     for (const e of explorable) {
       r -= weight(e);
+
       if (r <= 0) return e.version;
     }
+
     return explorable[explorable.length - 1]!.version;
   }
 
@@ -219,15 +233,23 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
 
   test('over the whole distribution the productive lineage wins the compute', () => {
     let s = 11;
-    const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
+
+    const rng = () => {
+      s = (s * 1664525 + 1013904223) % 0xffffffff;
+
+      return s / 0xffffffff;
+    };
+
     const clade = new Map([[1, 0], [2, 0], [3, 0], [4, 0]]);
     const ownScore = new Map([[1, 0], [2, 0], [3, 0], [4, 0]]);
+
     for (let i = 0; i < 800; i++) {
       const cladeVersion = selectEvolutionBase(lineage, { exploreShare: 1, random: rng })!.version;
       clade.set(cladeVersion, (clade.get(cladeVersion) ?? 0) + 1);
       const ownScoreVersion = ownScorePick(lineage, rng());
       ownScore.set(ownScoreVersion, (ownScore.get(ownScoreVersion) ?? 0) + 1);
     }
+
     expect(clade.get(3) ?? 0).toBeGreaterThan(clade.get(1) ?? 0);
     expect(ownScore.get(1) ?? 0).toBeGreaterThan(ownScore.get(3) ?? 0);
     // The dead-end lineage keeps a share — no variant is ever unreachable.
@@ -243,6 +265,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
       entry({ version: 1, parentVersion: null, status: 'rolled_back', trials: 2, wins: 0, losses: 2, winRate: 0 }),
       entry({ version: 0, parentVersion: null, status: 'historical' }),
     ];
+
     // Shape 2 — one generation deep, but the child has never been tried, so
     // the clade carries no information its parent didn't already have.
     const untriedChild: ScaffoldArchiveEntry[] = [
@@ -250,6 +273,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
       entry({ version: 1, parentVersion: 0, status: 'historical' }),
       entry({ version: 0, parentVersion: null, status: 'historical', trials: 4, wins: 3, losses: 1, winRate: 0.75 }),
     ];
+
     for (const archive of [flat, untriedChild]) {
       for (const roll of [0, 0.05, 0.2, 0.37, 0.5, 0.63, 0.8, 0.99]) {
         expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
@@ -269,6 +293,7 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
 describe('pathology coverage — the diversity signal beside the clade score', () => {
   function seq(...rolls: number[]): () => number {
     let i = 0;
+
     return () => rolls[i++] ?? 0;
   }
 
@@ -287,6 +312,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
       entry({ version: 2, parentVersion: 1, status: 'historical', trials: 4, wins: 3, losses: 1, winRate: 0.75 }),
       entry({ version: 1, parentVersion: null, status: 'rolled_back', trials: 2, wins: 0, losses: 2, winRate: 0 }),
     ];
+
     for (const roll of [0, 0.05, 0.2, 0.37, 0.5, 0.63, 0.8, 0.99]) {
       expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
         .toBe(noDiversityPick(archive, roll));
@@ -302,13 +328,22 @@ describe('pathology coverage — the diversity signal beside the clade score', (
       entry({ version: 2, parentVersion: null, status: 'historical', pathology: 'error/code', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
       entry({ version: 1, parentVersion: null, status: 'historical', pathology: 'overreach/prose', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
     ];
+
     let s = 7;
-    const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
+
+    const rng = () => {
+      s = (s * 1664525 + 1013904223) % 0xffffffff;
+
+      return s / 0xffffffff;
+    };
+
     const picks = new Map([[1, 0], [2, 0], [3, 0]]);
+
     for (let i = 0; i < 600; i++) {
       const version = selectEvolutionBase(crowded, { exploreShare: 1, random: rng })!.version;
       picks.set(version, (picks.get(version) ?? 0) + 1);
     }
+
     // v1 owns a cell of its own; v2 and v3 share theirs with the live current.
     expect(picks.get(1) ?? 0).toBeGreaterThan(picks.get(2) ?? 0);
     expect(picks.get(1) ?? 0).toBeGreaterThan(picks.get(3) ?? 0);
@@ -325,13 +360,22 @@ describe('pathology coverage — the diversity signal beside the clade score', (
       entry({ version: 2, parentVersion: null, status: 'historical', pathology: 'error/code', trials: 40, wins: 40, losses: 0, winRate: 1 }),
       entry({ version: 1, parentVersion: null, status: 'historical', pathology: 'repeat/terse', trials: 40, wins: 0, losses: 40, winRate: 0 }),
     ];
+
     let s = 3;
-    const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
+
+    const rng = () => {
+      s = (s * 1664525 + 1013904223) % 0xffffffff;
+
+      return s / 0xffffffff;
+    };
+
     const picks = new Map([[1, 0], [2, 0], [3, 0]]);
+
     for (let i = 0; i < 600; i++) {
       const version = selectEvolutionBase(archive, { exploreShare: 1, random: rng })!.version;
       picks.set(version, (picks.get(version) ?? 0) + 1);
     }
+
     expect(picks.get(2) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
     expect(picks.get(3) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
   });
@@ -344,6 +388,7 @@ describe('pathology coverage — the diversity signal beside the clade score', (
       entry({ version: 2, parentVersion: null, status: 'historical', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
       entry({ version: 1, parentVersion: null, status: 'historical', trials: 4, wins: 2, losses: 2, winRate: 0.5 }),
     ];
+
     for (const roll of [0.1, 0.4, 0.9]) {
       expect(selectEvolutionBase(archive, { exploreShare: 1, random: seq(0, roll) })!.version)
         .toBe(noDiversityPick(archive, roll));
@@ -359,6 +404,7 @@ describe('rejected proposals are queryable evidence', () => {
     const proposal = `// pathology: error/code\n${scaffoldSrc('v1')}`;
     const result = await modifyScaffold(rt, RATIONALE, proposal);
     expect(result.ok).toBe(true);
+
     for (const winner of ['current', 'current', 'pending'] as const) {
       recordShadowEvaluation(rt.storage.sql, rt.actor, {
         currentVersion: 0, pendingVersion: result.version!, task: 't',
@@ -366,6 +412,7 @@ describe('rejected proposals are queryable evidence', () => {
         judgeResult: { winner, rationale: `${winner} was clearer`, currentScore: 1, pendingScore: 0 },
       });
     }
+
     await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'rollback');
 
     const [rejected] = listRejectedProposals(rt.storage.sql, rt.actor);
@@ -419,6 +466,7 @@ describe('proposal prompt cites the archive', () => {
         entry({ version: 1, parentVersion: 0, status: 'rolled_back', trials: 2, wins: 0, losses: 2, ties: 0, winRate: 0, rationale: 'tried branching heads' }),
       ],
     });
+
     expect(prompt).toContain('Scaffold archive');
     expect(prompt).toContain('v3 [current, parent v2, 4-0-1 W-L-T]');
     expect(prompt).toContain('v1 [rolled_back, parent v0, 0-2-0 W-L-T] — tried branching heads');
@@ -440,6 +488,7 @@ describe('proposal prompt cites the archive', () => {
       ],
       rejections: new Map([[1, 'lost 2 of 3 decisive shadow trials']]),
     });
+
     expect(prompt).toContain('for repeat/prose');
     expect(prompt).toContain('refused: lost 2 of 3 decisive shadow trials');
   });

@@ -90,16 +90,19 @@ function callableSource(text: string): string {
  *  that calls a model is not a producer of workspace spend. */
 function shippedSources(): Map<string, string> {
   const out = new Map<string, string>();
+
   for (const pattern of ['packages/*/src/**/*.ts', 'packages/*/src/**/*.tsx']) {
     for (const rel of new Glob(pattern).scanSync(REPO)) {
       if (rel.includes('/tests/') || rel.endsWith('.test.ts')) continue;
       out.set(rel, callableSource(readFileSync(resolve(REPO, rel), 'utf8')));
     }
   }
+
   return out;
 }
 
 const sources = shippedSources();
+
 const invokers = [...sources]
   .filter(([, text]) => INVOCATIONS.some((re) => re.test(text)))
   .map(([rel]) => rel)
@@ -139,6 +142,7 @@ describe('every model caller reports its usage', () => {
     const unreported = invokers.filter(
       (rel) => !exempted.includes(rel) && !REPORTS.test(sources.get(rel) ?? ''),
     );
+
     expect(unreported).toEqual([]);
   });
 });

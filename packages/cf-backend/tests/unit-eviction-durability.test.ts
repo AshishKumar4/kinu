@@ -53,7 +53,9 @@ async function recover(
   agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext,
 ): Promise<FiberRecoveryResult> {
   const result = await agent.harnessRecoverFiber(ctx);
+
   if (result === undefined) throw new Error(`onFiberRecovered returned nothing for "${ctx.name}"`);
+
   return result;
 }
 
@@ -79,16 +81,20 @@ function recordSubmissions(agent: HarnessOrchestratorAgent): string[] {
       const id = messages[0]?.id ?? '(none)';
       const first = !seen.includes(id);
       seen.push(id);
+
       const submission: RecordedSubmission = {
         submissionId: `sub-${String(seen.length)}`,
         status: 'pending',
         createdAt: Date.now(),
         accepted: first,
       };
+
       if (options?.idempotencyKey !== undefined) submission.idempotencyKey = options.idempotencyKey;
+
       return submission;
     },
   });
+
   return seen;
 }
 
@@ -139,11 +145,13 @@ function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
   const signals: AgentSignal[] = [];
   const arrived = Promise.withResolvers<void>();
   const held = Promise.withResolvers<void>();
+
   const reply = JSON.stringify({
     note: 'The migration ran before the suite. Confirm a backup exists.',
     severity: 'blocker',
     class: 'wrong-work',
   });
+
   Object.defineProperty(agent.observeRuntime(), 'advisorLlm', {
     configurable: true,
     get: () => ({
@@ -151,6 +159,7 @@ function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
         arrived.resolve();
         await held.promise;
         notes.push(reply);
+
         return reply;
       },
       stream: () => { throw new Error('the advisor lane completes, it does not stream'); },
@@ -160,8 +169,13 @@ function observeAdvisor(agent: HarnessOrchestratorAgent): AdvisorObservation {
   const deliver = signals_.deliver.bind(signals_);
   Object.defineProperty(signals_, 'deliver', {
     configurable: true,
-    value: async (signal: AgentSignal) => { signals.push(signal); return await deliver(signal); },
+    value: async (signal: AgentSignal) => {
+      signals.push(signal);
+
+      return await deliver(signal);
+    },
   });
+
   return { notes, signals, entered: arrived.promise, release: () => { held.resolve(); } };
 }
 
@@ -177,12 +191,16 @@ interface Recovering {
 
 function recovering(agent: HarnessOrchestratorAgent, ctx: FiberRecoveryContext): Recovering {
   let answered = false;
+
   const result = (async () => {
     const value = await agent.harnessRecoverFiber(ctx);
     answered = true;
+
     if (value === undefined) throw new Error(`onFiberRecovered returned nothing for "${ctx.name}"`);
+
     return value;
   })();
+
   return { result, answered: () => answered };
 }
 
@@ -261,6 +279,7 @@ describe('a background job whose executor died', () => {
     agent.harnessSetSignalDeliverer(async () => {
       arrived.resolve();
       await queued.promise;
+
       return 'queued';
     });
 
@@ -405,6 +424,7 @@ describe('the post-turn lanes', () => {
     expect(result).toEqual({
       status: 'completed', snapshot: { lane: 'mcts', recorded: true, redrive: 'memory-note' },
     });
+
     // The agent's own record of the interruption: a future turn that finds a
     // half-expanded tree can see why. The search itself is NOT re-driven here —
     // its tree is durable and, when the call was detached, its job row is what
@@ -416,6 +436,7 @@ describe('the post-turn lanes', () => {
     const events = harness.db.prepare<{ type: string; message: string }, []>(
       "SELECT type, message FROM evolution_events WHERE type = 'fiber_recovered'",
     ).all();
+
     expect(events).toHaveLength(1);
     expect(events[0]!.message).toContain('mcts');
 
@@ -524,6 +545,7 @@ describe('a sandbox lifecycle failure', () => {
       configurable: true,
       value: async (messages: { parts: { text?: string }[] }[]) => {
         texts.push(messages[0]?.parts[0]?.text ?? '');
+
         return { submissionId: 's', status: 'pending' as const, createdAt: Date.now(), accepted: true };
       },
     });
@@ -575,6 +597,7 @@ describe('a sandbox lifecycle failure', () => {
       configurable: true,
       value: async (messages: { parts: { text?: string }[] }[]) => {
         texts.push(messages[0]?.parts[0]?.text ?? '');
+
         return { submissionId: 's', status: 'pending' as const, createdAt: Date.now(), accepted: true };
       },
     });
@@ -584,21 +607,25 @@ describe('a sandbox lifecycle failure', () => {
         version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
         incidentId: `inc-${stage}`, stage, reason: 'measured failure', attempts: 1,
       });
+
       expect({ stage, status: answer.status }).toEqual({ stage, status: 'queued' });
     }
 
     // The denominator: a stage admitted by the schema with no consequence
     // written for it would render as `undefined` in the agent's own turn.
     expect(texts).toHaveLength(INCIDENT_STAGES.length);
+
     for (const text of texts) expect(text).not.toContain('undefined');
   });
 
   test('a stage outside the closed set is refused rather than given a generic consequence', async () => {
     const { agent } = orchestratorHarness();
+
     const answer = await agent.acceptSandboxLifecycleFailure({
       version: SANDBOX_LIFECYCLE_ENVELOPE_VERSION,
       incidentId: 'inc-4', stage: 'defrost', reason: 'measured failure', attempts: 1,
     });
+
     expect(answer.status).toBe('rejected');
   });
 });

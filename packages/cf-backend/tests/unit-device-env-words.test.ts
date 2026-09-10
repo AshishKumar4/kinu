@@ -65,6 +65,7 @@ describe('the environment row says needs approval only where approval is the que
       name: 'sandbox', prefix: 'sandbox.*', live: true,
       policy: { readOnly: false, consistency: 'ephemeral' }, reason: null,
     };
+
     const row = exec({ name: 'sandbox', kind: 'sandbox', granted: false });
     expect(statusOf(sandbox, row)).toMatchObject({ word: 'active' });
   });

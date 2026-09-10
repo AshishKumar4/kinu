@@ -34,9 +34,11 @@ describe('createFileCodexAuthStore', () => {
     }, null, 2)}\n`);
 
     const calls: string[] = [];
+
     const store = createFileCodexAuthStore(configPath, {
       fetch: asFetchFunction(async (input) => {
         calls.push(String(input));
+
         return Response.json({
           access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
           refresh_token: 'refresh-new',
@@ -82,6 +84,7 @@ describe('createFileCodexAuthStore', () => {
     // Resolved from inside the refresh, so the second caller starts while the
     // first still holds the lock rather than at a guessed moment.
     const midFlight = Promise.withResolvers<void>();
+
     const store = createFileCodexAuthStore(configPath, {
       fetch: asFetchFunction(async (_input, init) => {
         submitted.push(String(new URLSearchParams(String(init?.body)).get('refresh_token')));
@@ -89,6 +92,7 @@ describe('createFileCodexAuthStore', () => {
         // Yield before answering, so the refresh is genuinely mid-flight — the
         // state in which a lock released at the callback's first await is gone.
         await Promise.resolve();
+
         return Response.json({
           access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
           refresh_token: `refresh-${String(submitted.length)}`,
@@ -129,10 +133,12 @@ describe('createFileCodexAuthStore', () => {
   test('an unparseable config is a failure, not an empty one', () => {
     const dir = scratchDir('codex-auth-store');
     const configPath = join(dir, 'config.json');
+
     const intact = JSON.stringify({
       origin: 'https://kinu.example',
       providers: { openai: { apiKey: 'sk-openai' }, codex: { refreshToken: 'refresh-old' } },
     }, null, 2);
+
     writeFileSync(configPath, intact.slice(0, -12));
 
     const store = createFileCodexAuthStore(configPath);

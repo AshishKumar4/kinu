@@ -40,6 +40,7 @@ function freshDb() {
   // The directory comes back too, so a case can issue a real SIBLING and prove
   // the folding is per-actor rather than per-database.
   const actors = createTestActors(sql, execRaw);
+
   return { db, sql, actors, actor: actors.main, actorId: actors.main.actorId };
 }
 
@@ -60,18 +61,21 @@ function seedJournalledRun(
 ): void {
   db.prepare(`INSERT INTO head_runs (actor_id, root_id, rationale, spawned_at) VALUES (?, ?, ?, ?)`)
     .run(actorId, run.rootId, run.rationale ?? run.task, run.at);
+
   if (run.parentHead) {
     db.prepare(
       `INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
        VALUES (?, ?, NULL, ?, 0, ?, '', ?, ?, 'synthesize')`,
     ).run(actorId, run.rootId, run.rootId, `parent of ${run.task}`, run.parentHead.status, run.at);
   }
+
   run.heads.forEach((head, i) => {
     db.prepare(
       `INSERT INTO head_journal (actor_id, id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
        VALUES (?, ?, ?, ?, 1, ?, '', ?, ?, 'synthesize')`,
     ).run(actorId, `${run.rootId}-h${i}`, run.parentHead ? run.rootId : null, run.rootId, `branch ${i}`, head.status, run.at + i);
   });
+
   if (run.merged) {
     db.prepare(
       `INSERT INTO head_merge_results
@@ -97,7 +101,9 @@ function seedSearchRun(
     `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
      VALUES (?, ?, ?, ?, ?, ?, '', 1, ?, ?, ?, ?)`,
   );
+
   node.run(actorId, run.rootId, null, run.rootId, run.task, run.name ?? '', 0, 0, 'open', run.at);
+
   for (let i = 0; i < run.branches; i++) {
     const isWinner = run.winner !== undefined && i === 0;
     node.run(
@@ -105,6 +111,7 @@ function seedSearchRun(
       isWinner ? run.winner! : 0.2, 1, isWinner ? 'terminal' : 'pruned', run.at + i + 1,
     );
   }
+
   if (run.ledger) {
     db.prepare(
       `INSERT INTO mcts_search_runs (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
@@ -272,6 +279,7 @@ describe('listForkRuns', () => {
       rootId: 'r-real', task: 'the real run', at: 1000,
       heads: [{ status: 'completed' }], merged: true,
     });
+
     for (let index = 0; index < 30; index += 1) {
       seedJournalledRun(db, actorId, {
         rootId: newBranchId(), task: `redirect ${index}`, at: 2000 + index,
@@ -284,10 +292,12 @@ describe('listForkRuns', () => {
 
   test('the limit bounds the run list, not each store', () => {
     const { db, sql, actor, actorId } = freshDb();
+
     for (let i = 0; i < 4; i++) {
       seedJournalledRun(db, actorId, { rootId: `m${i}`, task: `merge ${i}`, at: 1000 + i * 10, heads: [{ status: 'completed' }], merged: true });
       seedSearchRun(db, actorId, { rootId: `s${i}`, task: `search ${i}`, at: 1005 + i * 10, branches: 2, winner: 0.5, ledger: 'converged' });
     }
+
     const runs = listForkRuns(sql, actor, null, 3).items;
     expect(runs).toHaveLength(3);
     expect(runs.map((r) => r.id)).toEqual(['s3', 'm3', 's2']);
@@ -299,6 +309,7 @@ describe('listForkRuns', () => {
       rootId: 'bookmarked', task: 'historical run', at: 1,
       heads: [{ status: 'completed' }], merged: true,
     });
+
     for (let index = 0; index < 30; index += 1) {
       seedSearchRun(db, actorId, {
         rootId: `recent-${index}`, task: `recent ${index}`, at: 100 + index,
@@ -427,10 +438,12 @@ describe('a stale running lease', () => {
       `INSERT INTO search_nodes (actor_id, id, parent_id, root_id, task, action, observation, visits, value, depth, status, created_at)
        VALUES (?, ?, ?, ?, 'audit the coupon guard', '', '', 1, ?, ?, ?, ?)`,
     );
+
     node.run(actorId, run.rootId, null, run.rootId, 0, 0, run.root, 1000);
     run.branches.forEach((status, index) => {
       node.run(actorId, `${run.rootId}-n${index}`, run.rootId, run.rootId, 0.4, 1, status, 1001 + index);
     });
+
     if (run.ledger) {
       db.prepare(
         `INSERT INTO mcts_search_runs (actor_id, root_id, task, engine, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
@@ -591,12 +604,15 @@ describe('a run that wrote both stores', () => {
 
     const seen: ForkRunSummary[] = [];
     let cursor: SeekCursor | null = null;
+
     for (let page = 0; page < 5; page++) {
       const next: Page<ForkRunSummary> = listForkRuns(sql, actor, cursor, 1);
       seen.push(...next.items);
+
       if (next.status === 'end') break;
       cursor = next.next;
     }
+
     expect(seen.map((run) => run.id)).toEqual(['newest', 'middle', 'swarm-1']);
     const swarm = seen.find((run) => run.id === 'swarm-1');
     expect(swarm).toMatchObject({ hasSearchTree: true, hasNodeTranscripts: true, branches: 3 });
@@ -634,10 +650,12 @@ describe('the canvas page does not carry step traces', () => {
       heads: [{ status: 'completed' }, { status: 'completed' }],
     });
     const journal = new HeadJournal(fixture.sql, fixture.actor);
+
     for (const id of ['traced-h0', 'traced-h1']) {
       journal.appendStep(id, 0, { text: 'x'.repeat(chars), toolCalls: [{ name: 'file' }] });
       journal.appendStep(id, 1, { text: 'y'.repeat(chars), toolCalls: [] });
     }
+
     return journal;
   }
 

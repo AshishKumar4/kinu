@@ -36,6 +36,7 @@ function scriptedModel(text: string, prompts: string[]): MockLanguageModelV3 {
   return new MockLanguageModelV3({
     doGenerate: async (options) => {
       prompts.push(JSON.stringify(options.prompt));
+
       return {
         content: [{ type: 'text' as const, text }],
         finishReason: { unified: 'stop' as const, raw: undefined },
@@ -54,6 +55,7 @@ function policyWith(text: string, profile: () => Promise<ResolvedTurnProfile>) {
   const prompts: string[] = [];
   const reports: ModelCallReport[] = [];
   const operations: ModelOperationEvent[] = [];
+
   const mergeLLM = headMergeLLM({
     profile,
     bindMergeModel: (route) => {
@@ -63,11 +65,13 @@ function policyWith(text: string, profile: () => Promise<ResolvedTurnProfile>) {
         tier: route.tier,
         source: route.source,
       });
+
       return { model: scriptedModel(text, prompts) };
     },
     reportModelCall: (report) => reports.push(report),
     operations: (event) => operations.push(event),
   });
+
   return { asked, prompts, reports, operations, mergeLLM };
 }
 
@@ -139,8 +143,10 @@ describe('the head merge resolves one route, one effort, one spend label', () =>
 
   test('the profile is asked per merge, so a rebound tier lands on the next one', async () => {
     let asks = 0;
+
     const { asked, mergeLLM } = policyWith(GOOD_MERGE, async () => {
       asks += 1;
+
       return mergePolicyProfile();
     });
 

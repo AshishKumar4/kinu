@@ -34,6 +34,7 @@ const TunnelFrameSchema = v.object({
   method: v.string(),
   params: v.array(v.unknown()),
 });
+
 type TunnelFrame = v.InferOutput<typeof TunnelFrameSchema>;
 
 /** The laptop transport over a real tunnel — the seam the cloud actually has,
@@ -41,6 +42,7 @@ type TunnelFrame = v.InferOutput<typeof TunnelFrameSchema>;
  *  that answers on command. */
 function tunnelTransport(tunnel: DeviceTunnel): DeviceTransport {
   const connected = { connected: true, registered: true, toolchain: null } as const;
+
   return {
     rpc: (method, params, opts) => tunnel.rpc(method, params, opts),
     status: () => connected,
@@ -53,29 +55,36 @@ describe('run tool — workspace shell abort', () => {
     const { rt } = createTestRuntime();
     const controller = new AbortController();
     const executed: string[] = [];
+
     const ShellOptionsSchema = v.object({
       stdin: v.optional(v.string()),
       signal: v.optional(v.instance(AbortSignal)),
     });
+
     const shell: Shell = {
       exec: async (command, options) => {
         const parsed = v.safeParse(ShellOptionsSchema, options);
         const signal = parsed.success ? parsed.output.signal : undefined;
         executed.push(command);
+
         // Simulate the agent-utils shell contract: aborted → exit 130.
         if (signal?.aborted) return { stdout: '', stderr: 'aborted', exitCode: 130 };
+
         return { stdout: 'done', stderr: '', exitCode: 0 };
       },
     };
+
     const rtWithShell: AgentRuntime = { ...rt, shell };
     const tools = buildBuiltinTools({ rt: rtWithShell });
     const run = toolExecute<{ command: string; runtime?: string }, CommandResult>(tools.run);
 
     controller.abort();
+
     const pending = run(
       { command: 'cat big.txt && cat big2.txt' },
       { toolCallId: 'abort-test', messages: [], abortSignal: controller.signal },
     );
+
     await expect(pending).rejects.toMatchObject({ code: 'io', execution: { exitCode: 130 }, message: expect.stringContaining('exit 130') });
     expect(executed).toEqual(['cat big.txt && cat big2.txt']);
   });
@@ -95,9 +104,11 @@ describe('remote executor exec abort', () => {
 
   function sandboxHandleThatHonours(exec: SandboxHandle['exec']) {
     const seen: ObservedExec[] = [];
+
     const handle: SandboxHandle = {
       exec: (command, opts) => {
         seen.push({ command, signalled: opts?.signal !== undefined });
+
         return exec(command, opts);
       },
       readFile: async () => ({}),
@@ -109,6 +120,7 @@ describe('remote executor exec abort', () => {
       getExposedPorts: async () => [],
       ...sandboxHandleLifecycle,
     };
+
     return { handle, seen };
   }
 
@@ -121,8 +133,10 @@ describe('remote executor exec abort', () => {
           'AbortError',
         ));
       }, { once: true });
+
       return promise;
     });
+
     const provider = createSandboxExecutor(handle, 'preview.example.com');
     const controller = new AbortController();
 
@@ -155,10 +169,12 @@ describe('remote executor exec abort', () => {
     // start a SECOND container process for a turn that has already stopped
     // caring about the first.
     const controller = new AbortController();
+
     const { handle, seen } = sandboxHandleThatHonours(async () => {
       controller.abort();
       throw new Error('Network connection lost.');
     });
+
     const provider = createSandboxExecutor(handle, 'preview.example.com');
 
     await expect(provider.tools.exec.execute('ls', { signal: controller.signal }))
@@ -179,17 +195,22 @@ describe('remote executor exec abort', () => {
     cancelAnswer: (requestId: string) => Promise<JsonValue | undefined>,
   ) {
     const calls: LaptopCall[] = [];
+
     const transport: DeviceTransport = {
       rpc: async (method, params, opts) => {
         const call: LaptopCall = { method, params };
+
         if (opts?.requestId !== undefined) call.requestId = opts.requestId;
         calls.push(call);
+
         if (method !== DEVICE_CANCEL_METHOD) return hangingPromise();
+
         return cancelAnswer(String(params[0]));
       },
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
     };
+
     return { transport, calls };
   }
 
@@ -197,6 +218,7 @@ describe('remote executor exec abort', () => {
     const { transport, calls } = cancellableTransport(async (requestId) => ({
       requestId, cancelled: 'terminated',
     }));
+
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
 
@@ -212,6 +234,7 @@ describe('remote executor exec abort', () => {
     // could drift out of step and stop the wrong process.
     expect(calls.map((call) => call.method)).toEqual(['exec', DEVICE_CANCEL_METHOD]);
     const execRequestId = calls[0].requestId;
+
     if (execRequestId === undefined) throw new Error('the exec call carried no request identity');
     expect(calls[1].params[0]).toBe(execRequestId);
     expect(calls[1].params[1]).toBe(DEVICE_CANCEL_PROTOCOL);
@@ -223,6 +246,7 @@ describe('remote executor exec abort', () => {
     const { transport } = cancellableTransport(async (requestId) => ({
       requestId, cancelled: 'unknown',
     }));
+
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
 
@@ -241,6 +265,7 @@ describe('remote executor exec abort', () => {
     const { transport } = cancellableTransport(() => {
       throw new Error(`${DEVICE_UNKNOWN_METHOD}: ${DEVICE_CANCEL_METHOD}`);
     });
+
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
 
@@ -255,6 +280,7 @@ describe('remote executor exec abort', () => {
     const { transport } = cancellableTransport(() => {
       throw new Error('EPERM: operation not permitted, kill -12345');
     });
+
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
 
@@ -268,6 +294,7 @@ describe('remote executor exec abort', () => {
     const { transport } = cancellableTransport(() => {
       throw new Error(TUNNEL_DISCONNECTED);
     });
+
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
 
@@ -288,10 +315,12 @@ describe('remote executor exec abort', () => {
     // tunnel's deadline: a transport double could assert the report and never
     // that anything ends the wait at all.
     const frames: TunnelFrame[] = [];
+
     const socket: TunnelSocket = {
       readyState: 1,
       send: (data: string) => { frames.push(v.parse(TunnelFrameSchema, JSON.parse(data))); },
     };
+
     // A short control deadline and a distant liveness probe: the only thing
     // that can end this cancellation is the deadline under test. The wait below
     // is the tunnel's own rejection, never a sleep — but the deadline itself is
@@ -329,6 +358,7 @@ describe('remote executor exec abort', () => {
     const { transport } = cancellableTransport(async () => ({
       requestId: 'rpc-elsewhere0-4', cancelled: 'terminated',
     }));
+
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
 
@@ -345,15 +375,19 @@ describe('remote executor exec abort', () => {
     // and its result frame arrives after the abort was reported.
     const calls: LaptopCall[] = [];
     const held = Promise.withResolvers<JsonValue>();
+
     const transport: DeviceTransport = {
       rpc: (method, params) => {
         calls.push({ method, params });
+
         if (method !== DEVICE_CANCEL_METHOD) return held.promise;
+
         return Promise.resolve({ requestId: String(params[0]), cancelled: 'unknown' });
       },
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
     };
+
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
 
@@ -384,6 +418,7 @@ describe('remote executor exec abort', () => {
         exists: async () => false, delete: async () => {},
       },
     };
+
     const provider = createNimbusExecutor({ box });
     const controller = new AbortController();
 
@@ -397,11 +432,17 @@ describe('remote executor exec abort', () => {
     // process group anywhere — and no cancellation to send either, which is the
     // one abort case that must NOT reach the device.
     const calls: string[] = [];
+
     const transport: DeviceTransport = {
-      rpc: async (method) => { calls.push(method); return { stdout: '', stderr: '', exitCode: 0 }; },
+      rpc: async (method) => {
+        calls.push(method);
+
+        return { stdout: '', stderr: '', exitCode: 0 };
+      },
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
     };
+
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
     controller.abort();
@@ -420,6 +461,7 @@ describe('remote executor exec abort', () => {
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
     };
+
     const provider = createDeviceTunnelExecutor(transport);
     expect(await provider.tools.exec.execute('ls')).toBe('ok');
   });

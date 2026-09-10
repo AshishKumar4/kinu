@@ -32,6 +32,7 @@ const LockSchema = v.array(v.string());
 export function reconcile(keys: readonly string[], lockPath: string): Ratchet {
   const locked = new Set(v.parse(LockSchema, JSON.parse(readFileSync(lockPath, 'utf8'))));
   const found = new Set(keys);
+
   return {
     added: [...found].filter((k) => !locked.has(k)).sort(),
     stale: [...locked].filter((k) => !found.has(k)).sort(),
@@ -41,6 +42,7 @@ export function reconcile(keys: readonly string[], lockPath: string): Ratchet {
 export function writeLock(keys: readonly string[], lockPath: string): number {
   const sorted = [...new Set(keys)].sort();
   writeFileSync(lockPath, `${JSON.stringify(sorted, null, 2)}\n`);
+
   return sorted.length;
 }
 
@@ -55,11 +57,13 @@ export function assertMeasured(
   counts: readonly (readonly [string, number])[],
 ): string {
   const empty = counts.filter(([, n]) => n <= 0).map(([label]) => label);
+
   if (empty.length > 0) {
     throw new Error(
       `${gate}: measured nothing (${empty.join(', ')} is zero) — a gate that scans nothing cannot fail`,
     );
   }
+
   return counts.map(([label, n]) => `${String(n)} ${label}`).join(', ');
 }
 
@@ -97,19 +101,25 @@ export function report(
 ): number {
   if (ratchet.added.length === 0 && ratchet.stale.length === 0) {
     console.log(`${gate}: ok — ${measured}`);
+
     return 0;
   }
+
   if (ratchet.added.length > 0) {
     console.error(`${gate}: ${ratchet.added.length} new violation(s)\n`);
+
     for (const key of ratchet.added) console.error(detail.get(key) ?? key);
   }
+
   if (ratchet.stale.length > 0) {
     console.error(
       `\n${gate}: ${ratchet.stale.length} recorded violation(s) no longer reproduce.`,
     );
+
     for (const key of ratchet.stale) console.error(`  ${key}`);
     console.error(`Run \`${lockCommand}\` to record the cleanup.`);
   }
+
   return 1;
 }
 
@@ -139,10 +149,13 @@ export function blocked(
   acknowledgedBy: string,
 ): number {
   const acknowledgement = (process.env[acknowledgedBy] ?? '').trim();
+
   if (acknowledgement.length > 0) {
     console.log(`${gate}: BLOCKED and acknowledged — ${reason} (${acknowledgedBy}=${acknowledgement})`);
+
     return 0;
   }
+
   console.error(
     `${gate}: BLOCKED — ${reason}\n`
     + '  This is NOT a pass. The gate could not observe the thing it asserts, so it\n'
@@ -152,5 +165,6 @@ export function blocked(
     + `  or:        acknowledge it for this run with ${acknowledgedBy}=<who/why>, which\n`
     + '             records the acknowledgement in the invocation instead of in a comment.',
   );
+
   return 1;
 }

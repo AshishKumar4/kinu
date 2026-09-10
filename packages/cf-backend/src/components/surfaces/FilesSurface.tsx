@@ -43,6 +43,7 @@ import {
 } from "./files-plane";
 
 interface DirectoryResponse { path?: string; entries?: DirEntry[]; error?: string }
+
 type WriteResult = { ok: true } | { error: string };
 
 interface UploadState { name: string; status: "uploading" | "error"; error?: string }
@@ -56,8 +57,11 @@ const MOUNT_EXECUTOR: Record<string, string> = Object.fromEntries(
 /** Sizes at a glance, in the unit that keeps the column scannable. */
 function fmtSize(n: number): string {
   if (n < 1024) return `${n} B`;
+
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+
   return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
 
@@ -65,10 +69,15 @@ function fmtSize(n: number): string {
 function fmtWhen(mtimeMs: number | undefined): string {
   if (!mtimeMs) return "";
   const delta = Date.now() - mtimeMs;
+
   if (delta < 60e3) return "just now";
+
   if (delta < 36e5) return `${Math.round(delta / 60e3)}m ago`;
+
   if (delta < 864e5) return `${Math.round(delta / 36e5)}h ago`;
+
   if (delta < 30 * 864e5) return `${Math.round(delta / 864e5)}d ago`;
+
   return new Date(mtimeMs).toLocaleDateString();
 }
 
@@ -110,6 +119,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
   const listDir = useCallback(async (dir: string): Promise<{ path: string; entries: DirEntry[] }> => {
     const r = await rpc<DirectoryResponse>("getExecutorFiles", [PLANE, dir]);
+
     if (r.error) throw new Error(r.error);
     const listed = r.entries ?? [];
     const at = r.path ?? dir;
@@ -117,6 +127,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     // entry it names at a new revision, or no longer names at all, invalidates
     // that subtree instead of leaving it on screen.
     setTreeCache((prev) => nextTreeCache(prev, at, listed));
+
     return { path: at, entries: listed };
   }, [rpc]);
 
@@ -129,16 +140,19 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const loadListing = useCallback(async (): Promise<DirEntry[]> => {
     try {
       const listed = await listDir(path);
+
       // Asked for a bare mount point, the plane lists the machine's CONSENTED
       // directory rather than its `/`, and says which one it listed. Adopt it:
       // the crumb bar and every child path are built from `path`, so naming
       // `/pc` while showing `/pc/home/kinu` sends the next click nowhere.
       if (listed.path !== path) setPath(listed.path);
+
       return listed.entries;
     } catch (e) {
       throw new Error(renderThrownChain({ cause: e }), { cause: e });
     }
   }, [listDir, path]);
+
   const { resource: listing, reload: reloadListing } = useAsyncResource(loadListing, undefined, path);
   const entries = lastValue(listing) ?? [];
   const loading = listing.status === "loading";
@@ -166,6 +180,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   /** Row-operation runner: every rejection lands in the notice banner. */
   const run = useCallback(async (op: () => Promise<void>) => {
     setNotice(null);
+
     try {
       await op();
     } catch (cause) {
@@ -184,6 +199,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const uploadFiles = useCallback(async (list: readonly File[]) => {
     if (list.length === 0) return;
     setUploads(list.map((f) => ({ name: f.name, status: "uploading" as const })));
+
     for (const f of list) {
       try {
         // Raw bytes over HTTP: no base64 inflation, no frame ceiling.
@@ -195,17 +211,22 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           : u));
       }
     }
+
     await reloadListing();
   }, [path, rawUrl, reloadListing]);
 
   const commitRename = useCallback((from: string, draft: string) => run(async () => {
     const name = draft.trim();
     setRenaming(null);
+
     if (!name || name.includes("/")) throw new Error("a name cannot be empty or contain /");
     const to = joinDir(parentDir(from), name);
+
     if (to === from) return;
     const out = await rpc<WriteResult>("renameExecutorFile", [PLANE, from, to]);
+
     if ("error" in out) throw new Error(out.error);
+
     if (preview === from) setPreview(to);
     await reloadListing();
   }), [preview, reloadListing, rpc, run]);
@@ -213,7 +234,9 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const deletePath = useCallback((full: string) => run(async () => {
     setConfirmDelete(null);
     const out = await rpc<WriteResult>("deleteExecutorFile", [PLANE, full]);
+
     if ("error" in out) throw new Error(out.error);
+
     if (preview === full) setPreview(null);
     await reloadListing();
   }), [preview, reloadListing, rpc, run]);
@@ -221,15 +244,18 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const onListDragOver = useCallback((e: ReactDragEvent) => {
     if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
   }, []);
+
   const onListDragLeave = useCallback((e: ReactDragEvent) => {
     if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
     setDragOver(false);
   }, []);
+
   const onListDrop = useCallback((e: ReactDragEvent) => {
     if (!e.dataTransfer.files.length) return;
     e.preventDefault();
     setDragOver(false);
     const dropped = [...e.dataTransfer.files];
+
     return run(() => uploadFiles(dropped));
   }, [run, uploadFiles]);
 
@@ -243,20 +269,26 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
 
   const filtered = useMemo(() => {
     const needle = filter.trim().toLowerCase();
+
     if (!needle) return entries;
+
     return entries.filter((e) => e.name.toLowerCase().includes(needle));
   }, [entries, filter]);
 
   const laptopLabel = executors.find((e) => e.name === "laptop")?.label;
+
   const badgeFor = useCallback((entryName: string): string | null => {
     if (!atRoot) return null;
     const executor = MOUNT_EXECUTOR[entryName];
+
     if (!executor || !mounts.some((m) => m.name === executor && m.live)) return null;
+
     return executor === "laptop" ? laptopLabel ?? executorLabel("laptop") : executorLabel(executor);
   }, [atRoot, laptopLabel, mounts]);
 
   const open = useCallback((entry: DirEntry) => {
     const full = joinDir(path, entry.name);
+
     if (entry.type === "dir") {
       setFilter("");
       setPath(full);
@@ -277,9 +309,11 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const previewRevision = useMemo(() => {
     if (!preview) return "";
     const name = preview.slice(preview.lastIndexOf("/") + 1);
+
     const entry = preview === joinDir(path, name)
       ? entries.find((candidate) => candidate.name === name)
       : undefined;
+
     return entry ? entryRevision(entry) : "";
   }, [entries, path, preview]);
 
@@ -288,6 +322,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
   const onKeyDown = useCallback((e: ReactKeyboardEvent) => {
     if (renaming) return; // the rename input owns the keyboard
     const current = filtered[selected];
+
     if (e.key === "ArrowDown") { e.preventDefault(); setSelected((i) => Math.min(i + 1, filtered.length - 1)); }
     else if (e.key === "ArrowUp") { e.preventDefault(); setSelected((i) => Math.max(i - 1, 0)); }
     else if (e.key === "Enter" && current) { e.preventDefault(); open(current); }
@@ -296,6 +331,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
     else if (e.key === "Delete" && current) { e.preventDefault(); setConfirmDelete(joinDir(path, current.name)); }
     else if (e.key === "Escape") {
       e.preventDefault();
+
       if (confirmDelete) setConfirmDelete(null);
       else if (preview) setPreview(null);
       else if (filter) setFilter("");
@@ -320,6 +356,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           onOpenFile={setPreview}
           onToggle={(dir) => run(async () => {
             toggleExpanded(dir);
+
             if (!treeCache.has(dir)) await listDir(dir);
           })}
         />
@@ -342,7 +379,12 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             </span>
           ))}
           <input ref={uploadInputRef} type="file" multiple className="hidden"
-            onChange={(e) => { const picked = [...(e.currentTarget.files ?? [])]; e.currentTarget.value = ""; return run(() => uploadFiles(picked)); }} />
+            onChange={(e) => {
+              const picked = [...(e.currentTarget.files ?? [])];
+              e.currentTarget.value = "";
+
+              return run(() => uploadFiles(picked));
+            }} />
           <div className="ml-auto flex items-center gap-0.5 shrink-0">
             <button onClick={() => setPath(parentDir(path))} disabled={atRoot}
               className="p-text-3 hover:p-text p-1 disabled:opacity-30 disabled:hover:p-text-3"
@@ -432,6 +474,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             >
               {filtered.map((entry, i) => {
                 const full = joinDir(path, entry.name);
+
                 return (
                   <EntryTile
                     key={entry.name}
@@ -456,6 +499,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
           )}
           {offlineMounts.map((m) => {
             const mountName = Object.entries(MOUNT_EXECUTOR).find(([, executor]) => executor === m.name)?.[0] ?? m.name;
+
             return (
               <div key={`offline-${m.name}`} data-files-offline-mount
                 className="flex items-center gap-2 w-full font-mono px-3 py-1 p-text-4"
@@ -539,6 +583,7 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
   const isOpen = expanded.has(dir);
   const children = cache.get(dir)?.entries;
   const active = path === dir;
+
   return (
     <div>
       <div
@@ -548,7 +593,11 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
         onClick={() => onNavigate(dir)}
       >
         <button
-          onClick={(e) => { e.stopPropagation(); return onToggle(dir); }}
+          onClick={(e) => {
+            e.stopPropagation();
+
+            return onToggle(dir);
+          }}
           className="p-text-3 hover:p-text shrink-0"
           aria-label={isOpen ? `Collapse ${label}` : `Expand ${label}`}
         >
@@ -568,6 +617,7 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
       )}
       {isOpen && children?.map((child) => {
         const full = joinDir(dir, child.name);
+
         return child.type === "dir" ? (
           <TreeNode
             key={child.name}
@@ -625,6 +675,7 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
     entry.type === "file" && entry.size != null ? fmtSize(entry.size) : null,
     fmtWhen(entry.mtimeMs) || null,
   ].filter(Boolean).join(" · ");
+
   return (
     <div
       data-files-entry
@@ -648,7 +699,9 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
           onChange={(e) => onRenameDraft(e.currentTarget.value)}
           onKeyDown={(e) => {
             e.stopPropagation();
+
             if (e.key === "Enter") return onRenameCommit(e.currentTarget.value);
+
             if (e.key === "Escape") onRenameCancel();
           }}
           onBlur={onRenameCancel}

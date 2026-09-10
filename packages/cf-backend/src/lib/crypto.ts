@@ -8,12 +8,15 @@
 export function randomToken(bytes: number): string {
   const data = crypto.getRandomValues(new Uint8Array(bytes));
   let bin = '';
+
   for (const b of data) bin += String.fromCharCode(b);
+
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
 export async function sha256Hex(input: string | ArrayBuffer): Promise<string> {
   const bytes = input instanceof ArrayBuffer ? input : new TextEncoder().encode(input);
   const digest = await crypto.subtle.digest('SHA-256', bytes);
+
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }

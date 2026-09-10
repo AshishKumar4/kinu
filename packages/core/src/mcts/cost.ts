@@ -89,15 +89,18 @@ export function estimateCost(
 
 function priceProjection(totalCalls: number, model: CostModel | undefined) {
   const pricing = model?.pricing;
+
   if (model && pricing) {
     const projected: Usage = {
       input: totalCalls * AVG_CALL_USAGE.input,
       output: totalCalls * AVG_CALL_USAGE.output,
     };
+
     // The ONE pricing implementation (mission-budget.priceCall), so a search's
     // pre-run estimate and the ledger that later debits the same calls cannot
     // disagree about what a token costs.
     const priced = priceCall(projected, pricing);
+
     if (priced !== undefined) {
       return {
         estimatedUSD: priced.usd,
@@ -105,6 +108,7 @@ function priceProjection(totalCalls: number, model: CostModel | undefined) {
       };
     }
   }
+
   return {
     estimatedUSD: estimateUsdCost(totalCalls * AVG_TOKENS_PER_CALL),
     basis: {
@@ -122,7 +126,9 @@ export function describeCostBasis(basis: CostBasis): string {
     return `catalog rates for ${basis.model}: `
       + `$${basis.rates.input}/1M in, $${basis.rates.output}/1M out`;
   }
+
   const fallback = `the $${basis.usdPer1kTokens}/1k blended fallback`;
+
   return basis.model === null
     ? `no model named, so ${fallback} — the price is unknown, not zero`
     : `${basis.model} is unpriced in the catalog, so ${fallback} `

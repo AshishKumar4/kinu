@@ -41,7 +41,9 @@ interface DaemonContext {
 }
 
 const require = createRequire(import.meta.url);
+
 const rawDaemonModule: unknown = require('../../pc-agent/src/index.js');
+
 const daemon = v.parse(v.object({ handle: v.function() }), rawDaemonModule);
 
 /** The daemon's dispatch, called with the frame and sink shapes above. Valibot
@@ -58,6 +60,7 @@ function daemonResolves(PATH: string, names: readonly string[]): string[] {
   const frames: unknown[] = [];
   const previous = process.env.PATH;
   process.env.PATH = PATH;
+
   try {
     dispatch(
       { id: 1, method: 'which', params: [[...names]] },
@@ -67,6 +70,7 @@ function daemonResolves(PATH: string, names: readonly string[]): string[] {
   } finally {
     process.env.PATH = previous;
   }
+
   return v.parse(whichResult, frames[0]).result.present;
 }
 
@@ -78,8 +82,10 @@ function bunResolves(PATH: string, names: readonly string[]): string[] {
 /** A PATH directory laid out by `build`, cleaned up after `fn`. */
 function withPathDir<T>(build: (dir: string) => void, fn: (dir: string) => T): T {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-scratch-path-parity-'));
+
   try {
     build(dir);
+
     return fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });

@@ -13,17 +13,20 @@ import {
 import type { UserCaller } from '../src/user/workspace-capability';
 
 const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;
+
 const caller = async () => FAKE_CALLER;
 
 type RpcCall = [method: string, params: JsonValue[], opts: DeviceRpcOptions | undefined, caller: UserCaller];
 
 function fakeHub(status: () => DeviceStatus): DeviceHubClient & { rpcCalls: RpcCall[] } {
   const rpcCalls: RpcCall[] = [];
+
   return {
     rpcCalls,
     deviceRuntimeStatus: async () => status(),
     deviceRpc: async (caller, method, params, opts) => {
       rpcCalls.push([method, params, opts, caller]);
+
       return JSON.stringify({ stdout: 'ok', stderr: '', exitCode: 0 });
     },
     acknowledgeDeviceRequest: async () => {},
@@ -34,19 +37,23 @@ const NO_DEVICE: DeviceStatus = { connected: false, registered: false, toolchain
 
 function requiredCall(calls: RpcCall[], index: number): RpcCall {
   const call = calls[index];
+
   if (!call) throw new Error(`expected RPC call ${index}`);
+
   return call;
 }
 
 const sleep = (ms: number): Promise<void> => {
   const { promise, resolve } = Promise.withResolvers<void>();
   setTimeout(resolve, ms);
+
   return promise;
 };
 
 describe('createHubDeviceTransport', () => {
   test('refreshStatus is authoritative: a device that connected mid-session becomes visible', async () => {
     let connected = false;
+
     const transport = createHubDeviceTransport({
       hub: () => fakeHub(() => ({ connected, registered: true, toolchain: null })),
       caller,
@@ -62,14 +69,17 @@ describe('createHubDeviceTransport', () => {
 
   test('status() serves the cached snapshot inside the TTL without re-querying the hub', async () => {
     let listCalls = 0;
+
     const hub: DeviceHubClient = {
       deviceRuntimeStatus: async () => {
         listCalls += 1;
+
         return { connected: true, registered: true, toolchain: null };
       },
       deviceRpc: async () => 'unused',
       acknowledgeDeviceRequest: async () => {},
     };
+
     const transport = createHubDeviceTransport({
       hub: () => hub, agentName: 'agent-1', cliCwd: () => null,
       caller,
@@ -101,6 +111,7 @@ describe('createHubDeviceTransport', () => {
       hub: () => null, agentName: 'agent-1', cliCwd: () => null,
       caller,
     });
+
     expect(await transport.refreshStatus()).toEqual({ connected: false, registered: false, toolchain: null });
     const refusal = transport.rpc('exec', ['ls']);
     await expect(refusal).rejects.toThrow(WORKSPACE_HAS_NO_OWNER);
@@ -108,29 +119,37 @@ describe('createHubDeviceTransport', () => {
     // Handled identically by every caller — the plane is unavailable — and told
     // apart only where a person is being told what to do next.
     let unattached: Error | null = null;
+
     try { await transport.rpc('exec', ['ls']); }
     catch (caught) { unattached = caught instanceof Error ? caught : new Error(String(caught)); }
+
     expect(isDeviceNotConnectedError(unattached)).toBe(true);
     expect(isWorkspaceUnattachedError(unattached)).toBe(true);
+
     // The denominator: a hub that answers, with no device on it, is the OTHER
     // condition and must not read as unattached.
     const unlinked = createHubDeviceTransport({
       hub: () => fakeHub(() => NO_DEVICE), agentName: 'agent-1', cliCwd: () => null, caller,
     });
+
     let hubRefusal: Error | null = null;
+
     try { await unlinked.rpc('exec', ['ls']); }
     catch (caught) { hubRefusal = caught instanceof Error ? caught : new Error(String(caught)); }
+
     expect(isWorkspaceUnattachedError(hubRefusal)).toBe(false);
   });
 
   test('rpc outcomes re-seed the snapshot: success → connected, hub rejection → offline', async () => {
     let hubUp = true;
     const hub = fakeHub(() => NO_DEVICE);
+
     const failingHub: DeviceHubClient = {
       deviceRuntimeStatus: async () => NO_DEVICE,
       deviceRpc: async () => { throw new Error('no device connected'); },
       acknowledgeDeviceRequest: async () => { throw new Error('no device connected'); },
     };
+
     const transport = createHubDeviceTransport({
       hub: () => (hubUp ? hub : failingHub),
       caller,
@@ -156,7 +175,9 @@ describe('createHubDeviceTransport', () => {
       registered: true,
       toolchain: { present: ['javascript'], asked: ['javascript', 'python'], probedAt: Date.now() },
     };
+
     const hub = fakeHub(() => probed);
+
     const transport = createHubDeviceTransport({
       hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => null,
     });
@@ -175,9 +196,11 @@ describe('createHubDeviceTransport', () => {
     // params for the CLI cwd and adds checkpoint hints. An id that does not
     // reach the hub is a command nothing can cancel.
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+
     const transport = createHubDeviceTransport({
       hub: () => hub, caller, agentName: 'agent-1', cliCwd: () => '/home/me/project',
     });
+
     const requestId = nextDeviceRequestId();
 
     await transport.rpc('exec', ['make'], { timeoutMs: 0, requestId });
@@ -194,6 +217,7 @@ describe('createHubDeviceTransport', () => {
 
   test('mutating methods carry the pre-mutation checkpoint hint; reads do not', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+
     const transport = createHubDeviceTransport({
       hub: () => hub,
       caller,
@@ -225,16 +249,19 @@ describe('createHubDeviceTransport', () => {
       hub: () => hub, agentName: 'a', cliCwd: () => null, checkpointMeta: () => null,
       caller,
     });
+
     await outsideTurn.rpc('writeFile', ['/x', 'y']);
     expect(requiredCall(hub.rpcCalls, 1)[2]?.checkpoint).toBeUndefined();
   });
 
   test('exec calls are rewritten into the CLI-forwarded working directory', async () => {
     const hub = fakeHub(() => ({ connected: true, registered: true, toolchain: null }));
+
     const transport = createHubDeviceTransport({
       hub: () => hub, agentName: 'agent-1', cliCwd: () => "/home/u/my proj",
       caller,
     });
+
     await transport.rpc('exec', ['git status']);
     await transport.rpc('readFile', ['/tmp/a']);
     // The workspace identity reaches the hub with every call, not just the first.
@@ -247,11 +274,13 @@ describe('createHubDeviceTransport', () => {
   // the user hub. What the agent must see is "no device", not a crashed turn.
   test('a hub that refuses this workspace reads as no device, and calls surface the reason', async () => {
     const denial = () => { throw new Error('"device.rpc" is not available to a shared workspace.'); };
+
     const denying: DeviceHubClient = {
       deviceRuntimeStatus: async () => denial(),
       deviceRpc: async () => denial(),
       acknowledgeDeviceRequest: async () => denial(),
     };
+
     const transport = createHubDeviceTransport({
       hub: () => denying, caller, agentName: 'agent-1', cliCwd: () => null,
     });

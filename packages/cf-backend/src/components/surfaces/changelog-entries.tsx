@@ -31,6 +31,7 @@ import { DiffLines, timeAgo, CodeBlock } from "./shared";
 import { renderThrownChain } from "@kinu.run/core/obs";
 
 export interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
+
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }
 
 const KIND_ICON = {
@@ -79,15 +80,18 @@ export function useChangelog(rpc: Rpc, onSeen?: () => void) {
   // rendering against THAT would blank the new-entry dots seconds after the
   // reader arrived, on the surface whose whole job is showing what is new.
   const openedSeenAt = useRef<number | null>(null);
+
   if (openedSeenAt.current === null && view !== null) openedSeenAt.current = view.seenAt;
 
   const [seenError, setSeenError] = useState<string | null>(null);
+
   const markSeen = useCallback(async () => {
     if (!view || view.unseenCount === 0) return;
     await rpc("markChangelogSeen", []);
     setSeenError(null);
     onSeen?.();
   }, [view, rpc, onSeen]);
+
   const { resource: seenMark } = useAsyncResource(markSeen);
 
   useEffect(() => {
@@ -105,6 +109,7 @@ export function ChangelogFailure(
   if (resource.status === "error") {
     return <LoadFailure what="the changelog" message={resource.message} onRetry={reload} />;
   }
+
   return <div className="flex items-center justify-center gap-2 py-4 text-xs p-text-3" role="status">
     <Loader size="sm" />
     <span>Loading journal…</span>
@@ -131,9 +136,11 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const revert = useCallback(async () => {
     setBusy(true);
     setNotice(null);
+
     try {
       const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entry.id]);
       setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
+
       if (r.ok) onReverted();
     } catch (e) {
       setNotice({ text: renderThrownChain({ cause: e }), ok: false });
@@ -143,9 +150,15 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   }, [rpc, entry.id, onReverted]);
 
   const toggleDiff = useCallback(async () => {
-    if (diff !== null) { setDiff(null); return; }
+    if (diff !== null) {
+      setDiff(null);
+
+      return;
+    }
+
     if (entry.scaffoldVersion == null) return;
     setDiff({ status: "loading" });
+
     try {
       const d = await rpc<ScaffoldDiff>("getScaffoldDiff", [entry.scaffoldVersion]);
       setDiff(loadSucceeded(d));
@@ -260,6 +273,7 @@ interface StagedSkillView {
   requestId: string; routeIndex: number; target: string;
   digest: string; source: string; intact: boolean;
 }
+
 type StagedSkillResult = { ok: true; view: StagedSkillView } | { ok: false; error: string };
 
 /**
@@ -284,8 +298,14 @@ function StagedSkillDecision(
   const [notice, setNotice] = useState<{ text: string; ok: boolean } | null>(null);
 
   const open = useCallback(async () => {
-    if (staged !== null) { setStaged(null); return; }
+    if (staged !== null) {
+      setStaged(null);
+
+      return;
+    }
+
     setStaged({ status: "loading" });
+
     try {
       const result = await rpc<StagedSkillResult>("showRefinement", [decision.requestId, decision.routeIndex]);
       setStaged((previous) => result.ok
@@ -299,6 +319,7 @@ function StagedSkillDecision(
   const decide = useCallback(async (verdict: "approve" | "reject", digest: string) => {
     setBusy(true);
     setNotice(null);
+
     try {
       const result = await rpc<{ ok: boolean; detail?: string; error?: string }>(
         "decideRefinement",
@@ -309,7 +330,9 @@ function StagedSkillDecision(
           decision: verdict,
         }],
       );
+
       setNotice({ text: result.ok ? (result.detail ?? "done") : (result.error ?? "failed"), ok: result.ok });
+
       if (result.ok) onDecided();
     } catch (error) {
       setNotice({ text: renderThrownChain({ cause: error }), ok: false });
@@ -370,9 +393,11 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc;
   const revert = useCallback(async () => {
     setBusy(true);
     setNotice(null);
+
     try {
       const r = await rpc<{ ok: boolean; detail?: string; error?: string }>("revertChangelogEntry", [entry.id]);
       setNotice({ text: r.ok ? `Reverted: ${r.detail ?? "done"}` : (r.error ?? "revert failed"), ok: r.ok });
+
       if (r.ok) onReverted();
     } catch (e) {
       setNotice({ text: renderThrownChain({ cause: e }), ok: false });

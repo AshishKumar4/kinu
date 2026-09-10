@@ -23,6 +23,7 @@ function fakeUserDOStub(
     key, kind: headers['x-api-key'] ? 'bearer' : 'oauth',
     createdAt: 0, updatedAt: 0,
   }));
+
   return userCredentialSource({
     getAuthHeaders: async (key: string) => creds[key] ?? null,
     hasCredential: async (key: string) => !!creds[key],
@@ -37,6 +38,7 @@ describe('AgentProviderRegistry composition', () => {
       env: {},
       userDO: fakeUserDOStub(),
     });
+
     const ids = reg.registry.list().map(p => p.id);
     expect(ids).toEqual([
       'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'openai',
@@ -65,6 +67,7 @@ describe('AgentProviderRegistry composition', () => {
     // assembly; a bare `@cf/…` parses to provider `@cf`, which no registry
     // knows, so the count is asked of a provider that does not exist.
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
+
     for (const raw of ['@cf/moonshotai/kimi-k2.6', 'gpt-5.5', 'codex/gpt-5.5', '']) {
       const keyed = parseModelSpec(reg.normalizeSpecSync(raw));
       // The provider the counter names is one the registry can actually serve.
@@ -72,6 +75,7 @@ describe('AgentProviderRegistry composition', () => {
       // And it is the same spec the model resolution would take.
       expect(`${keyed.provider}/${keyed.modelId}`).toBe(reg.normalizeSpecSync(raw));
     }
+
     // The two directions raw parsing breaks in, stated as themselves: it throws
     // on the bare id and mis-keys the bare `@cf/…`.
     expect(() => parseModelSpec('gpt-5.5')).toThrow(/expected "<provider>\/<modelId>"/);
@@ -90,21 +94,25 @@ describe('AgentProviderRegistry composition', () => {
       env: platformGatewayEnv(),
       userDO: fakeUserDOStub(),
     });
+
     expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('the staging identity runs Workers AI through the direct binding', async () => {
     const calls: Array<{ model: string; stream: boolean }> = [];
+
     const ai = Object.assign(stubAiBinding().binding, {
       async run(model: string, inputs: { stream?: boolean }) {
         const stream = inputs.stream === true;
         calls.push({ model, stream });
+
         if (!stream) {
           return {
             response: 'direct binding',
             usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
           };
         }
+
         // A streamed turn goes over the binding as a real event stream. The
         // adapter refuses a finished completion replayed as one frame, so a stub
         // answering `{ response, usage }` for `stream: true` would fail here.
@@ -115,11 +123,14 @@ describe('AgentProviderRegistry composition', () => {
         ].join(''), { headers: { 'content-type': 'text/event-stream' } });
       },
     });
+
     const directBinding: Ai = Object.create(ai);
+
     const env = {
       DEV_USER_EMAIL: 'eval-service@kinu.run',
       AI: directBinding,
     };
+
     const reg = createAgentProviderRegistry({ env, userDO: fakeUserDOStub() });
     expect(await reg.registry.get('workers-ai')!.isAvailable(reg.deps)).toBe(true);
     const model = reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6');
@@ -154,6 +165,7 @@ describe('AgentProviderRegistry composition', () => {
         'openai.bearer': { Authorization: 'Bearer sk-test' },
       }),
     });
+
     expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
@@ -162,6 +174,7 @@ describe('AgentProviderRegistry composition', () => {
       env: {},
       userDO: fakeUserDOStub({ 'codex.oauth': { Authorization: 'Bearer codex-token', originator: 'codex_cli_rs' } }),
     });
+
     expect(reg.normalizeSpecSync('codex/gpt-5.5')).toBe('codex/gpt-5.5');
   });
 
@@ -175,9 +188,11 @@ describe('AgentProviderRegistry composition', () => {
       env: {},
       userDO: null,
     });
+
     const gated = [
       'workers-ai', 'my-gateway', 'codex', 'openai', 'anthropic', 'openrouter', 'openai-compat',
     ];
+
     const list = await reg.registry.listProviders(reg.deps);
     const credGated = list.filter((p) => gated.includes(p.id));
     // Every one of them, by name. A filter is a denominator: an empty list, or an
@@ -185,6 +200,7 @@ describe('AgentProviderRegistry composition', () => {
     // provider is available without a UserDO" a claim about nothing — which is
     // the reading a provider that silently became reachable would produce.
     expect(credGated.map((p) => p.id).sort()).toEqual([...gated].sort());
+
     for (const p of credGated) expect(p.available).toBe(false);
   });
 });
@@ -198,6 +214,7 @@ describe('default provider with a null UserDO stub (inline-branch context)', () 
       env: platformGatewayEnv(),
       userDO: null,
     });
+
     expect(reg.normalizeSpecSync(null))
       .toBe(`ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`);
   });
@@ -210,6 +227,7 @@ describe('default provider with a null UserDO stub (inline-branch context)', () 
       env: { AI_GATEWAY_URL: TEST_GATEWAY_URL },
       userDO: null,
     });
+
     expect(() => reg.normalizeSpecSync(null)).toThrow(/Workers AI binding \(env\.AI\) missing/);
   });
 
@@ -218,14 +236,17 @@ describe('default provider with a null UserDO stub (inline-branch context)', () 
       env: { AI_GATEWAY_URL: 'https://gw', AI: stubAiBinding().binding },
       userDO: null,
     });
+
     expect(() => reg.normalizeSpecSync(null)).toThrow(/AI_GATEWAY_URL is not an AI Gateway URL/);
   });
 
   test('registry default and provider availability answer the same question', async () => {
     const usable = createAgentProviderRegistry({ env: platformGatewayEnv(), userDO: null });
     const unusable = createAgentProviderRegistry({ env: { AI_GATEWAY_URL: TEST_GATEWAY_URL }, userDO: null });
+
     const availability = async (reg: AgentProviderRegistry) =>
       (await reg.registry.listProviders(reg.deps)).find((p) => p.id === 'ai-gateway')?.available;
+
     expect(await availability(usable)).toBe(true);
     expect(usable.normalizeSpecSync(null)).toStartWith('ai-gateway/');
     expect(await availability(unusable)).toBe(false);
@@ -258,11 +279,13 @@ describe('default-agent prompt model context', () => {
     expect(modelId).toBe(DEFAULT_WORKERS_AI_MODEL_ID);
 
     const { rt } = createTestRuntime();
+
     const prompt = buildSystemPromptSync(rt, {
       availableTools: ['run', 'memory'],
       backend: 'cf',
       model: { id: modelId, provider },
     });
+
     expect(prompt).not.toContain('Kimi K2.6 works best when tool use is concrete and continuous');
   });
 });
@@ -276,6 +299,7 @@ describe('the model a new workspace starts on', () => {
   const native: ModelMenuEntry = {
     spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'DeepSeek V4 Pro 0813', provider: 'workers-ai',
   };
+
   const byo: ModelMenuEntry = { spec: 'openai/gpt-5.5', label: 'GPT-5.5', provider: 'openai' };
   const servable = (models: ModelMenuEntry[]) => models.map((entry) => entry.spec);
 

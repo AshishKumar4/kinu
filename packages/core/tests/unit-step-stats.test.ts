@@ -44,6 +44,7 @@ describe('summarizeSteps', () => {
       step({ input: 100, cacheRead: 50, output: 10, reasoning: 5 }),
       step({ input: 200, cacheRead: 150, output: 20, reasoning: 0 }),
     ], { windowLimit: 50 });
+
     expect(t.tokens).toEqual({ input: 300, cacheRead: 200, output: 30, reasoning: 5 });
     expect(t.steps).toBe(2);
     expect(t.windowLimit).toBe(50);
@@ -54,6 +55,7 @@ describe('summarizeSteps', () => {
       step({ input: 100, output: 10 }),
       step({ input: 200, output: 20 }),
     ], { windowLimit: 50 });
+
     expect(t.tokens).toEqual({ input: 300, output: 30 });
     expect('cacheRead' in t.tokens).toBe(false);
     expect('reasoning' in t.tokens).toBe(false);
@@ -65,6 +67,7 @@ describe('summarizeSteps', () => {
       step({ input: 100, output: 10 }),
       step({ input: 200, output: 20, cacheWrite: 64, cacheWrite1h: 32 }),
     ], { windowLimit: 50 });
+
     expect(t.tokens.cacheWrite).toBe(64);
     expect(t.tokens.cacheWrite1h).toBe(32);
   });
@@ -74,6 +77,7 @@ describe('summarizeSteps', () => {
       step({ input: 88, output: 24, neurons: 19.2 }),
       step({ input: 92, output: 21, neurons: 6.2 }),
     ], { windowLimit: 50 });
+
     expect(t.tokens.neurons).toBeCloseTo(25.4, 5);
   });
 
@@ -83,6 +87,7 @@ describe('summarizeSteps', () => {
       step({}),
       step({}),
     ], { windowLimit: 50 });
+
     expect(t.steps).toBe(3);
     expect(t.stepsWithoutUsage).toBe(2);
     // The totals cover only the one reporting step, and the counter says so.
@@ -100,6 +105,7 @@ describe('summarizeSteps', () => {
     // ceil(0.95*10)=10th smallest, i.e. the maximum.
     const samples = Array.from({ length: 10 }, (_, i) =>
       step({ input: 100, cacheRead: (i + 1) * 10 }));
+
     const { cacheHit } = summarizeSteps(samples, { windowLimit: 100 });
     expect(cacheHit.samples).toBe(10);
     expect(cacheHit.last).toBeCloseTo(1.0, 10);
@@ -122,6 +128,7 @@ describe('summarizeSteps', () => {
       step({ input: 0, output: 5 }),
       step({ input: 100, cacheRead: 40 }),
     ], { windowLimit: 10 });
+
     expect(t.steps).toBe(2);
     expect(t.cacheHit.samples).toBe(1);
     expect(t.cacheHit.mean).toBeCloseTo(0.4, 10);
@@ -132,6 +139,7 @@ describe('summarizeSteps', () => {
       step({ input: 100, output: 10 }),
       step({ input: 100, output: 10 }),
     ], { windowLimit: 10 });
+
     expect(t.steps).toBe(2);
     // No rate is inferable from either, so the distribution is empty rather
     // than two fabricated 0% misses.
@@ -145,6 +153,7 @@ describe('summarizeSteps', () => {
       step({ input: 100, output: 10 }, 0.25),
       step({ input: 100, output: 10 }),
     ], { windowLimit: 10 });
+
     expect(t.usd).toBeCloseTo(0.25, 10);
     expect(t.pricedSteps).toBe(1);
     expect(t.unpricedSteps).toBe(1);

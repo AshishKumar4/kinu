@@ -40,6 +40,7 @@ type TunnelModule = typeof DeviceTunnelModule;
  */
 async function isolateLifetime(tag: string): Promise<TunnelModule> {
   const specifier = `../src/execution/device-tunnel.ts?lifetime=${tag}`;
+
   return await import(specifier);
 }
 
@@ -54,11 +55,13 @@ const SentFrameSchema = v.object({
  *  land. */
 function fakeSocket() {
   const sent: v.InferOutput<typeof SentFrameSchema>[] = [];
+
   const socket: TunnelSocket & { sent: typeof sent; readyState: number } = {
     readyState: 1,
     sent,
     send(data: string) { sent.push(v.parse(SentFrameSchema, JSON.parse(data))); },
   };
+
   return socket;
 }
 

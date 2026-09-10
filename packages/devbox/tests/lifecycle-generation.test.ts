@@ -38,9 +38,11 @@ import {
 } from './support/devbox-harness';
 
 const RECOVERY_KEY = 'devbox:attach-recovery';
+
 /** The owner a seeded row carries: a previous attempt's token, which no live
  *  attempt holds. */
 const PREVIOUS = 'previous-attempt';
+
 const INCIDENT_PREFIX = 'devbox:incident:';
 
 const failure = (code: string): SandboxFailure =>
@@ -153,6 +155,7 @@ function ladder(rows: Map<string, StoredValue>): RecoveryRow | undefined {
   // shape, and a test that read the row more loosely than the box does could
   // assert a stage the box would have refused.
   const held = parseRecoveryRow(rows.get(RECOVERY_KEY));
+
   return held.kind === 'row' ? held.row : undefined;
 }
 
@@ -170,6 +173,7 @@ function ladder(rows: Map<string, StoredValue>): RecoveryRow | undefined {
 function failAttempt(harnessed: { readonly storage: FakeStorage }, code: string): void {
   harnessed.storage.faultOn('devbox:last-attach', failure(code));
 }
+
 /** Fail the container-start hook's restore, so the delivered attempt is the
  *  one the test observes.
  *
@@ -1151,6 +1155,7 @@ describe('one budget, two policies: the attach may replace, the phases after it 
     // outlast the runner's timeout many times over.
     const harnessed = harness(TightBox);
     const { box, container, rows } = harnessed;
+
     for (const value of [3000, 8080, 9000]) port(rows, value, `tok${String(value)}`);
     await box.devboxStartup();
     // ATTACHED, AND HONEST ABOUT NOT BEING READY. No port answered, so none was
@@ -1297,6 +1302,7 @@ describe('the heartbeat does not quiesce active caller work', () => {
   test('a long exec crossing both idle windows keeps running, then quiesces after it settles', async () => {
     let now = Date.parse('2026-08-28T00:00:00.000Z');
     const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+
     try {
       const { box, container } = harness(HeartbeatBox);
       await box.exec('true');

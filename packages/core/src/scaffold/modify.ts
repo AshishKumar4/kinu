@@ -44,23 +44,28 @@ export async function modifyScaffold(
   if (rationale.length < minRationaleLength) {
     return { ok: false, stage: 1, error: `Rationale must be ≥${minRationaleLength} chars` };
   }
+
   for (const pattern of FORBIDDEN_PATTERNS) {
     if (pattern.test(code)) {
       return { ok: false, stage: 1, error: `Forbidden pattern: ${pattern.source}` };
     }
   }
+
   if (!REQUIRED_SIGNATURE.test(code)) {
     return { ok: false, stage: 1, error: 'Must export async function* run(rt, task)' };
   }
+
   // Misevolution gate (fixed criteria, hardcoded in core): a proposal that
   // touches the safety machinery, opens raw egress, or weakens consent paths
   // is a hard veto with a recorded reason. Re-checked at promotion time in
   // applyPromotionDecision against the on-disk pending file.
   const misevolution = checkMisevolution(code);
+
   if (!misevolution.ok) {
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'scaffold', violation: misevolution, detail: rationale,
     });
+
     return { ok: false, stage: 1, error: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
   }
 
@@ -69,6 +74,7 @@ export async function modifyScaffold(
     `async () => { new Function(${JSON.stringify(`"use strict";\n${code}`)}); return true; }`,
     [],
   );
+
   if (parseError) {
     return { ok: false, stage: 2, error: `Parse error: ${parseError}` };
   }
@@ -83,6 +89,7 @@ export async function modifyScaffold(
     SELECT version FROM scaffold_versions
     WHERE actor_id = ${actorId} AND status = 'pending'
     ORDER BY version DESC LIMIT 1`;
+
   if (pendingRows.length > 0) {
     return {
       ok: false, stage: 3,
@@ -95,18 +102,22 @@ export async function modifyScaffold(
   // cycle. Number the new pending above any existing row so its PK never
   // collides with a stale row.
   const currentVersion = getCurrentScaffoldVersion(rt.storage.sql, rt.actor) ?? 0;
+
   const maxRows = rt.storage.sql<{ v: number }>`
     SELECT COALESCE(MAX(version), 0) AS v FROM scaffold_versions
     WHERE actor_id = ${actorId}`;
+
   const newVersion = (maxRows[0]?.v ?? 0) + 1;
 
   // Lineage: a proposal may branch from ANY archived version (DGM stepping
   // stones), not only the current. The base must be a real archive row.
   const baseVersion = opts?.baseVersion ?? currentVersion;
+
   if (baseVersion !== currentVersion) {
     const baseRows = rt.storage.sql<{ version: number }>`
       SELECT version FROM scaffold_versions
       WHERE actor_id = ${actorId} AND version = ${baseVersion} LIMIT 1`;
+
     if (baseRows.length === 0) {
       return { ok: false, stage: 3, error: `base version v${baseVersion} not found in the scaffold archive` };
     }
@@ -117,10 +128,13 @@ export async function modifyScaffold(
   // when missing, never overwrite from the live view.
   const scaffoldVfs = rt.agentStateVfs ?? rt.storage.vfs;
   const currentPath = `${rt.identity.scaffold.path}.v${currentVersion}`;
+
   if (!(await scaffoldVfs.exists(currentPath))) {
     const current = await readScaffoldVersion(rt, currentVersion);
+
     if (current !== null) await scaffoldVfs.writeFile(currentPath, current);
   }
+
   // Gate 4: source before metadata. Both version files are on disk before
   // the pending row exists, so a crash at any point leaves either no
   // proposal or a complete one — never a row whose source is missing.

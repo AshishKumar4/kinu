@@ -8,10 +8,14 @@
  *  claim a measurement nobody made. */
 export function fmtTokens(n: number | undefined): string {
 	if (n === undefined) return "—";
+
 	const scaled = (value: number, suffix: string): string =>
 		`${Number(value.toFixed(1))}${suffix}`;
+
 	if (n >= 1_000_000) return scaled(n / 1_000_000, "M");
+
 	if (n >= 1_000) return scaled(n / 1_000, "k");
+
 	return String(n);
 }
 
@@ -22,8 +26,11 @@ export function fmtTokens(n: number | undefined): string {
  */
 export function fmtUsd(n: number): string {
 	if (n === 0) return "$0";
+
 	if (n < 0.01) return `$${n.toFixed(4)}`;
+
 	if (n < 1) return `$${n.toFixed(3)}`;
+
 	return `$${n.toFixed(2)}`;
 }
 

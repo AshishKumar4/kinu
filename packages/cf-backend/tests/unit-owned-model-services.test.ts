@@ -50,8 +50,10 @@ function fakeEnv(stub: FakeUserDO = fakeUserDO(), extra: Partial<ProviderEnv> = 
     },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
+
   const env: Partial<Env> = {};
   Object.assign(env, bindings, extra);
+
   // SAFETY: OwnedModelServices only reads the constructed UserDO namespace, the
   // credential secret, and whatever `extra` supplies in these tests; every
   // reachable stub method exists.
@@ -59,6 +61,7 @@ function fakeEnv(stub: FakeUserDO = fakeUserDO(), extra: Partial<ProviderEnv> = 
 }
 
 const realFetch = globalThis.fetch;
+
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe('OwnedModelServices', () => {
@@ -141,7 +144,9 @@ describe('OwnedModelServices', () => {
     const mock = createMockFetch([
       { match: 'openrouter.ai', respond: { status: 200, body: { choices: [] } } },
     ]);
+
     globalThis.fetch = mock.fetch;
+
     const services = new OwnedModelServices({
       env: fakeEnv(fakeUserDO({
         'openrouter.bearer': { Authorization: 'Bearer openrouter-token' },
@@ -178,8 +183,10 @@ describe('OwnedModelServices', () => {
         },
       },
     ]);
+
     globalThis.fetch = mock.fetch;
     let owner: string | null = null;
+
     const services = new OwnedModelServices({
       env: fakeEnv(fakeUserDO({ 'tavily': { Authorization: 'Bearer tavily-token' } })),
       agentName: () => 'head',
@@ -189,6 +196,7 @@ describe('OwnedModelServices', () => {
       getOwnerUserId: () => owner,
       getCredentialsRevision: async () => 0,
     });
+
     const web = services.getWebSearchProvider();
     const beforeRegistry = services.providerRegistry();
 
@@ -247,7 +255,9 @@ function catalogDown() {
   const mock = createMockFetch([
     { match: 'models.dev/api.json', respond: { status: 503, body: 'upstream down' } },
   ]);
+
   globalThis.fetch = mock.fetch;
+
   return mock;
 }
 
@@ -329,6 +339,7 @@ describe('OwnedModelServices — the provider snapshot', () => {
     mock.reset();
 
     const services = degradedServices();
+
     const [a, b, c] = await Promise.all([
       services.profileProviderSnapshot(),
       services.profileProviderSnapshot(),
@@ -360,11 +371,13 @@ describe('OwnedModelServices — the provider snapshot', () => {
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
       const response = await upstream(input, init);
       await held.promise;
+
       return response;
     });
     const services = snapshotServices(null);
 
     const inFlight = services.profileProviderSnapshot();
+
     // The sweep is in flight once its first upstream call is parked.
     while (mock.matching('models.dev/api.json').length === 0) await Promise.resolve();
     services.invalidate();
@@ -404,8 +417,10 @@ describe('OwnedModelServices — the provider snapshot', () => {
   test('an authority that cannot answer leaves the cache alone rather than failing the turn', async () => {
     catalogDown();
     let refuse = false;
+
     const services = snapshotServices(null, {}, async () => {
       if (refuse) throw new Error('UserDO unreachable');
+
       return 1;
     });
 
@@ -464,6 +479,7 @@ describe('a degraded listing versus a confirmed-missing model', () => {
         deep: { model: PINNED },
       },
     };
+
     return {
       authority: { kind: 'account', accountId: 'acct-1' },
       version: 1,
@@ -474,7 +490,9 @@ describe('a degraded listing versus a confirmed-missing model', () => {
 
   function resolveWith(provider: ProviderCatalogSnapshot) {
     const defaultModel = provider.availableModels[0];
+
     if (!defaultModel) throw new Error('fixture needs at least one available model');
+
     return resolveTurnProfile({
       envelope: envelopeWithDeepPin(defaultModel),
       provider,

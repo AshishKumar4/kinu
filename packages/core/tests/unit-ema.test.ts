@@ -60,9 +60,12 @@ describe('filterByEffectiveScore — the one injection policy', () => {
   function setup() {
     const db = new Database(':memory:');
     initCraftedToolsTables(makeSql(db));
+
     return { db, sql: makeSql(db) };
   }
+
   const tools = [{ name: 'good' }, { name: 'stale' }, { name: 'unstored' }];
+
   const seedTool = (sql: ReturnType<typeof makeSql>, name: string, score: number, at: number): void => {
     // The quality columns live ON the tool row a real creation writes.
     void sql`INSERT INTO crafted_tools (name, code, score, uses, last_used_at)

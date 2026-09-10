@@ -7,11 +7,15 @@ import type { UserCaller } from '../src/user/workspace-capability';
 import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
 const TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 
 const OkResponseSchema = v.object({ ok: v.boolean() });
+
 const TicketResponseSchema = v.object({ ticket: v.string(), expiresAt: v.number() });
+
 const ErrorResponseSchema = v.object({ error: v.string() });
+
 const RpcResponseSchema = v.object({ result: JsonValueSchema });
 
 interface TestNamespace<Stub> {
@@ -31,6 +35,7 @@ interface ControlRouteTestBindings<UserStub, AgentStub> {
 function testEnv<UserStub, AgentStub>(bindings: ControlRouteTestBindings<UserStub, AgentStub>): Env {
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: The control routes reach only the two constructed namespaces and
   // credential key; every typed binding reachable in these tests is present.
   return env as Env;
@@ -38,6 +43,7 @@ function testEnv<UserStub, AgentStub>(bindings: ControlRouteTestBindings<UserStu
 
 function handled(response: Response | null): Response {
   if (!response) throw new Error('CLI control route did not handle the request');
+
   return response;
 }
 
@@ -47,6 +53,7 @@ async function errorBody(response: Response | null) {
 
 function setupEnv(opts: { tokenMintedAt?: number } = {}) {
   const calls: string[] = [];
+
   const userDO = {
     async verifyCliToken(_caller: UserCaller, token: string) {
       return {
@@ -73,24 +80,30 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     },
     async issueCliAgentConnectTicket(_caller: UserCaller, input: { userId: string; agentName: string; cliTokenHash: string }) {
       calls.push(`connect-ticket:${input.userId}:${input.agentName}:${input.cliTokenHash}`);
+
       return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
     },
   };
+
   const agent = {
     async claimOwner(userId: string) {
       calls.push(`claim:${userId}`);
+
       return { owner: userId, capabilityHash: 'sha-existing' };
     },
     async getAgentStatus() {
       calls.push('status');
+
       return { name: 'jarvis', purpose: 'help', messageCount: 3 };
     },
     async getToolDescriptions() {
       calls.push('tools');
+
       return { builtIn: [{ name: 'run', description: 'Run command' }], crafted: [], executors: [] };
     },
     async getChatHistoryPage(request: { limit?: number }) {
       calls.push(`messages:${request.limit}`);
+
       return {
         status: 'end',
         items: [
@@ -101,50 +114,62 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     },
     async listPendingConsents() {
       calls.push('consents:list');
+
       return [{ consentId: 'cons-1', deviceLabel: 'Workstation', method: 'exec', command: 'pwd', createdAt: 1 }];
     },
     async resolveDeviceConsent(id: string, decision: string) {
       calls.push(`consents:resolve:${id}:${decision}`);
+
       return { ok: true };
     },
     async setModel(spec: string) {
       calls.push(`model:set:${spec}`);
+
       return { ok: true, spec };
     },
     async getReasoningEffort() {
       calls.push('effort:get');
+
       return { effort: 'medium' };
     },
     async setReasoningEffort(effort: string) {
       calls.push(`effort:set:${effort}`);
+
       return { ok: true, effort };
     },
     async createTimerTrigger(opts: JsonObject) {
       calls.push(`triggers:create:${JSON.stringify(opts)}`);
+
       return { id: 'trg_1', kind: 'timer_oneshot', nextFireAt: 123 };
     },
     async listBackgroundJobs(limit: number) {
       calls.push(`jobs:list:${limit}`);
+
       return [{ id: 'job_1', kind: 'run', status: 'running' }];
     },
     async cancelBackgroundJob(id: string) {
       calls.push(`jobs:cancel:${id}`);
+
       return { ok: true };
     },
     async cancelCurrentWork() {
       calls.push('work:cancel');
+
       return { ok: true, cancelledJobs: ['job_1'], abortedTools: 1 };
     },
     async searchMemoryHybrid(query: string, limit: number) {
       calls.push(`memory:search:${query}:${limit}`);
+
       return [{ path: 'memory/MEMORY.md', snippet: 'hit', score: 1 }];
     },
     async executeInExecutor(id: string, command: string) {
       calls.push(`executors:exec:${id}:${command}`);
+
       return { stdout: 'ok', exitCode: 0 };
     },
     async createDurableWebhook(opts: JsonObject) {
       calls.push(`triggers:webhook:${JSON.stringify(opts)}`);
+
       return {
         trigger_id: '01HZY6QK9N4T7M2P8V3XABCDEF',
         url: '/api/workspaces/jarvis/webhook/01HZY6QK9N4T7M2P8V3XABCDEF/v1-'
@@ -155,13 +180,16 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     // Off-table on purpose: the rpc dispatcher must never reach this.
     async destroyAgent(expectedOwnerUserId: string) {
       calls.push(`destroy:${expectedOwnerUserId}`);
+
       return { ok: true };
     },
     async deviceRpc(method: string) {
       calls.push(`deviceRpc:${method}`);
+
       return null;
     },
   };
+
   const env = testEnv({
     UserDO: {
       idFromName(name: string) { return name; },
@@ -174,6 +202,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
     WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
   });
+
   return { env, calls };
 }
 
@@ -198,6 +227,7 @@ function rpcRequest(method: string, args: JsonValue[] = [], agent = 'jarvis') {
 async function rpcResult(env: Env, method: string, args: JsonValue[] = []): Promise<JsonValue> {
   const res = await handleCliRequest(rpcRequest(method, args), env);
   expect(`${method}:${res?.status}`).toBe(`${method}:200`);
+
   return v.parse(RpcResponseSchema, await handled(res).json()).result;
 }
 
@@ -278,22 +308,26 @@ describe('CLI control routes', () => {
 
   test('off-table and never methods are rejected WITHOUT dispatching', async () => {
     const { env, calls } = setupEnv();
+
     for (const method of ['deviceRpc', 'claimOwner', 'constructor', '__proto__', 'destroyAgent']) {
       const res = await handleCliRequest(rpcRequest(method, ['x']), env);
       expect(`${method}:${res?.status}`).toBe(`${method}:404`);
       expect((await errorBody(res)).error).toContain('No such agent RPC method');
     }
+
     // Nothing was invoked on the DO — not even the ownership claim.
     expect(calls).toEqual([]);
   });
 
   test('malformed rpc bodies are 400s, unknown workspaces are 404s', async () => {
     const { env } = setupEnv();
+
     const noMethod = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/rpc', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ args: [] }),
     }), env);
+
     expect(noMethod?.status).toBe(400);
 
     const badArgs = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/rpc', {
@@ -301,6 +335,7 @@ describe('CLI control routes', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ method: 'getAgentStatus', args: { not: 'an array' } }),
     }), env);
+
     expect(badArgs?.status).toBe(400);
 
     const unknownAgent = await handleCliRequest(rpcRequest('getAgentStatus', [], 'unknown'), env);
@@ -329,6 +364,7 @@ describe('CLI control routes', () => {
       CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
       WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
     });
+
     const thrown = await handleCliRequest(rpcRequest('createTimerTrigger', [{}]), env);
     expect(thrown?.status).toBe(400);
     expect((await errorBody(thrown)).error).toContain('Timer trigger requires cron or atMs');

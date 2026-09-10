@@ -80,6 +80,7 @@ import { renderThrownChain } from '../obs/index';
 export const MERGE_POLICIES = [
   'apply-winner', 'sequential-rebase', 'conflict-spawns-a-merge-node', 'synthesis',
 ] as const;
+
 export type MergePolicy = (typeof MERGE_POLICIES)[number];
 
 /**
@@ -206,7 +207,9 @@ export async function baseDigestOf(
   diff: MemberDiff, readOrigin: (path: string) => Promise<string | null>,
 ): Promise<string> {
   const at: { path: string; content: string | null }[] = [];
+
   for (const file of diff.files) at.push({ path: file.path, content: await readOrigin(file.path) });
+
   return argumentDigest(at);
 }
 
@@ -260,13 +263,16 @@ export function planMemberApply(diff: MemberDiff): MemberApplyPlan {
   const encoder = new TextEncoder();
   let blobBytes = 0;
   let chunks = 0;
+
   for (const file of diff.files) {
     if (file.after === null) continue;
     const bytes = encoder.encode(file.after).length;
     blobBytes += bytes;
     chunks += Math.ceil(bytes / CHUNK_SIZE);
   }
+
   const inodes = diff.files.length;
+
   // Rows reach the transaction as grouped inserts of BATCH_SIZE, so the statement
   // count is per group and not per row — the difference between fitting and not.
   return {
@@ -290,8 +296,10 @@ export function memberApplyBound(
 ): { readonly bound: TransactionBound; readonly actual: number; readonly maximum: number } | null {
   for (const bound of ['blobBytes', 'logicalRows', 'sqlExecs'] as const) {
     const maximum = TRANSACTION_BOUNDS[bound];
+
     if (plan[bound] > maximum) return { bound, actual: plan[bound], maximum };
   }
+
   return null;
 }
 
@@ -310,6 +318,7 @@ export const SETTLE_RULES = [
   'dependency-unsettled', 'no-verdict', 'verdict-unclean',
   'verdict-stale', 'scope-escape', 'base-drift',
 ] as const;
+
 export type SettleRule = (typeof SETTLE_RULES)[number];
 
 /**
@@ -323,6 +332,7 @@ export type SettleRule = (typeof SETTLE_RULES)[number];
 export const APPLY_PRECONDITIONS = [
   'no-boundary', 'oversized', 'apply-unwired', 'apply-failed',
 ] as const;
+
 export type ApplyPrecondition = (typeof APPLY_PRECONDITIONS)[number];
 
 /**
@@ -335,6 +345,7 @@ export type ApplyPrecondition = (typeof APPLY_PRECONDITIONS)[number];
  * either list would misreport which document asked for it.
  */
 export const ORDER_RULES = ['dependency-cycle'] as const;
+
 export type OrderRule = (typeof ORDER_RULES)[number];
 
 export type MergeRefusalCause = SettleRule | ApplyPrecondition | OrderRule;
@@ -494,34 +505,42 @@ export function dependencyOrder(
   settled: ReadonlySet<string> = new Set(),
 ): MergeOrder {
   const offered = new Set(members.map((member) => member.nodeId));
+
   const edges = new Map(members.map((member) => [
     member.nodeId,
     member.deps.filter((dep) => offered.has(dep) && !settled.has(dep)),
   ]));
+
   const ordered: MergeMember[] = [];
   const placed = new Set<string>();
+
   // A sweep in OFFERED order, repeated while it places anything: that is what makes the
   // result stable, and the member count bounds the sweeps.
   for (let progressed = true; progressed;) {
     progressed = false;
+
     for (const member of members) {
       if (placed.has(member.nodeId)) continue;
+
       if ((edges.get(member.nodeId) ?? []).some((dep) => !placed.has(dep))) continue;
       ordered.push(member);
       placed.add(member.nodeId);
       progressed = true;
     }
   }
+
   // Whatever the sweeps could not place is waiting on something they could not place
   // either, which is a cycle. Named from the FIRST such member in offered order, so the
   // refusal is the same one every time for the same input.
   for (const member of members) {
     if (placed.has(member.nodeId)) continue;
+
     const stuck = new Map(
       [...edges]
         .filter(([nodeId]) => !placed.has(nodeId))
         .map(([nodeId, deps]) => [nodeId, deps.filter((dep) => !placed.has(dep))] as const),
     );
+
     return {
       kind: 'cycle',
       nodeId: member.nodeId,
@@ -533,6 +552,7 @@ export function dependencyOrder(
         + 'consumes them, so a parent that depends on its own dependent is not a fan-in.'),
     };
   }
+
   return { kind: 'ordered', members: ordered };
 }
 
@@ -549,10 +569,12 @@ function cycleFrom(
 ): readonly string[] {
   const path: string[] = [];
   let at: string | undefined = start;
+
   while (at !== undefined && !path.includes(at)) {
     path.push(at);
     at = (stuck.get(at) ?? [])[0];
   }
+
   return at === undefined ? path : [...path.slice(path.indexOf(at)), at];
 }
 
@@ -583,6 +605,7 @@ export async function mergeBack(
    *  DISAGREEMENT and not an overlap; see {@link conflictWith}. */
   const writtenBy = new Map<string, { nodeId: string; after: string | null }>();
   let stoppedAt: string | null = null;
+
   /**
    * The report, with the one aggregate event every path owes a reader.
    *
@@ -600,6 +623,7 @@ export async function mergeBack(
       stopped_at: stopped ?? '',
       order: ordered.join(','),
     });
+
     return { policy, outcomes, stoppedAt: stopped, order: ordered };
   };
 
@@ -616,16 +640,19 @@ export async function mergeBack(
   const order = policy === 'sequential-rebase'
     ? dependencyOrder(members, settled)
     : ({ kind: 'ordered', members } as const);
+
   if (order.kind === 'cycle') {
     outcomes.push({ kind: 'refused', nodeId: order.nodeId, refusal: order.refusal });
     deps.log.event('swarm.merge_refused', {
       preset: deps.preset, policy, node: order.nodeId,
       cause: order.refusal.cause, reason: order.refusal.reason, error: order.refusal.error,
     });
+
     // NO ORDER MEANS NO APPLY, not "apply the part that is orderable". A prefix landed out
     // of a set whose remainder can never land is half a merge published.
     return settle(order.nodeId, []);
   }
+
   const ordered = order.members.map((member) => member.nodeId);
 
   for (const member of order.members) {
@@ -634,6 +661,7 @@ export async function mergeBack(
     // conflict *"does not fail"*. Gating first would report the disagreement as a
     // stale verdict and the merge-node policy would be unreachable.
     const conflict = conflictWith(member, writtenBy);
+
     if (conflict) {
       const outcome = await spawnMerge(member, conflict, deps, policy);
       outcomes.push(outcome);
@@ -642,12 +670,14 @@ export async function mergeBack(
     }
 
     const refusal = await gate(member, { applied, rebasedAt: writtenBy, deps });
+
     if (refusal) {
       outcomes.push({ kind: 'refused', nodeId: member.nodeId, refusal });
       deps.log.event('swarm.merge_refused', {
         preset: deps.preset, policy, node: member.nodeId,
         cause: refusal.cause, reason: refusal.reason, error: refusal.error,
       });
+
       // A REFUSAL SKIPS THE MEMBER, IT DOES NOT STOP THE SETTLE — under
       // `sequential-rebase`, the only policy that applies more than one member. A
       // skipped member joins neither `applied` nor the rebase frontier, so every
@@ -664,11 +694,14 @@ export async function mergeBack(
 
     const outcome = await applyOne(member, deps, policy);
     outcomes.push(outcome);
+
     if (outcome.kind !== 'applied') {
       stoppedAt = member.nodeId;
       break;
     }
+
     applied.add(member.nodeId);
+
     for (const file of member.diff.files) {
       writtenBy.set(file.path, { nodeId: member.nodeId, after: file.after });
     }
@@ -717,6 +750,7 @@ async function gate(
   // this is the only place a dependency edge is enforced, and a dropped edge refuses
   // rather than degrading toward runnable.
   const waiting = member.deps.filter((dep) => !ctx.applied.has(dep));
+
   if (waiting.length > 0) {
     return refuse('dependency-unsettled', 'bad_input',
       `node ${member.nodeId} merges after ${waiting.join(', ')}, and ${
@@ -744,6 +778,7 @@ async function gate(
   // re-verification, so checking it first spends no model call to learn something
   // already knowable. Rule 4 is the expensive one.
   const escaped = scopeEscapes(member);
+
   if (escaped.length > 0) {
     return refuse('scope-escape', 'denied',
       `node ${member.nodeId} wrote ${escaped.join(', ')}, outside the scope it declared (${
@@ -769,11 +804,14 @@ async function gate(
   // is bound to what it lands on: `Rebase.lean — applied_is_bound_to_the_base_it_lands_on`,
   // lifted over a whole settle by `Rebase.lean — rebase_applies_only_bound_verdicts`.
   const baseDigest = await baseDigestOf(member.diff, ctx.deps.readOrigin);
+
   if (member.verdict.baseDigest !== baseDigest) {
     const fresh = await reverified(member, baseDigest, ctx.deps);
+
     if ('reason' in fresh) {
       return { ...fresh, cause: 'verdict-stale' };
     }
+
     if (!fresh.clean) {
       return refuse('verdict-stale', 'denied',
         `node ${member.nodeId}'s verdict was re-checked against the base it would now be applied `
@@ -788,6 +826,7 @@ async function gate(
   // member. Drift anywhere else is a writer outside this settle, and applying over it
   // would silently discard whatever it did.
   const drifted = await baseDrift(member, ctx.deps.readOrigin, ctx.rebasedAt);
+
   if (drifted.length > 0) {
     return refuse('base-drift', 'denied',
       `node ${member.nodeId}'s diff was taken against different content than the origin now holds `
@@ -811,8 +850,11 @@ async function reverified(
       + 'applies: wire a Reverifier over the verifier registry, or merge this member first so its '
       + 'base is the one it was checked against.'));
   }
+
   const fresh = await deps.reverify({ member, baseDigest });
+
   if ('reason' in fresh) return fresh;
+
   // A re-verification that came back bound to a DIFFERENT base has not answered the
   // question that was asked. Accepting it would reintroduce the staleness the
   // re-check exists to remove, one level down.
@@ -821,6 +863,7 @@ async function reverified(
       `node ${member.nodeId}'s re-verification returned a verdict bound to a different base than `
       + 'the one it was asked about, so it does not revalidate this apply.'));
   }
+
   return fresh;
 }
 
@@ -828,7 +871,9 @@ async function reverified(
  *  escape one — absent is not an empty allow-list. */
 function scopeEscapes(member: MergeMember): string[] {
   const scope = member.scope;
+
   if (scope === null) return [];
+
   return member.diff.files
     .map((f) => f.path)
     .filter((path) => !scope.some((allowed) => path === allowed || path.startsWith(`${allowed}/`)));
@@ -843,10 +888,13 @@ async function baseDrift(
   rebasedAt: ReadonlyMap<string, { nodeId: string; after: string | null }>,
 ): Promise<string[]> {
   const drifted: string[] = [];
+
   for (const file of member.diff.files) {
     if (rebasedAt.has(file.path)) continue;
+
     if ((await readOrigin(file.path)) !== file.base) drifted.push(file.path);
   }
+
   return drifted;
 }
 
@@ -861,6 +909,7 @@ async function applyOne(
 ): Promise<MergeOutcome> {
   const plan = planMemberApply(member.diff);
   const exceeded = memberApplyBound(plan);
+
   if (exceeded) {
     const refusal = refuse('oversized', 'unsupported',
       `node ${member.nodeId}'s apply needs ${exceeded.actual} ${exceeded.bound} and one host `
@@ -868,6 +917,7 @@ async function applyOne(
       + 'all-or-nothing; splitting it would publish a committed prefix if a later part failed, '
       + 'which is a torn workspace rather than a failed merge. Reduce what this node changes, or '
       + 'split the work across nodes so each member fits.');
+
     // ITS OWN EVENT NAME, and the bound is a FIELD. A name shared with the other
     // refusals could not answer "did anything tear, or nearly?" — which is the one
     // question this refusal exists to make answerable.
@@ -876,6 +926,7 @@ async function applyOne(
       reason: refusal.reason, error: refusal.error,
       bound: exceeded.bound, actual: exceeded.actual, maximum: exceeded.maximum,
     });
+
     return { kind: 'refused', nodeId: member.nodeId, refusal };
   }
 
@@ -884,10 +935,12 @@ async function applyOne(
       `node ${member.nodeId} fits one transaction but no atomic multi-file write is wired, and a `
       + 'per-file loop would tear this member into a committed prefix. Wire MemberApply to the '
       + "substrate's one-transaction batch write.");
+
     deps.log.event('swarm.merge_unwired', {
       preset: deps.preset, policy, node: member.nodeId,
       cause: refusal.cause, reason: refusal.reason, error: refusal.error,
     });
+
     return { kind: 'refused', nodeId: member.nodeId, refusal };
   }
 
@@ -898,9 +951,11 @@ async function applyOne(
       `node ${member.nodeId}'s apply failed at the substrate: ${
         renderThrownChain({ cause: err })
       }. The transaction is all-or-nothing, so nothing of this member landed.`);
+
     deps.log.failure('swarm.merge_apply_failed',
       new KinuError('io', refusal.error, { cause: err instanceof Error ? err : undefined }),
       { preset: deps.preset, policy, node: member.nodeId, cause: refusal.cause });
+
     return { kind: 'refused', nodeId: member.nodeId, refusal };
   }
 
@@ -908,6 +963,7 @@ async function applyOne(
     preset: deps.preset, policy, node: member.nodeId,
     files: member.diff.files.length, bytes: plan.blobBytes,
   });
+
   return {
     kind: 'applied', nodeId: member.nodeId,
     files: member.diff.files.length, bytes: plan.blobBytes,
@@ -930,12 +986,15 @@ function conflictWith(
 ): { readonly with: string; readonly paths: readonly string[] } | null {
   const paths: string[] = [];
   let other: string | null = null;
+
   for (const file of member.diff.files) {
     const earlier = writtenBy.get(file.path);
+
     if (earlier === undefined || earlier.after === file.after) continue;
     paths.push(file.path);
     other ??= earlier.nodeId;
   }
+
   return other === null ? null : { with: other, paths };
 }
 
@@ -958,12 +1017,14 @@ async function spawnMerge(
       + 'earned, then report it. Your result is graded like any other candidate — it is not '
       + 'trusted because it resolved a conflict.',
   };
+
   const spawned = deps.spawnMergeNode ? await deps.spawnMergeNode(request) : null;
   deps.log.event('swarm.merge_node_spawned', {
     preset: deps.preset, policy: 'conflict-spawns-a-merge-node',
     derived_from: policy, node: member.nodeId, conflicts_with: conflict.with,
     paths: conflict.paths.length, spawned: spawned ?? '',
   });
+
   return { kind: 'merge-node', nodeId: member.nodeId, request, spawned };
 }
 
@@ -1015,6 +1076,7 @@ export function admitCarry(input: {
   readonly publication: PublicationState;
 }): CarryVerdict {
   const { carry, score, publication } = input;
+
   // `none` and `reflections` write nothing a later run reads, so neither reaches a
   // publication surface and neither is this function's business.
   if (carry.kind !== 'elites' && carry.kind !== 'artifacts') return { kind: 'admitted' };
@@ -1022,10 +1084,13 @@ export function admitCarry(input: {
   if (admitsPublication(publication, 'records').kind === 'refused') {
     return { kind: 'refused', cause: 'sealed' };
   }
+
   if (score === null) return { kind: 'refused', cause: 'unmeasurable' };
+
   if (carry.kind === 'artifacts' && score < carry.threshold) {
     return { kind: 'refused', cause: 'below-threshold' };
   }
+
   return { kind: 'admitted' };
 }
 
@@ -1048,6 +1113,7 @@ export function settleCarry(
     const verdict = admitCarry({
       carry: input.carry, score: member.score, publication: input.publication,
     });
+
     // Two constant names rather than one chosen name. An event name assembled at the
     // call site produces one name per branch and none a query can be written against,
     // so the branch lives here and each outcome keeps a greppable name.
@@ -1056,11 +1122,13 @@ export function settleCarry(
       score: member.score ?? -1,
       threshold: input.carry.kind === 'artifacts' ? input.carry.threshold : -1,
     };
+
     if (verdict.kind === 'admitted') {
       deps.log.event('swarm.carry_admitted', { ...fields, cause: '' });
     } else {
       deps.log.event('swarm.carry_refused', { ...fields, cause: verdict.cause });
     }
+
     return { nodeId: member.nodeId, verdict };
   });
 }
@@ -1074,6 +1142,7 @@ export function originReader(vfs: VFS): (path: string) => Promise<string | null>
   return async (path) => {
     try {
       const payload = textPayload(await vfs.readFile(path, { encoding: 'utf8' }));
+
       // A binary path reads as absent, so the member's recorded base cannot match it and
       // rule 6 refuses. Decoding it would invent a base that was never there.
       return payload.kind === 'text' ? payload.text : null;

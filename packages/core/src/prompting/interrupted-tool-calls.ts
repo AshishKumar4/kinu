@@ -64,6 +64,7 @@ export function settleUnpairedToolCalls(
 
   for (const [index, message] of messages.entries()) {
     settled.push(message);
+
     if (message.role === 'assistant' && Array.isArray(message.content)) {
       for (const part of message.content) {
         if (part.type === 'tool-call' && part.providerExecuted !== true) {
@@ -75,6 +76,7 @@ export function settleUnpairedToolCalls(
         if (part.type === 'tool-result') pending.delete(part.toolCallId);
       }
     }
+
     if (pending.size === 0 || messages[index + 1]?.role === 'tool') continue;
     settled.push(interruptedResults(pending));
     synthesized += pending.size;
@@ -91,5 +93,6 @@ function interruptedResults(pending: ReadonlyMap<string, string>): ToolModelMess
     toolName,
     output: { type: 'error-text', value: INTERRUPTED_TOOL_RESULT },
   }));
+
   return { role: 'tool', content };
 }

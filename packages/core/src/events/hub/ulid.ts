@@ -12,12 +12,14 @@
 const ULID_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 
 let lastTs = -1;
+
 let lastRand: number[] = [];
 
 export function ulid(): string {
   const ts = Date.now();
   const tsChars: string[] = [];
   let t = ts;
+
   for (let i = 9; i >= 0; i--) {
     tsChars[i] = ULID_ALPHABET[t % 32];
     t = Math.floor(t / 32);
@@ -27,11 +29,14 @@ export function ulid(): string {
     // Same millisecond: increment the previous random suffix (base-32,
     // little chance of overflow across 16 chars; on overflow, re-roll).
     let i = 15;
+
     while (i >= 0) {
       if (lastRand[i] < 31) { lastRand[i]++; break; }
+
       lastRand[i] = 0;
       i--;
     }
+
     if (i < 0) lastRand = rollRandom();
   } else {
     lastTs = ts;
@@ -39,7 +44,9 @@ export function ulid(): string {
   }
 
   let rand = '';
+
   for (let i = 0; i < 16; i++) rand += ULID_ALPHABET[lastRand[i]];
+
   return tsChars.join('') + rand;
 }
 
@@ -55,6 +62,8 @@ export function isUlid(value: string): boolean {
 
 function rollRandom(): number[] {
   const out: number[] = [];
+
   for (let i = 0; i < 16; i++) out.push(Math.floor(Math.random() * 32));
+
   return out;
 }

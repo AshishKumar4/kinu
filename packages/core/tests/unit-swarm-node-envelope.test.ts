@@ -62,6 +62,7 @@ async function nodeUnderDeadline(
   let steps = 0;
   let now = Date.now();
   const clock = spyOn(Date, 'now').mockImplementation(() => now);
+
   try {
     const run = await runNodeAgent({
       nodeId: 'n-deadline', rootId: 'r-deadline', parentId: null, depth: 0,
@@ -76,6 +77,7 @@ async function nodeUnderDeadline(
         doGenerate: async () => {
           steps++;
           now += maxWallClockMs === undefined ? 26 * 60_000 : maxWallClockMs + 1;
+
           return {
             content: maxWallClockMs === undefined
               ? [{ type: 'text', text: 'finished the long step' }]
@@ -91,6 +93,7 @@ async function nodeUnderDeadline(
       }),
       journal, maxWallClockMs, logger: createRecordingLogger(),
     });
+
     return { run, steps };
   } finally {
     clock.mockRestore();

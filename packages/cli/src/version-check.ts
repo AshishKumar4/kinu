@@ -16,6 +16,7 @@ import * as v from 'valibot';
 import { classify, classifyErrorCode, renderThrownChain, tolerateAsync } from '@kinu.run/core/obs';
 
 const CLI_VERSION_PATH = '/downloads/kinu-version.json';
+
 /**
  * The bound on the STARTUP notice's probe, and on nothing else.
  *
@@ -29,10 +30,12 @@ const CLI_VERSION_PATH = '/downloads/kinu-version.json';
  * in 1.6 s, which is a diagnostic reporting a fault it never observed.
  */
 const STARTUP_PROBE_TIMEOUT_MS = 1_500;
+
 /** How long a startup notice stays quiet after one probe. Once a day: the
  *  published build changes at most that often in practice, and the notice is
  *  an interruption whether or not it has news. */
 const CHECK_INTERVAL_MS = 24 * 60 * 60_000;
+
 const ServedVersionSchema = v.object({
   version: v.pipe(v.string(), v.trim(), v.nonEmpty()),
   sha: v.optional(v.string()),
@@ -71,23 +74,31 @@ export async function fetchServedVersion(
   // this probe, so it ends on the origin's answer or on a network failure.
   const controller = timeoutMs === undefined ? undefined : new AbortController();
   const timer = controller === undefined ? undefined : setTimeout(() => controller.abort(), timeoutMs);
+
   try {
     let res: Response;
+
     try {
       res = await fetchImpl(`${origin}${CLI_VERSION_PATH}`, { cache: 'no-store', signal: controller?.signal });
     } catch (error) {
       // Could not ask: unreachable origin, or a caller-set bound firing. A malformed origin is
       // OURS — swallowed here, the update check would silently never fire again.
       if (classify({ cause: error }) === 'malformed-input') throw error;
+
       return null;
     }
+
     if (!res.ok) return null;
     // The payload belongs to the server: unparseable JSON is a probe that learned nothing.
     const parsed = v.safeParse(ServedVersionSchema, await tolerateAsync(() => res.json(), 'malformed-input'));
+
     if (!parsed.success) return null;
     const served: ServedVersion = { version: parsed.output.version };
+
     if (parsed.output.sha !== undefined) served.sha = parsed.output.sha;
+
     if (parsed.output.builtAt !== undefined) served.builtAt = parsed.output.builtAt;
+
     return served;
   } finally {
     clearTimeout(timer);
@@ -104,15 +115,19 @@ export interface NoticeContext {
  *  suppression rules are testable without a clock, a terminal, or a server. */
 function shouldCheckForUpdate(ctx: NoticeContext): boolean {
   if (!ctx.isTTY) return false;                       // CI, pipes, --json
+
   if (ctx.config.updateCheck === false) return false; // explicit opt-out
+
   if (!ctx.config.origin) return false;               // not signed in anywhere
   const last = ctx.config.updateCheckedAt ?? 0;
+
   return ctx.now - last >= CHECK_INTERVAL_MS;
 }
 
 /** The one muted line, or null when the installed build is current. */
 function updateNotice(installed: string, served: ServedVersion | null): string | null {
   if (!served || isSameBuild(installed, served.version)) return null;
+
   return `A newer Kinu is available (${served.version}). Run: kinu update`;
 }
 
@@ -129,11 +144,13 @@ export async function runStartupUpdateCheck(opts: {
 } ): Promise<string | null> {
   try {
     const config = loadConfigFile();
+
     const ctx: NoticeContext = {
       config,
       isTTY: opts.isTTY ?? Boolean(process.stdout.isTTY),
       now: opts.now ?? Date.now(),
     };
+
     if (!shouldCheckForUpdate(ctx)) return null;
 
     const served = await fetchServedVersion(config.origin!, opts.fetchImpl ?? fetch, STARTUP_PROBE_TIMEOUT_MS);
@@ -141,11 +158,14 @@ export async function runStartupUpdateCheck(opts: {
     // not retry on every single invocation.
     updateConfigFile((c) => {
       c.updateCheckedAt = ctx.now;
+
       if (served) c.updateLatestSeen = served.version;
     });
 
     const notice = updateNotice(VERSION, served);
+
     if (notice) opts.log(notice);
+
     return notice;
   } catch (error) {
     // Expected probe conditions stay silent: the check is throttled to once a
@@ -157,8 +177,10 @@ export async function runStartupUpdateCheck(opts: {
     // unwritable config, a malformed origin — still has to say so instead of
     // skipping every run.
     const code = classifyErrorCode({ cause: error });
+
     if (code === 'cancelled' || code === 'timeout' || code === 'unavailable') return null;
     opts.log(`Update check failed: ${renderThrownChain({ cause: error })}`);
+
     return null;
   }
 }

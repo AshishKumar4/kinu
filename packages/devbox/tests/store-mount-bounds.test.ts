@@ -13,6 +13,7 @@ import { chainBox } from './support/chain-box';
  *  mount did not state it — which leaves s3fs's own default in charge. */
 function bound(options: readonly string[], key: string): number | undefined {
   const stated = options.find((option) => option.startsWith(`${key}=`));
+
   return stated === undefined ? undefined : Number(stated.slice(key.length + 1));
 }
 

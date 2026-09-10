@@ -64,6 +64,7 @@ function testProfile(): AgentsProfileContext {
       deep: { model: TEST_MODEL },
     },
   };
+
   return {
     envelope: {
       authority: { kind: 'local' } as const,
@@ -83,6 +84,7 @@ const NOW = 1_700_000_000_000;
  *  rather than inlined as an `unknown` dictionary so a member that stops
  *  existing is a type error and not an undefined call. */
 type SandboxMember = (...args: unknown[]) => Promise<CodemodeResult>;
+
 type SandboxNamespace = Partial<Record<AgentsToolAction, SandboxMember>>;
 
 const HANDOFF: SubordinateHandoff = {
@@ -134,6 +136,7 @@ function makeRosterStore(): SubordinateRosterStore {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const parent = createTestActors(sql, makeExecRaw(db)).main;
+
   return new SubordinateRosterStore(makeSqlExec(db), parent);
 }
 
@@ -162,22 +165,29 @@ function makeScene(options: {
   // The inbox belongs to the actor whose events these are — the workspace main
   // that hires the temporaries below, over the same database it was issued on.
   const log = new EventLog(eventSql, directory.main());
+
   const runtime: SubordinateRuntime = {
     async spawn(input) {
       calls.push(`spawn:${input.name}`);
+
       if (options.fail === 'spawn') throw new Error('the facet substrate is unavailable');
+
       return directory.apply(directory.main(), [], { action: 'register', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime }).reference;
     },
     async cancelBirth(input) {
       const actor = directory.apply(directory.main(), [], { action: 'cancelCreation', name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime });
+
       if (actor.state !== 'deleted') directory.apply(directory.main(), [], { action: 'release', name: input.name, reference: actor.reference });
+
       return actor.reference;
     },
     async assign(name, input) {
       calls.push(`assign:${name}`);
       briefs.push(input.body);
+
       if (options.fail === 'assign') throw new Error('admission refused');
       await options.duringAssignment?.();
+
       return HANDOFF;
     },
     async status() {
@@ -186,10 +196,12 @@ function makeScene(options: {
     async message() { return HANDOFF; },
     async dismiss(name, keepHistory) {
       calls.push(`dismiss:${name}:${keepHistory}`);
+
       if (options.failRelease) throw new Error('the release failed');
     },
     async rename() { /* not reached by this rung */ },
   };
+
   const portInput: Parameters<typeof createTemporaryAgentPort>[0] = {
     roster,
     runtime,
@@ -197,7 +209,9 @@ function makeScene(options: {
     now: () => NOW,
     renderInheritedContext: () => undefined,
   };
+
   const temporary = createTemporaryAgentPort(portInput);
+
   const teamInput: Parameters<typeof createTeamToolDeps>[0] = {
     delegation: options.delegation
       ? delegationBudgetAtDepth(options.delegation.depth)
@@ -211,17 +225,24 @@ function makeScene(options: {
     broadcast: () => { /* no listeners in this scene */ },
     broadcastTask: () => { /* no listeners in this scene */ },
   };
+
   // Absent, not empty: the rung's every gate reads the KEY's presence, so a
   // scene without the port must not carry it at all.
   if (!options.withoutTemporary) Object.assign(teamInput, { temporary });
   const team = createTeamToolDeps(teamInput);
+
   const deps: AgentsToolDeps = {
     mode: 'build' satisfies WorkMode,
     team,
     profile: () => testProfile(),
   };
+
   return {
-    recover: async (clearFailure) => { if (clearFailure) { delete options.fail; delete options.failRelease; } return recoverSubordinateLifecycles(roster, runtime); },
+    recover: async (clearFailure) => {
+      if (clearFailure) { delete options.fail; delete options.failRelease; }
+
+      return recoverSubordinateLifecycles(roster, runtime);
+    },
     deps,
     temporary,
     roster,
@@ -257,10 +278,13 @@ function makeScene(options: {
     sandbox: () => {
       const provider = createAgentsCodemodeProvider(() => deps);
       const members: SandboxNamespace = {};
+
       for (const action of agentsActionsFor(deps)) {
         const entry = provider.tools[action];
+
         if (entry) members[action] = entry.execute;
       }
+
       return members;
     },
   };
@@ -271,14 +295,17 @@ function makeScene(options: {
  *  what the roster contract promises. */
 function startRun(scene: Scene, input: Omit<AgentsToolInput, 'action'>, signal?: AbortSignal) {
   const settled = scene.call({ action: 'hire', lifetime: 'task', ...input }, signal);
+
   // Observe the assignment acknowledgement rather than counting asynchronous turns.
   const ready = (async () => {
     for (let attempt = 0; attempt < 50; attempt++) {
       if (scene.roster.get(TEMP_NAME)?.taskEventId) return;
       await Promise.resolve();
     }
+
     throw new Error('the temporary run never recorded its assignment id');
   })();
+
   return { settled, ready };
 }
 
@@ -444,12 +471,14 @@ describe('a task-lifetime hire returns one completed answer', () => {
 describe('the roster shows a temporary agent while it runs and keeps its history after', () => {
   test('an answer before the assignment acknowledgement settles the ask before later cancellation', async () => {
     const controller = new AbortController();
+
     const scene = makeScene({
       duringAssignment: async () => {
         await scene.report({ content: 'The answer reaches the parent before its assignment acknowledgement.' });
         controller.abort();
       },
     });
+
     const outcome = await scene.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }, controller.signal);
     expect(outcome).toMatchObject({
       status: 'completed', answer: 'The answer reaches the parent before its assignment acknowledgement.',
@@ -564,6 +593,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     const failed = v.parse(FailedOutcome, await scene.call({
       action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.',
     }));
+
     expect(failed.status).toBe('failed');
     expect(failed.transcript).toBe('none');
     // The pre-existing agent is STILL THERE, unchanged, and still addressable.
@@ -591,6 +621,7 @@ describe('the roster shows a temporary agent while it runs and keeps its history
     const failed = v.parse(FailedOutcome, await scene.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' }));
     expect(failed.answer).toContain('admission refused');
     const actor = scene.roster.requireExisting(TEMP_NAME).actorReference;
+
     if (!actor) throw new Error('The acknowledged seed has no actor reference.');
     scene.roster.requestDeletion(TEMP_NAME, actor, NOW);
     await expect(scene.recover()).rejects.toThrow('the release failed');
@@ -654,10 +685,12 @@ describe('an answer that outlives its waiter', () => {
   test('a turn_end answer with no waiter releases the row too, not just a terminal report', async () => {
     const scene = makeScene();
     scene.roster.create({ name: TEMP_NAME, actorReference: null, birth: null, deleteRequested: false, createdBy: 'orchestrator', status: 'working', currentTask: 'Audit the ledger.', createdAt: NOW, dismissedAt: null, lifetime: 'task', taskEventId: 'evt-1' });
+
     // `progress` + `turn_end` — exactly what a finished child turn relays.
     const delivered = await scene.report({
       status: 'progress', origin: 'turn_end', content: 'Totals reconcile.',
     });
+
     expect(delivered.disposition).toBe('admitted');
     expect(scene.published()).toBe(1);
     expect(scene.roster.list()).toEqual([]);
@@ -748,9 +781,11 @@ describe('the two hire targets are decided by `role`', () => {
   // rather than accepted and dropped.
   test('a task-lifetime hire refuses a name, because the row is archived before anyone could use it', async () => {
     const scene = makeScene();
+
     const pending = scene.call({
       action: 'hire', lifetime: 'task', agent: 'named-helper', role: 'auditor', mission: 'go',
     });
+
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('never addressable');
     expect(scene.calls).toEqual([]);
@@ -800,10 +835,12 @@ describe('bulk material travels by path, not by field', () => {
   test('a path named in the mission reaches the child brief and the bytes never do', async () => {
     const scene = makeScene();
     await scene.files.writeFile('/spill/tool-output.txt', 'x'.repeat(5000));
+
     const run = startRun(scene, {
       role: 'auditor',
       mission: 'What failed in /spill/tool-output.txt? Read it yourself.',
     });
+
     await run.ready;
     await scene.report({ content: 'A timeout on the third request.' });
     await run.settled;
@@ -862,6 +899,7 @@ describe('the rung is structural, and so is its absence', () => {
     expect(delegationExhausted(capped.deps.team!.delegation)).toBe(true);
 
     const team = capped.deps.team;
+
     if (!team) throw new Error('the depth fixture has no team');
     const expected = delegationDepthRefusal(team.delegation);
     const taskRefusal = capped.call({ action: 'hire', lifetime: 'task', role: 'auditor', mission: 'Audit the ledger.' });
@@ -913,6 +951,7 @@ describe('the rung is structural, and so is its absence', () => {
       expect(child.deps.team!.temporary).toBeDefined();
       expect(agentsActionsFor(child.deps)).toContain('hire');
     }
+
     // At the cap the backend wires no team deps at all, so the rung is not
     // refused — it is not there. A leaf answers directly.
     const leaf: AgentsToolDeps = { mode: 'build' };

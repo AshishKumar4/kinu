@@ -23,6 +23,7 @@ export interface BenchSuite {
 }
 
 const BENCH_SUITE_NAMES = ['core', 'lean'] as const;
+
 type BenchSuiteName = (typeof BENCH_SUITE_NAMES)[number];
 
 /** The verifiable outcomes this repo already supplies. `core` is the whole core
@@ -75,27 +76,35 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
 
   raw.split('\n').forEach((line, i) => {
     const text = line.trim();
+
     if (!text || text.startsWith('#')) return;
     let parsedJson: unknown;
+
     try {
       parsedJson = JSON.parse(text);
     } catch (err) {
       throw new Error(`${path}:${i + 1}: not valid JSON`, { cause: err });
     }
+
     const parsed = v.safeParse(TaskLineSchema, parsedJson);
+
     if (!parsed.success) {
       throw new Error(`${path}:${i + 1}: ${parsed.issues.map((x) => x.message).join('; ')}`);
     }
+
     const line_ = parsed.output;
     const patchPath = join(dir, 'patches', `${line_.id}.patch`);
+
     if (!existsSync(patchPath)) throw new Error(`${path}:${i + 1}: missing defect patch ${patchPath}`);
     const patch = readFileSync(patchPath, 'utf8');
 
     const leak = promptLeaksFix(line_.prompt, patch);
+
     if (leak) throw new Error(`${path}:${i + 1}: prompt quotes the fix ("${leak}") — that is not a task`);
 
     const suite = BENCH_SUITES[line_.suite];
     patches.set(line_.id, patch);
+
     const task: BenchTask = {
       id: line_.id,
       title: line_.title,
@@ -104,11 +113,13 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
       guarded: suite.guarded,
       checks: suite.checks,
     };
+
     if (line_.tags) task.tags = line_.tags;
     tasks.push(task);
   });
 
   if (tasks.length === 0) throw new Error(`${path}: no tasks — an empty corpus proves nothing`);
+
   return { corpus: partitionCorpus(tasks, opts), patches, path };
 }
 
@@ -164,9 +175,11 @@ export interface StalePatch {
 export function stalePatches(repoRoot: string, files: readonly string[]): StalePatch[] {
   const named = new Set(loadBenchCorpus(repoRoot).patches.keys());
   const stale: StalePatch[] = [];
+
   for (const relative of files) {
     const path = join(repoRoot, relative);
     const file = basename(relative);
+
     const res = Bun.spawnSync(
       ['git', 'apply', '--check', '--whitespace=nowarn', '-'],
       // The tree at `repoRoot` IS the subject. GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE
@@ -175,9 +188,11 @@ export function stalePatches(repoRoot: string, files: readonly string[]): StaleP
       // has already once made `git status` in this repo describe another tree.
       { cwd: repoRoot, env: gitEnv(), stdin: Buffer.from(readFileSync(path)), stdout: 'ignore', stderr: 'pipe' },
     );
+
     if (res.exitCode === 0) continue;
     const id = file.slice(0, -'.patch'.length);
     stale.push({ id, path, detail: res.stderr.toString().trim(), orphan: !named.has(id) });
   }
+
   return stale;
 }

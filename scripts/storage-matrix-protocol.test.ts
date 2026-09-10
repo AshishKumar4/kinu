@@ -29,11 +29,13 @@ describe('paired order and censoring protocol', () => {
 
   test('censors an unstable or over-budget cell instead of assigning a score', () => {
     expect(coefficientOfVariation([100, 105])).toBeLessThan(MAX_CV);
+
     const [stable, noisy, slow] = scoreCells([
       representative,
       { ...representative, values: [1, 100] },
       { ...representative, wallMs: 1_001 },
     ], 1_000);
+
     expect(stable?.censored).toBe(false);
     expect(noisy?.censored).toBe(true);
     expect(noisy?.censorReason).toContain('CV');
@@ -67,6 +69,7 @@ test('reports cases in separate sections and never constructs a pooled case', ()
     { case: 'representative', value: 5 },
     { case: 'best', value: 2 },
   ];
+
   const groups = groupByCase(rows, (row) => row.case);
   expect(groups.get('best')).toEqual([{ case: 'best', value: 1 }, { case: 'best', value: 2 }]);
   expect(groups.get('representative')).toEqual([{ case: 'representative', value: 5 }]);

@@ -22,6 +22,7 @@ function setup() {
   const db = new Database(':memory:');
   const sql = sqlExec(db);
   initAccessTokenTable(sql);
+
   return { db, sql };
 }
 
@@ -29,6 +30,7 @@ describe('access token format', () => {
   test('parses the embedded userId and rejects other token classes', async () => {
     const { sql } = setup();
     const minted = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec']);
+
     if (!minted.ok) throw new Error(minted.error);
     expect(parseAccessTokenUserId(minted.token)).toBe(USER_ID);
     expect(parseAccessTokenUserId(`ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`)).toBeNull();
@@ -40,6 +42,7 @@ describe('mint', () => {
   test('stores only the hash — the raw token never lands in SQLite', async () => {
     const { db, sql } = setup();
     const minted = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec', 'workspace.read']);
+
     if (!minted.ok) throw new Error(minted.error);
     const rows = db.prepare<{ token_hash: string }, []>('SELECT token_hash FROM user_access_tokens').all();
     expect(rows).toHaveLength(1);
@@ -51,6 +54,7 @@ describe('mint', () => {
     const { sql } = setup();
     const unknown = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec', 'admin.godmode']);
     expect(unknown.ok).toBe(false);
+
     if (!unknown.ok) expect(unknown.error).toContain('admin.godmode');
     const empty = await mintAccessToken(sql, USER_ID, 'ci', []);
     expect(empty.ok).toBe(false);
@@ -65,6 +69,7 @@ describe('mint', () => {
     expect((await mintAccessToken(sql, USER_ID, 'ci', ['workspace.read'])).ok).toBe(true);
     const duplicate = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.read']);
     expect(duplicate.ok).toBe(false);
+
     if (!duplicate.ok) expect(duplicate.error).toContain('already exists');
 
     expect(revokeAccessToken(sql, 'ci').revoked).toBe(true);
@@ -81,6 +86,7 @@ describe('verify', () => {
   test('round-trips a minted token with its scopes and records last use', async () => {
     const { db, sql } = setup();
     const minted = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.read', 'workspace.exec']);
+
     if (!minted.ok) throw new Error(minted.error);
 
     const verified = await verifyAccessToken(sql, minted.token);
@@ -97,6 +103,7 @@ describe('verify', () => {
   test('rejects unknown, tampered, and revoked tokens', async () => {
     const { sql } = setup();
     const minted = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec']);
+
     if (!minted.ok) throw new Error(minted.error);
 
     expect((await verifyAccessToken(sql, 'garbage')).ok).toBe(false);
@@ -111,6 +118,7 @@ describe('verify', () => {
   test('resolves live scopes by bearer hash for connect-ticket pinning', async () => {
     const { sql } = setup();
     const minted = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.read', 'workspace.exec']);
+
     if (!minted.ok) throw new Error(minted.error);
     expect(getActiveAccessTokenScopes(sql, minted.record.tokenHash)).toEqual(['workspace.read', 'workspace.exec']);
     expect(getActiveAccessTokenScopes(sql, 'f'.repeat(64))).toBeNull();
@@ -121,9 +129,11 @@ describe('list and revoke', () => {
   test('lists active tokens newest-first with scopes and last-used; hides revoked', async () => {
     const { db, sql } = setup();
     const first = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec']);
+
     if (!first.ok) throw new Error(first.error);
     db.prepare('UPDATE user_access_tokens SET created_at = created_at - 1000').run();
     const second = await mintAccessToken(sql, USER_ID, 'deploy', ['workspace.read']);
+
     if (!second.ok) throw new Error(second.error);
 
     expect(listAccessTokens(sql).map((t) => t.name)).toEqual(['deploy', 'ci']);
@@ -135,6 +145,7 @@ describe('list and revoke', () => {
     const { sql } = setup();
     expect(revokeAccessToken(sql, 'missing').revoked).toBe(false);
     const minted = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec']);
+
     if (!minted.ok) throw new Error(minted.error);
     expect(revokeAccessToken(sql, 'ci').revoked).toBe(true);
     expect(revokeAccessToken(sql, 'ci').revoked).toBe(false);

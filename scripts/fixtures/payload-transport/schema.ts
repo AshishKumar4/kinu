@@ -132,11 +132,17 @@ export const ArtifactSchema = v.object({
 });
 
 export type RunPlan = v.InferOutput<typeof RunPlanSchema>;
+
 export type Availability = v.InferOutput<typeof AvailabilitySchema>;
+
 export type Cell = v.InferOutput<typeof CellSchema>;
+
 export type ControlRpc = v.InferOutput<typeof ControlRpcSchema>;
+
 export type CleanupStep = v.InferOutput<typeof CleanupStepSchema>;
+
 export type Verdict = v.InferOutput<typeof VerdictSchema>;
+
 export type Artifact = v.InferOutput<typeof ArtifactSchema>;
 
 /**
@@ -149,6 +155,7 @@ export function assertCellCoherence(cell: Cell): string | null {
   if (cell.status === 'ok') {
     return cell.reason !== undefined ? 'an ok cell carries no refusal reason' : null;
   }
+
   return cell.reason !== undefined && cell.reason.length > 0
     ? null
     : `a ${cell.status} cell must name its reason`;
@@ -156,11 +163,14 @@ export function assertCellCoherence(cell: Cell): string | null {
 
 export function validateArtifact(value: v.InferInput<typeof ArtifactSchema>): Artifact {
   const parsed = v.parse(ArtifactSchema, value);
+
   for (const cell of [...parsed.warmups, ...parsed.cells]) {
     const problem = assertCellCoherence(cell);
+
     if (problem !== null) {
       throw new Error(`cell ${cell.arm}/${cell.op}/${cell.sizeMiB}MiB#${cell.rep}: ${problem}`);
     }
   }
+
   return parsed;
 }

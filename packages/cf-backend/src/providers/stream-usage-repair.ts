@@ -56,14 +56,19 @@ const UsageSchema = v.looseObject({
  */
 export function createCachedUsageRepair(): (usage: JsonObject) => JsonObject | undefined {
   let maxCached = 0;
+
   return (usage) => {
     const parsed = v.safeParse(UsageSchema, usage);
+
     if (!parsed.success) return undefined;
     const cached = parsed.output.prompt_tokens_details?.cached_tokens ?? undefined;
+
     if (cached !== undefined && cached >= maxCached) {
       maxCached = cached;
+
       return undefined;
     }
+
     // No chunk has reported a real cache read yet, so there is no maximum to
     // restore — and writing a `cached_tokens: 0` here would fabricate a report
     // the provider never made, which is the one thing this repair must not do.
@@ -74,6 +79,7 @@ export function createCachedUsageRepair(): (usage: JsonObject) => JsonObject | u
     const details = usage.prompt_tokens_details;
     const repaired: JsonObject = v.is(JsonObjectSchema, details) ? { ...details } : {};
     repaired.cached_tokens = maxCached;
+
     return { ...usage, prompt_tokens_details: repaired };
   };
 }
@@ -82,7 +88,9 @@ export function createCachedUsageRepair(): (usage: JsonObject) => JsonObject | u
  *  and bodyless responses are returned unchanged. */
 export function repairSseCachedUsage(res: Response): Response {
   const contentType = res.headers.get('content-type') ?? '';
+
   if (!res.body || !contentType.includes('text/event-stream')) return res;
+
   return new Response(res.body.pipeThrough(cachedUsageRepairTransform()), {
     status: res.status,
     statusText: res.statusText,
@@ -103,18 +111,23 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
     if (!line.startsWith('data:')) return line;
     const crlf = line.endsWith('\r');
     const payload = line.slice(5, crlf ? -1 : undefined).trim();
+
     if (!payload.startsWith('{')) return line; // e.g. "data: [DONE]"
     // A `data:` line that is not JSON is not a usage chunk, so it passes
     // through untouched like every other non-usage line. Any other failure is
     // real and must not become a silent skip of the repair.
     const decoded = tolerate<unknown>(() => JSON.parse(payload), 'malformed-input');
     const parsed = v.safeParse(JsonObjectSchema, decoded);
+
     if (!parsed.success) return line;
     const chunk = parsed.output;
+
     // `usage` is what distinguishes a usage chunk from a delta.
     if (!v.is(JsonObjectSchema, chunk.usage)) return line;
     const repaired = repairUsage(chunk.usage);
+
     if (!repaired) return line;
+
     return `data: ${JSON.stringify({ ...chunk, usage: repaired })}${crlf ? '\r' : ''}`;
   };
 
@@ -123,10 +136,12 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
       buffer += decoder.decode(bytes, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
+
       for (const line of lines) controller.enqueue(encoder.encode(`${repairLine(line)}\n`));
     },
     flush(controller) {
       buffer += decoder.decode();
+
       if (buffer.length > 0) controller.enqueue(encoder.encode(repairLine(buffer)));
     },
   });

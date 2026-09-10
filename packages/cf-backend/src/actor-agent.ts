@@ -361,8 +361,10 @@ const ClientRpcFrameSchema = v.object({
 function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
   if (!v.is(v.string(), message)) return null;
   const json = tolerate<unknown>(() => JSON.parse(message), 'malformed-input');
+
   if (json === undefined) return null;
   const frame = v.safeParse(ClientRpcFrameSchema, json);
+
   return frame.success ? { id: frame.output.id, method: frame.output.method } : null;
 }
 
@@ -370,12 +372,15 @@ function parseClientRpcFrame<Message>(message: Message): ClientRpcFrame | null {
  *  so a client whose authority is gone stops reconnecting and surfaces the
  *  reason instead of retrying a socket it can never hold again. */
 const WEBSOCKET_POLICY_CLOSE = 1008;
+
 const CLI_AUTHORITY_REVOKED = 'This CLI authorization is invalid. Sign in again with: kinu auth';
+
 const SESSION_AUTHORITY_REVOKED = 'This session has been signed out. Sign in again.';
 
 
 function jsonObject<Input>(input: Input): JsonObject {
   const parsed = v.safeParse(JsonObjectSchema, input);
+
   return parsed.success ? parsed.output : {};
 }
 
@@ -405,6 +410,7 @@ const RecordedUiMessageSchema = v.object({
  */
 function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
   const row = v.parse(RecordedUiMessageSchema, value);
+
   const recorded: Omit<UIMessage, 'id'> = {
     role: row.role,
     // SAFETY: the part union is the SDK's, and `convertToModelMessages` is its
@@ -412,7 +418,9 @@ function recordedUiMessage(value: JsonValue): Omit<UIMessage, 'id'> {
     // conversion itself rejects a part it cannot read.
     parts: row.parts as UIMessage['parts'],
   };
+
   if (row.metadata !== undefined) recorded.metadata = row.metadata;
+
   return recorded;
 }
 
@@ -431,25 +439,32 @@ const PlanApprovalMetadataSchema = v.pipe(v.string(), v.parseJson(), v.object({
 function extractLastUserText(messages: ReadonlyArray<ModelMessage>): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
+
     if (m.role !== 'user') continue;
     const c = m.content;
+
     if (v.is(v.string(), c)) return c;
+
     if (Array.isArray(c)) {
       return c
         .map((part) => {
           const parsed = v.safeParse(v.looseObject({ text: v.optional(v.string()) }), part);
+
           return parsed.success ? parsed.output.text ?? '' : '';
         })
         .filter(Boolean)
         .join('\n');
     }
+
     return '';
   }
+
   return '';
 }
 
 function readCliCwd(body?: JsonObject): string | null {
   const cwd = body?.cwd;
+
   return v.is(v.string(), cwd) && cwd.trim() ? cwd.trim() : null;
 }
 
@@ -467,6 +482,7 @@ function readTurnContinuity(body?: JsonObject): TurnContinuity {
 
 function readTurnTier(body?: JsonObject): TierId | undefined {
   const parsed = v.safeParse(v.picklist(TIER_IDS), body?.tier);
+
   return parsed.success ? parsed.output : undefined;
 }
 
@@ -474,34 +490,42 @@ type UserModelMessage = Extract<ModelMessage, { role: 'user' }>;
 
 function withCliCwdContext(messages: ReadonlyArray<ModelMessage>, cwd: string): ModelMessage[] {
   const prefix = `Current terminal working directory: ${cwd}\n\n`;
+
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
+
     if (message.role !== 'user') continue;
     const next = [...messages];
     next[i] = {
       ...message,
       content: prefixCliCwdContent(message.content, prefix),
     };
+
     return next;
   }
+
   return [...messages];
 }
 
 function prefixCliCwdContent(content: UserModelMessage['content'], prefix: string): UserModelMessage['content'] {
   if (v.is(v.string(), content)) return `${prefix}${content}`;
+
   if (Array.isArray(content)) return [{ type: 'text', text: prefix }, ...content];
+
   return prefix;
 }
 
 /** One activity-log line per compaction engine event: message + compact JSON. */
 function compactionLogDetail<Data>(message: string, data?: Data): string {
   if (data === undefined) return message;
+
   try {
     return `${message} ${JSON.stringify(data)}`;
   } catch (error) {
     // A detail that cannot serialize (a cycle, a BigInt) must not take the
     // activity-log line down with it: record why and ship the message alone.
     diagnostics.event('actor.compaction_detail_unserializable', { error: renderThrownChain({ cause: error }) });
+
     return message;
   }
 }
@@ -546,6 +570,7 @@ function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const gate = {
     [REPORT_TOOL]: !!deps.report,
   } satisfies Partial<Record<BuiltinToolName, boolean>>;
+
   return BUILTIN_TOOLS.filter((name) => gate[name] ?? true);
 }
 
@@ -625,6 +650,7 @@ function hostedActorNamespaces(actor: HostedActor): CodemodeProvider[] {
   // is teaching core about Vectorize to satisfy a cf read, which is backwards:
   // the whole point of `runtimeFor` is that the BACKEND owns the runtime.
   const runtime = actor.runtime as CFRuntime;
+
   return [
     ...(runtime.executionRouter?.getProviders() ?? []),
     createDbCodemodeProvider(actor.stores.appData),
@@ -651,6 +677,7 @@ export abstract class ActorAgent extends Think<Env> {
   private actorRuntimeRefusal(): Refusal | null {
     try {
       this.actorHandle();
+
       return null;
     } catch (cause) {
       if (cause instanceof KinuError && cause.code === 'missing') return refusalOf(cause);
@@ -660,6 +687,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   override async alarm(): Promise<void> {
     const refusal = this.actorRuntimeRefusal();
+
     if (refusal) throw new KinuError(refusal.reason, refusal.error);
     await super.alarm();
   }
@@ -714,6 +742,7 @@ export abstract class ActorAgent extends Think<Env> {
     // A plain read; the constructor owns the table (`initCapabilitySchema`),
     // so a failure here is a real failure and never reads as "no token".
     const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
+
     return rows[0]?.token || null;
   }
 
@@ -722,6 +751,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  sides disagree without either of them exchanging the secret. */
   protected async workspaceCapabilityHash(): Promise<string | null> {
     const token = this.workspaceCapabilityToken();
+
     return token ? sha256Hex(token) : null;
   }
 
@@ -741,6 +771,7 @@ export abstract class ActorAgent extends Think<Env> {
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
+
     // Hosted actors read the workspace's single capability row through their
     // runtime, so a reissue takes effect on their next call without
     // propagating token copies. Per-actor copies would require reconciliation
@@ -757,8 +788,10 @@ export abstract class ActorAgent extends Think<Env> {
    *  runs, and the token is the same one the registry already committed. */
   async repushWorkspaceCapability(): Promise<{ missed: number }> {
     const token = this.workspaceCapabilityToken();
+
     if (!token) return { missed: 0 };
     const result = await this.installWorkspaceCapability(token);
+
     return { missed: result.missed };
   }
 
@@ -855,23 +888,30 @@ export abstract class ActorAgent extends Think<Env> {
   private _turnTaskPlan: TaskPlanContext | undefined;
   private approvedTaskPlan(messageId: string | null): TaskPlan | null {
     const sql = this.boundSql;
+
     if (messageId === null || !tableExists(sql, 'cf_think_submissions')) return null;
+
     const rows = sql<{ metadata_json: string | null; idempotency_key: string | null }>
       `SELECT metadata_json,idempotency_key FROM cf_think_submissions
        WHERE status='running' AND EXISTS
          (SELECT 1 FROM json_each(messages_json) WHERE json_extract(value,'$.id')=${messageId})`;
+
     for (const row of rows) {
       if (row.idempotency_key === null) continue;
       const parsed = v.safeParse(PlanApprovalMetadataSchema, row.metadata_json);
+
       if (!parsed.success) continue;
       const input = parsed.output;
       const prefix = `plan:${input.planId}:${input.revision}:approve:`;
+
       if (!row.idempotency_key.startsWith(prefix) || !/^\d+$/.test(row.idempotency_key.slice(prefix.length))) continue;
       const plan = this.planReviews.get(input.planId, input.revision);
+
       if (plan?.status === 'approved' && plan.sessionId === 'default') {
         return Object.freeze({ id: plan.id, revision: plan.revision, sessionId: plan.sessionId });
       }
     }
+
     return null;
   }
 
@@ -880,12 +920,15 @@ export abstract class ActorAgent extends Think<Env> {
   /** One SQL-backed review stream, local to this actor's durable storage. */
   protected get planReviews(): PlanReviewStore {
     if (!this._planReviews) this._planReviews = new PlanReviewStore(this.boundSql, this.actorHandle());
+
     return this._planReviews;
   }
 
   protected submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult | Promise<PlanReviewResult> {
     const result = this.planReviews.submit('default', edits);
+
     if (result.ok) this.broadcastPlanUpdate(result.plan);
+
     return result;
   }
 
@@ -905,11 +948,15 @@ export abstract class ActorAgent extends Think<Env> {
     annotations: PlanReviewAnnotation[],
   ): Promise<PlanReviewResult> {
     const admitted = admitPlanReviewAnnotations(annotations);
+
     if (!admitted.ok) {
       return { ok: false, error: admitted.error, plan: this.planReviews.get(id, revision) };
     }
+
     const result = this.planReviews.saveAnnotations(id, revision, admitted.annotations);
+
     if (result.ok) this.broadcastPlanUpdate(result.plan);
+
     return result;
   }
 
@@ -928,13 +975,17 @@ export abstract class ActorAgent extends Think<Env> {
     readonly queueError?: string;
   }> {
     const result = this.planReviews.decide(id, revision, decision, feedback);
+
     if (!result.ok) return result;
+
     if (result.plan.handoffAccepted) {
       return { ok: true, plan: result.plan, queued: true };
     }
+
     this.broadcastPlanUpdate(result.plan);
 
     const plan = result.plan;
+
     const text = decision === 'request_changes'
       ? [
           `The owner requested changes to plan ${plan.id} revision ${plan.revision}.`,
@@ -961,6 +1012,7 @@ export abstract class ActorAgent extends Think<Env> {
           plan.content,
           '</approved-plan>',
         ].join('\n');
+
     const metadata = {
       kinuEvent: decision === 'approve' ? 'plan_approved' : 'plan_feedback',
       kinuMode: decision === 'approve' ? 'build' : 'plan',
@@ -968,14 +1020,17 @@ export abstract class ActorAgent extends Think<Env> {
       revision: plan.revision,
       decision,
     };
+
     const enqueue = (attempt: number) => this.host.enqueueTurn({
       text,
       metadata,
       idempotencyKey: `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`,
     });
+
     try {
       let attempt = this.planReviews.handoffAttempt(plan.id, plan.revision);
       let queued = await enqueue(attempt);
+
       if (queued.status === 'skipped'
         && queued.durable
         && !queued.durable.accepted
@@ -985,12 +1040,16 @@ export abstract class ActorAgent extends Think<Env> {
         attempt = this.planReviews.advanceHandoffAttempt(plan.id, plan.revision, attempt);
         queued = await enqueue(attempt);
       }
+
       if (queued.status !== 'queued') {
         return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
       }
+
       const accepted = this.planReviews.markHandoffAccepted(plan.id, plan.revision);
+
       if (!accepted.ok) return accepted;
       this.broadcastPlanUpdate(accepted.plan);
+
       return { ok: true, plan: accepted.plan, queued: true };
     } catch (error) {
       return {
@@ -1085,6 +1144,7 @@ export abstract class ActorAgent extends Think<Env> {
       this._subordinateRoster = new SubordinateRosterStore(this.ctx.storage.sql, this.actorHandle());
       this._subordinateRoster.ensureSchema();
     }
+
     return this._subordinateRoster;
   }
 
@@ -1095,7 +1155,9 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected async subordinateView(name: string): Promise<SubordinateView> {
     const entry = this.subordinateRoster.get(name);
+
     if (entry === null) throw new Error(`Subordinate "${name}" is not in the roster`);
+
     try {
       // The child's OWN config rows, read through the host's binder rather than
       // fetched over a stub: `getSubordinateSnapshot` was an RPC because the
@@ -1104,6 +1166,7 @@ export abstract class ActorAgent extends Think<Env> {
       const child = this.actorHost().bindStores(
         this.actorDirectoryStore().apply(actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name }).reference,
       );
+
       return {
         ...entry,
         displayName: child.stores.config.getDisplayName() ?? entry.name,
@@ -1115,6 +1178,7 @@ export abstract class ActorAgent extends Think<Env> {
         cause: error,
         otherwise: 'unavailable',
       }), { subordinate: name });
+
       return { ...entry, displayName: name, role: 'Unavailable' };
     }
   }
@@ -1130,6 +1194,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected broadcastSubordinatesChanged(_event?: SubordinatesChangedEvent): void {
     this._subordinateRosterBroadcastPending = true;
+
     if (this._subordinateRosterBroadcast !== null) return;
     const owner: AsyncTaskOwner = { promise: null };
     this._subordinateRosterBroadcast = owner;
@@ -1149,6 +1214,7 @@ export abstract class ActorAgent extends Think<Env> {
       } finally {
         if (this._subordinateRosterBroadcast === owner) {
           this._subordinateRosterBroadcast = null;
+
           if (this._subordinateRosterBroadcastPending) this.broadcastSubordinatesChanged();
         }
       }
@@ -1201,6 +1267,7 @@ export abstract class ActorAgent extends Think<Env> {
       this.subordinateSeams(),
       () => this.actorHost().bindStores(actorReferenceOf(this.actorHandle())),
     );
+
     return this._subordinateRuntime;
   }
 
@@ -1222,6 +1289,7 @@ export abstract class ActorAgent extends Think<Env> {
       renderInheritedContext: () => renderSubordinateInheritedContext(this.readInheritedContext()),
       createName: mintSubordinateName,
     });
+
     return this._temporaryAgentPort;
   }
 
@@ -1263,6 +1331,7 @@ export abstract class ActorAgent extends Think<Env> {
   ): Promise<{ ok: true }> {
     this.ensureSchema();
     await this.getTeamToolDeps().recordTitle({ name, displayName });
+
     return { ok: true };
   }
 
@@ -1296,13 +1365,17 @@ export abstract class ActorAgent extends Think<Env> {
       this.ensureSchema();
       const child = await this.actorDirectory({ action: 'validate', name: input.name, reference: input.reference });
       const ownerUserId = this.getOwnerUserId();
+
       if (!ownerUserId) throw new KinuError('missing', 'The workspace has no owner.');
       let depth: number | null = null;
+
       if (child.kind === 'subordinate') {
         const own = this.delegationBudget();
+
         if (delegationExhausted(own)) throw new KinuError('denied', 'The parent cannot create a subordinate below its delegation depth.');
         depth = deriveChildDelegationBudget(own).depth;
       }
+
       return {
         parentWorkspace: this.workspaceName(), ownerUserId, model: this.config.getModel(),
         depth, kind: child.kind, lifetime: child.lifetime, name: child.name, storageKey: child.storageKey, creationId: child.creationId,
@@ -1327,6 +1400,7 @@ export abstract class ActorAgent extends Think<Env> {
     sequenceId: string;
   }): Promise<SubordinateEventResult> {
     this.ensureSchema();
+
     return receiveSubordinateEvent({
       log: this.eventLog,
       roster: this.subordinateRoster,
@@ -1360,6 +1434,7 @@ export abstract class ActorAgent extends Think<Env> {
     // makes a missed fan-out notification self-healing instead of durable.
     getCredentialsRevision: async () => {
       const { stub, caller } = await this.userHub();
+
       return stub.getCredentialsRevision(caller);
     },
   });
@@ -1413,11 +1488,15 @@ export abstract class ActorAgent extends Think<Env> {
     this.onMessage = async (connection, message) => {
       if (await this.refuseRevokedSocketAuthority(connection, message)) return;
       const rejection = rejectOutOfScopeRpc(connection.tags, message);
+
       if (rejection) {
         connection.send(rejection);
+
         return;
       }
+
       const rpc = parseClientRpcFrame(message);
+
       if (rpc && this.isClientRpcMethodDenied(rpc.method)) {
         connection.send(JSON.stringify({
           type: 'rpc',
@@ -1425,24 +1504,30 @@ export abstract class ActorAgent extends Think<Env> {
           success: false,
           error: `${rpc.method} is not available from client connections.`,
         }));
+
         return;
       }
+
       const event = v.is(v.string(), message) ? parseProtocolMessage(message) : null;
       const unavailable = this.actorRuntimeRefusal();
       const inspection = rpc && (requiredRpcAccess(rpc.method) === 'workspace.read' || rpc.method === 'inspectSubordinate' || rpc.method === 'exportWorkspaceArchive');
+
       if (unavailable && !inspection) {
         if (rpc) connection.send(JSON.stringify({ ...unavailable, type: 'rpc', id: rpc.id, success: false }));
         else if (event?.type === 'chat-request' || event?.type === 'stream-resume-ack') {
           connection.send(JSON.stringify({ reason: unavailable.reason, type: MessageType.CF_AGENT_USE_CHAT_RESPONSE, id: event.id, body: unavailable.error, done: true, error: true }));
         } else connection.send(JSON.stringify({ ...unavailable, type: 'error' }));
+
         return;
       }
+
       try {
         return await dispatchMessage.call(this, connection, message);
       } finally {
         if (event?.type === 'clear') {
           this.dynamicLedger.reset();
           this._pendingDrainReplyTurns.clear();
+
           try {
             await this.compactionState.plans.save(this.name, null);
           } catch (err) {
@@ -1475,6 +1560,7 @@ export abstract class ActorAgent extends Think<Env> {
     const drainTurnId = this._activeDrainTurnId
       ?? this._pendingDrainReplyTurns.get(result.requestId)
       ?? this.turnDrainTurnId();
+
     const programmaticUserMessage = this._activeProgrammaticUserMessage;
     this._activeDrainTurnId = null;
     this._activeProgrammaticUserMessage = null;
@@ -1503,12 +1589,14 @@ export abstract class ActorAgent extends Think<Env> {
     // dropping it on the failure path would discard it for exactly the turns an
     // owner is most likely to have edited.
     const claimedTurn = this._turnClaim;
+
     if (claimedTurn !== null) {
       this._adoptedContext = this.contextPlane.endTurn({
         turnId: claimedTurn.turnId,
         history: this._lastTurnOpts?.messages ?? [],
       }).messages;
     }
+
     this.settleTurnClaim(result.status === 'completed'
       ? 'completed'
       : result.status === 'aborted' ? 'aborted' : 'error');
@@ -1517,6 +1605,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.rerunLeftoverSteers();
     const completed = result.status === 'completed';
     const injectedSignals = this.orch.signals.settle({ completed });
+
     // THE OUTPUT-LIMIT CONTINUATION, decided here because this is the one place
     // both actors settle through and the one moment all three facts are still
     // readable: the accumulator's last finish reason (reset at the next turn's
@@ -1535,9 +1624,11 @@ export abstract class ActorAgent extends Think<Env> {
         this.turnUserMessageEvent(programmaticUserMessage) === OUTPUT_CONTINUATION_EVENT
         || injectedSignals.absorbed.some((signal) => signal.kind === OUTPUT_CONTINUATION_EVENT),
     });
+
     if (outputContinuation) {
       this.logActivity('output_limit_reached', 'the answer was cut at the output limit — one continuation owed');
     }
+
     return {
       drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals,
       outputContinuation,
@@ -1550,14 +1641,17 @@ export abstract class ActorAgent extends Think<Env> {
   ) {
     const userMessages = this.messages.filter((message) => message.role === 'user');
     const lastUserMessage = programmaticUserMessage ?? userMessages.at(-1);
+
     const userText = lastUserMessage?.parts
       ?.filter((part) => part.type === 'text')
       .map((part) => part.text)
       .join('') ?? '';
+
     const assistantText = result.message.parts
       ?.filter((part) => part.type === 'text')
       .map((part) => part.text)
       .join('') ?? '';
+
     return { userText, assistantText };
   }
 
@@ -1571,7 +1665,9 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected transitionFor(result: ChatResponseResult): { turnId: string; messageId: string } | null {
     const durableTurnId = this.durableTurnId();
+
     if (durableTurnId === null || result.message.id === '') return null;
+
     return { turnId: durableTurnId, messageId: result.message.id };
   }
 
@@ -1596,22 +1692,28 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected async acceptUserSteer(text: string, mode: WorkMode): Promise<SteerTurnLanding> {
     const body = text.trim();
+
     if (!body) throw new Error('steerTurn requires the message text');
     const id = `steer-${nanoid(12)}`;
+
     // The decision and durable reservation are one synchronous actor slice.
     // A mid-turn steer exists in SQL before the client hears it queued, so an
     // eviction cannot turn an acknowledged chip into forgotten RAM.
     if (this._inFlight) {
       const turnId = this.durableTurnId();
+
       if (turnId === null) throw new Error('running turn has no durable identity');
       void this.sql`INSERT INTO pending_steers (actor_id, id, turn_id, mode, text)
         VALUES (${this.actorHandle().actorId}, ${id}, ${turnId}, ${mode}, ${body})`;
       const outcome = this.userSteer.accept({ id, text: body });
+
       if (outcome !== 'mid-turn') throw new Error('turn changed while accepting a steer');
       this.broadcastSteerStatus({ status: 'queued', steerId: id, text: body });
       this.logActivity('steer_queued', body.slice(0, 120));
+
       return 'mid-turn';
     }
+
     // The operator's own words, exactly as the ordinary send path would have
     // written them — author-stamped so the row wears the user bubble, never
     // filed as the harness speaking (the rerunLeftoverSteers precedent).
@@ -1619,9 +1721,11 @@ export abstract class ActorAgent extends Think<Env> {
       text: body,
       metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: mode },
     });
+
     if (queued.status !== 'queued') {
       throw new Error('the turn had already finished and this could not be queued as a new message — send it again');
     }
+
     return 'queued';
   }
 
@@ -1656,6 +1760,7 @@ export abstract class ActorAgent extends Think<Env> {
       parts: [{ type: 'text' as const, text: row.text }],
       metadata: row.metadata,
     })));
+
     for (const row of rows) {
       void this.sql`DELETE FROM pending_steers
         WHERE actor_id = ${this.actorHandle().actorId} AND id = ${row.id}`;
@@ -1694,16 +1799,20 @@ export abstract class ActorAgent extends Think<Env> {
 
   private rerunLeftoverSteers(): void {
     this._rerunningSteerPending = true;
+
     if (this._rerunningSteerTask !== null) return;
     const owner: AsyncTaskOwner = { promise: null };
     this._rerunningSteerTask = owner;
     owner.promise = (async () => {
       let steers = 0;
+
       try {
         await this.runFiber(TERMINAL_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: TERMINAL_LANE_FIBER });
+
           while (this._rerunningSteerPending) {
             this._rerunningSteerPending = false;
+
             // Terminal leftovers come from SQL, not the RAM drain: a reset has
             // already lost RAM, while these rows are the operator words we
             // acknowledged. Keep seq order and mode boundaries; merging a Plan
@@ -1711,29 +1820,37 @@ export abstract class ActorAgent extends Think<Env> {
             const rows = this.sql<{ id: string; turn_id: string; mode: WorkMode; text: string }>`
               SELECT id, turn_id, mode, text FROM pending_steers
       WHERE actor_id = ${this.actorHandle().actorId} ORDER BY seq ASC`;
+
             steers = rows.length;
             let index = 0;
+
             while (index < rows.length) {
               const first = rows[index]!;
               const group = [first];
               index++;
+
               while (index < rows.length && rows[index]!.mode === first.mode && rows[index]!.turn_id === first.turn_id) group.push(rows[index++]!);
               const idempotencyKey = `steer-rerun:${first.turn_id}:${first.mode}:${first.id}`;
+
               // A duplicate terminal callback can arrive before the first admission
               // resolves. RAM closes that window; the durable idempotency key closes
               // the same window across an activation reset.
               if (this._rerunningSteerKeys.has(idempotencyKey)) continue;
               this._rerunningSteerKeys.add(idempotencyKey);
+
               try {
                 const queued = await this.host.enqueueTurn({
                   text: group.map((row) => row.text).join('\n\n'),
                   metadata: { [TURN_AUTHOR_METADATA_KEY]: 'operator', kinuMode: first.mode },
                   idempotencyKey,
                 });
+
                 const duplicateAdmission = queued.durable?.accepted === false
                   && (queued.durable.status === 'pending' || queued.durable.status === 'running'
                     || queued.durable.status === 'completed');
+
                 if (queued.status !== 'queued' && !duplicateAdmission) continue;
+
                 for (const row of group) {
         void this.sql`DELETE FROM pending_steers
           WHERE actor_id = ${this.actorHandle().actorId} AND id = ${row.id}`;
@@ -1751,6 +1868,7 @@ export abstract class ActorAgent extends Think<Env> {
       } finally {
         if (this._rerunningSteerTask === owner) {
           this._rerunningSteerTask = null;
+
           if (this._rerunningSteerPending) this.rerunLeftoverSteers();
         }
       }
@@ -1776,6 +1894,7 @@ export abstract class ActorAgent extends Think<Env> {
     let overflowRecovery: OverflowRecoveryDecision | null = null;
     // The NEXT turn's measured compaction trigger (core turn-lifecycle).
     persistMeasuredPromptTokens(this.compactionState, this.name, this.acc.lastPromptTokens, this._turnDurableLength);
+
     // Overflow planning and compaction arming are synchronous. If this turn
     // earned a retry, the caller records it as `overflow_retry` in the terminal
     // roster before any asynchronous effect runs.
@@ -1788,11 +1907,13 @@ export abstract class ActorAgent extends Think<Env> {
         state: this.compactionState,
         sessionKey: this.name,
       });
+
       if (overflowRecovery.forceCompaction) {
         this.logActivity('overflow_detected',
           `${overflowRecovery.failureClass} — force compaction armed${overflowRecovery.enqueueRetry ? ', retry owed' : ''}`);
       }
     }
+
     // Seal the durable run: turn_end + run_end (core turn-lifecycle).
     //
     // `reason` is core's vocabulary and the classifier takes RAW FACTS, so
@@ -1813,6 +1934,7 @@ export abstract class ActorAgent extends Think<Env> {
       errorText,
       lastFinishReason: this.acc.lastFinishReason,
     });
+
     if (this._currentRunId) {
       closeTurnRun(this.eventRecorder, this._currentRunId, {
         turnIndex: this.orch.sessionTurnIndex,
@@ -1827,6 +1949,7 @@ export abstract class ActorAgent extends Think<Env> {
         ...end,
       });
     }
+
     // The effect claims are NOT released here, and the ordering is the whole
     // point. This method runs at the TOP of every actor's onChatResponse, and
     // everything with a downstream effect runs after it: the reply a drained
@@ -1854,6 +1977,7 @@ export abstract class ActorAgent extends Think<Env> {
       usage: this.acc.usage,
       usd: this.priceAt(this.acc.usage),
     });
+
     return { overflowRecovery, end };
   }
 
@@ -1922,6 +2046,7 @@ export abstract class ActorAgent extends Think<Env> {
           // named and recorded on the row.
           let responseMessages: ModelMessage[] = [];
           let refusal: string | undefined;
+
           try {
             responseMessages = await convertToModelMessages(
               [recordedUiMessage(message)], { ignoreIncompleteToolCalls: true },
@@ -1932,10 +2057,13 @@ export abstract class ActorAgent extends Think<Env> {
               cause: err,
               otherwise: 'bad_input',
             });
+
             diagnostics.failure('turn.turn_end_messages_unreadable', failure);
             refusal = failure.message;
           }
+
           await this.extensions.emitTurnEnd({ text, responseMessages });
+
           return refusal === undefined
             ? { status: 'completed' }
             : { status: 'completed', detail: refusal };
@@ -1966,6 +2094,7 @@ export abstract class ActorAgent extends Think<Env> {
             // The live plan path records nothing, and a replay must not either.
             return { status: 'completed', detail: 'a plan turn records no evolution state' };
           }
+
           // Unkeyed for an empty id: every such response would share one key, and
           // the second would read the first's append as its own.
           const recordedId = keyedScope(messageId);
@@ -1976,6 +2105,7 @@ export abstract class ActorAgent extends Think<Env> {
               ? { recordedAt, enabled: autoEvolve }
               : { recordedAt, enabled: autoEvolve, id: `turn-${recordedId}` },
           );
+
           return { status: 'completed' };
         },
       }),
@@ -1991,6 +2121,7 @@ export abstract class ActorAgent extends Think<Env> {
           // row does, and reporting `completed` over a half-bound batch strands
           // the assignment behind it.
           await this.orch.drainPendingEvents({ rethrow: true });
+
           return { status: 'completed' };
         },
       }),
@@ -2007,9 +2138,11 @@ export abstract class ActorAgent extends Think<Env> {
         // open a lane the turn never earned.
         run: async ({ status, turn, workMode, advisor }) => {
           this.warmUserMcpInBackground();
+
           if (!this.orch.improvementLanesOpen(status, workMode)) {
             return { status: 'completed', detail: 'improvement lanes closed for this turn' };
           }
+
           const completed = v.parse(CompletedTurnSchema, turn);
           this.settleEvolutionInBackground();
           // AWAITED to its CHECKPOINT, not to its finish. The lane is durable from
@@ -2017,6 +2150,7 @@ export abstract class ActorAgent extends Think<Env> {
           // with a null snapshot and a review recovery terminalized as an error —
           // a review nobody ran and nobody was owed.
           await this.reviewTurnInBackground(completed, v.parse(AdvisorRecoverySnapshotSchema, advisor));
+
           return { status: 'completed' };
         },
       }),
@@ -2030,12 +2164,14 @@ export abstract class ActorAgent extends Think<Env> {
         // beside it does not wait for a slot — nor repeat when the trial retries.
         run: ({ turn, trialContext, pendingVersion }, scope) => {
           const trialScope = keyedScope(scope);
+
           const queued = this.engine.queueShadowTrial(
             v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
             trialScope === undefined
               ? { pendingVersion }
               : { pendingVersion, id: `trial-${trialScope}` },
           );
+
           // A refusal is not a deferral. A session with evolution off answers
           // `not_sampled` forever, so an owed row for it would hold the outer
           // claim open across every later start. `not_sampled` means there is
@@ -2045,6 +2181,7 @@ export abstract class ActorAgent extends Think<Env> {
           if (queued === 'queue_full' || queued === 'failed') {
             return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
           }
+
           return queued === 'queued'
             ? { status: 'completed' }
             : { status: 'completed', detail: `no trial to queue: ${queued}` };
@@ -2096,6 +2233,7 @@ export abstract class ActorAgent extends Think<Env> {
         scheduleRetry: (atMs: number) => this.scheduleTerminalRetry(atMs),
       });
     }
+
     return this._terminalTransitions;
   }
 
@@ -2118,6 +2256,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private turnMayStillRun(turnId: string): boolean {
     if (this._inFlight && this.durableTurnId() === turnId) return true;
+
     return openChatTurnResponses(this.boundSql, turnId)
       .some((requestId) => !this._settlingChatRequests.has(requestId));
   }
@@ -2164,18 +2303,24 @@ export abstract class ActorAgent extends Think<Env> {
     // before the target leaves the work not-yet-due, which would re-arm for the
     // same second and busy-spin the alarm until the millisecond passed.
     const targetSec = Math.max(Math.ceil(atMs / 1000), nowSec + 1);
+
     const pending = async (): Promise<{ id: string; time: number }[]> =>
       (await this.listSchedules())
         .filter((row) => row.callback === callback && row.time > nowSec)
         .map((row) => ({ id: row.id, time: row.time }));
+
     const armed = await pending();
     const desired = Math.min(targetSec, ...armed.map((row) => row.time));
+
     if (armed.length === 1 && armed[0].time === desired) return;
     await this.schedule(new Date(desired * 1000), callback);
     const settled = await pending();
+
     if (settled.length <= 1) return;
+
     const keeper = settled.reduce((best, row) =>
       row.time < best.time || (row.time === best.time && row.id < best.id) ? row : best);
+
     // The keeper is never cancelled, so a failure here leaves EXTRA wakes and
     // never zero, and it propagates: the caller's own write is what the output
     // gate is holding, and a silent collapse failure would report a converged
@@ -2218,6 +2363,7 @@ export abstract class ActorAgent extends Think<Env> {
     // that same isolate, and without this line it would fire into a frame that
     // had already decided it had nothing to recover.
     await this.jobRunner.recoverDueResumes();
+
     if (sweepsUnfinished || recoveryUnfinished) {
       this.#maintenanceLaps = this.#maintenanceLaps + 1;
       await this.scheduleTerminalRetry(Date.now() + recoveryBackoffMs(this.#maintenanceLaps));
@@ -2290,7 +2436,9 @@ export abstract class ActorAgent extends Think<Env> {
    *  turn's claim. */
   protected durableTurnId(): string | null {
     const live = this._turnCheckpoint?.turnId;
+
     if (live !== undefined) return live;
+
     // A cold activation has no checkpoint in RAM yet. The claim ledger is the
     // handoff: the newest claim this ACTOR admitted and never settled is the
     // turn a Stop sweep must identify, and being actor-scoped it cannot answer
@@ -2340,6 +2488,7 @@ export abstract class ActorAgent extends Think<Env> {
     // with storage — a Durable Object must not touch SQL while its fields
     // initialise.
     this._contextPlane ??= createActorContextPlane({ claims: this.stores.claims, events: null });
+
     return this._contextPlane;
   }
 
@@ -2362,6 +2511,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  drops the reference first. */
   private settleTurnClaim(outcome: ClaimOutcome): void {
     const claim = this._turnClaim;
+
     if (claim === null) return;
     this._turnClaim = null;
     this.stores.claims.settle(claim, outcome);
@@ -2401,6 +2551,7 @@ export abstract class ActorAgent extends Think<Env> {
     const prior = this._terminalReported;
     const owner: AsyncTaskOwner = { promise: null };
     this._terminalReportedOwner = owner;
+
     const task = (async () => {
       try {
         // Chain terminal closures so the latest owner retains every earlier
@@ -2412,6 +2563,7 @@ export abstract class ActorAgent extends Think<Env> {
           // roster whether anything else may still act under this turn and the
           // response being closed usually still owns a row of its own.
           this._settlingChatRequests.add(chatRequestId);
+
           try {
             await close();
           } finally {
@@ -2429,6 +2581,7 @@ export abstract class ActorAgent extends Think<Env> {
           cause,
           otherwise: 'io',
         }), { turnId: transition.turnId, messageId: transition.messageId });
+
         // RE-ARMED, for the reason the initial arm is. The close carries the
         // ledger's own final wake, so this rejection can BE that wake failing —
         // and the fiber is about to be disposed. Without this the rows stay owed
@@ -2449,6 +2602,7 @@ export abstract class ActorAgent extends Think<Env> {
         }
       }
     })();
+
     owner.promise = task;
     this._terminalReported = task;
   }
@@ -2477,13 +2631,16 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private analyticsModelOf(spec: string): ModelDimensions {
     if (!spec) return UNRESOLVED_MODEL;
+
     try {
       const { provider, modelId } = parseModelSpec(spec);
+
       return { provider, model: modelId };
     } catch (error) {
       diagnostics.event('actor.model_spec_unparseable', {
         workspace: this.name, error: renderThrownChain({ cause: error }),
       });
+
       return UNRESOLVED_MODEL;
     }
   }
@@ -2501,6 +2658,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private priceAt(usage: Usage): number | undefined {
     const pricing = this.modelCatalog.pricing();
+
     return pricing ? priceCall(usage, pricing)?.usd : undefined;
   }
 
@@ -2597,6 +2755,7 @@ export abstract class ActorAgent extends Think<Env> {
     const scopeTag = cliScopesConnectionTag(ctx.request.headers.get(CLI_SCOPES_HEADER));
     const bearerTag = cliBearerConnectionTag(ctx.request.headers.get(CLI_BEARER_HEADER));
     const sessionTag = sessionBearerConnectionTag(ctx.request.headers.get(SESSION_BEARER_HEADER));
+
     return [
       ...tags,
       ...(scopeTag === null ? [] : [scopeTag]),
@@ -2620,16 +2779,21 @@ export abstract class ActorAgent extends Think<Env> {
    */
   async closeRevokedCliSockets(generation: number): Promise<{ closed: number }> {
     let closed = 0;
+
     for (const connection of this.getConnections()) {
       const bearer = cliBearerFromTags(connection.tags);
+
       if (bearer === null) continue;
+
       if (bearer.readable && bearer.generation >= generation) continue;
       connection.close(WEBSOCKET_POLICY_CLOSE, CLI_AUTHORITY_REVOKED);
       closed += 1;
     }
+
     if (closed > 0) {
       diagnostics.event('auth.cli_sockets_closed', { outcome: 'denied', closed, generation });
     }
+
     return { closed };
   }
 
@@ -2644,16 +2808,21 @@ export abstract class ActorAgent extends Think<Env> {
    */
   async closeRevokedSessionSockets(sessionTokenHash: string): Promise<{ closed: number }> {
     let closed = 0;
+
     for (const connection of this.getConnections()) {
       const session = sessionBearerFromTags(connection.tags);
+
       if (session === null) continue;
+
       if (!('tokenHash' in session) || session.tokenHash !== sessionTokenHash) continue;
       connection.close(WEBSOCKET_POLICY_CLOSE, SESSION_AUTHORITY_REVOKED);
       closed += 1;
     }
+
     if (closed > 0) {
       diagnostics.event('auth.session_sockets_closed', { outcome: 'denied', closed });
     }
+
     return { closed };
   }
 
@@ -2677,8 +2846,10 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private async refuseRevokedSocketAuthority(connection: Connection, message: WSMessage): Promise<boolean> {
     const denial = await this.socketAuthorityDenial(connection);
+
     if (denial === null) return false;
     const rpc = parseClientRpcFrame(message);
+
     // TWO ANSWERS, because they are read by two different things. The rpc reply
     // carries the authority's own WHY — a pending call fails with a reason
     // instead of hanging until it notices the close — while the close reason is
@@ -2688,6 +2859,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (rpc) connection.send(JSON.stringify({ type: 'rpc', id: rpc.id, success: false, error: denial.why }));
     connection.close(WEBSOCKET_POLICY_CLOSE, denial.close);
     diagnostics.event('auth.socket_frame_denied', { outcome: 'denied', reason: 'authority_not_live' });
+
     return true;
   }
 
@@ -2703,17 +2875,23 @@ export abstract class ActorAgent extends Think<Env> {
     connection: Connection,
   ): Promise<{ why: string; close: string } | null> {
     const bearer = cliBearerFromTags(connection.tags);
+
     if (bearer !== null) {
       const denial = await this.cliBearerDenial(bearer);
+
       if (denial !== null) return { why: denial, close: CLI_AUTHORITY_REVOKED };
     }
+
     const session = sessionBearerFromTags(connection.tags);
+
     if (session !== null) {
       const denial = await this.sessionBearerDenial(session);
+
       // A session denial is already written as an instruction — signed out,
       // unreadable, unconfirmable — so it is its own close reason.
       if (denial !== null) return { why: denial, close: denial };
     }
+
     return null;
   }
 
@@ -2725,10 +2903,13 @@ export abstract class ActorAgent extends Think<Env> {
     if ('unreadable' in session) {
       return 'This connection carries no readable session. Reload the page to sign in again.';
     }
+
     try {
       const { stub, caller } = await this.userHub();
+
       const verified = await retryTransientDO('verifySocketSession',
         () => stub.verifySocketSession(caller, session.tokenHash));
+
       return verified.live ? null : SESSION_AUTHORITY_REVOKED;
     } catch (cause) {
       diagnostics.failure('auth.session_bearer_check_failed', toKinuError({
@@ -2736,6 +2917,7 @@ export abstract class ActorAgent extends Think<Env> {
         cause,
         otherwise: 'unavailable',
       }), { workspace: this.name });
+
       return 'This connection\'s authorization could not be confirmed. Reload the page to sign in again.';
     }
   }
@@ -2749,11 +2931,15 @@ export abstract class ActorAgent extends Think<Env> {
    *  is not a socket to keep. */
   private async cliBearerDenial(bearer: CliSocketBearer): Promise<string | null> {
     if (!bearer.readable) return 'This connection carries no readable authorization. Reconnect with: kinu auth';
+
     try {
       const { stub, caller } = await this.userHub();
+
       const verified = await retryTransientDO('verifyCliSocketBearer',
         () => stub.verifyCliSocketBearer(caller, bearer.tokenHash));
+
       if (verified.live && verified.generation <= bearer.generation) return null;
+
       return verified.error ?? CLI_AUTHORITY_REVOKED;
     } catch (cause) {
       diagnostics.failure('auth.cli_bearer_check_failed', toKinuError({
@@ -2761,6 +2947,7 @@ export abstract class ActorAgent extends Think<Env> {
         cause,
         otherwise: 'unavailable',
       }), { workspace: this.name });
+
       return 'This connection\'s authorization could not be confirmed. Reconnect with: kinu auth';
     }
   }
@@ -2805,6 +2992,7 @@ export abstract class ActorAgent extends Think<Env> {
               failed: ev.error !== undefined && ev.error !== '',
               durationMs: ev.durationMs ?? 0,
             });
+
             try {
               if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'tool_call_end', ...ev });
             } catch (err) {
@@ -2829,6 +3017,7 @@ export abstract class ActorAgent extends Think<Env> {
         },
       });
     }
+
     return this._orch;
   }
   protected get acc(): TurnAccumulator { return this.orch.acc; }
@@ -2858,6 +3047,7 @@ export abstract class ActorAgent extends Think<Env> {
         }
       },
     });
+
     return this._budget;
   }
 
@@ -3032,6 +3222,7 @@ export abstract class ActorAgent extends Think<Env> {
       try {
         await this.runFiber(MCP_WARM_LANE_FIBER, async (ctx) => {
           ctx.stash({ lane: MCP_WARM_LANE_FIBER });
+
           // The same gate `buildUserMcpTools` uses, for the same reason: an owned
           // workspace that has not been issued a capability token yet reaches
           // nothing, and that is an ordinary state rather than a failure to report.
@@ -3114,9 +3305,11 @@ export abstract class ActorAgent extends Think<Env> {
     // its own note. Recovery re-drives the fiber this accepted; it does not come
     // back through here. An unkeyed turn has no replay to guard against.
     const laneKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
+
     if (laneKey !== null && effectAlreadyDone(this.boundSql, this.actorHandle(), ADVISOR_LANE_SCOPE, laneKey)) {
       return Promise.resolve();
     }
+
     const snapshot: AdvisorRecoverySnapshot = recorded ?? this.advisorSnapshotFor(turn);
     const checkpointed = Promise.withResolvers<void>();
     const taskKey = nanoid();
@@ -3137,6 +3330,7 @@ export abstract class ActorAgent extends Think<Env> {
               cause,
               otherwise: 'io',
             });
+
             diagnostics.failure('advisor.snapshot_failed', failure, { turnId: turn.turnId ?? '(none)' });
             checkpointed.reject(failure);
             // The caller owes a resumable review, not a finished one: a body that
@@ -3145,6 +3339,7 @@ export abstract class ActorAgent extends Think<Env> {
             // must reach the lane catch below, which records it as lane work.
             throw failure;
           }
+
           // Adjacent to the stash: from this instant the lane is recoverable on its
           // own, which is exactly when a second one becomes a duplicate.
           if (laneKey !== null) recordEffectDone(this.boundSql, this.actorHandle(), ADVISOR_LANE_SCOPE, laneKey);
@@ -3157,6 +3352,7 @@ export abstract class ActorAgent extends Think<Env> {
           cause,
           otherwise: 'unavailable',
         });
+
         diagnostics.failure('advisor.review_failed', failure);
         // A fiber that never reached its body leaves the caller waiting on a
         // checkpoint that will never be written. Rejecting is what keeps the row
@@ -3169,6 +3365,7 @@ export abstract class ActorAgent extends Think<Env> {
         }
       }
     })();
+
     return checkpointed.promise;
   }
 
@@ -3187,8 +3384,10 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private async runAdvisorReview(snapshot: AdvisorRecoverySnapshot): Promise<AdvisorDisposition | null> {
     const llm = this.rt.advisorLlm;
+
     if (llm === undefined) return null;
     const labels = snapshot.turn.missionLabels ?? [];
+
     return await runAdvisorLane({
       turn: snapshot.turn,
       llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
@@ -3251,6 +3450,7 @@ export abstract class ActorAgent extends Think<Env> {
           // neither a cost nor an in-flight row, and a process that died here
           // left nothing naming what was running.
           const operation = beginModelOperation(spend, 'stream');
+
           return projectDefaultInference(streamText({
             model: this.ownedModelServices.resolveModel(this.modelSpecForSource('scaffold')),
             messages: context && context.length > 0
@@ -3364,6 +3564,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (callScope === undefined) return createScaffoldCallTool(() => this.getRawTools(), undefined, signal);
     // Built ONCE for the rollout and held: the thunk is asked per dispatch.
     let scoped: ToolSet | undefined;
+
     return createScaffoldCallTool(
       () => (scoped ??= this.getRawToolsForWorkMode(this.turnWorkMode(), callScope)),
       callScope, signal,
@@ -3404,6 +3605,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected _transformInferenceResult(result: StreamableResult): StreamableResult {
     const selected = this._turnProgram;
+
     if (selected === null) throw new KinuError('missing', 'the actor turn program was not prepared');
 
     return runTaskPlan(this._turnTaskPlan ?? null, () => scaffoldInferenceTransform({
@@ -3438,6 +3640,7 @@ export abstract class ActorAgent extends Think<Env> {
           const drainTurnId = v.is(v.string(), metadata?.drainTurnId)
             ? metadata.drainTurnId
             : null;
+
           // The id is the row's provenance FALLBACK (core transcriptRole): every
           // turn the harness enqueues is prefixed, keyed or not. Where the
           // producer named the FACT, the id is that name — and the message
@@ -3453,8 +3656,10 @@ export abstract class ActorAgent extends Think<Env> {
             role: 'user' as const, parts: [{ type: 'text' as const, text }],
             metadata: stampTurnAuthor(metadata),
           };
+
           if (idempotencyKey) {
             const result = await this.submitMessages([message], { idempotencyKey, metadata });
+
             return {
               status: result.status === 'aborted' || result.status === 'skipped' || result.status === 'error'
                 ? 'skipped'
@@ -3466,12 +3671,15 @@ export abstract class ActorAgent extends Think<Env> {
               },
             };
           }
+
           try {
             const result = await this.saveMessages(() => {
               this._activeDrainTurnId = drainTurnId;
               this._activeProgrammaticUserMessage = message;
+
               return [message];
             });
+
             return { status: result.status === 'completed' ? 'queued' : 'skipped' };
           } finally {
             if (this._activeProgrammaticUserMessage === message) {
@@ -3502,6 +3710,7 @@ export abstract class ActorAgent extends Think<Env> {
                 await new Promise<void>((resolve) => {
                   setTimeout(resolve, ms);
                 });
+
                 try {
                   await fn();
                 } catch (cause) {
@@ -3529,12 +3738,14 @@ export abstract class ActorAgent extends Think<Env> {
         // heads need the owner for UserDO auth, set by first-turn time.
         get headRuntime() { return getHeadRuntime(); },
       };
+
       // Assigned rather than spread, so an actor with no wake chain of its own
       // leaves the key ABSENT: core reads the seam's presence as the host's
       // claim that it can deliver a wake with nobody watching, and a stub would
       // make that claim falsely.
       if (armWake) this._host.reconcileDurableWake = armWake;
     }
+
     return this._host;
   }
 
@@ -3564,28 +3775,36 @@ export abstract class ActorAgent extends Think<Env> {
   private get mcpToolsCache(): McpToolSurfaceCache<ToolSet> {
     this._mcpToolsCache ??= new McpToolSurfaceCache<ToolSet>(async (descriptors) => {
       const tools: ToolSet = {};
+
       for (const d of descriptors) {
         const serverId = d.serverId;
         const mcpName = d.name;
+
         const entry = tool({
           description: d.description ?? `${d.serverName}/${mcpName}`,
           inputSchema: jsonSchema<JsonObject>(d.inputSchema ?? { type: 'object' }),
           execute: async (args) => {
             const rawResult = await this.requireOwnerUserDO()
               .userMcp_callTool(await this.userCaller(), serverId, mcpName, args);
+
             const response = v.parse(JsonValueSchema, JSON.parse(rawResult));
+
             if (v.is(McpProtocolFailureSchema, response)) throw new McpToolError(response);
+
             return response;
           },
         });
+
         tools[d.toolKey] = d.readOnly === true ? permitInPlan(entry) : entry;
       }
+
       // An MCP server is a bulk producer like any other. Apply the same result
       // clamp and spill path as built-in tools.
       return withClampedToolResults(tools, {
         vfs: this.rt.storage.vfs, budget: this.acc.context, producer: 'external_tool',
       });
     });
+
     return this._mcpToolsCache;
   }
 
@@ -3634,6 +3853,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected announceHeadActivity(headId: string): void {
     this.broadcast(JSON.stringify({ type: 'head_activity', headId }));
     const rootId = this.headJournal.readHead(headId)?.root_id ?? headId;
+
     if (!isSteerBranchRunId(rootId)) this.broadcastMctsProgress(rootId, 'head-activity');
   }
 
@@ -3705,6 +3925,7 @@ export abstract class ActorAgent extends Think<Env> {
       effectiveSpec: this.effectiveModelSpec(),
       pricing: this.modelCatalog.pricing(),
     });
+
     try {
       this.eventRecorder.emit(this._currentRunId || WORKSPACE_RUN_ID, event);
     } catch (err) {
@@ -3714,6 +3935,7 @@ export abstract class ActorAgent extends Think<Env> {
         otherwise: 'io',
       }), { source: report.source });
     }
+
     // The fleet row. Every producer, not just the turn loop: a judge, the fast
     // tier, an evolution pass, a compaction fold. `spec` is what the caller
     // resolved and is absent on the seams that never had one, so the actor's own
@@ -3722,6 +3944,7 @@ export abstract class ActorAgent extends Think<Env> {
     const dimensions = report.spec === undefined
       ? this.analyticsModel()
       : this.analyticsModelOf(report.spec);
+
     recordModelRow(this.env, {
       workspace: this.workspaceName(),
       agentKind: this.actorKind(),
@@ -3766,6 +3989,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._eventLog) {
       this._eventLog = new EventLog(this.ctx.storage.sql, this.actorHandle());
     }
+
     return this._eventLog;
   }
   // agent_facts world model — typed, idempotent, keyed.
@@ -3806,10 +4030,12 @@ export abstract class ActorAgent extends Think<Env> {
   protected _scaffoldReady = false;
   protected async ensureOwnedScaffold(): Promise<void> {
     if (this._scaffoldReady || !this.getOwnerUserId()) return;
+
     if (!(await this.rt.identity.scaffold.exists())) {
       await bootstrapScaffold(this.rt);
       diagnostics.event('scaffold.bootstrapped', { workspace: this.workspaceName() });
     }
+
     this._scaffoldReady = true;
   }
 
@@ -3848,8 +4074,10 @@ export abstract class ActorAgent extends Think<Env> {
     try {
       const nodes = readSearchTree(this.boundSql, this.actorHandle(), rootId);
       const head = this.headJournal.readRun(rootId);
+
       if (nodes.length === 0 && head === null) return;
       const fingerprint = JSON.stringify([nodes, head]);
+
       if (fingerprint === this._lastMctsFingerprint.get(rootId)) return;
       this._lastMctsFingerprint.set(rootId, fingerprint);
       const pushSeq = (this._mctsPushSeq.get(rootId) ?? 0) + 1;
@@ -3944,6 +4172,7 @@ export abstract class ActorAgent extends Think<Env> {
         scheduleResume: (atMs) => this.scheduleTerminalRetry(atMs),
       });
     }
+
     return this._jobRunner;
   }
 
@@ -3962,8 +4191,10 @@ export abstract class ActorAgent extends Think<Env> {
   ): Promise<void> {
     if (requestIds.length === 0) return;
     const { stub, caller } = await this.userHub();
+
     for (const requestId of requestIds) {
       const { transferred } = await stub.transferDeviceRequestToBackgroundJob(caller, requestId, jobId);
+
       if (!transferred) {
         throw new KinuError(
           'unavailable',
@@ -3988,6 +4219,7 @@ export abstract class ActorAgent extends Think<Env> {
     const { stub, caller } = await this.userHub();
     const outcomes = await stub.cancelDeviceRequestsForBackgroundJob(caller, jobId);
     const unconfirmed = outcomes.filter((outcome) => outcome.outcome === 'failed');
+
     if (unconfirmed.length === 0) return;
     throw new KinuError('unavailable', `background job ${jobId} still holds ${unconfirmed.length} `
       + `device command(s) nothing confirmed stopped: `
@@ -4025,11 +4257,15 @@ export abstract class ActorAgent extends Think<Env> {
    */
   async hasSandboxBackgroundWork(): Promise<boolean> {
     if (this._inFlight) return true;
+
     if (this.jobs.countRunningInWorkspace() > 0) return true;
     const submissions = await this.listSubmissions({ status: ['pending', 'running'] });
+
     if (submissions.length > 0) return true;
     const fibers = await this.listFibers({ status: ['pending', 'running', 'interrupted'] });
+
     if (fibers.length > 0) return true;
+
     return false;
   }
   /** Foreground long-tool controllers before they cross the background
@@ -4055,6 +4291,7 @@ export abstract class ActorAgent extends Think<Env> {
     // would hand a whole wave one claim ledger and one loop pointer — a
     // cross-actor collision this makes impossible.
     const seams = this.explorationSeams();
+
     // Named and annotated rather than nested inline: this is the ONE production
     // construction site of `AgentsSwarmDeps` on this backend, and a literal buried
     // inside the outer one is a supply no reader — human or gate — can attribute
@@ -4127,14 +4364,19 @@ export abstract class ActorAgent extends Think<Env> {
         profile: COMPACTION_PRESETS.light,
       }),
     };
+
     const deps: AgentsToolDeps = {
       mode: workMode,
       swarm,
       budget: this.budget,
     };
+
     deps.profile = () => agentsProfileContext(this._turnProfile, this._turnProfileInputs);
+
     if (actorDeps.team) deps.team = actorDeps.team;
+
     if (actorDeps.peers) deps.peers = actorDeps.peers;
+
     return deps;
   }
 
@@ -4152,6 +4394,7 @@ export abstract class ActorAgent extends Think<Env> {
   private _skillsVfs: SkillsVfs | null = null;
   private getSkillsVfs(): SkillsVfs {
     if (!this._skillsVfs) this._skillsVfs = skillsVfsOver(this.rt.storage.vfs);
+
     return this._skillsVfs;
   }
 
@@ -4167,6 +4410,7 @@ export abstract class ActorAgent extends Think<Env> {
       this.actorHandle(),
       `cf:${this.workspaceName()}`,
     );
+
     return this._instructionApprovals;
   }
 
@@ -4174,11 +4418,14 @@ export abstract class ActorAgent extends Think<Env> {
   private _instructionTrust: InstructionTrustResolver | null = null;
   protected instructionTrust(): InstructionTrustResolver {
     const approvals = this._workspaceInstructionApprovals;
+
     if (approvals !== null) {
       return (path, content) => trustOfInstructionApprovals(approvals, path, content);
     }
+
     const store = this.instructionApprovals();
     this._instructionTrust ??= store.trustOf.bind(store);
+
     return this._instructionTrust;
   }
 
@@ -4188,6 +4435,7 @@ export abstract class ActorAgent extends Think<Env> {
   @callable()
   async getWorkspaceInstructionApprovals(): Promise<readonly InstructionApproval[]> {
     this._workspaceInstructionApprovals = null;
+
     return this.instructionApprovals().list();
   }
   /**
@@ -4202,6 +4450,7 @@ export abstract class ActorAgent extends Think<Env> {
   async listInstructionApprovals(request: PageRequest = {}): Promise<Page<InstructionSourceRow>> {
     this._workspaceInstructionApprovals = null;
     const agentsMd = await this.discoverInstructionSources();
+
     return listInstructionApprovals({
       ...request,
       sources: await gatherApprovableInstructions({
@@ -4221,7 +4470,9 @@ export abstract class ActorAgent extends Think<Env> {
   async readInstructionApproval(path: string): Promise<InstructionSourceView | null> {
     this._workspaceInstructionApprovals = null;
     const clean = path.trim();
+
     if (clean === '') return null;
+
     return openInstructionSource({
       path: clean,
       agentsMd: await this.discoverInstructionSources(),
@@ -4256,12 +4507,16 @@ export abstract class ActorAgent extends Think<Env> {
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
     this._workspaceInstructionApprovals = null;
     const admitted = admitInstructionDecision(path, reviewedDigest);
+
     if (!admitted.ok) return admitted;
     const current = await this.readInstructionApproval(admitted.path);
+
     if (!current || current.digest !== admitted.digest) {
       return { ok: false, error: 'the file changed or could not be read after review; read it again before approving' };
     }
+
     this.instructionApprovals().approve(admitted.path, admitted.digest);
+
     return { ok: true };
   }
 
@@ -4273,8 +4528,10 @@ export abstract class ActorAgent extends Think<Env> {
   ): Promise<{ readonly ok: true } | { readonly ok: false; readonly error: string }> {
     this._workspaceInstructionApprovals = null;
     const admitted = admitInstructionDecision(path);
+
     if (!admitted.ok) return admitted;
     this.instructionApprovals().revoke(admitted.path);
+
     return { ok: true };
   }
 
@@ -4404,6 +4661,7 @@ export abstract class ActorAgent extends Think<Env> {
   private _boundSql: SqlExecutor | null = null;
   protected get boundSql(): SqlExecutor {
     if (!this._boundSql) this._boundSql = bindAgentSql(this);
+
     return this._boundSql;
   }
 
@@ -4441,6 +4699,7 @@ export abstract class ActorAgent extends Think<Env> {
         selfPath: this.selfPath,
       });
     }
+
     return this._tracing;
   }
 
@@ -4464,6 +4723,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected logActivity(event: string, detail?: string) {
     const elapsed = this._turnT0 > 0 ? Math.round(performance.now() - this._turnT0) : 0;
     const now = Date.now();
+
     try {
       void this.sql`INSERT INTO activity_log (actor_id, event, detail, elapsed_ms, created_at)
         VALUES (${this.actorHandle().actorId}, ${event}, ${detail ?? null}, ${elapsed}, ${now})`;
@@ -4507,24 +4767,32 @@ export abstract class ActorAgent extends Think<Env> {
         // `REASONING_EFFORT_FOR_STAGE` here would compute the route's own answer
         // and then substitute a constant for it.
         const { model, providerOptions } = this.ownedModelServices.resolveModelWithEffort(spec, effort);
+
         const request: Parameters<typeof generateText>[0] = {
           model,
           messages: [{ role: 'user' as const, content: user }],
         };
+
         if (system !== undefined) request.system = system;
+
         if (providerOptions) request.providerOptions = providerOptions;
+
         const operation = beginModelOperation(
           { source: 'mcts', operations: this.modelOperations }, 'complete', { spec },
         );
+
         let answer;
+
         try {
           answer = await generateText(request);
         } catch (cause) {
           operation.failed({ cause });
           throw cause;
         }
+
         const usage = normalizeUsage(answer.usage);
         operation.completed({ usage, modelId: spec });
+
         return { text: answer.text.trim(), usage };
       },
     };
@@ -4548,6 +4816,7 @@ export abstract class ActorAgent extends Think<Env> {
           abort: (branchId) => abortHostedBranch(this.explorationSeams(), branchId),
         },
       };
+
       // NO `workspaceExecution`: this is the workspace's MAIN actor, which runs
       // as the session user because the tree is its own. Every other actor's
       // runtime is built by the host, which assigns the home it provisioned —
@@ -4574,9 +4843,11 @@ export abstract class ActorAgent extends Think<Env> {
         scaffoldPath: this.scaffoldPath(),
         capabilityToken: () => this.workspaceCapabilityToken(),
       }, hooks);
+
       this.configureRuntime(runtime);
       this._rt = runtime;
     }
+
     return this._rt;
   }
 
@@ -4636,9 +4907,11 @@ export abstract class ActorAgent extends Think<Env> {
     if (rest.length > 0) {
       throw new KinuError('denied', 'A binding path names one hosted actor; a nested path names an actor no directory holds.');
     }
+
     const entry = this.actorDirectoryStore().apply(
       actorReferenceOf(this.actorHandle()), [], { action: 'resolve', name },
     );
+
     return await this.actorHost().run(entry.reference, async (actor) => {
       if (route.kind !== 'namespace') {
         // A hosted actor connects no MCP servers and holds no slate read model
@@ -4646,6 +4919,7 @@ export abstract class ActorAgent extends Think<Env> {
         // main actor. A true reason, not a narrowing.
         throw new KinuError('denied', `a hosted actor has no ${route.kind} surface; that route belongs to the workspace actor`);
       }
+
       const providers = providersInWorkMode(mode, hostedActorNamespaces(actor));
       // NARROWED BY THE CHILD'S OWN ROLE, which is what the header above has
       // always promised and what this path did not do: it went straight from the
@@ -4654,13 +4928,18 @@ export abstract class ActorAgent extends Think<Env> {
       // per actor, so the only thing missing was asking it.
       const reach = await this.hostedSlateReach(actor, providers);
       const provider = reach.narrowProviders(providers).find((candidate) => candidate.name === route.namespace);
+
       if (!provider) throw new KinuError('denied', `${route.namespace} is not within that actor's reach right now`);
+
       if (!Object.hasOwn(provider.tools, route.member)) {
         throw new KinuError('missing', `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`);
       }
+
       const answered = await provider.tools[route.member]?.execute(...route.args);
       const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
+
       if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
+
       return value.output;
     });
   }
@@ -4685,23 +4964,31 @@ export abstract class ActorAgent extends Think<Env> {
     // inside this object, so an unreachable name is a refusal here instead of a
     // rejected RPC three objects deep.
     const [next, ...rest] = path;
+
     if (next !== undefined) {
       return await this.dispatchHostedSlateBinding(next.name, rest, route, mode);
     }
+
     switch (route.kind) {
       case 'namespace': {
         const providers = providersInWorkMode(mode, this.slateNamespaces());
         const reach = await this.slateReach(providers);
         const provider = reach.narrowProviders(providers).find((candidate) => candidate.name === route.namespace);
+
         if (!provider) throw new KinuError('denied', `${route.namespace} is not within this actor's reach right now`);
+
         if (!Object.hasOwn(provider.tools, route.member)) {
           throw new KinuError('missing', `${route.namespace} has no member ${route.member}; it offers ${Object.keys(provider.tools).join(', ')}`);
         }
+
         const answered = await provider.tools[route.member]?.execute(...route.args);
         const value = v.safeParse(JsonValueSchema, answered === undefined ? null : answered);
+
         if (!value.success) throw new KinuError('bad_input', `${route.namespace}.${route.member} answered a value that is not JSON`, { cause: new v.ValiError(value.issues) });
+
         return value.output;
       }
+
       case 'mcp': {
         // The nameable unit of an MCP tool on this actor's surface is its
         // descriptor key, and the role admits it by that key — the same
@@ -4709,12 +4996,16 @@ export abstract class ActorAgent extends Think<Env> {
         const { stub, caller } = await this.userHub();
         const surface = v.parse(McpToolSurfaceSchema, JSON.parse(await stub.userMcp_toolDescriptors(caller)));
         const descriptor = surface.descriptors.find((d) => d.serverId === route.server && d.name === route.tool);
+
         if (descriptor === undefined) throw new KinuError('missing', `${route.server} offers no tool ${route.tool} to this actor`);
         requireWorkModePermission(mode, descriptor.readOnly === true, descriptor.toolKey);
         const reach = await this.slateReach(this.slateNamespaces(), [descriptor.toolKey]);
+
         if (!reach.allowsTool(descriptor.toolKey)) throw new KinuError('denied', `${descriptor.toolKey} is not within this actor's reach right now`);
+
         return v.parse(JsonValueSchema, JSON.parse(await stub.userMcp_callTool(caller, route.server, route.tool, route.args)));
       }
+
       case 'rpc': return this.slateReadModel(route.method);
       case 'app': throw new KinuError('bad_input', 'An app hop is answered by the slate host, not by an actor');
     }
@@ -4743,6 +5034,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private async slateReach(providers: readonly CodemodeProvider[], mcpToolKeys: readonly string[] = []): Promise<ToolSurfaceNarrowing> {
     if (this._inFlight && this._turnProfile !== null) return narrowToolSurface(this._turnProfile.allowedTools);
+
     const profile = resolveAgentTurnProfile({
       ...(await this.profileInputs()),
       activeRoleId: this.activeRoleLabel(),
@@ -4751,6 +5043,7 @@ export abstract class ActorAgent extends Think<Env> {
       activeSkills: [],
       explicitTier: this.config.getAssignedTier() ?? undefined,
     });
+
     return narrowToolSurface(profile.allowedTools);
   }
 
@@ -4775,6 +5068,7 @@ export abstract class ActorAgent extends Think<Env> {
       availableTools: codemodeCapabilitiesFor(providers),
       workMode: 'build',
     });
+
     return narrowToolSurface(profile.allowedTools);
   }
 
@@ -4856,6 +5150,7 @@ export abstract class ActorAgent extends Think<Env> {
     // served to the next one for the rest of this DO's life.
     const narrowing = narrowToolSurface(this._turnProfile?.allowedTools);
     const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}:${this._turnProfile?.digest ?? ''}`;
+
     if (!this._craftExecTools.has(key)) {
       this._craftExecTools.set(key, createExecuteToolsFactory({
         loader: this.env.LOADER,
@@ -4884,8 +5179,11 @@ export abstract class ActorAgent extends Think<Env> {
         },
       }));
     }
+
     const factory = this._craftExecTools.get(key);
+
     if (factory === undefined) throw new Error(`execute_tools profile ${key} was not built`);
+
     return factory;
   }
 
@@ -4904,7 +5202,9 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private modelSpecForSource(source: SpendSource): string | null {
     const profile = this._turnProfile;
+
     if (!profile) return this.getStoredModelId();
+
     return resolveModelRoute(source, profile)?.model ?? this.getStoredModelId();
   }
 
@@ -4926,8 +5226,10 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected getOwnerUserDO(): UserHubClient | null {
     const userId = this.getOwnerUserId();
+
     if (!userId) return null;
     const stub: Pick<Fetcher, 'fetch'> = this.env.UserDO.get(this.env.UserDO.idFromName(userId));
+
     // SAFETY: the stub carries every method on the declared UserDO RPC surface
     // plus fetch. `DurableObjectStub<UserDO>` is the platform's own type for it,
     // and its RPC mapping over the JSON-carrying experience methods exceeds
@@ -4937,7 +5239,9 @@ export abstract class ActorAgent extends Think<Env> {
 
   protected requireOwnerUserDO(): UserHubClient {
     const stub = this.getOwnerUserDO();
+
     if (!stub) throw new Error('Agent has no owner yet. Open it through the authenticated app or CLI first.');
+
     return stub;
   }
 
@@ -4946,9 +5250,11 @@ export abstract class ActorAgent extends Think<Env> {
    *  workspace reaches nothing. */
   protected async userCaller(): Promise<UserCaller> {
     const workspaceToken = this.workspaceCapabilityToken();
+
     if (!workspaceToken) {
       throw new Error('This workspace has not been issued a capability token yet. Open it through the authenticated app or CLI first.');
     }
+
     return { workspaceToken };
   }
 
@@ -4971,6 +5277,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected async profileInputs(): Promise<ProfileAuthorityInputs> {
     const { stub, caller } = await this.userHub();
+
     return loadProfileAuthorityInputs({
       envelope: () => stub.getWorkspaceProfileCatalog(caller),
       provider: () => this.ownedModelServices.profileProviderSnapshot(),
@@ -5000,6 +5307,7 @@ export abstract class ActorAgent extends Think<Env> {
   async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
     try {
       const content = await this.rt.localVfs.readFile(path);
+
       return { ok: true, value: v.is(v.string(), content) ? new TextEncoder().encode(content) : content };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
@@ -5010,6 +5318,7 @@ export abstract class ActorAgent extends Think<Env> {
     try {
       if (input.kind === 'file') await this.rt.localVfs.writeFile(input.path, input.data);
       else await this.rt.localVfs.mkdir(input.path, { recursive: input.recursive });
+
       return { ok: true, value: null };
     } catch (error) {
       return this.workspaceFileFailure(input.path, error);
@@ -5035,6 +5344,7 @@ export abstract class ActorAgent extends Think<Env> {
   async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
     try {
       await this.rt.localVfs.unlink(path);
+
       return { ok: true, value: null };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
@@ -5051,7 +5361,9 @@ export abstract class ActorAgent extends Think<Env> {
    */
   async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
     const shell = this.rt.shell;
+
     if (!shell) return this.workspaceFileFailure('', new Error('this workspace has no shell'));
+
     try {
       return { ok: true, value: await shell.exec(command) };
     } catch (error) {
@@ -5096,6 +5408,7 @@ export abstract class ActorAgent extends Think<Env> {
   @callable()
   async getChatHistoryPage(request?: PageRequest): Promise<Page<ChatHistoryEntry>> {
     this.ensureSchema();
+
     return getChatHistoryPage(this.boundSql, this.actorHandle(), request ?? {});
   }
 
@@ -5115,20 +5428,24 @@ export abstract class ActorAgent extends Think<Env> {
    */
   @callable() async setRole(roleId: string): Promise<{ role: string }> {
     const { envelope } = await this.profileInputs();
+
     const changed = changeActiveRole({
       config: this.config,
       envelope,
       to: roleId,
       actor: 'user',
     });
+
     if (changed.kind !== 'applied') {
       throw new Error(roleChangeOutcomeText(roleId, changed, this.activeRoleLabel()));
     }
+
     return { role: changed.to };
   }
   @callable()
   async setModel(spec: string) {
     this.ensureSchema();
+
     return setModel({
       config: this.config,
       normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
@@ -5154,6 +5471,7 @@ export abstract class ActorAgent extends Think<Env> {
   @callable()
   async steerTurn(text: string, mode?: WorkMode): Promise<{ landed: SteerTurnLanding }> {
     this.ensureSchema();
+
     return { landed: await this.acceptUserSteer(text, isWorkMode(mode) ? mode : 'build') };
   }
 
@@ -5170,6 +5488,7 @@ export abstract class ActorAgent extends Think<Env> {
   async cancelCurrentWork(): Promise<CancelWorkOutcome> {
     this.ensureSchema();
     const turnId = this.durableTurnId();
+
     return await cancelCurrentWork({
       cancelChats: () => this.cancelAllChats(),
       activeToolControllers: this._activeToolControllers,
@@ -5177,11 +5496,13 @@ export abstract class ActorAgent extends Think<Env> {
       stopDeviceCommands: turnId === null ? undefined : async () => {
         try {
           const { stub, caller } = await this.userHub();
+
           return await stub.cancelDeviceRequestsForTurn(caller, turnId);
         } catch (err) {
           diagnostics.failure('device.turn_cancel_failed', toKinuError({
             doing: "cancelling this turn's device commands", cause: err, otherwise: 'unavailable',
           }), { turnId });
+
           // Stop is still complete — local controllers were already aborted —
           // but the frame must say the durable device sweep failed rather than
           // silently claiming commands stopped.
@@ -5207,6 +5528,7 @@ export abstract class ActorAgent extends Think<Env> {
   getModel(): LanguageModel {
     this.actorHandle();
     const spec = this._turnProfile?.tier.model ?? this.getStoredModelId();
+
     return this.ownedModelServices.resolveModel(spec);
   }
 
@@ -5288,6 +5610,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected async applyAutoTitle(mission: string): Promise<string | null> {
     // Read stored naming state before a cold activation plans a title.
     await this.hydrateTitleInputs();
+
     const title = await applyWorkspaceTitle({
       slug: this.actorHandle().name,
       ...this.titleInputs(),
@@ -5296,6 +5619,7 @@ export abstract class ActorAgent extends Think<Env> {
       persist: (name) => this.persistAutoTitle(name),
       suggest: (text) => this.suggestTitle(text),
     });
+
     if (title) diagnostics.event('agent.auto_titled', { workspace: this.name, title });
     // ALWAYS, not only when this pass produced a title: persisting stamps
     // `name_origin`, which stops matching the naming policy above — so a
@@ -5303,6 +5627,7 @@ export abstract class ActorAgent extends Think<Env> {
     // about the stored title would keep the placeholder with nothing owed to fix
     // it. Throws, so the owed row carries the retry.
     await this.publishAutoTitle();
+
     return title;
   }
 
@@ -5361,6 +5686,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected async suggestTitle(mission: string): Promise<string | null> {
     const { model, spec, providerOptions } = await this.modelForSource('fast');
+
     // The prompt pair and the parse are core's (suggestWorkspaceTitle); what
     // stays here is which model answers and the operation/spend framing.
     return suggestWorkspaceTitle(async (system, prompt) => {
@@ -5371,7 +5697,9 @@ export abstract class ActorAgent extends Think<Env> {
         'complete',
         { spec },
       );
+
       let result;
+
       try {
         const request: Parameters<typeof generateText>[0] = {
           model,
@@ -5380,12 +5708,14 @@ export abstract class ActorAgent extends Think<Env> {
           // No output cap: reasoning models spend their budget thinking before
           // the JSON, and a cap starves them into empty text.
         };
+
         if (providerOptions) request.providerOptions = providerOptions;
         result = await generateText(request);
       } catch (err) {
         operation.failed({ cause: err });
         throw err;
       }
+
       // `spec` came back with the model it built, so it is the exact string the
       // call was priced against rather than a second resolution that could
       // disagree; `modelId` is what the provider says served it, and the two are
@@ -5399,6 +5729,7 @@ export abstract class ActorAgent extends Think<Env> {
           ? { source: 'fast', usage, spec, modelId }
           : { source: 'fast', usage, spec },
       );
+
       return result.text;
     }, mission);
   }
@@ -5436,6 +5767,7 @@ export abstract class ActorAgent extends Think<Env> {
       SELECT COUNT(*) as cnt, COALESCE(MAX(updated_at), 0) as latest,
              COALESCE(MAX(last_used_at), 0) as lastUsed
       FROM crafted_tools`[0] ?? { cnt: 0, latest: 0, lastUsed: 0 };
+
     return `${row.cnt}:${row.latest}:${row.lastUsed}`;
   }
 
@@ -5446,6 +5778,7 @@ export abstract class ActorAgent extends Think<Env> {
     // inside a shadow-eval / scaffold / GEPA evaluation never detaches a job or
     // injects an unsolicited "job completed" turn into the user's chat.
     this._turnT0 = performance.now();
+
     return this.wrapToolsForBackground(this.getRawTools());
   }
 
@@ -5454,6 +5787,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  that must run tools to completion inline (never auto-background). */
   protected getRawTools(): ToolSet {
     this.actorHandle();
+
     return this.getRawToolsForWorkMode(this.turnWorkMode());
   }
 
@@ -5465,6 +5799,7 @@ export abstract class ActorAgent extends Think<Env> {
     // is turn-sensitive for subordinate reporting: an owner chat must never
     // reuse an assigned turn's upward-reporting surface.
     const cacheKey = `${mode}:${profileKey}:${this._craftCacheKey()}`;
+
     // The cache is the CHAT surface's. A scoped rollout's surface differs only
     // in the identity its effect claims key on and is asked for once per
     // rollout, so caching it would evict the surface every later turn wants for
@@ -5472,6 +5807,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (claimScope === undefined && this._cachedTools && cacheKey === this._cachedToolsKey) {
       return this._cachedTools;
     }
+
     this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
 
     try {
@@ -5528,7 +5864,9 @@ export abstract class ActorAgent extends Think<Env> {
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       };
+
       if (actorDeps.report) builtinDeps.report = actorDeps.report;
+
       if (mode === 'plan' && actorDeps.submitPlan) builtinDeps.submitPlan = actorDeps.submitPlan;
       const tools = buildActorTools(builtinDeps);
 
@@ -5541,7 +5879,9 @@ export abstract class ActorAgent extends Think<Env> {
         this._cachedTools = tools;
         this._cachedToolsKey = cacheKey;
       }
+
       this.logActivity("gettools_end", `rebuilt — ${Object.keys(tools).length} tools`);
+
       return tools;
     } catch (err) {
       diagnostics.failure('tool.surface_build_failed', toKinuError({
@@ -5560,10 +5900,13 @@ export abstract class ActorAgent extends Think<Env> {
   protected getCFHeadRuntime(): HeadRuntime | undefined {
     if (this._cfHeadRuntime) return this._cfHeadRuntime;
     const ownerUserId = this.getOwnerUserId();
+
     if (!ownerUserId) return undefined;
+
     const grounding: HeadGrounding = this.rt.judgeModel
       ? { executor: this.rt.executor, explorer: this.rt.llm, judge: this.rt.judgeModel }
       : { executor: this.rt.executor, explorer: this.rt.llm };
+
     this._cfHeadRuntime = createHeadRuntime({
       host: this.explorationSeams(),
       models: this.ownedModelServices,
@@ -5575,6 +5918,7 @@ export abstract class ActorAgent extends Think<Env> {
       operations: this.modelOperations,
       grounding,
     });
+
     return this._cfHeadRuntime;
   }
 
@@ -5610,6 +5954,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected assertSessionStore(): void {
     if (this.session === undefined) return;
+
     if (tableExists(this.boundSql, 'assistant_messages')) return;
     throw new Error(
       'Think booted its session but the workspace database has no `assistant_messages` table: '
@@ -5641,7 +5986,9 @@ export abstract class ActorAgent extends Think<Env> {
     // that blew up, and a head handed [] reports "I found nothing" rather than
     // "I could not see the parent" — the defect owners actually hit.
     if (!tableExists(this.boundSql, 'assistant_messages')) return [];
+
     type Row = { id: string; role: string; content: string; created_at: string };
+
     const rows = this.sql<Row>`
       SELECT id, role, content, created_at
       FROM (
@@ -5652,11 +5999,13 @@ export abstract class ActorAgent extends Think<Env> {
         LIMIT ${INHERITED_CONTEXT_CAP}
       ) sub
       ORDER BY created_at ASC`;
+
     // The SAME predicate on the total: a count over every actor's transcript
     // beside a page from one actor's would report a fork inheriting context it
     // was never given, which is the reading this cap exists to bound.
     const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages
       WHERE actor_id = ${actor.actorId}`[0]?.n ?? rows.length;
+
     return inheritedContextFromRows(
       rows.map((r) => ({
         id: r.id,
@@ -5686,6 +6035,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   private async buildUserMcpTools(nativeTools: ToolSet): Promise<ToolSet> {
     const userId = this.getOwnerUserId();
+
     if (!userId) return {};
 
     // No identity, no user-level tools: advertising descriptors the actor cannot
@@ -5712,10 +6062,12 @@ export abstract class ActorAgent extends Think<Env> {
           nativeToolTokens: toolSurfaceTokens(nativeTools),
         },
       );
+
       this._mcpUnavailable = this.mcpToolsCache.unavailable.map((u) => ({
         source: `MCP server "${u.server}"`, reason: u.reason,
       }));
       this.logActivity('mcp_tools_served', `${Object.keys(tools).length} tools`);
+
       return tools;
     } catch (err) {
       const failure = toKinuError({
@@ -5723,6 +6075,7 @@ export abstract class ActorAgent extends Think<Env> {
         cause: err,
         otherwise: 'unavailable',
       });
+
       // Only a catalog the turn could not REACH or FINISH reading is tolerated:
       // the turn proceeds on builtins alone, the failure is recorded whole, and
       // the surface state records what this turn will actually advertise —
@@ -5734,6 +6087,7 @@ export abstract class ActorAgent extends Think<Env> {
         source: 'MCP catalog',
         reason: 'The descriptor read failed. No MCP tool is available for this turn.',
       }];
+
       return {};
     }
   }
@@ -5758,17 +6112,21 @@ export abstract class ActorAgent extends Think<Env> {
    *  workspace's own catalog session, which is this resolution. */
   protected effectiveModelSpec(): string {
     const stored = this._turnProfile?.tier.model ?? this.getStoredModelId();
+
     try {
       return this.providerRegistry().normalizeSpecSync(stored);
     } catch (error) {
       diagnostics.event('actor.model_spec_unresolvable', { error: renderThrownChain({ cause: error }) });
+
       return stored ?? '';
     }
   }
 
   protected effectiveModelProviderFamily(): string {
     const spec = this.effectiveModelSpec();
+
     if (!spec) return '';
+
     return parseModelSpec(spec).provider;
   }
 
@@ -5778,14 +6136,18 @@ export abstract class ActorAgent extends Think<Env> {
    *  of bug effectiveModelSpec() fixes for the compaction threshold. */
   private promptModelContext(): PromptModelContext {
     const spec = this.effectiveModelSpec();
+
     if (!spec) return {};
+
     try {
       const { provider, modelId } = parseModelSpec(spec);
+
       return { id: modelId, provider };
     } catch (error) {
       diagnostics.event('actor.model_spec_unparseable', {
         workspace: this.name, error: renderThrownChain({ cause: error }),
       });
+
       return { id: spec };
     }
   }
@@ -5802,6 +6164,7 @@ export abstract class ActorAgent extends Think<Env> {
       if (!spec) return null;
       const { provider, modelId } = parseModelSpec(spec);
       const reg = this.providerRegistry();
+
       return catalogModelInfo(reg.registry.get(provider), reg.deps, modelId);
     },
   });
@@ -5839,13 +6202,17 @@ export abstract class ActorAgent extends Think<Env> {
    *  routing, never spliced into a later conversation. */
   private restoreTurnCheckpoint(): void {
     let lastUserId: string | undefined;
+
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const candidate = this.messages[i];
+
       if (candidate.role !== 'user') continue;
       lastUserId = candidate.id;
       break;
     }
+
     this._turnCheckpoint = { turnId: lastUserId ?? this._currentRunId, sessionId: 'default' };
+
     // No handoff row is written here. The durable claim written later in
     // `beforeTurn` IS the handoff, and it carries what a row here could not:
     // which issued actor owns the turn, which execution epoch owns it, and the
@@ -5854,6 +6221,7 @@ export abstract class ActorAgent extends Think<Env> {
       SELECT id, text FROM pending_steers
       WHERE actor_id = ${this.actorHandle().actorId} AND turn_id = ${this._turnCheckpoint.turnId}
       ORDER BY seq ASC`;
+
     if (pending.length > 0) this.userSteer.restorePending(pending);
   }
 
@@ -5884,11 +6252,14 @@ export abstract class ActorAgent extends Think<Env> {
       deviceNotice,
       provenance: this.turnProvenance(),
     };
+
     if (this._turnActiveSkills) turnLocalOptions.activeSkills = this._turnActiveSkills;
     const turnLocal = turnLocalContextMessage(turnLocalOptions);
+
     const unverified = unverifiedInstructionsMessage(
       activeSkills ? { agentsMd, activeSkills } : { agentsMd },
     );
+
     return [
       ...(unverified ? [unverified] : []),
       ...(turnLocal ? [turnLocal] : []),
@@ -5901,8 +6272,10 @@ export abstract class ActorAgent extends Think<Env> {
     // The scaffold and the soul are both files this turn is about to read, and
     // this is the first place with a promise to await them on.
     await this.ensureOwnedScaffold();
+
     if (this._cachedSoulText === null) await this.refreshSoulText();
     this._turnProfile = null;
+
     // Four reads of the owner's UserDO, each a Durable Object hop, started
     // together: the profile catalog, the MCP descriptor surface, the device
     // presence and the workspace title. None depends on another, so the turn
@@ -5923,6 +6296,7 @@ export abstract class ActorAgent extends Think<Env> {
       // owner's registry, which is an await.
       this.promptIdentity(),
     ]);
+
     this._turnProfileInputs = profileInputs;
     const activeRoleId = this.activeRoleLabel();
     const roleSkills = effectiveRoleCatalog(profileInputs.envelope.catalog)[activeRoleId]?.skills ?? [];
@@ -5946,6 +6320,7 @@ export abstract class ActorAgent extends Think<Env> {
     // buffered survive — they were typed for the turn that is about to run.
     this.userSteer.beginTurn();
     this.logActivity("beforeturn", "streamText() called next");
+
     // A real user message is the verdict on the previous turn — dispatch the
     // detached outcome review (Hermes-style forked background review). Runs
     // concurrently with this turn; never blocks it. Programmatic turns
@@ -5953,6 +6328,7 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this.lastUserTurnIsProgrammatic()) {
       this.orch.observeUserTurn(extractLastUserText(ctx.messages), this._turnContinuity);
     }
+
     // Start a new run for the event log, with provenance so cross-run history
     // (Supervise altitude) can show what kicked each run off. This is the chat
     // path → caused_by:'chat'; event-triggered runs set ingress_kind/trigger_id.
@@ -5978,6 +6354,7 @@ export abstract class ActorAgent extends Think<Env> {
     const requestedWorkMode = this.turnWorkMode();
     let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
     const trust = this.instructionTrust();
+
     const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
       vfs: this.getSkillsVfs(),
       config: this.config,
@@ -5989,6 +6366,7 @@ export abstract class ActorAgent extends Think<Env> {
         modelOutputLimit: this.modelCatalog.modelOutputLimit(),
       },
     });
+
     if (activeSetForPrompt) {
       this._turnActiveSkills = activeSetForPrompt;
       activeTools = filterToolNamesBySkills(activeTools, activeSetForPrompt);
@@ -5997,10 +6375,12 @@ export abstract class ActorAgent extends Think<Env> {
     }
 
     const mcpToolNames = Object.keys(mcpTools);
+
     const extensionTools = Object.fromEntries(
       Object.entries(this.extensions.tools())
         .filter(([name]) => !(name in ctx.tools) && !(name in mcpTools)),
     );
+
     const extensionToolNames = Object.keys(extensionTools);
     const availableAgentActions = actorAgentsActions(turnActorDeps);
     // The turn's WHOLE nameable surface. `release` / `agent` / `llm` are
@@ -6010,6 +6390,7 @@ export abstract class ActorAgent extends Think<Env> {
     // providers actually wired for this mode, so a capability is never offered
     // whose namespace is absent (Plan mode drops `release` for free).
     const turnCodemodeProviders = this.turnCodemodeProviders(requestedWorkMode);
+
     const availableTools = [
       ...activeTools,
       ...mcpToolNames,
@@ -6017,6 +6398,7 @@ export abstract class ActorAgent extends Think<Env> {
       ...(turnActorDeps.submitPlan ? [SUBMIT_PLAN_TOOL] : []),
       ...codemodeCapabilitiesFor(turnCodemodeProviders),
     ];
+
     const profile = resolveAgentTurnProfile({
       ...profileInputs,
       activeRoleId: this.activeRoleLabel(),
@@ -6030,6 +6412,7 @@ export abstract class ActorAgent extends Think<Env> {
       // for.
       explicitTier: readTurnTier(body) ?? this.config.getAssignedTier() ?? undefined,
     });
+
     this._turnProfile = profile;
     const workMode = profile.workMode;
     this.orch.restrictTurnWorkMode(workMode);
@@ -6038,15 +6421,18 @@ export abstract class ActorAgent extends Think<Env> {
     const toolAllowed = (name: string): boolean => allowedTools.has(name);
     const promptActiveTools = activeTools.filter(toolAllowed);
     const resolvedAgentActions = toolAllowed('agents') ? availableAgentActions : [];
+
     const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan && toolAllowed(SUBMIT_PLAN_TOOL)
       ? [SUBMIT_PLAN_TOOL]
       : [];
+
     const effectiveActiveTools = [
       ...promptActiveTools,
       ...planToolNames,
       ...mcpToolNames.filter(toolAllowed),
       ...extensionToolNames.filter(toolAllowed),
     ];
+
     const effectiveTools: ToolSet = Object.fromEntries(
       [...Object.entries(mcpTools), ...Object.entries(extensionTools)]
         .filter(([name]) => toolAllowed(name)),
@@ -6055,6 +6441,7 @@ export abstract class ActorAgent extends Think<Env> {
     // The persisted watermark is only a diff anchor for the one-turn change
     // notice; the hub stays the single source of truth.
     let deviceNotice: string | null = null;
+
     try {
       deviceNotice = observeDevicePresence(this.config, deviceStatus).notice;
     } catch (err) {
@@ -6089,6 +6476,7 @@ export abstract class ActorAgent extends Think<Env> {
     // re-prefills the prefix.
     const execs = this.rt.executionRouter?.listExecutors() ?? [];
     const model = this.promptModelContext();
+
     const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {
       soulOverride: this.getSoulText(),
       executors: execs,
@@ -6113,7 +6501,9 @@ export abstract class ActorAgent extends Think<Env> {
       sectionOverrides: activePromptSectionOverrides(this.rt.storage.sql, this.actorHandle()),
       identity,
     };
+
     if (availableSkills.lines.length > 0) promptOptions.availableSkills = availableSkills;
+
     if (activeSetForPrompt) promptOptions.activeSkills = activeSetForPrompt;
     promptOptions.agentsMd = agentsMd;
     const systemOverride = buildSystemPromptSync(this.rt, promptOptions);
@@ -6133,6 +6523,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._turnDurableLength = rawMessages.length;
     this._turnContextWindow = this.sessionContextWindow();
     const measured = measureCompactionTrigger(this.compactionState, this.name, rawMessages.length);
+
     // The forced rebuild was armed either by overflow recovery (onChatResponse,
     // on a context_length failure) or by the agent itself (agent.compactNow).
     if (measured.trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
@@ -6142,6 +6533,7 @@ export abstract class ActorAgent extends Think<Env> {
     // step: it is the one dynamic-context input that needs an await.
     this._turnMemoryTail = await readMemoryTail(this.rt.memory);
     const turnLocal = this.turnLocalTail(deviceNotice, agentsMd, activeSetForPrompt);
+
     // The shared turn-context assembly (core orchestrator/turn-context.ts) —
     // the SAME ordering runChat runs on the CLI: attachment sanitize →
     // extension onTurnStart → awaited transformContext (compaction, over the
@@ -6160,9 +6552,11 @@ export abstract class ActorAgent extends Think<Env> {
       contextWindow: this._turnContextWindow,
       trigger: measured.trigger,
     };
+
     if (measured.providerReportedTokens !== undefined) {
       assembly.providerReportedTokens = measured.providerReportedTokens;
     }
+
     const submittedTools = { ...modeTools, ...effectiveTools };
     const providers = this.providerRegistry();
     // NORMALISED, and by the same registry that will serve the request. The
@@ -6187,6 +6581,7 @@ export abstract class ActorAgent extends Think<Env> {
       tools: Object.fromEntries(
         effectiveActiveTools.flatMap((name) => {
           const entry = submittedTools[name];
+
           return entry === undefined ? [] : [[name, entry]];
         }),
       ),
@@ -6214,15 +6609,19 @@ export abstract class ActorAgent extends Think<Env> {
       sessionKey: this.ownedModelServices.affinityKey,
       retention: this.config.getCacheRetention(),
     });
+
     this._turnCachePlan = hasCacheMarkers(cachePlan.strategy)
       ? { strategy: cachePlan.strategy, system: cachePlan.system }
       : null;
     const cacheOptions = cachePlan.providerOptions;
+
     const reasoningOptions = reasoningEffortOptions(
       profile.tier.reasoningEffort,
       tierModel.provider,
     );
+
     const providerOptions = mergeProviderOptions(cacheOptions, reasoningOptions);
+
     if (providerOptions) cfg.providerOptions = providerOptions;
 
     // THE TURN'S STEP BOUND, on the config Think actually consumes.
@@ -6260,6 +6659,7 @@ export abstract class ActorAgent extends Think<Env> {
       tools: { ...ctx.tools, ...cfg.tools },
       activeTools: cfg.activeTools,
     };
+
     if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
     const runtime = this.rt;
     const mode = this.turnWorkMode();
@@ -6275,6 +6675,7 @@ export abstract class ActorAgent extends Think<Env> {
     // turn was admitted against. A crash after this leaves a claim a recovery
     // can verify; a crash before it leaves a turn that provably did nothing.
     const turnId = this.durableTurnId() ?? this._currentRunId;
+
     // The plane rebases before the claim, not after: `admitted.messages` is this
     // actor's history with any edit staged while the turn was preparing already
     // applied, and with input delivered since preserved after it exactly once.
@@ -6284,6 +6685,7 @@ export abstract class ActorAgent extends Think<Env> {
       turnId,
       history: this._adoptedContext ?? cfg.messages ?? ctx.messages,
     });
+
     this._turnClaim = this.stores.claims.admit({
       runId: this._currentRunId,
       turnId,
@@ -6301,6 +6703,7 @@ export abstract class ActorAgent extends Think<Env> {
     // ride every request of the turn and are otherwise invisible to anyone
     // asking where the window went.
     this.acc.composition.openTurn({ system: systemOverride, tools: this._lastTurnOpts.tools });
+
     return cfg;
   }
 
@@ -6337,6 +6740,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected dynamicContextSnapshot(): DynamicContext {
     const extras = this.extraDynamicContext();
+
     return collectDynamicContext({
       rt: this.rt,
       stores: this.stores,
@@ -6411,6 +6815,7 @@ export abstract class ActorAgent extends Think<Env> {
         ttftMs: Date.now() - this.acc.startedAt,
       });
     }
+
     this.acc.onFirstChunk();
   }
 
@@ -6438,6 +6843,7 @@ export abstract class ActorAgent extends Think<Env> {
     // reads. Continuity alone would miss the whole autonomous population,
     // which is the population the one-shot policy was measured on.
     const programmatic = this.turnUserMessageEvent(this._activeProgrammaticUserMessage) !== null;
+
     return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
   }
 
@@ -6447,6 +6853,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  the submission ledger still knows which batch it owes a reply to. */
   private turnDrainTurnId(): string | undefined {
     const metadata = this.turnDrivingMetadata();
+
     return v.is(v.string(), metadata?.drainTurnId) ? metadata.drainTurnId : undefined;
   }
 
@@ -6456,7 +6863,9 @@ export abstract class ActorAgent extends Think<Env> {
   protected turnUserMessageEvent(programmaticUserMessage: { metadata?: unknown } | null): string | null {
     const metadata = programmaticUserMessage ? programmaticUserMessage.metadata : this.turnUserMetadata();
     const parsed = v.safeParse(JsonObjectSchema, metadata);
+
     if (!parsed.success) return null;
+
     return v.is(v.string(), parsed.output.kinuEvent) ? parsed.output.kinuEvent : null;
   }
   /** What the turn may do. Plan is explicit user intent on the driving
@@ -6477,6 +6886,7 @@ export abstract class ActorAgent extends Think<Env> {
   private turnDrivingMetadata(): JsonObject | undefined {
     if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();
     const parsed = v.safeParse(JsonObjectSchema, this._activeProgrammaticUserMessage.metadata);
+
     return parsed.success ? parsed.output : undefined;
   }
 
@@ -6486,10 +6896,13 @@ export abstract class ActorAgent extends Think<Env> {
   protected turnUserMetadata(): JsonObject | undefined {
     for (let i = this.messages.length - 1; i >= 0; i--) {
       const candidate = this.messages[i];
+
       if (candidate.role !== 'user') continue;
       const parsed = v.safeParse(JsonObjectSchema, candidate.metadata);
+
       return parsed.success ? parsed.output : undefined;
     }
+
     return undefined;
   }
 
@@ -6507,13 +6920,16 @@ export abstract class ActorAgent extends Think<Env> {
     // accumulator records it + fires the activity log + run-event sinks.
     const input = jsonObject(ctx.input);
     const outcome = ctx.success ? { success: true } satisfies ToolOutcome : failedToolOutcome({ cause: ctx.error });
+
     const recorded: Parameters<TurnAccumulator['recordToolCall']>[0] = {
       toolName: ctx.toolName,
       input,
       durationMs: ctx.durationMs,
       ...outcome,
     };
+
     if (ctx.success && ctx.output !== undefined) recorded.output = projectJsonValue({ value: ctx.output });
+
     if (!ctx.success) recorded.error = ctx.error;
     this.acc.recordToolCall(recorded);
     await this.extensions.emitToolResult({
@@ -6554,6 +6970,7 @@ export abstract class ActorAgent extends Think<Env> {
       mode: () => this.turnWorkMode(),
       trackController: (controller) => {
         this._activeToolControllers.add(controller);
+
         return () => this._activeToolControllers.delete(controller);
       },
     });
@@ -6582,7 +6999,9 @@ export abstract class ActorAgent extends Think<Env> {
   private publishDeviceRequestChannel(raw: ToolSet): ToolSet {
     const entry = raw[EXECUTE_TOOLS_TOOL];
     const exec = entry?.execute;
+
     if (entry === undefined || exec === undefined) return raw;
+
     return {
       ...raw,
       [EXECUTE_TOOLS_TOOL]: {
@@ -6590,6 +7009,7 @@ export abstract class ActorAgent extends Think<Env> {
         execute: async (input, options) => {
           const outer = this._activeDeviceRequests;
           this._activeDeviceRequests = readDeviceRequestChannel(options) ?? null;
+
           try {
             return await exec(input, options);
           } finally {
@@ -6655,6 +7075,7 @@ export abstract class ActorAgent extends Think<Env> {
   }): Promise<{ readonly profile: ResolvedTurnProfile; readonly inputs: ProfileAuthorityInputs }> {
     const inputs = await this.profileInputs();
     const config = input.actor.config;
+
     return {
       profile: await resolveAgentTurnProfile({
         ...inputs,
@@ -6690,9 +7111,11 @@ export abstract class ActorAgent extends Think<Env> {
     providerOptions: ReturnType<OwnedModelServices['resolveModelWithEffort']>['providerOptions'];
   }> {
     const route = resolveModelRoute(source, await this.routingProfile());
+
     if (!route) {
       throw new Error(`${source} is platform-routed: it has no model in the turn profile`);
     }
+
     return {
       spec: route.model,
       ...this.ownedModelServices.resolveModelWithEffort(route.model, route.reasoningEffort),
@@ -6761,8 +7184,10 @@ export abstract class ActorAgent extends Think<Env> {
     // so the caller arms the wake and the next tick retries the same bounded
     // sweep — the value a caller can tell apart from "swept and found nothing".
     let truncated = true;
+
     try {
       const result = sweepUnrecoverableFibers(fiberRowStore(this.boundSql), Date.now());
+
       if (result.dropped > 0 || result.truncated) {
         diagnostics.event('fiber.unrecoverable_rows_dropped', {
           dropped: result.dropped,
@@ -6770,6 +7195,7 @@ export abstract class ActorAgent extends Think<Env> {
           truncated: result.truncated,
         });
       }
+
       truncated = result.truncated;
     } catch (err) {
       diagnostics.failure('fiber.unrecoverable_sweep_failed', toKinuError({
@@ -6778,6 +7204,7 @@ export abstract class ActorAgent extends Think<Env> {
         otherwise: 'io',
       }), { workspace: this.name });
     }
+
     return truncated;
   }
 
@@ -6842,6 +7269,7 @@ export abstract class ActorAgent extends Think<Env> {
       if (this._backgroundTasks.size === 0) return;
       await Promise.all([...this._backgroundTasks].map((task) => task.promise ?? Promise.resolve()));
     }
+
     throw new Error(
       `settleBackgroundTasks: ${String(this._backgroundTasks.size)} task(s) still detached after 32 `
       + 'laps — something keeps enqueuing work; join a narrower seam instead',
@@ -6891,6 +7319,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   override onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
     this.actorHandle();
+
     return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
   }
 
@@ -6977,6 +7406,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  state in this agent is dropped. Cheap; no-op if nothing is cached. */
   async onCredentialsChanged(): Promise<{ ok: true }> {
     this.invalidateModelCaches();
+
     return { ok: true };
   }
 

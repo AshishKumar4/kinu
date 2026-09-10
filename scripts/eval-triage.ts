@@ -140,6 +140,7 @@ export interface Loaded {
  */
 function storedField(record: EvalRunRecord, field: 'family' | 'transcripts'): string | null {
   const parsed = v.safeParse(v.pipe(v.string(), v.minLength(1)), record[field]);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -165,6 +166,7 @@ function armKey(record: EvalRunRecord): string {
  */
 function admissibilityFinding(failure: string): string {
   const head = failure.split(' — ')[0] ?? failure;
+
   return head.startsWith('declared ') ? 'declared tasks were never attempted' : head;
 }
 
@@ -180,7 +182,9 @@ function failureMixOf(
   observation: Scored, at: string,
 ): readonly (readonly [string, number])[] {
   const row = observation.scores.find((score) => score.name === toolOutcomes.name);
+
   if (row === undefined) return [];
+
   try {
     return parseFailureMix(row.detail);
   } catch (error) {
@@ -191,6 +195,7 @@ function failureMixOf(
 
 function shortPath(path: string): string {
   const short = relative(process.cwd(), path);
+
   return short.startsWith('..') ? path : short;
 }
 
@@ -205,6 +210,7 @@ function signalsOf({ path, record }: Loaded): Signal[] {
   const family = familyOf(record);
   const at = shortPath(path);
   const signals: Signal[] = [];
+
   const push = (
     kind: SignalKind, subject: string, slot: string, attempt: string | null,
     count: number, evidence: string,
@@ -213,6 +219,7 @@ function signalsOf({ path, record }: Loaded): Signal[] {
   };
 
   const today = assessAdmissibility(record.declaredTasks, record.observations);
+
   if (record.observations.length === 0) {
     // ONE finding, not four. A run that attempted nothing trips every
     // admissibility rule at once, and 45 such records reported per rule would
@@ -232,6 +239,7 @@ function signalsOf({ path, record }: Loaded): Signal[] {
       push('run', admissibilityFinding(failure), '*', null, 1, `${at}: ${failure}`);
     }
   }
+
   // THE EVIDENCE POINTER, checked for a run that produced observations. A run
   // that attempted nothing has no trajectory to retain, so it is exempt; for
   // every other run this is what decides whether a failure below can be
@@ -246,6 +254,7 @@ function signalsOf({ path, record }: Loaded): Signal[] {
   // artifacts are deliberately untracked.
   if (record.observations.length > 0) {
     const transcripts = storedField(record, 'transcripts');
+
     if (transcripts === null) {
       push('run', 'the record names no transcripts directory', '*', null, 1,
         `${at}: the field is absent, so no failure in this run can be opened`);
@@ -254,6 +263,7 @@ function signalsOf({ path, record }: Loaded): Signal[] {
         `${at}: names ${transcripts}, which does not exist`);
     }
   }
+
   if (today.admissible !== record.admissibility.admissible) {
     push('run', 'stored admissibility verdict is stale', '*', null, 1,
       `${at}: the record says admissible=${String(record.admissibility.admissible)} and `
@@ -262,11 +272,13 @@ function signalsOf({ path, record }: Loaded): Signal[] {
 
   for (const observation of record.observations) {
     const key = observationKey(observation);
+
     if (observation.outcome === 'errored' || observation.outcome === 'inert') {
       push('attempt', observation.outcome, observation.taskId, key, 1,
         `${at} ${key}: ${observation.reason}`);
       continue;
     }
+
     if (observation.outcome !== 'scored') continue;
 
     for (const score of observation.scores) {
@@ -275,12 +287,14 @@ function signalsOf({ path, record }: Loaded): Signal[] {
         `${at} ${key} ${score.name} `
         + `${String(score.passed)}/${String(score.eligible)}: ${score.detail}`);
     }
+
     for (const [failureKey, count] of failureMixOf(observation, at)) {
       if (toolFailurePartOfKey(failureKey) === 'refused') continue;
       push('tool-failure', failureKey, observation.taskId, key, count,
         `${at} ${key}: ${failureKey}×${String(count)}`);
     }
   }
+
   return signals;
 }
 
@@ -298,9 +312,11 @@ function pairingSignals(baseline: Loaded, candidate: Loaded): Signal[] {
   const family = familyOf(candidate.record);
   const pair = `${baseline.record.runId}→${candidate.record.runId}`;
   const comparison = compareRuns(baseline.record, candidate.record);
+
   const common = {
     kind: 'pairing' as const, family, recordPath: candidate.path, attempt: null, slot: '*',
   };
+
   if (!comparison.comparable) {
     return comparison.refusals.map((refusal) => ({
       ...common,
@@ -309,12 +325,15 @@ function pairingSignals(baseline: Loaded, candidate: Loaded): Signal[] {
       evidence: `${pair}: ${refusal.detail}`,
     }));
   }
+
   const byReason = new Map<string, string[]>();
+
   for (const diagnostic of comparison.diagnostics) {
     const keys = byReason.get(diagnostic.reason) ?? [];
     keys.push(diagnostic.key);
     byReason.set(diagnostic.reason, keys);
   }
+
   return [...byReason].map(([reason, keys]) => ({
     ...common,
     subject: reason,
@@ -334,18 +353,23 @@ function pairingSignals(baseline: Loaded, candidate: Loaded): Signal[] {
  */
 function armBuckets(loaded: readonly Loaded[]): Map<string, Loaded[]> {
   const buckets = new Map<string, Loaded[]>();
+
   for (const entry of loaded) {
     if (!entry.record.observations.some((o) => o.outcome === 'scored')) continue;
+
     const key = [
       familyOf(entry.record), entry.record.tier, entry.record.modelId, armKey(entry.record),
     ].join('|');
+
     const bucket = buckets.get(key) ?? [];
     bucket.push(entry);
     buckets.set(key, bucket);
   }
+
   for (const bucket of buckets.values()) {
     bucket.sort((a, b) => a.record.createdAt.localeCompare(b.record.createdAt));
   }
+
   return buckets;
 }
 
@@ -358,19 +382,24 @@ function armBuckets(loaded: readonly Loaded[]): Map<string, Loaded[]> {
  */
 function scorerAgreement(loaded: readonly Loaded[]): Map<string, Set<boolean>> {
   const verdicts = new Map<string, Set<boolean>>();
+
   for (const { record } of loaded) {
     for (const observation of record.observations) {
       if (observation.outcome !== 'scored') continue;
+
       for (const score of observation.scores) {
         if (score.eligible === 0) continue;
+
         const key = `${familyOf(record)}/scorer/${score.name}/${observation.taskId}`
           + `@${armKey(record)}`;
+
         const seen = verdicts.get(key) ?? new Set<boolean>();
         seen.add(score.passed >= score.eligible);
         verdicts.set(key, seen);
       }
     }
   }
+
   return verdicts;
 }
 
@@ -394,17 +423,21 @@ function attemptFacts(loaded: readonly Loaded[]): AttemptFacts {
   const facts = {
     broke: new Set<string>(), attributed: new Set<string>(), unattributed: new Set<string>(),
   };
+
   for (const { path, record } of loaded) {
     for (const observation of record.observations) {
       if (observation.outcome !== 'scored') continue;
       const id = `${path}#${observationKey(observation)}`;
       const mix = failureMixOf(observation, shortPath(path));
       const row = observation.scores.find((score) => score.name === toolOutcomes.name);
+
       if (mix.length > 0) facts.attributed.add(id);
       else if (row !== undefined && row.passed < row.eligible) facts.unattributed.add(id);
+
       if (mix.some(([key]) => toolFailurePartOfKey(key) === 'broke')) facts.broke.add(id);
     }
   }
+
   return facts;
 }
 
@@ -425,6 +458,7 @@ function classify(
   group: Pick<Group, 'kind' | 'subject' | 'signals'>, slot: string, facts: Evidence,
 ): Classification {
   const { kind, subject, signals } = group;
+
   if (kind === 'run') {
     return {
       cls: 'eval-defect',
@@ -432,6 +466,7 @@ function classify(
         + 'agent can be read',
     };
   }
+
   if (kind === 'attempt') {
     return subject === 'errored'
       ? { cls: 'product-defect', why: 'the attempt raised out of the code under test' }
@@ -440,23 +475,28 @@ function classify(
         why: 'the attempt ran and the ledger closed no turn, so the trajectory was never gradable',
       };
   }
+
   if (kind === 'pairing') {
     return {
       cls: 'eval-defect',
       why: 'the comparator could not use these pairs, so no cross-run claim rests on them',
     };
   }
+
   if (kind === 'tool-failure') {
     const part = toolFailurePartOfKey(subject);
+
     if (part === 'broke') {
       return { cls: 'product-defect', why: 'the tool neither refused nor ran the work — it broke' };
     }
+
     if (part === 'runtime-absent') {
       return {
         cls: 'eval-defect',
         why: 'the workspace has no such program, so the call could not have succeeded',
       };
     }
+
     return {
       cls: 'model-behaviour',
       why: 'the command ran and the work failed, which on a repair task is the finding',
@@ -465,24 +505,30 @@ function classify(
 
   const flaky = signals.some((signal) => {
     const arm = facts.armOf.get(signal.recordPath);
+
     const seen = arm === undefined
       ? undefined
       : facts.agreement.get(`${signal.family}/scorer/${subject}/${slot}@${arm}`);
+
     return seen !== undefined && seen.size > 1;
   });
+
   if (flaky) {
     return {
       cls: 'flake',
       why: 'one commit and one arm produced both verdicts here, so this is dispersion',
     };
   }
+
   const attemptIds = signals.map((signal) => `${signal.recordPath}#${signal.attempt ?? ''}`);
+
   if (attemptIds.every((id) => facts.attempts.broke.has(id))) {
     return {
       cls: 'product-defect',
       why: 'every failing attempt here also broke a tool in the same trajectory',
     };
   }
+
   if (subject === toolOutcomes.name && attemptIds.every((id) => facts.attempts.unattributed.has(id))) {
     return {
       cls: 'model-behaviour',
@@ -491,6 +537,7 @@ function classify(
         + 'that is not evidence the product is clean here',
     };
   }
+
   return subject === TASK_OUTCOME
     ? { cls: 'model-behaviour', why: 'the attempt did not reach every subgoal' }
     : {
@@ -515,16 +562,19 @@ export interface Triage {
 
 export function triage(loaded: readonly Loaded[], verdicts: readonly Verdict[]): Triage {
   const signals = loaded.flatMap(signalsOf);
+
   for (const bucket of armBuckets(loaded).values()) {
     for (let i = 1; i < bucket.length; i++) {
       const baseline = bucket[i - 1];
       const candidate = bucket[i];
+
       if (baseline === undefined || candidate === undefined) continue;
       signals.push(...pairingSignals(baseline, candidate));
     }
   }
 
   const attempts = attemptFacts(loaded);
+
   const facts: Evidence = {
     agreement: scorerAgreement(loaded),
     attempts,
@@ -532,6 +582,7 @@ export function triage(loaded: readonly Loaded[], verdicts: readonly Verdict[]):
   };
 
   const grouped = new Map<string, Signal[]>();
+
   for (const signal of signals) {
     const key = `${signal.family}/${signal.kind}/${signal.subject}/${signal.slot}`;
     const members = grouped.get(key) ?? [];
@@ -540,8 +591,10 @@ export function triage(loaded: readonly Loaded[], verdicts: readonly Verdict[]):
   }
 
   const groups: Group[] = [];
+
   for (const [key, members] of grouped) {
     const first = members[0];
+
     if (first === undefined) continue;
     const subject = { kind: first.kind, subject: first.subject, signals: members };
     const { cls, why } = classify(subject, first.slot, facts);
@@ -554,16 +607,20 @@ export function triage(loaded: readonly Loaded[], verdicts: readonly Verdict[]):
       records: new Set(members.map((signal) => signal.recordPath)).size,
     });
   }
+
   groups.sort((a, b) =>
     CLASS_ORDER.indexOf(a.cls) - CLASS_ORDER.indexOf(b.cls)
     || b.count - a.count || b.records - a.records || a.key.localeCompare(b.key));
 
   let refusedCalls = 0;
   let skippedAttempts = 0;
+
   for (const { path, record } of loaded) {
     for (const observation of record.observations) {
       if (observation.outcome === 'skipped') skippedAttempts++;
+
       if (observation.outcome !== 'scored') continue;
+
       for (const [failureKey, count] of failureMixOf(observation, shortPath(path))) {
         if (toolFailurePartOfKey(failureKey) === 'refused') refusedCalls += count;
       }
@@ -571,6 +628,7 @@ export function triage(loaded: readonly Loaded[], verdicts: readonly Verdict[]):
   }
 
   const present = new Set(groups.map((group) => group.key));
+
   return {
     groups,
     records: loaded.length,
@@ -590,13 +648,16 @@ export function render(result: Triage): string[] {
     + `${result.families.join(', ')}, ${String(result.groups.length)} failure group(s)`,
     '',
   ];
+
   if (result.groups.length === 0) lines.push('  nothing failed in this corpus.');
+
   for (const [index, group] of result.groups.entries()) {
     const verdict = result.verdictOf.get(group.key);
     lines.push(`${String(index + 1).padStart(3)}. [${group.cls}] ${group.key}`);
     lines.push(`       ×${String(group.count)} across ${String(group.records)} record(s) — `
       + group.why);
     lines.push(`       acts: ${WHO_ACTS[group.cls]}`);
+
     if (verdict === undefined) {
       lines.push('       verdict: UNVERIFIED — no hand check has ruled on this group');
     } else {
@@ -605,10 +666,13 @@ export function render(result: Triage): string[] {
         + verdict.note);
       lines.push(`       read: ${verdict.read}`);
     }
+
     for (const signal of group.signals.slice(0, 2)) lines.push(`       evidence: ${signal.evidence}`);
+
     if (group.signals.length > 2) {
       lines.push(`       evidence: … ${String(group.signals.length - 2)} more of the same shape`);
     }
+
     lines.push('');
   }
 
@@ -619,42 +683,53 @@ export function render(result: Triage): string[] {
     + 'named none of them, so this cannot find a product defect in them at all. A run written '
     + 'today names its failure keys; the two baselines predate the mix.');
   const found = result.groups.filter((group) => group.cls === 'product-defect').length;
+
   if (found === 0 && result.unattributedAttempts > 0) {
     lines.push('read the empty product-defect class as UNMEASURED, not as clean.');
   }
+
   for (const stale of result.staleVerdicts) {
     lines.push(`STALE VERDICT: ${stale.group} — reviewed ${stale.reviewed}, and no failure in this `
       + 'corpus produced that group. Re-check it or remove it.');
   }
+
   return lines;
 }
 
 export function readVerdicts(path: string): Verdict[] {
   const raw: unknown = JSON.parse(readFileSync(path, 'utf8'));
   const parsed = v.safeParse(VerdictFileSchema, raw);
+
   if (!parsed.success) {
     throw new Error(`${path}: not a triage verdict file of schema 1 — `
       + parsed.issues.map((issue) => issue.message).join('; '));
   }
+
   return [...parsed.output.verdicts];
 }
 
 function main(argv: readonly string[]): number {
   if (argv.some((arg) => arg.startsWith('-'))) {
     console.error('usage: bun scripts/eval-triage.ts [record.json | root]...');
+
     return 2;
   }
+
   const targets = argv.length > 0
     ? argv
     : [join(REPO_ROOT, 'bench-artifacts'), join(REPO_ROOT, 'tests/eval/runs')];
+
   const paths = targets.flatMap((target) =>
     target.endsWith('.json') ? [target] : runRecordPaths(target));
+
   if (paths.length === 0) {
     console.error(`eval-triage: no run record under ${targets.join(', ')} — nothing to triage.`);
+
     return 1;
   }
 
   const loaded: Loaded[] = [];
+
   for (const path of paths) {
     try {
       loaded.push({ path, record: readRunRecord(path) });
@@ -667,7 +742,9 @@ function main(argv: readonly string[]): number {
   }
 
   const verdicts = readVerdicts(join(REPO_ROOT, 'scripts/eval-triage.verdicts.json'));
+
   for (const line of render(triage(loaded, verdicts))) console.log(line);
+
   return 0;
 }
 

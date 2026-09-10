@@ -28,6 +28,7 @@ export interface TuiAgentHubEntry {
   /** The conversation this TUI session has open. */
   readonly current?: boolean;
 }
+
 const AGENT_KIND_LABEL = {
   main: 'main',
   subordinate: 'agent',
@@ -50,15 +51,20 @@ export function buildAgentHubEntries(input: {
   const { items, current, currentEntry, projectRoot } = input;
   const currentRow = items.find((item) => item.name === current.name && item.mode === current.mode);
   const groupKey = currentRow ? agentWorkspaceKey(currentRow, projectRoot) : null;
+
   const members = current.mode === 'local' && currentRow && groupKey !== null && groupKey !== 'unplaced'
     ? items.filter((item) => item.mode === 'local' && agentWorkspaceKey(item, projectRoot) === groupKey)
     : currentRow ? [currentRow] : [];
+
   if (members.length === 0) return [currentEntry];
+
   const workspace = current.mode === 'local'
     ? (currentRow?.workspaceId ?? currentEntry.workspace)
     : currentEntry.workspace;
+
   return members.flatMap((member) => {
     const own = member.name === current.name && member.mode === current.mode;
+
     // The roster's label is the display authority (an untitled agent carries
     // ''); the live entry keeps only role/tier and the running status.
     const row: TuiAgentHubEntry = own
@@ -70,6 +76,7 @@ export function buildAgentHubEntries(input: {
           status: member.status ?? 'idle',
           workspace,
         };
+
     const nested = (member.subordinates ?? []).map((subordinate): TuiAgentHubEntry => {
       const base = {
         id: `${member.mode}:${member.name}/${subordinate.id}`,
@@ -78,11 +85,14 @@ export function buildAgentHubEntries(input: {
         status: subordinate.status,
         workspace,
       } satisfies TuiAgentHubEntry;
+
       // Role and tier render as one `role/tier` pair, so they are carried as
       // one: a row that knows only half shows neither.
       if (subordinate.roleId === undefined || subordinate.tierId === undefined) return base;
+
       return { ...base, roleId: subordinate.roleId, tierId: subordinate.tierId };
     });
+
     return [row, ...nested];
   });
 }
@@ -112,6 +122,7 @@ export function HubOverlay(props: {
   const panelWidth = Math.min(Math.max(34, Math.floor(props.width * 0.72)), 88, Math.max(1, props.width - 2));
   const panelHeight = Math.min(Math.max(12, Math.floor(props.height * 0.72)), 28, Math.max(3, props.height - 2));
   const title = props.view === 'agents' ? 'Agent Hub' : props.view === 'roles' ? 'Role Hub' : 'Tier Hub';
+
   return (
     <box
       flexDirection="column"
@@ -154,12 +165,14 @@ function AgentHubRows({ data, newAgentHint }: {
   readonly newAgentHint?: string | undefined;
 }) {
   const { colors } = useTuiTheme();
+
   const hint = newAgentHint !== undefined && (
     <text>
       <span fg={colors.intent.accent}>{newAgentHint}</span>
       <span fg={colors.text.muted}> new agent — one click, no form; it names itself from your first message</span>
     </text>
   );
+
   if (data.agents.length === 0) {
     return (
       <box flexDirection="column" style={{ marginTop: 1 }}>
@@ -168,12 +181,16 @@ function AgentHubRows({ data, newAgentHint }: {
       </box>
     );
   }
+
   const workspaces: { name: string; agents: TuiAgentHubEntry[] }[] = [];
+
   for (const agent of data.agents) {
     const group = workspaces.find((entry) => entry.name === agent.workspace);
+
     if (group === undefined) workspaces.push({ name: agent.workspace, agents: [agent] });
     else group.agents.push(agent);
   }
+
   return (
     <box flexDirection="column" style={{ marginTop: 1 }}>
       {workspaces.map((workspace) => (
@@ -201,11 +218,13 @@ function RoleHubRows({ data }: { readonly data: TuiProfileHubData }) {
   const { colors } = useTuiTheme();
   const allowed = new Set(data.allowedRoleIds);
   const roles = effectiveRoleCatalog(data.envelope.catalog);
+
   return (
     <box flexDirection="column" style={{ marginTop: 1 }}>
       {Object.entries(roles).map(([roleId, role]) => {
         const active = roleId === data.activeRoleId;
         const available = allowed.has(roleId);
+
         return (
           <box key={roleId} flexDirection="column" style={{ height: 2, marginBottom: 1, backgroundColor: active ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
             <text>
@@ -225,12 +244,14 @@ function RoleHubRows({ data }: { readonly data: TuiProfileHubData }) {
 function TierHubRows({ data }: { readonly data: TuiProfileHubData }) {
   const { colors } = useTuiTheme();
   const defaultAssignment = data.envelope.catalog.tiers.default;
+
   return (
     <box flexDirection="column" style={{ marginTop: 1 }}>
       {TIER_IDS.map((tierId) => {
         const configured = data.envelope.catalog.tiers[tierId];
         const assignment = configured ?? defaultAssignment;
         const active = data.resolved?.tier.id === tierId;
+
         return (
           <box key={tierId} flexDirection="column" style={{ marginBottom: 1, backgroundColor: active ? colors.background.selection : colors.background.recessed, paddingLeft: 1, paddingRight: 1 }}>
             <text>
@@ -248,8 +269,12 @@ function TierHubRows({ data }: { readonly data: TuiProfileHubData }) {
 
 function statusColor(status: TuiAgentHubEntry['status'], colors: TuiThemeColors): string {
   if (status === 'running') return colors.intent.accent;
+
   if (status === 'needs-you') return colors.intent.warning;
+
   if (status === 'failed') return colors.intent.danger;
+
   if (status === 'settled') return colors.intent.success;
+
   return colors.text.muted;
 }

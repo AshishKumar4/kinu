@@ -80,6 +80,7 @@ export function probeCases(): EvalCase[] {
 /** The probe behind a case, or undefined when the case belongs to another family. */
 export function probeFor(task: Pick<EvalCase, 'id' | 'env'>): BehaviourProbe | undefined {
   if (task.env !== PROBE_ENV) return undefined;
+
   return PROBES.find((probe) => probe.id === task.id);
 }
 
@@ -87,6 +88,7 @@ export function probeFor(task: Pick<EvalCase, 'id' | 'env'>): BehaviourProbe | u
 export async function seedProbe(probe: BehaviourProbe, vfs: VFS): Promise<void> {
   for (const [path, content] of Object.entries(probe.seed)) {
     const dir = path.split('/').slice(0, -1).join('/');
+
     if (dir !== '') await vfs.mkdir(dir, { recursive: true });
     await vfs.writeFile(path, content);
   }
@@ -112,12 +114,14 @@ const ToolArgsSchema = v.object({ action: v.optional(v.string()), path: v.option
 
 function toolArgs(call: ToolEnd): { action?: string; path?: string } {
   const parsed = v.safeParse(ToolArgsSchema, call.args);
+
   return parsed.success ? { action: parsed.output.action, path: parsed.output.path } : {};
 }
 
 /** Same file by either spelling: the agent may or may not lead with a slash. */
 function onPath(call: ToolEnd, path: string): boolean {
   const actual = toolArgs(call).path;
+
   return actual === path || actual === `/${path}`;
 }
 
@@ -173,9 +177,12 @@ export const PROBES: readonly BehaviourProbe[] = [
       const refusals = refusedWith(events, 'file', 'unread', 'src/blind.txt');
       const reads = successfulCalls(events, 'file', 'read').filter((call) => onPath(call, 'src/blind.txt'));
       const edits = successfulCalls(events, 'file', 'edit').filter((call) => onPath(call, 'src/blind.txt'));
+
       const recovered = refusals.some((refusal) =>
         edits.some((edit) => edit.timestamp >= refusal.timestamp));
+
       const readFirst = refusals.length === 0 && reads.length > 0;
+
       return [
         {
           what: 'content-fixed',
@@ -219,8 +226,10 @@ export const PROBES: readonly BehaviourProbe[] = [
       const fixed = content !== null && content.includes('OPEN') && !content.includes('SEALED');
       const refusals = refusedWith(events, 'file', 'not_found', 'src/anchor.txt');
       const edits = successfulCalls(events, 'file', 'edit').filter((call) => onPath(call, 'src/anchor.txt'));
+
       const recovered = refusals.some((refusal) =>
         edits.some((edit) => edit.timestamp >= refusal.timestamp));
+
       return [
         {
           what: 'content-fixed',
@@ -257,6 +266,7 @@ export const PROBES: readonly BehaviourProbe[] = [
       const content = await files.readText('roundtrip.txt');
       const writes = successfulCalls(events, 'file', 'write').filter((call) => onPath(call, 'roundtrip.txt'));
       const reads = successfulCalls(events, 'file', 'read').filter((call) => onPath(call, 'roundtrip.txt'));
+
       return [
         {
           what: 'content-exact',
@@ -296,6 +306,7 @@ export const PROBES: readonly BehaviourProbe[] = [
     async verify({ files, events }) {
       const diagnosis = await files.readText('diagnosis.txt');
       const execSuccess = successfulCalls(events, 'execute_tools');
+
       return [
         {
           what: 'refusal-diagnosed',
@@ -333,9 +344,11 @@ export const PROBES: readonly BehaviourProbe[] = [
     async verify({ files, events }) {
       const failed = toolEnds(events).filter((call) =>
         call.name === 'execute_tools' && call.outcome?.success === false);
+
       const aftermath = await files.readText('aftermath.txt');
       const noted = aftermath !== null && aftermath.trim().length > 0;
       const fileWrites = successfulCalls(events, 'file', 'write').filter((call) => onPath(call, 'aftermath.txt'));
+
       return [
         {
           what: 'failure-surfaced',
@@ -365,6 +378,7 @@ export const PROBES: readonly BehaviourProbe[] = [
       const found = await files.readText('found.txt');
       const saves = successfulCalls(events, 'memory', 'save');
       const searches = successfulCalls(events, 'memory', 'search');
+
       return [
         {
           what: 'note-retrieved',
@@ -398,6 +412,7 @@ export const PROBES: readonly BehaviourProbe[] = [
       const remembers = successfulCalls(events, 'memory', 'remember');
       const recalls = successfulCalls(events, 'memory', 'recall');
       const forgets = successfulCalls(events, 'memory', 'forget');
+
       return [
         {
           what: 'value-transcribed',
@@ -439,6 +454,7 @@ export const PROBES: readonly BehaviourProbe[] = [
       const adds = successfulCalls(events, 'tasks', 'add');
       const updates = successfulCalls(events, 'tasks', 'update');
       const lists = successfulCalls(events, 'tasks', 'list');
+
       return [
         {
           what: 'status-transcribed',

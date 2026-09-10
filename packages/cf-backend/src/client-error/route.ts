@@ -55,7 +55,9 @@ const OVER_REQUEST_LIMIT = `a render-failure report is limited to ${String(CLIEN
  */
 function releaseMatch(reported: string | undefined, current: string | undefined): ReleaseMatch {
   if (current === undefined) return 'undeployed';
+
   if (reported === undefined) return 'unreported';
+
   return reported === current ? 'match' : 'stale';
 }
 
@@ -79,9 +81,12 @@ async function handleClientErrorReport(
   // the outcome. The limit is Analytics Engine's per-data-point text budget; see
   // `contract.ts` for why that is the number and not a choice made here.
   const bounded = await readBounded(request, CLIENT_ERROR_MAX_REQUEST_BYTES);
+
   if (bounded === 'too_large') return err(413, OVER_REQUEST_LIMIT);
+
   if (bounded instanceof KinuError) {
     diagnostics.failure('client.report_unreadable', bounded);
+
     return err(400, 'could not read the request body');
   }
 
@@ -89,6 +94,7 @@ async function handleClientErrorReport(
     ClientErrorReportSchema,
     tolerate(() => JSON.parse(new TextDecoder().decode(bounded)), 'malformed-input'),
   );
+
   // One refusal for every way a body can fail to be a report, and no detail
   // about which: the sender is our own ErrorBoundary, which has nothing to
   // correct, and a schema-shaped error message is a map of the accepted fields.
@@ -126,6 +132,7 @@ export async function handleClientErrorRequest(
   identity: AuthIdentity | null,
 ): Promise<Response | null> {
   if (new URL(request.url).pathname !== CLIENT_ERROR_ENDPOINT) return null;
+
   return request.method === 'POST'
     ? handleClientErrorReport(request, env, identity)
     : err(405, 'use POST');

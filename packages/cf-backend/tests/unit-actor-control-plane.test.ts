@@ -37,6 +37,7 @@ describe('the workspace root answers the actor control plane', () => {
 
   test('a hosted child keeps its own model row in the same database', async () => {
     const workspace = orchestratorHarness();
+
     const child = await hostedSubordinateHarness(workspace, {
       name: 'control-plane-child',
       displayName: 'Control Plane Child',
@@ -66,6 +67,7 @@ describe('the workspace root answers the actor control plane', () => {
       broadcast: () => {},
       enqueueTurn: async (turn: { text: string; metadata?: JsonObject }) => {
         enqueued.push(turn);
+
         return { status: 'queued' as const };
       },
       turnInFlight: () => false,
@@ -96,6 +98,7 @@ describe('the workspace root answers the actor control plane', () => {
    */
   test('only the workspace root files its own cancellation, under its own actor id', async () => {
     const orchestrator = orchestratorHarness();
+
     const child = await hostedSubordinateHarness(orchestrator, {
       name: 'cancel-scope-child',
       displayName: 'Cancel Scope Child',

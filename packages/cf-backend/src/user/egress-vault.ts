@@ -149,17 +149,21 @@ export async function putEgressSecret(
   if (!BINDING_ID_RE.test(input.id)) {
     throw new Error(`Invalid egress secret id "${input.id}" — letters, digits, dot, dash, underscore, up to 128.`);
   }
+
   if (!HOST_PATTERN_RE.test(input.host)) {
     throw new Error(
       `Invalid egress host "${input.host}" — a hostname or a * glob, with no scheme, port, path or space.`,
     );
   }
+
   if (input.secret.length === 0) throw new Error('An egress secret cannot be empty.');
+
   if (isEgressPlaceholder(input.secret)) {
     // Storing a placeholder AS a secret would make the substitution a no-op
     // and leave the container believing it holds a working credential.
     throw new Error('That value is a placeholder, not a secret.');
   }
+
   if (input.label.length === 0 || input.label.length > 200) {
     throw new Error('An egress secret needs a label of 1–200 characters.');
   }
@@ -175,6 +179,7 @@ export async function putEgressSecret(
        updated_at = unixepoch() * 1000`,
     input.id, input.label, input.host, placeholder, sealed,
   );
+
   return { id: input.id, label: input.label, host: input.host, placeholder };
 }
 
@@ -199,12 +204,16 @@ export async function resolveEgressInjection(
   active: readonly EgressSecretBinding[],
 ): Promise<EgressInjectionResult> {
   const plan = planEgress(facts, active);
+
   if (plan.kind === 'refuse') return plan;
+
   if (plan.substitutions.length === 0) return { kind: 'forward', substitutions: [] };
 
   const substitutions: EgressInjection[] = [];
+
   for (const { bindingId, placeholder } of plan.substitutions) {
     const row = readOne(SecretRow, deps.sql, `SELECT secret FROM user_egress_secrets WHERE id = ?`, bindingId);
+
     if (!row) {
       // The binding was in the handler's configured view but is gone from the
       // vault — revoked between configuration and this request. Fail closed:
@@ -216,8 +225,10 @@ export async function resolveEgressInjection(
         reason: 'A secret this request needs has been revoked.',
       };
     }
+
     substitutions.push({ placeholder, secret: await deps.cipher.open(deps.aad(bindingId), String(row.secret)) });
   }
+
   return { kind: 'forward', substitutions };
 }
 
@@ -237,10 +248,14 @@ export async function rewrapEgressSecrets(
   deps: EgressVaultDeps,
 ): Promise<boolean> {
   let clean = true;
+
   for (const raw of deps.sql.exec(`SELECT id, secret FROM user_egress_secrets`).toArray()) {
     const parsed = v.safeParse(IdSecretRow, raw);
+
     if (!parsed.success) { clean = false; continue; }
+
     const { id, secret } = parsed.output;
+
     try {
       const plaintext = await deps.cipher.open(deps.aad(id), secret);
       const resealed = await deps.cipher.seal(deps.aad(id), plaintext);
@@ -254,6 +269,7 @@ export async function rewrapEgressSecrets(
       }), { secretId: id });
     }
   }
+
   return clean;
 }
 
@@ -262,17 +278,22 @@ export async function rewrapEgressSecrets(
  *  the table is not what this module thinks it is, and that must not be
  *  discovered by a downstream `undefined`. */
 const PlaceholderRow = v.object({ placeholder: v.string() });
+
 const SecretRow = v.object({ secret: v.string() });
+
 const IdSecretRow = v.object({ id: v.string(), secret: v.string() });
 
 function readOne<Schema extends v.GenericSchema>(
   schema: Schema, sql: SqlExec, query: string, ...values: string[]
 ): v.InferOutput<Schema> | undefined {
   const row = sql.exec(query, ...values).toArray()[0];
+
   if (row === undefined) return undefined;
   const parsed = v.safeParse(schema, row);
+
   if (!parsed.success) {
     throw new Error(`user_egress_secrets row does not match its expected shape: ${query}`);
   }
+
   return parsed.output;
 }

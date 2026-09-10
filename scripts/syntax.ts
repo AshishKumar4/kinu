@@ -60,6 +60,7 @@ export function parse(file: string, text: string): Parsed {
   const { program, errors } = parseSync(file, text, {
     lang: file.endsWith('.tsx') ? 'tsx' : 'ts',
   });
+
   if (errors.length > 0) {
     // Loud, not skipped. A gate that quietly parses fewer files is
     // indistinguishable from a gate with no findings, which is how
@@ -75,14 +76,17 @@ export function parse(file: string, text: string): Parsed {
 
   const open: Building[] = [];
   let root: SyntaxNode | undefined;
+
   const enter = (raw: Node): void => {
     const parent = open.at(-1);
     const node: Building = { raw, type: raw.type, start: raw.start, end: raw.end, parent, children: [] };
     parent?.children.push(node);
     open.push(node);
   };
+
   const exit = (): void => {
     const done = open.pop();
+
     if (open.length === 0 && done !== undefined) root = done;
   };
 
@@ -94,23 +98,29 @@ export function parse(file: string, text: string): Parsed {
   const handlers = Object.fromEntries(
     Object.keys(visitorKeys).flatMap((type) => [[type, enter], [`${type}:exit`, exit]]),
   ) as VisitorObject;
+
   new Visitor(handlers).visit(program);
 
   if (root === undefined) throw new Error(`${file}: oxc-parser produced no root node.`);
 
   const lineStarts = [0];
+
   for (let i = 0; i < text.length; i += 1) {
     if (text.charCodeAt(i) === 10) lineStarts.push(i + 1);
   }
+
   return {
     root,
     lineAt: (offset) => {
       let low = 0;
       let high = lineStarts.length - 1;
+
       while (low < high) {
         const mid = (low + high + 1) >> 1;
+
         if (lineStarts[mid] <= offset) low = mid; else high = mid - 1;
       }
+
       return low + 1;
     },
   };
@@ -119,6 +129,7 @@ export function parse(file: string, text: string): Parsed {
 /** Preorder over `node` and every descendant. */
 export function walk(node: SyntaxNode, visit: (n: SyntaxNode) => void): void {
   visit(node);
+
   for (const child of node.children) walk(child, visit);
 }
 
@@ -132,6 +143,7 @@ const StringValued = v.object({ value: v.string() });
 const literalString = (raw: Node): string | undefined => {
   if (raw.type !== 'Literal') return undefined;
   const decoded = v.safeParse(StringValued, raw);
+
   return decoded.success ? decoded.output.value : undefined;
 };
 
@@ -147,9 +159,13 @@ const identifierName = (raw: Node): string | undefined =>
  *  `INSERT … ON CONFLICT` identically. */
 export function literalText(node: SyntaxNode): string | undefined {
   const { raw } = node;
+
   if (raw.type === 'TemplateElement') return raw.value.cooked ?? raw.value.raw;
+
   if (raw.type === 'JSXText') return raw.value;
+
   if (raw.type !== 'Literal') return undefined;
+
   return literalString(raw) ?? raw.raw ?? undefined;
 }
 
@@ -163,6 +179,7 @@ const RegexValued = v.object({ regex: v.object({ pattern: v.string() }) });
 export function regexPattern(node: SyntaxNode): string | undefined {
   if (node.raw.type !== 'Literal') return undefined;
   const decoded = v.safeParse(RegexValued, node.raw);
+
   return decoded.success ? decoded.output.regex.pattern : undefined;
 }
 
@@ -171,10 +188,13 @@ export function regexPattern(node: SyntaxNode): string | undefined {
  *  narrower than "this is a literal": `42` has text and is not a string. */
 function stringValue(node: SyntaxNode): string | undefined {
   const direct = literalString(node.raw);
+
   if (direct !== undefined) return direct;
   const { raw } = node;
+
   if (raw.type !== 'TemplateLiteral' || raw.expressions.length > 0) return undefined;
   const [only] = raw.quasis;
+
   return only === undefined ? undefined : only.value.cooked ?? only.value.raw;
 }
 
@@ -202,12 +222,15 @@ const IDENTIFIED_DECLARATIONS: ReadonlySet<string> = new Set([
  */
 export function declaredName(node: SyntaxNode): string | undefined {
   const { raw } = node;
+
   if (KEYED_DECLARATIONS.has(raw.type) && 'key' in raw) {
     return 'computed' in raw && raw.computed ? undefined : identifierName(raw.key);
   }
+
   if (IDENTIFIED_DECLARATIONS.has(raw.type) && 'id' in raw && raw.id !== null) {
     return identifierName(raw.id);
   }
+
   return undefined;
 }
 
@@ -221,11 +244,14 @@ export function declaredName(node: SyntaxNode): string | undefined {
  */
 export function ownerName(node: SyntaxNode): string | undefined {
   let up = node.parent;
+
   while (up !== undefined) {
     const named = declaredName(up);
+
     if (named !== undefined && named !== declaredName(node)) return named;
     up = up.parent;
   }
+
   return undefined;
 }
 
@@ -259,17 +285,24 @@ const DECLARATION_WRAPPER: ReadonlySet<string> = new Set([
  */
 export function docComment(text: string, node: SyntaxNode): string | undefined {
   let statement = node;
+
   while (statement.parent !== undefined && DECLARATION_WRAPPER.has(statement.parent.type)) {
     statement = statement.parent;
   }
+
   const before = text.slice(0, statement.start).replace(/\s+$/, '');
+
   if (before.endsWith('*/')) {
     const open = before.lastIndexOf('/**');
+
     return open < 0 ? undefined : before.slice(open);
   }
+
   const lines = before.split('\n');
   let first = lines.length;
+
   while (first > 0 && /^[ \t]*\/\//.test(lines[first - 1] ?? '')) first -= 1;
+
   return first === lines.length ? undefined : lines.slice(first).join('\n');
 }
 
@@ -296,7 +329,9 @@ export const isFunctionLike = (node: SyntaxNode): boolean =>
  *  `functionOwner`. */
 export function functionOf(member: SyntaxNode): SyntaxNode | undefined {
   const { raw } = member;
+
   if (raw.type !== 'MethodDefinition' && raw.type !== 'Property') return undefined;
+
   return member.children.find((child) => child.raw === raw.value);
 }
 
@@ -305,6 +340,7 @@ export function functionOf(member: SyntaxNode): SyntaxNode | undefined {
 export function isAsync(node: SyntaxNode): boolean {
   const target = functionOf(node) ?? node;
   const { raw } = target;
+
   return 'async' in raw && raw.async === true;
 }
 
@@ -314,8 +350,10 @@ export function isAsync(node: SyntaxNode): boolean {
 export function returnTypeOf(node: SyntaxNode): SyntaxNode | undefined {
   const target = functionOf(node) ?? node;
   const { raw } = target;
+
   if (!('returnType' in raw) || raw.returnType === null || raw.returnType === undefined) return undefined;
   const annotation = target.children.find((child) => child.raw === raw.returnType);
+
   return annotation?.children[0];
 }
 
@@ -327,8 +365,11 @@ export function returnTypeOf(node: SyntaxNode): SyntaxNode | undefined {
  */
 export function functionOwner(fn: SyntaxNode): SyntaxNode {
   const { parent } = fn;
+
   if (parent === undefined) return fn;
+
   if (parent.type === 'MethodDefinition' || parent.type === 'TSAbstractMethodDefinition') return parent;
+
   return parent.raw.type === 'Property' && parent.raw.method ? parent : fn;
 }
 
@@ -339,10 +380,13 @@ export function functionOwner(fn: SyntaxNode): SyntaxNode {
  */
 export function blockBodyOf(node: SyntaxNode): SyntaxNode | undefined {
   const { raw } = node;
+
   if (raw.type !== 'FunctionDeclaration' && raw.type !== 'FunctionExpression'
     && raw.type !== 'ArrowFunctionExpression') return undefined;
   const body = raw.body;
+
   if (body === null || body.type !== 'BlockStatement') return undefined;
+
   return node.children.find((child) => child.raw === body);
 }
 
@@ -354,8 +398,10 @@ export function blockBodyOf(node: SyntaxNode): SyntaxNode | undefined {
  */
 export function memberCalleeName(node: SyntaxNode): string | undefined {
   const { raw } = node;
+
   if (raw.type !== 'CallExpression' || raw.callee.type !== 'MemberExpression') return undefined;
   const { callee } = raw;
+
   return callee.computed ? literalString(callee.property) : identifierName(callee.property);
 }
 
@@ -368,11 +414,14 @@ export const identifierCalleeName = (node: SyntaxNode): string | undefined =>
 export function stringArguments(node: SyntaxNode): readonly string[] {
   if (node.raw.type !== 'CallExpression') return [];
   const found: string[] = [];
+
   for (const child of node.children) {
     if (!node.raw.arguments.some((argument) => argument === child.raw)) continue;
     const value = stringValue(child);
+
     if (value !== undefined) found.push(value);
   }
+
   return found;
 }
 
@@ -381,23 +430,30 @@ export function stringArguments(node: SyntaxNode): readonly string[] {
  *  one. `@callable()` and `@callable` both yield `callable`. */
 export function decoratorNames(node: SyntaxNode): readonly string[] {
   const { raw } = node;
+
   if (!('decorators' in raw)) return [];
   const names: string[] = [];
+
   for (const decorator of raw.decorators ?? []) {
     const { expression } = decorator;
+
     const name = expression.type === 'CallExpression'
       ? identifierName(expression.callee)
       : identifierName(expression);
+
     if (name !== undefined) names.push(name);
   }
+
   return names;
 }
 
 /** Class members of a class declaration, in source order. */
 export function classMembers(node: SyntaxNode): readonly SyntaxNode[] {
   const { raw } = node;
+
   if (raw.type !== 'ClassDeclaration' && raw.type !== 'ClassExpression') return [];
   const body = node.children.find((child) => child.raw === raw.body);
+
   return body?.children ?? [];
 }
 
@@ -426,10 +482,13 @@ interface Declared {
  *  wrapper ESTree puts around it, plus whether that wrapper was there. */
 export function declarationOf(statement: SyntaxNode): Declared {
   const { raw } = statement;
+
   if (raw.type !== 'ExportNamedDeclaration' && raw.type !== 'ExportDefaultDeclaration') {
     return { node: statement, exported: false };
   }
+
   const inner = statement.children.find((child) => child.raw === raw.declaration);
+
   return inner === undefined ? { node: statement, exported: true } : { node: inner, exported: true };
 }
 
@@ -445,16 +504,20 @@ export const isReExport = (statement: SyntaxNode): boolean =>
 export function exportedLocalNames(statement: SyntaxNode): readonly string[] {
   if (statement.raw.type !== 'ExportNamedDeclaration') return [];
   const names: string[] = [];
+
   for (const specifier of statement.raw.specifiers) {
     const name = identifierName(specifier.local) ?? literalString(specifier.local);
+
     if (name !== undefined) names.push(name);
   }
+
   return names;
 }
 
 /** Names an `import` statement binds locally: default, namespace and named. */
 export function importedNames(statement: SyntaxNode): readonly string[] {
   if (statement.raw.type !== 'ImportDeclaration') return [];
+
   return statement.raw.specifiers
     .map((specifier) => identifierName(specifier.local))
     .filter((name): name is string => name !== undefined);
@@ -479,18 +542,24 @@ export interface ModuleBinding {
  *  is what resolving an export back through a barrel needs. */
 export function importBindings(statement: SyntaxNode): readonly ModuleBinding[] {
   const { raw } = statement;
+
   if (raw.type !== 'ImportDeclaration') return [];
   const bound: ModuleBinding[] = [];
+
   for (const specifier of raw.specifiers) {
     const local = identifierName(specifier.local);
+
     if (local === undefined) continue;
+
     if (specifier.type === 'ImportDefaultSpecifier') bound.push({ imported: 'default', local });
     else if (specifier.type === 'ImportNamespaceSpecifier') bound.push({ imported: NAMESPACE, local });
     else {
       const imported = identifierName(specifier.imported) ?? literalString(specifier.imported);
+
       if (imported !== undefined) bound.push({ imported, local });
     }
   }
+
   return bound;
 }
 
@@ -500,21 +569,28 @@ export function importBindings(statement: SyntaxNode): readonly ModuleBinding[] 
  *  one declares, and {@link exportedLocalNames} is its accessor. */
 export function reExportBindings(statement: SyntaxNode): readonly ModuleBinding[] {
   const { raw } = statement;
+
   if (raw.type === 'ExportAllDeclaration') {
     const named = raw.exported === null || raw.exported === undefined
       ? undefined
       : identifierName(raw.exported) ?? literalString(raw.exported);
+
     return [{ imported: NAMESPACE, local: named ?? NAMESPACE }];
   }
+
   if (raw.type !== 'ExportNamedDeclaration' || raw.source === null || raw.source === undefined) {
     return [];
   }
+
   const bound: ModuleBinding[] = [];
+
   for (const specifier of raw.specifiers) {
     const imported = identifierName(specifier.local) ?? literalString(specifier.local);
     const local = identifierName(specifier.exported) ?? literalString(specifier.exported);
+
     if (imported !== undefined && local !== undefined) bound.push({ imported, local });
   }
+
   return bound;
 }
 
@@ -541,13 +617,17 @@ export function referencedNames(tree: SyntaxNode): Set<string> {
   const bindings = tree.children
     .filter((statement) => statement.raw.type === 'ImportDeclaration' || isReExport(statement))
     .map((statement) => [statement.start, statement.end] as const);
+
   const used = new Set<string>();
   walk(tree, (node) => {
     const name = identifierName(node.raw);
+
     if (name === undefined || namesAField(node) || declaresItself(node)) return;
+
     if (bindings.some(([from, to]) => node.start >= from && node.end <= to)) return;
     used.add(name);
   });
+
   return used;
 }
 
@@ -555,17 +635,23 @@ export function referencedNames(tree: SyntaxNode): Set<string> {
  *  declaration, rather than a reference to a binding. */
 function namesAField(node: SyntaxNode): boolean {
   const parent = node.parent?.raw;
+
   if (parent === undefined) return false;
+
   if (parent.type === 'MemberExpression') return !parent.computed && parent.property === node.raw;
+
   if (parent.type === 'Property') {
     return !parent.computed && !parent.shorthand && parent.key === node.raw;
   }
+
   if (parent.type === 'TSEnumMember') return parent.id === node.raw;
+
   if (parent.type === 'PropertyDefinition' || parent.type === 'MethodDefinition'
     || parent.type === 'TSPropertySignature' || parent.type === 'TSMethodSignature'
     || parent.type === 'AccessorProperty') {
     return !parent.computed && parent.key === node.raw;
   }
+
   return false;
 }
 
@@ -579,7 +665,9 @@ const SELF_NAMING: ReadonlySet<string> = new Set([
 /** True when this identifier is the name a declaration gives itself. */
 function declaresItself(node: SyntaxNode): boolean {
   const parent = node.parent?.raw;
+
   if (parent === undefined || !SELF_NAMING.has(parent.type)) return false;
+
   return 'id' in parent && parent.id === node.raw;
 }
 
@@ -589,18 +677,32 @@ function declaresItself(node: SyntaxNode): boolean {
  * default value. Collecting either would report names this file never declared.
  */
 function collectBindings(raw: Node, into: string[]): void {
-  if (raw.type === 'Identifier') { into.push(raw.name); return; }
+  if (raw.type === 'Identifier') {
+    into.push(raw.name);
+
+    return;
+  }
+
   if (raw.type === 'ObjectPattern') {
     for (const property of raw.properties) {
       collectBindings(property.type === 'RestElement' ? property.argument : property.value, into);
     }
+
     return;
   }
+
   if (raw.type === 'ArrayPattern') {
     for (const element of raw.elements) if (element !== null) collectBindings(element, into);
+
     return;
   }
-  if (raw.type === 'AssignmentPattern') { collectBindings(raw.left, into); return; }
+
+  if (raw.type === 'AssignmentPattern') {
+    collectBindings(raw.left, into);
+
+    return;
+  }
+
   if (raw.type === 'RestElement') collectBindings(raw.argument, into);
 }
 
@@ -612,15 +714,19 @@ function collectBindings(raw: Node, into: string[]): void {
  */
 export function declaredBindings(declaration: SyntaxNode, identifiersOnly: boolean): readonly string[] {
   const { raw } = declaration;
+
   if (raw.type !== 'VariableDeclaration') return [];
   const names: string[] = [];
+
   for (const declarator of raw.declarations) {
     if (identifiersOnly) {
       if (declarator.id.type === 'Identifier') names.push(declarator.id.name);
       continue;
     }
+
     collectBindings(declarator.id, names);
   }
+
   return names;
 }
 
@@ -635,18 +741,24 @@ export function moduleSpecifiers(tree: SyntaxNode): readonly string[] {
   const out: string[] = [];
   walk(tree, (node) => {
     const { raw } = node;
+
     if (raw.type === 'ImportDeclaration' || raw.type === 'ExportNamedDeclaration'
       || raw.type === 'ExportAllDeclaration') {
       const source = raw.source === null || raw.source === undefined
         ? undefined
         : literalString(raw.source);
+
       if (source !== undefined) out.push(source);
+
       return;
     }
+
     if (raw.type !== 'ImportExpression') return;
     const source = literalString(raw.source);
+
     if (source !== undefined) out.push(source);
   });
+
   return out;
 }
 
@@ -666,6 +778,7 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
   const scopes = new Map<SyntaxNode, ImportScope>();
   const declarations = new Set<Node>();
   const moduleScope: ImportScope = { parent: undefined, functionScope: true, bindings: new Map() };
+
   const bind = (raw: Node, scope: ImportScope, origin?: ImportUse, dynamic = false): void => {
     if (raw.type === 'Identifier') {
       declarations.add(raw);
@@ -679,92 +792,133 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
     } else if (raw.type === 'AssignmentPattern') bind(raw.left, scope);
     else if (raw.type === 'RestElement') bind(raw.argument, scope);
   };
+
   const bindVariable = (node: SyntaxNode, scope: ImportScope): void => {
     const { raw } = node;
+
     if (raw.type !== 'VariableDeclarator') return;
     let target = scope;
+
     if (node.parent?.raw.type === 'VariableDeclaration' && node.parent.raw.kind === 'var') {
       while (!target.functionScope && target.parent !== undefined) target = target.parent;
     }
+
     bind(raw.id, target);
+
     const imported = raw.init?.type === 'AwaitExpression' && raw.init.argument.type === 'ImportExpression'
       ? literalString(raw.init.argument.source) : undefined;
+
     if (imported === undefined) return;
+
     if (raw.id.type === 'Identifier') bind(raw.id, target, { specifier: imported, imported: NAMESPACE }, true);
     else if (raw.id.type === 'ObjectPattern') {
       for (const property of raw.id.properties) {
         if (property.type !== 'Property' || property.value.type !== 'Identifier') continue;
+
         const name = !property.computed && property.key.type === 'Identifier'
           ? property.key.name : literalString(property.key);
+
         if (name !== undefined) bind(property.value, target, { specifier: imported, imported: name }, true);
       }
     }
   };
+
   const visit = (node: SyntaxNode, enclosing: ImportScope): void => {
     const { raw } = node;
+
     if ((raw.type === 'FunctionDeclaration' || raw.type === 'ClassDeclaration') && raw.id !== null) {
       bind(raw.id, enclosing);
     }
+
     const functionScope = isFunctionLike(node);
+
     const ownScope = functionScope || raw.type === 'BlockStatement' || raw.type === 'CatchClause'
       || raw.type === 'ForStatement' || raw.type === 'ForOfStatement' || raw.type === 'ForInStatement'
       || raw.type === 'SwitchStatement' || raw.type === 'ClassExpression' || raw.type === 'ClassDeclaration';
+
     const scope: ImportScope = ownScope
       ? { parent: enclosing, functionScope, bindings: new Map() } : enclosing;
+
     scopes.set(node, scope);
+
     if (functionScope && 'params' in raw) {
       for (const parameter of raw.params) bind(parameter, scope);
+
       if ('id' in raw && raw.id !== null) bind(raw.id, scope);
     }
+
     if (raw.type === 'ClassExpression' && raw.id !== null) bind(raw.id, scope);
+
     if (raw.type === 'CatchClause' && raw.param !== null) bind(raw.param, scope);
+
     if (raw.type === 'ImportDeclaration') {
       for (const specifier of raw.specifiers) {
         const imported = specifier.type === 'ImportNamespaceSpecifier' ? NAMESPACE
           : specifier.type === 'ImportDefaultSpecifier' ? 'default'
           : specifier.imported.type === 'Identifier' ? specifier.imported.name : specifier.imported.value;
+
         bind(specifier.local, scope, { specifier: raw.source.value, imported });
       }
     }
+
     bindVariable(node, scope);
+
     for (const child of node.children) visit(child, scope);
   };
+
   visit(tree, moduleScope);
+
   const resolve = (node: SyntaxNode, name: string) => {
     let scope = scopes.get(node);
+
     while (scope !== undefined) {
       const binding = scope.bindings.get(name);
+
       if (binding !== undefined) return binding;
       scope = scope.parent;
     }
+
     return undefined;
   };
+
   // Reassigned dynamic bindings no longer prove which module their consumers read.
   walk(tree, node => {
     const raw = node.raw;
+
     const target = raw.type === 'AssignmentExpression' ? raw.left
       : raw.type === 'UpdateExpression' ? raw.argument : undefined;
+
     if (target?.type !== 'Identifier') return;
     const binding = resolve(node, target.name);
+
     if (binding?.dynamic) binding.origin = undefined;
   });
   const uses: ImportUse[] = [];
   walk(tree, node => {
     const name = identifierName(node.raw);
+
     if (name === undefined || declarations.has(node.raw) || namesAField(node) || declaresItself(node)) return;
+
     if (node.parent?.raw.type === 'Property' && node.parent.raw.key === node.raw
       && node.parent.parent?.raw.type === 'ObjectPattern') return;
+
     for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
       if (parent.raw.type === 'ImportDeclaration' || isReExport(parent)) return;
     }
+
     const binding = resolve(node, name);
     const origin = binding?.origin;
+
     if (binding === undefined || origin === undefined) return;
+
     if (binding.dynamic && origin.imported === NAMESPACE) {
       const parent = node.parent?.raw;
+
       if (parent?.type !== 'MemberExpression' || parent.object !== node.raw) return;
+
       const name = !parent.computed && parent.property.type === 'Identifier'
         ? parent.property.name : literalString(parent.property);
+
       if (name !== undefined) uses.push({ specifier: origin.specifier, imported: name });
     } else uses.push(origin);
   });
@@ -774,17 +928,24 @@ export function importUses(tree: SyntaxNode): readonly ImportUse[] {
   // anywhere else proves nothing about which member is read.
   walk(tree, node => {
     const { raw } = node;
+
     if (raw.type !== 'ImportExpression') return;
     const arrow = node.parent?.raw;
+
     if (arrow?.type !== 'ArrowFunctionExpression' || arrow.body !== raw) return;
     const call = node.parent?.parent?.raw;
+
     if (call?.type !== 'CallExpression' || call.arguments[0] !== arrow) return;
+
     const callee = call.callee.type === 'MemberExpression' && !call.callee.computed
       ? call.callee.property : call.callee;
+
     if (callee.type !== 'Identifier' || callee.name !== 'lazy') return;
     const specifier = literalString(raw.source);
+
     if (specifier !== undefined) uses.push({ specifier, imported: 'default' });
   });
+
   return uses;
 }
 
@@ -803,11 +964,14 @@ export const IMPORT_CANDIDATES: readonly string[] = ['', '.ts', '.tsx', '/index.
  */
 export function collapsePath(path: string): string {
   const stack: string[] = [];
+
   for (const part of path.split('/')) {
     if (part === '.' || part === '') continue;
+
     if (part === '..') stack.pop();
     else stack.push(part);
   }
+
   return stack.join('/');
 }
 
@@ -826,24 +990,32 @@ export function collapsePath(path: string): string {
  */
 export function numericValue(node: SyntaxNode): number | undefined {
   const { raw } = node;
+
   if (raw.type === 'Literal') {
     const decoded = v.safeParse(NumberValued, raw);
+
     return decoded.success && Number.isFinite(decoded.output.value)
       ? decoded.output.value
       : undefined;
   }
+
   if (raw.type === 'TSAsExpression' || raw.type === 'TSSatisfiesExpression'
     || raw.type === 'TSNonNullExpression') {
     return numericValue(node.children[0]);
   }
+
   if (raw.type === 'UnaryExpression' && (raw.operator === '-' || raw.operator === '+')) {
     const inner = numericValue(node.children[0]);
+
     return inner === undefined ? undefined : (raw.operator === '-' ? -inner : inner);
   }
+
   if (raw.type !== 'BinaryExpression') return undefined;
   const left = numericValue(node.children[0]);
   const right = numericValue(node.children[1]);
+
   if (left === undefined || right === undefined) return undefined;
+
   switch (raw.operator) {
     case '*': return finite(left * right);
     case '/': return finite(left / right);

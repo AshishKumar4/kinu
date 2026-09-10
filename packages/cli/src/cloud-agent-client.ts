@@ -64,6 +64,7 @@ import {
 import * as v from 'valibot';
 
 const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
+
 const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
   reviewModel: v.nullable(v.string()),
   autoPromoteScaffold: v.boolean(),
@@ -73,17 +74,21 @@ const EvolutionConfigSchema: v.GenericSchema<EvolutionConfigView> = v.object({
   advisorEnabled: v.boolean(),
   advisorMinSeverity: v.picklist(ADVISOR_SEVERITIES),
 });
+
 const PendingDeviceConsentSchema: v.GenericSchema<PendingDeviceConsent> = v.object({
   consentId: v.string(),
   deviceLabel: v.string(),
   method: v.string(),
   command: v.string(),
 });
+
 const ResolveDeviceConsentSchema = v.object({ ok: v.boolean() });
+
 const FileRestoreChangeSchema = v.object({
   path: v.string(),
   kind: v.picklist(['modify', 'create', 'delete']),
 });
+
 const FileCheckpointEntrySchema: v.GenericSchema<FileCheckpointEntry> = v.object({
   id: v.string(),
   dir: v.string(),
@@ -92,48 +97,60 @@ const FileCheckpointEntrySchema: v.GenericSchema<FileCheckpointEntry> = v.object
   sessionId: v.nullable(v.string()),
   reason: v.string(),
 });
+
 const FileRestorePlanSchema: v.GenericSchema<FileRestorePlan> = v.object({
   dir: v.string(),
   id: v.string(),
   files: v.array(FileRestoreChangeSchema),
 });
+
 const FileRestoreResultSchema: v.GenericSchema<FileRestoreResult> = v.object({
   dir: v.string(),
   id: v.string(),
   files: v.array(FileRestoreChangeSchema),
   preRestoreId: v.nullable(v.string()),
 });
+
 const CheckpointAvailabilitySchema: v.GenericSchema<CheckpointAvailability> = v.object({
   available: v.boolean(),
   reason: v.optional(v.string()),
 });
+
 const FileCheckpointListingSchema: v.GenericSchema<FileCheckpointListing> = v.object({
   availability: CheckpointAvailabilitySchema,
   entries: v.array(FileCheckpointEntrySchema),
 });
+
 const CloudChatMessageSchema: v.GenericSchema<CloudChatMessage> = v.object({
   id: v.string(),
   role: v.picklist(['user', 'assistant', 'system']),
   content: v.string(),
   createdAt: v.union([v.string(), v.number()]),
 });
+
 const CloudChatPageSchema: v.GenericSchema<Page<CloudChatMessage>> = pageSchema(CloudChatMessageSchema);
+
 const BranchTurnResultSchema = v.nullable(v.object({
   accepted: v.optional(v.boolean()),
   reason: v.optional(v.string()),
 }));
+
 const ForkAgentResultSchema = v.nullable(v.object({ name: v.optional(v.string()) }));
+
 /** Both additional-agent calls answer with the slug to address the agent by
  *  and its shown title, which is empty until something names it. */
 const AdditionalAgentSchema = v.object({ name: v.string(), displayName: v.string() });
+
 const AdditionalAgentEnvelopeSchema = v.object({
   subordinate: AdditionalAgentSchema,
 });
+
 const ChangelogRevertActionSchema = v.variant('type', [
   v.object({ type: v.literal('scaffold_rollback'), target: v.string() }),
   v.object({ type: v.literal('fact_forget'), target: v.string() }),
   v.object({ type: v.literal('fact_forget_many'), targets: v.array(v.string()) }),
 ]);
+
 const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.object({
   id: v.string(),
   kind: v.picklist(['scaffold', 'tool', 'fact', 'gepa', 'replay', 'outcomes']),
@@ -144,10 +161,12 @@ const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.obj
   scaffoldVersion: v.optional(v.number()),
   items: v.optional(v.array(ChangelogEntrySchema)),
 }));
+
 const ChangelogViewSchema = v.nullable(v.object({
   entries: v.optional(v.array(ChangelogEntrySchema), []),
   unseenCount: v.optional(v.number(), 0),
 }));
+
 /** The refinement surface as the wire carries it. Optional-with-default on
  *  every field for the same reason the changelog's schema is: an older
  *  workspace answering a newer client must degrade to an empty listing rather
@@ -159,6 +178,7 @@ const RefinementRouteSchema = v.object({
   disposition: v.picklist(REFINEMENT_DISPOSITIONS),
   reason: v.optional(v.string()),
 });
+
 const RefinementRequestViewSchema: v.GenericSchema<unknown, RefinementRequestView> = v.object({
   id: v.string(),
   trigger: v.picklist(REFINEMENT_TRIGGERS),
@@ -169,6 +189,7 @@ const RefinementRequestViewSchema: v.GenericSchema<unknown, RefinementRequestVie
   detail: v.optional(v.string(), ''),
   createdAt: v.optional(v.number(), 0),
 });
+
 const StagedSkillResultSchema: v.GenericSchema<unknown, StagedSkillResult> = v.variant('ok', [
   v.object({
     ok: v.literal(true),
@@ -183,6 +204,7 @@ const StagedSkillResultSchema: v.GenericSchema<unknown, StagedSkillResult> = v.v
   }),
   v.object({ ok: v.literal(false), error: v.string() }),
 ]);
+
 const RefinementDecisionResultSchema: v.GenericSchema<unknown, RefinementDecisionResult> = v.variant(
   'ok',
   [
@@ -190,6 +212,7 @@ const RefinementDecisionResultSchema: v.GenericSchema<unknown, RefinementDecisio
     v.object({ ok: v.literal(false), error: v.string() }),
   ],
 );
+
 const RefinementViewSchema: v.GenericSchema<unknown, AgentRefinementView> = v.object({
   requests: v.optional(v.array(RefinementRequestViewSchema), []),
   debt: v.object({
@@ -199,11 +222,13 @@ const RefinementViewSchema: v.GenericSchema<unknown, AgentRefinementView> = v.ob
     summary: v.optional(v.string(), ''),
   }),
 });
+
 const ChangelogRevertResultSchema: v.GenericSchema<ChangelogRevertResult> = v.object({
   ok: v.boolean(),
   detail: v.optional(v.string()),
   error: v.optional(v.string()),
 });
+
 const AlternateTakeCandidateSchema = v.object({
   nodeId: v.string(),
   text: v.string(),
@@ -212,6 +237,7 @@ const AlternateTakeCandidateSchema = v.object({
   depth: v.number(),
   origin: v.optional(v.picklist(['live', 'branch'])),
 });
+
 const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
   id: v.string(),
   turnId: v.nullable(v.string()),
@@ -224,6 +250,7 @@ const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
   createdAt: v.number(),
   pickedAt: v.nullable(v.number()),
 });
+
 const TakePickOutcomeSchema: v.GenericSchema<TakePickOutcome> = v.object({
   outcome: v.picklist(['accepted', 'corrected']),
   changedAnswer: v.boolean(),
@@ -231,6 +258,7 @@ const TakePickOutcomeSchema: v.GenericSchema<TakePickOutcome> = v.object({
   set: AlternateTakeSetSchema,
   continuationQueued: v.boolean(),
 });
+
 const SearchNodeProjectionSchema = v.object({
   depth: v.number(),
   status: v.string(),
@@ -238,9 +266,13 @@ const SearchNodeProjectionSchema = v.object({
   visits: v.optional(v.number()),
   action: v.optional(v.nullable(v.string())),
 });
+
 const ModelSpecSchema = v.object({ spec: v.nullable(v.string()) });
+
 const SetModelResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
+
 const ReasoningEffortResultSchema = v.object({ effort: v.nullable(ReasoningEffortSchema) });
+
 const SetReasoningEffortResultSchema = v.object({ ok: v.literal(true), effort: ReasoningEffortSchema });
 
 const SocketFrameSchema = v.objectWithRest({
@@ -254,6 +286,7 @@ const SocketFrameSchema = v.objectWithRest({
   /** Set by the DO on every frame of a stream it replays. */
   replay: v.optional(v.boolean()),
 }, JsonValueSchema);
+
 type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;
 
 const BranchStatusEventSchema = v.variant('status', [
@@ -342,9 +375,11 @@ export class CloudAgentClient implements AgentClient {
     this.cloudName = opts.cloudName;
     this.subordinateName = opts.subordinateName ?? null;
     const subordinateName = this.subordinateName;
+
     if (subordinateName) {
       this.rename = (displayName) => this.renameAdditionalAgent(subordinateName, displayName);
     }
+
     this.oneShot = opts.oneShot === true;
     this.transcriptOptions = opts.transcript ?? {};
     this.activeCliSession = createCliSession(opts.agentName, this.transcriptOptions);
@@ -377,6 +412,7 @@ export class CloudAgentClient implements AgentClient {
 
   subscribe(listener: (event: AgentClientEvent) => void): () => void {
     this.listeners.add(listener);
+
     return () => this.listeners.delete(listener);
   }
 
@@ -402,6 +438,7 @@ export class CloudAgentClient implements AgentClient {
       }
     })();
     this.launchedTasks.set(taskId, task);
+
     return true;
   }
 
@@ -411,18 +448,22 @@ export class CloudAgentClient implements AgentClient {
   branch(prompt: AgentPrompt, opts: AgentClientSendOptions = {}): boolean {
     if (this.activeTurns.size === 0) return false;
     const text = promptText(prompt).trim();
+
     if (!text) return false;
     this.activeCliSession.append('user', { text, branched: true, cwd: opts.cwd ?? process.cwd(), backend: 'cloud' });
+
     const fail = (message: string) => {
       const event: BranchStatusEvent = { type: 'branch_status', status: 'error', branchId: '', task: text, message };
       this.emit({ type: 'broadcast', event });
     };
+
     const taskId = randomRequestId();
     let task: Promise<void> | null = null;
     task = (async () => {
       try {
         const result = await this.callRpc('branchTurn', [text]);
         const r = v.parse(BranchTurnResultSchema, result);
+
         if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
       } catch (cause) {
         fail(renderThrownChain({ cause }));
@@ -431,15 +472,18 @@ export class CloudAgentClient implements AgentClient {
       }
     })();
     this.launchedTasks.set(taskId, task);
+
     return true;
   }
 
   private async submit(prompt: AgentPrompt, opts: AgentClientSendOptions, steered: boolean): Promise<AgentTurnResult> {
     const text = promptText(prompt).trim();
     const files = promptFiles(prompt);
+
     if (!text && files.length === 0) throw new Error('prompt required');
     await this.ensureOpen();
     const ws = this.ws;
+
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
 
     // The JSONL log records attachment names, never the data-URL payloads.
@@ -448,12 +492,15 @@ export class CloudAgentClient implements AgentClient {
       cwd: opts.cwd ?? process.cwd(),
       backend: 'cloud',
     };
+
     if (steered) sessionEntry.steered = true;
+
     if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
     this.activeCliSession.append('user', sessionEntry);
     this.emit({ type: 'turn-start', kind: 'user', text });
 
     const requestId = randomRequestId();
+
     return await new Promise<AgentTurnResult>((resolve) => {
       const turn = new CloudTurnStream((event) => this.emit(event), resolve);
       this.activeTurns.set(requestId, turn);
@@ -463,9 +510,13 @@ export class CloudAgentClient implements AgentClient {
           messages: [decodeJsonValue({ value: createUserUiMessage(text, files) })],
           trigger: 'submit-message',
         };
+
         if (opts.cwd) body.cwd = opts.cwd;
+
         if (opts.tier) body.tier = opts.tier;
+
         if (this.oneShot) body.oneShot = true;
+
         const request: JsonObject = {
           id: requestId,
           init: {
@@ -474,6 +525,7 @@ export class CloudAgentClient implements AgentClient {
           },
           type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
         };
+
         ws.send(JSON.stringify(request));
       } catch (err) {
         // The turn-start already went out — keep the lifecycle paired.
@@ -492,11 +544,15 @@ export class CloudAgentClient implements AgentClient {
     if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
     const rows = await this.transcript();
     const pivot = findForkPivot(rows, point);
+
     if (pivot < 0) throw new Error("Could not locate that message in the agent's chat history.");
+
     if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud workspace.');
     const untilId = rows[pivot - 1]!.id;
     const forkName = v.parse(ForkAgentResultSchema, await this.callRpc('forkAgent', [untilId]))?.name;
+
     if (!forkName) throw new Error('Cloud fork returned no agent name.');
+
     const sibling = new CloudAgentClient({
       origin: this.origin,
       token: this.token,
@@ -507,6 +563,7 @@ export class CloudAgentClient implements AgentClient {
         noTranscript: this.transcriptOptions.noTranscript,
       },
     });
+
     return { client: sibling, label: `agent ${forkName}` };
   }
 
@@ -518,6 +575,7 @@ export class CloudAgentClient implements AgentClient {
     if (this.subordinateName) {
       return this.callRpc(method, args).then((result) => v.parse(schema, result));
     }
+
     return this.callParentHttp(method, schema, args);
   }
 
@@ -529,10 +587,13 @@ export class CloudAgentClient implements AgentClient {
   private async callRpc(method: string, args: JsonValue[]): Promise<JsonValue> {
     await this.ensureOpen();
     const ws = this.ws;
+
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
     const id = randomRequestId();
+
     return await new Promise<JsonValue>((resolve, reject) => {
       this.pendingRpcs.set(id, { resolve, reject });
+
       try {
         ws.send(JSON.stringify({ type: 'rpc', id, method, args }));
       } catch (err) {
@@ -547,6 +608,7 @@ export class CloudAgentClient implements AgentClient {
    * request; the actor RPC awaits every foreground device outcome. */
   stop(): string[] {
     const ws = this.ws;
+
     for (const id of this.activeTurns.keys()) {
       try {
         if (ws?.readyState === WebSocket.OPEN) {
@@ -558,11 +620,14 @@ export class CloudAgentClient implements AgentClient {
           message: `Could not signal stream cancellation: ${renderThrownChain({ cause: error })}`,
         });
       }
+
       this.stoppingTurnIds.add(id);
     }
+
     if (this.stoppingTurnIds.size > 0 && !this.stopPromise) {
       this.stopPromise = this.settleStoppedTurns();
     }
+
     return [];
   }
 
@@ -574,9 +639,11 @@ export class CloudAgentClient implements AgentClient {
       this.emit({ type: 'error', message: renderThrownChain({ cause }) });
     } finally {
       this.stopPromise = null;
+
       for (const id of this.stoppingTurnIds) {
         this.stoppingTurnIds.delete(id);
         const turn = this.activeTurns.get(id);
+
         if (!turn) continue;
         this.activeTurns.delete(id);
         turn.settle();
@@ -612,12 +679,15 @@ export class CloudAgentClient implements AgentClient {
   private async transcript(): Promise<CloudChatMessage[]> {
     const rows: CloudChatMessage[] = [];
     let cursor: SeekCursor | null = null;
+
     for (;;) {
       const page: Page<CloudChatMessage> = await this.callHttp(
         'getChatHistoryPage', CloudChatPageSchema,
         [cursor === null ? {} : { cursor: { after: cursor.after } }],
       );
+
       rows.unshift(...page.items);
+
       if (page.status === 'end') return rows;
       cursor = page.next;
     }
@@ -625,6 +695,7 @@ export class CloudAgentClient implements AgentClient {
 
   async status(): Promise<AgentClientStatus> {
     const status = await this.callHttp('getAgentStatus', CloudAgentStatusSchema);
+
     return {
       name: status.displayName ?? status.name,
       purpose: status.purpose,
@@ -641,6 +712,7 @@ export class CloudAgentClient implements AgentClient {
 
   async describeTools(): Promise<AgentToolSurface> {
     const tools = await this.callHttp('getToolDescriptions', CloudToolDescriptionsSchema);
+
     return {
       builtIn: tools.builtIn.map(({ name, description }) => ({ name, description })),
       crafted: tools.crafted.map(({ name, description }) => ({ name, description })),
@@ -655,10 +727,12 @@ export class CloudAgentClient implements AgentClient {
     const result = v.parse(
       ChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: limit ?? 50 }]),
     );
+
     const view: AgentChangelogView = {
       entries: result?.entries ?? [],
       unseenCount: result?.unseenCount ?? 0,
     };
+
     // Viewing is the acknowledgement. A failed ack is reported through the client's own error
     // channel: silently dropped, the same digest returns as unseen forever with no reason given.
     try {
@@ -669,6 +743,7 @@ export class CloudAgentClient implements AgentClient {
         message: `Could not mark the changelog as seen: ${renderThrownChain({ cause: error })}`,
       });
     }
+
     return view;
   }
 
@@ -708,6 +783,7 @@ export class CloudAgentClient implements AgentClient {
   }
   async inspectSubordinate(request: SubordinateInspectionRequest): Promise<SubordinateInspectionResult> {
     const input = v.parse(SubordinateInspectionRequestSchema, request);
+
     return this.callParentHttp('inspectSubordinate', SubordinateInspectionResultSchema, [decodeJsonValue({ value: input })]);
   }
 
@@ -730,6 +806,7 @@ export class CloudAgentClient implements AgentClient {
     const result = this.subordinateName
       ? await this.callParentHttp('createSubordinateAgent', AdditionalAgentSchema)
       : v.parse(AdditionalAgentSchema, await this.callRpc('createSubordinateAgent', []));
+
     return result;
   }
 
@@ -755,11 +832,13 @@ export class CloudAgentClient implements AgentClient {
       AdditionalAgentEnvelopeSchema,
       [name, displayName],
     );
+
     return result.subordinate;
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {
     const rows = await this.callHttp('getMctsTree', v.array(SearchNodeProjectionSchema));
+
     return rows.map((node) => ({
       depth: node.depth,
       status: node.status,
@@ -771,6 +850,7 @@ export class CloudAgentClient implements AgentClient {
 
   async listJobs(limit = 20): Promise<AgentJobSummary[]> {
     const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), [limit]);
+
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status }));
   }
 
@@ -802,16 +882,19 @@ export class CloudAgentClient implements AgentClient {
 
   async listModels(): Promise<AgentModelMenu> {
     const menu = normalizeModelMenu({ payload: await listCloudAvailableModels(this.origin, this.token) });
+
     // Only a menu with nothing in it AND nothing to explain is an error; a
     // provider that failed is reported to the picker, not thrown at it.
     if (menu.models.length === 0 && menu.failures.length === 0) {
       throw new Error('No cloud models are available.');
     }
+
     return menu;
   }
 
   private emit(event: AgentClientEvent): void {
     this.recorder.record(this.activeCliSession, event);
+
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -819,15 +902,22 @@ export class CloudAgentClient implements AgentClient {
 
   private async ensureOpen(): Promise<void> {
     if (this.closed) throw new Error('Cloud workspace client is closed.');
+
     if (this.ws?.readyState === WebSocket.OPEN) return;
+
     if (this.connectPromise) {
       await this.connectPromise;
+
       if (this.closed) throw new Error('Cloud workspace client closed while connecting.');
+
       return;
     }
+
     this.connectPromise = this.openSocket();
+
     try {
       await this.connectPromise;
+
       if (this.closed) throw new Error('Cloud workspace client closed while connecting.');
     } finally {
       this.connectPromise = null;
@@ -837,11 +927,14 @@ export class CloudAgentClient implements AgentClient {
   private async openSocket(): Promise<void> {
     if (this.closed) throw new Error('Cloud workspace client is closed.');
     const { ticket } = await createCloudAgentConnectTicket(this.origin, this.token, this.cloudName);
+
     if (this.closed) throw new Error('Cloud workspace client closed while creating its connect ticket.');
+
     const actorPath = this.subordinateName
       ? `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`
         + `/sub/${SUBORDINATE_AGENT_SLUG}/${encodeURIComponent(this.subordinateName)}`
       : `/agents/${ORCHESTRATOR_AGENT_SLUG}/${encodeURIComponent(this.cloudName)}`;
+
     const url = new URL(actorPath, this.origin.replace(/\/+$/, ''));
     url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
     url.searchParams.set('ticket', ticket);
@@ -853,11 +946,14 @@ export class CloudAgentClient implements AgentClient {
     // `close`, and handling both would report the same drop twice — which, on
     // the rebind path below, reads as a turn that failed to rebind twice.
     let dropped = false;
+
     const onDrop = async (): Promise<void> => {
       if (dropped) return;
       dropped = true;
+
       if (this.ws === ws) this.ws = null;
       this.failPendingRpcs(new Error('Cloud workspace connection closed.'));
+
       try {
         await this.rebindInFlightTurns();
       } catch (cause) {
@@ -867,15 +963,18 @@ export class CloudAgentClient implements AgentClient {
         ));
       }
     };
+
     ws.addEventListener('close', onDrop);
     ws.addEventListener('error', onDrop);
 
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Timed out connecting to cloud workspace.')), 15_000);
+
       const settle = (outcome: () => void): void => {
         clearTimeout(timeout);
         outcome();
       };
+
       ws.addEventListener('open', () => {
         settle(resolve);
       }, { once: true });
@@ -886,6 +985,7 @@ export class CloudAgentClient implements AgentClient {
         settle(() => reject(new Error('Cloud workspace connection closed before it opened.')));
       }, { once: true });
     });
+
     if (this.closed) {
       ws.close();
       throw new Error('Cloud workspace client closed while connecting.');
@@ -894,14 +994,18 @@ export class CloudAgentClient implements AgentClient {
 
   private handleMessage(event: MessageEvent): void {
     const payload = parseSocketJson(event);
+
     if (!payload) return;
 
     if (payload.type === 'rpc' && payload.id) {
       const pending = this.pendingRpcs.get(payload.id);
+
       if (!pending) return;
       this.pendingRpcs.delete(payload.id);
+
       if (payload.success === true) pending.resolve(payload.result ?? null);
       else pending.reject(new Error(jsonErrorMessage(payload.error, 'Cloud workspace RPC failed.')));
+
       return;
     }
 
@@ -910,7 +1014,9 @@ export class CloudAgentClient implements AgentClient {
     // every other frame in this handler — no wholesale re-typing.
     if (payload.type === 'branch_status') {
       const event = parseBranchStatusEvent(payload);
+
       if (event) this.emit({ type: 'broadcast', event });
+
       return;
     }
 
@@ -918,7 +1024,9 @@ export class CloudAgentClient implements AgentClient {
     // replays its chunks after a reconnect; other clients' streams are ignored.
     if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && payload.id) {
       const resuming = this.activeTurns.get(payload.id);
+
       if (resuming) this.ackResume(payload.id, resuming);
+
       return;
     }
 
@@ -930,6 +1038,7 @@ export class CloudAgentClient implements AgentClient {
       for (const [id, turn] of this.activeTurns) {
         if (turn.awaitingRebind) this.ackResume(id, turn);
       }
+
       return;
     }
 
@@ -940,24 +1049,30 @@ export class CloudAgentClient implements AgentClient {
 
     if (payload.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || !payload.id) return;
     const active = this.activeTurns.get(payload.id);
+
     if (!active) return;
     // A frame for this turn is its stream bound to the live socket again —
     // read before it is cleared, because the terminal branch below needs to
     // know whether ANYTHING rebound before the stream ended.
     const unbound = active.awaitingRebind;
     active.awaitingRebind = false;
+
     if (payload.error) {
       if (this.stoppingTurnIds.has(payload.id)) return;
       this.activeTurns.delete(payload.id);
       const message = payload.body || 'Cloud agent stream failed.';
       this.emit({ type: 'error', message });
       active.settle(true);
+
       return;
     }
+
     if (payload.body?.trim()) active.apply(payload.body, payload.replay === true);
+
     if (payload.done) {
       if (this.stoppingTurnIds.has(payload.id)) return;
       this.activeTurns.delete(payload.id);
+
       // A REPLAYED terminal that is the FIRST frame back is the DO saying it
       // holds no stream under this id: nothing rebound, so whatever this
       // process had is all there is. Settling it as a clean turn would present
@@ -972,6 +1087,7 @@ export class CloudAgentClient implements AgentClient {
       } else {
         active.settle();
       }
+
       // This stream ending is the DO going idle behind it: re-probe so a turn
       // still unbound after the drop gets answered instead of waiting behind
       // the stream that was in front of it.
@@ -986,7 +1102,9 @@ export class CloudAgentClient implements AgentClient {
   private failInFlight(error: Error): void {
     const active = [...this.activeTurns.values()];
     this.activeTurns.clear();
+
     if (active.length > 0) this.emit({ type: 'error', message: error.message });
+
     for (const turn of active) turn.settle(true);
     this.failPendingRpcs(error);
   }
@@ -996,6 +1114,7 @@ export class CloudAgentClient implements AgentClient {
   private failPendingRpcs(error: Error): void {
     const rpcs = [...this.pendingRpcs.values()];
     this.pendingRpcs.clear();
+
     for (const rpc of rpcs) rpc.reject(error);
   }
 
@@ -1014,6 +1133,7 @@ export class CloudAgentClient implements AgentClient {
    */
   private async rebindInFlightTurns(): Promise<void> {
     if (this.closed || this.activeTurns.size === 0) return;
+
     // Iterated live rather than over a snapshot: a Map iterator tolerates the
     // deletion of the entry it is standing on, which is the only one deleted
     // here, so the copy bought nothing.
@@ -1027,11 +1147,14 @@ export class CloudAgentClient implements AgentClient {
       });
       turn.settle(true);
     }
+
     if (this.activeTurns.size === 0) return;
+
     for (const turn of this.activeTurns.values()) {
       turn.awaitingRebind = true;
       turn.resumeAcked = false;
     }
+
     await this.ensureOpen();
     this.requestStreamResume();
   }
@@ -1059,9 +1182,12 @@ export class CloudAgentClient implements AgentClient {
  *  (describeBranchStatus switches on status; the TUI keys on branchId). */
 function parseBranchStatusEvent(payload: SocketFrame): BranchStatusEvent | null {
   const result = v.safeParse(BranchStatusEventSchema, payload);
+
   if (!result.success) return null;
   const event = result.output;
+
   if (event.status !== 'error') return event;
+
   return { ...event, message: event.message ?? 'branch failed' };
 }
 
@@ -1070,6 +1196,7 @@ function parseSocketJson(event: MessageEvent): SocketFrame | null {
   const textResult = v.safeParse(v.string(), data);
   const bufferResult = v.safeParse(v.instance(ArrayBuffer), data);
   const bytesResult = v.safeParse(v.instance(Uint8Array), data);
+
   const text = textResult.success
     ? textResult.output
     : bufferResult.success
@@ -1077,10 +1204,13 @@ function parseSocketJson(event: MessageEvent): SocketFrame | null {
       : bytesResult.success
         ? new TextDecoder().decode(bytesResult.output)
         : String(data);
+
   // A frame off the wire is untrusted input: unparseable text is a frame we drop, and only that.
   const parsed = tolerate(() => parseJsonValue(text), 'malformed-input');
+
   if (parsed === undefined) return null;
   const frame = v.safeParse(SocketFrameSchema, parsed);
+
   return frame.success ? frame.output : null;
 }
 

@@ -34,13 +34,16 @@ const SURFACES = ["Work", "Diffs", "Files", "Releases", "Exploration", "Agent", 
  *  than a place to work in it, so it sits apart at the right of the strip and
  *  carries no label. */
 export const ACTIVITY_SURFACE = "Activity";
+
 /** Tabs Kinu wrote. Namespaced rather than mixed into the tuple above so a
  *  Slate can never collide with a host surface by picking its id, and so every
  *  render path can tell the two apart without a lookup. */
 export type SlateSurfaceKind = `${typeof SLATE_PREFIX}${string}`;
+
 export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE | SlateSurfaceKind | `preview:${string}`;
 
 const slateSurface = (id: string): SlateSurfaceKind => `${SLATE_PREFIX}${id}`;
+
 const slateId = (surface: SurfaceKind): string | null =>
   surface.startsWith(SLATE_PREFIX) ? surface.slice(SLATE_PREFIX.length) : null;
 
@@ -115,11 +118,13 @@ export interface WorkSurfaceProps {
   /** Signed-out sample content in place of a network preview. */
   slateBody?: (slate: SlateSummary) => ReactNode;
 }
+
 export function WorkSurface(props: WorkSurfaceProps) {
   const { surface, onSurface } = props;
   const strip = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const focus = props.previewFocus;
+
     if (focus?.startsWith("slate:")) onSurface(`slate:${focus.slice(6)}`);
     else if (focus?.startsWith("preview:")) onSurface(`preview:${focus.slice(8)}`);
   }, [props.previewFocus, onSurface]);
@@ -131,24 +136,30 @@ export function WorkSurface(props: WorkSurfaceProps) {
   // An unpublished Slate or an empty gated surface loses its selected tab.
   useEffect(() => {
     const duplicate = surface.startsWith("preview:workspace:") ? props.slates?.find(slate => `preview:workspace:${slate.port}` === surface) : undefined;
+
     const resolved = duplicate ? slateSurface(duplicate.id)
       : surface === "Diffs" && !hasDiffs ? "Work"
       : surface.startsWith("preview:") && !openPort ? "Work"
       : resolveGatedSurface(surface, props.tabPresence, props.mctsTrees, props.slates);
+
     if (resolved !== surface) onSurface(resolved);
   }, [surface, onSurface, props.tabPresence, props.mctsTrees, props.slates, hasDiffs, openPort]);
   // A one-shot cross-surface intent: an Environment card's Files action lands
   // the Files tab at that environment's own root on the composite plane.
   const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
+
   const openFiles = useCallback((path: string) => {
     setFilesJump((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }));
     onSurface("Files");
   }, [onSurface]);
+
   // The frame uses the summary for its header and the counter for preview reloads.
   const openSlate = slateId(surface);
+
   const openSlateSummary = openSlate === null
     ? undefined
     : props.slates?.find((slate) => slate.id === openSlate);
+
   const openSlateReloadKey = openSlate === null ? 0 : (props.slateReloads?.get(openSlate) ?? 0);
   // Linking a machine is asked for from three places in this column — an
   // offline Environment card, that card's call-to-action, and the drive's
@@ -164,11 +175,13 @@ export function WorkSurface(props: WorkSurfaceProps) {
   useEffect(() => {
     const container = strip.current;
     const selected = container?.querySelector('[aria-current="true"]');
+
     if (!container || !selected) return;
     const viewport = container.getBoundingClientRect();
     const tab = selected.getBoundingClientRect();
     const left = viewport.left + container.clientLeft;
     const right = left + container.clientWidth;
+
     if (tab.left < left) container.scrollLeft += tab.left - left;
     else if (tab.right > right) container.scrollLeft += tab.right - right;
   }, [surface]);
@@ -186,6 +199,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         <div ref={strip} className="p-tabstrip [--scroll-ground:var(--c-sidebar)] flex items-center min-w-0 flex-1 px-3 gap-0.5 -mb-px">
           {props.slates?.map(slate => {
             const kind = slateSurface(slate.id);
+
             return <button key={kind} onClick={() => onSurface(kind)} title={slate.title} aria-label={slate.title}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>
@@ -195,6 +209,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {ports.map(port => {
             const kind: SurfaceKind = `preview:${port.executor}:${port.port}`;
             const title = port.name || `${port.executor} :${port.port}`;
+
             return <button key={kind} onClick={() => onSurface(kind)} title={title} aria-label={title}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>{title}</button>;

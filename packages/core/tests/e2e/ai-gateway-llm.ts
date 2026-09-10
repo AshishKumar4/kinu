@@ -14,12 +14,14 @@ import { createVercelAILLM } from '../../src/llm';
 
 function getRequiredEnv(name: string): string {
   const value = process.env[name];
+
   if (!value) {
     throw new Error(
       `Missing required env var: ${name}. ` +
       `Set it in .env or export it. See .env.example for required variables.`,
     );
   }
+
   return value;
 }
 

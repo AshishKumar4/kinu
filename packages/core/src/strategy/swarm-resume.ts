@@ -252,6 +252,7 @@ const StoredSwarmNodeRecordSchema: v.GenericSchema<StoredSwarmNodeRecord> = v.ob
   aggregated: v.array(v.string()),
   tokens: v.nullable(v.number()),
 });
+
 const RecordVersionSchema = v.object({ v: v.number() });
 
 /** The DDL, once. No `reconcileColumns`: the table ships whole, so there is no
@@ -458,23 +459,31 @@ export function reenterSwarm(deps: {
   deps.actor.assertCurrent();
   const actorId = deps.actor.actorId;
   const [newest, ...older] = deps.ledger.findRunningSwarms(input.task);
+
   if (!newest) return null;
   const superseded = older.map((row) => row.rootId);
+
   for (const stale of superseded) deps.ledger.supersede(stale, input.now);
   const epoch = deps.ledger.reclaim(newest.rootId);
+
   if (epoch === null) return null;
+
   const rows = deps.sql<NodeRow>`
     SELECT id, parent_id, depth, observation FROM search_nodes
     WHERE actor_id = ${actorId} AND root_id = ${newest.rootId}
     ORDER BY depth ASC, created_at ASC`;
+
   const records = new Map<string, { record: string; merged: boolean }>();
+
   for (const row of deps.sql<{ node_id: string; record_json: string; merged_at: number | null }>`
     SELECT node_id, record_json, merged_at FROM swarm_node_records
     WHERE actor_id = ${actorId} AND root_id = ${newest.rootId}`) {
     records.set(row.node_id, { record: row.record_json, merged: row.merged_at !== null });
   }
+
   const nodes = rows.map((row): ReenteredSwarmNode => {
     const stored = records.get(row.id);
+
     return {
       id: row.id,
       parentId: row.parent_id,
@@ -485,6 +494,7 @@ export function reenterSwarm(deps: {
       produced: reconstructedTurns(deps.journal.readSteps(row.id)),
     };
   });
+
   return {
     rootId: newest.rootId,
     epoch,
@@ -537,15 +547,21 @@ function pendingNodes(sql: SqlExecutor, actorId: string, rootId: string): readon
       AND j.parent_id IN (
         SELECT id FROM search_nodes WHERE actor_id = ${actorId} AND root_id = ${rootId})
     ORDER BY j.depth ASC, j.rowid ASC`;
+
   const levels = new Map<string, typeof rows>();
+
   for (const row of rows) {
     const level = levels.get(row.parent_id);
+
     if (level) level.push(row);
     else levels.set(row.parent_id, [row]);
   }
+
   const pending: PendingSwarmNode[] = [];
+
   for (const level of levels.values()) {
     const briefs = level.map((row) => row.rationale ?? '');
+
     for (const [index, row] of level.entries()) {
       if (row.recorded > 0) continue;
       pending.push({
@@ -560,6 +576,7 @@ function pendingNodes(sql: SqlExecutor, actorId: string, rootId: string): readon
       });
     }
   }
+
   // Back into level-then-spawn order: the grouping above is by parent, and the run
   // re-runs the shallowest wave first so a resumed child's parent is always a node
   // this attempt has already rebuilt.
@@ -600,6 +617,7 @@ export function readStartedSwarmProfile(storage: {
   initMctsSearchTable(storage.execRaw);
   const ledger = new MctsSearchStore(storage.sql, actor);
   const [newest] = ledger.findRunningSwarms(task);
+
   return newest ? ledger.readSwarmProfile(newest.rootId) : null;
 }
 
@@ -609,6 +627,7 @@ export function readStartedSwarmProfile(storage: {
 const RECORD_READERS = {
   1(nodeId: string, decoded: JsonValue): SwarmNodeRecord {
     const parsed = v.safeParse(StoredSwarmNodeRecordSchema, decoded);
+
     if (!parsed.success) {
       throw new KinuError('io',
         `the durable record for node ${nodeId} of this search will not read back under its own `
@@ -616,7 +635,9 @@ const RECORD_READERS = {
         + `${parsed.issues.map((issue) => issue.message).join('; ')}. This engine writes that `
         + 'version itself, so it is corruption rather than an old shape.');
     }
+
     const { v: _version, ...record } = parsed.output;
+
     return record;
   },
 } satisfies Record<number, (nodeId: string, decoded: JsonValue) => SwarmNodeRecord>;
@@ -638,6 +659,7 @@ const RECORD_READERS = {
 function parseRecord(nodeId: string, json: string): SwarmNodeRecord {
   const decoded = v.parse(JsonValueSchema, JSON.parse(json));
   const stamped = v.safeParse(RecordVersionSchema, decoded);
+
   // A row THIS build did not write is refused by NAME, not reshaped: continuing past
   // one would rank candidates against measurements this build cannot see.
   if (stamped.success && stamped.output.v !== RECORD_SCHEMA_VERSION) {
@@ -646,6 +668,7 @@ function parseRecord(nodeId: string, json: string): SwarmNodeRecord {
       + `${String(stamped.output.v)}, which this build does not know: it was written by a newer `
       + 'engine, and continuing would rank candidates against rows this build cannot read.');
   }
+
   return RECORD_READERS[RECORD_SCHEMA_VERSION](nodeId, decoded);
 }
 
@@ -653,6 +676,7 @@ export function readSwarmNodeRecords(
   sql: SqlExecutor, actor: ActorHandle, rootId: string,
 ): readonly { readonly nodeId: string; readonly record: SwarmNodeRecord }[] {
   actor.assertCurrent();
+
   return sql<{ node_id: string; record_json: string }>`
     SELECT node_id, record_json
     FROM swarm_node_records
@@ -678,20 +702,27 @@ export function readSwarmNodeRecords(
  */
 function reconstructedTurns(steps: readonly HeadStep[]): ModelMessage[] {
   const turns: ModelMessage[] = [];
+
   for (const step of steps) {
     const parts: string[] = [];
+
     if (step.reasoning) parts.push(step.reasoning);
+
     if (step.text) parts.push(step.text);
+
     for (const call of step.toolCalls) {
       const body = [
         call.input === undefined ? '' : `in: ${JSON.stringify(call.input)}`,
         call.output === undefined ? '' : `out: ${JSON.stringify(call.output)}`,
       ].filter((half) => half.length > 0).join('\n');
+
       parts.push(body.length > 0 ? `[${call.name}]\n${body}` : `[${call.name}]`);
     }
+
     if (parts.length === 0) continue;
     turns.push({ role: 'assistant', content: parts.join('\n\n') });
   }
+
   return turns;
 }
 
@@ -766,10 +797,12 @@ export function harvestSwarm(deps: {
   deps.actor.assertCurrent();
   const actorId = deps.actor.actorId;
   const [running] = deps.ledger.findRunningSwarms(task);
+
   if (!running) return null;
 
   const records = new Map<string, SwarmNodeRecord>();
   const unreadable = new Set<string>();
+
   for (const row of deps.sql<{ node_id: string; record_json: string }>`
     SELECT node_id, record_json FROM swarm_node_records
     WHERE actor_id = ${actorId} AND root_id = ${running.rootId}`) {
@@ -791,13 +824,16 @@ export function harvestSwarm(deps: {
   }
 
   const candidates: HarvestedCandidate[] = [];
+
   for (const row of deps.sql<NodeRow>`
     SELECT id, parent_id, depth, observation FROM search_nodes
     WHERE actor_id = ${actorId} AND root_id = ${running.rootId} AND parent_id IS NOT NULL
     ORDER BY depth ASC, created_at ASC`) {
     const outcome = records.get(row.id)?.outcome ?? null;
+
     if (unreadable.has(row.id)) continue;
     const artifact = row.observation.trim();
+
     if (outcome?.kind === 'incomplete' || artifact.length === 0) continue;
     candidates.push({
       nodeId: row.id,
@@ -813,6 +849,7 @@ export function harvestSwarm(deps: {
         : null,
     });
   }
+
   if (candidates.length === 0 && unreadable.size > 0) {
     throw new KinuError(
       'io',
@@ -820,24 +857,30 @@ export function harvestSwarm(deps: {
         + [...unreadable].join(', '),
     );
   }
+
   if (candidates.length === 0) return null;
 
   let best: HarvestedCandidate | null = null;
+
   for (const candidate of candidates) {
     if (candidate.score === null) continue;
+
     if (best === null || candidate.score > (best.score ?? Number.NEGATIVE_INFINITY)) best = candidate;
   }
 
   const firstBreach = candidates.find((candidate) => candidate.breach !== null)?.breach ?? null;
+
   const publication: SwarmHarvest['publication'] = firstBreach === null
     ? { state: { kind: 'open' }, caveat: null }
     : {
         state: { kind: 'sealed', breach: firstBreach, clearedBy: null },
         caveat: 'At least one candidate crossed the objective floor. Harvested artifacts are not publishable until the floor is re-derived.',
       };
+
   const witnessed = candidates
     .map((candidate) => candidate.witnessFound)
     .filter((found): found is boolean => found !== null);
+
   const witnessFound = witnessed.length === 0 ? null : witnessed.some(Boolean);
 
   return {

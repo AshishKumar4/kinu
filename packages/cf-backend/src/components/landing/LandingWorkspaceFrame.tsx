@@ -51,6 +51,7 @@ import { SlateDashboard } from './SlateDashboard';
 export type LandingFrameKind = 'checkout' | 'plan' | 'slate';
 
 const EMPTY_TREES: ReadonlyMap<string, ForkNode> = new Map();
+
 const NO_HEAD_ACTIVITY: ReadonlyMap<string, number> = new Map();
 
 interface FrameSpec {
@@ -123,11 +124,14 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   const streaming = isMovie && discrete.streaming;
 
   const [altitude, setAltitude] = useState<Altitude>('run');
+
   const [surface, setSurface] = useState<SurfaceKind>(
     reduced && isMovie ? discreteAt(MOVIE_END).surface : frame.surface,
   );
+
   const [draft, setDraft] = useState('');
   const [model, setModel] = useState(LANDING_MODEL);
+
   // The movie's decision flows through the real `decidePlanReview` rpc: the
   // cursor's click lands on the product's Approve button, and the decided plan
   // it returns overrides the timeline's pending one from then on.
@@ -136,6 +140,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       ? { ...MOVIE_PLAN, status: 'approved', feedback: null, handoffAccepted: true, updatedAt: Date.now(), decidedAt: Date.now() }
       : null
   ));
+
   const decidePlan = useMemo(() => planRpc(setDecided, MOVIE_PLAN), []);
   const [, setWorkVersion] = useState(0);
   const work = useMemo(() => checkoutWorkFixture(() => setWorkVersion((version) => version + 1)), []);
@@ -153,15 +158,18 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     if (isMovie) setSurface(discrete.surface);
   }, [isMovie, discrete.surface]);
   const onSurface = useCallback((next: SurfaceKind) => setSurface(next), []);
+
   const slates = useMemo(
     () => (isMovie ? discrete.slates : (kind === 'slate' ? [SLATE_SUMMARY] : [])),
     [isMovie, discrete.slates, kind],
   );
+
   const slateBody = useCallback(() => <SlateBody />, []);
   // A transcript opens at its latest turn, as the app opens it.
   const transcript = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const list = transcript.current;
+
     if (list !== null) list.scrollTop = list.scrollHeight;
   }, [altitude, cueCount]);
 
@@ -169,10 +177,13 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
    *  (the plan chunk still loading, or the slate tab not yet opened). */
   const resolveTarget = (target: MovieTarget): { x: number; y: number } | null => {
     const stage = stageRef.current;
+
     if (stage === null) return null;
     const box = stage.getBoundingClientRect();
+
     if (target === 'cursor-origin') return { x: box.width - 56, y: box.height - 44 };
     let element: Element | null = null;
+
     if (target === 'composer') {
       element = stage.querySelector('[data-movie-target="composer"]');
     } else if (target === 'approve') {
@@ -181,9 +192,12 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     } else if (target === 'slate-tab') {
       element = stage.querySelector('[aria-label="Support queue"]');
     }
+
     if (element === null) return null;
     const rect = element.getBoundingClientRect();
+
     if (rect.width === 0) return null;
+
     return { x: rect.left - box.left + rect.width / 2, y: rect.top - box.top + rect.height / 2 };
   };
 
@@ -191,13 +205,18 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
    *  decision runs the product's `decidePlanReview` path, not a storyboard. */
   const clickApprove = (): boolean => {
     const stage = stageRef.current;
+
     if (stage === null) return false;
+
     const approve = [...stage.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button')]
       .find((button) => !button.disabled && /approve/i.test(button.textContent ?? ''));
+
     if (approve instanceof HTMLButtonElement) {
       approve.click();
+
       return true;
     }
+
     return false;
   };
 
@@ -205,35 +224,46 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
    *  attributes. Never triggers a React render. */
   const syncFrame = (): void => {
     const stage = stageRef.current;
+
     if (stage === null || !isMovie) return;
     const t = tRef.current;
     stage.dataset.movieT = String(Math.round(t));
     const cursor = cursorAt(t);
     const cursorNode = cursorRef.current;
     const rippleNode = rippleRef.current;
+
     if (pressedRef.current !== null) {
       pressedRef.current.style.transform = '';
       pressedRef.current = null;
     }
+
     if (cursorNode === null || rippleNode === null) return;
+
     if (reduced || !cursor.visible) {
       cursorNode.style.opacity = '0';
       rippleNode.style.opacity = '0';
+
       return;
     }
+
     const from = resolveTarget(cursor.from);
     const to = resolveTarget(cursor.to);
+
     const point = from !== null && to !== null
       ? { x: from.x + (to.x - from.x) * cursor.progress, y: from.y + (to.y - from.y) * cursor.progress }
       : (to ?? from ?? lastPointRef.current);
+
     if (point === null) {
       cursorNode.style.opacity = '0';
       rippleNode.style.opacity = '0';
+
       return;
     }
+
     lastPointRef.current = point;
     cursorNode.style.opacity = String(Math.min(1, Math.max(0, (t - CURSOR_ENTER_AT) / 400)));
     cursorNode.style.transform = `translate(${String(point.x - 2)}px, ${String(point.y - 1)}px)`;
+
     if (cursor.ripple !== null) {
       rippleNode.style.opacity = String(0.55 * (1 - cursor.ripple));
       rippleNode.style.transform
@@ -241,10 +271,12 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
     } else {
       rippleNode.style.opacity = '0';
     }
+
     if (cursor.pressed !== null) {
       const pressed = stageRef.current?.querySelector(`[data-movie-target="${cursor.pressed}"]`)
         ?? [...(stageRef.current?.querySelectorAll<HTMLButtonElement>('[data-plan-decisions] button') ?? [])]
           .find((button) => !button.disabled && /approve/i.test(button.textContent ?? ''));
+
       if (pressed instanceof HTMLElement) {
         pressed.style.transform = 'scale(.96)';
         pressedRef.current = pressed;
@@ -256,6 +288,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
    *  per frame between them (the window holds no cues, so the two never fight). */
   const syncBeats = (): void => {
     const count = cueCountAt(tRef.current);
+
     if (count !== cueRef.current) {
       cueRef.current = count;
       setCueCount(count);
@@ -264,37 +297,49 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
       setDraft(typed);
     }
   };
+
   useEffect(() => {
     if (!isMovie || reduced || !playing) return;
     let raf = 0;
     let last = performance.now();
+
     const step = (now: number): void => {
       // The first rAF timestamp can predate the performance.now() taken when
       tRef.current = Math.min(MOVIE_END, tRef.current + Math.max(0, now - last));
       last = now;
       const t = tRef.current;
+
       if (t < MOVIE_CUES.sent) {
         const typed = composerTextAt(t);
+
         if (typed !== lastTypedRef.current) {
           lastTypedRef.current = typed;
           setDraft(typed);
         }
       }
+
       const stage = stageRef.current;
+
       if (!approveFiredRef.current && stage?.querySelector('[data-plan-status]')?.textContent === 'Approved') {
         approveFiredRef.current = true;
       } else if (!approveFiredRef.current && t >= MOVIE_CUES.approve) {
         if (clickApprove()) approveFiredRef.current = true;
       }
+
       syncFrame();
       syncBeats();
+
       if (tRef.current >= MOVIE_END) {
         setPlaying(false);
+
         return;
       }
+
       raf = requestAnimationFrame(step);
     };
+
     raf = requestAnimationFrame(step);
+
     return () => cancelAnimationFrame(raf);
   }, [isMovie, reduced, playing]);
 
@@ -309,29 +354,38 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
   useEffect(() => {
     if (!isMovie || reduced) return;
     const stage = stageRef.current;
+
     if (stage === null) return;
+
     const observer = new IntersectionObserver((entries) => {
       if (startedRef.current) return;
+
       for (const entry of entries) {
         if (entry.intersectionRatio >= 0.3) {
           startedRef.current = true;
           setPlaying(true);
           observer.disconnect();
+
           return;
         }
       }
     }, { threshold: [0.3] });
+
     observer.observe(stage);
+
     return () => observer.disconnect();
   }, [isMovie, reduced]);
 
   useEffect(() => {
     if (!isMovie) return;
+
     const nextFrame = (): Promise<void> => {
       const { promise, resolve } = Promise.withResolvers<void>();
       requestAnimationFrame(() => resolve());
+
       return promise;
     };
+
     const handle: LandingMovieHandle = {
       duration: MOVIE_END,
       cues: MOVIE_CUES,
@@ -348,6 +402,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
           setCueCount(count);
           setDraft(typed);
           setSurface(discreteAt(t).surface);
+
           if (t < MOVIE_CUES.approve) setDecided(null);
         });
         syncFrame();
@@ -356,6 +411,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         // Neither re-runs this component's effects, so poll frames until the
         // beat's expectations hold, then re-anchor the cursor.
         const settled = discreteAt(tRef.current);
+
         if (settled.plan !== null) {
           for (let tick = 0; tick < 90; tick += 1) {
             if (stageRef.current?.querySelector('[data-kinu-plan-review]') !== null) break;
@@ -363,23 +419,27 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
             syncFrame();
           }
         }
+
         if (tRef.current >= MOVIE_CUES.approve) {
           for (let tick = 0; tick < 90; tick += 1) {
             if (stageRef.current?.querySelector('[data-plan-status]')?.textContent === 'Approved') {
               approveFiredRef.current = true;
               break;
             }
+
             clickApprove();
             await nextFrame();
             syncFrame();
           }
         }
+
         if (settled.slates.length > 0) {
           for (let tick = 0; tick < 90; tick += 1) {
             if (stageRef.current?.querySelector('[data-slate-dashboard]') !== null) break;
             await nextFrame();
           }
         }
+
         syncFrame();
       },
       play: () => {
@@ -392,13 +452,16 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
           setDraft('');
           syncBeats();
         }
+
         startedRef.current = true;
         setPlaying(true);
       },
       pause: () => setPlaying(false),
       state: () => ({ t: tRef.current, playing, settled: tRef.current >= MOVIE_END }),
     };
+
     window.__kinuLandingMovie = handle;
+
     return () => {
       if (window.__kinuLandingMovie === handle) delete window.__kinuLandingMovie;
     };

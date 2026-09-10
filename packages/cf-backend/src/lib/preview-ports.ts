@@ -44,6 +44,7 @@ export function reconcilePreviewPorts(
     const ports: PinnedPreviewPort[] = [];
     const identities = new Set<number>();
     let invalidPort: number | null = null;
+
     for (const candidate of result.ports) {
       if (!Number.isInteger(candidate.port) || candidate.port < 1 || candidate.port > 65_535
         || !acceptsUrl(candidate.url)
@@ -51,12 +52,15 @@ export function reconcilePreviewPorts(
         invalidPort = candidate.port;
         break;
       }
+
       identities.add(candidate.port);
+
       const port: PinnedPreviewPort = {
         executor,
         port: candidate.port,
         url: candidate.url,
       };
+
       if (candidate.name) port.name = candidate.name;
       ports.push(port);
     }
@@ -65,6 +69,7 @@ export function reconcilePreviewPorts(
       failures.push(`${executor}: invalid preview registration for port ${invalidPort}`);
       continue;
     }
+
     replacements.set(executor, ports);
   }
 

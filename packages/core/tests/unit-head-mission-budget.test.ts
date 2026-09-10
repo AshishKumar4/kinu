@@ -37,10 +37,12 @@ import type { HostedNodeSeat } from '../src/strategy/node-agent';
  *  reporting a fixed spend per step. */
 function steppingModel(perStep: { input: number; output: number; stopAfter?: number }): LanguageModel {
   let step = 0;
+
   return scriptedTurnModel({
     doGenerate: async () => {
       const finishes = perStep.stopAfter !== undefined && step >= perStep.stopAfter;
       step++;
+
       return {
         content: finishes
           ? [{ type: 'text' as const, text: 'Done.' }]
@@ -75,6 +77,7 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
     mergeStrategy: 'synthesize',
     loop: defaultLoopOrigin('head'),
   };
+
   return missionLabels ? { ...input, missionLabels } : input;
 }
 
@@ -89,11 +92,13 @@ function headInput(missionLabels?: readonly string[]): HeadInput {
  */
 async function hostedHead(): Promise<HostedNodeSeat> {
   const { rt, testSql } = createTestRuntime();
+
   return hostedSeatsOver({ rt, db: testSql.db }).seat('head-mission', 'head');
 }
 
 async function runHead(mission: MissionScope | null, opts: { stopAfter?: number } = {}) {
   const capture = new HeadCapture();
+
   const deps: Parameters<typeof runHeadInference>[1] = {
     ...await hostedHead(),
     model: steppingModel({ input: 1_000, output: 200, ...opts }),
@@ -102,8 +107,10 @@ async function runHead(mission: MissionScope | null, opts: { stopAfter?: number 
     workspaceLayout: 'shared-workspace',
     isAborted: () => false,
   };
+
   if (mission) deps.mission = mission;
   const report = await runHeadInference(headInput(mission?.labels), deps);
+
   return { report, capture };
 }
 
@@ -121,18 +128,24 @@ function countingLedger() {
   const rawSql = makeSql(db);
   const rawExec = makeExecRaw(db);
   const statements: string[] = [];
+
   const sql: SqlExecutor = function executeSql<T = unknown>(
     strings: TemplateStringsArray,
     ...values: SqlValue[]
   ): T[] {
     statements.push(strings.join('?').replace(/\s+/g, ' ').trim());
+
     return rawSql<T>(strings, ...values);
   };
+
   const execRaw: RawSqlExec = (ddl, ...args) => {
     statements.push(ddl.replace(/\s+/g, ' ').trim());
+
     return rawExec(ddl, ...args);
   };
+
   const actor = createTestActors(sql, execRaw).main;
+
   return { db, sql, execRaw, statements, actor };
 }
 
@@ -191,10 +204,12 @@ describe('a declared budget reaches the head mid-flight', () => {
     governor.declare('mission', { tokens: 1_000_000 }, {});
 
     const seen: number[] = [];
+
     const port: MissionBudgetPort = {
       async guard(seam, labels) { return governor.guard(seam, labels); },
       async debit(tokens, opts) { seen.push(tokens); governor.debit(tokens, opts); },
     };
+
     await runHead({ labels: ['mission'], port }, { stopAfter: 3 });
 
     // One debit per step, each the provider's own report for that step.
@@ -255,11 +270,13 @@ describe('a declared budget reaches the head mid-flight', () => {
   test('exhaustion fires the run-event hook exactly once', async () => {
     const ledger = countingLedger();
     const exhausted: string[] = [];
+
     const governor = new MissionGovernor({
       storage: { sql: ledger.sql, execRaw: ledger.execRaw },
       actor: ledger.actor,
       onExhausted: (refusal) => { exhausted.push(refusal.label); },
     });
+
     governor.declare('mission', { tokens: 2_500 }, {});
     await runHead(localMissionScope(governor, ['mission']), { stopAfter: 50 });
     expect(exhausted).toEqual(['mission']);

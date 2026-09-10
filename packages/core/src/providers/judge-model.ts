@@ -28,10 +28,13 @@ export async function availableJudgeSpecs(
 ): Promise<string[]> {
   const defaults = new Map(registry.list().map((provider) => [provider.id, provider.defaultModel]));
   const specs: string[] = [];
+
   for (const info of await registry.listProviders(deps)) {
     const modelId = defaults.get(info.id);
+
     if (info.available && modelId) specs.push(`${info.id}/${modelId}`);
   }
+
   return specs;
 }
 
@@ -63,8 +66,10 @@ const PROVIDER_VENDOR: ProviderVendorIndex = {
 export function modelVendorFamily(spec: string): string {
   const { provider, modelId } = parseModelSpec(spec);
   const segments = modelId.split('/');
+
   if (segments.length > 1) return segments[segments.length - 2].toLowerCase();
   const p = provider.toLowerCase();
+
   return PROVIDER_VENDOR[p] ?? p;
 }
 
@@ -100,14 +105,17 @@ export interface SelectJudgeModelOpts {
  */
 export async function selectJudgeModel(opts: SelectJudgeModelOpts): Promise<JudgeModelSelection> {
   const configured = opts.reviewSpec?.trim();
+
   if (configured) return { spec: configured, source: 'configured' };
 
   const chatFamily = modelVendorFamily(opts.chatSpec);
+
   for (const candidate of await opts.candidates()) {
     if (modelVendorFamily(candidate) !== chatFamily) {
       return { spec: candidate, source: 'cross-family' };
     }
   }
+
   return { spec: opts.chatSpec, source: 'same-family-fallback' };
 }
 
@@ -168,16 +176,21 @@ export async function selectEnsembleJudges(
 ): Promise<EnsembleJudgeSelection> {
   const count = opts.count ?? ENSEMBLE_JUDGE_COUNT;
   const configured = (opts.specs ?? []).map((spec) => spec.trim()).filter((spec) => spec !== '');
+
   if (configured.length > 0) return { specs: configured, source: 'configured' };
 
   const seen = new Set([modelVendorFamily(opts.chatSpec())]);
   const specs: string[] = [];
+
   for (const candidate of await opts.candidates()) {
     const family = modelVendorFamily(candidate);
+
     if (seen.has(family)) continue;
     seen.add(family);
     specs.push(candidate);
+
     if (specs.length === count) break;
   }
+
   return { specs, source: 'cross-family' };
 }

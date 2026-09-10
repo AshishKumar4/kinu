@@ -349,13 +349,16 @@ const SocketMessageSchema = v.variant("type", [
 
 function parseSocketMessage(data: MessageEvent["data"]) {
   const text = v.safeParse(v.string(), data);
+
   if (!text.success) return null;
+
   // A frame that is not JSON is not one of ours. Any other failure here is a
   // real fault and must not be read back as "no message".
   const decoded = v.safeParse(
     SocketMessageSchema,
     tolerate<unknown>(() => JSON.parse(text.output), "malformed-input"),
   );
+
   return decoded.success ? decoded.output : null;
 }
 
@@ -364,8 +367,10 @@ function parseSocketMessage(data: MessageEvent["data"]) {
  * actor boundary as untrusted even though both ends share the TypeScript type. */
 function parsePlanReview<Value>(value: Value): PlanReview | null {
   const parsed = v.safeParse(PlanReviewSchema, value);
+
   return parsed.success ? parsed.output : null;
 }
+
 /** Where a surfaced failure came from — each source owns (and clears) its own
  *  message so a recovery in one never hides a still-broken other.
  *
@@ -432,6 +437,7 @@ type ErrorSource = LiveRefreshSource | "model" | "memory";
 export type WorkspaceErrors = Partial<Record<ErrorSource, string>>;
 
 type LiveRefreshReporter = (source: LiveRefreshSource, message: string | null) => void;
+
 type ConsentResolutionReporter = (consentId: string, message: string | null) => void;
 
 export interface LiveRefreshAdmission {
@@ -445,20 +451,24 @@ export function createLiveRefreshAdmission(): LiveRefreshAdmission {
   let actorEpoch = 0;
   let requestSequence = 0;
   const latestRequest = new Map<string, number>();
+
   const advanceActor = (actorKey: string | null) => {
     activeActor = actorKey;
     actorEpoch += 1;
     latestRequest.clear();
   };
+
   return {
     activateActor(actorKey) {
       advanceActor(actorKey);
     },
     admit(actorKey, requestKey) {
       const admittedActor = actorEpoch;
+
       if (actorKey !== activeActor) return () => false;
       const requestId = ++requestSequence;
       latestRequest.set(requestKey, requestId);
+
       return () => actorKey === activeActor
         && admittedActor === actorEpoch
         && latestRequest.get(requestKey) === requestId;
@@ -481,13 +491,19 @@ function collectReadFailures(errors: LiveRefreshErrors) {
   const subsumed = errors.snapshot;
   const labels: string[] = [];
   const reasons: string[] = [];
+
   for (const descriptor of LIVE_REFRESH_DESCRIPTORS) {
     const reason = errors[descriptor.source];
+
     if (!reason) continue;
+
     if (!reasons.includes(reason)) reasons.push(reason);
+
     if (reason === subsumed && SNAPSHOT_SEEDED_SOURCES.includes(descriptor.source)) continue;
+
     if (!labels.includes(descriptor.label)) labels.push(descriptor.label);
   }
+
   return { labels, reasons };
 }
 
@@ -508,6 +524,7 @@ function collectReadFailures(errors: LiveRefreshErrors) {
  */
 export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): string | null {
   const { labels, reasons } = collectReadFailures(errors);
+
   // The labels are a noun list; the reasons are whatever an RPC rejected with,
   // so they are set down one after another rather than conjoined — "Network
   // connection lost. and MEMORY.md is unreadable" is not a sentence.
@@ -516,6 +533,7 @@ export function formatWorkspaceError(errors: WorkspaceErrors, loaded: boolean): 
     : loaded
       ? `Couldn't refresh ${formatNaturalList(labels)}. Showing last known data. ${reasons.join(" ")}`
       : `Couldn't open this workspace. ${reasons.join(" ")}`;
+
   return combineErrorMessages(errors.model ?? errors.memory ?? null, read);
 }
 
@@ -546,21 +564,28 @@ export async function loadWorkspaceSnapshot(
   seeded: readonly LiveRefreshSource[],
 ): Promise<SnapshotLoad> {
   const isCurrent = admit("snapshot");
+
   const seededReads = new Map(
     seeded.map((source) => [source, admit(source)] as const),
   );
+
   const isSourceCurrent = (source: LiveRefreshSource): boolean =>
     seededReads.get(source)?.() ?? false;
+
   try {
     await read(isCurrent, isSourceCurrent);
+
     if (!isCurrent()) return "superseded";
     report("snapshot", null);
+
     for (const [source, stillCurrent] of seededReads) if (stillCurrent()) report(source, null);
+
     return "loaded";
   } catch (error) {
     if (!isCurrent()) return "superseded";
     const failed = errorMessage(error);
     report("snapshot", failed);
+
     return { failed };
   }
 }
@@ -573,8 +598,10 @@ export async function refreshLiveResource<Value>(
   isCurrent: () => boolean,
 ): Promise<void> {
   if (!isCurrent()) return;
+
   try {
     const value = await read();
+
     if (!isCurrent()) return;
     apply(value);
     report(source, null);
@@ -606,6 +633,7 @@ export function resolvePendingConsent(
 /** Initial-load retry backoff. Doubling from 1s, capped so a long outage keeps
  *  a slow heartbeat instead of hammering the DO. */
 const RETRY_BASE_MS = 1_000;
+
 const RETRY_MAX_MS = 30_000;
 
 /** Memory search fires from an onChange handler, so it settles on the typed
@@ -634,6 +662,7 @@ function bindRpc(agent: CallableAgent): Rpc {
 /** A lightweight agent connection for surfaces that only need callable RPCs. */
 export function useWorkspaceRpc(agentId: string) {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
+
   const agent = useAgent({
     agent: ORCHESTRATOR_AGENT_SLUG,
     name: agentId,
@@ -642,7 +671,9 @@ export function useWorkspaceRpc(agentId: string) {
     onClose: useCallback(() => setConnectionStatus("disconnected"), []),
     onError: useCallback(() => setConnectionStatus("error"), []),
   });
+
   const rpc = useMemo(() => bindRpc(agent), [agent]);
+
   return { rpc, connectionStatus };
 }
 
@@ -676,19 +707,26 @@ export interface WorkspacePlanArrival {
 export function useKinu(target?: string | KinuActorAddress) {
   const targetString = v.safeParse(v.string(), target);
   const targetAddress = v.safeParse(KinuActorAddressSchema, target);
+
   const workspace = targetString.success
     ? targetString.output
     : targetAddress.success ? targetAddress.output.workspace : undefined;
+
   const subordinate = targetAddress.success ? targetAddress.output.subordinate : undefined;
+
   const actorAddress = useMemo<KinuActorAddress>(() => {
     const address: KinuActorAddress = { workspace: workspace || "default" };
+
     if (subordinate) address.subordinate = subordinate;
+
     return address;
   }, [workspace, subordinate]);
+
   const actorKey = useMemo(
     () => JSON.stringify([actorAddress.workspace, subordinate ?? null]),
     [actorAddress.workspace, subordinate],
   );
+
   const isSubordinate = subordinate !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -701,27 +739,37 @@ export function useKinu(target?: string | KinuActorAddress) {
   // vanishes leaves the surfaces it broke looking authoritative.
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
   const [consentResolutionErrors, setConsentResolutionErrors] = useState<ReadonlyMap<string, string>>(new Map());
+
   const setSourceError = useCallback((source: ErrorSource, message: string | null) => {
     setErrors((prev) => {
       if ((prev[source] ?? null) === message) return prev;
       const next = { ...prev };
+
       if (message) next[source] = message; else delete next[source];
+
       return next;
     });
   }, []);
+
   const setConsentResolutionError = useCallback((consentId: string, message: string | null) => {
     setConsentResolutionErrors((previous) => {
       if ((previous.get(consentId) ?? null) === message) return previous;
       const next = new Map(previous);
+
       if (message) next.set(consentId, message); else next.delete(consentId);
+
       return next;
     });
   }, []);
+
   const liveRefreshAdmissionRef = useRef<LiveRefreshAdmission | null>(null);
+
   if (liveRefreshAdmissionRef.current === null) {
     liveRefreshAdmissionRef.current = createLiveRefreshAdmission();
   }
+
   const liveRefreshAdmission = liveRefreshAdmissionRef.current;
+
   const refreshCurrentLiveResource = useCallback(<Value,>(
     source: LiveRefreshSource,
     read: () => Promise<Value>,
@@ -733,14 +781,18 @@ export function useKinu(target?: string | KinuActorAddress) {
     setSourceError,
     liveRefreshAdmission.admit(actorKey, source),
   ), [actorKey, liveRefreshAdmission, setSourceError]);
+
   useEffect(() => {
     liveRefreshAdmission.activateActor(actorKey);
+
     return () => liveRefreshAdmission.invalidateActor(actorKey);
   }, [actorKey, liveRefreshAdmission]);
   const consentResolutionReasons = [...new Set(consentResolutionErrors.values())];
+
   const liveErrors = consentResolutionReasons.length === 0
     ? errors
     : { ...errors, consentResolution: formatNaturalList(consentResolutionReasons) };
+
   // `agentStatus` is written only by a completed snapshot and cleared only by a
   // workspace switch, so it IS "this workspace has last known data" — the fact
   // the banner needs to choose its sentence and the panes need before any of
@@ -748,6 +800,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const snapshot: AsyncResource<AgentStatus> = errors.snapshot !== undefined
     ? { status: "error", message: errors.snapshot, last: agentStatus }
     : agentStatus === null ? { status: "loading" } : { status: "ready", value: agentStatus };
+
   const error = formatWorkspaceError(liveErrors, agentStatus !== null);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
@@ -809,13 +862,16 @@ export function useKinu(target?: string | KinuActorAddress) {
   // ends would have to agree on. Keyed by head id — a Map because the keys are
   // whatever branches this workspace has run.
   const [headActivity, setHeadActivity] = useState<ReadonlyMap<string, number>>(new Map());
+
   const bumpHeadActivity = useCallback((headId: string) => {
     setHeadActivity((previous) => {
       const next = new Map(previous);
       next.set(headId, (previous.get(headId) ?? 0) + 1);
+
       return next;
     });
   }, []);
+
   /**
    * The step each running head is writing but has not journalled yet, keyed by
    * head id — its prose and its reasoning, because `head_stream` carries the
@@ -830,15 +886,19 @@ export function useKinu(target?: string | KinuActorAddress) {
    * the step that replaces it arrives anyway.
    */
   const [headDeltaMap, setHeadDeltaMap] = useState<ReadonlyMap<string, HeadDelta>>(new Map());
+
   const retireDelta = useCallback((headId: string) => {
     setHeadDeltaMap((previous) => retireHeadDelta(previous, headId));
   }, []);
+
   // Nothing is being written any more: the socket went away, or the work did.
   const forgetDeltas = useCallback(() => { setHeadDeltaMap(new Map()); }, []);
+
   const headDeltas = useMemo<HeadDeltas>(() => ({
     get: (headId) => headDeltaMap.get(headId),
     retire: retireDelta,
   }), [headDeltaMap, retireDelta]);
+
   // Mid-turn steers — what the user typed while the agent was working, shown in
   // the thread from the moment the server takes it until the durable user row
   // it becomes arrives in `messages`.
@@ -906,11 +966,14 @@ export function useKinu(target?: string | KinuActorAddress) {
     // Live AI auto-title: update both actor state and the shared roster store.
     onMessage: useCallback((ev: MessageEvent) => {
       const data = parseSocketMessage(ev.data);
+
       if (data?.type === "workspace_renamed") {
         const displayName = data.displayName;
+
         if (displayName?.trim()) {
           setAgentStatus((prev) => prev ? { ...prev, displayName } : prev);
         }
+
         window.dispatchEvent(new CustomEvent("kinu:workspace-renamed", {
           detail: { name: actorAddress.workspace, displayName },
         }));
@@ -924,13 +987,16 @@ export function useKinu(target?: string | KinuActorAddress) {
         // RULE lives in `chat-turn-error.ts`, where an inverted replay test
         // or a dropped `done` check fails a test instead of reading correct.
         const failed = data === null ? null : terminalChatError(data, resumedRequestIds.current);
+
         if (failed !== null) setChatError(failed);
       }
     }, [actorAddress.workspace]),
   };
+
   if (subordinate) {
     agentOptions.sub = [{ agent: SUBORDINATE_AGENT_SLUG, name: subordinate }];
   }
+
   const agent = useAgent(agentOptions);
 
   const {
@@ -971,6 +1037,7 @@ export function useKinu(target?: string | KinuActorAddress) {
    * held. `isStreaming` above only MIRRORS it for rendering; it never decides.
    */
   const sendLatch = useRef(newSendLatch());
+
   const startTurn = useCallback(
     (begin: () => Promise<void>): boolean => admitTurn(sendLatch.current, begin),
     [],
@@ -997,8 +1064,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   // document also means the render-failure report and this notice can never
   // disagree about which build the page is running.
   const [newerDeployedBuild, setNewerDeployedBuild] = useState(false);
+
   const refreshDeployedBuild = useCallback(async () => {
     const [baseline, live] = await Promise.all([pageDeployedBuildSha(), fetchDeployedBuildSha()]);
+
     if (isNewerDeployedBuild(baseline, live)) setNewerDeployedBuild(true);
   }, []);
 
@@ -1010,13 +1079,21 @@ export function useKinu(target?: string | KinuActorAddress) {
   const isFirstOpen = useRef(true);
   useEffect(() => {
     if (!agent) return;
+
     const onOpen = () => {
       // Skip the very first open — useChat's mount-time resume handles it.
-      if (isFirstOpen.current) { isFirstOpen.current = false; return; }
+      if (isFirstOpen.current) {
+        isFirstOpen.current = false;
+
+        return;
+      }
+
       if (agent.readyState !== WebSocket.OPEN) return;
       agent.send(JSON.stringify({ type: "cf_agent_stream_resume_request" }));
     };
+
     agent.addEventListener("open", onOpen);
+
     return () => agent.removeEventListener("open", onOpen);
   }, [agent]);
 
@@ -1031,6 +1108,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   // A socket can replay a frame after reconnect. `pushSeq` is per root, so an
   // old A cannot reject a fresh B and an old A cannot replace A's newer tree.
   const mctsProgressState = useRef(createMctsProgressState<ForkNode>(actorKey));
+
   const setMctsTreeFromProgress = useCallback((progress: MctsProgress) => {
     const next = applyMctsProgress(
       mctsProgressState.current,
@@ -1038,6 +1116,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       progress,
       explorationForkTree({ tree: progress.nodes, head: progress.head }),
     );
+
     if (next === mctsProgressState.current) return;
     mctsProgressState.current = next;
     setMctsTrees(next.trees);
@@ -1063,12 +1142,14 @@ export function useKinu(target?: string | KinuActorAddress) {
   const agentRef = useRef(agent);
   agentRef.current = agent;
   const sessionRecoveryRef = useRef<SessionRecovery | null>(null);
+
   if (sessionRecoveryRef.current === null) {
     sessionRecoveryRef.current = createSessionRecovery({
       refetch: () => setLoadGeneration((g) => g + 1),
       forceRedial: () => agentRef.current?.reconnect(),
     });
   }
+
   const sessionRecovery = sessionRecoveryRef.current;
   // ── Session recovery: every reconnect re-fetches what the dead transport
   // silently missed, and a corpse socket — OPEN by readyState, timed-out by
@@ -1077,11 +1158,13 @@ export function useKinu(target?: string | KinuActorAddress) {
   const recoveryFirstOpen = useRef(true);
   useEffect(() => {
     if (!agent) return;
+
     const onOpen = async () => {
       knownPorts.current = null;
       const isFirst = recoveryFirstOpen.current;
       recoveryFirstOpen.current = false;
       sessionRecovery.socketOpened(isFirst);
+
       if (!isFirst) {
         try {
           await refreshDeployedBuild();
@@ -1092,7 +1175,9 @@ export function useKinu(target?: string | KinuActorAddress) {
         }
       }
     };
+
     agent.addEventListener("open", onOpen);
+
     return () => agent.removeEventListener("open", onOpen);
   }, [agent, refreshDeployedBuild, sessionRecovery]);
 
@@ -1101,10 +1186,12 @@ export function useKinu(target?: string | KinuActorAddress) {
   // Snapshot-only refresh left Files on a failed read until a manual refresh.
   const rpc = useMemo(() => {
     const call = bindRpc(agent);
+
     return async <T,>(method: string, args: unknown[] = []): Promise<T> => {
       try {
         const value = await call<T>(method, args);
         sessionRecovery.rpcSucceeded();
+
         return value;
       } catch (cause) {
         sessionRecovery.rpcFailed(cause, agent.readyState === WebSocket.OPEN);
@@ -1118,12 +1205,16 @@ export function useKinu(target?: string | KinuActorAddress) {
   // OPEN corpse otherwise produces no RPC evidence for the recovery controller.
   useEffect(() => {
     if (connectionStatus !== "connected") return;
+
     const id = setInterval(async () => {
       if (agent.readyState !== WebSocket.OPEN) return;
+
       if (!isSubordinate) {
         agent.send(JSON.stringify({ type: "ping" }));
+
         return;
       }
+
       try {
         // Any ACKNOWLEDGED frame answers the liveness question; this one is the
         // read the tab already depends on, so a corpse fails the ping and the
@@ -1134,6 +1225,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         setSourceError("snapshot", errorMessage(error));
       }
     }, 25_000);
+
     return () => clearInterval(id);
   }, [agent, connectionStatus, isSubordinate, rpc, setSourceError]);
 
@@ -1153,11 +1245,15 @@ export function useKinu(target?: string | KinuActorAddress) {
           (requestKey) => liveRefreshAdmission.admit(actorKey, requestKey),
           isSubordinate ? [] : SNAPSHOT_SEEDED_SOURCES,
         );
+
         if (disposed || outcome === "superseded") return;
+
         if (outcome === "loaded") {
           failureStreak.current = 0;
+
           return;
         }
+
         const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
         failureStreak.current += 1;
         timer = setTimeout(() => setLoadGeneration((g) => g + 1), delay);
@@ -1172,6 +1268,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       }
     })();
     snapshotLoadTasks.current.set(taskId, task);
+
     return () => {
       disposed = true;
       clearTimeout(timer);
@@ -1205,10 +1302,13 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const applySlates = useCallback((listing: SlateSummary[], announce = false) => {
     const previous = knownSlates.current;
+
     if (announce && previous !== null) {
       const added = listing.find(slate => !previous.has(slate.id));
+
       if (added) setPreviewFocus(`slate:${added.id}`);
     }
+
     knownSlates.current = new Set([...(previous ?? []), ...listing.map(slate => slate.id)]);
     setSlates(listing);
     setSlateReloads((previous) => pruneSlateReloads(previous, listing));
@@ -1239,6 +1339,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     // are in flight owns the latch now, and releasing it would open the door for
     // a concurrent turn — the exact failure the latch prevents.
     const aborting = sendLatch.current.owner;
+
     try {
       await Promise.all([
         stop(),
@@ -1246,6 +1347,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       ]);
     } finally {
       abandonTurnIfOwner(sendLatch.current, aborting);
+
       if (!isSubordinate) {
         try {
           await refreshBackgroundJobs();
@@ -1278,6 +1380,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     // binds it: a Plan-locked composer whose steer missed its turn must queue a
     // PLAN turn, not silently become a build one.
     const { landed } = await rpc<{ landed: "mid-turn" | "queued" }>("steerTurn", [text, mode]);
+
     return landed;
   }, [rpc]);
 
@@ -1287,9 +1390,12 @@ export function useKinu(target?: string | KinuActorAddress) {
   // dropping events. (STABILITY-AUDIT §A3.)
   useEffect(() => {
     if (!agent) return;
+
     const handler = async (event: MessageEvent) => {
       const msg = parseSocketMessage(event.data);
+
       if (!msg) return;
+
         if (msg.type === "cf_agent_chat_messages") {
           setTranscriptSeeded(true);
         } else if (msg.type === "mcts-progress") {
@@ -1297,6 +1403,7 @@ export function useKinu(target?: string | KinuActorAddress) {
         } else if (msg.type === "device_consent") {
           setPendingConsents((prev) => {
             if (prev.some((c) => c.consentId === msg.consentId)) return prev;
+
             const card: PendingConsent = {
               consentId: msg.consentId,
               deviceLabel: msg.deviceLabel,
@@ -1304,7 +1411,9 @@ export function useKinu(target?: string | KinuActorAddress) {
               command: msg.command,
               createdAt: Date.now(),
             };
+
             if (msg.workspaceName) card.workspaceName = msg.workspaceName;
+
             return [...prev, card];
           });
         } else if (msg.type === "device_consent_resolved") {
@@ -1314,6 +1423,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           // Every head stopped mid-step. Whatever they had written is either
           // journalled or gone, and neither case is still being written.
           forgetDeltas();
+
           try {
             await refreshBackgroundJobs();
           } catch (cause) {
@@ -1343,9 +1453,12 @@ export function useKinu(target?: string | KinuActorAddress) {
           // open tab among the changed ids so its preview URL re-reads.
           setSlateReloads((previous) => {
             const next = new Map(previous);
+
             for (const id of msg.ids) next.set(id, (next.get(id) ?? 0) + 1);
+
             return next;
           });
+
           try {
             await refreshSlates();
           } catch (cause) {
@@ -1357,6 +1470,7 @@ export function useKinu(target?: string | KinuActorAddress) {
           }
         } else if (msg.type === "branch_status") {
           const status = msg.status === "settled" ? "settled" : msg.status === "error" ? "error" : "running";
+
           // A branch that has stopped is writing nothing. Its head id is
           // derived from the run id, so the accumulator can be retired without
           // waiting for a journal write that a failed branch never makes.
@@ -1400,29 +1514,35 @@ export function useKinu(target?: string | KinuActorAddress) {
             ]);
         } else if (msg.type === "signal_card") {
           const card = parseSignalCardEvent(msg);
+
           if (card) setSignalCards((current) => applySignalCard(current, card));
         } else if (msg.type === "plan_updated") {
           const plan = parsePlanReview(msg.plan);
+
           if (plan) {
             const key = `${plan.id}:${plan.revision}`;
+
             if (!knownPlans.current.has(key) && plan.status === "pending") setPlanFocus(key);
             knownPlans.current.add(key);
             setActivePlan(plan);
           }
         } else if (!isSubordinate && msg.type === 'workspace_plan_updated') {
           const key = JSON.stringify(msg.reference);
+
           if (!knownWorkspacePlans.current.has(key)) {
             knownWorkspacePlans.current.add(key);
             setArrivedReference(msg.reference);
           }
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster(msg.subordinates);
+
           if (roster) {
             ++subordinateRefreshGeneration.current;
             setSubordinates(roster);
           }
         } else if (!isSubordinate && msg.type === "subordinate_event") {
           const subordinateEvent = parseSubordinateActivityEvent(msg);
+
           if (subordinateEvent) {
             setSubordinateEvents((current) => current.some((event) => event.id === subordinateEvent.id)
               ? current
@@ -1430,7 +1550,9 @@ export function useKinu(target?: string | KinuActorAddress) {
           }
         }
     };
+
     agent.addEventListener("message", handler);
+
     return () => {
       agent.removeEventListener("message", handler);
       // The paint belongs to a socket. A new one cannot know what a running
@@ -1453,12 +1575,14 @@ export function useKinu(target?: string | KinuActorAddress) {
 
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
+
     const results = await Promise.all(["workspace", "sandbox", "laptop"].map(async (executor) => {
       try {
         const result = await rpc<{
           ports: Array<{ port: number; url: string; name?: string }>;
           error?: string;
         }>("getExposedPorts", [executor]);
+
         return { executor, result } satisfies ExecutorPortRefresh;
       } catch (error) {
         return {
@@ -1467,25 +1591,32 @@ export function useKinu(target?: string | KinuActorAddress) {
         } satisfies ExecutorPortRefresh;
       }
     }));
+
     await refreshCurrentLiveResource("slates", () => rpc<{ slates: SlateSummary[] }>("listSlates", []).then(list => list.slates), applySlates);
+
     if (generation !== exposedPortsRefreshGeneration.current) return;
     setPinnedPorts((previous) => {
       const next = reconcilePreviewPorts(previous, results);
       setPreviewError(next.error);
+
       if (next.error === null) {
         const ids = next.ports.map(port => `${port.executor}:${port.port}`);
         const previousIds = knownPorts.current;
         const added = previousIds === null ? undefined : ids.find(id => !previousIds.has(id));
+
         if (added) setPreviewFocus(`preview:${added}`);
         knownPorts.current = new Set([...(previousIds ?? []), ...ids]);
       }
+
       return next.ports;
     });
   }, [rpc, refreshCurrentLiveResource, applySlates]);
+
   // Timer ticks and user/reconnect refreshes may overlap. Each cycle retains
   // its own task through settlement instead of borrowing a global catch sink.
   const liveRefreshTaskId = useRef(0);
   const liveRefreshTasks = useRef(new Map<number, Promise<void>>());
+
   const refreshLiveData = useCallback((): void => {
     const taskId = ++liveRefreshTaskId.current;
     let task: Promise<void> | null = null;
@@ -1541,6 +1672,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     // The SDK stops auto-redialling exactly when it sets `connectionError`,
     // so that is the condition under which Retry must force one.
     sessionRecovery.manualRetry(agentRef.current?.connectionError != null);
+
     if (!isSubordinate) refreshLiveData();
   }, [isSubordinate, refreshLiveData, sessionRecovery, setSourceError]);
 
@@ -1548,6 +1680,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   const wasStreaming = useRef(false);
   useEffect(() => {
     if (isSubordinate) return;
+
     if (isStreaming) {
       wasStreaming.current = true;
     } else if (wasStreaming.current) {
@@ -1562,6 +1695,7 @@ export function useKinu(target?: string | KinuActorAddress) {
   useEffect(() => {
     if (!isConnected || isSubordinate) return;
     const interval = setInterval(refreshLiveData, LIVE_DATA_REFRESH_MS);
+
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate, refreshLiveData]);
 
@@ -1580,26 +1714,36 @@ export function useKinu(target?: string | KinuActorAddress) {
     isSourceCurrent: (source: LiveRefreshSource) => boolean,
   ): Promise<void> {
     const snap = await rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", []);
+
     if (!isCurrent()) return;
     setAgentStatus(snap.status);
+
     if (isSourceCurrent("tools")) setTools(mapToolDescriptions(snap.tools));
+
     if (isSourceCurrent("memoryContent")) {
       setMemoryContent(snap.memoryContent);
+
       if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
     }
+
     if (isSourceCurrent("executors")) {
       setExecutors(snap.executors);
       setLastActiveExecutor(snap.lastActiveExecutor);
       const outputs = new Map<string, ExecutorOutput[]>();
+
       for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
       setExecutorOutputs(outputs);
     }
+
     if (isSourceCurrent("plan")) {
       const loadedPlan = parsePlanReview(snap.activePlan);
+
       if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
       setActivePlan(loadedPlan);
     }
+
     if (isSourceCurrent("presence")) setTabPresence(snap.tabPresence);
+
     if (isSourceCurrent("slates")) applySlates(snap.slates);
     // REPLACE, never merge. The durable rows are the authority for what is
     // queued and what is running, so a tab that reconnects after a deploy or a
@@ -1610,6 +1754,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     setBranchRuns(snap.branchRuns.map((run) => ({
       branchId: run.branchId, task: run.task, status: run.status,
     })));
+
     try {
       await Promise.all([refreshExposedPorts(), refreshPendingActions()]);
     } catch (cause) {
@@ -1627,6 +1772,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     // through its directory, so a tab cannot ask about an actor that is not a
     // child of this workspace.
     const snapshot = await rpc<SubordinateSnapshot>("getActorSnapshot", [subordinate]);
+
     if (!isCurrent()) return;
     setAgentStatus({
       name: snapshot.name,
@@ -1642,10 +1788,12 @@ export function useKinu(target?: string | KinuActorAddress) {
       forkLineage: null,
     });
     const loadedPlan = parseActivePlanReview(snapshot.activePlan);
+
     if (loadedPlan) knownPlans.current.add(`${loadedPlan.id}:${loadedPlan.revision}`);
     setActivePlan(loadedPlan);
     setSteerRuns(snapshot.pendingSteers);
   }
+
   // Roster loads may overlap across reconnects; their generation decides which
   // result is current, while this map keeps every started task owned to settle.
   const subordinateRefreshTasks = useRef(new Map<number, Promise<void>>());
@@ -1659,10 +1807,13 @@ export function useKinu(target?: string | KinuActorAddress) {
       // later reconnect owns this surface now, and its own load is what says
       // what the roster is.
       let thrown: { cause: unknown } | null = null;
+
       try {
         const value = await rpc<unknown>("listSubordinates", []);
+
         if (generation !== subordinateRefreshGeneration.current) return;
         const roster = parseSubordinateRoster(value);
+
         if (!roster) throw new Error('Subordinate roster returned an invalid response');
         setSubordinates(roster);
         setSourceError("roster", null);
@@ -1671,6 +1822,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       } finally {
         subordinateRefreshTasks.current.delete(generation);
       }
+
       if (thrown !== null && generation === subordinateRefreshGeneration.current) {
         setSourceError("roster", errorMessage(thrown.cause));
       }
@@ -1740,10 +1892,13 @@ export function useKinu(target?: string | KinuActorAddress) {
    *  the history it merges. */
   const claimWorkspacePlan = useCallback((reference: WorkspacePlanReference): boolean => {
     const key = JSON.stringify(reference);
+
     if (claimedWorkspacePlans.current.has(key)) return false;
     claimedWorkspacePlans.current.add(key);
+
     return true;
   }, []);
+
   const workspacePlanArrival = useMemo<WorkspacePlanArrival | null>(
     () => arrivedReference === null
       ? null
@@ -1772,9 +1927,12 @@ export function useKinu(target?: string | KinuActorAddress) {
       ...files,
       ...(content ? [{ type: "text" as const, text: content }] : []),
     ];
+
     if (parts.length === 0) return false;
+
     return startTurn(() => {
       setChatError(null);
+
       return sendMessage({ role: "user", parts, metadata: { kinuMode: mode } });
     });
   }, [startTurn, sendMessage]);
@@ -1796,8 +1954,10 @@ export function useKinu(target?: string | KinuActorAddress) {
    */
   const retryLastMessage = useCallback((): boolean => {
     if (messages.length === 0) return false;
+
     return startTurn(() => {
       setChatError(null);
+
       return regenerate();
     });
   }, [startTurn, messages.length, regenerate]);
@@ -1812,19 +1972,25 @@ export function useKinu(target?: string | KinuActorAddress) {
   const searchMemory = useCallback((q: string) => {
     clearTimeout(searchTimer.current);
     const seq = ++searchSeq.current;
+
     if (!q.trim()) {
       // Empty search — re-parse full content
       setSourceError("memory", null);
+
       if (memoryContent) setMemory(parseMemoryContent(memoryContent));
+
       return;
     }
+
     searchTimer.current = setTimeout(async () => {
       // The search's failure, published only while this query is still the
       // newest: a keystroke past it retired this sequence number, and the pane
       // belongs to the prefix the user actually has.
       let thrown: { cause: unknown } | null = null;
+
       try {
         const results = await rpc<Array<{ path: string; startLine?: number; endLine?: number; snippet: string; rrfScore: number }>>("searchMemoryHybrid", [q]);
+
         if (seq !== searchSeq.current) return;
         setSourceError("memory", null);
         setMemory((results ?? []).map(r => ({
@@ -1836,6 +2002,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       } catch (err) {
         thrown = { cause: err };
       }
+
       if (thrown !== null && seq === searchSeq.current) {
         setSourceError("memory", `Memory search failed: ${errorMessage(thrown.cause)}`);
       }
@@ -1852,17 +2019,21 @@ export function useKinu(target?: string | KinuActorAddress) {
     // Optimistically reflect in the UI so the dropdown doesn't snap back
     // while the RPC is in flight.
     setAgentStatus(prev => prev ? { ...prev, model: modelId } : prev);
+
     try {
       const r = await rpc<{ ok?: boolean; spec?: string }>("setModel", [modelId]);
       // Server may have normalized the spec — sync the UI to authoritative value.
       const spec = r?.spec;
+
       if (spec) setAgentStatus((prev) => prev ? { ...prev, model: spec } : prev);
       setSourceError("model", null);
+
       return null;
     } catch (err) {
       // Roll the picker back to the actually-stored spec so it can't keep
       // showing a model that was never saved.
       let reason = `Couldn't switch model: ${errorMessage(err)}`;
+
       try {
         const stored = await rpc<{ spec?: string | null }>("getStoredModelSpec", []);
         setAgentStatus(prev => prev ? { ...prev, model: stored.spec ?? '' } : prev);
@@ -1871,7 +2042,9 @@ export function useKinu(target?: string | KinuActorAddress) {
         // that was never stored. Say so rather than leaving it looking saved.
         reason += ` — and the stored model couldn't be re-read (${errorMessage(rollbackErr)}), so the model shown may not be what's saved`;
       }
+
       setSourceError("model", reason);
+
       return reason;
     }
   }, [rpc, setSourceError]);
@@ -1880,6 +2053,7 @@ export function useKinu(target?: string | KinuActorAddress) {
     const result = await rpc<{ displayName: string }>("setDisplayName", [displayName]);
     const saved = result.displayName;
     setAgentStatus((prev) => prev ? { ...prev, displayName: saved } : prev);
+
     return saved;
   }, [rpc]);
 
@@ -1897,8 +2071,10 @@ export function useKinu(target?: string | KinuActorAddress) {
   // §A3, D5).
   useEffect(() => {
     if (!agent) return;
+
     const handler = (event: MessageEvent) => {
       const msg = parseSocketMessage(event.data);
+
       if (msg?.type === "executor-output") {
           setExecutorOutputs(prev => {
             const next = new Map(prev);
@@ -1915,11 +2091,14 @@ export function useKinu(target?: string | KinuActorAddress) {
               stderr, stderr_len: stderr.length,
               exit_code: msg.exitCode ?? 0, created_at: msg.timestamp,
             }]);
+
             return next;
           });
       }
     };
+
     agent.addEventListener("message", handler);
+
     return () => agent.removeEventListener("message", handler);
   }, [agent]);
 
@@ -2042,12 +2221,14 @@ export function useKinu(target?: string | KinuActorAddress) {
         displayName: string;
         subordinate: SubordinateRosterEntry;
       }>("createSubordinateAgent", []);
+
       ++subordinateRefreshGeneration.current;
       setSubordinates((current) => [
         ...current.filter((entry) => entry.name !== result.subordinate.name),
         result.subordinate,
       ]);
       setSourceError("roster", null);
+
       return result;
     },
     /** Owner rename. Lands on the parent roster AND the child's own identity;
@@ -2057,12 +2238,14 @@ export function useKinu(target?: string | KinuActorAddress) {
         SubordinateMutationEnvelopeSchema,
         await rpc<unknown>("renameSubordinateAgent", [name, displayName]),
       );
+
       const entry = result.subordinate;
       ++subordinateRefreshGeneration.current;
       setSubordinates((current) => current.map(
         (existing) => existing.name === entry.name ? entry : existing,
       ));
       setSourceError("roster", null);
+
       return entry;
     },
     dismissSubordinate: async (name: string) => {
@@ -2070,6 +2253,7 @@ export function useKinu(target?: string | KinuActorAddress) {
       ++subordinateRefreshGeneration.current;
       setSubordinates((current) => current.filter((entry) => entry.name !== result.name));
       setSourceError("roster", null);
+
       return result;
     },
   };
@@ -2085,38 +2269,48 @@ export function useKinu(target?: string | KinuActorAddress) {
 function errorMessage<ErrorValue>(err: ErrorValue): string {
   if (err instanceof Error && err.message) return renderThrownChain({ cause: err });
   const text = v.safeParse(v.string(), err);
+
   if (text.success && text.output.trim()) return text.output;
+
   try { return JSON.stringify(err) || "unknown error"; }
   catch (error) { return `unrenderable error: ${renderThrownChain({ cause: error })}`; }
 }
 
 function formatNaturalList(values: readonly string[]): string {
   if (values.length <= 1) return values[0] ?? "unknown data";
+
   if (values.length === 2) return `${values[0]} and ${values[1]}`;
+
   return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
 }
 
 function combineErrorMessages(primary: string | null, live: string | null): string | null {
   if (!primary) return live;
+
   if (!live) return primary;
+
   return `${primary} ${live}`;
 }
 
 function parseActivePlanReview<Value>(value: Value): PlanReview | null {
   const parsed = v.safeParse(v.nullable(PlanReviewSchema), value);
+
   if (!parsed.success) {
     throw new Error("Active plan returned an invalid response", { cause: parsed.issues });
   }
+
   return parsed.output;
 }
 
 function parseSubordinateRoster<Value>(value: Value): SubordinateRosterEntry[] | null {
   const parsed = v.safeParse(v.array(SubordinateRosterEntrySchema), value);
+
   return parsed.success ? parsed.output : null;
 }
 
 function parseSubordinateActivityEvent<Value>(value: Value): SubordinateActivityEvent | null {
   const parsed = v.safeParse(SubordinateActivityEventSchema, value);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -2150,10 +2344,12 @@ function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
 function parseMemoryContent(content: string): MemoryEntry[] {
   const entries: MemoryEntry[] = [];
   const sections = content.split(/\n(?=###|##)/);
+
   for (const section of sections) {
     const lines = section.trim().split("\n");
     const header = lines[0] ?? "";
     const body = lines.slice(1).join("\n").trim();
+
     if (!body || !header) continue;
     entries.push({
       path: "memory/MEMORY.md",
@@ -2162,5 +2358,6 @@ function parseMemoryContent(content: string): MemoryEntry[] {
       updatedAt: header.replace(/^#+\s*/, ""),
     });
   }
+
   return entries;
 }

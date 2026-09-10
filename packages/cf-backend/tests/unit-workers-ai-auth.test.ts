@@ -25,6 +25,7 @@ const ModelRejectionSchema = v.looseObject({
   message: v.optional(v.string()),
   responseBody: v.optional(v.string()),
 });
+
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
 function chatCompletionResponse(): Response {
@@ -40,14 +41,19 @@ function chatCompletionResponse(): Response {
 
 test('configured effort reaches the native Workers AI binding through its SDK transport', async () => {
   const inputs: JsonObject[] = [];
+
   const binding = { async run(_model: string, input: JsonObject) {
     inputs.push(input);
+
     return chatCompletionResponse();
   } };
+
   // SAFETY: this constructed fixture provides Ai.run, and the adapter calls no other member of the binding.
   const fetch = createDirectWorkersAIFetch(binding as Ai);
+
   const model = createChatModel({ kind: 'openai-compat', name: 'workers-ai',
     modelId: '@cf/moonshotai/kimi-k2.6', baseURL: 'https://fixture.invalid/v1', headers: {}, fetch });
+
   await generateText({ model, prompt: 'probe', maxRetries: 0, providerOptions: reasoningEffortOptions('high', 'workers-ai') });
   expect(inputs[0]?.reasoning_effort).toBe('high');
   expect(inputs[0]?.reasoningEffort).toBeUndefined();
@@ -62,6 +68,7 @@ describe('Workers AI credential refresh', () => {
       const body = new URLSearchParams(String(init?.body));
       expect(body.get('grant_type')).toBe('refresh_token');
       expect(body.get('refresh_token')).toBe('cf-refresh-1');
+
       return new Response(JSON.stringify({
         access_token: 'cf-access-2',
         refresh_token: 'cf-refresh-2',
@@ -70,6 +77,7 @@ describe('Workers AI credential refresh', () => {
         scope: 'user-details.read ai.write offline_access',
       }), { headers: { 'content-type': 'application/json' } });
     });
+
     try {
       const next = await refreshCloudflareCredential(
         { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
@@ -81,6 +89,7 @@ describe('Workers AI credential refresh', () => {
           metadata: { accountId: 'abc123abc123abc1', accountName: 'User Account' },
         },
       );
+
       expect(next.accessToken).toBe('cf-access-2');
       expect(next.refreshToken).toBe('cf-refresh-2');
       expect(next.expiresAt).toBeGreaterThan(Date.now());
@@ -104,8 +113,10 @@ describe('Workers AI credential refresh', () => {
       error: 'invalid_grant',
       error_description: 'The provided authorization grant is invalid',
     }), { status: 400, headers: { 'content-type': 'application/json' } }));
+
     try {
       let rejected = false;
+
       try {
         await refreshCloudflareCredential(
           { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
@@ -117,6 +128,7 @@ describe('Workers AI credential refresh', () => {
         const parsed = v.safeParse(v.object({ oauthError: v.string() }), cause);
         expect(parsed.success && parsed.output.oauthError).toBe('invalid_grant');
       }
+
       expect(rejected).toBe(true);
     } finally {
       globalThis.fetch = originalFetch;
@@ -125,10 +137,12 @@ describe('Workers AI credential refresh', () => {
 
   test('a mid-flight 401 forces one refresh and retries with the fresh token', async () => {
     const authCalls: Array<boolean> = [];
+
     const stub = userCredentialSource({
       getAuthHeaders: async (key: string, opts?: { forceRefresh?: boolean }) => {
         if (key !== 'cloudflare.oauth') return null;
         authCalls.push(!!opts?.forceRefresh);
+
         return { authorization: opts?.forceRefresh ? 'Bearer cf-fresh' : 'Bearer cf-stale' };
       },
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
@@ -136,17 +150,20 @@ describe('Workers AI credential refresh', () => {
     });
 
     const wire: Array<string | null> = [];
+
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: stub,
       fetch: asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         wire.push(headers.get('authorization'));
+
         if (headers.get('authorization') === 'Bearer cf-stale') {
           return new Response(JSON.stringify({ errors: [{ message: 'Invalid access token' }] }), {
             status: 401, headers: { 'content-type': 'application/json' },
           });
         }
+
         return chatCompletionResponse();
       }),
     });
@@ -155,6 +172,7 @@ describe('Workers AI credential refresh', () => {
       model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
       prompt: 'ping',
     });
+
     expect(result.text).toBe('ok');
     expect(wire).toEqual(['Bearer cf-stale', 'Bearer cf-fresh']);
     expect(authCalls).toEqual([false, true]);
@@ -175,12 +193,15 @@ describe('Workers AI credential refresh', () => {
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),
     });
+
     let attempts = 0;
+
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: stub,
       fetch: asFetchFunction(async () => {
         attempts += 1;
+
         return new Response('Unauthorized', { status: 401, headers: { 'content-type': 'text/plain' } });
       }),
     });
@@ -189,6 +210,7 @@ describe('Workers AI credential refresh', () => {
     // that would make the negative below unable to fail, which is the same as
     // not having it. The body the owner is shown is `responseBody`/`message`.
     let failure = '';
+
     try {
       await generateText({
         model: reg.resolveModel('workers-ai/@cf/moonshotai/kimi-k2.6'),
@@ -218,6 +240,7 @@ describe('Workers AI credential refresh', () => {
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async () => null,
     });
+
     const reg = createAgentProviderRegistry({ env: {}, userDO: dead });
     expect(await reg.registry.get('workers-ai')!.isAvailable(reg.deps)).toBe(false);
 
@@ -229,6 +252,7 @@ describe('Workers AI credential refresh', () => {
       listCredentials: async () => [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }],
       getCredentialBaseURL: async (key: string) => (key === 'cloudflare.oauth' ? ACCOUNT_BASE_URL : null),
     });
+
     const reg2 = createAgentProviderRegistry({ env: {}, userDO: alive });
     expect(await reg2.registry.get('workers-ai')!.isAvailable(reg2.deps)).toBe(true);
   });

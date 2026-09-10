@@ -30,7 +30,9 @@ import { describePathology } from '../src/evolution/pathology';
 import { createTestRuntime } from './helpers';
 
 const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
+
 const V1_CODE = 'async function* run(rt, task) { yield "v1-pending"; }';
+
 const RATIONALE = 'Session reflection: stream tool results incrementally for long tasks.';
 
 function setup() {
@@ -42,6 +44,7 @@ function setup() {
   initReplayTables(execRaw);
   initFactsTable(execRaw);
   initGepaTables(execRaw);
+
   return { rt, facts: createFactsStore(rt.storage.sql, rt.actor) };
 }
 
@@ -51,6 +54,7 @@ async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
                  VALUES (${rt.actor.actorId}, 0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
   const result = await modifyScaffold(rt, RATIONALE, V1_CODE);
   expect(result.ok).toBe(true);
+
   return result.version!;
 }
 
@@ -147,6 +151,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
 
     const [entry] = buildChangelog(rt.storage.sql, rt.actor, { since: now - 30_000 })
       .filter((e) => e.kind === 'fact');
+
     expect(entry.summary).toBe('Learned 2 things about your environment');
     expect(entry.at).toBe(now - 1000);
     expect(entry.items?.map((item) => item.id)).toEqual([
@@ -316,6 +321,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('humanizes scaffold promotion and replay score direction without losing raw detail', async () => {
     const { rt } = setup();
     const version = await seedScaffoldPending(rt);
+
     for (const [index, winner] of (['pending', 'pending', 'pending', 'current'] as const).entries()) {
       recordShadowEvaluation(rt.storage.sql, rt.actor, {
         currentVersion: 0, pendingVersion: version, task: `trial-${index}`,
@@ -323,12 +329,15 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
         judgeResult: { winner, rationale: 'evidence', currentScore: 0.5, pendingScore: 0.8 },
       });
     }
+
     await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql, rt.actor)!, 'promote');
     const now = Date.now();
+
     const replayRow = (id: string, at: number, n: number, mean: number, scaffoldVersion: number) => {
       void rt.storage.sql`INSERT INTO replay_evals (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
           VALUES (${rt.actor.actorId}, ${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
     };
+
     // 0.50 → 0.75 over 4 instances: the intervals overlap almost entirely, so
     // this is not a direction and must not be reported as one.
     replayRow('rpl-old', now - 1000, 4, 0.50, 0);
@@ -517,13 +526,16 @@ describe('reverts — real paths only', () => {
     const result = await executeChangelogRevert({ rt, facts }, {
       type: 'scaffold_rollback', target: String(version),
     });
+
     expect(result.ok).toBe(true);
     expect(result.detail).toContain(`discarded pending v${version}`);
     expect(getPendingScaffold(rt.storage.sql, rt.actor)).toBeNull();
     expect(await rt.identity.scaffold.read()).toBe(V0_CODE); // live file untouched
+
     const status = rt.storage.sql<{ status: string }>`
       SELECT status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} AND version = ${version}`[0];
+
     expect(status.status).toBe('rolled_back');
   });
 
@@ -545,9 +557,11 @@ describe('reverts — real paths only', () => {
     expect(result.ok).toBe(true);
     expect(result.detail).toContain('rolled back to v0');
     expect(await rt.identity.scaffold.read()).toBe(V0_CODE);
+
     const rows = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
+
     expect(rows.find((r) => r.version === 0)!.status).toBe('current');
     expect(rows.find((r) => r.version === version)!.status).toBe('rolled_back');
 
@@ -555,6 +569,7 @@ describe('reverts — real paths only', () => {
     const again = await executeChangelogRevert({ rt, facts }, {
       type: 'scaffold_rollback', target: String(version),
     });
+
     expect(again.ok).toBe(false);
     expect(again.error).toContain('already rolled_back');
   });
@@ -603,9 +618,11 @@ describe('session-end digest — assembled when the window closes', () => {
     expect(digest[0].message).toContain('1 tool');
     expect(digest[0].message).toContain('1 fact');
     expect(digest[0].message).toContain('revertable');
+
     // …and it lands in the durable evolution_events log for the timeline.
     const rows = rt.storage.sql<{ type: string }>`
       SELECT type FROM evolution_events WHERE type = 'changelog_digest'`;
+
     expect(rows).toHaveLength(1);
   });
 
@@ -643,6 +660,7 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
 
     const entries = buildChangelog(rt.storage.sql, rt.actor);
     expect(entries.map((e) => e.id.split(':')[1])).toEqual(['t_new', 't_mid', 't_old']);
+
     for (let i = 1; i < entries.length; i++) {
       expect(entries[i - 1].at).toBeGreaterThan(entries[i].at);
     }
@@ -666,6 +684,7 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     const { rt } = setup();
     const now = Date.now();
     seedTools(rt, ['t1', 't2', 't3', 't4', 't5', 't6'], (i) => now - (5 - i) * 1000);
+
     for (let i = 0; i < 6; i++) {
       void rt.storage.sql`INSERT INTO replay_evals
         (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
@@ -721,6 +740,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
       buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'scaffold')
         .map((e) => [e.scaffoldVersion, e] as const),
     );
+
     // The promotion belongs to the version promoted INTO, not the one left behind.
     expect(byVersion.get(2)!.at).toBe(promotedAt);
     expect(byVersion.get(1)!.at).toBe(written);
@@ -739,6 +759,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
       buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'scaffold')
         .map((e) => [e.scaffoldVersion, e.revert !== undefined] as const),
     );
+
     // Rolling back something already rolled back or superseded would rewrite
     // history that the user cannot see.
     expect(revertable).toEqual(new Map([[1, true], [2, true], [3, false], [4, false]]));
@@ -783,13 +804,16 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     // last, a digest fetched before a re-observation could not be reverted.
     const idFor = (order: ReadonlyArray<readonly [string, number]>): string => {
       const { rt, facts } = setup();
+
       for (const [key, at] of order) {
         facts.upsert(key, 'v');
         void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${at}
           WHERE actor_id = ${rt.actor.actorId} AND key = ${key}`;
       }
+
       return buildChangelog(rt.storage.sql, rt.actor).filter((e) => e.kind === 'fact')[0].id;
     };
+
     const now = Date.now();
     expect(idFor([['a.one', now], ['b.two', now - 1000]]))
       .toBe(idFor([['b.two', now], ['a.one', now - 1000]]));
@@ -816,11 +840,13 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     // the window edge reads as a fresh baseline.
     const { rt } = setup();
     const now = Date.now();
+
     const row = (id: string, at: number, mean: number) => {
       void rt.storage.sql`INSERT INTO replay_evals
         (actor_id, id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
         VALUES (${rt.actor.actorId}, ${id}, ${at}, 40, 20, 20, ${mean}, ${1 - mean}, 0, '[]')`;
     };
+
     row('rp-1', now - 2000, 0.30);
     row('rp-2', now - 1000, 0.95);
     row('rp-3', now, 0.30);
@@ -847,6 +873,7 @@ describe('renderChangelogText + revert guards', () => {
   test('scaffold rollback refuses a target that is not a real version number', async () => {
     const { rt, facts } = setup();
     const ctx = { rt, facts };
+
     for (const target of ['0', '-1', 'abc', '1.5', '']) {
       const result = await executeChangelogRevert(ctx, { type: 'scaffold_rollback', target });
       expect(result.ok).toBe(false);

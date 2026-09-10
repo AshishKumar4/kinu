@@ -100,11 +100,15 @@ export async function forkWorkspace(
   }
 
   const requestedName = opts?.name?.trim();
+
   const name = requestedName && requestedName.length > 0
     ? requestedName
     : workspaceSlug(crypto.randomUUID());
+
   const refusal = workspaceAddressRefusal(name);
+
   if (refusal !== null) throw new Error(`invalid agent name: ${refusal}`);
+
   if (requestedName && await deps.transport.occupied(name)) {
     throw new Error(`agent name already exists: "${name}"`);
   }
@@ -112,5 +116,6 @@ export async function forkWorkspace(
   const { workspaceId, forkPointMs } = await deps.transport.deliver(name, {
     sql: deps.sql, vfs: deps.vfs, untilMessageId,
   });
+
   return { workspaceId, name, forkPointMs };
 }

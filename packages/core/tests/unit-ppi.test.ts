@@ -45,10 +45,12 @@ interface WorldSpec {
  *  profile. The classifier's OBSERVED rate will be wrong by construction. */
 function buildWorld(spec: WorldSpec): SyntheticRow[] {
   const random = seededRandom(spec.seed);
+
   return Array.from({ length: spec.size }, () => {
     const truth = random() < spec.rate;
     const saysEvent = truth ? random() < spec.sensitivity : random() >= spec.specificity;
     const eventKey = spec.splitEvent && random() < 0.5 ? 'frustrated' : 'corrected';
+
     return { truth, predicted: saysEvent ? eventKey : 'accepted' };
   });
 }
@@ -68,17 +70,21 @@ const EVENT_KEYS = new Set(['corrected', 'frustrated']);
  *  exactly where a real ledger hides that. */
 function stratify(rows: ReadonlyArray<SyntheticRow>, budget: number): PredictionStratum[] {
   const byKey = new Map<string, SyntheticRow[]>();
+
   for (const row of rows) {
     const bucket = byKey.get(row.predicted) ?? [];
     bucket.push(row);
     byKey.set(row.predicted, bucket);
   }
+
   const keys = [...byKey.keys()];
   const quotas = allocateLabelBudget(keys.map((k) => byKey.get(k)?.length ?? 0), budget);
+
   return keys.map((key, i) => {
     const bucket = byKey.get(key) ?? [];
     const take = Math.min(quotas[i], bucket.length);
     const drawn = Array.from({ length: take }, (_, j) => bucket[Math.floor(((j + 0.5) * bucket.length) / take)]);
+
     return {
       key,
       predictedEvent: EVENT_KEYS.has(key),
@@ -101,13 +107,17 @@ function observedRate(rows: ReadonlyArray<SyntheticRow>) {
 
 function requireAccuracy(strata: ReadonlyArray<PredictionStratum>): ClassifierAccuracy {
   const result = classifierAccuracy(strata);
+
   if (result.accuracy === null) throw new Error(`unexpected gap: ${result.gap.kind}`);
+
   return result.accuracy;
 }
 
 function requireRate(rows: ReadonlyArray<SyntheticRow>, accuracy: ClassifierAccuracy) {
   const result = correctedRate(observedRate(rows), accuracy);
+
   if (result.rate === null) throw new Error(`unexpected gap: ${result.gap.kind}`);
+
   return result.rate;
 }
 
@@ -202,8 +212,10 @@ describe('classifierAccuracy', () => {
           buildWorld({ size: 2000, rate: 0.2, sensitivity: 0.7, specificity: 0.95, seed: 500 + i }),
           budget,
         )));
+
       return draws.reduce((sum, d) => sum + d.sensitivity.mean, 0) / draws.length;
     };
+
     const at100 = meanSensitivity(100);
     const at400 = meanSensitivity(400);
 
@@ -219,6 +231,7 @@ describe('classifierAccuracy', () => {
         buildWorld({ size: 2000, rate: 0.2, sensitivity: 0.7, specificity: 0.95, seed: 500 + i }),
         100,
       )));
+
     expect(draws.reduce((sum, d) => sum + d.specificity.mean, 0) / draws.length).toBeCloseTo(0.95, 2);
   });
 
@@ -228,6 +241,7 @@ describe('classifierAccuracy', () => {
     // classifier whose real sensitivity is 0.7.
     const world = buildWorld({ size: 6000, rate: 0.2, sensitivity: 0.7, specificity: 0.95, seed: 13 });
     const strata = stratify(world, 200);
+
     const naiveSensitivity =
       strata.filter((s) => s.predictedEvent).reduce((n, s) => n + s.events, 0) /
       strata.reduce((n, s) => n + s.events, 0);
@@ -244,6 +258,7 @@ describe('classifierAccuracy', () => {
       { key: 'accepted', predictedEvent: false, population: 100, labeled: 20, events: 0 },
       { key: 'corrected', predictedEvent: true, population: 10, labeled: 10, events: 0 },
     ]);
+
     expect(sensitivity.mean).toBe(0);
     expect(sensitivity.lo).toBe(0);
     expect(sensitivity.hi).toBe(1);
@@ -261,19 +276,23 @@ describe('the corrected interval', () => {
     let estimateSum = 0;
     let truthSum = 0;
     const trials = 400;
+
     for (let seed = 1; seed <= trials; seed++) {
       const world = buildWorld({ size: 1500, rate: 0.2, sensitivity: 0.6, specificity: 0.98, seed });
       const truth = trueRate(world);
       const rate = calibrateAndCorrect(world, 100);
       estimateSum += rate.corrected.mean;
       truthSum += truth;
+
       if (rate.corrected.lo <= truth && truth <= rate.corrected.hi) covered++;
       // What the UNCORRECTED surface reports today: the classifier's own rate
       // with a Wilson interval over the whole ledger (alignment.ts, verbatim).
       const observed = observedRate(world);
       const raw = wilsonInterval(observed.events, observed.population);
+
       if (raw.lo <= truth && truth <= raw.hi) rawCovered++;
     }
+
     // The headline claim: averaged over calibration sets, the correction lands
     // on the truth. This is what every surface downstream depends on.
     expect(estimateSum / trials).toBeCloseTo(truthSum / trials, 2);
@@ -295,17 +314,21 @@ describe('the corrected interval', () => {
       { rate: 0.1, sensitivity: 0.6, specificity: 0.98, splitEvent: true },
       { rate: 0.4, sensitivity: 0.8, specificity: 0.85, splitEvent: true },
     ];
+
     for (const regime of regimes) {
       let covered = 0;
       let biasSum = 0;
       const trials = 300;
+
       for (let seed = 1; seed <= trials; seed++) {
         const world = buildWorld({ size: 1500, ...regime, seed });
         const truth = trueRate(world);
         const rate = calibrateAndCorrect(world, 100);
         biasSum += rate.corrected.mean - truth;
+
         if (rate.corrected.lo <= truth && truth <= rate.corrected.hi) covered++;
       }
+
       const label = `rate=${regime.rate} sens=${regime.sensitivity} spec=${regime.specificity}`;
       expect(`${label} bias=${Math.abs(biasSum / trials) < 0.01}`).toBe(`${label} bias=true`);
       expect(`${label} cover=${covered / trials >= 0.95}`).toBe(`${label} cover=true`);
@@ -317,6 +340,7 @@ describe('the corrected interval', () => {
       { key: 'accepted', predictedEvent: false, population: 900, labeled: 25, events: 0 },
       { key: 'corrected', predictedEvent: true, population: 100, labeled: 25, events: 25 },
     ]);
+
     const rate = correctedRate({ events: 100, population: 1000 }, accuracy).rate;
     expect(accuracy.sensitivity.mean).toBe(1);
     expect(accuracy.specificity.mean).toBe(1);
@@ -326,10 +350,13 @@ describe('the corrected interval', () => {
 
   test('more gold labels tighten it', () => {
     const world = buildWorld({ size: 4000, rate: 0.2, sensitivity: 0.7, specificity: 0.95, seed: 9 });
+
     const width = (budget: number): number => {
       const rate = calibrateAndCorrect(world, budget);
+
       return rate.corrected.hi - rate.corrected.lo;
     };
+
     expect(width(400)).toBeLessThan(width(100));
     expect(width(100)).toBeLessThan(width(30));
   });
@@ -339,10 +366,13 @@ describe('the corrected interval', () => {
     // widen. A correction cannot manufacture precision it did not buy.
     const world = buildWorld({ size: 4000, rate: 0.2, sensitivity: 0.7, specificity: 0.95, seed: 9 });
     const observed = observedRate(world);
+
     const width = (budget: number): number => {
       const rate = correctedRate(observed, requireAccuracy(stratify(world, budget))).rate;
+
       return (rate?.corrected.hi ?? 0) - (rate?.corrected.lo ?? 0);
     };
+
     expect(width(40)).toBeGreaterThan(width(400));
     expect(width(400)).toBeGreaterThan(wilsonInterval(observed.events, observed.population).hi -
       wilsonInterval(observed.events, observed.population).lo);
@@ -372,8 +402,10 @@ describe('one calibration set corrects every slice', () => {
     const older = buildWorld({ size: 2000, rate: 0.3, sensitivity: 0.7, specificity: 0.95, seed: 31 });
     const newer = buildWorld({ size: 2000, rate: 0.1, sensitivity: 0.7, specificity: 0.95, seed: 32 });
     const pooled = stratify([...older, ...newer], 200);
+
     const sliceWeighted = pooled.reduce((sum, s) => {
       const inSlice = newer.filter((r) => r.predicted === s.key).length;
+
       return sum + (inSlice / newer.length) * (s.events / s.labeled);
     }, 0);
 
@@ -399,6 +431,7 @@ describe('calibration gaps — no number rather than a wrong one', () => {
     const result = classifierAccuracy([
       { key: 'accepted', predictedEvent: false, population: 100, labeled: 0, events: 0 },
     ]);
+
     expect(result.accuracy).toBeNull();
     expect(result.gap && describeCalibrationGap(result.gap)).toBe('uncalibrated — no hand-labeled turns yet');
   });
@@ -408,6 +441,7 @@ describe('calibration gaps — no number rather than a wrong one', () => {
       { key: 'accepted', predictedEvent: false, population: 900, labeled: 30, events: 2 },
       { key: 'frustrated', predictedEvent: true, population: 12, labeled: 0, events: 0 },
     ]);
+
     expect(result.accuracy).toBeNull();
     expect(result.gap?.strata).toEqual(['frustrated']);
     expect(result.gap && describeCalibrationGap(result.gap)).toContain('"frustrated"');
@@ -419,6 +453,7 @@ describe('calibration gaps — no number rather than a wrong one', () => {
       { key: 'corrected', predictedEvent: true, population: 100, labeled: 30, events: 24 },
       { key: 'frustrated', predictedEvent: true, population: 0, labeled: 0, events: 0 },
     ]);
+
     expect(result.gap).toBeNull();
   });
 
@@ -429,6 +464,7 @@ describe('calibration gaps — no number rather than a wrong one', () => {
       { key: 'accepted', predictedEvent: false, population: 800, labeled: 40, events: 8 },
       { key: 'corrected', predictedEvent: true, population: 200, labeled: 40, events: 8 },
     ]);
+
     expect(chance.sensitivity.mean + chance.specificity.mean).toBeCloseTo(1, 10);
     const result = correctedRate({ events: 200, population: 1000 }, chance);
     expect(result.rate).toBeNull();
@@ -455,6 +491,7 @@ describe('designWeightedKappa', () => {
       gold('accepted', 800, Array<string>(20).fill('accepted')),
       gold('corrected', 200, Array<string>(20).fill('corrected')),
     ]);
+
     expect(kappa?.value).toBeCloseTo(1, 10);
     expect(kappa?.n).toBe(40);
   });
@@ -463,6 +500,7 @@ describe('designWeightedKappa', () => {
     const kappa = designWeightedKappa([
       gold('accepted', 1000, [...Array<string>(80).fill('accepted'), ...Array<string>(20).fill('corrected')]),
     ]);
+
     expect(kappa?.value).toBeCloseTo(0, 10);
   });
 
@@ -471,6 +509,7 @@ describe('designWeightedKappa', () => {
       gold('accepted', 800, [...Array<string>(34).fill('accepted'), ...Array<string>(6).fill('corrected')]),
       gold('corrected', 200, [...Array<string>(28).fill('corrected'), ...Array<string>(12).fill('accepted')]),
     ]);
+
     expect(kappa?.value).toBeGreaterThan(0.3);
     expect(kappa?.value).toBeLessThan(0.8);
     expect(kappa?.lo).toBeLessThan(kappa?.value ?? 0);
@@ -482,6 +521,7 @@ describe('designWeightedKappa', () => {
       gold('accepted', 800, ['accepted', 'corrected', 'accepted', 'accepted']),
       gold('corrected', 200, ['corrected', 'accepted', 'corrected', 'corrected']),
     ];
+
     // Observed agreement is 0.75 against chance agreement 0.59, so κ = 16/41.
     const kappa = designWeightedKappa(strata);
     expect(kappa?.value).toBeCloseTo(16 / 41, 10);
@@ -496,14 +536,18 @@ describe('designWeightedKappa', () => {
     // comparison. κ is a property of the pair, so swapping them cannot move it.
     const pairs = (spec: Array<[string, string, number]>): Array<{ a: string; b: string }> =>
       spec.flatMap(([a, b, n]) => Array<{ a: string; b: string }>(n).fill({ a, b }));
+
     const strata = [
       { key: 'accepted', population: 800, draws: pairs([['accepted', 'accepted', 30], ['corrected', 'accepted', 6], ['accepted', 'corrected', 4]]) },
       { key: 'corrected', population: 200, draws: pairs([['corrected', 'corrected', 30], ['accepted', 'corrected', 5], ['corrected', 'accepted', 5]]) },
     ];
+
     const forward = designWeightedKappa(strata);
+
     const swapped = designWeightedKappa(
       strata.map((s) => ({ ...s, draws: s.draws.map((d) => ({ a: d.b, b: d.a })) })),
     );
+
     expect(forward?.value).toBeCloseTo(swapped?.value ?? -1, 12);
     expect(forward?.value).toBeGreaterThan(0);
     expect(forward?.n).toBe(80);
@@ -513,18 +557,22 @@ describe('designWeightedKappa', () => {
     // Same 40 draws per stratum; the raters agree in the rare one and disagree
     // in the common one. A tally that ignored the design would call this good.
     const agree = Array<{ a: string; b: string }>(40).fill({ a: 'corrected', b: 'corrected' });
+
     const disagree = [
       ...Array<{ a: string; b: string }>(20).fill({ a: 'accepted', b: 'accepted' }),
       ...Array<{ a: string; b: string }>(20).fill({ a: 'accepted', b: 'corrected' }),
     ];
+
     const weighted = designWeightedKappa([
       { key: 'accepted', population: 900, draws: disagree },
       { key: 'corrected', population: 100, draws: agree },
     ]);
+
     const even = designWeightedKappa([
       { key: 'accepted', population: 500, draws: disagree },
       { key: 'corrected', population: 500, draws: agree },
     ]);
+
     expect(weighted?.value).toBeLessThan(even?.value ?? 0);
   });
 });

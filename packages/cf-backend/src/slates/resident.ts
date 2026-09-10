@@ -12,6 +12,7 @@ import { slateCredentialKey } from './bindings';
 export interface ResidentSlateProcess extends SlateProcess {
   request(request: Request): Promise<Response>;
 }
+
 export interface ResidentSlateDeps {
   readonly ctx: DurableObjectState;
   readonly env: ResidentFacetEnv;
@@ -21,6 +22,7 @@ export interface ResidentSlateDeps {
   registerPort(pid: number, port: number, target: RouteableFacetTarget, owner: string): Promise<void>;
   unregisterPorts(pid: number): void;
 }
+
 export interface ResidentSlateBoot {
   readonly key: string;
   /** Logical identity independent of source revision and process incarnation. */
@@ -37,7 +39,9 @@ export interface ResidentSlateBoot {
 
 function runner(assets: readonly { readonly path: string; readonly contents: string }[]): string {
   const files: Record<string, string> = {};
+
   for (const asset of assets) files[asset.path] = asset.contents;
+
   return [
     'import { DurableObject } from "cloudflare:workers";',
     'import application from "./application.js";',
@@ -103,6 +107,7 @@ async function compileSlate(bundler: EsbuildService, entry: string, options: Par
     if (cause instanceof Error && 'errors' in cause && Array.isArray(cause.errors)) {
       throw new KinuError('bad_input', 'Slate compilation failed', { cause });
     }
+
     throw cause;
   }
 }
@@ -115,32 +120,42 @@ export class ResidentSlateProcesses {
   async start(input: ResidentSlateBoot): Promise<ResidentSlateProcess> {
     const session = await this.deps.session();
     const main = input.project.main;
+
     if (main === undefined) throw new KinuError('bad_input', 'package.json main must name the Worker module');
     const bundlerKey = slateCredentialKey(input.cred);
     let bundler = this.bundlers.get(bundlerKey);
+
     if (bundler === undefined) {
       bundler = new EsbuildService(session.vfs.as(input.cred));
       this.bundlers.set(bundlerKey, bundler);
     }
+
     const server = await compileSlate(bundler, `${input.root}/${main}`, {
       bundle: true, format: 'esm', platform: 'neutral', outfile: '/application.js', external: ['cloudflare:*', 'node:*'],
     });
+
     if (server.errors.length !== 0) throw new KinuError('bad_input', server.errors.map((error) => error.text).join('\n'));
     const application = server.outputFiles.find((file) => file.path === '/application.js');
+
     if (application === undefined) throw new KinuError('io', 'Slate compiler did not produce the server module');
     let assets: typeof server.outputFiles = [];
+
     if (input.project.browser !== undefined) {
       const browser = input.project.browser;
+
       const client = await compileSlate(bundler, `${input.root}/${browser}`, {
         bundle: true, format: 'esm', platform: 'browser', outfile: new URL(browser, 'https://slate.invalid/').pathname,
       });
+
       if (client.errors.length !== 0) throw new KinuError('bad_input', client.errors.map((error) => error.text).join('\n'));
       assets = client.outputFiles;
     }
+
     const applicationRef = (await this.deps.content.put(new TextEncoder().encode(application.contents))).ref;
     const runnerRef = (await this.deps.content.put(new TextEncoder().encode(runner(assets)))).ref;
     const entry = session.processes.spawn(main, [], input.root, { longRunning: true });
     const writerId = crypto.randomUUID();
+
     const boot: ResidentBootSpec = {
       kind: 'code',
       code: {
@@ -150,29 +165,37 @@ export class ResidentSlateProcesses {
         globalOutbound: input.globalOutbound,
       },
     };
+
     const process = processes(this.deps.ctx, this.deps.env).spawn(
       () => ({ readFile: async (path) => {
         const digest = facetImagePathDigest(path);
+
         if (digest === null) throw new KinuError('bad_input', `Invalid facet image path: ${path}`);
+
         return this.deps.content.get(new ContentRef(`sha256:${digest}`));
       } }),
       { doId: this.deps.workspace, pid: entry.pid, writerId },
       { pid: entry.pid, workerKey: input.key, boot, writerId, startArgs: {} },
     );
+
     try {
       await process.started;
       await this.deps.registerPort(entry.pid, input.port, process, input.owner);
     } catch (cause) {
       session.processes.exit(entry.pid, 1);
       this.deps.unregisterPorts(entry.pid);
+
       try { await process.release(); }
       catch (releaseCause) { throw new AggregateError([cause, releaseCause], 'Slate boot and process release failed', { cause: releaseCause }); }
+
       throw cause;
     }
+
     session.processes.setTerminator(entry.pid, () => {
       this.deps.unregisterPorts(entry.pid);
       this.deps.ctx.waitUntil(process.release());
     });
+
     return {
       id: String(entry.pid), port: input.port,
       request: (request) => process.handleHttpRequest(request),

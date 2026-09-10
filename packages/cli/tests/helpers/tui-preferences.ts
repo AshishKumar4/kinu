@@ -18,6 +18,7 @@ export function createMemoryTuiPreferenceStore(
   ).read(),
 ): TuiPreferenceStore {
   let current = structuredClone(initial);
+
   return {
     read: () => current,
     write(preferences) {

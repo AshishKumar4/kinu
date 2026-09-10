@@ -89,7 +89,9 @@ export interface DefaultWebSearchProviderDeps {
 }
 
 const DEFAULT_SEARCH_LIMIT = 5;
+
 const MAX_SEARCH_LIMIT = 20;
+
 const TavilyResponseSchema = v.object({
   answer: v.optional(v.string()),
   results: v.optional(v.array(v.object({
@@ -99,9 +101,12 @@ const TavilyResponseSchema = v.object({
     published_date: v.optional(v.string()),
   }))),
 });
+
 const WebSearchOptionsSchema = v.object({ limit: v.optional(v.number()) });
+
 /** Body cap before conversion — protects against multi-MB pages. */
 const MAX_FETCH_BYTES = 2_000_000;
+
 /** Manual-follow bound: the WHATWG Fetch standard stops automatic following
  *  after 20 redirects ("If request's redirect count is 20, then return a
  *  network error", https://fetch.spec.whatwg.org/#http-redirect-fetch). The
@@ -137,16 +142,20 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
     const ctrl = new AbortController();
     caller?.addEventListener('abort', () => ctrl.abort(caller.reason), { once: true });
     const timer = setTimeout(() => ctrl.abort(), budgetMs);
+
     const onAbort = new Promise<never>((_, reject) => {
       ctrl.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
     });
+
     try {
       return await Promise.race([run(ctrl.signal), onAbort]);
     } catch (error) {
       if (caller?.aborted === true) throw error;
+
       if (ctrl.signal.aborted) {
         throw new WebFetchError(`request timed out after ${String(budgetMs)}ms`, true, { cause: error });
       }
+
       throw error;
     } finally {
       clearTimeout(timer);
@@ -155,6 +164,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
   const convert = async (html: string, url: string): Promise<string> => {
     if (!deps.htmlToMarkdown) return localHtmlToMarkdown(html);
+
     try {
       return stripBase64Images(await deps.htmlToMarkdown(html, { url }));
     } catch (error) {
@@ -162,6 +172,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         'web.convert_failed',
         toKinuError({ doing: 'convert fetched HTML to markdown', cause: error, otherwise: 'io' }),
       );
+
       return localHtmlToMarkdown(html);
     }
   };
@@ -169,6 +180,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   async function tavilyKey(): Promise<Record<string, string> | null> {
     if (!deps.getAuth) return null;
     const auth = await deps.getAuth(TAVILY_CRED_KEY);
+
     return auth?.headers ?? null;
   }
 
@@ -190,13 +202,17 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         }),
         signal,
       });
+
       if (res.status === 429) throw new WebFetchError('Tavily rate limit (429) — retry shortly', true);
+
       if (!res.ok) {
         const body = await res.text();
         throw new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
       }
+
       try {
         const json = v.parse(TavilyResponseSchema, await res.json());
+
         const results: WebSearchResult[] = (json.results ?? [])
           .filter((r) => r.url && isSafeUrl(r.url))
           .slice(0, limit)
@@ -207,6 +223,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
             date: r.published_date || undefined,
             position: i + 1,
           }));
+
         return { query, answer: json.answer?.trim() || undefined, results, source: 'tavily' };
       } catch (error) {
         if (signal?.aborted === true) throw error;
@@ -218,6 +235,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   async function duckDuckGoSearch(query: string, limit: number, caller: AbortSignal | undefined): Promise<WebSearchResponse> {
     return withRequestBudget(caller, async (signal) => {
       const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+
       const res = await fetchImpl(endpoint, {
         headers: {
           'user-agent': 'Mozilla/5.0 (compatible; KinuAgent/1.0; +https://kinu.dev)',
@@ -225,12 +243,15 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
         },
         signal,
       });
+
       if (res.status === 429 || res.status === 202) {
         throw new WebFetchError('DuckDuckGo rate-limited the request — retry shortly, or connect a Tavily key for reliable search', true);
       }
+
       if (!res.ok) throw new WebFetchError(`web search failed (${res.status})`);
       const html = await res.text();
       const results = parseDuckDuckGoHtml(html, limit);
+
       return { query, results, source: 'duckduckgo' };
     });
   }
@@ -238,29 +259,36 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
   return {
     async search(query, opts) {
       const q = (query ?? '').trim();
+
       if (!q) throw new WebFetchError('search query is empty');
       const limit = clampLimit(opts?.limit);
       const headers = await tavilyKey();
+
       if (headers) return tavilySearch(q, limit, headers, opts?.signal);
+
       return duckDuckGoSearch(q, limit, opts?.signal);
     },
 
     async fetch(url, opts) {
       let parsed: URL;
+
       try {
         parsed = assertSafeUrl(url);
       } catch (error) {
         if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
         throw error;
       }
+
       // Manual redirect chain: the initial URL is validated above, and every
       // Location below passes the same guard before its hop leaves. With
       // `redirect: 'follow'` the platform chased Location unchecked, so a
       // benign public page could bounce the agent's fetch onto a metadata or
       // private address the initial check had refused.
       let finalUrl = parsed.toString();
+
       const fetched = await withRequestBudget(opts?.signal, async (signal) => {
         let target = finalUrl;
+
         for (let redirects = 0; ; redirects++) {
           const hop = await fetchImpl(target, {
             headers: {
@@ -273,37 +301,48 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
             redirect: 'manual',
             signal,
           });
+
           const location =
             hop.status === 301 || hop.status === 302 || hop.status === 303 || hop.status === 307 || hop.status === 308
               ? hop.headers.get('location')
               : null;
+
           if (!location) {
             finalUrl = target;
+
             if (hop.status === 429) throw new WebFetchError('fetch rate-limited (429) — retry shortly', true);
+
             if (!hop.ok) throw new WebFetchError(`fetch failed (${hop.status}) for ${finalUrl}`);
             const contentType = hop.headers.get('content-type') ?? '';
             const { bytes, clipped } = await readCappedBody(hop, MAX_FETCH_BYTES);
+
             return { contentType, bytes, clipped };
           }
+
           if (redirects >= MAX_REDIRECTS) {
             throw new WebFetchError(`too many redirects (over ${MAX_REDIRECTS}) for ${parsed.toString()}`);
           }
+
           let next: URL;
+
           try {
             // Relative Location resolves against the hop that sent it.
             next = new URL(location, target);
           } catch (error) {
             throw new WebFetchError(`redirect from ${target} names an unparseable location`, false, { cause: error });
           }
+
           try {
             assertSafeUrl(next.toString());
           } catch (error) {
             if (error instanceof UnsafeUrlError) throw new WebFetchError(error.reason, false, { cause: error });
             throw error;
           }
+
           target = next.toString();
         }
       });
+
       const { contentType, bytes, clipped } = fetched;
       const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 
@@ -316,6 +355,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       const note = clipped
         ? `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of more than ${MAX_FETCH_BYTES} bytes]`
         : '';
+
       return {
         url: finalUrl,
         title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,
@@ -336,35 +376,46 @@ async function readCappedBody(res: Response, cap: number): Promise<{ bytes: Uint
   if (!res.body) {
     const buf = await res.arrayBuffer();
     const clipped = buf.byteLength > cap;
+
     return { bytes: new Uint8Array(clipped ? buf.slice(0, cap) : buf), clipped };
   }
+
   const reader = res.body.getReader();
   const chunks: Uint8Array[] = [];
   let kept = 0;
   let clipped = false;
+
   for (;;) {
     const { done, value } = await reader.read();
+
     if (done) break;
+
     if (kept + value.byteLength > cap) {
       const room = cap - kept;
+
       if (room > 0) {
         chunks.push(value.slice(0, room));
         kept = cap;
       }
+
       clipped = true;
       // Cancelling stops the transport; the rest of the body is never read.
       await reader.cancel();
       break;
     }
+
     chunks.push(value);
     kept += value.byteLength;
   }
+
   const bytes = new Uint8Array(kept);
   let offset = 0;
+
   for (const chunk of chunks) {
     bytes.set(chunk, offset);
     offset += chunk.length;
   }
+
   return { bytes, clipped };
 }
 
@@ -410,6 +461,7 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
           const query = String(args[0] ?? '');
           const parsedOpts = v.safeParse(WebSearchOptionsSchema, args[1]);
           const opts = parsedOpts.success ? parsedOpts.output : undefined;
+
           // The trailing context is the executor cancellation convention; a
           // codemode call that carries one ends its request with the turn.
           return provider.search(query, { ...opts, signal: readExecSignal({ context: args[2] }) });
@@ -426,6 +478,7 @@ export function createWebCodemodeProvider(provider: WebSearchProvider) {
 
 function clampLimit(limit: number | undefined): number {
   if (!limit || !Number.isFinite(limit)) return DEFAULT_SEARCH_LIMIT;
+
   return Math.max(1, Math.min(MAX_SEARCH_LIMIT, Math.floor(limit)));
 }
 
@@ -440,17 +493,21 @@ export function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResul
 
   const snippets: string[] = [];
   let sm: RegExpExecArray | null;
+
   while ((sm = snippetRe.exec(html)) !== null) snippets.push(decodeEntities(stripTags(sm[1])));
 
   let m: RegExpExecArray | null;
   let i = 0;
+
   while ((m = linkRe.exec(html)) !== null && results.length < limit) {
     const url = unwrapDuckUrl(decodeEntities(m[1]));
     const title = decodeEntities(stripTags(m[2])).trim();
+
     if (!url || !title || !isSafeUrl(url)) {
       i++;
       continue;
     }
+
     results.push({
       title,
       url,
@@ -459,6 +516,7 @@ export function parseDuckDuckGoHtml(html: string, limit: number): WebSearchResul
     });
     i++;
   }
+
   return results;
 }
 
@@ -468,14 +526,18 @@ function unwrapDuckUrl(href: string): string {
   // A result row can carry anything the page put in `href`; an unparseable one
   // is a value here. Every other URL failure is this module's own bug.
   const parsed = tolerate(() => new URL(abs, 'https://duckduckgo.com'), 'malformed-input');
+
   if (!parsed) return '';
   const uddg = parsed.searchParams.get('uddg');
+
   if (uddg) return uddg;
+
   return /^https?:/.test(abs) ? abs : '';
 }
 
 function extractTitle(html: string): string {
   const m = /<title\b[^>]*>([\s\S]*?)<\/title>/i.exec(html);
+
   return m ? decodeEntities(stripTags(m[1])).trim().slice(0, 300) : '';
 }
 
@@ -483,8 +545,10 @@ function extractTitle(html: string): string {
  *  `title:` then the first `# heading`. */
 function extractMarkdownTitle(md: string): string {
   const fm = /^---\s*[\s\S]*?\btitle:\s*["']?([^"'\n]+)["']?\s*[\s\S]*?\n---/m.exec(md);
+
   if (fm) return fm[1].trim().slice(0, 300);
   const h1 = /^#\s+(.+)$/m.exec(md);
+
   return h1 ? h1[1].trim().slice(0, 300) : '';
 }
 

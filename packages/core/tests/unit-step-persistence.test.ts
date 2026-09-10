@@ -72,15 +72,18 @@ const tools: ToolSet = {
 
 function scriptedProvider(script: ReadonlyArray<() => Response>) {
   let call = 0;
+
   const server = Bun.serve({
     port: 0,
     async fetch(req) {
       await req.json();
       const at = Math.min(call, script.length - 1);
       call += 1;
+
       return script[at]?.() ?? textStep('done');
     },
   });
+
   return {
     requests: () => call,
     model: createChatModel({
@@ -100,6 +103,7 @@ function workspaceOnDisk() {
   const path = scratchPath('step-persistence', 'store.sqlite');
   const db = new Database(path);
   initRunEventTables(makeExecRaw(db));
+
   return { path, db, sql: makeSql(db) };
 }
 
@@ -113,7 +117,9 @@ function backendWiring(recorder: RunEventRecorder, runId: string) {
   const acc = new TurnAccumulator({
     onStepEvent: (ev) => { recorder.emit(runId, { type: 'step_finish', ...ev }); },
   });
+
   acc.reset(Date.now());
+
   return acc;
 }
 
@@ -130,41 +136,53 @@ async function drive({ model, acc, cutAfterSteps }: {
   const history: ModelMessage[] = [];
   let threw: string | null = null;
   let finished = 0;
+
   try {
     for await (const ev of runChat({
       model, system: 'sys', history: [{ role: 'user', content: 'do the thing' }],
       tools, stopWhen: stepCountIs(20), signal: abort.signal,
     })) {
       events.push(ev);
+
       if (ev.type === 'step-finish') {
         const step: StepLike = { response: { messages: ev.responseMessages } };
+
         if (ev.usage) step.usage = ev.usage;
         acc.recordStep(step);
         finished += 1;
+
         if (cutAfterSteps !== undefined && finished >= cutAfterSteps) abort.abort();
       }
+
       if (ev.type === 'done') history.push(...ev.responseMessages);
     }
   } catch (err) {
     threw = err instanceof Error ? err.message : String(err);
   }
+
   return { events, threw, history };
 }
 
 /** Every tool call in a message array, and whether its result is present. */
 function pairing(messages: readonly ModelMessage[]): Array<{ id: string; name: string; settled: boolean }> {
   const settled = new Set<string>();
+
   for (const message of messages) {
     if (message.role !== 'tool') continue;
+
     for (const part of message.content) if (part.type === 'tool-result') settled.add(part.toolCallId);
   }
+
   const calls: Array<{ id: string; name: string; settled: boolean }> = [];
+
   for (const message of messages) {
     if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+
     for (const part of message.content) {
       if (part.type === 'tool-call') calls.push({ id: part.toolCallId, name: part.toolName, settled: settled.has(part.toolCallId) });
     }
   }
+
   return calls;
 }
 
@@ -180,7 +198,9 @@ describe('a completed step is durable at the moment it completes', () => {
       () => toolStep('call_b', 'git diff'),
       () => textStep('all clean'),
     ]);
+
     const { db, sql } = workspaceOnDisk();
+
     try {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-1');
@@ -189,6 +209,7 @@ describe('a completed step is durable at the moment it completes', () => {
       // durable that actually carry the model's output.
       const witness: Array<{ requests: number; recordedSteps: number }> = [];
       const abort = new AbortController();
+
       for await (const ev of runChat({
         model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
         tools, stopWhen: stepCountIs(20), signal: abort.signal,
@@ -216,7 +237,9 @@ describe('a completed step is durable at the moment it completes', () => {
       () => toolStep('call_b', 'git diff'),
       () => textStep('never reached'),
     ]);
+
     const { db, sql } = workspaceOnDisk();
+
     try {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-cut');
@@ -235,6 +258,7 @@ describe('a completed step is durable at the moment it completes', () => {
         expect(calls.length).toBe(1);
         expect(calls[0]?.settled).toBe(true);
       }
+
       expect(rows.flatMap((r) => pairing(r.messages ?? []).map((c) => c.id))).toEqual(['call_a', 'call_b']);
 
       // And the whole durable record assembles: every call in it is settled.
@@ -253,7 +277,9 @@ describe('a completed step is durable at the moment it completes', () => {
       () => toolStep('call_b', 'git diff'),
       () => textStep('never reached'),
     ]);
+
     const { path, db, sql } = workspaceOnDisk();
+
     try {
       const acc = backendWiring(new RunEventRecorder(sql, testActorHandle(sql)), 'run-killed');
       await drive({ model: provider.model, acc, cutAfterSteps: 2 });
@@ -262,6 +288,7 @@ describe('a completed step is durable at the moment it completes', () => {
       db.close();
 
       const reopened = new Database(path);
+
       try {
         const reopenedSql = makeSql(reopened);
         const after = new RunEventRecorder(reopenedSql, testActorHandle(reopenedSql));
@@ -282,7 +309,9 @@ describe('a completed step is durable at the moment it completes', () => {
       () => toolStep('call_a', 'git status'),
       () => new Response('{"error":{"message":"upstream exploded"}}', { status: 500, headers: { 'content-type': 'application/json' } }),
     ]);
+
     const { db, sql } = workspaceOnDisk();
+
     try {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-threw');
@@ -308,7 +337,9 @@ describe('the durable record and the history the caller persists are one constru
       () => toolStep('call_a', 'git status'),
       () => textStep('all clean'),
     ]);
+
     const { db, sql } = workspaceOnDisk();
+
     try {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-same');
@@ -329,7 +360,9 @@ describe('the durable record and the history the caller persists are one constru
       () => toolStep('call_b', 'git diff'),
       () => textStep('never reached'),
     ]);
+
     const { db, sql } = workspaceOnDisk();
+
     try {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-cut-tail');
@@ -338,16 +371,24 @@ describe('the durable record and the history the caller persists are one constru
       const abort = new AbortController();
       const history: ModelMessage[] = [];
       let calls = 0;
+
       const cutTurn = async (): Promise<void> => {
         for await (const ev of runChat({
           model: provider.model, system: 'sys', history: [{ role: 'user', content: 'go' }],
           tools, stopWhen: stepCountIs(20), signal: abort.signal,
         })) {
           if (ev.type === 'step-finish') acc.recordStep({ response: { messages: ev.responseMessages } });
-          if (ev.type === 'tool-call') { calls += 1; if (calls === 2) abort.abort(); }
+
+          if (ev.type === 'tool-call') {
+            calls += 1;
+
+            if (calls === 2) abort.abort();
+          }
+
           if (ev.type === 'done') history.push(...ev.responseMessages);
         }
       };
+
       await expect(cutTurn()).rejects.toThrow(INTERRUPTED_TURN);
 
       const transcript = recorder.transcript('run-cut-tail');
@@ -374,7 +415,9 @@ describe('ordering and idempotency', () => {
       () => toolStep('call_c', 'c'),
       () => textStep('done'),
     ]);
+
     const { db, sql } = workspaceOnDisk();
+
     try {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const acc = backendWiring(recorder, 'run-dedupe');
@@ -399,6 +442,7 @@ describe('ordering and idempotency', () => {
     const first = scriptedProvider(script);
     const second = scriptedProvider(script);
     const { db, sql } = workspaceOnDisk();
+
     try {
       const recorder = new RunEventRecorder(sql, testActorHandle(sql));
       const one = await drive({ model: first.model, acc: backendWiring(recorder, 'run-x') });

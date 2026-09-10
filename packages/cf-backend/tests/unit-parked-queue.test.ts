@@ -33,6 +33,7 @@ function parked(id: string, detail = `run \`deploy --${id}\` on laptop`): Pendin
 }
 
 const ACTIONS = [parked('a'), parked('b'), parked('c')];
+
 const ALL = ACTIONS.map((a) => a.id);
 
 /** The flow's deps, recorded. `decideDeferredApprovals` answers with the ids
@@ -48,6 +49,7 @@ interface RecordingDeps extends ParkedDecisionDeps {
 
 function recorder(): RecordingDeps {
   const decisions: Array<{ ids: string[]; decision: ParkedDecision }> = [];
+
   const rec: RecordingDeps = {
     decisions,
     refreshes: 0,
@@ -58,11 +60,14 @@ function recorder(): RecordingDeps {
         rec.failNextWith = null;
         throw new Error(message);
       }
+
       rec.decisions.push({ ids, decision });
+
       return { decided: ids };
     },
     onDecided: () => { rec.refreshes += 1; },
   };
+
   return rec;
 }
 
@@ -140,6 +145,7 @@ describe('the queue card, as the reader sees it', () => {
       actions: ACTIONS,
       rpc: SILENT_RPC,
     }));
+
     // Three rows, three checked boxes.
     expect(html.match(/checked/g)?.length).toBe(3);
     expect(html).toContain('Approve all');
@@ -149,11 +155,13 @@ describe('the queue card, as the reader sees it', () => {
     const rec = recorder();
     const flow = new ParkedDecisionFlow(rec);
     flow.toggle('c', ALL);
+
     const html = renderToStaticMarkup(createElement(ParkedCommands, {
       actions: ACTIONS,
       rpc: SILENT_RPC,
       flow,
     }));
+
     expect(html.match(/checked/g)?.length).toBe(2);
     expect(html).toContain('Approve 2');
   });
@@ -162,11 +170,13 @@ describe('the queue card, as the reader sees it', () => {
     const rec = recorder();
     const flow = new ParkedDecisionFlow(rec);
     await flow.decide('approved', [...flow.chosen(ALL)]);
+
     const html = renderToStaticMarkup(createElement(ParkedCommands, {
       actions: ACTIONS,
       rpc: SILENT_RPC,
       flow,
     }));
+
     expect(html).not.toContain('checked');
     expect(html).toContain('Approved. It runs when the agent picks the decision up.');
   });
@@ -176,11 +186,13 @@ describe('the queue card, as the reader sees it', () => {
     const flow = new ParkedDecisionFlow(rec);
     rec.failNextWith = 'connection lost';
     await flow.decide('denied', [...flow.chosen(ALL)]);
+
     const html = renderToStaticMarkup(createElement(ParkedCommands, {
       actions: ACTIONS,
       rpc: SILENT_RPC,
       flow,
     }));
+
     expect(html).toContain('Could not record the decision');
     expect(html.match(/checked/g)?.length).toBe(3);
   });

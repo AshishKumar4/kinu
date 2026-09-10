@@ -70,6 +70,7 @@ const DeviceRowSchema = v.object({
   revokedAt: v.nullable(v.number()),
   unstoppedAt: v.nullable(v.number()),
 });
+
 const DeviceListSchema = v.array(DeviceRowSchema);
 
 export type DeviceRow = v.InferOutput<typeof DeviceRowSchema>;
@@ -105,6 +106,7 @@ export interface DeviceAccount {
 export function requireIsolatedAgentHome(home: string = AGENT_HOME): void {
   const resolved = resolve(home);
   const scratch = resolve(tmpdir());
+
   if (resolved === resolve(homedir(), '.kinu') || !resolved.startsWith(`${scratch}/`)) {
     throw new Error(
       `the device eval installs a daemon under KINU_HOME and this process resolved it to ${resolved}, `
@@ -140,7 +142,9 @@ export function deviceArmGate(
   backend: string, resolution: PublicSessionResolution,
 ): DeviceArmGate {
   if (resolution.kind === 'ready') return { kind: 'run' };
+
   if (backend !== 'cloud') return { kind: 'skip', reason: resolution.remedy };
+
   return {
     kind: 'refuse',
     reason: 'the device arm ran under KINU_EVAL_BACKEND=cloud and resolved no plan. It needs BOTH '
@@ -164,10 +168,12 @@ export function deviceArmGate(
 export function summarizeRouteBody(body: string): string {
   const squeezed = body.replace(/\s+/g, ' ').trim();
   const title = /<title>([^<]+)<\/title>/i.exec(squeezed)?.[1]?.trim();
+
   if (title !== undefined) {
     return `${title} — the edge answered for a Worker that threw, so the cause is in the Worker `
       + 'log (`wrangler tail --env <deployment>`) and never in this body';
   }
+
   return squeezed.slice(0, BODY_EXCERPT);
 }
 
@@ -186,11 +192,15 @@ export async function listDevicesOverCliRoute(account: DeviceAccount): Promise<D
     const response = await fetch(`${account.origin}/api/cli/devices`, {
       headers: { authorization: `Bearer ${account.cliToken}` },
     });
+
     const text = await response.text();
+
     if (!response.ok) {
       return { status: response.status, rows: null, body: summarizeRouteBody(text) };
     }
+
     const parsed = v.safeParse(DeviceListSchema, tolerate(() => parseJsonValue(text), 'malformed-input'));
+
     return {
       status: response.status,
       rows: parsed.success ? parsed.output : null,
@@ -257,6 +267,7 @@ export async function grantDeviceAccess(
   // several live, an unnamed call is refused with the fleet ask and raises no
   // card, so a grant for the second machine can never mint one unnamed.
   const rpcUrl = `${account.origin}/api/cli/workspaces/${encodeURIComponent(agentName)}/rpc`;
+
   const raiseOnce = (): Promise<{ ok: boolean; detail: string }> => infraBoundary(
     `POST ${rpcUrl} (device consent raise)`,
     async () => {
@@ -269,19 +280,25 @@ export async function grantDeviceAccess(
         body: JSON.stringify({ method: 'executeInExecutor',
           args: deviceName === undefined ? ['laptop', 'true'] : ['laptop', 'true', deviceName] }),
       });
+
       const text = await response.text();
+
       if (!response.ok) {
         throw new Error(`raising the device consent card on ${agentName} failed: `
           + `${String(response.status)} ${response.statusText} — ${text.slice(0, BODY_EXCERPT)}`);
       }
+
       const answer = v.parse(v.object({ result: v.object({
         error: v.optional(v.string()),
         stdout: v.optional(v.string()),
       }) }), JSON.parse(text)).result;
+
       const detail = answer.error ?? answer.stdout ?? '';
+
       return { ok: answer.error === undefined, detail };
     },
   );
+
   // The raise BLOCKS on the card: `awaitDeviceConsent` parks the workspace's
   // call until somebody answers or the registry's five-minute window closes, so
   // awaiting it here would deadlock the very card this function is trying to
@@ -304,17 +321,20 @@ export async function grantDeviceAccess(
       // warm-up after the budget reads as unreachable with its own words.
       const warmup = /not available|no device connected|not known here yet|no connected machine is named/i;
       let raised = await raiseOnce();
+
       for (let attempt = 0; attempt < 12 && warmup.test(raised.detail); attempt += 1) {
         const tick = Promise.withResolvers<void>();
         setTimeout(tick.resolve, 1_000);
         await tick.promise;
         raised = await raiseOnce();
       }
+
       if (warmup.test(raised.detail)
         || (!raised.ok && !/queued|approval|denied/i.test(raised.detail))) {
         return new Error(`the laptop executor never became reachable for ${agentName}: `
           + `${raised.detail}`);
       }
+
       return null;
     } catch (err) {
       return err instanceof Error ? err : new Error(String(err));
@@ -325,6 +345,7 @@ export async function grantDeviceAccess(
   // racing in the background and has a warm-up of its own, so absence is
   // retried rather than read as "never raised".
   const listUrl = rpcUrl;
+
   for (let attempt = 0; attempt < 40; attempt += 1) {
     const found = await infraBoundary(`POST ${rpcUrl} (listPendingConsents)`, async () => {
       const response = await fetch(listUrl, {
@@ -335,30 +356,37 @@ export async function grantDeviceAccess(
         },
         body: JSON.stringify({ method: 'listPendingConsents', args: [] }),
       });
+
       // The body is read BEFORE the verdict, because a refusal's words are the
       // whole value of the refusal: this read answered `400 Bad Request` and
       // dropped what the deployment actually said, so a scope the route would
       // not accept was indistinguishable from a route that had moved.
       const text = await response.text();
+
       if (!response.ok) {
         throw new Error(`could not list the pending consents on ${agentName}: `
           + `${String(response.status)} ${response.statusText} — ${text.slice(0, BODY_EXCERPT)}`);
       }
+
       // The generic RPC route wraps every answer as { result: … } — the same
       // envelope `callHttp` unwraps in the shipped client. Parsed HERE rather
       // than trusted, so a route that changes its envelope is a parse failure
       // rather than a card that reads as absent.
       const envelope = v.parse(v.object({ result: v.array(v.object({ consentId: v.string() })) }),
         JSON.parse(text));
+
       return envelope.result;
     });
+
     const card = found.find((entry) => entry.consentId.length > 0) ?? null;
+
     if (card === null) {
       const tick = Promise.withResolvers<void>();
       setTimeout(tick.resolve, 500);
       await tick.promise;
       continue;
     }
+
     await infraBoundary(`POST ${rpcUrl} (resolveDeviceConsent)`, async () => {
       const response = await fetch(rpcUrl, {
         method: 'POST',
@@ -371,11 +399,14 @@ export async function grantDeviceAccess(
           args: [card.consentId, 'always'],
         }),
       });
+
       const text = await response.text();
+
       if (!response.ok) {
         throw new Error(`answering the device consent card ${card.consentId} failed: `
           + `${String(response.status)} ${response.statusText} — ${text.slice(0, BODY_EXCERPT)}`);
       }
+
       // The answer's own words, kept whole: `resolve` answers false for an id it
       // no longer holds — already settled, or raced with the window closing —
       // and that is a fact the caller needs, not a parse error. Both the
@@ -386,7 +417,9 @@ export async function grantDeviceAccess(
         v.object({ result: v.object({ ok: v.boolean() }) }),
         v.object({ ok: v.boolean() }),
       ]), JSON.parse(text));
+
       const decidedOk = 'result' in answer ? answer.result.ok : answer.ok;
+
       if (!decidedOk) {
         throw new Error(`the workspace did not record the decision on ${card.consentId} `
           + '— the card was already settled');
@@ -396,9 +429,12 @@ export async function grantDeviceAccess(
     // (the `true` that finally ran, or the words it answered) is awaited here so
     // a raise that failed for a real reason still fails this grant.
     const raiseFailure = await raising;
+
     if (raiseFailure) throw raiseFailure;
+
     return;
   }
+
   // No card within the budget. The raise may still be parked on a card this
   // poller could not see, so it is raced against a short grace rather than
   // abandoned — but its failure is not this function's finding either way: the
@@ -407,6 +443,7 @@ export async function grantDeviceAccess(
     raising,
     new Promise<Error | null>((resolve) => { setTimeout(() => { resolve(null); }, 5_000); }),
   ]);
+
   // The raise's own words when it has any: a deployment that refused the very
   // first call said WHY, and reporting "no card was raised" over that would
   // hide the refusal behind a symptom of it.
@@ -422,8 +459,10 @@ export async function revokeDeviceOverUserRoute(
   account: DeviceAccount, deviceId: string,
 ): Promise<{ status: number; body: string }> {
   const url = `${account.origin}/api/user/devices/${encodeURIComponent(deviceId)}`;
+
   return infraBoundary(`DELETE ${url}`, async () => {
     const response = await fetch(url, { method: 'DELETE', headers: webHeaders(account.identity) });
+
     return { status: response.status, body: (await response.text()).slice(0, BODY_EXCERPT) };
   });
 }
@@ -435,11 +474,14 @@ export type DeviceCommandVerdict =
 
 export function readDeviceCommand(result: PublicExecutorResult): DeviceCommandVerdict {
   if (result.refusal !== undefined) return { kind: 'refused', reason: result.refusal.reason, text: result.refusal.error };
+
   if (result.error !== undefined) return { kind: 'refused', reason: 'unclassified', text: result.error };
   const stdout = result.stdout ?? '';
+
   if ((result.exitCode ?? 0) !== 0) {
     return { kind: 'refused', reason: 'nonzero_exit', text: result.stderr ?? stdout };
   }
+
   return { kind: 'output', stdout };
 }
 
@@ -454,6 +496,7 @@ export function readDeviceCommand(result: PublicExecutorResult): DeviceCommandVe
 export const DEVICE_STEPS = [
   'devices-route', 'connect', 'listed', 'command', 'revoked', 'refused',
 ] as const;
+
 export type DeviceStep = typeof DEVICE_STEPS[number];
 
 /** One step's verdict: what was checked, and whether it held. */
@@ -469,8 +512,10 @@ export function completeSubgoals(
   observed: readonly DeviceSubgoal[],
 ): readonly DeviceSubgoal[] {
   const byStep: Partial<Record<DeviceStep, DeviceSubgoal>> = {};
+
   for (const subgoal of observed) byStep[subgoal.what] = subgoal;
   const stopped = observed.find((subgoal) => !subgoal.reached);
+
   return DEVICE_STEPS.map((what) => byStep[what] ?? {
     what,
     reached: false,
@@ -502,6 +547,7 @@ export interface TeardownStep {
  */
 export async function runTeardown(steps: readonly TeardownStep[]): Promise<readonly string[]> {
   const failures: string[] = [];
+
   for (const step of steps) {
     try {
       await step.run();
@@ -509,6 +555,7 @@ export async function runTeardown(steps: readonly TeardownStep[]): Promise<reado
       failures.push(`${step.what}: ${caught instanceof Error ? caught.message : String(caught)}`);
     }
   }
+
   return failures;
 }
 

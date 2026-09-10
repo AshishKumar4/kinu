@@ -44,6 +44,7 @@ async function scriptedTurn(actor: HostedActor, text: string): Promise<string> {
   const lease = actor.session.beginTurn({ runId: `run-${actor.record.name}`, turnId }, 'build', Date.now());
   actor.session.bindProfile(lease, profile, inputs);
   actor.session.appendInput(lease, { role: 'user', content: text });
+
   // The claim, admitted through the same store the session admits through and
   // settled through the same store the session settles through — the session
   // only attaches a claim to a lease inside `execute`, which needs a provider
@@ -54,14 +55,17 @@ async function scriptedTurn(actor: HostedActor, text: string): Promise<string> {
     runtime: actor.runtime, mode: 'build',
     version: await actor.runtime.identity.scaffold.version(),
   });
+
   const admitted = actor.stores.claims.admit({
     runId: lease.runId, turnId, workMode: 'build',
     program: programIdentityOf(program, 'harness-build'),
     context: actor.session.history,
     workingRevision: 0,
   });
+
   actor.stores.claims.settle(admitted, 'completed');
   actor.session.finishTurn(lease);
+
   return turnId;
 }
 
@@ -90,9 +94,11 @@ describe('one SQLite for every logical actor', () => {
     // has a claim" with one row read five times.
     const ids = actors.map((actor) => actor.handle.actorId);
     expect(new Set(ids).size).toBe(5);
+
     for (const actor of actors) {
       const claims = fixture.sql<{ actor_id: string; turn_id: string }>`
         SELECT actor_id, turn_id FROM actor_turn_claims WHERE actor_id = ${actor.handle.actorId}`;
+
       expect(claims.map((row) => row.turn_id)).toEqual([`turn-${actor.record.name}`]);
     }
 
@@ -100,12 +106,14 @@ describe('one SQLite for every logical actor', () => {
     // run five different promoted programs out of one database.
     const pointers = fixture.sql<{ actor_id: string }>`
       SELECT DISTINCT actor_id FROM scaffold_versions`;
+
     expect(new Set(pointers.map((row) => row.actor_id)).size).toBe(5);
   });
 
   test('the archive of the one database is the whole workspace, and restores per actor', async () => {
     const fixture = await hostedWorkspace();
     const main = await fixture.host.acquire(fixture.main);
+
     const roster = [
       main,
       await fixture.hire(fixture.main, 'sub-reader-1', 'subordinate'),
@@ -113,6 +121,7 @@ describe('one SQLite for every logical actor', () => {
       await fixture.hire(fixture.main, 'exp:head-a1', 'head'),
       await fixture.hire(fixture.main, 'exp:node-b2', 'head'),
     ];
+
     for (const actor of roster) await scriptedTurn(actor, `work for ${actor.record.name}`);
 
     // Walked to exhaustion, as a caller does: a workspace's rows have no
@@ -126,11 +135,14 @@ describe('one SQLite for every logical actor', () => {
     const pages: ArchivePage[] = [];
     let cursor: Parameters<typeof readWorkspaceArchivePage>[1]['cursor'] = null;
     const archiveSql = archiveSqlFromDatabase(fixture.db);
+
     for (;;) {
       const page = await readWorkspaceArchivePage(archiveSql, {
         workspace: 'harness', source: 'cloud', cursor,
       });
+
       pages.push(page);
+
       if (page.next === undefined || page.next === null) break;
       cursor = page.next;
     }
@@ -141,9 +153,11 @@ describe('one SQLite for every logical actor', () => {
     // checkable rather than implied.
 
     const restored = new Database(':memory:');
+
     const result = await restoreWorkspaceArchive(
       archiveSqlFromDatabase(restored), pages.flatMap((page) => page.lines),
     );
+
     // The archive DECLARES its roster size, retired actors included, and a
     // restore refuses an archive whose count does not match what it rebuilt —
     // which is what makes "one snapshot contains every retained actor"
@@ -155,18 +169,23 @@ describe('one SQLite for every logical actor', () => {
     for (const actor of roster) {
       const before = fixture.sql<{ n: number }>`
         SELECT COUNT(*) AS n FROM messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
+
       const after = harnessSql(restored)<{ n: number }>`
         SELECT COUNT(*) AS n FROM messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
+
       expect(after).toBe(before);
 
       const claims = harnessSql(restored)<{ turn_id: string }>`
         SELECT turn_id FROM actor_turn_claims WHERE actor_id = ${actor.handle.actorId}`;
+
       expect(claims.map((row) => row.turn_id)).toEqual([`turn-${actor.record.name}`]);
 
       const versions = harnessSql(restored)<{ n: number }>`
         SELECT COUNT(*) AS n FROM scaffold_versions WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
+
       expect(versions).toBeGreaterThan(0);
     }
+
     restored.close();
   });
 });

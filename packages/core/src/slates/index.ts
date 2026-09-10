@@ -7,7 +7,11 @@
  * client code can value-import it; worker code imports this subpath instead.
  */
 export { SqliteSlateStore } from './store';
+
 export { SqliteSlateContentStore } from './content';
+
 export { SqliteSlateInvocations, type SlateInvocationAuthority } from './invocations';
+
 export { SlateFiles, slateDirectory } from './files';
+
 export { WorkspaceSlates, type WorkspaceSlatesDeps } from './runtime';

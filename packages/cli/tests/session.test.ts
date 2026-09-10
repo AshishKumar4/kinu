@@ -21,6 +21,7 @@ afterEach(() => {
 function tempTranscriptDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "kinu-transcripts-"));
   tempDirs.push(dir);
+
   return dir;
 }
 
@@ -73,6 +74,7 @@ describe("CLI transcripts", () => {
     const session = createCliSession("jarvis", { transcriptDir: dir, conversationId: "default" });
     const recorder = new SessionRecorder("local");
     const turnText = "first text second text third text";
+
     // A turn that streams: text → tool → text → tool → text.
     const events: AgentClientEvent[] = [
       { type: "turn-start", kind: "user", text: "go" },
@@ -85,6 +87,7 @@ describe("CLI transcripts", () => {
       { type: "text-delta", delta: "third text" },
       { type: "turn-end", turn: { text: turnText, toolCalls: [], steps: 2, durationMs: 1, hadError: false } },
     ];
+
     for (const event of events) recorder.record(session, event);
 
     const transcript = readCliSessionTranscript("jarvis", session.id, { transcriptDir: dir });
@@ -108,6 +111,7 @@ describe("CLI transcripts", () => {
     const dir = tempTranscriptDir();
     const session = createCliSession("jarvis", { transcriptDir: dir, conversationId: "default" });
     const recorder = new SessionRecorder("local");
+
     // The backend synthesized text without streaming deltas (ended on a tool).
     for (const event of [
       { type: "turn-start", kind: "user", text: "go" },
@@ -140,6 +144,7 @@ describe("CLI transcripts", () => {
 
     const byId = findTranscriptPath("jarvis", "20260101T000000-abc111", { transcriptDir: dir });
     expect(byId).toBe(join(agentDir, "20260101T000000-abc111.jsonl"));
+
     if (byId === null) throw new Error("expected the seeded transcript path");
     expect(findTranscriptPath("jarvis", byId, { transcriptDir: dir })).toBe(byId);
     expect(findTranscriptPath("jarvis", "missing-id", { transcriptDir: dir })).toBeNull();

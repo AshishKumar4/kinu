@@ -43,6 +43,7 @@ export function admitTurn(latch: SendLatch, begin: () => Promise<void>): boolean
   const token = ++latch.minted;
   latch.owner = token;
   const release = (): void => { if (latch.owner === token) latch.owner = null; };
+
   try {
     begin().then(release, release);
   } catch (thrown) {
@@ -50,6 +51,7 @@ export function admitTurn(latch: SendLatch, begin: () => Promise<void>): boolean
     release();
     throw thrown;
   }
+
   return true;
 }
 
@@ -72,5 +74,6 @@ export function abandonTurn(latch: SendLatch): void {
  */
 export function abandonTurnIfOwner(latch: SendLatch, expected: number | null): void {
   if (expected === null) return;
+
   if (latch.owner === expected) latch.owner = null;
 }

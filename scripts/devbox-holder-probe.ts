@@ -39,11 +39,17 @@ import {
 } from './fixtures/r2-bench/deploy-substrate';
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
+
 const WORKLOAD_SOURCE = join(REPO_ROOT, 'scripts/fixtures/devbox-e2e/workload.ts');
+
 const HARNESS_DIR = '/var/tmp/devbox-e2e';
+
 const HARNESS_PATH = `${HARNESS_DIR}/workload.ts`;
+
 const WORK_ROOT = '/workspace/e2e';
+
 const RUNTIME_DIR = '/var/tmp/devbox';
+
 const WORKDIR = '/workspace';
 
 const log = (line: string): void => {
@@ -93,6 +99,7 @@ const ExecReplySchema = v.looseObject({
   stderr: v.optional(v.string()),
   error: v.optional(v.string()),
 });
+
 type ExecReply = v.InferOutput<typeof ExecReplySchema>;
 
 /** What `POST /write` answers; only its refusal is read. */
@@ -131,6 +138,7 @@ async function post<TSchema extends v.GenericSchema>(
     body: JSON.stringify({ ...body, strategy: 'snapshot-chain' }),
     signal: AbortSignal.timeout(timeoutMs),
   });
+
   return v.parse(schema, await response.json());
 }
 
@@ -152,9 +160,13 @@ async function scan(fixture: Fixture, box: string, when: string): Promise<string
   const reply = await exec(fixture, box, DIAGNOSTIC, RUNTIME_DIR);
   const out = (reply.stdout ?? '').trim();
   log(`── /proc report ${when} ──`);
+
   for (const line of out.split('\n')) log(`  ${line}`);
+
   if ((reply.stderr ?? '').trim().length > 0) log(`  stderr: ${(reply.stderr ?? '').trim()}`);
+
   if (reply.error !== undefined) log(`  error: ${reply.error}`);
+
   return out;
 }
 
@@ -162,14 +174,17 @@ async function main(): Promise<number> {
   const keep = process.argv.includes('--keep');
   const runId = `hp${new Date().toISOString().replace(/\D/g, '').slice(4, 14)}`;
   process.env.CLOUDFLARE_ACCOUNT_ID = BENCH_ACCOUNT_ID;
+
   if (runWrangler(REPO_ROOT, ['whoami'], { allowFailure: true }).startsWith(WRANGLER_FAILED)) {
     log('wrangler is not authenticated; nothing can be deployed and nothing can be proved');
+
     return 1;
   }
 
   const workloadSource = readFileSync(WORKLOAD_SOURCE, 'utf8');
   const fixtures = createFixtureResources(runId, ['snapshot-chain']);
   const arm = fixtures.arms[0];
+
   if (arm === undefined) throw new Error('no arm was generated');
   // `ab-<strategy>-…`, because `addressArmRequest` infers the arm from exactly
   // that shape and every driver helper below goes through it.
@@ -179,6 +194,7 @@ async function main(): Promise<number> {
 
   const accessKeyId = process.env['R2_ACCESS_KEY_ID'];
   const secretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
+
   const residue = accessKeyId !== undefined && secretAccessKey !== undefined
     ? r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId, secretAccessKey })
     : null;
@@ -186,23 +202,30 @@ async function main(): Promise<number> {
   publishTeardown(async (): Promise<void> => {
     if (keep) {
       log(`--keep left ${arm.worker} / ${arm.bucket} in place`);
+
       return;
     }
+
     if (live !== null) {
       for (const error of await teardownLiveArms(live, [box])) log(`teardown: ${error}`);
     }
+
     for (const status of (stopWorker?.() ?? []).filter((s) => /failed/i.test(s))) {
       log(`teardown: ${status}`);
     }
+
     let deleted = runWrangler(REPO_ROOT, ['r2', 'bucket', 'delete', arm.bucket], { allowFailure: true });
+
     if (deleted.startsWith(WRANGLER_FAILED) && /not empty|10008/i.test(deleted) && residue !== null) {
       const drained = await drainBucketResidue(residue, arm.bucket);
       log(`${arm.bucket}: drained ${String(drained.objects)} object(s), aborted ${String(drained.uploads)} upload(s)`);
       deleted = runWrangler(REPO_ROOT, ['r2', 'bucket', 'delete', arm.bucket], { allowFailure: true });
     }
+
     if (deleted.startsWith(WRANGLER_FAILED) && !/not found|does not exist/i.test(deleted)) {
       log(`teardown: ${arm.bucket}: ${deleted.slice(0, 200)}`);
     }
+
     fixtures.disposeConfig();
     log('teardown complete');
   });
@@ -223,12 +246,14 @@ async function main(): Promise<number> {
       path: HARNESS_PATH, content: workloadSource,
     });
     await exec(live, box, `mkdir -p ${WORK_ROOT}`);
+
     const spawned = await exec(
       live, box,
       `cd ${HARNESS_DIR} && nohup bun ${HARNESS_PATH} hold-open --root ${WORK_ROOT} `
       + '--path open-write.bin --content probe-open-write --hold-ms 1800000 '
       + '>/dev/null 2>&1 & echo spawned',
     );
+
     log(`writer spawn: rc=${String(spawned.exitCode)} ${(spawned.stdout ?? '').trim()}`);
 
     // An ordinary product exec, at the product's DEFAULT cwd. This is the shape
@@ -254,14 +279,17 @@ async function main(): Promise<number> {
     if (stillMounted) {
       const unmount = `(fusermount -u '${WORKDIR}' 2>&1 || fusermount3 -u '${WORKDIR}' 2>&1); `
         + `echo "rc=$?"; echo "MOUNTED=$(grep -c -F ' ${WORKDIR} ' /proc/mounts)"`;
+
       for (const arm of [
         { label: `A: session cwd INSIDE the mount (${WORKDIR}, the product default)`, cwd: WORKDIR },
         { label: `B: session cwd OUTSIDE the mount (${RUNTIME_DIR})`, cwd: RUNTIME_DIR },
       ]) {
         const attempt = await exec(live, box, unmount, arm.cwd);
         log(`── ${arm.label} ──`);
+
         for (const line of (attempt.stdout ?? '').trim().split('\n')) log(`  ${line}`);
         const err = (attempt.stderr ?? '').trim();
+
         if (err.length > 0) log(`  stderr: ${err}`);
       }
     }
@@ -276,9 +304,11 @@ async function main(): Promise<number> {
       ? 'VERDICT PASS — the open-write scenario stopped clean: the stop confirmed and '
         + `${WORKDIR} is no longer mounted`
       : `VERDICT FAIL — stop ok=${String(settled.ok)}, ${WORKDIR} still mounted=${String(stillMounted)}`);
+
     return clean ? 0 : 1;
   } catch (error) {
     log(`probe failed: ${describeThrown({ cause: error })}`);
+
     return 1;
   } finally {
     await runTeardownOnce();

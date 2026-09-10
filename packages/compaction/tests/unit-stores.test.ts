@@ -29,13 +29,17 @@ function initCompactionStateTable(db: Database): void {
     exec(query, ...bindings) {
       const bound = bindings.map(sqliteBinding);
       const stmt = db.prepare<SqlExecRow, SQLQueryBindings[]>(query);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
         return { toArray: () => stmt.all(...bound) };
       }
+
       stmt.run(...bound);
+
       return { toArray: () => [] };
     },
   };
+
   initWorkspaceSchema({
     execRaw: (ddl) => db.exec(ddl),
     sql: sqliteSql(db),
@@ -51,10 +55,13 @@ function sqliteSql(db: Database): SqlExecutor {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
     const bound = values.map(sqliteBinding);
     const stmt = db.prepare<T, SQLQueryBindings[]>(query);
+
     if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
     stmt.run(...bound);
+
     return [];
   };
+
   return sql;
 }
 
@@ -70,6 +77,7 @@ function stateRig() {
   const db = new Database(':memory:');
   initCompactionStateTable(db);
   const actor = createTestActorsOver(db).main;
+
   return { db, actor, store: createCompactionStateStore(sqliteSql(db), actor) };
 }
 
@@ -99,10 +107,13 @@ interface MemoryVfs {
 function memoryVfs(): MemoryVfs {
   const files = new Map<string, string>();
   const dirs = new Set<string>();
+
   const vfs: VFS = {
     readFile: async (path) => {
       const content = files.get(path);
+
       if (content === undefined) throw new Error(`ENOENT: ${path}`);
+
       return content;
     },
     writeFile: async (path, data) => {
@@ -119,6 +130,7 @@ function memoryVfs(): MemoryVfs {
     },
     exists: async (path) => files.has(path) || dirs.has(path),
   };
+
   return { vfs, files };
 }
 

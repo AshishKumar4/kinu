@@ -23,18 +23,22 @@ afterEach(() => {
 describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => {
   test("lists the worker menu and runs a turn through the AI proxy with bearer + affinity", async () => {
     const requests: Array<{ path: string; auth: string | null; affinity: string | null; model?: string }> = [];
+
     const server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
       async fetch(request) {
         const path = new URL(request.url).pathname;
+
         const entry = {
           path,
           auth: request.headers.get("authorization"),
           affinity: request.headers.get("x-session-affinity"),
         };
+
         if (path === "/api/cli/models") {
           requests.push(entry);
+
           return Response.json({
             models: [
               {
@@ -46,16 +50,19 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
             failures: [],
           });
         }
+
         if (path === "/api/user/ai/v1/chat/completions") {
           const body = v.parse(JsonObjectSchema, await request.json());
           const model = v.parse(v.string(), body.model);
           requests.push({ ...entry, model });
+
           return Response.json({
             id: "chatcmpl-1", object: "chat.completion", created: 0, model,
             choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           });
         }
+
         return new Response("unexpected", { status: 500 });
       },
     });
@@ -82,12 +89,15 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
           text: turn.text,
         }));
       `;
+
       const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+
       for (const name of [
         "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
         "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
       ]) delete env[name];
+
       const proc = Bun.spawn({
         cmd: [process.execPath, "-e", script],
         cwd: resolve(__dirname, "../../.."),
@@ -95,6 +105,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
         stdout: "pipe",
         stderr: "pipe",
       });
+
       const [stdout, stderr, exitCode] = await Promise.all([
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
@@ -120,6 +131,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
         affinity: "kinu-jarvis",
         model: DEFAULT_WORKERS_AI_MODEL_ID,
       });
+
       for (const request of requests) expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);
     } finally {
       await server.stop(true);
@@ -168,7 +180,9 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
       const turn = await generateText({ model: resolver.resolveModel('claude/claude-sonnet-4-x'), prompt: 'ping' });
       console.log(JSON.stringify({ claudeAvailable: claude?.available === true, turn: turn.text }));
     `;
+
     const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+
     for (const name of [
       "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
       "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
@@ -182,6 +196,7 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
       stdout: "pipe",
       stderr: "pipe",
     });
+
     const [stdout, stderr, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
@@ -199,18 +214,22 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
     const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-resolver-claude-wire-"));
     tempDirs.push(kinuHome);
     writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
+
     const script = `
       import { createConfiguredLocalModelResolver } from './packages/cli/src/local-model-resolver.ts';
       const { resolver } = createConfiguredLocalModelResolver({ model: 'claude/claude-sonnet-4-x' });
       const model = resolver.resolveModel('claude/claude-sonnet-4-x');
       console.log(JSON.stringify({ provider: model.provider, specificationVersion: model.specificationVersion }));
     `;
+
     const env: NodeJS.ProcessEnv = { ...process.env, KINU_HOME: kinuHome };
+
     for (const name of [
       "KINU_TOKEN", "KINU_ORIGIN", "KINU_MODEL", "KINU_BASE_URL", "KINU_AUTH",
       "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
       "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
     ]) delete env[name];
+
     const proc = Bun.spawn({
       cmd: [process.execPath, "-e", script],
       cwd: resolve(__dirname, "../../.."),
@@ -218,10 +237,12 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
       stdout: "pipe",
       stderr: "pipe",
     });
+
     const [stdout, exitCode] = await Promise.all([
       new Response(proc.stdout).text(),
       proc.exited,
     ]);
+
     expect(exitCode).toBe(0);
     expect(JSON.parse(stdout)).toEqual({ provider: "claude", specificationVersion: "v2" });
   });

@@ -21,6 +21,7 @@ import {
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
 import { BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, recoveryBackoffMs } from '@kinu.run/core';
+
 /** The carrier half of a classification verdict, read from the module's own
  *  answer rather than restated beside it. */
 const LaneSnapshotSchema = v.object({ lane: v.string(), redrive: v.string() });
@@ -30,11 +31,14 @@ function recordingTransports() {
   const writes: unknown[][] = [];
   const state = { auditRows: 0 };
   const actor: ActorHandle = createTestActorsOver(new Database(':memory:')).main;
+
   const sql: FiberLaneTransports['sql'] = <T>(_strings: TemplateStringsArray, ...values: unknown[]): T[] => {
     state.auditRows += 1;
     writes.push(values);
+
     return [];
   };
+
   const transports: FiberLaneTransports = {
     jobs: {
       recover: () => Promise.resolve(null),
@@ -50,6 +54,7 @@ function recordingTransports() {
     deliverSignal: () => Promise.resolve('queued' as const),
     redrive: (lane) => { redriven.push(lane); },
   };
+
   return {
     transports,
     redriven,
@@ -70,6 +75,7 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
       [TERMINAL_LANE_FIBER, TERMINAL_LANE_FIBER],
       [SEARCH_FIBER_NAME, SEARCH_FIBER_NAME],
     ];
+
     for (const [name, lane] of cases) {
       const scene = recordingTransports();
       const verdict = classifyRecoveredFiber(scene.transports, fiber(name));
@@ -86,6 +92,7 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
       },
       reachable: [], minSeverity: 'concern', recent: [],
     };
+
     const fresh = recordingTransports();
     expect(classifyRecoveredFiber(fresh.transports, fiber(ADVISOR_LANE_FIBER, snapshot)).status)
       .toBe('completed');
@@ -125,12 +132,15 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
     // The lane name below is the classifier's address. The carrier it names is
     // read from the verdict, never restated.
     const scene = recordingTransports();
+
     const signal = {
       kind: 'fork_interrupted', text: 'the fork was retired',
       idempotencyKey: 'fork-interrupted:root-1',
     };
+
     const verdict = classifyRecoveredFiber(scene.transports, fiber('fork:notice', signal));
     expect(verdict.status).toBe('completed');
+
     if (verdict.status !== 'completed') throw new Error('expected the fork-notice lane to classify completed');
     const snapshot = v.parse(LaneSnapshotSchema, verdict.snapshot);
     expect(snapshot.redrive).toBe('signal-delivery');
@@ -163,8 +173,10 @@ describe('every recovered lane leaves a carrier, or drops on purpose', () => {
     // second lands and dispatches nothing further.
     while (bodies.length > 0) {
       const body = bodies.shift();
+
       if (body) await body();
     }
+
     // Both dispatches ride the lane the verdict named — a retry under any
     // other lane would re-enter the wrong arm after an eviction.
     if (verdict.status !== 'completed') throw new Error('expected the fork-notice lane to classify completed');

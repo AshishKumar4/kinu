@@ -71,7 +71,9 @@ export function terminalChatError(
   announcedResumes: ReadonlySet<string>,
 ): ChatTurnError | null {
   if (frame.type !== 'cf_agent_use_chat_response') return null;
+
   if (frame.error !== true || frame.done !== true) return null;
+
   return {
     body: frame.body?.trim() ? frame.body : UNKNOWN_TURN_FAILURE,
     replayed: frame.id !== undefined && announcedResumes.has(frame.id),

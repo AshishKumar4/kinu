@@ -12,16 +12,19 @@ import {
 function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
   const execOptions: unknown[] = [];
+
   return {
     calls,
     execOptions,
     async exec(command: string, opts?: { cwd?: string; timeout?: number }) {
       calls.push(`exec:${command}`);
       execOptions.push(opts);
+
       return { stdout: "ok", exitCode: 0 };
     },
     async readFile(path: string) {
       calls.push(`read:${path}`);
+
       return { content: "file", exitCode: 0 };
     },
     async writeFile(path: string) {
@@ -29,6 +32,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
     },
     async listFiles(path: string) {
       calls.push(`list:${path}`);
+
       return { files: [] };
     },
     async deleteFile(path: string) {
@@ -36,6 +40,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
     },
     async exposePort(port: number) {
       calls.push(`expose:${port}`);
+
       return { url: `https://${port}.example.test`, port };
     },
     async unexposePort(port: number) {
@@ -43,6 +48,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
     },
     async getExposedPorts(hostname: string) {
       calls.push(`ports:${hostname}`);
+
       return [];
     },
     ...sandboxHandleLifecycle,
@@ -52,6 +58,7 @@ function sandboxHandle(): SandboxHandle & { calls: string[]; execOptions: unknow
 function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unknown[] } {
   const calls: string[] = [];
   const execOptions: unknown[] = [];
+
   return {
     calls,
     execOptions,
@@ -61,6 +68,7 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
     async exec(command: string, options) {
       calls.push(`exec:${command}`);
       execOptions.push(options);
+
       return {
         command,
         success: true,
@@ -74,6 +82,7 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
     files: {
       async read(path: string) {
         calls.push(`read:${path}`);
+
         return "hello";
       },
       async write(path: string, content: string | Uint8Array) {
@@ -81,10 +90,12 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
       },
       async list(path: string) {
         calls.push(`list:${path}`);
+
         return [{ name: "a.txt", type: "file" }];
       },
       async exists(path: string) {
         calls.push(`exists:${path}`);
+
         return true;
       },
       async mkdir(path: string) {
@@ -97,38 +108,46 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
     runtimes: {
       async ensure(specs: string | string[]): Promise<undefined> {
         calls.push(`ensure:${Array.isArray(specs) ? specs.join(",") : specs}`);
+
         return undefined;
       },
       async list() {
         calls.push("runtimes");
+
         return { installed: [], available: [] };
       },
     },
     processes: {
       async list() {
         calls.push("processes");
+
         return [];
       },
       async kill(pid: number) {
         calls.push(`kill:${pid}`);
+
         return { ok: true, pid };
       },
       async logs(pid: number) {
         calls.push(`logs:${pid}`);
+
         return "log";
       },
     },
     ports: {
       async expose(port: number) {
         calls.push(`expose:${port}`);
+
         return { port, url: `https://nimbus.example/s/test/port/${port}/` };
       },
       async unexpose(port: number) {
         calls.push(`unexpose:${port}`);
+
         return { port, ok: true };
       },
       async list() {
         calls.push("ports");
+
         return [];
       },
     },
@@ -186,6 +205,7 @@ describe("executor lifecycle state", () => {
 
     const provided = await executor.exposePort!(3000);
     expect(provided.supported).toBe(false);
+
     if (!provided.supported) expect(provided.reason).toContain("PREVIEW_HOST_SUFFIX");
 
     // A refusal must never touch the container — no probe, no SDK call.
@@ -206,6 +226,7 @@ describe("executor lifecycle state", () => {
     expect(await executor.tools.exposePort.execute(3000)).toContain("not configured");
     const provided = await executor.exposePort!(3000);
     expect(provided.supported).toBe(false);
+
     if (!provided.supported) expect(provided.reason).toContain("not configured");
   });
 
@@ -248,6 +269,7 @@ describe("executor lifecycle state", () => {
   test("sandbox exists maps a transport failure to a refusal, not a rejection", async () => {
     const handle = sandboxHandle();
     handle.exec = async () => { throw new Error("transport down"); };
+
     const executor = createSandboxExecutor(handle);
 
     const out = await executor.tools.exists.execute("/workspace/a.md");
@@ -258,6 +280,7 @@ describe("executor lifecycle state", () => {
   test("sandbox port discovery preserves a real SDK failure", async () => {
     const handle = sandboxHandle();
     handle.getExposedPorts = async () => { throw new Error("preview registry unavailable"); };
+
     const executor = createSandboxExecutor(handle, "kinu.example.test");
 
     await expect(executor.listExposedPorts!()).rejects.toThrow("preview registry unavailable");
@@ -275,12 +298,15 @@ describe("executor lifecycle state", () => {
     let readies = 0;
     handle.ensureReady = async () => {
       readies += 1;
+
       if (readies === 1) throw new Error("network connection lost");
     };
+
     handle.startSupervisedProcess = async () => {
       starts += 1;
       throw new Error("network connection lost");
     };
+
     const executor = createSandboxExecutor(handle);
 
     const out = await executor.tools.startProcess.execute("bun run server.ts");
@@ -330,6 +356,7 @@ describe("executor lifecycle state", () => {
     const executor = createNimbusExecutor({ box });
     const result = await executor.exposePort!(4321);
     expect(result.supported).toBe(false);
+
     if (!result.supported) expect(result.reason).toContain("4321");
   });
 
@@ -340,9 +367,12 @@ describe("executor lifecycle state", () => {
     handle.listFiles = async (path: string) => {
       seen.push(path);
       await inner(path);
+
       if (path === "/") return { files: [{ name: "/mydir", type: "directory" as const, size: 0 }] };
+
       return { files: [] };
     };
+
     const executor = createSandboxExecutor(handle, "kinu.example.test");
     expect(await executor.files!.stat("/mydir")).toMatchObject({ isDir: true });
     expect(await executor.files!.stat("/mydir/")).toMatchObject({ isDir: true });

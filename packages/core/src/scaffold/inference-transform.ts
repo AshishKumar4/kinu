@@ -60,20 +60,24 @@ export function scaffoldInferenceTransform(opts: {
   run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'>;
 }): InferenceStreamResult {
   const { program, result, run } = opts;
+
   if (program.kind === 'builtin' || (run.workMode ?? currentWorkMode()) === 'plan') return result;
 
   let delegated = false;
+
   // Capture at preparation, not when the lazy generator is finally consumed.
   const execute = bindTaskPlan(({ emit, options }: { emit: ScaffoldEmitFn; options: Parameters<InferenceStreamResult['toUIMessageStream']>[0] }) => runScaffold({
     ...run, emit,
     scaffoldCodeOverride: program.source,
     defaultInference: () => {
       delegated = true;
+
       return wrapDefaultStream(result.toUIMessageStream(options));
     },
   }).finally(async () => {
     if (!delegated) await result.toUIMessageStream(options)[Symbol.asyncIterator]().return?.();
   }));
+
   return {
     toUIMessageStream: (options) => scaffoldEventsToUIStream(
       (emit) => execute({ emit, options }),

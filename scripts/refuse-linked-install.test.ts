@@ -4,19 +4,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const GUARD = join(import.meta.dir, 'refuse-linked-install.ts');
+
 const PRIMARY_ENTRY = join(import.meta.dir, '..', 'node_modules', 'valibot');
+
 const minted: string[] = [];
+
 const fixture = (): string => {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-linked-install-'));
   minted.push(dir);
   mkdirSync(join(dir, 'node_modules'));
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'x', private: true, scripts: { preinstall: `bun ${GUARD}` } }));
+
   return dir;
 };
+
 const install = (cwd: string) => {
   const proc = Bun.spawnSync({ cmd: [process.execPath, 'install'], cwd, stdout: 'pipe', stderr: 'pipe' });
+
   return { exitCode: proc.exitCode, stderr: proc.stderr.toString() };
 };
+
 afterAll(() => { for (const dir of minted) rmSync(dir, { recursive: true, force: true }); });
 
 describe('refuse-linked-install', () => {

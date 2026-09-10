@@ -54,12 +54,18 @@ import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model
 // Dynamic because the offer has to be in place before the import: a static one
 // is hoisted above the assignment.
 const OFFERED_HOME = mkdtempSync(join(tmpdir(), 'kinu-naming-home-'));
+
 const inheritedHome = process.env.KINU_HOME;
+
 process.env.KINU_HOME = OFFERED_HOME;
+
 const { listKnownAgents } = await import('../src/agent-list');
+
 const { upsertAgentConfig, AGENT_HOME } = await import('../src/config');
+
 if (inheritedHome === undefined) delete process.env.KINU_HOME;
 else process.env.KINU_HOME = inheritedHome;
+
 afterAll(() => rmSync(OFFERED_HOME, { recursive: true, force: true }));
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -74,6 +80,7 @@ const PLACEHOLDER_MISSION = 'Help the user with the work they assign.';
 /** What the owner types first. The title the workspace ends up with is this
  *  line, so the assertions below can be literal. */
 const FIRST_PROMPT = 'Audit the OAuth callback flow';
+
 const TITLE = 'Audit the OAuth callback flow';
 
 /** A real slug, minted the way the product mints one, so "the surface must not
@@ -81,6 +88,7 @@ const TITLE = 'Audit the OAuth callback flow';
 const SLUG = workspaceSlug('4166c321-1a4e-4e20-9f15-9a7f159a4e20');
 
 const tempRoots: string[] = [];
+
 afterEach(() => {
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -101,16 +109,19 @@ interface PromptLog {
 function recordingModel(): PromptLog {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const systems: string[] = [];
+
   const record = (options: LanguageModelV2CallOptions) => {
     for (const message of options.prompt) {
       if (message.role === 'system') systems.push(message.content);
     }
   };
+
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doGenerate: async (options) => {
       record(options);
+
       return {
         content: [{ type: 'text', text: 'ack' }],
         finishReason: 'stop',
@@ -120,6 +131,7 @@ function recordingModel(): PromptLog {
     },
     doStream: async (options) => {
       record(options);
+
       return {
         stream: new ReadableStream({
           start(controller) {
@@ -135,6 +147,7 @@ function recordingModel(): PromptLog {
       };
     },
   });
+
   return { model, systems: () => [...systems] };
 }
 
@@ -151,6 +164,7 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
+
   try {
     const rt = await createWorkspace(db, { name: SLUG, purpose: PLACEHOLDER_MISSION, llm: DUMMY_LLM });
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
@@ -158,7 +172,9 @@ async function seedUntitledWorkspace(project: string): Promise<string> {
   } finally {
     db.close();
   }
+
   upsertAgentConfig({ name: SLUG, mode: 'local', localName: SLUG, cwd: project, workspaceId: 'proj' });
+
   return dbPath;
 }
 
@@ -169,9 +185,11 @@ function makeHost(model: LanguageModel, refs: readonly HostedAgentRef[]): LocalA
     open: async (ref, db, dbPath) => {
       const openConfig = { llm: DUMMY_LLM, cwd: ref.cwd };
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
+
       return { rt, openConfig, staticModel: model } satisfies LocalHostedAgent;
     },
   };
+
   return new LocalAgentHost(options);
 }
 
@@ -180,6 +198,7 @@ function makeHost(model: LanguageModel, refs: readonly HostedAgentRef[]): LocalA
 function makeProject(): string {
   const project = mkdtempSync(join(tmpdir(), 'kinu-naming-project-'));
   tempRoots.push(project, join(AGENT_HOME, SLUG));
+
   return project;
 }
 
@@ -188,11 +207,13 @@ function makeProject(): string {
  *  the fact rather than on a delay. */
 function titled(host: LocalAgentHost): Promise<string> {
   const settled = Promise.withResolvers<string>();
+
   const unsubscribe = host.subscribe((_who, event: SessionEvent) => {
     if (event.type !== 'broadcast' || event.event.type !== 'workspace_renamed') return;
     unsubscribe();
     settled.resolve(event.event.displayName);
   });
+
   return settled.promise;
 }
 
@@ -202,6 +223,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
     await seedUntitledWorkspace(project);
     const log = recordingModel();
     const host = makeHost(log.model, [{ name: SLUG, cwd: project, workspaceId: 'proj' }]);
+
     try {
       // Nothing has named this workspace yet, so the very first prompt the
       // model reads must not claim a name. Seeding SOUL.md's heading with the
@@ -235,6 +257,7 @@ describe('a workspace is named by its first prompt, and that name is what a pers
     await seedUntitledWorkspace(project);
     const log = recordingModel();
     const host = makeHost(log.model, [{ name: SLUG, cwd: project, workspaceId: 'proj' }]);
+
     try {
       const session = await host.acquire(SLUG);
       const renamed = titled(host);
@@ -244,10 +267,12 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       // A hire with a role and no name of its own: the roster titles it from
       // the role, and the tree ADDRESSES it by a minted slug.
       const team = await host.team(SLUG);
+
       const created = await team.create({
         role: 'researcher',
         mission: 'Read the callback handler and report what it trusts.',
       });
+
       expect(created.displayName).toBe('Researcher');
       expect(created.name).not.toBe(created.displayName);
 
@@ -261,16 +286,21 @@ describe('a workspace is named by its first prompt, and that name is what a pers
       // host between them tears a live turn's database out from under it.
       const childTurn = Promise.withResolvers<void>();
       const parentTurn = Promise.withResolvers<void>();
+
       const unsubscribe = host.subscribe((who, event) => {
         if (event.type !== 'turn-end') return;
+
         if (who === `${SLUG}/${created.name}`) childTurn.resolve();
+
         if (who === SLUG) parentTurn.resolve();
       });
+
       await Promise.all([childTurn.promise, parentTurn.promise]);
       unsubscribe();
 
       const childPrompt = log.systems().slice(before)
         .find((system) => system.includes('a subagent in the workspace'));
+
       expect(childPrompt).toBeDefined();
       expect(childPrompt).toContain(`You are "Researcher", a subagent in the workspace "${TITLE}".`);
       // Neither the workspace's slug nor the subagent's own minted address.

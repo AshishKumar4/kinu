@@ -23,6 +23,7 @@ import {
 } from '../src/orchestrator/turn-lifecycle';
 
 type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
+
 type UnifiedFinish = FinishPart['finishReason']['unified'];
 
 const USAGE: FinishPart['usage'] = {
@@ -38,6 +39,7 @@ function textStream(parts: readonly LanguageModelV3StreamPart[]): ReadableStream
   return new ReadableStream<LanguageModelV3StreamPart>({
     start(c) {
       c.enqueue({ type: 'stream-start', warnings: [] });
+
       for (const part of parts) c.enqueue(part);
       c.close();
     },
@@ -58,6 +60,7 @@ function text(id: string, delta: string): LanguageModelV3StreamPart[] {
 function scriptedModel(scripts: ReadonlyArray<readonly LanguageModelV3StreamPart[]>) {
   const prompts: LanguageModelV3Prompt[] = [];
   let call = 0;
+
   const model = new MockLanguageModelV3({
     provider: 'fake',
     modelId: 'fake-model',
@@ -65,14 +68,17 @@ function scriptedModel(scripts: ReadonlyArray<readonly LanguageModelV3StreamPart
       prompts.push(options.prompt);
       const script = scripts[Math.min(call, scripts.length - 1)] ?? [];
       call += 1;
+
       return { stream: textStream(script), response: { headers: {} } };
     },
   });
+
   return { model, prompts };
 }
 
 async function drain(model: LanguageModel, tools: ToolSet = {}): Promise<ChatEvent[]> {
   const events: ChatEvent[] = [];
+
   for await (const ev of runChat({
     model,
     system: 'sys',
@@ -81,6 +87,7 @@ async function drain(model: LanguageModel, tools: ToolSet = {}): Promise<ChatEve
   })) {
     events.push(ev);
   }
+
   return events;
 }
 
@@ -121,16 +128,19 @@ describe('output-limit continuation', () => {
 
   test('an output limit after a completed tool continues without replaying the call', async () => {
     let executions = 0;
+
     const tools: ToolSet = {
       look: tool({
         description: 'look something up',
         inputSchema: z.object({}),
         execute: async (): Promise<string> => {
           executions += 1;
+
           return 'the answer is 41';
         },
       }),
     };
+
     const { model, prompts } = scriptedModel([
       // Step 1: the model calls the tool. Step 2: it starts reporting and the
       // provider cuts it at the output limit.

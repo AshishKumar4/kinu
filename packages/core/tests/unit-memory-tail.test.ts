@@ -14,23 +14,29 @@ function seeded(content: string | null) {
   const db = new Database(':memory:');
   const files = createWorkspaceBundle(db).vfs;
   let bytesRead = 0;
+
   const counted: WorkspaceVFS = {
     ...files,
     async readFile(path, opts) {
       const raw = await files.readFile(path, opts);
       bytesRead += raw instanceof Uint8Array ? raw.byteLength : new TextEncoder().encode(raw).byteLength;
+
       return raw;
     },
     async readRange(path, offset, length) {
       const raw = await files.readRange(path, offset, length);
       bytesRead += raw.byteLength;
+
       return raw;
     },
   };
+
   const memory = createMemoryMemory(db, counted);
+
   const ready = content === null
     ? Promise.resolve()
     : files.mkdir('memory', { recursive: true }).then(() => files.writeFile(PATH, content));
+
   return { memory, ready, bytesRead: () => bytesRead };
 }
 
@@ -61,6 +67,7 @@ describe('readMemoryTail', () => {
       'ship it 🚀🎉 done ✅',
       'plain ascii last line',
     ].join('\n');
+
     const { memory, ready } = seeded(content);
     await ready;
     const whole = await memory.read(PATH);

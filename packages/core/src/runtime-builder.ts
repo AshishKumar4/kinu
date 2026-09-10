@@ -28,6 +28,7 @@ import type { ModelRouteResolution } from './profiles/model-route';
 import type { ResolvedTurnProfile } from './profiles/resolve';
 import type { SpendSource } from './events/model-call';
 import type { ActorHandle } from './identity/actor-handle';
+
 /**
  * Where the fixed-tier producer lanes come from. The route POLICY is core's
  * (profiles/model-route.ts); this component supplies what only a backend
@@ -123,8 +124,10 @@ interface PinnedLanes {
 function resolveRoutedLane(lanes: ModelLaneComponents | undefined, source: SpendSource): LLM | undefined {
   if (!lanes) return undefined;
   const profile = lanes.turnProfile();
+
   if (!profile) return lanes.fallbackLlm?.();
   const resolution = resolveModelRoute(source, profile);
+
   return resolution ? lanes.llm(resolution) : undefined;
 }
 
@@ -144,6 +147,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
       path: components.scaffoldPath ?? 'scaffold/agent.js',
     }),
   };
+
   const lanes = components.modelLanes;
   const pinned: PinnedLanes = {};
 

@@ -30,6 +30,7 @@ describe('IPv4 literals of every refused family', () => {
     expect(new URL('http://0x7f000001/').hostname).toBe('127.0.0.1');
     expect(new URL('http://2130706433/').hostname).toBe('127.0.0.1');
     expect(new URL('http://0177.0.0.1/').hostname).toBe('127.0.0.1');
+
     for (const spelling of ['127.1', '0x7f000001', '2130706433', '0177.0.0.1']) {
       expect(judged(`http://${spelling}/`)).toMatchObject({ reason: 'denied' });
     }

@@ -33,15 +33,18 @@ function isVfsErrorCode(code: string): code is VfsErrorCode {
  *  rather than being flattened into a lie about what went wrong. */
 function nodeError(input: { error: unknown }): v.InferOutput<typeof nodeErrorSchema> | null {
   const parsed = v.safeParse(nodeErrorSchema, input.error);
+
   return parsed.success ? parsed.output : null;
 }
 
 function throwVfsError(input: { error: unknown; syscall: string; path: string }): never {
   const error = nodeError(input);
+
   if (error?.code && isVfsErrorCode(error.code)) {
     const message = error.message ?? String(input.error);
     throw makeVfsError(error.code, `${message}, ${input.syscall} '${input.path}'`, input.path);
   }
+
   throw input.error;
 }
 
@@ -49,6 +52,7 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
   const snapshot = async (path: string, reason: string): Promise<void> => {
     await checkpoints?.ensureCheckpoint(checkpoints.workdirForPath(path), reason);
   };
+
   return {
     async readFile(path, opts) {
       try {
@@ -59,6 +63,7 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
     },
     async writeFile(path, data) {
       await snapshot(path, 'file write');
+
       try {
         await fs.mkdir(dirname(path), { recursive: true });
         await fs.writeFile(path, data);
@@ -71,6 +76,7 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
     async stat(path) {
       try {
         const s = await fs.stat(path);
+
         return { size: s.size, mtimeMs: s.mtimeMs, isDir: s.isDirectory() };
       } catch (error) {
         if (classify({ cause: error }) === 'enoent') return null;
@@ -79,6 +85,7 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
     },
     async unlink(path) {
       await snapshot(path, 'file delete');
+
       try { await fs.rm(path, { recursive: true, force: true }); }
       catch (error) { throwVfsError({ error, syscall: 'unlink', path }); }
     },
@@ -120,19 +127,25 @@ export function createHostMountVFS(checkpoints: FileCheckpoints | undefined): VF
 export function createCwdPlaneVFS(cwd: string, checkpoints: FileCheckpoints | undefined): VFS {
   const root = resolve(cwd);
   const host = createHostMountVFS(checkpoints);
+
   const hostPath = (path: string): string => {
     const direct = isAbsolute(path) ? resolve(path) : resolve(root, path || '.');
+
     // A real path inside the directory wins over every alias: the filesystem
     // is the authority on its own names, and this is the address the host
     // shell just printed.
     if (withinRoot(root, direct)) return direct;
     const inner = isAbsolute(path) ? planeRootRelative(path) : null;
+
     if (inner !== null) {
       const mapped = resolve(root, inner || '.');
+
       if (withinRoot(root, mapped)) return mapped;
     }
+
     throw makeVfsError('EACCES', `path escapes the workspace directory ${root}: ${path}`, path);
   };
+
   return {
     readFile: (path, opts) => host.readFile(hostPath(path), opts),
     writeFile: (path, data) => host.writeFile(hostPath(path), data),
@@ -155,15 +168,19 @@ const PLANE_ROOTS: readonly string[] = ['/', WORKSPACE_ROOT, '/workspace'];
 function planeRootRelative(path: string): string | null {
   for (const planeRoot of PLANE_ROOTS) {
     if (path === planeRoot) return '';
+
     // `/` names the root and nothing beneath it: `/etc/passwd` is a real
     // absolute path, never `<cwd>/etc/passwd`.
     if (planeRoot !== '/' && path.startsWith(`${planeRoot}/`)) return path.slice(planeRoot.length + 1);
   }
+
   return null;
 }
 
 function withinRoot(root: string, candidate: string): boolean {
   const distance = relative(root, candidate);
+
   if (distance === '') return true;
+
   return distance !== '..' && !distance.startsWith(`..${sep}`) && !isAbsolute(distance);
 }

@@ -74,6 +74,7 @@ const STALE_CHUNK_MESSAGES = [
 function isStaleChunkFailure<Failure>(cause: Failure): boolean {
   if (!(cause instanceof Error)) return false;
   const message = cause.message.toLowerCase();
+
   return STALE_CHUNK_MESSAGES.some((known) => message.includes(known));
 }
 
@@ -112,6 +113,7 @@ export interface ChunkReloadStore {
 function claimChunkReload(session: ChunkReloadStore, target: string): boolean {
   if (session.getItem(CHUNK_RELOAD_KEY) === target) return false;
   session.setItem(CHUNK_RELOAD_KEY, target);
+
   return true;
 }
 
@@ -161,11 +163,15 @@ export async function loadRouteChunk<Module>(
     // The origin first, because it is the read that costs a request; the page's
     // own baseline was captured at load and is already resolved.
     const live = await deps.live();
+
     if (live === null) throw cause;
+
     if (!isNewerDeployedBuild(await deps.baseline(), live)) throw cause;
+
     if (!claimChunkReload(deps.session, live)) throw cause;
     deps.reload();
     const { promise } = Promise.withResolvers<Module>();
+
     return await promise;
   }
 }
@@ -208,9 +214,11 @@ export function lazyRoute<Props extends object>(
   load: () => Promise<{ default: ComponentType<Props> }>,
 ): ComponentType<Props> {
   let examined = false;
+
   const attempt = async (): Promise<{ default: ComponentType<Props> }> => {
     if (examined) return await load();
     examined = true;
+
     return await loadRouteChunk(load, {
       baseline: pageDeployedBuildSha,
       live: fetchDeployedBuildSha,
@@ -218,8 +226,10 @@ export function lazyRoute<Props extends object>(
       reload: () => { location.reload(); },
     });
   };
+
   return function LazyRoute(props: Props) {
     const [Loaded] = useState(() => lazy(attempt));
+
     return <Loaded {...props} />;
   };
 }

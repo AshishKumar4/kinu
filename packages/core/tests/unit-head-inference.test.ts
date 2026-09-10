@@ -21,11 +21,13 @@ import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
  *  finishReason 'stop' so the head ends in a single step (no tool calls). */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
   const usage = opts?.usage ?? { inputTokens: 10, outputTokens: 20 };
+
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-head',
     doGenerate: async () => {
       if (opts?.throwError) throw new Error(opts.throwError);
+
       return {
         content: answer ? [{ type: 'text', text: answer }] : [],
         finishReason: { unified: 'stop', raw: undefined },
@@ -69,6 +71,7 @@ const deps = async (
 ): Promise<HeadInferenceDeps> => {
   const { rt, testSql } = createTestRuntime();
   const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-under-test', 'head');
+
   return {
     actor: seat.actor, runId: seat.runId, profile: seat.profile, dynamic: seat.dynamic,
     model, tools: {}, capture: new HeadCapture(), isAborted: () => false, ...over,
@@ -97,6 +100,7 @@ describe('runHeadInference — report assembly', () => {
       headInput(),
       await deps(fakeHeadModel('text'), { isAborted: () => true, abortReason: () => 'operator cancelled' }),
     );
+
     expect(report.status).toBe('aborted');
     expect(report.errorMessage).toBe('operator cancelled');
   });
@@ -195,10 +199,12 @@ describe('buildHeadMessages — a fork inherits real messages, not prose', () =>
 
   test('the provider sees the structured conversation, not one user blob', async () => {
     const prompts: Array<Array<{ role: string }>> = [];
+
     const model = scriptedTurnModel({
       provider: 'fake', modelId: 'fake-head',
       doGenerate: async (options) => {
         prompts.push(options.prompt.map((m) => ({ role: m.role })));
+
         return {
           content: [{ type: 'text', text: 'done' }],
           finishReason: { unified: 'stop', raw: undefined },
@@ -286,6 +292,7 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
   test('buildHeadMessages neither expands nor re-windows what the read already capped', () => {
     const inheritedContext = inheritedContextFromRows(
       [{ id: 'r1', role: 'assistant', content: stored, createdAt: 1 }], 1);
+
     const windowed = inheritedContext[0]!.content;
 
     // A second window IS observable on already-windowed text, so the

@@ -191,10 +191,12 @@ function ChatScene({
   const { keybindings, preferences, updatePreferences } = useTuiProduct();
   const sceneWidth = sceneWidthFor(width, preferences.wideSidebarOpen);
   const keyDispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
+
   const workspaceSource = useMemo(
     () => workspaceSourceInput ?? agentSourceFromList(listSidebarAgents),
     [workspaceSourceInput],
   );
+
   const roster = useAgentRoster(workspaceSource);
   const [navigationOpen, setNavigationOpen] = useState(false);
   // The client can be swapped mid-session: a cloud walk-back fork returns a
@@ -218,6 +220,7 @@ function ChatScene({
   const hubView = activeSurface?.kind === 'hub' ? activeSurface.view : null;
   const settingsOpen = activeSurface?.kind === 'settings';
   const themePickerOpen = activeSurface?.kind === 'theme';
+
   // The hub describes ONE open workspace, so its state carries that
   // workspace's identity: a switch resets it synchronously alongside every
   // other per-client piece, and the refresh effect re-derives it from the
@@ -225,6 +228,7 @@ function ChatScene({
   const [hub, setHub] = useState<{ identity: string; data: TuiHubData } | null>(
     hubData ? { identity: `${initialClient.mode}:${initialClient.agentName}`, data: hubData } : null,
   );
+
   const [draft, setDraft] = useState('');
   // What the composer SHOWS of that draft. The editor wraps it over display
   // columns, so these are visual rows, not typed lines — read back from the
@@ -234,12 +238,14 @@ function ChatScene({
   // saves under the OLD client's key, arriving restores under the new one's.
   const draftsRef = useRef(new Map<string, string>());
   const [inputState, setInputState] = useState(initialInputState);
+
   /** Steer-as-Branch runs in flight, branchId → task (status-bar segment). */
   const profileMutations = suppliedProfileMutations ?? {
     setModel: (spec: string) => setModelPreference(client, spec),
     setReasoningEffort: (effort: 'low' | 'medium' | 'high') =>
       setReasoningEffortPreference(client, effort),
   };
+
   const [branchTasks, setBranchTasks] = useState<Record<string, string>>({});
   const [toolDetailsExpanded, setToolDetailsExpanded] = useState(false);
 
@@ -247,10 +253,12 @@ function ChatScene({
   const historyRef = useRef<ScrollBoxRenderable | null>(null);
   const inputRef = useRef<TextareaRenderable | null>(null);
   const scrollAnchor = usePreservedScrollAnchor(historyRef);
+
   const handleNavigationFocusChange = useCallback((focused: boolean) => {
     if (focused) inputRef.current?.blur();
     else if (ready) inputRef.current?.focus();
   }, [ready]);
+
   // Mirrors the input's declarative `focused` condition so a click can reassert
   // focus without introducing a second focus state.
   const inputShouldFocusRef = useRef(false);
@@ -259,12 +267,14 @@ function ChatScene({
   const selectionPendingRef = useRef(false);
   const skipHydrationRef = useRef(false);
   const preconnectedClientRef = useRef<AgentClient | null>(null);
+
   const preconnectedEventsRef = useRef<{
     client: AgentClient;
     events: AgentClientEvent[];
     historyBoundary: number;
     stop: () => void;
   } | null>(null);
+
   const clientGenerationRef = useRef(0);
   const clientActionCountRef = useRef(0);
   /** Take sets already hinted at, so a turn without a new convergence is quiet. */
@@ -277,8 +287,10 @@ function ChatScene({
   const metadataTaskRef = useRef<Promise<void> | null>(null);
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
+
   const settings = useMemo<TuiSettingChoice[]>(() => {
     const effort = status?.reasoningEffort ?? 'medium';
+
     const rows: TuiSettingChoice[] = [
       {
         id: 'model',
@@ -302,6 +314,7 @@ function ChatScene({
         command: '/theme',
       },
     ];
+
     if (client.localControls) {
       const approval = client.localControls.getShellApprovalMode();
       rows.push(...(['strict', 'allow_all', 'deny_all'] as const).map((value) => ({
@@ -320,8 +333,10 @@ function ChatScene({
         command: '/always ',
       });
     }
+
     return rows;
   }, [activeTheme.label, client, modelSpec, preferences.theme.mode, status?.reasoningEffort]);
+
   useEffect(() => {
     if (activeSurface?.kind !== 'model') modelRequestRef.current += 1;
   }, [activeSurface?.kind]);
@@ -337,6 +352,7 @@ function ChatScene({
   const addError = useCallback((failure: CaughtFailure) => {
     addMessage({ role: 'system', content: errorLine(renderThrownChain(failure)) });
   }, [addMessage]);
+
   // ── Live assistant text segments — the key to chronological interleaving.
   // Streamed text-deltas flow into a `live` assistant message that sits at its
   // real position in the array. A tool-call SEALS the active segment so the
@@ -352,9 +368,11 @@ function ChatScene({
   /** Stream-buffer flush target: write coalesced text into the live segment. */
   const writeActiveSegment = useCallback((value: string | null) => {
     const id = activeSegmentRef.current;
+
     if (!id || value === null) return;
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, content: value } : m)));
   }, []);
+
   const stream = useStreamingBuffer(writeActiveSegment);
 
   /** Open a fresh live assistant segment and route streamed text into it. */
@@ -372,6 +390,7 @@ function ChatScene({
     const id = activeSegmentRef.current;
     activeSegmentRef.current = null;
     stream.clear();
+
     if (!id) return;
     setMessages((prev) =>
       prev.flatMap((m) => (m.id === id ? (m.content.trim() ? [{ ...m, live: false }] : []) : [m])),
@@ -384,6 +403,7 @@ function ChatScene({
     const { state, effects } = reduceInput(machineRef.current, event);
     machineRef.current = state;
     setInputState(state);
+
     return effects;
   }, []);
 
@@ -394,6 +414,7 @@ function ChatScene({
    *  same text wraps at. */
   const syncComposerRows = useCallback(() => {
     const input = inputRef.current;
+
     if (!input) return;
     setComposerRows(composerVisibleRows(input.editorView.getTotalVirtualLineCount()));
   }, []);
@@ -410,25 +431,34 @@ function ChatScene({
   const sendPrompt = useCallback(async (input: string) => {
     const generation = clientGenerationRef.current;
     clientActionCountRef.current += 1;
+
     try {
       const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
+
       if (clientGenerationRef.current !== generation) return;
+
       for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
       const steering = machineRef.current.activeTurns > 0;
+
       const message: Omit<DisplayMessage, 'id'> = {
         role: 'user',
         content: prompt.text,
         attachments: prompt.attached.length > 0 ? prompt.attached.map(describePromptAttachment) : undefined,
         steered: steering,
       };
+
       addMessage(message);
       const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
       const sendOptions: AgentClientSendOptions = { cwd: process.cwd() };
+
       if (nextTier) sendOptions.tier = nextTier;
+
       if (steering && client.steer(payload, sendOptions)) {
         setNextTier(null);
+
         return;
       }
+
       setNextTier(null);
       await client.send(payload, sendOptions);
     } catch (err) {
@@ -444,12 +474,16 @@ function ChatScene({
   const performBranch = useCallback(async (input: string) => {
     try {
       const text = input.trim();
+
       if (!text) return;
+
       if (machineRef.current.activeTurns > 0 && client.branch(text, { cwd: process.cwd() })) {
         const branch: Omit<DisplayMessage, 'id'> = { role: 'user', content: text, branched: true };
         addMessage(branch);
+
         return;
       }
+
       await sendPrompt(text);
     } catch (cause) {
       addError({ cause });
@@ -463,8 +497,10 @@ function ChatScene({
     selectionPendingRef.current = true;
     setReady(false);
     dispatchInput({ type: 'walkback-closed' });
+
     try {
       const result = await client.fork(point);
+
       if (result.client !== client) {
         setReady(false);
         setStatus(null);
@@ -476,6 +512,7 @@ function ChatScene({
         const previous = client;
         setClient(result.client);
         onClientChange?.(result.client);
+
         try {
           await previous.close();
         } catch (closeError) {
@@ -483,9 +520,11 @@ function ChatScene({
           addMessage({ role: 'system', content: `The pre-fork session did not close cleanly: ${reason}` });
         }
       }
+
       setMessages((prev) => {
         const pivot = findForkPivot(prev, point);
         const kept = pivot < 0 ? prev : prev.slice(0, pivot);
+
         return [...kept, {
           id: `msg-${++msgIdRef.current}`,
           role: 'system',
@@ -501,24 +540,31 @@ function ChatScene({
       setReady(true);
     }
   }, [addError, addMessage, client, dispatchInput, onClientChange, setInputText]);
+
   const switchWorkspace = useCallback(async (
     workspace: TuiAgentSummary,
     preparedClient?: AgentClient,
   ) => {
     if (!preparedClient && workspace.name === client.agentName && workspace.mode === client.mode) {
       setNavigationOpen(false);
+
       return;
     }
+
     if (!onWorkspaceSelect && !preparedClient) {
       setNavigationOpen(false);
       addMessage({ role: 'system', content: 'Exit to the home screen to open another workspace.' });
+
       return;
     }
+
     if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
       setNavigationOpen(false);
       addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
+
       return;
     }
+
     if (selectionPendingRef.current) return;
     selectionPendingRef.current = true;
     setNavigationOpen(false);
@@ -527,6 +573,7 @@ function ChatScene({
     const bufferedEvents: AgentClientEvent[] = [];
     let stopBuffering: (() => void) | null = null;
     let historyBoundary = 0;
+
     try {
       if (preparedClient) candidate = preparedClient;
       else if (onWorkspaceSelect) candidate = await onWorkspaceSelect(workspace.name);
@@ -535,12 +582,14 @@ function ChatScene({
       await candidate.connect();
       let history: DisplayMessage[] = [];
       let historyFailure: string | null = null;
+
       try {
         history = await candidate.history();
         historyBoundary = bufferedEvents.length;
       } catch (error) {
         historyFailure = errorLine(`Earlier messages could not be loaded: ${renderThrownChain({ cause: error })}`);
       }
+
       const previous = client;
       // The draft belongs to the conversation being left, and the one being
       // entered gets its own back (or a clean line the first time).
@@ -577,6 +626,7 @@ function ChatScene({
       setClient(candidate);
       onClientChange?.(candidate);
       candidate = null;
+
       try {
         await previous.close();
       } catch (error) {
@@ -587,6 +637,7 @@ function ChatScene({
       }
     } catch (error) {
       stopBuffering?.();
+
       if (candidate) {
         try {
           await candidate.close();
@@ -602,6 +653,7 @@ function ChatScene({
           );
         }
       }
+
       setReady(true);
       addError({ cause: error });
     } finally {
@@ -615,29 +667,38 @@ function ChatScene({
    * that conversation is nested under its parent workspace. */
   const createNewAgent = useCallback(async () => {
     if (onNewAgent === undefined || selectionPendingRef.current) return;
+
     if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
       addMessage({ role: 'system', content: 'Finish or stop the active workspace action before creating an agent.' });
+
       return;
     }
+
     addMessage({ role: 'system', content: 'Creating a new agent…' });
+
     try {
       const created = await onNewAgent(client);
+
       if (created.client) {
         await roster.reload();
         await switchWorkspace(
           { name: created.name, label: agentDisplayLabel(created.displayName), mode: 'cloud' },
           created.client,
         );
+
         return;
       }
+
       await roster.reload();
       await switchWorkspace({ name: created.name, label: agentDisplayLabel(created.displayName), mode: 'local' });
     } catch (error) {
       addError({ cause: error });
     }
   }, [addError, addMessage, client, onNewAgent, roster, switchWorkspace]);
+
   useEffect(() => {
     const identity = `${client.mode}:${client.agentName}`;
+
     if (hub !== null && hub.identity === identity) return;
     const abort = new AbortController();
     let task: Promise<void> | null = null;
@@ -645,6 +706,7 @@ function ChatScene({
     task = (async () => {
       try {
         const fresh = await (readHub ?? loadHubData)(client);
+
         if (!abort.signal.aborted) setHub({ identity, data: fresh });
       } catch (cause) {
         diagnostics.failure(
@@ -654,11 +716,14 @@ function ChatScene({
         );
       } finally {
         settled = true;
+
         if (task !== null && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
       }
     })();
     hubRefreshTaskRef.current = task;
+
     if (settled && hubRefreshTaskRef.current === task) hubRefreshTaskRef.current = null;
+
     return () => { abort.abort(); };
   }, [client, hub, readHub]);
 
@@ -666,6 +731,7 @@ function ChatScene({
   // the same roster the navigator reads, with the open agent's role/tier from
   // its loaded profile row and its status from this scene.
   const projectRoot = useMemo(() => canonicalProjectRoot(), []);
+
   const hubLive = useMemo<TuiHubData | undefined>(() => !hub ? undefined : {
     ...hub.data,
     agents: buildAgentHubEntries({
@@ -686,8 +752,10 @@ function ChatScene({
   const openModelPicker = useCallback(async () => {
     const request = ++modelRequestRef.current;
     setActiveSurface({ kind: 'model', menu: EMPTY_MODEL_MENU, loading: true, error: null });
+
     try {
       const menu = await client.listModels();
+
       if (modelRequestRef.current !== request) return;
       setModelCatalog(menu.models);
       setActiveSurface({ kind: 'model', menu, loading: false, error: null });
@@ -718,6 +786,7 @@ function ChatScene({
     setReady(false);
     selectionPendingRef.current = true;
     setActiveSurface(null);
+
     try {
       const result = await profileMutations.setModel(model.spec);
       setModelSpec(result.spec);
@@ -737,11 +806,14 @@ function ChatScene({
     selectionPendingRef.current = true;
     setActiveSurface(null);
     setReady(false);
+
     try {
       if (!entry.revert) {
         addMessage({ role: 'system', content: `"${entry.summary}" is informational (${entry.kind}). Nothing to revert.` });
+
         return;
       }
+
       const result = await client.revertChangelogEntry(entry.id);
       addMessage({
         role: 'system',
@@ -764,6 +836,7 @@ function ChatScene({
     selectionPendingRef.current = true;
     setActiveSurface(null);
     setReady(false);
+
     try {
       const index = set.candidates.findIndex((entry) => entry.nodeId === candidate.nodeId) + 1;
       const result = await client.pickTake(set.id, candidate.nodeId);
@@ -789,46 +862,58 @@ function ChatScene({
     switch (outcome.kind) {
       case 'text':
         addMessage({ role: 'system', content: outcome.text });
+
         return;
       case 'changelog':
         setActiveSurface({ kind: 'changelog', view: outcome.view });
+
         return;
       case 'takes':
         setActiveSurface({ kind: 'takes', set: outcome.set });
+
         return;
       case 'model-set':
         setModelSpec(outcome.spec);
         addMessage({ role: 'system', content: `Model: ${outcome.spec}` });
+
         return;
       case 'effort-set':
         setStatus((current) => current ? { ...current, reasoningEffort: outcome.effort } : current);
         addMessage({ role: 'system', content: `Reasoning effort: ${outcome.effort}` });
+
         return;
       case 'role-set':
         setStatus((current) => current ? { ...current, roleId: outcome.role } : current);
         addMessage({ role: 'system', content: `Role: ${outcome.role}` });
+
         return;
       case 'status':
         setStatus(outcome.status);
         setModelSpec(outcome.status.model ?? '');
         const note: Omit<DisplayMessage, 'id'> = { role: 'system', content: '', status: outcome.status };
         addMessage(note);
+
         return;
       case 'exit':
         if (onExit) await onExit();
         else if (globalExit) await globalExit();
+
         return;
       case 'model-picker':
         await openModelPicker();
+
         return;
       case 'settings':
         setActiveSurface({ kind: 'settings' });
+
         return;
       case 'theme':
         setActiveSurface({ kind: 'theme' });
+
         return;
       case 'device-connect':
         await deviceConnect.open();
+
         return;
       case 'queue':
       case 'fork':
@@ -838,8 +923,10 @@ function ChatScene({
       case 'cancel': {
         if (!activeSurface) {
           addMessage({ role: 'system', content: 'Nothing to cancel.' });
+
           return;
         }
+
         const cancelled = {
           settings: 'Settings closed.',
           theme: 'Theme picker closed. Your theme is unchanged.',
@@ -849,12 +936,16 @@ function ChatScene({
           changelog: 'Changelog closed. Everything kept.',
           takes: 'Takes closed. The answered take stays.',
         } satisfies Record<NonNullable<ActiveSurface>['kind'], string>;
+
         setActiveSurface(null);
         addMessage({ role: 'system', content: cancelled[activeSurface.kind] });
+
         return;
       }
+
       case 'unknown':
         addMessage({ role: 'system', content: `Unknown command: ${outcome.command}. Type /help` });
+
         return;
     }
   }, [
@@ -871,6 +962,7 @@ function ChatScene({
     // interrupt. A queue restore in the same batch appends instead of replacing.
     let droppedSteers: string[] = [];
     let action: Promise<void> | undefined;
+
     for (const effect of effects) {
       switch (effect.kind) {
         case 'interrupt':
@@ -879,6 +971,7 @@ function ChatScene({
           break;
         case 'exit':
           if (onExit) return onExit();
+
           return globalExit?.();
         case 'clear-input':
           setInputText('');
@@ -897,70 +990,100 @@ function ChatScene({
           break;
       }
     }
+
     if (droppedSteers.length > 0) {
       setInputText([...droppedSteers, inputRef.current?.plainText ?? ''].filter(Boolean).join('\n'));
     }
+
     return action;
   }, [addMessage, client, onExit, performBranch, sendPrompt, setInputText]);
 
   const handleSubmit = useCallback(async (input: string) => {
     const text = input.trim();
+
     if (!text) return;
+
     if (!ready) {
       addMessage({ role: 'system', content: 'Still connecting.' });
+
       return;
     }
+
     const generation = clientGenerationRef.current;
+
     try {
       const submitted = text.startsWith('/') ? resolveCommandDraft(commands, text) : text;
+
       if (!submitted.startsWith('/')) {
         await sendPrompt(submitted);
+
         return;
       }
+
       clientActionCountRef.current += 1;
+
       try {
         const outcome = await executeSlashCommand(client, submitted);
+
         if (clientGenerationRef.current !== generation) return;
+
         if (outcome.kind === 'queue') {
           if (outcome.text) await runInputEffects(dispatchInput({ type: 'queue', text: outcome.text }));
           else addMessage({ role: 'system', content: 'Usage: /queue <text>. It sends after the running turn, or at once when idle.' });
+
           return;
         }
+
         if (outcome.kind === 'branch') {
           if (outcome.text) await performBranch(outcome.text);
           else addMessage({ role: 'system', content: `Usage: /branch <text> (or ${keybindings.hint('conversation.branch')} on a draft). It runs the redirect as a parallel branch of the running turn.` });
+
           return;
         }
+
         if (outcome.kind === 'fork') {
           const candidates = forkCandidates(messages);
+
           if (candidates.length === 0) {
             addMessage({ role: 'system', content: 'No user messages to walk back to.' });
+
             return;
           }
+
           if (!outcome.ref) {
             dispatchInput({ type: 'open-walkback' });
+
             return;
           }
+
           const index = Number.parseInt(outcome.ref, 10) - 1;
           const picked = Number.isInteger(index) ? candidates[index] : undefined;
+
           if (!picked) {
             addMessage({ role: 'system', content: `No walk-back candidate "${outcome.ref}". Esc-Esc (or /fork) lists them.` });
+
             return;
           }
+
           await performWalkback(picked);
+
           return;
         }
+
         if (outcome.kind === 'undo') {
           const undone = await performUndo(client, outcome.ref);
           addMessage({ role: 'system', content: undone.text });
+
           if (undone.restored && forkCandidates(messages).length > 0) {
             // opencode parity: files + conversation together — reuse the
             // Esc-Esc walk-back picker for the conversation half.
             addMessage({ role: 'system', content: 'Pick a message to also walk back the conversation, or Esc to keep it.' });
             dispatchInput({ type: 'open-walkback' });
           }
+
           return;
         }
+
         await applySlashOutcome(outcome);
       } finally {
         clientActionCountRef.current -= 1;
@@ -985,17 +1108,22 @@ function ChatScene({
         sealSegment();
         turnStreamedTextRef.current = false;
         setTurnPhase(event.kind === 'programmatic' ? 'running background work' : 'thinking');
+
         if (event.kind === 'programmatic') {
           addMessage({ role: 'evolution', content: `» ${event.event ?? 'event'}: ${event.text.slice(0, 100)}` });
         }
+
         return;
       }
+
       case 'text-delta':
         if (!event.delta) return;
         turnStreamedTextRef.current = true;
+
         if (!activeSegmentRef.current) beginSegment();
         stream.append(event.delta);
         setTurnPhase((current) => current === 'writing' ? current : 'writing');
+
         return;
       case 'tool-call':
         // Seal the preceding text run so this tool — and any text that follows
@@ -1003,34 +1131,45 @@ function ChatScene({
         sealSegment();
         setTurnPhase(`calling ${event.toolName}`);
         addMessage({ role: 'tool_call', content: '', toolName: event.toolName, args: JSON.stringify(event.args) });
+
         return;
       case 'tool-result':
         setTurnPhase(`finished ${event.toolName}`);
         addMessage({ role: 'tool_result', content: event.result, success: event.success });
+
         return;
       case 'step-finish':
         setTurnPhase(`step ${event.stepIndex}`);
+
         return;
       case 'evolution':
       case 'background':
         addMessage({ role: 'evolution', content: `[${event.event}] ${event.message}` });
+
         return;
       case 'error':
         sealSegment();
         addMessage({ role: 'system', content: errorLine(event.message) });
+
         return;
       case 'turn-end': {
         if (activeSegmentRef.current) stream.finish();
         sealSegment();
+
         if (!turnStreamedTextRef.current && event.turn.text.trim()) {
           addMessage({ role: 'assistant', content: event.turn.text.trim() });
         }
+
         const inputEffects = runInputEffects(dispatchInput({ type: 'turn-settled' }));
+
         if (machineRef.current.activeTurns === 0) setTurnPhase(null);
+
         if (event.turn.toolCalls.some((call) => call.name === 'agents')) {
           const generation = clientGenerationRef.current;
+
           try {
             const set = await client.latestTakes();
+
             if (
               clientGenerationRef.current === generation
               && set
@@ -1057,23 +1196,31 @@ function ChatScene({
             }
           }
         }
+
         await inputEffects;
+
         return;
       }
+
       case 'broadcast': {
         if (!isBranchStatusEvent(event.event)) return;
         const status = event.event;
         setBranchTasks((prev) => {
           const next = { ...prev };
+
           if (status.status === 'running') next[status.branchId] = status.task;
           else delete next[status.branchId];
+
           return next;
         });
+
         // The settle/error line IS the takes affordance (the running state
         // lives in the status bar).
         if (status.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(status) });
+
         return;
       }
+
       case 'run-event':
         return;
     }
@@ -1083,30 +1230,39 @@ function ChatScene({
   // hydration. Re-runs when a walk-back fork swaps in a sibling client.
   useEffect(() => {
     const preconnected = preconnectedClientRef.current === client;
+
     if (preconnected) preconnectedClientRef.current = null;
     else setReady(false);
     const generation = clientGenerationRef.current;
+
     const buffered = preconnected && preconnectedEventsRef.current?.client === client
       ? preconnectedEventsRef.current
       : null;
+
     const bufferedCount = buffered?.events.length ?? 0;
     const abort = new AbortController();
+
     const unsubscribe = client.subscribe((event) => {
       if (clientGenerationRef.current === generation && !abort.signal.aborted) {
         return handleClientEvent(event);
       }
     });
+
     let replayTask: Promise<void> | null = null;
+
     if (buffered) {
       buffered.stop();
       preconnectedEventsRef.current = null;
+
       const replay = buffered.events.slice(0, bufferedCount)
         .filter((event, index) =>
           index >= buffered.historyBoundary || !persistedTranscriptEvent(event));
+
       replayTask = (async () => {
         await Promise.all(replay.map((event) => handleClientEvent(event)));
       })();
     }
+
     let task: Promise<void> | null = null;
     let settled = false;
     task = (async () => {
@@ -1114,6 +1270,7 @@ function ChatScene({
         if (hydrateHistory && !skipHydrationRef.current) {
           try {
             const history = await client.history();
+
             if (!abort.signal.aborted && history.length > 0) {
               setMessages([welcomeMessage(client.agentName), ...history]);
             }
@@ -1123,17 +1280,23 @@ function ChatScene({
             }
           }
         }
+
         skipHydrationRef.current = false;
         let connected = true;
+
         try {
           if (!preconnected) await client.connect();
         } catch (error) {
           connected = false;
+
           if (!abort.signal.aborted) addError({ cause: error });
         }
+
         if (!connected || abort.signal.aborted) return;
         setReady(true);
+
         if (client.mode !== 'cloud') return;
+
         try {
           await deviceConnect.offerIfUnconnected();
         } catch (cause) {
@@ -1152,12 +1315,15 @@ function ChatScene({
           if (replayTask) await replayTask;
         } finally {
           settled = true;
+
           if (task !== null && connectionTaskRef.current === task) connectionTaskRef.current = null;
         }
       }
     })();
     connectionTaskRef.current = task;
+
     if (settled && connectionTaskRef.current === task) connectionTaskRef.current = null;
+
     return () => {
       abort.abort();
       unsubscribe();
@@ -1174,6 +1340,7 @@ function ChatScene({
           (async () => {
             try {
               const next = await client.status();
+
               if (abort.signal.aborted) return;
               setStatus(next);
               setModelSpec((current) => current || (next.model ?? ''));
@@ -1189,6 +1356,7 @@ function ChatScene({
           (async () => {
             try {
               const menu = await client.listModels();
+
               if (!abort.signal.aborted) setModelCatalog(menu.models);
             } catch (cause) {
               if (!abort.signal.aborted) {
@@ -1202,11 +1370,14 @@ function ChatScene({
         ]);
       } finally {
         settled = true;
+
         if (task !== null && metadataTaskRef.current === task) metadataTaskRef.current = null;
       }
     })();
     metadataTaskRef.current = task;
+
     if (settled && metadataTaskRef.current === task) metadataTaskRef.current = null;
+
     return () => { abort.abort(); };
   }, [addMessage, client]);
 
@@ -1216,10 +1387,13 @@ function ChatScene({
   const consentDecisionRef = useRef<((decision: DeviceConsentDecision | 'cancelled') => void) | null>(null);
   useEffect(() => {
     const consents = client.consents;
+
     if (!consents || !isProcessing) {
       setPendingConsent(null);
+
       return;
     }
+
     const watcher = watchDeviceConsents(consents, {
       present: (consent, signal) => new Promise((resolve) => {
         const settle = (outcome: DeviceConsentDecision | 'cancelled') => {
@@ -1227,6 +1401,7 @@ function ChatScene({
           setPendingConsent(null);
           setTimeout(() => { resolve(outcome); }, 0);
         };
+
         consentDecisionRef.current = settle;
         setPendingConsent(consent);
         signal.addEventListener('abort', () => settle('cancelled'), { once: true });
@@ -1235,6 +1410,7 @@ function ChatScene({
         addMessage({ role: 'system', content: kind === 'error' ? errorLine(message) : message });
       },
     });
+
     return () => watcher.stop();
   }, [addMessage, client, isProcessing]);
 
@@ -1255,83 +1431,118 @@ function ChatScene({
     rendererInstance.root.onMouseUp = () => {
       // Defer slightly so the selection is finalized by the renderer.
       setTimeout(() => {
-        if (!rendererInstance.hasSelection) { copied = false; return; }
+        if (!rendererInstance.hasSelection) {
+          copied = false;
+
+          return;
+        }
+
         if (copied) return; // already copied this selection
         const selection = rendererInstance.getSelection();
+
         if (!selection) return;
         // Walk selected renderables and extract text.
         const parts: string[] = [];
+
         for (const r of selection.selectedRenderables ?? []) {
           const text = r.getSelectedText();
+
           if (text) parts.push(text);
         }
+
         const text = parts.join('\n').trim();
+
         if (text) {
           rendererInstance.copyToClipboardOSC52(text);
           copied = true;
         }
+
         // A click (to scroll, or to select+copy) moves native focus off the
         // input; reclaim it so the user can keep typing without a manual click.
         if (inputShouldFocusRef.current) inputRef.current?.focus();
       }, 10);
     };
+
     return () => { rendererInstance.root.onMouseUp = undefined; };
   }, [rendererInstance]);
 
   useKeyboard((key) => {
     if (deviceConnect.handleKey(key)) {
       key.preventDefault();
+
       return;
     }
+
     if (pendingConsent) {
       key.preventDefault();
       const actionId = keyDispatcher.feed(key, ['consent']).actionId;
       const canApprove = deviceConsentCanApprove(pendingConsent, { width, height });
+
       if (actionId === 'consent.once' && canApprove) resolvePendingConsent('once');
       else if (actionId === 'consent.always' && canApprove) resolvePendingConsent('always');
       else if (actionId === 'consent.deny') resolvePendingConsent('deny');
+
       return;
     }
+
     if (selectionPendingRef.current) {
       key.preventDefault();
+
       return;
     }
+
     if (navigationOpen && tuiLayoutForWidth(width) !== 'wide') return;
     const modalActive = activeSurface !== null || inputState.walkbackOpen;
     const result = keyDispatcher.feed(key, modalActive ? ['modal'] : ['editor', 'conversation', 'global']);
+
     if (result.pending) {
       key.preventDefault();
+
       return;
     }
+
     const actionId = result.actionId;
+
     if (actionId === null) return;
+
     if (modalActive) {
       if (actionId === 'hub.new-agent' && activeSurface?.kind === 'hub'
         && activeSurface.view === 'agents' && onNewAgent !== undefined) {
         key.preventDefault();
         setActiveSurface(null);
+
         return createNewAgent();
       }
+
       if (actionId === 'modal.close') {
         key.preventDefault();
+
         if (activeSurface?.kind === 'model') modelRequestRef.current += 1;
         setActiveSurface(null);
+
         if (inputState.walkbackOpen) dispatchInput({ type: 'walkback-closed' });
       }
+
       return;
     }
+
     if (actionId === 'settings.toggle') {
       key.preventDefault();
       setActiveSurface(settingsOpen ? null : { kind: 'settings' });
+
       return;
     }
+
     if (actionId === 'palette.toggle') {
       key.preventDefault();
       setActiveSurface(commandPalette ? null : { kind: 'commands' });
+
       return;
     }
+
     if (actionId === 'workspace.toggle') {
       key.preventDefault();
+
       if (machineRef.current.activeTurns > 0 || clientActionCountRef.current > 0) {
         addMessage({ role: 'system', content: 'Finish or stop the active workspace action before switching.' });
       } else if (tuiLayoutForWidth(width) === 'wide') {
@@ -1339,26 +1550,35 @@ function ChatScene({
       } else {
         setNavigationOpen((open) => !open);
       }
+
       return;
     }
+
     if (actionId === 'link.open-last') {
       key.preventDefault();
       const url = lastUrlFromMessages(messagesRef.current);
+
       if (url) openBrowser(url);
+
       return;
     }
+
     if (actionId === 'model.open') {
       key.preventDefault();
+
       return openModelPicker();
     }
+
     if (actionId === 'tier.cycle' || actionId === 'tier.cycle-reverse') {
       key.preventDefault();
       const current = nextTier ?? TIER_IDS.find((id) => id === status?.tierId) ?? 'default';
       const delta = actionId === 'tier.cycle' ? 1 : -1;
       const index = (TIER_IDS.indexOf(current) + delta + TIER_IDS.length) % TIER_IDS.length;
       setNextTier(TIER_IDS[index] ?? 'default');
+
       return;
     }
+
     if (actionId === 'hub.agents' || actionId === 'hub.roles' || actionId === 'hub.tiers'
       || actionId === 'tier.quick') {
       // The key opens the hub even while its read is still in flight. Dropping
@@ -1369,45 +1589,62 @@ function ChatScene({
       // overlay paints as soon as the read answers; the composer hint carries
       // the open surface meanwhile.
       key.preventDefault();
+
       const view: TuiHubView = actionId === 'hub.agents'
         ? 'agents'
         : actionId === 'hub.roles' ? 'roles' : 'tiers';
+
       setActiveSurface({ kind: 'hub', view });
+
       return;
     }
+
     if (actionId === 'tool.toggle') {
       key.preventDefault();
       setToolDetailsExpanded((expanded) => !expanded);
+
       return;
     }
+
     if (actionId === 'effort.cycle') {
       key.preventDefault();
       const efforts = ['low', 'medium', 'high'] as const;
       const current = status?.reasoningEffort ?? 'medium';
       const next = efforts[(efforts.indexOf(current) + 1) % efforts.length]!;
+
       return selectReasoningEffort(next);
     }
+
     if (actionId === 'conversation.branch') {
       key.preventDefault();
+
       return runInputEffects(dispatchInput({ type: 'branch', draft: inputRef.current?.plainText ?? '' }));
     }
+
     if (actionId === 'queue.add') {
       key.preventDefault();
+
       return runInputEffects(dispatchInput({ type: 'queue', text: inputRef.current?.plainText ?? '' }));
     }
+
     if (actionId === 'queue.edit-last') {
       dispatchInput({ type: 'backspace', draft: inputRef.current?.plainText ?? '' });
+
       return;
     }
+
     if (actionId === 'history.page-up' || actionId === 'history.page-down' || actionId === 'history.line-up' || actionId === 'history.line-down') {
       if (handleHistoryScrollAction(actionId, inputRef.current?.plainText ?? '', historyRef.current)) {
         key.preventDefault();
         scrollAnchor.remember();
       }
+
       return;
     }
+
     if (actionId !== 'conversation.cancel') return;
     key.preventDefault();
+
     return runInputEffects(dispatchInput({
       type: 'escape',
       now: Date.now(),
@@ -1418,8 +1655,10 @@ function ChatScene({
 
   const onInputSubmit = useCallback(() => {
     const value = inputRef.current?.plainText ?? '';
+
     if (!value.trim()) return;
     setInputText('');
+
     return handleSubmit(value);
   }, [handleSubmit, setInputText]);
 
@@ -1428,10 +1667,12 @@ function ChatScene({
     && !isProcessing && !/\s/.test(draft.trimStart())
     ? filterCommands(commands, draft)
     : [];
+
   const inputFocused = ready && !overlayOpen;
   const contextTokens = estimateContextTokens(messages);
   const contextWindow = contextWindowForSpec(modelCatalog, modelSpec);
   const walkbackList = inputState.walkbackOpen ? forkCandidates(messages) : [];
+
   const surfaceTitle = settingsOpen
     ? 'Settings ›'
     : themePickerOpen
@@ -1449,9 +1690,11 @@ function ChatScene({
               : inputState.walkbackOpen
                 ? 'Walk back ›'
                 : null;
+
   // The composer identifies an open surface. Turn progress stays in the
   // transcript's phase line, so one state is never announced twice.
   const composerTitle = surfaceTitle ?? undefined;
+
   // The placeholder is the one line a person reads before typing. While a
   // turn runs, what typing does is the one thing worth saying.
   const composerPlaceholder = !ready
@@ -1459,6 +1702,7 @@ function ChatScene({
     : isProcessing
       ? TUI_COMPOSER_STEERING_PLACEHOLDER
       : TUI_COMPOSER_PLACEHOLDER;
+
   useEffect(() => {
     if (inputFocused) inputRef.current?.focus();
   }, [inputFocused]);
@@ -1583,11 +1827,15 @@ function ChatScene({
           terminal={{ width: sceneWidth, height }}
           onSelect={(setting) => {
             setActiveSurface(null);
+
             if (setting.command === '/model') return openModelPicker();
+
             if (setting.command.endsWith(' ')) {
               setInputText(setting.command);
+
               return;
             }
+
             return handleSubmit(setting.command);
           }}
         />
@@ -1658,11 +1906,13 @@ function handleHistoryScrollAction(
   history: HistoryScrollTarget | null,
 ): boolean {
   const page = actionId === 'history.page-up' || actionId === 'history.page-down';
+
   if (history === null || (!page && draft.length > 0)) return false;
   const direction = actionId === 'history.page-up' || actionId === 'history.line-up' ? -1 : 1;
   const viewportFraction = page ? 0.5 : 0.2;
   const delta = Math.max(1, Math.floor(history.viewport.height * viewportFraction));
   history.scrollTo(history.scrollTop + direction * delta);
+
   return true;
 }
 
@@ -1671,18 +1921,23 @@ function handleHistoryScrollAction(
  *  system messages itself, so no ANSI here. */
 function errorLine(message: string): string {
   const guided = guideFailure({ cause: message });
+
   return guided.hint ? `Error: ${guided.message}\n${guided.hint}` : `Error: ${guided.message}`;
 }
 
 /** Extract the last URL from assistant message content. */
 function lastUrlFromMessages(messages: DisplayMessage[]): string | null {
   const urlRe = /https?:\/\/[^\s)\]}>'"]+/g;
+
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
+
     if (msg.role !== 'assistant' && msg.role !== 'system') continue;
     const matches = msg.content.match(urlRe);
+
     if (matches && matches.length > 0) return matches[matches.length - 1];
   }
+
   return null;
 }
 
@@ -1698,6 +1953,7 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   const roles = effectiveRoleCatalog(envelope.catalog);
   const activeRoleId = status.roleId && roles[status.roleId] ? status.roleId : DEFAULT_ROLE_ID;
   const tierId = TIER_IDS.find((id) => id === status.tierId) ?? roles[activeRoleId]?.tier ?? 'default';
+
   return {
     agents: [{
       id: workspace,
@@ -1731,13 +1987,16 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
 
   const cleanup = async () => {
     let closeFailure: string | null = null;
+
     try {
       await currentClient.close();
     } catch (error) {
       closeFailure = renderThrownChain({ cause: error });
     }
+
     root.render(<box />);
     renderer.destroy();
+
     if (closeFailure) console.error(`\n  The workspace did not close cleanly: ${closeFailure}`);
     console.log('\n  Goodbye.\n');
     process.exit(0);
@@ -1751,6 +2010,7 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
       process.exit(1);
     }
   };
+
   globalExit = exit;
   process.on('SIGINT', exit);
 

@@ -8,6 +8,7 @@ import { useTheme, toggleMode } from "../hooks/use-theme";
  */
 export function ModeToggle() {
   const { mode } = useTheme();
+
   return (
     <button
       type="button"
