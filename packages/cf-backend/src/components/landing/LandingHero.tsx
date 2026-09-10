@@ -306,7 +306,7 @@ function SearchCanvas(): ReactElement {
   );
 }
 
-const PHRASES = ['learn from feedback.', 'build their own tools.', 'run on your own machine.', 'compare approaches.'] as const;
+const PHRASES = ['get better with use.', 'build their own tools.', 'run in the cloud or on your machine.', 'connect to your devices.', 'work while your laptop is closed.'] as const;
 
 /**
  * The heading a screen reader gets, DERIVED rather than restated.
