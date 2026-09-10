@@ -44,6 +44,31 @@
  * got and the residual queue wait falls out of the two `at` values. That join is
  * how end-to-end wait is obtained; the sender's own `wait_ms` is only the part
  * its turn was blocked for.
+ *
+ * ## What these numbers do NOT say
+ *
+ * blind: A COLLISION IS A PATH AND A CLOCK, NOT A PROVEN OVERWRITE. Two authors
+ * writing one path inside the window is what is counted. Whether the second
+ * one destroyed the first one's work is a question about CONTENT, and the file
+ * tool's read-before-write rule already refuses the destructive case as
+ * `stale`, so a counted collision is usually contention that was survived.
+ *
+ * blind: THE PLANE IS ASSUMED, NEVER READ. The author ledger is keyed on the
+ * path SPELLING and lives once per process. Hired subordinates share their
+ * parent's file plane, which is the population this counter exists for and
+ * where the assumption holds; a head or a swarm node provisioned onto a
+ * private home does not, so two of those writing `src/a.ts` on different bytes
+ * would be counted as one collision. Closing it needs a plane identity the
+ * turn ledger does not carry and no caller supplies today.
+ *
+ * blind: ONLY WRITES THROUGH THE FILE TOOL. A shell command that edits a file
+ * never reaches the turn ledger, so it is neither an author nor a victim here.
+ * `heads/file-changes.ts` states the same limit for the same reason.
+ *
+ * blind: SENT AND RECEIVED ARE COUNTED IN DIFFERENT PROCESSES. Each is a
+ * per-process running total on its own side of the transport, so the two
+ * sequences do not subtract. What joins them is `message_id`, one message at a
+ * time.
  */
 
 import { diagnostics } from '../obs/index';
