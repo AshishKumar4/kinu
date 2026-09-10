@@ -166,12 +166,12 @@ export function mockAgentsSdk(): void {
     Agent: class {
       readonly ctx: AgentContext | undefined;
       readonly env: Env | undefined;
-      /** The vendor base builds a manager of its own in its constructor
-       *  (`agents/dist/index.js:803-806`) over the SAME storage a subclass's
-       *  manager uses, and its init chain restores it on every activation. A
-       *  stand-in without it cannot observe what that manager does — which is
-       *  the whole subject of the inherited-restore contract. */
-      readonly mcp = new FakeMCPClientManager({ inherited: true });
+      /** The vendor base builds the ONE manager in its constructor
+       *  (`agents/dist/src-5W6JNKVb.js:821`) and installs it on its lifecycle,
+       *  which is the only way a manager reaches storage since
+       *  cloudflare/agents#1897 — so it is the manager UserDO's plane runs on,
+       *  and the one whose activation-time restore UserDO retires. */
+      readonly mcp = new FakeMCPClientManager();
       constructor(ctx?: AgentContext, env?: Env) {
         this.ctx = ctx;
         this.env = env;
@@ -976,10 +976,11 @@ let mcpEstablishGate: Promise<void> | null = null;
  *  `hangMcpEstablish` hands back, so a test awaits the real event. */
 let mcpEstablishArrived: (() => void) | null = null;
 
-/** Remember the manager an activation just built, so a test can ask what it
- *  holds. Its own function because the alternative is `this` leaving a
- *  constructor through an assignment. */
-function rememberMcpManager(manager: { mcpConnections: Record<string, RecordedMcpConnection> }): void {
+/** Remember the manager a UserDO's plane runs on, so a test can ask what it
+ *  holds. Every stand-in Agent carries a manager of its own, so the one to
+ *  remember is named by the harness that built the UserDO rather than by
+ *  construction order — an orchestrator built after it must not shadow it. */
+export function rememberMcpManager(manager: { mcpConnections: Record<string, RecordedMcpConnection> }): void {
   liveMcpManager = manager;
 }
 
@@ -1101,10 +1102,10 @@ export function seedMcpAuthContinuation(id: string, authUrl: string): void {
 }
 
 /**
- * The manager the Agent BASE built for this instance — the one the SDK's init
- *  chain restores, as distinct from the one a subclass builds for its own
- *  plane. Asked for by identity rather than asserted: an instance that is not
- *  on this stand-in has nothing to say about the inherited restore.
+ * The manager the Agent BASE built for this instance — the one the SDK's
+ *  lifecycle restores on start, and the one UserDO's plane runs on. Asked for
+ *  by identity rather than asserted: an instance that is not on this stand-in
+ *  has nothing to say about the inherited restore.
  */
 export function inheritedMcpManager(agent: { mcp: unknown }): {
   mcpConnections: Record<string, RecordedMcpConnection>;
@@ -1211,13 +1212,6 @@ class FakeMCPClientManager {
    *  that keeps its rows out of this manager. Mirrored because the write is the
    *  contract under test. */
   _isRestored = false;
-
-  /** `inherited` marks the manager the Agent BASE builds. The tests reach for
-   *  the one a subclass built for its own plane, so only that one is
-   *  remembered — passing the instance out rather than aliasing `this`. */
-  constructor(options?: { inherited?: boolean }) {
-    if (!options?.inherited) rememberMcpManager(this);
-  }
 
   async registerServer(id: string, options: {
     url: string; name: string; callbackUrl?: string; clientId?: string; authUrl?: string;

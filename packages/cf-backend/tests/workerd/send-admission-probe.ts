@@ -23,7 +23,7 @@
  * subject is the SDK's durable-submission admission, which is the same machinery
  * `ActorAgent.host.enqueueTurn` reaches through `submitMessages`.
  */
-import { Think } from '@cloudflare/think';
+import { Think, type ChatRecoveryConfig } from '@cloudflare/think';
 import type { ModelStreamPart } from '@kinu.run/test-utils/turn-model';
 import { convertArrayToReadableStream, MockLanguageModelV3 } from 'ai/test';
 import type { LanguageModel, ToolSet } from 'ai';
@@ -57,7 +57,7 @@ const PROBE_TABLE = `CREATE TABLE IF NOT EXISTS probe_counters (
 export class SendAdmissionProbeDO extends Think<Cloudflare.Env> {
   /** The two settings `ActorAgent` declares, declared identically here so this
    *  probe measures the shipped configuration. */
-  override chatRecovery = true;
+  override chatRecovery: ChatRecoveryConfig = true;
   override chatStreamStallTimeoutMs = 0;
 
   private _model: LanguageModel | null = null;

@@ -6,7 +6,7 @@
 // guard the owner's credentials rather than a re-description of them.
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type { AgentContext } from 'agents';
-import { joinHarnessFibers, mockAgentsSdk } from './agents-sdk';
+import { joinHarnessFibers, mockAgentsSdk, rememberMcpManager, inheritedMcpManager } from './agents-sdk';
 import { sha256Hex } from '../../src/lib/crypto';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability';
 import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/user-do';
@@ -469,6 +469,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   // credential key and OrchestratorAgent binding in this harness.
   const userEnv = partialEnv as Env;
   const userDO = new UserDO(agentContext, userEnv);
+  rememberMcpManager(inheritedMcpManager(userDO));
   hub.current = userDO;
   return {
     userDO, db, sql, installed, destroyedWorkspaces, revokedSocketPushes,

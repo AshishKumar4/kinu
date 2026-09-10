@@ -689,8 +689,11 @@ describe('facets attenuate with their workspace', () => {
 
 const USER_DO_SOURCE = readFileSync(join(import.meta.dir, '..', 'src', 'user', 'user-do.ts'), 'utf8');
 
-/** Not RPC: the Durable Object runtime calls these, never a stub-holder. */
-const NON_RPC_METHODS = new Set(['fetch', 'webSocketMessage', 'webSocketClose', 'webSocketError']);
+/** Not RPC: the Durable Object runtime calls the first four, and the SDK base
+ *  calls `createMcpOAuthProvider` in process to build its manager's OAuth
+ *  provider — never a stub-holder, and `unit-rpc-surface.test.ts` holds the
+ *  override to being sealed. */
+const NON_RPC_METHODS = new Set(['fetch', 'webSocketMessage', 'webSocketClose', 'webSocketError', 'createMcpOAuthProvider']);
 
 /** The one method that cannot take a caller, because it IS the bootstrap of
  *  caller identity. Safe by shape rather than by gate — see its own tests
