@@ -99,12 +99,6 @@ const KNOWN_TWINS: readonly string[] = [
   'listFileCheckpoints',
   'planFileRestore',
   'restoreFileCheckpoint',
-  // Genuinely different resolutions: cf normalizes the stored spec through its
-  // provider registry (an unset model resolving to "" was the 41%-of-Kimi
-  // context-window bug); the CLI's resolver has already normalized by the time
-  // the spec is cached. Same answer, two legitimate routes to it — the two
-  // backends cache at different points of the same normalization pipeline.
-  'effectiveModelSpec',
   // Both build core's default key-less provider, but from different platform
   // material: cf's owned model services (env + the owner's auth) vs node fetch
   // + the local auth store. Only the memoisation is common, and memoisation is
@@ -181,6 +175,12 @@ const SHARED_TRANSPORTS = {
   // alone. What stays per backend is only where a FRESH resolution comes from:
   // the actor's own profile inputs, the CLI's local profile authority.
   routingProfile: 'resolveRoutingProfile',
+  // The claimed tier, else the stored spec, through the backend's own
+  // normalizer — ONE spelling, because every model_call row is priced against
+  // it and every analytics row grouped by it. The CLI's copy read its cached
+  // spec and fell to a fabricated static spec in the window between a config
+  // change and the next turn; cf's normalization was the stricter side.
+  effectiveModelSpec: 'resolveEffectiveModelSpec',
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
   getReasoningEffort: 'getReasoningEffort',

@@ -205,7 +205,7 @@ import {
   // Model-capability attachment sanitization (the PDF-400 fix)
   type MediaModality,
   // Shared catalog view of the resolved model
-  ModelCatalogSession,
+  ModelCatalogSession, resolveEffectiveModelSpec,
   // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
   assembleTurnMessages, measureCompactionTrigger,
   // The tool-call pairing invariant — applied wherever messages reach the model
@@ -6102,24 +6102,18 @@ export abstract class ActorAgent extends Think<Env> {
     return session;
   }
 
-  /** Resolved `<provider>/<modelId>` the next turn will actually use — the
-   *  same resolution getModel() applies. Computing the threshold from the raw
-   *  stored spec leaves an unset model on the generic context window instead
-   *  of the resolved default model's real limit. Falls back to the raw spec
+  /** Resolved `<provider>/<modelId>` the next turn will actually use — core's
+   *  one resolution, over this actor's registry. Falls back to the raw spec
    *  only pre-claim (no provider registry yet).
    *
    *  Protected because a hosted actor's search prices its estimate against the
    *  workspace's own catalog session, which is this resolution. */
   protected effectiveModelSpec(): string {
-    const stored = this._turnProfile?.tier.model ?? this.getStoredModelId();
-
-    try {
-      return this.providerRegistry().normalizeSpecSync(stored);
-    } catch (error) {
-      diagnostics.event('actor.model_spec_unresolvable', { error: renderThrownChain({ cause: error }) });
-
-      return stored ?? '';
-    }
+    return resolveEffectiveModelSpec({
+      live: () => this._turnProfile?.tier.model,
+      stored: () => this.getStoredModelId(),
+      normalize: (spec) => this.providerRegistry().normalizeSpecSync(spec),
+    });
   }
 
   protected effectiveModelProviderFamily(): string {

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
-  ModelCatalogSession, contextWindowForModel, resolvePromptModelProfile,
+  ModelCatalogSession, contextWindowForModel, resolvePromptModelProfile, resolveEffectiveModelSpec,
   outputReserveTokens, stepContextLimit,
   type ModelInfo,
 } from '../src/index';
@@ -133,5 +133,40 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
     await Promise.resolve();
 
     expect(session.modelOutputLimit()).toBe(262_144);
+  });
+});
+
+// The spelling every model_call row is priced against and every analytics row
+// is grouped by. Both backends resolve it here; a backend reading its own cache
+// instead handed the ledger a second spelling of the same model.
+describe('resolveEffectiveModelSpec', () => {
+  const canonical = (spec: string | null): string => {
+    const trimmed = spec?.trim() ?? '';
+    if (trimmed === '' || trimmed === 'house-model') return 'openai-compatible/house-model';
+    if (trimmed === 'openai-compatible/house-model') return trimmed;
+    throw new Error(`unknown model ${trimmed}`);
+  };
+
+  test('one model under two spellings resolves to one spec', () => {
+    const spellings = ['house-model', 'openai-compatible/house-model', '  house-model '];
+    const resolved = new Set(spellings.map((stored) => resolveEffectiveModelSpec({
+      live: () => undefined, stored: () => stored, normalize: canonical,
+    })));
+    expect([...resolved]).toEqual(['openai-compatible/house-model']);
+  });
+
+  test('the claimed tier outranks the stored spec, and is normalized too', () => {
+    expect(resolveEffectiveModelSpec({
+      live: () => 'house-model', stored: () => 'openai-compatible/other', normalize: canonical,
+    })).toBe('openai-compatible/house-model');
+  });
+
+  test('a spec the backend cannot resolve yet reads back raw rather than costing the caller', () => {
+    expect(resolveEffectiveModelSpec({
+      live: () => undefined, stored: () => 'vendor/unlisted', normalize: canonical,
+    })).toBe('vendor/unlisted');
+    expect(resolveEffectiveModelSpec({
+      live: () => undefined, stored: () => null, normalize: () => { throw new Error('no registry yet'); },
+    })).toBe('');
   });
 });

@@ -68,7 +68,7 @@ import {
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromHistory,
-  ModelCatalogSession,
+  ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   // The terminal transition — core owns the vocabulary, the roster, the state
   // machine and the replay; this backend supplies only the effect bodies and
@@ -1335,7 +1335,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Effective normalized model spec used for new turns. */
   getEffectiveModelSpec(): string {
-    return this.actorSession.profile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
+    return this.effectiveModelSpec();
   }
 
   /** The catalog role id this agent resolves under. */
@@ -2981,10 +2981,12 @@ export class LocalAgentSession implements BackendHost {
       .filter((msg): msg is ModelMessage => msg !== null);
 
     const cache = this.cacheIdentity();
-
+    // The NORMALIZED spelling, as cf parses it: a tier the account catalog
+    // names by a bare id has no slash, and `parseModelSpec` refuses it before
+    // the request leaves — a turn failed for a spelling, not a model.
     const providerOptions = reasoningEffortOptions(
       profile.tier.reasoningEffort,
-      parseModelSpec(profile.tier.model).provider,
+      parseModelSpec(this.effectiveModelSpec()).provider,
     );
 
     // The measured compaction trigger, read from the durable state by core in
@@ -5081,7 +5083,7 @@ export class LocalAgentSession implements BackendHost {
 
     const providerOptions = reasoningEffortOptions(
       resolution.reasoningEffort,
-      parseModelSpec(resolution.model).provider,
+      parseModelSpec(this.profiles().normalizeSpec(resolution.model)).provider,
     );
 
     return providerOptions ? { model, providerOptions } : { model };
@@ -5202,8 +5204,16 @@ export class LocalAgentSession implements BackendHost {
     );
   }
 
+  /** Core's one resolution over this session's profile authority: the claimed
+   *  tier, else the stored spec, spelled the way the plane spells it. Never the
+   *  cached spec — that is null between a config change and the next turn, and
+   *  a row priced in that window compared the rate against a fabricated spec. */
   private effectiveModelSpec(): string {
-    return this.actorSession.profile?.tier.model ?? this.cachedModelSpec ?? STATIC_MODEL_SPEC;
+    return resolveEffectiveModelSpec({
+      live: () => this.actorSession.profile?.tier.model,
+      stored: () => this.config.getModel(),
+      normalize: (spec) => this.profiles().normalizeSpec(spec),
+    });
   }
   /** The session's model before any per-turn claim: the static model, or
    *  null on resolver sessions until a spec resolves. `what` names the use so
