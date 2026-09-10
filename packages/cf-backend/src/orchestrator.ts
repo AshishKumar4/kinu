@@ -51,7 +51,7 @@ import {
 } from "./subordinate-hosting";
 import { createExecuteToolsFactory } from "./execute-tools";
 import { codemodeEgress } from "./codemode-egress";
-import type { SubordinateReportStatus } from "@kinu.run/core";
+import type { ReportToolDeps } from "@kinu.run/core";
 import type { ToolSet } from "ai";
 import {
   webhookRoutePath, webhookRouteSecret, WEBHOOK_ROUTE_UNAVAILABLE,
@@ -816,11 +816,12 @@ export class OrchestratorAgent extends ActorAgent {
       // than a copy of it taken at construction.
       extraProviders: () => [createReportCodemodeProvider(() => report)],
     });
-    const report = {
-      report: async (input: { status: SubordinateReportStatus; content: string }) => {
+    const report: ReportToolDeps = {
+      report: async (input) => {
         const relayed = await relayHostedReport(this.subordinateSeams(), turn.actor, {
           status: input.status, content: input.content, origin: 'report_tool',
           mode: 'build', sequenceId: `live:${turn.actor.record.name}:${nanoid()}`,
+          handoff: input.handoff,
         });
         turn.reports.spoke = true;
         // Only a run-SETTLING report counts as the answer. The same predicate

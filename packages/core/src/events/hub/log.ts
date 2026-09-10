@@ -37,6 +37,7 @@ import * as v from 'valibot';
 import {
   SUBORDINATE_REPORT_STATUSES,
   type AgentLogRow, type EventId, type EventVariant, type IngressDescriptor,
+  type SubordinateReportHandoffField,
   type Priority, type KinuEvent, type RevisitCondition,
   type TraceId, type TurnId,
 } from './types';
@@ -252,6 +253,22 @@ const SubordinateTaskPayloadSchema = v.object({
   kinu_mode: WorkModeSchema,
   creation_id: v.optional(v.string()),
 });
+/**
+ * The handoff fields, as STORED.
+ *
+ * `v.object` strips what it does not name, so a field added to
+ * {@link SUBORDINATE_REPORT_HANDOFF_FIELDS} and forgotten here would be
+ * written to the row and then dropped on the way back out — the parent
+ * receiving a report whose concerns evaporated between two reads of one
+ * event, with nothing throwing at either end. The `satisfies` is TOTAL over
+ * that vocabulary, which turns the omission into a compile error.
+ */
+const HandoffPayloadEntries = {
+  concerns: v.optional(v.array(v.string())),
+  deviations: v.optional(v.array(v.string())),
+  findings: v.optional(v.array(v.string())),
+  open_work: v.optional(v.array(v.string())),
+} satisfies Record<SubordinateReportHandoffField, v.GenericSchema<string[] | undefined>>;
 const SubordinateReportPayloadSchema = v.object({
   from_subordinate: v.string(),
   status: v.picklist(SUBORDINATE_REPORT_STATUSES),
@@ -259,6 +276,7 @@ const SubordinateReportPayloadSchema = v.object({
   sequence_id: v.string(),
   task: v.optional(v.string()),
   content_path: v.optional(v.string()),
+  ...HandoffPayloadEntries,
   kinu_mode: WorkModeSchema,
 });
 const FileChangedPayloadSchema = v.object({
