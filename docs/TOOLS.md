@@ -135,7 +135,7 @@ reads, a snapshot store, and 3-way merge. Its gains concentrate on weak models.
 
 ## agents: delegation
 
-`agents` combines the three deps groups `AgentsToolDeps` names: `fork`, `team`,
+`agents` combines the three deps groups `AgentsToolDeps` names: `swarm`, `team`,
 and `peers`. There is no `think` deps group; that name survives only as a
 stored run-event tool name, which `read-models/timeline.ts` maps to the `mcts`
 timeline kind. `hire`'s `lifetime` decides whether the helper persists.
