@@ -610,6 +610,23 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- **The landing header carries actions, not a table of contents.** The five
+  in-page section jumps are gone; the logo, the repository link, the theme
+  toggle and sign-in remain. The sections themselves are unchanged.
+- **A `hire` no longer accepts a field it cannot act on.** Handing a workstream
+  to an agent that already exists refuses `mission`, `tier` and `lifetime`, and
+  creating one refuses `message`, `deliverable` and `topic` — each naming the
+  field that does the job instead of dropping the value silently. The
+  descriptions now promise only the variants an actor actually wires, so a
+  surface without a temporary substrate is never told about `lifetime:"task"`.
+- **Execution success no longer counts as task success for learning.** A turn
+  graded only by the environment — the last tool call completed — records its
+  outcome and quality as before, and no longer publishes a reusable procedure
+  from it. A clean file read and a command that exits zero with the wrong
+  answer both reported success, and the crafted tool minted from either then
+  shaped which tools later turns were offered. Promotion now needs a graded
+  outcome, so an unattended run discovers no tools until a signal grades the
+  work rather than the invocation.
 - Unavailable GEPA judges no longer produce neutral quality scores. Failed
   measurements abort scaffold and section optimization with actual attempt
   counts; they cannot create a pending section or count as a promotion win.
