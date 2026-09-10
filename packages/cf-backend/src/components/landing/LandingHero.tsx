@@ -401,7 +401,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             <Typewriter />
           </h1>
           <p className="mb-8 max-w-[520px] text-[17.5px] leading-[1.65] text-pretty p-text-3">
-            Put agents to work with files, tools, and memory. They write their own tools, learn from your corrections, and compare approaches against an objective you set.
+            Put agents to work on your files, with tools they write themselves. They get better as you correct them, and can run several attempts at once, keeping whichever one your objective scores highest.
           </p>
           <div className="flex max-w-[540px] items-center justify-between gap-4 rounded-xl border p-border p-recessed px-4 py-3.5">
             <code className="min-w-0 flex-1 whitespace-pre-wrap break-all font-mono text-[12.5px] leading-relaxed p-text-2"><span aria-hidden="true" className="p-accent">$</span> <span data-install-command>{install}</span></code>
