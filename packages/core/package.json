@@ -12,13 +12,22 @@
     "./workspace": "./src/vfs/nimbus-workspace.ts"
   },
   "dependencies": {
+    "@agent-core/core": "workspace:*",
+    "@ai-sdk/anthropic": "3.0.89",
+    "@ai-sdk/openai": "3.0.77",
+    "@ai-sdk/openai-compatible": "2.0.54",
+    "@ai-sdk/provider-utils": "^4.0.33",
+    "@kinu.run/agent-utils": "workspace:*",
     "@nimbus-sh/core": "0.6.0",
     "@nimbus-sh/fabric": "0.2.0",
-    "@kinu.run/agent-utils": "workspace:*",
-    "acorn": "^8.17.0"
+    "acorn": "^8.17.0",
+    "ai": "6.0.214",
+    "valibot": "^1.4.1"
   },
   "devDependencies": {
-    "@kinu.run/test-utils": "workspace:*"
+    "@ai-sdk/provider": "3.0.12",
+    "@kinu.run/test-utils": "workspace:*",
+    "zod": "^4.3.6"
   },
   "scripts": {
     "build": "tsc",

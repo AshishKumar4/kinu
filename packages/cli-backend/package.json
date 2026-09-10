@@ -7,18 +7,23 @@
     ".": "./src/index.ts"
   },
   "dependencies": {
+    "@ai-sdk/openai": "3.0.77",
+    "@ai-sdk/openai-compatible": "2.0.54",
     "@ai-sdk/provider": "3.0.12",
     "@cloudflare/codemode": "0.5.1",
+    "@kinu.run/agent-utils": "workspace:*",
+    "@kinu.run/compaction": "workspace:*",
+    "@kinu.run/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@nimbus-sh/core": "0.6.0",
     "@nimbus-sh/runtime-bash": "5.2.37",
     "@nimbus-sh/runtime-cpython": "3.13.14",
-    "@kinu.run/core": "workspace:*",
-    "@kinu.run/agent-utils": "workspace:*",
     "ai": "6.0.214",
-    "@kinu.run/compaction": "workspace:*"
+    "valibot": "^1.4.1"
   },
   "devDependencies": {
-    "@kinu.run/test-utils": "workspace:*"
+    "@kinu.run/test-utils": "workspace:*",
+    "zod": "^4.3.6"
   },
   "scripts": {
     "build": "tsc",
