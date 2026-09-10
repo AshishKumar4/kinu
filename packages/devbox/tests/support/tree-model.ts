@@ -507,11 +507,14 @@ export class LiveTree {
   /**
    * Plant a complete tree: directories, files, symlinks, hardlinks (entries
    * sharing an `ino` share one inode), sparse content as runs. Existing paths
-   * are replaced. Charges every byte before it lands.
+   * are replaced; a missing ancestor becomes a directory, as it must on any
+   * filesystem. Charges every byte before it lands.
    */
   plant(entries: readonly NodeEntry[]): void {
     const byIno = new Map<number, LiveInode>();
     for (const entry of sortedByPath(entries)) {
+      const slash = entry.path.lastIndexOf('/');
+      if (slash > 0) this.mkdirp(entry.path.slice(0, slash));
       const existing = byIno.get(entry.ino);
       if (existing !== undefined) {
         this.#place(entry.path, existing);
@@ -533,15 +536,22 @@ export class LiveTree {
     }
   }
 
+  /** `mkdir -p`: `path` and every ancestor become directories where absent;
+   *  an existing node keeps its inode and attributes. */
+  mkdirp(path: string): void {
+    for (const step of [...ancestorsOf(path), path]) {
+      if (!this.#paths.has(step)) {
+        this.#place(step, { kind: 'dir', mode: 0o755, metadata: cloneMetadata(DEFAULT_METADATA) });
+      }
+    }
+  }
+
   /** Write dense bytes at `path`, creating ancestors as directories. A write
    *  advances mtime by one tick, as the kernel would, so a metadata-only
    *  change detector sees it; `plant` alone sets times verbatim. */
   writeFile(path: string, bytes: Uint8Array, metadata?: PosixMetadata, mode = 0o644): void {
-    for (const ancestor of ancestorsOf(path)) {
-      if (!this.#paths.has(ancestor)) {
-        this.#place(ancestor, { kind: 'dir', mode: 0o755, metadata: cloneMetadata(DEFAULT_METADATA) });
-      }
-    }
+    const slash = path.lastIndexOf('/');
+    if (slash > 0) this.mkdirp(path.slice(0, slash));
     const held = this.#paths.get(path);
     if (held !== undefined && held.kind === 'file' && held.content !== undefined) {
       // An in-place rewrite of a hardlinked file is seen by every name.
@@ -589,6 +599,34 @@ export class LiveTree {
         size: Math.max(content.size, offset + bytes.byteLength),
         runs: [...content.runs, { offset, bytes: bytes.slice() }],
       };
+    }
+    inode.metadata = touched(inode.metadata);
+  }
+
+  /**
+   * `truncate(2)`: the file takes length `size`. Bytes past it are released;
+   * a longer file gains a hole, which is what the kernel leaves there.
+   */
+  truncate(path: string, size: number): void {
+    const inode = this.#paths.get(path);
+    if (inode === undefined || inode.kind !== 'file' || inode.content === undefined) {
+      throw new Error(`truncate: no file at ${path}`);
+    }
+    const content = inode.content;
+    const held = contentSize(content);
+    if (size === held) return;
+    if (content.kind === 'dense' && size < held) {
+      this.charge(size - held);
+      inode.content = { kind: 'dense', bytes: content.bytes.slice(0, size) };
+    } else {
+      const runs = content.kind === 'dense' ? [{ offset: 0, bytes: content.bytes }] : content.runs;
+      const kept: SparseRun[] = [];
+      for (const run of runs) {
+        if (run.offset >= size) continue;
+        kept.push(run.offset + run.bytes.byteLength <= size ? run : { offset: run.offset, bytes: run.bytes.subarray(0, size - run.offset) });
+      }
+      this.charge(runBytesOfRuns(kept) - runBytes(content));
+      inode.content = { kind: 'sparse', size, runs: kept };
     }
     inode.metadata = touched(inode.metadata);
   }

@@ -229,7 +229,10 @@ export type DevboxStrategyName = 'snapshot-chain';
  * `src/candidates/merkle-pack/read.ts:296` at the 2026-09-06 tree,
  * fixed-change experiment `local-merklepack-index-1`) and completes no ladder
  * for anything (G3/G6 refused for both arms there): bounded-layers is
- * UNSETTLED (2026-09-09 section). */
+ * UNSETTLED (2026-09-09 section), and the 2026-09-10 single-arm run refused
+ * admission at the cold attach (gate cancelled at 30 s), so the chunked
+ * delta's C3 win (89,664 B in one object, local harness) is not yet a
+ * deployed measurement. */
 export const DEFAULT_DEVBOX_STRATEGY: DevboxStrategyName = 'snapshot-chain';
 
 export function parseDevboxStrategyName(value: string | null | undefined): DevboxStrategyName | null {

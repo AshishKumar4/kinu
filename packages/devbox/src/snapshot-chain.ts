@@ -57,6 +57,27 @@
 import type { BackupOptions, DirectoryBackup } from '@cloudflare/sandbox';
 import * as v from 'valibot';
 
+import {
+  DELTA_BLOCK_BYTES,
+  DELTA_MANIFEST_NAME,
+  DELTA_OPS_PER_COMMAND,
+  type DeltaBaseFact,
+  type DeltaFileHashes,
+  type DeltaManifest,
+  DeltaManifestSchema,
+  type DeltaMaterializeOps,
+  type DeltaProbeEntry,
+  buildDeltaMaterializeOps,
+  buildDeltaStageOps,
+  deltaBaseStatCommand,
+  deltaBlockHashCommand,
+  deltaHashCandidates,
+  deltaProbeCommand,
+  parseDeltaBaseStat,
+  parseDeltaBlockHashes,
+  parseDeltaProbe,
+  planDeltaPublication,
+} from './chunked-delta';
 import { describeThrown as describe, findMount } from './lifecycle';
 import {
   DEVBOX_RUNTIME_DIR,
@@ -371,6 +392,13 @@ export interface ChainGeneration {
   readonly base: ChainBaseLayer;
   /** The cumulative changed set, or undefined until the first delta lands. */
   readonly delta: ChainLayer | undefined;
+  /** How the delta's bytes are laid out. `chunked` is a sidecar of changed
+  *  extents plus a per-file map, materialized into the upper at attach.
+  *  Absent means the legacy layout: a full squashfs of the upper, composed
+  *  as an overlay lower. Absent is the only legacy value because every
+  *  record written before chunked deltas existed holds a full delta; a box
+  *  that wrote one keeps serving it until its next delta commit replaces it. */
+  readonly deltaFormat?: 'chunked' | undefined;
 }
 
 /** Everything a box knows about its own chain. One record, one writer,
@@ -430,6 +458,7 @@ const ChainGenerationSchema = v.object({
     digest: DigestSchema,
     objectVersion: ObjectVersionSchema,
   })),
+  deltaFormat: v.optional(v.picklist(['chunked'])),
 });
 
 const ChainStateSchema = v.object({
@@ -459,6 +488,7 @@ function generationOf(row: v.InferOutput<typeof ChainGenerationSchema>): ChainGe
       digest: row.delta.digest,
       objectVersion: row.delta.objectVersion,
     },
+    deltaFormat: row.deltaFormat,
   };
 }
 
@@ -992,6 +1022,48 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     return undefined;
   };
 
+  /**
+   * The manifest a mounted delta layer serves, validated, or null for a
+   * legacy full delta. A record naming a chunked delta whose mount serves no
+   * manifest is a failed layer; so is a manifest whose overrides are not
+   * block-aligned, ascending and inside the file, because `dd seek` over
+   * such a map writes past what the manifest declares.
+   */
+  const readSidecarManifest = async (
+    deltaLayer: string,
+    generation: ChainGeneration,
+    layerFailed: (layer: string, thrown: { readonly cause: unknown }) => Promise<never>,
+  ): Promise<DeltaManifest | null> => {
+    const cat = await ports.exec(`# devbox-manifest-v1\ncat ${shellPath(`${deltaLayer}/${DELTA_MANIFEST_NAME}`)} 2>/dev/null`);
+    let manifest: DeltaManifest | null = null;
+    if (cat.exitCode === 0 && cat.stdout.trim() !== '') {
+      try {
+        const read = v.safeParse(DeltaManifestSchema, JSON.parse(cat.stdout));
+        if (read.success) manifest = read.output;
+      } catch (error) {
+        // Not JSON: a legacy full delta whose tree happens to hold this
+        // path, served as a lower. Logged, because a chunked record over
+        // such bytes is refused just after.
+        ports.log(`${deltaLayer}/${DELTA_MANIFEST_NAME} is not a delta manifest: ${describe({ cause: error })}`);
+      }
+    }
+    if (manifest === null && generation.deltaFormat === 'chunked') {
+      await layerFailed('delta', { cause: new Error('the record names a chunked delta whose mount serves no manifest') });
+    }
+    if (manifest === null) return null;
+    for (const file of manifest.files) {
+      if (file.kind !== 'chunked') continue;
+      let last = -1;
+      for (const override of file.over) {
+        if (override.o % DELTA_BLOCK_BYTES !== 0 || override.o >= file.s || override.o <= last) {
+          await layerFailed('delta', { cause: new Error(`the delta manifest misplaces an override of ${file.p} at ${override.o}`) });
+        }
+        last = override.o;
+      }
+    }
+    return manifest;
+  };
+
   const attachChainOnce = async (generation: ChainGeneration): Promise<AttachOutcome> => {
     const containerGeneration = await ports.containerGeneration?.();
     // A chain whose layers EXIST cannot be served by extraction, so a mount
@@ -1038,10 +1110,11 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       );
     }
     // The delta as the STORE describes it, because the layer is mounted from
-    // the stored object. An unreferenced but complete delta is adopted (header,
-    // "Ordering under crash").
-    const storedDelta = await ports.objectFacts(deltaObjectKey(root, generation.base.id));
-    const haveDelta = generation.delta !== undefined || storedDelta !== undefined;
+    // the stored object. A delta the record names was probed and adopted by
+    // `serve` a moment ago, so it is not asked for twice; an unreferenced but
+    // complete delta is adopted here (header, "Ordering under crash").
+    const storedDelta = generation.delta ?? await ports.objectFacts(deltaObjectKey(root, generation.base.id));
+    const haveDelta = storedDelta !== undefined;
 
     // IS THIS UPPER ALREADY THIS DELTA? The stamp is written only by the
     // commit that archived this upper, and it names the delta object, so a
@@ -1090,21 +1163,56 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
         await layerFailed('delta', { cause: error });
       }
     }
+    // A CHUNKED delta is a sidecar, not a lower: its manifest is read off the
+    // mount and materialized INTO THE UPPER before the overlay lands, so the
+    // overlay stands on the base alone and the upper holds the cumulative
+    // changed set (no collapse on the next commit). THE MOUNT DECIDES which
+    // layout this is, not the record: a crash between the PUT and the record
+    // write can strand either layout under a record naming the other. A
+    // legacy full delta (no manifest) composes as a lower exactly as before.
+    let sidecar: DeltaMaterializeOps | null = null;
+    const manifest = composing ? await readSidecarManifest(deltaLayer, generation, layerFailed) : null;
+    if (manifest !== null) {
+      sidecar = buildDeltaMaterializeOps(manifest, { sideDir: deltaLayer, upperDir, lowerBase, mergedDir: DEVBOX_WORKDIR });
+      try {
+        await runOpsBatched('materializing the delta into the upper', sidecar.pre);
+      } catch (error) {
+        await layerFailed('delta', { cause: error });
+      }
+    }
     // NEWEST LOWER FIRST. fuse-overlayfs resolves `lowerdir` left to right, so
-    // the delta precedes the base: it holds the newer version of every path it
-    // names, and the whiteouts that hide what the base still has.
-    await shell.overlayAttach(DEVBOX_WORKDIR, composing ? [deltaLayer, lowerBase] : [lowerBase]);
+    // a legacy delta precedes the base: it holds the newer version of every
+    // path it names, and the whiteouts that hide what the base still has.
+    await shell.overlayAttach(DEVBOX_WORKDIR, composing && sidecar === null ? [deltaLayer, lowerBase] : [lowerBase]);
     await assertOverlayLanded(`chain ${generation.base.id}`);
+    if (sidecar !== null) {
+      try {
+        await runOpsBatched('applying the delta deletions', sidecar.post);
+      } catch (error) {
+        await layerFailed('delta', { cause: error });
+      }
+      // Absorbed: release the sidecar, best effort. A stuck mount must not
+      // fail a start whose workspace is served; the next commit sees the
+      // standing mount as a layered delta and collapses, which is correct
+      // and merely costly, and the next attach releases every delta layer.
+      try {
+        await shell.unmountPath(deltaLayer);
+      } catch (error) {
+        ports.log(`${DEVBOX_WORKDIR} chain ${generation.base.id} absorbed its delta and the sidecar could not be released: ${describe({ cause: error })}`);
+      }
+    }
     // THE STORE MOUNT STAYS: squashfuse reads each layer through it for as
     // long as the overlay serves the work directory, so a release here is
     // refused EBUSY. The publication writes through this same mount.
 
     const bytes = generation.base.bytes + (generation.delta?.bytes ?? 0);
     // The shape decides the next commit: `base+delta layered` means the first
-    // commit with anything to say collapses the chain.
+    // commit with anything to say collapses the chain; an absorbed sidecar
+    // leaves the upper holding the cumulative changed set, so the next commit
+    // publishes a delta of it.
     const restored = !haveDelta
       ? 'base'
-      : held ? 'base+delta already in this upper' : 'base+delta layered';
+      : held ? 'base+delta already in this upper' : sidecar !== null ? 'base+delta absorbed into the upper' : 'base+delta layered';
     ports.log(
       `${DEVBOX_WORKDIR} attached from ${generation.base.id} `
       + `(chain, ${bytes} bytes, ${restored})`,
@@ -1330,6 +1438,44 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
   };
 
   /**
+   * Move a staged archive into the store through the mount and return what
+   * the store then holds: the second half of every publication, shared by
+   * whole-tree and chunked stages. `tmpStaged` says the archive sits on
+   * tmpfs, which is returned whether or not the record below is written.
+   */
+  const publishStagedArchive = async (
+    key: string,
+    staged: string,
+    storeHeld: boolean,
+    tmpStaged: boolean,
+  ): Promise<ChainLayer> => {
+    if (!storeHeld) await mountStoreOnce();
+    const published = await shell.publishArchive(staged, mountedLayerPath(CHAIN_STORE_MOUNT, root, key));
+    const landed = await ports.objectFacts(key);
+    if (tmpStaged) {
+      try {
+        const removed = await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
+        if (removed.exitCode !== 0) ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${removed.stderr.trim()}`);
+      } catch (error) {
+        ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${describe({ cause: error })}`);
+      }
+    }
+    if (landed === undefined) {
+      throw new Error(
+        `the container published ${key} through ${CHAIN_STORE_MOUNT} and the store holds no `
+        + 'such object, so nothing has been recorded.',
+      );
+    }
+    if (landed.bytes !== published) {
+      throw new Error(
+        `the store holds ${landed.bytes} bytes for ${key} where the container flushed `
+        + `${published}. Refusing to record a layer whose upload did not carry every byte.`,
+      );
+    }
+    return landed;
+  };
+
+  /**
    * Build a squashfs of `sourceDir`, publish it as `key`, and return what the
    * store then holds for it.
    *
@@ -1372,33 +1518,118 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     const staged = short === null ? archivePath : `${tmpStageDir}/layer.sqsh`;
     if (short !== null) ports.log(`${short} Staging ${sourceDir} in memory at ${tmpStageDir} instead.`);
     await shell.makeSquashfs(sourceDir, staged, excludes);
-    if (!storeHeld) await mountStoreOnce();
-    const published = await shell.publishArchive(staged, mountedLayerPath(CHAIN_STORE_MOUNT, root, key));
-    const landed = await ports.objectFacts(key);
-    if (short !== null) {
-      // The archive is published; memory is returned whether or not the
-      // record below is written. A failed removal is a console line, because
-      // the layer is in the store and the record is what the caller owes.
-      try {
-        const removed = await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
-        if (removed.exitCode !== 0) ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${removed.stderr.trim()}`);
-      } catch (error) {
-        ports.log(`${tmpStageDir} could not be cleared after publishing ${key}: ${describe({ cause: error })}`);
+    return await publishStagedArchive(key, staged, storeHeld, short !== null);
+  };
+
+  /** Run generated shell operations — a `# devbox-…` header line then one
+   *  operation per line — in batches of {@link DELTA_OPS_PER_COMMAND}, so a
+   *  many-file checkpoint costs round trips in the hundreds, not files. Every
+   *  batch carries the header and runs under `set -e`: a shell's exit is its
+   *  LAST command's, so without it a failed `cp` in the middle of a batch
+   *  would be reported as success by the `chmod` after it. A non-zero exit
+   *  names the batch; the container's own stderr carries the operation. */
+  const runOpsBatched = async (doing: string, [header = '', ...ops]: readonly string[]): Promise<void> => {
+    for (let at = 0; at < ops.length; at += DELTA_OPS_PER_COMMAND) {
+      const result = await ports.exec([header, 'set -e', ...ops.slice(at, at + DELTA_OPS_PER_COMMAND)].join('\n'));
+      if (result.exitCode !== 0) {
+        throw new Error(`${doing} failed in batch ${at / DELTA_OPS_PER_COMMAND + 1} (${result.exitCode}): ${result.stderr || result.stdout}`);
       }
     }
-    if (landed === undefined) {
-      throw new Error(
-        `the container published ${key} through ${CHAIN_STORE_MOUNT} and the store holds no `
-        + 'such object, so nothing has been recorded.',
-      );
+  };
+
+  /**
+   * Stage the upper as a CHUNKED delta and publish it under the delta key, or
+   * answer null when this host cannot (the probe did not run, `split` is
+   * absent, a fact disagreed mid-checkpoint): the caller then archives the
+   * whole upper as before, so a chunked host is faster and every other host
+   * is exactly what it was. See `chunked-delta.ts` for the format.
+   *
+   * ONLY WHOLE OBJECT: the package is one squashfs, so the object count per
+   * checkpoint stays at one whatever the changed set holds.
+   */
+  const stageChunkedDelta = async (chainId: string, storeHeld: boolean): Promise<ChainLayer | null> => {
+    const fallback = (why: string): null => {
+      ports.log(`${DEVBOX_WORKDIR} chain ${chainId}: archiving the whole upper because ${why}`);
+      return null;
+    };
+    const excludes: string[] = [];
+    for (const pattern of ports.archiveExcludes()) {
+      const normalized = normalizeArchiveExclude(pattern);
+      if (normalized !== null) excludes.push(normalized);
     }
-    if (landed.bytes !== published) {
-      throw new Error(
-        `the store holds ${landed.bytes} bytes for ${key} where the container flushed `
-        + `${published}. Refusing to record a layer whose upload did not carry every byte.`,
-      );
+    let probe: DeltaProbeEntry[];
+    try {
+      probe = parseDeltaProbe((await ports.exec(deltaProbeCommand(upperDir, excludes))).stdout);
+    } catch (error) {
+      return fallback(`the upper probe did not answer: ${describe({ cause: error })}`);
     }
-    return landed;
+    if (probe.length === 0) return fallback('the probe listed nothing');
+    // ROOM TO STAGE IT, asked before staging: the package and the hash
+    // scratch are bounded by the upper's own bytes, so a disk short of those
+    // stages in tmpfs exactly as the whole-tree archive does.
+    const short = await shell.stagingShortfall(upperDir, ports.archiveExcludes());
+    const stageRoot = short === null ? stageDir : tmpStageDir;
+    if (short !== null) ports.log(`${short} Staging the chunked delta in memory at ${tmpStageDir} instead.`);
+    // A `c` entry is a whiteout only when it is the 0/0 device fuse-overlayfs
+    // mints; any other device travels whole.
+    const devices = probe.filter((entry) => entry.type === 'c').map((entry) => entry.path);
+    const whiteouts = new Set<string>();
+    if (devices.length > 0) {
+      const statted = await ports.exec(['# devbox-whiteout-v1', ...devices.map((path) =>
+        `stat -c '%t,%T' ${shellPath(`${upperDir}/${path}`)} 2>/dev/null || printf 'x\\n'`)].join('\n'));
+      const lines = statted.stdout.split('\n').filter((line) => line !== '' && !line.startsWith('#'));
+      if (lines.length !== devices.length) return fallback('the whiteout probe answered short');
+      devices.forEach((path, at) => { if (lines[at] === '0,0') whiteouts.add(path); });
+    }
+    const carried = probe.filter((entry) => entry.type !== 'd' && !whiteouts.has(entry.path)).map((entry) => entry.path);
+    let baseFacts = new Map<string, DeltaBaseFact | null>();
+    if (carried.length > 0) {
+      try {
+        baseFacts = parseDeltaBaseStat((await ports.exec(deltaBaseStatCommand(carried, lowerBase))).stdout, carried);
+      } catch (error) {
+        return fallback(`the base probe did not answer: ${describe({ cause: error })}`);
+      }
+    }
+    let hashFiles = deltaHashCandidates(probe);
+    let hashes = new Map<number, DeltaFileHashes>();
+    if (hashFiles.length > 0) {
+      const sizes = new Map(probe.map((entry) => [entry.path, entry.size] as const));
+      const files = hashFiles.map((path, index) => {
+        const fact = baseFacts.get(path);
+        return { index, upperPath: `${upperDir}/${path}`, basePath: fact?.kind === 'file' ? `${lowerBase}/${path}` : null };
+      });
+      const wanted = new Map(hashFiles.map((path, index) => {
+        const fact = baseFacts.get(path);
+        return [index, {
+          upperBlocks: Math.ceil((sizes.get(path) ?? 0) / DELTA_BLOCK_BYTES),
+          baseBlocks: fact?.kind === 'file' ? Math.ceil(fact.size / DELTA_BLOCK_BYTES) : null,
+        }] as const;
+      }));
+      const hashed = await ports.exec(deltaBlockHashCommand({ workDir: `${stageRoot}/hash`, files }));
+      try {
+        hashes = parseDeltaBlockHashes(hashed.stdout, wanted);
+      } catch (error) {
+        if (!(error instanceof Error) || error.message !== 'NOSPLIT') {
+          return fallback(`the block hashes did not answer: ${describe({ cause: error })}`);
+        }
+        // No `split` on this host: big files travel whole, still one object.
+        hashFiles = [];
+      }
+    }
+    const plan = planDeltaPublication({ probe, baseFacts, hashes, hashFiles, whiteouts });
+    const pkgDir = `${stageRoot}/pkg`;
+    try {
+      await runOpsBatched('staging the chunked delta', buildDeltaStageOps(plan, { upperDir, pkgDir }));
+    } catch (error) {
+      return fallback(`the stage did not complete: ${describe({ cause: error })}`);
+    }
+    try {
+      return await stageAndPut(deltaObjectKey(root, chainId), pkgDir, [], storeHeld);
+    } finally {
+      // The package lives in memory when the disk was short; it is released
+      // whether or not the publication landed.
+      if (short !== null) await ports.exec(`rm -rf ${shellPath(tmpStageDir)}`);
+    }
   };
 
   const commitExtract = async (
@@ -1557,6 +1788,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
 
     await shell.resetDirs([stageDir]);
     let layer: ChainLayer;
+    let deltaFormat: 'chunked' | undefined;
     if (fresh) {
       layer = await stageAndPut(
         baseObjectKey(root, chainId), DEVBOX_WORKDIR, ports.archiveExcludes(), storeHeld,
@@ -1577,7 +1809,12 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       // tick time and 1.34x class-A of the plain one. Applied to both, the
       // archives are commensurable, and durability is HONEST: a tree the base
       // drops was only ever "durable in the delta" until the next rebase.
-      layer = await stageAndPut(
+      // CHUNKED FIRST: changed extents plus a per-file map in one object; a
+      // host that cannot stage one archives the whole upper exactly as before
+      // (`stageChunkedDelta` answers null and says why).
+      const chunked = await stageChunkedDelta(chainId, storeHeld);
+      deltaFormat = chunked === null ? undefined : 'chunked';
+      layer = chunked ?? await stageAndPut(
         deltaObjectKey(root, chainId), upperDir, ports.archiveExcludes(), storeHeld,
       );
     }
@@ -1589,6 +1826,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
       rev: (previous?.rev ?? 0) + 1,
       base: fresh ? { id: chainId, ...layer } : previous.base,
       delta: fresh ? undefined : layer,
+      deltaFormat: fresh ? undefined : deltaFormat,
       at: ports.now(),
       changeVersion: version,
       upperMark,
@@ -1880,3 +2118,4 @@ export function upperFingerprintCommand(sourceDir: string): string {
     + '| LC_ALL=C sort -z | sha256sum | cut -c1-64';
   return `bash -o pipefail -c ${shellPath(walk)}`;
 }
+
