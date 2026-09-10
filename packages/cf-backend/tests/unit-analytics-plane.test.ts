@@ -837,7 +837,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
   test('a settled turn carries its duration, shape and the provider\'s own token report', () => {
     const plane = fakeEnv();
     recordTurnRow(plane.env, {
-      workspace: 'ws', agentKind: 'subordinate', provider: 'workers-ai', model: 'deepseek-v4',
+      workspace: 'ws', agentKind: 'orchestrator', provider: 'workers-ai', model: 'deepseek-v4',
       outcome: 'failed', code: 'timeout', durationMs: 4200, steps: 6, toolCalls: 9,
       usage: { input: 1200, output: 340, cacheRead: 900, cacheWrite: 12, reasoning: 45, neurons: 7 },
       usd: 0.0031,
@@ -845,7 +845,7 @@ describe('the record adapters write the rows their boundaries promise', () => {
     const point = onlyPoint(plane.agent);
     expect(point.blobs).toEqual([
       'turn', 'turn', 'turn.settled', 'failed', 'timeout', 'turn.settled',
-      'subordinate', 'workers-ai', 'deepseek-v4', '', '', '',
+      'orchestrator', 'workers-ai', 'deepseek-v4', '', '', '',
     ]);
     // The trailing 0 is `attempts`: a turn is not a delivery and counts none,
     // and a plausible 1 there would read as a first attempt in every aggregate
