@@ -48,7 +48,7 @@ import type { FiberRecoveryContext, FiberRecoveryResult } from 'agents';
 
 import {
   BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, BackgroundJobRunner, recoveryBackoffMs,
-  AdvisorRecoverySnapshotSchema, nanoid, projectJsonValue,
+  AdvisorRecoverySnapshotSchema, ADVISOR_LANE_FIBER, nanoid, projectJsonValue,
   type AdvisorDisposition, type AdvisorRecoverySnapshot, type JsonValue,
   type SqlExecutor,
   JsonObjectSchema, type AgentSignal, type SignalOutcome,
@@ -270,9 +270,6 @@ export function sweepUnrecoverableFibers(
 
 /** The post-turn evolution lane's durable fiber name. */
 export const EVOLUTION_LANE_FIBER = 'evolution:settle';
-
-/** The advisor lane's durable fiber name. */
-export const ADVISOR_LANE_FIBER = 'advisor:review';
 
 /** The post-turn MCP warmup lane's durable fiber name. */
 export const MCP_WARM_LANE_FIBER = 'mcp:warm';

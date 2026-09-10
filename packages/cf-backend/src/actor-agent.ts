@@ -83,7 +83,7 @@ import {
   // already owns; nothing about it is Cloudflare-shaped.
   advanceRefinementLane, refinementDebtRequest, type RefinementDeps,
   effortFor, type CompletedTurn, type TurnContinuity, UNBOUNDED_STEPS, UNBOUNDED_MAX_STEPS,
-  runAdvisorLane,
+  advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn, ADVISOR_LANE_FIBER,
   type AdvisorRecoverySnapshot, type AdvisorDisposition,
   // canonical tool + prompt surface — single source of truth
   buildActorTools,
@@ -142,7 +142,6 @@ import {
   // open is filed. The other 25 producers of workspace spend arrive this way.
   WORKSPACE_RUN_ID, type ModelCallReport, type ModelOperationSink, type ModelOperationEvent,
   recordModelOperations,
-  effectAlreadyDone, recordEffectDone,
   // The one builder for a model_call row: its shape AND the price-only-when-the
   // -rate-is-this-call's-own guard, spelled once for all three call sites.
   buildModelCallEvent,
@@ -250,7 +249,7 @@ import { hostedSubordinateRuntime, type SubordinateHostSeams } from "./subordina
 import {
   // The durable lanes' recovery roster — synchronous classification, six arms,
   // terminal-result discipline — and this backend's three cf-minted lane names.
-  classifyRecoveredFiber, EVOLUTION_LANE_FIBER, ADVISOR_LANE_FIBER, MCP_WARM_LANE_FIBER,
+  classifyRecoveredFiber, EVOLUTION_LANE_FIBER, MCP_WARM_LANE_FIBER,
   TERMINAL_LANE_FIBER,
   // What the chat roster knows about a turn this isolate is not running.
   openChatTurnResponses,
@@ -593,13 +592,6 @@ const EXECUTE_TOOLS_TOOL = 'execute_tools' satisfies BuiltinToolName;
  *  sequence still owed. Public on the actor because `Agent.schedule()` types its
  *  callback as `keyof this`, which excludes protected members. */
 export const TERMINAL_RETRY_CALLBACK = '_kinuTerminalRetryTick';
-
-
-/** Where a turn records that its advisor lane was ACCEPTED — started and
- *  checkpointed, so recovery owns it. Not that the review finished: what must
- *  not happen twice is the lane being opened, and the fiber's own row is what
- *  carries it from there. */
-const ADVISOR_LANE_SCOPE = 'advisor_lane';
 
 
 
@@ -3228,12 +3220,7 @@ export abstract class ActorAgent extends Think<Env> {
     // advisors would review one turn, each spending a model call and appending
     // its own note. Recovery re-drives the fiber this accepted; it does not come
     // back through here. An unkeyed turn has no replay to guard against.
-    const laneKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
-
-    if (laneKey !== null && effectAlreadyDone(this.boundSql, this.actorHandle(), ADVISOR_LANE_SCOPE, laneKey)) {
-      return Promise.resolve();
-    }
-
+    if (advisorLaneStarted(this.boundSql, this.actorHandle(), turn)) return Promise.resolve();
     const snapshot: AdvisorRecoverySnapshot = recorded ?? this.advisorSnapshotFor(turn);
     const checkpointed = Promise.withResolvers<void>();
     const taskKey = nanoid();
@@ -3266,7 +3253,7 @@ export abstract class ActorAgent extends Think<Env> {
 
           // Adjacent to the stash: from this instant the lane is recoverable on its
           // own, which is exactly when a second one becomes a duplicate.
-          if (laneKey !== null) recordEffectDone(this.boundSql, this.actorHandle(), ADVISOR_LANE_SCOPE, laneKey);
+          markAdvisorLaneStarted(this.boundSql, this.actorHandle(), turn);
           checkpointed.resolve();
           await this.runAdvisorReview(snapshot);
         });
@@ -3306,20 +3293,12 @@ export abstract class ActorAgent extends Think<Env> {
    * routing profile — a fixed tier, so it is answerable on a cold activation
    * with no turn), the signal seam, and the note store.
    */
-  private async runAdvisorReview(snapshot: AdvisorRecoverySnapshot): Promise<AdvisorDisposition | null> {
-    const llm = this.rt.advisorLlm;
-
-    if (llm === undefined) return null;
-    const labels = snapshot.turn.missionLabels ?? [];
-
-    return await runAdvisorLane({
-      turn: snapshot.turn,
-      llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
-      enabled: true,
-      minSeverity: snapshot.minSeverity,
-      recent: snapshot.recent,
+  private runAdvisorReview(snapshot: AdvisorRecoverySnapshot): Promise<AdvisorDisposition | null> {
+    return reviewRecordedTurn({
+      snapshot,
+      llm: this.rt.advisorLlm,
+      govern: (llm, labels) => this.budget.govern(llm, labels),
       gateOpen: false,
-      reachable: snapshot.reachable,
       deliver: (signal) => this.orch.signals.deliver(signal),
       record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
     });

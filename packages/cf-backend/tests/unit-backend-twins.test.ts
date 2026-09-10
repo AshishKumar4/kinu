@@ -229,17 +229,16 @@ const SHARED_TRANSPORTS = {
   resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
   revokeShellApprovalGrants: 'revokeShellApprovalGrants',
-  // The whole turn-end policy — enabled, review, the four suppression rules,
-  // deliver-or-record — is core's `runAdvisorLane`. What each body states is
-  // only what its own backend knows: where the governor lives, and whether a
-  // completion gate exists at all (it is the one-shot CLI surface's mechanism,
-  // so cf passes `gateOpen: false` by construction).
-  reviewTurnInBackground: 'runAdvisorLane',
-  // One review, from a snapshot: the single body each backend's live lane and its
-  // recovery both run. The verdict policy is the same `runAdvisorLane`; each body
-  // states only which model answers, where the governor lives, and whether a
-  // completion gate exists at all.
-  runAdvisorReview: 'runAdvisorLane',
+  // ONE lane per turn, ever started: the tombstone key, its scope and the
+  // fiber's name are core's, so a replay on either backend refuses a second
+  // review by the same rule. Each body keeps only its own carrier — a durable
+  // fiber on the DO, a tracked process fiber on the CLI.
+  reviewTurnInBackground: 'advisorLaneStarted',
+  // One review, from a snapshot: the body the live lane and its recovery both
+  // run, governed off the TURN's labels. Each backend states only which client
+  // answers, where the governor lives, and whether a completion gate exists at
+  // all (it is the one-shot CLI surface's mechanism, so cf passes `false`).
+  runAdvisorReview: 'reviewRecordedTurn',
   // The prompt pair and the parse are core's; each body states only which
   // model answers (its routed 'fast' lane) and its own spend/operation framing.
   suggestTitle: 'suggestWorkspaceTitle',

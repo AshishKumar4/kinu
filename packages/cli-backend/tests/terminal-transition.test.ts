@@ -19,7 +19,7 @@ import type { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
 import {
-  TerminalEffectInterrupt,
+  TerminalEffectInterrupt, ADVISOR_LANE_FIBER,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
   type Shell, type TerminalEffectFault,
@@ -463,14 +463,13 @@ describe('a recovery reads the record, not the session that finds it', () => {
     };
 
     void rt.storage.sql`INSERT INTO fibers (actor_id, id, name, snapshot, created_at)
-      VALUES (${rt.actor.actorId}, ${`fiber-${opts.turnId}`}, ${'advisor.review'},
+      VALUES (${rt.actor.actorId}, ${`fiber-${opts.turnId}`}, ${ADVISOR_LANE_FIBER},
               ${JSON.stringify(snapshot)}, 1)`;
   }
 
   const advisorFibers = (rt: CLIRuntime) =>
     rt.storage.sql<{ n: number }>`
-      SELECT count(*) AS n FROM fibers WHERE name = 'advisor.review'`[0]?.n ?? 0;
-
+      SELECT count(*) AS n FROM fibers WHERE name = ${ADVISOR_LANE_FIBER}`[0]?.n ?? 0;
   const notes = (rt: CLIRuntime) =>
     rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events WHERE type = 'advisor_note'`.map((row) => row.message);
