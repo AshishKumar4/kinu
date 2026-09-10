@@ -429,7 +429,7 @@ every runtime: `deny` refuses; `gate` requires `allow_all`.
 ## agents swarm: configured search
 
 `runSwarmAction` resolves `preset`, validates its axis tuple, then calls
-`runSwarm`. Only that step spends. `AgentsForkDeps` holds runtime, model
+`runSwarm`. Only that step spends. `AgentsSwarmDeps` holds runtime, model
 resolver, pricing, isolation, and shared-prefix compaction.
 
 | `reason` | What it says |

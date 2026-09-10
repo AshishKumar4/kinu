@@ -27,7 +27,7 @@ reaches exploration engines through their own paths. Lifetime evolution calls
 before spending anything.
 
 Each backend constructs
-`AgentsForkDeps` (`core/src/delegation/agents-tool.ts:347`) directly: runtime,
+`AgentsSwarmDeps` (`core/src/delegation/agents-tool.ts:396`) directly: runtime,
 caller's model, tier-model resolver, cost model, swarm-node loop host,
 swarm-node private home, shared-prefix compaction. It carries no strategy
 objects. To make another policy model-facing, add it to the closed swarm

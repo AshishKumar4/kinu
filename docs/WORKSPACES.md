@@ -143,7 +143,7 @@ actors that work inside it.
     provisioned in-isolate by the workspace's own host rather than over a hop.
     A subordinate is provisioned at hire and released on a wipe; a head
     provisions itself when it runs and its spawner releases it at settle; a
-    node is provisioned by its search through `AgentsForkDeps.provisionNodeHome`
+    node is provisioned by its search through `AgentsSwarmDeps.provisionNodeHome`
     and released by the same search. The `/tmp` rewrites are re-derived from
     the homes on disk every time the filesystem opens
     (`restoreAgentTmpConfinements`), so an eviction never leaves an actor with
