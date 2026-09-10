@@ -260,7 +260,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
 }
 
 /**
- * The per-node seat `AgentsForkDeps.hostNode` takes, over a real registration.
+ * The per-node seat `AgentsSwarmDeps.hostNode` takes, over a real registration.
  *
  * A FACTORY, because a wave's node deps are built once and shallow-copied per
  * child: one shared actor would give every node of that wave one claim ledger
@@ -274,7 +274,10 @@ export function nodeSeatFactory(rt: CLIRuntime, runId = 'fixture-run'): (node: N
     // The handle this seat's runtime must carry is the one registered above —
     // the host requires the runtime and the binding to be the same handle, so a
     // fixture that re-derived one here would build a seat the host refuses.
-    const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle });
+    // A node seat is a head row in swarm mode, declared the way production
+    // declares it — without the flag this would build the branching-head
+    // runtime and provision a home the loop never runs on.
+    const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
     const seams = headLoopSeams(rt, runId, handle, runtime);
     return { actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic };
   };

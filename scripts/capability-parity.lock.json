@@ -1,9 +1,9 @@
 [
   "asymmetry ActorToolsetDeps.craftedToolExecute#absent-in-cf",
   "asymmetry ActorToolsetDeps.vectorStore#absent-in-cli",
-  "asymmetry AgentsForkDeps.announceHeadActivity#absent-in-cli",
-  "asymmetry AgentsForkDeps.reportNodeDelta#absent-in-cli",
-  "asymmetry AgentsForkDeps.runtimeForNodeWorkspace#absent-in-cf",
+  "asymmetry AgentsSwarmDeps.announceHeadActivity#absent-in-cli",
+  "asymmetry AgentsSwarmDeps.reportNodeDelta#absent-in-cli",
+  "asymmetry AgentsSwarmDeps.runtimeForNodeWorkspace#absent-in-cf",
   "asymmetry ArchiveExportOptions.files#absent-in-cli",
   "asymmetry BackendHost.reconcileDurableWake#absent-in-cli",
   "asymmetry BackgroundJobRunnerDeps.onCancelled#absent-in-cli",

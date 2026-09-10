@@ -143,7 +143,7 @@ function searchOnlyDeps(): AgentsToolDeps {
   // bare runtime value — because the seat factory is where a wave would
   // otherwise give every node one claim ledger and one loop pointer.
   const seats = hostedSeatsOver({ rt, db: testSql.db });
-  return { mode: 'build', fork: { rt, hostNode: seats.hostNode, model: expandingModel() } };
+  return { mode: 'build', swarm: { rt, hostNode: seats.hostNode, model: expandingModel() } };
 }
 
 function fullDeps(): AgentsToolDeps {

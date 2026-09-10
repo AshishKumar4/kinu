@@ -106,7 +106,7 @@ describe('Pareto advance with a publishing carry', () => {
         objective: VECTOR,
         config: {
           unit: { kind: 'thought' },
-          context: 'fork',
+          context: 'inherit',
           expand: 'sample',
           score: { kind: 'verify' },
           advance: { kind: 'pareto' },

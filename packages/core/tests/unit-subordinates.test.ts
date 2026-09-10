@@ -253,7 +253,7 @@ describe('the delegation depth cap', () => {
     expect(refusal.error).toContain('depth 4');
     expect(refusal.error).toContain('depth 5');
     // Names the move that IS available, which "denied" alone cannot.
-    expect(refusal.error).toContain('fork');
+    expect(refusal.error).toContain('swarm');
   });
 
   // A row from a future, larger cap must not read as room. Clamping means a

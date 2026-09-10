@@ -2,11 +2,11 @@
  * Local actor identity — ONE physical database, N logical actors.
  *
  * A local workspace is one SQLite file. Every actor in it — the main agent, a
- * hired subordinate, an ask-by-role temporary, an exploration head, a swarm
- * node, a branch — is a row in `workspace_actors` on that one database, and
- * that row IS its identity. There is no second identity store: nothing seeds a
- * per-actor `actor_identity` row, because such a row can only exist once per
- * FILE and one file holds every actor a workspace has.
+ * hired subordinate, an ask-by-role temporary, an exploration head (a swarm
+ * node seats as one), a branch — is a row in `workspace_actors` on that one
+ * database, and that row IS its identity. There is no second identity store:
+ * nothing seeds a per-actor `actor_identity` row, because such a row can only
+ * exist once per FILE and one file holds every actor a workspace has.
  *
  * So a binding here carries no path. What it carries is the reference the
  * root's directory issued, and the authority to bind a handle to it: the
@@ -220,7 +220,7 @@ export function openLocalActor(parent: ActorHandle, name: string): LocalActorBin
 }
 
 export function registerLocalNode(parent: ActorHandle, node: NodeIdentity): ActorHandle {
-  return registerLocalActorState(parent, { name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'node', lifetime: 'task' });
+  return registerLocalActorState(parent, { name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task' });
 }
 
 /**

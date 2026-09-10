@@ -89,7 +89,7 @@ export const AGENT_UID_FLOOR = 2000;
 /**
  * Agent names that may become a directory under `/home`.
  *
- * A node's name reaches this module from the search engine's own row, so it is
+ * An exploration id reaches this module from the engine's own row, so it is
  * machine-generated rather than typed — which is exactly why it is validated.
  * An unvalidated name containing `/` or `..` writes a home outside `/home` and
  * a boundary is only as good as the path it is enforced on.
@@ -97,10 +97,10 @@ export const AGENT_UID_FLOOR = 2000;
  * The first character is narrower than the rest, and that asymmetry is the
  * point: a node id is a `nanoid`, whose alphabet includes `-`, and a directory
  * named `-rf` is a command-line argument at every callsite that ever expands
- * it. Derived names are prefixed (`nodeAgentName`, `subordinateAgentName`,
- * `headAgentName`) so the prefix supplies a safe first character and the id
- * keeps its case, which is what makes the mapping from facet to home
- * injective rather than merely tidy.
+ * it. Derived names are prefixed (`subordinateAgentName`, `headAgentName`) so
+ * the prefix supplies a safe first character and the id keeps its case, which
+ * is what makes the mapping from facet to home injective rather than merely
+ * tidy.
  *
  * The length covers the longest valid subordinate slug (64 characters by its
  * own validation) under the four-character `sub-` prefix. Length is not the

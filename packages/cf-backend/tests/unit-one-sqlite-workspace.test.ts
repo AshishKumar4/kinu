@@ -74,7 +74,7 @@ describe('one SQLite for every logical actor', () => {
     const first = await fixture.hire(fixture.main, 'sub-reader-1', 'subordinate');
     const second = await fixture.hire(fixture.main, 'sub-writer-2', 'subordinate');
     const head = await fixture.hire(fixture.main, 'exp:head-a1', 'head');
-    const node = await fixture.hire(fixture.main, 'exp:node-b2', 'node');
+    const node = await fixture.hire(fixture.main, 'exp:node-b2', 'head');
     const actors = [main, first, second, head, node];
 
     // THE measurement. One database exists, so there is no per-actor storage to
@@ -111,7 +111,7 @@ describe('one SQLite for every logical actor', () => {
       await fixture.hire(fixture.main, 'sub-reader-1', 'subordinate'),
       await fixture.hire(fixture.main, 'sub-writer-2', 'subordinate'),
       await fixture.hire(fixture.main, 'exp:head-a1', 'head'),
-      await fixture.hire(fixture.main, 'exp:node-b2', 'node'),
+      await fixture.hire(fixture.main, 'exp:node-b2', 'head'),
     ];
     for (const actor of roster) await scriptedTurn(actor, `work for ${actor.record.name}`);
 

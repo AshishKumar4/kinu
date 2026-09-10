@@ -47,7 +47,6 @@ import {
   describeSubordinateHandoff,
   inheritedContextFromHistory,
   headAgentName,
-  nodeAgentName,
   readSubordinateLiveStatus,
   receiveSubordinateEvent,
   renderSoulMarkdown,
@@ -728,9 +727,7 @@ export class LocalAgentHost {
   ): Promise<void> {
     const agentName = record.kind === 'head'
       ? headAgentName(record.storageKey)
-      : record.kind === 'node'
-        ? nodeAgentName(record.storageKey)
-        : subordinateAgentName(record.storageKey);
+      : subordinateAgentName(record.storageKey);
     if (ref.cwd) {
       cleanupFacetCwdScratch(ref.cwd, agentName);
       return;

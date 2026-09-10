@@ -116,7 +116,7 @@ describe('the reach declaration', () => {
         // REFUSES to seat a node rather than answering with a stub: this case
         // only builds each provider, so a node hosted here would be a node
         // nothing asked for, running under a fabricated actor.
-        fork: {
+        swarm: {
           rt, model: new MockLanguageModelV3(),
           hostNode: refuseHostNode('the tool-reach suite builds providers and runs no node'),
         },

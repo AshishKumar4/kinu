@@ -21,7 +21,7 @@ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import type { NimbusSandboxHandle, NodeHomeHost, NodeIdentity } from '@kinu.run/core';
 import {
-  facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, nodeAgentName, restoreAgentTmpConfinements,
+  facetHomeProvisioner, facetHomeReleaser, nimbusSessionFiles, headAgentName, restoreAgentTmpConfinements,
 } from '@kinu.run/core';
 import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
 import {
@@ -173,7 +173,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('the shell resolves /tmp per credential once the owner confines it', async () => {
     const f = await openOwner();
     try {
-      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(nodeAgentName(identity.nodeId));
+      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
 
@@ -182,7 +182,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
       // The sibling sees no such file, through the shell AND the substrate.
       expect((await rpcExec(f.host, 'cat /tmp/x', { cred: b })).exitCode).not.toBe(0);
       expect(f.workspace.vfs.as(ROOT).exists('tmp/x')).toBe(false);
-      expect(f.workspace.vfs.as(ROOT).readFileString('tmp/node-aX9/x')).toBe('a\n');
+      expect(f.workspace.vfs.as(ROOT).readFileString('tmp/head-aX9/x')).toBe('a\n');
     } finally {
       for (const database of f.databases) database.close();
     }
@@ -191,7 +191,7 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('the credentialed file plane resolves /tmp per credential too', async () => {
     const f = await openOwner();
     try {
-      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(nodeAgentName(identity.nodeId));
+      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
       const b = credOf(await provision(node('bK2')));
       const asA = nimbusSessionFiles(sessionBoxFor(f.host, a), a);
@@ -214,11 +214,11 @@ describe('a hosted node hardcoding /tmp stays private', () => {
   test('cleanup drops the confinement with the bytes', async () => {
     const f = await openOwner();
     try {
-      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(nodeAgentName(identity.nodeId));
+      const provision = (identity: { nodeId: string }) => facetHomeProvisioner(f.homeHost)(headAgentName(identity.nodeId));
       const a = credOf(await provision(node('aX9')));
       expect(await rpcExec(f.host, 'echo a > /tmp/gone', { cred: a })).toMatchObject({ exitCode: 0 });
-      await facetHomeReleaser(f.homeHost)('node-aX9');
-      expect(f.workspace.vfs.as(ROOT).exists('tmp/node-aX9')).toBe(false);
+      await facetHomeReleaser(f.homeHost)('head-aX9');
+      expect(f.workspace.vfs.as(ROOT).exists('tmp/head-aX9')).toBe(false);
       // The mapping is gone with the bytes: the same credential no longer
       // reaches a private root, and the shared scratch refuses it — dropped
       // confinement fails closed, never open.

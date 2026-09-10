@@ -626,7 +626,7 @@ export {
 export {
   buildActorTools, PEER_REPLY_TOPIC,
   type ActorToolsetDeps,
-  type AgentsToolDeps, type AgentsForkDeps,
+  type AgentsToolDeps, type AgentsSwarmDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps,

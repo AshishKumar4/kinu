@@ -30,7 +30,7 @@ function spawn(id: string, rootId: string): HeadInput {
     task: `do ${id}`, mode: 'build', rationale: 'because',
     inheritedContext: [], budget: { maxDepth: 1, spawnedAt: 1_000 },
     mergeStrategy: 'synthesize',
-    loop: defaultLoopOrigin('node'),
+    loop: defaultLoopOrigin('head'),
   };
 }
 

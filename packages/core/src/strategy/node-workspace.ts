@@ -124,19 +124,6 @@ export interface NodeIdentity {
  */
 export type NodeWorkspaceProvisioner = (node: NodeIdentity) => Promise<NodeWorkspace>;
 
-/**
- * A node's name as an agent, and therefore its directory under `/home`.
- *
- * Prefixed rather than raw: a node id is a `nanoid`, so it may begin with `-`,
- * and `node-` supplies a safe first character while leaving the id itself
- * untouched — which keeps the mapping INJECTIVE. Two nodes must never resolve
- * to one home, so sanitising (which can map two ids together) would be a
- * correctness bug and not a cosmetic choice.
- */
-export function nodeAgentName(nodeId: string): string {
-  return `node-${nodeId}`;
-}
-
 /** What a host must hand over for a node to get a real home. */
 export interface NodeHomeHost {
   /** The uid-0 view — `SqliteVFS.as(CRED_KERNEL)`. */
@@ -155,8 +142,9 @@ export interface NodeHomeHost {
  * is one thing — uid/gid/mode on real inodes plus a confined `/tmp` — and a
  * second implementation per kind is how two backends started disagreeing
  * about the same directory. The caller names the agent with its kind's
- * function (`nodeAgentName`, `subordinateAgentName`, `headAgentName`), so
- * the namespace stays disjoint by construction.
+ * function (`subordinateAgentName`, `headAgentName` — a swarm node's actor is
+ * a head, so its home lives in the `head-` namespace too), so the namespace
+ * stays disjoint by construction.
  *
  * Synchronous underneath and `async` only to satisfy the seam — every substrate
  * call here returns `void`. The host may arrive as a promise, because a

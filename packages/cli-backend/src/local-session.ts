@@ -33,7 +33,7 @@ import type {
   SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, KinuExtension,
   HeadRuntime, HeadGrounding, SerializedMessage, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
-  AgentsForkDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
+  AgentsSwarmDeps, AgentsToolDeps, TeamToolDeps, PeersToolDeps,
   MissingCapability, DynamicApproval,
   RunEvent, RunEventInput, RunEventQuery, SettledSignals,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
@@ -60,7 +60,7 @@ import {
   readMemoryTail,
   listProposedTasks, updateProposedTaskStatus,
   agentsActionsFor,
-  facetHomeProvisioner, facetHomeReleaser, nodeAgentName, headAgentName, explorationActorKey,
+  facetHomeProvisioner, facetHomeReleaser, headAgentName, explorationActorKey,
   type HostedNodeSeat, type NodeIdentity, type ModelPricing,
   type ShadowTrialTurn, type ShadowTrialPlan, type ShadowTrialQueueOutcome, type ShadowTrialDrain,
   type HeadInput,
@@ -663,11 +663,11 @@ export class LocalAgentSession implements BackendHost {
    * The loop origin each actor this session creates was CREATED with, until the
    * host has seeded it.
    *
-   * A fork may name a version (`agents fork` carries one per head), and the
+   * A search may name a version (`agents swarm` carries one per head), and the
    * pointer is seeded while the host builds the actor — before its first claim.
    * So the creation site records its choice here and `loopFor` reads it; an
    * actor nobody named an origin for gets the default for its kind, which is
-   * what every ordinary hire, head and node is.
+   * what every ordinary hire and head is.
    */
   private readonly loopOrigins = new Map<string, LoopOrigin>();
 
@@ -702,6 +702,20 @@ export class LocalAgentSession implements BackendHost {
    * and the next head seated under the same reference cannot inherit it.
    */
   private readonly actorWrites = new Map<string, WriteObserver>();
+  /**
+   * The actor ids this session seated as swarm NODES, until the host has
+   * built them.
+   *
+   * THE SAME SHAPE AS {@link loopOrigins}: the HOST builds the runtime, but
+   * only the CALLER knows which mode the seat runs in, and
+   * `ActorHostDeps.runtimeFor(bound)` is deliberately narrow. A node's seat is
+   * a HEAD row with its mode declared here — the row cannot carry it, because
+   * the row is what the directory reads back and the mode is what this
+   * session's runtime builder needs. Never cleared: an acquire may repeat for
+   * one node (register and acquire are both idempotent), and a second build
+   * must take the same arm as the first.
+   */
+  private readonly nodeSeats = new Set<string>();
 
   /** The per-turn mechanical-steering ledger — what fired at which step and
    *  what came of it. A read-only named view; the orchestrator owns writes. */
@@ -4471,8 +4485,10 @@ export class LocalAgentSession implements BackendHost {
       installedBuild: null,
       // The observer the seater filled in, when it filled one in: an actor
       // seated with no watcher is built unobserved, which is every kind but a
-      // head run reporting the files it changed.
-      runtimeFor: (bound) => buildLocalActorRuntime(this.rt, bound, this.pendingWriteObserver(bound.reference.actorId)),
+      // head run reporting the files it changed. The seat's MODE rides the
+      // session's own slot for the same reason: a swarm node's seat is a head
+      // row, and only `nodeSeats` tells the builder it seats a node.
+      runtimeFor: (bound) => buildLocalActorRuntime(this.rt, bound, this.pendingWriteObserver(bound.reference.actorId), this.nodeSeats.has(bound.reference.actorId)),
       orchestrationFor: (bound) => createLocalOrchestration({
         runtime: bound.runtime,
         eventLog: new EventLog(hubSql, bound.handle),
@@ -4483,7 +4499,7 @@ export class LocalAgentSession implements BackendHost {
         autoEvolve: this.autoEvolve,
       }).deps,
       // The origin the creation site NAMED, or the default for its kind. A
-      // head and a node inherit the parent's promoted program, which is what
+      // head inherits the parent's promoted program, which is what
       // makes a fork a fork of THIS agent rather than of the builtin loop.
       loopFor: (bound) => ({
         origin: this.loopOrigins.get(bound.reference.actorId) ?? defaultLoopOrigin(bound.record.kind),
@@ -4517,7 +4533,7 @@ export class LocalAgentSession implements BackendHost {
   /** The `agents` tool's swarm substrate. A swarm's nodes run their loops in
    *  this process, as hosted logical actors of this workspace, and get private
    *  homes from this workspace's uid-0 view. */
-  private buildAgentsForkDeps(): AgentsForkDeps {
+  private buildAgentsSwarmDeps(): AgentsSwarmDeps {
     const nodeHome = this.rt.nodeHome;
     const nodeRuntime = this.rt.nodeRuntime;
     return {
@@ -4526,7 +4542,7 @@ export class LocalAgentSession implements BackendHost {
       // child, so this has to be a factory: a shared actor would give every
       // node of that wave one claim ledger, one loop pointer and one row set.
       hostNode: (node) => this.hostNode(node),
-      model: this.cachedModel ?? this.defaultModel("an agents fork"),
+      model: this.cachedModel ?? this.defaultModel("an agents swarm"),
       originContext: () => Object.freeze(structuredClone([...this.actorSession.history])),
       // Same catalog session that answers the context window and prices the
       // mission ledger — so a search's pre-run estimate and the ledger that
@@ -4545,16 +4561,18 @@ export class LocalAgentSession implements BackendHost {
       // *Isolation*: this backend's filesystem is in this isolate, so it holds the
       // three host-owned members a private home needs (`CLIRuntime.nodeHome`), and
       // `facetHomeProvisioner` is the ONE implementation that turns them into one,
-      // keyed on the node ACTOR's storage key rather than a raw node id. So this site adapts the host to the seam rather than owning a second
-      // provisioner. Built per swarm call and awaited per node, so a turn that never
-      // searches never boots the workspace. A runtime built elsewhere
+      // keyed on the node ACTOR's storage key rather than a raw node id — the actor
+      // is a head, so the home lives in the `head-` namespace. So this site adapts
+      // the host to the seam rather than owning a second provisioner. Built per
+      // swarm call and awaited per node, so a turn that never searches never
+      // boots the workspace. A runtime built elsewhere
       // (`buildCLIHeadRuntime`, a bare AgentRuntime in a harness) holds no host, and
       // then its nodes report `shared-origin-plane` rather than a home they lack.
       provisionNodeHome: nodeHome === undefined
         ? undefined
         : () => async (node) => {
           const actor = registerLocalNode(this.rt.actor, node);
-          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(nodeAgentName(actor.storageKey));
+          return facetHomeProvisioner(nodeHome(), () => requireLocalActorWorkspace(this.rt.actor, actor))(headAgentName(actor.storageKey));
         },
       // The home is only real through a runtime that USES the credential: the
       // node's shell runs as its uid and its file tools write as the same uid,
@@ -4621,8 +4639,8 @@ export class LocalAgentSession implements BackendHost {
   }
 
   private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
-    const fork = this.buildAgentsForkDeps();
-    const base: AgentsToolDeps = { mode, fork, budget: this.budget };
+    const swarm = this.buildAgentsSwarmDeps();
+    const base: AgentsToolDeps = { mode, swarm, budget: this.budget };
     base.profile = () => agentsProfileContext(this.actorSession.profile, this.actorSession.profileInputs);
     if (this.teamDeps) base.team = this.teamDeps;
     if (this.peersDeps) base.peers = this.peersDeps;
@@ -4966,7 +4984,7 @@ export class LocalAgentSession implements BackendHost {
    * ONE builder for the two places that construct it — the constructor, before
    * any model is claimed, and every rebind after one. A second copy that omits
    * `resolveModel` is invisible: the constructor's own `ensureModelState()`
-   * rebuilds immediately, so `agents fork`'s per-fork model becomes a no-op on
+   * rebuilds immediately, so `agents swarm`'s per-search model becomes a no-op on
    * this backend forever — a panel asked for three vendors gets three copies of
    * one, which is exactly the defect `createCLIHeadRuntime`'s own tests pin one
    * layer down.
@@ -5003,7 +5021,7 @@ export class LocalAgentSession implements BackendHost {
       hostHead: (input, writes) => this.hostHead(input, writes),
     };
     // Per-fork models only mean something where a resolver exists; a static
-    // model session has one model and every fork inherits it.
+    // model session has one model and every search inherits it.
     if (this.modelResolver) {
       const modelResolver = this.modelResolver;
       options.resolveModel = (spec) => modelResolver.resolveModel(spec);
@@ -5093,8 +5111,12 @@ export class LocalAgentSession implements BackendHost {
    */
   async hostNode(node: NodeIdentity): Promise<HostedNodeSeat> {
     const binding = registerLocalActor(this.rt.actor, {
-      name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'node', lifetime: 'task',
+      name: explorationActorKey(node.nodeId), creationId: node.nodeId, kind: 'head', lifetime: 'task',
     });
+    // The mode this seat runs in, declared before the host builds it: the row
+    // is a head row, and only this slot tells `runtimeFor` it seats a swarm
+    // node rather than a branching head.
+    this.nodeSeats.add(binding.reference.actorId);
     const actor = await this.actorHost.acquire(binding.reference);
     return {
       actor,

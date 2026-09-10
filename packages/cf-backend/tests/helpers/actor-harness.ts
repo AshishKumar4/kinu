@@ -557,7 +557,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
    *  which actors exist. */
   harnessExplorationActors(): string[] {
     return this.actorDirectoryStore().list()
-      .filter((record) => record.kind === 'head' || record.kind === 'node' || record.kind === 'branch')
+      .filter((record) => record.kind === 'head' || record.kind === 'branch')
       .map((record) => record.name);
   }
 
@@ -1308,12 +1308,12 @@ export async function hostedSubordinateHarness(
 /**
  * One exploration actor of the given kind, hosted and acquired.
  *
- * Head, node and rollout-branch fixtures use the same directory registration
+ * Head and rollout-branch fixtures use the same directory registration
  * and `acquire` sequence. Their registered kind is the one differing argument.
  */
 export async function hostedExplorationHarness(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
-  kind: 'head' | 'node' | 'branch',
+  kind: 'head' | 'branch',
   id: string,
 ): Promise<HostedActorHarness> {
   const entry = await workspace.agent.actorDirectory({
@@ -1324,7 +1324,7 @@ export async function hostedExplorationHarness(
 }
 
 /** The workspace's own main actor, as a hosted actor — so a suite can assert
- *  the five kinds through one shape instead of special-casing the root. */
+ *  the four kinds through one shape instead of special-casing the root. */
 export async function hostedMainActor(
   workspace: ActorHarness<HarnessOrchestratorAgent>,
 ): Promise<HostedActorHarness> {

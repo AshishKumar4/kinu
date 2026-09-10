@@ -38,7 +38,7 @@ import {
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   SWARM_PRESET_DOCTRINE,
-  type AgentsForkDeps,
+  type AgentsSwarmDeps,
   type AgentsToolDeps,
   type PeersToolDeps,
   type SubordinateRosterEntry,
@@ -117,7 +117,7 @@ function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
  *  with one model for every spec because these tests are about the delegation
  *  surface; WHICH model a tier reaches is pinned in
  *  unit-swarm-profile-routing.test.ts. */
-function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
+function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   const { rt, testSql } = createTestRuntime();
   const model = new MockLanguageModelV3();
   return {
@@ -209,7 +209,7 @@ function makePeers() {
 }
 
 function fullDeps(): AgentsToolDeps {
-  return withBuildMode({ fork: forkDeps(), team: makeTeam().deps, peers: makePeers().deps });
+  return withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps });
 }
 
 function actionEnumOf(deps: TestAgentsToolDeps): string[] {
@@ -224,7 +224,7 @@ function actionEnumOf(deps: TestAgentsToolDeps): string[] {
 
 describe('agents.* codemode namespace — dep gating', () => {
   test('the exploration substrate (CLI / subordinate) exposes the search member alone', () => {
-    const deps = withBuildMode({ fork: forkDeps() });
+    const deps = withBuildMode({ swarm: swarmDeps() });
     // `swarm` rides that substrate — a model to expand with and a workspace to
     // measure in — so a sandbox with it can run a configured search, and the
     // namespace says so structurally.
@@ -242,7 +242,7 @@ describe('agents.* codemode namespace — dep gating', () => {
   });
 
   test('the namespace members ARE the tool action enum — one gate, never two', () => {
-    for (const deps of [withBuildMode({ fork: forkDeps() }), fullDeps(), withBuildMode({ team: makeTeam().deps })]) {
+    for (const deps of [withBuildMode({ swarm: swarmDeps() }), fullDeps(), withBuildMode({ team: makeTeam().deps })]) {
       expect(Object.keys(namespaceOf(() => deps))).toEqual(actionEnumOf(deps));
       expect(Object.keys(namespaceOf(() => deps))).toEqual(agentsActionsFor(deps));
     }
@@ -255,7 +255,7 @@ describe('agents.* codemode namespace — dep gating', () => {
   });
 
   test('an ungated action is structurally absent, not a runtime refusal', () => {
-    const ns = namespaceOf(() => ({ fork: forkDeps() }));
+    const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
     expect(ns.hire).toBeUndefined();
     expect(ns.msg).toBeUndefined();
   });
@@ -282,11 +282,11 @@ describe('agents.* codemode namespace — dispatch', () => {
     // What the old settle-availability test was really guarding. Plan mode
     // constrains what a helper may DO, never which rungs exist: a planning turn
     // searches to investigate exactly as a build turn does, over the same members.
-    const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', fork: forkDeps() }));
+    const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', swarm: swarmDeps() }));
     expect(await member(provider.tools, 'swarm').execute({ task: 'research' }))
       .toMatchObject({ reason: 'bad_input' });
     expect(Object.keys(provider.tools))
-      .toEqual(Object.keys(createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).tools));
+      .toEqual(Object.keys(createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).tools));
   });
 
   test('the search contract is the tool\'s, not re-implemented here', async () => {
@@ -294,7 +294,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     // same classified refusals a tool call does: a search with no preset is
     // refused, and `settle` — which left the surface with the judged tree — is
     // refused as the unknown field it now is, naming what swarm does take.
-    const ns = namespaceOf(() => ({ fork: forkDeps() }));
+    const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
     expect(await member(ns, 'swarm').execute({ task: 't' })).toMatchObject({ reason: 'bad_input' });
     const stale = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute({
       task: 't', settle: 'mcts', preset: 'ideate',
@@ -310,7 +310,7 @@ describe('agents.* codemode namespace — dispatch', () => {
     // The projection hands the SAME parsed input to the SAME dispatcher, so a
     // legal call is answered by the engine and an illegal composition by the
     // axis refusal — never by a second parse living in the sandbox bridge.
-    const ns = namespaceOf(() => ({ fork: forkDeps() }));
+    const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
     const refused = v.parse(v.object({ reason: v.string(), error: v.string() }), await member(ns, 'swarm').execute({
       task: 'ship it',
       preset: 'ideate',
@@ -329,7 +329,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   test('hire / msg / list / dismiss reach the same transports', async () => {
     const team = makeTeam();
     const peers = makePeers();
-    const deps = withBuildMode({ fork: forkDeps(), team: team.deps, peers: peers.deps, profile: profileDeps().profile });
+    const deps = withBuildMode({ swarm: swarmDeps(), team: team.deps, peers: peers.deps, profile: profileDeps().profile });
     const ns = namespaceOf(() => deps);
 
     expect(await member(ns, 'hire').execute({ role: 'researcher', mission: 'Map the landscape' }))
@@ -363,7 +363,7 @@ describe('agents.* codemode namespace — dispatch', () => {
       generation += 1;
       const { rt, testSql } = createTestRuntime();
       return {
-        fork: {
+        swarm: {
           rt, model: new MockLanguageModelV3(),
           hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode,
         },
@@ -450,7 +450,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     // never by "unknown field \"signal\"", which is what would happen the moment
     // the bridge stopped recognising it. From there `runSwarmAction` reads
     // `abortSignal` off that bag and hands it to the run.
-    const ns = namespaceOf(() => ({ fork: forkDeps() }));
+    const ns = namespaceOf(() => ({ swarm: swarmDeps() }));
     const controller = new AbortController();
     const result = v.parse(ErrorResultSchema, await member(ns, 'swarm').execute(
       { task: 't' }, { signal: controller.signal },
@@ -506,7 +506,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
 
 describe('agents.* codemode namespace — declared types', () => {
   test('declares exactly the gated members', () => {
-    const searchOnly = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
+    const searchOnly = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
     expect(searchOnly).toContain('swarm(input: {');
     expect(searchOnly).not.toContain('hire(input: {');
     expect(searchOnly).not.toContain('dismiss(input: {');
@@ -516,7 +516,7 @@ describe('agents.* codemode namespace — declared types', () => {
   });
 
   test('the search docstring states the non-resumable cost of searching in-sandbox', () => {
-    const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
+    const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
     expect(types).toContain('NOT resumable from here');
     expect(types).toContain('execute_tools declines background resume');
     expect(types).toContain('top-level `agents` tool');
@@ -527,7 +527,7 @@ describe('agents.* codemode namespace — declared types', () => {
     // wrong: that `verify` names a REGISTERED instrument rather than a path it
     // invents, and that an illegal composition is refused by NAME rather than
     // silently run under a different shape.
-    const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
+    const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
     expect(types).toContain('MEASURED rather than judged');
     expect(types).toContain('names a REGISTERED instrument');
     expect(types).toContain('names the axis');
@@ -544,7 +544,7 @@ describe('agents.* codemode namespace — declared types', () => {
     // with an exact checker was a TYPE ERROR — the declaration made a live
     // capability unreachable rather than merely undescribed. Derived now, so the
     // sandbox contract cannot come to offer a different set than the schema.
-    const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
+    const types = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types ?? '';
     for (const preset of SWARM_PRESETS) expect(types).toContain(`"${preset}"`);
     expect(types).toContain(`preset?: ${SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
     expect(types).toContain(`from?: ${NAMED_SWARM_PRESETS.map((preset) => `"${preset}"`).join(' | ')};`);
@@ -555,9 +555,9 @@ describe('agents.* codemode namespace — declared types', () => {
     // Two unrelated deps objects, same actions: the declaration the cf and node
     // sandboxes show the model must not differ by a byte, because it is one
     // literal per action rather than text derived from whatever is wired.
-    const a = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types;
+    const a = createAgentsCodemodeProvider(() => withBuildMode({ swarm: swarmDeps() })).types;
     const b = createAgentsCodemodeProvider(() => withBuildMode({
-      fork: {
+      swarm: {
         rt: createTestRuntime().rt, model: new MockLanguageModelV3(),
         // This case reads the rendered DECLARATION and runs nothing, so a seat
         // asked for here would be a node no assertion wanted.
@@ -675,7 +675,7 @@ describe('agents surface — one action-field source', () => {
 
   test('every dependency combination projects one native and codemode contract', () => {
     const combinations: TestAgentsToolDeps[] = [
-      { fork: forkDeps() },
+      { swarm: swarmDeps() },
       { team: makeTeam().deps },
       { peers: makePeers().deps },
       { team: makeTeam().deps, peers: makePeers().deps },
@@ -732,7 +732,7 @@ describe('agents surface — one action-field source', () => {
     // this test needs every advertised property.
     const schema = v.parse(
       ToolSchemaContract,
-      createAgentsTool(withBuildMode({ fork: forkDeps(), team: makeTeam().deps, peers: makePeers().deps })).inputSchema,
+      createAgentsTool(withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps })).inputSchema,
     );
     const advertised = new Set(Object.keys(schema.jsonSchema.properties).filter((k) => k !== 'action'));
     for (const action of AGENTS_TOOL_ACTIONS) {
@@ -774,7 +774,7 @@ function builtinEnvelope() {
 
 function profileDeps(overrides: Partial<AgentsToolDeps> = {}): TestAgentsToolDeps {
   return {
-    fork: forkDeps(),
+swarm: swarmDeps(),
     team: makeTeam().deps,
     profile: () => ({
       envelope: builtinEnvelope(),
@@ -853,9 +853,9 @@ describe('agents delegation — role/tier/preset precedence', () => {
     const noPreset = await member(tools, 'swarm').execute?.({ task: 'explore angles' });
     // researcher is not the caller (general), so this resolves general→ideate.
     expect(noPreset).not.toMatchObject({ reason: 'bad_input', error: expect.stringContaining('preset') });
-    const fork = deps.fork;
-    if (!fork) throw new Error('profile test needs the swarm substrate');
-    const row = fork.rt.storage.sql<{ config_json: string }>`
+    const swarm = deps.swarm;
+    if (!swarm) throw new Error('profile test needs the swarm substrate');
+    const row = swarm.rt.storage.sql<{ config_json: string }>`
       SELECT config_json FROM mcts_search_runs ORDER BY created_at DESC LIMIT 1
     `[0];
     if (!row) throw new Error('swarm did not persist its resolved config');
@@ -864,13 +864,13 @@ describe('agents delegation — role/tier/preset precedence', () => {
   });
 
   test('without a wired catalog, swarm demands an explicit preset and hire refuses', async () => {
-    const tools = namespaceOf(() => ({ fork: forkDeps(), team: makeTeam().deps }));
+    const tools = namespaceOf(() => ({ swarm: swarmDeps(), team: makeTeam().deps }));
     const refused = await member(tools, 'swarm').execute?.({ task: 'angles only' });
     expect(refused).toMatchObject({ reason: 'bad_input' });
     expect(v.parse(ErrorResultSchema, refused).error).toContain('preset');
 
     const team = makeTeam();
-    const noCatalog = namespaceOf(() => ({ fork: forkDeps(), team: team.deps }));
+    const noCatalog = namespaceOf(() => ({ swarm: swarmDeps(), team: team.deps }));
     const hireRefused = await member(noCatalog, 'hire').execute?.({ role: 'researcher', mission: 'scan' });
     expect(hireRefused).toMatchObject({ reason: 'denied' });
     expect(team.calls).toEqual([]);
@@ -883,7 +883,7 @@ describe('agents delegation — role/tier/preset precedence', () => {
     expect(withCatalog).toContain('researcher');
     expect(withCatalog).toContain('preset research');
     // No catalog wired → no summaries, and nothing invented.
-    expect(rendered({ fork: forkDeps() })).not.toContain('Available roles');
+    expect(rendered({ swarm: swarmDeps() })).not.toContain('Available roles');
   });
 });
 

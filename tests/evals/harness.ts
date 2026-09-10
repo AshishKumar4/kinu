@@ -51,7 +51,7 @@ import type { JsonValue } from '@vitest-evals/core';
 import * as v from 'valibot';
 
 import type {
-  AgentRuntime, AgentsToolAction, AgentsForkDeps, AgentsToolDeps, BuiltinToolName,
+  AgentRuntime, AgentsToolAction, AgentsSwarmDeps, AgentsToolDeps, BuiltinToolName,
   EvalCase, LLMProviderConfig, ProfileCatalog, ProfileCatalogEnvelope,
   ProviderCatalogSnapshot, RunEvent, SessionMessage, SessionWriter, Shell, ToolCallRecord, ToolOutcome,
 } from '../../packages/core/src/index';
@@ -128,7 +128,7 @@ export type { LedgerTotals };
  * discovered. All are documented non-degrading absences on their own
  * declarations, and none changes the surface the model is SHOWN:
  *   - `costModel` is a `ModelCatalogSession` a session owns; absent, a swarm's
- *     pre-run spend gate blends and says it blended (AgentsForkDeps:267-270).
+ *     pre-run spend gate blends and says it blended (AgentsSwarmDeps:267-270).
  *   - `heads` strategy options are not wired, because a local head runs over a
  *     FORK of the session's own CLIRuntime. `defaultOptions` has no consumer in
  *     the shipped tree anyway: declared at agents-tool.ts:299, produced by
@@ -181,7 +181,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
   // has a target and passes `target.hostNode` (see `swarm.eval.ts`); one that
   // reaches it through this surface would otherwise run every node on the
   // caller's own actor, which is the failure this refusal prevents.
-  const fork: AgentsForkDeps = {
+  const swarm: AgentsSwarmDeps = {
     rt,
     model,
     hostNode: () => Promise.reject(new Error(
@@ -189,7 +189,7 @@ export function buildEvalAgentSurface(deps: EvalAgentSurfaceDeps): EvalAgentSurf
       + 'drive the rung through a target that implements hostNode',
     )),
   };
-  const agents: AgentsToolDeps = { mode: 'build', fork };
+  const agents: AgentsToolDeps = { mode: 'build', swarm };
   const tools = buildActorTools({
     rt,
     craftedToolExecute: createNodeCraftedExecute(),

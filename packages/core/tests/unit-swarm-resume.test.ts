@@ -583,12 +583,12 @@ function objective(): Objective {
   };
 }
 
-/** `context:'fork'` so a level-2 node of a RE-ENTERED parent has to inherit that
+/** `context:'inherit'` so a level-2 node of a RE-ENTERED parent has to inherit that
  *  parent's conversation — which on a resume can only come out of the journal. */
 function config(): SwarmConfig {
   return {
     unit: { kind: 'answer' },
-    context: 'fork',
+    context: 'inherit',
     expand: 'sample',
     score: { kind: 'verify' },
     advance: { kind: 'uct' },
@@ -877,7 +877,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     const deps: AgentsToolDeps = {
       mode: 'build',
       // A SECOND activation's host — see `workspace`.
-      fork: { rt, hostNode: activation(), model: second.model },
+      swarm: { rt, hostNode: activation(), model: second.model },
       budget: governor,
     };
     const agents = createAgentsTool(deps);
@@ -1004,7 +1004,7 @@ describe('a swarm killed mid-flight is re-entered by the real resume path', () =
     expect(second.script.starts()).toBe(2);
 
     // A LEVEL-2 NODE OF A RE-ENTERED PARENT INHERITED ITS PARENT'S CONVERSATION. Under
-    // `context:'fork'` that prefix can only have come out of the journal, because the
+    // `context:'inherit'` that prefix can only have come out of the journal, because the
     // parent's own `ModelMessage[]` died with the first attempt.
     expect(second.script.inherited).toHaveLength(2);
     for (const turns of second.script.inherited) expect(turns).toBeGreaterThan(0);
@@ -1090,7 +1090,7 @@ describe('a swarm cut before any node reported re-runs those nodes, and creates 
     const { fiber, settled } = inlineFiber();
     // A SECOND activation's host — see `workspace`.
     const agents = createAgentsTool({
-      mode: 'build', fork: { rt, hostNode: activation(), model: second.model },
+      mode: 'build', swarm: { rt, hostNode: activation(), model: second.model },
     });
     const runner = new BackgroundJobRunner({
       store: jobs,
@@ -1224,7 +1224,7 @@ describe('the start-of-life sweep does not retire a swarm the re-drive can re-en
     // A SECOND activation's host: the first one's frozen turns are still admitted
     // on its in-memory sessions, and an eviction is what destroys them.
     const agents = createAgentsTool({
-      mode: 'build', fork: { rt, hostNode: activation(), model: second.model },
+      mode: 'build', swarm: { rt, hostNode: activation(), model: second.model },
     });
     const runner = new BackgroundJobRunner({
       store: jobs,

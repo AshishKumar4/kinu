@@ -27,7 +27,7 @@ import type { SqlDatabase, SqlRow, SqlValue, VfsCred } from '@nimbus-sh/core/run
 import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
 import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-process-supervisor.js';
 import {
-  facetHomeProvisioner, nodeAgentName,
+  facetHomeProvisioner, headAgentName,
   AGENT_HOME_MODE,
   AGENT_TMP_MODE,
   AGENT_UID_FLOOR,
@@ -138,9 +138,9 @@ async function openFixture(): Promise<Fixture> {
     // the home — because a rename must not move an actor's directory and two
     // actors that briefly shared a name across a retirement must not share one.
     // Keying a home on `node.nodeId` instead is exactly that collision.
-    provision: (identity: NodeIdentity) => facetHomeProvisioner(wiring)(nodeAgentName(identity.nodeId)),
+    provision: (identity: NodeIdentity) => facetHomeProvisioner(wiring)(headAgentName(identity.nodeId)),
     reprovision: (identity: NodeIdentity) =>
-      facetHomeProvisioner({ ...wiring, root: workspace.vfs.as(ROOT) })(nodeAgentName(identity.nodeId)),
+      facetHomeProvisioner({ ...wiring, root: workspace.vfs.as(ROOT) })(headAgentName(identity.nodeId)),
   };
 }
 
@@ -171,12 +171,12 @@ describe('a provisioned node gets a real home', () => {
     const provisioned = await f.provision(node('aX9'));
 
     expect(provisioned.isolation).toBe('private-home');
-    expect(provisioned.home).toBe('/home/node-aX9');
+    expect(provisioned.home).toBe('/home/head-aX9');
     const cred = credOf(provisioned);
     expect(cred.uid).toBeGreaterThanOrEqual(AGENT_UID_FLOOR);
     // gid equals uid, so group membership is never a second way into a sibling.
     expect(cred.gid).toBe(cred.uid);
-    expect(statOf(f.workspace, '/home/node-aX9')).toEqual({
+    expect(statOf(f.workspace, '/home/head-aX9')).toEqual({
       uid: cred.uid, gid: cred.uid, mode: AGENT_HOME_MODE,
     });
   });
@@ -185,12 +185,12 @@ describe('a provisioned node gets a real home', () => {
     const f = await openFixture();
     const provisioned = await f.provision(node('aX9'));
 
-    const wrote = await rpcExec(f.host, 'echo mine > /home/node-aX9/proof.txt', {
+    const wrote = await rpcExec(f.host, 'echo mine > /home/head-aX9/proof.txt', {
       cred: credOf(provisioned),
     });
 
     expect(wrote.exitCode).toBe(0);
-    expect(f.workspace.vfs.as(ROOT).readFileString('/home/node-aX9/proof.txt')).toBe('mine\n');
+    expect(f.workspace.vfs.as(ROOT).readFileString('/home/head-aX9/proof.txt')).toBe('mine\n');
   });
 
   test('its /tmp is private at the shared path', async () => {
@@ -201,7 +201,7 @@ describe('a provisioned node gets a real home', () => {
     f.workspace.vfs.as(credA).writeFile('/tmp/scratch', 'a');
 
     expect(f.workspace.vfs.as(credB).readdir('/tmp').map((entry) => entry.name)).toEqual([]);
-    expect(statOf(f.workspace, 'tmp/node-aX9').mode).toBe(AGENT_TMP_MODE);
+    expect(statOf(f.workspace, 'tmp/head-aX9').mode).toBe(AGENT_TMP_MODE);
   });
 
   test('two readers who are not the node can read it — which is what 0o755 is for', async () => {
@@ -241,11 +241,11 @@ describe('the allocation is durable and injective', () => {
     const f = await openFixture();
 
     const a = await f.provision(node('aX9'));
-    // A node id is a nanoid, so it may begin with `-`: the `node-` prefix has to
+    // A node id is a nanoid, so it may begin with `-`: the `head-` prefix has to
     // supply the safe first character without collapsing two ids into one home.
     const b = await f.provision(node('-Zq7'));
 
-    expect(b.home).toBe('/home/node--Zq7');
+    expect(b.home).toBe('/home/head--Zq7');
     expect(credOf(b).uid).not.toBe(credOf(a).uid);
     expect(b.home).not.toBe(a.home);
   });
@@ -257,11 +257,11 @@ describe('one node cannot write into another node\u2019s home', () => {
     const credA = credOf(await f.provision(node('aX9')));
     await f.provision(node('bK2'));
 
-    const refused = await rpcExec(f.host, 'echo leak > /home/node-bK2/leak.txt', { cred: credA });
+    const refused = await rpcExec(f.host, 'echo leak > /home/head-bK2/leak.txt', { cred: credA });
 
     expect(refused.exitCode).not.toBe(0);
     expect(refused.stderr.toLowerCase()).toContain('permission denied');
-    expect(f.workspace.vfs.as(ROOT).exists('/home/node-bK2/leak.txt')).toBe(false);
+    expect(f.workspace.vfs.as(ROOT).exists('/home/head-bK2/leak.txt')).toBe(false);
   });
 
   test('the refusal is EACCES on the filesystem itself', async () => {
@@ -269,7 +269,7 @@ describe('one node cannot write into another node\u2019s home', () => {
     const credA = credOf(await f.provision(node('aX9')));
     await f.provision(node('bK2'));
 
-    expect(() => f.workspace.vfs.as(credA).writeFile('/home/node-bK2/leak.txt', 'leak'))
+    expect(() => f.workspace.vfs.as(credA).writeFile('/home/head-bK2/leak.txt', 'leak'))
       .toThrow(expect.objectContaining({ code: 'EACCES' }));
   });
 });
@@ -644,36 +644,36 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const asB = nimbusSessionFiles(sessionBox(f.host, b), b);
 
     const bytes = new Uint8Array([0, 1, 2, 0xff, 0xfe, 0x80, 0x0a, 0x27, 0x5c]);
-    await asA.writeFile('/home/node-aX9/candidate.bin', bytes);
+    await asA.writeFile('/home/head-aX9/candidate.bin', bytes);
 
     // Byte-exact, and the ORIGIN's uid-0 view agrees these are the same rows.
-    expect(await asA.readFile('/home/node-aX9/candidate.bin')).toEqual(bytes);
-    expect(f.workspace.vfs.as(ROOT).readFile('/home/node-aX9/candidate.bin')).toEqual(bytes);
-    expect(await asA.readdir('/home/node-aX9')).toEqual(['candidate.bin']);
-    expect((await asA.stat('/home/node-aX9/candidate.bin'))?.size).toBe(bytes.byteLength);
+    expect(await asA.readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
+    expect(f.workspace.vfs.as(ROOT).readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
+    expect(await asA.readdir('/home/head-aX9')).toEqual(['candidate.bin']);
+    expect((await asA.stat('/home/head-aX9/candidate.bin'))?.size).toBe(bytes.byteLength);
     // The read window: a sibling reads a 0o755 home, which the grader and
     // merge-back need too.
-    expect(await asB.readFile('/home/node-aX9/candidate.bin')).toEqual(bytes);
+    expect(await asB.readFile('/home/head-aX9/candidate.bin')).toEqual(bytes);
     // And the boundary: the sibling's FILE TOOLS are refused, not only its
     // shell. This is the half a session-user plane could never enforce.
-    await expect(asB.writeFile('/home/node-aX9/candidate.bin', 'overwritten'))
+    await expect(asB.writeFile('/home/head-aX9/candidate.bin', 'overwritten'))
       .rejects.toThrow(expect.objectContaining({ code: 'EACCES' }));
-    await expect(asB.mkdir('/home/node-aX9/hostile')).rejects.toThrow(
+    await expect(asB.mkdir('/home/head-aX9/hostile')).rejects.toThrow(
       expect.objectContaining({ code: 'EACCES' }),
     );
-    await expect(asB.unlink('/home/node-aX9/candidate.bin')).rejects.toThrow(
+    await expect(asB.unlink('/home/head-aX9/candidate.bin')).rejects.toThrow(
       expect.objectContaining({ code: 'EACCES' }),
     );
-    expect(f.workspace.vfs.as(ROOT).exists('/home/node-aX9/hostile')).toBe(false);
+    expect(f.workspace.vfs.as(ROOT).exists('/home/head-aX9/hostile')).toBe(false);
     // Absent is ENOENT and stat answers `null`; a boundary is neither.
-    await expect(asA.readFile('/home/node-aX9/absent')).rejects.toThrow(
+    await expect(asA.readFile('/home/head-aX9/absent')).rejects.toThrow(
       expect.objectContaining({ code: 'ENOENT' }),
     );
-    expect(await asA.stat('/home/node-aX9/absent')).toBeNull();
+    expect(await asA.stat('/home/head-aX9/absent')).toBeNull();
     // And against a real refusal rather than a scripted one: a sibling's 0o700
     // directory inside A's home. `stat` must NOT answer `null` here, or a caller
     // reads a boundary as an empty space and writes into it.
-    const shut = '/home/node-aX9/shut';
+    const shut = '/home/head-aX9/shut';
     f.workspace.vfs.as(ROOT).mkdir(shut, { recursive: true });
     f.workspace.vfs.as(ROOT).chown(shut, b.uid, b.gid);
     f.workspace.vfs.as(ROOT).chmod(shut, 0o700);
@@ -695,21 +695,21 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const names = ["we\nird 'q'-name", '--dash-leading', 'two  spaces\ttab', 'back\\slash$dollar'];
 
     for (const [index, name] of names.entries()) {
-      await asA.writeFile(`/home/node-aX9/${name}`, `body ${String(index)}`);
+      await asA.writeFile(`/home/head-aX9/${name}`, `body ${String(index)}`);
     }
 
-    expect((await asA.readdir('/home/node-aX9')).sort()).toEqual([...names].sort());
-    expect(await asA.readFile(`/home/node-aX9/${names[0]}`, { encoding: 'utf8' })).toBe('body 0');
-    await asA.rename(`/home/node-aX9/${names[0]}`, '/home/node-aX9/clean');
-    expect(await asA.exists(`/home/node-aX9/${names[0]}`)).toBe(false);
-    expect(await asA.readFile('/home/node-aX9/clean', { encoding: 'utf8' })).toBe('body 0');
-    await asA.unlink(`/home/node-aX9/${names[1]}`);
-    expect((await asA.readdir('/home/node-aX9')).sort())
+    expect((await asA.readdir('/home/head-aX9')).sort()).toEqual([...names].sort());
+    expect(await asA.readFile(`/home/head-aX9/${names[0]}`, { encoding: 'utf8' })).toBe('body 0');
+    await asA.rename(`/home/head-aX9/${names[0]}`, '/home/head-aX9/clean');
+    expect(await asA.exists(`/home/head-aX9/${names[0]}`)).toBe(false);
+    expect(await asA.readFile('/home/head-aX9/clean', { encoding: 'utf8' })).toBe('body 0');
+    await asA.unlink(`/home/head-aX9/${names[1]}`);
+    expect((await asA.readdir('/home/head-aX9')).sort())
       .toEqual(['back\\slash$dollar', 'clean', 'two  spaces\ttab']);
-    await asA.mkdir('/home/node-aX9/nest/deep', { recursive: true });
-    await asA.writeFile('/home/node-aX9/nest/deep/leaf', 'leaf');
-    await asA.removeRecursive('/home/node-aX9/nest');
-    expect(await asA.exists('/home/node-aX9/nest')).toBe(false);
+    await asA.mkdir('/home/head-aX9/nest/deep', { recursive: true });
+    await asA.writeFile('/home/head-aX9/nest/deep/leaf', 'leaf');
+    await asA.removeRecursive('/home/head-aX9/nest');
+    expect(await asA.exists('/home/head-aX9/nest')).toBe(false);
   });
 
   test('against the real substrate: a file larger than one payload, and what it costs', async () => {
@@ -730,17 +730,17 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const big = new Uint8Array(AGENT_FS_CHUNK_BYTES + 4096);
     for (let at = 0; at < big.length; at += 1) big[at] = (at * 31 + (at >> 8)) & 0xff;
 
-    await asA.writeFile('/home/node-aX9/big.bin', big);
+    await asA.writeFile('/home/head-aX9/big.bin', big);
     const writeCalls = nimbus.calls.length;
     nimbus.calls.length = 0;
-    const read = await asA.readFile('/home/node-aX9/big.bin');
+    const read = await asA.readFile('/home/head-aX9/big.bin');
     const readCalls = nimbus.calls.length;
     // Parsed rather than tested at runtime: a byte read that came back decoded
     // would be a different contract, and this states which one is under test.
     const bytes = v.parse(v.instance(Uint8Array), read);
 
     expect(bytes).toEqual(big);
-    expect((await asA.stat('/home/node-aX9/big.bin'))?.size).toBe(big.byteLength);
+    expect((await asA.stat('/home/head-aX9/big.bin'))?.size).toBe(big.byteLength);
     // MEASURED COST, and the reason the chunk is a wire bound and not a file
     // limit: two chunks plus one commit to write; two chunks plus the
     // zero-length read that proves EOF to read.
@@ -756,18 +756,18 @@ describe('the hosted file plane acts as the node, or the home is unwritable', ()
     const f = await openFixture();
     const a = credOf(await f.provision(node('aX9')));
     const asA = nimbusSessionFiles(sessionBox(f.host, a), a);
-    await asA.writeFile('/home/node-aX9/keeper', 'the old bytes\n');
+    await asA.writeFile('/home/head-aX9/keeper', 'the old bytes\n');
     // A directory the rename cannot land on: the stage succeeds, the commit
     // fails, and the target must survive untouched.
-    await asA.mkdir('/home/node-aX9/occupied', { recursive: true });
-    await asA.writeFile('/home/node-aX9/occupied/child', 'child');
+    await asA.mkdir('/home/head-aX9/occupied', { recursive: true });
+    await asA.writeFile('/home/head-aX9/occupied/child', 'child');
 
-    await expect(asA.writeFile('/home/node-aX9/occupied', 'clobber')).rejects.toThrow();
+    await expect(asA.writeFile('/home/head-aX9/occupied', 'clobber')).rejects.toThrow();
 
-    expect(await asA.readFile('/home/node-aX9/keeper', { encoding: 'utf8' })).toBe('the old bytes\n');
-    expect(await asA.readFile('/home/node-aX9/occupied/child', { encoding: 'utf8' })).toBe('child');
+    expect(await asA.readFile('/home/head-aX9/keeper', { encoding: 'utf8' })).toBe('the old bytes\n');
+    expect(await asA.readFile('/home/head-aX9/occupied/child', { encoding: 'utf8' })).toBe('child');
     // And no staging file left behind for a later reader to trip over.
-    expect((await asA.readdir('/home/node-aX9')).filter((name) => name.includes('.kinu-'))).toEqual([]);
+    expect((await asA.readdir('/home/head-aX9')).filter((name) => name.includes('.kinu-'))).toEqual([]);
   });
 });
 
@@ -780,7 +780,7 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const transactions = { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } };
     const first = createWorkspace({ sql, transactions, generation: 1 });
     const provision = facetHomeProvisioner(first.privileged().then((host) => ({ ...host, sql })));
-    const identity = await provision(nodeAgentName(node('reset').nodeId));
+    const identity = await provision(headAgentName(node('reset').nodeId));
     if (identity.isolation !== 'private-home') throw new Error('node needs its own home');
     const child = await first.asAgent(identity);
     expect(await first.shell.exec('echo main > /tmp/note; echo shared > /home/user/shared')).toMatchObject({ exitCode: 0 });
@@ -808,8 +808,8 @@ describe('the in-isolate plane acts as the node on both surfaces', () => {
     const provision = facetHomeProvisioner(
       workspace.privileged().then((privileged) => ({ ...privileged, sql })),
     );
-    const a = await provision(nodeAgentName(node('aX9').nodeId));
-    const b = await provision(nodeAgentName(node('bK2').nodeId));
+    const a = await provision(headAgentName(node('aX9').nodeId));
+    const b = await provision(headAgentName(node('bK2').nodeId));
     if (a.isolation !== 'private-home' || b.isolation !== 'private-home') {
       throw new Error('the in-isolate seam must provision credentials');
     }

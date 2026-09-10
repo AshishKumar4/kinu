@@ -2,7 +2,7 @@
  * ONE PROMOTED-LOOP CONTRACT FOR EVERY FULL ACTOR KIND (open-41).
  *
  * The claim, per kind — root, hired subordinate, ask-by-role temporary,
- * branching head, swarm node:
+ * branching head, and a second head seated as a swarm node:
  *
  *   1. Install `<that actor's scaffold path>.v1` with a marker only that version
  *      can produce, flip THAT actor's `scaffold_versions` pointer to it, and
@@ -20,11 +20,9 @@
  *      while the next preparation selects v2. Re-reading from the ledger is
  *      load-bearing: a promotion that mutated the stored claim would satisfy an
  *      in-memory comparison of the object `admit` returned and fail this.
- *   5. For a head and a node, assert the loop ORIGIN was `inherit` — they run
+ *   5. For heads in both modes, assert the loop ORIGIN was `inherit` — they run
  *      the parent's promoted loop and never a fresh v0, because a fork of an
  *      actor's reasoning that started from nothing the actor had learned is not
- *      a fork. Asserted as `defaultLoopOrigin(kind)` PLUS the child's seeded
- *      version equalling the parent's, which is the observable consequence.
  *
  * WHERE THIS PROVES ITS POINT, and where it does not. The selection seam
  * (`prepareActorProgram`) and the claim ledger are production code and are
@@ -125,7 +123,7 @@ async function subjects(fixture: HostedWorkspaceFixture): Promise<readonly Subje
   const hired = await fixture.hire(fixture.main, 'sub-hired-1', 'subordinate');
   const temporary = await fixture.hire(fixture.main, 'sub-temp-2', 'subordinate');
   const head = await fixture.hire(fixture.main, 'exp:head-a1', 'head');
-  const node = await fixture.hire(fixture.main, 'exp:node-b2', 'node');
+  const node = await fixture.hire(fixture.main, 'exp:node-b2', 'head');
   return [
     { label: 'root', actor: main, record: main.record, expectedOrigin: 'builtin' },
     { label: 'hired', actor: hired, record: hired.record, expectedOrigin: 'builtin' },
@@ -196,12 +194,14 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
     }
   });
 
-  test('a head and a node inherit the parent loop; a hire starts builtin', async () => {
+  test('heads in both modes inherit the parent loop; a hire starts builtin', async () => {
     // The POLICY, from the one function every creation site defaults through.
     // No actors needed: the origin is a function of the kind, which is what
-    // makes it hold at sites this suite never drives.
+    // makes it hold at sites this suite never drives. A swarm node's seat is a
+    // head row, so the node arm below runs the head assertion, not a kind the
+    // directory no longer issues.
     const expected: readonly (readonly [WorkspaceActor['kind'], 'builtin' | 'inherit'])[] = [
-      ['main', 'builtin'], ['subordinate', 'builtin'], ['head', 'inherit'], ['node', 'inherit'], ['branch', 'inherit'],
+      ['main', 'builtin'], ['subordinate', 'builtin'], ['head', 'inherit'], ['branch', 'inherit'],
     ];
     for (const [kind, origin] of expected) {
       expect(defaultLoopOrigin(kind).kind).toBe(origin);
@@ -214,7 +214,7 @@ describe('the promoted-loop contract holds for every full actor kind', () => {
     await installVersion(fixture, main, 1, 'v1:root');
     await installVersion(fixture, main, 2, 'v2:root');
     const head = await fixture.hire(fixture.main, 'exp:head-b1', 'head');
-    const node = await fixture.hire(fixture.main, 'exp:node-b2', 'node');
+    const node = await fixture.hire(fixture.main, 'exp:node-b2', 'head');
     const hired = await fixture.hire(fixture.main, 'sub-hired-b3', 'subordinate');
     // An inheriting child runs the parent's PROMOTED bytes as its own v1 and
     // NAMES the parent version it was cut from — a copy, not a pointer. A

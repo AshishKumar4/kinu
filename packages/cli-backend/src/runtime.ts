@@ -762,22 +762,25 @@ export function cleanupFacetCwdScratch(cwd: string, facet: string): void {
  * The runtime for one LOGICAL ACTOR of this workspace, over the ONE database
  * the workspace already has.
  *
- * The seam `ActorHostDeps.runtimeFor` is satisfied by, for the two kinds a
- * session creates on its own authority: an exploration head and a swarm node.
- * A HIRE is not here, because a subordinate's runtime needs the provider and
- * auth wiring the surface that opened the workspace holds — the agent host
- * supplies that and delegates the two kinds below to this function, so both
- * hosts build one head the same way.
+ * The seam `ActorHostDeps.runtimeFor` is satisfied by, for the heads a session
+ * creates on its own authority: a branching head, and a swarm node's seat —
+ * which is a head row with its mode declared in `swarmSeat`. A HIRE is not
+ * here, because a subordinate's runtime needs the provider and auth wiring the
+ * surface that opened the workspace holds — the agent host supplies that and
+ * delegates heads to this function, so both hosts build one head the same way.
  *
  * A node's BASE runtime shares the origin's plane and says so. A search that
  * provisions private homes re-provisions it per node
- * (`AgentsForkDeps.runtimeForNodeWorkspace`), which changes the credential its
- * shell and files act as and nothing about which actor it is.
+ * (`AgentsSwarmDeps.runtimeForNodeWorkspace`), which changes the credential its
+ * shell and files act as and nothing about which actor it is. The seat's home
+ * comes later, through that seam; building the head's own home here as well
+ * would provision a plane the loop never runs on.
  */
 export async function buildLocalActorRuntime(
   parent: CLIRuntime,
   bound: { readonly reference: ActorReference; readonly handle: ActorHandle },
   writeObserver?: WriteObserver,
+  swarmSeat?: boolean,
 ): Promise<AgentRuntime> {
   // THE HOST'S HANDLE TRAVELS THROUGH, and the whole point of taking `bound`
   // rather than a bare reference is that it cannot be re-derived here: the
@@ -790,19 +793,19 @@ export async function buildLocalActorRuntime(
   // The host's handle needs this root's scope before anything reads local
   // identity through it — same scope, same reference, validated again here.
   adoptLocalActorHandle(parent.actor, bound.reference, bound.handle);
+  if (binding.kind === 'head' && swarmSeat === true) {
+    if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
+    return await parent.nodeRuntime(
+      { isolation: 'shared-origin-plane', home: '.', tmp: undefined, cred: undefined },
+      bound.handle, parent, writeObserver,
+    );
+  }
   if (binding.kind === 'head') {
     const opts: Parameters<typeof buildCLIHeadRuntime>[0] = {
       parentRuntime: parent, actorBinding: binding, actor: bound.handle,
     };
     if (writeObserver) opts.writeObserver = writeObserver;
     return await buildCLIHeadRuntime(opts);
-  }
-  if (binding.kind === 'node') {
-    if (!parent.nodeRuntime) throw new KinuError('missing', 'This workspace has no actor file-plane owner for a node.');
-    return await parent.nodeRuntime(
-      { isolation: 'shared-origin-plane', home: '.', tmp: undefined, cred: undefined },
-      bound.handle, parent, writeObserver,
-    );
   }
   throw new KinuError('denied', `A ${binding.kind} actor's runtime is not built by this workspace's own session.`);
 }

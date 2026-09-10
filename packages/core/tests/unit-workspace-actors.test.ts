@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createTestSql } from '@kinu.run/test-utils';
 import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
-import { initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { actorScaffoldPath, initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/state/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/tools/state-codemode';
 function workspace(id: string, owner: string) {
@@ -132,5 +132,31 @@ describe('one workspace actor directory', () => {
     expect(replacement.actorId).not.toBe(previous.actorId);
     expect(() => current.directory.apply(previous, [], { action: 'register', creationId: 'late-parent-call', name: 'reader', kind: 'subordinate', lifetime: 'durable' })).toThrow(expect.objectContaining({ code: 'missing' }));
     expect(current.directory.resolveChild(replacement, 'reader')).toBeNull();
+  });
+
+  test('a stored node row loads as a head — the fold retires the write path, not the row', () => {
+    // No API writes 'node' anymore; the only way to meet one is a row stored
+    // before the fold, inserted here as raw SQL.
+    const { directory, sql } = workspace('workspace', 'owner');
+    const main = directory.createMain({ name: 'main' });
+    const actorId = crypto.randomUUID();
+    const now = Date.now();
+    void sql`INSERT INTO workspace_actors (actor_id, workspace_id, parent_actor_id, name, storage_key, kind, lifetime, created_at, creation_id)
+      VALUES (${actorId}, 'workspace', ${main.actorId}, 'exp:node-before-the-fold', ${actorId}, 'node', 'task', ${now}, 'c-fold')`;
+    // The production read path presents it as what it behaviorally was: a head
+    // with its own scaffold under its own storage key.
+    const read = directory.describe(directory.open(actorId));
+    expect(read.kind).toBe('head');
+    expect(read.name).toBe('exp:node-before-the-fold');
+    expect(directory.retained(actorId)?.kind).toBe('head');
+    expect(directory.list().map((actor) => actor.kind)).toContain('head');
+    expect(actorScaffoldPath(read)).toBe(`.kinu/agents/${encodeURIComponent(actorId)}/scaffold/agent.js`);
+    expect(actorScaffoldPath(read)).not.toBe('scaffold/agent.js');
+    // And the write path is closed: nothing registers 'node' anymore.
+    // SAFETY: the schema parse below is the checked invariant — the cast carries
+    // only the retired 'node' spelling, and the bad_input refusal proves the
+    // schema rejects what the type already excludes.
+    expect(() => directory.apply(main, [], { action: 'register', creationId: 'c-new', name: 'exp:node-new', kind: 'node', lifetime: 'task' } as never))
+      .toThrow(expect.objectContaining({ code: 'bad_input' }));
   });
 });
