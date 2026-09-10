@@ -278,7 +278,7 @@ export interface TeamToolDeps {
    * register of its own.
    *
    * OPTIONAL IN THE TYPE, REQUIRED IN EFFECT wherever a backend wires a child
-   * substrate at all — the same shape {@link AgentsForkDeps.resolveModel}
+   * substrate at all — the same shape {@link AgentsSwarmDeps.resolveModel}
    * carries. It is a port and not a deps GROUP because it is not a capability
    * an actor can hold independently: it rides this roster's own
    * `SubordinateRuntime`, so an actor with a roster has the substrate for it by
@@ -344,7 +344,7 @@ const ASSIGN_NOTES = {
 
 /**
  * What an actor needs to run a search of its own: a model to expand with and a
- * workspace to measure in. Wired under the `fork` key on
+ * workspace to measure in. Wired under the `swarm` key on
  * {@link AgentsToolDeps}; both backends construct the same typed contract.
  *
  * `runSwarmAction` reads `rt`, `model`, `provisionNodeHome`,
@@ -352,8 +352,8 @@ const ASSIGN_NOTES = {
  * backends' one builder produces the whole bag, not because this module
  * dispatches a strategy.
  */
-export interface AgentsForkDeps {
-  /** The CALLER's runtime — the actor that invoked the fork. Not any node's. */
+export interface AgentsSwarmDeps {
+  /** The CALLER's runtime — the actor that invoked the swarm. Not any node's. */
   rt: AgentRuntime;
   /**
    * Acquire the hosted logical actor ONE swarm node runs as, by that node's
@@ -387,7 +387,7 @@ export interface AgentsForkDeps {
    */
   resolveModel?: (spec: string) => LanguageModel;
   /** The caller conversation at dispatch. Frozen into the search ledger so
-   * `context:'fork'` survives background re-drive and DO eviction. */
+   * `context:'inherit'` survives background re-drive and DO eviction. */
   originContext?: () => readonly ModelMessage[];
   /** What the resolved model charges, for gates on projected spend before
    *  starting. Backends wire the ModelCatalogSession they already hold;
@@ -495,7 +495,7 @@ export interface AgentsToolDeps {
   /** The exploration substrate — a model to expand with and a workspace to
    *  measure in. Wired wherever a backend has one: both backends, subordinates
    *  too. Its presence is what puts `swarm` in this actor's enum. */
-  fork?: AgentsForkDeps;
+  swarm?: AgentsSwarmDeps;
   /** Persistent subordinates. Wired on every actor that can hold a roster —
    *  the workspace orchestrator and, since a subordinate tree is recursive,
    *  every subordinate with depth left below it. */
@@ -512,7 +512,7 @@ export interface AgentsToolDeps {
    *  relation it is not party to. */
   peers?: PeersToolDeps;
   /** The actor's mission budget governor. Wired, it makes this the SPAWN seam — no
-   *  helper is launched under an exhausted label, and a fork's own declared cap nests
+   *  helper is launched under an exhausted label, and a swarm's own declared cap nests
    *  under the mission that spawned it — and it hands a search the PORT its model calls
    *  charge through as it makes them, so a cap stops the run rather than being reported
    *  after it. Unwired (or unscoped, the default) changes nothing. */
@@ -537,15 +537,15 @@ interface UnifiedRosterResult {
  *  shared by the tool schema, the system prompt's Delegation section and the
  *  `agents.*` codemode namespace.
  *  Presence-typed so prompt assembly can ask without building the substrate. */
-export function agentsActionsFor(deps: { fork?: object; team?: object; peers?: object }): AgentsToolAction[] {
+export function agentsActionsFor(deps: { swarm?: object; team?: object; peers?: object }): AgentsToolAction[] {
   const converse = !!deps.team || !!deps.peers;
   const present = {
     // Structural rather than a choice: a search needs a model to expand with and a
-    // workspace to measure in, which is exactly what AgentsForkDeps carries. It is
+    // workspace to measure in, which is exactly what AgentsSwarmDeps carries. It is
     // not a capability a backend could wire half of, so it gets no deps group of
     // its own — an actor with the exploration substrate can run a configured
     // search, and one without it has no search rung at all.
-    swarm: !!deps.fork,
+    swarm: !!deps.swarm,
     hire: converse,
     msg: converse,
     list: converse,
@@ -561,7 +561,7 @@ export function renderAgentsToolDescription(deps: AgentsToolDeps): string {
   const spec = BUILTIN_TOOL_SPECS.agents;
   const use = [
     DELEGATION_FRAME,
-    ...(deps.fork ? [DELEGATION_RUNGS.swarm] : []),
+    ...(deps.swarm ? [DELEGATION_RUNGS.swarm] : []),
     ...(deps.team || deps.peers ? [DELEGATION_RUNGS.hire] : []),
     ...(deps.team?.temporary ? [DELEGATION_TASK_LIFETIME] : []),
     ...(deps.peers
@@ -948,7 +948,7 @@ export function agentsActionFieldsFor(
   const fields = AGENTS_ACTION_FIELDS[action];
   switch (action) {
     case 'swarm':
-      return deps.fork ? fields : [];
+      return deps.swarm ? fields : [];
     case 'hire':
     case 'msg':
       // Each field once, in variant order — which is the order
@@ -1235,10 +1235,32 @@ function recordDroppedFields<T>(
  *   `settle` — a stored field identifying a judged-tree request within the
  *   stored fork shape. Same translation: the field is not an entry here, so
  *   it arrives as an unknown key and is reported as an unsupported field.
+ *
+ *   `config.context:'fork'` — the context value renamed `inherit`: the stored
+ *   row predates the rename, and the wire schema refuses the old spelling by
+ *   name, so the row is rewritten before the parse rather than after it. A row
+ *   is history, and history keeps working.
  */
+/**
+ * Rewrite a stored row's retired context value before the replay parse.
+ *
+ * Pre-parse, because the wire schema holds the old spelling only as a refusing
+ * arm: parsing first would reject the row this function exists to save. Shallow
+ * by design — `config` is the one field that carries a context value, and a
+ * deeper walk would translate bytes whose shape this surface does not own.
+ */
+const StoredSwarmContextSchema = v.looseObject({
+  config: v.optional(v.looseObject({ context: v.optional(v.string()) })),
+});
+type StoredSwarmContext = v.InferOutput<typeof StoredSwarmContextSchema>;
+function translateStoredSwarmContext(row: StoredSwarmContext): StoredSwarmContext {
+  if (row.config?.context !== 'fork') return row;
+  return { ...row, config: { ...row.config, context: 'inherit' } };
+}
 export function resumableAgentsInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind !== 'agents') return null;
-  const parsed = v.safeParse(StoredAgentsInputSchema, input);
+  const rewritten = v.safeParse(StoredSwarmContextSchema, input);
+  const parsed = v.safeParse(StoredAgentsInputSchema, rewritten.success ? translateStoredSwarmContext(rewritten.output) : input);
   if (!parsed.success) return null;
   const row = parsed.output;
   if (row.action === 'fork') {
@@ -1389,7 +1411,7 @@ async function runSwarmAction(
   toolOptions: AgentsToolCallOptions | undefined,
   budget?: MissionGovernor,
 ): Promise<object> {
-  const fork = deps.fork!;
+  const swarm = deps.swarm!;
   // THIS CALL IS A RE-DRIVE, or it is not — and the distinction decides where
   // the profile comes from BEFORE anything resolves: a re-drive replays a
   // stored snapshot verbatim and never consults today's catalog, so a catalog
@@ -1436,7 +1458,7 @@ async function runSwarmAction(
   // off the SAME record the role, tier and model do: read here, before the axes
   // resolve, because `resolveSwarm` needs it and the claim happens later.
   const started = redrive && input.preset === undefined
-    ? readStartedSwarmProfile(fork.rt.storage, fork.rt.actor, input.task)
+    ? readStartedSwarmProfile(swarm.rt.storage, swarm.rt.actor, input.task)
     : null;
   const preset: SwarmPreset = input.preset
     ?? delegated?.resolved.defaultPreset
@@ -1487,31 +1509,31 @@ async function runSwarmAction(
   // measurement calls this process makes, and the PORT the run charges its own model
   // calls through as it makes them.
   const mission = missionScope(budget, input);
-  let rt: AgentRuntime = fork.rt;
+  let rt: AgentRuntime = swarm.rt;
   if (mission) {
-    rt = { ...fork.rt, llm: mission.governor.govern(fork.rt.llm, mission.scope.labels) };
+    rt = { ...swarm.rt, llm: mission.governor.govern(swarm.rt.llm, mission.scope.labels) };
   }
   // Resolved BEFORE the bag, in this order, because each of these is a backend
   // factory whose CALL is a real event — a host is built, a broadcast channel is
   // looked up, a home provisioner is constructed — and the bag below then holds
   // what they returned rather than deciding anything itself.
-  const origin = fork.originContext?.();
+  const origin = swarm.originContext?.();
   const signal = toolOptions?.abortSignal;
   // The transient frames a node publishes while a step is still being produced.
   // Wired wherever the backend holds the socket, which is every backend now that
   // a node's loop runs in the isolate that ran the search.
-  const publishHeadStream = fork.reportNodeDelta?.();
+  const publishHeadStream = swarm.reportNodeDelta?.();
   // The durable announcement: the journal a node's rows land in is the parent's,
   // so this is the parent's own channel rather than the node's.
-  const announceHeadActivity = fork.announceHeadActivity?.();
+  const announceHeadActivity = swarm.announceHeadActivity?.();
   // A host constructs the provisioner around its authoritative filesystem. It
   // may be an in-isolate SqliteVFS or the hosted Nimbus session; the node loop
   // sees the same async contract either way.
-  const provisionHome = fork.provisionNodeHome?.();
+  const provisionHome = swarm.provisionNodeHome?.();
   // And the runtime the node's loop uses once it has that home. Wired only
   // beside the provisioner, because re-credentialing a runtime with no
   // credential to use is nothing.
-  const runtimeForWorkspace = fork.runtimeForNodeWorkspace?.();
+  const runtimeForWorkspace = swarm.runtimeForNodeWorkspace?.();
   /**
    * ONE TYPED LITERAL, for the reason `call` above gives about itself, and it
    * applies harder here: every field is checked against `SwarmRunDeps`, where
@@ -1529,10 +1551,10 @@ async function runSwarmAction(
     // Per-node actor acquisition, forwarded not derived: the backend owns what a
     // hosted node's runtime and role are, and every node of this search gets its
     // own actor over the one workspace database.
-    hostNode: fork.hostNode,
-    model: fork.model,
+    hostNode: swarm.hostNode,
+    model: swarm.model,
     mode,
-    // Frozen at dispatch so `context:'fork'` survives a background re-drive and a
+    // Frozen at dispatch so `context:'inherit'` survives a background re-drive and a
     // DO eviction carrying the conversation the caller actually had.
     originContext: origin === undefined
       ? undefined
@@ -1541,7 +1563,7 @@ async function runSwarmAction(
     // profile comes off the claimed ledger row INSIDE the runner, so the runner
     // is the only place that can see both cases, and resolving one of them here
     // would leave the other running today's model under yesterday's record.
-    resolveModel: fork.resolveModel,
+    resolveModel: swarm.resolveModel,
     // THE SNAPSHOT. A first attempt carries the resolved precedence record down
     // to the runner, which writes it into the run's own ledger row BEFORE any
     // node expands — the moment a durable detach could happen — so a re-drive
@@ -1559,10 +1581,10 @@ async function runSwarmAction(
     provisionHome,
     runtimeForWorkspace,
     // The *Inherited context* barrier: the backend's real compaction ladder, handed
-    // to the run so a fork parent past the threshold is rewritten once instead of
+    // to the run so an inheriting parent past the threshold is rewritten once instead of
     // inherited verbatim until the provider refuses. Absent stays absent — the
     // seam's documented loud failure rather than a silent stub.
-    compactShared: fork.compactShared,
+    compactShared: swarm.compactShared,
     // Only a re-drive re-enters an interrupted search; the flag was read at the top
     // of this action, where it also decides where the profile comes from.
     redrive,
@@ -1664,7 +1686,7 @@ function verifierKindSummary(): string {
 }
 
 function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
-  if (!deps.fork) return {};
+  if (!deps.swarm) return {};
   return {
     // Carries the batch-level role the `context` slot of oh-my-pi (can1357/oh-my-pi,
     // the hard fork — upstream pi has no sub-agents at all) has: the shared background
@@ -1738,7 +1760,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
     // Says what a mission is FOR, because the hire rung's context fact makes it
     // load-bearing: this text plus a bounded digest of the caller's recent
     // messages is the subordinate's whole starting knowledge. The sentence is
-    // DELEGATION_INHERITANCE.hire.brief — the fork brief's opposite, from the
+    // DELEGATION_INHERITANCE.hire.brief — the swarm brief's opposite, from the
     // same per-action source, so neither field can be handed the other's rule.
     mission: { type: 'string', maxLength: 20000, description: `For action=hire with \`role\`: the helper's mission — it seeds its identity and runs as its first turn, and at lifetime:"task" it IS the question. ${DELEGATION_INHERITANCE.hire.brief}` },
     message: {
@@ -2189,7 +2211,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
           type: 'string',
           enum: actions,
           description: [
-            ...(deps.fork ? [
+            ...(deps.swarm ? [
               // The line that says what this rung IS, on the field a model reads
               // FIRST. "Spawn several and pick the best" describes plenty of things;
               // the difference that matters is who decides, so it says so here.

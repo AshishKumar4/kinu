@@ -508,7 +508,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
         // actor of the one workspace database, and this arm drives the rung directly
         // rather than through `sendTurn`, so without it the search would run every
         // node on the caller's actor and share one claim ledger across the wave.
-        fork: { rt, model, hostNode: (node) => target.hostNode(node) },
+        swarm: { rt, model, hostNode: (node) => target.hostNode(node) },
       },
       effectClaims: { sql: rt.storage.sql, actor: rt.actor, turnId: () => WORKSPACE_RUN_ID },
     });
@@ -602,7 +602,7 @@ describe('Swarm evals — a live measured search through the settled tool surfac
     const outcome = await callSwarm({
       action: 'swarm',
       // A COMPOSITION, not a bare preset, and the label is what records it as one.
-      // `from:'optimise'` resolves the real row — unit:answer, context:fork,
+      // `from:'optimise'` resolves the real row — unit:answer, context:inherit,
       // score:verify, advance:uct, carry:elites — and `expand:'aggregate'` is the one
       // axis overridden, because that is the value under which a level barrier fans
       // in. A named preset takes no `config` at all (it is a tested path and cannot

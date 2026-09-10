@@ -176,7 +176,7 @@ export function hostedSeatsOver(input: {
   ): Promise<HostedNodeSeat> => {
     const known = seats.get(name);
     if (known) return known;
-    // A head and a node live in the EXPLORATION address space, which the
+    // A head lives in the EXPLORATION address space, which the
     // directory enforces for every non-subordinate kind — a raw node id is
     // refused. The creation id is the caller's name, so re-seating one node is
     // the same admitted creation rather than a second actor.
@@ -216,7 +216,7 @@ export function hostedSeatsOver(input: {
     broadcasts,
     enqueued,
     seat,
-    hostNode: (node) => seat(node.nodeId, 'node'),
+    hostNode: (node) => seat(node.nodeId, 'head'),
   };
 }
 

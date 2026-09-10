@@ -35,7 +35,7 @@ import { readStartedSwarmProfile } from '../src/strategy/swarm-resume';
 import { configDigestOf, resolveSwarm } from '../src/strategy/swarm';
 import {
   createAgentsTool, profileCatalogDigest, resolveTurnProfile,
-  type AgentsForkDeps, type AgentsProfileContext, type AgentsToolDeps, type AgentsToolInput,
+  type AgentsSwarmDeps, type AgentsProfileContext, type AgentsToolDeps, type AgentsToolInput,
   type ProfileCatalogEnvelope, type ProviderCatalogSnapshot, type ResolvedTurnProfile,
   type RoleDefinition, type SwarmProfileSnapshot, type TierAssignments,
 } from '../src/index';
@@ -146,7 +146,7 @@ function harness(input: {
   const deepV1 = countingModel('m-deep-v1');
   const deepV2 = countingModel('m-deep-v2');
   const resolvedSpecs: string[] = [];
-  const fork: AgentsForkDeps = {
+  const swarm: AgentsSwarmDeps = {
     rt,
     // One REAL actor per node, over the caller's own database: a routed run
     // records which model each node ran on, and a node with no actor of its own
@@ -169,7 +169,7 @@ function harness(input: {
     roleId: input.roleId,
     availableTools: [],
   });
-  const deps: AgentsToolDeps = { mode: 'build', fork, profile };
+  const deps: AgentsToolDeps = { mode: 'build', swarm, profile };
   const entry = createAgentsTool(deps);
   if (!entry) throw new Error('Expected the agents tool to be created');
   return {
@@ -302,7 +302,7 @@ describe('a delegated tier routes the model its nodes run', () => {
     const caller = countingModel('m-default');
     const entry = createAgentsTool({
       mode: 'build',
-      fork: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model },
     });
     if (!entry) throw new Error('Expected the agents tool to be created');
     const result = v.parse(v.object({ preset: v.string() }), await toolExecute<AgentsToolInput, unknown>(entry)({
@@ -411,7 +411,7 @@ function perNodeHarness() {
   const a = countingModel('m-alpha');
   const b = countingModel('m-beta');
   const resolvedSpecs: string[] = [];
-  const fork: AgentsForkDeps = {
+  const swarm: AgentsSwarmDeps = {
     rt,
     // One REAL actor per node, over the caller's own database: a routed run
     // records which model each node ran on, and a node with no actor of its own
@@ -426,7 +426,7 @@ function perNodeHarness() {
       throw new Error(`test fixture has no model for ${spec}`);
     },
   };
-  const deps: AgentsToolDeps = { mode: 'build', fork };
+  const deps: AgentsToolDeps = { mode: 'build', swarm };
   const entry = createAgentsTool(deps);
   if (!entry) throw new Error('Expected the agents tool to be created');
   return {

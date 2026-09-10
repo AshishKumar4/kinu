@@ -358,7 +358,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       task: 'the continuation', rationale: 'why', mode: 'build',
       inheritedContext: [], mergeStrategy: 'synthesize',
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: activationStart + 5 },
-      loop: defaultLoopOrigin('node'),
+      loop: defaultLoopOrigin('head'),
     });
 
     const agent = idleAgent();

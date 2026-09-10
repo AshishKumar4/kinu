@@ -78,7 +78,7 @@ describe('a node keeps its assigned question across re-entry', () => {
         id: `child-${index}`, rootId: 'root', parentId: 'parent', depth: 2,
         task: brief.task, rationale: brief.prompt, mode: 'build', inheritedContext: [],
         budget: { maxDepth: 1, spawnedAt: 2 }, mergeStrategy: 'synthesize',
-        loop: defaultLoopOrigin('node'),
+        loop: defaultLoopOrigin('head'),
       });
     }
     void sql`INSERT INTO search_nodes (actor_id, id, parent_id, root_id, depth, task, observation)

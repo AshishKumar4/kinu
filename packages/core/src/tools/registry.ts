@@ -398,7 +398,7 @@ export const DELEGATION_FRAME =
  * the two rungs need OPPOSITE instructions and a rule the model has to apply
  * itself gets applied to the wrong one. "You did not see this conversation, so
  * restate everything" is true of a hire and FALSE of a search node running under
- * `context:'fork'`; "build on what you already know" is true of that node and
+ * `context:'inherit'`; "build on what you already know" is true of that node and
  * false of a hire. The shape is the deepseek
  * harness's (deepseek-ai/deepseek-harness 0.1.0-rc.7, tool-subagent/src/index.ts
  * :213-243), where a single provider-declared `inheritsParentContext` boolean
@@ -416,7 +416,7 @@ export const DELEGATION_FRAME =
  * comment stating it inherits the parent's completed turns.
  *
  * Measured, not asserted. What a search node starts from is the `context` axis
- * (strategy/swarm.ts, SWARM_CONTEXTS): `fork` hands it the parent's conversation
+ * (strategy/swarm.ts, SWARM_CONTEXTS): `inherit` hands it the parent's conversation
  * VERBATIM as one cacheable prefix per branch point, `fresh` hands it the
  * engine-authored seed and its focus and nothing else, and each preset takes the
  * value its search needs. A hire gets renderSubordinateInheritedContext's
@@ -428,7 +428,7 @@ export const DELEGATION_FRAME =
 export const DELEGATION_INHERITANCE = {
   swarm: {
     rung:
-      'What a node starts from is the search\'s own `context`: under `fork` your recent turns arrive as its conversation, so it already knows what you know and the task only has to say what is being measured; under `fresh` it starts from the task and the objective alone, which is what you want when your own framing is the thing in question. Each preset takes the value its search needs.',
+      'What a node starts from is the search\'s own `context`: under `inherit` your recent turns arrive as its conversation, so it already knows what you know and the task only has to say what is being measured; under `fresh` it starts from the task and the objective alone, which is what you want when your own framing is the thing in question. Each preset takes the value its search needs.',
     brief:
       'State the goal, the constraints that hold for every candidate, and any interface they must agree on — once, here, rather than per candidate; and remember that whether a node also arrives holding your recent turns is the search\'s `context`, so do not lean on shared ground the preset may not grant.',
   },

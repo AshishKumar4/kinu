@@ -130,7 +130,7 @@ describe('ChatEvent tool success/error fidelity', () => {
     // fixture's rather than the run's.
     const deps = {
       mode: 'build',
-      fork: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: new MockLanguageModelV3() },
+      swarm: { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model: new MockLanguageModelV3() },
     } satisfies Parameters<typeof createAgentsTool>[0];
     const events = await collect(toolThenTextModel({ toolName: 'agents', input: JSON.stringify(input) }), { agents: createAgentsTool(deps) });
     expect(events.find((event) => event.type === 'tool-result')).toMatchObject({ success: false, reason, result: expect.stringContaining(detail) });

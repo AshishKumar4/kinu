@@ -57,7 +57,7 @@ import {
   childContextResolver, createActorHost, defaultLoopOrigin,
   EvolutionEngine, EventLog, MissionGovernor,
   facetHomeProvisioner, facetHomeReleaser, isVfsError,
-  headAgentName, nodeAgentName, subordinateAgentName, parseActorKey,
+  headAgentName, subordinateAgentName, parseActorKey,
   actorStateRoot, actorScaffoldPath,
   type ActorHost, type ActorHostDeps, type ActorRetirement, type BoundActor,
   type ActorHandle, type ActorReference, type AgentOrchestratorDeps, type AgentRuntime,
@@ -210,15 +210,15 @@ export interface WorkspaceHostSeams {
 }
 
 /** The home kinds the workspace provisions credentials for. A branch is not
- *  one: an MCTS rollout is toolless and acquires no execution plane at all. */
-export type HostedActorHomeKind = 'node' | 'head' | 'subordinate';
+ *  one: an MCTS rollout is toolless and acquires no execution plane at all. A
+ *  swarm node's actor is a head, so its home lives in the `head-` namespace. */
+export type HostedActorHomeKind = 'head' | 'subordinate';
 
-/** The one home namespace, by kind: `node-<id>`, `head-<id>`, `sub-<slug>`.
+/** The one home namespace, by kind: `head-<id>`, `sub-<slug>`.
  *  Derived from the kind and the id the directory holds, so an actor names what
  *  it IS and never the directory it wants. */
 function hostedActorAgentName(kind: HostedActorHomeKind, id: string): string {
   switch (kind) {
-    case 'node': return nodeAgentName(id);
     case 'head': return headAgentName(id);
     case 'subordinate': return subordinateAgentName(id);
   }
@@ -422,7 +422,7 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
      *
      * The host seeds before it constructs the session, so an unseeded hosted
      * actor is unrepresentable. The default is not uniform and that is the
-     * policy: a head, a node and a branch INHERIT the parent's promoted loop,
+     * policy: a head and a branch INHERIT the parent's promoted loop,
      * because a fork of an actor's reasoning that ran a fresh v0 would be a fork
      * of nothing the actor had learned. A hired subordinate starts BUILTIN — it
      * is a new colleague with its own role, and inheriting a program tuned for
@@ -433,13 +433,13 @@ export function createWorkspaceActorHost(seams: WorkspaceHostSeams): ActorHost {
      * `inheritedSource` consumes exactly three things — the parent's bound
      * handle, its `scaffold_versions` rows and its state VFS — and none of them
      * needs a live activation. The workspace ROOT always has all three because
-     * it IS this object's own runtime, and every head, node and branch registers
+     * it IS this object's own runtime, and every head and branch registers
      * under main, so asking only `hosted()` refused the FIRST fork in a fresh
      * workspace: nothing in production acquires main, so `seedActorLoop` threw
      * `bad_input` on a parent that was reachable all along. The cli passes its
      * own runtime unconditionally for this reason.
      *
-     * A deeper parent — a node under a hired subordinate — still needs to be
+     * A deeper parent — a head under a hired subordinate — still needs to be
      * live, and when it is not the null stands and the guard refuses, naming
      * what could not be reached. That refusal is deliberately NOT softened into
      * "keep the pointer or start builtin": a fork silently started on the

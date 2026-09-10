@@ -81,7 +81,7 @@ export type SwarmUnit = (typeof SWARM_UNITS)[number];
  * What a child STARTS FROM — *Inherited context* — and the one axis that spans the
  * caller-to-root edge and every parent-to-child edge with a single spelling.
  *
- * `fork` — the child inherits the parent's context VERBATIM, plus the parent's
+ * `inherit` — the child inherits the parent's context VERBATIM, plus the parent's
  * reported results, plus its own focus. Verbatim is a decision about CACHING and
  * not about fidelity: an unmodified prefix is a prefix a provider can cache, so
  * every sibling of one parent shares one cacheable prefix, and rewriting the
@@ -101,7 +101,7 @@ export type SwarmUnit = (typeof SWARM_UNITS)[number];
  * being tighter than its outer one (`agents-tool.ts`'s cap doc), and the arbiter's
  * fifth arm.
  */
-export const SWARM_CONTEXTS = ['fork', 'fresh'] as const;
+export const SWARM_CONTEXTS = ['inherit', 'fresh'] as const;
 export type BranchContext = (typeof SWARM_CONTEXTS)[number];
 
 /**
@@ -509,7 +509,7 @@ export interface SwarmInput {
    * precedence.
    *
    * RESOLVED THROUGH THE ONE SEAM the actor already routes a delegation's tier
-   * through (`AgentsForkDeps.resolveModel`), so there is no second resolver and
+   * through (`AgentsSwarmDeps.resolveModel`), so there is no second resolver and
    * no provider drift. An unresolvable spec is refused as `bad_input` naming
    * the spec, BEFORE any node runs — the refusal this field's first life lacked,
    * which is the whole of what its removal bought and what its return must keep.
@@ -720,10 +720,10 @@ export const SWARM_PRESET_POINTS = {
   },
   optimise: {
     config: {
-      // `fork`: a forked conversation carries the ancestor chain's measurements
+      // `inherit`: an inheriting child carries the ancestor chain's measurements
       // transitively, which is what a run climbing a value needs its children to
       // have seen.
-      unit: { kind: 'answer' }, context: 'fork',
+      unit: { kind: 'answer' }, context: 'inherit',
       expand: 'sample',
       score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'elites' },
     },
@@ -738,7 +738,7 @@ export const SWARM_PRESET_POINTS = {
       // that can run its own checker between steps. {@link SWARM_UNITS} holds two
       // words and neither is `generator`: a node that generates and checks IS an
       // `answer` node, and a second word for it would say nothing more.
-      unit: { kind: 'answer' }, context: 'fork',
+      unit: { kind: 'answer' }, context: 'inherit',
       expand: 'sample',
       // The checker IS the score. `verify` requires an `objective`, which is where
       // the caller names the checker — a `prove` call without one is refused by the
@@ -1036,7 +1036,7 @@ function badInput(error: string): SwarmRefusal {
  * change, and neither is a deferral. `observe` collapsed value by value onto things
  * that already exist — `none` is what a `thought` node IS, `own` is what holding tools
  * MEANS now that every other unit is a real agent, and `ancestors` is what
- * `context:'fork'` supplies by construction. `decorrelate` shipped with all three of
+ * `context:'inherit'` supplies by construction. `decorrelate` shipped with all three of
  * its values behaving identically: sibling angles were handed out under every one of
  * them INCLUDING `blind`, which names the opposite, so no caller was ever choosing
  * anything. Diversification is now unconditional, which removes the ability to turn
@@ -1755,12 +1755,12 @@ export function arbitrateBranch(input: BranchArbitrationInput): BranchArbitratio
       + `${String(remainingChildren)} remain in this search's expansion budget. The budget is the `
       + 'search\'s, shared by every node, and a proposal cannot mint children it cannot pay for.');
   }
-  const widening = proposal.branches.filter((branch) => branch.context === 'fork');
+  const widening = proposal.branches.filter((branch) => branch.context === 'inherit');
   if (config.context === 'fresh' && widening.length > 0) {
     return refused('context-conflict',
       `this search is resolved context:"fresh", which starts every child from its parent's REPORTED `
       + `results rather than its conversation, and ${String(widening.length)} of these `
-      + `${String(width)} branches ask for context:"fork". A node may narrow the search's inheritance `
+      + `${String(width)} branches ask for context:"inherit". A node may narrow the search's inheritance `
       + 'and never widen it, so this is refused rather than one of two conflicting policies being '
       + 'honoured quietly. Propose the same branches with context:"fresh" — they still receive your '
       + 'report, your candidate and their own focus, which is everything except your transcript.');

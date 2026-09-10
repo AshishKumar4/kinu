@@ -35,7 +35,7 @@
  *
  * So the CONTENT a re-entry needs is written beside the tree, one row per node, by the
  * engine that scored it. `head_journal` and `head_steps` keep the TURNS, unchanged and
- * unduplicated — this store holds no transcript, and what a `context:'fork'` child of
+ * unduplicated — this store holds no transcript, and what a `context:'inherit'` child of
  * a re-entered parent inherits is read back out of the journal
  * ({@link reconstructedTurns}).
  *
@@ -314,7 +314,7 @@ export interface ReenteredSwarmNode {
   readonly record: SwarmNodeRecord | null;
   /** Whether this member's work already reached the origin. */
   readonly merged: boolean;
-  /** This node's own turns, reconstructed from its journal — what a `context:'fork'`
+  /** This node's own turns, reconstructed from its journal — what a `context:'inherit'`
    *  child of it inherits. Empty for a toolless node, which journals nothing. */
   readonly produced: readonly ModelMessage[];
 }
@@ -662,7 +662,7 @@ export function readSwarmNodeRecords(
 }
 
 /**
- * One node's turns as a `context:'fork'` child inherits them, rebuilt from the journal.
+ * One node's turns as a `context:'inherit'` child inherits them, rebuilt from the journal.
  *
  * A RECONSTRUCTION, and the loss is named. The loop's own `ModelMessage[]` was never
  * durable — `head_steps` is, and it holds what the node SAID and what it CALLED, per

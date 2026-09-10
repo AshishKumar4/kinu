@@ -220,7 +220,7 @@ export interface NodeRun {
   /**
    * The conversation this node produced, in order.
    *
-   * What a `context:'fork'` child inherits, appended to what this node itself
+   * What a `context:'inherit'` child inherits, appended to what this node itself
    * inherited — the append-only rule of *Inherited context*, which is a decision
    * about caching: the prefix every sibling shares is byte-identical, so a provider
    * can cache it once for the whole level.
@@ -425,7 +425,7 @@ function buildProposeTool(
         + `${String(BRANCH_PROPOSAL_WIDTH.max)} narrower threads of your task. You are PROPOSING, `
         + 'not spawning: the search decides against a depth cap and a shared budget you cannot see, '
         + 'and this call returns either the children it reserved or the reason it refused. Each '
-        + 'branch names what it starts from — "fork" gives it your whole conversation, "fresh" gives '
+        + 'branch names what it starts from — "inherit" gives it your whole conversation, "fresh" gives '
         + 'it your report and its own focus. Call it at most once, when one thread genuinely '
         + 'deserves its own budget.',
       inputSchema: jsonSchema<{
@@ -841,7 +841,7 @@ export async function runNodeAgent(
     // A search explores under the loop it is searching FOR: a node reasoning
     // with the bootstrap loop while its parent runs a promoted one measures the
     // wrong program, so a node states its pointer rather than inheriting one.
-    loop: defaultLoopOrigin('node'),
+    loop: defaultLoopOrigin('head'),
   };
   // THE LEDGER AND THE ROUTE THIS NODE WAS ASSIGNED, on the two fields of
   // `HeadInput` that already carry them. A node's own loop reads neither — its

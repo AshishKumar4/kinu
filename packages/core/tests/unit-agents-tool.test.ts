@@ -26,7 +26,7 @@ import {
   PEER_REPLY_TOPIC, SPAWN_STARTED_OPTION,
   classifyToolFailure, JsonObjectSchema, failedToolOutcome,
   type AgentsToolInput,
-  type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
+  type AgentsSwarmDeps, type AgentsToolDeps, type PeersToolDeps,
   type AgentsProfileContext,
   type SubordinateRosterEntry, type TeamToolDeps,
   type SubordinateDelivery, type SubordinateHandoff,
@@ -116,12 +116,12 @@ const HandoffResultSchema = v.object({
   note: v.string(),
 });
 
-/** The fork substrate over a REAL hosted actor per node.
+/** The swarm substrate over a REAL hosted actor per node.
  *
  *  A delegated node is its own actor of the ONE workspace database now, so
  *  `hostNode` seats one per node id rather than sharing a single actor across
  *  the fan-out — which is what the seat map in `hostedSeatsOver` holds. */
-function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
+function swarmDeps(overrides: Partial<AgentsSwarmDeps> = {}): AgentsSwarmDeps {
   const { rt, testSql } = createTestRuntime();
   return {
     rt, model: testModel,
@@ -252,7 +252,7 @@ describe('agents tool — registration and dep-gating', () => {
   });
 
   test('the exploration substrate (the CLI / subordinate surface) exposes the search rung alone', () => {
-    const deps = withBuildMode({ fork: forkDeps() });
+    const deps = withBuildMode({ swarm: swarmDeps() });
     // By construction rather than by wiring: `swarm` needs a model to expand with
     // and a workspace to measure in, which is exactly what that substrate carries,
     // so there is no deps group a backend could wire half of.
@@ -266,7 +266,7 @@ describe('agents tool — registration and dep-gating', () => {
   });
 
   test('full deps (the workspace orchestrator) expose every action and the registry docstring verbatim', () => {
-    const deps = withBuildMode({ fork: forkDeps(), team: makeTeam().deps, peers: makePeers().deps });
+    const deps = withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps });
     expect(agentsActionsFor(deps)).toEqual([...AGENTS_TOOL_ACTIONS]);
     const t = agentsTool(deps);
     expect(actionEnum({ value: t.inputSchema })).toEqual([...AGENTS_TOOL_ACTIONS]);
@@ -321,7 +321,7 @@ describe('agents tool — registration and dep-gating', () => {
   });
 
   test('an unavailable action is a sharp error, not a deps call', async () => {
-    const t = agentsTool({ fork: forkDeps() });
+    const t = agentsTool({ swarm: swarmDeps() });
     await expect(t.execute({ action: 'hire', role: 'r', mission: 'm' })).rejects.toMatchObject({ code: 'unsupported', message: 'action "hire" is not available here. Available: swarm' });
   });
 });
@@ -334,7 +334,7 @@ describe('agents tool — registration and dep-gating', () => {
 // ceiling asked for and never applied.
 
 describe('agents tool — the field contract', () => {
-  const fullDeps = () => withBuildMode({ fork: forkDeps(), team: makeTeam().deps, peers: makePeers().deps });
+  const fullDeps = () => withBuildMode({ swarm: swarmDeps(), team: makeTeam().deps, peers: makePeers().deps });
 
   /** Every property the model is offered, for the actor these deps describe. */
   function propertyNames(input: { value: unknown }): string[] {
@@ -344,7 +344,7 @@ describe('agents tool — the field contract', () => {
   }
 
   test('a camelCase cap is refused by the tool, naming the field it meant', async () => {
-    const t = agentsTool({ fork: forkDeps() });
+    const t = agentsTool({ swarm: swarmDeps() });
     /* SAFETY: a field `AgentsToolInput` does not declare, which is precisely what
        reaches `execute` in production — the AI SDK validates a tool call's TYPES
        against the JSON Schema and never its field NAMES. */
@@ -363,7 +363,7 @@ describe('agents tool — the field contract', () => {
     // indicting the tool in `broke` — otherwise closing one silence buys a
     // false defect rate in the ledger.
     const args: AgentsToolInput & { budgetUsd: number } = { action: 'swarm', task: 'explore', budgetUsd: 5 };
-    expect(await recordedFailure(agentsTool({ fork: forkDeps() }).execute(args), args)).toEqual({
+    expect(await recordedFailure(agentsTool({ swarm: swarmDeps() }).execute(args), args)).toEqual({
       tool: 'agents', action: 'swarm', reason: 'bad_input',
       refused: true, workFailed: false, runtimeMissing: false,
     });
@@ -374,7 +374,7 @@ describe('agents tool — the field contract', () => {
     // call carrying a budget. The snake_case call gets PAST the name check and is
     // answered by the handler's own missing-`preset` refusal, which is how we know
     // the caps were accepted rather than rejected under another name.
-    const t = agentsTool({ fork: forkDeps() });
+    const t = agentsTool({ swarm: swarmDeps() });
     const pending = t.execute({ action: 'swarm', task: 'explore', budget_usd: 5, budget_label: 'audit' });
     await expect(pending).rejects.toThrow('swarm needs `preset`');
     await expect(pending).rejects.not.toThrow('unknown field');
@@ -396,14 +396,14 @@ describe('agents tool — the field contract', () => {
     // codemode declaration — disagree instead: a selectable preset like `prove`
     // ends up named in none of them, and a preset whose rows stopped resolving
     // goes on being described as working.
-    const t = agentsTool({ fork: forkDeps() });
+    const t = agentsTool({ swarm: swarmDeps() });
     const preset = propertyDescription({ value: t.inputSchema }, 'preset');
     expect(preset).toContain(SWARM_PRESET_DOCTRINE.join(' '));
     for (const name of SWARM_PRESETS) expect(preset).toContain(name);
   });
 
   test('the missing-`preset` refusal names the same presets the property does', async () => {
-    await expect(agentsTool({ fork: forkDeps() }).execute({ action: 'swarm', task: 'explore' }))
+    await expect(agentsTool({ swarm: swarmDeps() }).execute({ action: 'swarm', task: 'explore' }))
       .rejects.toThrow(SWARM_PRESET_DOCTRINE.join(' '));
   });
 
@@ -414,7 +414,7 @@ describe('agents tool — the field contract', () => {
     // every axis must measure finite — and must not carry a blanket refusal of
     // them, which would make the model scalarise a genuinely multi-axis
     // objective.
-    const objective = propertyDescription({ value: agentsTool({ fork: forkDeps() }).inputSchema }, 'objective');
+    const objective = propertyDescription({ value: agentsTool({ swarm: swarmDeps() }).inputSchema }, 'objective');
     expect(objective).toContain('run only with advance:"pareto"');
     expect(objective).toContain('{kind:"instanced", metric, unit, direction, scale, target, instances}');
     expect(objective).toContain('{kind:"vector", components:[...]}');
@@ -456,7 +456,7 @@ describe('agents tool — the field contract', () => {
     // Non-vacuity for the assertion above: it must be comparing something that
     // can differ. An actor holding only the exploration substrate is offered the
     // search rung's fields and nothing from the converse half.
-    const searchOnly = propertyNames({ value: agentsTool({ fork: forkDeps() }).inputSchema }).sort();
+    const searchOnly = propertyNames({ value: agentsTool({ swarm: swarmDeps() }).inputSchema }).sort();
     expect(searchOnly).toEqual(['action', ...AGENTS_ACTION_FIELDS.swarm].sort());
     // And the converse half really is absent, so the subset is a subset.
     expect(searchOnly).not.toContain('agent');
@@ -551,7 +551,7 @@ describe('agents tool — the swarm refusal seam', () => {
   }
 
   test('a swarm with no preset is refused at the seam — before the spawn is announced', async () => {
-    const tool = agentsTool({ fork: forkDeps() });
+    const tool = agentsTool({ swarm: swarmDeps() });
     let announced = 0;
     const pending = tool.execute({ action: 'swarm', task: 'split the work' }, spawnAnnouncing(() => { announced += 1; }));
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
@@ -560,7 +560,7 @@ describe('agents tool — the swarm refusal seam', () => {
   });
 
   test('a swarm with no task is the same refusal, and names where the metric goes', async () => {
-    const tool = agentsTool({ fork: forkDeps() });
+    const tool = agentsTool({ swarm: swarmDeps() });
     let announced = 0;
     const pending = tool.execute({ action: 'swarm', preset: 'ideate' }, spawnAnnouncing(() => { announced += 1; }));
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
@@ -572,7 +572,7 @@ describe('agents tool — the swarm refusal seam', () => {
     // The refusal reason is the vocabulary read-models/tool-failures.ts
     // classifies, so a correct refusal lands in `refused` instead of indicting
     // the tool in `broke` — which is where the old bare `{error}` envelopes went.
-    const tool = agentsTool({ fork: forkDeps() });
+    const tool = agentsTool({ swarm: swarmDeps() });
     const args: AgentsToolInput = { action: 'swarm', task: 't' };
     expect(await recordedFailure(tool.execute(args), args)).toEqual({
       tool: 'agents', action: 'swarm', reason: 'bad_input',
@@ -583,7 +583,7 @@ describe('agents tool — the swarm refusal seam', () => {
   test('the task field states what it is for, and what a node can lean on', () => {
     const schema = v.parse(v.object({ jsonSchema: v.object({ properties: v.object({
       task: v.object({ description: v.string() }),
-    }) }) }), agentsTool({ fork: forkDeps() }).inputSchema);
+    }) }) }), agentsTool({ swarm: swarmDeps() }).inputSchema);
     const { task } = schema.jsonSchema.properties;
     expect(task.description).toMatch(/what the search is for, in prose/);
     expect(task.description).toMatch(/never the measured quantity/);
@@ -1045,6 +1045,16 @@ describe('agents tool — resuming a stored delegation row', () => {
     expect(dropped[0]).toContain('settlement');
   });
 
+  test('a stored inherit-context row resumes under the renamed value', () => {
+    // `context:'fork'` predates the rename, and the wire schema refuses the old
+    // spelling by name — so the row is rewritten before the parse rather than
+    // after it. A row is history, and history keeps working.
+    const { result: resumed } = captureEvents(() => resumableAgentsInput('agents', {
+      action: 'swarm', preset: 'custom', task: 'search', config: { context: 'fork' },
+    }));
+    expect(resumed).toEqual({ action: 'swarm', preset: 'custom', task: 'search', config: { context: 'inherit' } });
+  });
+
   test('a row carrying a field the parse now refuses still resumes, and the drop is logged', () => {
     const { result: resumed, lines } = captureEvents(() => resumableAgentsInput('agents', {
       action: 'swarm', preset: 'ideate', task: 'search', budgetUsd: 5,
@@ -1071,7 +1081,7 @@ describe('agents tool — resuming a stored delegation row', () => {
     expect(resumed).toEqual({ action: 'swarm', preset: 'ideate', task: 'search' });
     expect(lines.filter((line) => line.includes('agents.resume.fields_dropped'))).toHaveLength(1);
     if (!resumed) throw new Error('expected a resumable agents input');
-    const replayed = v.parse(v.record(v.string(), v.unknown()), await agentsTool({ fork: forkDeps() }).execute(resumed));
+    const replayed = v.parse(v.record(v.string(), v.unknown()), await agentsTool({ swarm: swarmDeps() }).execute(resumed));
     // Not refused, and positively so: the re-drive reached the engine and came
     // back with a run report, which it could not have if `topic` had survived
     // into the strict parse.

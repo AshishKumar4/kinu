@@ -142,7 +142,7 @@ function proposalInvitation(input: {
     + `a line reading ${PROPOSAL_MARKER} followed by a JSON object: `
     + `{"rationale": why this thread deserves the budget, "branches": [{"task", "rationale", `
     + `"context"}, ...] (${String(BRANCH_PROPOSAL_WIDTH.min)}-${String(BRANCH_PROPOSAL_WIDTH.max)} `
-    + 'narrower sub-questions, each naming what it starts from: "fork" for your own answer as '
+    + 'narrower sub-questions, each naming what it starts from: "inherit" for your own answer as '
     + 'context, "fresh" for its own focus and your conclusion alone)}. '
     + 'You are proposing, not spawning: the search decides, against a budget and a depth cap you '
     + 'cannot see, and you will be told the reason if it refuses. Omit the block entirely if no '
@@ -152,8 +152,8 @@ function proposalInvitation(input: {
 /**
  * What a node is told about the measurements on its own path.
  *
- * Gated on `context:'fork'` rather than on the cut `observe:'ancestors'`, which is
- * the same gate: a forked child continues the parent's conversation and so has the
+ * Gated on `context:'inherit'` rather than on the cut `observe:'ancestors'`, which is
+ * the same gate: an inheriting child continues the parent's conversation and so has the
  * ancestor chain's measurements transitively. The axis went; the behaviour did not,
  * and it now hangs off the one axis that was already deciding it.
  */
@@ -164,7 +164,7 @@ function pathFeedback(input: {
   readonly ancestors: readonly TreeNode[];
 }): string {
   const { measured, baseline } = input;
-  if (input.context !== 'fork' || !measured || baseline === null) return '';
+  if (input.context !== 'inherit' || !measured || baseline === null) return '';
   const direction = measured.direction === 'minimise' ? 'lower' : 'higher';
   const path = input.ancestors
     .filter((node) => node.measurement?.kind === 'measured')
@@ -248,7 +248,7 @@ export function branchPrompt(input: {
   /** The parents this child FANS IN, under `expand:'aggregate'`. Empty for a sampling
    *  child, which continues from one parent. */
   readonly aggregated: readonly FanInParent[];
-  /** Root-first, parent-last. Read only where `context` is `'fork'`. */
+  /** Root-first, parent-last. Read only where `context` is `'inherit'`. */
   readonly ancestors: readonly TreeNode[];
   readonly atDepth: number;
   readonly maxDepth: number;
@@ -312,7 +312,7 @@ const CONTEXT_COMPACTION_THRESHOLD = 0.85;
 /**
  * The *Inherited context* BARRIER: the one prefix every child of this parent inherits.
  *
- * Verbatim below the threshold, which is the whole of what `context:'fork'` means and
+ * Verbatim below the threshold, which is the whole of what `context:'inherit'` means and
  * a decision about caching: an unmodified prefix is a prefix a provider can cache, so
  * every sibling of one parent shares one cacheable prefix, and rewriting the history
  * per child would break that prefix for all of them at once.
@@ -628,8 +628,8 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     task: input.task,
     rationale: input.rationale,
     base: prompt.system,
-    messages: input.context === 'fork' ? [...input.prefix, seed] : [seed],
-    inherited: input.context === 'fork' ? inheritedAsSerialized(input.prefix) : [],
+    messages: input.context === 'inherit' ? [...input.prefix, seed] : [seed],
+    inherited: input.context === 'inherit' ? inheritedAsSerialized(input.prefix) : [],
     context: input.context,
     mode,
     settle: resolved.settle,

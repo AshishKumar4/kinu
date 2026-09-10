@@ -99,7 +99,7 @@ function searchableDeps(opts: {
   const spawns = opts.spawns ?? [];
   return {
     mode: 'build',
-    fork: {
+    swarm: {
       rt,
       // One actor per node, over the caller's own database: the spend these
       // seams cap is charged per node, and a shared handle would bill a wave

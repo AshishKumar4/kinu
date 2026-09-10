@@ -37,11 +37,11 @@ import {
   AGENT_UID_FLOOR,
   facetHomeProvisioner,
   agentIdentity,
-  nodeAgentName,
+  headAgentName,
   createAgentsTool,
   initWorkspaceSchema,
   explorationActorKey,
-  type AgentsForkDeps,
+  type AgentsSwarmDeps,
   type AgentsToolInput,
   type JsonValue,
   type LLMProviderConfig,
@@ -103,7 +103,7 @@ function cliRuntime(label: string): CLIRuntime {
 }
 
 /** This backend's node-home wiring, as `local-session.ts` builds it: the host it
- *  hands over, and the `provisionNodeHome` seam a fork's deps carry — the
+ *  hands over, and the `provisionNodeHome` seam a swarm's deps carry — the
  *  canonical provisioner over that host, never a second one written here.
  *
  *  The missing host is a THROW rather than an absence, because an arm that
@@ -115,7 +115,7 @@ function nodeHomeWiring(rt: CLIRuntime) {
     nodeHome,
     provisionNodeHome: () => async (node: { readonly nodeId: string; readonly rootId: string; readonly depth: number }) => {
       const actor = registerLocalNode(rt.actor, node);
-      return facetHomeProvisioner(nodeHome())(nodeAgentName(actor.storageKey));
+      return facetHomeProvisioner(nodeHome())(headAgentName(actor.storageKey));
     },
   };
 }
@@ -126,13 +126,13 @@ function nodeHomeWiring(rt: CLIRuntime) {
  * Read back through the production directory — `resolve`, never a second
  * `register` — because the mapping from a node id to the key its home is named
  * for is the directory's to state, and resolving it also asserts the row is
- * still there and still active. Naming the home from `nodeAgentName(nodeId)`
+ * still there and still active. Naming the home from `headAgentName(nodeId)`
  * instead would assert a rule this workspace does not hold: a rename would
  * move an actor's home, and two nodes sharing a name across a retirement would
  * share a directory.
  */
 function nodeHomeName(rt: CLIRuntime, nodeId: string): string {
-  return nodeAgentName(openLocalActor(rt.actor, explorationActorKey(nodeId)).storageKey);
+  return headAgentName(openLocalActor(rt.actor, explorationActorKey(nodeId)).storageKey);
 }
 
 /** `diagnostics` writes one JSON line per event to console.error and has no
@@ -177,8 +177,8 @@ function settledNodes(lines: string[]): SettledNode[] {
 }
 
 /** One shipped `agents.swarm` call, through the tool the model calls. */
-async function runShippedSwarm(fork: AgentsForkDeps): Promise<SettledNode[]> {
-  const tool = createAgentsTool({ mode: 'build', fork });
+async function runShippedSwarm(swarm: AgentsSwarmDeps): Promise<SettledNode[]> {
+  const tool = createAgentsTool({ mode: 'build', swarm });
   const execute = toolExecute<AgentsToolInput, JsonValue>(tool);
   let outcome: JsonValue = null;
   const lines = await captureEvents(async () => {
@@ -249,7 +249,7 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     // NOT the node ids: a home named for one would move with a rename, and
     // every id below is absent from `/home` precisely because the storage keys
     // above are what own it.
-    for (const { node } of settled) expect(homes).not.toContain(nodeAgentName(node));
+    for (const { node } of settled) expect(homes).not.toContain(headAgentName(node));
 
     // The uid each home was chown'ed to, read back through the production
     // accessor: it is idempotent by design, so reading it here is also what
@@ -272,4 +272,20 @@ describe('a node in a shipped agents.swarm run reports private-home', () => {
     expect(settled.map((node) => node.isolation))
       .toEqual(Array.from({ length: IDEATE_BRANCHES }, () => 'shared-origin-plane'));
   }, 120_000);
+});
+
+describe('a node seat shares the origin plane on its own head row', () => {
+  test('the seat runs the origin shell until its home is provisioned, keyed by its own actor', async () => {
+    const rt = cliRuntime('swarm-node-home-seat');
+    expect(rt.shell).toBeDefined();
+    const seat = await nodeSeatFactory(rt)({ nodeId: 'seat-probe', rootId: 'seat-probe', depth: 1 });
+    // A former-node actor is a head row: the directory presents the swarm mode
+    // as what it behaviorally is, and the seat's base runtime is the origin's
+    // own plane — the home comes later through provisionNodeHome, and building
+    // the head's own home here would provision a plane the loop never runs on.
+    expect(seat.actor.record.kind).toBe('head');
+    expect(seat.actor.handle.actorId).not.toBe(rt.actor.actorId);
+    expect(seat.actor.runtime.shell).toBe(rt.shell);
+    expect(nodeHomeName(rt, 'seat-probe')).toBe(headAgentName(seat.actor.handle.storageKey));
+  });
 });

@@ -6,7 +6,7 @@
  * the ONE durable-state tool, whose keyed-fact actions are themselves gated
  * on `facts` — and tasks.
  * Conditional (needs a specific dep in BuiltinToolDeps):
- *   - agents           ← agents (fork substrate and/or team + peers deps;
+ *   - agents           ← agents (swarm substrate and/or team + peers deps;
  *                        the ONE delegation tool, actions gated per group)
  *   - web              ← webSearch (WebSearchProvider; search/fetch actions)
  *   - report           ← report (subordinate → parent progress spine)

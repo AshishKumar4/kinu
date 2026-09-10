@@ -30,7 +30,7 @@ import { withEffectClaims, type EffectClaimDeps } from './effect-claim';
 // already owns an `ActorToolDeps` — the actor PROFILE's deps (team / peers /
 // report / submitPlan), which is what feeds `agents` below, not this factory.
 export interface ActorToolsetDeps extends BuiltinToolDeps {
-  /** The `agents` delegation tool's deps: fork substrate (model +
+  /** The `agents` delegation tool's deps: swarm substrate (model +
    *  host-injected infra) and/or subordinate + peer transports. The
    *  tool is registered when ANY group is wired; actions gate per group. */
   agents?: AgentsToolDeps;
@@ -51,12 +51,12 @@ export interface ActorToolsetDeps extends BuiltinToolDeps {
  * plus `agents` when this actor's deps wire any delegation group — and every
  * one of them behind its declared replay policy (tools/effect-claim.ts), which
  * is why both backends assemble here and neither wraps tools of its own.
- * Per-action gating (fork / team / peers) lives in `createAgentsTool`, so an
+ * Per-action gating (swarm / team / peers) lives in `createAgentsTool`, so an
  * actor with only `team` sees hire/msg/list/dismiss and no swarm.
  */
 export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
   let extra: ToolSet | undefined;
-  if (deps.agents && (deps.agents.fork || deps.agents.team || deps.agents.peers)) {
+  if (deps.agents && (deps.agents.swarm || deps.agents.team || deps.agents.peers)) {
     extra = { agents: createAgentsTool(deps.agents) };
   }
   return withEffectClaims(buildToolSurface({ ...deps, extra }), deps.effectClaims);
@@ -67,7 +67,7 @@ export function buildActorTools(deps: ActorToolsetDeps): ToolSet {
 // for the backends that implement them, beside the factory that registers it.
 export {
   PEER_REPLY_TOPIC,
-  type AgentsToolDeps, type AgentsForkDeps,
+  type AgentsToolDeps, type AgentsSwarmDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps,

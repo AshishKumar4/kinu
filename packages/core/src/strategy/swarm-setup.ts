@@ -670,7 +670,7 @@ export function resolveNodeModel(input: {
       return unsupported(
         `this search is routed to the ${tier} tier, model ${JSON.stringify(spec)}, but no model `
         + 'resolver is wired in this runner — so its nodes could only run the caller\'s own '
-        + 'model while the run records the tier\'s. Wire AgentsForkDeps.resolveModel on this '
+        + 'model while the run records the tier\'s. Wire AgentsSwarmDeps.resolveModel on this '
         + 'backend.',
       );
     }
@@ -695,7 +695,7 @@ export function resolveNodeModel(input: {
  * `models` routes each node to the spec its slot is assigned (round-robin, per
  * `SwarmInput.models`). Every spec crosses the ONE seam the actor already routes a
  * delegation's tier through — {@link resolveModel}, wired by `agents-tool.ts` from
- * `AgentsForkDeps.resolveModel` — so a swarm's per-node routing and its tier routing
+ * `AgentsSwarmDeps.resolveModel` — so a swarm's per-node routing and its tier routing
  * build models through the same registry, and there is no second resolver to drift.
  *
  * REFUSED, not degraded, in both directions, and for the same reason
@@ -732,7 +732,7 @@ export function resolveNodeModels(input: {
     return unsupported(
       'this search routes each node through `models`, but no model resolver is wired in '
       + 'this runner — so its nodes could only run the caller\'s own model while the call '
-      + 'names others. Wire AgentsForkDeps.resolveModel on this backend.',
+      + 'names others. Wire AgentsSwarmDeps.resolveModel on this backend.',
     );
   }
   const resolved: RoutedNodeModel[] = [];
@@ -894,7 +894,7 @@ export async function createRoot(input: {
  * unpublishable — resuming open would publish work the seal exists to hold back),
  * the realised ensembles and the per-candidate spend.
  *
- * Nodes arrive parent-before-child, which is what lets a `context:'fork'` child of a
+ * Nodes arrive parent-before-child, which is what lets a `context:'inherit'` child of a
  * re-entered parent inherit that parent's conversation: the transcript is composed
  * down the chain exactly as the loop composes it. What it does NOT carry is each
  * child's own seed message — a user turn built from prompt state that was never

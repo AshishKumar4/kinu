@@ -30,7 +30,7 @@ import type { BranchProposal, ResolvedSwarmCaps, SwarmConfig } from '../src/stra
 
 function config(over?: Partial<SwarmConfig>): SwarmConfig {
   return {
-    unit: { kind: 'answer' }, context: 'fork',
+    unit: { kind: 'answer' }, context: 'inherit',
     expand: 'sample',
     score: { kind: 'verify' }, advance: { kind: 'uct' }, carry: { kind: 'none' },
     ...over,
@@ -48,7 +48,7 @@ function proposal(width: number): BranchProposal {
   return {
     rationale: 'this thread deserves its own budget',
     branches: Array.from({ length: width }, (_unused, i) => ({
-      task: `sub-question ${String(i)}`, rationale: 'r', context: 'fork' as const,
+      task: `sub-question ${String(i)}`, rationale: 'r', context: 'inherit' as const,
     })),
   };
 }

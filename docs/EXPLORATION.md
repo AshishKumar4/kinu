@@ -37,7 +37,7 @@ the enumeration.
 | axis | governs | values |
 | --- | --- | --- |
 | `unit` | what one node produces | `answer`, `thought` |
-| `context` | what a child starts from | `fork`, `fresh` |
+| `context` | what a child starts from | `inherit`, `fresh` |
 | `expand` | how children are produced | `sample`, `aggregate` |
 | `score` | how a node is valued | `verify`, `judge`, `none` |
 | `advance` | where the next unit of budget goes | `uct`, `best-first`, `pareto`, `archive`, `none` |
@@ -51,10 +51,11 @@ exactly one place, to decide whether a node is an agent at all.
 who writes it is refused by name and pointed at `answer`. The `prove` preset
 names `answer`.
 
-`fork` gives a child its parent's conversation verbatim, preserving one cacheable
-prefix for siblings. `fresh` gives only the task block and parent report. `fork`
-is an axis value, not the removed action. One spelling governs caller-to-root and
-branch edges; a resolved `fresh` search refuses a `fork` child.
+`inherit` gives a child its parent's conversation verbatim, preserving one cacheable
+prefix for siblings. `fresh` gives only the task block and parent report. `inherit`
+was `fork` until the removed `agents` action made that spelling ambiguous; stored
+rows carrying the old value are translated on resume. One spelling governs caller-to-root and
+branch edges; a resolved `fresh` search refuses an `inherit` child.
 
 `sample` starts from the workspace as found. `aggregate` consumes k parents into
 one child; see *Fan-in*. `verify` runs the registered instrument; `judge` takes
@@ -520,9 +521,10 @@ A bare `/tmp` resolves to each agent's own temporary directory on both
 backends. Hosted facets ask the workspace owner to register their mappings.
 Boot restores these mappings after a reset.
 
-Measured 2026-09-06, `bun scripts/workspace-planes-probe.ts` reads four
-distinct temporary-file values from main, swarm node, head, and subordinate
-planes. All four read the same shared workspace file. The second runtime
+Measured 2026-09-10, `bun scripts/workspace-planes-probe.ts` reads four
+distinct temporary-file values from main, swarm-node, head, and subordinate
+planes — the node's home is `head-<its own key>`, one head namespace for both
+modes. All four read the same shared workspace file. The second runtime
 generation returns the same values without copying files.
 
 `shared-origin-plane` remains the honest state of a runtime with no provisioner:
