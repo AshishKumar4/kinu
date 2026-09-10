@@ -27,7 +27,7 @@ import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
 import { createWorkspace, nextWorkspaceGeneration, type WorkspaceVFS } from '../src/vfs/nimbus-workspace';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { initCraftedToolsTables } from '@kinu.run/agent-utils/stores';
 import { createScaffoldSurface } from '../src/scaffold/surface';
 import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff';

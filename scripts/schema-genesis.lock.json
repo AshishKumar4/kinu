@@ -181,7 +181,7 @@
     "generation",
     "settled_at"
   ],
-  "compaction_archive@packages/core/src/identity/workspace-schema.ts": [
+  "compaction_archive@packages/core/src/state/workspace-schema.ts": [
     "actor_id",
     "session_key",
     "range_hash",
@@ -192,7 +192,7 @@
     "assistant_turns",
     "first_user_ask"
   ],
-  "compaction_state@packages/core/src/identity/workspace-schema.ts": [
+  "compaction_state@packages/core/src/state/workspace-schema.ts": [
     "actor_id",
     "session_key",
     "plan_json",
@@ -862,31 +862,31 @@
     "evaluation_json",
     "created_at"
   ],
-  "slate_content_chunks@packages/core/src/identity/workspace-schema.ts": [
+  "slate_content_chunks@packages/core/src/state/workspace-schema.ts": [
     "digest",
     "offset",
     "bytes"
   ],
-  "slate_content@packages/core/src/identity/workspace-schema.ts": [
+  "slate_content@packages/core/src/state/workspace-schema.ts": [
     "digest",
     "size",
     "hint"
   ],
-  "slate_deployment_reservations@packages/core/src/identity/workspace-schema.ts": [
+  "slate_deployment_reservations@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
     "slate_id",
     "parent_id",
     "bytes"
   ],
-  "slate_deployments@packages/core/src/identity/workspace-schema.ts": [
+  "slate_deployments@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
     "slate_id",
     "parent_id",
     "bytes"
   ],
-  "slate_invocations@packages/core/src/identity/workspace-schema.ts": [
+  "slate_invocations@packages/core/src/state/workspace-schema.ts": [
     "id",
     "slate_id",
     "request",
@@ -894,21 +894,21 @@
     "owner_epoch",
     "state"
   ],
-  "slate_previews@packages/core/src/identity/workspace-schema.ts": [
+  "slate_previews@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
     "slate_id",
     "parent_id",
     "bytes"
   ],
-  "slate_publications@packages/core/src/identity/workspace-schema.ts": [
+  "slate_publications@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
     "slate_id",
     "parent_id",
     "bytes"
   ],
-  "slate_receipts@packages/core/src/identity/workspace-schema.ts": [
+  "slate_receipts@packages/core/src/state/workspace-schema.ts": [
     "id",
     "invocation_id",
     "attempt",
@@ -916,28 +916,28 @@
     "error",
     "finished_at"
   ],
-  "slate_resource_reservations@packages/core/src/identity/workspace-schema.ts": [
+  "slate_resource_reservations@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
     "slate_id",
     "parent_id",
     "bytes"
   ],
-  "slate_resources@packages/core/src/identity/workspace-schema.ts": [
+  "slate_resources@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
     "slate_id",
     "parent_id",
     "bytes"
   ],
-  "slate_versions@packages/core/src/identity/workspace-schema.ts": [
+  "slate_versions@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
     "slate_id",
     "parent_id",
     "bytes"
   ],
-  "slates@packages/core/src/identity/workspace-schema.ts": [
+  "slates@packages/core/src/state/workspace-schema.ts": [
     "id",
     "workspace_id",
     "revision",

@@ -10,7 +10,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestActors, createTestRuntime } from '@kinu.run/test-utils';
 import { collectDynamicContext } from '../src/state/dynamic-context';
 import { createAgentStores } from '../src/state/agent-stores';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { makeSqlExec } from './helpers';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import type { AgentStores } from '../src/state/agent-stores';

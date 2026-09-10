@@ -37,7 +37,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initActorStateSchema, initWorkspaceSchema, type WorkspaceSchemaSql,
-} from '../src/identity/workspace-schema';
+} from '../src/state/workspace-schema';
 import { wrapDatabase } from '../src/identity/create';
 import { normalizeObservedTables } from '../src/conformance';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';

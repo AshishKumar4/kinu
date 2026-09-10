@@ -21,9 +21,9 @@
 
 import type { RawSqlExec, SqlExec, SqlExecutor } from '../types/primitives';
 import { initMemoryChunkTables } from '@kinu.run/agent-utils/memory';
-import { initActorTables, initWorkspaceOwnershipTables } from './schema';
-import { initWorkspaceActorTable } from './workspace-actors';
-import { initEffectTombstoneTable } from './effect-tombstones';
+import { initActorTables, initWorkspaceOwnershipTables } from '../identity/schema';
+import { initWorkspaceActorTable } from '../identity/workspace-actors';
+import { initEffectTombstoneTable } from '../identity/effect-tombstones';
 import { initAgentConfigTable } from '../config/store';
 import { initCurriculumTable } from '../curriculum/proposer';
 import { initEventsHubTables } from '../events/hub/schema';

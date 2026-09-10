@@ -4,7 +4,7 @@ import {
 } from '../src/curriculum/proposer';
 import { createScriptedLLM, createJSONLLM } from '@kinu.run/test-utils';
 import { createTestRuntime, makeSqlExec } from './helpers';
-import { initWorkspaceSchema } from '../src/identity/workspace-schema';
+import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { recordTurnOutcome } from '../src/evolution/outcomes';
 
 function setup() {
