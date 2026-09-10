@@ -65,7 +65,7 @@ import {
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
   initTurnOutcomeTables, isTrivialTurn, isNegativeOutcome, classifyTurnOutcome,
-  executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
+  executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall, promotesProcedure,
   outcomeToFeedback, outcomeQuality,
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
   listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
@@ -714,7 +714,7 @@ export class EvolutionEngine {
       }
     }
 
-    if (outcome === 'accepted' && turn.toolCalls.length > 0) {
+    if (promotesProcedure({ outcome, source, toolCalls: turn.toolCalls.length })) {
       // Same shape, same reason: extraction upserts a crafted tool and appends a
       // discovery event. The key travels INTO the body so the marker lands beside
       // those writes rather than after the await that returns from them.

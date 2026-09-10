@@ -204,6 +204,44 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     expect(turn.feedback).toBe('positive');
   });
 
+  // The boundary between "it ran" and "it worked". An execution verdict reads
+  // the last acting call's typed outcome, so a file that read cleanly and a
+  // command that exits zero with the wrong answer both say `succeeded` — and
+  // extraction publishes a crafted tool whose EMA then decides what later
+  // turns are offered. Both directions are asserted, because a guard that
+  // refused every promotion would pass the first half alone.
+  test('an execution verdict grades the turn but promotes no reusable procedure', async () => {
+    const pattern = JSON.stringify({
+      name: 'rotate_staging_keys', description: 'rotate staging keys',
+      params: { type: 'object', properties: {}, required: [] },
+      code: 'async (args) => ({ ok: true })',
+    });
+    const acted: Partial<CompletedTurn> = {
+      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok', outcome: { success: true } }],
+    };
+
+    const headless = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': pattern } });
+    await new EvolutionEngine(headless.rt).reviewTurn(makeTurn({ turnId: 'exec-promote', ...acted }), null);
+    const [graded] = listTurnOutcomes(headless.rt.storage.sql, headless.rt.actor);
+    expect(graded!.source).toBe('execution');
+    expect(graded!.outcome).toBe('accepted');
+    expect(headless.rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM crafted_tools`[0]?.n).toBe(0);
+    expect(headless.rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM pattern_extractions`[0]?.n).toBe(0);
+
+    // Same turn, same pattern answer, graded by a follow-up instead: promotion
+    // is what a real grade buys, so this half must still mint the tool.
+    const asked = createTestRuntime({
+      llmResponses: classifierResponses('accepted', { 'Extract a reusable pattern': pattern }),
+    });
+    await new EvolutionEngine(asked.rt).reviewTurn(
+      makeTurn({ turnId: 'graded-promote', ...acted }), 'perfect, thanks',
+    );
+    const [byUser] = listTurnOutcomes(asked.rt.storage.sql, asked.rt.actor);
+    expect(byUser!.source).toBe('classifier');
+    expect(asked.rt.storage.sql<{ name: string }>`SELECT name FROM crafted_tools`.map((r) => r.name))
+      .toEqual(['rotate_staging_keys']);
+  });
+
   test('a headless turn that errored is graded corrected — but does NOT corroborate lessons', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);

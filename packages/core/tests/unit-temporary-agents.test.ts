@@ -868,6 +868,14 @@ describe('the rung is structural, and so is its absence', () => {
     // parse with their fields intact: the handoff to an agent that exists,
     // and the fork-context search with `context` inside `config`, where the
     // schema holds it — while a top-level `context` is refused.
+    // The TEXT, not just the shape: the previous remedy advertised
+    // `agents({action:"swarm", context:"fork"})` and an `ask` by name, and no
+    // assertion could disagree with it, because every one built its
+    // expectation from the refusal itself.
+    const remedy = delegationDepthRefusal({ depth: DELEGATION_MAX_DEPTH, maxDepth: 0 }).error;
+    expect(remedy).toContain('config:{context:"fork"}');
+    expect(remedy).toContain('`hire` naming `agent`');
+    expect(remedy).not.toContain('ask by');
     expect(parseAgentsToolInput({ action: 'hire', agent: 'a', message: 'm' }))
       .toMatchObject({ action: 'hire', agent: 'a', message: 'm' });
     expect(parseAgentsToolInput({ action: 'swarm', task: 't', config: { context: 'fork' } }))
