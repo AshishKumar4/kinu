@@ -508,7 +508,7 @@ export const DELEGATION_TASK_LIFETIME =
  * text and there is no second assembly to drift.
  */
 export const AGENTS_RESULT_PARTS = {
-  roster: 'A durable hire and dismiss return roster state. ',
+  roster: 'A hire and dismiss return roster state. ',
   taskHire: 'A lifetime:"task" hire returns the agent\'s finished answer, its elapsed time and no roster row. ',
   rest:
     'A hire handed to an agent that already exists, and msg, return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
