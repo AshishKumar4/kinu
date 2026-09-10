@@ -1,3 +1,5 @@
+// KINU-LOCAL delta on upstream's suite: the `typeof x === "undefined"` existence probes upstream
+// lists as valid are invalid here. See tools/oxlint/anti-slop/upstream.json.
 import { RuleTester } from "oxlint/plugins-dev";
 
 import { noRuntimeTypeofRule } from "./no-runtime-typeof.ts";
@@ -24,6 +26,11 @@ tester.run("anti-slop/no-runtime-typeof", noRuntimeTypeofRule, {
 	],
 	invalid: [
 		{ code: 'if (typeof input === "string") use(input);', errors: [error] },
+		{ code: "if (typeof input === undefined) use(input);", errors: [error] },
+		{ code: 'const isServer = typeof document === "undefined";', errors: [error] },
+		{ code: 'const hasStorage = typeof localStorage !== "undefined";', errors: [error] },
+		{ code: 'if (typeof globalThis.crypto === "undefined") throw new Error("no crypto");', errors: [error] },
+		{ code: 'const missing = "undefined" === typeof process;', errors: [error] },
 		{
 			code: 'function isString(value: unknown): value is string { return typeof value === "string"; }',
 			errors: [error],

@@ -6,6 +6,8 @@ import { lexicalTypeParameterNames } from "../shared/lexical-type-parameters.ts"
 
 type TypeAssertion = ESTree.TSAsExpression | ESTree.TSTypeAssertion;
 
+const DEFAULT_SAFETY_MARKERS = ["SAFETY"] as const;
+
 const commentOwnerKinds = new Set([
   "ExpressionStatement",
   "PropertyDefinition",
@@ -22,22 +24,64 @@ function isConstAssertion(node: TypeAssertion): boolean {
   );
 }
 
-function safetyComment(sourceCode: SourceCode, node: TypeAssertion): string | null {
+function configuredSafetyMarkers(option: unknown): readonly string[] {
+  if (typeof option !== "object" || option === null || !("markers" in option)) {
+    return DEFAULT_SAFETY_MARKERS;
+  }
+  const configured = option.markers;
+  if (!Array.isArray(configured)) return DEFAULT_SAFETY_MARKERS;
+  const markers = configured.flatMap((marker) =>
+    typeof marker === "string" && marker.trim().length > 0 ? [marker.trim()] : [],
+  );
+  return markers.length > 0 ? markers : DEFAULT_SAFETY_MARKERS;
+}
+
+function markerPattern(markers: readonly string[]): RegExp {
+  const alternation = markers
+    .map((marker) => marker.replaceAll(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`))
+    .join("|");
+  return new RegExp(
+    String.raw`(?:^|[^\p{L}\p{N}_])(?:${alternation})\s*:\s*(?<reason>\S[\s\S]*)`,
+    "u",
+  );
+}
+
+function safetyJustificationBefore(
+  sourceCode: SourceCode,
+  owner: ESTree.Node,
+  assertion: TypeAssertion,
+  pattern: RegExp,
+): string | null {
+  for (const comment of sourceCode.getCommentsBefore(owner)) {
+    if (comment.end > assertion.start) continue;
+    const reason = comment.value.match(pattern)?.groups?.reason;
+    if (reason !== undefined) return reason;
+  }
+  return null;
+}
+
+function safetyComment(
+  sourceCode: SourceCode,
+  node: TypeAssertion,
+  pattern: RegExp,
+): string | null {
   let current: ESTree.Node = node;
   while (true) {
-    const comment = sourceCode
-      .getCommentsBefore(current)
-      .find((candidate) => candidate.end <= node.start && /\bSAFETY\s*:/u.test(candidate.value));
-    if (comment !== undefined) {
-      return comment.value;
+    const reason = safetyJustificationBefore(sourceCode, current, node, pattern);
+    if (reason !== null) return reason;
+    if (commentOwnerKinds.has(current.type)) {
+      const exportDeclaration = current.parent;
+      return exportDeclaration.type === "ExportNamedDeclaration" &&
+        exportDeclaration.declaration === current
+        ? safetyJustificationBefore(sourceCode, exportDeclaration, node, pattern)
+        : null;
     }
-    if (commentOwnerKinds.has(current.type) || current.parent.type === "Program") return null;
+    if (current.parent.type === "Program") return null;
     current = current.parent;
   }
 }
 
-function statesConcreteEvidence(comment: string): boolean {
-  const reason = comment.match(/\bSAFETY\s*:\s*(?<reason>[\s\S]*)/u)?.groups?.reason ?? "";
+function statesConcreteEvidence(reason: string): boolean {
   const words = reason.match(/[A-Za-z][A-Za-z0-9_-]*/gu) ?? [];
   return (
     words.length >= 3 &&
@@ -85,10 +129,11 @@ function isUnverifiableAssertion(sourceCode: SourceCode, node: TypeAssertion): b
 }
 
 /**
- * KINU-LOCAL: upstream accepts the mere presence of a `SAFETY:` comment. A comment cannot
+ * KINU-LOCAL: upstream accepts any non-empty justification after the marker. A comment cannot
  * establish a caller-selected generic, recover evidence from `any`, or validate raw JSON, so those
  * are rejected outright, and a `SAFETY:` note must name concrete evidence rather than assert
- * safety. See tools/oxlint/anti-slop/upstream.json.
+ * safety. Upstream's `markers` option and export-declaration comment attachment are vendored
+ * as-is. See tools/oxlint/anti-slop/upstream.json.
  */
 /** Require every non-const type assertion to state the invariant TypeScript cannot express. */
 export const requireSafetyCommentForTypeAssertionRule = defineRule({
@@ -100,27 +145,49 @@ export const requireSafetyCommentForTypeAssertionRule = defineRule({
     },
     messages: {
       missingSafetyComment:
-        "This type assertion has no `SAFETY:` justification. State the checked invariant immediately before the assertion or its containing statement.",
+        "This type assertion has no `{{marker}}:` justification. State the checked invariant immediately before the assertion or its containing statement.",
       unverifiableAssertion:
         "A comment cannot establish a caller-selected type, recover evidence from `any`, or validate raw JSON. Parse or construct a concrete owner type instead.",
       insufficientSafetyComment:
-        "The `SAFETY:` comment states no concrete checked, constructed, or owner-guaranteed invariant. Remove the assertion or name the evidence that makes it sound.",
+        "The `{{marker}}:` comment states no concrete checked, constructed, or owner-guaranteed invariant. Remove the assertion or name the evidence that makes it sound.",
     },
+    schema: [
+      {
+        type: "object",
+        properties: {
+          markers: {
+            type: "array",
+            items: { type: "string", minLength: 1 },
+            minItems: 1,
+            uniqueItems: true,
+          },
+        },
+        additionalProperties: false,
+      },
+    ],
+    defaultOptions: [{ markers: ["SAFETY"] }],
   },
   createOnce(context) {
+    const patterns = new Map<string, RegExp>();
+
     const checkAssertion = (node: TypeAssertion) => {
       if (isConstAssertion(node)) return;
       if (isUnverifiableAssertion(context.sourceCode, node)) {
         context.report({ node, messageId: "unverifiableAssertion" });
         return;
       }
-      const comment = safetyComment(context.sourceCode, node);
-      if (comment !== null && statesConcreteEvidence(comment)) return;
-      if (comment !== null) {
-        context.report({ node, messageId: "insufficientSafetyComment" });
-        return;
-      }
-      context.report({ node, messageId: "missingSafetyComment" });
+      const markers = configuredSafetyMarkers(context.options?.[0]);
+      const patternKey = markers.join("\u0000");
+      const pattern = patterns.get(patternKey) ?? markerPattern(markers);
+      patterns.set(patternKey, pattern);
+      const data = { marker: markers[0] ?? DEFAULT_SAFETY_MARKERS[0] };
+      const reason = safetyComment(context.sourceCode, node, pattern);
+      if (reason !== null && statesConcreteEvidence(reason)) return;
+      context.report({
+        node,
+        messageId: reason === null ? "missingSafetyComment" : "insufficientSafetyComment",
+        data,
+      });
     };
 
     return {

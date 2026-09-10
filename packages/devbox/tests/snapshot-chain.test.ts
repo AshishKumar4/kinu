@@ -3408,12 +3408,11 @@ describe('the retained fallback', () => {
     for (let publication = 0; publication < 5; publication += 1) {
       const roles = supersedeGeneration(state);
       expect(roles.fallback).toBeDefined();
-      state = {
-        ...state,
+      state = chainState({
         base: baseLayer(`a1b2c3d4-0000-4000-8000-00000000000${publication}`, 100),
         delta: undefined,
         ...roles,
-      };
+      });
       retained.push(state.fallback!.base.id);
     }
     // The first outgoing generation is the proven one, and it is still the

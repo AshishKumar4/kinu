@@ -173,11 +173,11 @@ describe('pruneStepToolOutputs', () => {
   test('the boundary moves once per batch, not once per step', () => {
     const limits: ModelWindow = { contextWindow: 200_000, modelOutputLimit: 64_000 };
     const STEPS = 40;
-    let turn: ModelMessage[] = [{ role: 'user', content: 'ship the feature' }];
+    const turn: ModelMessage[] = [{ role: 'user', content: 'ship the feature' }];
     let previous: string | null = null;
     const moved: number[] = [];
     for (let step = 0; step < STEPS; step++) {
-      turn = [...turn, ...toolExchange(step, 24_000)];
+      turn.push(...toolExchange(step, 24_000));
       const request = JSON.stringify(pruneStepToolOutputs(turn, limits) ?? turn);
       // A request whose predecessor is a literal prefix of it re-prefills
       // nothing: the provider reads every shared byte from its cache. The
@@ -205,9 +205,9 @@ describe('pruneStepToolOutputs', () => {
     // FIRST over-budget pass truncates: the overage is at most one result,
     // so everything past it is the quantum.
     const truncatedByFirstPass = (limits: ModelWindow): number => {
-      let turn: ModelMessage[] = [{ role: 'user', content: 'go' }];
+      const turn: ModelMessage[] = [{ role: 'user', content: 'go' }];
       for (let step = 0; ; step++) {
-        turn = [...turn, ...toolExchange(step, 8_000)];
+        turn.push(...toolExchange(step, 8_000));
         const pruned = pruneStepToolOutputs(turn, limits);
         if (pruned !== undefined) return pruned.filter((message, i) => message !== turn[i]).length;
       }

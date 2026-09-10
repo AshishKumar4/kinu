@@ -30,6 +30,14 @@ tester.run("anti-slop/no-known-value-widening", noKnownValueWideningRule, {
 		`${prelude} interface Commands { readonly start: Command } function create(): Commands { return { start: startCommand }; }`,
 		`${prelude} declare function make(): Record<string, Command>; const commands: Record<string, Command> = make();`,
 		`${prelude} import { Commands } from './types'; const commands: Commands = { start: startCommand };`,
+		`${prelude} type Diet = 'vegan' | 'omnivore'; const labels: Record<Diet, string> = { vegan: 'V', omnivore: 'O' };`,
+		`${prelude} type Diet = 'vegan' | 'omnivore'; type Labels = Record<Diet, string>; const labels: Labels = { vegan: 'V', omnivore: 'O' };`,
+		`${prelude} type Diet = 'vegan' | 'omnivore'; const labels: Readonly<Record<Diet, string>> = { vegan: 'V', omnivore: 'O' };`,
+		`${prelude} const labels: Record<'a' | 'b', number> = { a: 1, b: 2 };`,
+		`${prelude} type Index<Key extends PropertyKey, Value> = Record<Key, Value>; const commands: Index<'start', Command> = { start: startCommand };`,
+		"function isString(value: unknown): value is string { return true; } declare const input: unknown; isString(input);",
+		"function isString(value: string | unknown): value is string { return true; } declare const input: string | unknown; isString(input);",
+		"function isString(value: unknown): value is string { return true; } declare function readInput(): unknown; isString(readInput());",
 	],
 	invalid: [
 		{ code: "const value: unknown = {};", errors: [error] },
@@ -97,7 +105,15 @@ tester.run("anti-slop/no-known-value-widening", noKnownValueWideningRule, {
 			errors: [error],
 		},
 		{
+			code: `${prelude} function outer() { type Open = Record<string, Command>; const commands: Open = { start: startCommand }; }`,
+			errors: [error],
+		},
+		{
 			code: `${prelude} type Index<T> = Record<string, T>; const commands: Index<Command> = { start: startCommand };`,
+			errors: [error],
+		},
+		{
+			code: `${prelude} type Identity<T> = T; const commands: Identity<Record<string, Command>> = { start: startCommand };`,
 			errors: [error],
 		},
 		{
@@ -108,7 +124,43 @@ tester.run("anti-slop/no-known-value-widening", noKnownValueWideningRule, {
 			code: `${prelude} type Index<T = Command> = Record<string, T>; const commands: Index = { start: startCommand };`,
 			errors: [error],
 		},
+		{
+			code: `${prelude} type Key = string; const commands: Record<Key, Command> = { start: startCommand };`,
+			errors: [error],
+		},
+		{
+			code: `${prelude} const commands: Record<PropertyKey, Command> = { start: startCommand };`,
+			errors: [error],
+		},
+		{
+			code: `${prelude} const commands: Record<string | 'start', Command> = { start: startCommand };`,
+			errors: [error],
+		},
 		{ code: "const value: unknown = 1;", errors: [error] },
 		{ code: "const value: object = [];", errors: [error] },
+		{
+			code: "function isString(value: unknown): value is string { return true; } isString('known');",
+			errors: [error],
+		},
+		{
+			code: "function isString(value: unknown): value is string { return true; } const known = 'known'; isString(known);",
+			errors: [error],
+		},
+		{
+			code: "function isString(value: string | unknown): value is string { return true; } isString('known');",
+			errors: [error],
+		},
+		{
+			code: "function isString(value: unknown): value is string { return true; } function check(known: string): boolean { return isString(known); }",
+			errors: [error],
+		},
+		{
+			code: "const isString = (value: unknown): value is string => true; const known: string = getValue(); isString(known);",
+			errors: [error],
+		},
+		{
+			code: "type User = { readonly id: string }; function isUser(value: unknown): value is User { return true; } function parse(): User { return { id: 'known' }; } const user = parse(); isUser(user);",
+			errors: [error],
+		},
 	],
 });
