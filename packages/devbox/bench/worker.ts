@@ -870,6 +870,27 @@ async function serveInstrumentRoutes(
   counter: DurableObjectStub<BenchOpCounter>,
 ): Promise<Response | null> {
   switch (route) {
+    case 'GET /state': {
+      const state = await box.devboxState();
+      return json({
+        ok: true,
+        strategy,
+        box: name,
+        extractionAllowed: env.ALLOW_EXTRACTION === '1',
+        storePrefix: storePrefixOf(env, strategy, name),
+        state,
+        ms: Date.now() - started,
+      });
+    }
+
+    case 'GET /restore-probe': {
+      // The last in-gate restore's wall time, written by the start hook itself.
+      // The driver polls this after a wake settles: the number is the gate
+      // occupancy the platform cap judges, not the driver's own round trip.
+      const probe = await box.readRestoreProbe();
+      return json({ ok: probe !== undefined, strategy, box: name, probe, ms: Date.now() - started });
+    }
+
     case 'POST /checkpoint-cut': {
       if (env.BENCH_PUBLICATION_CUT !== '1') {
         throw new Error('NOT-CUT: this Worker boot did not enable --fault-cuts');
@@ -1087,34 +1108,6 @@ export default {
         case 'POST /wake': {
           await box.kickStartup();
           return json({ ok: true, strategy, box: name, ms: Date.now() - started });
-        }
-
-        case 'GET /state': {
-          const state = await box.devboxState();
-          return json({
-            ok: true,
-            strategy,
-            box: name,
-            extractionAllowed: env.ALLOW_EXTRACTION === '1',
-            storePrefix: storePrefixOf(env, strategy, name),
-            state,
-            ms: Date.now() - started,
-          });
-        }
-
-        case 'GET /restore-probe': {
-          // The last in-gate restore's wall time, written by the start hook
-          // itself. The driver polls this after a wake settles: the number is
-          // the gate occupancy the platform cap judges, not the driver's own
-          // round trip.
-          const probe = await box.readRestoreProbe();
-          return json({
-            ok: probe !== undefined,
-            strategy,
-            box: name,
-            probe,
-            ms: Date.now() - started,
-          });
         }
 
         case 'GET /ops': {
