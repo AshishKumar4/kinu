@@ -63,7 +63,10 @@ function PlatformSection({ install }: { install: string }): ReactElement {
             <div><dt className="inline font-mono text-xs p-text-2">kinu run workshop "task"</dt><dd className="mt-1">One task, streamed to your terminal.</dd></div>
             <div><dt className="inline font-mono text-xs p-text-2">kinu acp workshop</dt><dd className="mt-1">Connect from editors such as Zed over ACP.</dd></div>
           </dl>
-          <a href={REPOSITORY + '/blob/main/QUICKSTART.md'} target="_blank" rel="noreferrer" className="mt-6 text-sm font-semibold p-accent">Setup and provider configuration →</a>
+          {/* mt-auto, as the cloud card's CTA does: the two articles share one
+              stretched grid row, so a fixed margin here left 148px of dead
+              space under the shorter column at 1280 (measured 2026-09-10). */}
+          <a href={REPOSITORY + '/blob/main/QUICKSTART.md'} target="_blank" rel="noreferrer" className="mt-auto pt-6 text-sm font-semibold p-accent">Setup and provider configuration →</a>
         </article>
       </div>
       <div className="mt-12">
