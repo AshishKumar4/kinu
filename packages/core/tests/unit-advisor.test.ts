@@ -14,7 +14,7 @@ import {
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
   CONTENT_FREE_NOTES, DEFAULT_ADVISOR_MIN_SEVERITY,
   buildAdvisorPrompt, isAdvisorSeverity, isContentFree, isDuplicateNote,
-  judgeNote, normalizeNote, parseAdvisorReply, runAdvisorLane,
+  judgeNote, normalizeNote, parseAdvisorReply, reviewRecordedTurn,
   type AdvisorNote, type AdvisorSeverity,
 } from '../src/index';
 import type { AgentSignal } from '../src/types/signals';
@@ -48,21 +48,23 @@ const NOTE: AdvisorNote = {
 /** One lane run, with everything it touched recorded. */
 async function lane(over: {
   llm?: LLM | undefined;
-  enabled?: boolean;
   minSeverity?: AdvisorSeverity;
   recent?: readonly string[];
   gateOpen?: boolean;
   turn?: CompletedTurn;
+  reachable?: readonly string[];
 } = {}) {
   const delivered: AgentSignal[] = [];
   const recorded: AdvisorNote[] = [];
-
-  const disposition = await runAdvisorLane({
-    turn: over.turn ?? aTurn(),
+  const disposition = await reviewRecordedTurn({
+    snapshot: {
+      turn: over.turn ?? aTurn(),
+      reachable: [...(over.reachable ?? [])],
+      minSeverity: over.minSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
+      recent: [...(over.recent ?? [])],
+    },
     llm: 'llm' in over ? over.llm : saying(JSON.stringify(NOTE)),
-    enabled: over.enabled ?? true,
-    minSeverity: over.minSeverity ?? DEFAULT_ADVISOR_MIN_SEVERITY,
-    recent: over.recent ?? [],
+    govern: (llm) => llm,
     gateOpen: over.gateOpen ?? false,
     deliver: async (signal) => {
       delivered.push(signal);
@@ -78,20 +80,6 @@ async function lane(over: {
 // ── The switch ──────────────────────────────────────────────────────────────
 
 describe('the owner’s switch', () => {
-  test('off means no review at all, so no advisor spend exists', async () => {
-    let called = 0;
-
-    const counting: LLM = { async *stream() { yield ''; }, complete: async () => {
-      called += 1;
-
-      return '{}';
-    } };
-
-    const run = await lane({ enabled: false, llm: counting });
-    expect(called).toBe(0);
-    expect(run).toMatchObject({ disposition: null, delivered: [], recorded: [] });
-  });
-
   test('the default floor is `concern`, which keeps the conversation quiet', () => {
     expect(DEFAULT_ADVISOR_MIN_SEVERITY).toBe('concern');
   });
@@ -406,12 +394,7 @@ describe('the missed-capability class', () => {
         return '{}';
       },
     };
-
-    await runAdvisorLane({
-      turn: aTurn(), llm: capturing, enabled: true, minSeverity: 'concern',
-      recent: [], gateOpen: false, reachable: ['agents'],
-      deliver: async () => 'queued', record: () => {},
-    });
+    await lane({ llm: capturing, reachable: ['agents'] });
     expect(seen).toContain('did not use: agents');
   });
 });
@@ -500,4 +483,62 @@ describe('a turn with no durable id', () => {
     expect(run.disposition).toBe('deliver');
     expect(run.delivered[0]).not.toHaveProperty('idempotencyKey');
   });
+});
+
+// ── The recorded review both backends run ───────────────────────────────────
+//
+// The live lane and its recovery, on both backends, review a turn from ONE
+// snapshot through ONE body. What that body decides for itself is which client
+// reviews: the turn's own labels govern it, never the mission active later.
+
+describe('reviewRecordedTurn', () => {
+  const snapshot = (over: Partial<CompletedTurn> = {}) => ({
+    turn: aTurn(over), reachable: ['run'], minSeverity: DEFAULT_ADVISOR_MIN_SEVERITY, recent: [],
+  });
+
+  test('a labelled turn is reviewed on the governed client; an unlabelled one on the bare client', async () => {
+    const governed: string[][] = [];
+    const bare = saying(JSON.stringify(NOTE));
+    const review = (labels: string[] | undefined) => reviewRecordedTurn({
+      snapshot: snapshot(labels === undefined ? {} : { missionLabels: labels }),
+      llm: bare,
+      govern: (llm, asked) => { governed.push([...asked]); return llm; },
+      gateOpen: false,
+      deliver: async () => 'queued',
+      record: () => {},
+    });
+    expect(await review(['audit'])).toBe('deliver');
+    expect(await review(undefined)).toBe('deliver');
+    expect(await review([])).toBe('deliver');
+    expect(governed).toEqual([['audit']]);
+  });
+
+  test('the gate travels with the caller: open, the note is recorded and not spoken', async () => {
+    const delivered: AgentSignal[] = [];
+    const recorded: AdvisorNote[] = [];
+    const disposition = await reviewRecordedTurn({
+      snapshot: snapshot(),
+      llm: saying(JSON.stringify(NOTE)),
+      govern: (llm) => llm,
+      gateOpen: true,
+      deliver: async (signal) => { delivered.push(signal); return 'queued'; },
+      record: (note) => { recorded.push(note); },
+    });
+    expect(disposition).toBe('changelog');
+    expect(delivered).toEqual([]);
+    expect(recorded).toEqual([NOTE]);
+  });
+
+  test('a reviewer that throws is a turn with no advice, never a failed lane', async () => {
+    const throwing: LLM = { async *stream() { yield ''; }, complete: async () => { throw new Error('provider down'); } };
+    expect(await reviewRecordedTurn({
+      snapshot: snapshot(), llm: throwing, govern: (llm) => llm, gateOpen: false,
+      deliver: async () => 'queued', record: () => {},
+    })).toBeNull();
+    expect(await reviewRecordedTurn({
+      snapshot: snapshot(), llm: undefined, govern: (llm) => llm, gateOpen: false,
+      deliver: async () => 'queued', record: () => {},
+    })).toBeNull();
+  });
+
 });

@@ -96,8 +96,8 @@ import {
   normalizeUsage,
   persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
-  runAdvisorLane, AdvisorRecoverySnapshotSchema, type AdvisorRecoverySnapshot,
-  effectAlreadyDone, recordEffectDone,
+  AdvisorRecoverySnapshotSchema, type AdvisorRecoverySnapshot,
+  ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor,
   type JsonObject,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
@@ -422,15 +422,6 @@ const RecordedRosterSchema: v.GenericSchema<OwedEffect[]> = v.array(v.object({
   input: JsonValueSchema,
   lane: v.union([v.literal('inline'), v.literal('detached')]),
 }));
-
-/** The advisor lane's durable fiber name — the same name the Durable Object's
- *  fiber recovery dispatches on, because it is the same lane. */
-const ADVISOR_LANE_FIBER = 'advisor.review';
-
-/** The tombstone scope one turn's advisor lane is recorded under. It marks the
- *  lane RECOVERABLE, not finished: from the checkpoint on, a second lane beside
- *  it would be a duplicate review. */
-const ADVISOR_LANE_SCOPE = 'advisor_lane';
 
 /**
  * The advisor's recorded input on THIS backend: core's whole recovery snapshot,
@@ -4047,12 +4038,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private async reviewTurnInBackground(recorded: RecordedAdvisor): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return;
-
-    const laneKey = recorded.turn.turnId === undefined || recorded.turn.turnId === ''
-      ? null
-      : recorded.turn.turnId;
-
-    if (laneKey !== null && effectAlreadyDone(this.rt.storage.sql, this.rt.actor, ADVISOR_LANE_SCOPE, laneKey)) return;
+    if (advisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn)) return;
     const checkpointed = Promise.withResolvers<void>();
 
     const review = this.trackFiber(ADVISOR_LANE_FIBER, async (ctx) => {
@@ -4074,8 +4060,7 @@ export class LocalAgentSession implements BackendHost {
         checkpointed.reject(failure);
         throw failure;
       }
-
-      if (laneKey !== null) recordEffectDone(this.rt.storage.sql, this.rt.actor, ADVISOR_LANE_SCOPE, laneKey);
+      markAdvisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn);
       checkpointed.resolve();
       await this.runAdvisorReview(recorded);
     });
@@ -4118,28 +4103,14 @@ export class LocalAgentSession implements BackendHost {
    * Never throws: a reviewer that failed is a turn with no advice.
    */
   private async runAdvisorReview(recorded: RecordedAdvisor): Promise<void> {
-    const llm = this.rt.advisorLlm;
-
-    if (llm === undefined) return;
-    const labels = recorded.turn.missionLabels ?? [];
-
-    try {
-      await runAdvisorLane({
-        turn: recorded.turn,
-        llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
-        enabled: true,
-        minSeverity: recorded.minSeverity,
-        recent: recorded.recent,
-        gateOpen: recorded.gateOpen,
-        reachable: recorded.reachable,
-        deliver: (signal) => this.actorSession.orchestrator.signals.deliver(signal),
-        record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
-      });
-    } catch (cause) {
-      diagnostics.failure('advisor.review_failed', toKinuError({
-        doing: 'reviewing the completed turn', cause, otherwise: 'unavailable',
-      }));
-    }
+    await reviewRecordedTurn({
+      snapshot: recorded,
+      llm: this.rt.advisorLlm,
+      govern: (llm, labels) => this.budget.govern(llm, labels),
+      gateOpen: recorded.gateOpen,
+      deliver: (signal) => this.actorSession.orchestrator.signals.deliver(signal),
+      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
+    });
   }
 
   /** Passthrough SkillsVfs adapter over rt.storage.vfs (core turn-surface). */
