@@ -30,7 +30,7 @@ import type {
 import type { FanInParent } from './fanin';
 import type { ResolvedVerifier } from './verifier-registry';
 import type { SerializedMessage } from '../heads/types';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import type { Expansion, TreeNode } from './swarm-tree';
 import type { ModelCallSink } from '../events/model-call';
 

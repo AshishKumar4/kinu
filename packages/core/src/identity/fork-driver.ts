@@ -19,7 +19,7 @@
 import { workspaceAddressRefusal, workspaceSlug } from './naming';
 import { forkPointExists } from './conversation-store';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from './actor-handle';
 import type { ForkFileSource } from './fork-transfer';
 
 /**

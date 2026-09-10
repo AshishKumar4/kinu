@@ -389,6 +389,10 @@ export class FakeSandbox {
   /** Paths the box's own `mountBucket` holds mounted, which is what
    *  `/proc/mounts` reports for them. */
   readonly s3fsMounts = new Set<string>();
+  /** The s3fs options each mount was asked for, by path. What the container's
+   *  s3fs runs under is decided entirely by this list: an option absent here
+   *  is s3fs's own default. */
+  readonly s3fsOptionsByMount = new Map<string, readonly string[]>();
   /** While a holder is present an unmount answers with the EBUSY refusal a
    *  real fusermount gives for a mount with open files. Cleared by the
    *  holder-release command the way the real stop clears it by killing the
@@ -907,10 +911,13 @@ export class FakeSandbox {
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
-  async mountBucket(_binding: string, mountPath: string): Promise<void> {
+  async mountBucket(
+    _binding: string, mountPath: string, options?: { readonly s3fsOptions?: readonly string[] },
+  ): Promise<void> {
     this.mountCalls.push(`mount:${mountPath}`);
     this.sequence.push(`mount:${mountPath}`);
     this.s3fsMounts.add(mountPath);
+    this.s3fsOptionsByMount.set(mountPath, options?.s3fsOptions ?? []);
   }
 
   async unmountBucket(mountPath: string): Promise<void> {

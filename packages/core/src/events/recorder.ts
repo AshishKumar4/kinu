@@ -14,7 +14,7 @@
 import * as v from 'valibot';
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import {
   CONTEXT_EDIT_BOUNDARIES, CONTEXT_EDIT_STATUSES, CONTEXT_EDIT_VIA,
   type RunEvent, type RunEventInput, type RunEventType,

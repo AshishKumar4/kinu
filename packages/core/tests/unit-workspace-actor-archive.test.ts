@@ -16,9 +16,9 @@ import { describe, test, expect } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema';
-import { WorkspaceActorDirectory } from '../src/state/workspace-actors';
+import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/identity/archive';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import type { SqlExecutor, SqlValue } from '../src/types/primitives';
 
 interface Workspace {

@@ -5,17 +5,18 @@
   "main": "src/server.ts",
   "scripts": {
     "start": "vite dev --host 0.0.0.0",
-    "//deploy": "This package publishes nothing. Both environments deploy from the repository root — `bun run deploy` and `bun run deploy:staging` run scripts/deploy.sh — which is the only path carrying the required gates, the CLI download asset check and the post-deploy smoke gate. Publishing from here once shipped production with none of the three CLI download assets, and every fresh install died on a checksum mismatch while the site looked fine.",
+    "//deploy": "This package publishes nothing. Both environments deploy from the repository root \u2014 `bun run deploy` and `bun run deploy:staging` run scripts/deploy.sh \u2014 which is the only path carrying the required gates, the CLI download asset check and the post-deploy smoke gate. Publishing from here once shipped production with none of the three CLI download assets, and every fresh install died on a checksum mismatch while the site looked fine.",
     "smoke:workspace": "bun scripts/smoke-workspace.ts",
     "types": "wrangler types env.d.ts --include-runtime false"
   },
   "dependencies": {
+    "@agent-core/core": "workspace:*",
     "@ai-sdk/anthropic": "3.0.89",
     "@ai-sdk/openai": "3.0.77",
     "@ai-sdk/openai-compatible": "2.0.54",
-    "@cloudflare/containers": "0.3.7",
     "@cloudflare/ai-chat": "^0.10.1",
     "@cloudflare/codemode": "^0.5.1",
+    "@cloudflare/containers": "0.3.7",
     "@cloudflare/kumo": "^1.18.0",
     "@cloudflare/sandbox": "0.12.8",
     "@cloudflare/think": "^0.15.1",
@@ -25,6 +26,7 @@
     "@kinu.run/devbox": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@nimbus-sh/core": "0.6.0",
+    "@nimbus-sh/fabric": "0.2.0",
     "@nimbus-sh/sdk": "0.3.1",
     "@nimbus-sh/worker": "0.4.0",
     "@phosphor-icons/react": "^2.1.10",
@@ -51,19 +53,26 @@
     "zod": "^4.3.6"
   },
   "devDependencies": {
-    "@kinu.run/test-utils": "workspace:*",
+    "@ai-sdk/provider": "3.0.12",
     "@cloudflare/vite-plugin": "^1.53.1",
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^4.20260414.1",
+    "@kinu.run/test-utils": "workspace:*",
     "@rolldown/plugin-babel": "^0.2.3",
     "@tailwindcss/vite": "^4",
     "@types/d3": "^7.4.3",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "esbuild": "^0.28.1",
+    "miniflare": "^5.20260903.0-alpha",
+    "oxc-parser": "0.143.0",
+    "postcss": "8.5.28",
     "tailwindcss": "^4.2.2",
     "typescript": "7.0.2",
     "vite": "^8.0.8",
+    "vitest": "^4.1.11",
+    "workerd": "^1.20260903.1",
     "wrangler": "^4.125.0"
   }
 }

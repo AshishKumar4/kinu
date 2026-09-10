@@ -12,7 +12,7 @@
  */
 
 import type { SqlExecutor, VFS } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { getCurrentScaffoldVersion } from './shadow';
 
 export interface ScaffoldSurfaceOpts {

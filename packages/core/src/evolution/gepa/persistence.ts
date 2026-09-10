@@ -34,7 +34,7 @@
 
 import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../../types/primitives';
-import type { ActorHandle } from '../../state/actor-handle';
+import type { ActorHandle } from '../../identity/actor-handle';
 import { nanoid } from '../../utils/nanoid';
 import { nowMs } from '../../utils/date';
 import {

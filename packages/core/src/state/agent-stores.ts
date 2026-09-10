@@ -22,7 +22,7 @@
 
 import type { SqlExecutor } from '../types/primitives';
 import type { AgentConfigStore } from '../config/store';
-import type { ActorHandle } from './actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { createFactsStore, type FactsStore } from '../memory/facts';
 import { TaskListStore } from '../tasks/store';
 import { HeadJournal } from '../heads/journal';

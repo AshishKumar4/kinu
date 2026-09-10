@@ -34,7 +34,7 @@ import { HeadJournal } from '../heads/journal';
 import { readSearchTree } from './search-tree';
 import { runName } from './fork-runs';
 import type { Page, PageRequest } from './page';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 /** Which store recorded this node, and therefore how much there is to show. */
 export type NodeTranscriptOrigin = 'head' | 'rollout';

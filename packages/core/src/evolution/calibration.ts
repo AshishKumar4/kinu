@@ -36,7 +36,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { formatScoreInterval, seededRandom } from '../utils/stats';
 import {
   goldLabels, isNegativeOutcome, recordOutcomeLabels, TURN_OUTCOMES,

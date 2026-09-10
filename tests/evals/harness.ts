@@ -69,7 +69,7 @@ import {
   createDefaultWebSearchProvider, createWebCodemodeProvider,
 } from '../../packages/core/src/web/index';
 import { createWorkspace } from '../../packages/core/src/identity/index';
-import { openWorkspaceMainActor } from '../../packages/core/src/state/workspace-actors';
+import { openWorkspaceMainActor } from '../../packages/core/src/identity/workspace-actors';
 import { LocalAgentSession, type SessionEvent } from '../../packages/cli-backend/src/local-session';
 import { openWorkspaceCLI } from '../../packages/cli-backend/src/open';
 import {

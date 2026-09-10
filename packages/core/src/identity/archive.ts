@@ -812,7 +812,7 @@ export async function restoreWorkspaceArchive(
  * back out of the directory this restore has just landed.
  *
  * `kind = 'main'` is unique per workspace by schema — `workspace_actors` carries
- * a partial unique index on it (`state/workspace-actors.ts`) — so this is
+ * a partial unique index on it (`identity/workspace-actors.ts`) — so this is
  * exactly one row or none. None means an archive that carries a chat pane but
  * no actor directory to file it under, which cannot be attributed at all.
  *

@@ -33,7 +33,7 @@ import { combineAbortSignals } from '@kinu.run/agent-utils';
 import { DEVICE_REQUEST_OPTION, SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from './threshold';
 import { DeviceRequestOwnership } from './device-ownership';
 import type { BackgroundJobRunner } from './runner';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { decodeJsonValue, type JsonValue } from '../utils/json';
 
 /** How a backgroundable tool's work detaches: racing the threshold for a

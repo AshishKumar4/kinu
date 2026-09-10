@@ -21,7 +21,7 @@
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 /**
  * A search's dispatch parameters. `budget` is the expansion budget it was given;

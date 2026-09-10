@@ -5,7 +5,7 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { makeSql, createTestActor, createTestWorkspace } from './helpers';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import {
   initAlternateTakesTable, captureAlternateTakes, claimAlternateTakesForTurn,
   purgeUnclaimedAlternateTakes,

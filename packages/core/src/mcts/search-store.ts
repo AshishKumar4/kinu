@@ -27,9 +27,9 @@
 import { modelMessageSchema, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { MCTSConfig } from '../types/mcts';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { validateSwarmProfileSnapshot, type SwarmProfileSnapshot } from '../profiles';
 
 /** The serializable knobs of an MCTSConfig — everything a resumed loop needs,

@@ -8,7 +8,7 @@ Two files this page names live in the workspace filesystem, not in this reposito
 
 The other three timescales are conversational: the next user message grades a turn, five turns close a window, five windows close a lifetime.
 
-A headless actor runs the step clock and nothing above it, because `runHeadInference` (`core/src/heads/head-inference.ts`) records none of its turns into the window, and the CLI declares a task-lifetime hire the same way (`cli-backend/src/agent-host/host.ts`). A swarm's verifier score is consumed by the search under the root's actor (`core/src/strategy/swarm-scoring.ts`) and is never written as a lesson.
+A headless actor runs the step clock and nothing above it. `runHeadInference` (`core/src/heads/head-inference.ts`) records none of its turns into the window, and the CLI declares every hosted child `noAutoEvolve` (`cli-backend/src/agent-host/host.ts`). A hired agent learns at the step clock on both backends; only the workspace agent that owns the conversation reviews turns, closes windows and evolves its scaffold.
 
 The step clock fires on every settled `execute_tools` call, read off the tool-result hook. The hook carries the call's own args, so the code graded is the code that ran. Creation is credited only to a call that itself invoked `workspace.createTool`. Invocation means call sites in the submitted code: `tools.<name>(`, the one namespace a crafted tool is callable in. Strings and comments are blanked first, so a tool body passed to `createTool` is not read as a call.
 

@@ -69,7 +69,7 @@ import type { HeadStep } from '../heads/types';
 import { initSearchTables } from '../mcts/schemas';
 import { initMctsSearchTable, MctsSearchStore } from '../mcts/search-store';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
 import type {
   FloorBreach, MeasuredValue, ParetoAxis, ParetoEvidence, PublicationState,

@@ -27,7 +27,7 @@ import { TurnFileLedger } from '../src/tools/file-ledger';
 import { TurnContextBudget } from '../src/context-budget';
 import type { ActorContextStores, ChildContextResolver, ContextFileHeader } from '../src/vfs/context-plane';
 import type { VFS } from '../src/types/primitives';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import type { JsonValue } from '../src/utils/json';
 
 const PROGRAM = { kind: 'builtin' as const, version: 0, digest: null, build: null };

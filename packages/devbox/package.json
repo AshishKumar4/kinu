@@ -24,6 +24,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^4.20260414.1",
+    "miniflare": "^5.20260903.0-alpha",
     "vitest": "^4.1.11"
   }
 }

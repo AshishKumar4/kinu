@@ -196,6 +196,13 @@ export function validateMcpServerInput<Input>(input: Input): McpServerInput {
   if (!isHttps && !isLocalDev) {
     throw new Error('`serverUrl` must use https:// (http:// allowed only for localhost).');
   }
+  // A credential belongs in `headers`, which is sealed at rest. `serverUrl` is
+  // a plaintext column that every listing returns, and a Workers `fetch` refuses
+  // a URL carrying credentials anyway, so a userinfo here is a secret stored in
+  // the clear for a connection that could never open.
+  if (parsed.username !== '' || parsed.password !== '') {
+    throw new Error('`serverUrl` must not carry a username or password — put credentials in `headers`.');
+  }
 
   const parsedTransport = v.safeParse(v.nullish(McpTransportSchema), obj.transport);
   if (!parsedTransport.success) {

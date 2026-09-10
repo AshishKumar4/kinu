@@ -31,7 +31,7 @@
 
 import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { CraftStore } from '../types/agent-runtime';
 import type { FactsStore } from '../memory/facts';
 import { diagnostics, toKinuError, tolerate } from '../obs/index';

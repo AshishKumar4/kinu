@@ -33,7 +33,7 @@ import { RunEventRecorder, parseStoredRunEvent } from '../src/events/recorder';
 import { codemodeCapabilitiesFor, narrowToolSurface, TOOL_REACH } from '../src/tools/registry';
 import { inWorkMode, providersInWorkMode } from '../src/execution/work-mode';
 import { archiveSqlFromDatabase, restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/index';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 import type { RunEvent } from '../src/events/types';
 import type { SqlExec, SqlExecutor, SqlValue } from '../src/types/primitives';
 

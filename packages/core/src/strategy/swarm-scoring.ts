@@ -19,7 +19,7 @@ import {
 } from './objective';
 import type { ResolvedVerifier } from './verifier-registry';
 import type { AgentRuntime } from '../types/agent-runtime';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 
 import type { Logger } from '../obs/index';
 import type { SqlExecutor } from '../types/primitives';

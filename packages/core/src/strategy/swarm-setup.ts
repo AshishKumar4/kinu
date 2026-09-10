@@ -41,7 +41,7 @@ import {
 import { measuredHalf, normalisedScore, paretoObjectiveAxes, PUBLISHING_CARRIES } from './objective';
 import { argumentDigest } from '../safety/argument-digest';
 import { workModeRefusal } from '../execution/work-mode';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 
 import type { ModelCallSink } from '../events/model-call';
 import type { WebSearchProvider } from '../web/index';
@@ -60,7 +60,7 @@ import { insertSearchNode } from '../mcts/record-node';
 import { reenterSwarm, type SwarmReentry } from './swarm-resume';
 import type { SwarmProfileSnapshot } from '../profiles';
 import { readArtifact, type TreeNode } from './swarm-tree';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type {
   ExplorationRecord, MeasuredObjective, ObjectiveIdentity, PublishingCarry,
 } from './objective';

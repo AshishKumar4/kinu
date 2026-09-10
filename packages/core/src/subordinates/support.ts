@@ -16,7 +16,7 @@ import type { EventLog, PublishResult } from '../events/hub/log';
 import type { SubordinateReportHandoff, SubordinateReportStatus } from '../events/hub/types';
 import type { SerializedMessage } from '../heads/types';
 import type { SqlExec } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import {
   DELEGATION_MAX_DEPTH,
   delegationBudgetAtDepth,
@@ -24,10 +24,10 @@ import {
 } from './depth';
 import type { AgentIdentity } from '../vfs/agent-home';
 import { SubordinateRosterStore } from './roster';
-import { requireSubordinateActorName } from '../state/actor-key';
-import type { ActorReference } from '../state/actor-handle';
+import { requireSubordinateActorName } from '../identity/actor-key';
+import type { ActorReference } from '../identity/actor-handle';
 import { finishSubordinateBirth, type SubordinateBirth, type SubordinateSeed } from './birth';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import type { AgentConfigStore } from '../config/store';
 import type { RoleId, TierId } from '../profiles/catalog';
 import type {

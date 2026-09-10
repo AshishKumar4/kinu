@@ -25,7 +25,7 @@ import { ConversationSearchStore } from '../src/memory/conversation-search';
 import {
   createTestActor, createTestWorkspace, makeSql, makeExecRaw, SDK_SESSION_DDL, type TestWorkspace,
 } from './helpers';
-import type { ActorHandle } from '../src/state/actor-handle';
+import type { ActorHandle } from '../src/identity/actor-handle';
 
 /**
  * A workspace fixture and the actor its transcript belongs to.

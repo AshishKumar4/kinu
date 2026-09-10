@@ -1,7 +1,7 @@
 import * as v from 'valibot';
 import type { Refusal } from '../obs/index';
 import { JsonValueSchema, type JsonValue } from '../utils/json';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { requireWorkModePermission } from '../execution/work-mode';
 
 const METHOD_RE = /^[a-zA-Z][a-zA-Z0-9_]{0,63}$/;

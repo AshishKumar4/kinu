@@ -47,7 +47,7 @@
 
 import type { DynamicApproval } from '../prompting/volatile-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { SignalDeliverer } from '../types/signals';
 import type { ApprovalConsumedRecord } from '../events/types';
 import * as v from 'valibot';

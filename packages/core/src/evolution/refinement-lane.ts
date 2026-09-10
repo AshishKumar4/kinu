@@ -57,7 +57,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import { renderThrownChain, tolerate } from '../obs/index';
 import type { TemporaryRunRequest } from '../subordinates/temporary';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 
 export interface RequestRefinementInput {

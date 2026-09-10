@@ -74,7 +74,7 @@
 import { admitsPublication, type ExplorationRecord, type PublicationState } from './objective';
 import { cellOccupants, recordExploration, type ExplorationWrite, type RecordVerdict } from './records';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 
 /**
  * The cell a candidate belongs to, or the fact that its instrument witnessed none.

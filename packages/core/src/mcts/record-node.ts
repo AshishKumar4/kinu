@@ -8,7 +8,7 @@
  */
 
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import type { EvaluationGrounding } from '../types/evaluation';
 import { nanoid } from '../utils/nanoid';
 

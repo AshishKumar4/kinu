@@ -2,7 +2,7 @@ import type { ModelMessage } from 'ai';
 import { INTERRUPTED_TURN, type ChatEvent, type ChatOptions } from '../chat';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { ResolvedTurnProfile, ProfileAuthorityInputs } from '../profiles';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context';
 import type { KinuExtension } from '../extension';
 import { ExtensionHost } from '../extension';

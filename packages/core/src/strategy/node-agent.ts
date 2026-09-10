@@ -85,7 +85,7 @@ import type { HeadJournal } from '../heads/journal';
 import type { MissionScope } from '../mission-budget';
 import type { AgentRuntime } from '../types/agent-runtime';
 import type { WebSearchProvider } from '../web/index';
-import type { WorkMode } from '../prompting/surface';
+import type { WorkMode } from '../types/turn';
 import type { ModelCallSink } from '../events/model-call';
 import type { BuiltinToolName } from '../tools/registry';
 import { defaultLoopOrigin } from '../scaffold/loop-origin';

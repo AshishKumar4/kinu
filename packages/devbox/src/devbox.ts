@@ -208,6 +208,24 @@ const CHAIN_SEED_STAMP_PATH = `${DEVBOX_RUNTIME_DIR}/upper.seed-stamp`;
  *  whole signal. A file that survived would prove nothing. */
 const BOOT_ID_PATH = '/tmp/devbox-boot-id';
 
+/**
+ * The s3fs bounds every store mount runs under.
+ *
+ * s3fs's own defaults wait 300 s to connect, 120 s of silence per request and
+ * retry five times with backoff — for a mount whose every request is a hop to
+ * the platform's egress interception, not a WAN. A restoration that is bounded
+ * to `attachBudgetMs` abandons its attach at 25 s, and a mount still holding a
+ * dead connection for minutes past that is exactly the work a retry then has
+ * to run beside. A connect that has not landed in ten seconds is not going to,
+ * and thirty seconds of silence on a 5 MiB part is a dead connection rather
+ * than a slow one. `multireq_max` keeps s3fs's own bound of twenty.
+ */
+const STORE_MOUNT_S3FS_OPTIONS: readonly string[] = [
+  'connect_timeout=10',
+  'readwrite_timeout=30',
+  'retries=3',
+];
+
 /** Interaction stamps are throttled to this. Every call already renews the
  *  SDK's own in-memory timer; the durable copy only has to be good enough to
  *  survive an eviction, and one write per call would be a write per call. */
@@ -3410,6 +3428,7 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
         await this.mountBucket(store.binding, at, {
           prefix: `/${chainStoreRoot(this.#boxPrefix())}`,
           readOnly: false,
+          s3fsOptions: [...STORE_MOUNT_S3FS_OPTIONS],
         });
       },
       unmountStore: async (at) => {

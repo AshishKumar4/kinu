@@ -9,7 +9,7 @@ import type { Memory, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
 import type { FactsStore } from '../memory/facts';
 import type { VectorStore } from '../memory/vector-store';
-import type { ActorHandle } from '../state/actor-handle';
+import type { ActorHandle } from '../identity/actor-handle';
 import { appendMemoryNote } from '../memory/note';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search';
 import { ConversationSearchStore } from '../memory/conversation-search';

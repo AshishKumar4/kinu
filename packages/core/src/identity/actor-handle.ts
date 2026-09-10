@@ -1,6 +1,6 @@
 import * as v from 'valibot';
 import { createAgentConfigStore, type AgentConfigStore } from '../config/store';
-import { createProgramStateStore, type ProgramStateStore } from '../tools/state-codemode';
+import { createProgramStateStore, type ProgramStateStore } from './program-state';
 import type { SqlExecutor } from '../types/primitives';
 
 export const ActorReferenceSchema = v.strictObject({

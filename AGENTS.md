@@ -288,7 +288,7 @@ bench/clbench/  Kinu as a system for the external Continual Learning Bench
 ### cf-backend Architecture
 
 - `OrchestratorAgent extends ActorAgent` — chat, built-in tools, evolution hooks
-- `SubordinateAgent extends ActorAgent` — the one facet class, and the seed decides its mode (`FacetKind`): a hired subordinate sharing workspace files with actor-private shell/scaffold state, a tool-using head, a swarm node's host, or a toolless MCTS branch. `ActorAgent.facetClass()` names it; heads, nodes and branches register under `exp:`-keyed facet addresses (`facet-spawn.ts`)
+- Every non-root kind — a hired subordinate, an exploration head, a swarm node, a toolless branch — is a LOGICAL ACTOR of the one workspace Durable Object, not a facet: one database, one identity row per actor (`actor-hosting.ts`, cutover `f9c0b3847`). `OrchestratorAgent` hosts them through `hostedSubordinateRuntime` (`subordinate-hosting.ts`) and `hostHead` / `hostNodeSeat` / `hostBranch` (`exploration-hosting.ts`); a subordinate, a head and a node run `runHeadInference` and record no turn into the evolution window, by decision
 - `runtime.ts` — `createCFRuntime()` bridges Think DO context to `AgentRuntime`
 - `wrangler.jsonc` — DO bindings, worker_loaders, AI Gateway, SPA assets
 - `ControlPlaneDO` — the singleton admin index, feedback queue and audit log
@@ -320,10 +320,11 @@ OrchestratorAgent Durable Object that owns a hosted workspace, a `bun:sqlite`
 file on the CLI. ONE Durable Object per workspace: the filesystem tables sit
 beside the conversation, the ledgers and the memory index that reads those same
 files, so bytes and index commit together and a SQL-only snapshot of the object
-is the whole workspace. A facet (subordinate, exploration head, swarm node) has
-its own SQLite for its own ledgers and shares the workspace over one RPC into
-that object (`OrchestratorAgent.workspaceBoxOp`). It never keeps a filesystem of its
-own, which would be a second, empty workspace. A slate server runs as a resident
+is the whole workspace. A non-root actor (subordinate, exploration head, swarm
+node) lives in that same database: its ledgers are rows keyed by its `actor_id`
+(`workspace_actors`, `core/src/identity/workspace-actors.ts`), and it reads the
+one file plane in process. It never keeps a filesystem of its own, which would
+be a second, empty workspace. A slate server runs as a resident
 process of the workspace object: `cf-backend/src/slates/resident.ts` compiles the
 authored TypeScript entry from `package.json` and boots it through the fabric's
 process API. Its source and versions live in the workspace's durable stores;
@@ -405,7 +406,7 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - Every log carries a stable dotted event name (`capability.read_failed`). That is what makes a failure greppable across Workers Logs and the CLI journal
 - Enforced mechanically by the `no-empty-catch`, `no-sentinel-catch`, `require-cause-on-rethrow` and `no-ddl-in-catch` anti-slop rules. Never add an `oxlint-disable` to pass one
 - `classifyErrorCode` answers `null` when nothing pinned recognises a failure, and `toKinuError` therefore REQUIRES an `otherwise` from its caller. An unknowable cause is a value, never a guessed code: `Worker exceeded resource limits` is what the client sees for BOTH an isolate memory kill and a CPU-time kill, so it is not in the OOM matcher
-- The `Observability`/`Tracer` seam is wired at the boundaries that call `this.tracing.invocation`. Grep for that call when you need the current set, and do not restate the set or its size here: a count in this file is a claim nothing re-runs, and this bullet has already carried a wrong one in both directions. `InvocationKind` is declared in `obs/agent-tracing.ts`, and which of its values a boundary passes is read at that call site. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
+- The `Observability`/`Tracer` seam is wired at the boundaries that call `this.tracing.invocation`. Grep for that call when you need the current set, and do not restate the set or its size here: a count in this file is a claim nothing re-runs, and this bullet has already carried a wrong one in both directions. `InvocationKind` is declared in `obs/agent-tracing.ts`, and which of its values a boundary passes is read at that call site. The handle comes from the `tracing` getter on `ActorAgent`, which builds `createAgentTracing({tracer: createWorkersTracer(), isolateGen, selfPath})` once per construction; `createWorkersTracer` (`obs/cf-tracer.ts`) goes through `cloudflare:workers`' `tracing.enterSpan`, the only entry point available at our pin. `selfPath` rather than `ctx.id` because two facets (the pre-`f9c0b3847` design) with distinct ids both reported under the ROOT's `durableObjectId` on the deployed runtime, so an id-keyed trace collapses every head and node into one orchestrator. Spans are always scoped, and trace context does not survive a hibernation wake or a cold start. Across `alarm()` it is not merely absent but ENFORCED absent: `tracing.invocation` revokes the handle when the method's promise settles, so a span opened from anything that escaped the tick throws
 - The full contract, its status table and the unconverted boundary: [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)
 
 ## CF Backend Specifics
@@ -432,7 +433,7 @@ No `catch` may discard its error. `catch {}`, `catch { return null }` and `catch
 - `beforeTurn()` resets per-turn state counters
 - `configureSession()` adds memory context + cached prompt
 - `@callable()` methods for RPC from React UI via `agent.call()`
-- `SubordinateAgent` serves the exploration `@callable()`s beside the subordinate ones (`initHead`/`runAsHead`/`abortHead`, `initNode`/`runAsNode`, `explore`/`generateReflection`); a branch is toolless, while a head or node shares the canonical file plane with a shell and scaffold keyed by its own id. The RPC seal narrows an instance to the family its seed decides (`rpc-surface.ts`)
+- The exploration and subordinate `@callable()`s live on `OrchestratorAgent`; a branch is toolless, while a head or node shares the canonical file plane with a shell and scaffold keyed by its own actor id. The RPC seal (`rpc-surface.ts`) bounds what a stub-holder can reach
 
 ## Architecture Invariants
 

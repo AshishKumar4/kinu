@@ -34,6 +34,7 @@
  */
 
 import * as v from 'valibot';
+import { WorkModeSchema } from '../../types/turn';
 import {
   SUBORDINATE_REPORT_STATUSES,
   type AgentLogRow, type EventId, type EventVariant, type IngressDescriptor,
@@ -41,7 +42,7 @@ import {
   type Priority, type KinuEvent, type RevisitCondition,
   type TraceId, type TurnId,
 } from './types';
-import type { ActorHandle } from '../../state/actor-handle';
+import type { ActorHandle } from '../../identity/actor-handle';
 import { dedupeKeyForDescriptor } from './dedupe';
 import { wakesADrain } from './drain';
 import { deriveFields } from './trust';
@@ -164,7 +165,6 @@ const PayloadPolicySchema = v.picklist(['full', 'redact', 'hash', 'hmac', 'opaqu
 const AgentLogKindSchema = v.picklist([
   'event', 'phase', 'step', 'tool_call', 'tool_result', 'reactor_decision', 'reply_attempt',
 ]);
-const WorkModeSchema = v.picklist(['plan', 'build']);
 const NullableString = v.nullable(v.string());
 const NullableNumber = v.nullable(v.number());
 const IdRowSchema = v.object({ id: v.string() });
