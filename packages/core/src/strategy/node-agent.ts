@@ -53,7 +53,7 @@ import type { HeadInferenceDeps } from '../heads/head-inference';
 import type { HostedActor } from '../state/actor-host';
 import type { ProfileAuthorityInputs, ResolvedTurnProfile } from '../profiles';
 import type { DynamicContext } from '../prompting/volatile-context';
-import { buildToolSurface } from '../tools/builtins';
+import { buildToolSurface, type ReportToolDeps } from '../tools/builtins';
 import { AgentWakeQueue } from '../jobs/wake-queue';
 import { permitInPlan } from '../execution/work-mode';
 import { BackgroundJobRunner } from '../jobs/runner';
@@ -523,6 +523,37 @@ function buildNodeToolSet(input: {
   readonly mode: WorkMode;
 }): ToolSet {
   const { deps, scratch } = input;
+  // NAMED and ANNOTATED rather than written inline below, because this is the
+  // one destination in the tree that declares `bodyOnly`: an unannotated
+  // nested literal is a construction site nothing can attribute, and a field
+  // supplied only there reads as supplied nowhere.
+  const report: ReportToolDeps = {
+    // THE PROSE BODY IS THE WHOLE OF WHAT THIS DESTINATION READS. A node is
+    // measured on the candidate `candidateOf` extracts from `content`; there
+    // is no parent conversation here to weigh a concern and no journal field
+    // to keep one in. Declaring the handoff fields anyway would offer the
+    // node four slots whose contents reach nobody.
+    bodyOnly: true,
+    report: async ({ status, content }): Promise<JsonValue> => {
+      // THE INSTRUMENT RUNS HERE, BEFORE THE REPORT LANDS. The candidate is read out
+      // of the content through {@link candidateOf} — the same function the engine
+      // reads it with at the barrier, so the text the gate measures and the text the
+      // search measures cannot be two different things.
+      const errors = await deps.gradeReport?.(
+        candidateOf(content.trim(), deps.actor.runtime.executor.languages),
+      );
+      if (errors !== undefined && errors !== null) {
+        // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
+        // loop's terminal condition is a report having landed, so a refused one
+        // leaves the node running with the instrument's own words as its next
+        // instruction. Returned rather than thrown — a tool's refusal is its return
+        // value, the same shape the proposal tool answers an arbiter's denial with.
+        return { accepted: false, errors };
+      }
+      scratch.reported = { status, content };
+      return { received: true };
+    },
+  };
   // The proposal merges after the finish, so the sandbox never declares it;
   // the background wrap runs inside the capture, so the transcript records
   // the handle the model was told rather than a result it never saw.
@@ -530,27 +561,7 @@ function buildNodeToolSet(input: {
     rt: deps.actor.runtime,
     workMode: input.mode,
     logger: deps.logger,
-    report: {
-      report: async ({ status, content }): Promise<JsonValue> => {
-        // THE INSTRUMENT RUNS HERE, BEFORE THE REPORT LANDS. The candidate is read out
-        // of the content through {@link candidateOf} — the same function the engine
-        // reads it with at the barrier, so the text the gate measures and the text the
-        // search measures cannot be two different things.
-        const errors = await deps.gradeReport?.(
-          candidateOf(content.trim(), deps.actor.runtime.executor.languages),
-        );
-        if (errors !== undefined && errors !== null) {
-          // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
-          // loop's terminal condition is a report having landed, so a refused one
-          // leaves the node running with the instrument's own words as its next
-          // instruction. Returned rather than thrown — a tool's refusal is its return
-          // value, the same shape the proposal tool answers an arbiter's denial with.
-          return { accepted: false, errors };
-        }
-        scratch.reported = { status, content };
-        return { received: true };
-      },
-    },
+    report,
     webSearch: deps.webSearch,
     admitted: NODE_BUILTIN_TOOLS,
     executeTool: deps.executeTool,
