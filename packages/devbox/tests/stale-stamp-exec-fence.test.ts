@@ -66,10 +66,6 @@ describe('a stale attempt\'s stamp exec does not write the successor\'s containe
   test('the container file keeps the successor\'s id, and the rows agree with it', async () => {
     const harnessed = harness(TestBox);
     const { box, container, rows } = harnessed;
-    // IN-GATE, the parked attempt is a delivered one: the hook fails on its
-    // claim write before any stamp, so the stamp pause below catches the
-    // delivered attempt. The successor restores through its own hook.
-    harnessed.storage.faultOn('devbox:attach-recovery', new Error('hook claim refused'));
     const parked = gate();
     container.stampGate = parked;
     const stale = box.devboxStartup();
@@ -102,26 +98,11 @@ describe('a stale attempt\'s stamp exec does not write the successor\'s containe
     // have been issued, and the file is wrong for the whole gap between them.
     const harnessed = harness(TestBox);
     const { box, container, rows, storage } = harnessed;
-    // The hook is forced through an observed pause at its claim read, so its
-    // fate is not inferred: released, its next act is the faulted claim write
-    // and it parks before any container work. The second pause then catches
-    // the delivered attempt at its claim, and — released past a BOOT pause
-    // armed only for it — at the stamp's durable read. Each pause can catch
-    // only the attempt it names: the hook reads the ladder once and the
-    // delivered attempt reads the boot row next at its stamp.
-    harnessed.storage.faultOn('devbox:attach-recovery', new Error('hook claim refused'));
-    const hooking = gate();
-    storage.gateOn('devbox:attach-recovery', hooking);
-    const stale = box.devboxStartup();
-    await hooking.reached;
-    const claiming = gate();
-    storage.gateOn('devbox:attach-recovery', claiming);
-    hooking.release();
-    await claiming.reached;
     const reading = gate();
     storage.gateOn(BOOT_ID_KEY, reading);
-    claiming.release();
+    const stale = box.devboxStartup();
     await reading.reached;
+
     await container.stop();
     await box.devboxStartup();
     const durable = v.parse(StampedBootIdSchema, rows.get(BOOT_ID_KEY));

@@ -1221,11 +1221,11 @@ export class FakeSandbox {
     if (!wasRunning) this.containerStarts += 1;
       // THE INIT GATE, modelled where the SDK really opens it. `container.js`
       // runs this hook inside `ctx.blockConcurrencyWhile`, so for as long as it
-      // is held the runtime delivers NO event to the object — which is the
-      // admission control the restore now relies on. The promise is published so
-      // a test can deliver a request the way the platform does (see
-      // {@link deliver}) instead of calling straight into a method the platform
-      // would still be holding back.
+      // is held the runtime delivers NO event to the object — and no timer
+      // either, which is why the shipped hook reaches no container from here.
+      // The promise is published so a test can deliver a request the way the
+      // platform does (see {@link deliver}) instead of calling straight into a
+      // method the platform would still be holding back.
       // OPENED WHEN THE HOOK SETTLES, however it settled — a rejection there is
       // the platform resetting the object, and a request the runtime held back
       // is released either way. So the marker is resolved in the `finally`

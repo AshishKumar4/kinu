@@ -40,25 +40,17 @@ export interface DevboxPolicy {
    * Budget for the WHOLE restoration: attach, workload restart, listener proof,
    * port exposure and boot stamping.
    *
-   * THE NUMBER IS THE INIT GATE'S. The restoration's primary home is the
-   * container-start hook, which the SDK awaits inside `blockConcurrencyWhile`
-   * (`@cloudflare/containers`, `container.js:583,632`), and the platform cancels
-   * that block by RESETTING the object at `do.block_concurrency.cancel_ms`. So
-   * this budget is that ceiling minus a margin — see `KinuSandbox.policy`, which
-   * derives it from the platform catalog rather than retyping it — and holding
-   * to it is what makes the activation complete instead of being cancelled. A
-   * host that raises this budget for delivered frames (the bench fixture does)
-   * still restores inside the gate under the default ceiling: the gate cannot
-   * hold longer than the platform allows, whatever a frame outside it may spend.
-   *
-   * HOW IT IS ENFORCED DIFFERS BY WHERE THE RESTORATION RUNS, and that is the
-   * whole of {@link RestoreSteps}. Inside the gate a timer is not delivered
-   * until the block releases, so the budget is POLLED ({@link polledRestoreSteps}):
-   * it is consulted before each phase and before each container command, and a
-   * spent budget stops the walk with a classified reason. Outside the gate —
-   * the schedule row that continues a restoration the gate could not finish —
-   * the timer delivers normally and the budget also ABANDONS the step it bounds
-   * ({@link racedRestoreSteps}).
+   * THE RESTORATION RUNS ON A DELIVERED FRAME — the `devboxStartup` row or a
+   * readiness request — never inside the container-start hook's
+   * `blockConcurrencyWhile`, where no Durable Object timer is delivered until
+   * the block releases and the platform cancels the block by RESETTING the
+   * object at `do.block_concurrency.cancel_ms`. On a delivered frame the
+   * timer IS delivered, so the budget is RACED ({@link racedRestoreSteps}):
+   * every step runs against its allowance, and a step that outruns one is
+   * ABANDONED with a classified reason. The default still sits below the
+   * platform's cap — see `KinuSandbox.policy`, which derives it from the
+   * platform catalog rather than retyping it — so a request that opened the
+   * restore is not held past what the platform would allow an activation.
    *
    * IT COVERS EVERY PHASE, not just the attach. Wrapping `attach()` alone leaves
    * the phases after it unbounded while every caller waits in the readiness
@@ -85,22 +77,17 @@ export interface DevboxPolicy {
   /** Gap between two listener probes inside that window. */
   readonly portProbeIntervalMs: number;
   /**
-   * How long a CHECKPOINT may be held on a restoration before it answers from
+   * How long a REQUEST may be held on a restoration before it answers from
    * the restoration's state instead of waiting for it.
    *
-   * A request that OPENS a restoration drives it inside the platform gate and
-   * waits it out: nothing else touches the container until the box is restored,
-   * and the wait is bounded by the restoration's own budget, which sits below
-   * the platform's cancel point. A request that arrives while the schedule door
-   * already holds that gate never reaches this question at all — the platform
-   * holds it until the restore settles, so it observes only the restored box.
-   * The checkpoint lane is the one caller that cannot wait: it serialises every
-   * commit, so holding it for a whole restore would stall commits behind an
-   * unrelated recovery. It joins the attempt for this long and then answers "a
-   * restoration is running, ask again", which is a readable, re-askable answer
-   * rather than an open lane. Nothing is abandoned — the attempt keeps running
-   * under the single-flight entry and the next ask joins or reads it — and the
-   * timer IS delivered, because nothing on this path runs inside
+   * A request that OPENS a restoration, or arrives while one runs, joins the
+   * one single-flight attempt for this long and then answers "a restoration
+   * is running, ask again" — a readable, re-askable answer rather than an
+   * open frame. The checkpoint lane is held to the same bound: it serialises
+   * every commit, so holding it for a whole restore would stall commits
+   * behind an unrelated recovery. Nothing is abandoned — the attempt keeps
+   * running under the single-flight entry and the next ask joins or reads it
+   * — and the timer IS delivered, because nothing on this path runs inside
    * `blockConcurrencyWhile`.
    *
    * GENEROUS ON PURPOSE. A cold attach ordinarily settles inside one join and
@@ -292,15 +279,14 @@ async function raceAllowance<T>(
  * taxonomy. Every step AFTER the attach reports instead: see
  * {@link withStepAllowance}.
  *
- * A REAL TIMER, WHICH IS WHY A RESTORE INSIDE THE INIT GATE CANNOT USE IT.
- * A `setTimeout` set inside `blockConcurrencyWhile` is not delivered until the
- * block releases, so this bound cannot fire there. A restore that holds the
- * gate therefore runs under the polled policy below instead: the same budget,
- * consulted before each step, with a spent budget stopping the walk.
- *
- * Detaching the work is not an alternative either: a promise left floating in a
- * Durable Object is cancelled on eviction with its rejection swallowed, so the
- * work would silently not happen.
+ * A REAL TIMER, WHICH IS WHY THE RESTORE RUNS ON A DELIVERED FRAME. A
+ * `setTimeout` set inside `blockConcurrencyWhile` is not delivered until the
+ * block releases, so this bound cannot fire in the container-start hook — and
+ * a budget polled between commands cannot shorten the one command in flight,
+ * which is how the in-gate placement measured out (six fresh starts, one
+ * admitted). Detaching the work is not an alternative either: a promise left
+ * floating in a Durable Object is cancelled on eviction with its rejection
+ * swallowed, so the work would silently not happen.
  *
  * `onOverrun` receives the outcome of the abandoned work if it ever settles.
  * Abandoning a value is not the same as discarding an error, and that late
@@ -325,22 +311,18 @@ async function withContainerStartDeadline<T>(
  * HOW ONE RESTORATION BOUNDS ITS STEPS, as a value the restore is handed.
  *
  * The restore itself is one walk — attach, processes, listeners, exposures,
- * boot stamp — and it runs under one of two policies, chosen by WHERE it runs.
- * Outside the gate the timer is delivered, so {@link racedRestoreSteps} races
- * every step against its allowance and abandons a step that outruns one. Inside
- * the gate no timer fires until the block releases, so
- * {@link polledRestoreSteps} consults the same budget before each step and
- * stops the walk with a classified reason when it is spent.
+ * boot stamp — and {@link racedRestoreSteps} races every step against its
+ * allowance and abandons a step that outruns one.
  *
- * IT IS STILL A VALUE THE WALK IS HANDED rather than calls the walk makes
- * directly, because the two failure policies inside it — the attach throws, the
+ * IT IS A VALUE THE WALK IS HANDED rather than calls the walk makes directly,
+ * because the two failure policies inside it — the attach throws, the
  * post-attach steps report — are the contract the phases are written against,
  * and inlining them would spread that decision over six call sites.
  */
 export interface RestoreSteps {
   /** One post-attach step: a process start, a listener proof, an exposure, the
-   *  boot stamp. Reports rather than throws, in both policies — see
-   *  {@link runRestoreStep} for why none of them may throw. */
+   *  boot stamp. Reports rather than throws — see {@link runRestoreStep} for
+   *  why none of them may throw. */
   run<T>(work: () => Promise<T>, onLate: (failure: LateStartFailure) => void): Promise<StepOutcome<T>>;
   /** The attach: the one step whose failure THROWS, because it is the only one
    *  that is mid-mount when it ends. */
@@ -363,44 +345,6 @@ export function racedRestoreSteps(budget: StartBudget): RestoreSteps {
     run: async (work, onLate) => await runRestoreStep(budget.nextAllowanceMs(), work, onLate),
     attach: async (work, onOverrun) =>
       await withContainerStartDeadline('Devbox.attach', budget, work, onOverrun),
-    declare: (steps) => budget.declare(steps),
-    skip: () => void budget.nextAllowanceMs(),
-    remainingMs: () => budget.remainingMs(),
-  };
-}
-/**
- * The restore's step policy inside the init gate: the same budget, consulted
- * before each step instead of raced with a timer.
- *
- * A `setTimeout` set inside `blockConcurrencyWhile` is not delivered until the
- * block releases, so the raced policy's bound cannot fire there — and a late
- * arm that fired after the release would abandon work the walk already
- * finished. The polled policy therefore never arms a timer at all: a step runs
- * only while the budget still covers it, and a spent budget stops the walk by
- * throwing the same {@link ContainerStartOverrun} the raced attach throws, so
- * both policies classify an overrun identically. The walk's own
- * `remainingMs()` still throttles the in-container counted loops, which is
- * where the bound does its real work inside the gate.
- */
-export function polledRestoreSteps(budget: StartBudget): RestoreSteps {
-  const check = (): void => {
-    if (budget.remainingMs() <= 0) throw new ContainerStartOverrun('Devbox.attach', budget.budgetMs);
-  };
-  return {
-    run: async (work, _onLate) => {
-      void _onLate;
-      check();
-      try {
-        return { kind: 'done', value: await work() };
-      } catch (cause) {
-        return { kind: 'failed', cause };
-      }
-    },
-    attach: async (work, _onOverrun) => {
-      void _onOverrun;
-      check();
-      return await work();
-    },
     declare: (steps) => budget.declare(steps),
     skip: () => void budget.nextAllowanceMs(),
     remainingMs: () => budget.remainingMs(),
@@ -986,15 +930,12 @@ export function healthProbeSilent(output: string): boolean {
  * answers with the LAST probe's output so {@link healthProbeSilent} stays the
  * only reader of that format.
  *
- * THE WAITING HAPPENS IN THE CONTAINER, and that is not an optimisation — it is
- * what makes the listener proof legal inside the init gate at all. A Durable
- * Object loop — probe, `scheduler.wait`, probe again — is wrong in the gate two
- * ways. A timer is not delivered until `blockConcurrencyWhile` releases, so the
- * sleep never returns and the proof wedges the activation the platform then
- * RESETS; and each probe is a separate DO↔container round trip, so a
- * thirty-second window over a two-second interval spends fifteen of them on one
- * port. The container's own `sleep` is not the Durable Object's clock, so the
- * same window costs ONE hop and returns.
+ * THE WAITING HAPPENS IN THE CONTAINER, and that is the shape of the proof,
+ * not an optimisation. A Durable Object loop — probe, `scheduler.wait`, probe
+ * again — pays a DO↔container round trip per probe, so a thirty-second window
+ * over a two-second interval spends fifteen of them on one port, each under
+ * the SDK's own connect and retry timers. The container's own `sleep` is not
+ * the Durable Object's clock, so the same window costs ONE hop and returns.
  *
  * BOUNDED BY A COUNT, in the shape `snapshot-chain`'s own layer probe uses: the
  * loop runs at most `attempts` times, so the command's own duration is at most

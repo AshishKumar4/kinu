@@ -14,6 +14,7 @@
  */
 
 export { Devbox } from './devbox';
+export type { RestoreClockPhase } from './devbox';
 
 export {
   ATTACH_OUTCOME_KINDS,
