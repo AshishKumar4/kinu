@@ -14,6 +14,7 @@ import type { ModelProvider, ModelInfo, ProviderDeps } from './types';
 import { createAuthedFetch } from './util';
 import { listModelsDevProviderModels } from './models-dev';
 import { countAnthropicInputTokens } from './anthropic-count';
+import type { ReasoningEffort } from './reasoning-effort';
 
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
@@ -21,10 +22,22 @@ export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
+/** The `effort` parameter per model, from the effort guide's level table and
+ *  its supported-models list (read 2026-09-10):
+ *  https://platform.claude.com/docs/en/build-with-claude/effort. `xhigh` is
+ *  narrower than `max`, and a model off the supported list takes no effort. */
+const ANTHROPIC_REASONING_EFFORTS = {
+  'claude-opus-4-7':   ['low', 'medium', 'high', 'xhigh', 'max'],
+  'claude-opus-4-6':   ['low', 'medium', 'high', 'max'],
+  'claude-sonnet-4-6': ['low', 'medium', 'high', 'max'],
+  'claude-sonnet-4-5': [],
+  'claude-haiku-4-5':  [],
+} satisfies Record<string, readonly ReasoningEffort[]>;
+
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude Opus 4.7',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'] },
-  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',   capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'] },
-  { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',    capabilities: ['tools', 'streaming', 'vision'], contextWindow: 200_000, inputModalities: ['text', 'image', 'pdf'] },
+  { id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude Opus 4.7',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: ANTHROPIC_REASONING_EFFORTS['claude-opus-4-7'] },
+  { id: 'claude-sonnet-4-6', label: 'Claude Sonnet 4.6',   capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: ANTHROPIC_REASONING_EFFORTS['claude-sonnet-4-6'] },
+  { id: 'claude-haiku-4-5',  label: 'Claude Haiku 4.5',    capabilities: ['tools', 'streaming', 'vision'], contextWindow: 200_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: ANTHROPIC_REASONING_EFFORTS['claude-haiku-4-5'] },
 ];
 
 const PREFERRED_MODEL_IDS = [
@@ -46,6 +59,7 @@ export function createAnthropicProvider(): ModelProvider {
     listModels: (deps) => listModelsDevProviderModels('anthropic', deps, {
       fallback: FALLBACK_MODELS,
       preferredIds: PREFERRED_MODEL_IDS,
+      reasoningEfforts: ANTHROPIC_REASONING_EFFORTS,
     }),
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {

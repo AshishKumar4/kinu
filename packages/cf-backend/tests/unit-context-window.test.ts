@@ -20,6 +20,7 @@ describe("contextWindowForModel", () => {
       capabilities: ["tools", "streaming", "reasoning"],
       contextWindow: 1_048_576,
       inputModalities: ["text"],
+      reasoningEfforts: ["low", "medium", "high"],
     });
   });
 

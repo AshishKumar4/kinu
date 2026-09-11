@@ -279,7 +279,7 @@ export function buildProgram(): Command {
   program
     .command('effort <name> [level]')
     .helpGroup(CONFIGURE)
-    .description('Show or change workspace reasoning effort (low, medium, high)')
+    .description('Show or change workspace reasoning effort')
     .action(wrapAction(effortCommand));
 
   llmOpts(

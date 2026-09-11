@@ -6,7 +6,7 @@
  */
 import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
-  type ModelsDevProviderInfo, type ProviderFailure,
+  type ModelsDevProviderInfo, type ProviderFailure, type ReasoningEffort,
 } from '@kinu.run/core';
 import { createAgentProviderRegistry } from '../providers/agent-registry';
 import { retryTransientDO } from '../lib/do-rpc';
@@ -23,6 +23,9 @@ export interface ModelMenuEntry {
   capabilities?: string[];
   /** Provider-reported context window, when known. */
   contextWindow?: number;
+  /** The effort levels this model accepts (`ModelInfo.reasoningEfforts`);
+   *  the settings control renders exactly these after "model default". */
+  reasoningEfforts?: readonly ReasoningEffort[];
 }
 
 /** The model menu as HTTP clients receive it: what can be picked, and which
@@ -49,6 +52,7 @@ export async function listAvailableModels(env: Env, userId: string, caller: User
     provider: model.provider,
     capabilities: model.capabilities ? [...model.capabilities] : undefined,
     contextWindow: model.contextWindow,
+    reasoningEfforts: model.reasoningEfforts,
   }));
 
   // openai-compat: user-named — we surface each as a single generic entry.

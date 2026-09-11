@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types';
 import { cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import { diagnostics, renderThrownChain } from '../obs/index';
+import { CHAT_COMPLETIONS_REASONING_EFFORTS, type ReasoningEffort } from './reasoning-effort';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_TTL_MS = 5 * 60_000;
@@ -103,6 +104,12 @@ export interface ModelsDevListOptions {
   preferredIds?: readonly string[];
   ttlMs?: number;
   toolCallOnly?: boolean;
+  /** The effort levels a provider documents PER MODEL, keyed by model id.
+   *  models.dev says only whether a model reasons, never which levels it
+   *  takes, so a bespoke provider passes its own documented table here and
+   *  a model without a row falls back to the Chat Completions three when it
+   *  reasons, none when it does not. */
+  reasoningEfforts?: Readonly<Record<string, readonly ReasoningEffort[]>>;
 }
 
 export async function listModelsDevProviderModels(
@@ -118,7 +125,7 @@ export async function listModelsDevProviderModels(
 
     const out: ModelInfo[] = [];
     for (const [key, model] of Object.entries(models)) {
-      const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
+      const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true, opts.reasoningEfforts);
       if (info) out.push(info);
     }
     if (out.length === 0) return cloneModelInfos(opts.fallback);
@@ -215,7 +222,12 @@ function providerInfoFromModelsDev(id: string, provider: ModelsDevProvider): Mod
   };
 }
 
-function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly: boolean): ModelInfo | null {
+function modelInfoFromModelsDev(
+  key: string,
+  model: ModelsDevModel,
+  toolCallOnly: boolean,
+  declaredEfforts: Readonly<Record<string, readonly ReasoningEffort[]>> | undefined,
+): ModelInfo | null {
   if (model.status === 'deprecated') return null;
   if (toolCallOnly && model.tool_call !== true) return null;
 
@@ -228,6 +240,8 @@ function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly
     .filter((modality) => model.modalities?.input?.includes(modality) ?? false);
 
   const cost = pricingFromModelsDev(model.cost);
+  const reasoningEfforts = declaredEfforts?.[id]
+    ?? (model.reasoning === true ? CHAT_COMPLETIONS_REASONING_EFFORTS : []);
   return {
     id,
     label: nonEmptyString(model.name) ?? id,
@@ -236,6 +250,7 @@ function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly
     modelOutputLimit: positiveInteger(model.limit?.output),
     cost,
     inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
+    reasoningEfforts,
   };
 }
 

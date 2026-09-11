@@ -68,7 +68,30 @@ describe('provider model catalogs', () => {
       capabilities: ['streaming', 'tools', 'reasoning', 'vision'],
       contextWindow: 1_050_000,
       inputModalities: ['text', 'image'],
+      // models.dev says only that it reasons; the levels are the provider's
+      // own documented table for this id, xhigh included.
+      reasoningEfforts: ['none', 'low', 'medium', 'high', 'xhigh'],
     }]);
+  });
+
+  test('a model the provider table does not name gets the Chat Completions three, or none', async () => {
+    // The models.dev flag is a boolean, so a reasoning model with no
+    // documented table takes the three levels every OpenAI-compatible
+    // endpoint accepts, and a non-reasoning model takes none at all.
+    const provider = createOpenAIProvider();
+    const fetchFn = fetchStub(async () => Response.json({
+      openai: {
+        models: {
+          'gpt-next': { id: 'gpt-next', tool_call: true, reasoning: true },
+          'gpt-plain': { id: 'gpt-plain', tool_call: true, reasoning: false },
+        },
+      },
+    }));
+    const byId = new Map((await provider.listModels(deps({
+      [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } },
+    }, fetchFn))).map((model) => [model.id, model]));
+    expect(byId.get('gpt-next')?.reasoningEfforts).toEqual(['low', 'medium', 'high']);
+    expect(byId.get('gpt-plain')?.reasoningEfforts).toEqual([]);
   });
 
   test('models.dev per-model prices reach ModelInfo, and half-priced entries do not', async () => {
@@ -117,7 +140,7 @@ describe('provider model catalogs', () => {
             visibility: 'list',
             priority: 20,
             context_window: 272_000,
-            supported_reasoning_levels: ['low', 'medium'],
+            supported_reasoning_levels: [{ effort: 'low', description: 'fast' }, 'high', 'ultra'],
             input_modalities: ['text', 'image'],
           },
         ],
@@ -134,6 +157,10 @@ describe('provider model catalogs', () => {
       capabilities: ['tools', 'streaming', 'reasoning', 'vision'],
       contextWindow: 272_000,
       inputModalities: ['text', 'image'],
+      // The model's OWN declaration, in its order, whether rows are bare
+      // levels or `{effort}` objects; a spelling this build does not know
+      // drops rather than emptying the list. No medium: it declared none.
+      reasoningEfforts: ['low', 'high'],
     }]);
   });
 });
