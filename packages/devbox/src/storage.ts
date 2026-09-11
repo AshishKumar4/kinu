@@ -181,10 +181,13 @@ export interface DevboxStorage {
   /**
    * Make the durable bytes readable at the work directory.
    *
-   * Called inside the container-start hook, so it runs while nothing else can
-   * observe the container. Must be safe to call again on an already-attached
-   * container. Throws only when stored state exists but cannot be served —
-   * an agent handed a silently empty workspace is worse than a failed start.
+   * Called from the box's one single-flight restore attempt, on a delivered
+   * frame, under the raced budget; the readiness gate admits nobody until it
+   * settles. Must be safe to call again on an already-attached container —
+   * the container-start hook fires at least once per start and the attempt
+   * runs once per instance. Throws only when stored state exists but cannot
+   * be served — an agent handed a silently empty workspace is worse than a
+   * failed start.
    */
   attach(): Promise<AttachOutcome>;
   /**

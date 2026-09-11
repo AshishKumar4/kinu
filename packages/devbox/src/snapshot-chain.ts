@@ -78,6 +78,7 @@ import {
   parseDeltaProbe,
   planDeltaPublication,
 } from './chunked-delta';
+import type { StoragePhase } from './durability/contracts';
 import { describeThrown as describe, findMount } from './lifecycle';
 import {
   DEVBOX_RUNTIME_DIR,
@@ -614,6 +615,10 @@ export interface SnapshotChainPorts {
    *  (`mountStoreOnce`). A RELEASE IS NOT A FLUSH: a lazy unmount returns as
    *  the mount leaves the namespace, so `publishArchive` checks its own flush. */
   unmountStore(at: string): Promise<void>;
+  /** A phase of the attach landed: the store mount, the base layer. The host
+   *  keeps the clock; the strategy owes the call because only it knows which
+   *  of its commands was the mount. */
+  stamp(phase: StoragePhase): void;
   /** What the store holds for one object, or undefined. `digest` and
    *  `objectVersion` are the store's OWN answers, either of which may be
    *  undefined ({@link layerIntegrityFailure}). One metadata read, and the only
@@ -1088,6 +1093,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (findMount(mounts, CHAIN_STORE_MOUNT) !== undefined) return mounts;
     await ports.unmountStore(CHAIN_STORE_MOUNT);
     await ports.mountStore(CHAIN_STORE_MOUNT);
+    ports.stamp('storeMount');
 
     return undefined;
   };
@@ -1238,6 +1244,7 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     if (!baseHeld) {
       try {
         await shell.mountLayer(baseObjectKey(root, generation.base.id), lowerBase);
+        ports.stamp('baseAttach');
       } catch (error) {
         await layerFailed('base', { cause: error });
       }
