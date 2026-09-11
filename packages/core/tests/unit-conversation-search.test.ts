@@ -36,6 +36,30 @@ function setup(): Fixture {
   return { sql, store: new ConversationSearchStore(sql, testActorHandle(sql, { actorId: ACTOR_ID })) };
 }
 
+describe('a workspace created before the index carried actor_id', () => {
+  // The 2026-08-28 shape. `CREATE TABLE IF NOT EXISTS` never alters it, so
+  // every workspace from before 0f6899cff (2026-09-08) still holds this table
+  // and the first `SELECT actor_id …` threw `no such column` on the product:
+  // "Couldn't open this workspace. SQL query failed: no such column: actor_id".
+  test('opens, rebuilding the derived index rather than throwing', () => {
+    const { sql, execRaw } = createTestSql();
+    initAllTables(execRaw, sql);
+    execRaw(`CREATE TABLE conversation_fts_state (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      regime TEXT NOT NULL,
+      rev INTEGER NOT NULL DEFAULT 0,
+      synced_rev INTEGER NOT NULL DEFAULT -1
+    )`);
+    void sql`INSERT INTO conversation_fts_state (id, regime, rev, synced_rev) VALUES (1, 'plain', 3, 3)`;
+    insert(sql, 's1', 'user', 'the old workspace still searches');
+    const store = new ConversationSearchStore(sql, testActorHandle(sql, { actorId: ACTOR_ID }));
+
+    expect(store.search('workspace').map((hit) => hit.messageId)).toHaveLength(1);
+    expect(sql<{ sql: string }>`SELECT sql FROM sqlite_master WHERE name = 'conversation_fts_state'`[0]?.sql)
+      .toContain('actor_id');
+  });
+});
+
 describe('ConversationSearchStore.search', () => {
   test('backfills messages persisted before the index existed', () => {
     const { sql, store } = setup();
