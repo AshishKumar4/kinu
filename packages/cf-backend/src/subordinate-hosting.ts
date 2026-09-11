@@ -45,7 +45,7 @@ import {
   EventLog, HeadCapture, runHeadInference,
   admitSubordinateTask, describeSubordinateHandoff, readSubordinateLiveStatus,
   receiveSubordinateEvent, subordinateRelaysTurnEnd, temporaryRunSettles,
-  terminalTaskReport, defaultLoopOrigin, delegationBudgetAtDepth, delegationExhausted,
+  terminalTaskReport, defaultLoopOrigin, delegationBudgetOf, delegationExhausted,
   type ActorHost, type ActorReference, type AssignedTurnFraming, type BoundActor,
   type DelegationBudget,
   type DynamicContext, type HeadInferenceDeps, type HeadInput, type HostedActor,
@@ -168,25 +168,12 @@ export interface SubordinateHostSeams {
   temporary(actor: BoundActor): TemporaryAgentPort;
 }
 
-/** This child's own room in the tree, from the ONE row that states it.
- *
- *  Durable by construction rather than by a private copy: the old facet held
- *  `depth` in its own `actor_identity` row precisely because an evicted DO that
- *  kept it in memory would reset and rebuild the whole tree beneath itself. The
- *  directory row is that durability now, and it cannot disagree with the roster
- *  because it IS the roster. */
+/** This child's own room in the tree, from the ONE row that states it — core's
+ *  walk over this workspace's directory. */
 export function hostedDelegationBudget(
   seams: Pick<SubordinateHostSeams, 'host'>, actor: BoundActor,
 ): DelegationBudget {
-  let depth = 0;
-  let current: WorkspaceActor | null = actor.record;
-
-  while (current !== null && current.parentActorId !== null) {
-    depth += 1;
-    current = seams.host.describe(current.parentActorId);
-  }
-
-  return delegationBudgetAtDepth(depth);
+  return delegationBudgetOf((actorId) => seams.host.describe(actorId), actor.record);
 }
 
 /**

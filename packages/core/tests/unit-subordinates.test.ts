@@ -16,7 +16,7 @@ import {
   SubordinateRosterStore,
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
-  delegationBudgetAtDepth,
+  delegationBudgetAtDepth, delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
   deriveChildDelegationBudget,
@@ -290,6 +290,28 @@ describe('the delegation depth cap', () => {
   // the bound it inflates past the cap it exists to enforce.
   test('a stored negative depth reads as the root instead of inflating room', () => {
     expect(delegationBudgetAtDepth(-2)).toEqual({ depth: 0, maxDepth: DELEGATION_MAX_DEPTH });
+  });
+
+  // The depth is the DIRECTORY's answer, walked up the rows, on both backends.
+  // The CLI kept a copy on the child's config that only it read; the number a
+  // hire's team is gated on is now the same row the roster is.
+  test('an actor\'s depth is walked off its directory row, and a missing parent ends the walk as a floor', () => {
+    const rows = new Map<string, { parentActorId: string | null }>([
+      ['root', { parentActorId: null }],
+      ['d1', { parentActorId: 'root' }],
+      ['d2', { parentActorId: 'd1' }],
+      ['orphan', { parentActorId: 'gone' }],
+    ]);
+    const row = (actorId: string) => {
+      const found = rows.get(actorId);
+      if (!found) throw new Error(`no fixture row ${actorId}`);
+      return found;
+    };
+    const describe = (actorId: string) => rows.get(actorId) ?? null;
+    expect(delegationBudgetOf(describe, row('root'))).toEqual(ROOT_DELEGATION_BUDGET);
+    expect(delegationBudgetOf(describe, row('d1'))).toEqual({ depth: 1, maxDepth: 3 });
+    expect(delegationBudgetOf(describe, row('d2'))).toEqual({ depth: 2, maxDepth: 2 });
+    expect(delegationBudgetOf(describe, row('orphan'))).toEqual({ depth: 1, maxDepth: 3 });
   });
 });
 

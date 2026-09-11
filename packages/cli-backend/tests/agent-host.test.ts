@@ -1038,8 +1038,7 @@ describe('LocalAgentHost', () => {
    */
   test('a local actor at the delegation cap is wired no temporary port at all', async () => {
     const { state, project } = makeRoots();
-    const dbPath = await seedAgent(state, 'root');
-
+    await seedAgent(state, 'root');
     const { host } = makeHost(state, streamingModel('ack'), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
@@ -1048,23 +1047,22 @@ describe('LocalAgentHost', () => {
     // A root has the whole cap below it, so it HAS the rung.
     expect(team.temporary).toBeDefined();
 
-    await team.create({
-      name: 'deep',
-      role: 'researcher',
-      mission: 'Work at the cap.',
-    });
-    // Put the child AT the cap, the way its parent's seed would at depth 4.
-    const childDb = new Database(dbPath);
-    childDb.query(`UPDATE actor_config SET value = ? WHERE actor_id = ? AND key = 'subordinate.depth'`)
-      .run(String(DELEGATION_MAX_DEPTH), childActorId(dbPath, 'deep'));
-    childDb.close();
+    // A child AT the cap, put there the only way one can be: hired at every
+    // level below the root. Its depth is the directory's answer, walked up the
+    // rows — never a number written on the child's own config.
+    let address = 'root';
+    for (let level = 1; level <= DELEGATION_MAX_DEPTH; level++) {
+      await (await host.team(address)).create({
+        name: `d${level}`, role: 'researcher', mission: `Work at depth ${level}.`,
+      });
+      address = `${address}/d${level}`;
+    }
     await host.close();
 
     const { host: reopened } = makeHost(state, streamingModel('ack'), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
-
-    const capped = await reopened.team('root/deep');
+    const capped = await reopened.team(address);
     expect(capped.delegation.depth).toBe(DELEGATION_MAX_DEPTH);
     expect(delegationExhausted(capped.delegation)).toBe(true);
     // ABSENT, not present-and-refusing: the rung is gone from this actor's

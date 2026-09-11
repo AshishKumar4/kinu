@@ -693,7 +693,7 @@ export {
 export {
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
-  delegationBudgetAtDepth,
+  delegationBudgetAtDepth, delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
   deriveChildDelegationBudget,

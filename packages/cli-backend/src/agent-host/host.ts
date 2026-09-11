@@ -42,7 +42,7 @@ import {
   createTeamToolDeps,
   createTemporaryAgentPort,
   renderSubordinateInheritedContext,
-  delegationBudgetAtDepth,
+  delegationBudgetOf,
   delegationExhausted,
   describeSubordinateHandoff,
   inheritedContextFromConversation,
@@ -57,7 +57,6 @@ import {
   readSoul,
   recoverSubordinateLifecycles,
   SOUL_PATH,
-  TEMPORARY_LIFETIME,
   temporaryRunSettles,
   terminalTaskReport,
   type ActorHost,
@@ -80,7 +79,6 @@ import {
   subordinateAgentName,
   type SqlExec,
   type SubordinateHandoff,
-  type SubordinateLifetime,
   type SubordinateRuntime,
   type TeamToolDeps,
   type TemporaryAgentPort,
@@ -117,14 +115,6 @@ import {
 import type { LocalModelResolver } from '../model-resolver';
 import type { ProfileEnvelopeSource } from '../profile-authority';
 import type { McpServerConfig } from '../mcp';
-
-/** The one key a subordinate's own depth is read from. */
-const CHILD_DEPTH_KEY = 'subordinate.depth';
-
-/** The child's own copy of how long it is meant to live. On its OWN config, like
- *  its depth, so it survives a daemon restart — which is what lets a recovered
- *  actor still owe its caller the one report a task lifetime requires. */
-const CHILD_LIFETIME_KEY = 'subordinate.lifetime';
 
 /** Runtime inputs fixed for one bound agent while this host process is alive. */
 export interface LocalHostedAgent {
@@ -308,10 +298,6 @@ interface HostEntry {
     settledRun: boolean;
     mode: WorkMode;
   } | null;
-  /** How long this actor is MEANT to live. Only the child sees its own turn end,
-   *  and a `task` child owes its blocked caller one terminal report for every way
-   *  that turn can end — including the endings the durable policy withholds. */
-  lifetime: SubordinateLifetime;
 }
 
 export type AgentEventListener = (agent: string, event: SessionEvent) => void;
@@ -868,7 +854,6 @@ export class LocalAgentHost {
       session,
       config,
       eventLog: orchestration.eventLog,
-      lifetime: lifetimeOf(config),
       roster,
       temporary: createTemporaryAgentPort({
         roster,
@@ -1360,8 +1345,9 @@ export class LocalAgentHost {
         // A task child ALWAYS reports its ending, including one with nothing to
         // say: the durable policy withholds an empty answer because an answer
         // nobody asked for is not progress, and this child's caller DID ask.
-        const task = terminalTaskReport({ lifetime: child.lifetime, ending, assistantText });
-
+        // Off the directory row, as on cf: the row is the roster, and a private
+        // copy on the child's config was a second store nothing kept in step.
+        const task = terminalTaskReport({ lifetime: child.actor.record.lifetime, ending, assistantText });
         if (task) return task;
 
         // A hire reaches the SAME selective policy it always had, and only for a
@@ -1503,8 +1489,7 @@ export class LocalAgentHost {
   // ── local SubordinateRuntime ────────────────────────────────────────
 
   private buildTeam(parent: HostEntry): TeamToolDeps {
-    const delegation = delegationBudgetAtDepth(treeDepthOf(parent.config));
-
+    const delegation = delegationBudgetOf((actorId) => parent.tree.host.describe(actorId), parent.actor.record);
     const input: Parameters<typeof createTeamToolDeps>[0] = {
       delegation,
       roster: parent.roster,
@@ -1688,8 +1673,7 @@ export class LocalAgentHost {
     const exec = makeSqlExec(tree.db);
     const sql = makeSql(tree.db);
     const owner = localActorOwner(parent.ws.rt.actor);
-    const depth = treeDepthOf(parent.config) + 1;
-
+    const depth = delegationBudgetOf((actorId) => tree.host.describe(actorId), parent.actor.record).depth + 1;
     try {
       tree.db.transaction(() => {
         // The child's own handle, bound to its own directory row — the only
@@ -1710,8 +1694,6 @@ export class LocalAgentHost {
         const inheritedModel = parent.config.getModel();
 
         if (inheritedModel) actor.config.setModel(inheritedModel);
-        actor.config.set(CHILD_DEPTH_KEY, String(depth));
-        actor.config.set(CHILD_LIFETIME_KEY, input.lifetime);
       })();
       const actor = await tree.host.acquire(binding.reference);
       const rt = tree.runtimes.get(binding.reference.actorId);
@@ -1884,19 +1866,6 @@ export class LocalAgentHost {
       }
     });
   }
-}
-
-/** This actor's own lifetime, off its own config. Anything unrecognised — an
- *  actor created before the rung existed, or a root — is DURABLE, which is what
- *  it truly is: nothing is blocked on it. */
-function lifetimeOf(config: AgentConfigStore): SubordinateLifetime {
-  return config.get(CHILD_LIFETIME_KEY) === TEMPORARY_LIFETIME ? TEMPORARY_LIFETIME : 'durable';
-}
-
-function treeDepthOf(config: AgentConfigStore): number {
-  const depth = Number(config.get(CHILD_DEPTH_KEY));
-
-  return Number.isInteger(depth) && depth > 0 ? depth : 0;
 }
 
 /**
