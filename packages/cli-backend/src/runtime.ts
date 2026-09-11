@@ -33,7 +33,7 @@ import {
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor, commandResult, COMMAND_RESULT_TYPE,
   withMountTable, standardMounts, readTailWithVfsOps,
-  withApprovalGatedShell,
+  withApprovalGatedShell, holdsGrant,
   initFiberTable, initWorkspaceActorTable, WorkspaceActorDirectory, initActorStateSchema, initAgentConfigTable, initCodemodeStateTable, initScaffoldTables,
   createAgentStores, contextMount,
   resolveModelRoute,
@@ -617,8 +617,7 @@ export function createCLIRuntime(
 
   const approvalPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
-    granted: (grant) => agentConfig.getShellApprovalGrants()
-      .some((candidate) => candidate.rule === grant.rule && candidate.executor === grant.executor),
+    granted: (grant) => holdsGrant(agentConfig.getShellApprovalGrants(), grant),
     requestApproval: (request) => approvalChannel?.(request) ?? Promise.resolve(null),
   };
 
