@@ -1,6 +1,6 @@
 /** Model catalog entries as both backends expose them through AgentClient. */
 
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, type ProviderFailure } from '@kinu.run/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, knownReasoningEfforts, type ProviderFailure, type ReasoningEffort } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const ModelMenuPayloadSchema = v.object({
@@ -21,6 +21,7 @@ const ModelEntryPayloadSchema = v.object({
   label: v.optional(v.unknown()),
   capabilities: v.optional(v.unknown()),
   contextWindow: v.optional(v.unknown()),
+  reasoningEfforts: v.optional(v.unknown()),
 });
 
 export interface AgentModelEntry {
@@ -29,6 +30,9 @@ export interface AgentModelEntry {
   provider: string;
   capabilities?: string[];
   contextWindow?: number;
+  /** The effort levels the model accepts, in the provider's order; absent
+   *  when the catalog could not say. */
+  reasoningEfforts?: ReasoningEffort[];
 }
 
 /** The menu both backends return: pickable models, plus the providers that
@@ -141,6 +145,9 @@ function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
     const contextWindow = numberValue({ value: item.contextWindow });
 
     if (contextWindow !== undefined) entry.contextWindow = contextWindow;
+    const efforts = v.safeParse(v.array(v.unknown()), item.reasoningEfforts);
+
+    if (efforts.success) entry.reasoningEfforts = knownReasoningEfforts(efforts.output);
 
     return [entry];
   });

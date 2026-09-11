@@ -164,7 +164,7 @@ Its descriptor must distinguish:
 
 A role is not a second agent class. A temporary lifetime is not a reduced text-only completion. An exploration assignment does not justify maintaining another copy of ordinary tool use, cancellation or history handling.
 
-The product has five inference tiers: `tiny`, `fast`, `default`, `slow` and `deep`. Every tier without an explicit override inherits the default-tier setting. Changing that default must preserve explicit per-tier overrides. Roles/templates remain separate, and the main agent must be able to discover and use admitted subordinate templates. This is the explicit requirement in message 614 and the current catalogue's stated model.
+The product has three inference tiers: `fast`, `default` and `deep` (`tiny` and `slow` overlapped them and were removed, #7). Every tier without an explicit override inherits the default-tier setting. Changing that default must preserve explicit per-tier overrides. Roles/templates remain separate, and the main agent must be able to discover and use admitted subordinate templates. This is the explicit requirement in message 614 and the current catalogue's stated model.
 
 The requested default model for a new user or a user with no default override is **GLM 5.3 on Workers AI** (message 851; current model ID `@cf/zai-org/glm-5.3`). Existing user overrides must not be replaced. Missing credentials must produce an actionable availability state, not an unannounced alternative model.
 

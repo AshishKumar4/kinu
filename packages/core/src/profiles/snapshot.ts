@@ -67,10 +67,8 @@ const ResolvedTurnProfileSchema = v.strictObject({
    *  producers route through (model-route.ts). Written out per slot so a
    *  snapshot missing one fails here rather than at a producer. */
   tiers: v.strictObject({
-    tiny: TierSlotSchema,
     fast: TierSlotSchema,
     default: TierSlotSchema,
-    slow: TierSlotSchema,
     deep: TierSlotSchema,
   }),
   workMode: v.picklist(['plan', 'build']),

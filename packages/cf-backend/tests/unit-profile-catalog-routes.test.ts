@@ -39,13 +39,13 @@ const CUSTOM_CATALOG: ProfileCatalog = validateProfileCatalog({
     reviewer: {
       description: 'Review work before it ships.',
       instructions: 'Find defects and name evidence.',
-      tier: 'slow',
+      tier: 'deep',
       preset: 'audit',
     },
   },
   tiers: {
     ...BUILTIN_PROFILE_CATALOG.tiers,
-    slow: { model: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813', reasoningEffort: 'high' },
+    deep: { model: 'workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813', reasoningEffort: 'high' },
   },
 });
 

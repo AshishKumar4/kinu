@@ -38,7 +38,7 @@ function catalogA(): ProfileCatalog {
 function catalogB(): ProfileCatalog {
   return {
     roles: {
-      auditor: { description: 'checks work', instructions: 'Audit the result.', tier: 'slow', preset: 'audit' },
+      auditor: { description: 'checks work', instructions: 'Audit the result.', tier: 'deep', preset: 'audit' },
     },
     tiers: { default: { model: 'other-model' } },
   };

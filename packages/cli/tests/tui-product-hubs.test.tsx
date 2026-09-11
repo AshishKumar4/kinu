@@ -26,7 +26,7 @@ describe('role, tier, and agent hubs', () => {
           kind: 'subordinate',
           status: 'running',
           roleId: 'auditor',
-          tierId: 'slow',
+          tierId: 'deep',
           workspace: 'checkout',
           task: 'Review the coupon patch',
         },
@@ -57,13 +57,13 @@ describe('role, tier, and agent hubs', () => {
                 label: 'Auditor',
                 description: 'Review claims and run checks.',
                 instructions: 'Audit the evidence.',
-                tier: 'slow',
+                tier: 'deep',
                 preset: 'audit',
               },
             },
             tiers: {
               default: { model: 'workers-ai/deepseek', reasoningEffort: 'medium' },
-              slow: { model: 'anthropic/claude-opus', reasoningEffort: 'high' },
+              deep: { model: 'anthropic/claude-opus', reasoningEffort: 'high' },
             },
           },
         },
@@ -84,7 +84,7 @@ describe('role, tier, and agent hubs', () => {
 
     try {
       for (const [view, expected] of [
-        ['agents', 'Reviewer · agent · auditor/slow'],
+        ['agents', 'Reviewer · agent · auditor/deep'],
         ['roles', 'Review claims and run checks.'],
         ['tiers', 'fast → default'],
       ] as const satisfies readonly (readonly [TuiHubView, string])[]) {

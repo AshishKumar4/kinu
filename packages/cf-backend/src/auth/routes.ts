@@ -17,10 +17,9 @@ import {
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,
   cloudflareTokenToCredential,
-  isCloudflareCredentialUsable,
   type CloudflareTokenPayload,
 } from '../lib/cloudflare-oauth';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu.run/core';
+import { JsonObjectSchema, JsonValueSchema, type JsonObject } from '@kinu.run/core';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access';
 import { ownerCaller } from '../user/workspace-capability';
@@ -283,13 +282,8 @@ async function attachCloudflareWorkersAI(
     const credential = await cloudflareTokenToCredential(tokens);
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
     await userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential);
-
-    // Only default to Workers AI when the credential can actually serve it;
-    // otherwise the operator lands on a model they cannot call.
-    if (isCloudflareCredentialUsable(credential) && !await userDO.getConfig(await ownerCaller(env), 'default_model')) {
-      await userDO.setConfig(await ownerCaller(env), 'default_model', DEFAULT_WORKERS_AI_MODEL_SPEC);
-    }
-
+    // No model seeding: the profile catalog's built-in default tier already
+    // names the native Workers AI model, and a new workspace reads that tier.
     notifyWorkspacesCredentialsChanged(env, userDO, ctx);
   } catch (e) {
     const failure = summarizeOAuthFailure(e);
