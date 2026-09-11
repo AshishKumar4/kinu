@@ -674,9 +674,12 @@ export async function reviewRecordedTurn(deps: {
       record: deps.record,
     });
   } catch (cause) {
-    diagnostics.failure('advisor.review_failed', toKinuError({
-      doing: 'reviewing the completed turn', cause, otherwise: 'unavailable',
-    }));
+    const failure = toKinuError({ doing: 'reviewing the completed turn', cause, otherwise: 'unavailable' });
+
+    // Advice is optional; the turn is not. A reviewer that is down or slow is
+    // a turn with no advice. Anything else is a defect in the review itself.
+    if (failure.code !== 'unavailable' && failure.code !== 'timeout') throw failure;
+    diagnostics.failure('advisor.review_failed', failure);
 
     return null;
   }

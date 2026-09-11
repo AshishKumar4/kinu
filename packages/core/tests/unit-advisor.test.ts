@@ -9,6 +9,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { KinuError } from '../src/obs/error';
 import {
   ADVISOR_DEDUPE_WINDOW, ADVISOR_HEADER, ADVISOR_NOTE_MAX_CHARS,
   ADVISOR_SEVERITIES, ADVISOR_SEVERITY_METADATA_KEY, ADVISOR_SIGNAL_KIND,
@@ -541,6 +542,14 @@ describe('reviewRecordedTurn', () => {
     expect(disposition).toBe('changelog');
     expect(delivered).toEqual([]);
     expect(recorded).toEqual([NOTE]);
+  });
+
+  test('a reviewer that is down is a turn with no advice; a defect in the review propagates', async () => {
+    const bug: LLM = { async *stream() { yield ''; }, complete: async () => { throw new KinuError('bad_input', 'prompt rejected'); } };
+    await expect(reviewRecordedTurn({
+      snapshot: snapshot(), llm: bug, govern: (llm) => llm, gateOpen: false,
+      deliver: async () => 'queued', record: () => {},
+    })).rejects.toMatchObject({ code: 'bad_input' });
   });
 
   test('a reviewer that throws is a turn with no advice, never a failed lane', async () => {
