@@ -101,7 +101,15 @@ export function evalNameSlug(name: string): string {
  * surviving teardown says what made it.
  */
 export function evalWorkspaceName(subject: string): string {
-  return `${EVAL_WORKSPACE_PREFIX}${evalNameSlug(subject)}-${Math.random().toString(36).slice(2, 8)}`;
+  // The product refuses a name its preview grammar cannot carry (31 chars,
+  // lowercase alphanumerics and hyphens): a tier name that does not fit is a
+  // tier that cannot create its workspace. The random suffix keeps uniqueness;
+  // the subject keeps attributability for whatever fits.
+  const rand = Math.random().toString(36).slice(2, 8);
+  const room = 31 - EVAL_WORKSPACE_PREFIX.length - 1 - 6;
+  const slug = evalNameSlug(subject).slice(0, room).replace(/-+$/, '');
+
+  return `${EVAL_WORKSPACE_PREFIX}${slug}-${rand}`;
 }
 
 /** Why an origin was allowed. Reported rather than inferred, because "this ran
