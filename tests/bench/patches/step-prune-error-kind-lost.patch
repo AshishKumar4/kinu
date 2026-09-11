@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/prompting/step-prune.ts b/packages/core/src/prompting/step-prune.ts
-index 2c96c781f..ad6c8e706 100644
+index 9e02a1b7c..0f1458080 100644
 --- a/packages/core/src/prompting/step-prune.ts
 +++ b/packages/core/src/prompting/step-prune.ts
-@@ -195,7 +195,7 @@ function truncateResultPart(part: ToolResultPart): ToolResultPart {
-   const marker = `…[truncated: full output was ${serialized.length} chars; re-run the tool if needed]`;
+@@ -275,7 +275,7 @@ function truncateResultPart(part: ToolResultPart): ToolResultPart {
+ 
    if (serialized.length <= PRUNED_OUTPUT_HEAD_CHARS + marker.length) return part;
    const value = serialized.slice(0, PRUNED_OUTPUT_HEAD_CHARS) + marker;
 -  const isError = part.output.type === 'error-text' || part.output.type === 'error-json';
 +  const isError = part.output.type === 'error-text' && part.output.type === 'error-json';
+ 
    return { ...part, output: isError ? { type: 'error-text', value } : { type: 'text', value } };
  }
- 

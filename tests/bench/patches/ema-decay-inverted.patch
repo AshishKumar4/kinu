@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/craft/ema.ts b/packages/core/src/craft/ema.ts
-index b14270944..d3108a5be 100644
+index 08a2eca94..5c2c43abc 100644
 --- a/packages/core/src/craft/ema.ts
 +++ b/packages/core/src/craft/ema.ts
-@@ -41,7 +41,7 @@ export function effectiveScore(
- ): number {
+@@ -42,7 +42,7 @@ export function effectiveScore(
    if (lastUsedAtMs <= 0) return score;
    const daysSince = (now - lastUsedAtMs) / MS_PER_DAY;
+ 
 -  return score * Math.pow(0.5, daysSince / halfLifeDays);
 +  return score * Math.pow(0.5, halfLifeDays / daysSince);
  }

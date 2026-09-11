@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/replay.ts b/packages/core/src/evolution/replay.ts
-index a9792acb5..f5bef09fc 100644
+index 0274efaf4..1caa116b6 100644
 --- a/packages/core/src/evolution/replay.ts
 +++ b/packages/core/src/evolution/replay.ts
-@@ -215,7 +215,7 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
+@@ -227,7 +227,7 @@ export function listReplayEvals(sql: SqlExecutor, actor: ActorHandle, limit = 50
      scaffold_version: number | null; details: string;
      score_lo: number | null; score_hi: number | null;
    }>`SELECT * FROM replay_evals WHERE actor_id = ${actor.actorId}
 -      ORDER BY ran_at DESC, id DESC LIMIT ${limit}`;
 +      ORDER BY ran_at ASC, id ASC LIMIT ${limit}`;
+ 
    return rows.map((r) => {
      // Malformed details are the one tolerable corruption here: the summary
-     // numbers live in the row's own columns, so the point on the curve stands.

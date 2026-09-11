@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/memory/sleep-time-compute.ts b/packages/core/src/memory/sleep-time-compute.ts
-index f1b805f..0e31d78 100644
+index af37b7ac5..8afb81765 100644
 --- a/packages/core/src/memory/sleep-time-compute.ts
 +++ b/packages/core/src/memory/sleep-time-compute.ts
-@@ -124,7 +124,7 @@ export function applySleepTimeUpdate(
-     const cur = facts.recall(k);
+@@ -141,7 +141,7 @@ export function applySleepTimeUpdate(
+ 
      if (!cur) continue;
      facts.upsert(k, cur.value, {
 -      confidence: Math.max(0, cur.confidence - 0.2),

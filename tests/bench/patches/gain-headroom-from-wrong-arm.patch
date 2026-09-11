@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/bench/stats.ts b/packages/core/src/bench/stats.ts
-index 61b4f077a..684bd4948 100644
+index cb15ca48d..fc7af96b7 100644
 --- a/packages/core/src/bench/stats.ts
 +++ b/packages/core/src/bench/stats.ts
-@@ -435,7 +435,7 @@ export function computeGain(
-   const bounded = paired.every((p) => (
+@@ -489,7 +489,7 @@ export function computeGain(
      p.stateful >= 0 && p.stateful <= 1 && p.stateless >= 0 && p.stateless <= 1
    ));
+ 
 -  const headroom = 1 - statelessReward;
 +  const headroom = 1 - statefulReward;
    const normalizedGain = bounded && headroom > 1e-9 ? gain / headroom : null;

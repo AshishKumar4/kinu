@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/compaction.ts b/packages/core/src/compaction.ts
-index c563e02..ac68799 100644
+index ce3405b47..6a348ee07 100644
 --- a/packages/core/src/compaction.ts
 +++ b/packages/core/src/compaction.ts
-@@ -90,7 +90,7 @@ function rules(budgetTokens: number): string {
+@@ -89,7 +89,7 @@ function rules(budgetTokens: number): string {
  
  function activeTaskBlock(latestUserAsk?: string): string {
    if (!latestUserAsk?.trim()) return '';
 -  const ask = evidenceWindow(latestUserAsk, EVIDENCE_BUDGETS.storedUserMessage);
 +  const ask = evidenceWindow(latestUserAsk, EVIDENCE_BUDGETS.storedAssistantResponse);
+ 
    return `THE USER'S MOST RECENT REQUEST (copy this verbatim into "## Active Task"):
  """
- ${ask}

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/scaffold/archive.ts b/packages/core/src/scaffold/archive.ts
-index a120f14..5d94b10 100644
+index 81d0c0db9..2fbd4607d 100644
 --- a/packages/core/src/scaffold/archive.ts
 +++ b/packages/core/src/scaffold/archive.ts
-@@ -321,7 +321,7 @@ export function selectEvolutionBase(
-   const coverage = pathologyCoverage(archive);
+@@ -349,7 +349,7 @@ export function selectEvolutionBase(
+ 
    const weight = (e: ScaffoldArchiveEntry): number =>
      (clade.get(e.version) ?? 0.5) +
 -    1 / (1 + e.trials) +
 +    e.trials +
      (e.pathology === null ? 0 : 1 / (1 + coverage.get(e.pathology)!));
+ 
    const total = explorable.reduce((acc, e) => acc + weight(e), 0);
-   let roll = random() * total;

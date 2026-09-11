@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/evolution/changelog.ts b/packages/core/src/evolution/changelog.ts
-index 95440cd2b..0b83dd83e 100644
+index d02fa80cd..b76bc48c3 100644
 --- a/packages/core/src/evolution/changelog.ts
 +++ b/packages/core/src/evolution/changelog.ts
-@@ -528,7 +528,7 @@ export function buildChangelog(
-   const outcomes = outcomeEntry(sql, actor, opts.since, limit);
+@@ -587,7 +587,7 @@ export function buildChangelog(
    if (outcomes) entries.push(outcomes);
    entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
+ 
 -  return entries.slice(0, limit);
 +  return entries.slice(0, limit - 1);
  }

@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/evolution/outcomes.ts b/packages/core/src/evolution/outcomes.ts
-index 129dfef..119f5c4 100644
+index 79c3923a1..0a271989f 100644
 --- a/packages/core/src/evolution/outcomes.ts
 +++ b/packages/core/src/evolution/outcomes.ts
-@@ -132,7 +132,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
-   if (turn.toolCalls.length > 0) return false;
-   const msg = turn.userMessage.trim();
+@@ -153,7 +153,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
+ 
    if (TRIVIAL_MESSAGE.test(msg)) return true;
+ 
 -  return msg.length < 12 && !msg.includes('?');
 +  return msg.length < 120 && !msg.includes('?');
  }

@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/craft/conflict.ts b/packages/core/src/craft/conflict.ts
-index 8557bf7..d0e5481 100644
+index fd89422db..26629910c 100644
 --- a/packages/core/src/craft/conflict.ts
 +++ b/packages/core/src/craft/conflict.ts
-@@ -29,7 +29,7 @@ export function checkConflictsBeforeAdding(
-   const similar = rt.craftStore.search(candidate.description, 5);
+@@ -35,7 +35,7 @@ export function checkConflictsBeforeAdding(
    const highSimilarity = similar.filter(t => {
      const overlap = wordOverlap(t.description, candidate.description);
+ 
 -    return overlap > DEFAULT_CONFIG.craftStore.conflictSimilarityThreshold;
 +    return overlap < DEFAULT_CONFIG.craftStore.conflictSimilarityThreshold;
    });

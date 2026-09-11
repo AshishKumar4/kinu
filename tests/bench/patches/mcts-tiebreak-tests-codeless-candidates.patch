@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/mcts/test-selection.ts b/packages/core/src/mcts/test-selection.ts
-index 94eb6a970..9d1af40b9 100644
+index d66a2a8ba..ebd90067e 100644
 --- a/packages/core/src/mcts/test-selection.ts
 +++ b/packages/core/src/mcts/test-selection.ts
-@@ -49,7 +49,7 @@ export async function selectWinnerByTest(
-   const language = candidates.find((node) => (node.code_used ?? '').trim().length > 0)?.code_language;
+@@ -52,7 +52,7 @@ export async function selectWinnerByTest(
    if (!language) return winner.id;
+ 
    const runnable = candidates.filter((node) =>
 -    (node.code_used ?? '').trim().length > 0 && node.code_language === language);
 +    (node.code_used ?? '').trim().length === 0 && node.code_language === language);
+ 
    if (runnable.length < 2) return winner.id;
  
-   // The suite measures runnable code. A winner with none in this language

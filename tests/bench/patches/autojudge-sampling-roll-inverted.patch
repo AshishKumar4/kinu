@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/control.ts b/packages/core/src/evolution/control.ts
-index dca469cd5..916d4c738 100644
+index 1de6912ae..2938ad685 100644
 --- a/packages/core/src/evolution/control.ts
 +++ b/packages/core/src/evolution/control.ts
-@@ -250,7 +250,7 @@ export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): numb
-   if (sampleRate <= 0) return null;
-   const pending = getPendingScaffold(control.sql, control.rt.actor);
+@@ -258,7 +258,7 @@ export function shadowTrialPlan(control: ScaffoldControl, turnKey: string): numb
+ 
    if (!pending) return null;
+ 
 -  if (sampleFraction(turnKey) >= sampleRate) return null;
 +  if (sampleFraction(turnKey) <= sampleRate) return null;
+ 
    return pending.version;
  }
- 

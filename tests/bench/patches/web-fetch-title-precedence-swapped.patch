@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/web/provider.ts b/packages/core/src/web/provider.ts
-index 23e9e969d..f4e46aef5 100644
+index c586b736b..b498d5d17 100644
 --- a/packages/core/src/web/provider.ts
 +++ b/packages/core/src/web/provider.ts
-@@ -298,7 +298,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
-         : '';
+@@ -358,7 +358,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
+ 
        return {
          url: finalUrl,
 -        title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,

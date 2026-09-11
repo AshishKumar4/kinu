@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/bench/split.ts b/packages/core/src/bench/split.ts
-index edfaf1c..4cb9ae9 100644
+index f26d1d5a2..46c9b89c7 100644
 --- a/packages/core/src/bench/split.ts
 +++ b/packages/core/src/bench/split.ts
-@@ -168,7 +168,7 @@ export class SealedSplit {
-       : this.#tasks.filter((task) => only.includes(task.id));
+@@ -178,7 +178,7 @@ export class SealedSplit {
      for (const task of selected) {
        const result = await check(task);
+ 
 -      if (!result.ok) invalid.push(task.id);
 +      if (result.ok) invalid.push(task.id);
        else if ((result.passedOnAttempt ?? 1) > 1) flaky.push(task.id);
      }
-     return { checked: selected.length, invalid, flaky };
+ 

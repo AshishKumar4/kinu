@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/eval/report.ts b/packages/core/src/eval/report.ts
-index a8efca40..1b9983db 100644
+index cf4431211..2aedfe9c8 100644
 --- a/packages/core/src/eval/report.ts
 +++ b/packages/core/src/eval/report.ts
-@@ -91,7 +91,7 @@ export interface GateResult {
-  *  strategies errored. */
+@@ -94,7 +94,7 @@ export interface GateResult {
  export function evaluateGate(report: EvalReport, threshold: number): GateResult {
    const score = report.aggregateScore;
+ 
 -  if (report.summary.total === 0) {
 +  if (report.summary.total < 0) {
      return { pass: false, aggregateScore: score, threshold, reason: 'no eval cases ran — nothing to gate on' };
    }
-   // A case whose strategy errored produced no answer, so the judge scored the
+ 

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/evolution/outcomes.ts b/packages/core/src/evolution/outcomes.ts
-index 129dfef..6d17e65 100644
+index 79c3923a1..33f36c6ef 100644
 --- a/packages/core/src/evolution/outcomes.ts
 +++ b/packages/core/src/evolution/outcomes.ts
-@@ -112,7 +112,7 @@ export function outcomeQuality(outcome: TurnOutcome, source: TurnOutcomeSource =
-   if (source === 'execution') {
+@@ -130,7 +130,7 @@ export function outcomeQuality(outcome: TurnOutcome, source: TurnOutcomeSource =
      return outcome === 'accepted' ? EXECUTION_QUALITY.accepted : EXECUTION_QUALITY.negative;
    }
+ 
 -  if (outcome === 'frustrated') return 0.1;
 +  if (outcome === 'frustrated') return 0.9;
+ 
    return feedbackToQuality(outcome === 'accepted' ? 'positive' : 'negative');
  }
- 

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold/executor.ts
-index a169a5e1c..29f03b9c7 100644
+index f182e225c..bd50e21f4 100644
 --- a/packages/core/src/scaffold/executor.ts
 +++ b/packages/core/src/scaffold/executor.ts
-@@ -320,7 +320,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
-       if (!name.success) throw new KinuError('bad_input', 'host.callTool: name must be a string');
+@@ -332,7 +332,7 @@ function buildHostProvider(opts: ScaffoldRunControl & {
+ 
        if (!callTool) throw new KinuError('unavailable', 'host.callTool is unavailable in this runtime');
        const callId = `tc-${Math.random().toString(36).slice(2, 10)}`;
 -      const parsedArgs = v.safeParse(JsonValueSchema, rawArgs[1]);
 +      const parsedArgs = v.safeParse(JsonValueSchema, {});
+ 
        if (!parsedArgs.success) throw new KinuError('bad_input', 'host.callTool: arguments must be JSON', { cause: parsedArgs.issues });
        const toolArgs = parsedArgs.output;
-       if (!isJsonObject(toolArgs)) throw new KinuError('bad_input', 'host.callTool: arguments must be a JSON object');
