@@ -219,6 +219,29 @@ session scratch, and an absent `REQUESTS-LEDGER.md` there means you are
 reading the wrong tree, never that the ledger has no rows. Two copies with
 different contents means one is a fork; say so rather than picking one.
 
+## Delegation
+
+The default is solo. The harness guidebook records the measurement (`docs/research/harness/harness-design-guidebook.md`, source [A2]): an orchestrator over 25 workers scored 10 to 12 points BELOW a single agent at higher cost on dependent and single-context work, and OpenAI maximizes one agent and splits only on measured failure. A subagent starts blank, knows less, and returns a summary the integrator must re-verify, so delegation has to beat the single-agent effort curve on the product's objective before it is worth its cost. On 2026-09-10 one session dispatched about thirty lanes, most of them expert, several for single-context work, and the owner stopped it.
+
+- Do coupled, dependent, or single-context work yourself. Reading a file, fixing a query, moving a module, reconciling a ledger: never a lane.
+- Delegate only a whole coherent problem that is independent of what you are doing and long enough that a blank-context worker's summary pays for itself: an audit over a hundred findings, a bench with its own worktree, a rewrite with a fixed spec.
+- Match the agent to the task. `scout` for read-only research and inventories; `task` or `sonic` for mechanical writes against a fixed spec; `expert` only for load-bearing judgement where a wrong result is expensive.
+- At most two or three expert lanes at once. Park one before starting a fourth.
+- Every lane gets complete context, an explicit output contract, its own worktree at an absolute path, and its result is a claim to verify: re-run its numbers, red-prove its fixes, check what it dropped.
+- Never split one dependent chain across lanes with a handoff between them; the handoff costs more than the chain.
+- State the solo baseline when you do delegate: what it would cost to do in place.
+
+## Owner Preferences, Standing
+
+- Commit subjects are one line, `type(scope): text`, at most 80 characters; a body is at most four more lines and usually absent. The hook enforces it; write the subject short the first time.
+- No comment that restates the code or narrates the edit. Comment the reason or the constraint, or nothing.
+- One environment: the deployed worker at https://kinu.run is the test target. No staging, no environment flag in any test or gate, no staging-then-production sequence. The first-run tier runs on every deploy against the product a user meets.
+- Cloudflare resources and model inference are free here; never gate work on cost (§ Cost Never Gates Work). No migrations, cutovers or compatibility periods.
+- When two backends implement one rule differently, the stricter side wins and becomes the shared core path; each such unification is one commit with a pin test.
+- All business logic lives in the core packages; `cf-backend`, `cli-backend` and `cli` are adapters. A rule written in a backend is a defect.
+- Dump every suite run and large tool output to a file under `/tmp` and read its tail.
+- Report with the conclusion first, plain language, decision-relevant detail only; contradictions between asks are named, not resolved silently.
+
 ## Working Style
 
 - Avoid loading skills unless they are concretely needed for the task. Keep context focused and prefer direct source inspection for routine repo work.

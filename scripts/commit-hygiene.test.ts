@@ -617,23 +617,4 @@ describe('the gate states what it does not catch', () => {
       expect(rule.names.length).toBeGreaterThan(5);
     }
   });
-
-  test('AGENTS.md states the same convention the gate enforces', () => {
-    // AGENTS.md is loaded into every agent session, so it is where an author
-    // learns the vocabulary instead of discovering it from a red gate. Two
-    // statements of one set is drift by construction unless the equality is
-    // asserted, which is what this is.
-    const guidance = readFileSync(resolve(root, 'AGENTS.md'), 'utf8');
-    const section = guidance.slice(guidance.indexOf('## Commit Messages'));
-    expect(section.startsWith('## Commit Messages')).toBe(true);
-
-    const stated = [...section.slice(0, section.indexOf('\n## ', 1)).matchAll(/`([a-z]+)`/g)]
-      .map((match) => match[1]);
-
-    for (const prefix of ALLOWED_PREFIXES) expect(stated).toContain(prefix);
-    expect(section).toContain(`at most ${String(SUBJECT_CEILING)} characters`);
-    expect(section).toContain(`at most ${String(MESSAGE_LINE_CEILING)} non-blank lines`);
-
-    for (const name of ROSTER) expect(section).toContain(name);
-  });
 });

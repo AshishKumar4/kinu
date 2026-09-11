@@ -9,8 +9,8 @@
 import { describe, expect, test } from 'bun:test';
 
 import {
-  describeStagingVerdict, stagingDeploymentVerdict, type DeployedHealth,
-} from './staging-preflight';
+  describeStagingVerdict, deploymentVerdict, type DeployedHealth,
+} from './deploy-preflight';
 
 const ORIGIN = 'https://staging.kinu.run';
 
@@ -22,13 +22,13 @@ function health(sha: string | null): DeployedHealth {
 
 describe('the staging preflight', () => {
   test('a deployment on this checkout is current, and says which build', () => {
-    const verdict = stagingDeploymentVerdict({ localSha: 'abc1234', health: health('abc1234') });
+    const verdict = deploymentVerdict({ localSha: 'abc1234', health: health('abc1234') });
     expect(verdict.kind).toBe('current');
     expect(describeStagingVerdict(verdict, ORIGIN)).toContain('abc1234');
   });
 
   test('a deployment on another build is stale and names both shas plus the fix', () => {
-    const verdict = stagingDeploymentVerdict({ localSha: 'ffff999', health: health('17abc2980') });
+    const verdict = deploymentVerdict({ localSha: 'ffff999', health: health('17abc2980') });
     expect(verdict.kind).toBe('stale');
     const line = describeStagingVerdict(verdict, ORIGIN);
     // Both shas, because "stale" without the pair leaves a reader unable to tell
@@ -36,7 +36,7 @@ describe('the staging preflight', () => {
     // is the exact 2026-08-24 shape: deployed 17abc2980, checkout 27 ahead.
     expect(line).toContain('17abc2980');
     expect(line).toContain('ffff999');
-    expect(line).toContain('bun run deploy:staging');
+    expect(line).toContain('bun run deploy');
     expect(line).toContain('--allow-stale');
   });
 
@@ -44,13 +44,13 @@ describe('the staging preflight', () => {
     // `ok: false` with `build: null` is the health route's own way of saying the
     // asset bundle is incomplete. Reporting that as "stale" would send someone
     // comparing shas that do not exist.
-    const verdict = stagingDeploymentVerdict({ localSha: 'abc1234', health: health(null) });
+    const verdict = deploymentVerdict({ localSha: 'abc1234', health: health(null) });
     expect(verdict.kind).toBe('unstamped');
     expect(describeStagingVerdict(verdict, ORIGIN)).toContain('incomplete');
   });
 
   test('an unanswered health endpoint carries the transport failure verbatim', () => {
-    const verdict = stagingDeploymentVerdict({
+    const verdict = deploymentVerdict({
       localSha: 'abc1234', health: null, failure: 'HTTP 503',
     });
 
@@ -62,10 +62,10 @@ describe('the staging preflight', () => {
 
   test('every verdict names a command or a flag a reader can act on', () => {
     const verdicts = [
-      stagingDeploymentVerdict({ localSha: 'a', health: health('a') }),
-      stagingDeploymentVerdict({ localSha: 'a', health: health('b') }),
-      stagingDeploymentVerdict({ localSha: 'a', health: health(null) }),
-      stagingDeploymentVerdict({ localSha: 'a', health: null, failure: 'boom' }),
+      deploymentVerdict({ localSha: 'a', health: health('a') }),
+      deploymentVerdict({ localSha: 'a', health: health('b') }),
+      deploymentVerdict({ localSha: 'a', health: health(null) }),
+      deploymentVerdict({ localSha: 'a', health: null, failure: 'boom' }),
     ];
 
     for (const verdict of verdicts) {
@@ -75,7 +75,7 @@ describe('the staging preflight', () => {
       // remedy. A state reported without either has moved the problem.
       const actionable = verdict.kind === 'current'
         ? line.includes('runs this checkout')
-        : line.includes('deploy:staging') || line.includes('--allow-stale');
+        : line.includes('deploy') || line.includes('--allow-stale');
 
       expect(actionable, `${verdict.kind}: ${line}`).toBe(true);
     }

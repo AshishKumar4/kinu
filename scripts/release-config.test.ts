@@ -169,10 +169,10 @@ const DEPLOYMENTS = deployments();
 const EACH = DEPLOYMENTS.map((deployment) => [deployment[0], deployment[1]] as const);
 
 describe('the sandbox container image is pinned', () => {
-  test('production and staging are both measured', () => {
-    // Named rather than counted: every assertion below iterates, so an
-    // environment silently dropped from the config would pass them vacuously.
-    expect(DEPLOYMENTS.map(([name]) => name)).toEqual(['production', 'staging']);
+  test('the deployment is measured', () => {
+    // Named rather than counted: every assertion below iterates, so a
+    // deployment silently dropped from the config would pass them vacuously.
+    expect(DEPLOYMENTS.map(([name]) => name)).toEqual(['production']);
   });
 
   test.each(EACH)('%s runs the pinned digest and names no tag', (name, block) => {
@@ -323,11 +323,10 @@ const SECRET_JOBS = secretBearingJobs();
 
 describe('the workflows that publish and measure this product', () => {
   test('every workflow is read, and the credential-bearing jobs are named', () => {
-    expect(WORKFLOW_FILES.length, 'the workflow corpus collapsed').toBeGreaterThan(4);
+    expect(WORKFLOW_FILES.length, 'the workflow corpus collapsed').toBeGreaterThan(3);
     // Named, not counted. These two hold every credential in the repository, and
     // the assertions below are only worth anything if they are still the two.
     expect(SECRET_JOBS.map((entry) => entry.label).sort()).toEqual([
-      '.github/workflows/deploy-staging.yml#deploy',
       '.github/workflows/eval.yml#benchmark',
     ]);
   });
@@ -346,7 +345,6 @@ describe('the workflows that publish and measure this product', () => {
     // in the repository, including one added by a branch. An environment is the
     // only boundary GitHub offers that a file in the repository can ask for.
     const bound = new Map([
-      ['.github/workflows/deploy-staging.yml#deploy', 'staging'],
       ['.github/workflows/eval.yml#benchmark', 'eval'],
     ]);
 

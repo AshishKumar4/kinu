@@ -10,7 +10,7 @@ name: Quality Eval
 # refuses that configuration outright.
 #
 # WHO IT RUNS AS, AND WHERE IT POINTS. The `eval-service` account, against the
-# staging deployment. Both come from scripts/eval-credentials.ts over
+# deployment. Both come from scripts/eval-credentials.ts over
 # packages/test-utils/src/eval-identity.ts — the resolution every other eval
 # path uses — and a credential aimed at any other deployment is refused there
 # and stops this job. Neither a base URL nor an auth header comes from a
@@ -33,7 +33,7 @@ name: Quality Eval
 # needed a maintainer.
 #
 # So the secret-bearing job checks out the BASE revision: `main`'s scripts,
-# `main`'s lockfile, `main`'s corpus. It measures the staging DEPLOYMENT, which is
+# `main`'s lockfile, `main`'s corpus. It measures the DEPLOYMENT, which is
 # what the eval is about — the branch was never the subject, and a branch that
 # changes the harness or the corpus has to land (or be dispatched from a trusted
 # ref) before that change is measured. `validate-corpus` is where a PR's own

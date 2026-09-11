@@ -57,11 +57,12 @@
 #                        server is the other accepted value.
 #
 # The resolved pair is exported as KINU_ORIGIN + KINU_TOKEN, which is what
-# `resolveLiveModel` reads. An origin outside that allowlist is REFUSED and this
-# script stops — production is reachable only by naming the exception,
-# KINU_EVAL_ALLOW_PROD=1. That guard is not decoration: this pair reaches the
-# deployment's whole API, and until it existed the tier ran against production on
-# the owner's own session, leaving 23 test workspaces on the account among his 28.
+# `resolveLiveModel` reads. An origin outside that allowlist (the deployment or
+# a loopback) is REFUSED and this script stops. That guard is not decoration:
+# this pair reaches the deployment's whole API, and until the eval identity
+# existed the tier ran on the owner's own session, leaving 23 test workspaces on
+# the account among his 28. What keeps that from recurring is the identity, not
+# the origin: every run acts as the eval service account and tears down its rows.
 #
 # For models the account proxy does not front, an AI Gateway is still accepted
 # directly: AI_GATEWAY_BASE_URL + AI_GATEWAY_AUTH (KINU_BASE_URL + KINU_AUTH are
@@ -386,10 +387,9 @@ export KINU_EVAL_LIVE=1
 # running under `bun test` sees an empty environment. Two lines on stdout or
 # none; the token never reaches argv or the log.
 #
-# A NON-ZERO EXIT IS FATAL. It means a credential was aimed at a deployment the
-# allowlist refuses — production, unless KINU_EVAL_ALLOW_PROD=1 names the
-# exception — and continuing would run the whole tier against whatever the
-# environment happened to say. `set -e` is still in force here deliberately:
+# A NON-ZERO EXIT IS FATAL. It means a credential was aimed at an origin the
+# allowlist refuses, and continuing would run the whole tier against whatever
+# the environment happened to say. `set -e` is still in force here deliberately:
 # this is the one failure that must abort before anything spends or writes.
 # A COMMAND SUBSTITUTION, not `< <(…)`: `set -e` observes the exit status of an
 # assignment's substitution, but a process substitution's status is discarded —
@@ -428,7 +428,7 @@ if [[ "$BACKEND" == cloud ]]; then
     echo "    bun run test:eval" >&2
     exit 1
   fi
-  bun scripts/staging-preflight.ts "${ALLOW_STALE[@]}" "$KINU_ORIGIN"
+  bun scripts/deploy-preflight.ts "${ALLOW_STALE[@]}" "$KINU_ORIGIN"
 fi
 
 # EXPECT_LIVE is this script's answer to the only question `scripts/eval-spend.ts`
