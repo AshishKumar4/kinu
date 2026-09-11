@@ -304,7 +304,7 @@ function RoleEditor(props: {
       </label>
       <label className="space-y-1 text-xs p-text-2 md:col-span-2">
         <span>Instructions</span>
-        <textarea className={`${inputCls} min-h-24 resize-y`} value={props.role.instructions} onChange={(event) => set('instructions', event.target.value)} />
+        <textarea rows={16} className={`${inputCls} resize-y`} value={props.role.instructions} onChange={(event) => set('instructions', event.target.value)} />
       </label>
       <label className="space-y-1 text-xs p-text-2">
         <span>Default swarm preset</span>
