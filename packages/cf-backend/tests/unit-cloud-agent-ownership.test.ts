@@ -1,6 +1,6 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { asFetchFunction } from '@kinu.run/core';
+import { asFetchFunction, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, type ProfileCatalogEnvelope } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
 import { testOwner } from './helpers/user-do';
 import { handleUserRequest } from '../src/user/routes';
@@ -12,6 +12,15 @@ import type { PresentedCaller } from '../src/control-plane/capability';
 import type { AuthIdentity } from '../src/auth/session';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
+
+/** The account's catalog as a fresh account has it: the built-in default tier
+ *  is where a create reads the model a new workspace starts on. */
+const DEFAULT_ENVELOPE: ProfileCatalogEnvelope = {
+  authority: { kind: 'account', accountId: USER_ID },
+  version: 0,
+  digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
+  catalog: BUILTIN_PROFILE_CATALOG,
+};
 
 interface TestNamespace<Stub> {
   idFromName(name: string): string;
@@ -80,7 +89,7 @@ function userStub(env: Env) {
  */
 function registryStub() {
   return {
-    async getConfig(_caller: UserCaller) { return null; },
+    async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
     async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
     async getCredentialBaseURL(_caller: UserCaller) {
       return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
@@ -106,11 +115,7 @@ describe('cloud agent ownership safety', () => {
     const background: Promise<unknown>[] = [];
 
     const userDO = {
-      async getConfig(_caller: UserCaller, key: string) {
-        calls.push(`config:${key}`);
-
-        return null;
-      },
+      async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
       async getAuthHeaders(_caller: UserCaller) {
         return { authorization: 'Bearer token' };
       },
@@ -249,11 +254,7 @@ describe('cloud agent ownership safety', () => {
     const index = indexFeed();
 
     const userDO = {
-      async getConfig(_caller: UserCaller, key: string) {
-        calls.push(`config:${key}`);
-
-        return null;
-      },
+      async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
       async getAuthHeaders(_caller: UserCaller) {
         return { authorization: 'Bearer token' };
       },
@@ -456,7 +457,7 @@ describe('cloud agent ownership safety', () => {
     const index = indexFeed();
 
     const userDO = {
-      async getConfig(_caller: UserCaller) { return null; },
+      async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
       async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
       async getCredentialBaseURL(_caller: UserCaller) {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
@@ -471,11 +472,9 @@ describe('cloud agent ownership safety', () => {
           status: 'created' as const,
         };
       },
-      async releaseWorkspaceReservation() {
-        calls.push('release');
+      async releaseWorkspaceReservation() { calls.push('release');
 
-        return true;
-      },
+ return true; },
       async removeWorkspace() { calls.push('remove'); },
     };
 
@@ -519,7 +518,7 @@ describe('cloud agent ownership safety', () => {
     const calls: string[] = [];
 
     const userDO = {
-      async getConfig(_caller: UserCaller) { return null; },
+      async getProfileCatalog(_caller: UserCaller) { return DEFAULT_ENVELOPE; },
       async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
       async getCredentialBaseURL(_caller: UserCaller) {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
@@ -596,7 +595,7 @@ describe('cloud agent ownership safety', () => {
     const calls: string[] = [];
 
     const userDO = {
-      async getConfig() { return null; },
+      async getProfileCatalog() { return DEFAULT_ENVELOPE; },
       async getAuthHeaders() { return { authorization: 'Bearer token' }; },
       async getCredentialBaseURL() {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
@@ -618,27 +617,21 @@ describe('cloud agent ownership safety', () => {
 
     const orchestrator = {
       // A freshly materialized workspace DO holds nothing yet.
-      async claimOwner(userId: string) {
-        calls.push(`claim:${userId}`);
+      async claimOwner(userId: string) { calls.push(`claim:${userId}`);
 
-        return { owner: userId, capabilityHash: null };
-      },
+ return { owner: userId, capabilityHash: null }; },
       async setInitialDisplayName(_displayName: string, origin: 'user' | 'auto') { calls.push(`initial-title:${origin}`); },
       async setSoul() { calls.push('soul'); },
       async setModel() { calls.push('model'); },
-      async resetWorkspaceBaseline() {
-        calls.push('baseline');
+      async resetWorkspaceBaseline() { calls.push('baseline');
 
-        return { ok: true as const };
-      },
+ return { ok: true as const }; },
       // Named, no mission: the DO's own gate (workspaceGenesisSignal) declines a
       // first turn on a placeholder mission. The call still happens — the wire
       // is unconditional and the decision is not the worker's to make.
-      async beginGenesisTurn() {
-        calls.push('genesis');
+      async beginGenesisTurn() { calls.push('genesis');
 
-        return { started: false };
-      },
+ return { started: false }; },
     };
 
     const env = testEnv({

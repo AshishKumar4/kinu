@@ -219,7 +219,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
       {state.kind === "failed" && (
         <p data-connect-error className="text-xs p-danger">Could not register this device: {state.message}</p>
       )}
-      <div className="flex items-center gap-2">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
         <input
           value={label}
           onChange={(event) => setLabel(event.target.value)}

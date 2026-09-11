@@ -20,9 +20,9 @@ import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@op
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
 import {
-  DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER,
+  DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
   composerVisibleRows, effectiveRoleCatalog,
-  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type TierId,
+  type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type TierId,
 } from '@kinu.run/core';
 import {
   findForkPivot,
@@ -127,7 +127,7 @@ export interface ChatAppOpts {
   onNewAgent?: (client: AgentClient) => Promise<TuiCreatedAgent>;
   profileMutations?: {
     setModel(spec: string): Promise<{ spec: string }>;
-    setReasoningEffort(effort: 'low' | 'medium' | 'high'): Promise<{ effort: 'low' | 'medium' | 'high' }>;
+    setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
   };
   tui?: TuiRuntimeOptions;
   /** The hub as this host first read it. */
@@ -242,7 +242,7 @@ function ChatScene({
   /** Steer-as-Branch runs in flight, branchId → task (status-bar segment). */
   const profileMutations = suppliedProfileMutations ?? {
     setModel: (spec: string) => setModelPreference(client, spec),
-    setReasoningEffort: (effort: 'low' | 'medium' | 'high') =>
+    setReasoningEffort: (effort: ReasoningEffort) =>
       setReasoningEffortPreference(client, effort),
   };
 
@@ -288,6 +288,14 @@ function ChatScene({
   const commands = useMemo(() => commandsForClient(client), [client]);
   const deviceConnect = useDeviceConnectPrompt();
 
+  // The effort rows are the active model's own levels (#9), read off the
+  // catalog the picker loads; the stored level stays listed even when the
+  // catalog no longer names it.
+  const efforts = useMemo(
+    () => effortsForModel(modelCatalog, modelSpec, status),
+    [modelCatalog, modelSpec, status],
+  );
+
   const settings = useMemo<TuiSettingChoice[]>(() => {
     const effort = status?.reasoningEffort ?? 'medium';
 
@@ -299,7 +307,7 @@ function ChatScene({
         value: modelSpec || 'default',
         command: '/model',
       },
-      ...(['low', 'medium', 'high'] as const).map((value) => ({
+      ...efforts.map((value) => ({
         id: `effort-${value}`,
         group: 'Model',
         label: `Reasoning effort: ${value}`,
@@ -335,7 +343,7 @@ function ChatScene({
     }
 
     return rows;
-  }, [activeTheme.label, client, modelSpec, preferences.theme.mode, status?.reasoningEffort]);
+  }, [activeTheme.label, client, efforts, modelSpec, preferences.theme.mode, status?.reasoningEffort]);
 
   useEffect(() => {
     if (activeSurface?.kind !== 'model') modelRequestRef.current += 1;
@@ -849,7 +857,7 @@ function ChatScene({
     }
   }, [addError, addMessage, client]);
 
-  const selectReasoningEffort = useCallback(async (effort: 'low' | 'medium' | 'high') => {
+  const selectReasoningEffort = useCallback(async (effort: ReasoningEffort) => {
     try {
       await profileMutations.setReasoningEffort(effort);
       setStatus((value) => value === null ? value : { ...value, reasoningEffort: effort });
@@ -1431,11 +1439,9 @@ function ChatScene({
     rendererInstance.root.onMouseUp = () => {
       // Defer slightly so the selection is finalized by the renderer.
       setTimeout(() => {
-        if (!rendererInstance.hasSelection) {
-          copied = false;
+        if (!rendererInstance.hasSelection) { copied = false;
 
-          return;
-        }
+ return; }
 
         if (copied) return; // already copied this selection
         const selection = rendererInstance.getSelection();
@@ -1608,11 +1614,8 @@ function ChatScene({
 
     if (actionId === 'effort.cycle') {
       key.preventDefault();
-      const efforts = ['low', 'medium', 'high'] as const;
-      const current = status?.reasoningEffort ?? 'medium';
-      const next = efforts[(efforts.indexOf(current) + 1) % efforts.length]!;
 
-      return selectReasoningEffort(next);
+      return selectReasoningEffort(nextReasoningEffort(efforts, status?.reasoningEffort ?? 'medium'));
     }
 
     if (actionId === 'conversation.branch') {
@@ -2018,4 +2021,14 @@ export async function runTuiChat(opts: ChatAppOpts): Promise<void> {
 
   // Keep the process alive
   await new Promise<void>(() => {});
+}
+
+/** The effort levels the active model offers: its catalog entry's own list,
+ *  plus the stored level when the entry no longer names it. */
+function effortsForModel(
+  catalog: readonly AgentModelEntry[],
+  spec: string,
+  status: AgentClientStatus | null,
+): ReasoningEffort[] {
+  return offeredReasoningEfforts(catalog.find((model) => model.spec === spec)?.reasoningEfforts, status?.reasoningEffort);
 }

@@ -148,6 +148,7 @@ export function fakeClient(options: FakeClientOptions) {
         label: 'GPT 5.5',
         spec: 'openai/gpt-5.5',
         capabilities: ['tools', 'streaming'],
+        reasoningEfforts: ['low', 'medium', 'high'],
       }],
       failures: [],
     })),

@@ -6,9 +6,14 @@
  * and the owner's report was that it is hard to navigate: the thing you came
  * for is somewhere in a scroll, and a link that lands you on it lands you
  * mid-page with no way to tell where you are. The section is now in the URL
- * hash, the rail says which one you are reading, and every deep link that
- * existed (`/user/settings#devices`) opens its section instead of scrolling
- * to it.
+ * hash, the rail says which one you are reading, the section head says what
+ * it changes, and every deep link that existed (`/user/settings#devices`)
+ * opens its section instead of scrolling to it.
+ *
+ * One grammar inside a section: a `Card` names a group and what it applies
+ * to; a `Field` names one setting and what it does; lists are `p-group` rows;
+ * anything that takes something away is a quiet button in danger ink, kept
+ * apart from the facts beside it.
  *
  *   #account    profile
  *   #devices    the machines linked to this account
@@ -24,16 +29,15 @@ import { startTransition, useEffect, useState, useCallback, useRef, type ReactNo
 import { Link, useLocation } from "react-router-dom";
 import { Combobox, Loader } from "@cloudflare/kumo";
 import {
-  PlugIcon, KeyIcon, GearSixIcon, CheckIcon, CopyIcon,
+  PlugIcon, KeyIcon, CheckIcon, CloudIcon, OpenAiLogoIcon, PlugsConnectedIcon,
   UserCircleIcon, ArrowSquareOutIcon, TrashIcon, ArrowLeftIcon,
   DesktopTowerIcon, WarningIcon, PencilSimpleIcon, XIcon, TerminalIcon,
 } from "@phosphor-icons/react";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { ModelPicker } from "@/components/ModelPicker";
 import {
   getProfile, listCredentials, setCredential, deleteCredential,
   codexStatus, startCodexFlow, pollCodexFlow, disconnectCodex,
-  listAvailableModels, listProviderCatalog, getConfig, setConfig, getCliSetup,
+  listAvailableModels, listProviderCatalog, getCliSetup,
   listCloudflareGateways, selectCloudflareGateway,
   listCloudflareAccounts, selectCloudflareAccount,
   acknowledgeUnstoppedDevice, registerDevice, renameDevice, revokeDevice,
@@ -43,16 +47,16 @@ import {
   type CloudflareGatewayStatus, type CloudflareAccountStatus, type UserDevice,
   type DeviceConsent,
 } from "../lib/user-api";
-import { Card, inputCls } from "@/components/ui/form";
+import { Card, Field, inputCls } from "@/components/ui/form";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import {
   lastValue, useAsyncResource, type AsyncResource, type Revalidate,
 } from "@/hooks/use-async-resource";
 import { DEVICE_ROSTER_POLL_MS, useDeviceRoster } from "@/hooks/use-device-roster";
 import { ConnectDevicePanel, DeviceConnectFlow } from "@/components/ConnectDevicePanel";
-import { SettingsRail, settingsSection } from "@/components/SettingsRail";
-import { copyLabel, useCopy } from "@/hooks/use-copy";
+import { SettingsRail, SettingsSectionHead, settingsSection } from "@/components/SettingsRail";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { FilledButton } from "@/components/ui/FilledButton";
 import { ProfileCatalogSettings } from "@/components/ProfileCatalogSettings";
 import * as v from "valibot";
 import { describeGpuNodes, effectiveDeviceMode, sandboxReasonFix, type DeviceMode } from "@kinu.run/core";
@@ -105,9 +109,41 @@ function CardSlot<T>({ resource, what, onRetry, children }: {
   );
 }
 
+/** The one spelling of "this provider is connected", so Cloudflare and ChatGPT
+ *  say it the same way. A detail is the account or gateway it is connected as. */
+function ConnectedBadge({ detail }: { detail?: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="p-badge-success inline-flex items-center gap-1 px-2 py-0.5"><CheckIcon size={11} /> Connected</span>
+      {detail && <span className="p-meta p-text-3">{detail}</span>}
+    </div>
+  );
+}
+
+/** A quiet destructive action: danger ink in the quiet box, so it reads as an
+ *  action and as one that takes something away, without the filled danger the
+ *  page reserves for a confirm. */
+const dangerQuietCls = "p-btn-quiet inline-flex h-6.5 shrink-0 items-center gap-1 px-2 text-xs p-danger";
+
+/** The page frame both states of the page share: the way back, the title,
+ *  and what everything under it applies to. */
+function PageHeader() {
+  return (
+    <header className="border-b p-border pb-6">
+      <Link to="/" className="p-btn-ghost -ml-2 mb-4 inline-flex h-6.5 items-center gap-1 rounded-md px-2 text-xs">
+        <ArrowLeftIcon size={12} /> Workspaces
+      </Link>
+      <p className="p-eyebrow">Account</p>
+      <h1 className="p-display mt-1 text-[26px] leading-8">Account settings</h1>
+      <p className="mt-1.5 p-row-text p-text-3">
+        What you set here applies to every workspace you own.
+      </p>
+    </header>
+  );
+}
+
 export default function UserSettingsPage() {
   const [cliSetup, setCliSetup] = useState<CliSetup | null>(null);
-  const [defaultModel, setDefaultModel] = useState<string | null>(null);
 
   // Every one of these reads describes what the account HAS connected, so none
   // of them may fail quietly: a swallowed rejection turned into "Connect
@@ -124,9 +160,8 @@ export default function UserSettingsPage() {
   const catalog = useAsyncResource(listProviderCatalog);
   const gateways = useAsyncResource(listCloudflareGateways);
   const accounts = useAsyncResource(listCloudflareAccounts);
-  const storedDefault = useAsyncResource(useCallback(() => getConfig("default_model"), []));
 
-  const reads = [profile, creds, codex, models, catalog, gateways, accounts, storedDefault];
+  const reads = [profile, creds, codex, models, catalog, gateways, accounts];
   // One retry affordance: a mutation's onChanged and every card's Retry re-read
   // the whole account, because the mutators invalidate more than their own row
   // (connecting a provider changes the model menu, the catalog and the creds).
@@ -140,23 +175,10 @@ export default function UserSettingsPage() {
 
   // The picker is optimistic on the user's own pick; the loaded value is the
   // fallback until it is re-read.
-  const selectedDefaultModel = defaultModel ?? lastValue(storedDefault.resource)?.value ?? '';
 
   // Section state lives in the URL, so a deep link, a reload and the browser's
   // Back button all land on the same section.
   const section = settingsSection(useLocation().hash);
-
-  const header = (
-    <header>
-      <Link to="/" className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
-        <ArrowLeftIcon size={12} /> Back
-      </Link>
-      <h1 className="p-display text-2xl">Account settings</h1>
-      <p className="text-xs p-text-3 mt-1">
-        Credentials apply to every agent you own.
-      </p>
-    </header>
-  );
 
   // Before ANY read settles there is one quiet page loader, and when EVERY read
   // failed there is one failure — eight stacked copies of either say nothing
@@ -167,8 +189,8 @@ export default function UserSettingsPage() {
   if (allLoading || failures.length === reads.length) {
     return (
       <div className="h-full overflow-y-auto">
-        <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
-          {header}
+        <div className="mx-auto max-w-5xl space-y-8 px-5 py-8 sm:px-6">
+          <PageHeader />
           {allLoading
             ? <div className="flex justify-center py-10"><Loader size="base" /></div>
             : <LoadFailure what="your account" message={failures[0] ?? ""} onRetry={reloadAll} />}
@@ -179,41 +201,39 @@ export default function UserSettingsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-5xl mx-auto px-6 py-8 space-y-6">
-        {header}
+      <div className="mx-auto max-w-5xl space-y-8 px-5 py-8 sm:px-6">
+        <PageHeader />
         {/* A side rail needs room the workspace sidebar has already taken:
-            below 64rem the same entries wrap into a row above the section. */}
-        <div className="flex flex-col gap-6 lg:flex-row lg:gap-8">
+            below 64rem the same entries become a tab strip above the section. */}
+        <div className="flex flex-col gap-7 lg:flex-row lg:gap-10">
           <SettingsRail active={section} />
-          <div className="min-w-0 flex-1 space-y-6">
+          <div className="min-w-0 flex-1 lg:max-w-[820px]">
+            <SettingsSectionHead section={section} />
+            <div className="space-y-5">
 
         {section === "account" && (
           <Card title="Profile" icon={UserCircleIcon}>
             <CardSlot resource={profile.resource} what="your profile" onRetry={reloadAll}>
               {(p) => (
-                <div className="grid grid-cols-2 gap-3 text-xs">
-                  <div className="space-y-1">
-                    <div className="p-text-3">Email</div>
-                    <div className="font-mono">{p?.email ?? 'Not available'}</div>
+                <dl className="grid gap-5 sm:grid-cols-2">
+                  <div>
+                    <dt className="p-meta p-text-3">Email</dt>
+                    <dd className="mt-1 font-mono p-row-text p-text">{p?.email ?? 'Not available'}</dd>
                   </div>
-                  <div className="space-y-1">
-                    <div className="p-text-3">Member since</div>
-                    <div>{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</div>
+                  <div>
+                    <dt className="p-meta p-text-3">Member since</dt>
+                    <dd className="mt-1 p-row-text p-text">{p?.createdAt ? new Date(p.createdAt).toLocaleDateString() : 'Not available'}</dd>
                   </div>
-                </div>
+                </dl>
               )}
             </CardSlot>
           </Card>
         )}
 
         {section === "cli" && (
-          <Card title="CLI" icon={TerminalIcon}>
-            <div className="space-y-3">
-              <p className="text-xs p-text-2">
-                Install the CLI, sign in, and configure local execution with one command.
-              </p>
-              <CommandCopy label="Setup" command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
-            </div>
+          <Card title="Install" icon={TerminalIcon}
+            description="Install the CLI, sign in, and configure local execution with one command.">
+            <CommandCopy command={cliSetup?.installCommand ?? `curl -fsSL '${window.location.origin}/install.sh' | bash`} />
           </Card>
         )}
 
@@ -224,13 +244,12 @@ export default function UserSettingsPage() {
 
         {section === "providers" && (
           <>
-            <Card title="Cloudflare AI" icon={PlugIcon}>
+            <Card title="Cloudflare AI" icon={CloudIcon}
+              description="Workers AI models on your quota, and an AI Gateway for provider keys or Unified Billing.">
               <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
                 {(menu) => menu.models.some((model) => model.provider === 'workers-ai') ? (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-2 text-xs p-success">
-                      <CheckIcon size={13} /> Connected
-                    </div>
+                  <div className="space-y-5">
+                    <ConnectedBadge />
                     {/* Which account serves Workers AI is upstream of which gateway
                         is reachable, so it is asked first. */}
                     <CardSlot resource={accounts.resource} what="your Cloudflare accounts" onRetry={reloadAll}>
@@ -249,13 +268,15 @@ export default function UserSettingsPage() {
               </CardSlot>
             </Card>
 
-            <Card title="ChatGPT (Codex)" icon={PlugIcon}>
+            <Card title="ChatGPT (Codex)" icon={OpenAiLogoIcon}
+              description="Your ChatGPT subscription and its Codex models.">
               <CardSlot resource={codex.resource} what="your ChatGPT connection" onRetry={reloadAll}>
                 {(status) => <CodexConnect status={status} onChanged={reloadAll} />}
               </CardSlot>
             </Card>
 
-            <Card title="API keys" icon={KeyIcon}>
+            <Card title="API keys" icon={KeyIcon}
+              description="Keys you paste here are stored once and used by every workspace.">
               <CardSlot resource={creds.resource} what="your API keys" onRetry={reloadAll}>
                 {(credentials) => (
                   <CardSlot resource={catalog.resource} what="the provider catalog" onRetry={reloadAll}>
@@ -265,54 +286,18 @@ export default function UserSettingsPage() {
               </CardSlot>
             </Card>
 
-            <Card title="MCP servers" icon={PlugIcon}>
-              <div className="space-y-2 text-xs">
-                <p className="p-text-2">
-                  Connect an MCP server once. Every agent you own can use its tools.
-                </p>
-                <Link
-                  to="/user/settings/mcp"
-                  className="inline-flex items-center gap-1 px-3 py-1.5 p-card p-card-hover"
-                >Manage MCP servers <ArrowSquareOutIcon size={12} /></Link>
-              </div>
+            <Card title="MCP servers" icon={PlugsConnectedIcon}
+              description="Connect an MCP server once. Every agent you own can use its tools.">
+              <Link
+                to="/user/settings/mcp"
+                className="p-btn-quiet inline-flex h-6.5 items-center gap-1 px-2.5 text-xs"
+              >Manage MCP servers <ArrowSquareOutIcon size={12} /></Link>
             </Card>
           </>
         )}
 
-        {section === "models" && (
-          <>
-            <Card title="Defaults" icon={GearSixIcon}>
-              <CardSlot resource={models.resource} what="your connected models" onRetry={reloadAll}>
-                {(menu) => (
-                  <CardSlot resource={storedDefault.resource} what="your default model" onRetry={reloadAll}>
-                    {() => (
-                      <div className="space-y-2">
-                        <div className="text-xs p-text-2">Default model for new workspaces</div>
-                        <ModelPicker
-                          models={menu.models}
-                          failures={menu.failures}
-                          value={selectedDefaultModel}
-                          onChange={async (spec) => {
-                            setDefaultModel(spec);
-
-                            try { await setConfig('default_model', spec); }
-                            catch (err) { setDefaultModel(null); alert(renderThrownChain({ cause: err })); }
-                          }}
-                          clearable
-                          placeholder="(use system default)"
-                        />
-                        <p className="p-meta p-text-3">
-                          New workspaces use this default. Change an existing workspace under Workspace settings.
-                        </p>
-                      </div>
-                    )}
-                  </CardSlot>
-                )}
-              </CardSlot>
-            </Card>
-            <ProfileCatalogSettings />
-          </>
-        )}
+        {section === "models" && <ProfileCatalogSettings />}
+            </div>
           </div>
         </div>
       </div>
@@ -409,59 +394,55 @@ function DevicesCard() {
   const lapsing = lapsingDevices(devices);
 
   return (
-    <Card title="Devices" icon={DesktopTowerIcon}>
+    <>
       {/* What a link MEANS is stated once, by the connect panel below, in the
-          words `kinu connect` prints. This line is about the list. */}
-      <p className="text-xs p-text-2">
-        Your linked machines, and which workspaces can use them.
-      </p>
+          words `kinu connect` prints. This card is about the list. */}
+      <Card title="Linked machines" icon={DesktopTowerIcon}
+        description="Your linked machines, and which workspaces can use them. Revoke a workspace's access from the machine's row.">
+        {devices.length > 0 ? (
+          <div className="p-group text-xs">
+            {devices.map((d) => (
+              <DeviceRow
+                key={d.id}
+                device={d}
+                grants={grants.filter((g) => g.deviceId === d.id && g.policy === "allow")}
+                onDeviceChanged={reloadDevices}
+                onGrantsChanged={grantRoster.reload}
+                onError={setErr}
+                onRevoke={() => revoke(d.id, d.label)}
+                unstoppedCommands={unstoppedCounts.get(d.id)}
+                onAcknowledge={() => acknowledgeIncident(d.id)}
+              />
+            ))}
+          </div>
+        ) : roster.resource.status === "ready" && (
+          <p className="p-row-text p-text-3">No machine is linked yet. Connect one below.</p>
+        )}
+        {roster.resource.status === "error" && (
+          <LoadFailure what="your devices" message={roster.resource.message} onRetry={reloadDevices} />
+        )}
+        {grantRoster.resource.status === "error" && (
+          <LoadFailure what="the device grants" message={grantRoster.resource.message} onRetry={grantRoster.reload} />
+        )}
+        {devices.some((device) => device.revokedAt === null)
+          && !devices.some((device) => device.revokedAt === null && device.connected) && (
+          <p className="p-meta p-text-3">
+            Offline. Run <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on that machine.
+          </p>
+        )}
+        {lapsing.length > 0 && (
+          <p className="p-meta p-text-3">
+            {lapsing.map((d) => d.label).join(", ")} {lapsing.length > 1 ? "links lapse" : "link lapses"} soon.
+            Run <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on {lapsing.length > 1 ? "those machines" : "that machine"} to renew {lapsing.length > 1 ? "them" : "it"}.
+          </p>
+        )}
+        {err && <p className="text-xs p-danger">{err}</p>}
+      </Card>
 
-      {devices.length > 0 && (
-        <div className="rounded-md border p-border overflow-hidden text-xs">
-          {devices.map((d) => (
-            <DeviceRow
-              key={d.id}
-              device={d}
-              grants={grants.filter((g) => g.deviceId === d.id && g.policy === "allow")}
-              onDeviceChanged={reloadDevices}
-              onGrantsChanged={grantRoster.reload}
-              onError={setErr}
-              onRevoke={() => revoke(d.id, d.label)}
-              unstoppedCommands={unstoppedCounts.get(d.id)}
-              onAcknowledge={() => acknowledgeIncident(d.id)}
-            />
-          ))}
-        </div>
-      )}
-      {roster.resource.status === "error" && (
-        <LoadFailure what="your devices" message={roster.resource.message} onRetry={reloadDevices} />
-      )}
-      {grantRoster.resource.status === "error" && (
-        <LoadFailure what="the device grants" message={grantRoster.resource.message} onRetry={grantRoster.reload} />
-      )}
-      {devices.some((device) => device.revokedAt === null)
-        && !devices.some((device) => device.revokedAt === null && device.connected) && (
-        <p className="p-meta p-text-3">
-          Offline. Run <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on that machine.
-        </p>
-      )}
-      {lapsing.length > 0 && (
-        <p className="p-meta p-text-3">
-          {lapsing.map((d) => d.label).join(", ")} {lapsing.length > 1 ? "links lapse" : "link lapses"} soon.
-          Run <code className="font-mono p-fill px-1 rounded-sm">kinu connect</code> on {lapsing.length > 1 ? "those machines" : "that machine"} to renew {lapsing.length > 1 ? "them" : "it"}.
-        </p>
-      )}
-
-      {err && <div className="text-xs p-danger">{err}</div>}
-
-      <div className="border-t p-border pt-4">
+      <Card title="Connect a machine" icon={PlugIcon}>
         <ConnectDevicePanel flow={flow} devices={lastValue(roster.resource)} />
-      </div>
-
-      <p className="p-meta p-text-3">
-        Revoke workspace access from the machine's row.
-      </p>
-    </Card>
+      </Card>
+    </>
   );
 }
 
@@ -522,7 +503,7 @@ export function DeviceRow({
 
     return (
       <div data-device-incident={device.id} role="alert"
-        className="border-b p-border p-notice-danger px-3 py-3 text-xs last:border-0">
+        className="p-notice-danger rounded-none border-0 px-4 py-3 text-xs">
         <div className="flex items-start gap-2">
           <WarningIcon size={14} className="mt-0.5 shrink-0" />
           <div className="min-w-0 flex-1 space-y-1">
@@ -547,7 +528,7 @@ export function DeviceRow({
                 }
               });
             }}
-            className="p-btn-quiet shrink-0 px-2 py-1 disabled:opacity-50">
+            className="p-btn-quiet inline-flex h-6.5 shrink-0 items-center px-2 text-xs">
             {acknowledging ? "Acknowledging…" : "Acknowledge"}
           </button>
         </div>
@@ -593,12 +574,12 @@ export function DeviceRow({
   };
 
   return (
-    <div className="px-3 py-2 border-b p-border last:border-0">
-      <div className="flex items-center gap-2">
+    <div className="px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
         <span className={`size-1.5 rounded-full shrink-0 ${device.connected ? "p-dot-success" : "p-dot-neutral"}`} />
         {editing === null ? (
           <>
-            <span className="font-medium p-text">{device.label}</span>
+            <span className="p-row-text font-medium p-text">{device.label}</span>
             <button onClick={() => setEditing(device.label)} title="Rename this device" className="p-text-3 hover:p-text">
               <PencilSimpleIcon size={12} />
             </button>
@@ -622,14 +603,16 @@ export function DeviceRow({
             className="px-1.5 py-0.5 rounded-sm border p-border p-fill p-text text-xs w-44"
           />
         )}
-        {device.hostname && <span className="p-text-3 font-mono">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
-        <span className="p-text-3 ml-auto">{device.connected ? "connected" : "offline"}</span>
-        <button onClick={onRevoke} title="Revoke device" className="p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
+        {device.hostname && <span className="p-annotation p-text-3">{device.hostname}{device.os ? ` · ${device.os}` : ""}</span>}
+        <span className={`ml-auto px-2 py-0.5 ${device.connected ? "p-badge-success" : "p-badge-neutral"}`}>{device.connected ? "connected" : "offline"}</span>
+        {/* The one action here that takes something away sits apart from the
+            facts, past a hairline, in danger ink. */}
+        <button onClick={onRevoke} title="Revoke device" className="ml-1 border-l p-border pl-3 p-text-3 hover:p-danger"><TrashIcon size={13} /></button>
       </div>
       {/* The switch, then its consequence. One line of copy per mode; the badge
           is a machine fact the switch cannot change, so it sits beside the switch
           rather than inside the sentence. */}
-      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <label className="inline-flex items-center gap-2 p-text">
           <button
             type="button"
@@ -651,7 +634,7 @@ export function DeviceRow({
         {cannotSandbox && <span className="p-badge-warning px-1.5 py-0.5">Cannot sandbox</span>}
         {mode === "sandboxed" && <span className="p-text-3">GPU: {describeGpuNodes(sandbox.gpu)}</span>}
       </div>
-      <p className="mt-1 p-meta p-text-3" data-sandbox-mode={mode}>
+      <p className="mt-1.5 p-meta p-text-3" data-sandbox-mode={mode}>
         {SANDBOX_MODE_COPY[mode]}
         {/* The daemon's own line first, when it sent one. For a probe that
             failed in words nobody classified, that line is what the fix
@@ -659,7 +642,7 @@ export function DeviceRow({
         {cannotSandbox && sandbox.detail !== null && <> The daemon said: <code className="font-mono">{sandbox.detail}</code>.</>}
         {cannotSandbox && <> {withCodeSpans(sandboxReasonFix(sandbox.reason))}</>}
       </p>
-      <div className="mt-1 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 p-meta p-text-3">
         {grants.length === 0 ? (
           <span>No workspace uses it yet.</span>
         ) : (
@@ -689,19 +672,13 @@ export function DeviceRow({
   );
 }
 
-function CommandCopy({ label, command }: { label: string; command: string }) {
-  const { status, copy } = useCopy();
-
+/** A command to run elsewhere, in the block the connect panel hands its
+ *  command over in: the well, the selectable text, and the copy action. */
+function CommandCopy({ command }: { command: string }) {
   return (
-    <div className="flex items-center gap-2 rounded-md border p-border p-2">
-      <div className="w-14 shrink-0 p-meta p-text-3">{label}</div>
-      <code className="font-mono p-meta p-text flex-1 truncate">{command}</code>
-      <button
-        onClick={() => copy(command)}
-        className={`px-2 py-1 rounded-sm p-card p-card-hover flex items-center gap-1 text-xs ${status === "failed" ? "p-danger" : "p-text-2"}`}
-      >
-        <CopyIcon size={11} />{copyLabel(status)}
-      </button>
+    <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
+      <code className="font-mono p-meta p-text flex-1 break-all select-all leading-relaxed">{command}</code>
+      <CopyButton value={command} what="the install command" size={13} className="p-text-3 hover:p-text shrink-0" />
     </div>
   );
 }
@@ -734,24 +711,20 @@ function CloudflareAccountSection({ status, onChanged }: {
   };
 
   return (
-    <div className="space-y-1.5">
-      <div className="text-xs p-text-2">Workers AI account</div>
+    <Field label="Workers AI account" hint="Changing this account clears the AI Gateway selection.">
       <select
         value={status.selectedId ?? ''}
         onChange={(e) => choose(e.target.value)}
         disabled={saving}
-        className={inputCls}
+        className={`${inputCls} sm:max-w-sm`}
       >
         {status.selectedId === null && <option value="">(no account selected)</option>}
         {status.accounts.map((account) => (
           <option key={account.id} value={account.id}>{account.name}</option>
         ))}
       </select>
-      <p className="p-meta p-text-3">
-        Changing this account clears the AI Gateway selection.
-      </p>
       {error && <p className="text-xs p-danger">{error}</p>}
-    </div>
+    </Field>
   );
 }
 
@@ -794,19 +767,19 @@ function CloudflareGatewaySection({ status, onChanged }: {
   }
 
   return (
-    <div className="space-y-1.5">
-      <div className="text-xs p-text-2">Your AI Gateway</div>
+    <Field label="AI Gateway"
+      hint={<>Models matching <code className="p-code-inline">my-gateway/&lt;provider&gt;/&lt;model&gt;</code> use this gateway's provider keys or Unified Billing credits.</>}>
       {status.gateways.length === 1 && status.selectedId === status.gateways[0].id ? (
         <div className="flex items-center gap-2 text-xs">
           <CheckIcon size={13} className="p-success" />
-          <span className="font-mono">{status.selectedId}</span>
+          <span className="font-mono p-text">{status.selectedId}</span>
         </div>
       ) : (
         <select
           value={status.selectedId ?? ''}
           onChange={(e) => choose(e.target.value)}
           disabled={saving}
-          className={inputCls}
+          className={`${inputCls} sm:max-w-sm`}
         >
           <option value="">(no gateway selected)</option>
           {status.gateways.map((gw) => (
@@ -814,12 +787,8 @@ function CloudflareGatewaySection({ status, onChanged }: {
           ))}
         </select>
       )}
-      <p className="p-meta p-text-3">
-        Models matching <code className="p-card px-1">my-gateway/&lt;provider&gt;/&lt;model&gt;</code> use this
-        gateway's provider keys or Unified Billing credits.
-      </p>
       {error && <p className="text-xs p-danger">{error}</p>}
-    </div>
+    </Field>
   );
 }
 
@@ -884,51 +853,38 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
 
   if (status?.connected) {
     return (
-      <div className="space-y-3">
-        <div className="flex items-center gap-2 text-xs">
-          <CheckIcon size={14} className="p-success" />
-          <span>Connected{status.accountId ? <span className="p-text-3"> · account {status.accountId.slice(0, 8)}…</span> : null}</span>
-        </div>
-        <button onClick={disconnect}
-          className="text-xs px-3 py-1.5 p-card p-card-hover transition-colors">
-          Disconnect
-        </button>
-      </div>
+      <Field inline label={<ConnectedBadge detail={status.accountId ? <>account {status.accountId.slice(0, 8)}…</> : undefined} />}>
+        <button onClick={disconnect} className={dangerQuietCls}>Disconnect</button>
+      </Field>
     );
   }
 
   if (flow && polling) {
     return (
-      <div className="space-y-3">
-        <p className="text-xs p-text-2">
-          Open <a href={flow.portalURL} target="_blank" rel="noopener noreferrer" className="p-accent underline">{flow.portalURL}</a> and enter:
-        </p>
-        <div className="flex items-center gap-3">
-          <code className="text-2xl font-mono tracking-widest p-card px-4 py-2 select-all">{flow.userCode}</code>
+      <Field label={<>Open <a href={flow.portalURL} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">{flow.portalURL}</a> and enter this code</>}>
+        <div className="flex flex-wrap items-center gap-3">
+          <code className="rounded-md border p-border p-fill px-4 py-2 font-mono text-2xl tracking-widest p-text select-all">{flow.userCode}</code>
           <CopyButton value={flow.userCode} what="the device code" size={14}
-            className="p-2 p-card p-card-hover" />
+            className="p-btn-quiet inline-flex size-8 items-center justify-center" />
           <a
             href={flow.portalURL}
             target="_blank" rel="noopener noreferrer"
-            className="p-2 p-card p-card-hover"
+            className="p-btn-quiet inline-flex size-8 items-center justify-center"
             title="Open portal"
           ><ArrowSquareOutIcon size={14} /></a>
         </div>
         <p className="p-meta p-text-3 flex items-center gap-2"><Loader size="sm" /> Waiting for you to authorize…</p>
         {error && <p className="text-xs p-danger">{error}</p>}
-      </div>
+      </Field>
     );
   }
 
   return (
-    <div className="space-y-3">
-      <p className="text-xs p-text-2">
-        Authorize once. Every agent can then use your ChatGPT subscription and its Codex models.
-      </p>
-      <button
-        onClick={start}
-        className="px-3 py-1.5 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 transition-opacity"
-      >Connect ChatGPT</button>
+    <div className="space-y-2">
+      <Field inline label="Not connected"
+        hint="Authorize once. Every agent can then use your ChatGPT subscription and its Codex models.">
+        <FilledButton onClick={start}>Connect ChatGPT</FilledButton>
+      </Field>
       {error && <p className="text-xs p-danger">{error}</p>}
     </div>
   );
@@ -1000,36 +956,34 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
     }
   }, [compatName, compatBaseURL, compatApiKey, onChanged]);
 
+  const compatKeys = creds.filter((c) => c.key.startsWith('openai-compat.'));
+
   return (
-    <div className="space-y-4">
+    <div className="space-y-5">
       {/* Stored keys */}
       {storedKeys.length > 0 && (
-        <div className="space-y-1.5">
+        <div className="p-group">
           {storedKeys.map(({ key, provider }) => (
-            <div key={key} className="flex items-center gap-2 text-xs px-2 py-1.5 p-card rounded-sm">
+            <div key={key} className="flex items-center gap-2 px-4 py-2.5 text-xs">
               <CheckIcon size={13} className="p-success shrink-0" />
-              <span className="font-medium">{provider?.name ?? key}</span>
+              <span className="p-row-text font-medium p-text">{provider?.name ?? key}</span>
               {provider?.doc && (
                 <a href={provider.doc} target="_blank" rel="noopener noreferrer" className="p-text-3 hover:p-accent" title="Provider docs">
                   <ArrowSquareOutIcon size={12} />
                 </a>
               )}
-              <span className="p-text-3 font-mono truncate">{key}</span>
-              <button
-                onClick={() => remove(key, provider?.name ?? key)}
-                className="ml-auto flex items-center gap-1 p-text-3 hover:p-danger shrink-0"
-              ><TrashIcon size={11} /> Remove</button>
+              <span className="p-annotation p-text-3 truncate">{key}</span>
+              <button onClick={() => remove(key, provider?.name ?? key)} className={`${dangerQuietCls} ml-auto`}>
+                <TrashIcon size={11} /> Remove
+              </button>
             </div>
           ))}
         </div>
       )}
 
       {/* Connect any catalog provider */}
-      <div className="space-y-2">
-        <div className="text-xs font-medium">Connect a provider</div>
-        <p className="p-meta p-text-3">
-          Paste an API key for any of {catalog.length} providers. Every agent you own can use it.
-        </p>
+      <Field label="Connect a provider"
+        hint={`Paste an API key for any of ${catalog.length} providers. Every agent you own can use it.`}>
         <Combobox
           items={catalog}
           value={selected}
@@ -1055,9 +1009,9 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         {selected && (
           <div className="space-y-2">
             <p className="p-meta p-text-3">
-              {selected.envVar && <>Environment variable: <code className="p-card px-1">{selected.envVar}</code>. </>}
+              {selected.envVar && <>Environment variable: <code className="p-code-inline">{selected.envVar}</code>. </>}
               {selected.doc && (
-                <a href={selected.doc} target="_blank" rel="noopener noreferrer" className="p-accent underline">
+                <a href={selected.doc} target="_blank" rel="noopener noreferrer" className="p-accent underline underline-offset-2">
                   {selected.name} docs <ArrowSquareOutIcon size={10} className="inline" />
                 </a>
               )}
@@ -1073,28 +1027,29 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
               <button
                 onClick={saveSelected}
                 disabled={savingKey !== null || !apiKey.trim()}
-                className="px-3 py-1.5 p-card p-card-hover disabled:opacity-50 text-xs shrink-0"
+                className="p-btn-quiet inline-flex h-9 shrink-0 items-center px-3 text-xs"
               >{savingKey === selected.credKey ? '...' : (selected.connected ? 'Replace' : 'Save')}</button>
             </div>
           </div>
         )}
-      </div>
+      </Field>
 
       {/* OpenAI-compat slot */}
-      <div className="pt-3 border-t p-border space-y-2">
-        <div className="text-xs font-medium">OpenAI-compatible (Groq, Together, …)</div>
-        <p className="p-meta p-text-3">Each endpoint stores a base URL and API key. Use model spec <code className="p-card px-1">openai-compat:&lt;name&gt;/&lt;modelId&gt;</code>.</p>
-        <div className="grid grid-cols-3 gap-2">
+      <Field label="OpenAI-compatible (Groq, Together, …)"
+        hint={<>Each endpoint stores a base URL and API key. Use model spec <code className="p-code-inline">openai-compat:&lt;name&gt;/&lt;modelId&gt;</code>.</>}>
+        <div className="grid gap-2 sm:grid-cols-[1fr_1.6fr_1fr]">
           <input
             value={compatName}
             onChange={(e) => setCompatName(e.target.value)}
             placeholder="name (e.g. groq)"
+            aria-label="Endpoint name"
             className={inputCls}
           />
           <input
             value={compatBaseURL}
             onChange={(e) => setCompatBaseURL(e.target.value)}
             placeholder="https://api.example.com/v1"
+            aria-label="Base URL"
             className={inputCls}
           />
           <input
@@ -1102,25 +1057,28 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
             value={compatApiKey}
             onChange={(e) => setCompatApiKey(e.target.value)}
             placeholder="api key"
+            aria-label="API key"
             className={inputCls}
           />
         </div>
         <button
           onClick={saveCompat}
           disabled={savingKey !== null || !compatName.trim() || !compatBaseURL.trim() || !compatApiKey.trim()}
-          className="px-3 py-1.5 p-card p-card-hover disabled:opacity-50 text-xs"
+          className="p-btn-quiet inline-flex h-6.5 items-center px-2.5 text-xs"
         >Add endpoint</button>
-
-        {/* List existing openai-compat */}
-        {creds.filter((c) => c.key.startsWith('openai-compat.')).map((c) => (
-          <div key={c.key} className="flex items-center justify-between text-xs px-2 py-1.5 p-card rounded-sm">
-            <span className="font-mono">{c.key}</span>
-            <button onClick={() => remove(c.key, c.key)} className="flex items-center gap-1 p-text-3 hover:p-danger">
-              <TrashIcon size={11} /> Remove
-            </button>
+        {compatKeys.length > 0 && (
+          <div className="p-group">
+            {compatKeys.map((c) => (
+              <div key={c.key} className="flex items-center gap-2 px-4 py-2.5 text-xs">
+                <span className="p-annotation p-text">{c.key}</span>
+                <button onClick={() => remove(c.key, c.key)} className={`${dangerQuietCls} ml-auto`}>
+                  <TrashIcon size={11} /> Remove
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
+        )}
+      </Field>
     </div>
   );
 }

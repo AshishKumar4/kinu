@@ -325,7 +325,7 @@ export class EvolutionEngine {
    * labels, the one-sentence turn reflection, the session reflection, and
    * pattern extraction. Short, schema-constrained jobs the chat vendor's small
    * tier does as well as its flagship, routed through `MODEL_ROUTE_POLICY.fast`
-   * to the account's `tiny` tier. Falls back to
+   * to the account's `fast` tier. Falls back to
    * the chat model when the vendor has no smaller tier, which is what every
    * backend did before this existed.
    *

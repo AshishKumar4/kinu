@@ -22,8 +22,9 @@ import {
 } from "@kinu.run/core";
 import { executorLabel } from "@/lib/executors";
 import { useKinu } from "@/hooks/use-kinu";
-import { Card, inputCls } from "@/components/ui/form";
+import { Card, Field, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { FilledButton } from "@/components/ui/FilledButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import type { Rpc } from '@/lib/protocol';
@@ -265,14 +266,15 @@ export default function SettingsPage() {
 
   return (
     <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-6 py-8 space-y-6">
-        <header className="flex flex-wrap items-start justify-between gap-3">
+      <div className="mx-auto max-w-3xl space-y-8 px-5 py-8 sm:px-6">
+        <header className="flex flex-wrap items-end justify-between gap-4 border-b p-border pb-6">
           <div className="min-w-0">
-            <Link to={`/workspace/${agentId}`} className="text-xs p-text-3 flex items-center gap-1 hover:p-text mb-2">
+            <Link to={`/workspace/${agentId}`} className="p-btn-ghost -ml-2 mb-4 inline-flex h-6.5 items-center gap-1 rounded-md px-2 text-xs">
               <ArrowLeftIcon size={12} /> Back to chat
             </Link>
-            <h1 className="p-display text-2xl">Workspace settings</h1>
-            <p className="text-xs p-text-3 mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-1">
+            <p className="p-eyebrow">Workspace</p>
+            <h1 className="p-display mt-1 text-[26px] leading-8">Workspace settings</h1>
+            <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 p-row-text p-text-3">
               <span className="font-mono">{agentId}</span>
               <CopyButton value={agentId ?? ""} what="the workspace slug" size={11}
                 className="rounded-sm p-0.5 p-card-hover hover:p-text transition-colors" />
@@ -286,38 +288,37 @@ export default function SettingsPage() {
               </Link>
             </p>
           </div>
-          <button
+          <FilledButton
             onClick={save}
             disabled={saving || !dirty}
             title={dirty ? undefined : "No unsaved changes"}
-            className="px-4 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90 transition-opacity disabled:opacity-50 flex items-center gap-2"
+            className="px-3"
           >
             {saved ? <CheckIcon size={14} /> : <FloppyDiskIcon size={14} />}
             <span>{saving ? "Saving…" : saved ? "Saved" : "Save"}</span>
-          </button>
+          </FilledButton>
         </header>
 
-        {err && <div className="p-card p-3 text-xs p-danger">{err}</div>}
+        {err && <div className="p-notice-danger px-4 py-3 text-xs">{err}</div>}
 
+        <div className="space-y-5">
         {/* Identity */}
         <Card title="Identity" icon={BrainIcon}>
-          <div className="space-y-1.5">
-            <label className="text-xs p-text-2 font-medium">Display name</label>
+          <Field label="Display name">
             <FieldState field={displayName} what="the display name" onRetry={retryLoad}>
               {(value) => (
                 <input value={value} onChange={(e) => displayName.edit(e.target.value)} className={inputCls} />
               )}
             </FieldState>
-          </div>
-          <div className="space-y-1.5">
-            <label className="text-xs p-text-2 font-medium">SOUL.md</label>
+          </Field>
+          <Field label="SOUL.md">
             <FieldState field={soul} what="SOUL.md" onRetry={retryLoad}>
               {(value) => (
                 <textarea value={value} onChange={(e) => soul.edit(e.target.value)} rows={8}
                   className={`${inputCls} font-mono`} placeholder={"# Agent name\n\n## Mission\n\nWhat is this agent for?"} />
               )}
             </FieldState>
-          </div>
+          </Field>
         </Card>
 
 
@@ -408,6 +409,7 @@ export default function SettingsPage() {
 
         {/* GEPA offline scaffold optimisation */}
         <GepaOptimizationCard rpc={rpc} />
+        </div>
       </div>
     </div>
   );

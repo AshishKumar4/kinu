@@ -23,6 +23,7 @@ import {
 import {
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,
+  WORKERS_AI_REASONING_EFFORTS,
 } from './workers-ai-catalog';
 
 export const AI_GATEWAY_PROVIDER_ID = 'ai-gateway';
@@ -63,6 +64,7 @@ export function createAIGatewayProvider(): ModelProvider {
       const models = await listModelsDevProviderModels('cloudflare-workers-ai', deps, {
         fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
         preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
+        reasoningEfforts: WORKERS_AI_REASONING_EFFORTS,
       });
 
       return models.map((model) => ({

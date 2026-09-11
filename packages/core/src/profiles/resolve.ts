@@ -354,10 +354,8 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   };
 
   const tiers = Object.freeze({
-    tiny: tierSlot('tiny'),
     fast: tierSlot('fast'),
     default: tierSlot('default'),
-    slow: tierSlot('slow'),
     deep: tierSlot('deep'),
   });
 
