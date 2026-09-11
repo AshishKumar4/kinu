@@ -1380,8 +1380,11 @@ export class LocalAgentSession implements BackendHost {
     }, spec);
   }
 
-  getReasoningEffort() {
-    return { effort: this.actorSession.profile?.tier.reasoningEffort ?? getReasoningEffort(this.config).effort };
+  /** The stored setting, as on cf — what `setReasoningEffort` writes, never the
+   *  claimed tier's own effort: a reading that changed with the turn in flight
+   *  showed an owner a value their own setting could not move. */
+  getReasoningEffort(): ReturnType<typeof getReasoningEffort> {
+    return getReasoningEffort(this.config);
   }
 
   setReasoningEffort(
