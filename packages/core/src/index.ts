@@ -1491,7 +1491,7 @@ export {
   reviewCommand,
   formatApproval,
   gatedGrants,
-  formatApprovalGrant,
+  formatApprovalGrant, holdsGrant,
   parseApprovalGrant,
   approvalGrants,
   gateExec,
