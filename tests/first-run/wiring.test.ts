@@ -37,7 +37,8 @@ test('a failed first-run process still reports spend and leaves its reports read
   writeFileSync(join(bin, 'bun'), `#!/bin/bash
 case "$1" in
   scripts/bench-retention.ts) mkdir -p "$REPORT_FIXTURE"; printf '%s\n' "$REPORT_FIXTURE" ;;
-  scripts/eval-credentials.ts) printf '%s\n' 'https://staging.kinu.run' 'fixture-token' ;;
+  scripts/eval-session-mint.ts) ;;
+  scripts/eval-credentials.ts) printf '%s\n' 'https://kinu.run' 'fixture-token' ;;
   --bun) printf '<testsuite failures="1"/>\n' > "$REPORT_FIXTURE/junit-first-run.xml"; printf 'measured-spend\n' > "$KINU_EVAL_SPEND_FILE"; exit 42 ;;
   scripts/eval-spend.ts) printf 'reported\n' > "$REPORT_FIXTURE/spend-reported" ;;
   *) exit 99 ;;
