@@ -362,6 +362,7 @@ export class ConversationSearchStore {
     void this.sql`DROP TRIGGER IF EXISTS messages_fts_ad`;
     void this.sql`DROP TRIGGER IF EXISTS messages_fts_au`;
     void this.sql`DROP TABLE IF EXISTS messages_fts`;
+    dropPreActorFtsState(this.sql);
     void this.sql`
       CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(
         content, msg_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, created_at UNINDEXED
@@ -485,6 +486,23 @@ function sessionIdOf(sessionId: string): string {
 }
 
 /**
+ * Drop a `conversation_fts_state` that predates its `actor_id` column.
+ *
+ * The column joined on 2026-09-08 (0f6899cff); `CREATE TABLE IF NOT EXISTS`
+ * never alters a table that exists, so every workspace created before that
+ * day still carries the old shape and `SELECT actor_id …` throws `no such
+ * column` on its first search or snapshot. The table is disposable derived
+ * state, and a dropped one is one rebuild away, the same answer a regime flip
+ * gets. The DDL text is the probe: this runs on both SQLite backends.
+ */
+function dropPreActorFtsState(sql: SqlExecutor): void {
+  const ddl = sql<{ sql: string | null }>`
+    SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_fts_state'`[0]?.sql ?? null;
+
+  if (ddl !== null && !/\bactor_id\b/.test(ddl)) void sql`DROP TABLE conversation_fts_state`;
+}
+
+/**
  * Deterministic invalidation of the derived transcript-search index, called by
  * EVERY chat-row mutation that a rowid watermark cannot see: a fork restore's
  * purge-and-reseed, a session reassignment (`UPDATE messages SET session_id`),
@@ -493,6 +511,7 @@ function sessionIdOf(sessionId: string): string {
  * state, so correctness here is one rebuild away, never a dual-read.
  */
 export function invalidateConversationSearchIndex(sql: SqlExecutor): void {
+  dropPreActorFtsState(sql);
   void sql`
     CREATE TABLE IF NOT EXISTS conversation_fts_state (
       id INTEGER PRIMARY KEY CHECK (id = 1),
