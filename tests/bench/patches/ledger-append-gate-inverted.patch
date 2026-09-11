@@ -1,9 +1,9 @@
 diff --git a/packages/core/src/prompting/volatile-context.ts b/packages/core/src/prompting/volatile-context.ts
-index 8cb12385..57275ab8 100644
+index 297317ddf..6bab8342c 100644
 --- a/packages/core/src/prompting/volatile-context.ts
 +++ b/packages/core/src/prompting/volatile-context.ts
-@@ -607,7 +607,7 @@ export class DynamicContextLedger {
-     const text = renderDynamicContextBlock(state);
+@@ -868,7 +868,7 @@ export class DynamicContextLedger {
+ 
      // A null render appends nothing; frozen blocks stay regardless (removing
      // a mid-array message would break the provider prefix cache).
 -    if (text !== null && this.blocks[this.blocks.length - 1]?.text !== text) {

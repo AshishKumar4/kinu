@@ -1,10 +1,11 @@
 diff --git a/packages/core/src/execution/nimbus.ts b/packages/core/src/execution/nimbus.ts
+index 087ccc42e..3e143fbe2 100644
 --- a/packages/core/src/execution/nimbus.ts
 +++ b/packages/core/src/execution/nimbus.ts
-@@ -850,7 +850,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
-       const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(workspacePath(path))}`);
+@@ -1130,7 +1130,7 @@ export function nimbusSessionFiles(box: NimbusSandboxHandle, cred?: VfsCred): VF
        if (!r.success || r.exitCode !== 0) return null;
        const [size, seconds, ...kind] = r.stdout.trim().split(/\s+/);
+ 
 -      return { size: Number(size), mtimeMs: Number(seconds) * 1_000, isDir: kind.join(' ') === 'directory' };
 +      return { size: Number(seconds), mtimeMs: Number(size) * 1_000, isDir: kind.join(' ') === 'directory' };
      },

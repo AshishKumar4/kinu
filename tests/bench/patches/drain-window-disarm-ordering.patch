@@ -1,11 +1,13 @@
 diff --git a/packages/core/src/orchestrator/drain-scheduler.ts b/packages/core/src/orchestrator/drain-scheduler.ts
+index 3d497cef3..f497b2613 100644
 --- a/packages/core/src/orchestrator/drain-scheduler.ts
 +++ b/packages/core/src/orchestrator/drain-scheduler.ts
-@@ -41,9 +41,10 @@
+@@ -43,11 +43,11 @@ export class DrainScheduler {
      if (this.armed) return;
      this.armed = true;
      this.setTimer(async () => {
 -      this.armed = false;
+-
        try {
          await this.drain();
 +        this.armed = false;
@@ -13,3 +15,4 @@ diff --git a/packages/core/src/orchestrator/drain-scheduler.ts b/packages/core/s
 +        this.armed = false;
          // Never wedge: the window is already disarmed, the next schedule()
          // re-arms. Events stay pending in the EventLog for the next drain.
+         diagnostics.failure(

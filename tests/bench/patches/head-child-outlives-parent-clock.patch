@@ -1,8 +1,9 @@
 diff --git a/packages/core/src/heads/types.ts b/packages/core/src/heads/types.ts
+index 363ab5b73..46ac19f6b 100644
 --- a/packages/core/src/heads/types.ts
 +++ b/packages/core/src/heads/types.ts
-@@ -322,7 +322,7 @@
-   }
+@@ -432,7 +432,7 @@ export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()):
+ 
    return {
      maxDepth: parent.maxDepth - 1,
 -    maxWallClockMs: Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt)),

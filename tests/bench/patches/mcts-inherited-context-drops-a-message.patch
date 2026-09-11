@@ -1,5 +1,5 @@
 diff --git a/packages/core/src/mcts/inherited-context.ts b/packages/core/src/mcts/inherited-context.ts
-index 259beee75..9b2b3e58e 100644
+index b8449bdf6..f811388b0 100644
 --- a/packages/core/src/mcts/inherited-context.ts
 +++ b/packages/core/src/mcts/inherited-context.ts
 @@ -48,7 +48,7 @@ export function formatInheritedContext(
@@ -8,6 +8,6 @@ index 259beee75..9b2b3e58e 100644
    if (history.length === 0) return '';
 -  const n = Math.max(1, lastN);
 +  const n = Math.max(1, lastN - 1);
+ 
    const block = history
      .slice(-n)
-     .map((m) => `${m.role}: ${m.content}`)

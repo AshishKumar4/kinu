@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/eval/runner.ts b/packages/core/src/eval/runner.ts
-index e3cd0d847..e997c0f4b 100644
+index 1d526d83c..d3cd03134 100644
 --- a/packages/core/src/eval/runner.ts
 +++ b/packages/core/src/eval/runner.ts
-@@ -16,7 +16,7 @@ export interface RunEvalPairOpts {
- 
+@@ -17,7 +17,7 @@ export interface RunEvalPairOpts {
  export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> {
    const out: EvalResult[] = [];
+ 
 -  for (const c of opts.cases) {
 +  for (const c of opts.cases.slice(0, -1)) {
      const runA = await runOne(opts.strategyA, c, opts.buildContext);

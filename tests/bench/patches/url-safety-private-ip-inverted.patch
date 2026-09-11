@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/safety/egress-destination.ts b/packages/core/src/safety/egress-destination.ts
+index af7fad806..bfbbd448d 100644
 --- a/packages/core/src/safety/egress-destination.ts
 +++ b/packages/core/src/safety/egress-destination.ts
-@@ -224,7 +224,7 @@ export function refusedHostname(hostname: string): Refusal | null {
-   }
+@@ -256,7 +256,7 @@ export function refusedHostname(hostname: string): Refusal | null {
  
    const ipv4 = parseIPv4(host);
+ 
 -  if (ipv4 !== null && isRefusedIPv4(ipv4)) {
 +  if (ipv4 !== null && !isRefusedIPv4(ipv4)) {
      return refusalOf(new KinuError('denied', `blocked private/internal address: ${host}`));
    }
-   // A numeric form that is not a full dotted quad never leaves as a name. The
+ 

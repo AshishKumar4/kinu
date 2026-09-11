@@ -1,7 +1,8 @@
 diff --git a/packages/core/src/steer-branch.ts b/packages/core/src/steer-branch.ts
+index 0e0ead8d6..401df4f9c 100644
 --- a/packages/core/src/steer-branch.ts
 +++ b/packages/core/src/steer-branch.ts
-@@ -286,8 +286,8 @@ export function settleBranchIntoTakes(
+@@ -342,8 +342,8 @@ export function settleBranchIntoTakes(
      task: input.task,
      turnId: input.turnId,
      sessionId: input.sessionId,
@@ -11,4 +12,4 @@ diff --git a/packages/core/src/steer-branch.ts b/packages/core/src/steer-branch.
 +    branchText: input.liveText,
      now: input.now,
    };
-   const set = recordBranchTakeSet(
+ 

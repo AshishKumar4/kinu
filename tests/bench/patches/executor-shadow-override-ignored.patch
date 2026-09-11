@@ -1,10 +1,10 @@
 diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold/executor.ts
-index 01edc606..125c1d92 100644
+index f182e225c..c690c44f1 100644
 --- a/packages/core/src/scaffold/executor.ts
 +++ b/packages/core/src/scaffold/executor.ts
-@@ -421,7 +421,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
-   // 1. Load scaffold code (with optional shadow-mode override).
+@@ -490,7 +490,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
    let code: string;
+ 
    try {
 -    code = scaffoldCodeOverride ?? (await rt.identity.scaffold.read());
 +    code = (await rt.identity.scaffold.read()) ?? scaffoldCodeOverride;

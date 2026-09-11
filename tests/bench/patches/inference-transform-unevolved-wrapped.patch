@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/scaffold/inference-transform.ts b/packages/core/src/scaffold/inference-transform.ts
-index 9306460ff..7142dabdf 100644
+index d515df34f..943a148fe 100644
 --- a/packages/core/src/scaffold/inference-transform.ts
 +++ b/packages/core/src/scaffold/inference-transform.ts
-@@ -60,7 +60,7 @@ export function scaffoldInferenceTransform(opts: {
-   run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference' | 'scaffoldCodeOverride'>;
+@@ -61,7 +61,7 @@ export function scaffoldInferenceTransform(opts: {
  }): InferenceStreamResult {
    const { program, result, run } = opts;
+ 
 -  if (program.kind === 'builtin' || (run.workMode ?? currentWorkMode()) === 'plan') return result;
 +  if (program.version < 0 || (run.workMode ?? currentWorkMode()) === 'plan') return result;
  
    let delegated = false;
-   // Capture at preparation, not when the lazy generator is finally consumed.
+ 

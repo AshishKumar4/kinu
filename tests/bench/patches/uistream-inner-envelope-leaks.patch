@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/scaffold/ui-stream.ts b/packages/core/src/scaffold/ui-stream.ts
-index 2cdabc769..db0240a43 100644
+index a0f4f44ad..8fcb809f0 100644
 --- a/packages/core/src/scaffold/ui-stream.ts
 +++ b/packages/core/src/scaffold/ui-stream.ts
-@@ -44,7 +44,7 @@ async function forwardedUIChunk(
-   const validation = await uiMessageChunkSchema().validate?.(raw);
+@@ -46,7 +46,7 @@ async function forwardedUIChunk(
    if (validation === undefined || !validation.success) return undefined;
    const chunk = validation.value;
+ 
 -  if (chunk.type === 'start' || chunk.type === 'finish') return undefined;
 +  if (chunk.type === 'start' && chunk.type === 'finish') return undefined;
+ 
    const reasoning = chunk.type === 'reasoning-start' || chunk.type === 'reasoning-delta'
      || chunk.type === 'reasoning-end';
-   if (reasoning && sendReasoning === false) return undefined;
