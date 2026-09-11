@@ -2505,6 +2505,7 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
         return base.doGenerate(options);
       },
     });
+
     const { db, rt, session } = setup('unused', model);
     // What `kinu create` writes for an agent added without a name: no title,
     // and an origin that says the system may supply one. An origin nobody
@@ -4282,18 +4283,22 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // row unpriced on this backend while cf, which normalizes, priced it.
     const { db, rt } = workspaceRuntime();
     const captured: SinkSlot = { sink: null };
+
     const model = new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake-model',
       doStream: async (options) => {
         captured.sink?.({
           source: 'fast', usage: { input: 1_000_000, output: 0 }, spec: 'openai-compatible/house-model',
         });
+
         return fakeModel('answered').doStream(options);
       },
     });
+
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => {
         const trimmed = spec?.trim() ?? '';
+
         return trimmed === '' || trimmed === 'house-model' ? 'openai-compatible/house-model' : trimmed;
       },
       resolveModel: () => model,
@@ -4307,15 +4312,19 @@ describe('LocalAgentSession — the durable run-event log', () => {
       }),
       ...resolverRest,
     };
+
     const catalog = { roles: {}, tiers: { default: { model: 'house-model' } } };
+
     const envelope: ProfileCatalogEnvelope = {
       authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
     };
+
     const session = new LocalAgentSession({
       rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
       db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
       onEvent: () => {}, noAutoEvolve: true,
     });
+
     await waitFor(() => session.modelPricing() !== null);
     await session.send('hi');
 

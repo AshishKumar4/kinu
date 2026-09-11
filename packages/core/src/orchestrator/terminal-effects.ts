@@ -345,6 +345,7 @@ export function takesTerminalEffect(deps: {
           turnId: credited, sessionId: deps.sessionId, startedAt, takeIds,
         });
       }
+
       return { status: 'completed' };
     },
   });
@@ -381,33 +382,43 @@ export function branchesTerminalEffect(deps: {
     }),
     run: async ({ id, task, turnId, liveText }) => {
       const live = deps.pending.findIndex((entry) => entry.id === id);
+
       if (live >= 0) {
         const [entry] = deps.pending.splice(live, 1);
+
         if (entry !== undefined) {
           await settlePendingBranch(
             { sql: deps.sql, actor: deps.actor, sessionId: deps.sessionId, broadcast: deps.broadcast },
             entry, turnId, liveText, id,
           );
+
           return { status: 'completed' };
         }
       }
+
       const head = deps.journal.readHeadView(branchHeadId(id));
+
       if (head === null) {
         return { status: 'completed', detail: 'the journal holds no such branch head' };
       }
+
       const report = branchOutcomeFromJournal(head);
+
       if (report === null) {
         return { status: 'owed', detail: `branch head is ${head.status}` };
       }
+
       const outcome = settleBranchIntoTakes(deps.sql, deps.actor, {
         task, report, turnId, sessionId: deps.sessionId, liveText, settlementKey: id,
       });
+
       deps.broadcast(outcome.ok
         ? {
           type: 'branch_status', status: 'settled', branchId: id, task,
           takeSetId: outcome.set.id, turnId: turnId ?? '',
         }
         : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
+
       return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
     },
   });
@@ -437,6 +448,7 @@ export function turnRecordTerminalEffect(
       if (workMode === 'plan') {
         return { status: 'completed', detail: 'a plan turn records no evolution state' };
       }
+
       // Unkeyed for an empty id: every such response would share one key, and
       // the second would read the first's append as its own.
       const recordedId = keyedScope(messageId);
@@ -447,6 +459,7 @@ export function turnRecordTerminalEffect(
           ? { recordedAt, enabled: autoEvolve }
           : { recordedAt, enabled: autoEvolve, id: `turn-${recordedId}` },
       );
+
       return autoEvolve
         ? { status: 'completed' }
         : { status: 'completed', detail: 'the turn was produced with auto-evolution off' };
@@ -467,6 +480,7 @@ export function eventDrainTerminalEffect(
     input: v.object({}),
     run: async () => {
       await orch.drainPendingEvents({ rethrow: true });
+
       return { status: 'completed' };
     },
   });
@@ -492,15 +506,18 @@ export function shadowTrialTerminalEffect(
     }),
     run: ({ turn, trialContext, pendingVersion }, scope) => {
       const trialScope = keyedScope(scope);
+
       const queued = engine.queueShadowTrial(
         v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
         trialScope === undefined
           ? { pendingVersion }
           : { pendingVersion, id: `trial-${trialScope}` },
       );
+
       if (queued === 'queue_full' || queued === 'failed') {
         return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
       }
+
       return queued === 'queued'
         ? { status: 'completed' }
         : { status: 'completed', detail: `no trial to queue: ${queued}` };

@@ -129,11 +129,14 @@ describe('automatic workspace titling — the decision', () => {
 
   test('persistAutoTitle is the race check and the write: the owner\'s rename wins', () => {
     interface NamingRow { name: string; origin: 'user' | 'auto' | null }
+
     const stored: NamingRow = { name: 'workspace-1a4e20', origin: 'auto' };
+
     const config = {
       getNameOrigin: () => stored.origin,
       setDisplayNameOrigin: (name: string, origin: 'user' | 'auto') => { stored.name = name; stored.origin = origin; },
     };
+
     expect(persistAutoTitle(config, 'Audit the OAuth callback flow')).toBe(true);
     expect(stored).toEqual({ name: 'Audit the OAuth callback flow', origin: 'auto' });
     stored.name = 'Keys Rotation';

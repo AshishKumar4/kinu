@@ -310,10 +310,12 @@ describe('inheritedContextFromConversation — the plain store, read once for bo
   test('the newest rows up to the cap, in order, with the omission note core owes a hire', () => {
     const { sql, execRaw } = createTestWorkspace();
     const actor = createTestActors(sql, execRaw).main;
+
     for (let i = 0; i < INHERITED_CONTEXT_CAP + 5; i++) {
       void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
         VALUES (${actor.actorId}, ${`m${i}`}, ${'default'}, ${i % 2 === 0 ? 'user' : 'assistant'}, ${`body ${i}`}, ${1_000 + i})`;
     }
+
     // A row of another session, and a system row of this one: neither is a
     // turn the hire inherits, and neither counts against what it was not told.
     void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)

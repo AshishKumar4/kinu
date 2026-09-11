@@ -21,16 +21,24 @@ const TURN: CompletedTurn = {
   userMessage: 'name the parser', assistantResponse: 'the parser is sound',
   toolCalls: [], steps: 1, durationMs: 5, hadError: false, feedback: null,
 };
+
 const TURN_JSON = projectJsonValue({ value: TURN });
 
 describe('shadowTrialTerminalEffect', () => {
   const effectOver = (outcome: 'queued' | 'not_sampled' | 'queue_full' | 'failed') => {
     const asked: unknown[] = [];
+
     const effect = shadowTrialTerminalEffect({
-      queueShadowTrial: (turn, context, plan) => { asked.push({ turn, context, plan }); return outcome; },
+      queueShadowTrial: (turn, context, plan) => {
+        asked.push({ turn, context, plan });
+
+        return outcome;
+      },
     });
+
     return { effect, asked };
   };
+
   const input = { turn: TURN_JSON, trialContext: [], pendingVersion: 7 };
 
   test('a refusal discharges the row; only a full queue or a failed insert stays owed', async () => {
@@ -56,12 +64,15 @@ describe('shadowTrialTerminalEffect', () => {
 describe('turnRecordTerminalEffect', () => {
   const recorderOver = () => {
     const recorded: unknown[] = [];
+
     const effect = turnRecordTerminalEffect({
       recordedTurn: (status, turn) => ({ ...turn, status }),
       recordTurn: (turn, continuity, options) => { recorded.push({ turn, continuity, options }); },
     });
+
     return { effect, recorded };
   };
+
   const row = (workMode: 'plan' | 'build', autoEvolve: boolean) => ({
     messageId: 'msg-1', status: 'completed', turn: TURN_JSON, continuity: 'conversation',
     workMode, recordedAt: 1_000, autoEvolve,
@@ -91,11 +102,13 @@ describe('takesTerminalEffect', () => {
     const execRaw = makeExecRaw(db);
     initAlternateTakesTable(execRaw);
     const actor = createTestActors(sql, execRaw).main;
+
     const seed = (id: string) => sql`INSERT INTO alternate_takes
       (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
       VALUES (${actor.actorId}, ${id}, ${null}, ${null}, ${'pick'}, ${'mcts'}, ${'a'}, ${null},
               ${JSON.stringify([{ nodeId: 'a', text: 'A', score: 0.9, visits: 1, depth: 1 }, { nodeId: 'b', text: 'B', score: 0.8, visits: 1, depth: 1 }])},
               ${1}, ${null})`;
+
     const effect = takesTerminalEffect({ sql, actor, sessionId: 's' });
 
     seed('take-first');

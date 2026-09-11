@@ -21,6 +21,7 @@ import {
   TERMINAL_LANE_FIBER, classifyRecoveredFiber, type FiberLaneTransports,
 } from '../src/fiber-recovery';
 import { ADVISOR_LANE_FIBER, BACKGROUND_FIBER_PREFIX, SEARCH_FIBER_NAME, recoveryBackoffMs } from '@kinu.run/core';
+
 /** The carrier half of a classification verdict, read from the module's own
  *  answer rather than restated beside it. */
 const LaneSnapshotSchema = v.object({ lane: v.string(), redrive: v.string() });

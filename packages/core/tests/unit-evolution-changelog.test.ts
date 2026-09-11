@@ -512,6 +512,7 @@ describe('reverts — real paths only', () => {
     const { rt, facts } = setup();
     facts.upsert('editor', 'helix');
     const entry = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!;
+
     const audit = () => rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events WHERE type = 'reflection' AND message LIKE 'Operator reverted%'`;
 

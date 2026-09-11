@@ -1491,6 +1491,7 @@ export class UserDO extends Agent<Env> {
     )[0];
 
     if (!current) return { applied: false };
+
     if (origin === 'auto' && !autoTitleMayReplace(current.name_origin)) return { applied: false };
     this.sqlx(
       `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,

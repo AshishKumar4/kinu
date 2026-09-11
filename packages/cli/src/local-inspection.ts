@@ -269,6 +269,7 @@ export function getLocalProfileCoordinates(name: string): LocalProfileCoordinate
 export function readLocalMemory(name: string): string {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'memory_chunks')) return '';
+
     return all<{ text: string }>(
       db,
       `SELECT text FROM memory_chunks WHERE path = 'memory/MEMORY.md' ORDER BY start_line ASC`,
@@ -291,6 +292,7 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
 
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'memory_chunks')) return [];
+
     return all<{ path: string; text: string; start_line: number; end_line: number }>(
       db,
       `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY updated_at DESC LIMIT ?`,

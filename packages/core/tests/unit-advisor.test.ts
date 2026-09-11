@@ -56,6 +56,7 @@ async function lane(over: {
 } = {}) {
   const delivered: AgentSignal[] = [];
   const recorded: AdvisorNote[] = [];
+
   const disposition = await reviewRecordedTurn({
     snapshot: {
       turn: over.turn ?? aTurn(),
@@ -394,6 +395,7 @@ describe('the missed-capability class', () => {
         return '{}';
       },
     };
+
     await lane({ llm: capturing, reachable: ['agents'] });
     expect(seen).toContain('did not use: agents');
   });
@@ -499,14 +501,20 @@ describe('reviewRecordedTurn', () => {
   test('a labelled turn is reviewed on the governed client; an unlabelled one on the bare client', async () => {
     const governed: string[][] = [];
     const bare = saying(JSON.stringify(NOTE));
+
     const review = (labels: string[] | undefined) => reviewRecordedTurn({
       snapshot: snapshot(labels === undefined ? {} : { missionLabels: labels }),
       llm: bare,
-      govern: (llm, asked) => { governed.push([...asked]); return llm; },
+      govern: (llm, asked) => {
+        governed.push([...asked]);
+
+        return llm;
+      },
       gateOpen: false,
       deliver: async () => 'queued',
       record: () => {},
     });
+
     expect(await review(['audit'])).toBe('deliver');
     expect(await review(undefined)).toBe('deliver');
     expect(await review([])).toBe('deliver');
@@ -516,14 +524,20 @@ describe('reviewRecordedTurn', () => {
   test('the gate travels with the caller: open, the note is recorded and not spoken', async () => {
     const delivered: AgentSignal[] = [];
     const recorded: AdvisorNote[] = [];
+
     const disposition = await reviewRecordedTurn({
       snapshot: snapshot(),
       llm: saying(JSON.stringify(NOTE)),
       govern: (llm) => llm,
       gateOpen: true,
-      deliver: async (signal) => { delivered.push(signal); return 'queued'; },
+      deliver: async (signal) => {
+        delivered.push(signal);
+
+        return 'queued';
+      },
       record: (note) => { recorded.push(note); },
     });
+
     expect(disposition).toBe('changelog');
     expect(delivered).toEqual([]);
     expect(recorded).toEqual([NOTE]);

@@ -621,6 +621,7 @@ export function advisorLaneStarted(
   sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
 ): boolean {
   const key = advisorLaneKey(turn);
+
   return key !== null && effectAlreadyDone(sql, actor, ADVISOR_LANE_SCOPE, key);
 }
 
@@ -630,6 +631,7 @@ export function markAdvisorLaneStarted(
   sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
 ): void {
   const key = advisorLaneKey(turn);
+
   if (key !== null) recordEffectDone(sql, actor, ADVISOR_LANE_SCOPE, key);
 }
 
@@ -656,8 +658,10 @@ export async function reviewRecordedTurn(deps: {
   readonly record: AdvisorLaneDeps['record'];
 }): Promise<AdvisorDisposition | null> {
   const { snapshot, llm } = deps;
+
   if (llm === undefined) return null;
   const labels = snapshot.turn.missionLabels ?? [];
+
   try {
     return await runAdvisorLane({
       turn: snapshot.turn,
@@ -673,6 +677,7 @@ export async function reviewRecordedTurn(deps: {
     diagnostics.failure('advisor.review_failed', toKinuError({
       doing: 'reviewing the completed turn', cause, otherwise: 'unavailable',
     }));
+
     return null;
   }
 }
