@@ -51,17 +51,17 @@ describe('reasoning_effort plumbing', () => {
       openrouter: { reasoningEffort: 'low' },
     });
     expect(reasoningEffortOptions('high', 'anthropic')).toEqual({
-      anthropic: { thinking: { type: 'enabled', budgetTokens: 32_000 } },
+      anthropic: { effort: 'high' },
     });
   });
 
-  test('maps Anthropic effort levels to their token budgets', () => {
-    expect(reasoningEffortOptions('low', 'anthropic')).toEqual({
-      anthropic: { thinking: { type: 'enabled', budgetTokens: 4_000 } },
-    });
-    expect(reasoningEffortOptions('medium', 'anthropic')).toEqual({
-      anthropic: { thinking: { type: 'enabled', budgetTokens: 16_000 } },
-    });
+  test('Anthropic takes its documented effort levels and nothing outside them', () => {
+    // `max` and `xhigh` exist only as the effort parameter; a thinking budget
+    // could not have expressed them. `none` is not an Anthropic level, so it
+    // leaves the model on its own default rather than sending a refused value.
+    expect(reasoningEffortOptions('max', 'anthropic')).toEqual({ anthropic: { effort: 'max' } });
+    expect(reasoningEffortOptions('low', 'anthropic')).toEqual({ anthropic: { effort: 'low' } });
+    expect(reasoningEffortOptions('none', 'anthropic')).toBeUndefined();
   });
 
   test('returns no options for an unsupported provider or missing effort', () => {

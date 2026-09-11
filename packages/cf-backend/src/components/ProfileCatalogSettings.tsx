@@ -7,7 +7,9 @@ import {
   TIER_IDS,
   deriveRoleLabel,
   effectiveRoleCatalog,
+  isReasoningEffort,
   isValidRoleId,
+  offeredReasoningEfforts,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
@@ -22,7 +24,6 @@ import { ModelPicker } from './ModelPicker';
 import { Card, inputCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
 
-const EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
 
 interface CatalogOperation {
@@ -178,6 +179,13 @@ export function ProfileCatalogSettings() {
             {TIER_IDS.map((tierId) => {
               const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
               const resolved = assignment ?? draft.tiers.default;
+              // The levels are the MODEL's, read off its menu entry: a model
+              // that declares xhigh offers it, one that declares only low and
+              // high offers no medium (#9).
+              const efforts = offeredReasoningEfforts(
+                menu.models.find((model) => model.spec === resolved.model)?.reasoningEfforts,
+                assignment?.reasoningEffort,
+              );
               return (
                 <div key={tierId} className="grid gap-2 rounded-md border border-[var(--c-border-subtle)] p-2 md:grid-cols-[5rem_1fr_8rem] md:items-center">
                   <div>
@@ -198,13 +206,14 @@ export function ProfileCatalogSettings() {
                     className={inputCls}
                     value={assignment?.reasoningEffort ?? ''}
                     onChange={(event) => {
-                      const effort = EFFORTS.find((value) => value === event.target.value) ?? '';
-                      setTierEffort(tierId, effort);
+                      const effort = event.target.value;
+                      setTierEffort(tierId, isReasoningEffort(effort) ? effort : '');
                     }}
                     aria-label={`${tierId} reasoning effort`}
+                    title={efforts.length === 0 ? 'This model takes no reasoning effort setting.' : undefined}
                   >
                     <option value="">Model default</option>
-                    {EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                    {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
                   </select>
                 </div>
               );

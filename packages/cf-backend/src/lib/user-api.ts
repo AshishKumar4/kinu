@@ -5,12 +5,13 @@
  */
 import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS,
-  ProfileCatalogEnvelopeSchema,
+  ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
   type DeviceSandboxStatus,
   type DeviceTier,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
+  type ReasoningEffort,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
@@ -56,6 +57,9 @@ export interface ModelMenuEntry {
   provider: string;
   capabilities?: string[];
   contextWindow?: number;
+  /** The effort levels the model accepts, in the provider's order. Absent
+   *  when the catalog could not say; empty when the model takes none. */
+  reasoningEfforts?: ReasoningEffort[];
 }
 
 /** A provider the server could not reach while building the menu (revoked
@@ -95,6 +99,7 @@ const CredentialSummarySchema = v.object({
 const ModelMenuEntrySchema = v.object({
   spec: v.string(), label: v.string(), provider: v.string(),
   capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
+  reasoningEfforts: v.optional(v.array(v.picklist(REASONING_EFFORTS))),
 });
 const ProviderFailureSchema = v.object({
   provider: v.string(), label: v.optional(v.string()), reason: v.string(),

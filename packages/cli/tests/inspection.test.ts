@@ -242,7 +242,7 @@ describe("CLI inspection commands", () => {
 
     const invalid = runCli(home, ["effort", "localtest", "extreme"]);
     expect(invalid.exitCode).toBe(1);
-    expect(invalid.stderr.toString()).toContain("low, medium, or high");
+    expect(invalid.stderr.toString()).toContain("none, minimal, low, medium, high, xhigh, max");
   }, CLI_SPAWN_TIMEOUT_MS);
 
   test("kinu model validates known, uncatalogued, and unknown-provider specs", async () => {

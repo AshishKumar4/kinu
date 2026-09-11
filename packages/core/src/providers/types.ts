@@ -10,6 +10,7 @@
 // underlying SDK, so model construction never blocks the chat loop.
 import type { LanguageModel } from 'ai';
 import type { CountableRequest, InputTokenCount } from './input-tokens';
+import type { ReasoningEffort } from './reasoning-effort';
 
 /** Parsed `<provider>/<modelId>`. */
 export interface ModelSpec { provider: string; modelId: string; }
@@ -56,6 +57,12 @@ export interface ModelInfo {
    *  Absent when the catalog doesn't know — consumers fall back to a
    *  conservative provider-class default (attachment-sanitizer.ts). */
   inputModalities?: ModelInputModality[];
+  /** The reasoning-effort levels THIS model accepts, in the provider's
+   *  documented low-to-high order. Every catalog entry that names them cites
+   *  the provider page it read. Empty means the model takes no effort setting;
+   *  absent means the catalog could not say. A settings control renders exactly
+   *  this list after "model default", never a hardcoded three. */
+  reasoningEfforts?: readonly ReasoningEffort[];
 }
 
 /** The input-modality vocabulary (models.dev `modalities.input`). Feeds the

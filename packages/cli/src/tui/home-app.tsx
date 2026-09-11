@@ -2,7 +2,7 @@ import { createCliRenderer, type TextareaRenderable } from '@opentui/core';
 import { createRoot, flushSync, useKeyboard, useTerminalDimensions } from '@opentui/react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, type ReasoningEffort,
+  BUILTIN_ROLE_DEFINITIONS, deriveRoleLabel, offeredReasoningEfforts, type ReasoningEffort,
 } from '@kinu.run/core';
 import {
   createCliAgent,
@@ -73,7 +73,6 @@ export interface HomeTuiOptions {
 
 let finishHome: ((action: HomeTuiAction) => void) | null = null;
 type HomeFocus = 'agents' | 'mission' | 'mode' | 'model' | 'effort';
-const REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
 
 export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   return (
@@ -111,6 +110,10 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   const [defaultModel, setDefaultModelState] = useState(initialDefaults.model);
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(initialDefaults.reasoningEffort);
   const [modelPicker, setModelPicker] = useState<{ menu: AgentModelMenu; loading: boolean; error: string | null } | null>(null);
+  // The catalog the effort row reads its levels from: a model's own list
+  // (#9), loaded once in the background and refreshed whenever the picker
+  // opens. Unreadable is fine here; the picker reports that on its own.
+  const [catalog, setCatalog] = useState<AgentModelMenu>(EMPTY_MODEL_MENU);
   const [catalogHint, setCatalogHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -125,6 +128,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   // An effect can return cleanup, not its task. Retain the task here until it
   // settles so refresh work belongs to this scene for its full lifetime.
   const cloudSyncTaskRef = useRef<Promise<void> | null>(null);
+  const catalogTaskRef = useRef<Promise<void> | null>(null);
   const deviceConnect = useDeviceConnectPrompt();
   const cloudReady = isCloudAuthConfigured();
   const localReady = isLocalModelConfigured();
@@ -145,6 +149,21 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
   useEffect(() => () => {
     modelPickerRequestRef.current += 1;
   }, []);
+  useEffect(() => {
+    if (setupRequired) return;
+    let live = true;
+    // Retained on a ref, like the cloud sync above: the effect returns its
+    // cleanup, not its task.
+    catalogTaskRef.current = (async () => {
+      try {
+        const menu = await loadHomeModelCatalog(mode, opts);
+        if (live) setCatalog(menu);
+      } catch (cause) {
+        if (live) setCatalogHint(`Catalog unavailable: ${renderThrownChain({ cause })}`);
+      }
+    })();
+    return () => { live = false; };
+  }, [mode, opts, setupRequired]);
   useEffect(() => {
     if (initialFocusApplied.current || !sidebarFocusable) return;
     initialFocusApplied.current = true;
@@ -211,6 +230,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
         throw new Error(`No ${mode} models are available.`);
       }
       if (modelPickerRequestRef.current !== request) return;
+      setCatalog(menu);
       setModelPicker({ menu, loading: false, error: null });
     } catch (err) {
       if (modelPickerRequestRef.current !== request) return;
@@ -245,11 +265,21 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
     }
   }, []);
 
+  // What the row offers: the default model's declared levels, plus the stored
+  // one when the catalog no longer lists it, so the row never reads as empty.
+  const efforts = useMemo(
+    () => offeredReasoningEfforts(
+      catalog.models.find((model) => model.spec === defaultModel)?.reasoningEfforts,
+      reasoningEffort,
+    ),
+    [catalog, defaultModel, reasoningEffort],
+  );
+
   const moveReasoningEffort = useCallback((delta: number) => {
-    const index = REASONING_EFFORTS.indexOf(reasoningEffort);
-    const next = REASONING_EFFORTS[(index + delta + REASONING_EFFORTS.length) % REASONING_EFFORTS.length] ?? reasoningEffort;
+    const index = efforts.indexOf(reasoningEffort);
+    const next = efforts[(index + delta + efforts.length) % efforts.length] ?? reasoningEffort;
     return selectReasoningEffort(next);
-  }, [reasoningEffort, selectReasoningEffort]);
+  }, [efforts, reasoningEffort, selectReasoningEffort]);
 
   const submit = useCallback(async () => {
     const mission = (textareaRef.current?.plainText ?? draft).trim();
@@ -528,7 +558,7 @@ function HomeScene({ opts }: { opts: HomeTuiOptions }) {
             </box>
             <box flexDirection="row" style={{ height: 1, paddingLeft: 1 }}>
               <text><span fg={focusArea === 'effort' ? colors.intent.accentStrong : colors.intent.accentStrong}>Effort: </span></text>
-              {REASONING_EFFORTS.map((effort) => (
+              {efforts.map((effort) => (
                 <box
                   key={effort}
                   style={{
