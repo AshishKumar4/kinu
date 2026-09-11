@@ -9,21 +9,19 @@ import { useCopy } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
 import { LandingFrame } from './LandingFrame';
 import { LandingHero } from './LandingHero';
-import { LandingShowcases, RuleLabel } from './LandingShowcases';
+import { LandingShowcases, SectionHead } from './LandingShowcases';
 
 const REPOSITORY = 'https://github.com/AshishKumar4/kinu';
 
 const SHELL = 'landing-shell';
 
-const SECTION = 'border-t p-border py-20 lg:py-[104px] lg:pb-24';
+const SECTION = 'border-t p-border py-20 lg:py-24';
 
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
 
-const SAMPLE_NOTE = 'flex flex-wrap justify-between gap-2 px-1 pt-3 text-[11px] leading-relaxed p-text-4';
+const NOTE = 'px-1 pt-3 text-[11px] leading-relaxed p-text-4';
 
-function SectionTitle({ children, className = '' }: { children: ReactNode; className?: string }): ReactElement {
-  return <h2 className={`max-w-[900px] text-[clamp(30px,3.4vw,44px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty ${className}`}>{children}</h2>;
-}
+const TRAILING_LINK = 'mt-6 inline-block text-sm font-semibold p-accent';
 
 function Accent({ children }: { children: ReactNode }): ReactElement {
   return <span className="p-accent">{children}</span>;
@@ -35,9 +33,9 @@ function PlatformSection({ install }: { install: string }): ReactElement {
 
   return (
     <section id="platform" className={SECTION}>
-      <RuleLabel>01 · Where agents work</RuleLabel>
-      <SectionTitle>Run your agents in the cloud, <Accent>or on your own machine.</Accent></SectionTitle>
-      <p className="mb-10 mt-4 max-w-[700px] text-[17px] leading-[1.65] p-text-3">Same agent either way. You pick hosted on Kinu or local on your own machine when you create it.</p>
+      <SectionHead label="01 · Where agents work" lead="Same agent either way. You pick hosted on Kinu or local on your own machine when you create it.">
+        Run your agents in the cloud, <Accent>or on your own machine.</Accent>
+      </SectionHead>
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface md:grid-cols-2">
         <article className="flex min-w-0 flex-col p-6 sm:p-8">
           <span className="mb-6 font-mono text-[11px] uppercase tracking-[.14em] p-accent">Cloud agents</span>
@@ -74,10 +72,6 @@ function PlatformSection({ install }: { install: string }): ReactElement {
           <a href={REPOSITORY + '/blob/main/QUICKSTART.md'} target="_blank" rel="noreferrer" className="mt-auto pt-6 text-sm font-semibold p-accent">Setup and provider configuration →</a>
         </article>
       </div>
-      <div className="mt-12">
-        <LandingFrame kind="checkout" />
-        <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a live workspace.</span><span>Run and Supervise, the Work tab, and Retry act on this page only.</span></p>
-      </div>
     </section>
   );
 }
@@ -85,12 +79,12 @@ function PlatformSection({ install }: { install: string }): ReactElement {
 function PlanSection(): ReactElement {
   return (
     <section id="plan" className={SECTION}>
-      <RuleLabel>03 · Plan mode</RuleLabel>
-      <SectionTitle>See the plan before <Accent>anything is written.</Accent></SectionTitle>
-      <p className="mb-10 mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">In Plan mode the agent can read files and research, but not edit anything. It submits a Markdown plan. You mark the lines that need work, or approve it, and only then does a Build turn start.</p>
-      <LandingFrame kind="plan" />
-      <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a live workspace.</span><span>A recorded walkthrough plays over the workspace: a request, tool calls, a submitted plan, an approval, and the slate it builds.</span></p>
-      <a className="mt-6 inline-block text-sm font-semibold p-accent" href={REPOSITORY + '/blob/main/docs/TOOLS.md#plan-authority'} target="_blank" rel="noreferrer">What Plan mode can and cannot do →</a>
+      <SectionHead label="03 · Plan mode" lead="In Plan mode the agent can read files and research, but not edit anything. It submits a Markdown plan. You mark the lines that need work, or approve it, and only then does a Build turn start.">
+        See the plan before <Accent>anything is written.</Accent>
+      </SectionHead>
+      <LandingFrame kind="plan" caption="Example UI and sample data, not a live workspace." />
+      <p className={NOTE}>A recorded walkthrough plays over the workspace: a request, tool calls, a submitted plan, an approval, and the slate it builds.</p>
+      <a className={TRAILING_LINK} href={REPOSITORY + '/blob/main/docs/TOOLS.md#plan-authority'} target="_blank" rel="noreferrer">What Plan mode can and cannot do →</a>
     </section>
   );
 }
@@ -98,11 +92,11 @@ function PlanSection(): ReactElement {
 function SlatesSection(): ReactElement {
   return (
     <section id="slates" className={SECTION}>
-      <RuleLabel>04 · Slates</RuleLabel>
-      <SectionTitle>Build live apps <Accent>with slates.</Accent></SectionTitle>
-      <p className="mb-10 mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">Ask for a dashboard and the agent writes a small Worker. It opens in its own tab on a preview URL, reading whatever you connected — your files, or a database over MCP.</p>
-      <LandingFrame kind="slate" />
-      <p className={SAMPLE_NOTE}><span>Example UI and sample data, not a running app.</span><span>The charts draw once on open.</span></p>
+      <SectionHead label="04 · Slates" lead="Ask for a dashboard and the agent writes a small Worker. It opens in its own tab on a preview URL, reading whatever you connected — your files, or a database over MCP.">
+        Build live apps <Accent>with slates.</Accent>
+      </SectionHead>
+      <LandingFrame kind="slate" caption="Example UI and sample data, not a running app." />
+      <p className={NOTE}>The charts draw once on open.</p>
       <div className="mt-8 grid gap-4 text-[13px] leading-[1.7] p-text-3 md:grid-cols-2 md:gap-12">
         <p>A binding passes one of the caller's own capabilities: files, an MCP connection narrowed to named tools, or a read model. A declaration is not a permission grant. The owner's existing gates still apply on every call.</p>
         <p>Kinu compiles the source and serves it on its own preview hostname. Credentials never enter the app. Lasting state belongs in workspace files or another allowed capability, and committed versions survive restarts. <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/LIVE-UI.md'} target="_blank" rel="noreferrer">How a live app runs</a></p>
@@ -173,9 +167,9 @@ function EvolutionSection(): ReactElement {
 
   return (
     <section id="evolution" data-evolution-stage={activeIndex} className={SECTION}>
-      <RuleLabel>05 · Self-evolution</RuleLabel>
-      <SectionTitle>The agent <Accent>evolves with use.</Accent></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[720px] text-[17px] leading-[1.6] p-text-3">When you correct the agent, it records a provisional lesson. Each tool run updates that tool's fitness score. A problem that keeps coming back can lead to a proposed change to the scaffold, the code that drives the agent loop.</p>
+      <SectionHead label="05 · Self-evolution" lead="When you correct the agent, it records a provisional lesson. Each tool run updates that tool's fitness score. A problem that keeps coming back can lead to a proposed change to the scaffold, the code that drives the agent loop.">
+        The agent <Accent>evolves with use.</Accent>
+      </SectionHead>
       <div className="grid overflow-hidden rounded-2xl border p-border p-surface lg:grid-cols-[280px_minmax(0,1fr)]">
         <div className="grid gap-px bg-[var(--c-border)] sm:grid-cols-2 lg:grid-cols-1">
           {stages.map((stage, index) => (
@@ -205,7 +199,7 @@ function EvolutionSection(): ReactElement {
           <p className="mt-7 border-t border-dashed border-[var(--c-dash)] pt-5 text-sm leading-[1.65] p-text-3">{active.detail}</p>
         </div>
       </div>
-      <a className="mt-6 inline-block text-sm font-semibold p-accent" href={REPOSITORY + '/blob/main/docs/EVOLUTION.md'} target="_blank" rel="noreferrer">How evolution works, and its limits →</a>
+      <a className={TRAILING_LINK} href={REPOSITORY + '/blob/main/docs/EVOLUTION.md'} target="_blank" rel="noreferrer">How evolution works, and its limits →</a>
     </section>
   );
 }
@@ -213,9 +207,9 @@ function EvolutionSection(): ReactElement {
 function SwarmSection(): ReactElement {
   return (
     <section id="swarm" className={SECTION}>
-      <RuleLabel>06 · Swarms</RuleLabel>
-      <SectionTitle>Explore several approaches in parallel <Accent>with swarms.</Accent></SectionTitle>
-      <p className="mb-10 mt-3.5 max-w-[780px] text-[17px] leading-[1.6] p-text-3">A swarm is a tree search whose nodes are agents. Several candidates work on the same objective at once. A forked candidate keeps the parent conversation; a fresh one starts from the task and the parent's report.</p>
+      <SectionHead label="06 · Swarms" lead="A swarm is a tree search whose nodes are agents. Several candidates work on the same objective at once. A forked candidate keeps the parent conversation; a fresh one starts from the task and the parent's report.">
+        Explore several approaches in parallel <Accent>with swarms.</Accent>
+      </SectionHead>
       <SwarmSearch />
       <p className="mt-6 max-w-[780px] text-sm leading-[1.7] p-text-3">With an objective and an executable verifier, measurements guide the search. Without an objective, the verification presets fall back to a judged sweep, which ranks candidates but measures nothing. Ideation returns unranked ideas. <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/EXPLORATION.md'} target="_blank" rel="noreferrer">How exploration works</a></p>
     </section>
@@ -225,8 +219,8 @@ function SwarmSection(): ReactElement {
 function OpenSourceSection(): ReactElement {
   return (
     <section id="cta" className="border-t p-border bg-[linear-gradient(180deg,var(--c-surface)_0%,var(--c-bg)_100%)]">
-      <div className={`${SHELL} grid items-center gap-10 py-20 lg:grid-cols-[1.2fr_1fr] lg:gap-14 lg:py-[100px]`}>
-        <div><RuleLabel>07 · Open source</RuleLabel><SectionTitle>Open source, <Accent>end to end.</Accent></SectionTitle><p className="mb-9 mt-4 text-[17px] leading-[1.6] p-text-3">MIT-licensed: the agent, both backends, and the CLI.</p><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
+      <div className={`${SHELL} grid items-center gap-10 py-20 lg:grid-cols-[1.2fr_1fr] lg:gap-14 lg:py-24`}>
+        <div><SectionHead label="07 · Open source" lead="MIT-licensed: the agent, both backends, and the CLI." tight>Open source, <Accent>end to end.</Accent></SectionHead><div className="flex flex-wrap gap-3"><LandingActionLink external primary href={REPOSITORY}>Read the source →</LandingActionLink><LandingActionLink href="/login">Try cloud agents</LandingActionLink></div></div>
         <div className={`${CARD} px-[26px] py-1.5`}>
           {[['Licence', <span key="mit">MIT</span>], ['Source', <a key="source" href={REPOSITORY} target="_blank" rel="noreferrer" className="p-accent">github.com/AshishKumar4/kinu</a>], ['Backends', <span key="backends">Cloudflare Workers · POSIX</span>], ['Docs', <span key="docs" className="flex flex-wrap gap-3.5">{['ARCHITECTURE', 'EXPLORATION', 'EVOLUTION', 'DEPLOYMENT'].map((doc) => <a key={doc} href={`${REPOSITORY}/blob/main/docs/${doc}.md`} target="_blank" rel="noreferrer" className="p-accent">{doc.toLowerCase()}</a>)}</span>]].map(([label, value], index) => <div key={String(label)} className={`grid gap-2 py-[15px] sm:grid-cols-[96px_1fr] sm:gap-4 ${index > 0 ? 'border-t border-dashed border-[var(--c-dash)]' : ''}`}><span className="text-xs p-text-4">{label}</span><div className="min-w-0 [overflow-wrap:anywhere] font-mono text-[12.5px] p-text-2">{value}</div></div>)}
         </div>
