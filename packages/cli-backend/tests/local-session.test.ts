@@ -1418,6 +1418,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         reasoningEffort: 'high',
       },
     });
+    // The read model answers the STORED setting, as cf's does — the tier's own
+    // effort drove the request above, and is not what the owner can set.
+    expect(session.getReasoningEffort()).toEqual({ effort: null });
+    expect(session.setReasoningEffort('low')).toEqual({ ok: true, effort: 'low' });
+    expect(session.getReasoningEffort()).toEqual({ effort: 'low' });
   });
 
   test('an explicit tier applies to one turn and is consumed', async () => {
