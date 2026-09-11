@@ -6115,7 +6115,7 @@ export interface CutJudgment {
  */
 const CHAIN_SERVED_PATTERN = /^chain \S+ \d+B (.+)$/;
 
-const CHAIN_SERVED_WORDS = ['base', 'base+delta already in this upper', 'base+delta layered'] as const;
+const CHAIN_SERVED_WORDS = ['base', 'base+delta already in this upper', 'base+delta absorbed into the upper', 'base+delta layered'] as const;
 
 /** The served word of a chain attach detail, or null when the detail speaks
  *  an shape the judges do not cover — a fallback path, or a rewording. */

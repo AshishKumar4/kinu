@@ -110,9 +110,11 @@ export const FENCES: readonly Fence[] = [
     // AFTER the reconciling activation and requires it to survive beside it.
     snippet: `    const before = scope?.spawnedBefore ?? null;
     const runs = this.unfinishedRuns(null, null, before);
+
     if (runs.length === 0) return [];`,
     mutation: `    const before = null as number | null;
     const runs = this.unfinishedRuns(null, null, before);
+
     if (runs.length === 0) return [];`,
     owner: {
       suite: 'packages/core/tests/integration-cancelled-fork-visibility.test.ts',
@@ -151,11 +153,14 @@ export const FENCES: readonly Fence[] = [
     // identity and the next heartbeat re-drives a healthy box.
     snippet: `    if (!this.#owns(generation)) {
       const settled = await this.ctx.storage.get<string>(BOOT_ID_KEY);
+
       if (settled !== undefined && settled !== bootId) {
         await this.#rawExec(\`printf %s \${settled} > \${BOOT_ID_PATH}\`);
       }
+
       return;
     }
+
     await this.ctx.storage.put(BOOT_ID_KEY, bootId);`,
     mutation: `    await this.ctx.storage.put(BOOT_ID_KEY, bootId);`,
     owner: {
