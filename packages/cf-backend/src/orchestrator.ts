@@ -4062,30 +4062,7 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
-    const result = await applyScaffoldDecision(this.scaffoldControl, mode);
-
-    if (!result.ok) return result;
-
-    // Emit the decision into the durable event log so SSE subscribers + MCP
-    // `list_run_events` see it in-band. Uses the action ACTUALLY applied — the
-    // misevolution recheck can convert a requested promote into a rollback
-    // (result.vetoReason says why).
-    try {
-      const runId = this._currentRunId || `scaffold-${nanoid()}`;
-      this.eventRecorder.emit(runId, {
-        type: result.action === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-        fromVersion: result.fromVersion,
-        toVersion: result.newCurrentVersion,
-      });
-    } catch (err) {
-      diagnostics.failure('event.scaffold_decision_emit_failed', toKinuError({
-        doing: 'recording a scaffold promotion/rollback run event',
-        cause: err,
-        otherwise: 'io',
-      }), { action: result.action });
-    }
-
-    return result;
+    return applyScaffoldDecision(this.scaffoldControl, mode);
   }
 
   /**
