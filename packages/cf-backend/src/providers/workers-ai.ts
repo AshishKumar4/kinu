@@ -12,6 +12,7 @@ import { createDirectWorkersAIFetch } from './direct-workers-ai-fetch';
 import {
   WORKERS_AI_FALLBACK_MODEL_CATALOG,
   WORKERS_AI_PREFERRED_MODEL_IDS,
+  WORKERS_AI_REASONING_EFFORTS,
 } from './workers-ai-catalog';
 
 export interface WorkersAIOptions {
@@ -37,6 +38,7 @@ export function createWorkersAIProvider(
     listModels: (deps): Promise<ModelInfo[]> => listModelsDevProviderModels('cloudflare-workers-ai', deps, {
       fallback: WORKERS_AI_FALLBACK_MODEL_CATALOG,
       preferredIds: WORKERS_AI_PREFERRED_MODEL_IDS,
+      reasoningEfforts: WORKERS_AI_REASONING_EFFORTS,
     }),
     createModel(modelId, deps): LanguageModel {
       if (developmentBinding) {

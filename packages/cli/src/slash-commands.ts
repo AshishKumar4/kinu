@@ -5,8 +5,9 @@
  * stdout, picker overlay vs printed list).
  */
 
-import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REFINEMENT_DECISIONS, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
+import { ADVISOR_SEVERITIES, DEFAULT_ROLE_ID, REASONING_EFFORTS, REFINEMENT_DECISIONS, offeredReasoningEfforts, type StagedSkillView, type RefinementRequestView, type RefinementRoute, isAdvisorSeverity, isReasoningEffort, summarizeRestorePlan, takeEvidence, type AlternateTakeSet, type BranchStatusEvent, type EvolutionConfigView, type FileCheckpointEntry, type ReasoningEffort, type TakePickOutcome } from '@kinu.run/core';
 import type { AgentChangelogView, AgentClient, AgentClientStatus, AgentRefinementView } from './agent-client';
+import { renderThrownChain } from '@kinu.run/core/obs';
 import { loadActiveProfile, updateDefaultTier } from './profiles';
 import { renderSearchTreeLines } from './display';
 
@@ -23,7 +24,7 @@ const SLASH_COMMANDS: readonly SlashCommandInfo[] = [
   { name: '/status', description: 'Show agent state and stats' },
   { name: '/tools', description: 'List available tools' },
   { name: '/model', description: 'Show or set the default model', usage: '/model [spec]' },
-  { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [low|medium|high]' },
+  { name: '/effort', description: 'Show or set default-tier reasoning effort', usage: '/effort [level]' },
   { name: '/role', description: 'Show or select this agent role', usage: '/role [id]' },
   { name: '/rename', description: 'Rename this agent; a name you choose is never auto-replaced', usage: '/rename <name>', requires: 'rename' },
   { name: '/settings', description: 'Open interactive settings' },
@@ -639,20 +640,34 @@ export async function setReasoningEffortPreference(
 }
 
 async function executeEffortCommand(
-  client: Pick<AgentClient, 'getReasoningEffort' | 'setReasoningEffort'>,
+  client: Pick<AgentClient, 'getReasoningEffort' | 'setReasoningEffort' | 'listModels'>,
   arg: string,
 ): Promise<SlashOutcome> {
   if (!arg) {
-    const current = (await loadActiveProfile()).catalog.tiers.default.reasoningEffort ?? 'medium';
+    const tier = (await loadActiveProfile()).catalog.tiers.default;
+    const current = tier.reasoningEffort ?? 'medium';
+    // The levels are the MODEL's (#9): read off its catalog entry, never a
+    // fixed three. A catalog that cannot be read falls back to the whole
+    // vocabulary, saying so.
+    let levels: string;
+
+    try {
+      const declared = (await client.listModels()).models.find((model) => model.spec === tier.model)?.reasoningEfforts;
+      levels = declared === undefined
+        ? `${REASONING_EFFORTS.join(', ')} (the catalog does not say which ${tier.model} accepts)`
+        : offeredReasoningEfforts(declared, tier.reasoningEffort).join(', ') || 'none; the model takes no effort setting';
+    } catch (cause) {
+      levels = `${REASONING_EFFORTS.join(', ')} (catalog unavailable: ${renderThrownChain({ cause })})`;
+    }
 
     return {
       kind: 'text',
-      text: `Default-tier reasoning effort: ${current}\nOptions: low, medium, high\nSet with /effort <level>.`,
+      text: `Default-tier reasoning effort: ${current}\nLevels for ${tier.model}: ${levels}\nSet with /effort <level>.`,
     };
   }
 
   if (!isReasoningEffort(arg)) {
-    return { kind: 'text', text: 'Usage: /effort low | medium | high' };
+    return { kind: 'text', text: `Usage: /effort <${REASONING_EFFORTS.join('|')}>` };
   }
 
   const result = await setReasoningEffortPreference(client, arg);

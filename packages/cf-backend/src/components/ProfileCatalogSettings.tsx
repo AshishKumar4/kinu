@@ -7,7 +7,9 @@ import {
   TIER_IDS,
   deriveRoleLabel,
   effectiveRoleCatalog,
+  isReasoningEffort,
   isValidRoleId,
+  offeredReasoningEfforts,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
   type ReasoningEffort,
@@ -21,8 +23,6 @@ import { getProfileCatalog, listAvailableModels, updateProfileCatalog, type Mode
 import { ModelPicker } from './ModelPicker';
 import { Card, inputCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
-
-const EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
 
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
 
@@ -176,7 +176,7 @@ export function ProfileCatalogSettings() {
   return (
     <Card title="Agent roles and model tiers" icon={IdentificationCardIcon}>
       <p className="text-xs p-text-3">
-        Roles select instructions, tools, skills, a tier, and a swarm preset. Tier changes apply account-wide next turn.
+        The default tier is the model this account runs on and the one a new workspace starts with. Roles select instructions, tools, skills, a tier, and a swarm preset. Tier changes apply account-wide next turn.
       </p>
       {error && <div className="rounded-md border border-[var(--c-danger)]/30 bg-[var(--c-danger)]/5 px-3 py-2 text-xs p-danger">{error}</div>}
       {!draft || !envelope ? (
@@ -192,11 +192,20 @@ export function ProfileCatalogSettings() {
               const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
               const resolved = assignment ?? draft.tiers.default;
 
+              // The levels are the MODEL's, read off its menu entry: a model
+              // that declares xhigh offers it, one that declares only low and
+              // high offers no medium (#9).
+              const efforts = offeredReasoningEfforts(
+                menu.models.find((model) => model.spec === resolved.model)?.reasoningEfforts,
+                assignment?.reasoningEffort,
+              );
+
               return (
                 <div key={tierId} className="grid gap-2 rounded-md border border-[var(--c-border-subtle)] p-2 md:grid-cols-[5rem_1fr_8rem] md:items-center">
                   <div>
                     <div className="text-xs font-medium p-text">{tierId}</div>
                     {assignment === undefined && <div className="text-[10px] p-text-3">uses default</div>}
+                    {tierId === 'default' && <div className="text-[10px] p-text-3">account default</div>}
                   </div>
                   <ModelPicker
                     models={menu.models}
@@ -211,13 +220,14 @@ export function ProfileCatalogSettings() {
                     className={inputCls}
                     value={assignment?.reasoningEffort ?? ''}
                     onChange={(event) => {
-                      const effort = EFFORTS.find((value) => value === event.target.value) ?? '';
-                      setTierEffort(tierId, effort);
+                      const effort = event.target.value;
+                      setTierEffort(tierId, isReasoningEffort(effort) ? effort : '');
                     }}
                     aria-label={`${tierId} reasoning effort`}
+                    title={efforts.length === 0 ? 'This model takes no reasoning effort setting.' : undefined}
                   >
                     <option value="">Model default</option>
-                    {EFFORTS.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
+                    {efforts.map((effort) => <option key={effort} value={effort}>{effort}</option>)}
                   </select>
                 </div>
               );

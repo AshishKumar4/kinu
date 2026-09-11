@@ -10,6 +10,7 @@ import type { LanguageModel } from 'ai';
 import type { ModelProvider, ModelInfo } from './types';
 import { createAuthedFetch } from './util';
 import { listModelsDevProviderModels } from './models-dev';
+import type { ReasoningEffort } from './reasoning-effort';
 
 export const OPENAI_CRED_KEY = 'openai.bearer';
 
@@ -20,10 +21,22 @@ export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
+/** `reasoning.effort` per model, as each model page lists it (read 2026-09-10):
+ *  https://developers.openai.com/api/docs/models/<id>. Shared with the Codex
+ *  provider, which serves the same models over the ChatGPT login. */
+export const OPENAI_REASONING_EFFORTS = {
+  'gpt-5.5':      ['none', 'low', 'medium', 'high', 'xhigh'],
+  'gpt-5.5-pro':  ['medium', 'high', 'xhigh'],
+  'gpt-5.4':      ['none', 'low', 'medium', 'high', 'xhigh'],
+  'gpt-5.4-mini': ['none', 'low', 'medium', 'high', 'xhigh'],
+  'gpt-5':        ['minimal', 'low', 'medium', 'high'],
+  'gpt-5.3-codex': ['low', 'medium', 'high', 'xhigh'],
+} satisfies Record<string, readonly ReasoningEffort[]>;
+
 const FALLBACK_MODELS: ModelInfo[] = [
-  { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'] },
-  { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'] },
-  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000, inputModalities: ['text', 'image', 'pdf'] },
+  { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5.5'] },
+  { id: 'gpt-5.4',    label: 'GPT-5.4',    capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5.4'] },
+  { id: 'gpt-5',      label: 'GPT-5',      capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 400_000, inputModalities: ['text', 'image', 'pdf'], reasoningEfforts: OPENAI_REASONING_EFFORTS['gpt-5'] },
 ];
 
 const PREFERRED_MODEL_IDS = ['gpt-5.5', 'gpt-5.4', 'gpt-5.5-pro', 'gpt-5.4-pro', 'gpt-5', 'gpt-5.4-mini'];
@@ -46,6 +59,7 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
     listModels: (deps) => listModelsDevProviderModels('openai', deps, {
       fallback: FALLBACK_MODELS,
       preferredIds: PREFERRED_MODEL_IDS,
+      reasoningEfforts: OPENAI_REASONING_EFFORTS,
     }),
     createModel(modelId, deps): LanguageModel {
       const customFetch = createAuthedFetch(deps, {

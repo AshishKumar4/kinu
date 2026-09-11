@@ -10,6 +10,7 @@ import type { LanguageModel } from 'ai';
 import * as v from 'valibot';
 import type { ModelProvider, ModelInfo } from './types';
 import { authCacheKey, createAuthedFetch } from './util';
+import { knownReasoningEfforts } from './reasoning-effort';
 
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 
@@ -21,12 +22,17 @@ export interface OpenRouterOptions {
   catalogTtlMs?: number;
 }
 
+/** `GET /models` rows. `reasoning.supported_efforts` is the model's own list
+ *  of accepted `reasoning.effort` values, published for exactly this use
+ *  ("Use this when building client UIs"):
+ *  https://openrouter.ai/docs/use-cases/reasoning-tokens */
 const OpenRouterCatalogSchema = v.object({
   data: v.optional(v.array(v.object({
     id: v.string(),
     name: v.optional(v.string()),
     context_length: v.optional(v.number()),
     architecture: v.optional(v.object({ modality: v.optional(v.string()) })),
+    reasoning: v.optional(v.object({ supported_efforts: v.optional(v.array(v.string())) })),
   }))),
 });
 
@@ -73,6 +79,8 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
         capabilities: m.architecture?.modality?.includes('image')
           ? ['tools', 'streaming', 'vision']
           : ['tools', 'streaming'],
+        // A row without a `reasoning` block is a non-reasoning model: no levels.
+        reasoningEfforts: knownReasoningEfforts(m.reasoning?.supported_efforts ?? []),
       }));
 
       catalogCache = { at: Date.now(), authKey, models };

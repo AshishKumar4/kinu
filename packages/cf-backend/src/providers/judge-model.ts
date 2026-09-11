@@ -27,7 +27,7 @@ const candidatesFor = (registry: AgentProviderRegistry) => (): Promise<string[]>
  *
  * The MECHANICAL producers deliberately do NOT come through here. They resolve
  * their model from the account's tier table (`MODEL_ROUTE_POLICY.fast` names the
- * `tiny` tier) synchronously at construction time, to decide whether to wire a
+ * `fast` tier) synchronously at construction time, to decide whether to wire a
  * distinct client at all; this one has to await a live credential listing. One
  * resolver over both would carry a branch neither caller can reach.
  */

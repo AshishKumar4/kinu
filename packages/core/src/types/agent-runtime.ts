@@ -137,7 +137,7 @@ export interface AgentRuntime {
    * The chat vendor's small tier, for MECHANICAL work — outcome
    * classification, pathology labels, one-sentence reflections, pattern
    * extraction, sleep-time compression. Same vendor, same credential, cheaper
-   * model, resolved through the account's `tiny` tier
+   * model, resolved through the account's `fast` tier
    * (`MODEL_ROUTE_POLICY.fast`).
    *
    * Optional, and every reader falls back to `llm`, so a backend that wires
