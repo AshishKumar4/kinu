@@ -2976,6 +2976,7 @@ export class LocalAgentSession implements BackendHost {
       .filter((msg): msg is ModelMessage => msg !== null);
 
     const cache = this.cacheIdentity();
+
     // The NORMALIZED spelling, as cf parses it: a tier the account catalog
     // names by a bare id has no slash, and `parseModelSpec` refuses it before
     // the request leaves — a turn failed for a spelling, not a model.
@@ -4038,6 +4039,7 @@ export class LocalAgentSession implements BackendHost {
    */
   private async reviewTurnInBackground(recorded: RecordedAdvisor): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return;
+
     if (advisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn)) return;
     const checkpointed = Promise.withResolvers<void>();
 
@@ -4060,6 +4062,7 @@ export class LocalAgentSession implements BackendHost {
         checkpointed.reject(failure);
         throw failure;
       }
+
       markAdvisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn);
       checkpointed.resolve();
       await this.runAdvisorReview(recorded);

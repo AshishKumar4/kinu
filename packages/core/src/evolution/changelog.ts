@@ -848,6 +848,7 @@ export async function revertChangelogEntryById(
 
   if (!entry.revert) return { ok: false, error: `changelog entry ${id} is informational — nothing to revert` };
   const result = await executeChangelogRevert(ctx, entry.revert);
+
   // The operator's own act, on the same audit stream the change it undoes was
   // announced on — so the changelog that showed the change shows its reversal.
   // Recorded here rather than by the caller: one backend wrote this row and
@@ -858,5 +859,6 @@ export async function revertChangelogEntryById(
       VALUES (${ctx.rt.actor.actorId}, 'reflection',
               ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
   }
+
   return result;
 }

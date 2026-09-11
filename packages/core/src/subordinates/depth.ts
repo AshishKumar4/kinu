@@ -80,10 +80,12 @@ export function delegationBudgetOf(
 ): DelegationBudget {
   let depth = 0;
   let current: Pick<WorkspaceActor, 'parentActorId'> | null = record;
+
   while (current !== null && current.parentActorId !== null) {
     depth += 1;
     current = describe(current.parentActorId);
   }
+
   return delegationBudgetAtDepth(depth);
 }
 

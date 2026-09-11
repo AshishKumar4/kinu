@@ -470,6 +470,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
   const advisorFibers = (rt: CLIRuntime) =>
     rt.storage.sql<{ n: number }>`
       SELECT count(*) AS n FROM fibers WHERE name = ${ADVISOR_LANE_FIBER}`[0]?.n ?? 0;
+
   const notes = (rt: CLIRuntime) =>
     rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events WHERE type = 'advisor_note'`.map((row) => row.message);

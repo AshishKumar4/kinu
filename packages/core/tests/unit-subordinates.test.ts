@@ -302,11 +302,15 @@ describe('the delegation depth cap', () => {
       ['d2', { parentActorId: 'd1' }],
       ['orphan', { parentActorId: 'gone' }],
     ]);
+
     const row = (actorId: string) => {
       const found = rows.get(actorId);
+
       if (!found) throw new Error(`no fixture row ${actorId}`);
+
       return found;
     };
+
     const describe = (actorId: string) => rows.get(actorId) ?? null;
     expect(delegationBudgetOf(describe, row('root'))).toEqual(ROOT_DELEGATION_BUDGET);
     expect(delegationBudgetOf(describe, row('d1'))).toEqual({ depth: 1, maxDepth: 3 });

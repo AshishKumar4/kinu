@@ -54,10 +54,12 @@ export function resolveEffectiveModelSpec(deps: {
   readonly normalize: (spec: string | null) => string;
 }): string {
   const stored = deps.live() ?? deps.stored();
+
   try {
     return deps.normalize(stored);
   } catch (error) {
     diagnostics.event('actor.model_spec_unresolvable', { error: renderThrownChain({ cause: error }) });
+
     return stored ?? '';
   }
 }

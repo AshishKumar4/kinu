@@ -278,6 +278,7 @@ export function persistAutoTitle(
 ): boolean {
   if (!autoTitleMayReplace(config.getNameOrigin())) return false;
   config.setDisplayNameOrigin(title, 'auto');
+
   return true;
 }
 
@@ -289,9 +290,12 @@ export function persistAutoTitle(
  *  is still showing its raw slug. */
 export function planWorkspaceTitle(state: WorkspaceTitleState): WorkspaceTitlePlan | null {
   if (!autoTitleMayReplace(state.nameOrigin)) return null;
+
   if (isPlaceholderMission(state.mission)) return null;
+
   if (!isPlaceholderWorkspaceTitle(state.displayName, state.slug)) return null;
   const mission = state.mission.trim();
+
   return { provisional: workspaceTitleFromMission(mission) || null, mission };
 }
 

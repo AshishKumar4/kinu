@@ -96,7 +96,9 @@ export function inheritedContextFromConversation(
   sql: SqlExecutor, actor: ActorHandle, sessionId: string,
 ): SerializedMessage[] {
   actor.assertCurrent();
+
   type Row = { id: string; role: string; content: string; created_at: number };
+
   const rows = sql<Row>`
     SELECT id, role, content, created_at
     FROM (
@@ -107,9 +109,11 @@ export function inheritedContextFromConversation(
       LIMIT ${INHERITED_CONTEXT_CAP}
     ) tail
     ORDER BY created_at ASC, seq ASC`;
+
   const total = sql<{ n: number }>`SELECT COUNT(*) AS n FROM messages
     WHERE actor_id = ${actor.actorId} AND session_id = ${sessionId}
       AND role IN ('user', 'assistant')`[0]?.n ?? rows.length;
+
   return inheritedContextFromRows(
     rows.map((row) => ({ id: row.id, role: row.role, content: row.content, createdAt: row.created_at })),
     total,

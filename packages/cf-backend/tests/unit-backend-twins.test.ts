@@ -634,11 +634,13 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
         ...CF_CLASSES.map(([file]) => read(file)), read('packages/cf-backend/src/head-runtime.ts'),
         ...entry.suites.filter((file) => file.startsWith('packages/cf-backend/src/')).map(read),
       ];
+
       const cli = [
         read(CLI_CLASS[0]), read('packages/cli-backend/src/head-runtime.ts'),
         read('packages/cli-backend/src/agent-host/host.ts'),
         ...entry.suites.filter((file) => file.startsWith('packages/cli')).map(read),
       ];
+
       if (!cf.some((body) => body.includes(entry.coreSymbol))) {
         unreached.push(`${entry.seam} — no cf surface names \`${entry.coreSymbol}\``);
       }
@@ -679,13 +681,16 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     // constructing `takes` through core would pass it. Each of the five is
     // its own drift site, so each is held separately.
     const seam = DIFFERENTIAL_SEAMS.find((entry) => entry.seam === 'terminal effect bodies');
+
     if (!seam) throw new Error('the terminal effect bodies seam is not declared');
     const cf = [read('packages/cf-backend/src/actor-agent.ts'), read('packages/cf-backend/src/orchestrator.ts')].join('\n');
     const cli = read(CLI_CLASS[0]);
+
     const missing = seam.fixture.flatMap((factory) => [
       ...(delegatesTo(cf, factory) ? [] : [`cf does not construct ${factory}`]),
       ...(delegatesTo(cli, factory) ? [] : [`cli does not construct ${factory}`]),
     ]);
+
     expect(missing).toEqual([]);
   });
 

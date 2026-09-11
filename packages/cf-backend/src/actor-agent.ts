@@ -3214,6 +3214,7 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected reviewTurnInBackground(turn: CompletedTurn, recorded?: AdvisorRecoverySnapshot): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return Promise.resolve();
+
     // ONE lane per turn, ever STARTED. A terminal replay arriving after the
     // checkpoint but before its row recorded `completed` would otherwise open a
     // second fiber beside the first — which the SDK can still recover — and two

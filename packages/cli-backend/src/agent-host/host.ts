@@ -1348,6 +1348,7 @@ export class LocalAgentHost {
         // Off the directory row, as on cf: the row is the roster, and a private
         // copy on the child's config was a second store nothing kept in step.
         const task = terminalTaskReport({ lifetime: child.actor.record.lifetime, ending, assistantText });
+
         if (task) return task;
 
         // A hire reaches the SAME selective policy it always had, and only for a
@@ -1490,6 +1491,7 @@ export class LocalAgentHost {
 
   private buildTeam(parent: HostEntry): TeamToolDeps {
     const delegation = delegationBudgetOf((actorId) => parent.tree.host.describe(actorId), parent.actor.record);
+
     const input: Parameters<typeof createTeamToolDeps>[0] = {
       delegation,
       roster: parent.roster,
@@ -1674,6 +1676,7 @@ export class LocalAgentHost {
     const sql = makeSql(tree.db);
     const owner = localActorOwner(parent.ws.rt.actor);
     const depth = delegationBudgetOf((actorId) => tree.host.describe(actorId), parent.actor.record).depth + 1;
+
     try {
       tree.db.transaction(() => {
         // The child's own handle, bound to its own directory row — the only

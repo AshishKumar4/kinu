@@ -142,16 +142,20 @@ describe('ModelCatalogSession.modelOutputLimit', () => {
 describe('resolveEffectiveModelSpec', () => {
   const canonical = (spec: string | null): string => {
     const trimmed = spec?.trim() ?? '';
+
     if (trimmed === '' || trimmed === 'house-model') return 'openai-compatible/house-model';
+
     if (trimmed === 'openai-compatible/house-model') return trimmed;
     throw new Error(`unknown model ${trimmed}`);
   };
 
   test('one model under two spellings resolves to one spec', () => {
     const spellings = ['house-model', 'openai-compatible/house-model', '  house-model '];
+
     const resolved = new Set(spellings.map((stored) => resolveEffectiveModelSpec({
       live: () => undefined, stored: () => stored, normalize: canonical,
     })));
+
     expect([...resolved]).toEqual(['openai-compatible/house-model']);
   });
 

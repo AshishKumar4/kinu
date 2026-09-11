@@ -816,6 +816,7 @@ export async function applyPromotionDecision(
     // after; execution reads the pointer's version file either way.
     await rt.identity.scaffold.write(pendingCode);
     recordScaffoldDecision(rt, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
+
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
 
@@ -829,7 +830,9 @@ export async function applyPromotionDecision(
   if (currentCode != null) {
     await rt.identity.scaffold.write(currentCode);
   }
+
   recordScaffoldDecision(rt, { type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion });
+
   return { newCurrentVersion: currentVersion, action: 'rollback' };
 }
 
