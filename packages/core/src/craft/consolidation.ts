@@ -16,6 +16,7 @@ import { isoDate, nowMs } from '../utils/date';
 import { DEFAULT_CONFIG } from '../config';
 
 const RETIREMENT_THRESHOLD = DEFAULT_CONFIG.craftStore.retirementThreshold;
+
 const MIN_USES_BEFORE_RETIREMENT = DEFAULT_CONFIG.craftStore.minUsesBeforeRetirement;
 
 /**
@@ -27,6 +28,7 @@ const MIN_USES_BEFORE_RETIREMENT = DEFAULT_CONFIG.craftStore.minUsesBeforeRetire
  */
 export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void> {
   const allTools = rt.craftStore.list();
+
   if (allTools.length === 0) return;
 
   const now = nowMs();
@@ -34,15 +36,20 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
   const scores = rt.storage.sql<{ name: string; score: number; uses: number; last_used_at: number }>`
     SELECT name, score, uses, last_used_at FROM crafted_tools
   `;
+
   const scoreMap = new Map(scores.map(s => [s.name, s]));
 
   const toRetire: string[] = [];
+
   for (const tool of allTools) {
     const scoreEntry = scoreMap.get(tool.name);
+
     if (!scoreEntry) continue;
+
     if (scoreEntry.uses < MIN_USES_BEFORE_RETIREMENT) continue;
 
     const effective = effectiveScore(scoreEntry.score, scoreEntry.last_used_at, now);
+
     if (effective < RETIREMENT_THRESHOLD) {
       toRetire.push(tool.name);
     }

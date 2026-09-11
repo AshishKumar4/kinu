@@ -28,6 +28,7 @@ import { bunResolutionShell } from '../src/cli/bun-runtime';
 import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
 
 const ORIGIN = 'https://kinu.example.com';
+
 const tempDirs: string[] = [];
 
 interface InstallSandbox {
@@ -66,8 +67,10 @@ async function installScript(): Promise<string> {
   // SAFETY: handleCliRequest returns from its /install.sh branch before reading env, and this request fixes that pathname.
   const env = partialEnv as Env;
   const response = await handleCliRequest(new Request(`${ORIGIN}/install.sh`), env);
+
   if (!response) throw new Error('/install.sh was not handled');
   expect(response.status).toBe(200);
+
   return response.text();
 }
 
@@ -76,8 +79,10 @@ async function launcherScript(): Promise<string> {
   // SAFETY: handleCliRequest returns from its /downloads/kinu branch before reading env, and this request fixes that pathname.
   const env = partialEnv as Env;
   const response = await handleCliRequest(new Request(`${ORIGIN}/downloads/kinu`), env);
+
   if (!response) throw new Error('/downloads/kinu was not handled');
   expect(response.status).toBe(200);
+
   return response.text();
 }
 
@@ -85,7 +90,9 @@ async function launcherScript(): Promise<string> {
  *  rather than imported: the served text is the contract both scripts ship. */
 function approvedBun(): string {
   const match = /KINU_BUN_VERSION="([^"]+)"/.exec(bunResolutionShell());
+
   if (!match) throw new Error('rendered resolution names no KINU_BUN_VERSION');
+
   return match[1];
 }
 
@@ -115,12 +122,14 @@ function makeDistTarballs(home: string): void {
     join(stage, 'runtime/kinu/node_modules/@nimbus-sh/runtime-cpython/manifest.json'),
     '{"name":"cpython","files":[]}\n',
   );
+
   for (const [name, from, member] of [
     ['cli.tar.gz', stage, 'kinu'],
     ['runtime.tar.gz', join(stage, 'runtime'), 'kinu'],
   ] as const) {
     const tarball = join(home, name);
     const tar = spawnSync('tar', ['-czf', tarball, '-C', from, member], { encoding: 'utf8' });
+
     if (tar.status !== 0) throw new Error(`tar failed: ${tar.stderr}`);
     const digest = createHash('sha256').update(readFileSync(tarball)).digest('hex');
     writeFileSync(`${tarball}.sha256`, `${digest}  ${name}\n`);
@@ -145,6 +154,7 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
     'if [ "$1" = "connect" ]; then echo "STUB-CONNECT-RAN $*"; exit 0; fi',
     'exit 0',
   ].join('\n');
+
   writeFileSync(join(home, 'stub-shim.sh'), `${stubShim}\n`);
   writeFileSync(join(home, 'launcher'), options.launcher ?? `${stubShim}\n`);
 
@@ -154,6 +164,7 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
   // test always sets it, and a stub that silently falls back would overwrite
   // the developer's own Bun on any machine where BUN_INSTALL is exported.
   writeFileSync(join(home, 'bun-stub-template'), bunStub('__BUN_VERSION__', bunLog));
+
   const bunInstaller = [
     '#!/bin/sh',
     'version="${1#bun-v}"',
@@ -164,6 +175,7 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
     `sed "s/__BUN_VERSION__/$version/g" "${home}/bun-stub-template" > "$dir/bun"`,
     'chmod 755 "$dir/bun"',
   ].join('\n');
+
   writeFileSync(join(home, 'bun-installer.sh'), `${bunInstaller}\n`);
 
   makeDistTarballs(home);
@@ -194,6 +206,7 @@ function makeSandbox(options: SandboxOptions = {}): InstallSandbox {
     `if [ -n "$out" ]; then cat "${home}/launcher" > "$out"; exit 0; fi`,
     'cat "$HOME/install.sh"',
   ].join('\n');
+
   writeFileSync(join(stubBin, 'curl'), `${curl}\n`);
   chmodSync(join(stubBin, 'curl'), 0o755);
 
@@ -222,6 +235,7 @@ function runHeadlessInstall(
   const { promise, resolve } = Promise.withResolvers<{
     exitCode: number | null; output: string; timedOut: boolean;
   }>();
+
   const child = spawn('bash', [], {
     detached: true,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -233,14 +247,17 @@ function runHeadlessInstall(
       ...extraEnv,
     },
   });
+
   let output = '';
   child.stdout.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
   child.stderr.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
   child.stdin.end(script);
 
   const childPid = child.pid;
+
   if (childPid === undefined) {
     resolve({ exitCode: null, output, timedOut: true });
+
     return promise;
   }
 
@@ -253,6 +270,7 @@ function runHeadlessInstall(
     clearTimeout(timer);
     resolve({ exitCode: code, output, timedOut: false });
   });
+
   return promise;
 }
 
@@ -287,6 +305,7 @@ describe('install.sh terminal handling', () => {
     expect(install).not.toContain('export PATH');
 
     const binDir = join(home, '.kinu/bin');
+
     const run = spawnSync('bash', ['-c', [
       install,
       'printf "BEFORE=%s\\n" "$(command -v kinu)"',
@@ -301,8 +320,10 @@ describe('install.sh terminal handling', () => {
     // kinu yet. That is exactly when the hint has to appear.
     expect(run.stdout).toContain('BEFORE=\n');
     expect(run.stdout).toContain('To use kinu in this shell now, run:');
+
     const hint = run.stdout.split('\n').map((line) => line.trim())
       .find((line) => line.startsWith('export PATH='));
+
     expect(hint).toBe(`export PATH="${binDir}:$PATH"`);
 
     // The hint is not decoration: running it is what activates the CLI.
@@ -311,6 +332,7 @@ describe('install.sh terminal handling', () => {
       timeout: 30_000,
       env: { HOME: home, KINU_HOME: join(home, '.kinu'), PATH: `${stubBin}:/usr/bin:/bin`, SHELL: '/bin/bash' },
     });
+
     expect(activated.status, activated.stderr).toBe(0);
     expect(activated.stdout).toContain(join(home, '.kinu/bin/kinu'));
     expect(activated.stdout).toContain('setup   connect your account');
@@ -330,11 +352,14 @@ describe('install.sh terminal handling', () => {
   test('--connect pairs the machine from inside the installer, before the PATH hint', async () => {
     const script = await installScript();
     const { home, stubBin } = makeSandbox();
+
     const install = buildCliInstallCommand({
       origin: ORIGIN, setup: false, connect: true, label: "Ashish's Mac",
     });
+
     expect(install).toContain("--connect --label 'Ashish'\\''s Mac'");
     writeFileSync(join(home, 'install.sh'), script);
+
     const run = spawnSync('bash', ['-c', install], {
       encoding: 'utf8',
       timeout: 30_000,
@@ -368,6 +393,7 @@ describe('install.sh terminal handling', () => {
 
   test('a CLI that dies in raw mode leaves the terminal sane after the served script exits', async () => {
     const python = Bun.which('python3');
+
     if (!python) return; // PTY harness needs python3
     const script = await installScript();
     const { home, stubBin } = makeSandbox();
@@ -384,6 +410,7 @@ describe('install.sh terminal handling', () => {
     writeFileSync(scriptPath, script);
     const harnessPath = join(home, 'pty-harness.py');
     writeFileSync(harnessPath, PTY_HARNESS);
+
     const run = spawnSync(python, [harnessPath, scriptPath], {
       encoding: 'utf8',
       timeout: 40_000,
@@ -399,8 +426,10 @@ describe('install.sh terminal handling', () => {
         BUN_INSTALL: '',
       },
     });
+
     expect(run.status).toBe(0);
     const lastLine = run.stdout.trim().split('\n').at(-1);
+
     if (!lastLine) throw new Error('PTY harness emitted no result');
     const result = v.parse(PtyResultSchema, JSON.parse(lastLine));
     expect(result.output).toContain('STUB-SETUP-DIED');
@@ -438,18 +467,24 @@ describe('the CLI installs as a prebuilt artifact', () => {
     // launcher accepts but the deploy never publishes is a 404 body unpacked
     // as a tarball, so the two sets are held equal here.
     const named = new Set<string>();
+
     for (const [unameS, os] of [['Darwin', 'darwin'], ['Linux', 'linux']] as const) {
       expect(launcher).toContain(`${unameS}) KINU_OS=${os} ;;`);
+
       for (const arch of ['arm64', 'x64']) named.add(`${os}-${arch}`);
     }
+
     expect(launcher).toContain('arm64|aarch64) KINU_ARCH=arm64 ;;');
     expect(launcher).toContain('x86_64|amd64) KINU_ARCH=x64 ;;');
+
     // The platforms the deploy publishes are read off the published paths —
     // the surface production serves — not off a private list.
     const published = CLI_DIST_PATHS.flatMap((path) => {
       const match = /\/downloads\/kinu-cli-([a-z0-9-]+)\.tar\.gz$/.exec(path);
+
       return match ? [match[1]] : [];
     });
+
     expect([...named].sort()).toEqual([...published].sort());
     // An unsupported pair stops rather than downloading a page.
     expect(launcher).toContain('Kinu supports macOS and Linux.');
@@ -506,6 +541,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     const shared = bunResolutionShell();
     const install = await installScript();
     const launcher = await launcherScript();
+
     for (const script of [install, launcher]) {
       expect(script).toContain(shared);
       // One `command -v bun`, and it is the shared one. A second probe beside
@@ -514,6 +550,7 @@ describe('Bun runtime resolution is one source of truth', () => {
         .toBe(shared.split('command -v bun').length - 1);
       expect(script).toContain('kinu_resolve_bun');
     }
+
     // The launcher never installs a runtime, and it runs exactly one — the Bun
     // it just resolved. The CLI imports bun:sqlite; there is no Node path.
     expect(launcher).not.toContain('bun.sh/install');
@@ -553,6 +590,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     const escaped = (await installScript()).split('\n').filter((line) => line.includes('\\$'));
     expect(escaped.length).toBeGreaterThan(0);
     expect(escaped.filter((line) => !line.includes('PATH'))).toEqual([]);
+
     for (const expansion of [
       '"$KINU_MANAGED_BUN"',
       '"$(command -v bun 2>/dev/null || true)"',
@@ -572,6 +610,7 @@ describe('Bun runtime resolution is one source of truth', () => {
     // mis-escaped expansion cannot pass this, because bash would hand the
     // arithmetic the literal text instead of the digits.
     const script = `${bunResolutionShell()}\nkinu_bun_key "$1"\n`;
+
     for (const [version, key] of [
       ['1.4.0', '1004000'],
       ['1.9.2', '1009002'],
@@ -582,6 +621,7 @@ describe('Bun runtime resolution is one source of truth', () => {
       expect(run.status, `${version}: ${run.stderr}`).toBe(0);
       expect(run.stdout.trim()).toBe(key);
     }
+
     // A version it must refuse to score rather than guess at.
     for (const bad of ['1.4', 'not-a-version', '']) {
       const run = spawnSync('bash', ['-c', script, 'kinu', bad], { encoding: 'utf8', timeout: 20_000 });
@@ -597,10 +637,12 @@ describe('Bun runtime resolution is one source of truth', () => {
     // `bun` in whatever directory the user ran the installer from must never
     // become the runtime this CLI executes.
     const cwd = mkdtempSync(join(tmpdir(), 'kinu-bun-cwd-'));
+
     try {
       const decoy = join(cwd, 'bun');
       writeFileSync(decoy, `#!/bin/sh\nprintf '%s\\n' '${approvedBun()}'\n`);
       chmodSync(decoy, 0o755);
+
       const probe = spawnSync('bash', ['-c', [
         'set -eu',
         'KINU_HOME="$PWD/.kinu"',

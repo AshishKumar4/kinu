@@ -64,8 +64,10 @@ import { diagnostics, renderThrownChain, toKinuError, tolerateAsync } from '../o
 
 /** The file every task asks the agent to write. */
 export const SOLUTION_FILE = 'solution.mjs';
+
 /** The reference implementation, seeded for the agent to read and beat. */
 export const REFERENCE_FILE = 'reference.mjs';
+
 /**
  * Prefixes for the two files the verifier writes, each suffixed with a stamp that
  * is unique per verification. Underscored so they sort away from the agent's own
@@ -79,6 +81,7 @@ export const REFERENCE_FILE = 'reference.mjs';
  * registry is shared between two `exec` calls in one isolate.
  */
 const MEASURE_PREFIX = '_measure_';
+
 const CANDIDATE_PREFIX = '_candidate_';
 
 /** Distinguishes two verifications inside the same millisecond, so uniqueness is
@@ -288,6 +291,7 @@ let implementationId: string | null = null;
  */
 export function execRatioImplementation(): string {
   implementationId ??= `exec-ratio@${sha256Hex(HARNESS_PROLOGUE, 12)}`;
+
   return implementationId;
 }
 
@@ -380,16 +384,20 @@ async function removeOwnedFiles(ctx: MeasurementContext, files: readonly string[
 export async function preflightRatioHarness(ctx: MeasurementContext): Promise<string | null> {
   verifications += 1;
   const probeFile = `${MEASURE_PREFIX}probe_${String(Date.now())}_${String(verifications)}.mjs`;
+
   try {
     await ctx.vfs.writeFile(probeFile, `console.log('RESULT ' + JSON.stringify({ ok: 1 }));\n`);
   } catch (error) {
     return `the workspace filesystem would not accept the harness file ${probeFile}: `
       + renderThrownChain({ cause: error });
   }
+
   let result: string | null;
+
   try {
     const run: ExecOutcome = await ctx.exec(`node ${probeFile}`);
     const stdout = run.stdout ?? '';
+
     if (RESULT_LINE.test(stdout)) result = null;
     else {
       result = `\`node ${probeFile}\` printed no RESULT line (exit ${String(run.exitCode)}). `
@@ -399,6 +407,7 @@ export async function preflightRatioHarness(ctx: MeasurementContext): Promise<st
     result = `\`node ${probeFile}\` could not be run in this workspace's shell: `
       + renderThrownChain({ cause: error });
   }
+
   try {
     await removeOwnedFiles(ctx, [probeFile]);
   } catch (swept) {
@@ -408,6 +417,7 @@ export async function preflightRatioHarness(ctx: MeasurementContext): Promise<st
       toKinuError({ doing: `remove owned preflight probe ${probeFile}`, cause: swept, otherwise: 'io' }),
     );
   }
+
   return result;
 }
 
@@ -443,6 +453,7 @@ export async function runRatioMeasurement(
 
   try {
     let submitted: string;
+
     try {
       const read = await ctx.vfs.readFile(SOLUTION_FILE, { encoding: 'utf8' });
       submitted = read instanceof Uint8Array ? new TextDecoder().decode(read) : read;
@@ -451,9 +462,11 @@ export async function runRatioMeasurement(
         `${SOLUTION_FILE} could not be read: ${renderThrownChain({ cause: error })}`,
       )});\n`;
     }
+
     await ctx.vfs.writeFile(candidateFile, submitted);
 
     const params = { ...problem.params, budgetMultiple: BUDGET_MULTIPLE, deadlineMs: DEADLINE_MS };
+
     const source = [
       `const P = ${JSON.stringify(params)};`,
       HARNESS_PROLOGUE,
@@ -461,19 +474,23 @@ export async function runRatioMeasurement(
       `const cand = await loadSolve('./${candidateFile}');`,
       problem.body,
     ].join('\n');
+
     await ctx.vfs.writeFile(measureFile, source);
 
     const run: ExecOutcome = await ctx.exec(`node ${measureFile}`);
     const stdout = run.stdout ?? '';
     const match = RESULT_LINE.exec(stdout);
+
     if (!match?.[1]) {
       throw new Error(
         `measurement harness produced no RESULT line (exit ${String(run.exitCode)}). `
         + `stdout: ${stdout.slice(0, 400)} | stderr: ${(run.stderr ?? '').slice(0, 400)}`,
       );
     }
+
     const measured = parseMeasurement(match[1]);
     await removeOwnedFiles(ctx, [candidateFile, measureFile]);
+
     return measured;
   } catch (primary) {
     try {
@@ -488,6 +505,7 @@ export async function runRatioMeasurement(
         }),
       );
     }
+
     throw primary;
   }
 }
@@ -508,6 +526,7 @@ function referenceAsExpression(reference: string): string {
   if (!reference.includes(REFERENCE_SOLVE_DECLARATION)) {
     throw new Error('a RatioProblem reference must declare `export function solve(input, oracle)`');
   }
+
   return `(() => { ${reference.replace(REFERENCE_SOLVE_DECLARATION, 'function solve(')}\nreturn solve; })()`;
 }
 
@@ -532,6 +551,7 @@ const MeasurementSchema = v.object({
 
 function parseMeasurement(json: string): RatioMeasurement {
   const parsed = v.safeParse(MeasurementSchema, JSON.parse(json));
+
   if (!parsed.success) {
     throw new Error(
       'the measurement harness printed a RESULT this verifier cannot read, so no number it '
@@ -539,5 +559,6 @@ function parseMeasurement(json: string): RatioMeasurement {
       + ` (line: ${json.slice(0, 200)})`,
     );
   }
+
   return parsed.output;
 }

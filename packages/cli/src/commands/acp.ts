@@ -26,6 +26,7 @@ export async function acpCommand(name: string, opts: AcpCommandOptions): Promise
   // printError writes to stderr: stdout is the protocol channel and diagnostics
   // must never touch it.
   const target = requireAgentTarget(name);
+
   if (target.mode === 'local') ensureLocalDaemonRunning();
 
   const app = createAcpAgent({
@@ -48,6 +49,7 @@ export async function acpCommand(name: string, opts: AcpCommandOptions): Promise
     Writable.toWeb(process.stdout),
     stdinBytes(),
   ));
+
   await connection.closed;
 }
 
@@ -55,6 +57,7 @@ function stdinBytes(): ReadableStream<Uint8Array> {
   let dataListener: ((chunk: Buffer) => void) | null = null;
   let endListener: (() => void) | null = null;
   let errorListener: ((error: Error) => void) | null = null;
+
   return new ReadableStream<Uint8Array>({
     start(controller) {
       dataListener = (chunk) => controller.enqueue(chunk);
@@ -67,7 +70,9 @@ function stdinBytes(): ReadableStream<Uint8Array> {
     },
     cancel() {
       if (dataListener) process.stdin.off('data', dataListener);
+
       if (endListener) process.stdin.off('end', endListener);
+
       if (errorListener) process.stdin.off('error', errorListener);
       process.stdin.pause();
     },

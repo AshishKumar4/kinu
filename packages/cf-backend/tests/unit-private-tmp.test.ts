@@ -35,18 +35,25 @@ afterEach(() => {
 });
 
 const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
+
 const SESSION_USER: VfsCred = { uid: 1000, gid: 1000, groups: [1000], umask: 0o022 };
+
 const AGENT_A: VfsCred = { uid: 2001, gid: 2001, groups: [2001], umask: 0o022 };
+
 const AGENT_B: VfsCred = { uid: 2002, gid: 2002, groups: [2002], umask: 0o022 };
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.byteLength);
     const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
+
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
+
     return bytes;
   }
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
@@ -64,22 +71,28 @@ interface Fixture {
 async function openFixture(): Promise<Fixture> {
   const database = new Database(':memory:');
   databases.push(database);
+
   const sql: SqlDatabase = {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
       const bound = bindings.map(sqlBinding);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
+
   const workspace = await NimbusWorkspace.create({
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
   });
+
   const durable = new Map<string, unknown>();
   const processes = new SessionProcessSupervisor();
+
   const host: ProgrammaticHost = {
     _w1SessionDestroyed: false,
     env: {},
@@ -107,7 +120,9 @@ async function openFixture(): Promise<Fixture> {
     ensureFacetManager: () => undefined,
     initSession: async () => { throw new Error('workspace is already composed'); },
   };
+
   await ensureProgrammaticReady(host);
+
   return {
     workspace,
     host,

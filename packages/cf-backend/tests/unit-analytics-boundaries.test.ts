@@ -66,6 +66,7 @@ interface CapturedPlane {
 function captureEnv(): CapturedPlane {
   const agent: Captured[] = [];
   const ops: Captured[] = [];
+
   return {
     agent,
     ops,
@@ -98,6 +99,7 @@ function callSites(file: string): readonly CallSite[] {
   const text = readFileSync(`${REPO}${file}`, 'utf8');
   const parsed = parseSync(file, text);
   const sites: CallSite[] = [];
+
   // The parser's OWN visitor rather than a hand-rolled walk: it knows which keys
   // hold children, so no node is missed and nothing has to guess at the spine.
   const visitor = new Visitor({
@@ -107,15 +109,20 @@ function callSites(file: string): readonly CallSite[] {
         : node.callee.type === 'MemberExpression' && node.callee.property.type === 'Identifier'
           ? node.callee.property.name
           : null;
+
       if (callee === null) return;
       const first = node.arguments[0];
+
       const literal = first !== undefined && first.type === 'Literal'
         ? v.safeParse(StringValued, first)
         : null;
+
       sites.push({ callee, firstString: literal?.success === true ? literal.output.value : null });
     },
   } satisfies VisitorObject);
+
   visitor.visit(parsed.program);
+
   return sites;
 }
 
@@ -126,9 +133,11 @@ const SITES_BY_FILE: Map<string, readonly CallSite[]> = new Map();
 
 function sitesOf(file: string): readonly CallSite[] {
   const cached = SITES_BY_FILE.get(file);
+
   if (cached) return cached;
   const parsed = callSites(file);
   SITES_BY_FILE.set(file, parsed);
+
   return parsed;
 }
 
@@ -152,20 +161,25 @@ const BoundaryRow = v.object({
   emitter: v.string(),
   means: v.string(),
 });
+
 type BoundaryRow = v.InferOutput<typeof BoundaryRow>;
 
 const StringLiteral = v.object({ type: v.literal('Literal'), value: v.string() });
+
 const Concatenation = v.object({
   type: v.literal('BinaryExpression'),
   operator: v.literal('+'),
   left: v.unknown(),
   right: v.unknown(),
 });
+
 const ArrayLiteral = v.object({
   type: v.literal('ArrayExpression'),
   elements: v.array(v.unknown()),
 });
+
 const AsConst = v.object({ type: v.literal('TSAsExpression'), expression: v.unknown() });
+
 const ObjectLiteral = v.object({
   type: v.literal('ObjectExpression'),
   properties: v.array(v.object({
@@ -174,6 +188,7 @@ const ObjectLiteral = v.object({
     value: v.unknown(),
   })),
 });
+
 const TopLevelConst = v.object({
   type: v.literal('VariableDeclaration'),
   declarations: v.array(v.object({ id: v.object({ name: v.string() }), init: v.unknown() })),
@@ -184,11 +199,14 @@ const TopLevelConst = v.object({
  *  read only `Literal` would report every `means` as absent. */
 function stringValueOf(input: { node: unknown }): string | null {
   const literal = v.safeParse(StringLiteral, input.node);
+
   if (literal.success) return literal.output.value;
   const joined = v.safeParse(Concatenation, input.node);
+
   if (!joined.success) return null;
   const left = stringValueOf({ node: joined.output.left });
   const right = stringValueOf({ node: joined.output.right });
+
   return left === null || right === null ? null : left + right;
 }
 
@@ -197,16 +215,21 @@ function stringValueOf(input: { node: unknown }): string | null {
  *  list would make every loop below vacuous and the whole gate pass. */
 function declaredElements(name: string): readonly unknown[] {
   const parsed = parseSync(BOUNDARIES_FILE, readFileSync(`${REPO}${BOUNDARIES_FILE}`, 'utf8'));
+
   for (const statement of parsed.program.body) {
     const declaration = v.safeParse(TopLevelConst, statement);
+
     if (!declaration.success) continue;
+
     for (const declarator of declaration.output.declarations) {
       if (declarator.id.name !== name) continue;
       const unwrapped = v.safeParse(AsConst, declarator.init);
+
       return v.parse(ArrayLiteral, unwrapped.success ? unwrapped.output.expression : declarator.init)
         .elements;
     }
   }
+
   throw new Error(`${BOUNDARIES_FILE} declares no array named ${name}`);
 }
 
@@ -226,10 +249,13 @@ function declaredElements(name: string): readonly unknown[] {
 const FLEET_BOUNDARIES: readonly BoundaryRow[] = declaredElements('FLEET_BOUNDARIES')
   .map((element) => {
     const fields: Record<string, string> = {};
+
     for (const property of v.parse(ObjectLiteral, element).properties) {
       const held = stringValueOf({ node: property.value });
+
       if (held !== null) fields[property.key.name] = held;
     }
+
     return v.parse(BoundaryRow, fields);
   });
 
@@ -244,6 +270,7 @@ describe('the declared boundaries are the instrumented boundaries', () => {
     // file itself. `declaredElements` throws on an absent declaration; this
     // catches the other shape, a declaration that parsed to no rows.
     expect(FLEET_BOUNDARIES.length).toBeGreaterThanOrEqual(BOUNDARY_FAMILIES.length);
+
     for (const boundary of FLEET_BOUNDARIES) {
       for (const field of Object.values(boundary)) expect(field).not.toBe('');
     }
@@ -269,10 +296,13 @@ describe('the declared boundaries are the instrumented boundaries', () => {
 
   test('every declared boundary calls its emitter at the file it names', () => {
     const missing: string[] = [];
+
     for (const boundary of FLEET_BOUNDARIES) {
       const called = sitesOf(boundary.site).some((site) => site.callee === boundary.emitter);
+
       if (!called) missing.push(`${boundary.id} -> ${boundary.emitter}() in ${boundary.site}`);
     }
+
     // Named rather than counted: the whole value of this gate is that the failure
     // message says which instrument stopped.
     expect(missing).toEqual([]);
@@ -280,11 +310,14 @@ describe('the declared boundaries are the instrumented boundaries', () => {
 
   test('every diagnostics boundary emits its own declared event name at its site', () => {
     const missing: string[] = [];
+
     for (const boundary of FLEET_BOUNDARIES) {
       if (boundary.mechanism !== 'diagnostics') continue;
       const emitted = sitesOf(boundary.site).some((site) => site.firstString === boundary.event);
+
       if (!emitted) missing.push(`${boundary.id} -> '${boundary.event}' in ${boundary.site}`);
     }
+
     // The stronger half of the check for a diagnostics boundary: `failure()` is a
     // common callee, and the EVENT NAME is what the sink routes and the dataset
     // groups by. A renamed event with the call left in place is a boundary that
@@ -294,6 +327,7 @@ describe('the declared boundaries are the instrumented boundaries', () => {
 
   test('every writer boundary has a real emitter exported from record.ts', () => {
     const exports = Object.entries(record);
+
     for (const boundary of FLEET_BOUNDARIES) {
       if (boundary.mechanism !== 'writer') continue;
       const found = exports.find(([name]) => name === boundary.emitter);
@@ -309,6 +343,7 @@ describe('the declared boundaries are the instrumented boundaries', () => {
     const declared = new Set(
       FLEET_BOUNDARIES.filter((b) => b.mechanism === 'writer').map((b) => b.emitter),
     );
+
     const adapters = Object.keys(record).filter((name) => /^record[A-Z]/.test(name));
     // Both directions, so the sets are EQUAL rather than one merely containing
     // the other: an adapter that exists and is not declared produces rows no
@@ -335,6 +370,7 @@ describe('the registry is read at runtime, not only by this gate', () => {
     for (const boundary of FLEET_BOUNDARIES) {
       expect(boundaryOf(boundary.event)).toBe(boundary.id);
     }
+
     // Empty rather than the event's own name: a query filtering on `boundary` is
     // asking about the DECLARED set, and widening it to every diagnostic in the
     // codebase would make the filter meaningless.
@@ -446,6 +482,7 @@ describe('the gate fails when an instrument is missing', () => {
       emitter: 'recordSomethingNobodyCalls',
       site: 'packages/cf-backend/src/actor-agent.ts',
     };
+
     const called = sitesOf(invented.site).some((site) => site.callee === invented.emitter);
     expect(called).toBe(false);
   });
@@ -455,6 +492,7 @@ describe('the gate fails when an instrument is missing', () => {
       event: 'provider.error_that_was_renamed',
       site: 'packages/cf-backend/src/providers/cloudflare-ai-fetch.ts',
     };
+
     const emitted = sitesOf(invented.site).some((site) => site.firstString === invented.event);
     expect(emitted).toBe(false);
     // And the real one IS found at that same file, so the predicate is reading
@@ -466,6 +504,7 @@ describe('the gate fails when an instrument is missing', () => {
     // `boundaries.ts` names every emitter as DATA. If the predicate were a text
     // search it would report all of them as wired from this file alone.
     const sites = sitesOf('packages/cf-backend/src/analytics/boundaries.ts');
+
     for (const boundary of FLEET_BOUNDARIES) {
       if (boundary.mechanism !== 'writer') continue;
       expect(sites.some((site) => site.callee === boundary.emitter)).toBe(false);

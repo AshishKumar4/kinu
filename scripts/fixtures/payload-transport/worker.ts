@@ -60,7 +60,9 @@ function shellArg(value: string): string {
 export { ContainerProxy };
 
 export const EXPECTED_IMAGE_VERSION = '0.12.8';
+
 const HARNESS_PATH = '/tmp/payload-bench/harness.ts';
+
 const encoder = new TextEncoder();
 
 interface JsonReply {
@@ -95,7 +97,9 @@ const RequestBodySchema = v.record(
   v.string(),
   v.union([v.string(), v.number(), v.boolean()]),
 );
+
 type RequestBody = v.InferOutput<typeof RequestBodySchema>;
+
 const SeedOperationSpecSchema = v.looseObject({
   files: v.string(),
   seed: v.number(),
@@ -129,6 +133,7 @@ function authorized(request: Request, token: string | undefined): boolean {
 
 async function sha256Of(data: ArrayBuffer | Uint8Array): Promise<string> {
   const view = data instanceof Uint8Array ? data : new Uint8Array(data);
+
   return [...new Uint8Array(await crypto.subtle.digest('SHA-256', view))]
     .map((byte) => byte.toString(16).padStart(2, '0'))
     .join('');
@@ -141,7 +146,9 @@ const describeThrown = (error: Error | string): string =>
 /** Parse every JSON object line of a supervised command's stdout. */
 function harnessResults(stdout: string): readonly HarnessResult[] {
   const lines = stdout.trim().split('\n').filter((entry) => entry.startsWith('{'));
+
   if (lines.length === 0) throw new Error(`no JSON result in stdout: ${stdout.slice(0, 200)}`);
+
   return lines.map((line) => v.parse(HarnessResultSchema, JSON.parse(line)));
 }
 
@@ -161,21 +168,28 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
 
   private async reconcileContainer(): Promise<string> {
     await this.exec('mkdir -p /tmp/payload-bench');
+
     const probe = await this.exec(
       `bun -e 'console.log(JSON.stringify({ imageVersion: process.env.SANDBOX_VERSION ?? null }))'`,
       { timeout: 60_000 },
     );
+
     const reported = probe.exitCode === 0 ? harnessResults(probe.stdout)[0] : undefined;
     const actualVersion = reported?.imageVersion ?? undefined;
+
     if (actualVersion !== EXPECTED_IMAGE_VERSION) {
       throw new Error(`stale container image: running ${actualVersion ?? 'unreported'}, pinned ${EXPECTED_IMAGE_VERSION}`);
     }
+
     await this.writeFile(HARNESS_PATH, HARNESS_TS);
     const ready = await this.exec('cd /tmp/payload-bench && bun --version', { timeout: 60_000 });
+
     if (ready.exitCode !== 0) throw new Error(`harness runtime not ready: ${ready.stderr.slice(0, 200)}`);
     const bucketName = this.env.BUCKET_NAME;
+
     if (bucketName === undefined) throw new Error('BUCKET_NAME is not configured');
     await this.mountBucket('BACKUP_BUCKET', `/mnt/${bucketName}`, { prefix: '/' });
+
     return actualVersion;
   }
 
@@ -211,11 +225,15 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
   private async sourceFileSize(file: string): Promise<number> {
     const measured = await this.exec(`wc -c < ${shellArg(file)}`, { timeout: 120_000 });
     const output = measured.stdout.trim();
+
     if (measured.exitCode !== 0 || !/^\d+$/.test(output)) {
       throw new Error(`could not measure ${file}: ${measured.stderr.slice(0, 200)}`);
     }
+
     const size = Number(output);
+
     if (!Number.isSafeInteger(size)) throw new Error(`file size is not a safe integer: ${output}`);
+
     return size;
   }
 
@@ -246,44 +264,57 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
   async fileThroughOwnerToObject(file: string, key: string): Promise<{ ms: number; sha256: string }> {
     const sizeBytes = await this.sourceFileSize(file);
     const chunks = streamFile(await this.readFileStream(file));
+
     const body = new ReadableStream<Uint8Array>({
       async pull(controller) {
         const next = await chunks.next();
+
         if (next.done === true) {
           controller.close();
+
           return;
         }
+
         // Text here would prove a protocol mismatch, not a payload: every tier
         // this instrument seeds is random bytes.
         if (!(next.value instanceof Uint8Array)) {
           controller.error(new Error(`${file} streamed text instead of bytes`));
+
           return;
         }
+
         controller.enqueue(next.value);
       },
     });
+
     const started = Date.now();
     const landed = await putStream(this.env.BACKUP_BUCKET, key, body, sizeBytes);
+
     return { ms: Date.now() - started, sha256: landed.digest };
   }
 
   /** Arm 1 GET — stream the stored object INTO the container; hash afterwards. */
   async objectThroughOwnerToFile(key: string, file: string): Promise<{ ms: number; sha256: string }> {
     const object = await this.env.BACKUP_BUCKET.get(key);
+
     if (object === null) throw new Error(`object not found: ${key}`);
     const started = Date.now();
     await this.writeFile(`${file}.returned`, object.body);
     const ms = Date.now() - started;
     const hashed = await this.exec(`sha256sum ${JSON.stringify(`${file}.returned`)}`, { timeout: 120_000 });
     const sha256 = /^([0-9a-f]{64})/.exec(hashed.stdout)?.[1];
+
     if (sha256 === undefined) throw new Error(`sha256sum printed no digest: ${hashed.stdout.slice(0, 120)}`);
+
     return { ms, sha256 };
   }
 
   async verifyObject(key: string): Promise<JsonReply> {
     const object = await this.env.BACKUP_BUCKET.get(key);
+
     if (object === null) throw new Error(`object not found: ${key}`);
     const data = await object.arrayBuffer();
+
     return { sha256: await sha256Of(data), size: data.byteLength };
   }
 
@@ -291,20 +322,26 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     if (this.env.R2_ACCESS_KEY_ID === undefined || this.env.R2_SECRET_ACCESS_KEY === undefined || this.env.ACCOUNT_ID === undefined || this.env.BUCKET_NAME === undefined) {
       return { available: false, reason: 'R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY were not supplied; presigned direct R2 is unavailable and never replaced by another arm.' };
     }
+
     const client = new AwsClient({ accessKeyId: this.env.R2_ACCESS_KEY_ID, secretAccessKey: this.env.R2_SECRET_ACCESS_KEY, service: 's3', region: 'auto' });
+
     const request = await client.sign(
       `https://${this.env.ACCOUNT_ID}.r2.cloudflarestorage.com/${this.env.BUCKET_NAME}/${key}`,
       { method: op === 'put' ? 'PUT' : 'GET', aws: { signQuery: true } },
     );
+
     return { available: true, opaque: request.url, fingerprint: await sha256Of(encoder.encode(request.url)) };
   }
 
   async temporaryCredentials(prefix: string): Promise<JsonReply> {
     const env = this.env;
+
     if (env.R2_ACCESS_KEY_ID === undefined || env.R2_SECRET_ACCESS_KEY === undefined || env.ACCOUNT_ID === undefined || env.BUCKET_NAME === undefined) {
       return { available: false, reason: 'R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY were not supplied; temporary S3 credentials are unavailable and never replaced by another arm.' };
     }
+
     const endpoint = `https://${env.ACCOUNT_ID}.r2.cloudflarestorage.com`;
+
     const jwt = await new SignJWT({
       bucket: env.BUCKET_NAME,
       scope: 'object-read-write',
@@ -318,7 +355,9 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
       .setIssuedAt()
       .setExpirationTime('900s')
       .sign(encoder.encode(env.R2_SECRET_ACCESS_KEY));
+
     const digest = await crypto.subtle.digest('SHA-256', encoder.encode(jwt));
+
     return {
       available: true,
       endpoint,
@@ -342,6 +381,7 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     // not in this DO. A RUNNING process is read, never duplicated; an EXITED
     // process is final — its result stays pollable instead of being rerun.
     let existing: Process | null;
+
     try {
       existing = await this.getProcess(operationId);
     } catch (cause) {
@@ -350,17 +390,22 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
         { cause },
       );
     }
+
     if (existing !== null && !operationNeedsStart(existing)) {
       return { started: false, exitCode: existing.exitCode ?? null };
     }
+
     let command: string;
     let env: Record<string, string | undefined> | undefined;
+
     if (kind === 'seed') {
       const input = v.parse(SeedOperationSpecSchema, spec);
+
       const files = v.parse(
         v.array(v.object({ path: v.string(), sizeMiB: v.number() })),
         JSON.parse(input.files),
       );
+
       command = [
         'cd /tmp/payload-bench',
         ...files.map((file) =>
@@ -368,14 +413,18 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
       ].join(' && ');
     } else {
       const input = v.parse(TransferOperationSpecSchema, spec);
+
       const parts = [
         'cd /tmp/payload-bench && bun harness.ts transfer',
         `--mode ${input.mode}`,
         `--op ${input.op}`,
         `--path ${JSON.stringify(input.file)}`,
       ];
+
       if (input.url !== undefined) parts.push(`--url ${JSON.stringify(input.url)}`);
+
       if (input.endpoint !== undefined) parts.push(`--endpoint ${JSON.stringify(input.endpoint)}`);
+
       if (input.key !== undefined) parts.push(`--key ${JSON.stringify(input.key)}`);
       command = parts.join(' ');
       env = {
@@ -384,11 +433,13 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
         BENCH_R2_SESSION_TOKEN: input.sessionToken,
       };
     }
+
     await this.startProcess(command, {
       processId: operationId,
       autoCleanup: false,
       env,
     });
+
     return { started: true, exitCode: null };
   }
 
@@ -398,12 +449,16 @@ export class PayloadBenchSandbox extends Sandbox<Env> {
     error?: string;
   }> {
     const state = await this.getProcess(operationId);
+
     if (state === null) throw new Error(`operation ${operationId} has no process record`);
+
     if (state.exitCode === null || state.exitCode === undefined) return { exitCode: null };
     const logs = await this.getProcessLogs(operationId);
+
     if (state.exitCode !== 0) {
       return { exitCode: state.exitCode, error: logs.stderr.slice(0, 400) || logs.stdout.slice(0, 400) };
     }
+
     try {
       return { exitCode: 0, results: harnessResults(logs.stdout) };
     } catch (error) {
@@ -440,15 +495,19 @@ async function purgePrefix(bucket: R2Bucket, prefix: string): Promise<{ deleted:
   let deleted = 0;
   let passes = 0;
   let cursor: string | undefined;
+
   do {
     const page = await bucket.list({ prefix, cursor });
+
     if (page.objects.length > 0) {
       await bucket.delete(page.objects.map((object) => object.key));
       deleted += page.objects.length;
     }
+
     cursor = page.truncated ? page.cursor : undefined;
     passes += 1;
   } while (cursor !== undefined);
+
   return { deleted, passes };
 }
 
@@ -456,12 +515,14 @@ async function inventoryBucket(bucket: R2Bucket): Promise<{ objects: number; byt
   let objects = 0;
   let bytes = 0;
   let cursor: string | undefined;
+
   do {
     const page = await bucket.list({ cursor });
     objects += page.objects.length;
     bytes += page.objects.reduce((total, object) => total + object.size, 0);
     cursor = page.truncated ? page.cursor : undefined;
   } while (cursor !== undefined);
+
   return { objects, bytes };
 }
 
@@ -475,12 +536,14 @@ export default {
     const url = new URL(request.url);
     const box = env.PayloadBenchSandbox.get(env.PayloadBenchSandbox.idFromName('owner'));
     let body: RequestBody;
+
     try {
       body = request.method === 'POST' && request.body !== null
         ? v.parse(RequestBodySchema, await request.json())
         : v.parse(RequestBodySchema, {});
     } catch (error) {
       const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+
       return jsonWithStatus({ error: `invalid request body: ${detail}` }, 400);
     }
 
@@ -488,6 +551,7 @@ export default {
 
     if (url.pathname === '/control') {
       await box.control();
+
       return json({ ok: true });
     }
 
@@ -507,12 +571,14 @@ export default {
         return json({ error: describeThrown(error instanceof Error ? error : String(error)) });
       }
     }
+
     // Arm 1 executes in the OWNING DO over the SDK file surface (base64 boundary).
     if (url.pathname === '/arm/do-base64') {
       try {
         const result = String(body['op']) === 'put'
           ? await box.fileThroughOwnerToObject(String(body['file']), String(body['key']))
           : await box.objectThroughOwnerToFile(String(body['key']), String(body['file']));
+
         return json({ ok: true, ...result });
       } catch (error) {
         return json({ error: describeThrown(error instanceof Error ? error : String(error)) });
@@ -537,6 +603,7 @@ export default {
           String(body['kind']) === 'seed' ? 'seed' : 'transfer',
           body,
         );
+
         return json({ ok: true, ...outcome });
       } catch (error) {
         return json({ error: describeThrown(error instanceof Error ? error : String(error)) });
@@ -567,6 +634,7 @@ export default {
     if (url.pathname === '/destroy') {
       try {
         await box.destroyRun();
+
         return json({ ok: true });
       } catch (error) {
         return json({ error: describeThrown(error instanceof Error ? error : String(error)) });

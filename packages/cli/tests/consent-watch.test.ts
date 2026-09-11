@@ -25,31 +25,38 @@ function makeSurface(initial: PendingDeviceConsent[] = []) {
   let polls = 0;
   const pollWaiters: Array<{ count: number; resolve: () => void }> = [];
   const resolveWaiters: Array<{ count: number; resolve: () => void }> = [];
+
   const wake = (waiters: Array<{ count: number; resolve: () => void }>, reached: number) => {
     for (const waiter of waiters.splice(0)) {
       if (waiter.count <= reached) waiter.resolve();
       else waiters.push(waiter);
     }
   };
+
   const surface: DeviceConsentSurface = {
     listPending: async () => {
       polls += 1;
       wake(pollWaiters, polls);
+
       return pending;
     },
     resolve: async (consentId, decision) => {
       resolved.push({ consentId, decision });
       wake(resolveWaiters, resolved.length);
+
       return { ok: resolveOk };
     },
   };
+
   const awaiting = (waiters: Array<{ count: number; resolve: () => void }>, reached: () => number) =>
     (count: number): Promise<void> => {
       if (reached() >= count) return Promise.resolve();
       const { promise, resolve } = Promise.withResolvers<void>();
       waiters.push({ count, resolve });
+
       return promise;
     };
+
   return {
     surface,
     resolved,
@@ -66,10 +73,12 @@ function makeSurface(initial: PendingDeviceConsent[] = []) {
 function collectNotes() {
   const notes: Array<{ kind: ConsentNoteKind; message: string }> = [];
   const waiters: Array<{ count: number; resolve: () => void }> = [];
+
   return {
     notes,
     note: (kind: ConsentNoteKind, message: string) => {
       notes.push({ kind, message });
+
       for (const waiter of waiters.splice(0)) {
         if (waiter.count <= notes.length) waiter.resolve();
         else waiters.push(waiter);
@@ -79,6 +88,7 @@ function collectNotes() {
       if (notes.length >= count) return Promise.resolve();
       const { promise, resolve } = Promise.withResolvers<void>();
       waiters.push({ count, resolve });
+
       return promise;
     },
   };
@@ -91,9 +101,14 @@ describe('watchDeviceConsents', () => {
     const presented: string[] = [];
 
     const watcher = watchDeviceConsents(surface, {
-      present: async (item) => { presented.push(item.consentId); return 'always'; },
+      present: async (item) => {
+        presented.push(item.consentId);
+
+        return 'always';
+      },
       note,
     });
+
     await noted(1);
     watcher.stop();
 
@@ -108,9 +123,14 @@ describe('watchDeviceConsents', () => {
     const presented: string[] = [];
 
     const watcher = watchDeviceConsents(surface, {
-      present: async (item) => { presented.push(item.consentId); return 'once'; },
+      present: async (item) => {
+        presented.push(item.consentId);
+
+        return 'once';
+      },
       note,
     });
+
     // c1 stays in the pending list across later polls (server-side race).
     await polled(3);
     watcher.stop();
@@ -125,9 +145,14 @@ describe('watchDeviceConsents', () => {
     const presented: string[] = [];
 
     const watcher = watchDeviceConsents(surface, {
-      present: async (item) => { presented.push(item.consentId); return 'deny'; },
+      present: async (item) => {
+        presented.push(item.consentId);
+
+        return 'deny';
+      },
       note,
     });
+
     await settled(1);
     setPending([consent('c2')]);
     await settled(2);
@@ -143,9 +168,14 @@ describe('watchDeviceConsents', () => {
     const presented: string[] = [];
 
     const watcher = watchDeviceConsents(surface, {
-      present: async (item) => { presented.push(item.consentId); return null; },
+      present: async (item) => {
+        presented.push(item.consentId);
+
+        return null;
+      },
       note,
     });
+
     await polled(3);
     watcher.stop();
 
@@ -165,10 +195,12 @@ describe('watchDeviceConsents', () => {
         asked.resolve();
         const answer = Promise.withResolvers<'cancelled'>();
         signal.addEventListener('abort', () => answer.resolve('cancelled'), { once: true });
+
         return answer.promise;
       },
       note,
     });
+
     await asked.promise;
     watcher.stop();
     await settled(1);
@@ -191,6 +223,7 @@ describe('watchDeviceConsents', () => {
         noted.resolve();
       },
     });
+
     await settled(1);
     await noted.promise;
     watcher.stop();
@@ -202,23 +235,28 @@ describe('watchDeviceConsents', () => {
     let failures = 2;
     const presented: string[] = [];
     const presentedOnce = Promise.withResolvers<void>();
+
     const surface: DeviceConsentSurface = {
       listPending: async () => {
         if (failures-- > 0) throw new Error('transient');
+
         return [consent('c1')];
       },
       resolve: async () => ({ ok: true }),
     };
+
     const { notes, note } = collectNotes();
 
     const watcher = watchDeviceConsents(surface, {
       present: async (item) => {
         presented.push(item.consentId);
         presentedOnce.resolve();
+
         return 'once';
       },
       note,
     });
+
     await presentedOnce.promise;
     watcher.stop();
 

@@ -32,11 +32,13 @@ describe('the orchestrator dynamic context reads its own planes', () => {
 
   test('a deferred shell approval is parked on the user in the block', () => {
     const agent = harness().agent;
+
     const parked = agent.harnessParkShellApproval({
       command: 'bun run deploy',
       executor: 'workspace',
       review: { decision: 'gate', hits: [] },
     });
+
     expect(parked.outcome).toBe('queued');
 
     const approvals = agent.observeDynamicContext().approvals;
@@ -46,6 +48,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
 
   test('a raised device consent waits on the user in the block', async () => {
     const agent = harness().agent;
+
     // The prompt is observable before its owner answers. Settle the caller's
     // promise afterward so this fixture does not leave work detached.
     const consent = agent.harnessAwaitDeviceConsent({
@@ -60,6 +63,7 @@ describe('the orchestrator dynamic context reads its own planes', () => {
       && approval.detail.includes('git push origin main'))).toBe(true);
 
     const [pendingConsent] = await agent.listPendingConsents();
+
     if (!pendingConsent) throw new Error('expected a pending device consent');
     expect(await agent.resolveDeviceConsent(pendingConsent.consentId, 'deny')).toEqual({ ok: true });
     await expect(consent).resolves.toBe('deny');

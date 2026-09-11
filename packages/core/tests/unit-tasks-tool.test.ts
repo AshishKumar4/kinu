@@ -14,6 +14,7 @@ import {
 } from '../src/index';
 
 type TasksResult = object | string | number | boolean | null | undefined;
+
 interface TasksTestInput {
   action: string;
   titles?: (string | number)[];
@@ -22,11 +23,13 @@ interface TasksTestInput {
   status?: string;
   role?: string;
 }
+
 type Exec = (args: TasksTestInput) => Promise<TasksResult>;
 
 const AddedSchema = v.object({
   added: v.array(v.object({ id: v.string(), title: v.optional(v.string()), parent: v.optional(v.nullable(v.string())) })),
 });
+
 const TaskListSchema = v.object({
   tasks: v.array(v.object({
     id: v.string(), title: v.optional(v.string()), status: v.optional(v.string()),
@@ -45,7 +48,9 @@ const PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
 
 function nativeTasks(rt: AgentRuntime): Exec {
   const entry = buildBuiltinTools({ rt, roleAuthority: () => PROFILE_ENVELOPE }).tasks;
+
   if (!entry) throw new Error('Expected tasks tool to be registered');
+
   return toolExecute<TasksTestInput, TasksResult>(entry);
 }
 
@@ -53,22 +58,27 @@ function setup(): Exec {
   const { rt, testSql } = createTestRuntime();
   initAllTables(testSql.execRaw, testSql.sql);
   initTaskListTable(testSql.execRaw);
+
   return nativeTasks(rt);
 }
 
 function codemodeExecute(provider: CodemodeProvider, name: string) {
   const entry = provider.tools[name];
+
   if (!entry) throw new Error(`Expected ${provider.name}.${name} to be registered`);
+
   return async (...args: JsonValue[]) => await entry.execute(...args);
 }
 
 describe('tasks tool', () => {
   test('add writes the whole plan in one call and returns the ids in order', async () => {
     const tasks = setup();
+
     const res = v.parse(
       AddedSchema,
       await tasks({ action: 'add', titles: ['Reproduce the 502', 'Patch the timeout'] }),
     );
+
     expect(res.added.map((t) => t.id)).toEqual(['t1', 't2']);
     expect(res.added[0]?.parent).toBeNull();
   });
@@ -91,14 +101,17 @@ describe('tasks tool', () => {
     const closed = v.parse(v.object({
       id: v.string(), status: v.string(), open_subtasks: v.optional(v.number()),
     }), await tasks({ action: 'update', id: 't1', status: 'done' }));
+
     expect(closed.status).toBe('done');
     expect(closed.open_subtasks).toBe(1);
 
     // Nothing left open ⇒ nothing said about it.
     await tasks({ action: 'update', id: 't3', status: 'done' });
+
     const clean = v.parse(v.object({
       open_subtasks: v.optional(v.number()),
     }), await tasks({ action: 'update', id: 't1', status: 'done' }));
+
     expect(clean.open_subtasks).toBeUndefined();
   });
 
@@ -116,10 +129,12 @@ describe('tasks tool', () => {
 
   test('a refused title is reported beside the ones that landed', async () => {
     const tasks = setup();
+
     const res = v.parse(v.object({
       added: v.array(v.object({ id: v.string() })),
       rejected: v.array(v.object({ title: v.string(), reason: v.string() })),
     }), await tasks({ action: 'add', titles: ['a real step', '   '] }));
+
     expect(res.added.map((t) => t.id)).toEqual(['t1']);
     expect(res.rejected).toEqual([{ title: '   ', reason: 'empty title' }]);
   });
@@ -128,6 +143,7 @@ describe('tasks tool', () => {
     // House rule: a spec's example is one REAL call. Parsing it and running it
     // is what keeps that true as either side changes.
     const example = BUILTIN_TOOL_SPECS.tasks.example;
+
     const args = v.parse(v.object({
       action: v.literal('add'), titles: v.array(v.string()), parent: v.optional(v.string()),
     }), JSON.parse(
@@ -139,11 +155,15 @@ describe('tasks tool', () => {
     ));
 
     const entry = buildBuiltinTools({ rt: createTestRuntime().rt }).tasks;
+
     if (!entry) throw new Error('Expected tasks tool to be registered');
+
     const schema = v.parse(v.object({ jsonSchema: v.object({
       properties: v.record(v.string(), v.unknown()), required: v.array(v.string()),
     }) }), entry.inputSchema).jsonSchema;
+
     for (const key of Object.keys(args)) expect(Object.keys(schema.properties)).toContain(key);
+
     for (const key of schema.required) expect(Object.keys(args)).toContain(key);
 
     const tasks = setup();
@@ -161,12 +181,14 @@ describe('tasks tool', () => {
     test('the exact production payload is refused by naming all four actions', async () => {
       const tasks = setup();
       const pending = tasks({ action: 'list">' });
+
       for (const action of ['add', 'update', 'list', 'mode']) await expect(pending).rejects.toThrow(action);
       await expect(pending).rejects.not.toThrow('unknown tasks action');
     });
 
     test('every wrong shape of action is refused the same way, not crashed on', async () => {
       const tasks = setup();
+
       for (const action of ['', 'LIST', 'listen', 'add ', '{"action":"list"}']) {
         await expect(tasks({ action })).rejects.toThrow('one of add, update, list, mode');
       }
@@ -201,6 +223,7 @@ describe('tasks.* codemode — the SAME dispatcher and store the native tool use
       AddedSchema,
       await codemodeExecute(provider, 'add')(['Reproduce the bug', 'Write the fix']),
     );
+
     expect(added.added.length).toBe(2);
 
     // The native tool's own dispatcher, over the SAME store, sees it —
@@ -238,6 +261,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
     initAllTables(testSql.execRaw, rt.storage.sql);
     initTaskListTable(testSql.execRaw);
     initAgentConfigTable(testSql.execRaw);
+
     return { tasks: nativeTasks(rt), rt, config: rt.actor.config };
   }
 
@@ -284,6 +308,7 @@ describe('tasks action=mode — the agent\'s durable role', () => {
       planSubmissionAvailable: true,
       roleSection: roleSection('implementer'),
     });
+
     expect(plan).toContain('Role: Implementer');
     expect(plan).toContain('Do not change project files, system resources, releases, or deployments');
     expect(plan).toMatch(/do not begin implementation/i);

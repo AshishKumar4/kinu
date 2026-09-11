@@ -24,6 +24,7 @@ function roundTrip(messages: ModelMessage[]): ModelMessage[] {
 function expectVerbatim(messages: ModelMessage[]): void {
   const decoded = roundTrip(messages);
   expect(decoded).toHaveLength(messages.length);
+
   for (let i = 0; i < messages.length; i++) expect(decoded[i]).toBe(messages[i]);
 }
 
@@ -109,6 +110,7 @@ describe('encode structure', () => {
       assistant([{ type: 'text', text: 'running' }, toolCall('c1', 'run', { command: 'ls' })]),
       toolMessage([toolResult('c1', 'run', 'out')]),
     ]);
+
     expect(turns).toHaveLength(2);
     expect(turns[0].role).toBe('user');
     expect(turns[1].role).toBe('assistant');
@@ -161,10 +163,12 @@ describe('decode after pruning', () => {
     const decoded = kinuCodec.decode(turns, messages);
     expect(decoded).toHaveLength(4);
     const rebuilt = decoded[1];
+
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     expect(rebuilt.content.map((part) => part.type)).toEqual(['text', 'tool-call', 'tool-call']);
     // Surviving parts are the same objects; untouched messages are verbatim.
     const original = messages[1];
+
     if (original.role !== 'assistant' || isString(original.content)) throw new Error('unexpected structure');
     expect(rebuilt.content[0]).toBe(original.content[1]);
     expect(decoded[0]).toBe(messages[0]);
@@ -177,10 +181,12 @@ describe('decode after pruning', () => {
     turns[1].items = turns[1].items.filter((item) => !(item.kind === 'tool' && item.callId === 'c1'));
     const decoded = kinuCodec.decode(turns, messages);
     const rebuiltAssistant = decoded[1];
+
     if (rebuiltAssistant.role !== 'assistant' || isString(rebuiltAssistant.content)) throw new Error('unexpected structure');
     expect(rebuiltAssistant.content.some((p) => p.type === 'tool-call' && p.toolCallId === 'c1')).toBe(false);
     expect(rebuiltAssistant.content.some((p) => p.type === 'tool-call' && p.toolCallId === 'c2')).toBe(true);
     const rebuiltTool = decoded[2];
+
     if (rebuiltTool.role !== 'tool') throw new Error('unexpected shape');
     expect(rebuiltTool.content).toHaveLength(1);
     expect(rebuiltTool.content[0].type === 'tool-result' && rebuiltTool.content[0].toolCallId).toBe('c2');
@@ -202,6 +208,7 @@ describe('decode after pruning', () => {
     ];
     const decoded = kinuCodec.decode(turns, messages);
     const rebuilt = decoded[1];
+
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     const last = rebuilt.content[rebuilt.content.length - 1];
     expect(last.type === 'text' && last.text).toBe('[tool calls/results cleared]');
@@ -216,6 +223,7 @@ describe('decode after pruning', () => {
       ]),
       toolMessage([toolResult('c1', 'run', '/workspace')]),
     ];
+
     const turns = kinuCodec.encode(ordered);
     const toolIndex = turns[0].items.findIndex((item) => item.kind === 'tool');
     turns[0].items[toolIndex] = {
@@ -227,6 +235,7 @@ describe('decode after pruning', () => {
     const decoded = kinuCodec.decode(turns, ordered);
     expect(decoded).toHaveLength(1);
     const rebuilt = decoded[0];
+
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     expect(rebuilt.content.map((part) => part.type === 'text' ? part.text : part.type)).toEqual([
       'before',
@@ -245,10 +254,13 @@ describe('decode after pruning', () => {
       ]),
       toolMessage([toolResult('b', 'run', '/workspace')]),
     ];
+
     const turns = kinuCodec.encode(ordered);
+
     const toolIndex = turns[0].items.findIndex(
       (item) => item.kind === 'tool' && item.callId === 'b',
     );
+
     turns[0].items[toolIndex] = {
       kind: 'synthetic',
       key: 'stub-b',
@@ -257,10 +269,13 @@ describe('decode after pruning', () => {
 
     const decoded = kinuCodec.decode(turns, ordered);
     const rebuilt = decoded[0];
+
     if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     expect(rebuilt.content.map((part) => {
       if (part.type === 'text') return part.text;
+
       if (part.type === 'tool-call' || part.type === 'tool-result') return `${part.type}:${part.toolCallId}`;
+
       return part.type;
     })).toEqual([
       'tool-call:a',
@@ -285,6 +300,7 @@ describe('decode after pruning', () => {
       role: 'user',
       items: [{ kind: 'synthetic', key: 'ref', text: '[Better Compact context pruning applied]' }],
     };
+
     const decoded = kinuCodec.decode([synthetic], []);
     expect(decoded).toEqual([{ role: 'user', content: '[Better Compact context pruning applied]' }]);
   });
@@ -294,6 +310,7 @@ describe('decode after pruning', () => {
     const raw = { type: 'text' as const, text: 'newest requirement stays raw' };
     const messages: ModelMessage[] = [{ role: 'user', content: [compacted, raw] }];
     const turns = kinuCodec.encode(messages);
+
     const plan = buildPlan(
       turns,
       {
@@ -305,15 +322,18 @@ describe('decode after pruning', () => {
       },
       kinuSpec,
     );
+
     if (!plan) throw new Error('expected a split-turn plan');
     expect(plan.rawTailItemBoundary).toEqual({ itemKey: turns[0].items[1].key, side: 'before' });
 
     const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, kinuSpec);
     const decoded = kinuCodec.decode(transformed, messages);
     const rebuilt = decoded.at(-1);
+
     if (!rebuilt || rebuilt.role !== 'user' || isString(rebuilt.content)) {
       throw new Error('expected a multipart raw-tail user message');
     }
+
     expect(rebuilt.content).toHaveLength(1);
     expect(rebuilt.content[0]).toBe(raw);
     expect(JSON.stringify(rebuilt)).not.toContain('old requirement');
@@ -328,9 +348,11 @@ describe('estimation and transcripts', () => {
   test('text prices at chars/4 and media prices flat', () => {
     const textTurns = kinuCodec.encode([user('x'.repeat(4_000))]);
     expect(kinuCodec.estimateTurns(textTurns)).toBe(1_000);
+
     const imageTurns = kinuCodec.encode([
       { role: 'user', content: [{ type: 'image', image: new Uint8Array(1_000_000), mediaType: 'image/png' }] },
     ]);
+
     expect(kinuCodec.estimateTurns(imageTurns)).toBe(1_200);
   // Measured 4.6 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
   // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
@@ -342,6 +364,7 @@ describe('estimation and transcripts', () => {
       assistant([toolCall('c1', 'run', { command: 'x'.repeat(400) })]),
       toolMessage([toolResult('c1', 'run', 'y'.repeat(4_000))]),
     ]);
+
     const tool = requireToolItem(turns[0].items[0]);
     expect(kinuCodec.estimateItem(tool)).toBeGreaterThan(1_000);
   });
@@ -351,6 +374,7 @@ describe('estimation and transcripts', () => {
       assistant([toolCall('c1', 'run', { command: 'make test' })]),
       toolMessage([toolResult('c1', 'run', 'all 42 tests passed')]),
     ]);
+
     const line = kinuCodec.transcriptLine(turns[0].items[0]);
     expect(line).toContain('[tool:run] callId=c1');
     expect(line).toContain('make test');
@@ -370,14 +394,17 @@ describe('estimation and transcripts', () => {
       assistant([toolCall('c1', 'run', { command: 'ls -la' })]),
       toolMessage([toolResult('c1', 'run', 'total 12\ndrwxr-xr-x')]),
     ];
+
     const doc = kinuCodec.transcriptDocument?.(kinuCodec.encode(messages)) ?? '';
     expect(doc).toContain('exact user wording');
     expect(doc).toContain('ls -la');
     expect(doc).toContain('total 12\\ndrwxr-xr-x');
     expect(doc).toContain('[binary 5 bytes]');
+
     // Every fenced block parses back to the native message group.
     const blocks = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)]
       .map((match) => parseMessageGroup(match[1]));
+
     expect(blocks).toHaveLength(3);
     expect(blocks[0][0]).toEqual({ role: 'user', content: 'exact user wording' });
     expect(blocks[2]).toHaveLength(2);
@@ -400,7 +427,9 @@ describe('conventions', () => {
         output: { type: 'error-text', value: 'ENOENT: /tmp/missing' },
       }]),
     ]);
+
     const item = turns[0].items[0];
+
     if (item.kind !== 'tool') throw new Error('expected a tool item');
     expect(kinuConventions.tool?.(item)).toEqual({
       name: 'workspace.readFile',
@@ -432,11 +461,14 @@ function isMessageGroup<Value>(value: Value): value is Value & ModelMessage[] {
 
 function parseMessageGroup(json: string): ModelMessage[] {
   const parsed: unknown = JSON.parse(json);
+
   if (!isMessageGroup(parsed)) throw new Error('expected a model-message transcript group');
+
   return parsed;
 }
 
 function requireToolItem(item: Item | undefined): Extract<Item, { kind: 'tool' }> {
   if (!item || item.kind !== 'tool') throw new Error('expected a tool item');
+
   return item;
 }

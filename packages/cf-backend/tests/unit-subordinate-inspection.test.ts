@@ -37,12 +37,14 @@ function workspaceFixture(): InspectionFixture {
   const created = createTestWorkspace();
   const raw = makeSqlExec(created.db);
   const actors = createTestActorsOver(created.db, { name: 'workspace' });
+
   const access: SubordinateInspectionAccess = {
     sql: created.sql,
     raw,
     actor: actors.main,
     directory: actors.directory,
   };
+
   return {
     sql: created.sql,
     raw,
@@ -61,6 +63,7 @@ function workspaceFixture(): InspectionFixture {
     roster(parent: ActorHandle): SubordinateRosterStore {
       const roster = new SubordinateRosterStore(raw, parent);
       roster.ensureSchema();
+
       return roster;
     },
   };
@@ -108,6 +111,7 @@ describe('owner reads of retained subordinate paths', () => {
     const before = fixture.sql`SELECT run_id, event_index, type FROM run_events ORDER BY run_id, event_index`;
     const first = read(fixture, { path: ['child', 'leaf'], view: 'events', runId: 'run', query: { limit: 2 } });
     expect(first.view).toBe('events');
+
     if (first.view !== 'events' || first.page.status !== 'more') throw new Error('Expected another event page');
     expect(first.page.items.map((event) => event.type)).toEqual(['run_start', 'tool_call_end']);
     const last = read(fixture, { path: ['child', 'leaf'], view: 'events', runId: 'run', query: { limit: 2, since: first.page.next } });
@@ -117,11 +121,14 @@ describe('owner reads of retained subordinate paths', () => {
 
   test('children pagination includes dismissed rows without skipping tied timestamps', () => {
     const fixture = workspaceFixture();
+
     for (const [index, name] of ['alpha', 'beta', 'gamma'].entries()) {
       fixture.child(fixture.main, name);
       rosterChild(fixture, fixture.main, name, index + 1);
     }
+
     const first = read(fixture, { path: [], view: 'children', page: { limit: 2 } });
+
     if (first.view !== 'children' || first.page.status !== 'more') throw new Error('Expected another roster page');
     expect(first.page.items.map((row) => [row.name, row.status])).toEqual([['alpha', 'dismissed'], ['beta', 'dismissed']]);
     const last = read(fixture, { path: [], view: 'children', page: { limit: 2, cursor: first.page.next } });
@@ -160,16 +167,20 @@ describe('owner reads of retained subordinate paths', () => {
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, 'child');
     const events = new RunEventRecorder(fixture.sql, child);
+
     for (const id of ['one', 'two', 'three']) {
       events.emit(id, { type: 'run_start', agentId: 'child', userMessage: id });
       void fixture.sql`INSERT INTO messages (actor_id,id,role,content,created_at)
         VALUES (${child.actorId}, ${id}, 'user', ${id}, ${id})`;
     }
+
     const runs = read(fixture, { path: ['child'], view: 'runs', page: { limit: 2 } });
+
     if (runs.view !== 'runs' || runs.page.status !== 'more') throw new Error('Expected another run page');
     expect(runs.page.items.map((run) => run.runId)).toEqual(['three', 'two']);
     expect(read(fixture, { path: ['child'], view: 'runs', page: { limit: 2, cursor: runs.page.next } })).toMatchObject({ page: { status: 'end', items: [{ runId: 'one' }] } });
     const history = read(fixture, { path: ['child'], view: 'history', page: { limit: 2 } });
+
     if (history.view !== 'history' || history.page.status !== 'more') throw new Error('Expected another history page');
     expect(history.page.items.map((message) => message.content)).toEqual(['two', 'three']);
     expect(read(fixture, { path: ['child'], view: 'history', page: { limit: 2, cursor: history.page.next } })).toMatchObject({ page: { status: 'end', items: [{ content: 'one' }] } });

@@ -187,9 +187,12 @@ export interface ExplorationHostSeams {
  *  row is the only authority on which parent that is. */
 function explorationParent(seams: ExplorationHostSeams, reference: ActorReference): ActorReference {
   const parentId = reference.parentActorId;
+
   if (parentId === null) throw new KinuError('denied', 'An exploration actor always has a parent.');
   const parent = seams.host.describe(parentId);
+
   if (parent === null) throw new KinuError('missing', 'The exploration actor has no registered parent.');
+
   return { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId };
 }
 
@@ -209,6 +212,7 @@ async function retireExploration(
   // `observed` only when a live claim was actually seen — absent is what lets
   // the host settle rather than guess, and a spread of nothing does not say so.
   const request: ActorRetirementRequest = { reference, name, keepHistory: false };
+
   if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
   const retirement = actorRetirementFor(request);
   await seams.host.retire(explorationParent(seams, reference), retirement);
@@ -228,7 +232,9 @@ async function explorationModelSpec(
   if (pinned) return pinned;
   const { profile } = await seams.profile({ actor, availableTools: [], workMode: 'build' });
   const route = resolveModelRoute(source, profile);
+
   if (!route) throw new KinuError('denied', `a hosted ${source} run cannot use the fixed platform model route`);
+
   return route.model;
 }
 
@@ -271,6 +277,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
    *  or an evicted isolate must leave this false, so an interrupted run is
    *  resumable rather than reported as cancelled. */
   let stopped: string | null = null;
+
   return {
     id: input.id,
     run: async (): Promise<HeadReport> => {
@@ -285,6 +292,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
       // reference cannot inherit this run's changes.
       const capture = new HeadCapture();
       const unwatch = seams.watchWrites(reference, capture.files);
+
       try {
         return await seams.host.run(reference, async (actor) => {
           // SAFETY: this runtime is the one `ActorHostDeps.runtimeFor` built,
@@ -294,6 +302,7 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
           const runtime = actor.runtime as CFRuntime;
           const webSearch = seams.webSearch();
           const spec = await explorationModelSpec(seams, actor, 'head', input.model);
+
           const deps: HeadInferenceDeps = {
             actor,
             runId: crypto.randomUUID(),
@@ -313,8 +322,11 @@ export async function hostHead(seams: ExplorationHostSeams, input: HeadInput): P
             reportStep: (seq, step) => seams.recordStep(input.id, seq, step),
             reportDelta: seams.publishDelta,
           };
+
           const mission = seams.mission(input);
+
           if (mission !== null) deps.mission = mission;
+
           return await runHeadInference(input, deps);
         });
       } finally {
@@ -362,6 +374,7 @@ export async function hostNodeSeat(
   // row. Stored `node` rows still load through the directory's read translation.
   const reference = await seams.register({ creationId: node.nodeId, kind: 'head' });
   const actor = await seams.host.acquire(reference);
+
   return {
     actor,
     runId: crypto.randomUUID(),
@@ -400,23 +413,30 @@ export async function reclaimSettledExplorationActors(
   let retired = 0;
   let retained = 0;
   const live = ledger.hasLiveExploration();
+
   for (const reference of seams.host.list()) {
     const record = seams.host.describe(reference.actorId);
+
     if (record === null || record.kind === 'main' || record.kind === 'subordinate') {
       retained += 1;
       continue;
     }
+
     const head = ledger.readHead(parseExplorationId(record.storageKey, record.name));
+
     const settled = head === null
       ? !live
       : !headStatusUnsettled(head.status) && storedHeadReportStatus(head.status) !== null;
+
     if (!settled) {
       retained += 1;
       continue;
     }
+
     await retireExploration(seams, reference, record.name);
     retired += 1;
   }
+
   return { retired, retained };
 }
 
@@ -425,6 +445,7 @@ export async function reclaimSettledExplorationActors(
  *  generated id from ever colliding with a roster slug. */
 function parseExplorationId(storageKey: string, name: string): string {
   const marked = name.startsWith('exp:') ? name.slice(4) : name;
+
   return marked === '' ? storageKey : marked;
 }
 
@@ -459,30 +480,39 @@ export async function hostBranch(
    *  follow it. In memory because the handle's life IS the window: the engine
    *  releases it after the last reflection of the iteration. */
   let trace = '';
+
   return {
     explore: (priorHistory, craftedTools, languages, mode, siblings) => seams.host.run(reference, async (actor) => {
       const { profile } = await seams.profile({ actor, availableTools: [], workMode: mode });
       const route = resolveModelRoute('mcts', profile);
+
       if (!route) throw new KinuError('denied', 'an MCTS branch cannot use the fixed platform model route');
+
       const { system, user } = deps.explorePrompt({
         mode,
         context: priorHistory.map((turn) => `${turn.role}: ${turn.content}`).join('\n\n'),
         craftedTools, languages, siblings: siblings ?? [],
       });
+
       const answer = await deps.complete({
         actor, spec: route.model, effort: route.reasoningEffort, system, user,
       });
+
       trace = answer.text;
+
       return answer;
     }),
     generateReflection: (task, outcome) => seams.host.run(reference, async (actor): Promise<BranchReflection> => {
       const { profile } = await seams.profile({ actor, availableTools: [], workMode: 'build' });
       const route = resolveModelRoute('mcts', profile);
+
       if (!route) throw new KinuError('denied', 'an MCTS reflection cannot use the fixed platform model route');
+
       const answer = await deps.complete({
         actor, spec: route.model, effort: route.reasoningEffort,
         user: deps.reflectionPrompt(task, trace, outcome),
       });
+
       return { text: answer.text, usage: answer.usage };
     }),
     release: () => retireExploration(seams, reference, name),

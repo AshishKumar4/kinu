@@ -37,12 +37,14 @@ interface Root {
  */
 function seed(sql: SqlExecutor, actorId: string, n: number): string[] {
   const ids: string[] = [];
+
   for (let i = 1; i <= n; i++) {
     const id = `m${i}`;
     ids.push(id);
     void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${actorId}, ${id}, 'default', ${i % 2 === 0 ? 'assistant' : 'user'}, ${`message ${i}`}, ${i})`;
   }
+
   return ids;
 }
 
@@ -52,12 +54,15 @@ function seed(sql: SqlExecutor, actorId: string, n: number): string[] {
 async function walk(root: Root, limit: number): Promise<{ ids: string[]; pages: number }> {
   const ids: string[] = [];
   let cursor: { after: string } | undefined;
+
   for (let pages = 1; pages <= 50; pages++) {
     const page: Page<ChatHistoryEntry> = await root.page({ limit, cursor });
     ids.unshift(...page.items.map((m) => m.id));
+
     if (page.status === 'end') return { ids, pages };
     cursor = page.next;
   }
+
   throw new Error('the walk did not reach the beginning within 50 pages');
 }
 
@@ -77,12 +82,14 @@ describe('a transcript longer than one window is reachable page by page', () => 
 
   test('and on a hosted subordinate, over its own actor partition', async () => {
     const workspace = orchestratorHarness();
+
     const child = await hostedSubordinateHarness(workspace, {
       name: 'transcript-child',
       displayName: 'Transcript Child',
       nameOrigin: 'user',
       mission: 'hold one conversation',
     });
+
     const sql = sqlOver(workspace.db);
     const seeded = seed(sql, child.actor.handle.actorId, 25);
 
@@ -100,12 +107,14 @@ describe('a transcript longer than one window is reachable page by page', () => 
    */
   test('the actors do not read each other', async () => {
     const parent = orchestratorHarness();
+
     const child = await hostedSubordinateHarness(parent, {
       name: 'partition-child',
       displayName: 'Partition Child',
       nameOrigin: 'user',
       mission: 'hold a separate conversation',
     });
+
     const sql = sqlOver(parent.db);
     seed(sql, parent.agent.observeRuntime().actor.actorId, 4);
 
@@ -123,12 +132,14 @@ describe('a transcript longer than one window is reachable page by page', () => 
    */
   test('an empty conversation ends the walk instead of failing it', async () => {
     const workspace = orchestratorHarness();
+
     const child = await hostedSubordinateHarness(workspace, {
       name: 'empty-child',
       displayName: 'Empty Child',
       nameOrigin: 'user',
       mission: 'hold no conversation',
     });
+
     const page = getChatHistoryPage(sqlOver(workspace.db), child.actor.handle, { limit: 10 });
 
     expect(page.status).toBe('end');

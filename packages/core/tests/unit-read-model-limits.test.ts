@@ -35,9 +35,11 @@ function seededRuns(count: number) {
   // writes under the one the spine reads.
   const actor = createTestActors(sql, execRaw).main;
   const recorder = new RunEventRecorder(sql, actor);
+
   for (let i = 0; i < count; i++) {
     recorder.emit(`run-${String(i).padStart(4, '0')}`, { type: 'run_start', agentId: 'a' });
   }
+
   return { recorder, sql, actor };
 }
 
@@ -78,6 +80,7 @@ describe('the run list page is closed against every caller value', () => {
     // which is what stops a caller mistaking a full page for the end of the log.
     const { recorder } = seededRuns(205);
     const page = listRuns(recorder, null, 1e9);
+
     if (page.status !== 'more') throw new Error('expected runs behind a clamped page');
     expect(page.items.length).toBe(200);
     expect(page.next.after).toBeTruthy();
@@ -103,11 +106,13 @@ describe('the merged timeline is closed against every caller value', () => {
    *  the span count rather than only in the SQL. */
   function timelineDeps(runs: number) {
     const { recorder, sql, actor } = seededRuns(1);
+
     for (let i = 0; i < runs; i++) {
       recorder.emit('run-0000', { type: 'error', message: `e${i}` });
       void sql`INSERT INTO evolution_events (actor_id, id, type, message, created_at)
         VALUES (${actor.actorId}, ${`ev-${i}`}, ${'note'}, ${`m${i}`}, ${1000 + i})`;
     }
+
     return {
       deps: {
         sql, actor, events: recorder, jobs: new BackgroundJobStore(sql, actor), currentRunId: 'run-0000',

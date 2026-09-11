@@ -80,19 +80,23 @@ function refusePreview(code: string, error: string, status: number): Response {
 export async function servePreviewRequest(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url);
   const label = sandboxPreviewLabelOf(url, env);
+
   // The whole preview subtree is claimed by this host, so most of what arrives
   // here is not a preview label at all: a bare guess, a scanner, a mistyped
   // hostname. Refused on shape, before any lookup.
   if (label === null || !isKinuSandboxId(label.sandboxId)) {
     return refusePreview('NOT_A_PREVIEW', 'This host serves sandbox previews only.', 404);
   }
+
   // Fail closed. Without the projection there is nothing to prove the label
   // against, and an unprovable label is exactly what must not reach the SDK.
   if (!env.AUTH_KV) {
     return refusePreview('PREVIEW_UNAVAILABLE', 'Preview routing is unavailable.', 503);
   }
+
   if (!(await sandboxPreviewExposed(env.AUTH_KV, label))) {
     diagnostics.event('preview.unpublished_label', { sandboxId: label.sandboxId, port: label.port });
+
     return refusePreview(
       'PREVIEW_NOT_EXPOSED',
       'This preview is not exposed. Re-expose the port to publish it again.',
@@ -105,6 +109,7 @@ export async function servePreviewRequest(request: Request, env: Env): Promise<R
   }), env);
 
   let response = await forward();
+
   // A published label the SDK will not route is a disagreement between the
   // projection and the object's own state, not a guess: the same refusal.
   if (!response) {
@@ -121,6 +126,7 @@ export async function servePreviewRequest(request: Request, env: Env): Promise<R
   if (request.method === 'GET' && await isStalePreview(response)) {
     await repairStalePreview(label.sandboxId, env);
     const reissued = await forward();
+
     if (reissued !== null) response = reissued;
   }
 
@@ -155,6 +161,7 @@ async function isStalePreview(response: Response): Promise<boolean> {
  */
 async function repairStalePreview(sandboxId: string, env: Env): Promise<void> {
   if (!env.Sandbox) return;
+
   try {
     // {@link SANDBOX_TRANSPORT}, the one value every Kinu getSandbox call site
     // passes: the SDK persists the transport and drops in-flight requests when
@@ -185,6 +192,7 @@ function renderNotReadyPage(host: string): Response {
   const safePort = escapeHtml(named ? label.slice(0, firstHyphen) : '');
   const sandboxId = named ? label.slice(firstHyphen + 1, lastHyphen) : '';
   const safeSandboxId = escapeHtml(sandboxId);
+
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -237,6 +245,7 @@ function renderNotReadyPage(host: string): Response {
 </div>
 </body>
 </html>`;
+
   return containPreviewResponse(new Response(html, {
     status: 503,
     headers: { "content-type": "text/html; charset=utf-8" },

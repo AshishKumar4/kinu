@@ -88,6 +88,7 @@ interface Prepend {
 }
 
 const SCROLL = '[data-testid="chat-scroll"]';
+
 const PROBE = '[data-testid="probe"]';
 
 /** The headline of a cause chain — what a scenario reports when it could not be
@@ -133,6 +134,7 @@ async function openFrame(browser: Browser, origin: string, query: string): Promi
     requestAnimationFrame(() => requestAnimationFrame(() => painted.resolve()));
     await painted.promise;
   });
+
   return page;
 }
 
@@ -180,8 +182,10 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
     // The bottom-most row still fully on screen: a row the reader is reading.
     const rows = [...el.querySelectorAll('[data-msg]')];
     const bottom = el.getBoundingClientRect().bottom;
+
     const anchor = rows.filter((row) => row.getBoundingClientRect().bottom <= bottom).pop()
       ?? rows[0];
+
     return {
       id: anchor?.getAttribute('data-msg') ?? null,
       top: anchor?.getBoundingClientRect().top ?? null,
@@ -190,12 +194,14 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
       rows: rows.length,
     };
   }));
+
   if (before.id === null || before.top === null) {
     throw new Error(`the frame drew no message rows (scrollHeight ${before.height})`);
   }
 
   const callsBefore = (await probe(page)).calls.length;
   let carriedDownPx = 0;
+
   if (scroll) {
     // Straight to the top edge, which is inside PREFETCH_THRESHOLD and
     // therefore the same trigger a reader's flick produces.
@@ -214,6 +220,7 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
   await page.evaluate(() => {
     const painted = Promise.withResolvers<void>();
     requestAnimationFrame(() => requestAnimationFrame(() => painted.resolve()));
+
     return painted.promise;
   });
 
@@ -226,6 +233,7 @@ async function prepend(page: Page, scroll: boolean): Promise<Prepend> {
 
   if (after.top === null) throw new Error(`anchor ${before.id} left the document`);
   const state = await probe(page);
+
   return {
     grewPx: after.height - before.height,
     driftPx: Math.round(after.top - before.top - carriedDownPx),
@@ -255,6 +263,7 @@ async function prependStep(page: Page, scroll = true): Promise<Prepend> {
     return await prepend(page, scroll);
   } catch (cause) {
     let state = 'the frame reported no state';
+
     try {
       const settledState = await probe(page);
       state = `exhausted=${settledState.exhausted}, calls=${settledState.calls.length}`
@@ -262,6 +271,7 @@ async function prependStep(page: Page, scroll = true): Promise<Prepend> {
     } catch (probeFailure) {
       state = `the probe itself failed: ${renderThrownChain({ cause: probeFailure })}`;
     }
+
     return {
       grewPx: 0, driftPx: 0, calls: 0, rows: 0,
       beforeTop: 0, beforeHeight: 0, beforeScrollTop: 0,
@@ -333,12 +343,14 @@ async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
   // 400ms default it had already landed by the time the harness finished its
   // second load, and the measurement was of nothing.
   const page = await openFrame(browser, origin, 'latency=3000&depth=5');
+
   const empty = {
     grewPx: 0, driftPx: 0, calls: 0, rows: 0,
     beforeTop: 0, beforeHeight: 0, beforeScrollTop: 0,
     afterTop: 0, afterHeight: 0, afterScrollTop: 0,
     refused: 'not reached',
   };
+
   try {
     const overflowAnchor = await page.$eval(SCROLL, (el) => getComputedStyle(el).overflowAnchor);
     // Asserted rather than assumed: the live rows alone, with the first page
@@ -349,7 +361,9 @@ async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
     await settled(page);
     const firstRows = await page.$$eval('[data-msg]', (rows) => rows.length);
     const prepends: Prepend[] = [];
+
     for (let i = 0; i < 3; i++) prepends.push(await prependStep(page));
+
     return { refused: null, overflowAnchor, firstPage, firstRows, prepends };
   } catch (err) {
     return { refused: firstLine({ cause: err }), overflowAnchor: '', firstPage: empty, firstRows: 0, prepends: [] };
@@ -368,6 +382,7 @@ async function measureWalk(browser: Browser, origin: string): Promise<Walk> {
  */
 async function measureRace(browser: Browser, origin: string): Promise<Race> {
   const page = await openFrame(browser, origin, 'latency=1200&depth=4');
+
   try {
     await settled(page);
     await page.$eval(SCROLL, (el) => { el.scrollTop = 0; });
@@ -378,6 +393,7 @@ async function measureRace(browser: Browser, origin: string): Promise<Race> {
     await settled(page);
     const ids = (await probe(page)).ids;
     const seen = new Set<string>();
+
     return { refused: null, ids, duplicates: ids.filter((id) => seen.size === seen.add(id).size) };
   } catch (err) {
     return { refused: firstLine({ cause: err }), ids: [], duplicates: [] };
@@ -388,6 +404,7 @@ async function measureRace(browser: Browser, origin: string): Promise<Race> {
 
 async function measureBroken(browser: Browser, origin: string): Promise<Broken> {
   const page = await openFrame(browser, origin, 'latency=100&fail=1&depth=4');
+
   try {
     await untilProbe(page, 'state.error !== null');
     const failed = await probe(page);
@@ -400,6 +417,7 @@ async function measureBroken(browser: Browser, origin: string): Promise<Broken> 
     });
     await untilProbe(
       page, 'state.error === null && state.loading === false && state.ids.length > 3');
+
     return { refused: null, failed, boundary, retried: await probe(page) };
   } catch (err) {
     return { refused: firstLine({ cause: err }), failed: null, boundary: '', retried: null };
@@ -410,8 +428,10 @@ async function measureBroken(browser: Browser, origin: string): Promise<Broken> 
 
 async function measureWalked(browser: Browser, origin: string): Promise<Walked> {
   const page = await openFrame(browser, origin, 'latency=80&depth=1');
+
   try {
     await untilProbe(page, 'state.exhausted === true');
+
     return {
       refused: null,
       state: await probe(page),
@@ -434,10 +454,12 @@ async function run(): Promise<Observed> {
 }
 
 let observed: Observed;
+
 /** Only a failure to boot the gallery at all — every scenario holds its own.
  *  Rendered rather than held raw, because the whole cause chain is what says
  *  whether vite, Chrome or the frame is the thing that did not come up. */
 let bootFailure: string | null = null;
+
 beforeAll(async () => {
   try { observed = await run(); } catch (cause) { bootFailure = renderThrownChain({ cause }); }
 }, 300_000);
@@ -450,6 +472,7 @@ describe('the transcript this gate measures', () => {
     // 3 live + one 12-message page. A frame that renders nothing is the defect
     // class that made a sibling gate report clean over a blank document.
     expect(observed.walk.firstRows).toBeGreaterThanOrEqual(15);
+
     for (const [i, p] of observed.walk.prepends.filter((s) => s.refused === null).entries()) {
       expect(p.grewPx, `prepend ${i + 1} inserted nothing`).toBeGreaterThan(400);
     }
@@ -478,6 +501,7 @@ describe('a prepend does not move what the reader is reading', () => {
   test('the anchor holds, prepend by prepend', () => {
     const measured = observed.walk.prepends.filter((p) => p.refused === null);
     expect(measured, 'no prepend could be measured at all').not.toBeEmpty();
+
     for (const [i, p] of measured.entries()) {
       // One pixel of tolerance and no more: sub-pixel layout rounding is real,
       // a lost correction is not. Without `scrollTop += grew` this is the whole

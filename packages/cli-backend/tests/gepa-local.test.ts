@@ -32,6 +32,7 @@ const DUMMY_LLM: LLMProviderConfig = {
  *  (the reflection LM) with `completion`. */
 function scriptedModel(answer: string, completion: string): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -73,8 +74,10 @@ export default async function agent(task, host) {
  *  scripted judge to discriminate two identical strings. */
 function risingJudge(seedCalls: number): () => Promise<string> {
   let call = 0;
+
   return async () => {
     const score = call++ < seedCalls ? 0.2 : 0.9;
+
     return JSON.stringify({ score, feedback: 'answer the correction, not the original ask' });
   };
 }
@@ -88,10 +91,12 @@ async function setup(judge: () => Promise<string>) {
   // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
   const rt = createCLIRuntime(db, {
     dbPath: db.filename,
     llm: DUMMY_LLM,
   });
+
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   await seedSoul(rt.storage.vfs, rt.storage.sql, { name: 'gepa-local', mission: 'prove the pass runs locally' });
   await bootstrapScaffold(rt);
@@ -101,13 +106,19 @@ async function setup(judge: () => Promise<string>) {
   let judgeCalls = 0;
   rt.judgeModel = {
     stream: () => { throw new Error('the judge is asked for completions, not streams'); },
-    complete: async () => { judgeCalls++; return judge(); },
+    complete: async () => {
+      judgeCalls++;
+
+      return judge();
+    },
   };
 
   const model = scriptedModel('a local answer', CANDIDATE_SCAFFOLD);
+
   const session = new LocalAgentSession({
     rt, db, model, noAutoEvolve: true, onEvent: () => {},
   });
+
   return { db, rt, session, judgeCalls: () => judgeCalls };
 }
 
@@ -155,6 +166,7 @@ describe('GEPA runs on the local backend', () => {
     expect(runs[0]!.metricCalls).toBeGreaterThan(result.seedScore!.n);
     expect(judgeCalls()).toBe(runs[0]!.metricCalls);
     const candidates = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_candidates`).get();
+
     if (!candidates) throw new Error('GEPA candidate count row is missing');
     expect(candidates.c).toBeGreaterThan(0);
     db.close();
@@ -162,6 +174,7 @@ describe('GEPA runs on the local backend', () => {
 
   test('the pass refuses when the ledger has no failure to optimise toward', async () => {
     const { db, rt, session } = await setup(risingJudge(0));
+
     // Accepted turns only: nothing to select on but judge noise.
     for (let i = 0; i < 4; i++) {
       recordTurnOutcome(makeSql(db), rt.actor, {
@@ -177,6 +190,7 @@ describe('GEPA runs on the local backend', () => {
     expect(result.error).toContain('no corrected/frustrated turns yet');
     // A refusal costs nothing: no run row, so the lineage stays honest.
     const runs = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_runs`).get();
+
     if (!runs) throw new Error('GEPA run count row is missing');
     expect(runs.c).toBe(0);
     db.close();

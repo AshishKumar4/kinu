@@ -23,6 +23,7 @@ import { Card, inputCls } from './ui/form';
 import { FilledButton } from './ui/FilledButton';
 
 const EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
+
 const EMPTY_MENU: ModelMenu = { models: [], failures: [] };
 
 interface CatalogOperation {
@@ -73,7 +74,9 @@ export function ProfileCatalogSettings() {
     () => draft ? effectiveRoleCatalog(draft) : BUILTIN_ROLE_DEFINITIONS,
     [draft],
   );
+
   const role = roles[selectedRole] ?? null;
+
   const dirty = envelope !== null && draft !== null
     && JSON.stringify(envelope.catalog) !== JSON.stringify(draft);
 
@@ -107,14 +110,19 @@ export function ProfileCatalogSettings() {
 
   const addRole = () => {
     const id = newRoleId.trim();
+
     if (!isValidRoleId(id)) {
       setError('Role IDs use lowercase letters, digits, and hyphens.');
+
       return;
     }
+
     if (roles[id]) {
       setError(`Role "${id}" already exists.`);
+
       return;
     }
+
     replaceRole(id, {
       label: deriveRoleLabel(id),
       description: 'Describe when an agent should use this role.',
@@ -132,12 +140,14 @@ export function ProfileCatalogSettings() {
     const next = { ...draft.roles };
     delete next[selectedRole];
     setDraft({ ...draft, roles: next });
+
     if (!(selectedRole in BUILTIN_ROLE_DEFINITIONS)) setSelectedRole('general');
   };
 
   const setTier = (id: TierId, model: string) => {
     if (!draft) return;
     const tiers = { ...draft.tiers };
+
     if (id === 'default') {
       if (model) tiers.default = { ...tiers.default, model };
     } else if (model) {
@@ -145,6 +155,7 @@ export function ProfileCatalogSettings() {
     } else {
       delete tiers[id];
     }
+
     setDraft({ ...draft, tiers });
   };
 
@@ -153,8 +164,10 @@ export function ProfileCatalogSettings() {
     const tiers = { ...draft.tiers };
     const current = id === 'default' ? tiers.default : tiers[id] ?? tiers.default;
     const next = { ...current };
+
     if (effort) next.reasoningEffort = effort;
     else delete next.reasoningEffort;
+
     if (id === 'default') tiers.default = next;
     else tiers[id] = next;
     setDraft({ ...draft, tiers });
@@ -178,6 +191,7 @@ export function ProfileCatalogSettings() {
             {TIER_IDS.map((tierId) => {
               const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
               const resolved = assignment ?? draft.tiers.default;
+
               return (
                 <div key={tierId} className="grid gap-2 rounded-md border border-[var(--c-border-subtle)] p-2 md:grid-cols-[5rem_1fr_8rem] md:items-center">
                   <div>
@@ -261,10 +275,13 @@ function RoleEditor(props: {
 }) {
   const set = <Key extends keyof RoleDefinition>(key: Key, value: RoleDefinition[Key]) =>
     props.onChange({ ...props.role, [key]: value });
+
   const strings = (value: string): readonly string[] | undefined => {
     const entries = value.split(',').map((entry) => entry.trim()).filter(Boolean);
+
     return entries.length > 0 ? entries : undefined;
   };
+
   return (
     <div className="grid gap-3 rounded-md border border-[var(--c-border-subtle)] p-3 md:grid-cols-2">
       <label className="space-y-1 text-xs p-text-2">
@@ -275,6 +292,7 @@ function RoleEditor(props: {
         <span>Default tier</span>
         <select className={inputCls} value={props.role.tier} onChange={(event) => {
           const tier = TIER_IDS.find((value) => value === event.target.value);
+
           if (tier) set('tier', tier);
         }}>
           {TIER_IDS.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
@@ -286,12 +304,13 @@ function RoleEditor(props: {
       </label>
       <label className="space-y-1 text-xs p-text-2 md:col-span-2">
         <span>Instructions</span>
-        <textarea className={`${inputCls} min-h-24 resize-y`} value={props.role.instructions} onChange={(event) => set('instructions', event.target.value)} />
+        <textarea rows={16} className={`${inputCls} resize-y`} value={props.role.instructions} onChange={(event) => set('instructions', event.target.value)} />
       </label>
       <label className="space-y-1 text-xs p-text-2">
         <span>Default swarm preset</span>
         <select className={inputCls} value={props.role.preset} onChange={(event) => {
           const preset = NAMED_SWARM_PRESETS.find((value) => value === event.target.value);
+
           if (preset) set('preset', preset);
         }}>
           {NAMED_SWARM_PRESETS.map((preset) => <option key={preset} value={preset}>{preset}</option>)}

@@ -22,8 +22,10 @@ describe('docs/CLI.md', () => {
     const doc = readFileSync(docPath, 'utf8');
     const entries = commandEntries(buildProgram());
     expect(entries.length).toBeGreaterThan(40);
+
     for (const entry of entries) {
       expect(doc).toContain(`### kinu ${entry.term}`);
+
       for (const option of entry.command.options.filter((o) => !o.hidden)) {
         expect(doc).toContain(`\`${option.flags}\``);
       }

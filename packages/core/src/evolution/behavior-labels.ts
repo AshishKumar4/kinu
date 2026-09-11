@@ -187,7 +187,9 @@ const SHOUTED_RUN = /\b[A-Z]{4,}(?:['’]?[A-Z]*)?(?:[ \t]+[A-Z]{4,}(?:['’]?[A
  * the stop was a mistake overrides the bound, since that settles it outright.
  */
 const RESUME_ASK = /\b(?:continue|resume|keep\s+(?:going|implementing|building|grinding)|carry\s+on|proceed)\b/i;
+
 const RESUME_MISTAKE = /\b(?:mistake|mistakenly|accident|accidentally)\b/i;
+
 const RESUME_MAX_WORDS = 14;
 
 /** Fenced and inline code, stripped before the shouting test: a pasted stack
@@ -200,6 +202,7 @@ const CODE_SPAN = /```[\s\S]*?```|`[^`]*`/g;
  *  precision: either half alone fires on ordinary work (an agent cleaning a
  *  worktree, a user musing about undoing something later). */
 const REVERT_ASK = /\b(?:revert|undo|roll\s?back|back\s?out)\b/i;
+
 const REVERT_COMMAND = /\bgit\s+(?:revert\b|reset\s+--hard\b|restore\b|checkout\s+--)/;
 
 /** Token-set overlap above which a follow-up counts as the SAME request again.
@@ -220,9 +223,12 @@ function words(text: string): string[] {
 function tokenOverlap(a: string, b: string): number {
   const left = new Set(words(a));
   const right = new Set(words(b));
+
   if (left.size < REPEAT_MIN_WORDS || right.size < REPEAT_MIN_WORDS) return 0;
   let shared = 0;
+
   for (const token of left) if (right.has(token)) shared++;
+
   return shared / (left.size + right.size - shared);
 }
 
@@ -232,7 +238,9 @@ function shouts(text: string): boolean {
 
 function isApproval(text: string): boolean {
   const tokens = words(text);
+
   if (tokens.length === 0 || tokens.length > APPROVAL_MAX_WORDS) return false;
+
   return tokens.every((token) => APPROVAL_WORDS.has(token));
 }
 
@@ -346,6 +354,7 @@ export interface WeakLabel {
 export function weakLabel(turn: CorpusTurn): WeakLabel {
   const fired = BEHAVIOR_RULES.filter((rule) => rule.fires(turn));
   const verdicts = new Set(fired.map((rule) => rule.label));
+
   return {
     turnId: turn.item.outcomeId,
     label: verdicts.size === 1 && !verdicts.has('unclear') ? fired[0].label : null,
@@ -406,6 +415,7 @@ export function corpusStats(
     byProject: projects.map((project) => {
       const rows = turns.filter((turn) => turn.project === project);
       const found = rows.map((turn) => byId.get(turn.item.outcomeId)?.label ?? null);
+
       return {
         project,
         turns: rows.length,
@@ -480,6 +490,7 @@ function scoreRater(name: string, rated: ReadonlyArray<RatedTurn>, failed: numbe
     }))).filter((cell) => cell.count > 0),
     byRule: BEHAVIOR_RULES.map((rule) => {
       const rows = rated.filter((row) => row.rules.includes(rule.name));
+
       return {
         rule: rule.name,
         n: rows.length,
@@ -503,6 +514,7 @@ export interface RaterCost {
 
 function raterCost(name: string, usage: LLMUsage): RaterCost {
   const estimatedTokens = estimateTokens(usage.promptChars + usage.responseChars);
+
   return { name, usage, estimatedTokens, estimatedUsd: estimateUsdCost(estimatedTokens) };
 }
 
@@ -551,6 +563,7 @@ export interface CorpusEvalInput {
  */
 export async function runCorpusEval(input: CorpusEvalInput): Promise<CorpusEvalReport> {
   const byId = new Map(input.turns.map((turn) => [turn.item.outcomeId, turn]));
+
   const decided = input.labels.filter(
     (label): label is WeakLabel & { label: OutcomeLabel } => label.label !== null,
   );
@@ -562,6 +575,7 @@ export async function runCorpusEval(input: CorpusEvalInput): Promise<CorpusEvalR
   const classifier = input.classifier === null
     ? null
     : { name: input.classifier.name, ...meterLLM(input.classifier.llm) };
+
   const judges = input.judges.map((judge) => ({ spec: judge.spec, ...meterLLM(judge.llm) }));
 
   const classifierRated: RatedTurn[] = [];
@@ -573,6 +587,7 @@ export async function runCorpusEval(input: CorpusEvalInput): Promise<CorpusEvalR
 
   for (const label of decided) {
     const turn = byId.get(label.turnId);
+
     if (turn === undefined) continue;
 
     if (classifier !== null) {
@@ -581,6 +596,7 @@ export async function runCorpusEval(input: CorpusEvalInput): Promise<CorpusEvalR
         assistantResponse: turn.item.assistantResponse,
         followup: turn.item.followup ?? '',
       });
+
       if (verdict === null) classifierFailed++;
       else classifierRated.push({
         turnId: label.turnId, behavior: label.label, rater: verdict.outcome, rules: label.rules,
@@ -588,22 +604,28 @@ export async function runCorpusEval(input: CorpusEvalInput): Promise<CorpusEvalR
     }
 
     const answers: OutcomeLabel[] = [];
+
     for (const [index, judge] of judges.entries()) {
       const verdict = await askEnsembleJudge(judge, turn.item);
+
       if (verdict === null) {
         judgeFailed[index]++;
         continue;
       }
+
       answers.push(verdict);
       judgeRated[index].push({
         turnId: label.turnId, behavior: label.label, rater: verdict, rules: label.rules,
       });
     }
+
     // A judge that missed this turn leaves a hole; the panel has no verdict for
     // it, exactly as in ensemble.ts.
     if (answers.length < judges.length) continue;
     const verdict = panelVerdict(answers);
+
     if (verdict === null) continue;
+
     if (verdict === 'unclear') panelSplit++;
     panelRated.push({ turnId: label.turnId, behavior: label.label, rater: verdict, rules: label.rules });
   }
@@ -656,24 +678,30 @@ function raterSection(score: RaterScore): string[] {
     `- answered ${score.answered}${score.failed > 0 ? `, failed on ${score.failed}` : ''}`,
     `- κ vs the rules: ${kappaText(score.kappa)}`,
   ];
+
   if (score.accuracy !== null) {
     lines.push(
       `- negative class (corrected/frustrated): recall ${formatScoreInterval(score.accuracy.sensitivity)}` +
       `, specificity ${formatScoreInterval(score.accuracy.specificity)}`,
     );
   }
+
   if (score.byRule.length > 0) {
     lines.push('', '| rule | turns | rater agreed |', '| --- | ---: | ---: |');
+
     for (const row of score.byRule) {
       lines.push(`| ${row.rule} | ${row.n} | ${row.agreed} (${((row.agreed / row.n) * 100).toFixed(0)}%) |`);
     }
   }
+
   if (score.confusion.length > 0) {
     lines.push('', '| rater said | the rules said | turns |', '| --- | --- | ---: |');
+
     for (const cell of score.confusion) {
       lines.push(`| ${cell.rater} | ${cell.behavior} | ${cell.count} |`);
     }
   }
+
   return [...lines, ''];
 }
 
@@ -694,6 +722,7 @@ export function renderCorpusReport(
   },
 ): string {
   const { stats } = report;
+
   const lines = [
     `# ${opts.title}`,
     '',
@@ -728,15 +757,19 @@ export function renderCorpusReport(
     ...(report.panel === null ? [] : [report.panel]),
     ...report.judges,
   ];
+
   if (raters.length === 0) {
     lines.push('## Raters', '', 'No rater was run — this is the mining half only.', '');
+
     return lines.join('\n');
   }
 
   lines.push('## Raters', '');
+
   if (report.panel !== null) {
     lines.push(`The panel split on ${report.panelSplit} of the turns it covered (counted as \`unclear\`).`, '');
   }
+
   for (const score of raters) lines.push(...raterSection(score));
 
   if (report.cost.length > 0) {
@@ -758,5 +791,6 @@ export function renderCorpusReport(
       '',
     );
   }
+
   return lines.join('\n');
 }

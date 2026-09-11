@@ -49,10 +49,13 @@ function canvasIndex<T>(
   pick: (entry: ExplorationCanvasRun) => T | null,
 ): ReadonlyMap<string, T> {
   const byRoot = new Map<string, T>();
+
   for (const entry of entries ?? []) {
     const value = pick(entry);
+
     if (value !== null) byRoot.set(entry.run.id, value);
   }
+
   return byRoot;
 }
 
@@ -104,9 +107,11 @@ export function unexplainedForkRoots(
   moved: Iterable<string>,
 ): readonly string[] {
   if (entries === null) return [];
+
   const live = new Set(entries
     .filter((entry) => entry.run.status === "running")
     .map((entry) => entry.run.id));
+
   return [...new Set(moved)].filter((rootId) => !live.has(rootId)).sort();
 }
 
@@ -116,7 +121,9 @@ export function selectForkRun(
   requestedId: string | null,
 ): ForkRunSummary | null {
   if (runs === null) return null;
+
   if (requestedId !== null) return runs.find((run) => run.id === requestedId) ?? null;
+
   return runs[0] ?? null;
 }
 
@@ -155,16 +162,20 @@ export function useLiveForkRuns(
   backgroundJobs: readonly BackgroundJob[],
 ) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
+
   const load = useCallback(
     () => rpc<Page<ForkRunSummary>>("listForkRuns", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
+
   const revalidate = useCallback(
     (page: Page<ForkRunSummary> | null) =>
       forkRunsRevalidateMs(page === null ? null : page.items, hasActiveWork),
     [hasActiveWork],
   );
+
   const { resource, reload } = useAsyncResource(load, revalidate);
+
   return { resource, reload, runs: lastValue(resource)?.items ?? null, hasActiveWork };
 }
 
@@ -194,6 +205,7 @@ export function useExplorationCanvas(
   headActivity: ReadonlyMap<string, number> = EMPTY_ACTIVITY,
 ) {
   const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
+
   // One read per page, both halves of every fork on it. The canvas draws EVERY
   // fork, and a merged fork keeps its branches in the journal rather than in
   // `search_nodes`. Fetching that half separately costs one request per band (N
@@ -204,11 +216,13 @@ export function useExplorationCanvas(
     () => rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
+
   const revalidate = useCallback(
     (page: Page<ExplorationCanvasRun> | null) =>
       forkRunsRevalidateMs(page === null ? null : page.items.map((entry) => entry.run), hasActiveWork),
     [hasActiveWork],
   );
+
   const { resource, reload } = useAsyncResource(load, revalidate);
   const first = lastValue(resource);
 
@@ -217,12 +231,14 @@ export function useExplorationCanvas(
       rpc<Page<ExplorationCanvasRun>>("getExplorationCanvas", [{ cursor, limit: FORK_RUN_LIMIT }]),
     [rpc],
   );
+
   // The first page's own `next`. This read's anchor is composite and opaque —
   // only the read model knows how to spell it — so it is never built here.
   const startFrom = useCallback(
     () => (first !== null && first.status === "more" ? first.next : null),
     [first],
   );
+
   const tail = usePagedScroll<ExplorationCanvasRun>({ grows: "down", fetchPage, startFrom });
 
   /**
@@ -235,11 +251,13 @@ export function useExplorationCanvas(
     if (first === null) return null;
     const seen = new Set<string>();
     const rows: ExplorationCanvasRun[] = [];
+
     for (const entry of [...first.items, ...tail.fetched]) {
       if (seen.has(entry.run.id)) continue;
       seen.add(entry.run.id);
       rows.push(entry);
     }
+
     return rows;
   }, [first, tail.fetched]);
 
@@ -249,11 +267,15 @@ export function useExplorationCanvas(
    *  a search the agent was actively driving drew as its root alone. */
   const trees = useMemo(() => {
     const folded = new Map<string, ForkNode>();
+
     for (const entry of entries ?? []) {
       const tree = explorationForkTree(entry);
+
       if (tree !== null) folded.set(entry.run.id, tree);
     }
+
     for (const [rootId, tree] of liveTrees) folded.set(rootId, tree);
+
     return folded;
   }, [entries, liveTrees]);
 
@@ -273,6 +295,7 @@ export function useExplorationCanvas(
     ).join("\u0000"),
     [entries, liveTrees, headActivity],
   );
+
   const reloadedFor = useRef("");
   useEffect(() => {
     if (unexplained === "" || reloadedFor.current === unexplained) return;
@@ -299,6 +322,7 @@ export function useExplorationCanvas(
     () => canvasIndex(entries, (entry) => entry.head),
     [entries],
   );
+
   /**
    * Each search's resolved resolution — the preset it resolved and the tuple it resolved
    * to. Derived ONCE here rather than per surface, so the canvas, the run list and
@@ -350,18 +374,22 @@ export function useExactForkRun(
       : rpc<ExplorationCanvasRun | null>("getForkRun", [requestedId]),
     [requestedId, rpc],
   );
+
   const revalidate = useCallback(
     (entry: ExplorationCanvasRun | null) => requestedId === null
       ? null
       : forkRunsRevalidateMs(entry === null ? null : [entry.run], hasActiveWork),
     [hasActiveWork, requestedId],
   );
+
   const { resource, reload } = useAsyncResource<ExplorationCanvasRun | null>(
     load,
     revalidate,
     requestedId ?? undefined,
   );
+
   const entry = lastValue(resource);
+
   return { resource, reload, run: entry?.run ?? null, entry };
 }
 
@@ -387,22 +415,29 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
   if (!params) return [];
   const rows: ForkParamRow[] = [];
   const search = params.search;
+
   if (search !== null) {
     rows.push({ label: "budget", value: `${search.budget} expansions` });
     rows.push({ label: "branches", value: String(search.branches) });
+
     // A depth cap of one is not a knob beside budget — it is what "flat" means,
     // and the resolution panel says that as a shape. Rendering `max depth 1`
     // here read as a second throttle on a search that has none.
     if (search.maxDepth !== null && search.maxDepth > 1) {
       rows.push({ label: "max depth", value: String(search.maxDepth) });
     }
+
     if (search.explorationWeight !== null) {
       rows.push({ label: "exploration c", value: search.explorationWeight.toFixed(2) });
     }
+
     const judges = judgeEnsembleLabel(params);
+
     if (judges !== null) rows.push({ label: "judges", value: judges });
+
     if (search.mode !== null) rows.push({ label: "mode", value: search.mode });
   }
+
   if (params.transcripts !== null) {
     rows.push({ label: "journalled", value: params.transcripts.mergeStrategy });
     rows.push({ label: "nodes", value: String(params.transcripts.branches) });
@@ -429,10 +464,14 @@ export function forkParamRows(params: ForkRunParams | undefined): ForkParamRow[]
  */
 export function judgeEnsembleLabel(params: ForkRunParams | undefined): string | null {
   const search = params?.search;
+
   if (search === undefined || search === null) return null;
   const requested = search.judgeSamplesRequested;
+
   if (requested === null) return null;
   const realised = search.judgeSamplesRealised;
+
   if (realised === null) return `${requested} requested`;
+
   return realised < requested ? `${realised} of ${requested} requested` : `${realised} per branch`;
 }

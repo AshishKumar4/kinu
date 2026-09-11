@@ -40,12 +40,15 @@ export class CliAuthCodeError extends Error {
 }
 
 const AUTH_TTL_MS = 10 * 60 * 1000;
+
 /** How long a finished request stays readable past its deadline, so a late
  *  poll is told "already delivered" instead of "unknown request". */
 const RETENTION_MS = 10 * 60 * 1000;
+
 // Independent of DEFAULT_SESSION_REFLECTION_INTERVAL: this is a client polling
 // cadence, while that constant counts completed turns between reflection work.
 const POLL_INTERVAL_SECONDS = 5;
+
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 
 export interface CliAuthStartResult {
@@ -87,9 +90,11 @@ const CliAuthRecordSchema = v.object({
   expiresAt: v.number(),
   approvedAt: v.nullable(v.number()),
 });
+
 type CliAuthRecord = v.InferOutput<typeof CliAuthRecordSchema>;
 
 const CodePointerSchema = v.object({ deviceHash: v.string() });
+
 const RateBucketSchema = v.object({ count: v.number(), resetAt: v.number() });
 
 type CliAuthEnv = OwnerCapabilityEnv & {
@@ -121,6 +126,7 @@ export type CliTokenAuth =
  *  `readBearer` is the same read from a Request. */
 export function bearerOf(authorization: string | null): string | null {
   const match = /^Bearer\s+(.+)$/i.exec(authorization ?? '');
+
   return match?.[1]?.trim() || null;
 }
 
@@ -134,6 +140,7 @@ export function readBearer(request: Request): string | null {
  *  imports so unit tests can load it under plain bun. */
 export function parseCliTokenUserId(token: string): string | null {
   const match = /^ptc_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(token);
+
   return match?.[1] ?? null;
 }
 
@@ -150,9 +157,12 @@ export function parseCliTokenUserId(token: string): string | null {
  */
 export function parseCliBearer(token: string): { userId: string; kind: 'session' | 'access' } | null {
   const sessionUserId = parseCliTokenUserId(token);
+
   if (sessionUserId) return { userId: sessionUserId, kind: 'session' };
   const accessUserId = parseAccessTokenUserId(token);
+
   if (accessUserId) return { userId: accessUserId, kind: 'access' };
+
   return null;
 }
 
@@ -166,16 +176,21 @@ export async function authenticateCliToken(
   env: Pick<CliAuthEnv, 'UserDO' | 'CREDENTIAL_ENCRYPTION_KEY'>,
 ): Promise<CliTokenAuth> {
   const token = readBearer(request);
+
   if (!token) return { ok: false, error: 'Missing Authorization: Bearer <token>' };
   const bearer = parseCliBearer(token);
+
   if (!bearer) return { ok: false, error: 'Malformed CLI token' };
   const userDO = env.UserDO.get(env.UserDO.idFromName(bearer.userId));
+
   const verified = bearer.kind === 'session'
     ? await userDO.verifyCliToken(await ownerCaller(env), token)
     : await userDO.verifyAccessToken(await ownerCaller(env), token);
+
   if (!verified.ok || !verified.user || !verified.tokenHash) {
     return { ok: false, error: verified.error ?? 'Invalid CLI token' };
   }
+
   return {
     ok: true,
     identity: {
@@ -201,14 +216,17 @@ export async function startCliAuth(
   await rateLimit(env.AUTH_KV, `start:${cleanRateKey(clientKey)}`, 20, RATE_WINDOW_MS, now);
 
   const expiresAt = now + AUTH_TTL_MS;
+
   for (let attempt = 0; attempt < 10; attempt += 1) {
     const deviceToken = randomToken(32);
     const userCode = createUserCode();
+
     // A code is one in 32^8, so this reads to prove the claim rather than to
     // expect a clash; KV has no unique key to lean on instead.
     if (await readKvJson(env.AUTH_KV, codeKey(userCode), CodePointerSchema) !== null) continue;
 
     const deviceHash = await sha256Hex(deviceToken);
+
     const record: CliAuthRecord = {
       userCode,
       deviceName: cleanDeviceName(deviceName),
@@ -220,6 +238,7 @@ export async function startCliAuth(
       expiresAt,
       approvedAt: null,
     };
+
     // Record before pointer: a pointer is what the browser resolves, and one
     // that outran its record would read as an unknown code either way.
     await writeKvJson(env.AUTH_KV, deviceKey(deviceHash), record, expiresAt + RETENTION_MS);
@@ -233,13 +252,16 @@ export async function startCliAuth(
       intervalSeconds: POLL_INTERVAL_SECONDS,
     };
   }
+
   throw new Error('Could not allocate a CLI auth code.');
 }
 
 export async function inspectCliAuth(kv: KvStore, userCode: string): Promise<CliAuthRequestInfo | null> {
   const found = await readByUserCode(kv, userCode);
+
   if (!found) return null;
   const { record } = found;
+
   return {
     userCode: record.userCode,
     deviceName: record.deviceName,
@@ -258,14 +280,19 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
   await rateLimit(env.AUTH_KV, `poll-device:${hash}`, 180, RATE_WINDOW_MS, now);
 
   const record = await readKvJson(env.AUTH_KV, deviceKey(hash), CliAuthRecordSchema);
+
   if (!record) return { status: 'expired', message: 'Unknown CLI auth request.' };
 
   const status = currentStatus(record, now);
+
   if (status === 'expired') return { status: 'expired', message: 'CLI auth request expired.' };
+
   if (status === 'pending') return { status: 'pending' };
+
   if (status === 'consumed') {
     return { status: 'expired', message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.' };
   }
+
   if (!record.userId || !record.userEmail) {
     return { status: 'expired', message: 'CLI auth approval is incomplete. Run kinu auth again.' };
   }
@@ -284,6 +311,7 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
   // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
   const userDO = env.UserDO.get(env.UserDO.idFromName(record.userId)) as DurableObjectStub<UserDO>;
   let minted: { token: string; expiresAt: number };
+
   try {
     minted = await userDO.mintCliToken(await ownerCaller(env), record.userId, hash, record.deviceName);
   } catch (cause) {
@@ -291,11 +319,13 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
     // survive the RPC boundary, so the message is the contract — the same
     // reading `workspace-create.ts` does of `claimOwner`'s refusal.
     if (!AUTHORIZATION_SPENT.test(renderThrownChain({ cause }))) throw cause;
+
     return {
       status: 'expired',
       message: 'CLI auth token was already delivered. Run kinu auth again if it was not saved.',
     };
   }
+
   return {
     status: 'approved',
     origin: record.origin,
@@ -315,22 +345,26 @@ export async function approveCliAuth(
   await rateLimit(env.AUTH_KV, `approve:${identity.userId}:${cleanRateKey(clientKey)}`, 30, RATE_WINDOW_MS, now);
 
   const found = await readByUserCode(env.AUTH_KV, userCode);
+
   if (!found) throw new CliAuthCodeError('Unknown CLI auth code.');
   const { deviceHash, record } = found;
 
   const status = currentStatus(record, now);
+
   if (status === 'approved' || status === 'consumed') {
     // Idempotent replay only for the original approver. Anyone else
     // presenting an already-approved code must not learn whose it is.
     if (record.userId !== identity.userId) {
       throw new CliAuthCodeError('CLI auth code already used.');
     }
+
     return {
       ok: true,
       status: 'approved',
       user: { id: identity.userId, email: record.userEmail ?? identity.email },
     };
   }
+
   if (status !== 'pending') {
     throw new CliAuthCodeError('CLI auth code expired. Run kinu auth again.');
   }
@@ -362,11 +396,14 @@ async function rateLimit(
 ): Promise<void> {
   const bucketKey = `cli-auth-rate:${key}`;
   const bucket = await readKvJson(kv, bucketKey, RateBucketSchema);
+
   if (!bucket || bucket.resetAt <= now) {
     const resetAt = now + windowMs;
     await writeKvJson(kv, bucketKey, { count: 1, resetAt }, resetAt);
+
     return;
   }
+
   if (bucket.count >= limit) throw new RateLimitError();
   await writeKvJson(kv, bucketKey, { count: bucket.count + 1, resetAt: bucket.resetAt }, bucket.resetAt);
 }
@@ -375,9 +412,12 @@ async function readByUserCode(
   kv: KvStore, userCode: string,
 ): Promise<{ deviceHash: string; record: CliAuthRecord } | null> {
   const pointer = await readKvJson(kv, codeKey(normalizeUserCode(userCode)), CodePointerSchema);
+
   if (!pointer) return null;
   const record = await readKvJson(kv, deviceKey(pointer.deviceHash), CliAuthRecordSchema);
+
   if (!record) return null;
+
   return { deviceHash: pointer.deviceHash, record };
 }
 
@@ -391,11 +431,13 @@ function codeKey(userCode: string): string {
 
 function currentStatus(record: CliAuthRecord, now = Date.now()): CliAuthRequestInfo['status'] {
   if (record.status !== 'consumed' && now > record.expiresAt) return 'expired';
+
   return record.status;
 }
 
 function cleanDeviceName(input?: string): string {
   const s = (input ?? 'terminal').trim().replace(/\s+/g, ' ');
+
   return s ? s.slice(0, 80) : 'terminal';
 }
 
@@ -405,6 +447,7 @@ function cleanOrigin(input: string): string {
 
 function cleanRateKey(input?: string): string {
   const s = (input ?? 'unknown').trim();
+
   return s ? s.slice(0, 160) : 'unknown';
 }
 
@@ -416,6 +459,8 @@ function createUserCode(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   let out = '';
   const bytes = crypto.getRandomValues(new Uint8Array(8));
+
   for (const b of bytes) out += alphabet[b % alphabet.length];
+
   return `${out.slice(0, 4)}-${out.slice(4)}`;
 }

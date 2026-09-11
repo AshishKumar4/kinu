@@ -104,6 +104,7 @@ async function stoppedBoxWithService(): Promise<Harness<TestBox>> {
   port(harnessed.rows, 3000, 'tok3000');
   harnessed.container.listening.add(3000);
   await harnessed.container.stop();
+
   return harnessed;
 }
 
@@ -114,6 +115,7 @@ function runningBoxWithService(): Harness<TestBox> {
   proc(harnessed.rows, 'p1');
   port(harnessed.rows, 3000, 'tok3000');
   harnessed.container.listening.add(3000);
+
   return harnessed;
 }
 
@@ -129,8 +131,10 @@ interface Activated {
 /** Storage first with the rows already in it, then `new`, no `start()`. */
 function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
   const storage = fakeStorage();
+
   for (const [key, value] of rows) storage.rows.set(key, value);
   let activation: Promise<unknown> = Promise.resolve();
+
   // SAFETY: the constructor's contract reads `storage`, `id`, `container` and
   // `blockConcurrencyWhile` off its state and nothing else (devbox.ts
   // constructor + `#activate`); the fake carries those four, and hands the
@@ -142,10 +146,13 @@ function activatedOverRunning(rows: Map<string, StoredValue>): Activated {
     blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => {
       const run = closure();
       activation = run;
+
       return await run;
     },
   } as ConstructorParameters<typeof Devbox>[0];
+
   const box = new TestBox(state, {});
+
   return { box, container: FakeSandbox.last!, activation };
 }
 
@@ -321,10 +328,12 @@ describe('the restore runs on the first delivered frame after a container start'
     const { box, container, activation } = activatedOverRunning(restored.rows);
     const silent = gate();
     container.execGate = silent;
+
     const outcome = await Promise.race([
       activation.then(() => 'settled' as const),
       silent.reached.then(() => 'asked the container' as const),
     ]);
+
     expect({ outcome, execs: container.execs }).toEqual({ outcome: 'settled', execs: [] });
 
     container.execGate = undefined;
@@ -384,11 +393,13 @@ describe('the restore runs on the first delivered frame after a container start'
     // first exec after it here; on the shipped chain it is the attach's own
     // mount probe.
     const seen: [RestoreClockPhase, number][] = [];
+
     class WitnessBox extends TestBox {
       protected override onRestorePhase(phase: RestoreClockPhase, atMs: number): void {
         seen.push([phase, atMs]);
       }
     }
+
     const harnessed: Harness<WitnessBox> = harness(WitnessBox);
     proc(harnessed.rows, 'p1');
     harnessed.container.listening.add(3000);
@@ -431,6 +442,7 @@ describe('the restore runs on the first delivered frame after a container start'
       { callback: 'snapshotWorkspaceIfDue', time: overdue },
       { callback: 'devboxIncidents', time: overdue },
     );
+
     // Built the way `harness` builds it — the same members the class reads at
     // construction — but with the dead row already present, which is what an
     // activation wakes into.
@@ -443,6 +455,7 @@ describe('the restore runs on the first delivered frame after a container start'
       id: { toString: () => TEST_BOX_ID },
       blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
     } as ConstructorParameters<typeof Devbox>[0];
+
     new TestBox(state, {});
     // No waiting: this stub runs the gate closure inline inside `new`, and the
     // sweep body is synchronous storage I/O, so the rows are gone before `new`

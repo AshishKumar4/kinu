@@ -18,6 +18,7 @@ import { resolvePublicSessionPlan } from '../evals/public-session';
 
 /** The deployed tier's package command. */
 const GATE = 'bun run gate:first-run';
+
 const RUNNER = 'scripts/first-run-tier.sh';
 
 /** Every case file this tier holds, off the ONE enumeration and narrowed only by
@@ -42,10 +43,12 @@ case "$1" in
   *) exit 99 ;;
 esac
 `, { mode: 0o755 });
+
   const run = spawnSync('bash', [join(scripts, 'first-run-tier.sh')], {
     encoding: 'utf8', env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ''}`,
       REPORT_FIXTURE: reports, KINU_EVAL_WEB_IDENTITY: 'fixture-identity' },
   });
+
   expect(run.status).toBe(42);
   expect(existsSync(join(reports, 'junit-first-run.xml'))).toBe(true);
   expect(readFileSync(join(reports, 'spend-first-run.jsonl'), 'utf8')).toBe('measured-spend\n');
@@ -69,7 +72,9 @@ describe('the first-run corpus is the set this tier runs', () => {
     // sweep the eval suites into a post-deploy tier that cannot pay for them.
     expect(firstRunConfig.test?.include).toEqual([FIRST_RUN_INCLUDE]);
     expect(FIRST_RUN_INCLUDE).toBe('tests/first-run/**/*.first-run.ts');
+
     for (const file of onDisk) expect(file.startsWith('tests/first-run/')).toBe(true);
+
     // And no case file can be selected by the two runners that must never see
     // it: `bun test` matches only `.test.`/`.spec.`, and the eval tier's config
     // includes `tests/evals/**` alone.
@@ -93,6 +98,7 @@ describe('the first-run corpus is the set this tier runs', () => {
 describe('every case has a defect register entry', () => {
   test('the register covers exactly the declared cases', () => {
     expect(Object.keys(FIRST_RUN_DEFECTS).sort()).toEqual([...FIRST_RUN_CASES].sort());
+
     for (const id of FIRST_RUN_CASES) {
       const defect = FIRST_RUN_DEFECTS[id];
       expect(defect.id).toBe(id);
@@ -129,6 +135,7 @@ describe('a partial first-run tier is not evidence', () => {
       scores: [outcomeRow(subgoalOutcome(3, 3, 'every subgoal reached'))],
       turns: 1, toolCalls: 2, toolNames: ['laptop.exec'], tokensIn: 10, tokensOut: 5, ms: 1_000,
     });
+
     const declared = [...FIRST_RUN_CASES];
 
     const partial = assessAdmissibility(declared, declared.slice(0, -1).map(scored));
@@ -146,6 +153,7 @@ describe('a partial first-run tier is not evidence', () => {
       taskId: declared[0] ?? '', repetition: 0, outcome: 'scored', scores: [],
       turns: 1, toolCalls: 2, tokensIn: 10, tokensOut: 5, ms: 1_000,
     };
+
     expect(assessAdmissibility([declared[0] ?? ''], [activityOnly]).failures.join(' '))
       .toContain(TASK_OUTCOME);
   });

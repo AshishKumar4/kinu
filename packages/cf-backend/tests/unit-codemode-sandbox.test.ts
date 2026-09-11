@@ -19,8 +19,11 @@ import { KINU_NODE_MODULE_NAME, KINU_NODE_MODULE_SOURCE } from "../src/codemode-
 import { selectInjectableCraftedTools, renderToolsPrelude } from "../src/codemode-sandbox";
 
 const shimDir = scratchDir("shim");
+
 const shimPath = join(shimDir, KINU_NODE_MODULE_NAME);
+
 writeFileSync(shimPath, KINU_NODE_MODULE_SOURCE);
+
 // The one dynamic import in this file: the module under test is a string this
 // process wrote a moment ago, so no static specifier can name it.
 const shim = await import(shimPath);
@@ -30,7 +33,9 @@ function makeCraftStore(tools: Array<{ name: string; code: string; description?:
     name: t.name, code: t.code, description: t.description ?? "",
     params: null, scope: "local", createdAt: 0, updatedAt: 0,
   }));
+
   const unsupported = (): never => { throw new Error("unused CraftStore operation"); };
+
   return {
     create: unsupported,
     update: unsupported,
@@ -46,8 +51,10 @@ async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
     await promise;
   } catch (error) {
     if (error instanceof Error) return error;
+
     return new Error(String(error));
   }
+
   throw new Error("Expected promise to reject");
 }
 
@@ -58,12 +65,16 @@ type SandboxMember = (...args: JsonValue[]) => Promise<JsonValue>;
  *  `@cloudflare/codemode` (`proxyInits`), minus the RPC crossing. */
 function vendorProxy(dispatch: (name: string, args: JsonValue[]) => Promise<JsonValue>) {
   const own: Record<string, SandboxMember> = {};
+
   return new Proxy(own, {
     get: (target, toolName) => {
       const key = v.safeParse(v.string(), toolName);
+
       if (!key.success) return undefined;
       const defined = target[key.output];
+
       if (defined !== undefined) return defined;
+
       return async (...args: JsonValue[]) => dispatch(key.output, args);
     },
   });
@@ -94,6 +105,7 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
     initCraftedToolsTables(sql);
     const store = makeCraftStore([]);
     store.list = () => { throw new Error("not initialized"); };
+
     expect(() => selectInjectableCraftedTools(store, sql)).toThrow("not initialized");
   });
 });
@@ -104,6 +116,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
       [{ name: "double", code: "async (n) => n * 2", description: "" }],
       { workspace: "hardy-stone-a905df14" },
     );
+
     expect(prelude).toContain(`await import("./${KINU_NODE_MODULE_NAME}")`);
     expect(prelude).toContain("const require = __kinu.createRequire(");
     expect(prelude).toContain('workspace: "hardy-stone-a905df14"');
@@ -122,6 +135,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
       ],
       { workspace: "w" },
     );
+
     expect(prelude).toContain('"broken": __kinu.defineCrafted("broken", () => { throw new Error("stored source does not parse:');
     expect(prelude).toContain('"fine": __kinu.defineCrafted("fine", async () => (\nasync () => 2\n))');
     // The definitions block parses as JavaScript on its own.
@@ -139,6 +153,7 @@ describe("renderToolsPrelude — one guarded definition per crafted tool", () =>
       [{ name: "waiter", code: "await foo()", description: "" }],
       { workspace: "w" },
     );
+
     expect(prelude).toContain('"waiter": __kinu.defineCrafted("waiter", async () => (\nawait foo()\n))');
     const block = prelude.slice(prelude.indexOf("Object.assign(tools, {"));
     expect(() => new Function("tools", "__kinu", block)).not.toThrow();
@@ -167,7 +182,13 @@ describe("defineCrafted — a tool breaks only its own name", () => {
 
   test("own definitions win over the host dispatch on the vendor's proxy, and siblings see each other", async () => {
     const dispatched: string[] = [];
-    const tools = vendorProxy(async (name) => { dispatched.push(name); return `host:${name}`; });
+
+    const tools = vendorProxy(async (name) => {
+      dispatched.push(name);
+
+      return `host:${name}`;
+    });
+
     Object.assign(tools, {
       double: shim.defineCrafted("double", () => async (n: number) => n * 2),
       quad: shim.defineCrafted("quad", () => async (n: number) => Number(await tools.double?.(n)) * 2),
@@ -180,15 +201,23 @@ describe("defineCrafted — a tool breaks only its own name", () => {
 
 describe("createRequire — Node's fs and child_process over the workspace", () => {
   const files = new Map<string, string>([["notes.md", "hello"]]);
+
   const workspace = {
     readFile: async (path: string) => {
       const text = files.get(path);
+
       if (text === undefined) throw new Error(`workspace.readFile: ENOENT ${path}`);
+
       return text;
     },
-    writeFile: async (path: string, content: string) => { files.set(path, content); return "ok"; },
+    writeFile: async (path: string, content: string) => {
+      files.set(path, content);
+
+      return "ok";
+    },
     readdir: async (path: string) => {
       if (path !== "/" && path !== ".") throw new Error("ENOTDIR");
+
       return [...files.keys()];
     },
     exists: async (path: string) => files.has(path),
@@ -196,6 +225,7 @@ describe("createRequire — Node's fs and child_process over the workspace", () 
       ? "Error (exit 1)\n--- stderr ---\nnope"
       : `ran: ${command}`,
   };
+
   const require = shim.createRequire({ workspace, builtins: { "node:path": { join: (...parts: string[]) => parts.join("/") } } });
 
   test("fs/promises reads and writes workspace files", async () => {
@@ -224,9 +254,11 @@ describe("createRequire — Node's fs and child_process over the workspace", () 
     expect(await exec("ls -la")).toEqual({ stdout: "ran: ls -la", stderr: "" });
     const failed = await rejectionOf(exec("false"));
     expect(failed.message).toContain("Command failed: false");
+
     const viaCallback = await new Promise<string>((resolve) => {
       exec("echo hi", (error: Error | null, stdout: string) => resolve(error ? error.message : stdout));
     });
+
     expect(viaCallback).toBe("ran: echo hi");
   });
 

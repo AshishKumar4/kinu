@@ -197,12 +197,15 @@ export class OwnerCapabilityUnavailableError extends Error {
 
 function ownerToken(env: OwnerCapabilityEnv): Promise<string> {
   const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
+
   if (!secret) throw new OwnerCapabilityUnavailableError();
   let pending = ownerTokens.get(secret);
+
   if (!pending) {
     pending = hmacSha256Hex(secret, OWNER_CAPABILITY_LABEL);
     ownerTokens.set(secret, pending);
   }
+
   return pending;
 }
 
@@ -295,6 +298,7 @@ export function pendingCapabilityReconcile(sql: SqlExec, workspaceName: string):
   const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
     `SELECT token_hash FROM workspace_capability_reconcile WHERE workspace_name = ? LIMIT 1`, workspaceName,
   ).toArray()[0]);
+
   return row.success ? row.output.token_hash : null;
 }
 
@@ -324,6 +328,7 @@ export function workspaceCapabilityHash(sql: SqlExec, workspaceName: string): st
   const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
     `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = ? LIMIT 1`, workspaceName,
   ).toArray()[0]);
+
   return row.success ? row.output.token_hash : null;
 }
 
@@ -337,6 +342,7 @@ export function workspaceCapabilityHash(sql: SqlExec, workspaceName: string): st
  *  {@link commitWorkspaceCapability}. */
 export async function freshWorkspaceCapability(): Promise<{ token: string; tokenHash: string }> {
   const token = `pwc_${nanoid(44)}`;
+
   return { token, tokenHash: await sha256Hex(token) };
 }
 
@@ -379,28 +385,38 @@ async function resolveCaller<Caller>(
   capability: WorkspaceCapability,
 ): Promise<ResolvedCaller> {
   const parsedCaller = v.safeParse(UserCallerSchema, caller);
+
   if (!parsedCaller.success) {
     denyCapability('no_caller_identity', capability,
       'This call carried no valid caller identity. Privileged user-level calls must present a capability token.');
   }
+
   if ('ownerToken' in parsedCaller.output) {
     const presentedOwner = parsedCaller.output.ownerToken;
+
     if (timingSafeEqual(presentedOwner, await ownerToken(env))) return { kind: 'owner_session' };
     denyCapability('unrecognized_owner', capability, 'Unrecognized owner capability.');
   }
+
   const token = parsedCaller.output.workspaceToken;
+
   if (token === '') {
     denyCapability('no_workspace_identity', capability,
       'This call carried no workspace identity. Privileged user-level calls must present a workspace capability token.');
   }
+
   const tokenHash = await sha256Hex(token);
+
   const row = v.safeParse(v.object({ workspace_name: v.string() }), sql.exec(
     `SELECT workspace_name FROM workspace_capability_tokens WHERE token_hash = ? LIMIT 1`, tokenHash,
   ).toArray()[0]);
+
   const workspace = row.success ? row.output.workspace_name : null;
+
   if (!workspace) {
     denyCapability('unrecognized_workspace', capability, 'Unrecognized workspace capability token.');
   }
+
   return { kind: 'workspace', workspace };
 }
 
@@ -414,12 +430,15 @@ export async function requireTier<Caller>(
   capability: WorkspaceCapability,
 ): Promise<ResolvedCaller> {
   const resolved = await resolveCaller(sql, env, caller, capability);
+
   if (resolved.kind === 'owner_session') return resolved;
+
   if (WORKSPACE_CAPABILITY_TIERS[capability] === 'owner_only') {
     denyCapability('owner_only', capability,
       `"${capability}" is an account authority and is reachable only by the signed-in owner. `
       + `Workspace "${resolved.workspace}" presented a workspace capability token, which never carries `
       + 'owner authority.');
   }
+
   return resolved;
 }

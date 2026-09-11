@@ -15,6 +15,7 @@ test('Slate RPC declarations reject side effects and privileged host operations'
   const declare = async (method: string) => parseSlateProject({
     main: 'server.ts', slate: { bindings: { DATA: { kind: 'rpc', methods: [method] } } },
   });
+
   for (const [method, access] of Object.entries(AGENT_RPC_ACCESS)) {
     if (access === 'workspace.read') continue;
     await expect(declare(method)).rejects.toMatchObject({ code: 'bad_input' });

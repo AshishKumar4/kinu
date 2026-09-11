@@ -31,6 +31,7 @@ import type { JsonValue } from '../utils/json';
 import { KinuError } from '../obs/index';
 
 const StatusSchema = v.picklist(SUBORDINATE_REPORT_STATUSES);
+
 const ContentSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
 
 /** One handoff field as it arrives: a list of entries, each trimmed, with the
@@ -105,17 +106,23 @@ export function reportHandoffProperties(deps: ReportToolDeps) {
 function parseHandoff(args: ReportToolInput): SubordinateReportHandoff {
   const handoff: { -readonly [Field in SubordinateReportHandoffField]?: string[] } = {};
   let charged = 0;
+
   for (const field of SUBORDINATE_REPORT_HANDOFF_FIELDS) {
     const arriving = args[field];
+
     if (arriving === undefined || arriving === null) continue;
     const entries = v.safeParse(HandoffListSchema, arriving);
+
     if (!entries.success) {
       throw new KinuError('bad_input', `report \`${field}\` must be an array of strings, one short entry per item`);
     }
+
     if (entries.output.length === 0) continue;
     handoff[field] = entries.output;
+
     for (const entry of entries.output) charged += entry.length;
   }
+
   if (charged > SUBORDINATE_REPORT_HANDOFF_MAX_CHARS) {
     throw new KinuError(
       'bad_input',
@@ -123,6 +130,7 @@ function parseHandoff(args: ReportToolInput): SubordinateReportHandoff {
       + 'keep each entry to one line and put the detail in `content` or a workspace path.',
     );
   }
+
   return handoff;
 }
 
@@ -151,17 +159,24 @@ export async function dispatchReport(
   args: ReportToolInput,
 ): Promise<ReportToolResult> {
   const status = v.safeParse(StatusSchema, args.status);
+
   if (!status.success) {
     throw new KinuError('bad_input', unknownActionError('report', 'status', args.status, SUBORDINATE_REPORT_STATUSES));
   }
+
   const content = v.safeParse(ContentSchema, args.content);
+
   if (!content.success) throw new KinuError('bad_input', 'report requires non-empty `content`');
+
   const delivery: Parameters<ReportToolDeps['report']>[0] = {
     status: status.output, content: content.output,
   };
+
   if (!deps.bodyOnly) {
     const handoff = parseHandoff(args);
+
     if (Object.keys(handoff).length > 0) delivery.handoff = handoff;
   }
+
   return await deps.report(delivery);
 }

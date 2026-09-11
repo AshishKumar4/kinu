@@ -79,12 +79,17 @@
  *  prose confidence is capped below a passing branch with a median judge.
  *  See the BAND TABLE in the module header. */
 const PASS_FLOOR = 0.6;
+
 const PASS_SPAN = 0.4;
+
 const FAIL_FLOOR = 0.05;
+
 const FAIL_SPAN = 0.25;
+
 /** Top of the fail band (0.30): a code branch that ran and failed can score no
  *  higher, and neither may a prose branch when siblings actually attempted code. */
 const FAIL_CEIL = FAIL_FLOOR + FAIL_SPAN;
+
 const PROSE_CONFIDENCE = 0.75;
 
 import * as v from 'valibot';
@@ -169,13 +174,17 @@ export interface BranchEvaluation {
 export function executionObservation(execution: BranchEvaluation['execution']): string | null {
   if (!execution) return null;
   const { passedChecks, totalChecks } = execution;
+
   const tally = totalChecks !== undefined && passedChecks !== undefined
     ? ` and passed ${passedChecks} of ${totalChecks} generated checks`
     : execution.assertionsGenerated ? ' against generated assertions' : '';
+
   if (execution.passed) return `the proposed code ran${tally || ''} and PASSED.`;
+
   const error = execution.error
     ? evidenceWindow(execution.error, EVIDENCE_BUDGETS.judgeExecutionError)
     : 'no error text was reported';
+
   return totalChecks !== undefined && passedChecks !== undefined
     ? `the proposed code ran and passed ${passedChecks} of ${totalChecks} generated checks; the first failure was: ${error}`
     : `the proposed code ran and FAILED: ${error}`;
@@ -188,7 +197,9 @@ export function executionObservation(execution: BranchEvaluation['execution']): 
 export function checkFraction(execution: BranchEvaluation['execution']): number | null {
   const total = execution?.totalChecks;
   const passed = execution?.passedChecks;
+
   if (total === undefined || passed === undefined || total === 0) return null;
+
   return passed / total;
 }
 
@@ -212,6 +223,7 @@ const PARSE_FAILURE_SIGNATURES = [
 /** True when an execution error says the source did not parse. */
 export function isParseFailure(error: string): boolean {
   const text = error.toLowerCase();
+
   return PARSE_FAILURE_SIGNATURES.some((sig) => text.includes(sig));
 }
 
@@ -232,8 +244,10 @@ async function codeFailedToParse(
   language: string,
 ): Promise<boolean> {
   if (execution.passed || !execution.error || !isParseFailure(execution.error)) return false;
+
   if (!execution.assertionsGenerated) return true;
   const bare = await runForVerdict(executor, code, [], language);
+
   return !bare.passed && !!bare.error && isParseFailure(bare.error);
 }
 
@@ -276,6 +290,7 @@ export function judgeCallBudget(opts: {
 }): JudgeCallBudget {
   const budget = Math.max(1, opts.maxLLMCalls);
   const generatesChecks = opts.offersRunnableCode && budget >= 2;
+
   return {
     ensemble: Math.min(Math.max(1, opts.judgeSamples), budget - (generatesChecks ? 1 : 0)),
     generatesChecks,
@@ -286,6 +301,7 @@ export async function evaluateWithMultiModelJudging(
   opts: EvaluateBranchOptions,
 ): Promise<BranchEvaluation> {
   const trajectory = opts.trajectory.trim();
+
   // A branch that produced nothing (failed exploration) is dead — spend no
   // judge calls on it.
   if (trajectory.length === 0) {
@@ -299,6 +315,7 @@ export async function evaluateWithMultiModelJudging(
   const proposal = opts.executionPolicy === 'judge-only'
     ? null
     : readProposalCode(trajectory, opts.executor.languages);
+
   // Decided before a call is spent, and reported on every return below, so the
   // clamp cannot bind in silence.
   const { ensemble: k, generatesChecks } = judgeCallBudget({
@@ -309,13 +326,17 @@ export async function evaluateWithMultiModelJudging(
 
   // Layer 1: execution grounding.
   let execution: BranchEvaluation['execution'];
+
   if (proposal?.kind === 'runnable') {
     const { code, language } = proposal;
     let checks: readonly string[] = [];
+
     if (generatesChecks) {
       checks = await generateAssertionSuite(judge, opts.task, code, language);
     }
+
     execution = await runForVerdict(opts.executor, code, checks, language);
+
     // Cascade stage 0: source that never parsed has decided its own verdict.
     // Spend no judge calls placing it inside a band it cannot leave.
     if (await codeFailedToParse(opts.executor, execution, code, language)) {
@@ -328,9 +349,11 @@ export async function evaluateWithMultiModelJudging(
 
   // Layer 2: judge ensemble (median, parse-failure-robust).
   const prompt = buildJudgePrompt(opts.task, trajectory, opts.siblings ?? [], execution);
+
   const samples = await Promise.all(
     Array.from({ length: k }, () => sampleJudgeScore(judge, prompt)),
   );
+
   const parsed = samples.filter((s): s is number => s !== null);
   const judgeScore = parsed.length > 0 ? median(parsed) : null;
 
@@ -346,14 +369,17 @@ export async function evaluateWithMultiModelJudging(
     // PASS band, where the fraction is 1 by construction and carries nothing,
     // and inside the fail band only when no suite ran.
     const fraction = checkFraction(execution);
+
     const score = execution.passed
       ? PASS_FLOOR + PASS_SPAN * (judgeScore ?? 0)
       : FAIL_FLOOR + FAIL_SPAN * (fraction ?? judgeScore ?? 0);
+
     return {
       score, grounding: 'execution', execution,
       judgeSamplesAttempted: k, judgeSamplesUsed: parsed.length,
     };
   }
+
   if (proposal?.kind === 'unrunnable') {
     return {
       score: FAIL_CEIL * (judgeScore ?? 0),
@@ -363,10 +389,12 @@ export async function evaluateWithMultiModelJudging(
       judgeSamplesUsed: parsed.length,
     };
   }
+
   // Prose-only: reduced confidence, and capped at the FAIL ceiling when a
   // sibling actually attempted code (WP-A5) — dodging execution must not
   // outscore attempting-and-failing.
   const proseCap = opts.siblingsProducedCode ? FAIL_CEIL : PROSE_CONFIDENCE;
+
   return {
     score: proseCap * (judgeScore ?? 0),
     grounding: 'judge',
@@ -434,7 +462,9 @@ If the code cannot be meaningfully verified by assertions, reply with exactly:
 UNVERIFIABLE`;
 
   const text = await judge.complete(prompt);
+
   if (/^\s*UNVERIFIABLE\s*$/.test(text)) return [];
+
   return fencedBlocks(text)
     .filter((block) => (block.language ?? language) === language)
     .map((block) => block.code)
@@ -468,6 +498,7 @@ export async function runForVerdict(
   const run = async (source: string): Promise<string | null> => {
     try {
       const { error } = await executor.execute(source, [], { language });
+
       return error ?? null;
     } catch (e) {
       return renderThrownChain({ cause: e });
@@ -476,6 +507,7 @@ export async function runForVerdict(
 
   if (checks.length === 0) {
     const error = await run(code);
+
     return error === null
       ? { passed: true, assertionsGenerated: false }
       : { passed: false, error, assertionsGenerated: false };
@@ -484,16 +516,19 @@ export async function runForVerdict(
   const errors = await Promise.all(checks.map((check) => run(`${code}\n\n${check}`)));
   const failures = errors.filter((error): error is string => error !== null);
   const passedChecks = errors.length - failures.length;
+
   const verdict: NonNullable<BranchEvaluation['execution']> = {
     passed: failures.length === 0,
     passedChecks,
     totalChecks: errors.length,
     assertionsGenerated: true,
   };
+
   // The first failure, not a join: the judge prompt and the child's inherited
   // observation both want one legible cause, and four copies of the same
   // TypeError is what a whole-suite join produces when the code is simply broken.
   if (failures[0] !== undefined) verdict.error = failures[0];
+
   return verdict;
 }
 
@@ -543,10 +578,13 @@ const JudgeScoreSchema = v.object({ score: v.union([v.number(), v.string()]) });
 async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | null> {
   const text = await judge.complete(prompt);
   const json = tolerate(() => extractJsonObject(text), 'malformed-input');
+
   if (json === undefined) return null;
   const parsed = v.safeParse(JudgeScoreSchema, json);
+
   if (!parsed.success) return null;
   const score = Number(parsed.output.score);
+
   return Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : null;
 }
 
@@ -555,5 +593,6 @@ async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | nu
 export function median(values: number[]): number {
   const sorted = [...values].sort((a, b) => a - b);
   const mid = Math.floor(sorted.length / 2);
+
   return sorted.length % 2 === 1 ? sorted[mid]! : (sorted[mid - 1]! + sorted[mid]!) / 2;
 }

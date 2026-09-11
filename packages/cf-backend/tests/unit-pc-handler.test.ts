@@ -11,13 +11,21 @@ import {
 import type { UserCaller } from "../src/user/workspace-capability";
 import { makeKv } from "./helpers/kv";
 import * as v from "valibot";
+
 const GOOD_USER = "0123456789abcdef0123456789abcdef";
+
 const GOOD_TOKEN = `pdt_${"x".repeat(32)}`;
+
 const WRONG_TOKEN = `pdt_${"w".repeat(32)}`; // well-shaped, so admitted knocks reach the DO and fail there
+
 const GOOD_TICKET = `pct_${"y".repeat(32)}`;
+
 const TICKET_URL = "https://kinu.test/pc/connect-ticket";
+
 const CONNECT_URL = `https://kinu.test/pc/connect?user=${GOOD_USER}&ticket=${GOOD_TICKET}`;
+
 const KNOCKS_PER_WINDOW = 30;
+
 const TicketReplySchema = v.object({ ticket: v.string(), expiresAt: v.number() });
 
 interface FakeUserId {
@@ -35,27 +43,33 @@ function makeUserDO(): RecordedUserDO {
   const idNames: string[] = [];
   const tokens: string[] = [];
   const fetched: Request[] = [];
+
   const ns = {
     idFromName(name: string): FakeUserId {
       idNames.push(name);
+
       return { name };
     },
     get(_id: FakeUserId) {
       return {
         async issueDeviceConnectTicket(_caller: UserCaller, token: string) {
           tokens.push(token);
+
           if (token === GOOD_TOKEN) {
             return { ok: true, ticket: GOOD_TICKET, expiresAt: Date.now() + 60_000 };
           }
+
           return { ok: false };
         },
         async fetch(request: Request) {
           fetched.push(request);
+
           return new Response("socket accepted");
         },
       };
     },
   };
+
   return { idNames, tokens, fetched, ns };
 }
 
@@ -120,19 +134,23 @@ describe("/pc/connect-ticket", () => {
   test("the per-source budget bounds DO fanout: random users stop waking objects", async () => {
     const userDO = makeUserDO();
     const env = makeEnv(userDO);
+
     // Each admitted knock wakes exactly one DO even though every token is wrong.
     for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
       const user = knock.toString(16).padStart(32, "0");
       const response = await handlePcRequest(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
       expect(response.status).toBe(401);
     }
+
     expect(userDO.idNames.length).toBe(KNOCKS_PER_WINDOW);
+
     // Knock 31 and beyond — random users included — never reach the namespace.
     for (let knock = 0; knock < 5; knock++) {
       const user = (1000 + knock).toString(16).padStart(32, "f");
       const response = await handlePcRequest(ticketPost(JSON.stringify({ user, token: WRONG_TOKEN })), env);
       expect(response.status).toBe(429);
     }
+
     expect(userDO.idNames.length).toBe(KNOCKS_PER_WINDOW);
   });
 });
@@ -157,6 +175,7 @@ describe("/pc/connect upgrade", () => {
       `https://kinu.test/pc/connect?user=${GOOD_USER}`,
       "https://kinu.test/pc/connect?ticket=x",
     ];
+
     for (const url of cases) {
       const userDO = makeUserDO();
       const response = await handlePcRequest(connectRequest(url), makeEnv(userDO));
@@ -169,10 +188,12 @@ describe("/pc/connect upgrade", () => {
   test("the per-source budget bounds upgrade attempts too", async () => {
     const userDO = makeUserDO();
     const env = makeEnv(userDO);
+
     for (let knock = 0; knock < KNOCKS_PER_WINDOW; knock++) {
       const response = await handlePcRequest(connectRequest(CONNECT_URL), env);
       expect(response.status).toBe(200);
     }
+
     const denied = await handlePcRequest(connectRequest(CONNECT_URL), env);
     expect(denied.status).toBe(429);
     expect(userDO.fetched.length).toBe(KNOCKS_PER_WINDOW);

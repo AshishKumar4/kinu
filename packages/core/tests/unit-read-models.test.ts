@@ -50,6 +50,7 @@ function workspace() {
   const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw, sql, exec });
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'read-model-test');
+
   return { db, sql, execRaw, actor, vfs: createWorkspaceBundle(db).vfs, config: actor.config };
 }
 
@@ -75,9 +76,11 @@ function seedTranscript(sql: SqlExecutor, actor: ActorHandle, rows: readonly See
 function walkTranscript(sql: SqlExecutor, actor: ActorHandle, limit: number): string[] {
   const ids: string[] = [];
   let cursor: SeekCursor | undefined;
+
   for (;;) {
     const page = getChatHistoryPage(sql, actor, { limit, cursor });
     ids.unshift(...page.items.map((m) => m.id));
+
     if (page.status === 'end') return ids;
     cursor = page.next;
   }
@@ -94,16 +97,19 @@ function jobPlane() {
   const jobs = new BackgroundJobStore(sql, createTestActors(sql, execRaw).main);
   const detached: Array<{ jobId: string; kind: string }> = [];
   let created = 0;
+
   const runner: BackgroundJobControl = {
     cancel: () => Promise.resolve(true),
     createRetry: (sourceId, kind, input, mode) => {
       const id = `retry-${++created}`;
+
       return jobs.createRetry({
         sourceId, id, kind, workMode: mode, input: JSON.stringify(input), now: Date.now(),
       }) ? id : null;
     },
     detach: (jobId, kind) => { detached.push({ jobId, kind }); },
   };
+
   return { db, sql, jobs, runner, detached };
 }
 
@@ -114,6 +120,7 @@ describe('run reads', () => {
     const db = new Database(':memory:');
     initRunEventTables(makeExecRaw(db));
     const sql = makeSql(db);
+
     return new RunEventRecorder(sql, testActorHandle(sql));
   }
 
@@ -139,9 +146,11 @@ describe('run reads', () => {
     const events = eventLog();
 
     events.emit('big', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
+
     for (let i = 0; i < 1100; i++) {
       events.emit('big', { type: 'turn_end', turnIndex: i, usage: { input: 1 } });
     }
+
     events.emit('big', { type: 'run_end', reason: 'completed' });
 
     // THE RED DIRECTION: folding one window counted 999 of the 1100 turns and
@@ -232,14 +241,17 @@ describe('run timeline', () => {
     const { sql, execRaw, actor } = workspace();
     initRunEventTables(execRaw);
     const events = new RunEventRecorder(sql, actor);
+
     for (let i = 0; i < 5; i++) {
       void sql`INSERT INTO evolution_events (actor_id, id, type, message, created_at)
         VALUES (${actor.actorId}, ${`e${i}`}, 'reflection', ${`m${i}`}, ${i * 100})`;
     }
+
     const spans = getRunTimeline(
       { sql, actor, events, jobs: new BackgroundJobStore(sql, actor), currentRunId: null },
       { limit: 2 },
     );
+
     expect(spans.map((s) => s.label)).toEqual(['m3', 'm4']);
   });
 
@@ -382,6 +394,7 @@ describe('agent status', () => {
 
     const first = getChatHistoryPage(sql, actor, { limit: 4 });
     expect(first).toMatchObject({ status: 'more' });
+
     if (first.status !== 'more') throw new Error('unreachable');
     expect(first.items.map((m) => m.id)).toEqual(['m7', 'm8', 'm9', 'm10']);
 
@@ -411,10 +424,12 @@ describe('agent status', () => {
   test('messages sharing one whole second still page without loss', () => {
     const { db, sql, actor, execRaw } = workspace();
     execRaw(SDK_SESSION_DDL);
+
     for (const row of transcriptOf(6)) {
       void sql`INSERT INTO assistant_messages (actor_id, id, session_id, role, content, created_at)
         VALUES (${actor.actorId}, ${row.id}, ${''}, ${row.role}, ${row.content}, ${'2026-03-04 05:06:07'})`;
     }
+
     expect(walkTranscript(sql, actor, 2)).toEqual(['m1', 'm2', 'm3', 'm4', 'm5', 'm6']);
     db.close();
   });
@@ -504,6 +519,7 @@ describe('executor file plane', () => {
     const provider = files === undefined
       ? { homeDir: async () => '/home/user' }
       : { homeDir: async () => '/home/user', files };
+
     return { getProvider: (name: string) => (name === 'workspace' ? provider : undefined) };
   }
 
@@ -584,11 +600,13 @@ describe('executor file plane', () => {
           readRange: async (path: string, offset: number, length: number) => {
             const whole = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
             const bytes = whole instanceof Uint8Array ? whole : new TextEncoder().encode(whole);
+
             return bytes.subarray(offset, offset + length);
           },
         },
       } : undefined),
     };
+
     const big = await readExecutorFile(ranged, 'workspace', 'big');
     expect(big.truncated).toBe(true);
     expect(big.content).toHaveLength(512 * 1024);
@@ -618,10 +636,15 @@ describe('background-job control plane', () => {
   test('a settled job retries through its stored input on the raw surface', () => {
     const { db, jobs, runner, detached } = jobPlane();
     const seen: JsonValue[] = [];
+
     const tools: ToolSet = {
       search: tool({
         inputSchema: jsonSchema<JsonValue>({}),
-        execute: async (input) => { seen.push(input); return 'done'; },
+        execute: async (input) => {
+          seen.push(input);
+
+          return 'done';
+        },
       }),
     };
 
@@ -721,10 +744,12 @@ describe('config plane', () => {
   test('a model change is validated, stored, and invalidates what it bound', () => {
     const { db, config } = workspace();
     let invalidations = 0;
+
     const deps = {
       config,
       normalize: (spec: string) => {
         if (!spec.includes('/')) throw new Error(`unknown provider: ${spec}`);
+
         return spec.toLowerCase();
       },
       onChanged: () => { invalidations++; },
@@ -736,9 +761,15 @@ describe('config plane', () => {
 
     // The provider's own message is the CAUSE, not spliced into the wrapper.
     expect(() => setModel(deps, 'nonsense')).toThrow('setModel(nonsense) failed');
+
     const failure = (() => {
-      try { setModel(deps, 'nonsense'); return null; } catch (error) { return error; }
+      try {
+        setModel(deps, 'nonsense');
+
+        return null;
+      } catch (error) { return error; }
     })();
+
     expect(failure instanceof Error && failure.cause instanceof Error ? failure.cause.message : null)
       .toBe('unknown provider: nonsense');
     // A rejected spec neither stores nor invalidates.

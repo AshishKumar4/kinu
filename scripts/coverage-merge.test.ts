@@ -63,6 +63,7 @@ const OTHER_FILE = [
   'end_of_record',
   '',
 ].join('\n');
+
 /**
  * What `bun test --coverage-reporter=lcov` (1.4.0) really writes: `FNF`
  * and `FNH` totals with NO `FNDA` records behind them, and no branch section
@@ -103,6 +104,7 @@ const BUN_LCOV_TWO = [
 describe('parseLcov', () => {
   test('reads DA, FNDA and BRDA with their totals', () => {
     const [record] = parseLcov(RUN_A);
+
     if (record === undefined) throw new Error('no record parsed');
     expect(record.file).toBe('src/thing.ts');
     expect(record.lines.found).toBe(3);
@@ -125,6 +127,7 @@ describe('mergeLcov', () => {
     const merged = mergeLcov([...parseLcov(RUN_A), ...parseLcov(RUN_B)]);
     expect(merged).toHaveLength(1);
     const [record] = merged;
+
     if (record === undefined) throw new Error('no merged record');
     // Hand-derived: DA 1 = 3+2, DA 2 = 0+4, DA 3 = 3+0, DA 4 = 0+4 → 4 lines, 4 hit.
     expect(record.lines.data.map((d) => [d.line, d.count])).toEqual([[1, 5], [2, 4], [3, 3], [4, 4]]);
@@ -139,6 +142,7 @@ describe('mergeLcov', () => {
   test('branch hits take the MAXIMUM per branch key, not the sum', () => {
     const merged = mergeLcov([...parseLcov(RUN_A), ...parseLcov(RUN_B)]);
     const [record] = merged;
+
     if (record === undefined) throw new Error('no merged record');
     // BRDA 2,0,0: max(3,2)=3 · 2,0,1: max(0,4)=4 → both hit, 2 of 2.
     expect(record.branches.data.map((b) => [b.branch, b.count])).toEqual([[0, 3], [1, 4]]);

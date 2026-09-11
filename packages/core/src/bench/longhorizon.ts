@@ -39,8 +39,10 @@ const FiniteInteger = v.pipe(v.number(), v.finite(), v.integer());
 
 /** Sandbox-relative root the corpus is materialized under. */
 export const LONGHORIZON_CORPUS_DIR = 'bench-corpus';
+
 /** Sandbox-relative file the solver writes its answers to. */
 export const LONGHORIZON_ANSWER_FILE = 'bench-answer.txt';
+
 /** Entries per corpus file. Small enough that reading one file is a partial
  *  read, large enough that a corpus is not thousands of files. */
 export const LONGHORIZON_ENTRIES_PER_FILE = 25;
@@ -65,13 +67,17 @@ export interface LongHorizonSpec {
 }
 
 const ACTORS = ['rhea', 'tycho', 'ilex', 'morrow', 'sable', 'vesper'] as const;
+
 const COMPONENTS = ['ingest', 'router', 'planner', 'ledger', 'vault'] as const;
+
 const REGIONS = ['eu-west', 'us-east', 'ap-south', 'sa-east'] as const;
+
 const FILLER_WORDS = [
   'retry', 'backoff', 'quorum', 'lease', 'digest', 'shard', 'replica', 'cursor',
   'window', 'drain', 'flush', 'handoff', 'anchor', 'segment', 'probe', 'lag',
   'checkpoint', 'batch', 'stall', 'commit', 'rebalance', 'sweep', 'fence', 'gap',
 ] as const;
+
 const VALUE_WORDS = [
   'bramble', 'quartz', 'lantern', 'harbor', 'cinder', 'meridian', 'thistle',
   'obsidian', 'wren', 'saffron', 'gantry', 'kelp',
@@ -113,18 +119,23 @@ function markerIndices(spec: LongHorizonSpec): Set<number> {
   const base = Math.floor(spec.markers / spec.parts);
   const remainder = spec.markers % spec.parts;
   const byPart = new Map<number, Array<{ index: number; draw: number }>>();
+
   for (let i = 1; i <= spec.entries; i++) {
     const part = partOf(spec, i);
     const bucket = byPart.get(part) ?? [];
     bucket.push({ index: i, draw: unitHash(`${spec.seed}:${i}:marker-rank`) });
     byPart.set(part, bucket);
   }
+
   const chosen = new Set<number>();
+
   for (const [part, bucket] of byPart) {
     const quota = base + (part <= remainder ? 1 : 0);
     bucket.sort((a, b) => (a.draw - b.draw) || (a.index - b.index));
+
     for (const entry of bucket.slice(0, quota)) chosen.add(entry.index);
   }
+
   return chosen;
 }
 
@@ -136,8 +147,10 @@ export function generateLongHorizonEntries(spec: LongHorizonSpec): LongHorizonEn
   assertLongHorizonSpec(spec);
   const marked = markerIndices(spec);
   const entries: LongHorizonEntry[] = [];
+
   for (let i = 1; i <= spec.entries; i++) {
     const draw = (salt: string) => unitHash(`${spec.seed}:${i}:${salt}`);
+
     const entry: LongHorizonEntry = {
       index: i,
       id: longHorizonEntryId(i),
@@ -148,6 +161,7 @@ export function generateLongHorizonEntries(spec: LongHorizonSpec): LongHorizonEn
       code: 100 + Math.floor(draw('code') * 900),
       part: partOf(spec, i),
     };
+
     if (marked.has(i)) {
       entry.marker = {
         token: `MARKER-${fnv1a64(`${spec.seed}:${i}:marker-token`).slice(0, 6).toUpperCase()}`,
@@ -158,8 +172,10 @@ export function generateLongHorizonEntries(spec: LongHorizonSpec): LongHorizonEn
         ].join('-'),
       };
     }
+
     entries.push(entry);
   }
+
   return entries;
 }
 
@@ -167,11 +183,13 @@ function fillerText(spec: LongHorizonSpec, index: number): string {
   if (spec.filler <= 0) return '';
   const words: string[] = [];
   let length = 0;
+
   for (let w = 0; length < spec.filler; w++) {
     const word = pick(FILLER_WORDS, unitHash(`${spec.seed}:${index}:filler:${w}`));
     words.push(word);
     length += word.length + 1;
   }
+
   return words.join(' ');
 }
 
@@ -184,10 +202,13 @@ export function renderLongHorizonEntry(spec: LongHorizonSpec, entry: LongHorizon
     `status: ${entry.status}`,
     `code: ${entry.code}`,
   ];
+
   if (entry.marker) {
     lines.push(`marker: ${entry.marker.token}`, `value: ${entry.marker.value}`);
   }
+
   lines.push(`notes: ${fillerText(spec, entry.index)}`, '');
+
   return lines.join('\n');
 }
 
@@ -206,14 +227,18 @@ export function longHorizonPartDir(spec: LongHorizonSpec, part: number): string 
 
 export function generateLongHorizonFiles(spec: LongHorizonSpec): LongHorizonFile[] {
   const byPart = new Map<number, LongHorizonEntry[]>();
+
   for (const entry of generateLongHorizonEntries(spec)) {
     const bucket = byPart.get(entry.part) ?? [];
     bucket.push(entry);
     byPart.set(entry.part, bucket);
   }
+
   const files: LongHorizonFile[] = [];
+
   for (const part of [...byPart.keys()].sort((a, b) => a - b)) {
     const partEntries = byPart.get(part)!;
+
     for (let start = 0, n = 0; start < partEntries.length; start += LONGHORIZON_ENTRIES_PER_FILE, n++) {
       const chunk = partEntries.slice(start, start + LONGHORIZON_ENTRIES_PER_FILE);
       files.push({
@@ -223,6 +248,7 @@ export function generateLongHorizonFiles(spec: LongHorizonSpec): LongHorizonFile
       });
     }
   }
+
   return files;
 }
 
@@ -322,6 +348,7 @@ export function buildLongHorizonAsks(spec: LongHorizonSpec): LongHorizonAsks {
 
   const asks: string[] = [];
   const removeAfterAsk: Array<string | null> = [];
+
   for (let part = 1; part <= spec.parts; part++) {
     const partFiles = files.filter((f) => f.part === part);
     const dir = longHorizonPartDir(spec, part);
@@ -337,12 +364,14 @@ export function buildLongHorizonAsks(spec: LongHorizonSpec): LongHorizonAsks {
     ].join('\n'));
     removeAfterAsk.push(dir);
   }
+
   asks.push([
     `All ${spec.parts} parts of the log have been deleted. Answer from what you established while reading them.`,
     '',
     answerInstruction(questions),
   ].join('\n'));
   removeAfterAsk.push(null);
+
   return { asks, removeAfterAsk };
 }
 
@@ -351,12 +380,16 @@ export function buildLongHorizonAsks(spec: LongHorizonSpec): LongHorizonAsks {
  *  unforgiving about the answer itself. */
 export function parseLongHorizonAnswerFile(text: string): Map<string, string> {
   const found = new Map<string, string>();
+
   for (const line of text.split('\n')) {
     const match = /^\s*[-*]?\s*(q-[a-z]+)\s*[:=]\s*(.*)$/.exec(line);
+
     if (!match) continue;
     const [, id, value] = match;
+
     if (!found.has(id!)) found.set(id!, value!.trim());
   }
+
   return found;
 }
 
@@ -377,13 +410,17 @@ export function longHorizonAnswerMatches(question: LongHorizonQuestion, submitte
   switch (question.kind) {
     case 'count': {
       const found = /-?\d+/.exec(submitted.replace(/,/g, ''));
+
       return found !== null && found[0] === question.answer;
     }
+
     case 'list': {
       const expected = entryIds(question.answer);
       const actual = entryIds(submitted);
+
       return actual.length === expected.length && actual.every((id, i) => id === expected[i]);
     }
+
     case 'verbatim':
       return tokens(submitted).includes(question.answer.toLowerCase());
   }
@@ -407,8 +444,10 @@ export function scoreLongHorizonAnswers(
   answerFileText: string,
 ): LongHorizonScore {
   const parsed = parseLongHorizonAnswerFile(answerFileText);
+
   const results = questions.map((q) => {
     const submitted = parsed.get(q.id) ?? null;
+
     return {
       id: q.id,
       expected: q.answer,
@@ -416,6 +455,7 @@ export function scoreLongHorizonAnswers(
       ok: submitted !== null && longHorizonAnswerMatches(q, submitted),
     };
   });
+
   return { passed: results.length > 0 && results.every((r) => r.ok), results };
 }
 
@@ -433,10 +473,13 @@ export function longHorizonAsksLeakAnswer(
   questions: readonly LongHorizonQuestion[],
 ): string | null {
   const joined = asks.join('\n');
+
   for (const q of questions) {
     if (q.answer.length < 6) continue;
+
     if (joined.includes(q.answer)) return q.answer;
   }
+
   return null;
 }
 
@@ -444,31 +487,44 @@ export function longHorizonAsksLeakAnswer(
  *  the task hash, so it must not depend on object-literal order. */
 export function encodeLongHorizonSpec(spec: LongHorizonSpec): string {
   assertLongHorizonSpec(spec);
+
   return JSON.stringify([spec.mode, spec.seed, spec.entries, spec.filler, spec.markers, spec.parts]);
 }
 
 export function decodeLongHorizonSpec(encoded: string): LongHorizonSpec {
   let raw;
+
   try {
     raw = parseJsonValue(encoded);
   } catch (error) {
     throw new Error('long-horizon spec is not valid JSON', { cause: error });
   }
+
   if (!Array.isArray(raw) || raw.length !== 6) {
     throw new Error('long-horizon spec must be [mode, seed, entries, filler, markers, parts]');
   }
+
   const [mode, seed, entries, filler, markers, parts] = raw;
+
   if (mode !== 'digest' && mode !== 'continuation') throw new Error(`unknown long-horizon mode: ${String(mode)}`);
+
   if (!v.is(FiniteInteger, seed)) throw new Error(`long-horizon spec.seed must be a finite integer, got ${JSON.stringify(seed)}`);
+
   if (!v.is(FiniteInteger, entries)) throw new Error(`long-horizon spec.entries must be a finite integer, got ${JSON.stringify(entries)}`);
+
   if (!v.is(FiniteInteger, filler)) throw new Error(`long-horizon spec.filler must be a finite integer, got ${JSON.stringify(filler)}`);
+
   if (!v.is(FiniteInteger, markers)) throw new Error(`long-horizon spec.markers must be a finite integer, got ${JSON.stringify(markers)}`);
+
   if (!v.is(FiniteInteger, parts)) throw new Error(`long-horizon spec.parts must be a finite integer, got ${JSON.stringify(parts)}`);
+
   const spec: LongHorizonSpec = {
     mode,
     seed, entries, filler, markers, parts,
   };
+
   assertLongHorizonSpec(spec);
+
   return spec;
 }
 
@@ -478,14 +534,19 @@ export function assertLongHorizonSpec(spec: LongHorizonSpec): void {
       throw new Error(`long-horizon spec.${name} must be an integer ≥ ${min}, got ${value}`);
     }
   };
+
   positiveInt('seed', spec.seed, 0);
   positiveInt('entries', spec.entries, 1);
   positiveInt('filler', spec.filler, 0);
   positiveInt('markers', spec.markers, 1);
   positiveInt('parts', spec.parts, 1);
+
   if (spec.markers > spec.entries) throw new Error(`long-horizon spec plants ${spec.markers} markers in ${spec.entries} entries`);
+
   if (spec.parts > spec.entries) throw new Error(`long-horizon spec splits ${spec.entries} entries over ${spec.parts} parts`);
+
   if (spec.mode === 'digest' && spec.parts !== 1) throw new Error('long-horizon digest mode has exactly one part');
+
   if (spec.markers < spec.parts) {
     throw new Error(`long-horizon spec plants ${spec.markers} markers over ${spec.parts} parts — every part must plant at least one, or the final ask does not depend on it`);
   }

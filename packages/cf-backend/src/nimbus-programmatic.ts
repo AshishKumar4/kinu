@@ -41,7 +41,9 @@ export type {
 } from '../../../node_modules/@nimbus-sh/worker/dist/session/programmatic.js';
 
 type Programmatic = typeof programmaticModule;
+
 type Routes = typeof routesModule;
+
 type Git = typeof gitModule;
 
 export interface NimbusProgrammatic {
@@ -79,6 +81,7 @@ export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
       import('../../../node_modules/@nimbus-sh/worker/dist/session/routes.js'),
       import('../../../node_modules/@nimbus-sh/worker/dist/git/commands.js'),
     ]);
+
     return {
       ensureProgrammaticReady: programmatic.ensureProgrammaticReady,
       rpcEnsureRuntimes: programmatic.rpcEnsureRuntimes,
@@ -98,6 +101,7 @@ export function nimbusProgrammatic(): Promise<NimbusProgrammatic> {
       registerGitCommands: git.registerGitCommands,
     };
   })();
+
   return loading;
 }
 

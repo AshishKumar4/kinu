@@ -107,17 +107,23 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
   actor.assertCurrent();
   const soul = (await readSoul(vfs)) ?? '';
   const purpose = summarizeSoul(soul);
+
   const identity = sql<{ name: string; created_at: number }>`
     SELECT name, created_at FROM workspace_identity LIMIT 1`;
+
   const scaffoldVersion = sql<{ v: number }>`
     SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions
     WHERE actor_id = ${actor.actorId}`;
+
   // Message count reflects the canonical conversation store — the workspace's
   // default-chat authority, whichever table owns it.
   const messageCount = conversationCount(sql, actor);
+
   const searchNodes = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes
     WHERE actor_id = ${actor.actorId}`;
+
   const craftedTools = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
+
   return {
     name: identity[0]?.name ?? deps.name,
     displayName: deps.displayName,
@@ -158,13 +164,17 @@ export function getChatHistoryPage(
 ): Page<ChatHistoryEntry> {
   return mapPage(conversationPageRows(sql, actor, request), (rows) => rows.flatMap((row) => {
     const role = normalizeUiRole(row.role);
+
     if (!role) return [];
     const { text, metadata } = projectStoredRow(row);
+
     const entry: ChatHistoryEntry = {
       id: row.id, role: transcriptRole(row.id, role, metadata),
       content: text, createdAt: row.createdAt,
     };
+
     if (metadata !== undefined) entry.metadata = metadata;
+
     return [entry];
   }).reverse());
 }
@@ -178,9 +188,11 @@ const MirrorStampSchema = v.optional(JsonObjectSchema);
  *  everything written before stamps existed. */
 function projectStoredRow(row: ConversationPageRow): StoredRowProjection {
   const projected = uiMessageRow(row.content);
+
   if (projected.metadata !== undefined || !row.metadata) return projected;
   const decoded = tolerate(() => parseJsonValue(row.metadata!), 'malformed-input');
   const parsed = decoded === undefined ? undefined : v.safeParse(MirrorStampSchema, decoded);
+
   return parsed?.success && parsed.output !== undefined
     ? { text: projected.text, metadata: parsed.output }
     : { text: projected.text };
@@ -192,11 +204,13 @@ export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
   const crafted = craftStore.list().map((t) => {
     const scoreRow = sql<{ score: number; uses: number }>`
       SELECT score, uses FROM crafted_tools WHERE name = ${t.name} LIMIT 1`;
+
     return {
       name: t.name, description: t.description, scope: t.scope,
       qualityScore: scoreRow[0]?.score ?? CRAFT_NEUTRAL_PRIOR,
       usageCount: scoreRow[0]?.uses ?? 0,
     };
   });
+
   return { builtIn: [...BUILTIN_TOOLS], crafted };
 }

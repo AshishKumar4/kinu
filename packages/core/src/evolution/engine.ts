@@ -108,6 +108,7 @@ const GeneralizedToolSchema = v.object({
   description: v.optional(v.string()),
   code: v.optional(v.string()),
 });
+
 import { runMCTS } from '../mcts/engine';
 import { createDurableMctsSession } from '../orchestrator/mcts-session';
 import type { AgentConfigStore } from '../config/store';
@@ -132,17 +133,22 @@ function renderArchiveBlock(archive: ProposalArchiveContext): string {
     const lineage = e.parentVersion != null ? `parent v${e.parentVersion}` : 'root';
     const record = e.trials > 0 ? `${e.wins}-${e.losses}-${e.ties} W-L-T` : 'untried';
     const real = archive.realRates?.get(e.version);
+
     const realNote = real && real.accepted + real.negative > 0
       ? `, real ${real.accepted}✓/${real.negative}✗`
       : '';
+
     const targeted = e.pathology !== null ? `, for ${e.pathology}` : '';
     const rejection = archive.rejections?.get(e.version);
     const why = rejection ? `\n    refused: ${rejection}` : '';
+
     return `  v${e.version} [${e.status}, ${lineage}, ${record}${realNote}${targeted}] — ${e.rationale.slice(0, 80)}${why}`;
   });
+
   const baseNote = archive.base.mode === 'explore'
     ? `You are branching from ARCHIVED v${archive.base.version} (a stepping stone, not the live current) — its code is shown above.`
     : `You are branching from the live current v${archive.base.version}.`;
+
   return (
     `Scaffold archive (your prior variants — lineage + shadow record):\n` +
     `${lines.join('\n')}\n` +
@@ -235,9 +241,11 @@ function buildTurnReflectionPrompt(input: {
   followup: string | null;
 }): string {
   const { turn, outcome, quality, followup } = input;
+
   const toolSummary = turn.toolCalls.length > 0
     ? `Tools used: ${turn.toolCalls.map((call) => call.name).join(', ')}`
     : 'No tools used';
+
   return (
     `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
     `User asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n` +
@@ -350,6 +358,7 @@ export class EvolutionEngine {
    */
   private reviewLlm(turn: CompletedTurn): LLM {
     const labels = turn.missionLabels ?? [];
+
     return labels.length === 0
       ? this.fastLlm
       : this.config.governor?.govern(this.fastLlm, labels) ?? this.fastLlm;
@@ -384,6 +393,7 @@ export class EvolutionEngine {
     void this.rt.storage.sql`INSERT INTO evolution_events (actor_id, type, message, data, created_at)
       VALUES (${this.rt.actor.actorId}, ${event.type}, ${event.message},
               ${event.data ? JSON.stringify(event.data) : null}, ${Date.now()})`;
+
     for (const listener of this.listeners) {
       listener(event);
     }
@@ -404,6 +414,7 @@ export class EvolutionEngine {
    */
   recordRecovery(finding: RecoveryFinding): void {
     if (!this.config.enabled) return;
+
     // The lessons ledger is part of the shared workspace schema; there is no
     // "bare runtime" without it, and returning early on a failed write made a
     // recovery the step clock genuinely observed indistinguishable from none.
@@ -442,6 +453,7 @@ export class EvolutionEngine {
     const data: AdvisorRowData = {
       severity: note.severity, class: note.class, turnId: turnId ?? null,
     };
+
     this.emit({ type: ADVISOR_EVENT_TYPE, message: note.note, data });
   }
 
@@ -452,6 +464,7 @@ export class EvolutionEngine {
       SELECT message FROM evolution_events
       WHERE actor_id = ${this.rt.actor.actorId} AND type = ${ADVISOR_EVENT_TYPE}
       ORDER BY created_at DESC LIMIT ${limit}`;
+
     return rows.map((row) => normalizeNote(row.message));
   }
 
@@ -470,6 +483,7 @@ export class EvolutionEngine {
       SELECT COUNT(*) AS n FROM evolution_events
       WHERE actor_id = ${this.rt.actor.actorId} AND type = ${ADVISOR_EVENT_TYPE}
         AND json_extract(data, '$.turnId') = ${turnId}`;
+
     return (rows[0]?.n ?? 0) > 0;
   }
 
@@ -513,6 +527,7 @@ export class EvolutionEngine {
     // An EMPTY id is not an identity: every such turn would share one key, and
     // the second would read the first's grading as its own.
     const gradedKey = turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
+
     // Asked BEFORE the classifier, not after it. The verdict is already on
     // record, so re-deriving it spends another governed model call that can
     // itself be refused — leaving the still-owed suffix no closer to running.
@@ -523,7 +538,9 @@ export class EvolutionEngine {
     // announce that turn's completion again.
     const graded = gradedKey !== null
       && effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_GRADED_SCOPE, gradedKey);
+
     const recorded = graded ? recordedTurnVerdict(this.rt.storage.sql, this.rt.actor, gradedKey) : null;
+
     if (recorded) {
       outcome = recorded.outcome;
       source = recorded.source;
@@ -532,6 +549,7 @@ export class EvolutionEngine {
 
     const explicit = graded ? null : this.readExplicitFeedback(turn.turnId);
     const pickedOutcome = graded || explicit ? null : takePickOutcome(this.rt.storage.sql, this.rt.actor, turn.turnId);
+
     if (graded) {
       // Resumed. The verdict above is the one the ledger holds, and the suffix
       // below is what is still owed.
@@ -550,6 +568,7 @@ export class EvolutionEngine {
         assistantResponse: turn.assistantResponse,
         followup,
       });
+
       if (!c) return; // classifier unusable — no signal beats a guessed one
       outcome = c.outcome;
       confidence = c.confidence;
@@ -561,6 +580,7 @@ export class EvolutionEngine {
       // what makes the headless channel symmetric: before this, a turn that
       // errored fed a punishment and a turn that worked fed nothing at all.
       const verdict = executionVerdict(turn);
+
       if (verdict) {
         outcome = executionVerdictOutcome(verdict);
         source = 'execution';
@@ -591,6 +611,7 @@ export class EvolutionEngine {
     const quality: number | null = outcome
       ? (outcome === 'abandoned' && turn.hadError ? 0.1 : outcomeQuality(outcome, source))
       : (turn.hadError ? 0.1 : null);
+
     // Craft EMA — real-outcome observations on the crafted tools this turn used,
     // as the in-episode craft clock observed them. Crafted tools are
     // codemode-only, so they are never IN the set "every tool name that is not
@@ -643,16 +664,20 @@ export class EvolutionEngine {
           evidence,
         });
       }
+
       // A failed EMA write is not "non-fatal": it is the crafted-tool score
       // silently not moving, which is the retirement signal going quiet.
       if (quality !== null && craftedToolNames.length > 0 && !graded) {
         updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);
       }
+
       if (gradedKey !== null && !graded) {
         recordEffectDone(this.rt.storage.sql, this.rt.actor, TURN_GRADED_SCOPE, gradedKey);
       }
+
       announce();
     });
+
     if (outcome && !graded) turn.feedback = outcomeToFeedback(outcome);
 
 
@@ -676,6 +701,7 @@ export class EvolutionEngine {
     // still warrants the reflection below, provisionally — exactly as an
     // errored ungraded turn always did.
     const corroborated = negative && isUserVerdictSource(source);
+
     if (corroborated) this.corroborateLessons(turn.turnId);
 
     // Imported experience rides this turn's verdict: accepted adopts it into
@@ -692,24 +718,29 @@ export class EvolutionEngine {
       // tombstone is what stops a retry from writing a second copy of one
       // reflection. Recorded adjacent to the write, as the grading pair is.
       const reflectionKey = gradedKey === null ? null : `${gradedKey}:reflection`;
+
       if (reflectionKey === null
         || !effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, reflectionKey)) {
         const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
+
         const lesson = {
           turnIds: turn.turnId ? [turn.turnId] : [],
           text: reflection,
           source: 'turn_reflection',
           status: corroborated ? 'corroborated' : 'provisional',
         } satisfies Parameters<typeof recordLesson>[2];
+
         // KEYED, so the insert and its tombstone need not be atomic: a death
         // between them replays into the same row rather than a second lesson.
         recordLesson(
           this.rt.storage.sql, this.rt.actor,
           reflectionKey === null ? lesson : { ...lesson, key: reflectionKey },
         );
+
         if (reflectionKey !== null) {
           recordEffectDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, reflectionKey);
         }
+
         this.emit({ type: 'reflection', message: corroborated ? reflection : `[provisional] ${reflection}` });
       }
     }
@@ -719,6 +750,7 @@ export class EvolutionEngine {
       // discovery event. The key travels INTO the body so the marker lands beside
       // those writes rather than after the await that returns from them.
       const patternKey = gradedKey === null ? null : `${gradedKey}:pattern`;
+
       if (patternKey === null
         || !effectAlreadyDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, patternKey)) {
         await this.extractPattern(turn, quality, patternKey);
@@ -749,6 +781,7 @@ export class EvolutionEngine {
   ): EnqueueOutcome {
     if (!this.config.enabled) return 'queued';
     const outcome = this.sessionWindow.enqueueReview(turn, followup, opts);
+
     if (outcome !== 'queued') {
       diagnostics.failure(
         'evolution.turn_review_not_deferred',
@@ -761,6 +794,7 @@ export class EvolutionEngine {
         }),
       );
     }
+
     return outcome;
   }
 
@@ -803,6 +837,7 @@ export class EvolutionEngine {
     const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
     const refused: RefusedTurnReview[] = [...taken.refused];
     let reviewed = 0;
+
     for (const row of taken.reviews) {
       try {
         await this.reviewTurn(row.turn, row.followup);
@@ -821,9 +856,11 @@ export class EvolutionEngine {
             { reviewId: row.id },
           );
         }
+
         this.sessionWindow.releaseQueuedReview(row.id);
         continue;
       }
+
       // Immediately after the review resolves and BEFORE the lease settles, so
       // the append/EMA side effects and the record that they happened are
       // adjacent. A crash between them is the only remaining window, and it is
@@ -832,6 +869,7 @@ export class EvolutionEngine {
       this.sessionWindow.settleReview(row.id);
       reviewed++;
     }
+
     return { reviewed, refused };
   }
 
@@ -859,6 +897,7 @@ export class EvolutionEngine {
       followup: null,
       scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
     });
+
     if (feedback === 'negative') this.corroborateLessons(messageId);
   }
 
@@ -878,6 +917,7 @@ export class EvolutionEngine {
    *  feedback table" from "the query failed", and reported both as no thumbs. */
   private readExplicitFeedback(turnId?: string): 'positive' | 'negative' | null {
     if (!turnId || !tableExists(this.rt.storage.sql, 'turn_feedback')) return null;
+
     // Scoped, because `turn_feedback` is keyed `(actor_id, message_id)` and a
     // message id is minted per actor: a bare `message_id` read returns whichever
     // sibling's row a `LIMIT 1` reaches first, and the verdict it returns feeds
@@ -914,12 +954,16 @@ export class EvolutionEngine {
     // failed ADOPTION, leaving the import staged forever with the turn recorded
     // as having settled it.
     bindPendingImports(this.rt.storage.sql, this.rt.actor, turnId);
+
     const settled = await settleImportsForTurn(
       this.rt, turnId, outcome === 'accepted' ? 'accepted' : 'rejected',
     );
+
     if (settled.corroborated.length === 0 && settled.discarded.length === 0) return;
+
     const describe = (rows: ImportedExperienceRow[]) =>
       rows.map((r) => `${r.kind} "${r.key}" from ${r.sourceWorkspace}`).join(', ');
+
     this.emit({
       type: 'experience_import',
       message: settled.corroborated.length > 0
@@ -976,6 +1020,7 @@ export class EvolutionEngine {
     turn: CompletedTurn, context: readonly ModelMessage[], plan: ShadowTrialPlan,
   ): ShadowTrialQueueOutcome {
     if (!this.config.enabled) return 'not_sampled';
+
     return this.config.shadowTrialQueue?.({
       task: turn.userMessage,
       currentOutput: turn.assistantResponse,
@@ -1004,6 +1049,7 @@ export class EvolutionEngine {
    */
   async runDueShadowTrials(): Promise<void> {
     if (!this.config.enabled || !this.config.shadowTrialRunner) return;
+
     try {
       await this.config.shadowTrialRunner();
     } catch (err) {
@@ -1017,8 +1063,10 @@ export class EvolutionEngine {
   /** Emit one "what I changed about myself" line for the closed window. */
   private emitChangelogDigest(since: number): void {
     const entries = buildChangelog(this.rt.storage.sql, this.rt.actor, { since, limit: 20 });
+
     if (entries.length === 0) return;
     const counts = new Map<string, number>();
+
     for (const e of entries) counts.set(e.kind, (counts.get(e.kind) ?? 0) + 1);
     const parts = [...counts].map(([kind, n]) => `${n} ${kind}`).join(' · ');
     this.emit({
@@ -1035,6 +1083,7 @@ export class EvolutionEngine {
   private sessionWarrantsReflection(session: CompletedSession): boolean {
     if (session.turns.some(t => t.hadError || t.feedback === 'negative')) return true;
     const turnIds = session.turns.map(t => t.turnId).filter((id): id is string => !!id);
+
     return hasNegativeOutcome(this.rt.storage.sql, this.rt.actor, turnIds);
   }
 
@@ -1084,6 +1133,7 @@ export class EvolutionEngine {
    *  report the same silence as one that proposed nothing worth taking. */
   private async maybeEvolveScaffold(reflection: string): Promise<void> {
     const scaffoldExists = await this.rt.identity.scaffold.exists();
+
     if (!scaffoldExists) return;
 
     // Skip if a scaffold proposal is already in flight. Consecutive windows
@@ -1093,15 +1143,18 @@ export class EvolutionEngine {
       SELECT version FROM scaffold_versions
       WHERE actor_id = ${this.rt.actor.actorId} AND status = 'pending' LIMIT 1
     `;
+
     if (pending.length > 0) {
       this.emit({
         type: 'scaffold_proposed',
         message: `Skipped — scaffold v${pending[0].version} is still pending shadow evaluation`,
       });
+
       return;
     }
 
     const currentScaffold = await this.rt.identity.scaffold.read();
+
     if (!currentScaffold || currentScaffold.length < 50) return;
 
     // DGM archive branching: mostly evolve the live current, with a
@@ -1113,9 +1166,11 @@ export class EvolutionEngine {
     // over each candidate's descendant lineage (clade-metaproductivity).
     const archive = listScaffoldArchive(this.rt.storage.sql, this.rt.actor, 12);
     const realRates = realOutcomeScaffoldRates(this.rt.storage.sql, this.rt.actor);
+
     const base = selectEvolutionBase(blendRealOutcomeRates(archive, realRates), {
       exploreShare: this.agentConfig.getScaffoldExploreShare(),
     });
+
     // The live file IS the current version's content; only an archived
     // stepping stone needs the versioned-backup read (v0 has no backup).
     const baseCode = base
@@ -1128,6 +1183,7 @@ export class EvolutionEngine {
     const pathologies = await labelPathologyClusters(this.fastLlm, clusterPathologies(
       listTurnOutcomes(this.rt.storage.sql, this.rt.actor, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
     ));
+
     const rejections = new Map(
       listRejectedProposals(this.rt.storage.sql, this.rt.actor, 12)
         .flatMap((r) => (r.version === null ? [] : [[r.version, r.reason] as const])),
@@ -1150,11 +1206,14 @@ export class EvolutionEngine {
     const branchNote = base && baseCode
       ? `branched from v${base.version}${base.mode === 'explore' ? ' (archive stepping stone)' : ''}`
       : 'branched from the live scaffold';
+
     const rationale = `Session reflection, ${branchNote}: ${reflection.slice(0, 100)}`;
+
     const result = await modifyScaffold(
       this.rt, rationale, code,
       base && baseCode ? { baseVersion: base.version } : undefined,
     );
+
     if (!result.ok) return;
     // The same parse modifyScaffold stamped the row with, over the same
     // code — the event and the row cannot disagree about what was targeted.
@@ -1174,6 +1233,7 @@ export class EvolutionEngine {
    */
   async onLifetimeEvolution(session?: SessionWriter): Promise<void> {
     const rt = this.rt;
+
     const purpose = summarizeSoul(await readSoul(rt.agentStateVfs ?? rt.storage.vfs))
       || 'be a helpful assistant';
 
@@ -1207,6 +1267,7 @@ export class EvolutionEngine {
       // Operator MCTS overrides apply here too; the iteration budget stays
       // the lifetime-specific cadence cap (its own knob), not mcts_iterations.
       const overrides = this.agentConfig.getMctsOverrides();
+
       const result = await runMCTS(this.rt, writer, task, {
         budget: this.config.lifetimeMCTSBudget,
         branches: overrides.branches ?? this.config.lifetimeMCTSBranches,
@@ -1245,7 +1306,9 @@ export class EvolutionEngine {
    */
   async runReplayEval(sampleSize?: number): Promise<ReplayEvalSummary | null> {
     const runTask = this.config.replayTaskRunner;
+
     if (!runTask) return null;
+
     try {
       const summary = await runReplayEval({
         sql: this.rt.storage.sql,
@@ -1255,6 +1318,7 @@ export class EvolutionEngine {
         sampleSize,
         scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql, this.rt.actor),
       });
+
       if (summary) {
         this.emit({
           type: 'replay_eval',
@@ -1264,10 +1328,12 @@ export class EvolutionEngine {
           data: summary,
         });
       }
+
       return summary;
     } catch (err) {
       const message = renderThrownChain({ cause: err });
       this.emit({ type: 'replay_eval', message: `Replay eval failed: ${message}` });
+
       return null;
     }
   }
@@ -1287,6 +1353,7 @@ export class EvolutionEngine {
     const raw = await this.reviewLlm(turn).complete(
       buildTurnReflectionPrompt({ turn, outcome, quality, followup }),
     );
+
     return raw.trim().slice(0, TURN_REFLECTION_MAX_CHARS);
   }
 
@@ -1303,6 +1370,7 @@ export class EvolutionEngine {
     patternKey: string | null,
   ): Promise<void> {
     const meaningfulCalls = turn.toolCalls.filter(tc => !isPureLookupCall(tc));
+
     if (meaningfulCalls.length === 0) return;
 
     const callSummary = meaningfulCalls
@@ -1322,6 +1390,7 @@ export class EvolutionEngine {
       : this.rt.storage.sql<{ answer: string }>`
           SELECT answer FROM pattern_extractions
           WHERE actor_id = ${this.rt.actor.actorId} AND effect_key = ${patternKey}`[0]?.answer;
+
     const generalized = recorded ?? await this.reviewLlm(turn).complete(
       `A successful interaction used these tool calls:\n${callSummary}\n\n` +
       `The user asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n\n` +
@@ -1335,11 +1404,14 @@ export class EvolutionEngine {
     // absorbed every upsertCraftedTool failure — a compile or storage fault on
     // an accepted pattern read exactly like the model having produced nothing.
     const json = tolerate(() => extractJsonObject(generalized), 'malformed-input');
+
     if (json === undefined) return;
     const parsed = v.safeParse(GeneralizedToolSchema, json);
+
     // Shape only — whether the code is usable is decided by upsertCraftedTool,
     // which compiles it the way the runtime will before storing anything.
     if (!parsed.success || !parsed.output.name || !parsed.output.code) return;
+
     if (patternKey !== null && recorded === undefined) {
       void this.rt.storage.sql`INSERT INTO pattern_extractions (actor_id, effect_key, answer, created_at)
         VALUES (${this.rt.actor.actorId}, ${patternKey}, ${generalized}, ${Date.now()})
@@ -1347,12 +1419,14 @@ export class EvolutionEngine {
     }
 
     const discovered = (parsed.output.description ?? parsed.output.name).slice(0, 60);
+
     const acceptance = await upsertCraftedTool(this.rt, {
       name: parsed.output.name,
       description: parsed.output.description ?? '',
       code: parsed.output.code,
       score: quality,
     });
+
     // ONE COMMIT for the discovery event, the marker and the retirement of the
     // stored answer. Separately, a kill between the event and the marker
     // appended the same discovery twice, and a kill between the marker and the
@@ -1365,6 +1439,7 @@ export class EvolutionEngine {
           message: `Discovered pattern: ${discovered}`,
         });
       }
+
       if (patternKey !== null) {
         recordEffectDone(this.rt.storage.sql, this.rt.actor, TURN_REVIEW_STEP_SCOPE, patternKey);
         // Only needed while the marker is absent.

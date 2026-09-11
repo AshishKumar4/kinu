@@ -25,17 +25,27 @@ import { git, initRepo, scratchDir } from '@kinu.run/test-utils';
 const REPO_ROOT = join(import.meta.dir, '..');
 
 const AWS_KEY = `AKIA${'ABCDEFGHIJKLMNOP'}`;
+
 const OTHER_AWS_KEY = `AKIA${'ZZZZZZZZZZZZZZZZ'}`;
+
 const PRIVATE_KEY = `-----BEGIN RSA ${'PRIVATE KEY'}-----`;
+
 const BARE_PRIVATE_KEY = `-----BEGIN ${'PRIVATE KEY'}-----`;
+
 const JWT = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9${'.'}eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkoifQ.sig`;
+
 const BEARER = `headers: { 'cf-aig-authorization': 'Bearer ${'abcdefghijklmnopqrstuvwxyz012345'}' }`;
+
 const ASSIGNMENT = `const api_key = ${'"sk-live-abc12345"'};`;
+
 // Joined, not interpolated: an interpolation with no space or '@' in it still
 // satisfies [^@\s]{8,}, so the shape survived a template literal.
 const CONN_URL = ['postgres://admin', 'hunter2hunter2@db.example.com/app'].join(':');
+
 const TYPE_DECL = `interface Creds { api_key: ${'"literal-union-value"'} }`;
+
 const CFUT_TOKEN = ['cfut', 'A'.repeat(48)].join('_');
+
 const CFUT_PLACEHOLDER = ['cfut', '<your-cloudflare-user-token>'].join('_');
 
 describe('the patterns catch what they are for', () => {
@@ -90,6 +100,7 @@ describe('the patterns catch what they are for', () => {
       `redis://user:${'password'}@localhost:6379`,
       TYPE_DECL,
     ];
+
     for (const line of benign) expect(scanText('f.ts', line)).toEqual([]);
   });
 
@@ -97,6 +108,7 @@ describe('the patterns catch what they are for', () => {
     expect(scanText('f.ts', CFUT_PLACEHOLDER)).toEqual([]);
     expect(scanText('f.ts', `${CFUT_PLACEHOLDER} ${CFUT_TOKEN}`).map((finding) => finding.pattern))
       .toEqual(['cloudflare-user-token']);
+
     for (const body of ['A'.repeat(47), 'A'.repeat(49)]) {
       const token = ['cfut', body].join('_');
       expect(scanText('f.ts', token)).toEqual([]);
@@ -106,6 +118,7 @@ describe('the patterns catch what they are for', () => {
   test('reports every match on a line, with its line number', () => {
     const found = scanText('f.ts', `ok\n${AWS_KEY} and ${OTHER_AWS_KEY}\n`);
     expect(found).toHaveLength(2);
+
     for (const f of found) expect(f.line).toBe(2);
   });
 
@@ -171,12 +184,14 @@ function historyFixture() {
   git(repo, 'commit', '-qm', 'historical fixture');
   const oid = git(repo, 'rev-parse', 'HEAD:history.md').trim();
   git(repo, 'checkout', '-q', primary);
+
   return { repo, oid, secret };
 }
 
 describe('reachable history', () => {
   test('a historical credential is red until its exact blob/path/detector/count adjudication is present', async () => {
     const fixture = historyFixture();
+
     const expected = {
       detector: 'cloudflare-user-token',
       oid: fixture.oid,

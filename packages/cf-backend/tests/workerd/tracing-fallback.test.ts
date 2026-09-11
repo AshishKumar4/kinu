@@ -88,6 +88,7 @@ const EVIDENCE_KEY = 'VITE_KINU083_DEPLOYED_TRACE';
 
 function deployedEvidence(): string | null {
   const value = import.meta.env?.[EVIDENCE_KEY];
+
   return value !== undefined && value.length > 0 ? value : null;
 }
 
@@ -140,12 +141,15 @@ interface Attempt {
 function attempt<T>(name: string, body: (traced: boolean) => T): Attempt {
   let ran = 0;
   let fallbackSpan = false;
+
   try {
     const returned = createWorkersTracer().span(name, OPEN, (span) => {
       ran += 1;
       fallbackSpan = Object.isFrozen(span);
+
       return body(span.isTraced);
     });
+
     return { ran, returned, thrown: null, fallbackSpan };
   } catch (error) {
     return { ran, returned: undefined, thrown: error, fallbackSpan };
@@ -197,9 +201,11 @@ function pipelinedStub(value: string): PromiseLike<string> {
   // which returns a `resolve`-calling function for `'then'` and `undefined` for
   // every other key, so nothing is ever read off this target.
   const target = {} as PromiseLike<string>;
+
   return new Proxy<PromiseLike<string>>(target, {
     get(_target: PromiseLike<string>, key: string | symbol): StubThen | undefined {
       if (key !== 'then') return undefined;
+
       return (resolve) => { resolve(value); };
     },
   });
@@ -268,6 +274,7 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
   it(`falls back when ${MEMBER} is absent: the callback runs once and nothing escapes`, () => {
     const sentinel = Object.freeze({ probe: 'fallback identity' });
     let observed: Attempt;
+
     try {
       shadowMember(undefined);
       observed = attempt('probe.absent', () => sentinel);
@@ -290,6 +297,7 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
   /** The second arm: the member is present, and it is not callable. */
   it(`falls back when ${MEMBER} is present but not callable`, () => {
     let observed: Attempt;
+
     try {
       shadowMember({ present: true, callable: false });
       observed = attempt('probe.non-callable', () => 'entered');
@@ -302,6 +310,7 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
 
   it('reports the fallback span as untraced rather than claiming a recording', () => {
     let observed: Attempt;
+
     try {
       shadowMember(undefined);
       observed = attempt('probe.untraced', (traced) => traced);
@@ -326,6 +335,7 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
     let value: Attempt;
     let rejected: Attempt;
     let threw: Attempt;
+
     try {
       shadowMember(undefined);
       value = attempt('probe.fallback-async', () => resolved);
@@ -398,6 +408,7 @@ describe('the shipped Workers tracer against the platform it deploys onto', () =
     expect(observed.returned).toBe(false);
 
     const evidence = deployedEvidence();
+
     if (evidence === null) return;
     // A trace id, not a word. `wrangler tail` reports a 32-character hex id, and
     // an operator pasting "yes" or "done" must not settle a measurement.

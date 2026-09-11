@@ -49,9 +49,11 @@ interface CapturedExecuteTool {
  */
 function captureExecuteTool(): CapturedExecuteTool {
   const seen: ExecuteToolsSurface[] = [];
+
   return {
     builder: (surface) => {
       seen.push(surface);
+
       return tool({
         description: 'mock',
         inputSchema: jsonSchema({ type: 'object' }),
@@ -60,7 +62,9 @@ function captureExecuteTool(): CapturedExecuteTool {
     },
     surface: () => {
       const first = seen[0];
+
       if (!first) throw new Error('the execute_tools builder was never called');
+
       return first;
     },
   };
@@ -88,8 +92,10 @@ describe('Phase D — crafted tools reach the execute_tools builder under tools.
     });
 
     let factoryCallCount = 0;
+
     const factory: CraftedToolExecute = () => {
       factoryCallCount++;
+
       return async (arg) => Number(arg) * 2;
     };
 
@@ -122,6 +128,7 @@ describe('Phase D — crafted tools reach the execute_tools builder under tools.
     actorTools(rt, {
       craftedToolExecute: (source) => async (arg) => {
         if (source.name !== 'quadruple') throw new Error(`unexpected tool ${source.name}`);
+
         return v.parse(v.number(), arg) * 4;
       },
       executeTools: capture.builder,
@@ -151,9 +158,12 @@ describe('Phase D — crafted tools reach the execute_tools builder under tools.
     });
 
     let execCalls = 0;
+
     const factory: CraftedToolExecute = (tool) => async (arg) => {
       execCalls++;
+
       if (tool.name !== 'triple') throw new Error(`unexpected tool ${tool.name}`);
+
       return v.parse(v.number(), arg) * 3;
     };
 
@@ -177,10 +187,13 @@ describe('Phase D — crafted tools reach the execute_tools builder under tools.
     void rt.storage.sql`UPDATE crafted_tools SET score = 0.01, last_used_at = ${Date.now()} WHERE name = 'forgotten'`;
 
     let factoryCalls = 0;
+
     const factory: CraftedToolExecute = () => {
       factoryCalls++;
+
       return async () => null;
     };
+
     const capture = captureExecuteTool();
     actorTools(rt, { craftedToolExecute: factory, executeTools: capture.builder });
 

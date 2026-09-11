@@ -25,8 +25,11 @@ import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } fr
 import { classify, diagnostics, KinuError, renderThrownChain } from '../obs/index';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
+
 export const CODEX_CRED_KEY = 'codex.oauth';
+
 export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
+
 /** The small tier the evolution engine's mechanical calls run on. */
 export const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 
@@ -55,6 +58,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
   // Keyed by the resolved credential so swapping the ChatGPT account
   // invalidates the catalog instead of serving the previous account's models.
   let modelCache: { at: number; authKey: string; models: ModelInfo[] } | null = null;
+
   return {
     id: 'codex',
     label: 'ChatGPT Codex (subscription)',
@@ -67,33 +71,44 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     },
     async listModels(deps) {
       const auth = await deps.getAuth(CODEX_CRED_KEY);
+
       if (!auth) {
         modelCache = null;
+
         return cloneModelInfos(FALLBACK_MODELS);
       }
+
       const authKey = authCacheKey(auth);
+
       if (modelCache && modelCache.authKey === authKey && Date.now() - modelCache.at < CODEX_MODELS_TTL_MS) {
         return cloneModelInfos(modelCache.models);
       }
+
       try {
         const fetchFn = deps.fetch ?? fetch;
+
         const res = await fetchFn(`${baseURL.replace(/\/+$/, '')}/models?client_version=1.0.0`, {
           headers: auth.headers,
         });
+
         if (!res.ok) return cloneModelInfos(FALLBACK_MODELS);
         const body: unknown = await res.json();
         const models = parseCodexModels(body);
+
         if (models.length === 0) return cloneModelInfos(FALLBACK_MODELS);
         modelCache = { at: Date.now(), authKey, models };
+
         return cloneModelInfos(models);
       } catch (error) {
         diagnostics.event('codex.models_fallback', { error: renderThrownChain({ cause: error }) });
+
         return cloneModelInfos(FALLBACK_MODELS);
       }
     },
 
     createModel(modelId, deps): LanguageModel {
       const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
+
       const customFetch = asFetchFunction(async (input, init) => {
         // A dead login presents two ways: the resolver refuses up front (its
         // own proactive refresh hit invalid_grant — the local store's shape),
@@ -109,12 +124,14 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
             throw cause;
           }
         };
+
         const refusedLoginResponse = (): Response => {
           diagnostics.failure(
             'provider.codex_dead_login',
             new KinuError('denied', 'the stored ChatGPT login was refused by chatgpt.com'),
             { model: modelId },
           );
+
           return new Response(
             JSON.stringify({ error: { message: CODEX_DEAD_LOGIN } }),
             { status: 401, headers: { 'Content-Type': 'application/json' } },
@@ -122,38 +139,51 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
         };
 
         const auth = await resolveAuth();
+
         if (auth === 'revoked') return refusedLoginResponse();
+
         if (!auth) {
           diagnostics.failure(
             'credential.codex_absent',
             new KinuError('missing', 'no Codex credentials; the model call was refused before it left'),
             { model: modelId },
           );
+
           return new Response(
             JSON.stringify({ error: { message: 'Codex credentials not configured. Connect ChatGPT in User settings, or run `kinu setup` on this machine.' } }),
             { status: 401, headers: { 'Content-Type': 'application/json' } },
           );
         }
+
         const requestInit = normalizeCodexResponsesRequest(init);
+
         const send = async (headers: Record<string, string>) => {
           const merged = copyHeaders(init?.headers);
+
           for (const [k, v] of Object.entries(headers)) merged.set(k, v);
+
           return baseFetch(input, { ...requestInit, headers: merged });
         };
+
         let res = await send(auth.headers);
+
         if (res.status === 401) {
           const refreshed = await resolveAuth({ forceRefresh: true });
+
           if (refreshed === 'revoked') return refusedLoginResponse();
+
           if (refreshed) {
             res = await send(refreshed.headers);
           }
         }
+
         if (!res.ok) {
           // Upstream error body, for WAF detection. Read from a clone so `res`
           // stays intact for the SDK. No catch: a body this cannot read is a
           // body the SDK cannot read either, and an empty string here would
           // silently disable the WAF branch below.
           const body = await res.clone().text();
+
           // Cloudflare WAF "Attention Required!" challenge page comes back as
           // HTML, not the JSON shape the AI SDK expects. The stream crashes
           // with an opaque parse error. Replace the response body with a
@@ -167,27 +197,33 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
               'Workaround: in /user/settings → API keys, paste an OpenAI API key, then pick an ' +
               '`openai/*` model — that path goes to api.openai.com directly and isn\'t affected by ' +
               'the WAF.';
+
             diagnostics.failure(
               'provider.codex_waf_blocked',
               new KinuError('unavailable', 'Codex refused this Worker\'s egress as bot traffic'),
               { model: modelId },
             );
+
             return new Response(
               JSON.stringify({ error: { message: userMsg, type: 'cf_waf_blocked', code: 'codex_unavailable' } }),
               { status: 503, headers: { 'Content-Type': 'application/json' } },
             );
           }
         }
+
         if (res.status === 401) {
           // Still 401 AFTER the forced refresh: the stored login is dead
           // upstream, whatever the resolver believed.
           return refusedLoginResponse();
         }
+
         return res;
       });
+
       // apiKey is unused (customFetch overrides Authorization) but the SDK
       // requires a non-empty value to construct headers internally.
       const provider = createOpenAI({ baseURL, apiKey: 'oauth-placeholder', fetch: customFetch });
+
       return provider.responses(modelId);
     },
   };
@@ -211,20 +247,28 @@ const ModelInputModalitySchema: v.GenericSchema<ModelInputModality> = v.picklist
 
 function parseCodexModels<T>(body: T): ModelInfo[] {
   const parsed = v.safeParse(CodexModelsResponseSchema, body);
+
   if (!parsed.success) return [];
   const rows = parsed.output.models ?? [];
   const models: Array<ModelInfo & { priority: number }> = [];
+
   for (const row of rows) {
     if (row.visibility !== 'list' && row.visibility !== undefined) continue;
     const id = nonEmptyString(row.slug);
+
     if (!id) continue;
     const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
+
     if ((row.supported_reasoning_levels?.length ?? 0) > 0) capabilities.push('reasoning');
+
     if (row.input_modalities?.includes('image')) capabilities.push('vision');
+
     const inputModalities = (row.input_modalities ?? []).flatMap((modality) => {
       const parsedModality = v.safeParse(ModelInputModalitySchema, modality);
+
       return parsedModality.success ? [parsedModality.output] : [];
     });
+
     const priority = v.safeParse(v.number(), row.priority);
     models.push({
       id,
@@ -235,6 +279,7 @@ function parseCodexModels<T>(body: T): ModelInfo[] {
       priority: priority.success ? priority.output : 0,
     });
   }
+
   return models
     .sort((a, b) => (b.priority - a.priority) || (a.label ?? a.id).localeCompare(b.label ?? b.id))
     .map(({ priority: _priority, ...model }) => model);
@@ -245,39 +290,50 @@ const CODEX_DEFAULT_INSTRUCTIONS = 'You are Kinu, a helpful coding agent.';
 export function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestInit | undefined {
   if (!init) return init;
   const serializedBody = v.safeParse(v.string(), init.body);
+
   if (!serializedBody.success) return init;
 
   let decoded: JsonValue;
+
   try {
     decoded = v.parse(JsonValueSchema, JSON.parse(serializedBody.output));
   } catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
+
     return init;
   }
+
   const parsedBody = v.safeParse(JsonObjectSchema, decoded);
+
   if (!parsedBody.success) return init;
   const body = parsedBody.output;
+
   if (nonEmptyString(body.instructions)) {
     return {
       ...init,
       body: JSON.stringify({ ...body, store: false }),
     };
   }
+
   const parsedInput = v.safeParse(JsonArraySchema, body.input);
+
   if (!parsedInput.success) {
     return {
       ...init,
       body: JSON.stringify({ ...body, instructions: CODEX_DEFAULT_INSTRUCTIONS, store: false }),
     };
   }
+
   const input = parsedInput.output;
   const instructionParts: string[] = [];
   const remainingInput: JsonValue[] = [];
 
   for (const item of input) {
     const instruction = parseInstructionInputItem(item);
+
     if (instruction) {
       const text = contentToText(instruction.content);
+
       if (text) instructionParts.push(text);
     } else {
       remainingInput.push(item);
@@ -285,6 +341,7 @@ export function normalizeCodexResponsesRequest(init: RequestInit | undefined): R
   }
 
   const instructions = instructionParts.join('\n\n').trim() || CODEX_DEFAULT_INSTRUCTIONS;
+
   return {
     ...init,
     body: JSON.stringify({
@@ -303,6 +360,7 @@ const InstructionInputItemSchema = v.object({
 
 function parseInstructionInputItem<T>(value: T): v.InferOutput<typeof InstructionInputItemSchema> | null {
   const parsed = v.safeParse(InstructionInputItemSchema, value);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -310,9 +368,12 @@ const InstructionContentPartsSchema = v.array(v.object({ text: v.optional(v.stri
 
 function contentToText<T>(content: T): string {
   const text = v.safeParse(v.string(), content);
+
   if (text.success) return text.output.trim();
   const parts = v.safeParse(InstructionContentPartsSchema, content);
+
   if (!parts.success) return '';
+
   return parts.output
     .map((part) => part.text ?? '')
     .filter(Boolean)

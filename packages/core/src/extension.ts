@@ -120,14 +120,18 @@ export interface KinuExtension {
  *  abort; the orphaned promise is left to settle on its own. */
 async function untilAborted<T>(pending: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
   if (signal === undefined) return pending;
+
   const cancelled = (): KinuError =>
     new KinuError('cancelled', 'the turn was cancelled while an extension hook was running', { cause: signal.reason });
+
   if (signal.aborted) throw cancelled();
   let onAbort: (() => void) | undefined;
+
   const aborted = new Promise<never>((_, reject) => {
     onAbort = () => reject(cancelled());
     signal.addEventListener('abort', onAbort, { once: true });
   });
+
   try {
     return await Promise.race([pending, aborted]);
   } finally {
@@ -141,6 +145,7 @@ export class ExtensionHost {
   /** Register an extension. Returns `this` for chaining. */
   register(ext: KinuExtension): this {
     this.extensions.push(ext);
+
     return this;
   }
 
@@ -153,18 +158,24 @@ export class ExtensionHost {
   tools(): ToolSet {
     const merged: ToolSet = {};
     const owners = new Map<string, string>();
+
     for (const ext of this.extensions) {
       const contributed = ext.registerTools?.();
+
       if (!contributed) continue;
+
       for (const [name, tool] of Object.entries(contributed)) {
         const prior = owners.get(name);
+
         if (prior) {
           throw new Error(`extension "${ext.name}" registers tool "${name}" already registered by "${prior}"`);
         }
+
         owners.set(name, ext.name);
         merged[name] = tool;
       }
     }
+
     return merged;
   }
 
@@ -176,20 +187,24 @@ export class ExtensionHost {
   ): ModelMessage[] | undefined | Promise<ModelMessage[] | undefined> {
     let messages = ctx.messages;
     let changed = false;
+
     for (let index = 0; index < this.extensions.length; index += 1) {
       const next = this.extensions[index]?.prepareStep?.({
         stepNumber: ctx.stepNumber,
         messages,
         abortSignal: ctx.abortSignal,
       });
+
       if (next instanceof Promise) {
         return this.continuePrepareStep(index + 1, ctx, messages, changed, next);
       }
+
       if (next) {
         messages = next;
         changed = true;
       }
     }
+
     return changed ? messages : undefined;
   }
 
@@ -203,17 +218,20 @@ export class ExtensionHost {
     const firstResult = await untilAborted(first, ctx.abortSignal);
     let current = firstResult ?? messages;
     let rewritten = changed || firstResult !== undefined;
+
     for (let index = start; index < this.extensions.length; index += 1) {
       const next = await untilAborted(Promise.resolve(this.extensions[index]?.prepareStep?.({
         stepNumber: ctx.stepNumber,
         messages: current,
         abortSignal: ctx.abortSignal,
       })), ctx.abortSignal);
+
       if (next) {
         current = next;
         rewritten = true;
       }
     }
+
     return rewritten ? current : undefined;
   }
 
@@ -232,12 +250,14 @@ export class ExtensionHost {
       return await untilAborted(Promise.resolve(run()), signal);
     } catch (err) {
       const failure = toKinuError({ doing: `run an extension ${hook} hook`, cause: err, otherwise: 'io' });
+
       // Every plugin failure is tolerated EXCEPT a cancelled turn and an oom:
       // neither is the plugin's fault, and swallowing the turn's own abort
       // (or a memory kill) as a silent skip would paper over it. A plain
       // Error classifies as io and stays fail-open.
       if (failure.code === 'cancelled' || failure.code === 'oom') throw failure;
       diagnostics.failure('extension.hook_failed', failure, { extension, hook });
+
       return undefined;
     }
   }
@@ -250,19 +270,23 @@ export class ExtensionHost {
   async runTransformContext(ctx: TransformContext): Promise<ModelMessage[] | undefined> {
     let current: readonly ModelMessage[] = ctx.messages;
     let out: ModelMessage[] | undefined;
+
     for (const ext of this.extensions) {
       if (!ext.transformContext) continue;
+
       const next = await this.guardHook(
         'transformContext',
         ext.name,
         () => ext.transformContext?.({ ...ctx, messages: current }),
         ctx.abortSignal,
       );
+
       if (next) {
         out = next;
         current = next;
       }
     }
+
     return out;
   }
 

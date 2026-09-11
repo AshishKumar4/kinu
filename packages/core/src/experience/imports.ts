@@ -111,9 +111,11 @@ interface RawImportRow {
 
 function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
   const payload = parseExperiencePayload(r.payload_json);
+
   if (!payload || payload.kind !== r.kind) return null;
   const rawTurnIds: unknown = tolerate(() => JSON.parse(r.turn_ids), 'malformed-input');
   const parsedTurnIds = v.safeParse(v.array(v.string()), rawTurnIds);
+
   if (!parsedTurnIds.success) {
     diagnostics.failure(
       'experience.import_row_unreadable',
@@ -124,9 +126,12 @@ function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
       }),
       { rowId: r.id },
     );
+
     return null;
   }
+
   const turnIds = parsedTurnIds.output;
+
   return {
     id: r.id, libraryId: r.library_id, kind: r.kind, key: r.key, title: r.title,
     payload, evidence: r.evidence, sourceWorkspace: r.source_workspace,
@@ -141,12 +146,14 @@ export function listImportedExperience(
 ): ImportedExperienceRow[] {
   actor.assertCurrent();
   const limit = options.limit ?? 100;
+
   const rows = options.status
     ? sql<RawImportRow>`SELECT * FROM imported_experience
         WHERE actor_id = ${actor.actorId} AND status = ${options.status}
         ORDER BY imported_at DESC LIMIT ${limit}`
     : sql<RawImportRow>`SELECT * FROM imported_experience WHERE actor_id = ${actor.actorId}
         ORDER BY imported_at DESC LIMIT ${limit}`;
+
   return rows.map(toImportRow).filter((r): r is ImportedExperienceRow => r !== null);
 }
 
@@ -164,19 +171,23 @@ export function stageImport(
   now = nowMs(),
 ): ImportOutcome {
   const staged = parseExperiencePayload(JSON.stringify(entry.payload));
+
   if (!staged || staged.kind !== entry.kind) {
     return {
       ok: false,
       reason: `payload for ${entry.kind} "${entry.key}" does not parse as ${entry.kind} experience — refusing a row lists would skip`,
     };
   }
+
   const verdict = checkMisevolutionForSurface(misevolutionSourceOf(entry.payload), 'import');
+
   if (!verdict.ok) {
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'import',
       violation: verdict,
       detail: `${entry.kind} "${entry.key}" from workspace "${entry.sourceWorkspace}" rejected`,
     });
+
     return {
       ok: false,
       reason: `Misevolution veto (${verdict.criterionId}): ${verdict.reason}`,
@@ -184,9 +195,11 @@ export function stageImport(
   }
 
   rt.actor.assertCurrent();
+
   const existing = rt.storage.sql<{ status: ImportStatus }>`
     SELECT status FROM imported_experience
     WHERE actor_id = ${rt.actor.actorId} AND library_id = ${entry.id} LIMIT 1`[0];
+
   if (existing) {
     return {
       ok: false,
@@ -222,6 +235,7 @@ export function stageImport(
 export function bindPendingImports(sql: SqlExecutor, actor: ActorHandle, turnId: string): void {
   const pending = listImportedExperience(sql, actor, { status: 'provisional', limit: 200 })
     .filter((row) => row.turnIds.length === 0);
+
   for (const row of pending) {
     void sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])}
       WHERE actor_id = ${actor.actorId} AND id = ${row.id}`;
@@ -255,6 +269,7 @@ export async function settleImportsForTurn(
 ): Promise<ImportSettlement> {
   const riding = listImportedExperience(rt.storage.sql, rt.actor, { status: 'provisional', limit: 200 })
     .filter((row) => row.turnIds.includes(turnId));
+
   const settlement: ImportSettlement = { corroborated: [], discarded: [] };
 
   for (const row of riding) {
@@ -269,6 +284,7 @@ export async function settleImportsForTurn(
     // twice adopts one artifact. The marker only stops a resumed review from
     // appending a second settlement for an import already dispositioned.
     if (effectAlreadyDone(rt.storage.sql, rt.actor, IMPORT_SETTLED_SCOPE, row.id)) continue;
+
     if (verdict === 'accepted' && await promoteImport(rt, row, turnId)) {
       void rt.storage.sql`UPDATE imported_experience
           SET status = 'corroborated', corroborated_at = ${now}
@@ -282,6 +298,7 @@ export async function settleImportsForTurn(
       settlement.discarded.push(row);
     }
   }
+
   return settlement;
 }
 
@@ -313,6 +330,7 @@ function importedScaffoldMarker(importId: string): string {
 
 async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnId: string): Promise<boolean> {
   const from = `imported from workspace "${row.sourceWorkspace}" (${row.evidence})`;
+
   switch (row.payload.kind) {
     case 'craft': {
       const accepted = await upsertCraftedTool(rt, {
@@ -322,8 +340,10 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
         code: row.payload.code,
         score: row.payload.score,
       });
+
       return accepted.accepted;
     }
+
     case 'lesson': {
       // The lesson joins THIS workspace's ledger as an already-corroborated
       // row — the same store every other lesson lives in, so prompt weaving,
@@ -339,15 +359,19 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
         // unkeyed insert made that a second copy of one adopted lesson.
         key: row.id,
       });
+
       return true;
     }
+
     case 'fact': {
       createFactsStore(rt.storage.sql, rt.actor).upsert(row.payload.key, row.payload.value, {
         confidence: row.payload.confidence,
         source: `experience:${row.sourceWorkspace}`,
       });
+
       return true;
     }
+
     case 'scaffold': {
       // Provenance in the rationale, because that is what scaffold_versions
       // stores, the day log records and the Evolution Changelog shows the
@@ -363,12 +387,15 @@ async function promoteImport(rt: AgentRuntime, row: ImportedExperienceRow, turnI
       // scaffold exists. That is the whole reason this link is prose.
       const marker = importedScaffoldMarker(row.id);
       const pending = getPendingScaffold(rt.storage.sql, rt.actor);
+
       if (pending?.rationale.includes(marker)) return true;
+
       const proposed = await modifyScaffold(
         rt,
         `Imported scaffold, ${from}. Its rationale there: ${row.payload.rationale} ${marker}`,
         row.payload.code,
       );
+
       return proposed.ok;
     }
   }

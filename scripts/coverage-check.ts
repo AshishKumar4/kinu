@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { parseLcov, type LcovRecord } from './coverage-lcov';
 
 const ROOT = new URL('..', import.meta.url).pathname;
+
 const LCOV = join(ROOT, 'coverage', 'lcov.info');
 
 interface PkgTally {
@@ -26,28 +27,37 @@ interface PkgTally {
 
 function packageOf(file: string): string {
   if (file.startsWith('packages/')) return file.split('/')[1] ?? 'packages';
+
   if (file.startsWith('scripts/')) return 'scripts';
+
   return 'tests';
 }
 
 function main(): number {
   if (!existsSync(LCOV)) {
     console.error('coverage:check: no coverage/lcov.info — run `bun run coverage` first');
+
     return 1;
   }
+
   const records: LcovRecord[] = parseLcov(readFileSync(LCOV, 'utf8'));
+
   if (records.length === 0) {
     console.error('coverage:check: merged lcov parsed to zero file records — a gate over nothing');
+
     return 1;
   }
 
   const tallies = new Map<string, PkgTally>();
+
   for (const record of records) {
     const pkg = packageOf(record.file);
+
     const t = tallies.get(pkg) ?? {
       linesHit: 0, linesFound: 0, functionsHit: 0, functionsFound: 0,
       branchesHit: 0, branchesFound: 0, files: 0,
     };
+
     t.linesHit += record.lines.hit; t.linesFound += record.lines.found;
     t.functionsHit += record.functions.hit; t.functionsFound += record.functions.found;
     t.branchesHit += record.branches.hit; t.branchesFound += record.branches.found;
@@ -85,6 +95,7 @@ function main(): number {
     },
     packages,
   }, null, 2));
+
   return 0;
 }
 

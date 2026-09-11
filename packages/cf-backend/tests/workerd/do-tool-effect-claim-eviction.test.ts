@@ -63,9 +63,11 @@ const NEXT_TURN: ProbeToolCall = { ...SEND, turnId: 'u-claim-next' };
 /** Two answers for one effect. The second stands for a replay that got further
  *  than the attempt before it and tried to record its own outcome. */
 const FIRST_RESULT = '{"delivered":true,"id":"msg-1"}';
+
 const SECOND_RESULT = '{"delivered":true,"id":"msg-2-a-replay-must-never-record"}';
 
 const CLAIMED = { kind: 'claimed', result: null };
+
 const REFUSED = { kind: 'indeterminate', result: null };
 
 describe('a tool effect claimed on an isolate that dies before settling', () => {

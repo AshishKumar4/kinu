@@ -168,21 +168,26 @@ import {
 } from '../lib/cloudflare-oauth';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+
 /** How long a device link lives from its last ROTATION. Rotation happens on
  *  every accepted connect, so a machine in use renews itself and never has to
  *  be re-linked; a copy of `device.json` that stops rotating dies on this wall
  *  clock rather than living as long as someone keeps using it. */
 const DEVICE_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
+
 /** How long a fork transfer holds its reserved name without saying it is still
  *  running. Renewed as each frame lands, so the bound is on the GAP between
  *  frames rather than on the transfer: minutes of slack for a slow ranged read
  *  over a large workspace, and still an end for a sender whose Durable Object
  *  died mid-stream. */
 const FORK_RESERVATION_LEASE_MS = 5 * 60 * 1000;
+
 /** A device name is a display label, not a hostname — bounded so a UI row
  *  cannot be blown out by one paste. */
 const DEVICE_NAME_MAX_LENGTH = 80;
+
 /** Owner-facing checkpoint reads do not execute or write on the device. Every
  * other workspace call, including restore, crosses the consent chokepoint. */
 const CONSENT_FREE_DEVICE_METHODS = {
@@ -190,7 +195,9 @@ const CONSENT_FREE_DEVICE_METHODS = {
   checkpointList: true,
   checkpointPlan: true,
 } as const satisfies Record<string, true>;
+
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
+
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
 
 /** Wire bound for the roster listing. A page past this size answers with the
@@ -205,6 +212,7 @@ const WORKSPACE_LIST_LIMIT = 200;
  *  — every server uses this single per-user endpoint so callback routing
  *  is uniform regardless of which agent triggered the addition. */
 const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
+
 /** The OAuth client name this user's MCP plane registers under. It keys the
  *  SDK's own storage (`/{clientName}/{serverId}/...`), so every construction
  *  and every restore has to spell it the same way. */
@@ -238,6 +246,7 @@ function rethrowMcpNameCollision(input: { cause: unknown; name: string }): never
   if (/UNIQUE constraint failed/i.test(renderThrownChain({ cause: input.cause }))) {
     throw new Error(mcpNameTakenMessage(input.name), { cause: input.cause });
   }
+
   throw input.cause;
 }
 
@@ -272,6 +281,7 @@ type DeviceCancellationOutcome = {
   outcome: DeviceCancelOutcome | 'failed';
   detail?: string;
 };
+
 /** The request id a cancellation frame names, parsed off the outgoing params. */
 const CancelledRequestIdSchema = v.pipe(v.string(), v.minLength(1));
 
@@ -347,6 +357,7 @@ function sandboxVerdictFromHello(
 ): SandboxVerdict {
   if (hello.sandbox === undefined) return { capability: 'files_only', reason: 'daemon_outdated', detail: null };
   const claimed = parseSandboxCapability(hello.sandbox.capability);
+
   if (claimed === 'sandboxed' && agentRoot === null) {
     return {
       capability: 'files_only',
@@ -354,12 +365,15 @@ function sandboxVerdictFromHello(
       detail: 'the daemon proved a sandbox but did not say where agent homes live',
     };
   }
+
   const word = hello.sandbox.reason ?? null;
   const line = hello.sandbox.reasonDetail ?? null;
   const reason = parseSandboxReason(word);
+
   if (reason === null && word !== null) {
     return { capability: claimed, reason, detail: line === null ? word : `${word}: ${line}` };
   }
+
   return { capability: claimed, reason, detail: line };
 }
 
@@ -378,11 +392,15 @@ function readSandboxColumns(row: SandboxColumns | undefined): SandboxVerdict & P
 /** An absolute path, or null for anything else. A relative path names nothing
  *  the hub can send to a machine, and an older daemon sends none at all. */
 const AbsolutePathSchema = v.pipe(v.string(), v.regex(/^\/.+/));
+
 function absolutePathOrNull(value: string | undefined): string | null {
   const parsed = v.safeParse(AbsolutePathSchema, value);
+
   if (!parsed.success) return null;
+
   return parsed.output.length > 1 ? parsed.output.replace(/\/+$/, '') : parsed.output;
 }
+
 const DeviceRotationAckSchema = v.object({ type: v.literal(DEVICE_TOKEN_ROTATION_ACK) });
 
 /**
@@ -417,11 +435,16 @@ const TERMINAL_OPEN_TIMEOUT_MS = 10_000;
 function bytesFromBase64(data: string): Uint8Array {
   const binary = atob(data);
   const bytes = new Uint8Array(binary.length);
+
   for (let at = 0; at < binary.length; at += 1) bytes[at] = binary.charCodeAt(at);
+
   return bytes;
 }
+
 const LooseObjectSchema = v.looseObject({});
+
 const NullableStringArraySchema = v.nullable(v.array(v.string()));
+
 const NullableStringRecordSchema = v.nullable(v.record(v.string(), v.string()));
 
 
@@ -593,16 +616,19 @@ export interface LiveBrowserSession {
 
 export function parseCliAgentConnectTicketUserId(ticket: string): string | null {
   const match = /^pat_([a-f0-9]{32})_[A-Za-z0-9_-]{24,}$/.exec(ticket);
+
   return match?.[1] ?? null;
 }
 
 function cleanCliTokenLabel(label?: string): string {
   const trimmed = (label ?? '').trim().replace(/\s+/g, ' ');
+
   return trimmed ? trimmed.slice(0, 80) : 'Kinu CLI';
 }
 
 function parseCapabilityList(value: string): string[] {
   const parsed = v.safeParse(v.array(v.string()), tolerate(() => JSON.parse(value), 'malformed-input'));
+
   return parsed.success ? parsed.output : [];
 }
 
@@ -618,19 +644,25 @@ const RosterCursorSchema = v.strictObject({ v: v.number(), n: v.string() });
 function decodeRosterCursor(cursor?: string | null): { v: number; n: string } | null {
   if (cursor == null || cursor === '') return null;
   let raw: unknown;
+
   try {
     raw = JSON.parse(decodeURIComponent(cursor));
   } catch (e) {
     throw new Error('Invalid workspace roster cursor; start from page one.', { cause: e });
   }
+
   const parsed = v.safeParse(RosterCursorSchema, raw);
+
   if (!parsed.success) throw new Error('Invalid workspace roster cursor; start from page one.');
+
   return parsed.output;
 }
 
 function clampRosterLimit(limit?: number): number {
   if (limit === undefined) return WORKSPACE_LIST_LIMIT;
+
   if (!Number.isSafeInteger(limit) || limit < 1) throw new Error('Workspace roster limit must be a positive integer.');
+
   return Math.min(limit, WORKSPACE_LIST_LIMIT);
 }
 
@@ -664,6 +696,7 @@ function retireActivationRestore(
   manager.restoreConnectionsFromStorage = async (): Promise<void> => {
     diagnostics.event('mcp.inherited_restore_skipped', { manager: USER_MCP_CLIENT_NAME });
   };
+
   return restore;
 }
 
@@ -717,6 +750,7 @@ export class UserDO extends Agent<Env> {
 
   private sqlx<T extends SqlRow = SqlRow>(query: string, ...bindings: SqlStorageValue[]): T[] {
     this.ensureInit();
+
     return this.ctx.storage.sql.exec<T>(query, ...bindings).toArray();
   }
 
@@ -733,6 +767,7 @@ export class UserDO extends Agent<Env> {
   private requireTier(caller: UserCaller, capability: WorkspaceCapability): Promise<ResolvedCaller> {
     this.ensureInit();
     openAnalyticsWindow(this.env);
+
     return requireTier(this.ctx.storage.sql, this.env, caller, capability);
   }
 
@@ -767,9 +802,11 @@ export class UserDO extends Agent<Env> {
     this.ensureInit();
     openAnalyticsWindow(this.env);
     validateWorkspaceName(workspaceName);
+
     if (!this.workspaceRegistered(workspaceName)) {
       throw new Error(`Workspace ${workspaceName} is not in your registry.`);
     }
+
     return this.reconcileWorkspaceCapability(workspaceName, presentedHash);
   }
 
@@ -797,33 +834,45 @@ export class UserDO extends Agent<Env> {
       // previous token, and nothing else ever retries that. The root is the
       // only holder of the plaintext, so the retry asks it to re-push.
       const pending = pendingCapabilityReconcile(this.ctx.storage.sql, workspaceName);
+
       if (pending === null || pending !== presentedHash) return;
       const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
       const result = await workspace.repushWorkspaceCapability();
+
       if (result.missed === 0) {
         clearCapabilityReconcile(this.ctx.storage.sql, workspaceName);
+
         return;
       }
+
       armCapabilityReconcile(this.ctx.storage.sql, workspaceName, presentedHash);
+
       return;
     }
 
     const inFlight = this._provisioning.get(workspaceName);
+
     if (inFlight) return inFlight;
+
     const task = (async () => {
       const { token, tokenHash } = await freshWorkspaceCapability();
+
       if (!this.workspaceMintable(workspaceName)) {
         throw new Error(`Workspace ${workspaceName} is being deleted; it cannot be issued an identity.`);
       }
+
       commitWorkspaceCapability(this.ctx.storage.sql, workspaceName, tokenHash);
       clearCapabilityReconcile(this.ctx.storage.sql, workspaceName);
       const workspace = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(workspaceName));
       const result = await workspace.installWorkspaceCapability(token);
+
       if (result.missed > 0) {
         armCapabilityReconcile(this.ctx.storage.sql, workspaceName, tokenHash);
       }
     })();
+
     this._provisioning.set(workspaceName, task);
+
     try { await task; } finally { this._provisioning.delete(workspaceName); }
   }
 
@@ -842,6 +891,7 @@ export class UserDO extends Agent<Env> {
 
   private releases() {
     this.ensureInit();
+
     return createReleaseStore(releaseSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
   }
 
@@ -850,14 +900,17 @@ export class UserDO extends Agent<Env> {
   async ensureProfile(caller: UserCaller, email: string, displayName?: string): Promise<UserProfile> {
     await this.requireTier(caller, 'profile');
     const now = Date.now();
+
     const existing = this.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
       `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
     )[0];
+
     if (existing) {
       this.sqlx(
         `UPDATE user_profile SET last_seen_at = ?, display_name = COALESCE(?, display_name) WHERE id = 1`,
         now, displayName ?? null,
       );
+
       return {
         email: existing.email,
         displayName: displayName ?? existing.display_name,
@@ -865,19 +918,24 @@ export class UserDO extends Agent<Env> {
         lastSeenAt: now,
       };
     }
+
     this.sqlx(
       `INSERT INTO user_profile (id, email, display_name, created_at, last_seen_at) VALUES (1, ?, ?, ?, ?)`,
       email, displayName ?? null, now, now,
     );
+
     return { email, displayName: displayName ?? null, createdAt: now, lastSeenAt: now };
   }
 
   async getProfile(caller: UserCaller): Promise<UserProfile | null> {
     await this.requireTier(caller, 'profile');
+
     const row = this.sqlx<{ email: string; display_name: string | null; created_at: number; last_seen_at: number }>(
       `SELECT email, display_name, created_at, last_seen_at FROM user_profile WHERE id = 1`,
     )[0];
+
     if (!row) return null;
+
     return {
       email: row.email,
       displayName: row.display_name,
@@ -898,6 +956,7 @@ export class UserDO extends Agent<Env> {
     await this.reclaimStaleForkReservations();
     const limit = clampRosterLimit(page?.limit);
     const cursor = decodeRosterCursor(page?.cursor);
+
     const rows = this.sqlx<{ name: string; display_name: string; created_at: number; last_visited: number; archived_at: number | null }>(
       cursor
         ? `SELECT name, display_name, created_at, last_visited, archived_at
@@ -910,7 +969,9 @@ export class UserDO extends Agent<Env> {
            ORDER BY last_visited DESC, name ASC LIMIT ${limit + 1}`,
       ...(cursor ? [cursor.v, cursor.v, cursor.n] : []),
     );
+
     const hasMore = rows.length > limit;
+
     const entries = rows.slice(0, limit).map((r) => ({
       name: r.name,
       displayName: r.display_name,
@@ -918,11 +979,14 @@ export class UserDO extends Agent<Env> {
       lastVisited: r.last_visited,
       archivedAt: r.archived_at,
     }));
+
     const { n } = this.sqlx<{ n: number }>(
       `SELECT COUNT(*) AS n FROM user_workspaces
        WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
     )[0];
+
     const last = entries.at(-1);
+
     return { entries, total: n, nextCursor: hasMore && last ? encodeRosterCursor(last) : null };
   }
 
@@ -932,6 +996,7 @@ export class UserDO extends Agent<Env> {
    *  is listWorkspaces. */
   async listActiveWorkspaces(caller: UserCaller): Promise<Array<Pick<WorkspaceEntry, 'name' | 'displayName' | 'createdAt'>>> {
     await this.requireTier(caller, 'workspaces.read');
+
     return this.sqlx<{ name: string; display_name: string; created_at: number }>(
       `SELECT name, display_name, created_at FROM user_workspaces
        WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0
@@ -965,6 +1030,7 @@ export class UserDO extends Agent<Env> {
     validateWorkspaceName(name);
     await this.requireNotDeleting(name);
     const now = Date.now();
+
     const existing = this.sqlx<{
       display_name: string;
       created_at: number;
@@ -975,7 +1041,9 @@ export class UserDO extends Agent<Env> {
        FROM user_workspaces WHERE name = ?`,
       name,
     )[0];
+
     if (existing && existing.create_pending !== 0) return { status: 'reserved' };
+
     if (existing) {
       // The owner asked for this name, so the workspace behind it has been
       // visited; nothing else about it is this call's to rewrite. Returning the
@@ -986,6 +1054,7 @@ export class UserDO extends Agent<Env> {
         `UPDATE user_workspaces SET last_visited = ?, archived_at = NULL WHERE name = ?`,
         now, name,
       );
+
       return {
         status: 'active',
         entry: {
@@ -997,6 +1066,7 @@ export class UserDO extends Agent<Env> {
         },
       };
     }
+
     const explicit = displayName?.trim() ?? '';
     const title = resolveWorkspaceTitle({ explicit, purpose, slug: name });
     // No ON CONFLICT clause: the read above and this write are one turn, so a
@@ -1007,6 +1077,7 @@ export class UserDO extends Agent<Env> {
        VALUES (?, ?, ?, ?, ?, 0)`,
       name, title, explicit !== '' ? 'user' : 'auto', now, now,
     );
+
     return {
       status: 'created',
       entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
@@ -1037,6 +1108,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
     await this.requireNotDeleting(name);
+
     const existing = this.sqlx<{
       name: string;
       display_name: string;
@@ -1051,10 +1123,13 @@ export class UserDO extends Agent<Env> {
        FROM user_workspaces WHERE name = ?`,
       name,
     )[0];
+
     const abandoned = existing !== undefined
       && existing.create_pending === 1
       && (existing.fork_lease_expires_at ?? 0) <= Date.now();
+
     if (abandoned) await this.reclaimForkReservation(name);
+
     if (existing && !abandoned) {
       return {
         entry: {
@@ -1077,6 +1152,7 @@ export class UserDO extends Agent<Env> {
        VALUES (?, ?, ?, ?, ?, 1, ?)`,
       name, title, explicit !== '' ? 'user' : 'auto', now, now, now + FORK_RESERVATION_LEASE_MS,
     );
+
     return {
       entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
       reserved: true,
@@ -1095,7 +1171,9 @@ export class UserDO extends Agent<Env> {
   async renewWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
+
     if (!Number.isFinite(createdAt)) return false;
+
     return this.sqlx(
       `UPDATE user_workspaces SET fork_lease_expires_at = ?
        WHERE name = ? AND created_at = ? AND create_pending = 1 AND delete_pending = 0
@@ -1112,6 +1190,7 @@ export class UserDO extends Agent<Env> {
    */
   private async reclaimForkReservation(name: string): Promise<void> {
     const ownerUserId = this.ctx.id.name ?? '';
+
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
       // Without the owner id this object cannot prove the destroy is
       // authorized, and guessing is what that check refuses. The row keeps its
@@ -1123,6 +1202,7 @@ export class UserDO extends Agent<Env> {
       }), { workspace: name });
       throw new Error(`Workspace "${name}" holds an abandoned fork reservation that cannot be reclaimed.`);
     }
+
     await this.tearDownWorkspace(name, ownerUserId);
   }
 
@@ -1142,6 +1222,7 @@ export class UserDO extends Agent<Env> {
          AND COALESCE(fork_lease_expires_at, 0) <= ?`,
       Date.now(),
     );
+
     for (const row of stale) {
       try {
         await this.reclaimForkReservation(row.name);
@@ -1171,6 +1252,7 @@ export class UserDO extends Agent<Env> {
   ): Promise<void> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
+
     // Exactly the row `reserveWorkspace` inserted, still open. The timestamp is
     // the identity: on the name alone, a transfer's late reply could publish a
     // LATER reservation of the same name. `delete_pending` is excluded for the
@@ -1181,12 +1263,15 @@ export class UserDO extends Agent<Env> {
        WHERE name = ? AND created_at = ? AND delete_pending = 0`,
       name, createdAt,
     )[0]);
+
     if (!reserved.success) {
       throw new WorkspaceReservationNotPendingError(name, 'no reservation of that name is open under that timestamp');
     }
+
     if (reserved.output.create_pending === 0) {
       throw new WorkspaceReservationNotPendingError(name, 'it is already published');
     }
+
     // Installing the capability is a cross-DO await, so it cannot sit inside the
     // transaction: `transactionSync` commits when its SYNCHRONOUS body returns,
     // and an async body would commit at its first await and take the atomicity
@@ -1210,7 +1295,9 @@ export class UserDO extends Agent<Env> {
   async releaseWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
+
     if (!Number.isFinite(createdAt)) return false;
+
     // A marked row is not this reservation's to drop: it belongs to a teardown
     // that has not finished, and dropping it would lose the only record that
     // anything is still owed.
@@ -1218,9 +1305,11 @@ export class UserDO extends Agent<Env> {
       `SELECT created_at FROM user_workspaces WHERE name = ? AND delete_pending = 0`,
       name,
     )[0];
+
     if (!row || row.created_at !== createdAt) return false;
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ? AND created_at = ?`, name, createdAt);
     revokeWorkspaceCapability(this.ctx.storage.sql, name);
+
     return true;
   }
 
@@ -1253,6 +1342,7 @@ export class UserDO extends Agent<Env> {
   async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
+
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) throw new Error('invalid owner user id');
     await this.tearDownWorkspace(name, ownerUserId);
   }
@@ -1290,6 +1380,7 @@ export class UserDO extends Agent<Env> {
     // full_filesystem waiting for the next workspace created with that name -
     // which a shared template makes ordinary rather than unlikely.
     this.sqlx(`DELETE FROM device_consent WHERE agent_name = ?`, name);
+
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
       await stub.destroyAgent(ownerUserId);
@@ -1298,6 +1389,7 @@ export class UserDO extends Agent<Env> {
       // exact sentinel is successful completion; every other error is real.
       if (!(err instanceof Error) || err.message !== 'destroyed') throw err;
     }
+
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
     // Re-run for the row this teardown resumed from an earlier attempt, whose
     // identity a pre-fence delete could have left registered.
@@ -1318,8 +1410,10 @@ export class UserDO extends Agent<Env> {
     const pending = this.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces WHERE delete_pending = 1`,
     );
+
     if (pending.length === 0) return;
     const ownerUserId = this.ctx.id.name ?? '';
+
     if (!/^[a-f0-9]{32}$/.test(ownerUserId)) {
       // Without the owner id this object cannot prove to the workspace that the
       // destroy is authorized, and guessing is exactly what the check refuses.
@@ -1328,8 +1422,10 @@ export class UserDO extends Agent<Env> {
         cause: new Error('this user object has no user id to authorize the destroy with'),
         otherwise: 'denied',
       }), { pending: pending.length });
+
       return;
     }
+
     for (const row of pending) {
       try {
         await this.tearDownWorkspace(row.name, ownerUserId);
@@ -1355,8 +1451,10 @@ export class UserDO extends Agent<Env> {
    */
   private async requireNotDeleting(name: string): Promise<void> {
     const marked = `SELECT 1 AS x FROM user_workspaces WHERE name = ? AND delete_pending = 1`;
+
     if (this.sqlx(marked, name).length === 0) return;
     await this.resumePendingDeletions();
+
     if (this.sqlx(marked, name).length === 0) return;
     throw new Error(`Workspace "${name}" is still being deleted; its teardown has not finished.`);
   }
@@ -1376,11 +1474,13 @@ export class UserDO extends Agent<Env> {
   ): Promise<{ applied: boolean }> {
     const resolved = await this.requireTier(caller, 'workspaces.rename_self');
     validateWorkspaceName(name);
+
     // Workspace-scoped by construction: an agent renames itself, never a
     // sibling. This is what makes rename safe to keep at the `shared` tier.
     if (resolved.kind === 'workspace' && resolved.workspace !== name) {
       throw new Error(`Workspace "${resolved.workspace}" may only rename itself.`);
     }
+
     // Both pending flags excluded as everywhere else: a workspace being torn
     // down, or one a fork has not committed yet, has no title to commit, so the
     // write reports the not-found answer.
@@ -1388,12 +1488,15 @@ export class UserDO extends Agent<Env> {
       `SELECT name_origin FROM user_workspaces
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
     )[0];
+
     if (!current) return { applied: false };
+
     if (origin === 'auto' && current.name_origin !== 'auto') return { applied: false };
     this.sqlx(
       `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
       displayName, origin, name,
     );
+
     return { applied: true };
   }
 
@@ -1402,16 +1505,20 @@ export class UserDO extends Agent<Env> {
   async getWorkspaceTitle(caller: UserCaller, name: string): Promise<{ displayName: string; nameOrigin: 'user' | 'auto' } | null> {
     await this.requireTier(caller, 'workspaces.read');
     validateWorkspaceName(name);
+
     const row = this.sqlx<{ display_name: string; name_origin: 'user' | 'auto' | null }>(
       `SELECT display_name, name_origin FROM user_workspaces
        WHERE name = ? AND delete_pending = 0 AND create_pending = 0`, name,
     )[0];
+
     if (!row) return null;
+
     return { displayName: row.display_name, nameOrigin: row.name_origin ?? 'user' };
   }
 
   async hasWorkspace(caller: UserCaller, name: string): Promise<boolean> {
     await this.requireTier(caller, 'workspaces.read');
+
     return this.workspaceRegistered(name);
   }
 
@@ -1419,6 +1526,7 @@ export class UserDO extends Agent<Env> {
    *  and the ticket flows, whose own entry points are already gated. */
   private workspaceRegistered(name: string): boolean {
     validateWorkspaceName(name);
+
     // Both pending flags excluded for the same reason `archived_at` is: a
     // workspace whose teardown has started, and one whose fork transfer has not
     // committed, are not ones this owner can open — and this gate is what every
@@ -1429,6 +1537,7 @@ export class UserDO extends Agent<Env> {
          AND create_pending = 0`,
       name,
     )[0];
+
     return !!row;
   }
 
@@ -1439,10 +1548,12 @@ export class UserDO extends Agent<Env> {
    *  a grant (ownership is checked before this). */
   async hasPeerGrant(caller: UserCaller, senderAgentName: string, senderUserId: string): Promise<boolean> {
     await this.requireTier(caller, 'peers.grants');
+
     const row = this.sqlx(
       `SELECT 1 AS x FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`,
       senderUserId, senderAgentName,
     )[0];
+
     return !!row;
   }
 
@@ -1487,8 +1598,10 @@ export class UserDO extends Agent<Env> {
    *  arrived yet still has something true to answer with. */
   async verifyBrowserSession(caller: UserCaller, tokenHash: string): Promise<LiveBrowserSession | null> {
     await this.requireTier(caller, 'auth_tokens');
+
     return this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(`DELETE FROM user_browser_sessions WHERE expires_at <= ?`, Date.now());
+
       const row = this.ctx.storage.sql.exec<{
         email: string | null;
         display_name: string | null;
@@ -1499,13 +1612,16 @@ export class UserDO extends Agent<Env> {
         `SELECT email, display_name, provider, provider_sub, auth_time
            FROM user_browser_sessions WHERE token_hash = ? LIMIT 1`, tokenHash,
       ).toArray()[0];
+
       if (!row) return null;
+
       // All five were written by one INSERT, so they are present together or
       // absent together; a row from before they existed carries no identity at
       // all rather than a half of one.
       if (row.email === null || row.provider === null || row.provider_sub === null || row.auth_time === null) {
         return { identity: null };
       }
+
       return {
         identity: {
           email: row.email,
@@ -1543,9 +1659,11 @@ export class UserDO extends Agent<Env> {
       `SELECT name FROM user_workspaces
        WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
     ).map((row) => row.name);
+
     const settled = await Promise.allSettled(workspaces.map((name) => this.env.OrchestratorAgent
       .get(this.env.OrchestratorAgent.idFromName(name))
       .closeRevokedSessionSockets(tokenHash)));
+
     for (const [index, outcome] of settled.entries()) {
       if (outcome.status === 'fulfilled') continue;
       diagnostics.failure('auth.session_socket_revocation_push_failed', toKinuError({
@@ -1563,11 +1681,14 @@ export class UserDO extends Agent<Env> {
    *  that cannot be reached is refused by the caller, not answered here. */
   async verifySocketSession(caller: UserCaller, tokenHash: string): Promise<{ live: boolean }> {
     await this.requireTier(caller, 'auth_tokens.socket');
+
     if (!/^[a-f0-9]{64}$/.test(tokenHash)) return { live: false };
+
     const row = this.sqlx<{ token_hash: string }>(
       `SELECT token_hash FROM user_browser_sessions WHERE token_hash = ? AND expires_at > ? LIMIT 1`,
       tokenHash, Date.now(),
     )[0];
+
     return { live: row !== undefined };
   }
 
@@ -1592,12 +1713,15 @@ export class UserDO extends Agent<Env> {
     caller: UserCaller, userId: string, authorizationHash: string, label?: string,
   ): Promise<{ token: string; tokenHash: string; expiresAt: number }> {
     await this.requireTier(caller, 'auth_tokens');
+
     if (!/^[a-f0-9]{32}$/.test(userId)) throw new Error('invalid user id');
+
     if (!/^[a-f0-9]{64}$/.test(authorizationHash)) throw new Error('invalid authorization hash');
     const token = `ptc_${userId}_${nanoid(44)}`;
     const tokenHash = await sha256Hex(token);
     const now = Date.now();
     const expiresAt = now + CLI_TOKEN_TTL_MS;
+
     try {
       this.sqlx(
         `INSERT INTO user_cli_tokens (token_hash, label, created_at, expires_at, authorization_hash)
@@ -1610,6 +1734,7 @@ export class UserDO extends Agent<Env> {
       // the caller can act on.
       throw new CliAuthorizationSpentError({ cause });
     }
+
     return { token, tokenHash, expiresAt };
   }
 
@@ -1618,18 +1743,24 @@ export class UserDO extends Agent<Env> {
   async verifyCliToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
     await this.requireTier(caller, 'auth_tokens');
     const userId = parseCliTokenUserId(token);
+
     if (!userId) return { ok: false, error: 'malformed token' };
     const tokenHash = await sha256Hex(token);
+
     const row = this.sqlx<{ expires_at: number; revoked_at: number | null }>(
       `SELECT expires_at, revoked_at FROM user_cli_tokens WHERE token_hash = ? LIMIT 1`,
       tokenHash,
     )[0];
+
     if (!row || row.revoked_at !== null) return { ok: false, error: 'invalid token' };
     const now = Date.now();
+
     if (row.expires_at <= now) return { ok: false, error: 'expired token' };
     this.sqlx(`UPDATE user_cli_tokens SET last_used_at = ? WHERE token_hash = ?`, now, tokenHash);
     const profile = await this.getProfile(await ownerCaller(this.env));
+
     if (!profile) return { ok: false, error: 'profile missing' };
+
     return {
       ok: true,
       user: { id: userId, email: profile.email, displayName: profile.displayName },
@@ -1640,6 +1771,7 @@ export class UserDO extends Agent<Env> {
 
   async listCliTokens(caller: UserCaller): Promise<Array<{ tokenHash: string; label: string; createdAt: number; expiresAt: number; lastUsedAt: number | null }>> {
     await this.requireTier(caller, 'auth_tokens');
+
     return this.sqlx<{ token_hash: string; label: string; created_at: number; expires_at: number; last_used_at: number | null }>(
       `SELECT token_hash, label, created_at, expires_at, last_used_at
        FROM user_cli_tokens WHERE revoked_at IS NULL ORDER BY created_at DESC`,
@@ -1656,6 +1788,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'auth_tokens');
     this.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE token_hash = ?`, Date.now(), tokenHash);
     await this.retireCliAuthority();
+
     return { ok: true };
   }
 
@@ -1667,11 +1800,14 @@ export class UserDO extends Agent<Env> {
    *  covers every socket at once, exactly as a single revocation does. */
   async revokeAllCliTokens(caller: UserCaller): Promise<{ revoked: number }> {
     await this.requireTier(caller, 'auth_tokens');
+
     const revoked = this.sqlx<{ n: number }>(
       `SELECT COUNT(*) AS n FROM user_cli_tokens WHERE revoked_at IS NULL`,
     )[0]?.n ?? 0;
+
     this.sqlx(`UPDATE user_cli_tokens SET revoked_at = ? WHERE revoked_at IS NULL`, Date.now());
     await this.retireCliAuthority();
+
     return { revoked };
   }
 
@@ -1692,6 +1828,7 @@ export class UserDO extends Agent<Env> {
     const row = this.sqlx<{ generation: number }>(
       `SELECT generation FROM user_auth_generation WHERE id = 1`,
     )[0];
+
     return row?.generation ?? 0;
   }
 
@@ -1712,13 +1849,16 @@ export class UserDO extends Agent<Env> {
       Date.now(),
     );
     const generation = this.authGeneration();
+
     const workspaces = this.sqlx<{ name: string }>(
       `SELECT name FROM user_workspaces
        WHERE archived_at IS NULL AND delete_pending = 0 AND create_pending = 0`,
     ).map((row) => row.name);
+
     const settled = await Promise.allSettled(workspaces.map((name) => this.env.OrchestratorAgent
       .get(this.env.OrchestratorAgent.idFromName(name))
       .closeRevokedCliSockets(generation)));
+
     for (const [index, outcome] of settled.entries()) {
       if (outcome.status === 'fulfilled') continue;
       diagnostics.failure('auth.socket_revocation_push_failed', toKinuError({
@@ -1745,9 +1885,12 @@ export class UserDO extends Agent<Env> {
   }> {
     await this.requireTier(caller, 'auth_tokens.socket');
     const generation = this.authGeneration();
+
     if (!/^[a-f0-9]{64}$/.test(tokenHash)) return { live: false, generation, error: 'invalid token hash' };
     const scopes = this.cliBearerScopes(tokenHash, Date.now());
+
     if (!scopes) return { live: false, generation, error: 'the CLI token behind this connection is no longer valid' };
+
     return { live: true, generation };
   }
 
@@ -1758,6 +1901,7 @@ export class UserDO extends Agent<Env> {
    *  hash-only storage plus name/scope validation. */
   async mintAccessToken(caller: UserCaller, userId: string, name: string, scopes: readonly string[]): Promise<AccessTokenMint> {
     await this.requireTier(caller, 'auth_tokens');
+
     return mintAccessTokenRow(this.ctx.storage.sql, userId, name, scopes);
   }
 
@@ -1766,9 +1910,12 @@ export class UserDO extends Agent<Env> {
   async verifyAccessToken(caller: UserCaller, token: string): Promise<CliTokenVerification> {
     await this.requireTier(caller, 'auth_tokens');
     const verified = await verifyAccessTokenRow(this.ctx.storage.sql, token);
+
     if (!verified.ok) return { ok: false, error: verified.error };
     const profile = await this.getProfile(await ownerCaller(this.env));
+
     if (!profile) return { ok: false, error: 'profile missing' };
+
     return {
       ok: true,
       user: { id: verified.userId, email: profile.email, displayName: profile.displayName },
@@ -1779,6 +1926,7 @@ export class UserDO extends Agent<Env> {
 
   async listAccessTokens(caller: UserCaller): Promise<AccessTokenRecord[]> {
     await this.requireTier(caller, 'auth_tokens');
+
     return listAccessTokenRows(this.ctx.storage.sql);
   }
 
@@ -1790,6 +1938,7 @@ export class UserDO extends Agent<Env> {
     // costs one comparison while one that skips a real revocation costs the
     // socket it should have closed.
     await this.retireCliAuthority();
+
     return result;
   }
 
@@ -1801,17 +1950,23 @@ export class UserDO extends Agent<Env> {
     capabilities?: Array<typeof CLI_AGENT_WEBSOCKET_CAPABILITY>;
   }): Promise<{ ok: boolean; ticket?: string; expiresAt?: number; error?: string }> {
     await this.requireTier(caller, 'auth_tokens');
+
     if (!/^[a-f0-9]{32}$/.test(input.userId)) return { ok: false, error: 'invalid user id' };
+
     if (input.agentClass !== ORCHESTRATOR_AGENT_SLUG) return { ok: false, error: 'invalid agent class' };
+
     if (!/^[a-f0-9]{64}$/.test(input.cliTokenHash)) return { ok: false, error: 'invalid token hash' };
     validateWorkspaceName(input.agentName);
+
     if (!this.workspaceRegistered(input.agentName)) return { ok: false, error: 'agent not found' };
 
     const now = Date.now();
     this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
+
     if (!this.cliBearerScopes(input.cliTokenHash, now)) return { ok: false, error: 'invalid CLI token' };
 
     const capabilities = input.capabilities?.length ? input.capabilities : [CLI_AGENT_WEBSOCKET_CAPABILITY];
+
     if (!capabilities.includes(CLI_AGENT_WEBSOCKET_CAPABILITY)) return { ok: false, error: 'missing websocket capability' };
     const ticket = `pat_${input.userId}_${randomToken(32)}`;
     const expiresAt = now + CLI_AGENT_CONNECT_TICKET_TTL_MS;
@@ -1828,6 +1983,7 @@ export class UserDO extends Agent<Env> {
       now,
       expiresAt,
     );
+
     return { ok: true, ticket, expiresAt };
   }
 
@@ -1843,13 +1999,16 @@ export class UserDO extends Agent<Env> {
   ): Promise<CliAgentConnectTicketVerification> {
     await this.requireTier(caller, 'auth_tokens');
     const hintedUserId = parseCliAgentConnectTicketUserId(ticket);
+
     if (!hintedUserId) return { ok: false, error: 'malformed ticket' };
+
     if (hintedUserId !== expected.userId) return { ok: false, error: 'wrong user' };
     validateWorkspaceName(expected.agentName);
 
     const now = Date.now();
     this.sqlx(`DELETE FROM cli_agent_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
     const ticketHash = await sha256Hex(ticket);
+
     const row = this.sqlx<{
       user_id: string;
       agent_class: string;
@@ -1864,19 +2023,28 @@ export class UserDO extends Agent<Env> {
         WHERE ticket_hash = ? LIMIT 1`,
       ticketHash,
     )[0];
+
     if (!row || row.used_at !== null || row.expires_at <= now) return { ok: false, error: 'invalid ticket' };
+
     if (row.user_id !== expected.userId) return { ok: false, error: 'wrong user' };
+
     if (row.agent_class !== expected.agentClass) return { ok: false, error: 'wrong agent class' };
+
     if (row.agent_name !== expected.agentName) return { ok: false, error: 'wrong agent' };
     const capabilities = parseCapabilityList(row.capabilities);
+
     if (!capabilities.includes(expected.capability)) return { ok: false, error: 'missing capability' };
 
     this.sqlx(`UPDATE cli_agent_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
+
     if (!this.workspaceRegistered(expected.agentName)) return { ok: false, error: 'agent not found' };
     const bearerScopes = this.cliBearerScopes(row.cli_token_hash, now);
+
     if (!bearerScopes) return { ok: false, error: 'invalid CLI token' };
     const profile = await this.getProfile(await ownerCaller(this.env));
+
     if (!profile) return { ok: false, error: 'profile missing' };
+
     const verification: CliAgentConnectTicketVerification = {
       ok: true,
       user: { id: expected.userId, email: profile.email, displayName: profile.displayName },
@@ -1885,7 +2053,9 @@ export class UserDO extends Agent<Env> {
       capabilities,
       authGeneration: this.authGeneration(),
     };
+
     if (bearerScopes !== 'all') verification.scopes = bearerScopes;
+
     return verification;
   }
 
@@ -1899,7 +2069,9 @@ export class UserDO extends Agent<Env> {
       `SELECT expires_at FROM user_cli_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
       tokenHash,
     )[0];
+
     if (session) return session.expires_at > now ? 'all' : null;
+
     return getActiveAccessTokenScopes(this.ctx.storage.sql, tokenHash);
   }
 
@@ -1930,8 +2102,11 @@ export class UserDO extends Agent<Env> {
    *  (agents-SDK routing, sub-agents) flows to the SDK untouched. */
   override async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
+
     if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url);
+
     if (url.pathname === DEVICE_TERMINAL_PATH) return this.acceptTerminalSocket(request, url);
+
     return super.fetch(request);
   }
 
@@ -1955,8 +2130,10 @@ export class UserDO extends Agent<Env> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 });
     }
+
     const ticket = url.searchParams.get('ticket');
     const verified = ticket ? await this.verifyDeviceConnectTicket(await ownerCaller(this.env), ticket) : { ok: false as const };
+
     if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
 
     if (this._devices.isConnected(verified.deviceId)) {
@@ -1979,6 +2156,7 @@ export class UserDO extends Agent<Env> {
       token: await this.rotateDeviceToken(verified.deviceId, verified.tokenWasCurrent === true),
     }));
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
+
     return new Response(null, init);
   }
 
@@ -1997,10 +2175,12 @@ export class UserDO extends Agent<Env> {
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('Expected WebSocket', { status: 426 });
     }
+
     const session = url.searchParams.get('session') ?? '';
     const pair = new WebSocketPair();
     const [client, server] = [pair[0], pair[1]];
     let attached: { device: string; workspace: string };
+
     try {
       attached = this._terminals.attach(session, server);
     } catch (cause) {
@@ -2009,11 +2189,13 @@ export class UserDO extends Agent<Env> {
       // open and this upgrade. The pane opens a new one.
       return new Response(renderThrownChain({ cause }), { status: 409 });
     }
+
     // The pane may paint as soon as it sees this, and the shell is already
     // running: its first bytes are on the way from the machine.
     server.send(JSON.stringify({ type: 'ready' }));
     diagnostics.event('device.terminal_attached', { device: attached.device, workspace: attached.workspace });
     const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
+
     return new Response(null, init);
   }
 
@@ -2050,6 +2232,7 @@ export class UserDO extends Agent<Env> {
         WHERE id = ?`,
       keepGrace ? 1 : 0, await sha256Hex(token), Date.now() + DEVICE_TOKEN_TTL_MS, deviceId,
     );
+
     return token;
   }
 
@@ -2066,15 +2249,20 @@ export class UserDO extends Agent<Env> {
     // frame anything here parses: an arrow key is three bytes that are not a
     // character, and decoding them as text would corrupt them.
     const terminal = terminalFromSocket(ws);
+
     if (terminal) {
       this.ensureInit();
       this._terminals.fromPane(terminal.session, terminal.device, message);
+
       return;
     }
+
     const deviceId = deviceIdFromSocket(ws);
+
     if (!deviceId) return this.lifecycle.webSocketMessage(ws, message);
     this.ensureInit();
     let data: string;
+
     if (isTextWebSocketMessage(message)) {
       data = message;
     } else if (message instanceof ArrayBuffer) {
@@ -2084,22 +2272,29 @@ export class UserDO extends Agent<Env> {
       bytes.set(new Uint8Array(message.buffer, message.byteOffset, message.byteLength));
       data = new TextDecoder().decode(bytes);
     }
+
     // The daemon's HELLO carries metadata; everything else (including a frame
     // that is not JSON at all) is an RPC response.
     const hello = v.safeParse(DeviceHelloSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+
     if (hello.success) {
       this.recordDeviceHello(deviceId, hello.output);
+
       return;
     }
+
     const acknowledged = v.safeParse(DeviceRotationAckSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+
     if (acknowledged.success) {
       // The machine says the new secret is on its disk, so the superseded one
       // has no remaining purpose. Every second it stays valid is a second a
       // copy of the old `device.json` could spend it.
       this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL, last_seen_at = ? WHERE id = ?`,
         Date.now(), deviceId);
+
       return;
     }
+
     // A live terminal's own frames, read before the RPC correlator: they carry
     // a session name and no request id, and a correlator handed one would drop
     // it without a word.
@@ -2116,12 +2311,17 @@ export class UserDO extends Agent<Env> {
    */
   private handleTerminalFrame(data: string): boolean {
     const frame = v.safeParse(DeviceTerminalFrameSchema, tolerate(() => JSON.parse(data), 'malformed-input'));
+
     if (!frame.success) return false;
+
     if (frame.output.type === DEVICE_PTY_OUTPUT) {
       this._terminals.toPane(frame.output.session, bytesFromBase64(frame.output.data));
+
       return true;
     }
+
     this._terminals.paneExit(frame.output.session, frame.output.exitCode);
+
     return true;
   }
 
@@ -2146,6 +2346,7 @@ export class UserDO extends Agent<Env> {
     const bounded = (axis: number, fallback: number): number => (
       Number.isInteger(axis) && axis >= 1 && axis <= DEVICE_PTY_MAX_AXIS ? axis : fallback
     );
+
     // The gate FIRST, before any device state is read. deviceRpc takes the
     // same tier below, but a caller it would refuse must not learn whether a
     // machine is connected on the way out.
@@ -2154,6 +2355,7 @@ export class UserDO extends Agent<Env> {
     // Resolved before a session is minted, by the same rule every device call
     // follows: several live and none named is a question, not a coin.
     const target = await this.resolveDeviceForCall(deviceId, undefined);
+
     try {
       await this.deviceRpc(
         caller,
@@ -2169,13 +2371,17 @@ export class UserDO extends Agent<Env> {
       if (isDeviceUnknownMethodError(cause)) {
         throw new Error(`${this.deviceLabel(target)} runs an older Kinu. Run \`kinu update\` on that machine.`, { cause });
       }
+
       throw new Error('opening a terminal on this machine', { cause });
     }
+
     this._terminals.register(session, target, agentName);
+
     // A session nobody attached to is a shell with no window on it. The sweep
     // runs on the next open rather than on a timer: this object has one alarm
     // and it belongs to work the owner is waiting for.
     for (const stale of this._terminals.expired()) this.closeDeviceTerminal(stale.session, stale.device);
+
     return { session };
   }
 
@@ -2226,21 +2432,27 @@ export class UserDO extends Agent<Env> {
     // A pane's socket closing is a person closing a terminal, so the shell on
     // their machine is hung up rather than left running behind no window.
     const terminal = terminalFromSocket(ws);
+
     if (terminal) {
       this.ensureInit();
       this.closeDeviceTerminal(terminal.session, terminal.device);
+
       return;
     }
+
     const deviceId = deviceIdFromSocket(ws);
+
     if (!deviceId) return this.lifecycle.webSocketClose(ws, code, reason, wasClean);
     this.ensureInit();
     this._devices.handleClose(deviceId, ws);
+
     // Every terminal on this machine went with its socket: the daemon hangs up
     // its own shells when the socket drops, so the panes are told rather than
     // left waiting on bytes that will never come.
     for (const session of this._terminals.panesForDevice(deviceId)) {
       this._terminals.endPane(session, NO_DEVICE_CONNECTED);
     }
+
     // A replacing socket may already be live — only then keep connected_at.
     if (!this._devices.isConnected(deviceId)) {
       this.sqlx(`UPDATE user_devices SET connected_at = NULL WHERE id = ?`, deviceId);
@@ -2267,6 +2479,7 @@ export class UserDO extends Agent<Env> {
       `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
       deviceId, tokenHash, trimmedLabel || 'Your PC', now, now + DEVICE_TOKEN_TTL_MS,
     );
+
     return { deviceId, token };
   }
 
@@ -2275,11 +2488,14 @@ export class UserDO extends Agent<Env> {
   async renameDevice(caller: UserCaller, deviceId: string, name: string): Promise<{ ok: boolean }> {
     await this.requireTier(caller, 'device.manage');
     const trimmed = name.trim().slice(0, DEVICE_NAME_MAX_LENGTH);
+
     const row = trimmed ? this.sqlx<{ id: string }>(
       `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
     )[0] : undefined;
+
     if (!row) return { ok: false };
     this.sqlx(`UPDATE user_devices SET label = ? WHERE id = ?`, trimmed, deviceId);
+
     return { ok: true };
   }
 
@@ -2311,8 +2527,10 @@ export class UserDO extends Agent<Env> {
    */
   async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string; current?: boolean }> {
     await this.requireTier(caller, 'device.manage');
+
     if (!/^pdt_[A-Za-z0-9_-]{32,}$/.test(token)) return { ok: false };
     const tokenHash = await sha256Hex(token);
+
     const row = this.sqlx<{ id: string; expires_at: number | null; current: number }>(
       `SELECT id, expires_at, (token_hash = ?) AS current
          FROM user_devices
@@ -2320,9 +2538,12 @@ export class UserDO extends Agent<Env> {
         LIMIT 1`,
       tokenHash, tokenHash, tokenHash,
     )[0];
+
     if (!row) return { ok: false };
+
     if (row.expires_at !== null && row.expires_at <= Date.now()) return { ok: false };
     this.sqlx(`UPDATE user_devices SET prev_token_hash = NULL WHERE id = ?`, row.id);
+
     return { ok: true, deviceId: row.id, current: row.current === 1 };
   }
 
@@ -2331,6 +2552,7 @@ export class UserDO extends Agent<Env> {
   async issueDeviceConnectTicket(caller: UserCaller, token: string): Promise<{ ok: boolean; ticket?: string; expiresAt?: number }> {
     await this.requireTier(caller, 'device.manage');
     const verified = await this.verifyDeviceToken(await ownerCaller(this.env), token);
+
     if (!verified.ok || !verified.deviceId) return { ok: false };
     const now = Date.now();
     this.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
@@ -2346,16 +2568,19 @@ export class UserDO extends Agent<Env> {
       expiresAt,
       verified.current === true ? 1 : 0,
     );
+
     return { ok: true, ticket, expiresAt };
   }
 
   /** Consume a short-lived WebSocket connect ticket. */
   async verifyDeviceConnectTicket(caller: UserCaller, ticket: string): Promise<{ ok: boolean; deviceId?: string; tokenWasCurrent?: boolean }> {
     await this.requireTier(caller, 'device.manage');
+
     if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) return { ok: false };
     const now = Date.now();
     this.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
     const ticketHash = await sha256Hex(ticket);
+
     const row = this.sqlx<{
       device_id: string; expires_at: number; used_at: number | null; token_was_current: number | null;
     }>(
@@ -2364,12 +2589,16 @@ export class UserDO extends Agent<Env> {
         WHERE ticket_hash = ? LIMIT 1`,
       ticketHash,
     )[0];
+
     if (!row || row.used_at !== null || row.expires_at <= now) return { ok: false };
     this.sqlx(`UPDATE device_connect_tickets SET used_at = ? WHERE ticket_hash = ?`, now, ticketHash);
+
     const active = this.sqlx<{ id: string }>(
       `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, row.device_id,
     )[0];
+
     if (!active) return { ok: false };
+
     // A null column is a ticket written before it existed: read as "not proved
     // current", which withholds the grace rather than granting one on a guess.
     return { ok: true, deviceId: row.device_id, tokenWasCurrent: row.token_was_current === 1 };
@@ -2379,6 +2608,7 @@ export class UserDO extends Agent<Env> {
    *  name them. Names only: an id is routing, and the ask is for a person. */
   private connectedDeviceNames(): string[] {
     const live = this._devices.connectedDeviceIds();
+
     return this.sqlx<{ id: string; label: string }>(
       `SELECT id, label FROM user_devices WHERE revoked_at IS NULL`,
     ).filter((row) => live.includes(row.id)).map((row) => row.label);
@@ -2420,10 +2650,13 @@ export class UserDO extends Agent<Env> {
     consentAgent: string | undefined,
   ): Promise<string> {
     const deviceId = this._devices.connectedDeviceId(requested);
+
     if (deviceId) return deviceId;
+
     if (requested === undefined && this._devices.connectedDeviceIds().length > 1) {
       throw new Error(`${SEVERAL_DEVICES_CONNECTED}: ${this.connectedDeviceNames().join(', ')}`);
     }
+
     if (consentAgent !== undefined) await this.raiseProvisioningRequest(consentAgent);
     throw new Error(NO_DEVICE_CONNECTED);
   }
@@ -2444,11 +2677,15 @@ export class UserDO extends Agent<Env> {
     // is there to answer, which is the failure the cancellation exists for.
     const stopping = method === DEVICE_CANCEL_METHOD;
     const ownerRead = opts?.agentName === undefined && Object.hasOwn(CONSENT_FREE_DEVICE_METHODS, method);
+
     const consentAgent = stopping ? undefined : (resolved.kind === 'workspace'
       ? (ownerRead ? undefined : resolved.workspace)
       : opts?.agentName);
+
     const deviceId = await this.resolveDeviceForCall(opts?.deviceId, consentAgent);
+
     if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
+
     if (consentAgent !== undefined) {
       // Consent is keyed on the PROVEN workspace, never the claimed name — an
       // agent cannot ride a sibling workspace's remembered grant. The three
@@ -2457,8 +2694,10 @@ export class UserDO extends Agent<Env> {
         consentAgent, deviceId, method, params,
         resolved.kind === 'workspace' ? resolved.workspace : undefined,
       );
+
       if (!consent.allowed) throw new Error(consent.reason);
     }
+
     // A command and a terminal are the two calls that RUN something, so they
     // are the two the sandbox decides. The file plane stays open in every mode
     // — the daemon shows it the same view — and a cancellation is never gated
@@ -2475,31 +2714,38 @@ export class UserDO extends Agent<Env> {
     // and the daemon has no use for one. A sandboxed command with nowhere to
     // put its home is refused three lines above instead of being sent.
     let execSandbox: JsonObject | null = null;
+
     if (method === 'exec' || method === DEVICE_PTY_OPEN_METHOD) {
       const workspace = resolved.kind === 'workspace' ? resolved.workspace : null;
       const sandbox = this.deviceSandboxFor(deviceId, workspace);
       const mode = effectiveDeviceMode(sandbox);
+
       // Refused HERE, before the frame leaves, so a machine that cannot honour
       // the tier never sees the command. The daemon refuses it again on its own
       // probe; neither end ever downgrades a sandboxed command to a raw one.
       if (mode === 'files_only') {
         throw new Error(this.sandboxRefusal(deviceId, sandbox, sandboxCause(sandbox)));
       }
+
       if (mode === 'sandboxed' && sandbox.agentHome === null) {
         throw new Error(this.sandboxRefusal(deviceId, sandbox, workspace === null
           ? 'an agent home belongs to a workspace, and this call has none'
           : 'the daemon did not report where agent homes live'));
       }
+
       execSandbox = {
         tier: sandbox.tier,
         agentHome: sandbox.agentHome ?? '',
         roots: [...sandbox.roots],
       };
     }
+
     if (!stopping && !this.isActiveDevice(deviceId)) throw new Error(NO_DEVICE_CONNECTED);
     const tunnel = this._devices.tunnel(deviceId);
+
     if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
     const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = { extra: { deviceId } };
+
     if (opts?.checkpoint) {
       rpcOptions.extra = {
         ...rpcOptions.extra,
@@ -2511,8 +2757,11 @@ export class UserDO extends Agent<Env> {
         },
       };
     }
+
     if (execSandbox !== null) rpcOptions.extra = { ...rpcOptions.extra, sandbox: execSandbox };
+
     if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
+
     if (opts?.requestId !== undefined) rpcOptions.requestId = opts.requestId;
 
     // Persist BEFORE the frame leaves UserDO. The request identity is the same
@@ -2523,12 +2772,14 @@ export class UserDO extends Agent<Env> {
     // turn authority they do not possess.
     const requestId = opts?.requestId;
     const durableExec = method === 'exec' && requestId !== undefined && resolved.kind === 'workspace';
+
     if (durableExec) {
       // A probe must never ACK the command's own id: a retry may carry a
       // retained terminal result, and ACKing it before replay would delete it.
       // This fresh canonical id names no command and only distinguishes a
       // daemon that implements durable result acknowledgement before work.
       await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [nextDeviceRequestId(), DEVICE_CANCEL_PROTOCOL]);
+
       // The probe is an await, so a revocation sweep can land inside it. Recheck
       // admission before the row and the frame: a command admitted after that
       // sweep claimed this device's requests would run with nothing left to
@@ -2542,9 +2793,11 @@ export class UserDO extends Agent<Env> {
       // owner would leave a row that neither a turn sweep nor a job sweep can
       // ever select, which is precisely the orphan this table exists to prevent.
       const backgroundJobId = opts?.backgroundJobId ?? null;
+
       if (backgroundJobId === '') {
         throw new KinuError('bad_input', 'A background job id must name a job.');
       }
+
       this.ensureInit();
       this._inflight.insert({
         requestId,
@@ -2554,12 +2807,15 @@ export class UserDO extends Agent<Env> {
         backgroundJobId,
       });
     }
+
     const result = await tunnel.rpc(method, params, rpcOptions);
+
     // A tool aborting its own exec sends this frame straight through, so the
     // answer must land in the same place a durable sweep would put it. First
     // answer wins: it is the one that actually ended the process group, and a
     // later sweep then reports it instead of killing a dead command again.
     if (stopping) this.recordToolPathCancellation(params, result);
+
     return result === undefined ? undefined : JSON.stringify(result);
   }
 
@@ -2571,6 +2827,7 @@ export class UserDO extends Agent<Env> {
    *  was not confirmed, and the row stays live work for the next sweep. */
   private recordToolPathCancellation(params: JsonValue[], result: JsonValue | undefined): void {
     const requestId = v.safeParse(CancelledRequestIdSchema, params[0]);
+
     if (!requestId.success) return;
     const answer = parseDeviceCancelAnswer(requestId.output, result);
     this.ensureInit();
@@ -2588,10 +2845,13 @@ export class UserDO extends Agent<Env> {
    */
   async acknowledgeDeviceRequest(caller: UserCaller, requestId: string): Promise<void> {
     const resolved = await this.requireTier(caller, 'device.rpc');
+
     if (resolved.kind !== 'workspace' || requestId === '') return;
     const held = this._inflight.acknowledgeable(requestId, resolved.workspace);
+
     if (!held) return;
     const tunnel = this._devices.tunnel(held.deviceId);
+
     if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
     await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL]);
     this._inflight.deleteAcknowledged({
@@ -2628,7 +2888,9 @@ export class UserDO extends Agent<Env> {
     claim: (workspace: string) => ClaimedDeviceRequest[],
   ): Promise<DeviceCancellationOutcome[]> {
     const resolved = await this.requireTier(caller, 'device.rpc');
+
     if (resolved.kind !== 'workspace' || scopeId === '') return [];
+
     return this.cancelDeviceRequests(claim(resolved.workspace));
   }
 
@@ -2643,7 +2905,9 @@ export class UserDO extends Agent<Env> {
     jobId: string,
   ): Promise<{ transferred: boolean }> {
     const resolved = await this.requireTier(caller, 'device.rpc');
+
     if (resolved.kind !== 'workspace' || requestId === '' || jobId === '') return { transferred: false };
+
     return this._inflight.transferToBackgroundJob({
       requestId, workspace: resolved.workspace, jobId,
     });
@@ -2665,6 +2929,7 @@ export class UserDO extends Agent<Env> {
    */
   private async cancelDeviceRequests(rows: ClaimedDeviceRequest[]): Promise<DeviceCancellationOutcome[]> {
     const outcomes: DeviceCancellationOutcome[] = [];
+
     for (const row of rows) {
       // One read, taken BEFORE any frame, answers both questions that can have
       // changed while an earlier row was awaiting: does this sweep still own the
@@ -2673,22 +2938,28 @@ export class UserDO extends Agent<Env> {
       // this sweep killing a command that is already dead and contradicting the
       // answer the abort reported.
       const held = this._inflight.held(row.requestId, row.claim);
+
       if (held === null) continue;
+
       if (held.settled !== null) {
         outcomes.push({ requestId: row.requestId, outcome: held.settled });
         await this.cleanUpSettledDeviceRequest(row);
         continue;
       }
+
       const tunnel = this._devices.tunnel(row.deviceId);
+
       if (!tunnel) {
         this._inflight.releaseClaim(row.requestId, row.claim);
         outcomes.push({ requestId: row.requestId, outcome: 'failed', detail: NO_DEVICE_CONNECTED });
         continue;
       }
+
       try {
         const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
           DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
         )).cancelled;
+
         // Durable BEFORE the acknowledgement, because the acknowledgement is the
         // step that can fail. The guarded write is also this call's post-await
         // ownership check: no row updated means the terminal authority took the
@@ -2696,6 +2967,7 @@ export class UserDO extends Agent<Env> {
         // comes back is the answer that STANDS, which is this sweep's only when
         // no answer landed while it was waiting.
         const settled = this._inflight.settleHeld(row.requestId, row.claim, answer);
+
         if (settled === null) continue;
         outcomes.push({ requestId: row.requestId, outcome: settled });
         await this.cleanUpSettledDeviceRequest(row);
@@ -2712,6 +2984,7 @@ export class UserDO extends Agent<Env> {
         });
       }
     }
+
     return outcomes;
   }
 
@@ -2723,6 +2996,7 @@ export class UserDO extends Agent<Env> {
    */
   private async cleanUpSettledDeviceRequest(row: ClaimedDeviceRequest): Promise<void> {
     const tunnel = this._devices.tunnel(row.deviceId);
+
     try {
       if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
       await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
@@ -2757,9 +3031,11 @@ export class UserDO extends Agent<Env> {
       `SELECT tier, sandbox_capability, sandbox_reason, sandbox_detail, sandbox_gpu, agent_root, consented_root, device_home
          FROM user_devices WHERE id = ?`, deviceId,
     )[0];
+
     const agentRoot = row?.agent_root ?? null;
     const named = workspace !== null && workspace !== '.' && workspace !== '..' && workspace !== '';
     const consented = row?.consented_root ?? null;
+
     return {
       tier: parseDeviceTier(row?.tier),
       ...readSandboxColumns(row),
@@ -2793,15 +3069,20 @@ export class UserDO extends Agent<Env> {
    */
   async setDeviceTier(caller: UserCaller, deviceId: string, tier: DeviceTier): Promise<{ ok: boolean }> {
     const resolved = await this.requireTier(caller, 'device.manage');
+
     if (resolved.kind !== 'owner_session') {
       throw new CapabilityDeniedError('Only the account owner can change a device\'s Sandbox setting.');
     }
+
     if (!v.is(v.picklist(DEVICE_TIERS), tier)) return { ok: false };
+
     const row = this.sqlx<{ id: string }>(
       `SELECT id FROM user_devices WHERE id = ? AND revoked_at IS NULL LIMIT 1`, deviceId,
     )[0];
+
     if (!row) return { ok: false };
     this.sqlx(`UPDATE user_devices SET tier = ? WHERE id = ?`, tier, deviceId);
+
     return { ok: true };
   }
 
@@ -2814,7 +3095,9 @@ export class UserDO extends Agent<Env> {
     const row = this.sqlx<{ policy: string }>(
       `SELECT policy FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId,
     )[0];
+
     if (row?.policy !== 'allow' && row?.policy !== 'deny') return null;
+
     return row.policy;
   }
 
@@ -2859,32 +3142,43 @@ export class UserDO extends Agent<Env> {
     workspaceName?: string,
   ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
     const bound = this.getDeviceBinding(agentName, deviceId);
+
     if (bound === 'allow') return { allowed: true };
+
     if (bound === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
     const action = summarizeDeviceAction(method, params);
     let decision: DeviceConsentDecision;
+
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName));
+
       const base: DeviceConsentRequest = {
         deviceId,
         deviceLabel: this.deviceLabel(deviceId),
         method: action.method,
         command: action.command,
       };
+
       const request: DeviceConsentRequest = workspaceName
         ? { ...base, workspaceName }
         : base;
+
       decision = await stub.awaitDeviceConsent(request);
     } catch (error) {
       // The agent could not be reached to raise the card at all — nobody was
       // asked, so this is the unanswered case, not a refusal.
       diagnostics.event('device.consent_unreachable', { error: renderThrownChain({ cause: error }) });
+
       return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
     }
+
     // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
     if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
+
     if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
+
     if (decision === 'always') this.setDeviceBinding(agentName, deviceId, 'allow', action);
+
     return { allowed: true };
   }
 
@@ -2924,6 +3218,7 @@ export class UserDO extends Agent<Env> {
     lastSummary: string | null;
   }>> {
     await this.requireTier(caller, 'device.consent');
+
     return this.sqlx<{
       agent_name: string; device_id: string; policy: string;
       last_method: string | null; last_summary: string | null;
@@ -2949,8 +3244,10 @@ export class UserDO extends Agent<Env> {
    *  result. `revokeDevice` is the authority that ENDS live commands. */
   async revokeDeviceConsent(caller: UserCaller, agentName: string, deviceId: string): Promise<{ ok: boolean }> {
     await this.requireTier(caller, 'device.consent');
+
     if (!agentName || !deviceId) return { ok: false };
     this.sqlx(`DELETE FROM device_consent WHERE agent_name = ? AND device_id = ?`, agentName, deviceId);
+
     return { ok: true };
   }
 
@@ -2971,11 +3268,14 @@ export class UserDO extends Agent<Env> {
     // rows. Unnamed resolves the only live machine; several with none named
     // is "confined", the closed answer.
     const deviceId = this._devices.connectedDeviceId(device);
+
     if (!deviceId) return { unconfined: false };
     // Named so a facet cannot read a sibling workspace's answer by asking for
     // it: a workspace caller's identity is its token, never its argument.
     const workspace = resolved.kind === 'workspace' ? resolved.workspace : agentName;
+
     if (this.getDeviceBinding(workspace, deviceId) !== 'allow') return { unconfined: false };
+
     return { unconfined: this.deviceSandboxFor(deviceId, workspace).tier === 'raw' };
   }
 
@@ -3000,6 +3300,7 @@ export class UserDO extends Agent<Env> {
     sandbox: Pick<DeviceSandboxStatus, 'tier' | 'capability' | 'reason' | 'detail' | 'gpu'>;
   }>> {
     await this.requireTier(caller, 'device.manage');
+
     return this.sqlx<SandboxColumns & {
       id: string; label: string; os: string | null; hostname: string | null;
       created_at: number; last_seen_at: number | null; expires_at: number | null;
@@ -3051,11 +3352,13 @@ export class UserDO extends Agent<Env> {
     // grant on it, because two machines answer each of those independently
     // and a single "the connected device" was what let them take turns.
     const now = Date.now();
+
     const devices = await Promise.all(this.deviceFleet().map(async (device): Promise<DeviceFleetEntry> => {
       if (!device.connected) return device;
       // One row read: the sandbox verdict query already holds the consented
       // root and the device home, so no second SELECT names the same row.
       const { deviceHome, ...sandbox } = this.deviceSandboxFor(device.id, workspace);
+
       const reach: DeviceFleetEntry = {
         ...device,
         toolchain: await this._devices.probeToolchain(device.id, now),
@@ -3063,20 +3366,26 @@ export class UserDO extends Agent<Env> {
         consentedRoot: sandbox.roots[0] ?? null,
         deviceHome,
       };
+
       return workspace === null
         ? reach
         : { ...reach, granted: this.getDeviceBinding(workspace, device.id) === 'allow' };
     }));
+
     const live = devices.filter((device) => device.connected);
+
     if (live.length === 0) {
       return { connected: false, registered: devices.length > 0, toolchain: null, devices };
     }
+
     // The single-machine fields describe THE live machine and nothing else.
     // With several live there is no such machine, so they are absent — the
     // per-device entries above carry each machine's own answer.
     if (live.length > 1) return { connected: true, registered: true, toolchain: null, devices };
     const only = live[0];
+
     if (!only) return { connected: false, registered: devices.length > 0, toolchain: null, devices };
+
     const status: DeviceStatus = {
       connected: true,
       registered: true,
@@ -3088,7 +3397,9 @@ export class UserDO extends Agent<Env> {
       // gets are what the model needs to know before it writes anything.
       sandbox: only.sandbox,
     };
+
     if (only.granted !== undefined) status.workspaceGranted = only.granted;
+
     return status;
   }
 
@@ -3130,9 +3441,11 @@ export class UserDO extends Agent<Env> {
     // `_provisioning` above - a Durable Object serializes nothing across an
     // outbound await.
     const inFlight = this._revoking.get(deviceId);
+
     if (inFlight) return inFlight;
     const task = this.sweepAndRevokeDevice(deviceId);
     this._revoking.set(deviceId, task);
+
     try { return await task; } finally { this._revoking.delete(deviceId); }
   }
 
@@ -3154,6 +3467,7 @@ export class UserDO extends Agent<Env> {
     // sweep can change under its awaits. A displaced sweep keeps reporting the
     // outcome it observed; its guarded cleanup simply finds the row already gone.
     const rows = this._inflight.claimEveryRequestOf(deviceId);
+
     // Pessimistic, and written BEFORE the first await below: an activation that
     // dies mid-sweep leaves a revoked device the owner can SEE carries commands
     // nobody confirmed, rather than a silent revoked row with live processes and
@@ -3162,26 +3476,32 @@ export class UserDO extends Agent<Env> {
     if (rows.length > 0) {
       this.sqlx(`UPDATE user_devices SET unstopped_at = ? WHERE id = ?`, now, deviceId);
     }
+
     let unstoppedCommands = 0;
     const tunnel = this._devices.tunnel(deviceId);
+
     for (const row of rows) {
       // A stored answer already says nothing runs under this request, so it is
       // not an unstopped command however the socket behaves now. Its cleanup is
       // owed, and revocation drops every row below in either case.
       const settled = row.settled;
+
       if (!tunnel) {
         if (settled === null) unstoppedCommands += 1;
         continue;
       }
+
       try {
         if (settled === null) {
           const answer = parseDeviceCancelAnswer(row.requestId, await tunnel.rpc(
             DEVICE_CANCEL_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL],
           )).cancelled;
+
           // Durable before the acknowledgement, so an activation that dies here
           // leaves an answer rather than a row that reads as live work.
           this._inflight.settleRevoked(row.requestId, answer);
         }
+
         try {
           await tunnel.rpc(DEVICE_EXEC_ACK_METHOD, [row.requestId, DEVICE_CANCEL_PROTOCOL]);
         } catch (err) {
@@ -3203,6 +3523,7 @@ export class UserDO extends Agent<Env> {
         }), { device: deviceId, request: row.requestId });
       }
     }
+
     // One sweep per device runs at a time, so this decision is the whole truth
     // about the commands THIS sweep swept. A later revoke of an already-revoked
     // device sweeps nothing, wrote no provisional marker, and therefore may not
@@ -3221,6 +3542,7 @@ export class UserDO extends Agent<Env> {
     // grants on removed machines is what makes it unreadable.
     this.sqlx(`DELETE FROM device_consent WHERE device_id = ?`, deviceId);
     this._devices.close(deviceId, 'device revoked');
+
     return { ok: true, unstoppedCommands };
   }
 
@@ -3236,13 +3558,16 @@ export class UserDO extends Agent<Env> {
    */
   async acknowledgeUnstoppedDevice(caller: UserCaller, deviceId: string): Promise<{ ok: boolean }> {
     await this.requireTier(caller, 'device.manage');
+
     if (this._inflight.hasRequestsFor(deviceId)) return { ok: false };
+
     const cleared = this.sqlx<{ id: string }>(
       `UPDATE user_devices SET unstopped_at = NULL
         WHERE id = ? AND revoked_at IS NOT NULL AND unstopped_at IS NOT NULL
         RETURNING id`,
       deviceId,
     );
+
     return { ok: cleared.length === 1 };
   }
 
@@ -3250,11 +3575,13 @@ export class UserDO extends Agent<Env> {
 
   async upsertReleaseSource(caller: UserCaller, input: ReleaseSourceInput & { id?: string }): Promise<ReleaseSource> {
     await this.requireTier(caller, 'release');
+
     return this.releases().upsertSourceBinding(input);
   }
 
   async createReleaseChange(caller: UserCaller, agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ReleaseChange> {
     await this.requireTier(caller, 'release');
+
     return this.releases().createChange(agentName, input);
   }
 
@@ -3264,6 +3591,7 @@ export class UserDO extends Agent<Env> {
     patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
   ): Promise<ReleaseChange> {
     await this.requireTier(caller, 'release');
+
     return this.releases().updateChange(changeId, patch);
   }
 
@@ -3282,6 +3610,7 @@ export class UserDO extends Agent<Env> {
       outcome: 'ok',
       code: '',
     });
+
     return change;
   }
 
@@ -3291,11 +3620,13 @@ export class UserDO extends Agent<Env> {
     input: { name: string; status: ReleaseCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
   ): Promise<ReleaseCheck> {
     await this.requireTier(caller, 'release');
+
     return this.releases().recordCheck(changeId, input);
   }
 
   async requestReleaseApproval(caller: UserCaller, changeId: string, approvalType: ReleaseApproval['approvalType']): Promise<ReleaseApproval> {
     await this.requireTier(caller, 'release');
+
     return this.releases().requestApproval(changeId, approvalType);
   }
 
@@ -3307,6 +3638,7 @@ export class UserDO extends Agent<Env> {
     note?: string | null,
   ): Promise<ReleaseApproval> {
     await this.requireTier(caller, 'release');
+
     return this.releases().decideApproval(approvalId, decision, approvedBy, note);
   }
 
@@ -3325,17 +3657,20 @@ export class UserDO extends Agent<Env> {
       outcome: 'ok',
       code: '',
     });
+
     return deployment;
   }
 
   async getReleaseBoard(caller: UserCaller, agentName?: string, limit = 20): Promise<ReleaseBoard> {
     await this.requireTier(caller, 'release');
+
     return this.releases().board(agentName, limit);
   }
 
   /** Full ledger view of one change — the execution engine's read surface. */
   async getReleaseDetail(caller: UserCaller, changeId: string): Promise<ReleaseDetail> {
     await this.requireTier(caller, 'release');
+
     return this.releases().detail(changeId);
   }
 
@@ -3343,6 +3678,7 @@ export class UserDO extends Agent<Env> {
 
   private experienceLibrary() {
     this.ensureInit();
+
     return createExperienceLibrary(this.ctx.storage.sql);
   }
 
@@ -3354,9 +3690,11 @@ export class UserDO extends Agent<Env> {
    */
   async publishExperience(caller: UserCaller, candidate: PublishableCandidate): Promise<ExperienceEntry> {
     const resolved = await this.requireTier(caller, 'experience.write');
+
     if (resolved.kind !== 'workspace') {
       throw new Error('Only a workspace can publish experience; it publishes under its own name.');
     }
+
     return this.experienceLibrary().publish(candidate, resolved.workspace);
   }
 
@@ -3368,12 +3706,15 @@ export class UserDO extends Agent<Env> {
   ): Promise<ExperienceEntry[]> {
     const resolved = await this.requireTier(caller, 'experience.read');
     const searchOptions: typeof options & { excludeWorkspace?: string } = { ...options };
+
     if (resolved.kind === 'workspace') searchOptions.excludeWorkspace = resolved.workspace;
+
     return this.experienceLibrary().search(searchOptions);
   }
 
   async getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
     await this.requireTier(caller, 'experience.read');
+
     return this.experienceLibrary().get(id);
   }
 
@@ -3404,14 +3745,19 @@ export class UserDO extends Agent<Env> {
   async setCredential<CredentialInput>(caller: UserCaller, key: string, credentialJson: CredentialInput): Promise<void> {
     await this.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
+
     if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
       throw new Error(`${CLOUDFLARE_AI_GATEWAY_CRED_KEY} is derived from your Cloudflare login and cannot be stored directly.`);
     }
+
     const cred = validateCredential(credentialJson);
+
     if (key === CODEX_CRED_KEY && cred.kind === 'oauth' && !cred.refreshToken) {
       throw new Error('codex.oauth requires an OAuth refresh token.');
     }
+
     await this.writeCredential(key, cred);
+
     // Cloudflare login just landed → discover the account's AI Gateways now
     // (single-gateway auto-select lives in listAIGateways), so my-gateway
     // works without a settings visit. listAIGateways never throws.
@@ -3446,8 +3792,10 @@ export class UserDO extends Agent<Env> {
   private async readCredential(key: string): Promise<Credential | null> {
     await this.rewrapCredentials();
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
+
     if (!row) return null;
     let plaintext: string;
+
     try { plaintext = await (await this.cipher()).open(this.credentialAad(key), row.value); }
     catch (err) {
       diagnostics.failure('credential.unreadable', toKinuError({
@@ -3455,8 +3803,10 @@ export class UserDO extends Agent<Env> {
         cause: err,
         otherwise: 'bad_input',
       }), { credentialKey: key });
+
       return null;
     }
+
     // Parsed outside the catch above on purpose: a JSON error message quotes
     // the input it choked on, and that input is the decrypted secret.
     try { return validateCredential(JSON.parse(plaintext)); }
@@ -3466,6 +3816,7 @@ export class UserDO extends Agent<Env> {
         new KinuError('bad_input', 'a stored credential did not decode as JSON'),
         { credentialKey: key },
       );
+
       return null;
     }
   }
@@ -3474,6 +3825,7 @@ export class UserDO extends Agent<Env> {
    *  {@link commitCredential} can be paired with a fence read in one turn. */
   private async sealCredential(key: string, cred: Credential): Promise<string> {
     await this.rewrapCredentials();
+
     return (await this.cipher()).seal(this.credentialAad(key), JSON.stringify(cred));
   }
 
@@ -3492,6 +3844,7 @@ export class UserDO extends Agent<Env> {
     if (input.expectRevision !== undefined && this.credentialRevision(input.key) !== input.expectRevision) {
       return false;
     }
+
     const now = Date.now();
     this.sqlx(
       `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
@@ -3500,6 +3853,7 @@ export class UserDO extends Agent<Env> {
     );
     this.bumpCredentialRevision(input.key);
     this.bumpCredentialsRevision();
+
     return true;
   }
 
@@ -3522,6 +3876,7 @@ export class UserDO extends Agent<Env> {
     const row = v.safeParse(v.object({ revision: v.number() }), this.sqlx(
       `SELECT revision FROM user_credential_revisions WHERE key = ?`, key,
     )[0]);
+
     return row.success ? row.output.revision : 0;
   }
 
@@ -3544,6 +3899,7 @@ export class UserDO extends Agent<Env> {
    *  keep a stale catalog of exactly the model providers it needs. */
   async getCredentialsRevision(caller: UserCaller): Promise<number> {
     await this.requireTier(caller, 'credentials.model');
+
     return this.credentialsRevision();
   }
 
@@ -3551,6 +3907,7 @@ export class UserDO extends Agent<Env> {
     const row = v.safeParse(v.object({ revision: v.number() }), this.sqlx(
       `SELECT revision FROM user_credentials_revision WHERE id = 1`,
     )[0]);
+
     return row.success ? row.output.revision : 0;
   }
 
@@ -3577,11 +3934,13 @@ export class UserDO extends Agent<Env> {
     key: string, next: OAuthCredential, expectRevision: number,
   ): Promise<OAuthCredential | 'revoked'> {
     const sealed = await this.sealCredential(key, next);
+
     if (this.commitCredential({ key, kind: next.kind, sealed, expectRevision })) return next;
     diagnostics.event('credential.refresh_superseded', { outcome: 'denied', credentialKey: key });
     // The store is the authority, so the answer comes from it and never from
     // the token this call was carrying.
     const current = await this.readCredential(key);
+
     return current?.kind === 'oauth' ? current : 'revoked';
   }
 
@@ -3611,13 +3970,17 @@ export class UserDO extends Agent<Env> {
   private rewrapCredentials(): Promise<void> {
     this._credentialsRewrapped ??= (async () => {
       const cipher = await this.cipher();
+
       const marker = this.sqlx<{ value: string }>(
         `SELECT value FROM user_schema_meta WHERE key = ?`, UserDO.CREDENTIAL_ENVELOPE_MARKER,
       )[0];
+
       if (marker?.value === cipher.keyId) return;
       let clean = true;
+
       for (const row of this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_credentials`)) {
         const aad = this.credentialAad(row.key);
+
         try {
           this.sqlx(
             `UPDATE user_credentials SET value = ? WHERE key = ?`,
@@ -3632,10 +3995,12 @@ export class UserDO extends Agent<Env> {
           }), { credentialKey: row.key });
         }
       }
+
       for (const row of this.sqlx<{ id: string; headers: string }>(
         `SELECT id, headers FROM user_mcp_servers WHERE headers IS NOT NULL`,
       )) {
         const aad = this.mcpHeadersAad(row.id);
+
         try {
           this.sqlx(
             `UPDATE user_mcp_servers SET headers = ? WHERE id = ?`,
@@ -3650,10 +4015,12 @@ export class UserDO extends Agent<Env> {
           }), { serverId: row.id });
         }
       }
+
       // Egress secrets are sealed with the same cipher, so they rotate in the
       // same pass. Omitting them would let the marker claim the whole store is
       // current while these rows still needed a key the next rotation drops.
       if (!await rewrapEgressSecrets(this.egressVaultDeps(cipher))) clean = false;
+
       // The marker claims the WHOLE store is sealed under this key, and the
       // documented rotation drops the retired key on the strength of that
       // claim. A pass that left a row behind must not make it.
@@ -3664,6 +4031,7 @@ export class UserDO extends Agent<Env> {
         UserDO.CREDENTIAL_ENVELOPE_MARKER, cipher.keyId,
       );
     })();
+
     return this._credentialsRewrapped;
   }
 
@@ -3679,12 +4047,15 @@ export class UserDO extends Agent<Env> {
 
   private async sealMcpHeaders(serverId: string, headers: string | null): Promise<string | null> {
     await this.rewrapCredentials();
+
     return headers === null ? null : (await this.cipher()).seal(this.mcpHeadersAad(serverId), headers);
   }
 
   private async openMcpHeaders(serverId: string, stored: string | null): Promise<string | null> {
     await this.rewrapCredentials();
+
     if (stored === null) return null;
+
     try { return await (await this.cipher()).open(this.mcpHeadersAad(serverId), stored); }
     catch (err) {
       diagnostics.failure('mcp.stored_headers_unreadable', toKinuError({
@@ -3692,6 +4063,7 @@ export class UserDO extends Agent<Env> {
         cause: err,
         otherwise: 'bad_input',
       }), { serverId });
+
       return null;
     }
   }
@@ -3717,6 +4089,7 @@ export class UserDO extends Agent<Env> {
    *  the owner, the UI or an agent. */
   async listEgressSecrets(caller: UserCaller): Promise<EgressSecretSummary[]> {
     await this.requireTier(caller, 'egress_secrets.manage');
+
     return listEgressSecrets(this.ctx.storage.sql);
   }
 
@@ -3730,6 +4103,7 @@ export class UserDO extends Agent<Env> {
   async putEgressSecret(caller: UserCaller, input: PutEgressSecretInput): Promise<EgressSecretBinding> {
     await this.requireTier(caller, 'egress_secrets.manage');
     await this.rewrapCredentials();
+
     return putEgressSecret(this.egressVaultDeps(await this.cipher()), input);
   }
 
@@ -3737,6 +4111,7 @@ export class UserDO extends Agent<Env> {
    *  refused rather than forwarded with a dummy. */
   async revokeEgressSecret(caller: UserCaller, id: string): Promise<{ revoked: boolean }> {
     await this.requireTier(caller, 'egress_secrets.manage');
+
     return { revoked: revokeEgressSecret(this.ctx.storage.sql, id) };
   }
 
@@ -3757,6 +4132,7 @@ export class UserDO extends Agent<Env> {
   ): Promise<EgressInjectionResult> {
     await this.requireTier(caller, 'egress_secrets.inject');
     await this.rewrapCredentials();
+
     return resolveEgressInjection(this.egressVaultDeps(await this.cipher()), facts, active);
   }
 
@@ -3771,12 +4147,16 @@ export class UserDO extends Agent<Env> {
     // Workers AI — only the cf-aig-gateway-id header differs.
     const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
     const cred = await this.readCredential(storedKey);
+
     if (cred?.kind === 'openai-compat') return cred.baseURL;
+
     if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
       if (!isCloudflareCredentialUsable(cred)) return null;
       const accountId = accountIdFromCloudflareCredential(cred);
+
       return accountId ? cloudflareWorkersAIBaseURL(accountId) : null;
     }
+
     return null;
   }
 
@@ -3790,6 +4170,7 @@ export class UserDO extends Agent<Env> {
     // selected gateway (null until one is selected — that gates my-gateway).
     const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
     const stored = await this.readCredential(storedKey);
+
     if (!stored) return null;
     // Explicitly-typed non-null so the conditional refresh-reassignment below
     // doesn't re-widen back to `Credential | null`.
@@ -3798,23 +4179,31 @@ export class UserDO extends Agent<Env> {
     // Codex OAuth — auto-refresh if expiring or forced.
     if (storedKey === CODEX_CRED_KEY && cred.kind === 'oauth') {
       const refreshToken = cred.refreshToken;
+
       if (!refreshToken) return null;
       const needRefresh = opts?.forceRefresh || accessTokenExpiring(cred.accessToken);
+
       if (needRefresh) {
         const refreshed = await this.refreshCodexInternal({ ...cred, refreshToken });
+
         if (refreshed === 'revoked') return null;
+
         if (refreshed) cred = refreshed;
         // If refresh failed we keep using the old (possibly-expired) creds —
         // the caller may still succeed, and if not it gets 401 and a clear
         // signal that re-auth is needed.
       }
     }
+
     if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred.kind === 'oauth') {
       const needRefresh = opts?.forceRefresh || isCloudflareCredentialExpiring(cred);
+
       if (needRefresh) {
         if (!cred.refreshToken) return null;
         const refreshed = await this.refreshCloudflareInternal(cred);
+
         if (refreshed === 'revoked') return null;
+
         if (refreshed) cred = refreshed;
       }
     }
@@ -3822,8 +4211,10 @@ export class UserDO extends Agent<Env> {
     // A credential whose stored shape does not match its key is a defect, not
     // an absent credential: it must not reach the caller as "not connected".
     const headers = credentialToHeaders(storedKey, cred);
+
     if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
       const gatewayId = this.selectedAIGatewayId();
+
       if (!gatewayId) return null;
       headers['cf-aig-gateway-id'] = gatewayId;
     } else if (key === CLOUDFLARE_OAUTH_CRED_KEY) {
@@ -3832,6 +4223,7 @@ export class UserDO extends Agent<Env> {
       // platform's configured default.
       headers['cf-aig-gateway-id'] = this.selectedAIGatewayId() ?? cloudflareAIGatewayId(this.env);
     }
+
     return headers;
   }
 
@@ -3843,6 +4235,7 @@ export class UserDO extends Agent<Env> {
     const row = this.sqlx<{ value: string }>(
       `SELECT value FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY,
     )[0];
+
     return row && isCloudflareAIGatewayId(row.value) ? row.value : null;
   }
 
@@ -3850,14 +4243,19 @@ export class UserDO extends Agent<Env> {
    *  API calls. Null when no usable Cloudflare credential is stored. */
   private async cloudflareAPICredential(): Promise<{ accessToken: string; accountId: string } | null> {
     const stored = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+
     if (stored?.kind !== 'oauth' || !isCloudflareCredentialUsable(stored)) return null;
     let cred = stored;
+
     if (isCloudflareCredentialExpiring(cred)) {
       const refreshed = await this.refreshCloudflareInternal(cred);
+
       if (refreshed === 'revoked' || !refreshed) return null;
       cred = refreshed;
     }
+
     const accountId = accountIdFromCloudflareCredential(cred);
+
     return accountId ? { accessToken: cred.accessToken, accountId } : null;
   }
 
@@ -3873,13 +4271,17 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'ai_gateway.admin');
     let selectedId = this.selectedAIGatewayId();
     const api = await this.cloudflareAPICredential();
+
     if (!api) return { connected: false, selectedId, gateways: [], error: null };
+
     try {
       const gateways = await fetchCloudflareAIGateways(api.accountId, api.accessToken);
+
       if (!selectedId && gateways.length === 1) {
         await this.selectAIGateway(await ownerCaller(this.env), gateways[0].id);
         selectedId = gateways[0].id;
       }
+
       return { connected: true, selectedId, gateways, error: null };
     } catch (err) {
       return { connected: true, selectedId, gateways: [], error: renderThrownChain({ cause: err }) };
@@ -3888,10 +4290,13 @@ export class UserDO extends Agent<Env> {
 
   async selectAIGateway(caller: UserCaller, gatewayId: string | null): Promise<void> {
     await this.requireTier(caller, 'ai_gateway.admin');
+
     if (gatewayId === null) {
       this.sqlx(`DELETE FROM user_config WHERE key = ?`, UserDO.AI_GATEWAY_CONFIG_KEY);
+
       return;
     }
+
     if (!isCloudflareAIGatewayId(gatewayId)) throw new Error('Invalid AI Gateway id.');
     await this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
   }
@@ -3908,7 +4313,9 @@ export class UserDO extends Agent<Env> {
   }> {
     await this.requireTier(caller, 'ai_gateway.admin');
     const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+
     if (cred?.kind !== 'oauth') return { connected: false, selectedId: null, accounts: [] };
+
     return {
       connected: true,
       selectedId: accountIdFromCloudflareCredential(cred),
@@ -3922,6 +4329,7 @@ export class UserDO extends Agent<Env> {
   async selectCloudflareAccount(caller: UserCaller, accountId: string): Promise<void> {
     await this.requireTier(caller, 'ai_gateway.admin');
     const cred = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
+
     if (cred?.kind !== 'oauth') throw new Error('Cloudflare is not connected.');
     await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, withCloudflareAccount(cred, accountId));
     const owner = await ownerCaller(this.env);
@@ -3942,8 +4350,10 @@ export class UserDO extends Agent<Env> {
    *  the owner can disconnect or reconnect. */
   private async refreshCloudflareInternal(current: OAuthCredential): Promise<OAuthCredential | 'revoked' | null> {
     const revision = this.credentialRevision(CLOUDFLARE_OAUTH_CRED_KEY);
+
     try {
       const next = await refreshCloudflareCredential(this.env, current);
+
       return await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, next, revision);
     } catch (err) {
       if (err instanceof CloudflareOAuthTokenError && err.oauthError === 'invalid_grant') {
@@ -3958,13 +4368,16 @@ export class UserDO extends Agent<Env> {
         // during the round trip must not be demoted by its predecessor's
         // rejection.
         await this.commitRefreshedCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest, revision);
+
         return 'revoked';
       }
+
       diagnostics.failure('credential.cloudflare_refresh_failed', toKinuError({
         doing: 'refreshing the Cloudflare credential',
         cause: err,
         otherwise: 'unavailable',
       }));
+
       return null;
     }
   }
@@ -3980,8 +4393,10 @@ export class UserDO extends Agent<Env> {
   private async refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthCredential | 'revoked' | null> {
     const revision = this.credentialRevision(CODEX_CRED_KEY);
     const client = createCodexOAuthClient();
+
     try {
       const fresh = await client.refresh(current.refreshToken);
+
       const next: OAuthCredential = {
         kind: 'oauth',
         accessToken: fresh.accessToken,
@@ -3989,6 +4404,7 @@ export class UserDO extends Agent<Env> {
         expiresAt: fresh.expiresAt,
         metadata: current.metadata,
       };
+
       return await this.commitRefreshedCredential(CODEX_CRED_KEY, next, revision);
     } catch (err) {
       if (err instanceof CodexOAuthTokenError && err.oauthError === 'invalid_grant') {
@@ -4001,13 +4417,16 @@ export class UserDO extends Agent<Env> {
         // during the round trip is not deleted by the rejection of the
         // credential it replaced.
         this.retireRejectedCredential(CODEX_CRED_KEY, revision);
+
         return 'revoked';
       }
+
       diagnostics.failure('credential.codex_refresh_failed', toKinuError({
         doing: 'refreshing the Codex credential',
         cause: err,
         otherwise: 'unavailable',
       }));
+
       return null;
     }
   }
@@ -4044,15 +4463,18 @@ export class UserDO extends Agent<Env> {
          settled_at     = NULL`,
       result.deviceAuthId, result.userCode, result.pollIntervalSec, result.portalURL, Date.now(),
     );
+
     return result;
   }
 
   async pollCodexDeviceFlow(caller: UserCaller): Promise<{ connected: boolean; accountId?: string; error?: string }> {
     await this.requireTier(caller, 'codex_auth');
+
     const row = this.sqlx<{ device_auth_id: string; user_code: string; generation: number }>(
       `SELECT device_auth_id, user_code, generation FROM codex_device_flow
        WHERE id = 1 AND settled_at IS NULL`,
     )[0];
+
     if (!row) return { connected: false, error: 'No device flow in progress — call startCodexDeviceFlow first.' };
     // Both fences are read here, BEFORE the provider wait that is the whole
     // reason they exist.
@@ -4060,20 +4482,26 @@ export class UserDO extends Agent<Env> {
     const revision = this.credentialRevision(CODEX_CRED_KEY);
 
     const client = createCodexOAuthClient();
+
     try {
       const poll = await client.pollDeviceFlow(row.device_auth_id, row.user_code);
+
       if (poll.status === 'pending') return { connected: false }; // still pending
+
       if (poll.status === 'expired' || poll.status === 'denied') return { connected: false, error: poll.message };
       const accountId = decodeCodexAccountId(poll.tokens.accessToken);
       const cred = tokensToCredential(poll.tokens, accountId ? { accountId } : undefined);
       const sealed = await this.sealCredential(CODEX_CRED_KEY, cred);
+
       if (!this.commitCodexDeviceFlow({ generation, revision, kind: cred.kind, sealed })) {
         diagnostics.event('credential.codex_device_flow_superseded', { outcome: 'denied' });
+
         return {
           connected: false,
           error: 'That Codex sign-in was superseded before it completed — start the connection again.',
         };
       }
+
       return { connected: true, accountId: accountId ?? undefined };
     } catch (err) {
       return { connected: false, error: renderThrownChain({ cause: err }) };
@@ -4098,11 +4526,14 @@ export class UserDO extends Agent<Env> {
        WHERE id = 1 AND generation = ? AND settled_at IS NULL`,
       input.generation,
     ).length > 0;
+
     if (!open) return false;
+
     if (!this.commitCredential({
       key: CODEX_CRED_KEY, kind: input.kind, sealed: input.sealed, expectRevision: input.revision,
     })) return false;
     this.sqlx(`UPDATE codex_device_flow SET settled_at = ? WHERE id = 1`, Date.now());
+
     return true;
   }
 
@@ -4118,6 +4549,7 @@ export class UserDO extends Agent<Env> {
   async getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
     await this.requireTier(caller, 'codex_auth');
     const cred = await this.readCredential(CODEX_CRED_KEY);
+
     // Only an OPEN attempt is a flow the owner is in the middle of. A settled
     // row is the record that keeps the generation rising, not a prompt to go
     // back to a portal page that has already been used.
@@ -4125,6 +4557,7 @@ export class UserDO extends Agent<Env> {
       `SELECT user_code, portal_url, poll_interval FROM codex_device_flow
        WHERE id = 1 AND settled_at IS NULL`,
     )[0];
+
     if (cred?.kind === 'oauth') {
       return {
         connected: true,
@@ -4135,6 +4568,7 @@ export class UserDO extends Agent<Env> {
           : null,
       };
     }
+
     return {
       connected: false,
       accountId: null,
@@ -4149,18 +4583,23 @@ export class UserDO extends Agent<Env> {
 
   async getConfig(caller: UserCaller, key: string): Promise<string | null> {
     await this.requireTier(caller, 'config');
+
     if (key === PROFILE_CATALOG_CONFIG_KEY) {
       throw new Error('profile_catalog has a dedicated typed CAS route.');
     }
+
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_config WHERE key = ?`, key)[0];
+
     return row?.value ?? null;
   }
 
   async setConfig(caller: UserCaller, key: string, value: string): Promise<void> {
     await this.requireTier(caller, 'config');
+
     if (key === PROFILE_CATALOG_CONFIG_KEY) {
       throw new Error('profile_catalog has a dedicated typed CAS route.');
     }
+
     this.sqlx(
       `INSERT INTO user_config (key, value, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
@@ -4170,11 +4609,15 @@ export class UserDO extends Agent<Env> {
 
   async listConfig(caller: UserCaller): Promise<Record<string, string>> {
     await this.requireTier(caller, 'config');
+
     const rows = this.sqlx<{ key: string; value: string }>(
       `SELECT key, value FROM user_config WHERE key <> ?`, PROFILE_CATALOG_CONFIG_KEY,
     );
+
     const out: Record<string, string> = {};
+
     for (const r of rows) out[r.key] = r.value;
+
     return out;
   }
 
@@ -4189,6 +4632,7 @@ export class UserDO extends Agent<Env> {
    */
   private async requireOwnerSession(caller: UserCaller): Promise<void> {
     const resolved = await this.requireTier(caller, 'config');
+
     if (resolved.kind !== 'owner_session') {
       throw new CapabilityDeniedError(
         'The profile catalog is owner-only. Workspaces cannot read or write the account\'s roles and tiers.',
@@ -4200,6 +4644,7 @@ export class UserDO extends Agent<Env> {
    *  configuration error, not permission to substitute different authority. */
   private parseStoredProfileCatalog(value: string): ProfileCatalog {
     let json: JsonValue;
+
     try {
       json = decodeJsonValue({ value: JSON.parse(value) });
     } catch (error) {
@@ -4208,6 +4653,7 @@ export class UserDO extends Agent<Env> {
         { cause: error },
       );
     }
+
     try {
       return validateProfileCatalog(json);
     } catch (error) {
@@ -4234,20 +4680,24 @@ export class UserDO extends Agent<Env> {
     const rawRow = this.sqlx(
       `SELECT value, version FROM user_config WHERE key = ?`, PROFILE_CATALOG_CONFIG_KEY,
     )[0];
+
     if (!rawRow) return { version: 0, catalog: BUILTIN_PROFILE_CATALOG };
 
     let row: StoredProfileCatalogRow;
+
     try {
       row = v.parse(StoredProfileCatalogRowSchema, rawRow);
     } catch (error) {
       throw new Error('The stored account profile catalog state is malformed.', { cause: error });
     }
+
     return { version: row.version, catalog: this.parseStoredProfileCatalog(row.value) };
   }
 
   async getProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
     await this.requireOwnerSession(caller);
     const current = this.readProfileCatalogState();
+
     return this.profileCatalogEnvelope(current.version, current.catalog);
   }
 
@@ -4256,6 +4706,7 @@ export class UserDO extends Agent<Env> {
   async getWorkspaceProfileCatalog(caller: UserCaller): Promise<ProfileCatalogEnvelope> {
     await this.requireTier(caller, 'profile.resolve');
     const current = this.readProfileCatalogState();
+
     return this.profileCatalogEnvelope(current.version, current.catalog);
   }
 
@@ -4268,10 +4719,13 @@ export class UserDO extends Agent<Env> {
    */
   async putProfileCatalog(caller: UserCaller, catalog: JsonValue, expectedVersion: number): Promise<ProfileCatalogWriteResult> {
     await this.requireOwnerSession(caller);
+
     if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 0) {
       return { ok: false, kind: 'malformed', reason: 'expectedVersion must be a non-negative integer.' };
     }
+
     let parsed: ProfileCatalog;
+
     try {
       parsed = validateProfileCatalog(catalog);
     } catch (cause) {
@@ -4281,8 +4735,10 @@ export class UserDO extends Agent<Env> {
       // which is exactly the loss `renderThrownChain` exists to stop.
       return { ok: false, kind: 'malformed', reason: renderThrownChain({ cause }) };
     }
+
     // No await from here to the write: DO input gates make the CAS atomic.
     const current = this.readProfileCatalogState();
+
     if (current.version !== expectedVersion) {
       return {
         ok: false,
@@ -4291,12 +4747,14 @@ export class UserDO extends Agent<Env> {
         currentDigest: profileCatalogDigest(current.catalog),
       };
     }
+
     const nextVersion = current.version + 1;
     this.sqlx(
       `INSERT INTO user_config (key, value, updated_at, version) VALUES (?, ?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at, version = excluded.version`,
       PROFILE_CATALOG_CONFIG_KEY, JSON.stringify(parsed), Date.now(), nextVersion,
     );
+
     return { ok: true, envelope: this.profileCatalogEnvelope(nextVersion, parsed) };
   }
 
@@ -4308,6 +4766,7 @@ export class UserDO extends Agent<Env> {
    *  `user_mcp_servers`; the SDK rows are derived from it. */
   private userMcp(): MCPClientManager {
     this.ensureInit();
+
     return this.mcp;
   }
 
@@ -4358,6 +4817,7 @@ export class UserDO extends Agent<Env> {
     if (this._hydratingUserMcp) return this._hydratingUserMcp;
     const hydration = this.hydrateUserMcpOnce();
     this._hydratingUserMcp = hydration;
+
     try {
       await hydration;
     } finally {
@@ -4369,16 +4829,20 @@ export class UserDO extends Agent<Env> {
    *  {@link hydrateUserMcp}, which coalesces concurrent callers. */
   private async hydrateUserMcpOnce(): Promise<void> {
     const mgr = this.userMcp();
+
     const rows = this.sqlx<McpHydrationRow>(
       `SELECT id, name, server_url, transport, headers FROM user_mcp_servers`,
     );
+
     const configured = new Set(rows.map((row) => row.id));
     // Read ONCE, and kept: these rows answer both questions this pass asks of
     // the SDK's storage — which of them no config row owns, and which of them
     // still hold a credential as data.
     const sdkRows = mgr.listServers();
+
     for (const stored of sdkRows) {
       if (configured.has(stored.id)) continue;
+
       try { await mgr.removeServer(stored.id); }
       catch (err) {
         diagnostics.failure('mcp.orphan_server_removal_failed', toKinuError({
@@ -4391,21 +4855,25 @@ export class UserDO extends Agent<Env> {
     }
 
     const registered: string[] = [];
+
     for (const row of rows) {
       const live = mgr.mcpConnections[row.id]?.options.transport;
       const seamLive = live !== undefined && 'fetch' in live && live.fetch !== undefined;
       // A sealed credential must run on the seam, and a credential the SDK
       // stored as data must go — whether or not our column still holds one.
       const needsSeam = row.headers !== null && !seamLive;
+
       const holdsPlaintext = storedMcpOptionsCarryCredential(
         sdkRows.find((server) => server.id === row.id)?.server_options,
       );
+
       if (!needsSeam && !holdsPlaintext) continue;
       await this.registerOwnedMcpTransport(row);
       registered.push(row.id);
     }
 
     await this.restoreUserMcp(USER_MCP_CLIENT_NAME);
+
     for (const id of registered) await mgr.establishConnection(id);
     this._userMcpHydrated = true;
   }
@@ -4435,6 +4903,7 @@ export class UserDO extends Agent<Env> {
     const mgr = this.userMcp();
     const stored = mgr.listServers().find((server) => server.id === row.id);
     const callbackUrl = stored?.callback_url ?? '';
+
     if (mgr.mcpConnections[row.id]) {
       try { await mgr.removeServer(row.id); }
       catch (err) {
@@ -4446,6 +4915,7 @@ export class UserDO extends Agent<Env> {
         throw err;
       }
     }
+
     const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> =
       row.headers === null
         ? { type: row.transport }
@@ -4453,18 +4923,24 @@ export class UserDO extends Agent<Env> {
             ...mcpCredentialTransport(row.server_url, () => this.openMcpHeaderMap(row.id)),
             type: row.transport,
           };
+
     if (callbackUrl) {
       const authProvider = new DurableObjectOAuthClientProvider(
         this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
       );
+
       authProvider.serverId = row.id;
+
       if (stored?.client_id) authProvider.clientId = stored.client_id;
       transport.authProvider = authProvider;
     }
+
     const options: Parameters<MCPClientManager['registerServer']>[1] = {
       url: row.server_url, name: row.name, callbackUrl, transport,
     };
+
     if (stored?.client_id) options.clientId = stored.client_id;
+
     if (stored?.auth_url) options.authUrl = stored.auth_url;
     await mgr.registerServer(row.id, options);
   }
@@ -4479,7 +4955,9 @@ export class UserDO extends Agent<Env> {
     const row = this.sqlx<{ headers: string | null }>(
       `SELECT headers FROM user_mcp_servers WHERE id = ?`, serverId,
     )[0];
+
     if (!row) return null;
+
     return parseMcpHeaders(await this.openMcpHeaders(serverId, row.headers));
   }
 
@@ -4497,6 +4975,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'mcp.manage');
     const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
     const servers = rows?.n ?? 0;
+
     try { await this.hydrateUserMcp(); }
     catch (err) {
       diagnostics.failure('mcp.connection_warmup_failed', toKinuError({
@@ -4505,11 +4984,13 @@ export class UserDO extends Agent<Env> {
         otherwise: 'unavailable',
       }), { servers });
     }
+
     return { servers };
   }
 
   async userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
     await this.requireTier(caller, 'mcp.manage');
+
     const rows = this.sqlx<{
       id: string; name: string; server_url: string; transport: McpTransport;
       allowed_tools: string | null; created_at: number; updated_at: number;
@@ -4517,6 +4998,7 @@ export class UserDO extends Agent<Env> {
       `SELECT id, name, server_url, transport, allowed_tools, created_at, updated_at
        FROM user_mcp_servers ORDER BY name`,
     );
+
     // Hydrate so the live view of connection state is real, and unconditionally
     // — an orphaned SDK row outlives the last config row, and this is the
     // management surface where that is settled. Idempotent. A failure here is a
@@ -4524,21 +5006,25 @@ export class UserDO extends Agent<Env> {
     // the row's `status` — so it must not report every server disconnected.
     await this.hydrateUserMcp();
     const connections = this.mcp.mcpConnections;
+
     return rows.map((r): McpServerSummary => {
       const conn = connections[r.id];
       const status = mapConnectionStatus(conn?.connectionState);
       const allowed = parseAllowedTools(r.allowed_tools);
+
       const toolsCount = conn?.tools
         ? (allowed
             ? conn.tools.filter((t: { name: string }) => allowed.includes(t.name)).length
             : conn.tools.length)
         : 0;
+
       // authUrl is set on the auth provider while AUTHENTICATING. The SDK
       // also persists it on the storage row; expose only if currently
       // pending so the UI knows whether to render the "Open authorize" link.
       const authUrl = status === 'authenticating'
         ? (conn?.options?.transport?.authProvider?.authUrl ?? null)
         : null;
+
       return {
         id: r.id,
         name: r.name,
@@ -4566,9 +5052,11 @@ export class UserDO extends Agent<Env> {
   ): Promise<{ id: string; authUrl: string | null }> {
     await this.requireTier(caller, 'mcp.manage');
     const cfg = validateMcpServerInput(input);
+
     if (!/^https?:\/\//.test(publicOrigin)) {
       throw new Error('publicOrigin must be a full https?:// origin.');
     }
+
     const id = nanoid(8);
     const now = Date.now();
     const headersJson = cfg.headers ? JSON.stringify(cfg.headers) : null;
@@ -4589,9 +5077,11 @@ export class UserDO extends Agent<Env> {
     });
 
     const callbackUrl = `${publicOrigin.replace(/\/+$/, '')}${MCP_OAUTH_CALLBACK_PATH}`;
+
     const authProvider = new DurableObjectOAuthClientProvider(
       this.ctx.storage, USER_MCP_CLIENT_NAME, callbackUrl,
     );
+
     authProvider.serverId = id;
 
     // The credential is a CLOSURE, never data the SDK can persist. See
@@ -4601,6 +5091,7 @@ export class UserDO extends Agent<Env> {
       : {};
 
     let authUrl: string | null = null;
+
     try {
       const mgr = this.userMcp();
       await mgr.registerServer(id, {
@@ -4614,9 +5105,11 @@ export class UserDO extends Agent<Env> {
         },
       });
       const result = await mgr.connectToServer(id);
+
       if (result.state === 'failed') {
         throw new Error(result.error ?? 'connection failed');
       }
+
       if (result.state === 'authenticating') {
         authUrl = result.authUrl ?? null;
       } else {
@@ -4636,12 +5129,15 @@ export class UserDO extends Agent<Env> {
       await this.userMcp().removeServer(id);
       throw new Error(`MCP connect failed: ${renderThrownChain({ cause: err })}`, { cause: err });
     }
+
     return { id, authUrl };
   }
 
   async userMcp_remove(caller: UserCaller, id: string): Promise<void> {
     await this.requireTier(caller, 'mcp.manage');
+
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
+
     try { await this.userMcp().removeServer(id); }
     catch (err) {
       diagnostics.failure('mcp.live_server_removal_failed', toKinuError({
@@ -4650,6 +5146,7 @@ export class UserDO extends Agent<Env> {
         otherwise: 'unavailable',
       }), { serverId: id });
     }
+
     this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
   }
 
@@ -4667,8 +5164,10 @@ export class UserDO extends Agent<Env> {
    *  doesn't support live re-targeting). */
   async userMcp_update<Patch>(caller: UserCaller, id: string, patch: Patch): Promise<void> {
     await this.requireTier(caller, 'mcp.manage');
+
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
     const parsedPatch = v.safeParse(LooseObjectSchema, patch);
+
     if (!parsedPatch.success) throw new Error('patch must be a JSON object.');
     const p = parsedPatch.output;
     const sets: string[] = [];
@@ -4676,34 +5175,44 @@ export class UserDO extends Agent<Env> {
     // ONE name rule, shared with the add path — a rename must not accept a name
     // an add would refuse, since both claim from the same canonical namespace.
     const renamed = p.name === undefined ? null : validateMcpServerName(p.name);
+
     if (renamed !== null) { sets.push('name = ?'); args.push(renamed); }
+
     if (p.allowedTools !== undefined) {
       const allowedTools = v.safeParse(NullableStringArraySchema, p.allowedTools);
+
       if (!allowedTools.success) throw new Error('allowedTools must be string[] or null.');
+
       if (allowedTools.output === null) {
         sets.push('allowed_tools = ?'); args.push(null);
       } else {
         sets.push('allowed_tools = ?'); args.push(JSON.stringify(allowedTools.output));
       }
     }
+
     if (p.headers !== undefined) {
       const headers = v.safeParse(NullableStringRecordSchema, p.headers);
+
       if (!headers.success) throw new Error('headers must be Record<string,string> or null.');
+
       if (headers.output === null) {
         sets.push('headers = ?'); args.push(null);
       } else {
         sets.push('headers = ?'); args.push(await this.sealMcpHeaders(id, JSON.stringify(headers.output)));
       }
     }
+
     // Everything above is validated and sealed, so nothing below awaits. The
     // write is the last thing that happens and it happens atomically.
     if (sets.length === 0) return;
     const now = Date.now();
     sets.push('updated_at = ?'); args.push(now);
     args.push(id);
+
     const write = (): void => {
       this.ctx.storage.sql.exec(`UPDATE user_mcp_servers SET ${sets.join(', ')} WHERE id = ?`, ...args);
     };
+
     if (renamed === null) write();
     else this.claimMcpServerName(renamed, id, write);
 
@@ -4741,12 +5250,14 @@ export class UserDO extends Agent<Env> {
    */
   private claimMcpServerName(name: string, serverId: string, write: () => void): void {
     this.ensureInit();
+
     try {
       this.ctx.storage.transactionSync(() => {
         const taken = this.ctx.storage.sql.exec(
           `SELECT 1 AS held FROM user_mcp_servers WHERE lower(name) = lower(?) AND id <> ? LIMIT 1`,
           name, serverId,
         ).toArray().length > 0;
+
         if (taken) throw new Error(mcpNameTakenMessage(name));
         write();
       });
@@ -4786,12 +5297,15 @@ export class UserDO extends Agent<Env> {
    */
   async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
     await this.requireTier(caller, 'mcp.tools');
+
     const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
       `SELECT id, name, allowed_tools FROM user_mcp_servers`,
     );
+
     if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
 
     const allowedById = new Map<string, ReadonlySet<string> | null>();
+
     for (const r of rows) {
       const allowed = parseAllowedTools(r.allowed_tools);
       allowedById.set(r.id, allowed ? new Set(allowed) : null);
@@ -4799,6 +5313,7 @@ export class UserDO extends Agent<Env> {
 
     const out: SerializableToolDescriptor[] = [];
     const connections = this.mcp.mcpConnections;
+
     // Connection is a property of the SDK connection, NOT of emitted
     // descriptors. A ready server can expose zero tools or have every tool
     // filtered by `allowed_tools`; neither fact means it is still connecting.
@@ -4807,6 +5322,7 @@ export class UserDO extends Agent<Env> {
         .filter(([, conn]) => mapConnectionStatus(conn.connectionState) === 'ready')
         .map(([id]) => id),
     );
+
     for (const [id, conn] of Object.entries(connections)) {
       // The two channels are disjoint by construction: a connection that is
       // not ready contributes no descriptors, and the `unavailable` list below
@@ -4817,14 +5333,18 @@ export class UserDO extends Agent<Env> {
       // are gone, is the contradiction this gate deletes.
       if (!connected.has(id)) continue;
       const allowed = allowedById.get(id);
+
       if (allowed === undefined) continue; // deleted
       const meta = rows.find((r) => r.id === id);
+
       if (!meta) continue;
+
       for (const tool of conn.tools) {
         if (allowed && !allowed.has(tool.name)) continue;
         out.push(describeMcpTool({ id, name: meta.name }, tool));
       }
     }
+
     const unavailable = rows
       .filter((r) => !connected.has(r.id))
       .map((r) => ({
@@ -4833,11 +5353,13 @@ export class UserDO extends Agent<Env> {
           + `installed by the next turn once the connection completes — a turn's tool set is fixed `
           + `when the turn opens.`,
       }));
+
     // Sorted by the tool key, because this JSON is what the orchestrator's
     // cache hashes: `Object.entries(connections)` order is whatever the SDK's
     // map happens to hold, so an unsorted surface re-hashes — and rebuilds every
     // tool closure — for a reason nobody changed.
     out.sort((a, b) => (a.toolKey < b.toolKey ? -1 : a.toolKey > b.toolKey ? 1 : 0));
+
     return JSON.stringify({ descriptors: out, unavailable } satisfies McpToolSurface);
   }
 
@@ -4855,25 +5377,32 @@ export class UserDO extends Agent<Env> {
     // for a workspace this user's registry issued one to, and dies with it.
     await this.requireTier(caller, 'mcp.tools');
     const manager = this.userMcp();
+
     if (!this._userMcpHydrated) {
       // Cold start: hydrate the manager before dispatching.
       try { await this.hydrateUserMcp(); }
       catch (err) { throw new Error(`MCP not ready: ${renderThrownChain({ cause: err })}`, { cause: err }); }
     }
+
     // Type-check the server membership inside our SQL so a stale orchestrator
     // closure can't dispatch to a server the user just deleted.
     const row = this.sqlx<{ allowed_tools: string | null }>(
       `SELECT allowed_tools FROM user_mcp_servers WHERE id = ?`, serverId,
     )[0];
+
     if (!row) throw new Error(`Unknown MCP server: ${serverId}`);
     const allowed = parseAllowedTools(row.allowed_tools);
+
     if (allowed && !allowed.includes(name)) {
       throw new Error(`Tool '${name}' is not in the allowed_tools list for this server.`);
     }
+
     const parsedParams = v.safeParse(JsonObjectSchema, args);
     const params = parsedParams.success ? parsedParams.output : {};
+
     try {
       const result = await manager.callTool({ serverId, name, arguments: params });
+
       return JSON.stringify(decodeJsonValue({ value: result }));
     } catch (err) {
       await this.convergeMcpAuthState({ serverId, cause: err });
@@ -4906,6 +5435,7 @@ export class UserDO extends Agent<Env> {
   private async convergeMcpAuthState(input: { serverId: string; cause: unknown }): Promise<void> {
     if (!isMcpTransportUnauthorized(input)) return;
     const { serverId } = input;
+
     try { await this.userMcp().discoverIfConnected(serverId); }
     catch (err) {
       diagnostics.failure('mcp.auth_state_convergence_failed', toKinuError({
@@ -4920,9 +5450,11 @@ export class UserDO extends Agent<Env> {
    *  `/api/user/mcp/callback` request and forwards it here verbatim. */
   async userMcp_handleOAuthCallback(caller: UserCaller, url: string): Promise<{ ok: boolean; serverId: string | null; error: string | null }> {
     await this.requireTier(caller, 'mcp.manage');
+
     try {
       const req = new Request(url);
       const result = await this.userMcp().handleCallbackRequest(req);
+
       if (result.authSuccess) {
         // Awaited, and in its own try: the tokens ARE saved by this point, so a
         // connect failure must not be reported as an auth failure. Detaching it
@@ -4932,8 +5464,10 @@ export class UserDO extends Agent<Env> {
         // sign-in.
         try { await this.userMcp().establishConnection(result.serverId); }
         catch (err) { return { ok: true, serverId: result.serverId, error: `connected but not established: ${renderThrownChain({ cause: err })}` }; }
+
         return { ok: true, serverId: result.serverId, error: null };
       }
+
       return { ok: false, serverId: result.serverId ?? null, error: result.authError };
     } catch (err) {
       return { ok: false, serverId: null, error: renderThrownChain({ cause: err }) };
@@ -4948,29 +5482,36 @@ export class UserDO extends Agent<Env> {
     const creds = this.credentialSummaries(await this.requireTier(caller, 'credentials.model'));
     const byKey = new Map(creds.map((c) => [c.key, c]));
     const out: ConnectedProvider[] = [];
+
     // Built-in providers without credentials are listed by the server, not
     // here — UserDO only knows about credential-gated ones.
     if (byKey.has(CLOUDFLARE_OAUTH_CRED_KEY)) {
       out.push({ id: 'workers-ai', label: 'Cloudflare Workers AI', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
+
       if (this.selectedAIGatewayId()) {
         out.push({ id: 'my-gateway', label: 'Your AI Gateway', credentialKeys: [CLOUDFLARE_OAUTH_CRED_KEY] });
       }
     }
+
     if (byKey.has(CODEX_CRED_KEY)) out.push({ id: 'codex', label: 'ChatGPT Codex', credentialKeys: [CODEX_CRED_KEY] });
+
     for (const c of creds) {
       // `<providerId>.bearer` — BYO API keys (bespoke trio + any models.dev
       // catalog provider). Display names come from the catalog client-side.
       const bearer = /^([a-z0-9][a-z0-9._-]*)\.bearer$/.exec(c.key);
+
       if (bearer) {
         out.push({ id: bearer[1], label: bearer[1], credentialKeys: [c.key] });
         continue;
       }
+
       // openai-compat is keyed by user-chosen suffix: 'openai-compat.<name>'
       if (c.key.startsWith('openai-compat.')) {
         const name = c.key.slice('openai-compat.'.length);
         out.push({ id: `openai-compat:${name}`, label: `OpenAI-compatible (${name})`, credentialKeys: [c.key] });
       }
     }
+
     return out;
   }
 }

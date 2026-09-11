@@ -85,6 +85,7 @@ function render(
   overrides: { tools?: ToolInfo[]; memoryContent?: string } = {},
 ): string {
   const { tools = [], memoryContent = '' } = overrides;
+
   return readable(renderToStaticMarkup(createElement(AgentSurface, {
     snapshot,
     tools,

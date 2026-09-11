@@ -15,9 +15,12 @@ import { readBuildStamp } from './lib/deployed-assets';
 
 export async function handleHealthRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
+
   if (url.pathname !== '/api/health') return null;
+
   if (request.method !== 'GET') return null;
   const build = await readBuildStamp(env, request.url);
+
   return Response.json({
     ok: build !== null,
     build,

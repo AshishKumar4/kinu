@@ -40,12 +40,15 @@ export type TextPayload =
 
 export function textPayload(value: string | Uint8Array | null | undefined): TextPayload {
   if (value === null || value === undefined) return { kind: 'absent' };
+
   if (!(value instanceof Uint8Array)) return { kind: 'text', text: value };
   const text = decodedText(value);
+
   return text === null ? { kind: 'binary' } : { kind: 'text', text };
 }
 
 const utf8 = new TextDecoder();
+
 const encoder = new TextEncoder();
 
 /** The bytes as text, or null when they are not text. A plane answers bytes
@@ -56,8 +59,11 @@ function decodedText(bytes: Uint8Array): string | null {
   if (bytes.includes(0)) return null;
   const text = utf8.decode(bytes);
   const again = encoder.encode(text);
+
   if (again.byteLength !== bytes.byteLength) return null;
+
   for (let i = 0; i < bytes.byteLength; i += 1) if (again[i] !== bytes[i]) return null;
+
   return text;
 }
 
@@ -85,13 +91,16 @@ export interface WriteObserver {
 export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T {
   const baselineFor = async (path: string): Promise<{ before?: string | Uint8Array | null } | null> => {
     if (!observer.needsBaseline(path)) return {};
+
     try {
       return { before: (await vfs.readFile(path)) ?? null };
     } catch (err) {
       if (isVfsError(err) && err.code === 'ENOENT') return { before: null };
+
       return null;
     }
   };
+
   const report = (
     path: string,
     baseline: { before?: string | Uint8Array | null } | null,
@@ -99,7 +108,9 @@ export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T
   ): void => {
     if (baseline) observer.record({ path, ...baseline, after });
   };
+
   const conditional = vfs.writeFileIfRevision;
+
   const wrapped: T = {
     ...vfs,
     readFile: (path, opts) => vfs.readFile(path, opts),
@@ -118,15 +129,19 @@ export function observeWrites<T extends VFS>(vfs: T, observer: WriteObserver): T
       report(path, baseline, null);
     },
   };
+
   if (conditional) {
     Object.assign(wrapped, {
       writeFileIfRevision: async (path: string, data: Uint8Array, expectedRevision: number) => {
         const baseline = await baselineFor(path);
         const result = await conditional(path, data, expectedRevision);
+
         if (result.ok) report(path, baseline, data);
+
         return result;
       },
     });
   }
+
   return wrapped;
 }

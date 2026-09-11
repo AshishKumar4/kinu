@@ -37,7 +37,9 @@ import {
 } from './helpers/actor-harness';
 
 const OWNER_USER_ID = '0123456789abcdef0123456789abcdef';
+
 const WORKSPACE = 'jarvis';
+
 const TURN = 'u-turn-with-a-laptop-command';
 
 /** The `work_cancelled` frame, parsed rather than cast: `deviceCommands` is the
@@ -84,9 +86,11 @@ async function stopRail(responder: DeviceResponder): Promise<StopRail> {
   // machine that says nothing is one the hub correctly refuses to run on.
   await user.sendDeviceHello(CAPABLE_HELLO);
   const token = await provisionTestWorkspace(user, WORKSPACE, 'Jarvis');
+
   const actor = orchestratorHarness(undefined, {
     userDO: user.userDO, workspace: WORKSPACE, ownerUserId: OWNER_USER_ID,
   });
+
   actor.agent.harnessHoldsCapability(token);
   // The turn-start refresh production detaches, awaited: it is what makes the
   // connected device visible to this actor's laptop runtime.
@@ -96,6 +100,7 @@ async function stopRail(responder: DeviceResponder): Promise<StopRail> {
   actor.agent.harnessBeginTurn(TURN);
   const broadcasts: string[] = [];
   Reflect.set(actor.agent, 'broadcast', (payload: string) => { broadcasts.push(payload); });
+
   return {
     user,
     actor,
@@ -124,6 +129,7 @@ async function asked(rail: StopRail, method: string): Promise<void> {
     setImmediate(resolve);
     await promise;
   }
+
   throw new Error(`the device was never asked to ${method}`);
 }
 
@@ -131,12 +137,15 @@ async function asked(rail: StopRail, method: string): Promise<void> {
  *  completion can be put on the far side of its own cancellation. */
 function holdingDaemon(cancelled: 'terminated' | 'unknown' = 'terminated') {
   const held = Promise.withResolvers<JsonValue>();
+
   return {
     responder: (frame: DeviceFrame): JsonValue | Promise<JsonValue> => {
       if (frame.method === 'exec') return held.promise;
+
       if (frame.method === DEVICE_CANCEL_METHOD) {
         return { requestId: String(frame.params[0]), cancelled };
       }
+
       return daemon(frame);
     },
     release: () => held.resolve({ stdout: 'partial build output', stderr: '', exitCode: 0 }),
@@ -155,6 +164,7 @@ describe('stopping the turn stops the command running on the owner\'s machine', 
     const running = rail.actor.agent.executeInExecutor('laptop', 'bun run build');
     await asked(rail, 'exec');
     const requestId = rail.inflightRows()[0]?.request_id;
+
     if (requestId === undefined) throw new Error('the command left no durable row to stop');
     expect(rail.inflightRows()).toEqual([{ request_id: requestId, turn_id: TURN }]);
     expect(rail.user.consentPrompts.map((prompt) => prompt.method)).toEqual(['exec']);
@@ -194,19 +204,25 @@ describe('stopping the turn stops the command running on the owner\'s machine', 
     // command may still be executing on the owner's computer.
     let killWorks = false;
     const held = Promise.withResolvers<JsonValue>();
+
     const rail = await stopRail((frame: DeviceFrame) => {
       if (frame.method === 'exec') return held.promise;
+
       if (frame.method === DEVICE_CANCEL_METHOD) {
         if (!killWorks) throw new Error('the kernel refused the kill');
+
         return { requestId: String(frame.params[0]), cancelled: 'terminated' };
       }
+
       return daemon(frame);
     });
+
     rail.user.consentDecision = 'always';
 
     const running = rail.actor.agent.executeInExecutor('laptop', 'bun run build');
     await asked(rail, 'exec');
     const requestId = rail.inflightRows()[0]?.request_id;
+
     if (requestId === undefined) throw new Error('the command left no durable row to stop');
 
     const outcome = await rail.actor.agent.cancelCurrentWork();
@@ -214,11 +230,13 @@ describe('stopping the turn stops the command running on the owner\'s machine', 
     expect(outcome.deviceCommands).toHaveLength(1);
     expect(outcome.deviceCommands[0]?.outcome).toBe('failed');
     expect(outcome.deviceCommands[0]?.detail).toContain('refused the kill');
+
     // The owner-facing frame says the same thing: no tab is told this stopped.
     const cancelled = rail.broadcasts
       .map((payload) => v.safeParse(WorkCancelledSchema, JSON.parse(payload)))
       .filter((frame) => frame.success)
       .map((frame) => frame.output);
+
     expect(cancelled[0]?.deviceCommands[0]?.outcome).toBe('failed');
     // Still live work: the claim went back, so the row is there for the next
     // sweep — a failed stop is retryable, never forgotten.

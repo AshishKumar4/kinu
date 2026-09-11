@@ -54,12 +54,14 @@ export class DefaultExecutionRouter implements ExecutionRouter {
   listExecutors(): ExecutorInfo[] {
     return [...this.providers.values()].map(p => {
       const fallback = p.isAvailable();
+
       const status = p.getStatus?.() ?? {
         configured: fallback,
         available: fallback,
         active: fallback,
         status: fallback ? 'active' as const : 'not_configured' as const,
       };
+
       const info: ExecutorInfo = {
         name: p.name,
         kind: p.kind,
@@ -69,14 +71,21 @@ export class DefaultExecutionRouter implements ExecutionRouter {
         active: status.active,
         status: status.status,
       };
+
       if (p.unmeasuredCapabilities !== undefined && p.unmeasuredCapabilities.size > 0) {
         info.unmeasuredCapabilities = [...p.unmeasuredCapabilities];
       }
+
       if (status.reason !== undefined) Object.assign(info, { reason: status.reason });
+
       if (status.label !== undefined) Object.assign(info, { label: status.label });
+
       if (status.granted !== undefined) Object.assign(info, { granted: status.granted });
+
       if (status.sandbox !== undefined) Object.assign(info, { sandbox: status.sandbox });
+
       if (p.resourceLimits !== undefined) Object.assign(info, { resourceLimits: p.resourceLimits });
+
       return info;
     });
   }

@@ -199,6 +199,7 @@ export class HeadController {
    */
   private resolveTopLevelRun(task: string): HeadId {
     const journal = this.journal;
+
     if (!isRootJournal(journal)) {
       // Not a degrade: minting a fresh id here is exactly the defect above, so a
       // facet's port reaching this is a wiring error and says so.
@@ -207,6 +208,7 @@ export class HeadController {
         + 'unfinished run in the store. A recursive split has to pass parentHeadId.',
       );
     }
+
     return journal.findResumableRun(task) ?? nanoid();
   }
 
@@ -235,9 +237,11 @@ export class HeadController {
     const strategy: MergeStrategy = opts.request.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
 
     const parentBudget = opts.parentBudget;
+
     if (parentBudget.maxDepth <= 0) {
       throw new Error('Cannot split: max depth reached');
     }
+
     if (opts.request.heads.length === 0) {
       throw new Error('Cannot split: no head tasks provided');
     }
@@ -247,6 +251,7 @@ export class HeadController {
     // Only the root owns run identity and final settlement. Nested reports share its journal.
     if (opts.parentHeadId === null) {
       const splitRecorded = this.journal.recordSplit(rootId, opts.request.rationale, parentBudget.spawnedAt);
+
       if (splitRecorded !== undefined) await splitRecorded;
     }
 
@@ -271,6 +276,7 @@ export class HeadController {
        * apart. A parent id is unique, so parent-plus-slot is unique without it.
        */
       const id = `${opts.parentHeadId ?? rootId}-d${childBudget.maxDepth + 1}-${idx}`;
+
       const input: HeadInput = {
         id,
         rootId,
@@ -291,11 +297,14 @@ export class HeadController {
         // which kind inherits lives in one place.
         loop: defaultLoopOrigin('head'),
       };
+
       if (opts.missionLabels?.length) Object.assign(input, { missionLabels: opts.missionLabels });
       // Same as recordSplit above: a local journal writes the row before this
       // returns, and nothing may push that write behind a microtask.
       const spawnRecorded = this.journal.insertSpawn(input);
+
       if (spawnRecorded !== undefined) await spawnRecorded;
+
       try {
         return await this.runtime.spawnHead(input);
       } catch (err) {
@@ -317,7 +326,9 @@ export class HeadController {
           wallClockMs: 0,
           errorMessage: renderThrownChain({ cause: err }),
         };
+
         await this.journal.recordReport(failed);
+
         return failed;
       }
     });
@@ -326,9 +337,11 @@ export class HeadController {
     // Only heads that actually spawned hold a handle. The split event carries
     // exactly these ids — never a head that failed to spawn.
     const handles: SpawnedHead[] = [];
+
     for (const s of settled) {
       if ('run' in s) handles.push(s);
     }
+
     const startedAt = Date.now();
 
     // Fire 'split' with the REAL head ids the controller just spawned.
@@ -350,12 +363,15 @@ export class HeadController {
         // rejoins here in its original slot so the merge still sees every head.
         if (!('run' in s)) return s;
         const h = s;
+
         const remainingMs = parentBudget.maxWallClockMs === undefined
           ? undefined
           : parentBudget.maxWallClockMs - (Date.now() - startedAt);
+
         try {
           const report = await raceWithTimeout(h, remainingMs);
           await this.journal.recordReport(report);
+
           return report;
         } catch (err) {
           // Either the abort failed or a requested deadline blew.
@@ -376,7 +392,9 @@ export class HeadController {
             wallClockMs: Date.now() - startedAt,
             errorMessage: renderThrownChain({ cause: err }),
           };
+
           await this.journal.recordReport(failed);
+
           return failed;
         }
       }),
@@ -398,6 +416,7 @@ export class HeadController {
       reports.map((r) => r.id),
       headScores,
     );
+
     if (opts.parentHeadId === null) await this.journal.cacheMerge(rootId, mergeResult, strategy);
     opts.onPhase?.({
       kind: 'merge',
@@ -407,6 +426,7 @@ export class HeadController {
       fileChanges: mergeResult.fileChanges,
       blindSpots: mergeResult.blindSpots,
     });
+
     return mergeResult;
   }
 
@@ -449,15 +469,19 @@ export class HeadController {
     const judgeSamplesRequested = g?.judgeSamples ?? DEFAULT_CONFIG.mcts.judgeSamples;
     const reportedClampedEnsembles = new Set<number>();
     const siblings = reports.map(headTrajectory);
+
     const settled = await Promise.allSettled(
       reports.map(async (r, i): Promise<HeadScore> => {
         const base = { id: r.id, text: r.summary, status: r.status } as const;
+
         // No grounding seam → no honest outcome signal; a neutral score keeps
         // the take candidate without inventing a verdict.
         if (!g) return { ...base, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
+
         // A head that never completed produced no trustworthy outcome — floor it
         // without a judge call so it ranks below a head that ran.
         if (r.status !== 'completed') return { ...base, score: 0, grounding: 'judge' };
+
         const evaluation = await evaluateWithMultiModelJudging({
           task: rationale,
           trajectory: siblings[i]!,
@@ -468,7 +492,9 @@ export class HeadController {
           judgeSamples: g.judgeSamples,
           maxLLMCalls: g.maxEvalLLMCalls,
         });
+
         const realised = evaluation.judgeSamplesAttempted;
+
         if (realised > 0 && realised < judgeSamplesRequested && !reportedClampedEnsembles.has(realised)) {
           reportedClampedEnsembles.add(realised);
           diagnostics.event('head.judge_ensemble_clamped', {
@@ -478,9 +504,11 @@ export class HeadController {
             maxEvalLLMCalls: g.maxEvalLLMCalls ?? DEFAULT_CONFIG.mcts.maxEvalLLMCalls,
           });
         }
+
         return { ...base, score: evaluation.score, grounding: evaluation.grounding };
       }),
     );
+
     return settled.map((outcome, i) => {
       if (outcome.status === 'fulfilled') return outcome.value;
       const r = reports[i]!;
@@ -492,6 +520,7 @@ export class HeadController {
         toKinuError({ doing: 'score a head report', cause: outcome.reason, otherwise: 'unavailable' }),
         { headId: r.id },
       );
+
       return { id: r.id, text: r.summary, status: r.status, score: NO_GROUNDED_SIGNAL, grounding: 'judge' };
     });
   }
@@ -545,6 +574,7 @@ export class HeadController {
     }
 
     const prompt = buildMergePrompt(reports, rationale, strategy, inheritedContext, grounded ? headScores : []);
+
     const fallback = (errMsg: string): MergeResult => ({
       mergedNarrative: fallbackNarrative(reports, rationale, errMsg),
       selectedDecisions: reports.flatMap((r) => r.decisions),
@@ -560,6 +590,7 @@ export class HeadController {
     });
 
     const merged = await this.synthesize(prompt, rationale, grounded);
+
     if (!merged.ok) return fallback(merged.error);
 
     return {
@@ -592,12 +623,15 @@ export class HeadController {
 
     const sampleOne = async (): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> => {
       let out: MergeOutput;
+
       try {
         out = await this.runtime.mergeLLM(prompt, MergeOutputSchema);
       } catch (err) {
         return { ok: false, error: renderThrownChain({ cause: err }) };
       }
+
       const parse = v.safeParse(MergeOutputSchema, out);
+
       return parse.success
         ? { ok: true, output: parse.output }
         : { ok: false, error: `merge schema invalid: ${parse.issues.map((i) => i.message).join('; ')}` };
@@ -607,10 +641,13 @@ export class HeadController {
 
     const results = await Promise.all(Array.from({ length: k }, sampleOne));
     const samples = results.filter((r): r is { ok: true; output: MergeOutput } => r.ok).map((r) => r.output);
+
     if (samples.length === 0) {
       const firstError = results.find((r): r is { ok: false; error: string } => !r.ok);
+
       return { ok: false, error: firstError?.error ?? 'all merge samples failed' };
     }
+
     if (samples.length === 1) return { ok: true, output: samples[0]! };
 
     // Score each candidate synthesis with the grounded judge and keep the
@@ -624,9 +661,11 @@ export class HeadController {
     // head_merge row. Only reachable with mergeSamples > 1, which is why no
     // test caught it; k defaults to 1.
     const judge = g.judge ?? g.explorer;
+
     const settled = await Promise.allSettled(
       samples.map(async (s) => ({ sample: s, score: await scoreMergeNarrative(judge, rationale, s.narrative) })),
     );
+
     const scored = settled.map((outcome, i) => {
       if (outcome.status === 'fulfilled') return outcome.value;
       // The reason itself, not its `message` — see scoreHeads.
@@ -635,15 +674,20 @@ export class HeadController {
         toKinuError({ doing: 'score a merge sample', cause: outcome.reason, otherwise: 'unavailable' }),
         { sampleIndex: i },
       );
+
       return { sample: samples[i]!, score: null };
     });
+
     const usable = scored.filter((x): x is { sample: MergeOutput; score: number } => x.score !== null);
+
     if (usable.length === 0) return { ok: true, output: samples[0]! };
     const medianScore = median(usable.map((x) => x.score));
+
     // Pick the sample whose score is closest to the median.
     const winner = usable.reduce((best, cur) =>
       Math.abs(cur.score - medianScore) < Math.abs(best.score - medianScore) ? cur : best,
     );
+
     return { ok: true, output: winner.sample };
   }
 }
@@ -656,11 +700,14 @@ export class HeadController {
  *  single-head runner (steer-branch.ts). */
 export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefined): Promise<HeadReport> {
   if (timeoutMs === undefined) return h.run();
+
   if (timeoutMs <= 0) {
     await h.abort('wall-clock budget already exhausted at spawn time');
     throw new Error('wall-clock budget already exhausted');
   }
+
   let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
   const timeout = new Promise<never>((_resolve, reject) => {
     timeoutHandle = setTimeout(async () => {
       // The deadline first owns the abort, then rejects the caller-visible race:
@@ -678,9 +725,11 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefi
           { headId: h.id },
         );
       }
+
       reject(new Error(`wall-clock budget exceeded after ${timeoutMs}ms`));
     }, timeoutMs);
   });
+
   try {
     return await Promise.race([h.run(), timeout]);
   } finally {
@@ -704,6 +753,7 @@ function summarizeCost(reports: readonly HeadReport[], parentBudget: HeadBudget)
   // reported. `usageTotal` then answers undefined for exactly that split, and it
   // declines to name a cost rather than claiming the delegation was free.
   const usage = reports.reduce<Usage>((acc, r) => addUsage(acc, r.usage), {});
+
   return {
     headCount: reports.length,
     headsWithFindings: reports.filter(headProducedFindings).length,
@@ -721,6 +771,7 @@ function emptySplitNarrative(reports: readonly HeadReport[], rationale: string):
     `No head produced findings. ${reports.length} head(s) were spawned to explore: ${rationale}`,
     '',
   ];
+
   for (const r of reports) {
     // A head the provider never reported on gets "tokens unreported", not
     // "0 tokens" — this narrative goes into the parent's context verbatim, and
@@ -734,12 +785,14 @@ function emptySplitNarrative(reports: readonly HeadReport[], rationale: string):
       + ` ${r.toolCalls.length} tool call(s), ${r.stepCount} step(s))`,
     );
   }
+
   lines.push(
     '',
     'Nothing was learned about the task. This is a failed delegation, not information '
     + 'about the task or the environment: do not infer a cause from it, and do not repeat '
     + 'it back as a finding.',
   );
+
   return lines.join('\n');
 }
 
@@ -749,9 +802,13 @@ function emptySplitNarrative(reports: readonly HeadReport[], rationale: string):
  *  so a head that left runnable code is scored on whether it RUNS, not vibes. */
 function headTrajectory(r: HeadReport): string {
   const parts: string[] = [r.summary];
+
   for (const d of r.decisions) parts.push(`Decision — ${d.question}: ${d.choice} (${d.rationale})`);
+
   for (const e of r.evidence) parts.push(`Evidence [${e.kind}]: ${e.body}`);
+
   for (const a of r.artifactRefs) parts.push(`Artifact (${a.kind}): ${a.ref}${a.description ? ` — ${a.description}` : ''}`);
+
   return parts.join('\n').trim();
 }
 
@@ -773,10 +830,13 @@ Score from 0.0 to 1.0 for how completely and correctly the answer resolves the t
 JSON shape:
 {"score": <float 0.0-1.0>, "rationale": "<15 words max>"}
 ${jsonObjectOnlyInstruction()}`;
+
   const text = await judge.complete(prompt);
   const match = text.match(/"score"\s*:\s*(-?\d+(?:\.\d+)?)/);
+
   if (!match) return null;
   const score = Number(match[1]);
+
   return Number.isFinite(score) ? Math.min(1, Math.max(0, score)) : null;
 }
 
@@ -786,11 +846,13 @@ function fallbackNarrative(reports: readonly HeadReport[], rationale: string, er
   lines.push('');
   lines.push(`Reason for split: ${rationale}`);
   lines.push('');
+
   for (const r of reports) {
     lines.push(`### Head ${r.id} (${r.status}${headProducedFindings(r) ? '' : ' — produced no findings'})`);
     lines.push(r.summary);
     lines.push('');
   }
+
   return lines.join('\n');
 }
 
@@ -813,6 +875,7 @@ function buildMergePrompt(
     .join('\n');
 
   const scoreById = new Map(headScores.map((s) => [s.id, s]));
+
   const headSections = reports.map((r) => {
     // Pass ALL evidence with full bodies — no 6×200-char clipping; the merge is
     // where information must NOT be lost. Same for decisions + artifact refs.
@@ -821,15 +884,19 @@ function buildMergePrompt(
       : r.evidence
         .map((e) => `  - [${e.kind}${e.confidence != null ? ` conf=${e.confidence.toFixed(2)}` : ''}${e.ref ? ` ref=${e.ref}` : ''}] ${e.body}`)
         .join('\n');
+
     const decList = r.decisions.length === 0
       ? '  (none)'
       : r.decisions.map((d) => `  - Q: ${d.question}\n    A: ${d.choice}\n    Why: ${d.rationale}`).join('\n');
+
     const artList = r.artifactRefs.length === 0
       ? ''
       : `\n\nArtifacts:\n${r.artifactRefs.map((a) => `  - (${a.kind}) ${a.ref}${a.description ? ` — ${a.description}` : ''}`).join('\n')}`;
+
     const s = scoreById.get(r.id);
     const scoreTag = s ? ` — grounded outcome ${s.score.toFixed(2)} (${s.grounding})` : '';
     const emptyTag = headProducedFindings(r) ? '' : ' — PRODUCED NO FINDINGS';
+
     return `## Head ${r.id} (${r.status}${emptyTag})${scoreTag}
 Summary:
 ${r.summary}
@@ -848,6 +915,7 @@ ${evList}${artList}`;
   // A head that stopped before banking anything observed nothing. Without this
   // the model reads its silence as a signal and narrates a cause for it.
   const emptyCount = reports.length - reports.filter(headProducedFindings).length;
+
   const emptyGuidance = emptyCount > 0
     ? `\n${emptyCount} of ${reports.length} heads are marked PRODUCED NO FINDINGS: they stopped before recording anything. Say plainly that they did not complete and contributed nothing. Do NOT state or imply why they stopped, and do NOT turn their silence into a claim about the environment, the tooling, or the task.\n`
     : '';

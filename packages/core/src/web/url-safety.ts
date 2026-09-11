@@ -53,6 +53,7 @@ export function assertSafeUrl(url: string): URL {
   }
 
   let parsed: URL;
+
   try {
     parsed = new URL(url);
   } catch (error) {
@@ -60,6 +61,7 @@ export function assertSafeUrl(url: string): URL {
   }
 
   const scheme = parsed.protocol.replace(/:$/, '').toLowerCase();
+
   if (scheme !== 'http' && scheme !== 'https') {
     throw new UnsafeUrlError(`unsupported URL scheme: ${scheme || '<empty>'}`);
   }
@@ -69,6 +71,7 @@ export function assertSafeUrl(url: string): URL {
   // payload carries the rendered cause chain, which is exactly the prose this
   // module's error type wants as its reason.
   const refusal = refusedHostname(parsed.hostname);
+
   if (refusal) throw new UnsafeUrlError(refusal.error);
 
   return parsed;
@@ -80,9 +83,11 @@ export function assertSafeUrl(url: string): URL {
 export function isSafeUrl(url: string): boolean {
   try {
     assertSafeUrl(url);
+
     return true;
   } catch (error) {
     if (!(error instanceof UnsafeUrlError)) throw error;
+
     return false;
   }
 }
@@ -94,6 +99,7 @@ function safeDecode(s: string): string {
     // decodeURIComponent fails only on a malformed escape — expected here, and
     // unnamed by classify's closed set, so the expected failure is named locally.
     if (!(error instanceof URIError)) throw error;
+
     return s;
   }
 }

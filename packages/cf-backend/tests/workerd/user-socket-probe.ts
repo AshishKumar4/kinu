@@ -31,8 +31,10 @@ export class UserSocketProbeDO extends UserDO {
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
     client.accept();
+
     try {
       await this.webSocketMessage(server, JSON.stringify({ type: 'cf_agent_state', state: { probe: true } }));
+
       return 'handled';
     } catch (cause) {
       return { threw: cause instanceof Error ? cause.message : String(cause) };

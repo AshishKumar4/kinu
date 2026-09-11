@@ -25,6 +25,7 @@
 import * as v from 'valibot';
 
 export const MetricScoreSchema = v.pipe(v.number(), v.finite(), v.minValue(0), v.maxValue(1));
+
 export const MetricOutcomeSchema = v.object({ score: MetricScoreSchema, feedback: v.string() });
 
 /** A single evaluation instance — what the metric is scored against. */

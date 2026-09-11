@@ -75,6 +75,7 @@ const ProviderCatalogSnapshotSchema = v.looseObject({
 export type ProviderCatalogSnapshot = v.InferInput<typeof ProviderCatalogSnapshotSchema>;
 
 export type TierSource = 'explicit' | 'role' | 'default';
+
 export interface ProfileAuthorityInputs {
   envelope: ProfileCatalogEnvelope;
   provider: ProviderCatalogSnapshot;
@@ -117,6 +118,7 @@ export async function loadProfileAuthorityInputs(input: {
   const startedAt = Date.now();
   const [envelope, read] = await Promise.all([input.envelope(), input.provider()]);
   const inputs: ProfileAuthorityInputs = { envelope, provider: read.snapshot };
+
   if (input.record) {
     try {
       input.record({
@@ -136,6 +138,7 @@ export async function loadProfileAuthorityInputs(input: {
       }));
     }
   }
+
   return inputs;
 }
 
@@ -189,25 +192,30 @@ export interface ResolvedTurnProfile {
 function normalizeNames(lists: ReadonlyArray<readonly string[]>): string[] {
   const seen = new Set<string>();
   const names: string[] = [];
+
   for (const list of lists) {
     for (const raw of list) {
       const name = raw.trim();
+
       if (name.length === 0 || seen.has(name)) continue;
       seen.add(name);
       names.push(name);
     }
   }
+
   return names;
 }
 
 function uniqueTools(tools: readonly string[]): string[] {
   const seen = new Set<string>();
   const unique: string[] = [];
+
   for (const tool of tools) {
     if (seen.has(tool)) continue;
     seen.add(tool);
     unique.push(tool);
   }
+
   return unique;
 }
 
@@ -218,6 +226,7 @@ function uniqueTools(tools: readonly string[]): string[] {
 function intersectTools(available: readonly string[], allowed: readonly string[]): string[] {
   const allow = new Set(allowed);
   const permitted = available.filter((tool) => allow.has(tool));
+
   return uniqueTools(permitted);
 }
 
@@ -226,6 +235,7 @@ function intersectTools(available: readonly string[], allowed: readonly string[]
 export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurnProfile {
   const envelope = validateProfileCatalogEnvelope(input.envelope);
   const catalogDigest = profileCatalogDigest(envelope.catalog);
+
   if (catalogDigest !== input.envelope.digest) {
     throw new Error(
       `profile catalog digest mismatch: envelope carries ${input.envelope.digest} `
@@ -236,22 +246,30 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   if (!isWorkMode(input.workMode)) {
     throw new Error(`invalid work mode: ${JSON.stringify(input.workMode)}`);
   }
+
   if (!isValidRoleId(input.roleId)) {
     throw new Error(`invalid role id ${JSON.stringify(input.roleId)}: must match ${ROLE_ID_RE.source}`);
   }
+
   let explicitTier: TierId | undefined;
+
   if (input.explicitTier !== undefined) {
     const parsedTier = v.safeParse(v.picklist(TIER_IDS), input.explicitTier);
+
     if (!parsedTier.success) {
       throw new Error(`invalid explicit tier: ${JSON.stringify(input.explicitTier)}`);
     }
+
     explicitTier = parsedTier.output;
   }
+
   const parsedProvider = v.safeParse(ProviderCatalogSnapshotSchema, input.provider);
+
   if (!parsedProvider.success) {
     throw new Error('provider snapshot must carry {revision, availableModels} and, when '
       + 'present, unavailableProviders as {provider, label, reason} rows');
   }
+
   const provider = parsedProvider.output;
   // ABSENCE IS ONLY EVIDENCE WHEN THE LISTING WAS COMPLETE.
   //
@@ -275,6 +293,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   // caught here and fails at call time instead, where the provider names it.
   // That is the trade for never refusing a turn over a model nobody looked up.
   const listingComplete = provider.unavailableProviders.length === 0;
+
   const requireAvailable = (model: string, id: TierId): void => {
     if (!listingComplete || provider.availableModels.includes(model)) return;
     throw new Error(
@@ -283,9 +302,11 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
       + 'configure a different model for the tier or pick another tier',
     );
   };
+
   const roles = effectiveRoleCatalog(envelope.catalog);
 
   const role = roles[input.roleId];
+
   if (!role) {
     throw new Error(`unknown role ${JSON.stringify(input.roleId)}: known roles are ${Object.keys(roles).sort().join(', ')}`);
   }
@@ -296,6 +317,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   let tierId: TierId = requested;
   let source: TierSource;
   let assignment = envelope.catalog.tiers[requested];
+
   if (assignment) {
     source = explicitTier !== undefined ? 'explicit' : 'role';
   } else {
@@ -309,6 +331,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   const availableTools = role.allowedTools === undefined
     ? uniqueTools(input.availableTools)
     : intersectTools(input.availableTools, role.allowedTools);
+
   const skills = normalizeNames([role.skills ?? [], input.activeSkills]);
   // `plan` narrows only: build becomes plan; plan can never become build.
   const workMode: WorkMode = role.plan === true ? 'plan' : input.workMode;
@@ -317,15 +340,19 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   // default assignment, and every slot meets the same availability rule as the
   // turn's own tier above, so no producer can meet a misconfiguration later.
   const defaultAssignment = envelope.catalog.tiers.default;
+
   if (!defaultAssignment) throw new Error('profile catalog has no default tier assignment');
+
   const tierSlot = (id: TierId): { model: string; reasoningEffort: ReasoningEffort } => {
     const slot = id === 'default' ? defaultAssignment : (envelope.catalog.tiers[id] ?? defaultAssignment);
     requireAvailable(slot.model, id);
+
     return Object.freeze({
       model: slot.model,
       reasoningEffort: slot.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT,
     });
   };
+
   const tiers = Object.freeze({
     tiny: tierSlot('tiny'),
     fast: tierSlot('fast'),
@@ -356,7 +383,9 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     providerRevision: provider.revision,
     tiers: Object.freeze(tiers),
   };
+
   const profileDigest = sha256Hex(stableStringify(v.parse(JsonValueSchema, resolved)));
+
   return Object.freeze({ ...resolved, digest: profileDigest });
 }
 
@@ -365,6 +394,7 @@ export function resolveAgentTurnProfile(
   input: ResolveAgentTurnProfileInput,
 ): ResolvedTurnProfile {
   const { activeRoleId, ...turn } = input;
+
   return resolveTurnProfile({ ...turn, roleId: activeRoleId });
 }
 

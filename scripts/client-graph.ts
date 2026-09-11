@@ -55,21 +55,28 @@ function runtimeEdges(parsed: Parsed): Edge[] {
   const edges: Edge[] = [];
   walk(parsed.root, (node: SyntaxNode) => {
     const raw = node.raw;
+
     if (raw.type === 'ImportDeclaration') {
       if (raw.importKind === 'type') return;
       edges.push({ specifier: raw.source.value, line: parsed.lineAt(node.start) });
+
       return;
     }
+
     if (raw.type === 'ExportNamedDeclaration' || raw.type === 'ExportAllDeclaration') {
       if (raw.exportKind === 'type' || raw.source === null || raw.source === undefined) return;
       edges.push({ specifier: raw.source.value, line: parsed.lineAt(node.start) });
+
       return;
     }
+
     if (raw.type === 'ImportExpression') {
       const source = literalText(node.children.find((child) => child.raw.type === 'Literal') ?? node);
+
       if (source !== undefined) edges.push({ specifier: source, line: parsed.lineAt(node.start) });
     }
   });
+
   return edges;
 }
 
@@ -93,15 +100,21 @@ const ManifestSchema = v.object({
  *  specifiers are forbidden edges, never walk targets. */
 function readWorkspace(): ReadonlyMap<string, PackageDir> {
   const out = new Map<string, PackageDir>();
+
   for (const [file, text] of readMatching(isManifest)) {
     const segments = file.split('/');
+
     if (segments.length !== 3 || segments[0] !== 'packages' || !file.endsWith('/package.json')) continue;
+
     if (file.startsWith('packages/agent-core/')) continue;
     const parsed = v.parse(ManifestSchema, JSON.parse(text));
+
     if (parsed.name === undefined || !parsed.name.startsWith('@')) continue;
     out.set(parsed.name, { directory: file.slice(0, -'package.json'.length), exports: parsed.exports, main: parsed.main });
   }
+
   if (out.size === 0) throw new Error(`${GATE}: no workspace manifests in the corpus — a gate that resolves nothing cannot fail`);
+
   return out;
 }
 
@@ -117,9 +130,11 @@ function readCfAlias(): string {
   const file = 'packages/cf-backend/tsconfig.json';
   const parsed = v.parse(TsconfigSchema, JSON.parse(readRepositoryFile(root, file)));
   const target = parsed.compilerOptions?.paths?.['@/*']?.[0];
+
   if (target === undefined || !target.endsWith('/*')) {
     throw new Error(`${GATE}: ${file} declares no @/* path — the client alias cannot be resolved`);
   }
+
   return `packages/cf-backend/${target.slice(0, -1)}`;
 }
 
@@ -133,6 +148,7 @@ function collapse(base: string): string {
   return base.split('/').reduce((parts: string[], part) => {
     if (part === '..') parts.pop();
     else if (part !== '.' && part !== '') parts.push(part);
+
     return parts;
   }, []).join('/');
 }
@@ -144,14 +160,18 @@ function collapse(base: string): string {
  *  survived every gate. */
 function probe(base: string, from: string, specifier: string, universe: ReadonlySet<string>): string | undefined {
   const collapsed = collapse(base);
+
   if (collapsed.endsWith('.css') || collapsed.endsWith('.json') || collapsed.endsWith('.svg')
     || collapsed.endsWith('.png') || collapsed.endsWith('.webp') || collapsed.endsWith('.woff2')) {
     return undefined;
   }
+
   const candidate = CANDIDATES.map((suffix) => collapsed + suffix).find((path) => universe.has(path));
+
   if (candidate === undefined) {
     throw new Error(`${GATE}: ${from} names ${specifier}, which resolves to no parsed source`);
   }
+
   return candidate;
 }
 
@@ -167,14 +187,19 @@ function resolve(
   cfAlias: string,
 ): Resolved {
   if (specifier.includes('?') || specifier.includes('#')) return { kind: 'leaf' };
+
   if (specifier.includes('/node_modules/')) return { kind: 'leaf' };
+
   // The `@/` alias BEFORE the workspace branch: it also starts with `@`, and
   // treating it as a package name drops the whole aliased subgraph as leaves.
   if (specifier.startsWith('@/')) {
     const path = probe(cfAlias + specifier.slice(2), from, specifier, universe);
+
     if (path === undefined) return { kind: 'leaf' };
+
     return { kind: 'file', path };
   }
+
   if (specifier.startsWith('@') || specifier.startsWith('#')) {
     // A scoped name is two segments (`@kinu.run/core`); an unscoped one is
     // one. Splitting on the first slash turns the scope into the name and
@@ -183,20 +208,28 @@ function resolve(
     const name = specifier.startsWith('@') ? segments.slice(0, 2).join('/') : segments[0] ?? specifier;
     const rest = `.${specifier.slice(name.length)}`;
     const pkg = workspace.get(name);
+
     if (pkg === undefined) return { kind: 'leaf' };
     const target = pkg.exports[rest] ?? (rest === '.' ? pkg.main : undefined);
+
     if (target === undefined) {
       throw new Error(`${GATE}: ${from} names ${specifier}, which is no subpath of ${name}`);
     }
+
     const candidate = `${pkg.directory}${target.startsWith('./') ? target.slice(2) : target}`;
+
     if (!universe.has(candidate)) {
       throw new Error(`${GATE}: ${from} names ${specifier}, which resolves to ${candidate} outside the corpus`);
     }
+
     return { kind: 'file', path: candidate };
   }
+
   if (!specifier.startsWith('.')) return { kind: 'leaf' };
   const path = probe(`${from.slice(0, from.lastIndexOf('/') + 1)}/${specifier}`, from, specifier, universe);
+
   if (path === undefined) return { kind: 'leaf' };
+
   return { kind: 'file', path };
 }
 
@@ -213,38 +246,49 @@ export function findViolations(sources: ReadonlyMap<string, string>): Violation[
       throw new Error(`${GATE}: client entry ${entry} is not in the corpus — a gate that scans no entry cannot fail`);
     }
   }
+
   const universe = new Set(sources.keys());
   const workspace = readWorkspace();
   const cfAlias = readCfAlias();
   const parsed = new Map<string, Parsed>();
+
   const of = (file: string): Parsed => {
     const text = sources.get(file);
+
     if (text === undefined) throw new Error(`${GATE}: ${file} left the corpus mid-walk`);
     let tree = parsed.get(file);
+
     if (tree === undefined) {
       tree = parse(file, text);
       parsed.set(file, tree);
     }
+
     return tree;
   };
+
   const violations: Violation[] = [];
   const seen = new Set<string>();
+
   const visit = (file: string, chain: readonly string[]): void => {
     for (const edge of runtimeEdges(of(file))) {
       if (isForbidden(edge.specifier)) {
         violations.push({ chain: [...chain, `${file}:${edge.line}`], specifier: edge.specifier });
         continue;
       }
+
       const next = resolve(edge.specifier, file, universe, workspace, cfAlias);
+
       if (next.kind === 'leaf' || seen.has(next.path)) continue;
       seen.add(next.path);
       visit(next.path, [...chain, `${file}:${edge.line}`]);
     }
   };
+
   for (const entry of ENTRIES) {
     seen.add(entry);
     visit(entry, []);
   }
+
   return violations.sort((a, b) => a.specifier.localeCompare(b.specifier)
     || a.chain.join('').localeCompare(b.chain.join('')));
 }
@@ -271,6 +315,7 @@ export const BLIND_SPOTS: readonly string[] = [
 if (import.meta.main) {
   const sources = readSources();
   const violations = findViolations(sources);
+
   // Zero violations is the PASSING state, so assertMeasured guards only the
   // denominators that must be non-empty for the walk to mean anything — an
   // empty universe or entry set would report a clean tree over nothing.
@@ -278,18 +323,24 @@ if (import.meta.main) {
     ['client entries walked', ENTRIES.length],
     ['product source files in the resolution universe', sources.size],
   ]);
+
   if (violations.length > 0) {
     console.error(`${GATE}: ${violations.length} client-reachable worker-only edge(s) over ${measured}\n`);
+
     for (const violation of violations) {
       console.error(`  must:      no client entry loads a worker-only runtime module`);
       console.error(`  found:     ${violation.specifier}`);
+
       for (const link of violation.chain) console.error(`    via:     ${link}`);
       console.error(`  silently:  dev serves the graph as written and dies before mount, `
         + `while the build tree-shakes it green`);
       console.error(`  fix:       move the worker-only module behind a worker-imported subpath\n`);
     }
+
     process.exit(1);
   }
+
   console.log(`${GATE}: ok — ${measured}, no client path reaches @agent-core/core or bun:sqlite`);
+
   for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
 }

@@ -92,6 +92,7 @@ export function ExplorationSurface({
     resource, reload, runs, params, trees, journals, resolutions, frontiers,
     exhausted, loadingMore, pageError, loadMore,
   } = useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees, headActivity);
+
   // The list is the scroll container in both layouts, so the trigger lives on it
   // rather than on the canvas beside it.
   const listRef = useGrowingScroll<HTMLDivElement>({
@@ -103,6 +104,7 @@ export function ExplorationSurface({
       ? <LoadFailure what="the fork runs" message={resource.message} onRetry={reload} />
       : <div className="flex justify-center py-8"><Loader size="sm" /></div>;
   }
+
   if (runs.length === 0) {
     return <EmptyState icon={<GitForkIcon size={28} />} title="No forks yet" hint={EMPTY_HINTS.forks} />;
   }
@@ -217,9 +219,13 @@ export function runStateLine(
   run: ForkRunSummary, liveness: RunLiveness | null, refusal: RunRefusal | null,
 ): string {
   const parts: string[] = [run.status];
+
   if (refusal !== null && refusal.reason !== run.status) parts.push(refusal.reason);
+
   if (liveness !== null) parts.push(nodeTally(liveness));
+
   if (run.winnerScore !== null) parts.push(`winner ${formatScore(run.winnerScore)}`);
+
   return parts.join(" · ");
 }
 
@@ -231,6 +237,7 @@ export function runStateLine(
  */
 function runKind(resolution: SwarmResolution | undefined): string | null {
   if (resolution === undefined) return null;
+
   return resolution.kind === "preset" ? resolution.preset : "custom";
 }
 
@@ -289,9 +296,13 @@ function ForkRunRow(
  */
 function nodeTally(counted: Pick<RunLiveness, "running" | "reported" | "failed" | "total">): string {
   const parts: string[] = [];
+
   if (counted.running > 0) parts.push(`${counted.running} running`);
+
   if (counted.reported > 0) parts.push(`${counted.reported} reported`);
+
   if (counted.failed > 0) parts.push(`${counted.failed} stopped`);
+
   return parts.length === 0 ? `${counted.total} nodes` : parts.join(" · ");
 }
 
@@ -316,13 +327,16 @@ function useForkRunDetail(run: ForkRunSummary, rpc: Rpc, hasActiveWork: boolean)
       : Promise.resolve<HeadRunView | null>(null),
     [rpc, run.id, run.hasNodeTranscripts],
   );
+
   const revalidate = useCallback(
     () => (run.status === "running" || hasActiveWork ? FORK_REVALIDATE_MS : null),
     [run.status, hasActiveWork],
   );
+
   const { resource, reload } = useAsyncResource<HeadRunView | null>(
     load, revalidate, `journal:${run.id}`,
   );
+
   return { headRun: lastValue(resource) ?? null, resource, reload };
 }
 
@@ -344,22 +358,26 @@ export function useForkRunTree(
   run: ForkRunSummary, rpc: Rpc, liveTree: ForkNode | null, hasActiveWork: boolean,
 ) {
   const detail = useForkRunDetail(run, rpc, hasActiveWork);
+
   const load = useCallback(
     () => run.hasSearchTree
       ? rpc<MctsRow[]>("getSearchTree", [run.id])
       : Promise.resolve<MctsRow[]>([]),
     [rpc, run.id, run.hasSearchTree],
   );
+
   const revalidate = useCallback(
     () => (run.status === "running" || hasActiveWork ? FORK_REVALIDATE_MS : null),
     [run.status, hasActiveWork],
   );
+
   const { resource, reload } = useAsyncResource(load, revalidate, `search:${run.id}`);
   const rows = lastValue(resource);
   // Which half a reader is WAITING on, and the resolution's discriminator. Not
   // which half the tree is folded from — both are.
   const searched = run.hasSearchTree;
   const fetched = explorationForkTree({ tree: rows ?? [], head: detail.headRun });
+
   return {
     tree: liveTree ?? fetched,
     headRun: detail.headRun,
@@ -425,6 +443,7 @@ function RunDetailView({
 }) {
   const liveness = runLiveness(journal);
   const refusal = runRefusal(run, journal);
+
   return (
     <div className="h-full min-h-0 flex flex-col rounded-xl border p-border p-surface overflow-hidden">
       <div className="shrink-0 flex items-start gap-2 border-b p-border px-3 py-2">
@@ -476,6 +495,7 @@ const OBJECTIVE_CLAMP = 240;
 function RunObjective({ task }: { task: string }) {
   const [expanded, setExpanded] = useState(false);
   const long = task.length > OBJECTIVE_CLAMP;
+
   return (
     <>
       <div className={`text-[11px] p-text-2 leading-relaxed break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
@@ -589,12 +609,14 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
   onOpen: (nodeId: string) => void;
 }) {
   const scores = useMemo(() => nodeScores(tree), [tree]);
+
   const nodes = useMemo(
     () => [...(journal?.heads ?? [])].sort(
       (a, b) => (b.lastStepAt ?? b.spawnedAt) - (a.lastStepAt ?? a.spawnedAt),
     ),
     [journal],
   );
+
   if (nodes.length === 0) {
     return (
       <div className="min-h-0 flex-1 flex items-center justify-center p-4">
@@ -603,6 +625,7 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
       </div>
     );
   }
+
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-1.5 space-y-0.5">
       {nodes.map((node) => (
@@ -617,11 +640,15 @@ function RunNodeList({ journal, tree, activity, onOpen }: {
  *  tree has not is a node still running, and it carries no score by design. */
 function nodeScores(tree: ForkNode | null): ReadonlyMap<string, number> {
   const scores = new Map<string, number>();
+
   const walk = (node: ForkNode): void => {
     if (node.value !== null) scores.set(node.id, node.value);
+
     for (const child of node.children) walk(child);
   };
+
   if (tree !== null) walk(tree);
+
   return scores;
 }
 
@@ -640,6 +667,7 @@ function RunNodeRow({ node, score, moving, onOpen }: {
   // exports beside the code that writes these messages, never a regex here — a
   // reworded sentence must not silently reclassify.
   const rateLimited = node.errorMessage !== null && isRateLimitedTurnError(node.errorMessage);
+
   return (
     <button type="button" onClick={onOpen} data-run-node={node.id}
       className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
@@ -790,8 +818,10 @@ function ForkCanvas({
   const regions = useMemo(
     () => runs.flatMap((run) => {
       const root = trees.get(run.id);
+
       if (!root) return [];
       const journal = journals.get(run.id) ?? null;
+
       return [{
         runId: run.id, root, title: run.task, name: run.name,
         note: runStateLine(run, runLiveness(journal), runRefusal(run, journal)),
@@ -804,6 +834,7 @@ function ForkCanvas({
 
   const focused = runs.find((run) => run.id === focusedId) ?? null;
   const refusal = focused === null ? null : runRefusal(focused, journals.get(focusedId) ?? null);
+
   /** What the searches WANT, measured off the same layout the canvas draws with
    *  — never a second stacking rule that could disagree with it. Null where
    *  there is no tree to want anything: the box then holds a sentence, and a
@@ -812,6 +843,7 @@ function ForkCanvas({
     () => (regions.length === 0 ? null : naturalCanvasHeight(regions)),
     [regions],
   );
+
   /** The column's remaining height, capped at that. Zero until the cell has
    *  been measured, which the graph box below renders as "sizing" rather than
    *  as an empty canvas.
@@ -900,9 +932,11 @@ export function SwarmConfigDisclosure(
   },
 ) {
   if (resolution === undefined && paramRows.length === 0) return null;
+
   const name = resolution === undefined
     ? "config"
     : resolution.kind === "custom" ? resolution.label : resolution.preset;
+
   return (
     <details data-swarm-config className="group shrink-0 min-w-0">
       <summary
@@ -945,6 +979,7 @@ function SwarmResolutionBody(
       ? `flat · ${resolution.branches} ${resolution.branches === 1 ? "branch" : "branches"}`
       : `depth ${resolution.depth} · branches ${resolution.branches}`
     : null;
+
   return (
     <div data-swarm-resolution={resolution?.kind ?? "none"}
       className="mt-1 rounded-md border p-border p-recessed px-3 py-2">

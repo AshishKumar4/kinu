@@ -51,6 +51,7 @@ const TriggerSchema = v.object({
 
 /** Real modules, so a fixture exercises resolution rather than mocking it. */
 const ARBITRATION = 'lean/Kinu/Exploration/Arbitration.lean';
+
 const STORAGE = 'MCTS/StorageIsolation.lean';
 
 /** A line comfortably past the end of any module in the tree. */
@@ -58,9 +59,12 @@ const PAST_END = 99_999;
 
 /** A theorem the tree declares, in `ARBITRATION`, at the line the docs cite. */
 const LIVE = `accepted_respects_${'context'}`;
+
 const LIVE_LINE = 200;
+
 /** A theorem spelling nothing in the tree declares. */
 const UNDECLARED = `accepted_respects_${'decorrelate'}`;
+
 /** A theorem that exists, but in `STORAGE` rather than in `ARBITRATION`. */
 const ELSEWHERE = `init_${'isolated'}`;
 
@@ -169,6 +173,7 @@ describe('the false positives that shaped the adjacency rule', () => {
     const proposal = 'Proposed names, so the spec can cite one spelling: preservation theorem'
       + ` \`agent_node_transition_preserves_${'isolation'}\`, discharged by the same two-case`
       + ` rcases the .Expand case uses in ${STORAGE} and checked against ${ARBITRATION}.`;
+
     expect(audit(proposal)).toEqual([]);
   });
 
@@ -184,6 +189,7 @@ describe('the false positives that shaped the adjacency rule', () => {
       + ` \`initial_${'valid'}\`, since renamed, and a test naming`
       + ` \`all_below_gives_${'empty'}\` and \`consolidation_requires_nonempty_${'guard'}\`,`
       + ` which have never existed. The modules involved were ${ARBITRATION} and ${STORAGE}.`;
+
     expect(audit(account)).toEqual([]);
   });
 
@@ -245,28 +251,34 @@ describe('the workflow that runs this gate fires on what this gate reads', () =>
       TriggerSchema,
       Bun.YAML.parse(readFileSync(resolve(repoRoot, workflowPath), 'utf8')),
     );
+
     const corpus = trackedFiles().filter(isTextSource);
     // The denominator: a corpus this assertion could not populate would make it
     // pass over nothing, which is the defect the gate itself is about.
     expect(corpus.length).toBeGreaterThan(1000);
 
     const dropped: string[] = [];
+
     for (const [event, trigger] of Object.entries(parsed.on)) {
       if (trigger === null) continue;
       const ignore = trigger['paths-ignore'] ?? [];
+
       if (ignore.length > 0) {
         const globs = ignore.map((pattern) => new Bun.Glob(pattern));
         dropped.push(...corpus
           .filter((file) => globs.some((glob) => glob.match(file)))
           .map((file) => `${event} paths-ignore drops ${file}`));
       }
+
       const paths = trigger.paths ?? [];
+
       if (paths.length === 0) continue;
       const globs = paths.map((pattern) => new Bun.Glob(pattern));
       dropped.push(...corpus
         .filter((file) => !globs.some((glob) => glob.match(file)))
         .map((file) => `${event} paths does not select ${file}`));
     }
+
     // Named, not counted, and capped only in the message: the first few are what
     // a reader needs, and the count is what says how bad it is.
     expect(dropped.slice(0, 5)).toEqual([]);
@@ -281,9 +293,12 @@ describe('the workflow that runs this gate fires on what this gate reads', () =>
     const corpus = new Set(trackedFiles().filter(isTextSource));
     const runner = 'scripts/verify-lean.sh';
     const script = readFileSync(resolve(repoRoot, runner), 'utf8');
+
     const gates = [runner, workflowPath, 'scripts/lean-citations.ts',
       'lean/check-traceability.mjs', 'lean/check-no-false.sh'];
+
     expect(gates.filter((gate) => !corpus.has(gate))).toEqual([]);
+
     // And the runner really invokes each of the three, so this list is not a
     // guess about what the workflow does.
     for (const gate of ['lean-citations.ts', 'check-traceability.mjs', 'check-no-false.sh']) {

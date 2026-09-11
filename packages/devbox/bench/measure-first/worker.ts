@@ -37,6 +37,7 @@ interface MeasureEnv {
 }
 
 const BINDING = 'BACKUP_BUCKET';
+
 const BOX_ID = 'measure-first';
 
 export class MeasureBox extends Sandbox<MeasureEnv> {
@@ -62,6 +63,7 @@ export class MeasureBox extends Sandbox<MeasureEnv> {
    *  was never started, so that refusal is not a leak either. */
   override async destroy(): Promise<void> {
     const failures: string[] = [];
+
     for (const process of await this.listProcesses()) {
       if (process.status === 'running') {
         try {
@@ -71,12 +73,15 @@ export class MeasureBox extends Sandbox<MeasureEnv> {
         }
       }
     }
+
     try {
       await super.destroy();
     } catch (error) {
       failures.push(`sandbox destroy: ${describeThrown({ cause: error })}`);
     }
+
     await this.ctx.storage.deleteAll();
+
     if (failures.length > 0) throw new Error(failures.join('; '));
   }
 }
@@ -91,6 +96,7 @@ const BodySchema = v.object({
   prefix: v.optional(v.string()),
   key: v.optional(v.string()),
 });
+
 type Body = v.InferOutput<typeof BodySchema>;
 
 function json<Answer>(payload: Answer, status = 200): Response {
@@ -101,16 +107,21 @@ function json<Answer>(payload: Answer, status = 200): Response {
 function authorized(request: Request, expected: string | undefined): boolean {
   if (expected === undefined || expected.length === 0) return false;
   const offered = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
+
   if (offered.length !== expected.length) return false;
   let diff = 0;
+
   for (let i = 0; i < expected.length; i += 1) diff |= offered.charCodeAt(i) ^ expected.charCodeAt(i);
+
   return diff === 0;
 }
 
 async function body(request: Request): Promise<Body> {
   if (request.method !== 'POST') return {};
   const text = await request.text();
+
   if (text.length === 0) return {};
+
   return v.parse(BodySchema, JSON.parse(text));
 }
 
@@ -118,63 +129,88 @@ export default {
   async fetch(request: Request, env: MeasureEnv): Promise<Response> {
     if (!authorized(request, env.MEASURE_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
     const url = new URL(request.url);
+
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true });
     let input: Body;
+
     try {
       input = await body(request);
     } catch (error) {
       return json({ ok: false, error: `malformed body: ${describeThrown({ cause: error })}` }, 400);
     }
+
     const box = getSandbox(env.MeasureBox, BOX_ID, { transport: 'rpc', keepAlive: true });
     const started = Date.now();
+
     try {
       switch (`${request.method} ${url.pathname}`) {
         case 'POST /exec': {
           const options: ExecOptions = { timeout: input.timeoutMs ?? 300_000 };
+
           if (input.cwd !== undefined) options.cwd = input.cwd;
           const result = await box.exec(input.command ?? 'true', options);
+
           return json({
             ok: result.exitCode === 0, exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr,
             ms: Date.now() - started,
           });
         }
+
         case 'POST /put': {
           const path = input.path ?? '';
+
           if (path.length === 0) return json({ ok: false, error: 'path is required' }, 400);
           await box.writeFile(path, input.content ?? '');
+
           return json({ ok: true, path, bytes: (input.content ?? '').length, ms: Date.now() - started });
         }
+
         case 'POST /start': {
           const processId = input.processId ?? '';
+
           if (processId.length === 0) return json({ ok: false, error: 'processId is required' }, 400);
           const existing = await box.getProcess(processId);
+
           if (existing !== null) {
             return json({ ok: true, processId, status: existing.status, started: false, ms: Date.now() - started });
           }
+
           const process = await box.startProcess(input.command ?? 'true', { processId, autoCleanup: false });
+
           return json({ ok: true, processId, status: process.status, started: true, ms: Date.now() - started });
         }
+
         case 'POST /mount': {
           const path = input.path ?? '';
+
           if (path.length === 0) return json({ ok: false, error: 'path is required' }, 400);
           await box.mountStore(path, input.prefix ?? 'measure');
+
           return json({ ok: true, path, ms: Date.now() - started });
         }
+
         case 'POST /unmount': {
           const path = input.path ?? '';
+
           if (path.length === 0) return json({ ok: false, error: 'path is required' }, 400);
           await box.unmountStore(path);
+
           return json({ ok: true, path, ms: Date.now() - started });
         }
+
         case 'GET /head': {
           // What the STORE holds under one key, through the binding: the only
           // reader of R2's own checksums, which no HTTP receipt carries.
           const key = url.searchParams.get('key') ?? '';
+
           if (key.length === 0) return json({ ok: false, error: 'key is required' }, 400);
           const object = await env.BACKUP_BUCKET.head(key);
+
           if (object === null) return json({ ok: false, key, exists: false, ms: Date.now() - started }, 404);
+
           const hex = (bytes: ArrayBuffer | undefined): string | null =>
             bytes === undefined ? null : [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('');
+
           return json({
             ok: true, key, exists: true, size: object.size, etag: object.etag, httpEtag: object.httpEtag,
             uploaded: object.uploaded.toISOString(),
@@ -185,22 +221,29 @@ export default {
             ms: Date.now() - started,
           });
         }
+
         case 'POST /purge': {
           // The bucket is this run's own; an empty prefix is the whole store.
           let purged = 0;
+
           for (;;) {
             const page = await env.BACKUP_BUCKET.list({ prefix: input.prefix ?? '' });
             const keys = page.objects.map((object) => object.key);
+
             if (keys.length === 0) break;
             await env.BACKUP_BUCKET.delete(keys);
             purged += keys.length;
           }
+
           return json({ ok: true, purged, ms: Date.now() - started });
         }
+
         case 'POST /destroy': {
           await box.destroy();
+
           return json({ ok: true, ms: Date.now() - started });
         }
+
         default:
           return json({ ok: false, error: `no route for ${request.method} ${url.pathname}` }, 404);
       }

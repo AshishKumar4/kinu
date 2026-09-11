@@ -80,13 +80,17 @@ const SqlResponseSchema = v.object({
 const SqlErrorSchema = v.object({
   errors: v.array(v.object({ message: v.optional(v.string()) })),
 });
+
 type SqlErrorEnvelope = v.InferOutput<typeof SqlErrorSchema>;
 
 /** Which required settings are absent, in the order an operator would set them. */
 export function analyticsMissingSettings(env: AnalyticsSqlEnv): readonly string[] {
   const missing: string[] = [];
+
   if (!(env.CLOUDFLARE_ACCOUNT_ID ?? '').trim()) missing.push('CLOUDFLARE_ACCOUNT_ID');
+
   if (!(env.ANALYTICS_SQL_API_TOKEN ?? '').trim()) missing.push('ANALYTICS_SQL_API_TOKEN');
+
   return missing;
 }
 
@@ -137,7 +141,9 @@ const BATCH_CACHE_MAX = 64;
  */
 async function runAnalyticsSql(env: AnalyticsSqlEnv, sql: string): Promise<AnalyticsResult> {
   const missing = analyticsMissingSettings(env);
+
   if (missing.length > 0) return { status: 'unconfigured', missing };
+
   try {
     const response = await fetch(SQL_API((env.CLOUDFLARE_ACCOUNT_ID ?? '').trim()), {
       method: 'POST',
@@ -148,14 +154,19 @@ async function runAnalyticsSql(env: AnalyticsSqlEnv, sql: string): Promise<Analy
       },
       body: sql,
     });
+
     const text = await response.text();
+
     if (!response.ok) {
       return { status: 'failed', reason: apiErrorReason(response.status, text) };
     }
+
     const parsed = v.safeParse(SqlResponseSchema, JSON.parse(text));
+
     if (!parsed.success) {
       return { status: 'failed', reason: 'the analytics API returned a shape this reader does not recognize' };
     }
+
     return { status: 'ok', rows: parsed.output.data };
   } catch (cause) {
     diagnostics.failure('control_plane.analytics_query_failed', toKinuError({
@@ -163,6 +174,7 @@ async function runAnalyticsSql(env: AnalyticsSqlEnv, sql: string): Promise<Analy
       cause,
       otherwise: 'unavailable',
     }));
+
     return { status: 'failed', reason: renderThrownChain({ cause }) };
   }
 }
@@ -215,14 +227,18 @@ function errorBodyOf(text: string): ErrorBody {
  */
 function apiErrorReason(status: number, body: string): string {
   const decoded = errorBodyOf(body);
+
   if (decoded.status === 'unreadable') {
     diagnostics.failure('control_plane.analytics_error_body_unreadable', decoded.failure, {
       status, bytes: decoded.bytes,
     });
+
     return `analytics API ${String(status)}: the body was not the documented error envelope `
       + `(${String(decoded.bytes)} bytes)`;
   }
+
   const message = decoded.envelope.errors[0]?.message;
+
   return message !== undefined && message.length > 0
     ? `analytics API ${String(status)}: ${message}`
     : `analytics API ${String(status)}`;
@@ -246,6 +262,7 @@ export async function runAnalyticsBatch(
   const named = [...queries.entries()].sort(([a], [b]) => a.localeCompare(b));
   const key = named.map(([name, sql]) => `${name}\u0000${sql}`).join('\u0001');
   const cached = batches.get(key);
+
   if (cached && now - cached.at < BATCH_TTL_MS) return cached.result;
 
   // Eviction lives INSIDE the fill rather than on a `.catch` beside it. A
@@ -259,6 +276,7 @@ export async function runAnalyticsBatch(
       const answers = await Promise.all(
         named.map(async ([name, sql]) => [name, await runAnalyticsSql(env, sql)] as const),
       );
+
       return Object.fromEntries(answers);
     } catch (cause) {
       // A rejected fill must not be cached, or one transient failure is served
@@ -276,6 +294,7 @@ export async function runAnalyticsBatch(
 
   if (batches.size >= BATCH_CACHE_MAX) batches.clear();
   batches.set(key, { at: now, result });
+
   return result;
 }
 

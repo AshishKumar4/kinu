@@ -214,6 +214,7 @@ export function markDocument(id: MarkId = KINU_MARK): string {
 const THEME_CSS = THEME_BLOCKS.map(({ selector, tokens }) => {
   const body = Object.entries(tokens).map(([name, value]) => `${name}:${value}`).join(';');
   const radii = selector === ':root' ? `;${Object.entries(RADII).map(([n, v]) => `${n}:${v}`).join(';')}` : '';
+
   return `${selector}{${body}${radii}}`;
 }).join('\n');
 
@@ -224,7 +225,9 @@ const THEME_CSS = THEME_BLOCKS.map(({ selector, tokens }) => {
  *  their OFL licence in `public/assets/fonts/`. `unit-public-shell` holds
  *  their byte budgets so an unsubset swap cannot land silently. */
 const UI_FONT_PATH = '/assets/fonts/schibsted-latin-var.woff2';
+
 const MONO_FONT_PATH = '/assets/fonts/fragmentmono-latin.woff2';
+
 const FONT_FACES = [
   `@font-face{font-family:"Schibsted Grotesk";src:url("${UI_FONT_PATH}") format("woff2-variations");font-weight:400 900;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
   `@font-face{font-family:"Fragment Mono";src:url("${MONO_FONT_PATH}") format("woff2");font-weight:400;font-style:normal;font-display:swap;unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}`,
@@ -444,6 +447,7 @@ for (const button of document.querySelectorAll('[data-copy]')) {
 
 export function publicPage(options: PublicPageOptions): string {
   const description = options.description ?? '';
+
   const header = options.nav === undefined
     ? ''
     : `<header class="bar"><div class="bar-inner">${wordmark()}<nav class="nav">${options.nav}</nav></div></header>\n`;

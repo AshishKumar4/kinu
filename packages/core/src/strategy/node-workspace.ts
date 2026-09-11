@@ -166,6 +166,7 @@ export function facetHomeProvisioner(
     // The bare `/tmp` rewrite as well as the directory, because a command that
     // hardcodes `/tmp/x` is a command this isolate can still keep private.
     const tmp = confineAgentTmp(confiner, agentName, identity);
+
     return { home, tmp, cred: agentCred(identity), isolation: 'private-home' };
   };
 }
@@ -200,6 +201,7 @@ export async function nodeWorkspace(
   provision?: NodeWorkspaceProvisioner,
 ): Promise<NodeWorkspace> {
   if (provision) return await provision(node);
+
   return { home: '.', tmp: undefined, cred: undefined, isolation: 'shared-origin-plane' };
 }
 

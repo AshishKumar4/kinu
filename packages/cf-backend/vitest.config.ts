@@ -77,8 +77,11 @@ function standardDecorators(): Plugin {
     enforce: 'pre',
     async transform(code, id) {
       const path = id.split('?')[0];
+
       if (!/\.tsx?$/u.test(path) || path.includes('/node_modules/')) return null;
+
       if (!DECORATED_SOURCE.test(code)) return null;
+
       const result = await transform(code, {
         loader: path.endsWith('.tsx') ? 'tsx' : 'ts',
         target: 'es2022',
@@ -89,6 +92,7 @@ function standardDecorators(): Plugin {
         // because the two decorator dialects disagree about what `target` is.
         tsconfigRaw: { compilerOptions: { experimentalDecorators: false, useDefineForClassFields: true } },
       });
+
       return { code: result.code, map: result.map };
     },
   };
@@ -130,6 +134,7 @@ const slateEgressProbe = buildSync({
   alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
   external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
 }).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
 let forbiddenEgressHits = 0;
 
 export default defineConfig({
@@ -203,15 +208,21 @@ export default defineConfig({
           // global fetch run above this mock. No unmatched request reaches a network.
           outboundService: async (request) => {
             const url = new URL(request.url);
+
             if (url.origin === 'http://169.254.169.254') {
               forbiddenEgressHits += 1;
+
               return new Response('forbidden transport reached');
             }
+
             if (url.origin === 'https://example.com') {
               if (url.pathname === '/control') return new Response('public control');
+
               if (url.pathname === '/redirect') return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/forbidden' } });
+
               if (url.pathname === '/seen') return Response.json({ forbiddenEgressHits });
             }
+
             throw new Error('Unmatched test egress is disabled: ' + request.url);
           },
         }],

@@ -162,7 +162,9 @@ export function fiberRowStore(sql: SqlExecutor): FiberRowStore {
  * shaped like this.
  */
 const CHAT_TURN_SNAPSHOT_KEY = '__cfThinkChatFiberSnapshot';
+
 const CHAT_TURN_ID_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.latestUserMessageId`;
+
 const CHAT_TURN_REQUEST_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.requestId`;
 
 /**
@@ -178,6 +180,7 @@ const CHAT_TURN_REQUEST_PATH = `$.${CHAT_TURN_SNAPSHOT_KEY}.requestId`;
  */
 export function openChatTurnResponses(sql: SqlExecutor, turnId: string): string[] {
   if (!fiberRowStore(sql).present()) return [];
+
   return sql<{ request_id: string }>`
     SELECT json_extract(snapshot, ${CHAT_TURN_REQUEST_PATH}) AS request_id
     FROM cf_agents_runs
@@ -236,23 +239,30 @@ export function sweepUnrecoverableFibers(
 ): FiberSweepResult {
   const cutoff = now - FIBER_RECOVERY_MAX_AGE_MS;
   const nothing: FiberSweepResult = { dropped: 0, scanned: 0, truncated: false };
+
   // An actor that has never detached durable work has no table. That is not a
   // failure, it is zero rows, and saying so keeps a fresh workspace quiet.
   if (!store.present()) return nothing;
   const boundary = store.upperBoundary();
+
   if (boundary === null) return nothing;
   let cursor = 0;
   let dropped = 0;
   let scanned = 0;
+
   for (;;) {
     if (scanned >= SWEEP_MAX_ROWS) {
       return { dropped, scanned, truncated: true };
     }
+
     const page = store.page(cursor, boundary, cutoff);
+
     if (page.length === 0) return { dropped, scanned, truncated: false };
+
     for (const row of page) {
       scanned++;
       cursor = row.rowid;
+
       if (store.dropIfExpired(row.id, cutoff)) dropped++;
     }
   }
@@ -357,14 +367,22 @@ export function classifyRecoveredFiber(
   ctx: FiberRecoveryContext,
 ): FiberRecoveryResult {
   diagnostics.event('fiber.recovered', { fiber: ctx.name, fiberId: ctx.id });
+
   try {
     if (ctx.name.startsWith(BACKGROUND_FIBER_PREFIX)) return redriveBackgroundJobLane(transports, ctx);
+
     if (ctx.name === EVOLUTION_LANE_FIBER) return redriveEvolutionLane(transports, ctx);
+
     if (ctx.name === ADVISOR_LANE_FIBER) return redriveAdvisorLane(transports, ctx);
+
     if (ctx.name === SEARCH_FIBER_NAME) return recordInterruptedSearch(transports, ctx);
+
     if (ctx.name === MCP_WARM_LANE_FIBER) return recoverMcpWarmLane();
+
     if (ctx.name === TERMINAL_LANE_FIBER) return armTerminalLaneRecovery(transports, ctx);
+
     if (ctx.name === FORK_NOTICE_LANE_FIBER) return redriveForkNoticeLane(transports, ctx);
+
     return unrecognisedLane(ctx);
   } catch (err) {
     const failure = toKinuError({
@@ -372,7 +390,9 @@ export function classifyRecoveredFiber(
       cause: err,
       otherwise: 'io',
     });
+
     diagnostics.failure('fiber.recovery_failed', failure, { fiber: ctx.name, fiberId: ctx.id });
+
     // Terminal, not rethrown. A lane whose guard could not be read, or whose
     // carrier could not write its row, will not classify on the fifth attempt
     // either, and re-offering the row is how one broken lane holds a Durable
@@ -398,6 +418,7 @@ function armTerminalLaneRecovery(
   transports.redrive(
     TERMINAL_LANE_FIBER, fiberSnapshot(ctx), () => transports.armOwedTerminalRecovery(),
   );
+
   return { status: 'completed', snapshot: { lane: TERMINAL_LANE_FIBER, redrive: 'terminal-wake' } };
 }
 
@@ -429,6 +450,7 @@ function redriveBackgroundJobLane(
       inFlight: inFlight.length,
     });
   });
+
   return { status: 'completed', snapshot: { lane: ctx.name, redrive: 'background-job' } };
 }
 
@@ -452,6 +474,7 @@ function redriveEvolutionLane(
   transports.redrive(
     EVOLUTION_LANE_FIBER, fiberSnapshot(ctx), () => transports.runDueSessionEvolution(),
   );
+
   return { status: 'completed', snapshot: { lane: EVOLUTION_LANE_FIBER, redrive: 'session-evolution' } };
 }
 
@@ -488,6 +511,7 @@ function redriveAdvisorLane(
 ): FiberRecoveryResult {
   const checkpoint = fiberSnapshot(ctx);
   const parsed = v.safeParse(AdvisorRecoverySnapshotSchema, checkpoint);
+
   if (!parsed.success) {
     return {
       status: 'error',
@@ -496,14 +520,17 @@ function redriveAdvisorLane(
       snapshot: { lane: ADVISOR_LANE_FIBER, redrive: null },
     };
   }
+
   const snapshot = parsed.output;
   const turnId = snapshot.turn.turnId;
+
   if (turnId !== undefined && transports.hasAdvisorNoteForTurn(turnId)) {
     return {
       status: 'completed',
       snapshot: { lane: ADVISOR_LANE_FIBER, turnId, redrive: null, alreadyRecorded: true },
     };
   }
+
   transports.redrive(ADVISOR_LANE_FIBER, checkpoint, async () => {
     const disposition = await transports.reviewAdvisorSnapshot(snapshot);
     diagnostics.event('fiber.advisor_lane_redriven', {
@@ -511,6 +538,7 @@ function redriveAdvisorLane(
       disposition: disposition ?? '(none)',
     });
   });
+
   return {
     status: 'completed',
     snapshot: { lane: ADVISOR_LANE_FIBER, turnId: turnId ?? null, redrive: 'advisor-review' },
@@ -532,6 +560,7 @@ function redriveForkNoticeLane(
 ): FiberRecoveryResult {
   const checkpoint = fiberSnapshot(ctx);
   const parsed = v.safeParse(RecoveredSignalSchema, checkpoint);
+
   if (!parsed.success) {
     return {
       status: 'error',
@@ -540,8 +569,10 @@ function redriveForkNoticeLane(
       snapshot: { lane: FORK_NOTICE_LANE_FIBER, redrive: null },
     };
   }
+
   const signal = parsed.output;
   dispatchRecoveredNotice(transports, signal, signal.attempts ?? 0);
+
   return { status: 'completed', snapshot: { lane: FORK_NOTICE_LANE_FIBER, redrive: 'signal-delivery' } };
 }
 
@@ -576,6 +607,7 @@ export function dispatchRecoveredNotice(
     if (attempts > 0) {
       await new Promise((resolve) => { setTimeout(resolve, recoveryBackoffMs(attempts)); });
     }
+
     if (await transports.deliverSignal(signal) === 'undelivered') {
       diagnostics.event('fiber.notice_redelivery_owed', {
         key: signal.idempotencyKey ?? '(none)', attempts: attempts + 1,
@@ -652,6 +684,7 @@ function recordInterruptedSearch(
     + `Fiber "${ctx.name}" was interrupted (likely DO eviction) and recovered. `
     + `Snapshot at interruption: ${JSON.stringify(snapshot).slice(0, 400)}\n`,
   ));
+
   return {
     status: 'completed',
     snapshot: { lane: SEARCH_FIBER_NAME, recorded: true, redrive: 'memory-note' },
@@ -672,7 +705,9 @@ function unrecognisedLane(ctx: FiberRecoveryContext): FiberRecoveryResult {
     'unsupported',
     `no recovery is defined for the "${ctx.name}" fiber, so the work it was carrying is lost`,
   );
+
   diagnostics.failure('fiber.recovery_unrecognised', failure, { fiber: ctx.name, fiberId: ctx.id });
+
   return { status: 'error', error: failure.message, snapshot: { lane: ctx.name, recovered: false } };
 }
 

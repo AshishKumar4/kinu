@@ -7,6 +7,7 @@ import { printHelp } from '../src/display';
 function registeredPaths(cmd: Command, prefix = ''): string[] {
   return cmd.commands.flatMap((sub) => {
     const path = `${prefix}${sub.name()}`;
+
     return sub.commands.length > 0 ? registeredPaths(sub, `${path} `) : [path];
   });
 }
@@ -21,17 +22,20 @@ describe('root help', () => {
   const logged: string[] = [];
   const originalLog = console.log;
   console.log = (message?: string) => { logged.push(message ?? ''); };
+
   try {
     printHelp(program);
   } finally {
     console.log = originalLog;
   }
+
   const help = stripAnsi(logged.join('\n'));
 
   test('lists every registered command', () => {
     const missing = registeredPaths(program).filter(
       (path) => !new RegExp(`^\\s{2}${path.replace(/ /g, '\\s')}(\\s|$)`, 'm').test(help),
     );
+
     expect(missing).toEqual([]);
   });
 

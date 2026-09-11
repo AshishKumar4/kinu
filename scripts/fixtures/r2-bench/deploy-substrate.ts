@@ -64,17 +64,22 @@ export const delay = async (ms: number): Promise<void> => {
  */
 export function accountId(repoRoot: string): string {
   const fromEnv = process.env['CLOUDFLARE_ACCOUNT_ID'];
+
   if (fromEnv !== undefined && fromEnv.length > 0) return fromEnv;
   const config = readFileSync(join(repoRoot, 'packages/cf-backend/wrangler.jsonc'), 'utf8');
   const found = /"account_id"\s*:\s*"([0-9a-f]+)"/.exec(config);
+
   if (found === null) {
     throw new Error(
       'no account_id in packages/cf-backend/wrangler.jsonc and no CLOUDFLARE_ACCOUNT_ID in the '
       + 'environment, so wrangler cannot pick an account non-interactively.',
     );
   }
+
   const id = found[1];
+
   if (id === undefined) throw new Error('account_id match contained no capture');
+
   return id;
 }
 
@@ -109,10 +114,12 @@ export function runWrangler(
     });
   } catch (error) {
     const detail = describeThrown({ cause: error });
+
     if (options.allowFailure === true) return `${WRANGLER_FAILED}: ${detail}`;
     throw new Error(`wrangler ${args.join(' ')} failed: ${detail}`, { cause: error });
   }
 }
+
 /** Cloudflare derives a container application name from Worker and DO class. */
 export function containerApplicationName(workerName: string, className: string): string {
   return `${workerName}-${className.toLowerCase()}`;
@@ -135,17 +142,22 @@ export function containerAppIds(
   wrangle: typeof runWrangler = runWrangler,
 ): { id: string; name: string }[] {
   const output = wrangle(repoRoot, ['containers', 'list', '--json'], { allowFailure: true });
+
   if (output.startsWith(WRANGLER_FAILED)) {
     log(`container application listing failed: ${output.slice(0, 240)}`);
     throw new Error('container application listing failed; absence is unproved');
   }
+
   const start = output.indexOf('[');
+
   if (start === -1) {
     log(`container application listing returned no JSON array: ${output.slice(0, 240)}`);
     throw new Error('container application listing had no JSON array; absence is unproved');
   }
+
   try {
     const apps = v.parse(ContainerAppListSchema, JSON.parse(output.slice(start)));
+
     return apps
       .filter((app): app is { id: string; name: string } =>
         app.id !== undefined && app.name !== undefined && names.includes(app.name))
@@ -164,13 +176,18 @@ export function deleteContainerApps(
   log: (message: string) => void,
 ): string[] {
   const found = containerAppIds(repoRoot, names, log);
+
   if (found.length === 0) return ['absent'];
+
   return found.map((app) => {
     const deleted = runWrangler(repoRoot, ['containers', 'delete', app.id], { allowFailure: true });
+
     if (!wranglerProvesAbsence(deleted)) {
       log(`WARNING: container application ${app.name} (${app.id}) was NOT deleted`);
+
       return `${app.name}: FAILED`;
     }
+
     return `${app.name}: absent`;
   });
 }
@@ -195,21 +212,29 @@ export function deleteFixtureWorker(
     ['delete', '--config', configPath, '--force'],
     { allowFailure: true },
   );
+
   if (!configured.startsWith(WRANGLER_FAILED)) {
     log('fixture Worker deleted');
+
     return true;
   }
+
   log(`delete --config failed, falling back to --name: ${configured.slice(0, 160)}`);
+
   const named = wrangle(
     repoRoot,
     ['delete', '--name', workerName, '--force'],
     { allowFailure: true },
   );
+
   if (!wranglerProvesAbsence(named)) {
     log(`WARNING: the fixture Worker was NOT deleted. Remove it by hand: ${named.slice(0, 300)}`);
+
     return false;
   }
+
   log('fixture Worker deleted or absent');
+
   return true;
 }
 
@@ -222,6 +247,7 @@ export function deleteFixtureWorker(
  * handlers run it exactly once before exiting.
  */
 let teardownHook: (() => Promise<void>) | null = null;
+
 let teardownRan = false;
 
 export function publishTeardown(hook: () => Promise<void>): void {
@@ -238,6 +264,7 @@ export function armSignalTeardown(log: (message: string) => void): void {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
       log(`${signal} received; running teardown before exit`);
+
       return runTeardownOnce().finally(() => process.exit(130));
     });
   }
@@ -262,7 +289,9 @@ export async function awaitTokenAccepted(
 ): Promise<void> {
   const probe = async (headers?: Record<string, string>): Promise<number | 'unreachable'> => {
     const init: RequestInit = { signal: AbortSignal.timeout(15_000) };
+
     if (headers !== undefined) init.headers = headers;
+
     try {
       return (await fetch(`${origin}${probePath}`, init)).status;
     } catch (error) {
@@ -272,25 +301,31 @@ export async function awaitTokenAccepted(
       // persistent DNS or TLS fault is visible rather than looking like a slow
       // deploy.
       log(`readiness probe unreachable: ${describeThrown({ cause: error })}`);
+
       return 'unreachable';
     }
   };
 
   const unauth = await probe();
+
   if (unauth === 200) {
     throw new Error('the fixture answered an unauthenticated request; refusing to run');
   }
 
   const deadline = Date.now() + deadlineMs;
+
   for (;;) {
     const authed = await probe({ authorization: `Bearer ${token}` });
+
     if (authed === 200) return;
+
     if (Date.now() > deadline) {
       throw new Error(
         `the deployment never accepted this run's token at ${origin} (last status ${authed}). `
         + 'A stable workers.dev hostname means an older deployment can answer here.',
       );
     }
+
     await delay(3_000);
   }
 }

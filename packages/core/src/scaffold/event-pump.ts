@@ -28,6 +28,7 @@ export async function* pumpScaffoldEvents(
   const wake = () => {
     if (resolveNext) { const r = resolveNext; resolveNext = null; r(); }
   };
+
   const emit: ScaffoldEmitFn = (event) => { queue.push(event); wake(); };
 
   // Mark finished when the run settles, so the drain loop terminates even if
@@ -40,8 +41,10 @@ export async function* pumpScaffoldEvents(
       await new Promise<void>((resolve) => { resolveNext = resolve; });
       continue;
     }
+
     const event = queue.shift()!;
     yield event;
+
     if (event.type === 'done') break;
   }
 

@@ -21,10 +21,14 @@ import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-f
 import { ProviderPacer, type RateLimitRetryOptions } from '@kinu.run/core';
 
 const MODEL = '@cf/moonshotai/kimi-k2.6';
+
 const ENDPOINT = 'https://kinu-direct-workers-ai.invalid/chat/completions';
+
 const PROMPT = 'the exact words the person typed';
+
 /** Model output a refusal must not replay back to the caller. */
 const WITHHELD = 'the completion a buffered replay would hand back';
+
 const DONE = 'data: [DONE]\n\n';
 
 /** Everything workerd's `Ai.run` can hand back, which is what the adapter has
@@ -98,13 +102,16 @@ interface RecordedRun {
  *  rather than becoming a silent undefined. */
 function directFetch(answer: (run: RecordedRun) => BindingAnswer, retry: RateLimitRetryOptions = {}) {
   const runs: RecordedRun[] = [];
+
   const ai = {
     run(model: string, inputs: JsonObject, options?: RunOptions): Promise<BindingAnswer> {
       const recorded: RecordedRun = { model, inputs, options };
       runs.push(recorded);
+
       return Promise.resolve(answer(recorded));
     },
   };
+
   // SAFETY: this constructed fixture provides `Ai.run`, and the adapter under
   // test calls no other member of the binding.
   return { fetch: createDirectWorkersAIFetch(ai as Ai, retry), runs };
@@ -121,6 +128,7 @@ function manualStream() {
   let sink: ReadableStreamDefaultController<Uint8Array> | undefined;
   let closed = false;
   let cancelled = false;
+
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       sink = controller;
@@ -129,8 +137,10 @@ function manualStream() {
       cancelled = true;
     },
   });
+
   if (!sink) throw new Error('ReadableStream did not start synchronously');
   const controller = sink;
+
   return {
     stream,
     push: (text: string) => controller.enqueue(encoder.encode(text)),
@@ -154,7 +164,9 @@ function eventStream(body: ReadableStream<Uint8Array>): Response {
 /** A body whose bytes are already known, as the upstream would deliver them. */
 function eventStreamOf(text: string): Response {
   const body = new Response(text).body;
+
   if (!body) throw new Error('fixture response carried no body');
+
   return eventStream(body);
 }
 
@@ -165,24 +177,32 @@ function frames(body: ReadableStream<Uint8Array> | null) {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+
   const next = async (): Promise<string | null> => {
     for (;;) {
       const cut = buffer.indexOf('\n\n');
+
       if (cut >= 0) {
         const frame = buffer.slice(0, cut);
         buffer = buffer.slice(cut + 2);
+
         return frame.startsWith('data: ') ? frame.slice('data: '.length) : frame;
       }
+
       const read = await reader.read();
+
       if (read.done) return null;
       buffer += decoder.decode(read.value, { stream: true });
     }
   };
+
   return {
     next,
     rest: async () => {
       const collected: string[] = [];
+
       for (let frame = await next(); frame !== null; frame = await next()) collected.push(frame);
+
       return collected;
     },
     cancel: async () => {
@@ -209,11 +229,14 @@ async function drainStreamed(direct: typeof globalThis.fetch) {
     method: 'POST',
     body: chatBody({ stream: true }),
   })).body).rest());
+
   const ids = [...new Set(emitted.map((chunk) => chunk.id))];
   const [responseId] = ids;
+
   if (ids.length !== 1 || responseId === undefined) {
     throw new Error(`one streamed response carried ${String(ids.length)} chunk ids`);
   }
+
   return {
     responseId,
     chunks: emitted,
@@ -223,15 +246,19 @@ async function drainStreamed(direct: typeof globalThis.fetch) {
 
 function deltaOf(payload: string | null): Chunk['choices'][number]['delta'] {
   if (payload === null) throw new Error('the stream ended before the expected frame');
+
   return chunks([payload])[0]?.choices[0]?.delta;
 }
 
 let restoreSink: (() => void) | undefined;
+
 function recordDiagnostics(): RecordingLogger {
   const logger = createRecordingLogger();
   restoreSink = setDiagnosticsSink(logger);
+
   return logger;
 }
+
 afterEach(() => {
   restoreSink?.();
   restoreSink = undefined;
@@ -247,13 +274,16 @@ describe('direct Workers AI binding — a rate limit is waited out, never surren
   test('a 429 envelope from the binding is retried until the completion arrives', async () => {
     const waits: number[] = [];
     let attempt = 0;
+
     const { fetch, runs } = directFetch(() => {
       attempt += 1;
+
       if (attempt < 3) {
         return new Response(JSON.stringify({ errors: [{ code: 3021, message: 'rate limiting: inference request per min rate reached' }] }), {
           status: 429, headers: { 'content-type': 'application/json', 'retry-after': '1' },
         });
       }
+
       // A whole completion, the shape the binding answers an unstreamed request with.
       return { response: 'OK', usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 } };
     }, {
@@ -261,6 +291,7 @@ describe('direct Workers AI binding — a rate limit is waited out, never surren
       pacer: new ProviderPacer({ sleep: async () => {} }),
       warn: () => {},
     });
+
     const response = await fetch(ENDPOINT, { method: 'POST', body: chatBody() });
     expect(response.status).toBe(200);
     expect(runs).toHaveLength(3);
@@ -316,11 +347,14 @@ describe('direct Workers AI binding — incremental streaming', () => {
     const { fetch: direct } = directFetch(() => eventStream(upstream.stream));
 
     let settled = false;
+
     const pending = direct(ENDPOINT, { method: 'POST', body: chatBody({ stream: true }) })
       .then((response) => {
         settled = true;
+
         return response;
       });
+
     // Nothing has been pushed, so no first byte exists. The adapter cannot have
     // answered, and the assertion holds however many microtasks have run: it is
     // a statement about the upstream having produced nothing, not about elapsed
@@ -341,6 +375,7 @@ describe('direct Workers AI binding — incremental streaming', () => {
   test('two turns on one binding do not read each other frames, headers or shapes', async () => {
     const alpha = manualStream();
     const beta = manualStream();
+
     // Different return shapes on purpose: `Ai.run` re-reads
     // `options.returnRawResponse` off the binding AFTER awaiting upstream, so a
     // concurrent call can hand this adapter the shape it did not ask for.
@@ -354,11 +389,13 @@ describe('direct Workers AI binding — incremental streaming', () => {
       body: chatBody({ stream: true }),
       headers: { 'x-session-affinity': 'kinu-alpha' },
     });
+
     const betaPending = direct(ENDPOINT, {
       method: 'POST',
       body: chatBody({ stream: true }),
       headers: { 'x-session-affinity': 'kinu-beta' },
     });
+
     // Sentinels carry a non-hex letter ON PURPOSE: the adapter mints random
     // chunk ids (`chatcmpl-<uuid>`), and a hex uuid can spell any [0-9a-f]
     // run — the hammer caught `chatcmpl-4faaa370…` satisfying a bare 'aaa'.
@@ -399,6 +436,7 @@ describe('direct Workers AI binding — incremental streaming', () => {
       body: chatBody({ stream: true }),
       signal: controller.signal,
     });
+
     upstream.push(sse({ response: 'partial' }));
     const reader = frames((await pending).body);
     await reader.next();
@@ -417,9 +455,11 @@ describe('direct Workers AI binding — incremental streaming', () => {
 
   test('a cancelled binding call is rethrown, never reported as a provider failure', async () => {
     const logger = recordDiagnostics();
+
     const { fetch: direct } = directFetch(() => {
       throw new DOMException('The operation was aborted', 'AbortError');
     });
+
     await expect(direct(ENDPOINT, { method: 'POST', body: chatBody({ stream: true }) }))
       .rejects.toThrow('The operation was aborted');
     expect(logger.emitted.map((line) => line.event)).not.toContain('workers_ai.direct_call_failed');
@@ -562,8 +602,10 @@ describe('direct Workers AI binding — usage and finish frames', () => {
   test('OpenAI-shaped chunks pass through verbatim and their finish reason is not duplicated', async () => {
     const upstreamChunk = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m",'
       + '"choices":[{"index":0,"delta":{"role":"assistant","content":"hi","reasoning_content":"because"}}]}';
+
     const finishChunk = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m",'
       + '"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":1,"total_tokens":4}}';
+
     // No upstream [DONE]: the terminator is this adapter's responsibility.
     const { fetch: direct } = directFetch(() => eventStreamOf(
       `data: ${upstreamChunk}\n\ndata: ${finishChunk}\n\n`,
@@ -585,6 +627,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     // OpenAI-shaped stream sends one. The turn then reported no tokens.
     const finishChunk = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m",'
       + '"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"},"finish_reason":"stop"}]}';
+
     const { fetch: direct } = directFetch(() => eventStreamOf(
       `data: ${finishChunk}\n\n${sse({ usage: { prompt_tokens: 21, completion_tokens: 5, total_tokens: 26 } })}${DONE}`,
     ));
@@ -610,6 +653,7 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     const head = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m"';
     const delta = `${head},"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]}`;
     const usageOnly = `${head},"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":2,"total_tokens":10}}`;
+
     const { fetch: direct } = directFetch(() => eventStreamOf(
       `data: ${delta}\n\ndata: ${usageOnly}\n\n${DONE}`,
     ));
@@ -620,8 +664,10 @@ describe('direct Workers AI binding — usage and finish frames', () => {
     })).body).rest();
 
     const emitted = chunks(payloads);
+
     const terminal = emitted.filter((chunk) =>
       (chunk.choices[0]?.finish_reason ?? null) !== null || chunk.usage !== undefined);
+
     expect(terminal).toHaveLength(1);
     expect(terminal[0]?.choices[0]?.finish_reason).toBe('stop');
     expect(terminal[0]?.usage).toEqual({ prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 });
@@ -712,6 +758,7 @@ describe('direct Workers AI binding — refusals', () => {
 
   test('a thrown binding failure becomes a classified 502, not an opaque transport fault', async () => {
     const logger = recordDiagnostics();
+
     const { fetch: direct } = directFetch(() => {
       throw new Error('3036: capacity temporarily exceeded');
     });
@@ -789,12 +836,14 @@ describe('direct Workers AI binding — whole completions', () => {
     }));
 
     const completions = [];
+
     for (const _step of [1, 2]) {
       const response = await direct(ENDPOINT, { method: 'POST', body: chatBody() });
       completions.push(v.parse(CompletionSchema, await response.json()));
     }
 
     const [first, second] = completions;
+
     if (!first || !second) throw new Error('the turn produced fewer than two completions');
     expect(first.id).not.toBe(second.id);
     expect(first.choices[0]?.message.tool_calls?.[0]?.id).toBe(`call-${first.id}-i-1`);
@@ -810,6 +859,7 @@ describe('direct Workers AI binding — whole completions', () => {
       choices: [{ index: 0, message: { role: 'assistant', content: 'passed' }, finish_reason: 'stop' }],
       usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
     };
+
     const { fetch: direct } = directFetch(() => upstream);
 
     const response = await direct(ENDPOINT, { method: 'POST', body: chatBody() });
@@ -823,7 +873,9 @@ describe('direct Workers AI binding — whole completions', () => {
     // request that asked for a whole answer.
     const { fetch: direct } = directFetch(() => {
       const body = new Response(JSON.stringify({ response: 'raw body' })).body;
+
       if (!body) throw new Error('fixture response carried no body');
+
       return body;
     });
 
@@ -854,6 +906,7 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
       sse({ response: '', usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } }),
       DONE,
     ].join('')));
+
     const model = createOpenAICompatible({
       name: 'workers-ai',
       baseURL: 'https://kinu-direct-workers-ai.invalid',
@@ -862,6 +915,7 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
 
     const result = streamText({ model, prompt: 'ping' });
     let text = '';
+
     for await (const delta of result.textStream) text += delta;
 
     expect(text).toBe('streamed through');
@@ -878,9 +932,11 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
     // whole turn was accounted at zero tokens.
     const finishChunk = '{"id":"chatcmpl-upstream","object":"chat.completion.chunk","created":7,"model":"m",'
       + '"choices":[{"index":0,"delta":{"role":"assistant","content":"counted"},"finish_reason":"stop"}]}';
+
     const { fetch: direct } = directFetch(() => eventStreamOf(
       `data: ${finishChunk}\n\n${sse({ usage: { prompt_tokens: 31, completion_tokens: 7, total_tokens: 38 } })}${DONE}`,
     ));
+
     const model = createOpenAICompatible({
       name: 'workers-ai',
       baseURL: 'https://kinu-direct-workers-ai.invalid',
@@ -889,6 +945,7 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
 
     const result = streamText({ model, prompt: 'ping' });
     let text = '';
+
     for await (const delta of result.textStream) text += delta;
 
     expect(text).toBe('counted');
@@ -905,15 +962,18 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
     // `call-1`, or the second step's result resolves against the first's call.
     const commands = [{ cmd: 'ls' }, { cmd: 'pwd' }];
     let step = 0;
+
     const { fetch: direct } = directFetch(() => eventStreamOf([
       sse({ tool_calls: [{ name: 'run', arguments: commands[step++] ?? {} }] }),
       DONE,
     ].join('')));
+
     const model = createOpenAICompatible({
       name: 'workers-ai',
       baseURL: 'https://kinu-direct-workers-ai.invalid',
       fetch: direct,
     }).chatModel(MODEL);
+
     const tools = {
       run: tool({
         description: 'Run a shell command in the workspace.',
@@ -924,9 +984,11 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
     };
 
     const answered = new Map<string, unknown>();
+
     for (const _step of commands) {
       const result = streamText({ model, tools, prompt: 'ping' });
       await result.consumeStream();
+
       for (const call of await result.toolCalls) answered.set(call.toolCallId, call.input);
     }
 
@@ -945,11 +1007,13 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
     // 2026-09-05), so every replay of a tool-calling turn was refused. The
     // empty string is the same message in the spelling the schema admits.
     const { fetch: direct, runs } = directFetch(() => ({ response: '999' }));
+
     const model = createOpenAICompatible({
       name: 'workers-ai',
       baseURL: 'https://kinu-direct-workers-ai.invalid',
       fetch: direct,
     }).chatModel(MODEL);
+
     const tools = {
       add: tool({
         description: 'Add two integers.',
@@ -958,6 +1022,7 @@ describe('direct Workers AI binding — the AI SDK consumes it', () => {
         }),
       }),
     };
+
     const history: ModelMessage[] = [
       { role: 'user', content: 'Call add for 142 and 857, then give the sum.' },
       {

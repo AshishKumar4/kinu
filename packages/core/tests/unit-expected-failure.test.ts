@@ -24,6 +24,7 @@ function thrown(provoke: () => void): Error {
     if (caught instanceof Error) return caught;
     throw new Error(`expected an Error, got ${String(caught)}`, { cause: caught });
   }
+
   throw new Error('the operation did not fail, so there is nothing to classify');
 }
 
@@ -106,6 +107,7 @@ describe('tolerate', () => {
   test('propagates an unrecognised failure unwrapped, preserving its identity', () => {
     const original = new TypeError('target is not a function');
     let seen: Error | null = null;
+
     try {
       tolerate(() => {
         throw original;
@@ -113,6 +115,7 @@ describe('tolerate', () => {
     } catch (caught) {
       seen = caught instanceof Error ? caught : null;
     }
+
     expect(seen).toBe(original);
   });
 
@@ -120,6 +123,7 @@ describe('tolerate', () => {
     const db = new Database(':memory:');
     db.run('CREATE TABLE t (id TEXT PRIMARY KEY, a TEXT)');
     db.run('CREATE TABLE u (id TEXT)');
+
     const provoked: Array<{ name: ExpectedFailure; cause: Error }> = [
       { name: 'sqlite-missing-table', cause: thrown(() => db.query('SELECT 1 FROM absent').all()) },
       { name: 'sqlite-duplicate-column', cause: thrown(() => db.run('ALTER TABLE t ADD COLUMN a TEXT')) },
@@ -129,9 +133,11 @@ describe('tolerate', () => {
       { name: 'esrch', cause: thrown(() => process.kill(0x7fffffff, 0)) },
       { name: 'malformed-input', cause: thrown(() => JSON.parse('{oops')) },
     ];
+
     // A registry whose names outnumber the errors anyone can provoke is a list of guesses. Asserting
     // the count here means adding a name without a provoked error fails this test.
     expect(provoked.length).toBe(7);
+
     for (const { name, cause } of provoked) {
       expect(classify({ cause })).toBe(name);
     }
@@ -143,6 +149,7 @@ describe('tolerateAsync', () => {
     const absent = async (): Promise<string> => {
       throw Object.assign(new Error('ENOENT: no such file or directory'), { code: 'ENOENT' });
     };
+
     expect(await tolerateAsync(absent, 'enoent')).toBeUndefined();
     await expect(tolerateAsync(absent, 'esrch')).rejects.toThrow(/ENOENT/u);
   });
@@ -152,6 +159,7 @@ describe('tolerateAsync', () => {
       await Promise.resolve();
       throw new SyntaxError('bad payload');
     };
+
     expect(await tolerateAsync(rejects, 'malformed-input')).toBeUndefined();
   });
 });

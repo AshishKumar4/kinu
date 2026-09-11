@@ -146,12 +146,15 @@ export function checkMisevolutionForSurface(
   surface: MisevolutionSurface,
 ): MisevolutionVerdict {
   const enforced = SURFACE_CRITERIA[surface];
+
   for (const criterion of MISEVOLUTION_CRITERIA) {
     if (!enforced.includes(criterion.id)) continue;
+
     if (criterion.pattern.test(source)) {
       return { ok: false, criterionId: criterion.id, reason: criterion.reason };
     }
   }
+
   return { ok: true };
 }
 

@@ -58,10 +58,13 @@ describe('head function-form execute_tools resolves over the allowed surface', (
     const { rt } = createTestRuntime();
     const allowed = ['execute_tools', 'run', 'file', 'record_evidence'];
     let seen: readonly string[] | null = null;
+
     const executeTool = (finished: ToolSet) => {
       seen = Object.keys(finished);
+
       return sandboxEntry('fn-ran');
     };
+
     const tools = buildHeadToolSet({
       input: headInput({ allowedTools: allowed }),
       capture: new HeadCapture(),
@@ -70,10 +73,12 @@ describe('head function-form execute_tools resolves over the allowed surface', (
       webSearch: stubWeb,
       split: neverSplit,
     });
+
     const runSandbox = toolExecute<{ code: string }, string>(tools.execute_tools);
     await expect(runSandbox({ code: 'const x = 1' })).resolves.toBe('fn-ran:const x = 1');
     const names: readonly string[] = seen ?? [];
     expect(names.length).toBeGreaterThan(0);
+
     for (const name of names) expect(allowed).toContain(name);
     expect(names).toContain('run');
     expect(names).not.toContain('web');
@@ -83,10 +88,13 @@ describe('head function-form execute_tools resolves over the allowed surface', (
   test('the function never runs when allowedTools drops execute_tools', () => {
     const { rt } = createTestRuntime();
     let calls = 0;
+
     const executeTool = (_finished: ToolSet) => {
       calls += 1;
+
       return sandboxEntry('fn-ran');
     };
+
     const tools = buildHeadToolSet({
       input: headInput({ allowedTools: ['run'] }),
       capture: new HeadCapture(),
@@ -95,6 +103,7 @@ describe('head function-form execute_tools resolves over the allowed surface', (
       webSearch: stubWeb,
       split: neverSplit,
     });
+
     expect(tools.execute_tools).toBeUndefined();
     expect(calls).toBe(0);
     expect(Object.keys(tools)).toEqual(['run']);
@@ -102,6 +111,7 @@ describe('head function-form execute_tools resolves over the allowed surface', (
 
   test('a finished executeTool entry installs directly and runs', async () => {
     const { rt } = createTestRuntime();
+
     const tools = buildHeadToolSet({
       input: headInput(),
       capture: new HeadCapture(),
@@ -110,6 +120,7 @@ describe('head function-form execute_tools resolves over the allowed surface', (
       webSearch: stubWeb,
       split: neverSplit,
     });
+
     const runSandbox = toolExecute<{ code: string }, string>(tools.execute_tools);
     await expect(runSandbox({ code: 'const x = 1' })).resolves.toBe('direct-ran:const x = 1');
   });
@@ -121,10 +132,13 @@ describe('node proposal merges after the execute_tools finish', () => {
     initHeadsTables(rt.storage.execRaw);
     const journal = new HeadJournal(rt.storage.sql, rt.actor);
     let seen: readonly string[] | null = null;
+
     const executeTool = (finished: ToolSet) => {
       seen = Object.keys(finished);
+
       return sandboxEntry('fn-ran');
     };
+
     // Proposes once, then reports the grant it was told about.
     const model = scriptedTurnModel({
       modelId: 'fake-proposer',
@@ -133,6 +147,7 @@ describe('node proposal merges after the execute_tools finish', () => {
         const proposed = prompt.some((message) => message.role === 'tool');
         const granted = text.includes('Granted: 2 children');
         const reported = text.includes('"received":true');
+
         const content: LanguageModelV3Content[] = reported
           ? [{ type: 'text', text: 'Done.' }]
           : granted
@@ -156,6 +171,7 @@ describe('node proposal merges after the execute_tools finish', () => {
                   ],
                 }),
               }];
+
         return {
           content,
           finishReason: {
@@ -170,6 +186,7 @@ describe('node proposal merges after the execute_tools finish', () => {
         };
       },
     });
+
     const input: NodeAgentInput = {
       nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,
       task: 'Make the reference implementation cheaper.',
@@ -187,6 +204,7 @@ describe('node proposal merges after the execute_tools finish', () => {
         proposal,
       }),
     };
+
     const deps: NodeAgentDeps = {
       // One seat for this node, over the caller's own database — `rt` is not a
       // node dep, because a shared handle would give every node of a wave one
@@ -198,6 +216,7 @@ describe('node proposal merges after the execute_tools finish', () => {
       maxWallClockMs: 60_000,
       executeTool,
     };
+
     const run = await runNodeAgent(input, deps);
     expect(run.report.status).toBe('completed');
     // The sandbox declarations predate the proposal tool.
@@ -206,6 +225,7 @@ describe('node proposal merges after the execute_tools finish', () => {
     expect(names).toContain('execute_tools');
     // And the proposal still landed: the grant the tool returned is the run's.
     expect(run.granted?.kind).toBe('granted');
+
     if (run.granted?.kind === 'granted') expect(run.granted.nodeIds).toEqual(['c1', 'c2']);
     expect(run.candidate).toContain('the granted children hold the answer');
   });

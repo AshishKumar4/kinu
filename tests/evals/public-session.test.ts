@@ -72,6 +72,7 @@ const ChatRequestFrameSchema = v.object({
   id: v.string(),
   init: v.object({ method: v.string(), body: v.string() }),
 });
+
 const ChatRequestBodySchema = v.object({
   trigger: v.string(),
   oneShot: v.optional(v.boolean()),
@@ -80,6 +81,7 @@ const ChatRequestBodySchema = v.object({
     parts: v.array(v.object({ type: v.string(), text: v.optional(v.string()) })),
   })),
 });
+
 const RpcRequestFrameSchema = v.object({
   type: v.string(),
   id: v.string(),
@@ -92,20 +94,26 @@ const RpcRequestFrameSchema = v.object({
  *  recorder. One path, so a green here is a statement about the live path. */
 function replay(frames: readonly string[]): PublicTurnRecorder {
   const recorder = recordPublicTurn();
+
   for (const raw of frames) {
     const frame = decodeFrame(raw);
+
     if (frame?.kind === 'response') recorder.apply(frame.frame);
   }
+
   return recorder;
 }
 
 test('executor RPC decoding preserves refusal provenance and successful refusal-shaped stdout', async () => {
   let response: JsonValue = { stdout: 'failed', stderr: 'remote error', exitCode: 1,
     refusal: { reason: 'io', error: 'remote error', execution: { exitCode: 7 } } };
+
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
     fetch(request, server) {
       if (request.method === 'DELETE') return Response.json({ ok: true });
+
       if (server.upgrade(request)) return;
+
       return new Response('not found', { status: 404 });
     },
     websocket: { message(socket, message) {
@@ -113,10 +121,12 @@ test('executor RPC decoding preserves refusal provenance and successful refusal-
       socket.send(rpcReplyFrame({ requestId: request.id, result: response }));
     } },
   });
+
   const session = new KinuPublicSession({ origin: server.url.origin, identity: { kind: 'loopback' },
     workspace: 'probe', purpose: 'executor protocol probe',
     llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
   }, 'probe');
+
   try {
     await session.connect();
     expect(await session.execute('laptop', 'work')).toEqual(response);
@@ -141,6 +151,7 @@ describe('the public session speaks the frames the web client speaks', () => {
       ChatRequestFrameSchema,
       JSON.parse(encodeChatRequest({ requestId: 'turn-1', text: 'write note.txt' })),
     );
+
     expect(request.init.method).toBe('POST');
     const body = v.parse(ChatRequestBodySchema, JSON.parse(request.init.body));
     expect(body.trigger).toBe('submit-message');
@@ -154,11 +165,14 @@ describe('the public session speaks the frames the web client speaks', () => {
     const frame = decodeFrame(encodeRpcRequest({
       requestId: 'rpc-1', method: 'steerTurn', args: ['stop, use the file tool', 'build'],
     }));
+
     // Same as above: an outbound frame is not one this session consumes.
     expect(frame?.kind).toBe('other');
+
     const sent = v.parse(RpcRequestFrameSchema, JSON.parse(encodeRpcRequest({
       requestId: 'rpc-1', method: 'setModel', args: ['@cf/x'],
     })));
+
     expect(sent).toEqual({ type: 'rpc', id: 'rpc-1', method: 'setModel', args: ['@cf/x'] });
   });
 
@@ -166,7 +180,9 @@ describe('the public session speaks the frames the web client speaks', () => {
     const recorder = replay(chatTurnFrames({
       requestId: FIXTURE_REQUEST_ID, chunks: FILE_TURN_CHUNKS,
     }));
+
     const turn = recorder.settled();
+
     if (turn === null) throw new Error('the terminal frame did not settle the turn');
     expect(turn.hadError).toBe(false);
     // Text deltas JOINED, not last-wins: a decoder that overwrote would report
@@ -191,6 +207,7 @@ describe('the public session speaks the frames the web client speaks', () => {
     const turn = replay(chatTurnFrames({
       requestId: FIXTURE_REQUEST_ID, chunks: RECOVERY_TURN_CHUNKS,
     })).settled();
+
     if (turn === null) throw new Error('the terminal frame did not settle the turn');
     expect(turn.toolCalls).toHaveLength(2);
     expect(turn.toolCalls[0]?.result).toContain('Error (exit 1)');
@@ -210,6 +227,7 @@ describe('the public session speaks the frames the web client speaks', () => {
       ...chatTurnFrames({ requestId: FIXTURE_REQUEST_ID, chunks: FILE_TURN_CHUNKS }).slice(0, 3),
       chatErrorFrame({ requestId: FIXTURE_REQUEST_ID, message: 'Internal Server Error' }),
     ]).settled();
+
     if (turn === null) throw new Error('the error frame did not settle the turn');
     expect(turn.hadError).toBe(true);
   });
@@ -221,19 +239,27 @@ describe('the public session speaks the frames the web client speaks', () => {
     // steps twice would report a turn that took twice the work it did.
     const live = chatTurnFrames({ requestId: FIXTURE_REQUEST_ID, chunks: FILE_TURN_CHUNKS });
     const recorder = recordPublicTurn();
+
     for (const raw of live.slice(0, 5)) {
       const frame = decodeFrame(raw);
+
       if (frame?.kind === 'response') recorder.apply(frame.frame);
     }
+
     expect(recorder.settled()).toBeNull();
+
     const replayed = chatTurnFrames({
       requestId: FIXTURE_REQUEST_ID, chunks: FILE_TURN_CHUNKS, replay: true,
     });
+
     for (const raw of replayed) {
       const frame = decodeFrame(raw);
+
       if (frame?.kind === 'response') recorder.apply(frame.frame);
     }
+
     const turn = recorder.settled();
+
     if (turn === null) throw new Error('the replayed terminal frame did not settle the turn');
     expect(turn.text).toBe('Wrote note.txt.');
     expect(turn.toolCalls).toHaveLength(1);
@@ -258,6 +284,7 @@ describe('the public session speaks the frames the web client speaks', () => {
   test('a frame for another turn is ignored by the turn it is not about', () => {
     const recorder = recordPublicTurn();
     const other = decodeFrame(chatTerminalFrame({ requestId: 'turn-other' }));
+
     if (other?.kind !== 'response') throw new Error('the terminal frame did not decode');
     // The session routes by id; this asserts the ROUTER's precondition — the
     // frame carries the id it belongs to, so a session holding two turns cannot
@@ -271,10 +298,12 @@ describe('the live arm is reachable only under KINU_EVAL_BACKEND=cloud', () => {
   test('the default and the local backend both refuse, naming the invocation', () => {
     for (const env of [{}, { KINU_EVAL_BACKEND: 'local' }]) {
       const resolution = resolvePublicSessionPlan(PROBE_SUITE, '@cf/model', env);
+
       if (resolution.kind !== 'unavailable') {
         throw new Error('a non-cloud backend resolved a public session plan, so this arm could '
           + 'run against an in-process runtime with no public surface at all');
       }
+
       // The remedy is the whole point of the refusal: it must name the knob AND
       // the command, because "unavailable" is not a remedy.
       expect(resolution.remedy).toContain('KINU_EVAL_BACKEND');
@@ -297,9 +326,11 @@ describe('the live arm is reachable only under KINU_EVAL_BACKEND=cloud', () => {
     const resolution = resolvePublicSessionPlan(PROBE_SUITE, '@cf/model', {
       KINU_EVAL_BACKEND: 'cloud',
     });
+
     if (resolution.kind !== 'unavailable') {
       throw new Error('a public session plan resolved with no credential in the environment');
     }
+
     expect(resolution.remedy).toContain('evals:cloud');
   });
 });
@@ -307,9 +338,11 @@ describe('the live arm is reachable only under KINU_EVAL_BACKEND=cloud', () => {
 describe('the browser plane names its own credential', () => {
   test('a remote origin with no secret prints both halves of the remedy', () => {
     const resolution = resolveWebIdentity(STAGING, {});
+
     if (resolution.kind !== 'absent') {
       throw new Error('a staging origin resolved a web identity out of an empty environment');
     }
+
     // The variable to export, and where the value comes from. Without the
     // second half the remedy is a name nobody can act on.
     expect(resolution.remedy).toContain(PUBLIC_IDENTITY_ENV);
@@ -376,6 +409,7 @@ describe('route-shaped run events score through the production instruments', () 
     const totals = ledgerTotalsFromEvents(DEGENERATE_EVENTS);
     expect(totals.turns).toBe(1);
     expect(totals.toolCalls).toBe(0);
+
     for (const row of scorePublicLedger(DEGENERATE_EVENTS)) {
       expect(row.eligible).toBe(0);
       expect(row.rate).toBeNull();
@@ -415,6 +449,7 @@ describe('route-shaped run events score through the production instruments', () 
       type: 'step_finish', runId: 'run-9', eventIndex: index, timestamp: '2026-08-30T12:00:00.000Z', stepIndex: index,
       reason: 'tool-calls',
     }));
+
     const provenance = projectRunEventProvenance(long);
     expect(provenance.totalEvents).toBe(1_203);
     expect(provenance.events).toHaveLength(provenance.bound);
@@ -425,9 +460,11 @@ describe('route-shaped run events score through the production instruments', () 
     const root = scratchDir('public-session-retention');
     const history = [{ role: 'user', text: 'write it' }, { role: 'assistant', text: 'DONE' }];
     const subgoals = [{ what: 'artifact', reached: false, detail: 'the file was empty' }];
+
     const dir = retainEpisodeTranscript(root, 'public-file-artifact', {
       events: LEDGER_EVENTS, history, subgoals,
     });
+
     expect(dir).toBe(join(root, 'public-file-artifact'));
     // ONE EVENT A LINE, every one the canonical union: a clipped or concatenated
     // read is still a parse of what was written, and a foreign shape fails here
@@ -451,6 +488,7 @@ describe('route-shaped run events score through the production instruments', () 
   test('an operation failure still retains its ledger and spend exactly once', async () => {
     resetLiveModelSpend();
     const root = scratchDir('failed-episode-evidence');
+
     const spend: WorkspaceSpend = {
       total: {
         calls: 8, callsWithoutUsage: 0, unpricedCalls: 8, floorPricedCalls: 0,
@@ -459,11 +497,13 @@ describe('route-shaped run events score through the production instruments', () 
       producers: [], missions: [], offTurnShare: null,
       coverage: { calls: 8, measured: 8, reported: 1, silent: [], partial: [] },
     };
+
     const reader = {
       async runEvents() { return LEDGER_EVENTS; },
       async history() { return [{ role: 'assistant', text: 'partial answer' }]; },
       async spend() { return spend; },
     };
+
     try {
       await expect(withEpisodeEvidence(async () => reader, { transcripts: root, taskId: 'failure', modelCalls: 'expected' }, async () => {
         throw new Error('failed after model work');
@@ -498,6 +538,7 @@ describe('route-shaped run events score through the production instruments', () 
     resetLiveModelSpend();
     const root = scratchDir('opening-evidence');
     const failure = new Error('created workspace but connection failed');
+
     try {
       await expect(withEpisodeEvidence(async () => { throw failure; },
         { transcripts: root, taskId: 'opening', modelCalls: 'expected' },
@@ -521,10 +562,12 @@ describe('route-shaped run events score through the production instruments', () 
 test('an explicitly missing file is an oracle miss; authorization and server failures still throw', async () => {
   let status = 404;
   const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('fixture failure', { status }) });
+
   const session = new KinuPublicSession({
     origin: server.url.origin, identity: { kind: 'loopback' }, workspace: 'probe', purpose: 'file-read oracle probe',
     llm: { name: 'workers-ai', model: '@cf/zai-org/glm-5.3', baseURL: server.url.origin, headers: {} },
   }, 'probe');
+
   try {
     await expect(session.readFile('missing.txt', { allowMissing: true })).resolves.toBe('');
     await expect(session.readFile('missing.txt')).rejects.toThrow('404');

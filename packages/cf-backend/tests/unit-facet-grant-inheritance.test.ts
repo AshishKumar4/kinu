@@ -27,6 +27,7 @@ const root = new URL('../', import.meta.url).pathname;
 /** A force-push reaches out, so the agent's own `sandbox` does not exempt it:
  *  the one command rule here that a root grant can stand for. */
 const GATED = 'git push --force origin main';
+
 const GATED_RULE = 'git-force-push';
 
 const ROOT_GRANTS: ApprovalGrant[] = [
@@ -78,7 +79,11 @@ describe('reachability of the root policy read', () => {
     const readGrants = workspace.agent.getShellApprovalGrants.bind(workspace.agent);
     Object.defineProperty(workspace.agent, 'getShellApprovalGrants', {
       configurable: true,
-      value: async () => { rootReads += 1; return readGrants(); },
+      value: async () => {
+        rootReads += 1;
+
+        return readGrants();
+      },
     });
 
     // The owner's standing decision, recorded where grants are only ever
@@ -88,6 +93,7 @@ describe('reachability of the root policy read', () => {
 
     const main = await hostedMainActor(workspace);
     const mainShell = main.actor.runtime.shell;
+
     if (!mainShell) throw new Error('the main actor carries a shell');
     expect((await mainShell.exec(GATED)).refusal).toBeUndefined();
     // It answered out of its OWN config — no root hop, because it IS the root.
@@ -97,10 +103,12 @@ describe('reachability of the root policy read', () => {
       name: 'grantee-1', displayName: 'Grantee', nameOrigin: 'user',
       mission: 'inherit the workspace policy', roleId: 'implementer',
     });
+
     // It recorded nothing of its own, so anything it holds, it holds because the
     // root holds it.
     expect(child.actor.handle.config.getShellApprovalGrants()).toEqual([]);
     const childShell = child.actor.runtime.shell;
+
     if (!childShell) throw new Error('a hosted subordinate carries a shell');
     // Counted from AFTER the hire, so the hop is attributed to the child's own
     // gate rather than to anything the hiring did on the way.
@@ -133,7 +141,9 @@ describe('reachability of the root policy read', () => {
       name: 'grantee-2', displayName: 'Grantee', nameOrigin: 'user',
       mission: 'inherit an empty policy', roleId: 'implementer',
     });
+
     const shell = child.actor.runtime.shell;
+
     if (!shell) throw new Error('a hosted subordinate carries a shell');
 
     const refused = await shell.exec(GATED);
@@ -153,10 +163,15 @@ describe('reachability of the root policy read', () => {
 describe('a facet holds the root set, or a subset of it', () => {
   function source(mode: ShellApprovalMode, own: ApprovalGrant[] | null) {
     let fetches = 0;
+
     return {
       fetches: () => fetches,
       deps: {
-        fetchRoot: async () => { fetches += 1; return { mode, grants: ROOT_GRANTS }; },
+        fetchRoot: async () => {
+          fetches += 1;
+
+          return { mode, grants: ROOT_GRANTS };
+        },
         ownGrants: () => own,
       },
     };
@@ -167,12 +182,18 @@ describe('a facet holds the root set, or a subset of it', () => {
     // ladder resolves the root before it reads a grant.
     const probe = source('strict', null);
     const ran: string[] = [];
+
     const run = gateExec<string>(
-      async (command) => { ran.push(command); return `ran:${command}`; },
+      async (command) => {
+        ran.push(command);
+
+        return `ran:${command}`;
+      },
       (error) => error.message,
       'sandbox',
       createInheritedApprovalPolicy(probe.deps),
     );
+
     expect(await run(GATED)).toBe(`ran:${GATED}`);
     expect(ran).toEqual([GATED]);
     expect(probe.fetches()).toBe(1);
@@ -182,6 +203,7 @@ describe('a facet holds the root set, or a subset of it', () => {
     const policy = createInheritedApprovalPolicy(source('strict', [
       { rule: egressSecretRule('prod-db'), executor: 'sandbox' },
     ]).deps);
+
     await policy.resolve?.();
     expect(policy.granted?.({ rule: egressSecretRule('prod-db'), executor: 'sandbox' })).toBe(false);
     // And the resolved set is provably a subset of the root's.
@@ -195,6 +217,7 @@ describe('a facet holds the root set, or a subset of it', () => {
     const policy = createInheritedApprovalPolicy(source('strict', [
       { rule: 'rm-recursive', executor: 'sandbox' },
     ]).deps);
+
     await policy.resolve?.();
     expect(policy.granted?.({ rule: 'rm-recursive', executor: 'sandbox' })).toBe(true);
     expect(policy.granted?.({ rule: egressSecretRule('stripe'), executor: 'sandbox' })).toBe(false);
@@ -216,6 +239,7 @@ describe('a facet holds the root set, or a subset of it', () => {
       fetchRoot: () => Promise.reject(new Error('root DO unreachable')),
       ownGrants: () => null,
     });
+
     expect(policy.mode()).toBe('strict');
     expect(policy.granted?.({ rule: 'rm-recursive', executor: 'sandbox' })).toBe(false);
   });

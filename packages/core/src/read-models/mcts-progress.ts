@@ -18,6 +18,7 @@ export interface MctsProgressStamp {
 export function createMctsProgressState<Tree>(actorKey: string): MctsProgressState<Tree> {
   return { actorKey, trees: new Map(), lastPush: new Map() };
 }
+
 export function activateMctsProgressActor<Tree>(
   state: MctsProgressState<Tree>,
   actorKey: string,
@@ -34,6 +35,7 @@ export function applyMctsProgress<Tree>(
 ): MctsProgressState<Tree> {
   if (actorKey !== state.actorKey) return state;
   const previous = state.lastPush.get(progress.rootId);
+
   if (
     previous !== undefined
     && (
@@ -41,10 +43,12 @@ export function applyMctsProgress<Tree>(
       || (progress.isolateGen === previous.isolateGen && progress.pushSeq <= previous.pushSeq)
     )
   ) return state;
+
   if (tree === null) return state;
   const trees = new Map(state.trees);
   trees.set(progress.rootId, tree);
   const lastPush = new Map(state.lastPush);
   lastPush.set(progress.rootId, { isolateGen: progress.isolateGen, pushSeq: progress.pushSeq });
+
   return { actorKey, trees, lastPush };
 }

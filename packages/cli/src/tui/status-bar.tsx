@@ -42,14 +42,18 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
   let identityPrefix = IDENTITY_PREFIX;
   let identityTail = ` ${mode}${versionSuffix}`;
   let nameBudget = identityBudget - identityPrefix.length - identityTail.length;
+
   if (nameBudget < 3 && versionSuffix !== '') {
     identityTail = ` ${mode}`;
     nameBudget = identityBudget - identityPrefix.length - identityTail.length;
   }
+
   let identityName: string;
+
   if (nameBudget < 2) {
     identityPrefix = '';
     const compactTail = ` ${mode}`;
+
     if (identityBudget > compactTail.length + 1) {
       identityTail = compactTail;
       identityName = clipText(name, identityBudget - compactTail.length);
@@ -60,12 +64,14 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
   } else {
     identityName = clipText(name, nameBudget);
   }
+
   const identityWidth = identityPrefix.length + identityName.length + identityTail.length;
   const modelName = modelDisplayName(model) || 'model';
   const modelHint = keybindings.hint('model.open');
   const modelFull = ` ${modelName}${modelHint === '' ? '' : ` [${modelHint}]`}`;
   const modelBare = ` ${modelName}`;
   const modelIdeal = Math.min(34, modelFull.length);
+
   // `id` is the segment's identity across renders. Segments must NOT remount
   // when their text ticks (context usage changes every stream delta): opentui's
   // TextNode child insert/remove is where the "Child not found in children"
@@ -93,20 +99,25 @@ export function StatusBar({ name, mode, model, reasoningEffort, onModelSelect, c
       : []),
     ...(toolCount !== undefined ? [{ id: 'tools', text: `  ${toolCount} tools`, color: colors.text.muted }] : []),
   ];
+
   const metadataBudget = Math.max(0, available - identityWidth - modelIdeal);
   const metadata: typeof optionalSegments = [];
   let metadataWidth = 0;
+
   for (const segment of optionalSegments) {
     if (metadataWidth + segment.text.length > metadataBudget) continue;
     metadata.push(segment);
     metadataWidth += segment.text.length;
   }
+
   const modelBudget = Math.min(modelIdeal, Math.max(0, available - identityWidth - metadataWidth));
+
   const modelShown = modelBudget >= modelFull.length
     ? modelFull
     : modelBudget >= modelBare.length
       ? modelBare
       : '';
+
   return (
     <box
       style={{

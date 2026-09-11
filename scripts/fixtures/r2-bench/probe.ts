@@ -32,16 +32,22 @@ import { join } from 'node:path';
 import { randomOffsets, summarize, throughputMiBs, type Summary } from './stats';
 
 const MiB = 1024 * 1024;
+
 const KiB = 1024;
 
 /** Sequential sizes the acceptance criterion names. */
 const SEQ_SIZES_MIB = [1, 10, 100] as const;
+
 /** Small-file counts the acceptance criterion names. */
 const SMALL_COUNTS = [1_000, 10_000] as const;
+
 /** Random-IO block size, and the file the blocks are drawn from. */
 const RANDOM_BLOCK = 4 * KiB;
+
 const RANDOM_FILE_MIB = 32;
+
 const RANDOM_OPS = 512;
+
 /** Bytes per small file. Small enough that the cost is per-object, not per-byte. */
 const SMALL_FILE_BYTES = 256;
 
@@ -95,6 +101,7 @@ let loopBudgetMs = DEFAULT_LOOP_BUDGET_MS;
  * on the same host. The structure above does not.
  */
 let loopShareMs = Number.POSITIVE_INFINITY;
+
 let groupDeadline = Number.POSITIVE_INFINITY;
 
 /** Declared by a phase: how many timed groups it contains. A single timed
@@ -130,12 +137,15 @@ const sum = (values: readonly number[]): number => values.reduce((a, b) => a + b
  */
 function timedLoop<T>(items: readonly T[], body: (item: T) => void) {
   const latencies: number[] = [];
+
   for (const item of items) {
     const t0 = now();
     body(item);
     latencies.push(now() - t0);
+
     if (now() > groupDeadline) break;
   }
+
   return { latencies, done: latencies.length };
 }
 
@@ -238,9 +248,11 @@ function clockTicks(): number {
     return Number.parseInt(execFileSync('getconf', ['CLK_TCK'], { encoding: 'utf8' }).trim(), 10) || 100;
   } catch (error) {
     process.stderr.write(`[probe] getconf CLK_TCK unavailable (${String(error)}); assuming 100 ticks/s\n`);
+
     return 100;
   }
 }
+
 const CLK_TCK = clockTicks();
 
 /**
@@ -253,6 +265,7 @@ function cpuSnapshot() {
   const self = process.cpuUsage();
   let childUser = 0;
   let childSystem = 0;
+
   try {
     const stat = readFileSync('/proc/self/stat', 'utf8');
     // The comm field may contain spaces and parentheses, so fields are counted
@@ -264,6 +277,7 @@ function cpuSnapshot() {
   } catch (error) {
     process.stderr.write(`[probe] /proc/self/stat unreadable (${String(error)}); CPU excludes reaped children\n`);
   }
+
   return {
     userMs: self.user / 1000 + childUser,
     systemMs: self.system / 1000 + childSystem,
@@ -278,6 +292,7 @@ const now = (): number => Number(process.hrtime.bigint() / 1000n) / 1000;
 function payload(bytes: number, seed: number): Buffer {
   const buf = Buffer.allocUnsafe(bytes);
   let x = (seed ^ 0x9e3779b9) >>> 0;
+
   for (let i = 0; i < bytes; i++) {
     x = (x + 0x6d2b79f5) >>> 0;
     let t = x;
@@ -285,6 +300,7 @@ function payload(bytes: number, seed: number): Buffer {
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
     buf[i] = (t ^ (t >>> 14)) & 0xff;
   }
+
   return buf;
 }
 
@@ -299,25 +315,31 @@ function ensureDir(dir: string): void {
  */
 function writeAndSync(path: string, data: Buffer) {
   const fd = openSync(path, 'w');
+
   try {
     const w0 = now();
     let written = 0;
+
     while (written < data.length) written += writeSync(fd, data, written, data.length - written);
     const w1 = now();
     // s3fs implements fsync as a flush of the whole object; on native disk it is
     // a barrier. Both are the cost of "the bytes are now safe", which is the
     // only write number a workspace cares about.
     let syncRefusal = '';
+
     try {
       fsyncSync(fd);
     } catch (error) {
       syncRefusal = String(error);
     }
+
     const w2 = now();
+
     // Recorded outside the w1..w2 window: a pipe write costs more than the
     // refusal it reports, so logging inside it would BE the measurement. The
     // close below still flushes and the posix phase carries the verdict.
     if (syncRefusal !== '') process.stderr.write(`[probe] fsync refused for ${path} (${syncRefusal})\n`);
+
     return { writeMs: w1 - w0, syncMs: w2 - w1 };
   } finally {
     closeSync(fd);
@@ -327,6 +349,7 @@ function writeAndSync(path: string, data: Buffer) {
 function readWhole(path: string) {
   const t0 = now();
   const buf = readFileSync(path);
+
   return { ms: now() - t0, bytes: buf.length };
 }
 
@@ -341,6 +364,7 @@ function phaseSeqSized(
   ensureDir(dir);
   const metrics: Metric[] = [];
   const verdicts: Verdict[] = [];
+
   for (const mib of sizes) {
     const bytes = mib * MiB;
     const path = join(dir, `seq-${mib}m.bin`);
@@ -387,6 +411,7 @@ function phaseSeqSized(
       detail: `wrote ${bytes} read ${r.bytes}`,
     });
   }
+
   return { metrics, verdicts };
 }
 
@@ -407,6 +432,7 @@ function phaseRand(root: string, seed: number): PhaseOutcome {
   const readLatencies: number[] = [];
   const rfd = openSync(path, 'r');
   openTimedGroup();
+
   try {
     const bounded = timedLoop(offsets, (offset) => { readSync(rfd, block, 0, RANDOM_BLOCK, offset); });
     readLatencies.push(...bounded.latencies);
@@ -420,6 +446,7 @@ function phaseRand(root: string, seed: number): PhaseOutcome {
   const wfd = openSync(path, 'r+');
   const stamp = payload(RANDOM_BLOCK, seed + 1);
   openTimedGroup();
+
   try {
     const bounded = timedLoop(offsets, (offset) => { writeSync(wfd, stamp, 0, RANDOM_BLOCK, offset); });
     writeLatencies.push(...bounded.latencies);
@@ -429,19 +456,23 @@ function phaseRand(root: string, seed: number): PhaseOutcome {
     // whole-object rewrite. It gets its own metric, as `fsync-<n>MiB` does for
     // the sequential phase.
     const f0 = now();
+
     try {
       fsyncSync(wfd);
     } catch (error) {
       flushRefusal = String(error);
     }
+
     flushMs = now() - f0;
   } finally {
     closeSync(wfd);
   }
+
   if (flushRefusal !== '') process.stderr.write(`[probe] fsync refused after random writes (${flushRefusal})\n`);
 
   const readSummary = summarize(readLatencies);
   const writeSummary = summarize(writeLatencies);
+
   return {
     metrics: [
       {
@@ -486,11 +517,13 @@ function phaseSmallSized(
   // `counts.length` is in it because `--phase small` runs the four twice, and
   // the budget bounds the PHASE.
   openPhaseBudget(4 * counts.length);
+
   for (const count of counts) {
     const dir = join(root, `small-${count}`);
     ensureDir(dir);
     const data = payload(SMALL_FILE_BYTES, seed + count);
     const names: string[] = [];
+
     for (let i = 0; i < count; i++) names.push(join(dir, `f${String(i).padStart(6, '0')}.txt`));
 
     openTimedGroup();
@@ -528,6 +561,7 @@ function phaseSmallSized(
         + `, readdir saw ${listed}`,
     });
   }
+
   return { metrics, verdicts };
 }
 
@@ -559,9 +593,12 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     const t0 = now();
     renameSync(from, to);
     const ms = now() - t0;
+
     if (existsSync(from)) throw new Error('source still present after rename');
+
     if (readFileSync(to).length !== data.length) throw new Error('content changed across rename');
     metrics.push({ name: 'rename-file', summary: summarize([ms]), wallMs: ms, ops: 1, bytes: data.length });
+
     return `moved in ${ms.toFixed(2)}ms, source gone, content intact`;
   });
 
@@ -579,9 +616,12 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     const t0 = now();
     renameSync(from, to);
     const ms = now() - t0;
+
     if (existsSync(from)) throw new Error('source still present after rename');
+
     if (statSync(to).size !== bytes) throw new Error(`destination size is ${statSync(to).size}`);
     metrics.push({ name: 'rename-file-4MiB', summary: summarize([ms]), wallMs: ms, ops: 1, bytes });
+
     return `moved 4MiB in ${ms.toFixed(2)}ms`;
   });
 
@@ -592,7 +632,9 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     writeFileSync(to, Buffer.from('old'));
     renameSync(from, to);
     const got = readFileSync(to, 'utf8');
+
     if (got !== 'new') throw new Error(`destination holds ${JSON.stringify(got)}`);
+
     return 'atomic replace observed';
   });
 
@@ -604,20 +646,24 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     const t0 = now();
     renameSync(from, to);
     const ms = now() - t0;
+
     if (!existsSync(join(to, 'nested', 'f'))) throw new Error('nested file lost');
     metrics.push({ name: 'rename-directory', summary: summarize([ms]), wallMs: ms, ops: 1 });
+
     return `subtree moved in ${ms.toFixed(2)}ms`;
   });
 
   check('fsync-file', () => {
     const path = join(dir, 'fsync-target');
     const fd = openSync(path, 'w');
+
     try {
       writeSync(fd, data, 0, data.length);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
+
     return 'fsync accepted';
   });
 
@@ -625,11 +671,13 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     // The durability barrier a database or a git index relies on. Object stores
     // routinely refuse it, and code that assumes it silently loses ordering.
     const fd = openSync(dir, 'r');
+
     try {
       fsyncSync(fd);
     } finally {
       closeSync(fd);
     }
+
     return 'directory fsync accepted';
   });
 
@@ -639,9 +687,13 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     writeFileSync(target, data);
     symlinkSync('sym-target', link);
     const seen = readlinkSync(link);
+
     if (seen !== 'sym-target') throw new Error(`readlink returned ${JSON.stringify(seen)}`);
+
     if (!lstatSync(link).isSymbolicLink()) throw new Error('lstat does not report a symlink');
+
     if (readFileSync(link).length !== data.length) throw new Error('following the link failed');
+
     return 'created, readlink and follow both correct';
   });
 
@@ -650,7 +702,9 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     const link = join(dir, 'hard-link');
     writeFileSync(target, data);
     linkSync(target, link);
+
     if (statSync(link).nlink < 2) throw new Error(`nlink is ${statSync(link).nlink}`);
+
     return 'nlink >= 2';
   });
 
@@ -659,7 +713,9 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     writeFileSync(path, data);
     chmodSync(path, 0o640);
     const mode = statSync(path).mode & 0o777;
+
     if (mode !== 0o640) throw new Error(`mode reads back as ${mode.toString(8)}`);
+
     return 'chmod 640 read back exactly';
   });
 
@@ -668,8 +724,10 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     writeFileSync(path, Buffer.from('#!/bin/sh\nexit 0\n'));
     chmodSync(path, 0o755);
     const mode = statSync(path).mode & 0o777;
+
     if (mode !== 0o755) throw new Error(`mode reads back as ${mode.toString(8)}`);
     execFileSync(path, [], { stdio: 'ignore' });
+
     return 'mode 755 preserved and the file executed';
   });
 
@@ -679,15 +737,20 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     const when = new Date(1_700_000_000_000);
     utimesSync(path, when, when);
     const got = statSync(path).mtime.getTime();
+
     if (Math.abs(got - when.getTime()) > 1000) throw new Error(`mtime is ${got}, wanted ${when.getTime()}`);
+
     return 'explicit mtime survived within 1s';
   });
 
   check('empty-directory-persists', () => {
     const path = join(dir, 'empty-dir');
     ensureDir(path);
+
     if (!statSync(path).isDirectory()) throw new Error('not a directory after mkdir');
+
     if (readdirSync(dir).indexOf('empty-dir') === -1) throw new Error('absent from parent listing');
+
     return 'present and listed';
   });
 
@@ -696,7 +759,9 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     writeFileSync(path, Buffer.from('a'));
     appendFileSync(path, Buffer.from('b'));
     const got = readFileSync(path, 'utf8');
+
     if (got !== 'ab') throw new Error(`file holds ${JSON.stringify(got)}`);
+
     return 'append produced "ab"';
   });
 
@@ -704,12 +769,15 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     const path = join(dir, 'trunc-target');
     writeFileSync(path, payload(4096, seed));
     const fd = openSync(path, 'r+');
+
     try {
       writeSync(fd, Buffer.from('x'), 0, 1, 8191);
     } finally {
       closeSync(fd);
     }
+
     if (statSync(path).size !== 8192) throw new Error(`size is ${statSync(path).size}`);
+
     return 'sparse extension to 8192 bytes';
   });
 
@@ -717,7 +785,9 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     writeFileSync(join(dir, 'CaseFile'), Buffer.from('upper'));
     writeFileSync(join(dir, 'casefile'), Buffer.from('lower'));
     const upper = readFileSync(join(dir, 'CaseFile'), 'utf8');
+
     if (upper !== 'upper') throw new Error('names collapsed: distinct cases share bytes');
+
     return 'two names, two files';
   });
 
@@ -725,7 +795,9 @@ function phasePosix(root: string, seed: number): PhaseOutcome {
     const path = join(dir, 'delete-target');
     writeFileSync(path, data);
     rmSync(path);
+
     if (existsSync(path)) throw new Error('still visible after unlink');
+
     return 'unlink immediately visible';
   });
 
@@ -743,11 +815,14 @@ function phaseArchive(root: string, seed: number): PhaseOutcome {
   // rather than a mix of creating and extracting.
   const build = join('/tmp', `bench-archive-src-${seed}`);
   rmSync(build, { recursive: true, force: true });
+
   for (let d = 0; d < 10; d++) {
     const sub = join(build, `d${d}`);
     mkdirSync(sub, { recursive: true });
+
     for (let f = 0; f < 30; f++) writeFileSync(join(sub, `f${f}.txt`), payload(2048, seed + d * 100 + f));
   }
+
   const tarball = join('/tmp', `bench-archive-${seed}.tar.gz`);
   rmSync(tarball, { force: true });
   execFileSync('tar', ['-czf', tarball, '-C', build, '.'], { stdio: 'ignore' });
@@ -763,14 +838,18 @@ function phaseArchive(root: string, seed: number): PhaseOutcome {
   // for a given seed. Summed in the walk that already counts the files.
   let extracted = 0;
   let landedBytes = 0;
+
   for (let d = 0; d < 10; d++) {
     const dir = join(out, `d${d}`);
+
     if (!existsSync(dir)) continue;
+
     for (const name of readdirSync(dir)) {
       extracted += 1;
       landedBytes += statSync(join(dir, name)).size;
     }
   }
+
   rmSync(build, { recursive: true, force: true });
   rmSync(tarball, { force: true });
 
@@ -810,6 +889,7 @@ function phaseNpmLike(root: string, seed: number): PhaseOutcome {
   const writeLatencies: number[] = [];
   const mkdirLatencies: number[] = [];
   openTimedGroup();
+
   for (let p = 0; p < packages; p++) {
     const pkg = join(modules, `pkg-${p}`);
     // One call, two levels: on an object store each level is its own PUT, so
@@ -818,10 +898,12 @@ function phaseNpmLike(root: string, seed: number): PhaseOutcome {
     const m0 = now();
     mkdirSync(join(pkg, 'dist'), { recursive: true });
     mkdirLatencies.push(now() - m0);
+
     const files = [
       join(pkg, 'package.json'),
       ...Array.from({ length: filesPer - 1 }, (_, i) => join(pkg, 'dist', `m${i}.js`)),
     ];
+
     const bounded = timedLoop(files, (file) => { writeFileSync(file, payload(1024, seed + p * 100)); });
     writeLatencies.push(...bounded.latencies);
   }
@@ -830,12 +912,15 @@ function phaseNpmLike(root: string, seed: number): PhaseOutcome {
   // it finds the entry point. Four of the five are misses. Built as one list so
   // the walk is a timed group like any other and cannot outrun the phase budget.
   const candidates: string[] = [];
+
   for (let p = 0; p < packages; p++) {
     const pkg = join(modules, `pkg-${p}`);
+
     for (const candidate of ['index.js', 'index.mjs', 'index.json', 'dist/m0.js', 'package.json']) {
       candidates.push(join(pkg, candidate));
     }
   }
+
   let hits = 0;
   openTimedGroup();
   const probe = timedLoop(candidates, (candidate) => { if (existsSync(candidate)) hits += 1; });
@@ -881,6 +966,7 @@ function phaseGitLike(root: string, seed: number): PhaseOutcome {
   const repo = join(root, 'gitlike');
   rmSync(repo, { recursive: true, force: true });
   ensureDir(repo);
+
   const env = {
     ...process.env,
     GIT_AUTHOR_NAME: 'bench',
@@ -892,9 +978,11 @@ function phaseGitLike(root: string, seed: number): PhaseOutcome {
     GIT_CONFIG_GLOBAL: '/dev/null',
     GIT_CONFIG_SYSTEM: '/dev/null',
   };
+
   const git = (args: string[]): number => {
     const t0 = now();
     execFileSync('git', ['-C', repo, ...args], { stdio: 'ignore', env });
+
     return now() - t0;
   };
 
@@ -907,6 +995,7 @@ function phaseGitLike(root: string, seed: number): PhaseOutcome {
   for (let i = 0; i < 120; i++) {
     writeFileSync(join(repo, `src${i}.txt`), payload(512, seed + i));
   }
+
   const addMs = git(['add', '-A']);
   metrics.push({ name: 'git-add-120', summary: summarize([addMs]), wallMs: addMs, ops: 120 });
 
@@ -928,6 +1017,7 @@ function phaseGitLike(root: string, seed: number): PhaseOutcome {
     holds: existsSync(join(repo, '.git', 'HEAD')),
     detail: 'init, add, commit, status and log all completed',
   });
+
   return { metrics, verdicts };
 }
 
@@ -939,10 +1029,12 @@ const DURABILITY_FILES = 24;
 
 function durabilityManifest(root: string) {
   const dir = join(root, 'durability');
+
   const entries = Array.from({ length: DURABILITY_FILES }, (_, i) => ({
     name: `d${String(i).padStart(3, '0')}.bin`,
     bytes: 1024 + i * 37,
   }));
+
   return { path: dir, entries };
 }
 
@@ -950,11 +1042,13 @@ function phaseSeedDurability(root: string, seed: number): PhaseOutcome {
   const { path, entries } = durabilityManifest(root);
   ensureDir(path);
   const latencies: number[] = [];
+
   for (const entry of entries) {
     const t0 = now();
     writeAndSync(join(path, entry.name), payload(entry.bytes, seed + entry.bytes));
     latencies.push(now() - t0);
   }
+
   return {
     metrics: [{
       name: 'durability-seed',
@@ -972,18 +1066,23 @@ function phaseVerifyDurability(root: string, seed: number): PhaseOutcome {
   let missing = 0;
   let corrupt = 0;
   const latencies: number[] = [];
+
   for (const entry of entries) {
     const t0 = now();
     const file = join(path, entry.name);
+
     if (existsSync(file)) {
       const got = readFileSync(file);
+
       if (got.length !== entry.bytes || !got.equals(payload(entry.bytes, seed + entry.bytes))) corrupt++;
       else intact++;
     } else {
       missing++;
     }
+
     latencies.push(now() - t0);
   }
+
   return {
     metrics: [{
       name: 'durability-verify',
@@ -1025,7 +1124,9 @@ const PHASES = {
 function arg(name: string, fallback?: string): string {
   const flag = `--${name}`;
   const index = process.argv.indexOf(flag);
+
   if (index !== -1 && index + 1 < process.argv.length) return process.argv[index + 1]!;
+
   if (fallback !== undefined) return fallback;
   throw new Error(`missing required argument ${flag}`);
 }
@@ -1038,6 +1139,7 @@ function environmentFacts(): EnvironmentFacts {
       return `unavailable: ${error instanceof Error ? error.message : String(error)}`;
     }
   };
+
   return {
     uname: read('uname', ['-a']),
     nproc: read('nproc', []),
@@ -1059,27 +1161,33 @@ function main(): number {
   loopBudgetMs = Number.parseInt(arg('budget-ms', String(DEFAULT_LOOP_BUDGET_MS)), 10);
 
   const names: PhaseName[] = [];
+
   if (requested === 'all') {
     names.push('posix', 'seq1', 'seq10', 'seq100', 'rand', 'archive', 'npmlike', 'gitlike', 'small1k', 'small10k');
   } else {
     for (const raw of requested.split(',')) {
       const name = raw.trim();
+
       if (!isPhaseName(name)) {
         process.stdout.write(JSON.stringify({ schema: 'r2-bench/probe@1', error: `unknown phase ${name}` }));
+
         return 2;
       }
+
       names.push(name);
     }
   }
 
   ensureDir(root);
   const results: PhaseResult[] = [];
+
   for (const name of names) {
     const cpu0 = cpuSnapshot();
     // Reset to unbounded so a multi-phase run cannot inherit the previous
     // phase's share; a phase with timed groups declares its own divisor.
     openPhaseBudget(0);
     const t0 = now();
+
     try {
       const { metrics, verdicts } = PHASES[name](root, seed);
       const cpu1 = cpuSnapshot();
@@ -1117,6 +1225,7 @@ function main(): number {
     phases: results,
     facts: wantFacts ? environmentFacts() : undefined,
   };
+
   const payloadJson = JSON.stringify(run);
   // `--out` exists for the groups that cannot be driven by a blocking exec: the
   // probe runs as a detached process, writes its result here, and the driver
@@ -1124,12 +1233,14 @@ function main(): number {
   // platform's per-exec ceiling. The sentinel is written AFTER the payload, so a
   // sentinel that exists always names a complete file.
   const outPath = process.argv.includes('--out') ? arg('out') : '';
+
   if (outPath === '') {
     process.stdout.write(payloadJson);
   } else {
     writeFileSync(outPath, payloadJson);
     writeFileSync(`${outPath}.done`, String(results.every((r) => r.status === 'ok') ? 0 : 1));
   }
+
   return results.every((r) => r.status === 'ok') ? 0 : 1;
 }
 

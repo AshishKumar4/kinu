@@ -42,6 +42,7 @@ export type CheckpointKind = 'tick' | 'quiesce';
  * one has to turn a suite red rather than pass silently.
  */
 export const ATTACH_OUTCOME_KINDS = ['empty', 'attached', 'already-attached'] as const;
+
 export type AttachOutcomeKind = (typeof ATTACH_OUTCOME_KINDS)[number];
 
 export interface AttachOutcome {
@@ -56,6 +57,7 @@ export interface AttachOutcome {
  *  failure has to travel as a value the caller can turn into an incident.
  *  Enumerated for the same reason as the attach kinds. */
 export const CHECKPOINT_OUTCOME_KINDS = ['skipped', 'committed', 'failed'] as const;
+
 export type CheckpointOutcomeKind = (typeof CHECKPOINT_OUTCOME_KINDS)[number];
 
 export interface CheckpointOutcome {
@@ -169,7 +171,9 @@ export async function recordCheckpointFailure<S extends StampableRow>(
   reason: string,
 ): Promise<CheckpointOutcome> {
   deps.log(`${DEVBOX_WORKDIR} checkpoint failed: ${reason}`);
+
   if (state !== null) await stampFailure(deps, state, reason);
+
   return { kind: 'failed', reason, bytes: undefined, movedBytes: undefined };
 }
 

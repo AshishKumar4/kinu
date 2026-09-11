@@ -89,6 +89,7 @@ const CONTAINER_EVENT_PATH = '/v1/events';
  *  between the class's registry and the DO that configures it — a typo would
  *  otherwise surface as a runtime "method not found in outboundHandlers". */
 export const EGRESS_HANDLER = 'kinuEgress';
+
 export const EVENT_HANDLER = 'kinuEvents';
 
 /** What the owning Durable Object tells the handlers. Not readable or
@@ -126,6 +127,7 @@ const EgressParamsSchema = v.object({
  *  has not been configured yet. Undefined makes both handlers refuse. */
 export function parseEgressParams(ctx: OutboundHandlerContext): KinuEgressParams | undefined {
   const parsed = v.safeParse(EgressParamsSchema, ctx.params);
+
   return parsed.success ? parsed.output : undefined;
 }
 
@@ -167,12 +169,15 @@ export async function handleContainerEgress(
     // forwarding would be the one behaviour that leaks.
     return refusal(503, 'Egress interception is not configured for this container yet.');
   }
+
   const url = new URL(request.url);
   // Judged BEFORE the vault call: where a request may go is a transport fact
   // that costs no round trip, and a private destination is refused whether or
   // not the vault would have answered.
   const destination = refusedHostname(url.hostname);
+
   if (destination !== null) return destinationRefusal(url.hostname, destination);
+
   const facts: EgressRequestFacts = {
     host: url.hostname,
     url: request.url,
@@ -189,6 +194,7 @@ export async function handleContainerEgress(
   // which it is, and nothing asserted the copy transferred it.
   const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(params.ownerUserId));
   let resolved: EgressInjectionResult;
+
   try {
     resolved = await vault.resolveEgressInjection(
       await ownerCaller(env), facts, params.bindings,
@@ -196,7 +202,9 @@ export async function handleContainerEgress(
   } catch (cause) {
     return authorityFailure({ cause, host: url.hostname });
   }
+
   if (resolved.kind === 'refuse') return refusal(resolved.status, resolved.reason);
+
   return forwardUpstream(request, url, resolved.substitutions);
 }
 
@@ -208,6 +216,7 @@ export async function handleContainerEgress(
 function destinationRefusal(host: string, payload: Refusal): Response {
   const error = new KinuError('denied', payload.error);
   diagnostics.failure('egress.private_destination', error, { host, seam: 'container' });
+
   return Response.json(payload, { status: 403 });
 }
 
@@ -234,16 +243,19 @@ async function forwardUpstream(
   const injected: ScrubReplacement[] = substitutions.map(
     (s) => ({ find: s.secret, replaceWith: s.placeholder }),
   );
+
   const reveal: ScrubReplacement[] = substitutions.map(
     (s) => ({ find: s.placeholder, replaceWith: s.secret }),
   );
 
   const headers = new Headers();
+
   for (const [name, value] of request.headers) headers.set(name, scrubText(value, reveal));
   headers.set('user-agent', kinuUserAgent(request.headers.get('user-agent')));
   const target = scrubText(url.toString(), reveal);
 
   let upstream: Response;
+
   try {
     upstream = await fetch(reoriginateRequest(request, target, {
       headers,
@@ -252,6 +264,7 @@ async function forwardUpstream(
   } catch (cause) {
     return upstreamFailure({ cause, host: url.hostname, injected });
   }
+
   if (substitutions.length === 0) return upstream;
 
   // Everything the container can read, scrubbed with the SAME pairs reversed:
@@ -259,7 +272,9 @@ async function forwardUpstream(
   // Location carrying the token as a query parameter, must not become an
   // oracle for the value we just attached.
   const responseHeaders = new Headers();
+
   for (const [name, value] of upstream.headers) responseHeaders.set(name, scrubText(value, injected));
+
   return new Response(
     upstream.body === null ? null : upstream.body.pipeThrough(createScrubStream(injected)),
     { status: upstream.status, statusText: scrubText(upstream.statusText, injected), headers: responseHeaders },
@@ -285,7 +300,9 @@ function authorityFailure(input: { cause: unknown; host: string }): Response {
     cause: input.cause,
     otherwise: 'unavailable',
   });
+
   diagnostics.failure('egress.authority_unreachable', error, { host: input.host });
+
   return refusal(
     error.code === 'timeout' ? 504 : 503,
     `Kinu could not reach the credential authority for this container (${error.code}); the request to ${input.host} was not sent.`,
@@ -313,6 +330,7 @@ function upstreamFailure(
   const code = classifyErrorCode({ cause }) ?? 'io';
   const chain = scrubText(renderThrownChain({ cause }), injected);
   diagnostics.failure('egress.upstream_failed', new KinuError(code, chain), { host });
+
   return refusal(
     code === 'timeout' ? 504 : 502,
     `Kinu could not complete the request to ${host} (${code}).`,
@@ -337,12 +355,15 @@ export async function handleContainerEvent(
 ): Promise<Response> {
   if (!params) return refusal(503, 'The event channel is not configured for this container yet.');
   const url = new URL(request.url);
+
   if (request.method !== 'POST') return refusal(405, `Use POST ${CONTAINER_EVENT_PATH}.`);
+
   if (url.pathname !== CONTAINER_EVENT_PATH) {
     return refusal(404, `The only route on ${CONTAINER_EVENT_HOST} is POST ${CONTAINER_EVENT_PATH}.`);
   }
 
   let body: JsonValue;
+
   try {
     // `request.json()` is typed `unknown`; JsonValueSchema is the parse that
     // makes it a named domain type before it crosses into the DO.
@@ -360,10 +381,12 @@ export async function handleContainerEvent(
   // not tell "not accepted" from "network gone". 503 says the event was not
   // recorded and the retry is the recovery.
   let result: ContainerEventResult;
+
   try {
     const agent: ContainerEventClient = await getAgentByName<Env, OrchestratorAgent>(
       env.OrchestratorAgent, params.workspaceName,
     );
+
     result = await agent.acceptContainerEvent(body);
   } catch (cause) {
     const error = toKinuError({
@@ -371,15 +394,19 @@ export async function handleContainerEvent(
       cause,
       otherwise: 'unavailable',
     });
+
     diagnostics.failure('egress.event_channel_unreachable', error, {
       workspace: params.workspaceName,
     });
+
     return refusal(
       error.code === 'timeout' ? 504 : 503,
       `Kinu could not record this event (${error.code}); it was not accepted, so send it again.`,
     );
   }
+
   if (result.status === 'rejected') return refusal(result.http_status, result.reason);
+
   return Response.json(
     { accepted: true, event_id: result.event_id, admitted: result.admitted },
     { status: 202 },

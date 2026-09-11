@@ -19,9 +19,13 @@
 // Dependency-free CommonJS, like index.js: the CLI ships both files beside each
 // other and there is no install step that could fetch a third.
 'use strict';
+
 const fs = require('node:fs');
+
 const os = require('node:os');
+
 const path = require('node:path');
+
 const { spawnSync } = require('node:child_process');
 
 /** Why a machine cannot sandbox. `ok` is the only status that runs a command;
@@ -108,6 +112,7 @@ const ENV_ALLOWLIST = Object.freeze([
   'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'LANG', 'TERM', 'TMPDIR',
   'XDG_RUNTIME_DIR', 'KINU_HOME',
 ]);
+
 const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
 
 /** GPU character devices, enumerated at every exec rather than at daemon start
@@ -118,6 +123,7 @@ const ENV_ALLOWLIST_FAMILY = /^LC_[A-Z_]+$/;
 function gpuNodes(devDir = '/dev') {
   const found = [];
   let entries;
+
   try {
     entries = fs.readdirSync(devDir);
   } catch (err) {
@@ -125,15 +131,20 @@ function gpuNodes(devDir = '/dev') {
     // function cannot answer about; an empty list is the honest answer and the
     // exec still runs. Anything other than "not there" is real breakage.
     if (!err || (err.code !== 'ENOENT' && err.code !== 'EACCES')) throw err;
+
     return found;
   }
+
   for (const entry of entries) {
     if (entry.startsWith('nvidia')) found.push(path.join(devDir, entry));
   }
+
   for (const extra of ['dri', 'kfd', 'dxg']) {
     const candidate = path.join(devDir, extra);
+
     if (fs.existsSync(candidate)) found.push(candidate);
   }
+
   return found.sort();
 }
 
@@ -146,16 +157,22 @@ function gpuNodes(devDir = '/dev') {
  */
 function ensureUvmNode(devDir = '/dev') {
   if (!fs.existsSync(path.join(devDir, 'nvidiactl'))) return null;
+
   if (fs.existsSync(path.join(devDir, 'nvidia-uvm'))) return null;
   const run = spawnSync('nvidia-modprobe', ['-u', '-c', '0'], { stdio: 'ignore' });
+
   if (run.error && run.error.code === 'ENOENT') return 'nvidia-modprobe is not installed, so /dev/nvidia-uvm was not created';
+
   if (run.error) return `nvidia-modprobe failed: ${run.error.message}`;
+
   if (run.status !== 0) return `nvidia-modprobe exited ${run.status}, so /dev/nvidia-uvm was not created`;
+
   return null;
 }
 
 function trimPath(value) {
   const resolved = path.resolve(value);
+
   return resolved.length > 1 ? resolved.replace(/\/+$/, '') : resolved;
 }
 
@@ -170,12 +187,15 @@ function trimPath(value) {
 function realTarget(requested) {
   const resolved = trimPath(requested);
   const followable = (err) => err && err.code !== 'ENOENT' && err.code !== 'EACCES' && err.code !== 'ELOOP';
+
   try {
     return fs.realpathSync(resolved);
   } catch (err) {
     if (followable(err)) throw err;
   }
+
   let parent = path.dirname(resolved);
+
   while (parent !== path.dirname(parent)) {
     try {
       return path.join(fs.realpathSync(parent), path.relative(parent, resolved));
@@ -184,6 +204,7 @@ function realTarget(requested) {
       parent = path.dirname(parent);
     }
   }
+
   return resolved;
 }
 
@@ -192,8 +213,10 @@ function realTarget(requested) {
 function dedupeExisting(paths) {
   const seen = new Set();
   const kept = [];
+
   for (const candidate of paths) {
     let real;
+
     try {
       real = fs.realpathSync(candidate);
     } catch (err) {
@@ -203,10 +226,12 @@ function dedupeExisting(paths) {
       if (!err || (err.code !== 'ENOENT' && err.code !== 'EACCES')) throw err;
       continue;
     }
+
     if (seen.has(real)) continue;
     seen.add(real);
     kept.push(real);
   }
+
   return kept;
 }
 
@@ -214,12 +239,15 @@ function dedupeExisting(paths) {
  *  a prefix like `/home/dev-old` never reads as inside `/home/dev`. */
 function within(root, target) {
   if (target === root) return true;
+
   return target.startsWith(root === '/' ? '/' : `${root}/`);
 }
 
 /** What the caller may do with a path, and where it actually lives. */
 const VIEW_INVISIBLE = 'invisible';
+
 const VIEW_READ_ONLY = 'read_only';
+
 const VIEW_WRITABLE = 'writable';
 
 /**
@@ -242,10 +270,12 @@ function viewFor(options) {
   const agentHome = trimPath(options.agentHome);
   const agentTmp = trimPath(options.agentTmp ?? path.join(path.dirname(agentHome), 'tmp'));
   const deviceHome = trimPath(options.deviceHome);
+
   // Longest first, so a root nested inside another root answers for itself.
   const roots = (Array.isArray(options.roots) ? options.roots : [])
     .map(trimPath)
     .sort((left, right) => right.length - left.length);
+
   // Every mask is kept, including whichever one holds the real home: the
   // agent-home bind is created inside that tmpfs and shadows it.
   const maskDirs = [...LINUX_MASK_DIRS];
@@ -258,6 +288,7 @@ function viewFor(options) {
    */
   const classify = (requested) => {
     const target = realTarget(requested);
+
     // The agent's OWN home is decided first, because it lives under Kinu's
     // directory (~/.kinu/agents/<workspace>/home) so that uninstall has one
     // path to remove. Fencing ~/.kinu first made the agent's home invisible to
@@ -265,19 +296,24 @@ function viewFor(options) {
     if (within(agentHome, target) || within(agentTmp, target)) {
       return { access: VIEW_WRITABLE, path: target };
     }
+
     if (within(deviceHome, target)) {
       return { access: VIEW_INVISIBLE, path: target, why: 'inside Kinu\'s own directory, which the tunnel never serves' };
     }
+
     for (const root of roots) {
       if (within(root, target)) return { access: VIEW_WRITABLE, path: target };
     }
+
     if (within(home, target)) {
       // The agent home is bind-mounted over the real home on Linux, and HOME
       // points at it on macOS. Either way `~/x` means the agent's own `x`.
       const relative = path.relative(home, target);
       const translated = relative === '' ? agentHome : path.join(agentHome, relative);
+
       return { access: VIEW_WRITABLE, path: translated, translated: true };
     }
+
     if (platform === 'darwin') {
       for (const denied of MAC_DENY_SUBPATHS) {
         if (within(denied, target)) {
@@ -290,12 +326,14 @@ function viewFor(options) {
           return { access: VIEW_INVISIBLE, path: target, why: `inside ${dir}, which this device's sandbox does not expose` };
         }
       }
+
       for (const file of LINUX_MASK_FILES) {
         if (target === file) {
           return { access: VIEW_INVISIBLE, path: target, why: `${file} is not exposed to this device's sandbox` };
         }
       }
     }
+
     return { access: VIEW_READ_ONLY, path: target };
   };
 
@@ -318,15 +356,21 @@ function viewFor(options) {
      */
     insidePath(target) {
       const resolved = trimPath(target);
+
       if (platform === 'darwin') return resolved;
+
       if (within(agentHome, resolved)) {
         const relative = path.relative(agentHome, resolved);
+
         return relative === '' ? home : path.join(home, relative);
       }
+
       if (within(agentTmp, resolved)) {
         const relative = path.relative(agentTmp, resolved);
+
         return relative === '' ? '/tmp' : path.join('/tmp', relative);
       }
+
       return resolved;
     },
     /**
@@ -338,6 +382,7 @@ function viewFor(options) {
     resolveEntryPath(requested, mode) {
       const resolved = trimPath(requested);
       const parent = this.resolvePath(path.dirname(resolved), mode);
+
       return path.join(parent, path.basename(resolved));
     },
     /**
@@ -347,19 +392,23 @@ function viewFor(options) {
      */
     resolvePath(requested, mode) {
       const decision = classify(requested);
+
       if (decision.access === VIEW_INVISIBLE) {
         const error = new Error(`device path '${requested}' is ${decision.why}`);
         error.code = VIEW_INVISIBLE;
         throw error;
       }
+
       if (decision.access === VIEW_READ_ONLY && mode === 'write') {
         const error = new Error(
           `device path '${requested}' is read-only in this device's sandbox; `
           + `write inside the agent's home or one of the consented directories (${roots.join(', ') || 'none'})`,
         );
+
         error.code = VIEW_READ_ONLY;
         throw error;
       }
+
       return decision.path;
     },
   };
@@ -373,6 +422,7 @@ function viewFor(options) {
  */
 function rawViewFor(options) {
   const deviceHome = trimPath(options.deviceHome);
+
   return {
     platform: options.platform ?? os.platform(),
     raw: true,
@@ -380,9 +430,11 @@ function rawViewFor(options) {
     roots: [],
     classify(requested) {
       const target = realTarget(requested);
+
       if (within(deviceHome, target)) {
         return { access: VIEW_INVISIBLE, path: target, why: 'inside Kinu\'s own directory, which the tunnel never serves' };
       }
+
       return { access: VIEW_WRITABLE, path: target };
     },
     resolveEntryPath(requested, mode) {
@@ -390,15 +442,18 @@ function rawViewFor(options) {
       // Authorizes the parent, returns the NAME: raw returns paths as
       // requested, so the entry is the requested spelling of it.
       this.resolvePath(path.dirname(resolved), mode);
+
       return requested;
     },
     resolvePath(requested, mode) {
       const decision = this.classify(requested);
+
       if (decision.access === VIEW_INVISIBLE) {
         const error = new Error(`device path '${requested}' is ${decision.why}`);
         error.code = VIEW_INVISIBLE;
         throw error;
       }
+
       // A raw path is returned as REQUESTED, not resolved: the tier's contract
       // is "exactly what it was before", and resolving would change the error
       // a missing path produces.
@@ -411,24 +466,31 @@ function rawViewFor(options) {
  *  own overrides last. */
 function sandboxEnvironment(source, overrides) {
   const env = {};
+
   for (const name of ENV_ALLOWLIST) {
     const value = source[name];
+
     if (value !== undefined) env[name] = value;
   }
+
   for (const name of Object.keys(source)) {
     if (ENV_ALLOWLIST_FAMILY.test(name) && source[name] !== undefined) env[name] = source[name];
   }
+
   for (const name of Object.keys(overrides)) {
     if (overrides[name] !== undefined) env[name] = overrides[name];
   }
+
   return env;
 }
 
 const LINUX_PATH_HEAD = ['.local/bin', '.cargo/bin', '.bun/bin'];
+
 const LINUX_PATH_TAIL = [
   '/usr/local/cuda/bin', '/usr/local/sbin', '/usr/local/bin',
   '/usr/sbin', '/usr/bin', '/sbin', '/bin',
 ];
+
 const MAC_PATH_TAIL = [
   '/opt/homebrew/bin', '/opt/homebrew/sbin', '/usr/local/bin',
   '/usr/bin', '/bin', '/usr/sbin', '/sbin',
@@ -451,10 +513,13 @@ function buildLinuxArgv(view, options) {
     '--dev', '/dev',
     '--tmpfs', '/dev/shm',
   ];
+
   if (options.statusFd !== undefined) argv.push('--json-status-fd', String(options.statusFd));
+
   // `--dev-bind-try`, so a node that disappears between enumeration and mount
   // (a driver reload) does not fail the command.
   for (const node of options.gpu) argv.push('--dev-bind-try', node, node);
+
   // Masked by REAL path, and each real path once. `/var/run` is a symlink to
   // `/run` on most distributions, so the two spellings of the docker socket
   // name one file — and bwrap fails the whole command when asked to create the
@@ -462,6 +527,7 @@ function buildLinuxArgv(view, options) {
   // measured on this box. Masking the target is enough: the symlink still
   // exists inside the read-only root and resolves to the masked path.
   for (const dir of dedupeExisting(view.maskDirs)) argv.push('--tmpfs', dir);
+
   for (const file of dedupeExisting(LINUX_MASK_FILES)) argv.push('--ro-bind', '/dev/null', file);
   // The agent tmp lands on `/tmp` BEFORE the agent home lands on the real
   // home path, because a home under /tmp is a home: bound the other way
@@ -475,13 +541,16 @@ function buildLinuxArgv(view, options) {
   // the agent's own directory and every tool's default (~/.local, ~/.cache,
   // ~/.cargo, ~/.npm) lands there with no environment tricks.
   argv.push('--bind', view.agentHome, view.home);
+
   // Shortest first here: a root nested inside another must be mounted after
   // its parent, or the parent's bind hides it.
   for (const root of [...view.roots].reverse()) argv.push('--bind', root, root);
   argv.push('--chdir', view.insidePath(options.cwd));
   argv.push('--clearenv');
+
   for (const name of Object.keys(options.env)) argv.push('--setenv', name, options.env[name]);
   argv.push('--', 'bash', '-c', options.command);
+
   return argv;
 }
 
@@ -491,6 +560,7 @@ function buildLinuxArgv(view, options) {
 function buildMacProfile(view) {
   const subpath = (dir) => `(subpath ${JSON.stringify(dir)})`;
   const writable = [view.agentHome, view.agentTmp, ...view.roots, '/private/tmp', '/private/var/tmp'];
+
   return [
     '(version 1)',
     '(deny default)',
@@ -535,8 +605,10 @@ const MAC_SANDBOX_EXEC = '/usr/bin/sandbox-exec';
 function plan(options) {
   const platform = options.platform ?? os.platform();
   const command = options.command;
+
   if (options.tier === 'raw') {
     const view = rawViewFor({ platform, deviceHome: options.deviceHome });
+
     return {
       view,
       argv: ['bash', '-c', command],
@@ -544,6 +616,7 @@ function plan(options) {
       cwd: options.cwd,
     };
   }
+
   const view = viewFor({
     platform,
     home: options.home,
@@ -552,6 +625,7 @@ function plan(options) {
     deviceHome: options.deviceHome,
     roots: options.roots,
   });
+
   // A cwd the command cannot write is a cwd that fails on its first redirect,
   // so an unwritable one falls back to the agent's own home.
   const requestedCwd = options.cwd === undefined || options.cwd === null ? view.home : trimPath(options.cwd);
@@ -566,6 +640,7 @@ function plan(options) {
       KINU_SANDBOX: '1',
       XDG_RUNTIME_DIR: undefined,
     });
+
     return {
       view,
       argv: [MAC_SANDBOX_EXEC, '-p', buildMacProfile(view), 'bash', '-c', command],
@@ -574,6 +649,7 @@ function plan(options) {
       profile: buildMacProfile(view),
     };
   }
+
   // Linux: HOME is the real path string, because the agent home is bind-mounted
   // over it. Inside the sandbox the two are the same directory, so a path the
   // model reads in the UI is the path the command sees.
@@ -585,7 +661,9 @@ function plan(options) {
     NPM_CONFIG_PREFIX: path.join(view.home, '.local'),
     KINU_SANDBOX: '1',
   });
+
   const gpu = options.gpu ?? gpuNodes();
+
   return {
     view,
     statusFd: options.statusFd,
@@ -610,9 +688,11 @@ function plan(options) {
 function probe(options = {}) {
   const platform = options.platform ?? os.platform();
   const deviceHome = options.deviceHome ?? path.join(os.homedir(), '.kinu');
+
   if (platform !== 'linux' && platform !== 'darwin') {
     return { status: SANDBOX_STATUS.UNSUPPORTED_PLATFORM, detail: PROBE_HINTS[SANDBOX_STATUS.UNSUPPORTED_PLATFORM] };
   }
+
   if (platform === 'darwin') {
     if (!fs.existsSync(MAC_SANDBOX_EXEC)) {
       return { status: SANDBOX_STATUS.NO_SANDBOX_EXEC, detail: PROBE_HINTS[SANDBOX_STATUS.NO_SANDBOX_EXEC] };
@@ -621,11 +701,14 @@ function probe(options = {}) {
     // WSL1 kernels end in `-Microsoft`; WSL2's `microsoft-standard-WSL2` is
     // plain Linux and takes the normal path.
     const release = readOsRelease(options.osReleasePath);
+
     if (release !== null && release.endsWith('-Microsoft')) {
       return { status: SANDBOX_STATUS.WSL1, detail: PROBE_HINTS[SANDBOX_STATUS.WSL1] };
     }
   }
+
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'kinu-sandbox-probe-'));
+
   try {
     const attempt = plan({
       platform,
@@ -640,24 +723,33 @@ function probe(options = {}) {
       tier: 'sandboxed',
       gpu: [],
     });
+
     fs.mkdirSync(attempt.view.agentHome, { recursive: true, mode: 0o700 });
     fs.mkdirSync(attempt.view.agentTmp, { recursive: true, mode: 0o700 });
+
     const run = spawnSync(attempt.argv[0], attempt.argv.slice(1), {
       env: attempt.env, stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8',
     });
+
     if (run.error && run.error.code === 'ENOENT') {
       const status = platform === 'darwin' ? SANDBOX_STATUS.NO_SANDBOX_EXEC : SANDBOX_STATUS.NO_BWRAP;
+
       return { status, detail: PROBE_HINTS[status] };
     }
+
     if (run.error) {
       return { status: SANDBOX_STATUS.PROBE_FAILED, detail: `sandbox probe could not run: ${run.error.message}` };
     }
+
     if (run.status === 0) return { status: SANDBOX_STATUS.OK, detail: null };
     const stderr = String(run.stderr ?? '').trim();
+
     if (platform === 'linux' && USERNS_REFUSALS.some((refusal) => stderr.includes(refusal))) {
       return { status: SANDBOX_STATUS.NO_USERNS, detail: PROBE_HINTS[SANDBOX_STATUS.NO_USERNS] };
     }
+
     const firstLine = stderr.split('\n')[0] || `exit ${run.status}`;
+
     return { status: SANDBOX_STATUS.PROBE_FAILED, detail: `sandbox probe failed: ${firstLine}` };
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
@@ -672,6 +764,7 @@ function readOsRelease(osReleasePath = '/proc/sys/kernel/osrelease') {
     // bwrap run below is the authority either way. Anything but "not there" is
     // this daemon's own breakage.
     if (!err || (err.code !== 'ENOENT' && err.code !== 'EACCES')) throw err;
+
     return null;
   }
 }
@@ -682,10 +775,12 @@ function helloCapability(probeResult) {
   if (probeResult.status === SANDBOX_STATUS.OK) {
     return { capability: 'sandboxed', reason: null };
   }
+
   // `raw_only` for a machine that can never sandbox, `files_only` for one that
   // could if it were fixed: the first is a platform fact and the owner's only
   // move is the switch, the second names a command that changes the answer.
   const capability = probeResult.status === SANDBOX_STATUS.UNSUPPORTED_PLATFORM ? 'raw_only' : 'files_only';
+
   return { capability, reason: probeResult.status, reasonDetail: probeResult.detail };
 }
 

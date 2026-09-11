@@ -31,11 +31,14 @@ import * as v from 'valibot';
 import { renderThrownChain } from '@kinu.run/core/obs';
 
 const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
+
 const ScoreIntervalSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
+
 const GepaRunSchema = v.object({
   runId: v.string(), target: v.string(), status: v.picklist(['running', 'completed', 'aborted']),
   stopReason: v.nullable(v.string()), iterations: v.number(), metricCalls: v.number(), startedAt: v.number(),
 });
+
 const GepaOptimizationResultSchema = v.object({
   ok: v.boolean(), error: v.optional(v.string()), proposed: v.optional(v.boolean()),
   pendingVersion: v.nullable(v.optional(v.number())), skipReason: v.optional(v.string()),
@@ -43,6 +46,7 @@ const GepaOptimizationResultSchema = v.object({
   selection: v.optional(v.object({ heldOutNegatives: v.number(), guards: v.number() })),
   selectionWarning: v.optional(v.string()),
 });
+
 const SkillNamesSchema = v.object({ names: v.array(v.string()) });
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
@@ -90,6 +94,7 @@ function useSettingField<T>(): SettingField<T> {
   // progress — the form keeps showing what the user typed.
   const hydrate = useCallback((next: T) => setResource(loadSucceeded(next)), []);
   const fail = useCallback(<Failure,>(error: Failure) => setResource((prev) => loadFailed(prev, error)), []);
+
   const markSaved = useCallback((saved: T) => {
     setResource(loadSucceeded(saved));
     setEdited(null);
@@ -114,9 +119,11 @@ function FieldState<T>({ field, what, onRetry, children }: {
   children: (value: T) => React.ReactNode;
 }) {
   if (field.value !== null) return <>{children(field.value)}</>;
+
   if (field.resource.status === "error") {
     return <LoadFailure what={what} message={field.resource.message} onRetry={onRetry} />;
   }
+
   return <p className="text-xs p-text-3">Loading {what}…</p>;
 }
 
@@ -154,6 +161,7 @@ export default function SettingsPage() {
   const { hydrate: hydrateApproval, fail: failApproval } = approval;
   const { hydrate: hydrateMcts, fail: failMcts } = mcts;
   const { hydrate: hydrateAdvisor, fail: failAdvisor } = advisor;
+
   // These effect and retry callers are synchronous. React owns the async
   // transition, while this reader records every failed field in place rather
   // than inventing a value Save could write over the stored setting.
@@ -169,6 +177,7 @@ export default function SettingsPage() {
           rpc<MctsConfig>("getMctsConfig", []),
           rpc<EvolutionConfigView>("getEvolutionConfig", []),
         ]);
+
         if (mode.status === "rejected") failApproval(mode.reason);
         else hydrateApproval(mode.value?.mode ?? "strict");
 
@@ -206,23 +215,29 @@ export default function SettingsPage() {
     // or failed to load, and the form has no authority over it.
     const writes: Array<Promise<JsonValue | undefined | void>> = [];
     const commits: Array<() => void> = [];
+
     const write = <T,>(field: SettingField<T>, put: (value: T) => Promise<JsonValue | undefined | void>) => {
       const { value } = field;
+
       if (!field.dirty || value === null) return;
       writes.push(put(value));
       commits.push(() => field.markSaved(value));
     };
+
     write(displayName, (v) => rpc("setDisplayName", [v]));
     write(soul, (v) => rpc("setSoul", [v]));
     write(approval, (v) => rpc("setShellApprovalMode", [v]));
     write(mcts, (v) => rpc("setMctsConfig", [v]));
     write(advisor, (v) => rpc("setEvolutionConfig", [v]));
+
     if (writes.length === 0) return;
 
     setSaving(true);
     setErr(null);
+
     try {
       await Promise.all(writes);
+
       for (const commit of commits) commit();
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -421,12 +436,14 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
     async () => (await rpc<{ grants: ApprovalGrant[] }>("getShellApprovalGrants", [])).grants,
     [rpc],
   );
+
   const { resource, reload } = useAsyncResource(load);
   const grants = lastValue(resource);
 
   const revoke = async (grant: ApprovalGrant) => {
     setBusy(`${grant.rule}@${grant.executor}`);
     setErr(null);
+
     try {
       await rpc("revokeShellApprovalGrants", [[grant]]);
       reload();
@@ -440,6 +457,7 @@ export function StandingApprovalsCard({ rpc }: { rpc: Rpc }) {
   // Nothing granted is the common case and says all it has to say in the
   // card above; a permanently empty card is furniture.
   if (resource.status !== "error" && grants !== null && grants.length === 0) return null;
+
   return (
     <Card title="Standing approvals" icon={ShieldIcon}>
       <p className="p-meta p-text-3">
@@ -502,15 +520,22 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
     ),
     [rpc, cursor],
   );
+
   const { resource, reload } = useAsyncResource(load);
   const page = lastValue(resource);
 
   // Opening a row reads THAT file and nothing else; the listing itself carries
   // no bytes, so a workspace full of agent-written skills costs one page.
   const read = async (row: InstructionSourceRow) => {
-    if (open?.path === row.path) { setOpen(null); return; }
+    if (open?.path === row.path) {
+      setOpen(null);
+
+      return;
+    }
+
     setBusy(row.path);
     setErr(null);
+
     try {
       setOpen(await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]));
     } catch (e) {
@@ -523,6 +548,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   const decide = async (row: InstructionSourceRow, action: "approve" | "revoke") => {
     setBusy(row.path);
     setErr(null);
+
     try {
       if (action === "approve") {
         // Approval binds the digest the owner was just shown. If the file has
@@ -530,11 +556,18 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
         const opened = open?.path === row.path
           ? open
           : await rpc<InstructionSourceView | null>("readInstructionApproval", [row.path]);
-        if (!opened) { setErr("Kinu could not read that file, so it approved nothing."); return; }
+
+        if (!opened) {
+          setErr("Kinu could not read that file, so it approved nothing.");
+
+          return;
+        }
+
         await rpc("approveInstruction", [row.path, opened.digest]);
       } else {
         await rpc("revokeInstruction", [row.path]);
       }
+
       setOpen(null);
       reload();
     } catch (e) {
@@ -545,7 +578,9 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
   };
 
   const rows = page?.items ?? null;
+
   if (resource.status !== "error" && rows !== null && rows.length === 0 && !cursor) return null;
+
   return (
     <Card title="Workspace instruction files" icon={ShieldIcon}>
       <p className="p-meta p-text-3">
@@ -560,6 +595,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
         <div className="space-y-1">
           {rows.map((row) => {
             const opened = open?.path === row.path ? open : null;
+
             const state = row.reason !== undefined
               ? `not readable: ${row.reason}`
               : row.decision === "grandfathered"
@@ -567,6 +603,7 @@ function InstructionApprovalsCard({ rpc }: { rpc: Rpc }) {
                 : row.decision === "approved"
                   ? "approved"
                   : row.decision === "revoked" ? "refused" : "not decided";
+
             return (
               <div key={row.path} className="rounded-md px-2 py-1.5 p-card space-y-1">
                 <div className="flex items-center gap-2 text-xs">
@@ -651,10 +688,12 @@ function WorkspaceBackupCard({
     setBusy(true);
     setErr(null);
     setStatus("Exporting…");
+
     try {
       const parts: string[] = [];
       let cursor: ArchiveCursor | null = null;
       let records = 0;
+
       do {
         const page: ArchivePage = v.parse(ArchivePageSchema, await rpc("exportWorkspaceArchive", [cursor]));
         parts.push(page.lines.map((line) => `${line}\n`).join(""));
@@ -664,6 +703,7 @@ function WorkspaceBackupCard({
       } while (cursor);
 
       const url = URL.createObjectURL(new Blob(parts, { type: "application/x-ndjson" }));
+
       try {
         const link = document.createElement("a");
         link.href = url;
@@ -672,6 +712,7 @@ function WorkspaceBackupCard({
       } finally {
         URL.revokeObjectURL(url);
       }
+
       setStatus(`Downloaded ${records} records.`);
     } catch (e) {
       setStatus(null);
@@ -716,30 +757,37 @@ function GepaOptimizationCard({
     async () => v.parse(v.array(GepaRunSchema), await rpc('getGepaRuns', [10])),
     [rpc],
   );
+
   const { resource, reload } = useAsyncResource(load);
   const runs = lastValue(resource) ?? [];
 
   const run = useCallback(async () => {
     setRunning(true);
     setMsg('Optimising candidate scaffolds against recent tasks. This can take a few minutes…');
+
     try {
       // No evalSize override — the agent's configured budget is the one
       // tuned against cost, and a smaller one cannot resolve a winner.
       const r = v.parse(GepaOptimizationResultSchema,
         await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4 }]));
+
       const scores = r.bestScore && r.seedScore
         ? `best ${formatScoreInterval(r.bestScore)} vs seed ${formatScoreInterval(r.seedScore)}`
         : '';
+
       const scoredOn = r.selection
         ? ` Scored on ${r.selection.heldOutNegatives} unseen failure(s) + ${r.selection.guards} accepted guard(s).`
         : '';
+
       const caveat = r.selectionWarning ? ` Caveat: ${r.selectionWarning}.` : '';
+
       if (!r.ok) setMsg(`No run: ${r.error}`);
       else if (r.proposed) {
         setMsg(`Proposed scaffold v${r.pendingVersion} (${scores}). Promote it under Agent → Evolution after shadow evaluation.${scoredOn}${caveat}`);
       } else {
         setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
       }
+
       reload();
     } catch (e) {
       setMsg(`Error: ${renderThrownChain({ cause: e })}`);
@@ -812,6 +860,7 @@ function AlwaysActiveSkillsCard({
   const save = useCallback(async (next: string[]) => {
     setBusy(true);
     setErr(null);
+
     try {
       const r = v.parse(SkillNamesSchema, await rpc('setAlwaysActiveSkills', [next]));
       setNames(r.names);
@@ -821,8 +870,15 @@ function AlwaysActiveSkillsCard({
 
   const add = useCallback(async () => {
     const n = input.trim();
+
     if (!n) return;
-    if (names.includes(n)) { setInput(''); return; }
+
+    if (names.includes(n)) {
+      setInput('');
+
+      return;
+    }
+
     setInput('');
     await save([...names, n]);
   }, [input, names, save]);

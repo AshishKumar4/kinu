@@ -44,6 +44,7 @@ describe('delegationFeatures', () => {
     const line = renderDelegationFeatures(delegationFeatures({
       toolCalls: [], steps: 41, durationMs: 372_000,
     }));
+
     expect(line).toBe(
       'Turn process: 41 sequential steps, 0 hiring, 0 exploration, 0 messaging, 0 execute_tools, 6.2min wall clock',
     );
@@ -56,6 +57,7 @@ describe('delegationFeatures', () => {
       write('/notes.md'),
       call('run', { command: 'cat /notes.md' }),
     ];
+
     const line = renderDelegationFeatures(delegationFeatures({ toolCalls, steps: 4, durationMs: 8_000 }));
     expect(line).toContain('8.0s wall clock. Wasted motion: 1 looped, 1 redundant, 1 backtracking tool calls');
   });
@@ -90,6 +92,7 @@ describe('executionPathSignals — loops', () => {
       call('run', { command: 'bun test packages/core' }),
       call('report', { status: 'completed', content: 'done' }),
     ];
+
     expect(executionPathSignals(trace)).toEqual({ loopedCalls: 0, redundantCalls: 0, backtrackCalls: 0 });
   });
 });
@@ -100,6 +103,7 @@ describe('executionPathSignals — redundancy', () => {
       call('fact', { action: 'remember', key: 'tz', value: 'UTC' }),
       call('fact', { value: 'UTC', key: 'tz', action: 'remember' }),
     ];
+
     expect(executionPathSignals(trace).redundantCalls).toBe(1);
   });
 
@@ -109,6 +113,7 @@ describe('executionPathSignals — redundancy', () => {
       call('web_search', { query: 'clopper pearson' }),
       call('web_search', { query: 'agresti coull' }),
     ];
+
     expect(executionPathSignals(trace).redundantCalls).toBe(0);
   });
 
@@ -129,6 +134,7 @@ describe('executionPathSignals — backtracking', () => {
       write('/src/auth.ts'),
       call('execute_tools', { code: 'const prev = await workspace.readFile("/src/auth.ts");' }),
     ];
+
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
   });
 
@@ -149,6 +155,7 @@ describe('executionPathSignals — backtracking', () => {
       write('/src/auth.ts'),
       call('run', { command: 'cat /src/other.ts' }),
     ];
+
     expect(executionPathSignals(trace).backtrackCalls).toBe(0);
   });
 
@@ -157,6 +164,7 @@ describe('executionPathSignals — backtracking', () => {
       call('execute_tools', { code: 'await workspace.readFile("/src/auth.ts");' }),
       write('/src/auth.ts'),
     ];
+
     expect(executionPathSignals(trace).backtrackCalls).toBe(0);
   });
 
@@ -166,6 +174,7 @@ describe('executionPathSignals — backtracking', () => {
         code: 'await workspace.writeFile("/a.ts", x); await workspace.readFile("/a.ts");',
       }),
     ];
+
     expect(executionPathSignals(trace).backtrackCalls).toBe(0);
   });
 
@@ -177,6 +186,7 @@ describe('executionPathSignals — backtracking', () => {
       call('run', { command: 'echo done > marker' }),
       call('run', { command: 'cat marker' }),
     ];
+
     expect(executionPathSignals(trace).backtrackCalls).toBe(0);
   });
 
@@ -185,6 +195,7 @@ describe('executionPathSignals — backtracking', () => {
       call('run', { action: 'spawn', task: { brief: 'run: echo x > /work/plan.md' } }),
       call('run', { action: 'spawn', task: { brief: 'run: rm /work/plan.md' } }),
     ];
+
     expect(executionPathSignals(trace).backtrackCalls).toBe(1);
   });
 

@@ -30,6 +30,7 @@ const connect = async (object: DurableObjectStub<SocketDO>, device: string) => {
   const response = await object.fetch(`https://user-do/?device=${device}`, {
     headers: { Upgrade: 'websocket' },
   });
+
   // Without this the tests below would pass on a hub that accepted nothing.
   expect(response.status).toBe(101);
 };

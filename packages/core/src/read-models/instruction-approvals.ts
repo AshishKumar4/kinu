@@ -135,6 +135,7 @@ const MISREPRESENTING = new RegExp(
  */
 export function previewInstruction(content: string, maxChars = DEFAULT_PREVIEW_CHARS): string {
   const safe = content.replace(MISREPRESENTING, '\uFFFD');
+
   return safe.length <= maxChars ? safe : `${safe.slice(0, maxChars)}…`;
 }
 
@@ -167,6 +168,7 @@ function instructionAnchor(row: InstructionSourceRow): string {
 
 function compareRows(a: InstructionSourceMeta, b: InstructionSourceMeta): number {
   if (a.kind !== b.kind) return a.kind < b.kind ? -1 : 1;
+
   return a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 }
 
@@ -182,6 +184,7 @@ export function listInstructionApprovals(input: {
   readonly decisions: readonly InstructionApproval[];
 } & PageRequest): Page<InstructionSourceRow> {
   const decisionByPath = new Map<string, InstructionApproval>();
+
   for (const row of input.decisions) decisionByPath.set(row.path, row);
 
   const ordered = [...input.sources].sort(compareRows).map((meta): InstructionSourceRow => {
@@ -191,14 +194,17 @@ export function listInstructionApprovals(input: {
       bytes: meta.bytes,
       decision: decisionByPath.get(meta.path)?.decision ?? 'none',
     };
+
     return meta.reason === undefined ? row : { ...row, reason: meta.reason };
   });
 
   const limit = boundedInt(input.limit, DEFAULT_INSTRUCTION_PAGE, 1, MAX_INSTRUCTION_PAGE);
   const after = input.cursor?.after;
+
   const from = after === undefined
     ? ordered
     : ordered.filter((row) => instructionAnchor(row) > after);
+
   return seekPage(from.slice(0, limit + 1), limit, instructionAnchor);
 }
 
@@ -251,6 +257,7 @@ export async function gatherApprovableInstructions(input: {
   const sources: InstructionSourceMeta[] = (input.agentsMd?.admitted ?? []).map((file) => ({
     path: file.path, kind: 'agents_md' as const, bytes: file.content.length,
   }));
+
   // A file that WOULD be carried and simply did not fit the window. The model is
   // told to open these by path, so an owner who cannot see them cannot revoke a
   // path the agent is being pointed at — and an agent that grows an AGENTS.md
@@ -261,27 +268,36 @@ export async function gatherApprovableInstructions(input: {
       reason: 'too large for this model\'s window; left on disk for the agent to open',
     });
   }
+
   for (const entry of input.agentsMd?.unavailable ?? []) {
     sources.push({ path: entry.path, kind: 'agents_md', bytes: 0, reason: entry.reason });
   }
 
   const opts: DiscoverOpts = { admissionTokens: input.admissionTokens };
+
   if (input.skillsDir !== undefined) opts.skillsDir = input.skillsDir;
   const discovery = await discoverSkills(input.skillsVfs, opts);
   const skills = discovery.skills.filter((skill) => skill.bodyRef.kind === 'file');
+
   const sizes = await Promise.all(skills.map(async (skill) => {
     const ref = skill.bodyRef;
+
     if (ref.kind !== 'file' || !input.skillsVfs.stat) return ref.kind === 'file' ? ref.chars : 0;
+
     return (await input.skillsVfs.stat(ref.path))?.size ?? ref.chars;
   }));
+
   for (let index = 0; index < skills.length; index += 1) {
     const skill = skills[index]!;
+
     if (skill.bodyRef.kind !== 'file') continue;
     sources.push({ path: skill.bodyRef.path, kind: 'skill', bytes: sizes[index]! });
   }
+
   for (const unread of discovery.unread) {
     sources.push({ path: unread.path, kind: 'skill', bytes: unread.bytes });
   }
+
   return sources;
 }
 
@@ -307,18 +323,22 @@ export async function openInstructionSource(input: {
 }): Promise<InstructionSourceView | null> {
   const decision: InstructionDecision | 'none' =
     input.decisions.find((row) => row.path === input.path)?.decision ?? 'none';
+
   const open = (kind: InstructionSourceKind, content: string): InstructionSourceView => {
     const request = {
       path: input.path, kind, content, decision,
       trust: input.trust(input.path, content),
     };
+
     return input.previewChars === undefined
       ? readInstructionSource(request)
       : readInstructionSource({ ...request, previewChars: input.previewChars });
   };
 
   const admitted = input.agentsMd?.admitted.find((file) => file.path === input.path);
+
   if (admitted) return open('agents_md', admitted.content);
+
   // A path discovery declined to follow has no bytes to open, and an oversized
   // file was never read; both stay listing-only rather than being materialized
   // here just to have something to show.
@@ -333,5 +353,6 @@ export async function openInstructionSource(input: {
     () => readSkillFile(input.skillsVfs, { kind: 'file', path: input.path, chars: 0 }),
     'enoent',
   );
+
   return source === undefined ? null : open('skill', source);
 }

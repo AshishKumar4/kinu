@@ -63,6 +63,7 @@ import {
 } from './bench-retention';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const SEAL_LEDGER = join(REPO_ROOT, 'tests', 'bench', 'seal-ledger.jsonl');
 
 /** Extra well-formedness checks a failing task gets before it is called BAD.
@@ -92,6 +93,7 @@ export interface CommonOptions {
  *  things, so averaging them would produce a number about nothing — the family
  *  is part of the run configuration and therefore part of the config hash. */
 export const BENCH_FAMILIES = ['defect', 'longhorizon'] as const;
+
 export type BenchFamilyId = (typeof BENCH_FAMILIES)[number];
 
 function isBenchFamilyId(value: string): value is BenchFamilyId {
@@ -100,27 +102,39 @@ function isBenchFamilyId(value: string): value is BenchFamilyId {
 
 export function parseCommon(args: Map<string, string>): CommonOptions {
   const runRoot = args.get('run-root') ?? process.env.BENCH_RUN_ROOT ?? null;
+
   if (!runRoot) {
     throw new Error('--run-root is required (or set BENCH_RUN_ROOT). It must be a throwaway directory outside your home — the harness refuses anything else.');
   }
+
   const num = (key: string, fallback: number): number => {
     const raw = args.get(key);
+
     if (raw === undefined) return fallback;
     const n = Number(raw);
+
     if (!Number.isFinite(n)) throw new Error(`--${key} must be a number, got ${raw}`);
+
     return n;
   };
+
   const count = (key: string, fallback: number, min: number): number => {
     const n = num(key, fallback);
+
     if (!Number.isInteger(n) || n < min) throw new Error(`--${key} must be an integer ≥ ${min}, got ${n}`);
+
     return n;
   };
+
   const limitRaw = args.get('limit');
   const family = args.get('family') ?? 'defect';
+
   if (!isBenchFamilyId(family)) {
     throw new Error(`--family must be one of ${BENCH_FAMILIES.join(' | ')}, got "${family}"`);
   }
+
   const resolvedRunRoot = ensureRunRoot(runRoot, REPO_ROOT);
+
   return {
     family,
     runRoot: resolvedRunRoot,
@@ -148,9 +162,11 @@ function benchLLM(): LLMProviderConfig {
   const baseURL = process.env.BENCH_BASE_URL;
   const auth = process.env.BENCH_AUTH;
   const model = process.env.BENCH_MODEL;
+
   if (!baseURL || !auth || !model) {
     throw new Error('agent variants need BENCH_BASE_URL, BENCH_AUTH and BENCH_MODEL. Deterministic variants (null/oracle/noisy) need none.');
   }
+
   return {
     name: model.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
     baseURL,
@@ -183,6 +199,7 @@ interface AgentVariant {
 
 function agentVariant(spec: string): AgentVariant {
   const evolving = spec === 'agent-evolving';
+
   return {
     id: spec,
     description: evolving
@@ -203,6 +220,7 @@ function piVariant(spec: string): {
       verifierRetry: false,
     };
   }
+
   if (spec === 'pi:retry') {
     return {
       id: spec,
@@ -210,12 +228,14 @@ function piVariant(spec: string): {
       verifierRetry: true,
     };
   }
+
   return null;
 }
 
 const PILOTED_VARIANTS = new Set([
   'pi:vanilla', 'pi:retry', 'agent', 'agent-evolving', 'panel:self', 'panel:mixed',
 ]);
+
 const PILOT_ARM_VARIANTS = new Set([
   'pi:vanilla', 'pi:retry', 'agent', 'panel:self', 'panel:mixed',
 ]);
@@ -255,15 +275,19 @@ function unknownVariant(spec: string): never {
  */
 export function panelArm(spec: string, analyst: LLMProviderConfig): PanelSolverOptions | null {
   const mixed = spec === 'panel:mixed';
+
   if (!mixed && spec !== 'panel:self') return null;
   const size = Number(process.env.BENCH_PANEL_SIZE ?? 3);
+
   if (!Number.isInteger(size) || size < 2 || size > 6) {
     throw new Error(`BENCH_PANEL_SIZE must be an integer in [2,6], got ${process.env.BENCH_PANEL_SIZE}`);
   }
+
   // The mixed arm needs real cross-vendor configs; there is no way to synthesize
   // them from one credential, and quietly running one model under N names would
   // make the whole comparison a lie.
   const panel = mixed ? panelProviders(size) : Array.from({ length: size }, () => analyst);
+
   return {
     id: spec,
     description: mixed
@@ -278,17 +302,21 @@ export function panelArm(spec: string, analyst: LLMProviderConfig): PanelSolverO
 /** `BENCH_PANEL` — `<baseURL>|<auth>|<model>` per member, separated by `;`. */
 export function panelProviders(size: number): LLMProviderConfig[] {
   const raw = (process.env.BENCH_PANEL ?? '').split(';').map((s) => s.trim()).filter(Boolean);
+
   if (raw.length !== size) {
     throw new Error(
       `panel:mixed needs BENCH_PANEL with ${size} entries (got ${raw.length}). `
       + 'Format: "<baseURL>|<auth>|<model>;<baseURL>|<auth>|<model>;…", one per vendor family.',
     );
   }
+
   return raw.map((entry, i) => {
     const [baseURL, auth, model] = entry.split('|').map((s) => s.trim());
+
     if (!baseURL || !auth || !model) {
       throw new Error(`BENCH_PANEL entry ${i + 1} must be "<baseURL>|<auth>|<model>", got "${entry}"`);
     }
+
     return {
       name: model.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
       baseURL,
@@ -305,47 +333,66 @@ function noisyRate(spec: string): number | null {
 function loadFamily(id: BenchFamilyId): BenchFamily {
   if (id === 'defect') {
     const { corpus, patches, path } = loadBenchCorpus(REPO_ROOT);
+
     return {
       id, corpus, path,
       prepare: (task) => (dir) => applyPatch(dir, patchFor(patches, task.id), { reverse: false }),
       resolveSolver: (spec, opts) => {
         if (spec === 'null') return nullSolver;
+
         if (spec === 'oracle') return createOracleSolver(patches);
         const rate = noisyRate(spec);
+
         if (rate !== null) return createNoisyOracleSolver(patches, rate, spec);
         const pi = piVariant(spec);
+
         if (pi) return createPiSolver({ ...pi, llm: benchLLM(), repoRoot: REPO_ROOT });
+
         if (spec === 'agent' || spec === 'agent-evolving') {
           const solverOptions: AgentSolverOptions = {
             ...agentVariant(spec), llm: benchLLM(), repoRoot: REPO_ROOT,
           };
+
           if (opts.sharedHome) solverOptions.sharedHome = opts.sharedHome;
+
           return createAgentSolver(solverOptions);
         }
+
         const panel = panelArm(spec, benchLLM());
+
         if (panel) return createPanelSolver(panel);
+
         return unknownVariant(spec);
       },
     };
   }
+
   const { corpus, specs, path } = loadLongHorizonCorpus(REPO_ROOT);
+
   return {
     id, corpus, path,
     prepare: (task) => (dir) => materializeLongHorizon(dir, specFor(specs, task.id)),
     resolveSolver: (spec, opts) => {
       if (spec === 'null') return nullSolver;
+
       if (spec === 'oracle') return createLongHorizonOracleSolver(specs);
       const rate = noisyRate(spec);
+
       if (rate !== null) return createLongHorizonNoisySolver(specs, rate, spec);
       const pi = piVariant(spec);
+
       if (pi) return createLongHorizonPiSolver({ ...pi, llm: benchLLM(), repoRoot: REPO_ROOT, specs });
+
       if (spec === 'agent' || spec === 'agent-evolving') {
         const solverOptions: LongHorizonAgentSolverOptions = {
           ...agentVariant(spec), llm: benchLLM(), repoRoot: REPO_ROOT, specs,
         };
+
         if (opts.sharedHome) solverOptions.sharedHome = opts.sharedHome;
+
         return createLongHorizonAgentSolver(solverOptions);
       }
+
       return unknownVariant(spec);
     },
   };
@@ -353,7 +400,9 @@ function loadFamily(id: BenchFamilyId): BenchFamily {
 
 function patchFor(patches: PatchLookup, taskId: string): string {
   const patch = patches.get(taskId);
+
   if (!patch) throw new Error(`no defect patch for task ${taskId}`);
+
   return patch;
 }
 
@@ -387,6 +436,7 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   let modelCalls: number | undefined;
   let peakPromptTokens: number | undefined;
   let error: string | undefined;
+
   try {
     const result = await solver.solve({
       task,
@@ -397,6 +447,7 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
       seed: common.seed,
       repeat: req.repeat,
     });
+
     tokens = result.tokens;
     modelCalls = result.modelCalls;
     peakPromptTokens = result.peakPromptTokens;
@@ -406,11 +457,13 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   } finally {
     budget.done();
   }
+
   const solveMs = Date.now() - started;
 
   // Scoring happens after the budget window and is never charged to it: the
   // variant is what is being measured, not the scorer.
   const { checks, passed } = await scoreSandbox(task, sandbox, REPO_ROOT);
+
   if (!common.keepSandboxes) sandbox.dispose();
 
   // An attempt nobody metered cannot be judged against a token cap. Reading its
@@ -423,6 +476,7 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   // refuses to render absent model-call evidence as zero.
   const budgetBreach = budget.timedOut() ? 'wall-clock'
     : (tokens !== undefined && tokens > common.budget.maxTokens ? 'tokens' : null);
+
   const outcome: AttemptOutcome = {
     taskId: task.id,
     variantId: solver.id,
@@ -433,11 +487,16 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
     durationMs: solveMs,
     budgetBreach,
   };
+
   if (tokens !== undefined) outcome.tokens = tokens;
+
   if (peakPromptTokens !== undefined) outcome.peakPromptTokens = peakPromptTokens;
+
   if (modelCalls !== undefined) outcome.modelCalls = modelCalls;
+
   if (error) outcome.error = error;
   req.retention.recordAttempt(outcome);
+
   return outcome;
 }
 
@@ -455,12 +514,15 @@ async function runPair(
   const order = runOrder(task.id, common.seed, repeat);
   const first = order === 'ab' ? 'a' : 'b';
   const second = first === 'a' ? 'b' : 'a';
+
   const attempt = (slot: 'a' | 'b') => runAttempt({
     task, solver: solvers[slot], slot, repeat, family, common, retention,
     attemptId: `${task.id}-${slot}-r${repeat}-${fnv1a64(`${common.seed}:${task.id}:${slot}:${repeat}`).slice(0, 8)}`,
   });
+
   const firstOut = await attempt(first);
   const secondOut = await attempt(second);
+
   return first === 'a' ? { a: firstOut, b: secondOut } : { a: secondOut, b: firstOut };
 }
 
@@ -475,18 +537,22 @@ async function runRepeats(
 ): Promise<{ a: AttemptOutcome[]; b: AttemptOutcome[] }> {
   const a: AttemptOutcome[] = [];
   const b: AttemptOutcome[] = [];
+
   for (let repeat = 0; repeat < common.repeats; repeat++) {
     const pair = await runPair(task, repeat, solvers, family, common, retention);
     a.push(pair.a);
     b.push(pair.b);
   }
+
   return { a, b };
 }
 
 /** `2/3` when the repeats disagreed, `pass`/`fail` when there is only one. */
 function tally(outcomes: readonly AttemptOutcome[]): string {
   const passes = outcomes.filter((o) => o.passed).length;
+
   if (outcomes.length === 1) return passes === 1 ? 'pass' : 'fail';
+
   return `${passes}/${outcomes.length}${passes > 0 && passes < outcomes.length ? '~' : ''}`;
 }
 
@@ -506,7 +572,9 @@ export function selectTasks(
   seed: number,
 ): BenchTask[] {
   const byId = [...tasks].sort((x, y) => x.id.localeCompare(y.id));
+
   if (limit === null || limit >= byId.length) return byId;
+
   return byId
     .map((task) => ({ task, draw: unitHash(`sample:${seed}:${task.id}`) }))
     .sort((x, y) => x.draw - y.draw)
@@ -523,11 +591,14 @@ function corpusLabel(path: string, limit: number | null, total: number, seed: nu
 
 function appendSealLedger(entry: JsonObject): number {
   mkdirSync(join(REPO_ROOT, 'tests', 'bench'), { recursive: true });
+
   const prior = existsSync(SEAL_LEDGER)
     ? readFileSync(SEAL_LEDGER, 'utf8').split('\n').filter((l) => l.trim() && !l.startsWith('#')).length
     : 0;
+
   const ordinal = prior + 1;
   appendFileSync(SEAL_LEDGER, `${JSON.stringify({ ordinal, ...entry })}\n`);
+
   return ordinal;
 }
 
@@ -549,6 +620,7 @@ function openRetention(opts: {
   providerHash: string | null;
 }): RunRetention {
   const { common, family } = opts;
+
   const retention = openRunRetention({
     artifactRoot: common.artifactRoot,
     repoRoot: REPO_ROOT,
@@ -568,7 +640,9 @@ function openRetention(opts: {
       taskIds: opts.tasks.map((task) => task.id),
     },
   });
+
   console.error(`retaining per-trial evidence in ${retention.dir}`);
+
   return retention;
 }
 
@@ -587,10 +661,12 @@ async function runWellFormedAttempt(
     task, solver: nullSolver, slot: 'a', repeat, family, common, retention,
     attemptId: `validate-broken-${task.id}-${repeat}`,
   });
+
   const fixed = await runAttempt({
     task, solver: oracle, slot: 'b', repeat, family, common, retention,
     attemptId: `validate-fixed-${task.id}-${repeat}`,
   });
+
   return { broken, oracle: fixed };
 }
 
@@ -604,16 +680,21 @@ async function cmdValidate(args: Map<string, string>, common: CommonOptions): Pr
   // re-anchored sealed patch needs re-proving exactly as much as a dev one and
   // well-formedness carries no performance signal either way.
   const only = args.get('id')?.split(',').map((id) => id.trim()).filter((id) => id.length > 0);
+
   if (only !== undefined) {
     if (only.length === 0) throw new Error('--id needs at least one task id');
+
     const unknown = only.filter((id) =>
       !corpus.dev.some((task) => task.id === id) && !corpus.sealed.has(id));
+
     if (unknown.length > 0) {
       throw new Error(`--id names ${String(unknown.length)} task(s) this corpus does not have: `
         + `${unknown.join(', ')} — a narrowed run over nothing would report ok`);
     }
   }
+
   const oracle = family.resolveSolver('oracle', {});
+
   const retention = openRetention({
     command: 'validate',
     runId: fnv1a64(`validate:${Date.now()}:${common.seed}`).slice(0, 12),
@@ -631,15 +712,18 @@ async function cmdValidate(args: Map<string, string>, common: CommonOptions): Pr
     sealed: corpus.sealed,
     runAttempt: (task, repeat) => runWellFormedAttempt(task, repeat, family, common, oracle, retention),
   };
+
   if (only !== undefined) options.only = only;
   const summary = await runValidation(options);
   retention.finish(decodeJsonValue({ value: summary }));
+
   return summary.ok ? 0 : 1;
 }
 
 async function cmdCompare(args: Map<string, string>, common: CommonOptions): Promise<number> {
   const specA = args.get('a');
   const specB = args.get('b');
+
   if (!specA || !specB) throw new Error('compare needs --a <variant> and --b <variant>');
   const family = loadFamily(common.family);
   const corpus = family.corpus;
@@ -647,12 +731,14 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
 
   const sharedHomeA = join(common.runRoot, 'shared-a');
   const sharedHomeB = join(common.runRoot, 'shared-b');
+
   const solvers = {
     a: family.resolveSolver(specA, { sharedHome: sharedHomeA }),
     b: family.resolveSolver(specB, { sharedHome: sharedHomeB }),
   };
 
   const devTasks = selectTasks(corpus.dev, common.limit, common.seed);
+
   const config: BenchRunConfig = {
     corpus: corpusLabel(family.path, common.limit, corpus.dev.length, common.seed),
     budget: common.budget,
@@ -662,7 +748,9 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
     repeats: common.repeats,
     manifestHash: corpus.manifestHash,
   };
+
   const runId = fnv1a64(`${Date.now()}:${config.variantA}:${config.variantB}:${config.seed}`).slice(0, 12);
+
   const retention = openRetention({
     command: 'compare', runId, common, family,
     variants: [solvers.a.id, solvers.b.id], tasks: devTasks,
@@ -671,6 +759,7 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
 
   console.error(`dev split: ${devTasks.length} tasks × 2 variants × ${common.repeats} repeat(s)`);
   const devAttempts: AttemptOutcome[] = [];
+
   for (const task of devTasks) {
     const { a, b } = await runRepeats(task, solvers, family, common, retention);
     devAttempts.push(...a, ...b);
@@ -679,10 +768,12 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
 
   let sealed: SealedScorecard | null = null;
   let ordinal: number | null = null;
+
   if (args.has('sealed')) {
     console.error(`sealed split: ${corpus.sealed.size} tasks × 2 variants × ${common.repeats} repeat(s) (aggregates only)`);
     sealed = await corpus.sealed.evaluate(async (task) => {
       const { a, b } = await runRepeats(task, solvers, family, common, retention);
+
       return { a: a.map((o) => o.passed), b: b.map((o) => o.passed) };
     }, { seed: common.seed });
     ordinal = appendSealLedger({
@@ -698,12 +789,16 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
     ...buildBenchReport({ runId, config, devAttempts, sealed, sealAccessOrdinal: ordinal }),
     modelEvidence: pilotEvidence(pilot),
   };
+
   retention.finish(decodeJsonValue({ value: report }));
+
   if (common.out) {
     writeFileSync(common.out, JSON.stringify(report, null, 2));
     console.error(`Wrote ${common.out}`);
   }
+
   console.log(renderBenchSummary(report));
+
   return args.has('require-accept') && !report.decision.accept ? 1 : 0;
 }
 
@@ -714,16 +809,21 @@ function requireStabilityPilot(
   variants: readonly string[],
 ): PilotReport | null {
   if (!variants.some((variant) => PILOTED_VARIANTS.has(variant))) return null;
+
   if (common.repeats < MIN_PILOT_REPEATS) {
     throw new Error(`model-backed runs need at least ${MIN_PILOT_REPEATS} repeats per task; got ${common.repeats}`);
   }
+
   const path = args.get('pilot-report');
+
   if (!path) {
     throw new Error(
       `model-backed runs need --pilot-report from a one-arm ${MIN_PILOT_TASKS}-task × ${MIN_PILOT_REPEATS}-repeat stability pilot`,
     );
   }
+
   const llm = benchLLM();
+
   return loadAndValidatePilotReport(path, {
     family: family.id,
     manifestHash: family.corpus.manifestHash,
@@ -756,30 +856,39 @@ function pilotEvidence(pilot: PilotReport | null): null | {
 
 async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promise<number> {
   const spec = args.get('variant');
+
   if (!spec || !PILOT_ARM_VARIANTS.has(spec)) {
     throw new Error(`pilot needs --variant <${[...PILOT_ARM_VARIANTS].join(' | ')}> — exactly one fresh model-backed arm`);
   }
+
   if (!common.out) throw new Error('pilot needs --out <report.json>');
   const family = loadFamily(common.family);
   const tasks = selectTasks(family.corpus.dev, common.limit, common.seed);
+
   if (tasks.length < MIN_PILOT_TASKS) {
     throw new Error(`stability pilot needs at least ${MIN_PILOT_TASKS} development tasks; ${family.id} selected ${tasks.length}`);
   }
+
   if (common.repeats < MIN_PILOT_REPEATS) {
     throw new Error(`stability pilot needs at least ${MIN_PILOT_REPEATS} repeats; got ${common.repeats}`);
   }
+
   const llm = benchLLM();
   const solver = family.resolveSolver(spec, { sharedHome: join(common.runRoot, 'pilot-shared') });
+
   const retention = openRetention({
     command: 'pilot',
     runId: fnv1a64(`pilot:${Date.now()}:${solver.id}:${common.seed}`).slice(0, 12),
     common, family, variants: [solver.id], tasks,
     model: llm.model, providerHash: benchProviderHash(llm),
   });
+
   const outcomes: AttemptOutcome[] = [];
   console.error(`stability pilot: ${tasks.length} tasks × 1 variant × ${common.repeats} repeats`);
+
   for (const task of tasks) {
     const repeated: AttemptOutcome[] = [];
+
     for (let repeat = 0; repeat < common.repeats; repeat++) {
       const outcome = await runAttempt({
         task,
@@ -791,11 +900,14 @@ async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promi
         retention,
         attemptId: `pilot-${task.id}-r${repeat}`,
       });
+
       repeated.push(outcome);
       outcomes.push(outcome);
     }
+
     console.error(`  ${task.id.padEnd(28)} ${solver.id}=${tally(repeated)}`);
   }
+
   const report = buildPilotReport({
     family: family.id,
     manifestHash: family.corpus.manifestHash,
@@ -806,6 +918,7 @@ async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promi
     repeats: common.repeats,
     outcomes,
   });
+
   retention.finish(decodeJsonValue({ value: report }));
   writeFileSync(common.out, JSON.stringify(report, null, 2));
   console.log(
@@ -814,6 +927,7 @@ async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promi
     + `${report.totalModelCalls} model calls; ${report.errors} errors; `
     + `${report.budgetBreaches} budget breaches.`,
   );
+
   return report.errors === 0 && report.budgetBreaches === 0 ? 0 : 1;
 }
 
@@ -823,9 +937,11 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
   const family = loadFamily(common.family);
   const pilot = requireStabilityPilot(args, common, family, [statefulSpec, statelessSpec]);
   const sequence = selectTasks(family.corpus.dev, common.limit, common.seed);
+
   if (sequence.length === 0) throw new Error('no tasks in the sequence');
 
   const stateless = family.resolveSolver(statelessSpec, {});
+
   // The replicate here is a whole PASS over the sequence, not an individual
   // attempt: the stateful arm's point is that state accumulates ALONG the
   // sequence, so re-attempting one task mid-run would be measuring the same
@@ -845,7 +961,9 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
     repeats: common.repeats,
     manifestHash: family.corpus.manifestHash,
   };
+
   const runId = fnv1a64(`gain:${Date.now()}:${config.seed}`).slice(0, 12);
+
   const retention = openRetention({
     command: 'gain', runId, common, family,
     variants: [stateless.id, statefulPasses[0]!.id], tasks: sequence,
@@ -854,6 +972,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
 
   const scores = new Map<string, { stateful: number; stateless: number }>();
   const attempts: AttemptOutcome[] = [];
+
   for (let pass = 0; pass < common.repeats; pass++) {
     const stateful = statefulPasses[pass]!;
 
@@ -861,17 +980,20 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
     // whole design. Which arm runs first is randomized from the seed so any host
     // drift over the run does not systematically favour one of them.
     const statefulFirst = runOrder('arm-order', common.seed, pass) === 'ab';
+
     const arms: Array<{ solver: Solver; key: 'stateful' | 'stateless' }> = statefulFirst
       ? [{ solver: stateful, key: 'stateful' }, { solver: stateless, key: 'stateless' }]
       : [{ solver: stateless, key: 'stateless' }, { solver: stateful, key: 'stateful' }];
 
     for (const arm of arms) {
       console.error(`${arm.key} arm, pass ${pass + 1}/${common.repeats}: ${sequence.length} tasks in sequence`);
+
       for (const [index, task] of sequence.entries()) {
         const outcome = await runAttempt({
           task, solver: arm.solver, slot: arm.key === 'stateful' ? 'b' : 'a', repeat: pass, family, common, retention,
           attemptId: `gain-${arm.key}-p${pass}-${index}-${task.id}`,
         });
+
         attempts.push(outcome);
         const entry = scores.get(task.id) ?? { stateful: 0, stateless: 0 };
         entry[arm.key] += (outcome.passed ? 1 : 0) / common.repeats;
@@ -892,12 +1014,16 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
     ...buildGainReport({ runId, config, perTask, attempts }),
     modelEvidence: pilotEvidence(pilot),
   };
+
   retention.finish(decodeJsonValue({ value: report }));
+
   if (common.out) {
     writeFileSync(common.out, JSON.stringify(report, null, 2));
     console.error(`Wrote ${common.out}`);
   }
+
   console.log(renderGainSummary(report));
+
   return 0;
 }
 
@@ -973,34 +1099,46 @@ export interface ParsedBenchArgv {
 export function parseArgv(argv: string[]): ParsedBenchArgv {
   const args = new Map<string, string>();
   const command = argv[0] ?? '';
+
   for (let i = 1; i < argv.length; i++) {
     const arg = argv[i];
+
     if (arg === undefined) throw new Error(`argument ${i} is missing`);
+
     if (!arg.startsWith('--')) throw new Error(`unexpected argument: ${arg}`);
     const key = arg.slice(2);
     const next = argv[i + 1];
+
     if (next === undefined || next.startsWith('--')) args.set(key, '');
     else { args.set(key, next); i++; }
   }
+
   return { command, args };
 }
 
 async function main(): Promise<void> {
   const { command, args } = parseArgv(process.argv.slice(2));
+
   if (!command || args.has('help') || command === 'help') {
     console.log(USAGE);
+
     return;
   }
+
   if (command === 'pilot') {
     if (!args.has('limit')) args.set('limit', String(MIN_PILOT_TASKS));
+
     if (!args.has('repeats')) args.set('repeats', String(MIN_PILOT_REPEATS));
   }
+
   const common = parseCommon(args);
+
   const code = command === 'validate' ? await cmdValidate(args, common)
     : command === 'pilot' ? await cmdPilot(args, common)
     : command === 'compare' ? await cmdCompare(args, common)
     : command === 'gain' ? await cmdGain(args, common)
     : (() => { throw new Error(`unknown command "${command}"`); })();
+
   process.exit(code);
 }
 

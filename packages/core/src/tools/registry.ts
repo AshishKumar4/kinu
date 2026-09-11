@@ -213,6 +213,7 @@ interface CapabilityReach {
 const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
   CAPABILITY_NAMES.flatMap((name) => {
     const reach = TOOL_REACH[name];
+
     return reach.native ? [] : [{ name, namespace: reach.codemode }];
   }),
 );
@@ -223,11 +224,14 @@ const CODEMODE_ONLY_REACH: readonly CapabilityReach[] = Object.freeze(
  *  cannot join the surface without joining this index. */
 const CAPABILITIES_BY_NAMESPACE: Readonly<Record<string, readonly CapabilityName[]>> = (() => {
   const index: Record<string, CapabilityName[]> = {};
+
   for (const name of CAPABILITY_NAMES) {
     const namespace = TOOL_REACH[name].codemode;
+
     if (namespace === null) continue;
     (index[namespace] ??= []).push(name);
   }
+
   return Object.freeze(index);
 })();
 
@@ -248,6 +252,7 @@ export function codemodeCapabilitiesFor(
   providers: readonly { readonly name: string }[],
 ): string[] {
   const wired = new Set(providers.map((provider) => provider.name));
+
   return CODEMODE_ONLY_REACH
     .filter((reach) => wired.has(reach.namespace))
     .map((reach) => reach.name);
@@ -299,13 +304,18 @@ export function narrowToolSurface(
       narrowProviders: (providers) => [...providers],
     };
   }
+
   const allowed = new Set(allowedTools);
   const sandbox = allowed.has('execute_tools');
+
   const allowsNamespace = (namespace: string): boolean => {
     const reaching = CAPABILITIES_BY_NAMESPACE[namespace];
+
     if (!reaching) return sandbox;
+
     return reaching.some((name) => allowed.has(name));
   };
+
   return {
     allowsTool: (name) => allowed.has(name),
     allowsNamespace,
@@ -608,11 +618,13 @@ export function memoryActionsFor(hasFacts: boolean): readonly MemoryToolAction[]
  *  than inline in builtins.ts, so the schema enum, the dispatcher's accepted
  *  set and a refusal's wording are one symbol. */
 export const WEB_TOOL_ACTIONS = ['search', 'fetch'] as const;
+
 export type WebToolAction = (typeof WEB_TOOL_ACTIONS)[number];
 
 /** The `file` plane's actions — the one file/execution surface's whole
  *  vocabulary, declared beside its siblings for the same reason. */
 export const FILE_TOOL_ACTIONS = ['read', 'write', 'edit', 'list', 'stat', 'search'] as const;
+
 export type FileToolAction = (typeof FILE_TOOL_ACTIONS)[number];
 
 /**
@@ -652,6 +664,7 @@ export function unknownActionError(
 // state decision.
 
 export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list', 'mode'] as const;
+
 export type TasksToolAction = (typeof TASKS_TOOL_ACTIONS)[number];
 
 

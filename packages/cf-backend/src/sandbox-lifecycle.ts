@@ -255,7 +255,9 @@ function readDeliveryState(
 } | null {
   const row = sql<IncidentRow>`SELECT incident_id, first_seen_at, announced_at, outcome
     FROM sandbox_lifecycle_incidents WHERE incident_id = ${incidentId}`[0];
+
   if (!row) return null;
+
   return {
     firstSeenAt: row.first_seen_at,
     announcedAt: row.announced_at,
@@ -297,6 +299,7 @@ export async function acceptSandboxLifecycleFailure(
   now: number,
 ): Promise<SandboxLifecycleFailureResult> {
   const parsed = v.safeParse(SandboxLifecycleFailureSchema, body);
+
   if (!parsed.success) {
     // Nothing about this envelope is claimed as a dimension: it named no stage
     // and no attempt, and a fabricated one is worse than an absent one. The
@@ -306,6 +309,7 @@ export async function acceptSandboxLifecycleFailure(
     deps.recordRecovery({
       stage: '', outcome: 'refused', code: 'bad_input', attempts: 0, durationMs: 0,
     });
+
     // NAMED, and through valibot's own path helper. A missing key already
     // carries its name in the message; a mismatched VALUE does not — "Expected 2
     // but received 1" is the version refusal, which is the one a caller most
@@ -314,13 +318,16 @@ export async function acceptSandboxLifecycleFailure(
     // every issue rather than of most of them.
     const named = parsed.issues.map((issue) => {
       const path = v.getDotPath(issue);
+
       return path === null ? issue.message : `${path}: ${issue.message}`;
     });
+
     return {
       status: 'rejected',
       reason: `malformed sandbox lifecycle failure: ${named.join('; ')}`,
     };
   }
+
   const incident = parsed.output;
 
   // Read BEFORE writing: the answer this call gives depends on whether the
@@ -332,6 +339,7 @@ export async function acceptSandboxLifecycleFailure(
   // hop. Equal to `now` for an incident nobody has reported before, which is a
   // duration of zero rather than an unmeasured one.
   const firstSeenAt = before?.firstSeenAt ?? now;
+
   const recordSettlement = (outcome: RowOutcome, code: ErrorCode | ''): void => {
     deps.recordRecovery({
       stage: incident.stage,
@@ -349,6 +357,7 @@ export async function acceptSandboxLifecycleFailure(
     // an answer it may not have received, not a recovery that failed.
     recordSettlement('ok', '');
     deps.logActivity?.('sandbox_incident_duplicate', `${incident.stage} — ${incident.incidentId}`);
+
     // `queued` is the truth here and not a courtesy: this arm is reached only
     // when the row says the announcement HAS landed, so the caller may stop.
     return { status: 'queued', incidentId: incident.incidentId, duplicate: true };
@@ -367,7 +376,9 @@ export async function acceptSandboxLifecycleFailure(
     incidentId: incident.incidentId,
     stage: incident.stage,
   };
+
   if (incident.processId !== undefined) metadata.processId = incident.processId;
+
   if (incident.port !== undefined) metadata.port = incident.port;
 
   const signal: AgentSignal = {
@@ -380,7 +391,9 @@ export async function acceptSandboxLifecycleFailure(
     // the one already announced.
     idempotencyKey: sandboxLifecycleIncidentKey(incident.incidentId),
   };
+
   let outcome: SignalOutcome;
+
   try {
     outcome = await deps.signals.deliver(signal);
   } catch (cause) {
@@ -395,9 +408,11 @@ export async function acceptSandboxLifecycleFailure(
       cause,
       otherwise: 'io',
     });
+
     recordSettlement('failed', error.code);
     throw error;
   }
+
   const landed = outcome !== 'undelivered';
   void deps.sql`UPDATE sandbox_lifecycle_incidents
     SET outcome = ${outcome}, announced_at = ${landed ? now : null}
@@ -410,6 +425,7 @@ export async function acceptSandboxLifecycleFailure(
     landed ? 'sandbox_incident_announced' : 'sandbox_incident_undelivered',
     `${incident.stage} — ${incident.incidentId}`,
   );
+
   // The delivery outcome IS the answer. `announced_at` above and this status are
   // written from the same `landed`, so the ledger and the caller cannot diverge.
   return {
@@ -425,6 +441,7 @@ function incidentText(incident: SandboxLifecycleFailure): string {
   const where = incident.processId !== undefined
     ? ` (process ${incident.processId})`
     : incident.port !== undefined ? ` (port ${String(incident.port)})` : '';
+
   return `The workspace container failed at the ${incident.stage} stage${where}. `
     + `${STAGE_CONSEQUENCE[incident.stage]}\n\n`
     + `Reported cause: ${incident.reason}\n`

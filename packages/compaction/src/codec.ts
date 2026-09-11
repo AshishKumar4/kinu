@@ -57,8 +57,11 @@ import {
 } from '@better-compact/core';
 
 type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
+
 type UserPart = Exclude<UserModelMessage['content'], string>[number];
+
 type ToolPart = ToolModelMessage['content'][number];
+
 type NativeHandle = ModelMessage | AssistantPart | UserPart | ToolPart;
 
 /** One IR tool item owns the call part and its paired result: when the ladder
@@ -84,11 +87,13 @@ type ToolItem = Extract<Item, { kind: 'tool' }>;
  *  payload bytes, and a base64 blob would wildly overprice. Same scale as the
  *  pi adapter's image estimate (~1200 tokens). */
 const ESTIMATED_MEDIA_CHARS = 4_800;
+
 const TRANSCRIPT_PREVIEW_CHARS = 20_000;
 
 export const kinuCodec: Codec<ModelMessage> = {
   encode(messages) {
     const claimKey = keyDeduper();
+
     return groupMessages(messages).map((group) => encodeGroup(group, claimKey));
   },
 
@@ -104,6 +109,7 @@ export const kinuCodec: Codec<ModelMessage> = {
       (sum, turn) => sum + turn.items.reduce((acc, item) => acc + charsOfItem(item), 0),
       0,
     );
+
     return Math.max(0, Math.round(chars / 4));
   },
 
@@ -113,9 +119,13 @@ export const kinuCodec: Codec<ModelMessage> = {
 
   transcriptLine(item) {
     if (item.kind === 'synthetic') return item.text;
+
     if (item.kind === 'text') return item.text;
+
     if (item.kind === 'reasoning') return `[reasoning]\n${reasoningText(item.handle)}`;
+
     if (item.kind === 'tool') return formatToolPair(pairOf(item));
+
     return formatOpaque(item.handle);
   },
 
@@ -126,6 +136,7 @@ export const kinuCodec: Codec<ModelMessage> = {
   transcriptDocument(turns) {
     const blocks = turns.map((turn) => {
       const native = turn.handle ? decodeTurn(turn) : { role: turn.role, content: syntheticText(turn.items) };
+
       return [
         `## ${turn.role.toUpperCase()} ${turn.key}`,
         '```json',
@@ -133,6 +144,7 @@ export const kinuCodec: Codec<ModelMessage> = {
         '```',
       ].join('\n');
     });
+
     return `# Kinu Compaction Raw Transcript\n\n${blocks.join('\n\n')}\n`;
   },
 };
@@ -140,6 +152,7 @@ export const kinuCodec: Codec<ModelMessage> = {
 export const kinuConventions: Conventions = {
   tool: (item) => {
     const pair = pairOf(item);
+
     return {
       name: pair.call.toolName,
       input: pair.call.input,
@@ -172,6 +185,7 @@ export const kinuSpec: LadderSpec = {
 function groupMessages(messages: ModelMessage[]): ModelMessage[][] {
   const groups: ModelMessage[][] = [];
   let run: ModelMessage[] | null = null;
+
   for (const message of messages) {
     if (message.role === 'user') {
       groups.push([message]);
@@ -183,6 +197,7 @@ function groupMessages(messages: ModelMessage[]): ModelMessage[][] {
       run.push(message);
     }
   }
+
   return groups;
 }
 
@@ -234,8 +249,10 @@ function encodeAssistant(
 ): void {
   if (isString(message.content)) {
     items.push({ kind: 'text', key: `${turnKey}#${items.length}`, text: message.content, handle: message });
+
     return;
   }
+
   for (const part of message.content) {
     if (part.type === 'text') {
       items.push({ kind: 'text', key: `${turnKey}#${items.length}`, text: part.text, handle: part });
@@ -247,6 +264,7 @@ function encodeAssistant(
       items.push({ kind: 'tool', key: `${turnKey}#${items.length}`, callId: part.toolCallId, handle: pair });
     } else if (part.type === 'tool-result') {
       const pair = pendingCalls.get(part.toolCallId);
+
       if (pair && !pair.inlineResult && !pair.result) {
         pair.inlineResult = part;
       } else {
@@ -260,8 +278,10 @@ function encodeAssistant(
 
 function bindResult(pendingCalls: Map<string, ToolPairHandle>, result: ToolResultPart): boolean {
   const pair = pendingCalls.get(result.toolCallId);
+
   if (!pair || pair.result || pair.inlineResult) return false;
   pair.result = result;
+
   return true;
 }
 
@@ -285,12 +305,16 @@ function decodeTurn(turn: Turn): ModelMessage[] {
   if (turn.handle === undefined) {
     // Ladder-synthesized turn (reference message, prefix summary).
     const text = syntheticText(turn.items);
+
     if (!text) return [];
+
     return [turn.role === 'user' ? { role: 'user', content: text } : { role: 'assistant', content: text }];
   }
+
   if (!isModelMessageGroup(turn.handle)) {
     throw new Error(`compaction codec: invalid native turn handle for ${turn.key}`);
   }
+
   const group = turn.handle;
 
   const survival = collectSurvival(turn.items);
@@ -300,23 +324,29 @@ function decodeTurn(turn: Turn): ModelMessage[] {
   for (const message of group) {
     if (message.role === 'assistant') {
       const rebuilt = rebuildAssistant(message, turn.items);
+
       if (rebuilt) out.push(rebuilt);
     } else if (message.role === 'user') {
       const rebuilt = rebuildUser(message, turn.items);
+
       if (rebuilt) out.push(rebuilt);
     } else if (message.role === 'tool') {
       const rebuilt = rebuildToolMessage(message, survival);
+
       if (rebuilt) out.push(rebuilt);
     } else if (survival.handles.has(message)) {
       out.push(message);
     }
   }
+
   // Synthetic replacement text with no assistant message to carry it (a
   // collapsed headless run) re-emits as a user-role notice.
   const synthetic = syntheticText(turn.items);
+
   if (synthetic && !hasAssistant && !group.some((message) => message.role === 'user')) {
     out.unshift({ role: 'user', content: synthetic });
   }
+
   return out;
 }
 
@@ -325,15 +355,19 @@ function collectSurvival(items: Item[]): Survival {
     handles: new Set(),
     results: new Set(),
   };
+
   for (const item of items) {
     if (item.kind === 'synthetic') continue;
+
     if (item.kind === 'tool') {
       const pair = pairOf(item);
+
       if (pair.result) survival.results.add(pair.result);
     } else {
       survival.handles.add(nativeHandle(item.handle));
     }
   }
+
   return survival;
 }
 
@@ -346,8 +380,10 @@ function rebuildAssistant(
   if (isString(message.content)) {
     const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
     const synthetic = syntheticText(items);
+
     if (textSurvives && !synthetic) return message;
     const text = [textSurvives ? message.content : '', synthetic].filter(Boolean).join('\n\n');
+
     return text ? { ...message, content: text } : null;
   }
 
@@ -363,34 +399,43 @@ function rebuildAssistant(
       .filter((item): item is ToolItem => item.kind === 'tool')
       .map((item) => pairOf(item).call),
   );
+
   const removedCalls = message.content.filter(
     (part): part is ToolCallPart => part.type === 'tool-call' && !survivingCalls.has(part),
   );
+
   const stubs = items.filter(
     (item): item is Extract<Item, { kind: 'synthetic' }> =>
       item.kind === 'synthetic' && isToolStub(item),
   );
+
   const stubByCall = new Map(
     removedCalls.slice(0, stubs.length).map((call, index) => [call, stubs[index]]),
   );
 
   const parts: AssistantPart[] = [];
+
   for (const part of message.content) {
     if (part.type === 'tool-call') {
       const stub = stubByCall.get(part);
+
       if (stub) parts.push({ type: 'text', text: stub.text });
       else if (assistantPartSurvives(part, items)) parts.push(part);
     } else if (assistantPartSurvives(part, items)) {
       parts.push(part);
     }
   }
+
   for (const item of items) {
     if (item.kind === 'synthetic' && !isToolStub(item)) {
       parts.push({ type: 'text', text: item.text });
     }
   }
+
   if (parts.length === 0) return null;
+
   if (sameParts(parts, message.content)) return message;
+
   return { ...message, content: parts };
 }
 
@@ -398,6 +443,7 @@ function assistantPartSurvives(part: AssistantPart, items: Item[]): boolean {
   if (part.type === 'tool-call') {
     return items.some((item) => item.kind === 'tool' && pairOf(item).call === part);
   }
+
   if (part.type === 'tool-result') {
     return items.some(
       (item) =>
@@ -405,6 +451,7 @@ function assistantPartSurvives(part: AssistantPart, items: Item[]): boolean {
         (item.kind === 'opaque' && item.handle === part),
     );
   }
+
   return items.some(
     (item) => item.kind !== 'synthetic' && item.kind !== 'tool' && item.handle === part,
   );
@@ -418,13 +465,16 @@ function rebuildUser(message: UserModelMessage, items: Item[]): UserModelMessage
   if (isString(message.content)) {
     const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
     const synthetic = syntheticText(items);
+
     if (textSurvives && !synthetic) return message;
     const text = [textSurvives ? message.content : '', synthetic].filter(Boolean).join('\n\n');
+
     return text ? { ...message, content: text } : null;
   }
 
   const parts: UserPart[] = [];
   const originalParts = new Set<UserPart>(message.content);
+
   for (const item of items) {
     if (item.kind === 'synthetic') {
       parts.push({ type: 'text', text: item.text });
@@ -433,8 +483,11 @@ function rebuildUser(message: UserModelMessage, items: Item[]): UserModelMessage
       parts.push(item.handle);
     }
   }
+
   if (parts.length === 0) return null;
+
   if (sameParts(parts, message.content)) return message;
+
   return { ...message, content: parts };
 }
 
@@ -448,8 +501,11 @@ function rebuildToolMessage(message: ToolModelMessage, survival: Survival): Tool
       ? survival.results.has(part) || survival.handles.has(part)
       : survival.handles.has(part),
   );
+
   if (parts.length === message.content.length) return message;
+
   if (parts.length === 0) return null;
+
   return { ...message, content: parts };
 }
 
@@ -465,15 +521,21 @@ function pairOf(item: ToolItem): ToolPairHandle {
   if (!isStoredToolPairHandle(item.handle)) {
     throw new Error(`compaction codec: invalid tool-pair handle for ${item.key}`);
   }
+
   return item.handle;
 }
 
 function toolError(pair: ToolPairHandle): string | undefined {
   const output = (pair.result ?? pair.inlineResult)?.output;
+
   if (!output) return undefined;
+
   if (output.type === 'error-text') return output.value;
+
   if (output.type === 'error-json') return previewJson(output.value);
+
   if (output.type === 'execution-denied') return output.reason ?? 'execution denied';
+
   return undefined;
 }
 
@@ -481,33 +543,46 @@ function toolError(pair: ToolPairHandle): string | undefined {
 
 function charsOfItem(item: Item): number {
   if (item.kind === 'text') return item.text.length;
+
   if (item.kind === 'synthetic') return item.text.length;
+
   if (item.kind === 'reasoning') return reasoningText(item.handle).length;
+
   if (item.kind === 'tool') return charsOfPair(pairOf(item));
+
   return charsOfOpaque(item.handle);
 }
 
 function charsOfPair(pair: ToolPairHandle): number {
   let chars = pair.call.toolName.length + jsonLength(pair.call.input);
+
   if (pair.inlineResult) chars += charsOfResultOutput(pair.inlineResult);
+
   if (pair.result) chars += charsOfResultOutput(pair.result);
+
   return chars;
 }
 
 function charsOfResultOutput(part: ToolResultPart): number {
   const output = part.output;
+
   if (output.type === 'text') return output.value.length;
+
   if (output.type === 'json') return jsonLength(output.value);
+
   return jsonLength(output);
 }
 
 function charsOfOpaque<Handle>(handle: Handle): number {
   const value = nativeHandle(handle);
+
   if ((isAssistantPart(value) || isUserPart(value))
       && (value.type === 'image' || value.type === 'file')) return ESTIMATED_MEDIA_CHARS;
+
   if (isModelMessage(value)) {
     return isString(value.content) ? value.content.length : jsonLength(value.content);
   }
+
   return jsonLength(value);
 }
 
@@ -529,6 +604,7 @@ function jsonLength<Value>(value: Value): number {
 
 function formatToolPair(pair: ToolPairHandle): string {
   const result = pair.result ?? pair.inlineResult;
+
   return [
     `[tool:${pair.call.toolName}] callId=${pair.call.toolCallId}`,
     `input=${previewJson(pair.call.input)}`,
@@ -540,30 +616,39 @@ function formatToolPair(pair: ToolPairHandle): string {
 
 function resultText(part: ToolResultPart): string {
   const output = part.output;
+
   if (output.type === 'text') return output.value;
+
   if (output.type === 'json') return previewJson(output.value);
+
   return previewJson(output);
 }
 
 function formatOpaque<Handle>(handle: Handle): string {
   const value = nativeHandle(handle);
+
   if ((isAssistantPart(value) || isUserPart(value)) && value.type === 'image') {
     return `[image ${value.mediaType ?? 'unknown'}]`;
   }
+
   if ((isAssistantPart(value) || isUserPart(value)) && value.type === 'file') {
     return `[file ${value.mediaType ?? 'unknown'}]`;
   }
+
   if (isToolPart(value) && value.type === 'tool-result') {
     return `[orphaned tool result:${value.toolName}] callId=${value.toolCallId}\n${truncate(resultText(value), TRANSCRIPT_PREVIEW_CHARS)}`;
   }
+
   if (isModelMessage(value)) {
     return `[${value.role}] ${isString(value.content) ? value.content : previewJson(value.content)}`;
   }
+
   return `[${value.type}] ${previewJson(value)}`;
 }
 
 function previewJson<Value>(value: Value): string {
   if (value === undefined) return '';
+
   try {
     return truncate(
       isString(value) ? value : JSON.stringify(value, binaryReplacer),
@@ -578,16 +663,21 @@ function previewJson<Value>(value: Value): string {
  *  textual field serializes exactly. */
 function binaryReplacer<Value>(_key: string, value: Value): Value | string {
   if (value instanceof Uint8Array) return `[binary ${value.byteLength} bytes]`;
+
   if (value instanceof ArrayBuffer) return `[binary ${value.byteLength} bytes]`;
+
   return value;
 }
 
 const StringSchema = v.string();
+
 interface ToolPairMarker {
   [TOOL_PAIR_HANDLE]: unknown;
 }
+
 const ToolPairMarkerSchema = v.custom<ToolPairMarker>((input) => {
   if (!v.is(v.object({}), input)) return false;
+
   return TOOL_PAIR_HANDLE in input;
 });
 
@@ -597,6 +687,7 @@ function isString<Value>(value: Value): value is Value & string {
 
 function isStoredToolPairHandle<Value>(value: Value): value is Value & StoredToolPairHandle {
   const parsed = v.safeParse(ToolPairMarkerSchema, value);
+
   return parsed.success && parsed.output[TOOL_PAIR_HANDLE] === true;
 }
 
@@ -626,5 +717,6 @@ function isNativeHandle<Value>(value: Value): value is Value & NativeHandle {
 
 function nativeHandle<Value>(value: Value): Value & NativeHandle {
   if (!isNativeHandle(value)) throw new Error('compaction codec: invalid native item handle');
+
   return value;
 }

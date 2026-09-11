@@ -61,10 +61,13 @@ export class MonitorDO extends DurableObject<Env> {
   async check(now: number = Date.now()): Promise<MonitorRunResult> {
     openAnalyticsWindow(this.env);
     const origin = this.env.CLI_PUBLIC_ORIGIN;
+
     if (!origin) {
       throw new Error('CLI_PUBLIC_ORIGIN is not configured; there is no origin to probe.');
     }
+
     const outcomes = await runSyntheticProbes({ origin, fetch: (input, init) => fetch(input, init) });
+
     return recordProbeRun({
       sql: this.ctx.storage.sql,
       outbox: this.outbox,
@@ -94,6 +97,7 @@ export class MonitorDO extends DurableObject<Env> {
    */
   async listIncidents(limit = 100): Promise<MonitorIncident[]> {
     openAnalyticsWindow(this.env);
+
     return listIncidents(this.ctx.storage.sql)
       .slice(0, Math.max(1, Math.trunc(limit)))
       .map((row) => ({

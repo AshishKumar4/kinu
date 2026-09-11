@@ -29,6 +29,7 @@ import {
   type RatioProblem,
 } from '@kinu.run/core';
 import type { VerifierContext } from '../eval-outcome';
+
 /** A scored ratio, carrying every quantity the score was derived from. */
 export interface RatioScore {
   /** Normalized to [0,1], ready for `ratioOutcome`. */
@@ -64,9 +65,11 @@ export function scoreRatio(m: RatioMeasurement, problem: RatioProblem): RatioSco
       + 'no range to score on, so this task cannot be scored at all',
     );
   }
+
   if (m.failure !== null) {
     return { score: 0, detail: `no usable solution: ${m.failure}`, measured };
   }
+
   if (!m.correct) {
     return {
       score: 0,
@@ -75,6 +78,7 @@ export function scoreRatio(m: RatioMeasurement, problem: RatioProblem): RatioSco
       measured,
     };
   }
+
   if (m.candOps < problem.lowerBoundOps) {
     return {
       score: 0,
@@ -88,6 +92,7 @@ export function scoreRatio(m: RatioMeasurement, problem: RatioProblem): RatioSco
   const span = Math.log(m.refOps) - Math.log(problem.targetOps);
   const raw = (Math.log(m.refOps) - Math.log(Math.max(m.candOps, 1))) / span;
   const score = Math.min(1, Math.max(0, raw));
+
   return {
     score,
     detail: `${String(m.candOps)} oracle calls vs reference ${String(m.refOps)} `
@@ -152,6 +157,7 @@ export function ratioTask(spec: {
   readonly problem: RatioProblem;
 }): HardTask {
   const { problem } = spec;
+
   return {
     id: spec.id,
     tags: spec.tags,

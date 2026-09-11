@@ -236,6 +236,7 @@ function runSuite(suite: string, grep: string, cwd: string): SuiteRun {
     env: { ...process.env, KINU_HOME: join(cwd, '.kinu-test-home') },
     timeout: 300_000,
   });
+
   return {
     exit: result.status,
     output: `${result.stdout ?? ''}${result.stderr ?? ''}`.trim(),
@@ -281,17 +282,20 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
   // The exactly-once check reads THIS checkout, which is the right tree for
   // it: a snippet that has moved here has moved everywhere.
   const stale = fences.filter((fence) => !snippetSitsExactlyOnce(fence)).map((fence) => fence.name);
+
   if (untracked.length > 0 || stale.length > 0) {
     return { results: [], stale, untracked, copyError: null };
   }
 
   const copy = scratchRoot();
   rmSync(copy, { recursive: true, force: true });
+
   const detached = spawnSync(
     'git',
     ['worktree', 'add', '--detach', '--no-checkout', copy, 'HEAD'],
     { cwd: root, encoding: 'utf8' },
   );
+
   if (detached.status !== 0) {
     return {
       results: [],
@@ -300,6 +304,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
       copyError: `git worktree add --detach failed: ${(detached.stderr ?? '').trim()}`,
     };
   }
+
   try {
     // Sparse: the whole `packages/` tree plus what a `bun test` invocation
     // itself reads. The owning suites resolve `@kinu.run/*` through the
@@ -311,6 +316,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
       ['sparse-checkout', 'set', '--no-cone', ...SPARSE_CONE],
       { cwd: copy, encoding: 'utf8' },
     );
+
     if (sparse.status !== 0) {
       return {
         results: [],
@@ -319,7 +325,9 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
         copyError: `git sparse-checkout set failed: ${(sparse.stderr ?? '').trim()}`,
       };
     }
+
     const checkout = spawnSync('git', ['checkout', 'HEAD'], { cwd: copy, encoding: 'utf8' });
+
     if (checkout.status !== 0) {
       return {
         results: [],
@@ -328,11 +336,15 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
         copyError: `git checkout in the isolated worktree failed: ${(checkout.stderr ?? '').trim()}`,
       };
     }
+
     const mirrorError = mirrorNodeModules(copy);
+
     if (mirrorError !== null) {
       return { results: [], stale: [], untracked: [], copyError: mirrorError };
     }
+
     const results: FenceResult[] = [];
+
     for (const fence of fences) {
       const pristine = runSuite(fence.owner.suite, fence.owner.grep, copy);
 
@@ -342,6 +354,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
       const at = join(copy, fence.file);
       const source = readFileSync(at, 'utf8');
       let mutated: SuiteRun;
+
       if (source.split(fence.snippet).length - 1 !== 1) {
         mutated = {
           exit: null,
@@ -354,12 +367,14 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
         const staged = `${at}.mutant`;
         writeFileSync(staged, source.replace(fence.snippet, fence.mutation));
         renameSync(staged, at);
+
         try {
           mutated = runSuite(fence.owner.suite, fence.owner.grep, copy);
         } finally {
           spawnSync('git', ['checkout', '--', fence.file], { cwd: copy, encoding: 'utf8' });
         }
       }
+
       results.push({
         fence: fence.name,
         pristineExit: pristine.exit,
@@ -367,6 +382,7 @@ export function proveFences(fences: readonly Fence[] = FENCES): FenceProof {
         output: mutated.output,
       });
     }
+
     return { results, stale: [], untracked: [], copyError: null };
   } finally {
     spawnSync('git', ['worktree', 'remove', '--force', copy], { cwd: root, encoding: 'utf8' });
@@ -404,22 +420,28 @@ const SPARSE_CONE = [
  */
 function mirrorNodeModules(copy: string): string | null {
   const donor = join(root, 'node_modules');
+
   if (!existsSync(donor)) {
     return `no node_modules at ${donor} to mirror into the isolated copy`;
   }
+
   // The scope and the package list come from the ONE enumeration, never from a
   // walk of the copy: `workspaceScope()` reads the manifests git lists, so a
   // renamed scope or a new package moves both sides at once.
   const scope = workspaceScope();
+
   const packages = trackedFiles()
     .filter((file) => /^packages\/[^/]+\/package\.json$/.test(file))
     .map((file) => file.split('/')[1] ?? '')
     .filter((name) => name.length > 0);
+
   if (packages.length === 0) {
     return 'the enumeration lists no packages/*/package.json to rebuild the scope from';
   }
+
   const target = join(copy, 'node_modules');
   mkdirSync(target, { recursive: true });
+
   for (const entry of readdirSync(donor, { withFileTypes: true })) {
     // The workspace scope is rebuilt below, never linked: its entries are
     // relative to the donor, which is precisely how they end up back there.
@@ -427,11 +449,14 @@ function mirrorNodeModules(copy: string): string | null {
     rmSync(join(target, entry.name), { recursive: true, force: true });
     symlinkSync(join(donor, entry.name), join(target, entry.name), 'dir');
   }
+
   const scopeDir = join(target, scope);
   mkdirSync(scopeDir, { recursive: true });
+
   for (const directory of packages) {
     const manifest = readFileSync(join(copy, 'packages', directory, 'package.json'), 'utf8');
     const name = /"name"\s*:\s*"([^"]+)"/.exec(manifest)?.[1];
+
     if (name === undefined || !name.startsWith(`${scope}/`)) continue;
     const short = name.slice(scope.length + 1);
     rmSync(join(scopeDir, short), { recursive: true, force: true });
@@ -440,6 +465,7 @@ function mirrorNodeModules(copy: string): string | null {
     // exists to avoid.
     symlinkSync(`../../packages/${directory}`, join(scopeDir, short), 'dir');
   }
+
   return null;
 }
 
@@ -462,12 +488,14 @@ if (import.meta.main) {
   }
 
   const findings: string[] = [];
+
   for (const name of untracked) {
     findings.push(`  ${name}\n    must:      name a tracked file and a tracked owning suite\n`
       + '    found:     one of the two is not in the enumeration\n'
       + '    silently: the gate would read the working tree while the proof ran elsewhere\n'
       + '    fix:      point the fence at a tracked path');
   }
+
   for (const name of stale) {
     findings.push(`  ${name}\n    must:      its snippet sit in its file exactly once\n`
       + '    found:     the snippet moved or duplicated\n'
@@ -475,6 +503,7 @@ if (import.meta.main) {
       + '               gate would read green over a proof nobody made\n'
       + '    fix:      re-quote the guarded lines from the file as it stands');
   }
+
   for (const result of results) {
     if (result.pristineExit !== 0) {
       findings.push(`  ${result.fence}\n    must:      its owning test pass on the pristine tree\n`
@@ -483,6 +512,7 @@ if (import.meta.main) {
         + '               owner is broken independently of the fence\n'
         + '    fix:      repair the owning suite first');
     }
+
     if (result.mutantExit === 0) {
       findings.push(`  ${result.fence}\n    must:      its owning test FAIL once the fence is stripped\n`
         + '    found:     the mutant passed — the proof has rotted\n'
@@ -490,6 +520,7 @@ if (import.meta.main) {
         + '               refactor removes it and nothing notices\n'
         + '    fix:      restore the owning test\'s red direction, or re-quote the snippet');
     }
+
     if (result.mutantExit === null) {
       findings.push(`  ${result.fence}\n    must:      its owning test FAIL once the fence is stripped\n`
         + `    found:     the mutant run never settled: ${result.output.slice(0, 400)}\n`
@@ -500,6 +531,7 @@ if (import.meta.main) {
 
   if (findings.length > 0) {
     console.error(`mutation-fences: ${String(findings.length)} finding(s)\n`);
+
     for (const finding of findings) console.error(finding);
     process.exit(1);
   }

@@ -78,11 +78,13 @@ const CHECK_TONE = {
 
 function timeShort(ts: number): string {
   if (!ts) return "";
+
   return new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 function sourceLabel(binding: ReleaseSource | undefined): string {
   if (!binding) return "Unknown source";
+
   return binding.kind === "github"
     ? `${binding.label} · ${binding.repoUrl ?? "GitHub"}`
     : `${binding.label} · ${binding.localRoot ?? "local"}`;
@@ -90,6 +92,7 @@ function sourceLabel(binding: ReleaseSource | undefined): string {
 
 function statusBadge(status: ReleaseStatus) {
   const meta = STATUS_META[status];
+
   return <span className={`inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${meta.tone}`}>{meta.label}</span>;
 }
 
@@ -108,7 +111,9 @@ function SectionTitle({ icon, title, count }: { icon: React.ReactNode; title: st
  *  could. Ready-with-note is the milder case (previews off). */
 function SubstrateNotice({ executors }: { executors: ExecutorInfo[] }) {
   const substrate = releaseSubstrate(executors);
+
   if (substrate.state === "unknown") return null;
+
   if (substrate.state === "unavailable") {
     return (
       <div className="p-card p-3 flex items-start gap-2.5">
@@ -123,7 +128,9 @@ function SubstrateNotice({ executors }: { executors: ExecutorInfo[] }) {
       </div>
     );
   }
+
   if (substrate.note === null) return null;
+
   return (
     <div className="text-[11px] p-text-3 rounded-lg border p-border px-3 py-2 leading-relaxed">
       {substrate.note}
@@ -188,9 +195,11 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
 }) {
   const [busy, setBusy] = useState<"approved" | "rejected" | null>(null);
   const [err, setErr] = useState<string | null>(null);
+
   const decide = async (decision: "approved" | "rejected") => {
     setBusy(decision);
     setErr(null);
+
     try { await rpc("decideReleaseApproval", [approval.id, decision]); onRefresh(); }
     catch (e) { setErr(renderThrownChain({ cause: e })); }
     finally { setBusy(null); }

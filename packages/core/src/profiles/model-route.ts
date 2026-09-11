@@ -99,9 +99,11 @@ function tierResolution(
   tier: TierId,
 ): { model: string; reasoningEffort: ReasoningEffort } {
   const assignment = profile.tiers[tier];
+
   if (!assignment) {
     throw new Error(`turn profile carries no ${tier} tier resolution`);
   }
+
   return assignment;
 }
 
@@ -115,6 +117,7 @@ export function resolveModelRoute(
   if (!isProfileRouted(source)) return null;
   const policy = MODEL_ROUTE_POLICY[source];
   const tier = policy.kind === 'invocation' ? profile.tier.id : policy.tier;
+
   return Object.freeze({
     source,
     tier,

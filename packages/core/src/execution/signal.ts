@@ -29,6 +29,7 @@ const ExecContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal))
 
 export function readExecSignal(input: { context: unknown }): AbortSignal | undefined {
   const parsed = v.safeParse(ExecContextSchema, input.context);
+
   return parsed.success ? parsed.output.signal : undefined;
 }
 
@@ -64,16 +65,22 @@ export interface DeviceOwnership {
 
 export function readDeviceOwnershipContext(input: { context: unknown }): DeviceOwnership {
   const parsed = v.safeParse(DeviceOwnershipContextSchema, input.context);
+
   if (!parsed.success) return {};
   const ownership: DeviceOwnership = {};
   const reporter = parsed.output.onDeviceRequest;
+
   if (reporter !== undefined) ownership.report = (requestId: string) => { reporter(requestId); };
+
   const owner = parsed.output.deviceRequestOwner;
+
   if (owner !== undefined) {
     ownership.owner = () => {
       const answer = v.safeParse(OwnerAnswerSchema, owner() ?? null);
+
       return answer.success ? answer.output : null;
     };
   }
+
   return ownership;
 }

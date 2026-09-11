@@ -42,6 +42,7 @@ describe('MCTS evict-resume (B6)', () => {
       onProgress: (event) => {
         if (event.type !== 'iteration-complete') return;
         run1Iters = event.iteration;
+
         if (event.iteration === 2) ctrl.abort(new Error('DO eviction')); // interrupt mid-run
       },
     })).rejects.toThrow();
@@ -56,6 +57,7 @@ describe('MCTS evict-resume (B6)', () => {
 
     // ── Run 2: fresh call (restarted DO) resumes the SAME search ────────────
     let run2Iters = 0;
+
     const result = await runMCTS(rt, createMockSession(), TASK, {
       budget: 4, branches: 1, search: store,
       onProgress: (event) => {
@@ -108,15 +110,18 @@ const isCheckpointLine = (line: string): boolean => line.includes('"event":"mcts
 function checkpointedRuntime() {
   const { rt, db } = createTestRuntime();
   initTables(rt);
+
   return { rt, store: new MctsSearchStore(makeSql(db), rt.actor) };
 }
 
 describe('MCTS per-iteration checkpoint logging', () => {
   test('a durably-checkpointed search logs iteration/total/remaining every iteration', async () => {
     const { rt, store } = checkpointedRuntime();
+
     const { stderr } = await captureConsole(() =>
       runMCTS(rt, createMockSession(), TASK, { budget: 3, branches: 1, search: store }),
     );
+
     const checkpointLines = stderr.filter(isCheckpointLine);
     expect(checkpointLines).toHaveLength(3);
     // Fields, not prose: `iteration`/`total`/`remaining` are scalars a query can
@@ -131,9 +136,11 @@ describe('MCTS per-iteration checkpoint logging', () => {
   // serves both surfaces.
   test('the heartbeat never touches stdout, which is the CLI machine channel', async () => {
     const { rt, store } = checkpointedRuntime();
+
     const { stdout } = await captureConsole(() =>
       runMCTS(rt, createMockSession(), TASK, { budget: 3, branches: 1, search: store }),
     );
+
     expect(stdout.filter(isCheckpointLine)).toHaveLength(0);
   });
 
@@ -141,9 +148,11 @@ describe('MCTS per-iteration checkpoint logging', () => {
     const { rt } = createTestRuntime();
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
+
     const { stdout, stderr } = await captureConsole(() =>
       runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1 }),
     );
+
     expect([...stdout, ...stderr].filter(isCheckpointLine)).toHaveLength(0);
   });
 });
@@ -166,10 +175,12 @@ describe('the ledger records the ensemble a run was observed to sample', () => {
       rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
       config: { budget: 2, branches: 2, judgeSamples: 20 }, budget: 2, now: 1_000,
     });
+
     const realised = () => makeSql(db)<{ judge_samples_realised: number | null }>`
       SELECT judge_samples_realised FROM mcts_search_runs
       WHERE actor_id = ${rt.actor.actorId} AND root_id = 'r1'`[0]
       ?.judge_samples_realised ?? null;
+
     return { store, realised };
   }
 
@@ -182,10 +193,12 @@ describe('the ledger records the ensemble a run was observed to sample', () => {
     // and clamped the next did clamp. Ascending and descending both, because a
     // last-write-wins fold passes one order and fails the other.
     const ascending = ledger();
+
     for (const seen of [2, 5, 9]) ascending.store.observeJudgeEnsemble('r1', seen);
     expect(ascending.realised()).toBe(2);
 
     const descending = ledger();
+
     for (const seen of [9, 5, 2]) descending.store.observeJudgeEnsemble('r1', seen);
     expect(descending.realised()).toBe(2);
   });
@@ -267,6 +280,7 @@ describe('the ledger classifies a search that earned no acceptable answer', () =
       rootId: 'r1', task: TASK, engine: 'mcts', rootMsgId: 'm1',
       config: { budget: 2, branches: 2 }, budget: 2, now: 1_000,
     });
+
     return { rt, s };
   }
 
@@ -310,13 +324,16 @@ describe('the search ledger is created whole', () => {
   function fresh() {
     const { rt, db } = createTestRuntime();
     initMctsSearchTable(rt.storage.execRaw);
+
     return { db, sql: makeSql(db), actor: rt.actor };
   }
 
   test('the CREATE alone carries every column the writer names', () => {
     const { sql } = fresh();
+
     const columns = sql<{ name: string }>`SELECT name FROM pragma_table_info('mcts_search_runs')`
       .map((row) => row.name);
+
     expect(columns).toEqual([
       'actor_id', 'root_id', 'task', 'engine', 'root_msg_id', 'config_json', 'iteration',
       'budget', 'status', 'epoch', 'judge_samples_realised', 'created_at', 'updated_at',
@@ -383,6 +400,7 @@ describe('a resume prices its remaining budget, not its initial one', () => {
 
     // A search begun at budget 10, evicted with 6 iterations done and 4 left.
     const rootId = 'resume-budget-root';
+
     const rootMsgId = await recordNode(session, rt.storage.sql, rt.actor, {
       nodeId: rootId,
       parentNodeId: null,
@@ -394,6 +412,7 @@ describe('a resume prices its remaining budget, not its initial one', () => {
       codeUsed: null,
       depth: 0,
     });
+
     store.begin({
       rootId, task: TASK, engine: 'mcts', rootMsgId,
       config: persistableMCTSConfig({
@@ -407,6 +426,7 @@ describe('a resume prices its remaining budget, not its initial one', () => {
     // but the 4 remaining at ~$0.40 (under it). The resume must run those 4 —
     // iterations 7 through 10 — rather than refuse on the spent 6.
     let lastIteration = 0;
+
     const result = await runMCTS(rt, createMockSession(), TASK, {
       budget: 10, branches: 1, search: store,
       costModel: () => ({ spec: 'anthropic/claude-fable-5', pricing: { input: 10, output: 50 } }),

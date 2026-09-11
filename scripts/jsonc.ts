@@ -7,6 +7,8 @@ export function parseJsonc<TSchema extends v.GenericSchema>(
   label: string,
 ): v.InferOutput<TSchema> {
   const parsed = v.safeParse(schema, Bun.JSONC.parse(source));
+
   if (!parsed.success) throw new Error(`${label}: ${v.summarize(parsed.issues)}`);
+
   return parsed.output;
 }

@@ -57,6 +57,7 @@ import {
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/ast-duplication.lock.json`;
 
 /**
@@ -94,8 +95,10 @@ interface Unit extends DuplicateMember {
 
 function slot(map: Map<string, number>, key: string): number {
   const hit = map.get(key);
+
   if (hit !== undefined) return hit;
   map.set(key, map.size);
+
   return map.size - 1;
 }
 
@@ -114,20 +117,26 @@ function fingerprintOf(body: SyntaxNode): Fingerprint {
   const names = new Map<string, number>();
   const parts: string[] = [];
   let size = 0;
+
   const visit = (n: SyntaxNode): void => {
     size += 1;
     parts.push('(', n.type);
     const identifier = identifierText(n);
+
     if (identifier !== undefined) {
       parts.push('#' + slot(names, identifier));
     } else {
       const literal = literalText(n);
+
       if (literal !== undefined) parts.push('=' + literal);
     }
+
     for (const child of n.children) visit(child);
     parts.push(')');
   };
+
   for (const child of body.children) visit(child);
+
   return { hash: createHash('sha256').update(parts.join('')).digest('hex').slice(0, 16), size };
 }
 
@@ -136,18 +145,23 @@ function fingerprintOf(body: SyntaxNode): Fingerprint {
 function nameOf(node: SyntaxNode): string {
   if (methodKind(node) === 'constructor') return 'constructor';
   const own = declaredName(node);
+
   if (own !== undefined) return own;
 
   let inner = 'anonymous';
   const { parent } = node;
+
   if (parent?.type === 'CallExpression') {
     inner = memberCalleeName(parent) ?? identifierCalleeName(parent) ?? inner;
   }
+
   for (let p = node.parent; p !== undefined; p = p.parent) {
     if (methodKind(p) === 'constructor') return `constructor > ${inner}`;
     const owner = declaredName(p);
+
     if (owner !== undefined) return `${owner} > ${inner}`;
   }
+
   return inner;
 }
 
@@ -156,6 +170,7 @@ function unitsOf(file: string, text: string): Unit[] {
   const units: Unit[] = [];
   walk(parsed.root, (node) => {
     const body = blockBodyOf(node);
+
     if (body === undefined) return;
     const { hash, size } = fingerprintOf(body);
     // The span and the name come from the member a function implements, not the
@@ -171,11 +186,13 @@ function unitsOf(file: string, text: string): Unit[] {
       end: unit.end,
     });
   });
+
   return units;
 }
 
 function classify(members: readonly DuplicateMember[]): DuplicateKind {
   if (new Set(members.map((m) => m.file.split('/')[1])).size > 1) return 'cross-package';
+
   return new Set(members.map((m) => m.file)).size > 1 ? 'cross-file' : 'same-file';
 }
 
@@ -184,20 +201,25 @@ export function findDuplicateGroups(
   minNodes = MIN_NODES,
 ): DuplicateGroup[] {
   const byHash = new Map<string, Unit[]>();
+
   for (const [file, text] of sources) {
     for (const unit of unitsOf(file, text)) {
       if (unit.size < minNodes) continue;
       const bucket = byHash.get(unit.hash);
+
       if (bucket) bucket.push(unit); else byHash.set(unit.hash, [unit]);
     }
   }
 
   const candidates: { group: DuplicateGroup; units: readonly Unit[] }[] = [];
   const seen = new Map<string, number>();
+
   for (const units of byHash.values()) {
     if (units.length < 2) continue;
+
     const members = [...units].sort((a, b) =>
       a.file.localeCompare(b.file) || a.line - b.line);
+
     const kind = classify(members);
     // The key must survive edits inside a duplicated body, so it names members
     // rather than lines or the fingerprint. Two groups can share a member set
@@ -222,14 +244,17 @@ export function findDuplicateGroups(
   // an already-kept, larger group says nothing new.
   candidates.sort((a, b) => b.group.nodes - a.group.nodes);
   const kept: { group: DuplicateGroup; units: readonly Unit[] }[] = [];
+
   for (const candidate of candidates) {
     const contained = candidate.units.every((unit) => kept.some((outer) =>
       outer.units.some((o) =>
         o.file === unit.file && o.start <= unit.start && o.end >= unit.end)));
+
     if (!contained) kept.push(candidate);
   }
 
   const rank = { 'cross-package': 0, 'cross-file': 1, 'same-file': 2 } satisfies Record<DuplicateKind, number>;
+
   return kept
     .map((c) => c.group)
     .sort((a, b) => rank[a.kind] - rank[b.kind] || b.nodes - a.nodes);
@@ -237,6 +262,7 @@ export function findDuplicateGroups(
 
 export function describe(group: DuplicateGroup): string {
   const head = `  ${group.kind}, ${group.nodes} AST nodes, ${group.members.length} copies`;
+
   return [head, ...group.members.map((m) => `    ${m.file}:${m.line} ${m.name}`)].join('\n');
 }
 
@@ -262,16 +288,20 @@ export const BLIND_SPOTS: readonly string[] = [
 if (import.meta.main) {
   const sources = readSources();
   const units = [...sources].reduce((n, [file, text]) => n + unitsOf(file, text).length, 0);
+
   const measured = assertMeasured('ast-duplication', [
     ['source files', sources.size],
     ['function bodies', units],
   ]);
+
   const groups = findDuplicateGroups(sources);
+
   if (process.argv.includes('--lock')) {
     const count = writeLock(groups.map((g) => g.key), LOCK);
     console.log(`ast-duplication: locked ${count} group(s) over ${measured}`);
   } else {
     const detail = new Map(groups.map((g) => [g.key, describe(g)]));
+
     const code = report(
       'ast-duplication',
       reconcile(groups.map((g) => g.key), LOCK),
@@ -279,9 +309,11 @@ if (import.meta.main) {
       'bun scripts/ast-duplication.ts --lock',
       measured,
     );
+
     if (code === 0) {
       for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
     }
+
     process.exit(code);
   }
 }

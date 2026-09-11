@@ -41,8 +41,10 @@ const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.
 
 function parseShellExecOptions(input: { value: unknown }): string | ShellExecOptions | undefined {
   const text = v.safeParse(v.string(), input.value);
+
   if (text.success) return text.output;
   const options = v.safeParse(ShellExecOptionsSchema, input.value);
+
   return options.success ? options.output : undefined;
 }
 
@@ -75,9 +77,11 @@ export function withApprovalGatedShell(
     policy,
     (result) => result.refusal?.reason ?? null,
   );
+
   return {
     exec: (command, stdinOrOptions) => {
       requireBuild('Workspace shell execution');
+
       return execute(command, stdinOrOptions);
     },
   };
@@ -115,10 +119,13 @@ const GATED_EXECUTES = new WeakSet<ExecutorTool['execute']>();
 export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprovalPolicy): ExecutorProvider {
   let changed = false;
   const tools = { ...provider.tools };
+
   for (const name of SHELL_COMMAND_MEMBERS) {
     if (provider.kind === 'workspace' && name === 'exec') continue;
     const entry = provider.tools[name];
+
     if (!entry || GATED_EXECUTES.has(entry.execute)) continue;
+
     // Keyed on `name`, not `kind`: the name is this executor's identity
     // everywhere else the owner and the model meet it — the `runtime:` value,
     // the codemode namespace, the executor a standing grant is written
@@ -131,13 +138,17 @@ export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprov
       policy,
       (result) => result === undefined ? null : answeredRefusal(result)?.reason ?? null,
     );
+
     const execute: ExecutorTool['execute'] = (...args) => {
       requireBuild(provider.name + '.' + name);
+
       return gated(...args);
     };
+
     GATED_EXECUTES.add(execute);
     tools[name] = { ...entry, execute };
     changed = true;
   }
+
   return changed ? { ...provider, tools } : provider;
 }

@@ -50,6 +50,7 @@ interface HeadReportIndex {
 describe('v2 e2e: workspace executor via createInlineExecutor', () => {
   test('writeFile + readFile + exec round-trip through ExecutorProvider tools', async () => {
     const { rt } = createTestRuntime();
+
     const provider = createInlineExecutor({
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async (cmd) => cmd.includes('echo hi')
@@ -109,6 +110,7 @@ describe('v2 e2e: branching heads → merge', () => {
     const runtime: HeadRuntime = {
       async spawnHead(input: HeadInput): Promise<SpawnedHead> {
         const taskKey = input.task.split(' ')[0];
+
         return {
           id: input.id,
           async run() { return { ...(headReports[taskKey] ?? headReports.survey), id: input.id }; },
@@ -130,9 +132,11 @@ describe('v2 e2e: branching heads → merge', () => {
     };
 
     const controller = new HeadController(runtime, journal);
+
     const inheritedContext: SerializedMessage[] = [
       { id: 'm1', role: 'user', content: 'help me integrate X', createdAt: 1 },
     ];
+
     const request: SplitRequest = {
       rationale: 'Explore three angles on integrating X',
       heads: [
@@ -165,7 +169,9 @@ describe('v2 e2e: branching heads → merge', () => {
 
     const rows = sql<{ status: string; summary: string | null }>`
       SELECT status, summary FROM head_journal WHERE actor_id = ${actor.actorId}`;
+
     expect(rows.length).toBe(3);
+
     for (const r of rows) {
       expect(r.status).toBe('completed');
       expect(r.summary).not.toBeNull();
@@ -191,11 +197,13 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     const validCode = `async function* run(rt, task) {
       yield { type: "chunk", data: "v1: " + task };
     }`;
+
     const result = await modifyScaffold(
       rt,
       'Try a tagged response to improve UI rendering for fast paths.',
       validCode,
     );
+
     expect(result.ok).toBe(true);
     expect(result.version).toBe(1);
 
@@ -208,6 +216,7 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
+
     const map = new Map(statuses.map((s) => [s.version, s.status]));
     expect(map.get(0)).toBe('current');
     expect(map.get(1)).toBe('pending');
@@ -240,6 +249,7 @@ describe('v2 e2e: scaffold shadow rollout', () => {
       currentScore: winner === 'current' ? 0.8 : 0.5,
       pendingScore: winner === 'pending' ? 0.8 : 0.5,
     });
+
     // A clean 5-0 win: past minTrials/minDecisiveTrials with no losses beyond
     // the regression tolerance — promotable.
     for (let i = 0; i < 5; i++) {
@@ -267,6 +277,7 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
+
     const byVersion = new Map(statuses.map((s) => [s.version, s.status]));
     expect(byVersion.get(1)).toBe('current');
     expect(byVersion.get(0)).toBe('historical');
@@ -323,8 +334,13 @@ describe('v2 e2e: durable event log', () => {
 describe('v2 e2e: approval gate', () => {
   test('classifies and routes correctly through gateExec', async () => {
     const seen: string[] = [];
+
     const gated = gateExec<string>(
-      async (cmd) => { seen.push(cmd); return `ran:${cmd}`; },
+      async (cmd) => {
+        seen.push(cmd);
+
+        return `ran:${cmd}`;
+      },
       (msg) => `DENIED:${msg}`,
       'laptop',
       { mode: () => 'strict', requestApproval: async () => 'allow' },

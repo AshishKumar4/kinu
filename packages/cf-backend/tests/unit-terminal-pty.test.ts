@@ -29,10 +29,12 @@ import { installSandboxSdkMock, setSandboxSdk } from './helpers/sandbox-sdk';
 // the module; this file only points it. Reset in `afterAll`, so a later file
 // meets the real SDK.
 await installSandboxSdkMock();
+
 setSandboxSdk({
   getSandbox: (namespace: NonNullable<Env['Sandbox']>, name: string) =>
     namespace.get(namespace.idFromName(name)),
 });
+
 afterAll(() => { setSandboxSdk(null); });
 
 // The route imports `getAgentByName` from `agents`, whose module graph reaches
@@ -88,19 +90,23 @@ function harness(opts: {
   sandboxBound?: boolean;
 } = {}): Harness {
   const trace: Trace = { calls: [], options: undefined, request: undefined, session: undefined };
+
   const container = jsrpcStub<TerminalDouble>({
     noteTerminalActivity: async () => {
       trace.calls.push('noteTerminalActivity');
+
       if (opts.lease) await opts.lease();
     },
     getSession: async (sessionId) => {
       trace.calls.push('getSession');
       trace.session = sessionId;
+
       return {
         terminal: async (request, options) => {
           trace.calls.push('terminal');
           trace.options = options;
           trace.request = request;
+
           return opts.attach
             ? await opts.attach()
             // A 101 cannot be constructed without a real WebSocketPair, so the
@@ -111,15 +117,18 @@ function harness(opts: {
       };
     },
   });
+
   // `getAgentByName` resolves through the namespace binding, so the workspace
   // double is reached exactly the way production reaches it — through a stub
   // whose methods are not own enumerable properties.
   const agent = jsrpcStub({
     prepareTerminal: async (executorId: string) => {
       trace.calls.push(`prepareTerminal:${executorId}`);
+
       return opts.prepare ? await opts.prepare() : { ok: true as const };
     },
   });
+
   // The doubles are deliberately NOT typed as the bindings they stand in for:
   // a fake `idFromName` returning the name can never satisfy `DurableObjectId`,
   // and `jsrpcStub`'s prototype-bound methods can never satisfy
@@ -129,11 +138,13 @@ function harness(opts: {
   Object.assign(view, {
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => agent },
   });
+
   if (opts.sandboxBound !== false) {
     Object.assign(view, {
       Sandbox: { idFromName: (name: string) => name, get: () => container },
     });
   }
+
   // SAFETY: both members the route reads are constructed by the Object.assigns
   // above — `OrchestratorAgent.get` (returning the `prepareTerminal` double)
   // and `Sandbox.get` (returning the container double) are the complete set
@@ -170,6 +181,7 @@ const payloadSchema = v.record(v.string(), v.unknown());
 
 async function body(response: Response | null | undefined) {
   if (response == null) throw new Error('the route returned no response');
+
   return v.parse(payloadSchema, await response.json());
 }
 
@@ -206,9 +218,11 @@ describe('which environments can have a terminal', () => {
 describe('attaching a terminal', () => {
   test('another path under the same workspace is left to the next handler', async () => {
     const { env } = harness();
+
     const response = await terminalRequest(
       new Request(`https://app.example/api/workspaces/${WORKSPACE}/files?path=/x`), env,
     );
+
     expect(response).toBeNull();
   });
 
@@ -274,6 +288,7 @@ describe('attaching a terminal', () => {
 
   test('the upgrade the SDK proxies is the same request, minus the caller\'s credentials', async () => {
     const { env, trace } = harness();
+
     const request = attachRequest('executor=sandbox', {
       headers: {
         upgrade: 'websocket',
@@ -290,8 +305,10 @@ describe('attaching a terminal', () => {
         'x-kinu-auth-time': '1700000000000',
       },
     });
+
     await terminalRequest(request, env);
     const forwarded = trace.request;
+
     if (!forwarded) throw new Error('the SDK was never handed an upgrade');
     expect(forwarded.url).toBe(request.url);
     expect([...forwarded.headers.keys()].sort()).toEqual([
@@ -301,9 +318,11 @@ describe('attaching a terminal', () => {
 
   test('a request that is not an upgrade touches nothing', async () => {
     const { env, trace } = harness();
+
     const response = await terminalRequest(
       new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal?executor=sandbox`), env,
     );
+
     expect(response?.status).toBe(400);
     // Not merely a refusal: a plain GET must not start a container.
     expect(trace.calls).toEqual([]);
@@ -338,6 +357,7 @@ describe('attaching a terminal', () => {
     const { env, trace } = harness({
       prepare: async () => ({ error: 'attach overran its budget; a retry is scheduled' }),
     });
+
     const response = await terminalRequest(attachRequest('executor=sandbox'), env);
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('attach overran');
@@ -377,6 +397,7 @@ describe('a terminal failure names the workspace and the executor', () => {
   }> {
     const logger = createRecordingLogger();
     const restore = setDiagnosticsSink(logger);
+
     try {
       return { value: await body(), logs: logger.emitted };
     } finally {
@@ -496,15 +517,18 @@ describe('an attached terminal and a container that wants to sleep', () => {
   // container awake for a user who is reading rather than typing.
   test('each beat renews the lease', async () => {
     const { env, trace } = harness();
+
     const beat = new Request(
       `https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`,
       { method: 'POST' },
     );
+
     for (let i = 0; i < 3; i++) {
       const response = await terminalRequest(beat, env);
       expect(response?.status).toBe(200);
       expect((await body(response)).ok).toBe(true);
     }
+
     expect(trace.calls).toEqual(['noteTerminalActivity', 'noteTerminalActivity', 'noteTerminalActivity']);
   });
 
@@ -519,29 +543,35 @@ describe('an attached terminal and a container that wants to sleep', () => {
 
   test('a beat is a POST', async () => {
     const { env, trace } = harness();
+
     const response = await terminalRequest(
       new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`), env,
     );
+
     expect(response?.status).toBe(405);
     expect(trace.calls).toEqual([]);
   });
 
   test('a container that has gone away answers the beat with why', async () => {
     const { env } = harness({ lease: async () => { throw new Error('attach failed: snapshot not found'); } });
+
     const response = await terminalRequest(
       new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=sandbox`,
         { method: 'POST' }), env,
     );
+
     expect(response?.status).toBe(503);
     expect(String((await body(response)).error)).toContain('snapshot not found');
   });
 
   test('a beat for a lane that has no terminal is refused like an attach', async () => {
     const { env, trace } = harness();
+
     const response = await terminalRequest(
       new Request(`https://app.example/api/workspaces/${WORKSPACE}/terminal/keepalive?executor=workspace`,
         { method: 'POST' }), env,
     );
+
     expect(response?.status).toBe(409);
     expect(trace.calls).toEqual([]);
   });
@@ -582,14 +612,18 @@ describe('who owns a terminal attach', () => {
     const held = Promise.withResolvers<Response>();
     const closed = Promise.withResolvers<void>();
     const events: string[] = [];
+
     const { env, trace } = harness({
       attach: () => {
         entered.resolve();
+
         return held.promise;
       },
     });
+
     const controller = new AbortController();
     const retained: Promise<unknown>[] = [];
+
     const context: Pick<ExecutionContext, 'waitUntil'> = {
       waitUntil: (promise) => { retained.push(promise); },
     };
@@ -597,6 +631,7 @@ describe('who owns a terminal attach', () => {
     const pending = terminalRequest(
       attachRequest('executor=sandbox', { signal: controller.signal }), env, context,
     );
+
     await entered.promise;
     expect(trace.calls).toContain('terminal');
     // The tab closes while the container is still opening the shell.

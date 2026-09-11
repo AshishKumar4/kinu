@@ -63,6 +63,7 @@ import { renderThrownChain } from "@kinu.run/core/obs";
  * something to take while clearing a path, so it stays surfaced instead.
  */
 const squareButtonVariant = "square";
+
 const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
 /** A workspace before its first turn. The mission it was created for is what
@@ -71,6 +72,7 @@ const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
  *  would then try to carry out. */
 export function EmptyConversation({ mission }: { mission: string }) {
   const brief = isPlaceholderMission(mission) ? null : mission.trim();
+
   return (
     <div className="flex h-full flex-col items-center justify-center px-6 text-center">
       <KinuMark size={34} className="mb-4 text-[var(--c-accent)] opacity-70" />
@@ -144,6 +146,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
 }) {
   if (consent.method === DEVICE_PROVISION_METHOD) {
     const asking = consent.workspaceName ? `“${consent.workspaceName}”` : "This agent";
+
     return (
       <div className="p-tint-warning rounded-xl border p-3 animate-fade-in">
         <div className="flex items-start gap-2">
@@ -171,7 +174,9 @@ export function DeviceConsentCard({ consent, onResolve }: {
       </div>
     );
   }
+
   const forWhom = consent.workspaceName ? `“${consent.workspaceName}”` : "this workspace";
+
   return (
     <div className="p-tint-warning rounded-xl border p-3 animate-fade-in" data-device-bind={consent.consentId}>
       <div className="flex items-start gap-2">
@@ -297,6 +302,7 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
   const tone = done ? "p-success" : failed ? "p-danger" : "p-text-3";
   const verb = event.kind === "task" ? "assigned" : done ? "reported done" : failed ? "hit an error" : "reported progress";
   const detail = event.task || event.content;
+
   return (
     <div className="flex justify-center animate-fade-in py-1">
       <Link
@@ -331,6 +337,7 @@ function ForkModal({
     if (busy) return;
     setBusy(true);
     setErr(null);
+
     try {
       await onSubmit(name.trim());
     } catch (e) {
@@ -415,6 +422,7 @@ function SubordinateChatColumn({
   const state = useKinu({ workspace, subordinate: subName });
   useEffect(() => {
     onPlanContext({ name: subName, plan: state.activePlan, focus: state.planFocus, rpc: state.rpc });
+
     return () => onPlanContext(null);
   }, [onPlanContext, state.activePlan, state.planFocus, state.rpc, subName]);
 
@@ -423,9 +431,11 @@ function SubordinateChatColumn({
   // resolves the reason, so this handler owns the settlement and has nothing
   // to add to what the banner already shows.
   const setModel = state.setModel;
+
   const onPickModel = useCallback(async (spec: string): Promise<void> => {
     await setModel(spec);
   }, [setModel]);
+
   const ui = useConversationUiState(`${workspace}/agents/${subName}`);
   const input = ui.draft;
   const setInput = ui.setDraft;
@@ -433,11 +443,13 @@ function SubordinateChatColumn({
   // locks this composer to Plan until the owner decides.
   const planGate = usePlanGatedMode(state.activePlan, ui);
   const effectiveMode = planGate.mode;
+
   // The same older-history walk the workspace column runs, over this facet's
   // own storage. A subordinate keeps its own conversation, and a helper that
   // worked for an hour has more of one than the SDK's hydration window holds.
   const { history, transcript, thread } = useChatThread(
     state.rpc, state.messages, state.transcriptSeeded, state.steerRuns);
+
   const messagesRef = useGrowingScroll<HTMLDivElement>({
     grows: "up",
     content: transcript,
@@ -448,10 +460,12 @@ function SubordinateChatColumn({
     onScrollPosition: ui.rememberScroll,
     exhausted: history.exhausted,
   });
+
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useLayoutEffect(() => {
     const el = inputRef.current;
+
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
@@ -463,7 +477,9 @@ function SubordinateChatColumn({
   // actually admitted and a refused press leaves the draft alone.
   const send = useCallback(() => {
     const t = input.trim();
+
     if (!t) return;
+
     if (!state.sendChat(t, [], effectiveMode)) return;
     setInput("");
   }, [input, state, effectiveMode, setInput]);
@@ -479,6 +495,7 @@ function SubordinateChatColumn({
   if (state.terminalClose && !state.agentStatus) {
     return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
   }
+
   if (state.connectionStatus === "connecting" && !state.agentStatus) {
     return (
       <div className="flex flex-1 items-center justify-center">
@@ -488,6 +505,7 @@ function SubordinateChatColumn({
   }
 
   const as = state.agentStatus;
+
   return (
     <div className="@container relative flex flex-col flex-1 min-h-0">
       <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b p-border">
@@ -609,19 +627,24 @@ export default function WorkspacePage() {
   const navigate = useNavigate();
   const state = useKinu(agentId);
   const { entries: workspaceEntries } = useWorkspaceRoster();
+
   const [subordinatePlanContext, setSubordinatePlanContext] =
     useState<SubordinatePlanContext | null>(null);
+
   const syncSubordinatePlanContext = useCallback((context: SubordinatePlanContext | null) => {
     setSubordinatePlanContext(context);
   }, []);
+
   const [creatingAgent, setCreatingAgent] = useState(false);
   const creatingAgentRef = useRef(false);
   const [createAgentError, setCreateAgentError] = useState<string | null>(null);
+
   const createAndOpenAgent = useCallback(async () => {
     if (!agentId || creatingAgentRef.current) return;
     creatingAgentRef.current = true;
     setCreatingAgent(true);
     setCreateAgentError(null);
+
     try {
       const created = await state.createSubordinate();
       await navigate(`/workspace/${agentId}/agents/${created.name}`);
@@ -632,9 +655,12 @@ export default function WorkspacePage() {
       setCreatingAgent(false);
     }
   }, [agentId, navigate, state.createSubordinate]);
+
   useEffect(() => {
     const open = async (): Promise<void> => { await createAndOpenAgent(); };
+
     window.addEventListener("kinu:new-agent", open);
+
     return () => window.removeEventListener("kinu:new-agent", open);
   }, [createAndOpenAgent]);
 
@@ -643,41 +669,53 @@ export default function WorkspacePage() {
   // resolves the reason, so this handler owns the settlement and has nothing
   // to add to what the banner already shows.
   const setModel = state.setModel;
+
   const onPickModel = useCallback(async (spec: string): Promise<void> => {
     await setModel(spec);
   }, [setModel]);
+
   const [sideErrors, setSideErrors] = useState<Partial<Record<SideSource, string>>>({});
+
   const reportSide = useCallback((source: SideSource, message: string | null) => {
     setSideErrors((prev) => {
       if ((prev[source] ?? null) === message) return prev;
       const next = { ...prev };
+
       if (message === null) delete next[source];
       else next[source] = message;
+
       return next;
     });
   }, []);
+
   // ?altitude=supervise deep-links straight to the Supervise altitude (the
   // /triggers/:id redirect and settings' Automations link use it).
   const [altitude, setAltitude] = useState<Altitude>(
     () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
   );
+
   // A returning driver opens on status, not on the agent's own description.
   const [mobilePane, setMobilePane] = useState<'chat' | 'workspace'>('chat');
+
   const [desktopPanels, setDesktopPanels] = useState(
     () => globalThis.window === undefined || globalThis.window.matchMedia("(min-width: 768px)").matches,
   );
+
   useEffect(() => {
     const media = window.matchMedia("(min-width: 768px)");
     const sync = () => setDesktopPanels(media.matches);
     sync();
     media.addEventListener("change", sync);
+
     return () => media.removeEventListener("change", sync);
   }, []);
+
   // Plan decisions use the selected actor; previews remain workspace-scoped.
   const subordinateReview = subName !== undefined
     && subordinatePlanContext?.name === subName
     ? subordinatePlanContext
     : null;
+
   const visiblePlan = subName === undefined ? state.activePlan : subordinateReview?.plan ?? null;
   const [surface, setSurface] = useState<SurfaceKind>("Work");
   // Draft, Auto/Plan and reading position belong to THIS conversation — the
@@ -691,6 +729,7 @@ export default function WorkspacePage() {
   const setChatInput = ui.setDraft;
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);
+
   // ── Older history ────────────────────────────────────────────────────────
   // `state.messages` is the LIVE list: the SDK's `get-messages` seed (which is
   // `Think.messages`, a bounded newest window governed by hydrationByteBudget)
@@ -716,6 +755,7 @@ export default function WorkspacePage() {
     onScrollPosition: ui.rememberScroll,
     exhausted: history.exhausted,
   });
+
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   // Pending chat attachments — fed by the attach button, paste, and drag-drop
   // onto the chat column; rendered as removable chips above the input. The hook
@@ -729,12 +769,15 @@ export default function WorkspacePage() {
   const onChatDragOver = useCallback((e: ReactDragEvent) => {
     if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }
   }, []);
+
   const onChatDragLeave = useCallback((e: ReactDragEvent) => {
     if (e.relatedTarget instanceof Node && e.currentTarget.contains(e.relatedTarget)) return;
     setDragOver(false);
   }, []);
+
   const onChatDrop = useCallback((e: ReactDragEvent) => {
     const files = e.dataTransfer.files;
+
     if (!files.length) return;
     e.preventDefault();
     setDragOver(false);
@@ -749,6 +792,7 @@ export default function WorkspacePage() {
   // internally. Clearing chatInput after send collapses it back to one row.
   useLayoutEffect(() => {
     const el = chatInputRef.current;
+
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
@@ -789,6 +833,7 @@ export default function WorkspacePage() {
   // "working now" dot on a workspace whose connection has gone away.
   useEffect(() => {
     if (!agentId) return;
+
     return () => {
       window.dispatchEvent(new CustomEvent("kinu:workspace-activity", {
         detail: { name: agentId, running: false, unseenChangelog: 0, agents: [] },
@@ -803,7 +848,9 @@ export default function WorkspacePage() {
   // only for the press that was admitted; a refused press keeps both.
   const handleSend = useCallback(() => {
     const t = chatInput.trim();
+
     if (!t && attachments.parts.length === 0) return;
+
     if (!state.sendChat(t, [...attachments.parts], effectiveChatMode)) return;
     setChatInput("");
     attachments.clear();
@@ -813,8 +860,10 @@ export default function WorkspacePage() {
   // runs the draft as a parallel head (branchTurn) — the live turn continues;
   // progress arrives as branch_status broadcasts (state.branchRuns).
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
+
   const handleBranch = useCallback(() => {
     const t = chatInput.trim();
+
     if (!t || !state.isStreaming || effectiveChatMode === "plan") return;
     setBranchNotice(null);
     // The composer is cleared only once the branch was actually accepted —
@@ -824,6 +873,7 @@ export default function WorkspacePage() {
     startTransition(async () => {
       try {
         const result = await state.rpc<{ accepted: boolean; reason?: string }>("branchTurn", [t]);
+
         if (result.accepted) ui.updateDraft((current) => current.trim() === t ? "" : current);
         else setBranchNotice(result.reason ?? "Branching is unavailable right now.");
       } catch (cause) {
@@ -880,18 +930,23 @@ export default function WorkspacePage() {
   const cardStates = useMemo(
     () => new Map(state.signalCards.map((card) => [card.id, card.state])),
     [state.signalCards]);
+
   const messageCardIds = useMemo(() => new Set(state.messages.flatMap((msg) => {
     const id = messageSignalId(msg.metadata);
+
     return id ? [id] : [];
   })), [state.messages]);
+
   const looseCards = useMemo(() => state.signalCards.flatMap((card) => {
     if (messageCardIds.has(card.id)) return [];
     const turn = classifyProgrammaticTurn(card.metadata);
+
     return turn ? [{ card, turn }] : [];
   }), [state.signalCards, messageCardIds]);
 
   const cardStateOf = <Metadata,>(metadata: Metadata) => {
     const id = messageSignalId(metadata);
+
     return id ? cardStates.get(id) : undefined;
   };
 
@@ -914,9 +969,12 @@ export default function WorkspacePage() {
   const onPickTake = useCallback(async (takeId: string, nodeId: string): Promise<TakePickOutcome> => {
     const result = await state.rpc<TakePickOutcome>('pickAlternateTake', [takeId, nodeId]);
     const turnId = result.set.turnId;
+
     if (turnId) setTakesByTurn((prev) => ({ ...prev, [turnId]: result.set }));
+
     return result;
   }, [state.rpc]);
+
   // Shadow-git restore — the files half of walk-back. The store lives on the
   // user's device daemon; the DO forwards. Shows the plan (paths + counts)
   // before applying; the restore itself is preceded by a safety snapshot.
@@ -933,6 +991,7 @@ export default function WorkspacePage() {
     if (planning || restoring) return;
     setRestoreNotice(null);
     setPlanning(true);
+
     try {
       // Keyed on the turn IN THE STORE, not filtered here. Reading a window and
       // filtering client-side is what produced "It changed no device files." on a
@@ -942,6 +1001,7 @@ export default function WorkspacePage() {
       // the empty filter result was rendered as a fact about the turn.
       const { availability, entries } =
         await state.rpc<FileCheckpointListing>('listFileCheckpoints', [200, mid]);
+
       if (!availability.available) {
         // The store is not reachable. Saying anything about what the turn
         // changed would be a guess: this is where "It changed no device files."
@@ -949,26 +1009,35 @@ export default function WorkspacePage() {
         setRestoreNotice(
           `File history is unavailable: ${availability.reason ?? 'the checkpoint store cannot be reached'}.`,
         );
+
         return;
       }
+
       // Now an empty answer means what it says: the store searched every
       // directory for this turn and holds no checkpoint for it.
       if (entries.length === 0) {
         setRestoreNotice(
           'This turn changed no files on your device. Workspace and sandbox changes cannot be restored here.',
         );
+
         return;
       }
+
       const matches = entries;
       const plans: FileRestorePlan[] = [];
+
       for (const entry of matches) {
         plans.push(await state.rpc<FileRestorePlan>('planFileRestore', [entry.dir, entry.id]));
       }
+
       const files = plans.flatMap((p) => p.files);
+
       if (files.length === 0) {
         setRestoreNotice('Your files already match the state before this turn.');
+
         return;
       }
+
       setRestorePlan({ entries: matches, dirs: plans.map((p) => p.dir), files });
     } catch (err) {
       setRestoreNotice(`Restore failed: ${renderThrownChain({ cause: err })}`);
@@ -980,10 +1049,12 @@ export default function WorkspacePage() {
   const applyRestore = useCallback(async () => {
     if (!restorePlan) return;
     setRestoring(true);
+
     try {
       for (const entry of restorePlan.entries) {
         await state.rpc('restoreFileCheckpoint', [entry.dir, entry.id]);
       }
+
       setRestoreNotice(`Restored ${restorePlan.files.length} ${restorePlan.files.length === 1 ? "file" : "files"}. Run restore again to undo it.`);
       setRestorePlan(null);
     } catch (err) {
@@ -998,7 +1069,9 @@ export default function WorkspacePage() {
     await state.rpc('setTurnFeedback', [mid, fb]);
     setFeedbackByMessage((prev) => {
       const next = { ...prev };
+
       if (fb) next[mid] = fb; else delete next[mid];
+
       return next;
     });
   }, [state.rpc]);
@@ -1008,9 +1081,11 @@ export default function WorkspacePage() {
   if (state.connectionStatus === "connecting" && !state.agentStatus) return (
     <div className="h-full flex items-center justify-center"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" /><span>Connecting...</span></div></div>
   );
+
   if (state.terminalClose && !state.agentStatus) {
     return <TerminalCloseBoundary close={state.terminalClose} onRetry={state.retryLoad} />;
   }
+
   if (!agentId) return null;
 
   const as = state.agentStatus;
@@ -1019,6 +1094,7 @@ export default function WorkspacePage() {
   // back to it is what titled a new workspace `handwrought-walnut-4166c321`.
   // The URL still carries the id for anyone who needs one.
   const shownTitle = workspaceTitle(as?.displayName || rosterTitle);
+
   return (
     <div className="h-full flex flex-col">
       {/* Non-destructive disconnect banner. The chat panel below stays
@@ -1117,6 +1193,7 @@ export default function WorkspacePage() {
               // so the header reads it too; a deep link that lands before the
               // roster row arrives shows the address until it does.
               const rosterEntry = state.subordinates.find((entry) => entry.name === subName);
+
               return (
                 <SubordinateChatColumn
                   key={subName}
@@ -1161,6 +1238,7 @@ export default function WorkspacePage() {
               )}
               {thread.entries.map(({ message: msg, steers }, i) => {
                 const takes = takesByTurn[msg.id];
+
                 return (
                   <MessageView
                     key={msg.id}
@@ -1257,6 +1335,7 @@ export default function WorkspacePage() {
                   // to prevent.
                   ...SIDE_SOURCES.flatMap(({ source, label }) => {
                     const message = sideErrors[source];
+
                     return message
                       ? [{ id: `side-${source}`, tone: "warning" as const,
                           text: `Could not ${label}: ${message}`,
@@ -1394,18 +1473,22 @@ interface RestorePlan {
 }
 
 const RESTORE_PREVIEW_LIMIT = 12;
+
 const RESTORE_MARK = { modify: "~", create: "+", delete: "-" } satisfies Record<FileRestoreChange["kind"], string>;
 
 function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
   plan: RestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
 }) {
   const { modified, created, deleted } = summarizeRestorePlan(plan.files);
+
   const counts = [
     modified ? `${modified} modified` : null,
     created ? `${created} recreated` : null,
     deleted ? `${deleted} removed` : null,
   ].filter(Boolean).join(", ");
+
   const shown = plan.files.slice(0, RESTORE_PREVIEW_LIMIT);
+
   return (
     <Modal
       title="Restore files to before this turn"

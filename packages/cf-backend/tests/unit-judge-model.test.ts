@@ -15,6 +15,7 @@ import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 import { resolveReviewingModelSelection } from '../src/providers/judge-model';
 
 const CLOUDFLARE_BASE = 'https://api.cloudflare.com/client/v4/accounts/acct';
+
 const KIMI = 'workers-ai/@cf/moonshotai/kimi-k2.6';
 
 /** A registry whose owner has exactly `keys` connected. `cloudflare.oauth`
@@ -26,6 +27,7 @@ function registryWith(...keys: string[]) {
   const mock = createMockFetch([
     { match: 'models.dev/api.json', respond: { status: 200, body: {} } },
   ]);
+
   return createAgentProviderRegistry({
     env: {},
     fetch: mock.fetch,
@@ -44,6 +46,7 @@ describe('resolveReviewingModelSelection', () => {
       pinned: null,
       chatSpec: null, // unset → the workers-ai default, the shipping configuration
     });
+
     expect(selection).toEqual({
       spec: DEFAULT_WORKERS_AI_MODEL_SPEC,
       source: 'same-family-fallback',
@@ -56,6 +59,7 @@ describe('resolveReviewingModelSelection', () => {
       pinned: null,
       chatSpec: null,
     });
+
     expect(selection.source).toBe('cross-family');
     expect(selection.spec).toBe('anthropic/claude-opus-4-7');
   });
@@ -67,6 +71,7 @@ describe('resolveReviewingModelSelection', () => {
       pinned: null,
       chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
     });
+
     expect(selection.spec).toBe('anthropic/claude-opus-4-7');
 
     const withOpenAI = await resolveReviewingModelSelection({
@@ -74,6 +79,7 @@ describe('resolveReviewingModelSelection', () => {
       pinned: null,
       chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
     });
+
     // Registry preference order: openai is offered before anthropic.
     expect(withOpenAI.spec).toBe('openai/gpt-5.5');
   });
@@ -84,6 +90,7 @@ describe('resolveReviewingModelSelection', () => {
       pinned: null,
       chatSpec: 'openai/gpt-5.5',
     });
+
     // Workers AI comes first and its native DeepSeek default is a real
     // cross-vendor jump from GPT.
     expect(selection.spec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
@@ -96,6 +103,7 @@ describe('resolveReviewingModelSelection', () => {
       pinned: '@cf/openai/gpt-oss-120b',
       chatSpec: KIMI,
     });
+
     expect(selection).toEqual({ spec: 'workers-ai/@cf/openai/gpt-oss-120b', source: 'configured' });
   });
 });

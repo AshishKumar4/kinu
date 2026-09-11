@@ -26,14 +26,19 @@ type Built = { keys: string[] };
 
 function harness() {
   const builds: string[][] = [];
+
   const cache = new McpToolSurfaceCache<Built>(async (descriptors) => {
     const keys = descriptors.map((d) => d.toolKey);
     builds.push(keys);
+
     return { keys };
   });
+
   let next = surface([]);
   const failNext = () => { next = '\fNOT JSON'; };
+
   const serve = (raw: string) => { next = raw; };
+
   return {
     cache, builds, serve, failNext,
     // A window big enough that admission is never the thing under test here;

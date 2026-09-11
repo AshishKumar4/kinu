@@ -18,4 +18,5 @@
  * JavaScript. The one import of it, anywhere, is the text import above.
  */
 declare const source: string;
+
 export default source;

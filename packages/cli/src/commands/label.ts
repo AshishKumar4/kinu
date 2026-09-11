@@ -72,32 +72,42 @@ const USAGE = 'Usage: kinu label <export|ingest|ensemble|report|mine|score> [age
 const TurnOutcomeSchema = v.picklist([
   'accepted', 'corrected', 'frustrated', 'abandoned',
 ] satisfies TurnOutcome[]);
+
 const OutcomeLabelSchema = v.picklist([
   'accepted', 'corrected', 'frustrated', 'abandoned', 'unclear',
 ] satisfies OutcomeLabel[]);
+
 const MeasuredProportionSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number(), se: v.number() });
+
 const KappaEstimateSchema = v.object({ value: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
+
 const ClassifierAccuracySchema = v.object({
   sensitivity: MeasuredProportionSchema, specificity: MeasuredProportionSchema, prevalence: v.number(),
 });
+
 const CorrectedRateSchema = v.object({
   corrected: MeasuredProportionSchema, raw: v.number(), bias: v.number(), population: v.number(),
 });
+
 const CalibrationGapSchema = v.object({
   kind: v.picklist(['no_population', 'no_labels', 'unlabeled_strata', 'uninformative_classifier']),
   strata: v.array(v.string()),
 });
+
 const EnsembleGapSchema = v.object({
   kind: v.picklist(['no_population', 'no_gold_labels', 'no_usable_labels', 'too_few_judges', 'not_run']),
   judges: v.array(v.string()),
 });
+
 const LabelingItemSchema: v.GenericSchema<LabelingItem> = v.object({
   outcomeId: v.string(), userMessage: v.string(), assistantResponse: v.string(),
   followup: v.nullable(v.string()), createdAt: v.number(),
 });
+
 const LabelIngestResultSchema: v.GenericSchema<LabelIngestResult> = v.object({
   stored: v.number(), unknown: v.array(v.string()), disagreements: v.number(),
 });
+
 const EnsembleRunResultSchema: v.GenericSchema<EnsembleRunResult> = v.union([
   v.object({
     run: v.object({
@@ -108,6 +118,7 @@ const EnsembleRunResultSchema: v.GenericSchema<EnsembleRunResult> = v.union([
   }),
   v.object({ run: v.null(), gap: EnsembleGapSchema }),
 ]);
+
 const CalibrationReportSchema: v.GenericSchema<CalibrationReport> = v.object({
   universe: v.number(), labeled: v.number(), unclear: v.number(), orphaned: v.number(),
   labelers: v.array(v.string()), lastLabeledAt: v.nullable(v.number()),
@@ -125,6 +136,7 @@ const CalibrationReportSchema: v.GenericSchema<CalibrationReport> = v.object({
   })),
   gap: v.nullable(CalibrationGapSchema),
 });
+
 const EnsembleReportSchema: v.GenericSchema<EnsembleReport> = v.object({
   members: v.array(v.object({ model: v.string(), labeled: v.number(), kappa: v.nullable(KappaEstimateSchema) })),
   gold: v.number(), covered: v.number(), split: v.number(), compared: v.number(),
@@ -150,8 +162,10 @@ export async function labelCommand(
   // `mine` reads the owner's own transcripts and no agent's ledger, so it is
   // the one action that names no agent.
   if (action === 'mine') return mineCorpus(opts);
+
   if (!name) throw new Error(USAGE);
   const target = resolveAgentTarget(name);
+
   switch (action) {
     case 'export': return exportLabels(target, opts);
     case 'ingest': return ingestLabels(target, file, opts);
@@ -169,6 +183,7 @@ export async function labelCommand(
 
 async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
   const size = opts.size === undefined ? DEFAULT_LABEL_BUDGET : parsePositiveInt(opts.size, 'size');
+
   const items = target.mode === 'cloud'
     ? await cloudRpc(target, 'sampleOutcomeLabeling', v.array(LabelingItemSchema), [size])
     : sampleLocalLabeling(target.localName, size);
@@ -176,6 +191,7 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
   if (items.length === 0) {
     console.log(`${WARN('nothing to label')} ${target.name} has no classifier-graded turns left to check.`);
     console.log(DIM('The classifier grades a turn once you send a follow-up. Chat with the agent first.'));
+
     return;
   }
 
@@ -184,8 +200,10 @@ async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
 
   if (opts.json) {
     printJson({ path, turns: items.length });
+
     return;
   }
+
   console.log(`${OK('drew')} ${plural(items.length, 'turn')} → ${ACCENT(path)}` +
     DIM(`  (~${Math.round(items.length * 0.35)}–${Math.round(items.length * 0.5)} minutes)`));
   console.log('');
@@ -215,29 +233,37 @@ async function ingestLabels(target: AgentTarget, file: string | undefined, opts:
       parsed.errors.map((problem) => `  ${problem}`).join('\n'),
     );
   }
+
   if (parsed.labels.length === 0) {
     console.log(`${WARN('no verdicts')} every turn in ${path} was left blank.`);
+
     return;
   }
 
   const labeler = opts.labeler ?? process.env.USER ?? 'owner';
+
   const result = target.mode === 'cloud'
     ? await cloudRpc(target, 'recordOutcomeLabeling', LabelIngestResultSchema, [labeler, decodeJsonValue({ value: parsed.labels })])
     : await recordLocalOutcomeLabels(target.localName, { labeler, labels: parsed.labels });
 
   if (opts.json) {
     printJson({ ...result, skipped: parsed.skipped, labeler });
+
     return;
   }
+
   console.log(`${OK('stored')} ${plural(result.stored, 'verdict')} as ${labeler}` +
     (parsed.skipped > 0 ? DIM(`  (${parsed.skipped} left blank)`) : ''));
+
   if (result.stored > 0) {
     console.log(`  You disagreed with the classifier on ${result.disagreements} of ${result.stored}.`);
   }
+
   if (result.unknown.length > 0) {
     console.log(`${WARN('skipped')} ${plural(result.unknown.length, 'turn')} ` +
       `no longer in the ledger: ${result.unknown.slice(0, 3).join(', ')}${result.unknown.length > 3 ? '…' : ''}`);
   }
+
   console.log('');
   console.log(renderCalibrationReport(await fetchReport(target)));
 }
@@ -262,19 +288,25 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
 
   if (opts.json) {
     printJson(projectJsonValue({ value: { run: result, report: await fetchEnsemble(target) } }));
+
     return;
   }
+
   if (result.run === null) {
     console.log(`${WARN('did not run')} ${describeEnsembleGap(result.gap)}`);
+
     return;
   }
+
   for (const judge of result.run.judged) {
     console.log(`${OK('judged')} ${judge.model} — ${plural(judge.stored, 'verdict')}` +
       (judge.failed > 0 ? WARN(`, ${judge.failed} unanswered`) : ''));
   }
+
   if (result.run.alreadyJudged > 0) {
     console.log(DIM(`  ${result.run.alreadyJudged} already judged on an earlier run, left alone.`));
   }
+
   console.log('');
   console.log(renderEnsembleReport(await fetchEnsemble(target)));
 }
@@ -286,11 +318,13 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
  *  and `CC-CORPUS-*.md` for a run deliberately pointed at the repo. */
 function defaultCorpusDir(): string {
   const cache = process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache');
+
   return join(cache, 'kinu', 'cc-corpus');
 }
 
 function corpusReportPath(opts: LabelOpts): string {
   if (opts.out) return resolve(opts.out);
+
   return join(defaultCorpusDir(), `CC-CORPUS-${new Date().toISOString().slice(0, 10)}.md`);
 }
 
@@ -307,6 +341,7 @@ function mineAndLabel(opts: LabelOpts) {
     root: opts.root ? resolve(opts.root) : defaultTranscriptRoot(homedir()),
     projects: (opts.projects ?? '').split(',').map((p) => p.trim()).filter((p) => p !== ''),
   });
+
   return { mined, labels: mined.turns.map(weakLabel) };
 }
 
@@ -321,23 +356,30 @@ function miningOnly(mined: MineResult, labels: ReturnType<typeof weakLabel>[]): 
 async function mineCorpus(opts: LabelOpts): Promise<void> {
   const { mined, labels } = mineAndLabel(opts);
   const report = miningOnly(mined, labels);
+
   if (opts.json) {
     printJson(projectJsonValue({ value: { ...report, provenance: mined.skips, versions: mined.versions } }));
+
     return;
   }
 
   const path = corpusReportPath(opts);
+
   const markdown = renderCorpusReport(report, {
     title: `Claude Code transcript corpus — ${new Date().toISOString().slice(0, 10)}`,
     provenance: renderMineSkips(mined),
   });
+
   writeReport(path, markdown);
   console.log(markdown);
   console.log(`${OK('wrote')} ${ACCENT(path)}`);
+
   if (report.stats.labeled === 0) {
     console.log(`${WARN('no labels')} no rule fired on any mined turn. Nothing to score a rater against.`);
+
     return;
   }
+
   console.log(DIM(`Score the classifier and the panel against these with:  ` +
     `kinu label score <agent>  (${report.stats.labeled} labeled turns available)`));
 }
@@ -354,22 +396,27 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
       `"${target.requestedName}" is a cloud agent. Score the corpus with a local one.`,
     );
   }
+
   const limit = opts.limit === undefined ? DEFAULT_SCORE_LIMIT : parsePositiveInt(opts.limit, 'limit');
   const specs = (opts.models ?? '').split(',').map((s) => s.trim()).filter((s) => s !== '');
 
   const { mined, labels } = mineAndLabel(opts);
+
   // Only labeled turns are put to a rater, so the budget is spent where an
   // answer can be checked. Trimming the LABELS rather than the turns keeps the
   // corpus composition in the report honest about what was mined.
   const scored = new Set(labels.filter((label) => label.label !== null).slice(0, limit)
     .map((label) => label.turnId));
+
   const budgeted = labels.map((label) =>
     scored.has(label.turnId) ? label : { ...label, label: null });
 
   if (scored.size === 0) {
     console.log(`${WARN('nothing to score')} no rule fired on any mined turn.`);
+
     return;
   }
+
   if (!opts.json) {
     console.log(DIM(`Scoring ${plural(scored.size, 'labeled turn')}: one classifier`));
     console.log(DIM('call, plus one call per judge. Every rater sees only the turn, never a rule.'));
@@ -379,15 +426,20 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
   const report = await runLocalCorpusEval(target.localName, {
     turns: mined.turns, labels: budgeted, specs: specs.length > 0 ? specs : null,
   });
+
   if (opts.json) {
     printJson(projectJsonValue({ value: { ...report, provenance: mined.skips, versions: mined.versions } }));
+
     return;
   }
+
   const path = corpusReportPath(opts);
+
   const markdown = renderCorpusReport(report, {
     title: `Claude Code transcript corpus, scored — ${new Date().toISOString().slice(0, 10)}`,
     provenance: renderMineSkips(mined),
   });
+
   writeReport(path, markdown);
   console.log(markdown);
   console.log(`${OK('wrote')} ${ACCENT(path)}`);
@@ -397,10 +449,13 @@ async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> 
 
 async function reportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
   const [calibration, ensemble] = await Promise.all([fetchReport(target), fetchEnsemble(target)]);
+
   if (opts.json) {
     printJson(projectJsonValue({ value: { calibration, ensemble } }));
+
     return;
   }
+
   console.log(renderCalibrationReport(calibration));
   console.log('');
   console.log(renderEnsembleReport(ensemble));
@@ -427,5 +482,6 @@ function cloudRpc<T>(
   args: JsonValue[] = [],
 ): Promise<T> {
   const auth = requireAuthConfig();
+
   return callAgentRpc(auth.origin, auth.token, target.cloudName, method, schema, args);
 }

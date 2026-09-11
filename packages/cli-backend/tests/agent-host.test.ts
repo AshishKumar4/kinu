@@ -51,6 +51,7 @@ afterEach(() => {
 
 function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -62,6 +63,7 @@ function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOp
     }),
     doStream: async (options) => {
       onCall?.(options);
+
       return {
         stream: new ReadableStream({
           start(controller) {
@@ -100,17 +102,21 @@ function gatedFirstModel(): GatedModel {
   let markStarted!: () => void;
   const gate = new Promise<void>((resolve) => { release = resolve; });
   const started = new Promise<void>((resolve) => { markStarted = resolve; });
+
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async () => {
       callCount += 1;
       const call = callCount;
+
       if (call === 1) {
         markStarted();
         await gate;
       }
+
       const answer = call === 1 ? 'child report' : 'parent acknowledged';
+
       return {
         stream: new ReadableStream({
           start(controller) {
@@ -126,6 +132,7 @@ function gatedFirstModel(): GatedModel {
       };
     },
   });
+
   return { model, started, release, calls: () => callCount };
 }
 
@@ -140,6 +147,7 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
   let reflections = 0;
+
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -149,6 +157,7 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
     // it is the one call turn-level learning spends.
     doGenerate: async (options) => {
       if (JSON.stringify(options.prompt).includes('should be done differently')) reflections += 1;
+
       return {
         content: [{ type: 'text', text: 'acknowledged' }],
         finishReason: 'stop' as const,
@@ -161,10 +170,12 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
       // Call 1 is the child's assigned turn; 2 is its continuation past the
       // tool result; the rest are the parent's wake turn.
       const reporting = calls === 1;
+
       return {
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
+
             if (reporting) {
               controller.enqueue({
                 type: 'tool-call',
@@ -177,6 +188,7 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
               controller.enqueue({ type: 'text-delta', id: '0', delta: 'acknowledged' });
               controller.enqueue({ type: 'text-end', id: '0' });
             }
+
             controller.enqueue({
               type: 'finish', finishReason: reporting ? 'tool-calls' : 'stop', usage,
             });
@@ -187,6 +199,7 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
       };
     },
   });
+
   return { model, calls: () => calls, reflections: () => reflections };
 }
 
@@ -197,6 +210,7 @@ function reportingChildModel(content: string, status: 'completed' | 'failed' = '
  *  returned. A task child must report it as a non-answer instead. */
 function silentChildModel() {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -237,6 +251,7 @@ function failingChildModel() {
 function progressThenChildModel(then: 'answer' | 'throw') {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let calls = 0;
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -246,6 +261,7 @@ function progressThenChildModel(then: 'answer' | 'throw') {
     }),
     doStream: async () => {
       calls += 1;
+
       if (calls === 1) {
         return {
           stream: new ReadableStream({
@@ -264,7 +280,9 @@ function progressThenChildModel(then: 'answer' | 'throw') {
           response: { headers: {} },
         };
       }
+
       if (then === 'throw') throw new Error('provider is down');
+
       return {
         stream: new ReadableStream({
           start(controller) {
@@ -287,6 +305,7 @@ async function seedAgent(state: string, name: string): Promise<string> {
   mkdirSync(dirname(dbPath), { recursive: true });
   const db = new Database(dbPath);
   db.exec('PRAGMA journal_mode = WAL');
+
   try {
     await createWorkspace(db, {
       name,
@@ -297,6 +316,7 @@ async function seedAgent(state: string, name: string): Promise<string> {
   } finally {
     db.close();
   }
+
   return dbPath;
 }
 
@@ -307,6 +327,7 @@ function makeRoots() {
   const state = mkdtempSync(join(tmpdir(), 'kinu-host-state-'));
   const project = mkdtempSync(join(tmpdir(), 'kinu-host-project-'));
   tempRoots.push(state, project);
+
   return { state, project };
 }
 
@@ -330,6 +351,7 @@ function makeHost(
   extras: TestHostExtras = {},
 ): TestHost {
   const runtimes = new Map<string, CLIRuntime>();
+
   const options: LocalAgentHostOptions = {
     roster: () => refs,
     dbPath: (name) => join(state, name, 'agent.db'),
@@ -338,17 +360,22 @@ function makeHost(
       const { rt } = await openWorkspaceCLI(db, dbPath, openConfig);
       runtimes.set(ref.name, rt);
       const hosted: LocalHostedAgent = { rt, openConfig, staticModel: model };
+
       return hosted;
     },
   };
+
   if (extras.wakeAt) options.wakeAt = extras.wakeAt;
+
   if (extras.driverKind) options.driverKind = extras.driverKind;
+
   return { host: new LocalAgentHost(options), runtimes };
 }
 
 
 function peerEventCount(dbPath: string): number {
   const db = new Database(dbPath, { readonly: true });
+
   try {
     return db.query<{ n: number }, []>(
       `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND variant = 'peer_agent'`,
@@ -369,18 +396,22 @@ function peerEventCount(dbPath: string): number {
 function awaitTurns(host: LocalAgentHost, agent: string, count: number): Promise<void> {
   const settled = Promise.withResolvers<void>();
   let seen = 0;
+
   const unsubscribe = host.subscribe((who, event) => {
     if (who !== agent || event.type !== 'turn-end') return;
     seen += 1;
+
     if (seen < count) return;
     unsubscribe();
     settled.resolve();
   });
+
   return settled.promise;
 }
 
 function pendingOutboxRows(dbPath: string): Array<{ id: string; state: string; attempt_count: number }> {
   const db = new Database(dbPath, { readonly: true });
+
   try {
     return db.query<{ id: string; state: string; attempt_count: number }, []>(
       'SELECT id, state, attempt_count FROM outbox_peer ORDER BY id',
@@ -406,6 +437,7 @@ function pendingOutboxRows(dbPath: string): Array<{ id: string; state: string; a
 function replyingModel(answer: string) {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const answered = new Set<string>();
+
   const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -421,11 +453,14 @@ function replyingModel(answer: string) {
     doStream: async (options) => {
       const eventId = askedEventId(options.prompt);
       const replyTo = eventId !== null && !answered.has(eventId) ? eventId : null;
+
       if (replyTo) answered.add(replyTo);
+
       return {
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
+
             if (replyTo) {
               controller.enqueue({
                 type: 'tool-call',
@@ -438,6 +473,7 @@ function replyingModel(answer: string) {
               controller.enqueue({ type: 'text-delta', id: '0', delta: answer });
               controller.enqueue({ type: 'text-end', id: '0' });
             }
+
             controller.enqueue({
               type: 'finish',
               finishReason: replyTo ? 'tool-calls' : 'stop',
@@ -450,6 +486,7 @@ function replyingModel(answer: string) {
       };
     },
   });
+
   return { model, replies: () => answered.size };
 }
 
@@ -457,6 +494,7 @@ function replyingModel(answer: string) {
 function askedEventId(prompt: LanguageModelV2CallOptions['prompt']): string | null {
   const matches = [...renderPromptText(prompt)
     .matchAll(/the sender awaits your answer[\s\S]*?event_id:'([^']+)'/gu)];
+
   return matches[matches.length - 1]?.[1] ?? null;
 }
 
@@ -466,9 +504,11 @@ describe('LocalAgentHost', () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     let calls = 0;
+
     const { host } = makeHost(state, streamingModel('ack', () => { calls += 1; }), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const delivered: string[] = [];
     const unsubscribe = host.subscribe((agent, event) => delivered.push(`${agent}:${event.type}`));
 
@@ -476,6 +516,7 @@ describe('LocalAgentHost', () => {
       host.acquire('root'),
       host.acquire('root'),
     ]);
+
     expect(concurrent).toBe(session);
     await session.send('remember this');
     const deliveredBeforeDisconnect = delivered.length;
@@ -487,12 +528,15 @@ describe('LocalAgentHost', () => {
 
     expect(delivered).toHaveLength(deliveredBeforeDisconnect);
     const db = new Database(dbPath);
+
     const sessions = db.query<{ session_id: string }, []>(
       'SELECT DISTINCT session_id FROM messages ORDER BY session_id',
     ).all();
+
     const rows = db.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM messages WHERE role IN ('user','assistant')",
     ).get();
+
     const config = openWorkspaceMainActor(makeSql(db)).config;
     expect(sessions).toEqual([{ session_id: 'default' }]);
     expect(rows?.n).toBe(4);
@@ -542,15 +586,19 @@ describe('LocalAgentHost', () => {
 
     const check = new Database(dbPath);
     const wakeId = `programmatic:${backgroundJobWakeTrigger(jobId)}`;
+
     const wakeRows = check.query<{ n: number }, [string]>(
       'SELECT COUNT(*) AS n FROM messages WHERE id = ?',
     ).get(wakeId);
+
     const assistantRows = check.query<{ n: number }, [string]>(
       "SELECT COUNT(*) AS n FROM messages WHERE parent_id = ? AND role = 'assistant'",
     ).get(wakeId);
+
     const orphanRows = check.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM fibers WHERE id = 'orphan-fiber'",
     ).get();
+
     expect(wakeRows?.n).toBe(1);
     expect(assistantRows?.n).toBe(1);
     expect(orphanRows?.n).toBe(0);
@@ -561,19 +609,23 @@ describe('LocalAgentHost', () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const gated = gatedFirstModel();
+
     const { host } = makeHost(state, gated.model, [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const events: SessionEvent[] = [];
     const reportDelivered = Promise.withResolvers<void>();
     const parentTurnEnded = Promise.withResolvers<void>();
     host.subscribe((agent, event) => {
       events.push(event);
+
       if (
         event.type === 'broadcast'
         && event.event.type === 'subordinate_event'
         && event.event.status === 'progress'
       ) reportDelivered.resolve();
+
       if (agent === 'root' && event.type === 'turn-end') parentTurnEnded.resolve();
     });
     const team = await host.team('root');
@@ -583,9 +635,11 @@ describe('LocalAgentHost', () => {
       role: 'researcher',
       mission: 'Investigate the incident.',
     });
+
     const childTeam = await host.team('root/researcher');
     expect(childTeam.delegation.depth).toBe(1);
     const reference = created.subordinate.actorReference;
+
     if (!reference) throw new Error('The created subordinate has no actor reference.');
     expect(created.subordinate.status).toBe('idle');
     // NO FILE, AND NO DIRECTORY TO PUT ONE IN. A subordinate is a logical
@@ -602,6 +656,7 @@ describe('LocalAgentHost', () => {
       task: 'Find the root cause and report it.',
       mode: 'build',
     });
+
     expect(assigned.delivery).toBe('starts_now');
     await gated.started;
     gated.release();
@@ -609,9 +664,11 @@ describe('LocalAgentHost', () => {
     await parentTurnEnded.promise;
 
     const view = new Database(dbPath, { readonly: true });
+
     const reportCount = view.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
     ).get()?.n ?? 0;
+
     view.close();
     expect(reportCount).toBe(1);
     expect(gated.calls()).toBeGreaterThanOrEqual(2);
@@ -642,7 +699,9 @@ describe('LocalAgentHost', () => {
       role: 'auditor',
       mission: 'Inspect one isolated case.',
     });
+
     const temporaryReference = temporary.subordinate.actorReference;
+
     if (!temporaryReference) throw new Error('The created temporary-named subordinate has no actor reference.');
     // KEPT, THEN PURGED — the transition the per-child directory stood for.
     // `keepHistory: false` is literal: this actor's rows go from every table
@@ -675,9 +734,11 @@ describe('LocalAgentHost', () => {
     const dbPath = await seedAgent(state, 'root');
     const ANSWER = 'the callback URL was never registered';
     const child = reportingChildModel(ANSWER);
+
     const { host } = makeHost(state, child.model, [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const team = await host.team('root');
     const port = team.temporary;
     // The port is wired wherever a local agent holds a roster — the rung is
@@ -719,9 +780,11 @@ describe('LocalAgentHost', () => {
     // ...and archived in that same roster, carrying the lifetime that says which
     // rung created it. No second table was consulted to learn any of this.
     const archived = new Database(dbPath, { readonly: true });
+
     const rows = archived.query<{
       name: string; status: string; lifetime: string; task_event_id: string | null;
     }, []>('SELECT name, status, lifetime, task_event_id FROM actor_subordinates').all();
+
     archived.close();
     expect(rows).toEqual([
       { name: agent, status: 'dismissed', lifetime: 'task', task_event_id: null },
@@ -732,9 +795,11 @@ describe('LocalAgentHost', () => {
     // `subordinate_report` event on the parent's rail — publishing it too would
     // have billed a turn to read an answer already in hand.
     const view = new Database(dbPath, { readonly: true });
+
     const reports = view.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
     ).get()?.n ?? 0;
+
     view.close();
     expect(reports).toBe(0);
   });
@@ -745,14 +810,17 @@ describe('LocalAgentHost', () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const child = reportingChildModel('root cause found');
+
     const { host } = makeHost(state, child.model, [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const reported = Promise.withResolvers<void>();
     const parentTurnEnded = Promise.withResolvers<void>();
     host.subscribe((agent, event) => {
       if (event.type === 'broadcast' && event.event.type === 'subordinate_event'
         && event.event.status === 'completed') reported.resolve();
+
       if (agent === 'root' && event.type === 'turn-end') parentTurnEnded.resolve();
     });
     const team = await host.team('root');
@@ -772,9 +840,11 @@ describe('LocalAgentHost', () => {
     await parentTurnEnded.promise;
     await host.close();
     const view = new Database(dbPath, { readonly: true });
+
     const reports = view.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
     ).get()?.n ?? 0;
+
     view.close();
     // A durable subordinate's answer IS its parent's event: exactly one, on the
     // rail, unchanged by the temporary rung's existence.
@@ -797,10 +867,13 @@ describe('LocalAgentHost', () => {
     test(`a temporary child that ${label} still answers its caller exactly once`, async () => {
       const { state, project } = makeRoots();
       const dbPath = await seedAgent(state, 'root');
+
       const { host } = makeHost(state, model, [
         { name: 'root', cwd: project, workspaceId: 'proj' },
       ]);
+
       const team = await host.team('root');
+
       const outcome = await team.temporary!.run({
         role: 'researcher',
         roleLabel: 'researcher',
@@ -818,14 +891,17 @@ describe('LocalAgentHost', () => {
       expect(await team.list()).toEqual([]);
       await host.close();
       const view = new Database(dbPath, { readonly: true });
+
       const rows = view.query<{ name: string; status: string; lifetime: string }, []>(
         'SELECT name, status, lifetime FROM actor_subordinates',
       ).all();
+
       // EXACTLY ONE result: the waiting call consumed the report, so it never
       // also became an event that would wake the parent for a second reading.
       const reports = view.query<{ n: number }, []>(
         "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
       ).get()?.n ?? 0;
+
       view.close();
       expect(rows).toEqual([{ name: answer.agent, status: 'dismissed', lifetime: 'task' }]);
       expect(reports).toBe(0);
@@ -852,13 +928,17 @@ describe('LocalAgentHost', () => {
     const ask = makeRoots();
     const askDb = await seedAgent(ask.state, 'root');
     const askChild = reportingChildModel('could not find the root cause', 'failed');
+
     const asking = makeHost(ask.state, askChild.model, [
       { name: 'root', cwd: ask.project, workspaceId: 'proj' },
     ]);
+
     const askTeam = await asking.host.team('root');
+
     const outcome = await askTeam.temporary!.run({
       role: 'researcher', roleLabel: 'researcher', task: 'Find the root cause.', mode: 'build',
     });
+
     await asking.host.close();
     const asked = v.parse(v.object({ agent: v.string() }), outcome).agent;
     const askActorId = childActorId(askDb, asked);
@@ -869,9 +949,11 @@ describe('LocalAgentHost', () => {
     const hire = makeRoots();
     const hireDb = await seedAgent(hire.state, 'root');
     const hireChild = reportingChildModel('could not find the root cause', 'failed');
+
     const hiring = makeHost(hire.state, hireChild.model, [
       { name: 'root', cwd: hire.project, workspaceId: 'proj' },
     ]);
+
     const childTurnEnded = Promise.withResolvers<void>();
     hiring.host.subscribe((agent, event) => {
       if (agent !== 'root' && event.type === 'turn-end') childTurnEnded.resolve();
@@ -879,6 +961,7 @@ describe('LocalAgentHost', () => {
     const hireTeam = await hiring.host.team('root');
     await hireTeam.spawn({ role: 'researcher', mission: 'Investigate the incident.', mode: 'build' });
     const [hired] = await hireTeam.list();
+
     if (!hired) throw new Error('The hire was not rostered.');
     await childTurnEnded.promise;
     await hiring.host.close();
@@ -905,10 +988,13 @@ describe('LocalAgentHost', () => {
     test(`a temporary child that reports progress and then ${then}s still answers its caller`, async () => {
       const { state, project } = makeRoots();
       const dbPath = await seedAgent(state, 'root');
+
       const { host } = makeHost(state, progressThenChildModel(then), [
         { name: 'root', cwd: project, workspaceId: 'proj' },
       ]);
+
       const team = await host.team('root');
+
       const outcome = await team.temporary!.run({
         role: 'researcher',
         roleLabel: 'researcher',
@@ -923,14 +1009,17 @@ describe('LocalAgentHost', () => {
       expect(await team.list()).toEqual([]);
       await host.close();
       const view = new Database(dbPath, { readonly: true });
+
       const rows = view.query<{ status: string; lifetime: string }, []>(
         'SELECT status, lifetime FROM actor_subordinates',
       ).all();
+
       // The PROGRESS note is the one thing that legitimately reaches the rail:
       // it is not the answer, so it wakes the parent like any mid-work note.
       const reports = view.query<{ n: number }, []>(
         "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
       ).get()?.n ?? 0;
+
       view.close();
       expect(rows).toEqual([{ status: 'dismissed', lifetime: 'task' }]);
       expect(reports).toBe(1);
@@ -950,9 +1039,11 @@ describe('LocalAgentHost', () => {
   test('a local actor at the delegation cap is wired no temporary port at all', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
+
     const { host } = makeHost(state, streamingModel('ack'), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const team = await host.team('root');
     // A root has the whole cap below it, so it HAS the rung.
     expect(team.temporary).toBeDefined();
@@ -972,6 +1063,7 @@ describe('LocalAgentHost', () => {
     const { host: reopened } = makeHost(state, streamingModel('ack'), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const capped = await reopened.team('root/deep');
     expect(capped.delegation.depth).toBe(DELEGATION_MAX_DEPTH);
     expect(delegationExhausted(capped.delegation)).toBe(true);
@@ -995,16 +1087,20 @@ describe('LocalAgentHost', () => {
   test('a settled temporary run refuses a second report for the same child', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
+
     const { host } = makeHost(state, failingChildModel(), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const team = await host.team('root');
+
     const outcome = await team.temporary!.run({
       role: 'researcher',
       roleLabel: 'researcher',
       task: 'Find the root cause.',
       mode: 'build',
     });
+
     const agent = v.parse(v.object({ agent: v.string(), status: v.string() }), outcome);
     expect(agent.status).toBe('failed');
 
@@ -1016,9 +1112,11 @@ describe('LocalAgentHost', () => {
 
     await host.close();
     const view = new Database(dbPath, { readonly: true });
+
     const reports = view.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
     ).get()?.n ?? 0;
+
     view.close();
     // The one result went to the waiting call and never also to the rail.
     expect(reports).toBe(0);
@@ -1034,9 +1132,11 @@ describe('LocalAgentHost', () => {
     const dbPath = await seedAgent(state, 'root');
     const CONTENT = 'late but correct';
     const child = reportingChildModel(CONTENT);
+
     const { host } = makeHost(state, child.model, [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const team = await host.team('root');
     // Hand a child work, then mark its row task-lifetime with no waiter parked,
     // which is exactly the state an evicted asking activation leaves. The
@@ -1060,12 +1160,15 @@ describe('LocalAgentHost', () => {
     await host.close();
 
     const view = new Database(dbPath, { readonly: true });
+
     const reports = view.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
     ).get()?.n ?? 0;
+
     const rows = view.query<{ status: string; lifetime: string }, []>(
       "SELECT status, lifetime FROM actor_subordinates WHERE name='ask-researcher-late'",
     ).all();
+
     view.close();
     // ONE event — not zero (it would be lost) and not two (a duplicate report).
     expect(reports).toBe(1);
@@ -1078,9 +1181,11 @@ describe('LocalAgentHost', () => {
     const dbPath = await seedAgent(state, 'root');
     const CONTENT = 'root cause: the callback URL was never registered';
     const child = reportingChildModel(CONTENT);
+
     const { host } = makeHost(state, child.model, [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     // Resolved on the first REPORT — the assignment rides the same
     // `subordinate_event` channel under status 'task' — and then asserted, so a
     // host that published the wrong status fails by naming it rather than by
@@ -1096,8 +1201,10 @@ describe('LocalAgentHost', () => {
       ) {
         reported.resolve({ status: event.event.status ?? '', text: event.event.text ?? '' });
       }
+
       if (event.type === 'turn-end') {
         if (agent === 'root/researcher') childTurnEnded.resolve();
+
         if (agent === 'root') parentTurnEnded.resolve();
       }
     });
@@ -1106,9 +1213,11 @@ describe('LocalAgentHost', () => {
     await team.create({
       name: 'researcher', role: 'researcher', mission: 'Investigate the incident.',
     });
+
     const assigned = await team.assign({
       name: 'researcher', task: 'Find the root cause and report it.', mode: 'build',
     });
+
     expect(assigned.delivery).toBe('starts_now');
 
     // The child's own word — and its body — cross into the parent's rail.
@@ -1142,9 +1251,11 @@ describe('LocalAgentHost', () => {
     // report just cleared straight back to 'working'.
     await host.close();
     const view = new Database(dbPath, { readonly: true });
+
     const reports = view.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM agent_log WHERE kind='event' AND variant='subordinate_report'",
     ).get()?.n ?? 0;
+
     view.close();
     expect(reports).toBe(1);
   });
@@ -1155,11 +1266,14 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const { state, project } = makeRoots();
     await seedAgent(state, 'alpha');
     await seedAgent(state, 'beta');
+
     const refs: HostedAgentRef[] = [
       { name: 'alpha', cwd: project, workspaceId: 'proj', displayName: 'Alpha' },
       { name: 'beta', cwd: project, workspaceId: 'proj', displayName: 'Beta' },
     ];
+
     const { host } = makeHost(state, streamingModel('ack'), refs);
+
     try {
       const alpha = await host.peers('alpha');
       const beta = await host.peers('beta');
@@ -1184,25 +1298,31 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const { state, project } = makeRoots();
     const alphaDb = await seedAgent(state, 'alpha');
     const betaDb = await seedAgent(state, 'beta');
+
     const refs: HostedAgentRef[] = [
       { name: 'alpha', cwd: project, workspaceId: 'proj' },
       { name: 'beta', cwd: project, workspaceId: 'proj' },
     ];
+
     const answering = replyingModel('the parser is the bottleneck');
     const { host } = makeHost(state, answering.model, refs);
+
     try {
       const alpha = await host.peers('alpha');
       // Two turns on beta: the note it is woken by, and the ask it answers.
       const betaSettled = awaitTurns(host, 'beta', 2);
+
       const sent = await alpha!.deps.send({
         agent: 'beta', topic: 'note', message: 'starting on the parser', mode: 'build',
       });
+
       expect(sent).toMatchObject({ status: 'delivered' });
       expect(peerEventCount(betaDb)).toBe(1);
 
       const asked = await alpha!.deps.ask({
         agent: 'beta', topic: 'research', message: 'what did you find?', mode: 'build',
       });
+
       expect(asked).toEqual({
         status: 'replied',
         from: 'beta',
@@ -1228,6 +1348,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const alphaDb = await seedAgent(state, 'alpha');
     const betaDb = await seedAgent(state, 'beta');
     await seedAgent(state, 'gamma');
+
     const refs: HostedAgentRef[] = [
       { name: 'alpha', cwd: project, workspaceId: 'proj' },
       { name: 'beta', cwd: project, workspaceId: 'proj' },
@@ -1235,7 +1356,9 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
       // boundary is the PAIR and not the folder.
       { name: 'gamma', cwd: project, workspaceId: 'other' },
     ];
+
     const { host } = makeHost(state, streamingModel('ack'), refs);
+
     try {
       await (await host.team('alpha')).create({
         name: 'scout', role: 'researcher', mission: 'Read the parser.',
@@ -1274,6 +1397,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
         body: 'let me in',
         mode: 'build',
       });
+
       expect(refused.admitted).toBe(false);
       expect(peerEventCount(alphaDb)).toBe(0);
     } finally {
@@ -1284,18 +1408,22 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
   test('undelivered peer mail survives a restart and is re-driven by the next tick', async () => {
     const { state, project } = makeRoots();
     const alphaDb = await seedAgent(state, 'alpha');
+
     const refs: HostedAgentRef[] = [
       { name: 'alpha', cwd: project, workspaceId: 'proj' },
       // Placed in the roster, so it is a legitimate peer — but its state does
       // not exist yet, so the hop throws and the row must WAIT rather than die.
       { name: 'beta', cwd: project, workspaceId: 'proj' },
     ];
+
     const armed: number[] = [];
     const { host: first } = makeHost(state, streamingModel('ack'), refs, { wakeAt: (at) => armed.push(at) });
     const alpha = await first.peers('alpha');
+
     const queued = await alpha!.deps.send({
       agent: 'beta', topic: 'note', message: 'survive this', mode: 'build',
     });
+
     expect(queued).toMatchObject({ status: 'queued' });
     // The retry instant reaches the driver, and the tick reports it too, so a
     // sleeping loop cannot sleep past it.
@@ -1312,6 +1440,7 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
 
     const betaDb = await seedAgent(state, 'beta');
     const { host: second } = makeHost(state, streamingModel('ack'), refs);
+
     try {
       // The re-driven delivery wakes beta, whose turn is deliberately not
       // awaited by the sender — so wait for it here rather than tear the host
@@ -1331,14 +1460,18 @@ describe('LocalAgentHost — peers in one virtual workspace', () => {
     const { state, project } = makeRoots();
     await seedAgent(state, 'alpha');
     await seedAgent(state, 'beta');
+
     const refs: HostedAgentRef[] = [
       { name: 'alpha', cwd: project, workspaceId: 'proj' },
       { name: 'beta', cwd: project, workspaceId: 'proj' },
     ];
+
     const seen: string[] = [];
+
     const { host, runtimes } = makeHost(state, streamingModel('ack', (options) => {
       seen.push(renderPromptText(options.prompt));
     }), refs);
+
     try {
       await (await host.team('alpha')).create({
         name: 'scout', role: 'researcher', mission: 'Read the parser.',
@@ -1400,10 +1533,13 @@ function renderPromptText(prompt: LanguageModelV2CallOptions['prompt']): string 
  */
 function childActorId(parent: string, name: string): string {
   const db = new Database(parent, { readonly: true });
+
   try {
     const sql = makeSql(db);
     const reference = new SubordinateRosterStore(makeSqlExec(db), openWorkspaceMainActor(sql)).get(name)?.actorReference;
+
     if (!reference) throw new Error('The child has no recorded actor identity.');
+
     return reference.actorId;
   } finally { db.close(); }
 }
@@ -1424,11 +1560,15 @@ function childActorId(parent: string, name: string): string {
  */
 function actorLifecycle(parent: string, actorId: string): 'live' | 'retiring' | 'retained' | null {
   const db = new Database(parent, { readonly: true });
+
   try {
     const row = makeSql(db)<{ retiring_at: number | null; deleted_at: number | null }>`
       SELECT retiring_at, deleted_at FROM workspace_actors WHERE actor_id = ${actorId}`[0];
+
     if (!row) return null;
+
     if (row.deleted_at !== null) return 'retained';
+
     return row.retiring_at === null ? 'live' : 'retiring';
   } finally { db.close(); }
 }
@@ -1451,17 +1591,21 @@ function actorLifecycle(parent: string, actorId: string): 'live' | 'retiring' | 
  */
 function actorRowCount(parent: string, actorId: string): number {
   const db = new Database(parent, { readonly: true });
+
   try {
     const scoped = db.query<{ name: string }, []>(`
       SELECT m.name AS name FROM sqlite_master AS m JOIN pragma_table_info(m.name) AS c
       WHERE m.type = 'table' AND m.name <> 'workspace_actors' AND c.name = 'actor_id'
       ORDER BY m.name`).all();
+
     let total = 0;
+
     for (const table of scoped) {
       total += db.query<{ c: number }, [string]>(
         `SELECT COUNT(*) AS c FROM "${table.name.replace(/"/g, '""')}" WHERE actor_id = ?`,
       ).get(actorId)?.c ?? 0;
     }
+
     return total;
   } finally { db.close(); }
 }
@@ -1470,6 +1614,7 @@ function actorRowCount(parent: string, actorId: string): number {
  *  the durable window, the graded outcomes and the lessons. */
 function evolutionRows(dbPath: string, actorId: string) {
   const db = new Database(dbPath, { readonly: true });
+
   try {
     return {
       window: db.query<{ c: number }, [string]>('SELECT COUNT(*) AS c FROM completed_turns WHERE actor_id = ?').get(actorId)?.c ?? 0,
@@ -1485,6 +1630,7 @@ function evolutionRows(dbPath: string, actorId: string) {
 
 function userMessages(dbPath: string, actorId?: string): string[] {
   const db = new Database(dbPath, { readonly: true });
+
   try {
     // ACTOR-SCOPED when asked. One database holds every actor's transcript, so
     // "what did THIS agent hear" is a predicate now rather than a file choice.
@@ -1493,6 +1639,7 @@ function userMessages(dbPath: string, actorId?: string): string[] {
         "SELECT content FROM messages WHERE role = 'user' AND actor_id = ?",
       ).all(actorId).map((row) => row.content);
     }
+
     return db.query<{ content: string }, []>(
       "SELECT content FROM messages WHERE role = 'user'",
     ).all().map((row) => row.content);
@@ -1506,6 +1653,7 @@ function userMessages(dbPath: string, actorId?: string): string[] {
  *  which is the one external ingress a local workspace has. */
 async function scheduleTimer(dbPath: string, label: string, atMs: number): Promise<void> {
   const db = new Database(dbPath);
+
   try {
     const registry = new TriggerRegistry(makeSqlExec(db), openWorkspaceMainActor(makeSql(db)), { scheduleAt: async () => {} });
     await createTimerTrigger(registry, { atMs, label, trust: 'owner' }, Date.now());
@@ -1535,6 +1683,7 @@ describe('LocalAgentHost — the driver lease', () => {
    *  `kill(pid, 0)`, which is the lease's whole liveness question. */
   async function retireRivals(): Promise<void> {
     const going = rivals.splice(0);
+
     for (const rival of going) rival.kill();
     await Promise.all(going.map((rival) => rival.exited));
   }
@@ -1544,14 +1693,18 @@ describe('LocalAgentHost — the driver lease', () => {
     const rival = Bun.spawn({ cmd: ['sleep', '120'], stdout: 'ignore', stderr: 'ignore' });
     rivals.push(rival);
     const db = new Database(dbPath);
+
     try {
       const hold = new DriverLeaseHold({
         sql: makeSql(db),
         execRaw: makeExecRaw(db),
         proc: { pid: rival.pid, isAlive: () => true },
       }, kind);
+
       const refusal = hold.acquire();
+
       if (refusal) throw new Error(`the rival could not take the lease: ${refusal.refused.error}`);
+
       return rival.pid;
     } finally {
       db.close();
@@ -1561,6 +1714,7 @@ describe('LocalAgentHost — the driver lease', () => {
   /** Who is driving, by the file rather than by any hold this process keeps. */
   function holderAt(dbPath: string): DriverLeaseHolder | null {
     const db = new Database(dbPath);
+
     try {
       return leaseHolder(db);
     } finally {
@@ -1575,6 +1729,7 @@ describe('LocalAgentHost — the driver lease', () => {
    *  it here would count an answered event as pending again. */
   function pendingEventCount(dbPath: string): number {
     const db = new Database(dbPath, { readonly: true });
+
     try {
       return db.query<{ n: number }, []>(
         `SELECT COUNT(*) AS n FROM agent_log WHERE kind = 'event' AND turn_id IS NULL`,
@@ -1587,9 +1742,11 @@ describe('LocalAgentHost — the driver lease', () => {
   test('a failed first open releases and forgets its lease before a retry', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
+
     const { host } = makeHost(state, streamingModel('ack'), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ]);
+
     const flush = LocalAgentSession.prototype.flushPendingDrains;
     let refuseFirst = true;
     LocalAgentSession.prototype.flushPendingDrains = async function flushOnce() {
@@ -1597,8 +1754,10 @@ describe('LocalAgentHost — the driver lease', () => {
         refuseFirst = false;
         throw new Error('injected first-open drain failure');
       }
+
       return flush.call(this);
     };
+
     try {
       await expect(host.acquire('root')).rejects.toThrow('injected first-open drain failure');
       // The failed entry acquired an interactive hold before recovery. It no
@@ -1619,9 +1778,11 @@ describe('LocalAgentHost — the driver lease', () => {
   test('a daemon hands the lease back at the end of every pass, so nothing has to preempt it', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
+
     const { host } = makeHost(state, streamingModel('ack'), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ], { driverKind: 'daemon' });
+
     try {
       const first = await host.tick('root');
       expect(first.ran).toBe(true);
@@ -1641,9 +1802,11 @@ describe('LocalAgentHost — the driver lease', () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
     const rivalPid = rivalHolds(dbPath, 'interactive');
+
     const { host } = makeHost(state, streamingModel('ack'), [
       { name: 'root', cwd: project, workspaceId: 'proj' },
     ], { driverKind: 'daemon' });
+
     try {
       const result = await host.tick('root');
 
@@ -1667,6 +1830,7 @@ describe('LocalAgentHost — the driver lease', () => {
     const dbPath = await seedAgent(state, 'root');
     const refs: HostedAgentRef[] = [{ name: 'root', cwd: project, workspaceId: 'proj' }];
     const before = makeHost(state, streamingModel('handled'), refs, { driverKind: 'daemon' });
+
     try {
       const fireAt = Date.now() + 60_000;
       await scheduleTimer(dbPath, 'a build finished', fireAt);
@@ -1677,20 +1841,25 @@ describe('LocalAgentHost — the driver lease', () => {
     } finally {
       await before.host.close();
     }
+
     // What the dead process left: bound to its turn, lease still open.
     const db = new Database(dbPath);
+
     try {
       db.query(`UPDATE agent_log SET turn_id = 'evt-dead', step_idx = 0, consumed_at = 5 WHERE kind = 'event'`).run();
     } finally {
       db.close();
     }
+
     expect(pendingEventCount(dbPath)).toBe(0);
 
     const after = makeHost(state, streamingModel('handled after recovery'), refs, { driverKind: 'daemon' });
     let turns = 0;
+
     const unsubscribe = after.host.subscribe((_agent, event) => {
       if (event.type === 'turn-start') turns += 1;
     });
+
     try {
       // Opening it is the whole recovery: buildEntry reclaims under the lease
       // and drains in the same bracket.
@@ -1716,11 +1885,15 @@ describe('LocalAgentHost — the driver lease', () => {
     // hold it when the turn is about to run. The announcement is the seam that
     // makes it exact — no clock, no guessed window.
     let stolenBy: number | null = null;
+
     const unsubscribe = host.subscribe((_agent, event) => {
       if (event.type === 'turn-start') turns += 1;
+
       if (event.type !== 'broadcast' || event.event.type !== 'signal_card') return;
+
       if (stolenBy === null) stolenBy = rivalHolds(dbPath, 'interactive');
     });
+
     try {
       // Admission is not conversion: the row lands whoever is driving.
       const fireAt = Date.now() + 60_000;

@@ -21,6 +21,7 @@ describe('sandbox durability evidence', () => {
   test('persists the complete deployed-run record outside stdout', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
     temporaryDirectories.push(root);
+
     const artifact: DurabilityProbeArtifact = {
       schemaVersion: 2,
       command: 'bun scripts/sandbox-durability-probe.ts --run',
@@ -68,6 +69,7 @@ describe('sandbox durability evidence', () => {
   test('refuses to overwrite evidence for an existing run id', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
     temporaryDirectories.push(root);
+
     const artifact: DurabilityProbeArtifact = {
       schemaVersion: 2,
       command: 'bun scripts/sandbox-durability-probe.ts --run',
@@ -103,6 +105,7 @@ describe('sandbox durability evidence', () => {
   test('persists partial evidence and the failure when a phase fails', async () => {
     const root = await mkdtemp(join(tmpdir(), 'kinu-durability-artifact-'));
     temporaryDirectories.push(root);
+
     const artifact: DurabilityProbeArtifact = {
       schemaVersion: 2,
       command: 'bun scripts/sandbox-durability-probe.ts --run',

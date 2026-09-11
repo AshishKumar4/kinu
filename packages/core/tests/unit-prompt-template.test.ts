@@ -18,7 +18,9 @@ import { createTestRuntime } from '../../test-utils/src/runtime';
 function commonPrefixLength(a: string, b: string): number {
   const limit = Math.min(a.length, b.length);
   let i = 0;
+
   while (i < limit && a.charCodeAt(i) === b.charCodeAt(i)) i += 1;
+
   return i;
 }
 
@@ -153,6 +155,7 @@ describe('TemplateSlots — the typed boundary', () => {
       TemplateSlots<'- **{{name}}** — {{summary}}\n  `{{example}}`'>,
       { readonly name: string; readonly summary: string; readonly example: string }
     >;
+
     expect(exact).toBe(true);
   });
 
@@ -161,6 +164,7 @@ describe('TemplateSlots — the typed boundary', () => {
       TemplateSlots<'{{v}} {{v}}'>,
       { readonly v: string }
     >;
+
     expect(exact).toBe(true);
   });
 
@@ -174,6 +178,7 @@ describe('TemplateSlots — the typed boundary', () => {
       TemplateSlots<'## V\n- a{{#if hasShell}}\n- b {{note}}{{/if}}'>,
       { readonly note: string } & { readonly hasShell: boolean }
     >;
+
     expect(exact).toBe(true);
   });
 
@@ -182,6 +187,7 @@ describe('TemplateSlots — the typed boundary', () => {
       TemplateSlots<'{{#if on}}a{{/if}}{{#if on}}b{{/if}}'>,
       { readonly on: boolean }
     >;
+
     expect(exact).toBe(true);
   });
 
@@ -190,6 +196,7 @@ describe('TemplateSlots — the typed boundary', () => {
       TemplateSlots<'{{#if on}}a{{else}}b{{/if}}'>,
       { readonly on: boolean }
     >;
+
     expect(exact).toBe(true);
   });
 });
@@ -224,6 +231,7 @@ describe('{{#if}} — prose that branches on one declared boolean', () => {
       't/nested-if',
       'A{{#if outer}}B{{#if inner}}C{{else}}D{{/if}}E{{/if}}F',
     );
+
     expect(nested.render({ outer: true, inner: true })).toBe('ABCEF');
     expect(nested.render({ outer: true, inner: false })).toBe('ABDEF');
     expect(nested.render({ outer: false, inner: true })).toBe('AF');
@@ -366,6 +374,7 @@ describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
   // quietly come back.
   function expectedLine(name: BuiltinToolName): string {
     const spec = BUILTIN_TOOL_SPECS[name];
+
     return `- **${name}**: \`${spec.example}\``;
   }
 
@@ -395,6 +404,7 @@ describe('BUILTIN_TOOL_LINE — live in the system prompt', () => {
     // render byte-exactly, and at least one must, or this proves nothing.
     const present = BUILTIN_TOOLS.filter((name) => prompt.includes(`- **${name}**:`));
     expect(present.length).toBeGreaterThan(0);
+
     for (const name of present) expect(prompt).toContain(expectedLine(name));
   });
 

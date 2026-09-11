@@ -45,6 +45,7 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
     .filter(isActiveExecutionDevice)
     .sort((a, b) => executorSortKey(a.name) - executorSortKey(b.name) || a.name.localeCompare(b.name))
     .map((e) => e.name);
+
   const options = Array.from(new Set([...availableDevices, "workspace"]));
   const defaultExecutor = pickDefaultExecutor(executors, lastActiveExecutor);
   const userSelected = useRef(false);
@@ -65,12 +66,16 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
   }, [defaultExecutor, exec, options]);
 
   const executorKey = options.join("\n");
+
   const load = useCallback(async (): Promise<LoadedDiff> => {
     const rows = await Promise.all(executorKey.split("\n").map(async executor => ({ executor, result: await rpc<DiffResult>("getExecutorDiff", [executor]) })));
     const selected = rows.find(row => row.executor === exec);
+
     if (!selected) throw new Error("The selected change-set executor is unavailable");
+
     return { ...selected, hasChanges: rows.some(row => row.result.files.length > 0 || !!row.result.error) };
   }, [rpc, exec, executorKey]);
+
   const revalidate = useCallback(() => 2_000, []);
   const { resource, reload } = useAsyncResource(load, revalidate);
   const loaded = lastValue(resource);
@@ -82,6 +87,7 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
   const markReviewed = useCallback(async () => {
     setBusy(true);
     setActionErr(null);
+
     try { await rpc("resetWorkspaceBaseline", []); clearExpanded(); reload(); }
     catch (e) { setActionErr(`Could not mark reviewed: ${describeError(e)}`); }
     finally { setBusy(false); }
@@ -143,6 +149,7 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
         <div className="space-y-1.5">
           {files.map((f) => {
             const open = expanded.has(f.path);
+
             return (
               <div key={f.path} className="rounded-md border p-border overflow-hidden">
                 <button onClick={() => toggle(f.path)} className="w-full flex items-center gap-2 px-3 py-1.5 text-left p-card-hover transition-colors">

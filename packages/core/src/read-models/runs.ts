@@ -94,6 +94,7 @@ export function listRuns(
   // behind the cursor is EXHAUSTED. A caller's typo would report a workspace as
   // having no runs.
   const page = boundedInt(limit, DEFAULT_RUN_PAGE, 1, MAX_RUN_PAGE);
+
   return seekPage(events.listRunsBefore(anchorSeq(events, cursor), page + 1), page, (run) => run.runId);
 }
 
@@ -114,6 +115,7 @@ export function getRunSummaries(
   // hand this read the wider list page — 50 rows, each costing a full read of
   // that run's events, where this surface is deliberately sized at 30.
   const page = boundedInt(limit, DEFAULT_SUMMARY_PAGE, 1, MAX_RUN_PAGE);
+
   return mapPage(listRuns(events, cursor, page), (runs) => runs.map((run) => summarize(events, run)));
 }
 
@@ -128,8 +130,10 @@ function summarize(events: RunEventRecorder, run: RunListEntry): RunSummary {
   // folds whole instead of dropping its tail (and the `run_end` in it).
   const window = 1000;
   let since = 0;
+
   for (;;) {
     const batch = events.read(run.runId, { since, limit: window });
+
     for (const e of batch) {
       if (e.type === 'run_start') {
         causedBy = e.caused_by ?? 'chat';
@@ -137,17 +141,21 @@ function summarize(events: RunEventRecorder, run: RunListEntry): RunSummary {
         startedAt = Date.parse(e.timestamp) || startedAt;
       } else if (e.type === 'turn_end') {
         const turn = e.usage ?? {};
+
         if (usageReported(turn)) usage = addUsage(usage, turn);
         else turnsWithoutUsage++;
       } else if (e.type === 'run_end') {
         status = e.reason ?? null;
       }
     }
+
     if (batch.length < window) break;
     const last = batch[batch.length - 1];
+
     if (last === undefined) break;
     since = last.eventIndex + 1;
   }
+
   return { runId: run.runId, startedAt, causedBy, userMessage, status, usage, turnsWithoutUsage, eventCount: run.eventCount };
 }
 
@@ -157,6 +165,8 @@ function summarize(events: RunEventRecorder, run: RunListEntry): RunSummary {
 function anchorSeq(events: RunEventRecorder, cursor: SeekCursor | null): number | null {
   if (cursor === null) return null;
   const seq = events.runSeq(cursor.after);
+
   if (seq === null) throw new StaleCursorError('run history', cursor.after);
+
   return seq;
 }

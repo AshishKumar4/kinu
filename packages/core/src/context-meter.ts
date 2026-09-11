@@ -73,6 +73,7 @@ export type SystemText = string | SystemModelMessage | undefined;
 function systemText(system: SystemText): string {
   if (system === undefined) return '';
   const text = v.safeParse(v.string(), system);
+
   return text.success ? text.output : v.parse(v.object({ content: v.string() }), system).content;
 }
 
@@ -84,7 +85,9 @@ function systemText(system: SystemText): string {
 function messageChars(message: ModelMessage): number {
   const content = message.content;
   const text = v.safeParse(v.string(), content);
+
   if (text.success) return text.output.length;
+
   return JSON.stringify(content)?.length ?? 0;
 }
 
@@ -93,6 +96,7 @@ function messageChars(message: ModelMessage): number {
  *  context breakdown needs them separated from what the user actually said. */
 function isEphemeral(message: ModelMessage): boolean {
   const content = v.safeParse(v.string(), message.content);
+
   return message.role === 'user'
     && content.success
     && content.output.startsWith(DYNAMIC_CONTEXT_OPEN_TAG);
@@ -101,11 +105,13 @@ function isEphemeral(message: ModelMessage): boolean {
 function toolChars(name: string, def: { description?: string; inputSchema?: unknown } | undefined): number {
   if (!def) return 0;
   let schema = 0;
+
   try {
     schema = def.inputSchema === undefined ? 0 : (JSON.stringify(def.inputSchema)?.length ?? 0);
   } catch (error) {
     diagnostics.event('context_meter.schema_unmeasurable', { error: renderThrownChain({ cause: error }) });
   }
+
   return name.length + (def.description?.length ?? 0) + schema;
 }
 
@@ -129,6 +135,7 @@ export function measureContext(input: {
 
   for (const [name, def] of Object.entries(input.tools ?? {})) {
     const chars = toolChars(name, def);
+
     if (chars > 0) segments.push({ plane: 'tools', label: name, chars, items: 1 });
   }
 
@@ -138,26 +145,32 @@ export function measureContext(input: {
   const roles = new Map<string, { chars: number; items: number }>();
   let ephemeralChars = 0;
   let ephemeralItems = 0;
+
   for (const message of input.messages) {
     const chars = messageChars(message);
+
     if (isEphemeral(message)) {
       ephemeralChars += chars;
       ephemeralItems++;
       continue;
     }
+
     const row = roles.get(message.role) ?? { chars: 0, items: 0 };
     row.chars += chars;
     row.items++;
     roles.set(message.role, row);
   }
+
   for (const [role, row] of roles) {
     segments.push({ plane: 'messages', label: role, chars: row.chars, items: row.items });
   }
+
   if (ephemeralItems > 0) {
     segments.push({ plane: 'ephemeral', label: 'dynamic_context', chars: ephemeralChars, items: ephemeralItems });
   }
 
   const measuredChars = segments.reduce((sum, s) => sum + s.chars, 0);
+
   return {
     segments,
     measuredChars,
@@ -198,6 +211,7 @@ export class TurnContextMeter {
   take(): ContextComposition | undefined {
     const latest = this.latest;
     this.latest = undefined;
+
     return latest;
   }
 

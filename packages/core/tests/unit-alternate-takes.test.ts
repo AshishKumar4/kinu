@@ -27,6 +27,7 @@ function setup() {
   // of the actor-scoped conversation store, so the fixture needs the actor the
   // production readers would resolve for this workspace.
   const actor = createTestActor(sql, execRaw, 'ws-takes', 'takes');
+
   return { db, sql, execRaw, actor };
 }
 
@@ -85,6 +86,7 @@ describe('captureAlternateTakes — the near-tie epsilon rule', () => {
     const { sql, actor } = setup();
     insertNode(sql, actor, { id: 'win', value: 0.9, text: 'same text' });
     insertNode(sql, actor, { id: 'dup', value: 0.89, text: 'same text' });
+
     for (let i = 0; i < 6; i++) insertNode(sql, actor, { id: `r${i}`, value: 0.88 - i * 0.001, text: `rival ${i}` });
     captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
     const set = latestAlternateTakeSet(sql, actor)!;
@@ -122,6 +124,7 @@ describe('claimAlternateTakesForTurn — attaching mid-turn captures to the turn
     insertNode(sql, actor, { id: 'w1', value: 0.9, text: 'a' });
     insertNode(sql, actor, { id: 'r1', value: 0.88, text: 'b' });
     const id = captureAlternateTakes(sql, actor, { rootId: 'r', task: 'the task', winnerId: 'w1', epsilon: 0.1, now: 1_000 });
+
     if (!id) throw new Error('expected captureAlternateTakes to produce a take set');
     expect(claimAlternateTakesForTurn(sql, actor, { turnId: 'msg-1', sessionId: 'default', startedAt: 500 })).toBe(1);
     // A replay names the already-claimed set; a missing id names nothing —
@@ -160,6 +163,7 @@ function capturedSet(sql: ReturnType<typeof makeSql>, actor: ActorHandle) {
     VALUES (${actor.actorId}, 'u-9', 'default', 'user', 'please solve it')`;
   void sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
     VALUES (${actor.actorId}, 'msg-9', 'default', 'u-9', 'assistant', 'I used the winning approach')`;
+
   return latestAlternateTakeSet(sql, actor)!;
 }
 

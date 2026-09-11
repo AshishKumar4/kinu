@@ -79,6 +79,7 @@ export function craftedToolDescription(name: string, description?: string): stri
 export function firstSentence(text: string): string {
   const line = text.trim().split('\n')[0] ?? '';
   const match = /^(.+?[.!?])(\s|$)/.exec(line);
+
   return (match?.[1] ?? line).trim();
 }
 
@@ -104,13 +105,18 @@ const SchemaObjectSchema = v.looseObject({
 export function jsonSchemaToTs(schema: JsonValue | undefined, depth = 0): string {
   if (depth > 6) return 'unknown';
   const parsed = v.safeParse(SchemaObjectSchema, schema);
+
   if (!parsed.success) return 'unknown';
   const node = parsed.output;
+
   if (node.const !== undefined) return JSON.stringify(node.const);
+
   if (node.enum !== undefined) return node.enum.map((member) => JSON.stringify(member)).join(' | ');
   const variants = node.anyOf ?? node.oneOf;
+
   if (variants !== undefined) return variants.map((member) => jsonSchemaToTs(member, depth + 1)).join(' | ');
   const type = Array.isArray(node.type) ? node.type : [node.type];
+
   const rendered = type.map((member) => {
     switch (member) {
       case 'string': return 'string';
@@ -121,21 +127,28 @@ export function jsonSchemaToTs(schema: JsonValue | undefined, depth = 0): string
       case 'array': return `${jsonSchemaToTs(node.items, depth + 1)}[]`;
       case 'object': {
         const properties = node.properties;
+
         if (properties === undefined) return 'Record<string, unknown>';
         const required = new Set(node.required ?? []);
+
         const fields = Object.entries(properties).map(([key, value]) => {
           const field = /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(key) ? key : JSON.stringify(key);
           const doc = v.safeParse(SchemaObjectSchema, value);
+
           const comment = doc.success && doc.output.description
             ? `/** ${firstSentence(doc.output.description).replace(/\*\//g, '* /')} */ `
             : '';
+
           return `${comment}${field}${required.has(key) ? '' : '?'}: ${jsonSchemaToTs(value, depth + 1)}`;
         });
+
         return fields.length === 0 ? 'Record<string, unknown>' : `{ ${fields.join('; ')} }`;
       }
+
       default: return 'unknown';
     }
   });
+
   return rendered.length === 0 ? 'unknown' : [...new Set(rendered)].join(' | ');
 }
 
@@ -145,6 +158,7 @@ const NativeToolSchemaCarrier = v.looseObject({ jsonSchema: v.optional(JsonValue
 
 export function nativeToolInputSchema(tool: ToolSet[string]): JsonValue | undefined {
   const parsed = v.safeParse(NativeToolSchemaCarrier, tool.inputSchema);
+
   return parsed.success ? parsed.output.jsonSchema : undefined;
 }
 
@@ -164,6 +178,7 @@ export function renderToolsDeclaration(
   crafted: readonly CraftedDeclaration[],
 ): string {
   const lines: string[] = [];
+
   for (const [name, tool] of Object.entries(native)) {
     if (name === SANDBOX_TOOL) continue;
     const input = jsonSchemaToTs(nativeToolInputSchema(tool));
@@ -171,10 +186,12 @@ export function renderToolsDeclaration(
     lines.push(`  /** ${summary.replace(/\*\//g, '* /')} Same input as the native \`${name}\` tool. */`);
     lines.push(`  ${name}(input: ${input}): Promise<unknown>;`);
   }
+
   for (const entry of crafted) {
     lines.push(`  /** ${craftedToolDescription(entry.name, entry.description).replace(/\*\//g, '* /')} (crafted by you) */`);
     lines.push(`  ${entry.name}(...args: unknown[]): Promise<unknown>;`);
   }
+
   return `export declare const ${CRAFTED_TOOL_NAMESPACE}: {\n${lines.join('\n')}\n};\n`;
 }
 
@@ -188,24 +205,30 @@ export function renderToolsDeclaration(
  */
 export function nativeToolFunctions(tools: ToolSet): CodemodeProvider['tools'] {
   const out: Record<string, CodemodeProvider['tools'][string]> = {};
+
   for (const [name, tool] of Object.entries(tools)) {
     const execute = tool.execute;
+
     if (name === SANDBOX_TOOL || execute === undefined) continue;
     out[name] = {
       description: tool.description ?? name,
       planAllowed: hasPlanPermission(tool),
       execute: async (...args: unknown[]) => {
         const input = v.safeParse(JsonObjectSchema, args[0] === undefined ? {} : args[0]);
+
         if (!input.success) {
           return { error: `tools.${name}(input): input must be one JSON object, the same shape the native \`${name}\` tool takes` };
         }
+
         return branchableToolCall(async () => {
           const result = await execute(input.output, { toolCallId: 'codemode-' + nanoid(), messages: [] });
+
           return result === undefined ? undefined : decodeJsonValue({ value: result });
         });
       },
     };
   }
+
   return out;
 }
 

@@ -73,6 +73,7 @@ describe("parseGitDiff", () => {
       "+const y = 3;",
       " export { x, y };",
     ].join("\n");
+
     const out = parseGitDiff(raw);
     expect(out.length).toBe(1);
     expect(out[0]).toMatchObject({ path: "src/app.ts", status: "changed", added: 1, removed: 1 });
@@ -92,6 +93,7 @@ describe("parseGitDiff", () => {
       "+# Title",
       "+body",
     ].join("\n");
+
     const out = parseGitDiff(raw);
     expect(out[0]).toMatchObject({ path: "NEW.md", status: "added", added: 2, removed: 0 });
   });
@@ -106,6 +108,7 @@ describe("parseGitDiff", () => {
       "@@ -1 +0,0 @@",
       "-gone",
     ].join("\n");
+
     const out = parseGitDiff(raw);
     expect(out[0]).toMatchObject({ path: "OLD.txt", status: "removed", added: 0, removed: 1 });
   });
@@ -117,6 +120,7 @@ describe("parseGitDiff", () => {
       "rename from old/name.ts",
       "rename to new/name.ts",
     ].join("\n");
+
     const out = parseGitDiff(raw);
     expect(out[0].path).toBe("new/name.ts");
   });
@@ -127,6 +131,7 @@ describe("parseGitDiff", () => {
       "index 5555555..6666666 100644",
       "Binary files a/img.png and b/img.png differ",
     ].join("\n");
+
     const out = parseGitDiff(raw);
     expect(out[0]).toMatchObject({ path: "img.png", status: "changed", added: 0, removed: 0 });
     expect(out[0].lines).toEqual([{ kind: "ctx", text: "(binary file differs)" }]);
@@ -147,6 +152,7 @@ describe("parseGitDiff", () => {
       "@@ -0,0 +1 @@",
       "+new",
     ].join("\n");
+
     const out = parseGitDiff(raw);
     expect(out.map((f) => f.path)).toEqual(["a.txt", "b.txt"]);
     expect(out[1].status).toBe("added");
@@ -162,6 +168,7 @@ describe("parseGitDiff", () => {
     // presents the undercount as the file's +/- totals with nothing marking it
     // as partial.
     const adds = 1_400, dels = 300;
+
     const raw = [
       "diff --git a/big.txt b/big.txt",
       "--- a/big.txt",
@@ -170,6 +177,7 @@ describe("parseGitDiff", () => {
       ...Array.from({ length: dels }, (_, i) => `-old ${i}`),
       ...Array.from({ length: adds }, (_, i) => `+new ${i}`),
     ].join("\n");
+
     const [file] = parseGitDiff(raw);
     expect(file.added).toBe(adds);
     expect(file.removed).toBe(dels);
@@ -188,6 +196,7 @@ describe("parseGitDiff", () => {
       "-a",
       "+b",
     ].join("\n");
+
     const [file] = parseGitDiff(raw);
     expect(file.truncated).toBeUndefined();
     expect(file.added).toBe(1);
@@ -211,9 +220,11 @@ describe("diffLines cost bound", () => {
   const LINES = 8192;
   const body = (i: number) => `${i % 10}`.repeat(31);
   const before = Array.from({ length: LINES }, (_, i) => body(i)).join("\n");
+
   const after = (() => {
     const rows = Array.from({ length: LINES }, (_, i) => body(i));
     rows[LINES >> 1] = "X".repeat(31);
+
     return rows.join("\n");
   })();
 

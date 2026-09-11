@@ -13,6 +13,7 @@ import { FeedbackModal } from "./FeedbackModal";
 
 export function FeedbackButton({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
+
   return (
     <>
       <button

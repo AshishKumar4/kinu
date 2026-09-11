@@ -96,7 +96,9 @@ export interface Tracer {
 
 /** Attribute keys. One spelling, so a query and an emitter cannot drift. */
 export const SPAN_ATTR_ISOLATE_GEN = 'kinu.isolate_gen';
+
 export const SPAN_ATTR_SELF_PATH = 'kinu.self_path';
+
 /** Set to `true`, and never to `false`: absent means the span did not fail, which
  *  is what a trace query already reads. A boolean and nothing else — see
  *  `ScopedSpan.fail` for why the message is not here. */
@@ -109,6 +111,7 @@ export const SPAN_ATTR_ERROR = 'kinu.error';
  */
 export function renderSelfPath(path: ReadonlyArray<{ className: string; name: string }>): string {
   if (path.length === 0) return 'root';
+
   return path.map((step) => `${step.className}:${step.name}`).join('/');
 }
 
@@ -158,6 +161,7 @@ export function createRecordingTracer(): RecordingTracer {
    *  under the first; the paths asserted with this fake await in sequence, and a
    *  concurrent fan-out would need the real runtime's tree anyway. */
   const stack: number[] = [];
+
   return {
     opened,
     span<T>(name: string, attributes: SpanOpenAttributes, fn: (span: ScopedSpan) => T): T {
@@ -165,6 +169,7 @@ export function createRecordingTracer(): RecordingTracer {
         [SPAN_ATTR_ISOLATE_GEN, attributes.isolateGen],
         [SPAN_ATTR_SELF_PATH, attributes.selfPath],
       ]);
+
       const index = opened.length;
       opened.push({
         name,
@@ -173,6 +178,7 @@ export function createRecordingTracer(): RecordingTracer {
         parent: stack.at(-1) ?? null,
         attributes: captured,
       });
+
       const span: ScopedSpan = {
         isTraced: true,
         setAttribute(key: string, value: SpanAttributeValue): void {
@@ -182,15 +188,22 @@ export function createRecordingTracer(): RecordingTracer {
           captured.set(SPAN_ATTR_ERROR, true);
         },
       };
+
       stack.push(index);
+
       const close = (): void => {
         const top = stack.lastIndexOf(index);
+
         if (top >= 0) stack.splice(top, 1);
       };
+
       const failed = (): void => { captured.set(SPAN_ATTR_ERROR, true); };
+
       let closesLater = false;
+
       try {
         const result = fn(span);
+
         // `instanceof Promise` rather than a structural `then` probe: every
         // caller of this fake passes an `async` callback or a synchronous one, so
         // the narrow test is exact here and needs no type assertion. A foreign
@@ -206,6 +219,7 @@ export function createRecordingTracer(): RecordingTracer {
           // takes no parameter because it records the FACT and never the error.
           void result.then(close, () => { failed(); close(); });
         }
+
         return result;
       } catch (error) {
         // Marked, then rethrown UNCHANGED — `throw error`, not a wrap: the seam's

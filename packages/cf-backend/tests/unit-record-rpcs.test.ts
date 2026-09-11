@@ -90,17 +90,20 @@ function seededWorkspace() {
   // under any other actor come back as an EMPTY page rather than an error, so
   // the assertions below would hold over a workspace that recorded nothing.
   const actor = harness.agent.observeRuntime().actor;
+
   for (const [index, value] of [41, 23, 88].entries()) {
     recordExploration(sql, actor, {
       publication: OPEN,
       write: write({ artifact: `calls-${String(index)}`, value, at: T0 + index }),
     });
   }
+
   const partitioned: ReadonlyArray<readonly [string, number, number]> = [
     ['len=short', 0.71, 10], ['len=short', 0.5, 11], ['len=short', 0.5, 11],
     ['len=short', 0.5, 12], ['len=short', 0.44, 13],
     ['len=medium', 0.66, 14], ['len=long', 0.6, 15], ['len=long', 0.58, 16],
   ];
+
   for (const [index, [descriptor, value, offset]] of partitioned.entries()) {
     recordExploration(sql, actor, {
       publication: OPEN,
@@ -110,6 +113,7 @@ function seededWorkspace() {
       }),
     });
   }
+
   return harness;
 }
 
@@ -143,11 +147,13 @@ describe('the record RPCs answer over a real workspace', () => {
     const objectives = await harness.agent.listRecordObjectives();
     const calls = objectives.items.find((item) => item.metric === 'oracle_calls');
     expect(calls?.floorDigest).toBeNull();
+
     if (!calls) throw new Error('the fixture must hold the unfloored set');
 
     const cells = await harness.agent.listRecordCells({
       objectiveId: calls.objectiveId, floorDigest: calls.floorDigest,
     });
+
     expect(cells.items.length).toBeGreaterThan(0);
     expect(cells.items.map((cell) => [cell.descriptor, cell.occupants, cell.elite?.value]))
       .toEqual([[null, 3, 23]]);
@@ -159,6 +165,7 @@ describe('the record RPCs answer over a real workspace', () => {
     const harness = seededWorkspace();
     const objectives = await harness.agent.listRecordObjectives();
     const pass = objectives.items.find((item) => item.metric === 'pass_rate');
+
     if (!pass) throw new Error('the fixture must hold the partitioned set');
     const handle = { objectiveId: pass.objectiveId, floorDigest: pass.floorDigest, descriptor: 'len=short' };
 
@@ -169,12 +176,15 @@ describe('the record RPCs answer over a real workspace', () => {
 
     const digests: string[] = [];
     let cursor: { after: string } | undefined;
+
     for (let step = 0; step < 10; step += 1) {
       const page = await harness.agent.readRecordCell({ ...handle, cursor, limit: 2 });
       digests.push(...page.items.map((row) => row.artifactDigest));
+
       if (page.status === 'end') break;
       cursor = page.next;
     }
+
     expect(digests).toEqual(whole.items.map((row) => row.artifactDigest));
     expect(new Set(digests).size).toBe(whole.items.length);
   });
@@ -183,10 +193,13 @@ describe('the record RPCs answer over a real workspace', () => {
     const harness = seededWorkspace();
     const objectives = await harness.agent.listRecordObjectives();
     const calls = objectives.items.find((item) => item.metric === 'oracle_calls');
+
     if (!calls) throw new Error('the fixture must hold the unfloored set');
+
     const page = await harness.agent.readRecordCell({
       objectiveId: calls.objectiveId, floorDigest: calls.floorDigest, descriptor: null,
     });
+
     expect(page.items.length).toBeGreaterThan(0);
     expect(page.items.map((row) => row.value)).toEqual([23, 41, 88]);
   });

@@ -27,16 +27,19 @@ const DUMMY_LLM: LLMProviderConfig = {
 function scriptedEpisode(blocks: readonly string[]): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async () => {
       const code = blocks[step];
       step += 1;
+
       return {
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
+
             if (code !== undefined) {
               controller.enqueue({
                 type: 'tool-call', toolCallId: `call-${step}`, toolName: 'execute_tools',
@@ -49,6 +52,7 @@ function scriptedEpisode(blocks: readonly string[]): LanguageModel {
               controller.enqueue({ type: 'text-end', id: '0' });
               controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
             }
+
             controller.close();
           },
         }),
@@ -67,13 +71,17 @@ function episode(blocks: readonly string[]) {
   // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
   const rt = createCLIRuntime(db, {
     dbPath: db.filename, llm: DUMMY_LLM,
   });
+
   const events: SessionEvent[] = [];
+
   const session = new LocalAgentSession({
     rt, db, model: scriptedEpisode(blocks), onEvent: (e) => events.push(e),
   });
+
   return { db, rt, session, events };
 }
 
@@ -92,8 +100,10 @@ function craftCycleRow(session: LocalAgentSession, rt: CLIRuntime, db: Database)
   const row = db.query<{ run_id: string }, [string]>(
     'SELECT run_id FROM run_events WHERE actor_id = ? LIMIT 1',
   ).get(rt.actor.actorId);
+
   if (!row) throw new Error('craft run-event row is missing');
   const runId = row.run_id;
+
   return session.getRunEvents(runId)
     .find((e: RunEvent): e is Extract<RunEvent, { type: 'craft_cycle' }> => e.type === 'craft_cycle');
 }
@@ -115,6 +125,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     const toolResults = events.filter(
       (e): e is Extract<SessionEvent, { type: 'tool-result' }> => e.type === 'tool-result',
     );
+
     expect(toolResults).toHaveLength(2);
     expect(toolResults[1]!.result).toContain('42');
 
@@ -137,7 +148,9 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
   test('a tool that keeps raising stops being callable before the turn is over', async () => {
     const create =
       'await workspace.createTool("brokenIt", "always throws", "async () => { throw new Error(\\"nope\\"); }"); return "made";';
+
     const call = 'return await tools.brokenIt();';
+
     const { db, rt, session, events } = episode([
       create, call, call, call, call,
       // By now the tool is under the injection floor: the sandbox no longer
@@ -150,6 +163,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     const results = events.filter(
       (e): e is Extract<SessionEvent, { type: 'tool-result' }> => e.type === 'tool-result',
     );
+
     expect(results).toHaveLength(6);
     // Every call while it was still injected named the tool that raised.
     expect(results[1]!.result).toContain('[crafted:brokenIt]');
@@ -178,10 +192,13 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
   // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(dbOff));
+
       const rt = createCLIRuntime(dbOff, {
         dbPath: dbOff.filename, llm: DUMMY_LLM,
       });
+
       const evs: SessionEvent[] = [];
+
       return {
         db: dbOff,
         events: evs,
@@ -200,6 +217,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     const results = off.events.filter(
       (e): e is Extract<SessionEvent, { type: 'tool-result' }> => e.type === 'tool-result',
     );
+
     expect(results[1]!.result).toContain('42');
     expect(craftScore(off.db, 'doubleIt')).toEqual({ score: CRAFT_NEUTRAL_PRIOR, uses: 0 });
 

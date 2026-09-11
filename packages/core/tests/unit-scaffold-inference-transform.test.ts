@@ -30,6 +30,7 @@ const CUSTOM_SCAFFOLD = `async function run(rt, task) {
 function runtime(): AgentRuntime {
   const { rt } = createTestRuntime();
   rt.executor = createEvalExecutor();
+
   return rt;
 }
 
@@ -38,6 +39,7 @@ async function selected(version: number, scaffoldCode: string) {
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
   await files.writeFile(rt.identity.scaffold.path + '.v' + version, scaffoldCode);
+
   return {
     program: await prepareActorProgram({ runtime: rt, mode: 'build', version }),
     run: { rt, task: 'the task',
@@ -48,9 +50,11 @@ async function selected(version: number, scaffoldCode: string) {
 
 async function collect(stream: ReturnType<InferenceStreamResult['toUIMessageStream']>): Promise<JsonObject[]> {
   const out: JsonObject[] = [];
+
   for await (const chunk of stream) {
     out.push(v.parse(JsonObjectSchema, chunk));
   }
+
   return out;
 }
 
@@ -61,6 +65,7 @@ describe('scaffoldInferenceTransform', () => {
     const result: InferenceStreamResult = {
       toUIMessageStream: () => (async function* () { yield { type: 'finish' }; })(),
     };
+
     expect(scaffoldInferenceTransform({ result, ...await selected(0, DELEGATING_SCAFFOLD) }))
       .toBe(result);
   });
@@ -72,12 +77,16 @@ describe('scaffoldInferenceTransform', () => {
       { type: 'text-delta', id: 'x', delta: 'world' },
       { type: 'text-end', id: 'x' },
     ];
+
     let streams = 0;
+
     const result: InferenceStreamResult = {
       toUIMessageStream: () => {
         streams++;
+
         return (async function* () {
           yield { type: 'start', messageId: 'inner' };
+
           for (const c of innerContent) yield c;
           yield { type: 'finish' };
         })();
@@ -103,12 +112,14 @@ describe('scaffoldInferenceTransform', () => {
 
   test('custom scaffold replaces the default; the orphaned eager stream is cancelled', async () => {
     let closed = false;
+
     const result: InferenceStreamResult = {
       toUIMessageStream: () => ({
         [Symbol.asyncIterator]: () => ({
           next: async () => ({ value: { type: 'text-delta', id: 'd', delta: 'default' }, done: false }),
           return: async () => {
             closed = true;
+
             return { value: undefined, done: true };
           },
         }),
@@ -121,6 +132,7 @@ describe('scaffoldInferenceTransform', () => {
     const text = chunks
       .filter((chunk) => chunkType(chunk) === 'text-delta')
       .map((chunk) => v.parse(v.string(), chunk.delta)).join('');
+
     expect(text).toBe('custom answer');
     // The scaffold never delegated → the eagerly-fired default stream was
     // cancelled instead of running unconsumed to completion.

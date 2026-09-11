@@ -6,26 +6,32 @@ function parentHandle(calls: string[]): ParentWorkspaceHandle {
   return {
     read: async (path: string) => {
       calls.push(`read:${path}`);
+
       return { ok: true, value: new TextEncoder().encode('hi') };
     },
     write: async (input) => {
       calls.push(`write:${input.kind}:${input.path}`);
+
       return { ok: true, value: null };
     },
     list: async (path: string) => {
       calls.push(`list:${path}`);
+
       return { ok: true, value: [] };
     },
     stat: async (path: string) => {
       calls.push(`stat:${path}`);
+
       return { ok: true, value: null };
     },
     delete: async (path: string) => {
       calls.push(`delete:${path}`);
+
       return { ok: true, value: null };
     },
     exec: async (command: string) => {
       calls.push(`exec:${command}`);
+
       return { ok: true, value: { stdout: 'ok', stderr: '', exitCode: 0 } };
     },
   };

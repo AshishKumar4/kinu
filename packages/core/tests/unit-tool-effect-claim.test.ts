@@ -29,6 +29,7 @@ function claimPlane(turnId = 'turn-1') {
   const actor = createTestActors(sql, execRaw).main;
   const scope = { turnId };
   const deps: EffectClaimDeps = { sql, actor, turnId: () => scope.turnId };
+
   return { sql, actor, deps, scope };
 }
 
@@ -57,14 +58,17 @@ interface SendResult {
  *  answer each time, so a replayed result is distinguishable from a re-run. */
 function countingTool() {
   const calls: string[] = [];
+
   const entry = tool({
     description: 'send the invoice',
     inputSchema: RECIPIENT_SCHEMA,
     execute: async (input: { to: string }): Promise<SendResult> => {
       calls.push(input.to);
+
       return { sent: input.to, attempt: calls.length };
     },
   });
+
   return { calls, tools: { run: entry } };
 }
 
@@ -86,6 +90,7 @@ describe('tool effect claims', () => {
 
   test('a claim whose outcome was never recorded refuses instead of repeating', async () => {
     const { deps } = claimPlane();
+
     const tools = {
       run: tool({
         description: 'send the invoice',
@@ -100,6 +105,7 @@ describe('tool effect claims', () => {
         },
       }),
     };
+
     const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
 
     // The first attempt claimed the effect and then died without settling: from
@@ -165,6 +171,7 @@ describe('tool effect claims', () => {
 
   test('a safe tool is untouched: no wrapper, no row', async () => {
     const { sql, deps } = claimPlane();
+
     const entry = tool({
       description: 'search the web',
       inputSchema: jsonSchema<{ q: string }>({
@@ -172,6 +179,7 @@ describe('tool effect claims', () => {
       }),
       execute: async () => ({ hits: 0 }),
     });
+
     const wrapped = withEffectClaims({ web: entry }, deps);
 
     expect(replayPolicyFor('web')).toBe('safe');
@@ -205,6 +213,7 @@ describe('tool effect claims', () => {
     const started = Promise.withResolvers<void>();
     const release = Promise.withResolvers<void>();
     const calls: string[] = [];
+
     const tools = {
       run: tool({
         description: 'send the invoice',
@@ -215,10 +224,12 @@ describe('tool effect claims', () => {
           calls.push(input.to);
           started.resolve();
           await release.promise;
+
           return { sent: input.to, attempt: calls.length };
         },
       }),
     };
+
     const execute = toolExecute<{ to: string }, JsonValue>(withEffectClaims(tools, deps).run);
 
     const inFlight = execute({ to: 'ops@example.test' }, OPTIONS);

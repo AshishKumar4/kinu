@@ -34,6 +34,7 @@ export function defaultSpecFor(
   availableSpecs: readonly string[],
 ): string | null {
   if (configured && availableSpecs.includes(configured)) return configured;
+
   return availableSpecs.includes(DEFAULT_WORKERS_AI_MODEL_SPEC)
     ? DEFAULT_WORKERS_AI_MODEL_SPEC
     : null;

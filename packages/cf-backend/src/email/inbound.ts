@@ -24,10 +24,13 @@ const AGENT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
 export function agentNameFromRecipient(to: string, emailDomain: string | undefined): string | null {
   const addr = normalizeEmailAddress(to);
   const at = addr.lastIndexOf('@');
+
   if (at <= 0) return null;
   const host = addr.slice(at + 1);
+
   if (!emailDomain || host !== emailDomain.trim().toLowerCase()) return null;
   const local = addr.slice(0, at).split('+')[0];
+
   return AGENT_NAME_RE.test(local) ? local : null;
 }
 
@@ -45,13 +48,18 @@ export function agentEmailAddress(agentName: string, emailDomain: string): strin
 export function isAutoReplyEmail(headers: Headers): boolean {
   // RFC 3834: "no" is the only value that marks human-sent mail.
   const autoSubmitted = headers.get('auto-submitted');
+
   if (autoSubmitted && autoSubmitted.trim().toLowerCase() !== 'no') return true;
+
   // Any value means the sender doesn't want auto-replies.
   if (headers.get('x-auto-response-suppress')) return true;
   const precedence = headers.get('precedence')?.trim().toLowerCase();
+
   if (precedence === 'bulk' || precedence === 'junk' || precedence === 'list') return true;
+
   // Mailing-list mail carries List-* headers (RFC 2919/2369).
   if (headers.has('list-id') || headers.has('list-unsubscribe')) return true;
+
   return false;
 }
 
@@ -73,11 +81,15 @@ const QUOTE_MARKERS: ReadonlyArray<RegExp> = [
  *  back to the full text when stripping would leave nothing. */
 function stripQuotedReply(text: string): string {
   let cut = text.length;
+
   for (const re of QUOTE_MARKERS) {
     const m = re.exec(text);
+
     if (m && m.index < cut) cut = m.index;
   }
+
   const stripped = text.slice(0, cut).trim();
+
   return stripped.length > 0 ? stripped : text.trim();
 }
 
@@ -120,11 +132,13 @@ function attachmentSize(content: ArrayBuffer | Uint8Array | string): number {
 /** Parse a buffered raw MIME message into the turn-input fields. */
 export async function parseInboundMime(raw: ArrayBuffer): Promise<ParsedInboundEmail> {
   const parsed = await PostalMime.parse(raw);
+
   const text = parsed.text?.trim()
     ? parsed.text
     : parsed.html
       ? htmlToText(parsed.html)
       : '';
+
   return {
     subject: parsed.subject?.trim() ?? '(no subject)',
     body_text: stripQuotedReply(text),

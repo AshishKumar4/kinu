@@ -33,6 +33,7 @@ function repeats(taskId: string, variantId: string, passes: readonly boolean[]):
 
 function scorecard(spec: { a: boolean; b: boolean }[]): SealedScorecard {
   const outcomes: PairedOutcome[] = spec.map((s, i) => ({ taskId: `s${i}`, a: [s.a], b: [s.b] }));
+
   return { tasks: spec.length, manifestHash: 'sealed-hash', stats: pairedBinaryComparison(outcomes, { seed: 1, iterations: 1000 }) };
 }
 
@@ -66,6 +67,7 @@ describe('buildBenchReport', () => {
         attempt('t2', 'baseline', true), attempt('t2', 'candidate', false, { budgetBreach: 'wall-clock' }),
       ],
     });
+
     expect(report.dev.tasks).toBe(2);
     expect(report.dev.stats.onlyA).toBe(1);
     expect(report.dev.stats.onlyB).toBe(1);
@@ -93,6 +95,7 @@ describe('buildBenchReport', () => {
 
   test('folds repeats into one case row and averages the per-attempt cost', () => {
     const config = { ...CONFIG, repeats: 3 };
+
     const report = buildBenchReport({
       runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
       devAttempts: [
@@ -106,6 +109,7 @@ describe('buildBenchReport', () => {
         ...repeats('t2', 'candidate', [false, false, false]),
       ],
     });
+
     const [t1, t2] = report.dev.cases;
     expect(t1).toMatchObject({ taskId: 't1', attempts: 3, passesA: 2, passesB: 3 });
     expect(t2).toMatchObject({ taskId: 't2', attempts: 3, passesA: 0, passesB: 0 });
@@ -129,6 +133,7 @@ describe('buildBenchReport', () => {
 
   test('an attempt nobody metered folds to null, never to a cheaper number', () => {
     const config = { ...CONFIG, repeats: 2 };
+
     const report = buildBenchReport({
       runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
       devAttempts: [
@@ -142,6 +147,7 @@ describe('buildBenchReport', () => {
         ...repeats('t1', 'candidate', [true, true]),
       ],
     });
+
     const [t1] = report.dev.cases;
     expect(t1!.tokensA).toBeNull();
     expect(t1!.peakPromptTokensA).toBeNull();
@@ -167,6 +173,7 @@ describe('buildBenchReport', () => {
         attempt('t1', 'candidate', true, { modelCalls: 0 }),
       ],
     });
+
     expect(report.dev.cases[0]).toMatchObject({ modelCallsA: null, modelCallsB: 0 });
     expect(renderBenchSummary(report)).toContain('model calls/task A=unreported  B=0.0');
   });
@@ -225,6 +232,7 @@ describe('decideBenchOutcome — rejection by default', () => {
       { a: false, b: true }, { a: false, b: true }, { a: true, b: false },
       ...Array.from({ length: 9 }, () => ({ a: true, b: true })),
     ]));
+
     expect(decision.accept).toBe(false);
     expect(decision.reason).toContain('only 3 of 12 held-out tasks differed');
     expect(decision.reason).toContain('0.2500');
@@ -238,6 +246,7 @@ describe('decideBenchOutcome — rejection by default', () => {
       ...Array.from({ length: 3 }, () => ({ a: true, b: false })),
       ...Array.from({ length: 9 }, () => ({ a: true, b: true })),
     ]));
+
     expect(decision.accept).toBe(false);
     expect(decision.reason).toContain('not significant');
   });
@@ -266,6 +275,7 @@ describe('renderBenchSummary', () => {
       sealed: scorecard(Array.from({ length: 6 }, () => ({ a: false, b: true }))),
       sealAccessOrdinal: 3,
     });
+
     const text = renderBenchSummary(report);
     // The rendered figure has to be the budget the run actually used, not a copy of
     // it — a second literal here is how the summary came to advertise a wall clock
@@ -279,6 +289,7 @@ describe('renderBenchSummary', () => {
 
   test('reports pass^k next to pass@1 and names the unstable tasks', () => {
     const config = { ...CONFIG, repeats: 3 };
+
     const report = buildBenchReport({
       runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
       devAttempts: [
@@ -288,6 +299,7 @@ describe('renderBenchSummary', () => {
         ...repeats('wobbly', 'candidate', [false, false, false]),
       ],
     });
+
     const text = renderBenchSummary(report);
     expect(text).toContain('Repeats: 3 attempt(s) per task per variant');
     expect(text).toContain('pass@1 A=83.3%  B=50.0%');
@@ -303,6 +315,7 @@ describe('renderBenchSummary', () => {
 
   test('says every task agreed when the repeats were unanimous', () => {
     const config = { ...CONFIG, repeats: 2 };
+
     const report = buildBenchReport({
       runId: 'r1', config, sealed: null, sealAccessOrdinal: null,
       devAttempts: [
@@ -310,6 +323,7 @@ describe('renderBenchSummary', () => {
         ...repeats('t1', 'candidate', [true, true]),
       ],
     });
+
     expect(renderBenchSummary(report)).toContain('UNSTABLE on dev: none');
   });
 
@@ -318,6 +332,7 @@ describe('renderBenchSummary', () => {
       runId: 'r1', config: CONFIG, sealed: null, sealAccessOrdinal: null,
       devAttempts: [attempt('t1', 'baseline', false), attempt('t1', 'candidate', true)],
     });
+
     expect(renderBenchSummary(report)).toContain('SEALED split: not opened');
     expect(renderBenchSummary(report)).toContain('DECISION: REJECT');
   });
@@ -346,6 +361,7 @@ describe('gain report', () => {
       ],
       attempts: outcomes(['t1', 't2', 't3']),
     });
+
     expect(report.stats.gain).toBe(0);
     expect(report.stats.pairsWithDifference).toBe(0);
     expect(report.stats.canReachSignificance).toBe(false);
@@ -361,6 +377,7 @@ describe('gain report', () => {
     // is at the exact test's six-differing-pair floor, so this contrast was
     // capable of resolving an effect and simply found none.
     const ids = ['t1', 't2', 't3', 't4', 't5', 't6'];
+
     const report = buildGainReport({
       runId: 'g1', config: CONFIG,
       perTask: ids.map((taskId, index) => ({
@@ -368,6 +385,7 @@ describe('gain report', () => {
       })),
       attempts: outcomes(ids),
     });
+
     expect(report.stats.gain).toBe(0);
     expect(report.stats.pairsWithDifference).toBe(6);
     expect(report.stats.canReachSignificance).toBe(true);
@@ -386,6 +404,7 @@ describe('gain report', () => {
       ],
       attempts: outcomes(['a', 'b', 'c']),
     });
+
     expect(report.sequence).toEqual(['a', 'b', 'c']);
     expect(report.stats.normalizedGain).toBeCloseTo(2 / 3, 10);
   });
@@ -399,6 +418,7 @@ describe('gain report', () => {
         attempt('t1', CONFIG.variantB, true, { tokens: 80, modelCalls: 0, peakPromptTokens: 500 }),
       ],
     });
+
     expect(report.cost.stateless).toMatchObject({
       attempts: 1, totalTokens: 120, meanTokens: 120,
       totalModelCalls: null, meanModelCalls: null, peakPromptTokens: 1000,
@@ -420,6 +440,7 @@ describe('gain report', () => {
         attempt('t1', CONFIG.variantB, true, { tokens: 80 }),
       ],
     });
+
     expect(report.cost.stateless).toMatchObject({
       attempts: 1, totalTokens: null, meanTokens: null, peakPromptTokens: null,
     });
@@ -436,6 +457,7 @@ describe('gain report', () => {
     })).toThrow(/expected 1 attempt per arm/);
   });
 });
+
 describe('run mechanics', () => {
   test('runOrder is deterministic per seed and varies across tasks', () => {
     expect(runOrder('t1', 7)).toBe(runOrder('t1', 7));
@@ -453,6 +475,7 @@ describe('run mechanics', () => {
       outputTokens: { total: 56, text: 56, reasoning: 0 },
       raw: { prompt_tokens: 1234, completion_tokens: 56, total_tokens: 1290 },
     };
+
     expect(usageTokens(usage)).toBe(1290);
   });
 
@@ -466,6 +489,7 @@ describe('run mechanics', () => {
     for (const bad of [undefined, null, 'nonsense', 42, {}, { inputTokens: {} }]) {
       expect(usageTokens(bad)).toBeUndefined();
     }
+
     // A non-finite figure is discarded, not propagated: the readable half still
     // counts and NaN never reaches an arithmetic comparison.
     expect(usageTokens({ inputTokens: NaN, outputTokens: 3 })).toBe(3);

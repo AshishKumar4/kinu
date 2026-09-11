@@ -43,6 +43,7 @@ import {
 } from '../src/snapshot-chain';
 
 export type SecurityCellId = 'F7' | 'F10' | 'F11' | 'F12';
+
 export type SecurityCellStatus = 'refused' | 'accepted' | 'unable';
 
 export interface SecurityCellResult {
@@ -73,12 +74,14 @@ const textDecoder = new TextDecoder();
  *  declared digest against the stored one, so what these hash is irrelevant
  *  and only their difference is under test. */
 const DECLARED_DIGEST = 'a'.repeat(64);
+
 const STORED_DIGEST = `${'a'.repeat(63)}b`;
 
 /** The isolated prefix for one call. The nonce is driver-chosen per call. */
 export function securityPrefixFor(boxPrefix: string, nonce: string): string {
   if (!NONCE.test(nonce)) throw new Error('security nonce is not an 8-64 char id');
   const base = boxPrefix.endsWith('/') ? boxPrefix : `${boxPrefix}/`;
+
   return `${base}security-cells/${nonce}/`;
 }
 
@@ -90,8 +93,10 @@ async function purgePrefix(bucket: R2Bucket, prefix: string): Promise<void> {
   for (;;) {
     const page = await bucket.list({ prefix, limit: 100 });
     const keys = page.objects.map((o) => o.key);
+
     if (keys.length === 0) return;
     await bucket.delete(keys);
+
     if (page.truncated !== true) return;
   }
 }
@@ -99,9 +104,12 @@ async function purgePrefix(bucket: R2Bucket, prefix: string): Promise<void> {
 async function listKeys(bucket: R2Bucket, prefix: string): Promise<string[]> {
   const keys: string[] = [];
   let cursor: string | undefined;
+
   for (;;) {
     const page = await bucket.list({ prefix, cursor, limit: 100 });
+
     for (const o of page.objects) keys.push(o.key);
+
     if (page.truncated !== true || page.cursor === undefined) return keys;
     cursor = page.cursor;
   }
@@ -116,8 +124,10 @@ async function f7Chain(input: {
   // put in one transaction, throwing ChainRecordAdvanced on a stale rev —
   // the same rule SnapshotChainPorts.writeState enforces on the live row.
   const key = `__security:chain:${input.nonce}`;
+
   const read = async (): Promise<{ rev: number } | null> =>
     (await input.storage.get<{ rev: number }>(key)) ?? null;
+
   const deleteIsolatedKey = async (): Promise<void> => {
     try {
       await input.storage.delete(key);
@@ -125,17 +135,23 @@ async function f7Chain(input: {
       input.cleanupErrors.push(`isolated chain record cleanup: ${describeThrown({ cause: error })}`);
     }
   };
+
   await input.storage.put(key, { rev: 7 });
   const observed = await read();
+
   if (observed === null) {
     await deleteIsolatedKey();
+
     return cell('F7', 'unable', 'isolated chain record did not persist');
   }
+
   // A concurrent writer advances the record first.
   await input.storage.put(key, { rev: observed.rev + 1 });
+
   try {
     await input.storage.transaction(async (txn) => {
       const stored = ((await txn.get<{ rev: number }>(key))?.rev) ?? null;
+
       if (stored !== observed.rev) throw new ChainRecordAdvanced(observed.rev, stored);
       await txn.put(key, { rev: observed.rev + 1 });
     });
@@ -143,15 +159,21 @@ async function f7Chain(input: {
     if (error instanceof ChainRecordAdvanced) {
       const current = await read();
       await deleteIsolatedKey();
+
       if (current?.rev !== observed.rev + 1) {
         return cell('F7', 'unable', 'stale chain write refused but the record did not hold the winner');
       }
+
       return cell('F7', 'refused', `stale rev ${observed.rev} refused after advance to ${current?.rev}: ${describeThrown({ cause: error })}`);
     }
+
     await deleteIsolatedKey();
+
     return cell('F7', 'unable', `stale chain write failed outside the rev fence: ${describeThrown({ cause: error })}`);
   }
+
   await deleteIsolatedKey();
+
   return cell('F7', 'accepted', `stale rev ${observed.rev} overwrote the advanced record`);
 }
 
@@ -162,27 +184,36 @@ async function f10Chain(): Promise<SecurityCellResult> {
   const hostileIds = ['../escape', '', 'not-a-uuid', 'a/b', 'x'.repeat(200)];
   const root = 'boxes/unit-test/backups';
   const refusals: string[] = [];
+
   for (const id of hostileIds) {
     if (isChainId(id)) return cell('F10', 'accepted', 'hostile chain id passed the UUID gate');
+
     try {
       baseObjectKey(root, id);
+
       return cell('F10', 'accepted', 'hostile chain id built a storage key');
     } catch (error) {
       refusals.push(describeThrown({ cause: error }));
     }
   }
+
   // Same-length corruption: the digest/version rule must refuse.
   const declared: ChainLayer = {
     bytes: 1024, digest: DECLARED_DIGEST, objectVersion: 'version-a',
   };
+
   const sameLengthOtherDigest: ChainLayer = {
     bytes: 1024, digest: STORED_DIGEST, objectVersion: 'version-b',
   };
+
   const failure = layerIntegrityFailure({ declared, stored: sameLengthOtherDigest, label: 'delta' });
+
   if (failure === null) return cell('F10', 'accepted', 'same-length replacement with a different digest passed integrity');
   // Soundness: an identical layer must NOT refuse (else the gate above is vacuous).
   const sound = layerIntegrityFailure({ declared, stored: { ...declared }, label: 'delta' });
+
   if (sound !== null) return cell('F10', 'unable', `identical layer refused integrity: ${sound.slice(0, 120)}`);
+
   return cell('F10', 'refused', `hostile ids (${refusals.length}) refused; same-length digest mismatch refused`);
 }
 
@@ -197,6 +228,7 @@ async function f11Chain(input: {
   let prefixEscapes = 0;
   const capabilityEscapesOrReplays = 0;
   const prefixRefusals: string[] = [];
+
   // Prefix: hostile ids throw before a key exists; sound keys stay inside.
   try {
     baseObjectKey(chainStoreRoot(input.boxPrefix), '../escape');
@@ -204,13 +236,16 @@ async function f11Chain(input: {
   } catch (error) {
     prefixRefusals.push(describeThrown({ cause: error }));
   }
+
   try {
     deltaObjectKey(chainStoreRoot(input.boxPrefix), '/absolute');
     prefixEscapes += 1;
   } catch (error) {
     prefixRefusals.push(describeThrown({ cause: error }));
   }
+
   const soundKey = baseObjectKey(chainStoreRoot(input.boxPrefix), '123e4567-e89b-12d3-a456-426614174000');
+
   if (!soundKey.startsWith(input.boxPrefix)) prefixEscapes += 1;
   // Replay fence: a stale rev write must throw ChainRecordAdvanced. Anything
   // else is not a refusal — it is a probe failure, reported as unable.
@@ -220,9 +255,11 @@ async function f11Chain(input: {
   await input.storage.put(key, { rev: 12 });
   let replayRefused = false;
   let replayOutsideFence: string | null = null;
+
   try {
     await input.storage.transaction(async (txn) => {
       const stored = ((await txn.get<{ rev: number }>(key))?.rev) ?? null;
+
       if (stored !== observed) throw new ChainRecordAdvanced(observed, stored);
       await txn.put(key, { rev: 13 });
     });
@@ -239,28 +276,34 @@ async function f11Chain(input: {
       input.cleanupErrors.push(`isolated replay record cleanup: ${describeThrown({ cause: error })}`);
     }
   }
+
   if (replayOutsideFence !== null) {
     return {
       result: cell('F11', 'unable', `replay probe failed outside the rev fence: ${replayOutsideFence}`),
       prefixEscapes, capabilityEscapesOrReplays,
     };
   }
+
   if (!replayRefused) {
     return {
       result: cell('F11', 'accepted', 'stale chain rev replay overwrote the advanced record'),
       prefixEscapes, capabilityEscapesOrReplays: 1,
     };
   }
+
   const keys = await listKeys(input.bucket, input.securityPrefix);
+
   for (const k of keys) {
     if (!k.startsWith(input.securityPrefix)) prefixEscapes += 1;
   }
+
   if (prefixEscapes > 0) {
     return {
       result: cell('F11', 'accepted', `${prefixEscapes} prefix escape(s) accepted`),
       prefixEscapes, capabilityEscapesOrReplays,
     };
   }
+
   return {
     result: cell('F11', 'refused', `hostile chain ids refused (${prefixRefusals.length}); stale rev replay refused; ${keys.length} isolated object(s) inside the namespace`),
     prefixEscapes, capabilityEscapesOrReplays,
@@ -284,12 +327,14 @@ export async function runBenchSecurityCells(input: {
 
   const f7 = await f7Chain({ storage: input.storage, nonce: input.nonce, cleanupErrors });
   const f10 = await f10Chain();
+
   const f11 = await f11Chain({
     storage: input.storage, bucket: input.bucket,
     boxPrefix: input.boxPrefix, nonce: input.nonce, securityPrefix, cleanupErrors,
   });
 
   const probeText = [f7.detail, f10.detail, f11.result.detail].join('\n');
+
   const f12 = await runF12({
     bucket: input.bucket, securityPrefix,
     fixtureSecret: input.fixtureSecret, envValues: input.envValues, probeText,
@@ -301,7 +346,9 @@ export async function runBenchSecurityCells(input: {
   const prefixEscapes = f11.prefixEscapes;
   const capabilityEscapesOrReplays = f11.capabilityEscapesOrReplays;
   const credentialLeaks: string[] = [];
+
   if (f12.status === 'accepted') credentialLeaks.push('F12: live fixture secret present in a scanned surface');
+
   const completed = cells.every((c) => c.status === 'refused')
     && !staleWriterAccepted && !hostileMetadataAccepted
     && prefixEscapes === 0 && capabilityEscapesOrReplays === 0
@@ -331,34 +378,45 @@ async function runF12(input: {
   probeText: string;
 }): Promise<SecurityCellResult> {
   const { fixtureSecret } = input;
+
   if (fixtureSecret.length === 0) {
     return cell('F12', 'unable', 'no live fixture secret was supplied to scan for');
   }
+
   // Surfaces: the cells' own detail text, every non-token env value, and the
   // isolated store bytes written above. Each hit reports its surface only.
   const hits: string[] = [];
+
   if (input.probeText.length > 0 && input.probeText.includes(fixtureSecret)) {
     hits.push('security cell details');
   }
+
   for (const env of input.envValues) {
     if (env.value.length > 0 && env.value.includes(fixtureSecret)) hits.push(`env ${env.name}`);
   }
+
   try {
     const keys = await listKeys(input.bucket, input.securityPrefix);
+
     for (const key of keys.slice(0, 20)) {
       const object = await input.bucket.get(key);
+
       if (object === null) continue;
       const text = textDecoder.decode(new Uint8Array(await object.arrayBuffer()).slice(0, 4096));
+
       if (text.includes(fixtureSecret)) {
         hits.push('isolated store object');
         break;
       }
     }
+
     if (input.securityPrefix.includes(fixtureSecret)) hits.push('isolated key prefix');
   } catch (error) {
     return cell('F12', 'unable', `isolated store scan failed: ${describeThrown({ cause: error })}`);
   }
+
   if (hits.length > 0) return cell('F12', 'accepted', `live fixture secret present in ${hits.length} scanned surface(s)`);
+
   return cell('F12', 'refused', 'live fixture secret absent from details, env and isolated store bytes');
 }
 

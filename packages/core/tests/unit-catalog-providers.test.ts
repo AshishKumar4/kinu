@@ -61,6 +61,7 @@ const CATALOG = {
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));
+
   return {
     env: {},
     fetch: fetchFn,
@@ -85,6 +86,7 @@ function staticProvider(id: string, modelId: string, onCreate: () => void = () =
     listModels: () => [{ id: modelId, label: `${id} static` }],
     createModel: () => {
       onCreate();
+
       return new MockLanguageModelV3({ provider: `static-${id}`, modelId });
     },
   };
@@ -135,6 +137,7 @@ describe('models.dev dynamic catalog source', () => {
   test('listIds = stored .bearer keys ∩ key-satisfiable catalog providers', async () => {
     const mock = catalogMock();
     const source = createModelsDevCatalogSource();
+
     const deps = makeDeps({
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk' } },
       [catalogCredKey('sap-ai-core')]: { headers: { Authorization: 'Bearer sk' } }, // not satisfiable
@@ -142,6 +145,7 @@ describe('models.dev dynamic catalog source', () => {
       'openai-compat.groq': { headers: {}, baseURL: 'https://x' },                 // openai-compat namespace
       [catalogCredKey('unlisted')]: { headers: { Authorization: 'Bearer x' } },    // not in catalog
     }, mock.fetch);
+
     expect(await source.listIds(deps)).toEqual(['groq']);
   });
 
@@ -149,9 +153,11 @@ describe('models.dev dynamic catalog source', () => {
     const source = createModelsDevCatalogSource({ exclude: ['cloudflare-workers-ai'] });
     expect(source.get('cloudflare-workers-ai')).toBeUndefined();
     const mock = catalogMock();
+
     const deps = makeDeps({
       [catalogCredKey('cloudflare-workers-ai')]: { headers: { Authorization: 'Bearer t' } },
     }, mock.fetch);
+
     expect(await source.listIds(deps)).toEqual([]);
   });
 
@@ -169,6 +175,7 @@ describe('registry with dynamic catalog source', () => {
     const registry = createProviderRegistry();
     registry.register(staticProvider('openai', 'gpt-5.5'));
     registry.registerDynamic(createModelsDevCatalogSource());
+
     return registry;
   }
 
@@ -176,7 +183,9 @@ describe('registry with dynamic catalog source', () => {
     const mock = catalogMock([
       { match: 'api.groq.com', respond: { status: 200, body: CHAT_COMPLETION_BODY } },
     ]);
+
     const registry = makeRegistry();
+
     const deps = makeDeps({
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk-test' } },
     }, mock.fetch);
@@ -194,6 +203,7 @@ describe('registry with dynamic catalog source', () => {
   test('listAllModels includes catalog models (tool-call only) for connected providers', async () => {
     const mock = catalogMock();
     const registry = makeRegistry();
+
     const deps = makeDeps({
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk' } },
     }, mock.fetch);
@@ -215,6 +225,7 @@ describe('registry with dynamic catalog source', () => {
     const registry = createProviderRegistry();
     registry.register(staticProvider('openai', 'gpt-5.5', () => { staticCreates++; }));
     registry.registerDynamic(createModelsDevCatalogSource());
+
     const deps = makeDeps({
       [catalogCredKey('openai')]: { headers: { Authorization: 'Bearer sk' } },
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk' } },
@@ -253,16 +264,20 @@ describe('registry with dynamic catalog source', () => {
   test('credentialed id missing from the catalog fails at request time with a clear error', async () => {
     const mock = catalogMock();
     const registry = makeRegistry();
+
     const deps = makeDeps({
       [catalogCredKey('unlisted')]: { headers: { Authorization: 'Bearer x' } },
     }, mock.fetch);
+
     const model = registry.resolve('unlisted/some-model', deps);
     let detail = '';
+
     try {
       await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
     } catch (err) {
       detail = describeProviderError({ cause: err });
     }
+
     expect(detail).toContain('models.dev');
   });
 });

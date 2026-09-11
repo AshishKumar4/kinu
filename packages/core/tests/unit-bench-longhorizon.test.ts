@@ -12,6 +12,7 @@ import {
 } from '../src/index';
 
 const digest: LongHorizonSpec = { mode: 'digest', seed: 11, entries: 120, filler: 60, markers: 5, parts: 1 };
+
 const continuation: LongHorizonSpec = { mode: 'continuation', seed: 12, entries: 200, filler: 40, markers: 6, parts: 4 };
 
 describe('the corpus is a pure function of the spec', () => {
@@ -58,6 +59,7 @@ describe('the corpus is a pure function of the spec', () => {
   test('digest keeps one flat directory; continuation splits into parts', () => {
     expect(longHorizonPartDir(digest, 1)).toBe(LONGHORIZON_CORPUS_DIR);
     expect(longHorizonPartDir(continuation, 3)).toBe(`${LONGHORIZON_CORPUS_DIR}/part-3`);
+
     for (const f of generateLongHorizonFiles(continuation)) {
       expect(f.path.startsWith(`${LONGHORIZON_CORPUS_DIR}/part-${f.part}/`)).toBe(true);
     }
@@ -65,6 +67,7 @@ describe('the corpus is a pure function of the spec', () => {
 
   test('every entry is materialized exactly once across the files', () => {
     const text = generateLongHorizonFiles(continuation).map((f) => f.text).join('\n');
+
     for (const entry of generateLongHorizonEntries(continuation)) {
       expect(text.split(`### ${entry.id}\n`)).toHaveLength(2);
     }
@@ -75,8 +78,10 @@ describe('the questions are answerable only from the corpus', () => {
   test('the count answer equals what the entries actually contain', () => {
     const q = buildLongHorizonQuestions(digest).find((x) => x.id === 'q-count')!;
     const component = /component: (\w[\w-]*)/.exec(q.text)![1];
+
     const expected = generateLongHorizonEntries(digest)
       .filter((e) => e.component === component && e.status === 'fail').length;
+
     expect(q.answer).toBe(String(expected));
     expect(expected).toBeGreaterThan(0);
   });
@@ -189,13 +194,16 @@ describe('the spec round-trips into the check argv', () => {
     for (const spec of [digest, continuation]) {
       expect(decodeLongHorizonSpec(encodeLongHorizonSpec(spec))).toEqual(spec);
     }
+
     // Hand-derived array encoding, so a field-order change fails here.
     expect(encodeLongHorizonSpec(digest)).toBe('["digest",11,120,60,5,1]');
+
     // Field order in the encoding must not follow object-literal order — the
     // encoded string lands in the check argv, so it lands in the task hash.
     const reordered: LongHorizonSpec = {
       parts: 1, markers: 5, filler: 60, entries: 120, seed: 11, mode: 'digest',
     };
+
     expect(encodeLongHorizonSpec(reordered)).toBe(encodeLongHorizonSpec(digest));
   });
 

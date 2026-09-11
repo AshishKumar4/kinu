@@ -21,6 +21,7 @@ import type { JsonObject, JsonValue } from '../utils/json';
  * portability layer a backend author reads.
  */
 export type { SqlValue, SqlExecutor } from '@kinu.run/agent-utils';
+
 import type { Refusal } from '../obs/error';
 
 /**

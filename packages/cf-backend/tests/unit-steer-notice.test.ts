@@ -23,6 +23,7 @@ import type { InlineSteer } from '@kinu.run/core';
 
 const queued = (id: string): InlineSteer =>
   ({ id, text: 'use the swarm for this', state: 'queued', atStep: null });
+
 const landed = (id: string, atStep = 3): InlineSteer =>
   ({ id, text: 'use the swarm for this', state: 'landed', atStep });
 
@@ -34,6 +35,7 @@ const landed = (id: string, atStep = 3): InlineSteer =>
  *  is the property under test. */
 function noticeFor(steerRuns: readonly InlineSteer[], hasAttachments = false): string | null {
   let seen: string | null = null;
+
   function Probe() {
     const deps: SteerActionsDeps = {
       steerChat: async () => 'mid-turn',
@@ -43,11 +45,15 @@ function noticeFor(steerRuns: readonly InlineSteer[], hasAttachments = false): s
       hasAttachments,
       steerRuns,
     };
+
     const { notice } = useSteerActions(deps);
     seen = notice === null ? null : notice.text;
+
     return null;
   }
+
   renderToStaticMarkup(createElement(Probe));
+
   return seen;
 }
 

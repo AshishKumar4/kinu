@@ -71,6 +71,7 @@ function queuedSteerNotice(
   steerRuns: readonly InlineSteer[], hasAttachments: boolean,
 ): ComposerNotice | null {
   if (!steerRuns.some((steer) => steer.state === "queued")) return null;
+
   return {
     id: NOTICE_ID, tone: "progress",
     text: hasAttachments
@@ -90,6 +91,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
 
   const steer = useCallback(() => {
     const text = draft.trim();
+
     if (!text) return;
     // Cleared optimistically: the thread renders the steer from the server's own
     // broadcast the moment it is taken, so the text is visibly somewhere.
@@ -98,6 +100,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
     startTransition(async () => {
       try {
         const landed = await steerChat(text);
+
         if (landed === "queued") {
           // The turn ended before this arrived, so the ACTOR queued it as the
           // next ordinary turn — atomically, in its own turn queue, so another
@@ -120,6 +123,7 @@ export function useSteerActions(deps: SteerActionsDeps): SteerActions {
       }
     });
   }, [draft, setDraft, steerChat]);
+
   const stop = useCallback(() => {
     setSettled(null);
     startTransition(async () => {

@@ -36,6 +36,7 @@ export interface ModelMenuResponse {
 export async function listAvailableModels(env: Env, userId: string, caller: UserCaller): Promise<ModelMenuResponse> {
   // The UserDO namespace binding declares UserDO as its stub contract.
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
+
   const { registry, deps } = createAgentProviderRegistry({
     env,
     userDO: { stub, caller },
@@ -43,6 +44,7 @@ export async function listAvailableModels(env: Env, userId: string, caller: User
   });
 
   const menu = await registry.listAllModels(deps);
+
   const out = menu.models.map((model): ModelMenuEntry => ({
     spec: `${model.provider}/${model.id}`,
     label: model.label ?? model.id,
@@ -56,6 +58,7 @@ export async function listAvailableModels(env: Env, userId: string, caller: User
   // Retried: a dropped read here renders a user's connected accounts as none at
   // all, which sends them to re-authorise a provider they never lost.
   const creds = await retryTransientDO('listCredentials', () => stub.listCredentials(caller));
+
   for (const c of creds) {
     if (c.key.startsWith('openai-compat.')) {
       const name = c.key.slice('openai-compat.'.length);
@@ -67,6 +70,7 @@ export async function listAvailableModels(env: Env, userId: string, caller: User
       });
     }
   }
+
   return { models: out, failures: menu.failures };
 }
 
@@ -96,6 +100,7 @@ function buildProviderCatalog(
     .filter((p) => modelsDevCompatBaseURL(p) !== null || staticIds.has(p.id))
     .map((p): ProviderCatalogEntry => {
       const credKey = catalogCredKey(p.id);
+
       return {
         id: p.id,
         credKey,
@@ -112,10 +117,12 @@ export async function listProviderCatalog(env: Env, userId: string, caller: User
   // The UserDO namespace binding declares UserDO as its stub contract.
   const stub = env.UserDO.get(env.UserDO.idFromName(userId));
   const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
+
   const [providers, creds] = await Promise.all([
     listModelsDevProviders({ fetch }),
     retryTransientDO('listCredentials', () => stub.listCredentials(caller)),
   ]);
+
   return buildProviderCatalog(
     providers,
     new Set(registry.list().map((p) => p.id)),

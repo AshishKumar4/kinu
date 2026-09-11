@@ -3,19 +3,23 @@ import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });
+
 const CloudflareGatewaySchema = v.object({
   id: v.string(), authentication: v.optional(v.boolean()), created_at: v.optional(v.string()),
 });
+
 const CloudflareErrorEnvelopeSchema = v.object({
   errors: v.optional(v.array(v.object({ message: v.optional(v.string()) }))),
 });
 
 export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
+
 /** DERIVED credential key — never stored. UserDO serves it from the same
  *  `cloudflare.oauth` row, but the header bundle targets the user's OWN
  *  selected AI Gateway (`cf-aig-gateway-id`). Resolves to null until a
  *  gateway is selected, which is what gates the `my-gateway` provider. */
 export const CLOUDFLARE_AI_GATEWAY_CRED_KEY = 'cloudflare.ai-gateway';
+
 // `offline_access` is what makes dash.cloudflare.com issue a refresh token
 // (the OAuth client must also have the Refresh Token grant enabled). Without
 // it the credential dies at access-token expiry and Workers AI "disconnects".
@@ -24,9 +28,11 @@ export const CLOUDFLARE_AI_GATEWAY_CRED_KEY = 'cloudflare.ai-gateway';
 // the my-gateway provider uses for discovery) and `aig.run` covers inference.
 // Users who connected before a scope was added need one re-login to grant it.
 export const CLOUDFLARE_WORKERS_AI_SCOPES = 'user-details.read account-settings.read ai.write aig.write aig.run offline_access';
+
 const DEFAULT_CLOUDFLARE_AI_GATEWAY_ID = 'default';
 
 const CLOUDFLARE_API = 'https://api.cloudflare.com/client/v4';
+
 const CLOUDFLARE_TOKEN_URL = 'https://dash.cloudflare.com/oauth2/token';
 
 export interface CloudflareOAuthEnv {
@@ -65,9 +71,11 @@ async function requestCloudflareOAuthToken(
 ): Promise<JsonObject> {
   const clientId = cleanEnv(env.CLOUDFLARE_OAUTH_CLIENT_ID);
   const clientSecret = cleanEnv(env.CLOUDFLARE_OAUTH_CLIENT_SECRET);
+
   if (!clientId) throw new Error('Cloudflare OAuth client id is not configured.');
 
   const body = new URLSearchParams({ client_id: clientId, ...fields });
+
   const headers = new Headers({
     accept: 'application/json',
     'content-type': 'application/x-www-form-urlencoded',
@@ -83,11 +91,13 @@ async function requestCloudflareOAuthToken(
 
   const response = await fetch(CLOUDFLARE_TOKEN_URL, { method: 'POST', headers, body });
   const payload = await readJsonObject(response, 'Cloudflare token endpoint');
+
   if (!response.ok) {
     const code = stringField(payload, 'error') ?? `http_${response.status}`;
     const reason = stringField(payload, 'error_description') ?? stringField(payload, 'error') ?? `HTTP ${response.status}`;
     throw new CloudflareOAuthTokenError(code, `Cloudflare token refresh failed: ${reason}`);
   }
+
   return payload;
 }
 
@@ -98,19 +108,25 @@ async function fetchCloudflareAccounts(accessToken: string): Promise<CloudflareA
       authorization: `Bearer ${accessToken}`,
     },
   });
+
   const payload = await readJsonObject(response, 'Cloudflare accounts endpoint');
+
   if (!response.ok) {
     const reason = stringField(payload, 'error_description') ?? firstCloudflareError(payload) ?? `HTTP ${response.status}`;
     throw new Error(`Cloudflare account lookup failed: ${reason}`);
   }
 
   const result = v.safeParse(v.array(CloudflareAccountSchema), payload.result);
+
   if (!result.success) return [];
+
   return result
     .output.map((row) => {
       const id = row.id;
+
       if (!isCloudflareAccountId(id)) return null;
       const name = row.name?.trim() || id;
+
       return { id, name };
     })
     .filter((item): item is CloudflareAccount => item !== null);
@@ -120,6 +136,7 @@ export async function cloudflareTokenToCredential(
   token: CloudflareTokenPayload,
 ): Promise<OAuthCredential> {
   const accessToken = stringValue(token.access_token);
+
   if (!accessToken) throw new Error('Cloudflare OAuth did not return an access token.');
 
   const refreshToken = stringValue(token.refresh_token);
@@ -130,6 +147,7 @@ export async function cloudflareTokenToCredential(
   // the whole login. Gating sign-in on this lookup breaks sign-in for everyone
   // the moment the lookup fails; it must never be able to fail again.
   let accounts: CloudflareAccount[] = [];
+
   try {
     accounts = await fetchCloudflareAccounts(accessToken);
   } catch (err) {
@@ -143,6 +161,7 @@ export async function cloudflareTokenToCredential(
   const metadata: JsonObject = {
     tokenType: stringValue(token.token_type) ?? 'bearer',
   };
+
   // Every visible account is recorded so a multi-account user can switch to the
   // one that carries their Workers AI entitlement without a second API call —
   // and without this layer ever handing the token back out. The first is the
@@ -152,15 +171,20 @@ export async function cloudflareTokenToCredential(
     metadata.accountId = accounts[0].id;
     metadata.accountName = accounts[0].name;
   }
+
   const scopes = scopeList(token.scope);
+
   if (scopes) metadata.scopes = scopes;
+
   const credential: OAuthCredential = {
     kind: 'oauth',
     accessToken,
     expiresAt: expiresAtFromToken(token),
     metadata,
   };
+
   if (refreshToken) credential.refreshToken = refreshToken;
+
   return credential;
 }
 
@@ -169,6 +193,7 @@ export async function refreshCloudflareCredential(
   current: OAuthCredential,
 ): Promise<OAuthCredential> {
   if (!current.refreshToken) throw new Error('Cloudflare OAuth credential has no refresh token. Reconnect Cloudflare.');
+
   const token: CloudflareTokenPayload = await requestCloudflareOAuthToken(env, {
     grant_type: 'refresh_token',
     refresh_token: current.refreshToken,
@@ -178,21 +203,27 @@ export async function refreshCloudflareCredential(
   const refreshToken = stringValue(token.refresh_token) ?? current.refreshToken;
   const metadata: JsonObject = { ...current.metadata };
   const scopes = scopeList(token.scope);
+
   if (scopes) metadata.scopes = scopes;
   metadata.tokenType = stringValue(token.token_type) ?? current.metadata?.tokenType ?? 'bearer';
+
   const credential: OAuthCredential = {
     ...current,
     accessToken,
     refreshToken,
     metadata,
   };
+
   const expiresAt = expiresAtFromToken(token) ?? current.expiresAt;
+
   if (expiresAt !== undefined) credential.expiresAt = expiresAt;
+
   return credential;
 }
 
 export function cloudflareWorkersAIBaseURL(accountId: string): string | null {
   if (!isCloudflareAccountId(accountId)) return null;
+
   return `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/ai/v1`;
 }
 
@@ -202,6 +233,7 @@ export function cloudflareWorkersAIBaseURL(accountId: string): string | null {
  *  same AuthResolution it already holds — no extra plumbing for account ids. */
 export function cloudflareAccountAPIRoot(workersAIBaseURL: string): string | null {
   const match = /^(https:\/\/api\.cloudflare\.com\/client\/v4\/accounts\/[^/]+)\/ai\/v1\/?$/.exec(workersAIBaseURL);
+
   return match?.[1] ?? null;
 }
 
@@ -229,20 +261,29 @@ export async function fetchCloudflareAIGateways(
     `${CLOUDFLARE_API}/accounts/${encodeURIComponent(accountId)}/ai-gateway/gateways?per_page=50`,
     { headers: { accept: 'application/json', authorization: `Bearer ${accessToken}` } },
   );
+
   const payload = await readJsonObject(response, 'Cloudflare AI Gateway list endpoint');
+
   if (!response.ok) {
     const reason = firstCloudflareError(payload) ?? `HTTP ${response.status}`;
+
     const hint = response.status === 401 || response.status === 403
       ? ' Reconnect Cloudflare to grant AI Gateway access.'
       : '';
+
     throw new Error(`Cloudflare AI Gateway listing failed: ${reason}.${hint}`);
   }
+
   const result = v.safeParse(v.array(CloudflareGatewaySchema), payload.result);
+
   if (!result.success) return [];
+
   return result.output
     .map((item): CloudflareAIGatewaySummary | null => {
       const id = item.id;
+
       if (!isCloudflareAIGatewayId(id)) return null;
+
       return {
         id,
         authenticated: item.authentication === true,
@@ -258,6 +299,7 @@ export function cloudflareAIGatewayId(env: Pick<CloudflareOAuthEnv, 'CLOUDFLARE_
 
 export function accountIdFromCloudflareCredential(credential: OAuthCredential): string | null {
   const accountId = credential.metadata?.accountId;
+
   return v.is(v.string(), accountId) && isCloudflareAccountId(accountId) ? accountId : null;
 }
 
@@ -266,15 +308,19 @@ export function accountIdFromCloudflareCredential(credential: OAuthCredential): 
  *  account, so the picker always has at least the account in use. */
 export function cloudflareAccountsFromCredential(credential: OAuthCredential): CloudflareAccount[] {
   const stored = v.safeParse(v.array(CloudflareAccountSchema), credential.metadata?.accounts);
+
   const accounts = stored.success
     ? stored.output
         .filter((row) => isCloudflareAccountId(row.id))
         .map((row): CloudflareAccount => ({ id: row.id, name: row.name?.trim() || row.id }))
     : [];
+
   if (accounts.length > 0) return accounts;
   const selected = accountIdFromCloudflareCredential(credential);
+
   if (!selected) return [];
   const name = credential.metadata?.accountName;
+
   return [{ id: selected, name: v.is(v.string(), name) && name.trim() ? name.trim() : selected }];
 }
 
@@ -283,7 +329,9 @@ export function cloudflareAccountsFromCredential(credential: OAuthCredential): C
  *  this user's Workers AI" — the value `cloudflareWorkersAIBaseURL` reads. */
 export function withCloudflareAccount(credential: OAuthCredential, accountId: string): OAuthCredential {
   const account = cloudflareAccountsFromCredential(credential).find((row) => row.id === accountId);
+
   if (!account) throw new Error('That Cloudflare account is not one this login can see. Reconnect Cloudflare and try again.');
+
   return {
     ...credential,
     metadata: { ...credential.metadata, accountId: account.id, accountName: account.name },
@@ -292,8 +340,11 @@ export function withCloudflareAccount(credential: OAuthCredential, accountId: st
 
 export function isCloudflareCredentialUsable(credential: OAuthCredential, skewMs = 60_000): boolean {
   if (!accountIdFromCloudflareCredential(credential)) return false;
+
   if (credential.expiresAt === undefined) return true;
+
   if (credential.expiresAt > Date.now() + skewMs) return true;
+
   return credential.refreshToken !== undefined && credential.refreshToken.length > 0;
 }
 
@@ -307,24 +358,31 @@ function cleanEnv<Value>(value: Value): string {
 
 function expiresAtFromToken(token: CloudflareTokenPayload): number | undefined {
   const raw = token.expires_in;
+
   const seconds = v.is(v.number(), raw)
     ? raw
     : v.is(v.string(), raw) && raw.trim()
       ? Number(raw)
       : NaN;
+
   if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+
   return Date.now() + Math.max(0, seconds - 30) * 1000;
 }
 
 function scopeList<Value>(value: Value): string[] | undefined {
   if (v.is(v.string(), value)) {
     const scopes = value.trim().split(/\s+/).filter(Boolean);
+
     return scopes.length ? scopes : undefined;
   }
+
   if (Array.isArray(value)) {
     const scopes = value.filter((item): item is string => v.is(v.string(), item) && item.trim().length > 0);
+
     return scopes.length ? scopes : undefined;
   }
+
   return undefined;
 }
 
@@ -338,10 +396,13 @@ function stringField(obj: JsonObject, key: string): string | null {
 
 function firstCloudflareError(obj: JsonObject): string | null {
   const parsed = v.safeParse(CloudflareErrorEnvelopeSchema, obj);
+
   for (const error of parsed.success ? parsed.output.errors ?? [] : []) {
     const message = error.message?.trim() || null;
+
     if (message) return message;
   }
+
   return null;
 }
 

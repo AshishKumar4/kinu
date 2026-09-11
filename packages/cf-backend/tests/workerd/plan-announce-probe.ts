@@ -29,10 +29,12 @@ import { getAgentByName, type AgentContext } from 'agents';
 import { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from '../../src/rpc-surface';
 import * as v from 'valibot';
+
 // The owner's own Durable Object. A production root claims an owner before it
 // registers any actor, and building its runtime reaches `env.UserDO` for the
 // device plane — so the class this worker binds has to be here.
 export { UserDO } from '../../src/user/user-do';
+
 export { UserSocketProbeDO } from './user-socket-probe';
 
 type ActorEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
@@ -57,11 +59,13 @@ const SMUGGLED = 'kinu-probe-smuggled-frame';
  *  workspace really publishes, which is what makes the absence above an
  *  absence in a LIVE channel rather than in a silent one. */
 const HEAD_ID = 'head-wire';
+
 const DELTA = 'kinu-probe-narrow-delta';
 
 async function hop<Answer>(call: () => Promise<Answer>): Promise<HopResult> {
   try {
     await call();
+
     return { ok: true, error: null };
   } catch (cause) {
     return { ok: false, error: cause instanceof Error ? cause.message : String(cause) };
@@ -94,6 +98,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
    *  parsed out rather than narrowed to. */
   override broadcast(message: string | ArrayBuffer | ArrayBufferView): void {
     const text = v.safeParse(v.string(), message);
+
     if (text.success) this.published.push(text.output);
   }
 
@@ -111,6 +116,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
     // A DIFFERENT id, so this is one object calling another, and every hop is
     // outbound so nothing re-enters the object that is awaiting.
     const target = await getAgentByName<ActorEnv, ProductionOrchestrator>(this.env.OrchestratorAgent, SEALED);
+
     // EXPRESSION BODIES, never a statement block, and the difference is the
     // whole instrument: `broadcast` and `setState` are declared `void`, so a
     // block body drops the RPC promise the stub actually returns and the
@@ -136,6 +142,7 @@ export class OrchestratorAgent extends ProductionOrchestrator {
       // stub-holder that reached it would rewrite the callee's own state.
       state: await hop(async () => target.setState(null)),
     };
+
     return { hops, published: this.published };
   }
 }

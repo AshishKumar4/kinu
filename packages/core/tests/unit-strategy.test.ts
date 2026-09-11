@@ -22,17 +22,20 @@ describe('reasoning_effort plumbing', () => {
 
   test('configured Workers AI effort reaches the streaming HTTP request without an output cap', async () => {
     const requests: JsonObject[] = [];
+
     const model = createChatModel({
       kind: 'openai-compat', name: 'workers-ai', modelId: '@cf/zai-org/glm-5.3',
       baseURL: 'https://fixture.invalid/v1', headers: {},
       fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
         requests.push(v.parse(JsonObjectSchema, await new Request(input, init).json()));
+
         return new Response(`data: ${JSON.stringify({ id: 'x', object: 'chat.completion.chunk', created: 1, model: '@cf/zai-org/glm-5.3',
           choices: [{ index: 0, delta: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
           usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
         })}\n\ndata: [DONE]\n\n`, { headers: { 'content-type': 'text/event-stream' } });
       }),
     });
+
     const result = streamText({ model, prompt: 'probe', maxRetries: 0, ...effortFor('chat') });
     await result.text;
     expect(requests[0]?.reasoning_effort).toBe(REASONING_EFFORT_FOR_STAGE.chat);
@@ -47,6 +50,7 @@ describe('reasoning_effort plumbing', () => {
         openai: { reasoningEffort: 'medium' },
       });
     }
+
     expect(reasoningEffortOptions('low', 'openrouter')).toEqual({
       openrouter: { reasoningEffort: 'low' },
     });

@@ -26,6 +26,7 @@ import { deriveUserId } from '../src/auth/store';
  */
 
 const ROOT = join(import.meta.dir, '..');
+
 const source = (p: string): string => readFileSync(join(ROOT, p), 'utf8');
 
 describe('F1 defense 1 — the /agents/* transport is pinned to the orchestrator', () => {
@@ -148,6 +149,7 @@ describe('F1 defense 2 — @callable surface reduction (worker-side stubs preser
 
   test('every UserDO method is preserved for worker-side stub callers', () => {
     const src = source('src/user/user-do.ts');
+
     for (const m of ['getAuthHeaders', 'mintCliToken', 'setCredential', 'listWorkspaces', 'ensureProfile', 'ensureWorkspaceCapability']) {
       expect(src).toMatch(new RegExp(`async ${m}(?:<[^>]+>)?\\(`));
     }
@@ -163,13 +165,16 @@ describe('F1 defense 2 — @callable surface reduction (worker-side stubs preser
     // too. That no browser socket can reach any of them is asserted in
     // `tests/workerd/decorated-agent.test.ts`.
     const orchestrator = source('src/orchestrator.ts');
+
     for (const m of [
       'rawCopyFromFork', 'claimOwner', 'acceptWebhookDelivery', 'acceptEmailDelivery',
       'receivePeerMessage', 'listPeersFromMcp', 'runTaskFromMcp', 'saveNoteFromMcp', 'sendPeerFromMcp',
     ]) {
       expect(orchestrator).toContain(`async ${m}(`);
     }
+
     const actor = source('src/actor-agent.ts');
+
     for (const m of ['installWorkspaceCapability', 'getSubordinateBootstrapIdentity', 'receiveSubordinateEvent']) {
       expect(actor).toContain(`async ${m}(`);
     }

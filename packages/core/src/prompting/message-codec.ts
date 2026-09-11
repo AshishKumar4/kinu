@@ -54,6 +54,7 @@ const NativeValueSchema: v.GenericSchema<NativeValue> = v.lazy(() => v.union([
   v.array(NativeValueSchema),
   v.record(v.string(), NativeValueSchema),
 ]));
+
 const NativeRecordSchema: v.GenericSchema<{ readonly [key: string]: NativeValue }> =
   v.record(v.string(), NativeValueSchema);
 
@@ -72,70 +73,93 @@ const BinaryEnvelopeSchema = v.object({
   bytes: v.number(),
   buffer: v.optional(v.literal(true)),
 });
+
 const UrlEnvelopeSchema = v.object({ $url: v.string() });
+
 /** The escape hatch: a SOURCE object that itself carries a reserved key travels
  *  inside this wrapper, so an encode/decode pair is total rather than
  *  total-unless-the-data-looks-like-the-encoding. */
 const PlainEnvelopeSchema = v.object({ $plain: v.record(v.string(), StoredValueSchema) });
+
 const StoredRecordSchema = v.record(v.string(), StoredValueSchema);
 
 const RESERVED = ['$binary', '$url', '$plain'] as const;
 
 function encodeValue(value: NativeValue): StoredValue {
   if (value instanceof Uint8Array) return { $binary: bytesToBase64(value), bytes: value.byteLength };
+
   if (value instanceof ArrayBuffer) {
     const bytes = new Uint8Array(value);
+
     return { $binary: bytesToBase64(bytes), bytes: bytes.byteLength, buffer: true };
   }
+
   if (value === undefined) return null;
+
   if (value instanceof URL) return { $url: value.href };
+
   if (Array.isArray(value)) return value.map(encodeValue);
   // Not a record: a primitive, which the stored form carries unchanged. An
   // absent value became `null` above, which is what JSON does with it anyway
   // and what the SDK schema reads as an absent optional field.
   const record = v.safeParse(NativeRecordSchema, value);
+
   if (!record.success) {
     // Everything left is a JSON primitive the stored form carries unchanged;
     // parsing says so rather than an assertion claiming it.
     return v.parse(StoredValueSchema, value);
   }
+
   const mapped: Record<string, StoredValue> = {};
   const source = record.output;
+
   for (const key of Object.keys(source)) {
     const item = source[key];
+
     if (item !== undefined) mapped[key] = encodeValue(item);
   }
+
   return RESERVED.some((key) => Object.hasOwn(source, key)) ? { $plain: mapped } : mapped;
 }
 
 function decodeValue(value: StoredValue): NativeValue {
   if (Array.isArray(value)) return value.map(decodeValue);
   const record = v.safeParse(StoredRecordSchema, value);
+
   if (!record.success) return value;
   const binary = v.safeParse(BinaryEnvelopeSchema, record.output);
+
   if (binary.success) {
     const bytes = base64ToBytes(binary.output.$binary);
+
     if (bytes.byteLength !== binary.output.bytes) {
       throw new KinuError('io',
         `a stored message payload is truncated: ${bytes.byteLength} of ${binary.output.bytes} bytes decoded`);
     }
+
     if (binary.output.buffer !== true) return bytes;
     // A fresh buffer rather than `bytes.buffer`: the view's backing store is
     // typed `ArrayBufferLike`, and a copy states the exact type the source had
     // without an assertion about which kind of buffer it is.
     const restored = new ArrayBuffer(bytes.byteLength);
     new Uint8Array(restored).set(bytes);
+
     return restored;
   }
+
   const url = v.safeParse(UrlEnvelopeSchema, record.output);
+
   if (url.success) return new URL(url.output.$url);
   const plain = v.safeParse(PlainEnvelopeSchema, record.output);
   const inner = plain.success ? plain.output.$plain : record.output;
   const mapped: Record<string, NativeValue> = {};
+
   for (const key of Object.keys(inner)) {
     const item = inner[key];
+
     if (item !== undefined) mapped[key] = decodeValue(item);
   }
+
   return mapped;
 }
 
@@ -145,9 +169,11 @@ function decodeValue(value: StoredValue): NativeValue {
  *  could be handed, and refused at the READ, so a corrupt row is named. */
 function validated(message: NativeValue, position: number): ModelMessage {
   const parsed = modelMessageSchema.safeParse(message);
+
   if (!parsed.success) {
     throw new KinuError('bad_input', `message ${position} is not a model message the SDK accepts`);
   }
+
   return parsed.data;
 }
 
@@ -168,7 +194,9 @@ export function encodeModelMessages(messages: readonly ModelMessage[]): string {
  *  attachments included. */
 export function decodeModelMessages(payload: string): ModelMessage[] {
   const parsed = v.safeParse(v.array(StoredValueSchema), JSON.parse(payload));
+
   if (!parsed.success) throw new KinuError('io', 'a stored message payload is not a JSON message array');
+
   return parsed.output.map((message, index) => validated(decodeValue(message), index));
 }
 

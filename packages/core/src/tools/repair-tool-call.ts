@@ -27,13 +27,16 @@ export function repairToolCall<Tools extends ToolSet>(): ToolCallRepairFunction<
     if (NoSuchToolError.isInstance(error)) {
       const wanted = toolCall.toolName.toLowerCase();
       const matches = Object.keys(tools).filter((name) => name.toLowerCase() === wanted);
+
       // Two names that differ only by case are two tools; guessing between
       // them is a call the model did not make.
       return matches.length === 1 && matches[0] !== undefined ? { ...toolCall, toolName: matches[0] } : null;
     }
+
     if (!InvalidToolInputError.isInstance(error)) return null;
     const settled = settledArguments(toolCall.input);
     const input = settled === undefined ? undefined : JSON.stringify(settled);
+
     return input === undefined || input === toolCall.input ? null : { ...toolCall, input };
   };
 }
@@ -44,6 +47,7 @@ const DoubleEncodedSchema = v.pipe(
   v.transform((text) => tolerate<unknown>(() => JSON.parse(text), 'malformed-input')),
   ArgumentObjectSchema,
 );
+
 /** `{ input: {…} }` / `{ arguments: {…} }`: the schema's object wrapped in the
  *  wire's own key name, and nothing beside it. */
 const WrappedSchema = v.union([
@@ -56,9 +60,12 @@ function settledArguments(raw: string): JsonObject | undefined {
   const unfenced = raw.trim().replace(/^```(?:json)?\s*/u, '').replace(/\s*```$/u, '');
   const parsed = tolerate<unknown>(() => JSON.parse(unfenced === '' ? '{}' : unfenced), 'malformed-input');
   const twice = v.safeParse(DoubleEncodedSchema, parsed);
+
   if (twice.success) return twice.output;
   const wrapped = v.safeParse(WrappedSchema, parsed);
+
   if (wrapped.success) return 'input' in wrapped.output ? wrapped.output.input : wrapped.output.arguments;
   const object = v.safeParse(ArgumentObjectSchema, parsed);
+
   return object.success ? object.output : undefined;
 }

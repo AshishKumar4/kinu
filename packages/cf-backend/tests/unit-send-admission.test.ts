@@ -24,6 +24,7 @@ function deferredTurn(): DeferredTurn {
   // The platform's own resolver pair, so the settle handles carry their types
   // instead of a hand-written anonymous shape restating them.
   const unsettled: DeferredSettlement[] = [];
+
   return {
     begin: () => {
       started += 1;
@@ -33,6 +34,7 @@ function deferredTurn(): DeferredTurn {
         finish: () => { settle.resolve(); },
         fail: (reason) => { settle.reject(reason); },
       });
+
       return settle.promise;
     },
     finish: () => {
@@ -58,12 +60,16 @@ const settleMicrotasks = async (): Promise<void> => { await Promise.resolve(); a
 function reactiveAdmission(startedTurns: Promise<void>[]): (begin: () => Promise<void>) => boolean {
   let streaming = false;
   let committed = false;
+
   return (begin) => {
     if (streaming) return false;
+
     // The write the old code relied on, deferred exactly as a render is.
     if (!committed) { committed = true; queueMicrotask(() => { streaming = true; }); }
+
     const started = begin();
     startedTurns.push(started);
+
     return true;
   };
 }
@@ -205,11 +211,13 @@ describe('send admission', () => {
   test('tokens never repeat, so no two sends can ever be the same owner', () => {
     const latch = newSendLatch();
     const tokens: number[] = [];
+
     for (let attempt = 0; attempt < 5; attempt += 1) {
       admitTurn(latch, () => Promise.resolve());
       tokens.push(latch.minted);
       abandonTurn(latch);
     }
+
     expect(tokens).toEqual([1, 2, 3, 4, 5]);
   });
 });

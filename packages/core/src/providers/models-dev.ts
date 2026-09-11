@@ -7,6 +7,7 @@ import { cloneModelInfos, nonEmptyString, positiveInteger } from './util';
 import { diagnostics, renderThrownChain } from '../obs/index';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
+
 const DEFAULT_TTL_MS = 5 * 60_000;
 
 /** Provider-level models.dev metadata (everything except the model map). */
@@ -114,17 +115,23 @@ export async function listModelsDevProviderModels(
     const data = await getModelsDevCatalog(deps.fetch, opts.ttlMs ?? DEFAULT_TTL_MS);
     const provider = data[providerId];
     const models = provider?.models;
+
     if (!models) return cloneModelInfos(opts.fallback);
 
     const out: ModelInfo[] = [];
+
     for (const [key, model] of Object.entries(models)) {
       const info = modelInfoFromModelsDev(key, model, opts.toolCallOnly ?? true);
+
       if (info) out.push(info);
     }
+
     if (out.length === 0) return cloneModelInfos(opts.fallback);
+
     return orderModels(out, opts.preferredIds);
   } catch (error) {
     diagnostics.event('models_dev.catalog_fallback', { error: renderThrownChain({ cause: error }) });
+
     return cloneModelInfos(opts.fallback);
   }
 }
@@ -140,6 +147,7 @@ export async function getModelsDevProvider(
 ): Promise<ModelsDevProviderInfo | null> {
   const data = await getModelsDevCatalog(deps.fetch, ttlMs);
   const provider = data[providerId];
+
   return provider ? providerInfoFromModelsDev(providerId, provider) : null;
 }
 
@@ -151,6 +159,7 @@ export async function listModelsDevProviders(
   ttlMs: number = DEFAULT_TTL_MS,
 ): Promise<ModelsDevProviderInfo[]> {
   const data = await getModelsDevCatalog(deps.fetch, ttlMs);
+
   return Object.entries(data).map(([id, provider]) => providerInfoFromModelsDev(id, provider));
 }
 
@@ -186,21 +195,28 @@ const COMPAT_ENDPOINT_SUPPLEMENT: CompatEndpointIndex = {
 export function modelsDevCompatBaseURL(provider: ModelsDevProviderInfo): string | null {
   const catalogEligible = provider.api && !provider.api.includes('${')
     && (provider.npm === '@ai-sdk/openai-compatible' || provider.npm === '@ai-sdk/openai');
+
   if (catalogEligible) return provider.api ?? null;
+
   return COMPAT_ENDPOINT_SUPPLEMENT[provider.id] ?? null;
 }
 
 async function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: number): Promise<Record<string, ModelsDevProvider>> {
   const fetchImpl = fetchFn ?? fetch;
+
   if (cache && cache.fetchFn === fetchImpl && Date.now() - cache.at < ttlMs) return cache.data;
+
   const response = await fetchImpl(MODELS_DEV_URL, {
     headers: { accept: 'application/json' },
   });
+
   if (!response.ok) throw new Error(`models.dev returned HTTP ${response.status}`);
   const body = v.safeParse(ModelsDevCatalogSchema, await response.json());
+
   if (!body.success) throw new Error('models.dev response was not a valid catalog');
   const data: Record<string, ModelsDevProvider> = body.output;
   cache = { at: Date.now(), fetchFn: fetchImpl, data };
+
   return data;
 }
 
@@ -217,17 +233,23 @@ function providerInfoFromModelsDev(id: string, provider: ModelsDevProvider): Mod
 
 function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly: boolean): ModelInfo | null {
   if (model.status === 'deprecated') return null;
+
   if (toolCallOnly && model.tool_call !== true) return null;
 
   const id = nonEmptyString(model.id) ?? key;
   const capabilities: ModelCapability[] = ['streaming'];
+
   if (model.tool_call === true) capabilities.push('tools');
+
   if (model.reasoning === true) capabilities.push('reasoning');
+
   if (model.modalities?.input?.includes('image')) capabilities.push('vision');
+
   const inputModalities: ModelInputModality[] = MODEL_INPUT_MODALITIES
     .filter((modality) => model.modalities?.input?.includes(modality) ?? false);
 
   const cost = pricingFromModelsDev(model.cost);
+
   return {
     id,
     label: nonEmptyString(model.name) ?? id,
@@ -244,9 +266,11 @@ function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly
 function pricingFromModelsDev(cost: ModelsDevModel['cost']): ModelPricing | undefined {
   const input = usdRate(cost?.input);
   const output = usdRate(cost?.output);
+
   if (input === undefined || output === undefined) return undefined;
   const cacheRead = usdRate(cost?.cache_read);
   const cacheWrite = usdRate(cost?.cache_write);
+
   return {
     input, output,
     cacheRead,
@@ -257,15 +281,19 @@ function pricingFromModelsDev(cost: ModelsDevModel['cost']): ModelPricing | unde
 /** A USD-per-1M rate. Zero is a real price (free tiers); negative is not. */
 function usdRate<Value>(value: Value): number | undefined {
   const rate = v.safeParse(v.pipe(v.number(), v.finite(), v.minValue(0)), value);
+
   return rate.success ? rate.output : undefined;
 }
 
 function orderModels(models: ModelInfo[], preferredIds: readonly string[] | undefined): ModelInfo[] {
   const rank = new Map((preferredIds ?? []).map((id, index) => [id, index]));
+
   return [...models].sort((a, b) => {
     const ar = rank.get(a.id) ?? Number.MAX_SAFE_INTEGER;
     const br = rank.get(b.id) ?? Number.MAX_SAFE_INTEGER;
+
     if (ar !== br) return ar - br;
+
     return (a.label ?? a.id).localeCompare(b.label ?? b.id);
   });
 }

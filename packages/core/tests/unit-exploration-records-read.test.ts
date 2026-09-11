@@ -93,6 +93,7 @@ function store(): RecordStore {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initExplorationRecordsTable(execRaw);
+
   return { sql, actor: createTestActors(sql, execRaw).main };
 }
 
@@ -124,6 +125,7 @@ function write(over: Partial<ExplorationWrite>): ExplorationWrite {
 }
 
 const CALLS_HANDLE: RecordObjectiveHandle = recordHandleOf({ identity: CALLS, floor: null });
+
 const PASS_HANDLE: RecordObjectiveHandle = recordHandleOf({ identity: PASS, floor: FLOOR });
 
 /**
@@ -136,12 +138,14 @@ const PASS_HANDLE: RecordObjectiveHandle = recordHandleOf({ identity: PASS, floo
  */
 function seeded(): RecordStore {
   const { sql, actor } = store();
+
   for (const [index, value] of [41, 23, 88].entries()) {
     recordExploration(sql, actor, {
       publication: OPEN,
       write: write({ artifact: `calls-${String(index)}`, value, at: T0 + index }),
     });
   }
+
   const partitioned: ReadonlyArray<readonly [string, number, number]> = [
     ['len=short', 0.71, T0 + 10],
     ['len=short', 0.5, T0 + 11],
@@ -152,6 +156,7 @@ function seeded(): RecordStore {
     ['len=long', 0.6, T0 + 15],
     ['len=long', 0.58, T0 + 16],
   ];
+
   for (const [index, [descriptor, value, at]] of partitioned.entries()) {
     recordExploration(sql, actor, {
       publication: OPEN,
@@ -161,6 +166,7 @@ function seeded(): RecordStore {
       }),
     });
   }
+
   return { sql, actor };
 }
 
@@ -170,12 +176,15 @@ function seeded(): RecordStore {
 function walk<Item>(read: (cursor: SeekCursor | null) => Page<Item>): readonly Item[] {
   const items: Item[] = [];
   let cursor: SeekCursor | null = null;
+
   for (let step = 0; step < 50; step += 1) {
     const page: Page<Item> = read(cursor);
     items.push(...page.items);
+
     if (page.status === 'end') return items;
     cursor = page.next;
   }
+
   throw new Error('the walk did not reach `end` in 50 pages');
 }
 
@@ -186,14 +195,17 @@ describe('a stored identity cannot disagree with the digest beside it', () => {
     // re-hash no longer lands on the key. That is what makes the denormalisation safe to
     // read rather than a second copy that has to be trusted.
     const { sql } = seeded();
+
     const rows = sql<{
       objective_id: string; metric: string; unit: string;
       direction: string; scale: string; verifier_digest: string;
     }>`SELECT objective_id, metric, unit, direction, scale, verifier_digest
          FROM exploration_records`;
+
     // The denominator: a re-hash test over zero rows passes while proving nothing.
     expect(rows.length).toBeGreaterThan(0);
     expect(rows).toHaveLength(11);
+
     for (const row of rows) {
       expect(objectiveIdOf({
         metric: row.metric,
@@ -206,6 +218,7 @@ describe('a stored identity cannot disagree with the digest beside it', () => {
         verifierDigest: row.verifier_digest,
       })).toBe(row.objective_id);
     }
+
     // And both directions are actually present, so the ternaries above are not both
     // taking one branch.
     expect(new Set(rows.map((row) => row.direction))).toEqual(new Set(['minimise', 'maximise']));
@@ -310,6 +323,7 @@ describe('listRecordObjectives — the discovery read the store had none of', ()
     const { sql, actor } = seeded();
     const first = listRecordObjectives(sql, actor, null, 1);
     expect(first.status).toBe('more');
+
     if (first.status !== 'more') return;
     void sql`DELETE FROM exploration_records WHERE objective_id = ${PASS_HANDLE.objectiveId}`;
     expect(() => listRecordObjectives(sql, actor, first.next, 1)).toThrow(StaleCursorError);
@@ -411,6 +425,7 @@ describe('readRecordCell — an unbounded population, paged', () => {
     const handle = { ...PASS_HANDLE, descriptor: 'len=short' };
     const first = readRecordCell(sql, actor, handle, null, 2);
     expect(first.status).toBe('more');
+
     if (first.status !== 'more') return;
     // The cursor is the LAST DELIVERED row's identity, so the next page starts strictly
     // after it — not at it.
@@ -422,6 +437,7 @@ describe('readRecordCell — an unbounded population, paged', () => {
     // the second page is full. `seekPage` over-fetches by one, so `end` is only ever
     // reported about a query that ran off the end of the data.
     expect(second.status).toBe('more');
+
     if (second.status !== 'more') return;
     const third = readRecordCell(sql, actor, handle, second.next, 2);
     expect(third.status).toBe('end');
@@ -432,6 +448,7 @@ describe('readRecordCell — an unbounded population, paged', () => {
     const { sql, actor } = seeded();
     const handle = { ...PASS_HANDLE, descriptor: 'len=short' };
     const first = readRecordCell(sql, actor, handle, null, 2);
+
     if (first.status !== 'more') throw new Error('the fixture must page');
     void sql`DELETE FROM exploration_records WHERE artifact_digest = ${first.next.after}`;
     expect(() => readRecordCell(sql, actor, handle, first.next, 2)).toThrow(StaleCursorError);

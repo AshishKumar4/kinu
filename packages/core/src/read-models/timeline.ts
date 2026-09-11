@@ -47,6 +47,7 @@ export function safeJsonParse(s: string): JsonValue {
   try { return parseJsonValue(s); }
   catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
+
     return s;
   }
 }
@@ -58,21 +59,32 @@ export function safeJsonParse(s: string): JsonValue {
  *  exploration through their head_split / head_merge spans. */
 export function toolKindFor(name: string): TimelineKind {
   if (name === 'run') return 'runtime-exec';
+
   if (name === 'think') return 'mcts';
+
   if (name === 'skills') return 'skills';
+
   return 'tool-call';
 }
 
 /** Map an evolution_events.type to a timeline kind. */
 export function classifyEvolutionType(type: string): TimelineKind {
   if (type === 'turn_complete') return 'llm-turn';
+
   if (type === 'reflection') return 'reflection';
+
   if (type.startsWith('scaffold')) return 'scaffold';
+
   if (type.startsWith('mcts')) return 'mcts';
+
   if (type === 'consolidation' || type === 'craft_discovered') return 'craft';
+
   if (type === 'fiber_recovered') return 'recovery';
+
   if (type.startsWith('gepa')) return 'gepa';
+
   if (type.startsWith('curriculum')) return 'curriculum';
+
   return 'other';
 }
 
@@ -87,8 +99,11 @@ export function classifyEvolutionType(type: string): TimelineKind {
  */
 function turnUsageDetail(usage: Usage | undefined): string | undefined {
   const parts: string[] = [];
+
   if (usage?.input !== undefined) parts.push(`${usage.input} in`);
+
   if (usage?.output !== undefined) parts.push(`${usage.output} out`);
+
   return parts.length === 0 ? undefined : `${parts.join(' + ')} tok`;
 }
 
@@ -96,6 +111,7 @@ function turnUsageDetail(usage: Usage | undefined): string | undefined {
 export function runEventToSpan(e: RunEvent): TimelineSpan {
   const ts = Date.parse(e.timestamp) || Date.now();
   const base = { ts, source: 'run' as const, rawType: e.type };
+
   switch (e.type) {
     case 'run_start':
       return { ...base, kind: 'trigger', label: e.caused_by ? `Run started · ${e.caused_by}` : 'Run started', detail: e.userMessage };
@@ -196,10 +212,12 @@ export function getRunTimeline(
   if (runId) {
     for (const e of deps.events.read(runId, { limit })) spans.push(runEventToSpan(e));
   }
+
   // 2) Agent-level evolution events — PRESERVE the `data` payload.
   const evolutionRows = deps.sql<{ id: string; type: string; message: string; data: string | null; created_at: number }>`
     SELECT id, type, message, data, created_at FROM evolution_events
     WHERE actor_id = ${deps.actor.actorId} ORDER BY created_at DESC LIMIT ${limit}`;
+
   for (const r of evolutionRows) {
     spans.push({
       ts: r.created_at, kind: classifyEvolutionType(r.type), label: r.message || r.type,
@@ -207,10 +225,12 @@ export function getRunTimeline(
       source: 'evolution', refId: r.id, rawType: r.type,
     });
   }
+
   // 3) MCTS search nodes.
   const nodes = deps.sql<{ id: string; action: string; value: number; status: string; created_at: number }>`
     SELECT id, action, value, status, created_at FROM search_nodes
     WHERE actor_id = ${deps.actor.actorId} ORDER BY created_at DESC LIMIT ${limit}`;
+
   for (const n of nodes) {
     spans.push({
       ts: n.created_at, kind: 'mcts', label: n.action || `node ${n.id.slice(0, 8)}`,
@@ -218,11 +238,13 @@ export function getRunTimeline(
       source: 'mcts', refId: n.id,
     });
   }
+
   // 4) Background jobs — auto-detached >30s tool calls, as first-class spans
   // (the run that "ended" because work moved to the background must say so).
   for (const j of deps.jobs.list(limit)) {
     const detail = j.status === 'running' ? 'running in background'
       : j.error ? `${j.status}: ${j.error}` : j.status;
+
     spans.push({
       ts: j.createdAt, kind: 'background',
       label: `Background ${j.kind}`, detail,
@@ -231,5 +253,6 @@ export function getRunTimeline(
   }
 
   spans.sort((a, b) => a.ts - b.ts);
+
   return spans.slice(-limit);
 }

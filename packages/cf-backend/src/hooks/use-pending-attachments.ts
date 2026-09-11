@@ -44,8 +44,10 @@ export function admitAttachments(
   let budget = limitBytes - current.reduce((sum, part) => sum + dataUrlRawBytes(part.url), 0);
   const admitted: FileUIPart[] = [];
   const refused: string[] = [];
+
   for (const part of offered) {
     const bytes = dataUrlRawBytes(part.url);
+
     if (bytes <= budget) {
       admitted.push(part);
       budget -= bytes;
@@ -53,6 +55,7 @@ export function admitAttachments(
       refused.push(partName(part));
     }
   }
+
   return {
     parts: admitted.length === 0 ? current : [...current, ...admitted],
     refused,
@@ -79,6 +82,7 @@ const EMPTY: State = { parts: [], refused: [], conversionFailure: null };
 
 function reduce(state: State, action: Action, limitBytes: number): State {
   if (action.kind === "clear") return EMPTY;
+
   if (action.kind === "remove") {
     return {
       parts: state.parts.filter((_, index) => index !== action.index),
@@ -88,6 +92,7 @@ function reduce(state: State, action: Action, limitBytes: number): State {
       conversionFailure: null,
     };
   }
+
   if (action.kind === "conversion_failed") {
     return {
       parts: state.parts,
@@ -95,7 +100,9 @@ function reduce(state: State, action: Action, limitBytes: number): State {
       conversionFailure: action.message,
     };
   }
+
   const admission = admitAttachments(state.parts, action.parts, limitBytes);
+
   return {
     parts: admission.parts,
     refused: [...action.oversized, ...admission.refused],
@@ -141,10 +148,13 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
     // is the expensive half and it would be thrown away.
     const oversized = candidates.filter((file) => file.size > limitBytes).map((file) => file.name);
     const convertible = candidates.filter((file) => file.size <= limitBytes);
+
     if (convertible.length === 0) {
       dispatch({ kind: "offer", parts: [], oversized });
+
       return;
     }
+
     // Materialize before the event returns: an input's FileList empties when
     // its value is cleared, and a dataTransfer's when the handler returns.
     const generation = conversionGeneration.current;
@@ -156,10 +166,13 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
       // whose hook unmounted mid-inflation has no notice left to land in, and
       // that is not the handler's call to make.
       let thrown: { cause: unknown } | null = null;
+
       try {
         const transfer = new DataTransfer();
+
         for (const file of convertible) transfer.items.add(file);
         const parts = await convertFileListToFileUIParts(transfer.files);
+
         if (generation !== conversionGeneration.current) return;
         dispatch({ kind: "offer", parts, oversized });
       } catch (cause) {
@@ -167,10 +180,12 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
       } finally {
         if (conversionTasks.current.get(taskId) === owner) conversionTasks.current.delete(taskId);
       }
+
       if (thrown === null || generation !== conversionGeneration.current) return;
       const names = convertible.map((file) => file.name).join(", ");
       const reason = renderThrownChain(thrown);
       let message = `Couldn't read ${names}: ${reason}`;
+
       try {
         diagnostics.event('attachments.conversion_failed', {
           names,
@@ -179,6 +194,7 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
       } catch (diagnosticCause) {
         message += ` Recording the conversion failure also failed: ${renderThrownChain({ cause: diagnosticCause })}`;
       }
+
       dispatch({ kind: "conversion_failed", oversized, message });
     })();
   }, [limitBytes]);
@@ -192,7 +208,9 @@ export function usePendingAttachments(limitBytes: number): PendingAttachments {
       + `${state.refused.join(", ")} did not fit. `
       + `Upload larger files via the Files pane on the Environment tab.`
     );
+
     if (state.conversionFailure === null) return capacityRefusal;
+
     return capacityRefusal === null
       ? state.conversionFailure
       : `${capacityRefusal} ${state.conversionFailure}`;

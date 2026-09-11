@@ -34,6 +34,7 @@ function setup(): Replays {
   const execRaw = makeExecRaw(db);
   initTurnOutcomeTables(execRaw);
   initReplayTables(execRaw);
+
   return { sql, actor: createTestActors(sql, execRaw).main };
 }
 
@@ -53,6 +54,7 @@ describe('runReplayEval', () => {
     const { sql, actor } = setup();
     seedOutcomes(sql, actor);
     const ranTasks: string[] = [];
+
     const judge = createMockLLM({
       // The accepted instance judges against the reference; the corrected one
       // against the user's correction. Distinct scores prove both paths ran.
@@ -62,7 +64,11 @@ describe('runReplayEval', () => {
 
     const summary = await runReplayEval({
       sql, actor, judge,
-      runTask: async (task) => { ranTasks.push(task); return `fresh answer to: ${task}`; },
+      runTask: async (task) => {
+        ranTasks.push(task);
+
+        return `fresh answer to: ${task}`;
+      },
       sampleSize: 6,
     });
 
@@ -85,8 +91,10 @@ describe('runReplayEval', () => {
     expect(stored[0].loss).toBeCloseTo(0.25);
     expect(stored[0].results).toHaveLength(2);
     expect(stored[0].interval).toEqual(summary!.interval);
+
     const [row] = sql<{ score_lo: number; score_hi: number }>`
       SELECT score_lo, score_hi FROM replay_evals WHERE actor_id = ${actor.actorId}`;
+
     expect(row.score_lo).toBeCloseTo(0.1979, 4);
     expect(row.score_hi).toBeCloseTo(0.9733, 4);
   });
@@ -94,14 +102,17 @@ describe('runReplayEval', () => {
   test('a failed re-run or unusable judge scores 0 — failing to reproduce IS loss', async () => {
     const { sql, actor } = setup();
     seedOutcomes(sql, actor);
+
     const summary = await runReplayEval({
       sql, actor,
       judge: createMockLLM({ '': 'not json' }),
       runTask: async (task) => {
         if (task.includes('Q3')) throw new Error('runner exploded');
+
         return 'fresh';
       },
     });
+
     expect(summary!.meanScore).toBe(0);
     expect(summary!.loss).toBe(1);
     expect(summary!.results.map((r) => r.note).join(' ')).toContain('runner exploded');
@@ -109,9 +120,11 @@ describe('runReplayEval', () => {
 
   test('returns null (and persists nothing) when no labeled turns exist', async () => {
     const { sql, actor } = setup();
+
     const summary = await runReplayEval({
       sql, actor, judge: createMockLLM(), runTask: async () => 'x',
     });
+
     expect(summary).toBeNull();
     expect(listReplayEvals(sql, actor)).toHaveLength(0);
   });
@@ -143,6 +156,7 @@ describe('listReplayEvals — the quality-panel data series', () => {
 
   test('honors the limit', () => {
     const { sql, actor } = setup();
+
     for (let i = 0; i < 5; i++) insertReplay(sql, actor, { id: `r${i}`, ranAt: i * 10, meanScore: 0.5, scaffoldVersion: null });
     expect(listReplayEvals(sql, actor, 3)).toHaveLength(3);
   });
@@ -164,11 +178,14 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
         "User's correction": '{"score": 0.8, "note": "ok"}',
       },
     });
+
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
+
     const engine = new EvolutionEngine(rt, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
+
     seedOutcomes(rt.storage.sql, rt.actor);
     const events: Array<{ type: string; message: string }> = [];
     engine.onEvent((e) => events.push(e));
@@ -186,12 +203,14 @@ describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
         "User's correction": '{"score": 0.8, "note": "ok"}',
       },
     });
+
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
 
     const engine = new EvolutionEngine(rt, {
       replayTaskRunner: async (task) => `current-config answer: ${task}`,
     });
+
     seedOutcomes(rt.storage.sql, rt.actor);
 
     const events: Array<{ type: string; message: string }> = [];

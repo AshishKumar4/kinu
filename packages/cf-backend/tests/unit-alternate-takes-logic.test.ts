@@ -72,6 +72,7 @@ describe('take-pick schema ordering (lazy-engine hole)', () => {
     const schema = readFileSync(
       join(import.meta.dir, '..', '..', 'core', 'src', 'state', 'workspace-schema.ts'), 'utf8',
     );
+
     const body = schema.slice(schema.indexOf('export function initWorkspaceSchema'));
     expect(body).toContain('initTurnOutcomeTables(execRaw)');
   });

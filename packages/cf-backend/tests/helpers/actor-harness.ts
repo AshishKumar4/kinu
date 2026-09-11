@@ -55,6 +55,7 @@ import type { VfsCred } from '@nimbus-sh/core/runtime/os-contracts.js';
 mockAgentsSdk();
 
 const { OrchestratorAgent } = await import('../../src/orchestrator');
+
 const { runHostedTask } = await import('../../src/subordinate-hosting');
 
 /** The scaffold precondition a turn checks, declared satisfied — the harness
@@ -67,6 +68,7 @@ const HARNESS_PROFILE_ENVELOPE: ProfileCatalogEnvelope = {
   digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
   catalog: BUILTIN_PROFILE_CATALOG,
 };
+
 const HARNESS_PROVIDER_SNAPSHOT: ProviderCatalogSnapshot = {
   revision: 'actor-harness',
   availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC],
@@ -81,6 +83,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   override async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     const config = await super.beforeTurn(ctx);
+
     return this.modelFactory ? { ...config, model: this.modelFactory() } : config;
   }
   observeRawTools(): ToolSet { return this.getRawTools(); }
@@ -133,7 +136,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   }
   protected override async profileInputs() {
     const overlay = this._catalogOverlay;
+
     if (overlay === null) return { envelope: HARNESS_PROFILE_ENVELOPE, provider: HARNESS_PROVIDER_SNAPSHOT };
+
     // An owner-authored catalog carries the builtins plus its own roles: merged,
     // not replaced, so a test names the role under test rather than restating
     // the workspace. The digest is recomputed over the merged catalog, which is
@@ -145,6 +150,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       roles: { ...BUILTIN_PROFILE_CATALOG.roles, ...overlay.roles },
       tiers: { ...BUILTIN_PROFILE_CATALOG.tiers, ...overlay.tiers },
     };
+
     return {
       envelope: { ...HARNESS_PROFILE_ENVELOPE, catalog, digest: profileCatalogDigest(catalog) },
       provider: overlay.availableModels === undefined ? HARNESS_PROVIDER_SNAPSHOT : {
@@ -361,8 +367,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   /** Rebuild the reset-lost steer drain from its SQL authority for one turn. */
   harnessRestorePendingSteers(turnId: string): void {
     this.userSteer.interrupt();
+
     const pending = this.sql<{ id: string; text: string }>`
       SELECT id, text FROM pending_steers WHERE turn_id = ${turnId} ORDER BY seq ASC`;
+
     this.userSteer.restorePending(pending);
   }
 
@@ -410,6 +418,7 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   ): void {
     this.terminalEffectFault = (atPhase, atName, atScope) => {
       if (atName !== name || atPhase !== phase) return;
+
       if (scope !== undefined && atScope !== scope) return;
       throw new TerminalEffectInterrupt(atPhase, atName, atScope);
     };
@@ -490,15 +499,18 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
         // created: registering the row IS the whole of a head's existence — it
         // has no database of its own to bring up.
         await this.actorDirectory({ action: 'register', creationId: input.id, name: `exp:${input.id}`, kind: 'head', lifetime: 'task' });
+
         return {
           id: input.id,
           run: async () => {
             if (report === null) return new Promise<HeadReport>(() => { /* never reports */ });
+
             const reported: HeadReport = {
               id: input.id, status: report.status, summary: report.summary,
               evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
               toolCalls: [], stepCount: 1, usage: {}, wallClockMs: 1,
             };
+
             return report.errorMessage === undefined
               ? reported
               : { ...reported, errorMessage: report.errorMessage };
@@ -508,7 +520,9 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       },
       mergeLLM: () => { throw new Error('a steer branch is one head and never merges'); },
     };
+
     const handle = await startBranchHead(runtime, this.headJournal, { id, task, inheritedContext: [] });
+
     if (report !== null) await handle.result;
   }
 
@@ -607,11 +621,14 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
       taskProfile: async (turn) => {
         const profile = await seams.taskProfile(turn);
         built.push(profile);
+
         return profile;
       },
     }, child.reference, { body: task, mode: 'build', sequenceId: crypto.randomUUID() });
     const [profile] = built;
+
     if (profile === undefined) throw new Error('the delegated turn never built its profile');
+
     return profile;
   }
 
@@ -714,13 +731,16 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
     input: { status: RunEndReason; turn: CompletedTurn; workMode?: WorkMode },
   ): Promise<boolean> {
     const lanes = this.terminalEffectTable().improvement_lanes;
+
     if (lanes === undefined) return false;
+
     const outcome = await lanes.run({
       status: input.status,
       turn: projectJsonValue({ value: input.turn }),
       workMode: input.workMode ?? this.turnWorkMode(),
       advisor: projectJsonValue({ value: this.advisorSnapshotFor(input.turn) }),
     }, input.turn.turnId ?? '');
+
     return outcome.status === 'completed' && outcome.detail === undefined;
   }
 
@@ -920,10 +940,13 @@ export interface ActorHarness<T> {
  */
 export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
   const canonicalSql = makeSqlExec(db);
+
   const sqlExec = (query: string, ...bindings: SqlValue[]) => {
     const rows = canonicalSql.exec(query, ...bindings).toArray();
+
     return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
   };
+
   // The KEY-VALUE half of Durable Object storage, beside the SQL half. Real for
   // the same reason `transactionSync` is: the SDK records a facet's own lineage
   // here — `_cf_initAsFacet` puts `cf_agents_parent_path` — and the owner's
@@ -933,6 +956,7 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
   // indistinguishable from one that always admits. A key nobody wrote still
   // resolves `undefined`, which is the platform's answer too.
   const kv = new Map<string, JsonValue>();
+
   const context = {
     storage: {
       sql: { exec: sqlExec },
@@ -957,8 +981,10 @@ export function makeCtx(db: Database, id = 'harness-actor'): AgentContext {
     getWebSockets: () => [],
     abort: () => {},
   };
+
   const partialContext: Partial<AgentContext> = {};
   Object.assign(partialContext, context);
+
   // SAFETY: the Agent constructor contract stores this locally constructed
   // context, and actor schema initialization only calls the implemented SQL,
   // transaction, identity, alarm, and concurrency members above.
@@ -1057,17 +1083,21 @@ export function makeEnv(
       // `world.userDO` is to drive production code over production state.
       get: () => {
         if (world?.userDO !== undefined) return world.userDO;
+
         const ownerPlane = {
           getWorkspaceTitle: async (): Promise<null> => null,
           setWorkspaceDisplayName: async (
             _caller: UserCaller, _workspace: string, displayName: string,
           ): Promise<{ applied: boolean }> => {
             userPlane?.titles.push(displayName);
+
             return { applied: true };
           },
           userMcp_warmConnections: async (caller: UserCaller): Promise<{ servers: number }> => {
             userPlane?.warmConnections.push(caller);
+
             if (userPlane?.failWarm) throw userPlane.failWarm;
+
             return { servers: 1 };
           },
           userMcp_toolDescriptors: async (): Promise<never> => {
@@ -1083,19 +1113,23 @@ export function makeEnv(
             bindings: [], changes: [], checks: [], approvals: [], deployments: [],
           }),
         };
+
         return new Proxy(ownerPlane, {
           get: (target, prop) => {
             if (prop === 'then') return undefined;
+
             if (prop in target) {
               // SAFETY: the `prop in target` guard makes the key one of the owner plane's own members.
               return target[prop as keyof typeof target];
             }
+
             return async () => { throw new Error(`harness UserDO: ${String(prop)} is not reachable under bun`); };
           },
         });
       },
     },
   };
+
   if (parentNamespace) {
     Object.assign(bindings, { OrchestratorAgent: parentNamespace });
   } else if (parent) {
@@ -1103,8 +1137,10 @@ export function makeEnv(
       OrchestratorAgent: { idFromName: (n: string) => n, get: () => parent },
     });
   }
+
   const env: Partial<Env> = {};
   Object.assign(env, bindings);
+
   // SAFETY: the ActorAgent dependency contract only reads the constructed
   // LOADER, UserDO, and gateway bindings in this harness; each
   // unsupported operation throws if schema composition begins invoking it.
@@ -1124,6 +1160,7 @@ function instantiate<T extends object>(
 ): ActorHarness<T> {
   const builtEnv = env ?? makeEnv(parent, userPlane, world, parentNamespace);
   const agent = new Actor(makeCtx(db), builtEnv);
+
   if (env === undefined && parent === undefined && parentNamespace === undefined) {
     // This workspace answers its own standing-policy reads: a hosted actor's
     // runtime shares this env, and its approval gate fetches the ROOT's policy
@@ -1134,7 +1171,9 @@ function instantiate<T extends object>(
       OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
     });
   }
+
   Object.defineProperty(agent, 'name', { value: world?.workspace ?? 'harness-parent', configurable: true });
+
   return {
     agent,
     db,
@@ -1143,6 +1182,7 @@ function instantiate<T extends object>(
     ).all().map((row) => row.name),
   };
 }
+
 /**
  * The actor's own schema half of an activation.
  *
@@ -1185,6 +1225,7 @@ export function orchestratorHarness(
   harness.agent.harnessHoldsCapability('harness-capability');
   harness.agent.declareScaffoldPresent();
   harness.agent.harnessDisableSleepTimeCompute();
+
   return harness;
 }
 
@@ -1229,19 +1270,24 @@ export async function reactivateOrchestratorHarness(
   },
 ): Promise<ActorHarness<HarnessOrchestratorAgent>> {
   const harness = instantiate(HarnessOrchestratorAgent, db, undefined, userPlane, opts?.world);
+
   // BEFORE `onStart`, because `onStart` is what starts the recovery under test:
   // a skew or fault armed after it would arrive too late to affect the pass it
   // is meant to steer.
   if (opts?.clockSkewMs !== undefined) harness.agent.harnessAdvanceTerminalClock(opts.clockSkewMs);
+
   if (opts?.fault) harness.agent.harnessArmTerminalFault(opts.fault[0], opts.fault[1]);
+
   if (opts?.sleepTimeAnswer) {
     harness.agent.harnessRecordSleepTimeAnswer(...opts.sleepTimeAnswer);
   } else {
     harness.agent.harnessDisableSleepTimeCompute();
   }
+
   opts?.beforeStart?.(harness.agent);
   ensureActorSchema(harness.agent);
   harness.agent.declareScaffoldPresent();
+
   // The activation's OWN reconcile, JOINED on its observable end state. `onStart`
   // detaches it (it sends mail) and it ACQUIRES each sequence it recovers, so a
   // suite that called a second reconcile would be turned away by the first's
@@ -1252,9 +1298,11 @@ export async function reactivateOrchestratorHarness(
   // returns from `onStart` it has not yet acquired anything and an in-flight
   // check would read zero and let the suite assert into the middle of it.
   for (let tick = 0; tick < 8; tick++) await joinHarnessFibers();
+
   for (let tick = 0; tick < 200 && harness.agent.harnessSequencesInFlight() > 0; tick++) {
     await joinHarnessFibers();
   }
+
   return harness;
 }
 
@@ -1300,8 +1348,10 @@ export async function hostedSubordinateHarness(
     // instruction and one the catalog cannot honour.
     creationId: crypto.randomUUID(),
   };
+
   const reference = await workspace.agent.observeSubordinateRuntime().spawn(seed);
   const actor = await workspace.agent.observeActorHost().acquire(reference);
+
   return { actor, workspace };
 }
 
@@ -1319,7 +1369,9 @@ export async function hostedExplorationHarness(
   const entry = await workspace.agent.actorDirectory({
     action: 'register', creationId: id, name: `exp:${id}`, kind, lifetime: 'task',
   });
+
   const actor = await workspace.agent.observeActorHost().acquire(entry.reference);
+
   return { actor, workspace };
 }
 
@@ -1330,5 +1382,6 @@ export async function hostedMainActor(
 ): Promise<HostedActorHarness> {
   const host = workspace.agent.observeActorHost();
   const actor = await host.acquire(actorReferenceOf(workspace.agent.observeRuntime().actor));
+
   return { actor, workspace };
 }

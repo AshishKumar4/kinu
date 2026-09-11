@@ -159,10 +159,13 @@ async function terminateDeviceExec(
     const answer = parseDeviceCancelAnswer(requestId, await rpc(
       DEVICE_CANCEL_METHOD, [requestId, DEVICE_CANCEL_PROTOCOL], deviceId === undefined ? undefined : { deviceId },
     ));
+
     return answer.cancelled === 'terminated' ? EXEC_TERMINATED : EXEC_NOTHING_RUNNING;
   } catch (err) {
     if (isDeviceUnknownMethodError(err)) return EXEC_CANCEL_UNSUPPORTED;
+
     if (isDeviceNotConnectedError(err)) return EXEC_CANCEL_UNCONFIRMED;
+
     return execCancelFailed(renderThrownChain({ cause: err }));
   }
 }
@@ -217,13 +220,17 @@ export interface DeviceTransport {
 }
 
 const StringSchema = v.string();
+
 const OptionalStringSchema = v.optional(v.string());
+
 const DeviceExecResultSchema = v.object({
   stdout: v.string(),
   stderr: v.string(),
   exitCode: v.number(),
 });
+
 const DeviceListResultSchema = v.array(JsonValueSchema);
+
 const DeviceStatSchema = v.nullable(v.object({
   size: v.number(),
   mtimeMs: v.number(),
@@ -235,6 +242,7 @@ function parseInput<TSchema extends v.GenericSchema>(
   input: { value: unknown },
 ): v.InferOutput<TSchema> | undefined {
   const result = v.safeParse(schema, input.value);
+
   return result.success ? result.output : undefined;
 }
 
@@ -255,8 +263,10 @@ const DeviceSelectionSchema = v.union([
  *  `execute(cmd, { device: 'studio', signal })`. */
 function readDeviceSelection(input: { context: unknown }): string | undefined {
   const parsed = v.safeParse(DeviceSelectionSchema, input.context);
+
   if (!parsed.success) return undefined;
   const named = v.is(v.string(), parsed.output) ? parsed.output : parsed.output.device;
+
   return named?.trim() || undefined;
 }
 
@@ -295,6 +305,7 @@ export function createDeviceTunnelExecutor(
     const live = (s.devices ?? []).filter((d) => d.connected);
     const named = live[0] ?? s.devices?.[0];
     const identity: Partial<Pick<ExecutorStatus, 'label' | 'granted' | 'sandbox'>> = {};
+
     if (named) identity.label = named.name;
     // Reach for THE live machine, under the same "no the" rule the hub's own
     // top-level field follows: a per-device answer is read only when exactly
@@ -305,11 +316,14 @@ export function createDeviceTunnelExecutor(
     // workspace identity, which keeps the liveness reading it always had.
     const perDeviceReach = live.length === 1 ? live[0].granted : undefined;
     const granted = perDeviceReach ?? s.workspaceGranted;
+
     if (granted !== undefined) identity.granted = granted;
+
     // The one row the model reads before it decides where to put work, so it
     // carries what the machine will actually do with a command: the owner's
     // switch, what the machine proved, and this workspace's own home on it.
     if (s.sandbox !== undefined) identity.sandbox = s.sandbox;
+
     // Reach, not liveness. A connected machine this workspace holds no grant
     // on is not callable by the model: the first call raises the owner's card
     // instead of running.
@@ -320,7 +334,9 @@ export function createDeviceTunnelExecutor(
         ...identity,
       };
     }
+
     if (s.connected) return { configured: true, available: true, active: true, status: 'active', ...identity };
+
     if (s.registered) {
       return {
         configured: true, available: false, active: false, status: 'disconnected',
@@ -328,6 +344,7 @@ export function createDeviceTunnelExecutor(
         ...identity,
       };
     }
+
     return { configured: false, available: false, active: false, status: 'not_configured', ...identity };
   };
 
@@ -343,6 +360,7 @@ export function createDeviceTunnelExecutor(
 
   const derived = () => {
     const answer = freshDeviceToolchain(transport.status().toolchain, Date.now());
+
     if (memo?.from === answer) return memo;
     // Anything the answer's own scope covers is measured — named in `present`,
     // or absent because it was looked for and not found. Anything outside that
@@ -354,6 +372,7 @@ export function createDeviceTunnelExecutor(
       capabilities: new Set([...STRUCTURAL, ...answer?.present ?? []]),
       unmeasured: new Set(ASKED_OF_THE_MACHINE.filter((c) => !measured.includes(c))),
     };
+
     return memo;
   };
 
@@ -364,15 +383,18 @@ export function createDeviceTunnelExecutor(
       description: 'Execute a command on the user\'s local machine via the device tunnel.',
       execute: async (...args: unknown[]): Promise<CommandResult> => {
         const command = parseInput(StringSchema, { value: args[0] });
+
         if (command === undefined) {
           return refusalOf(new KinuError('bad_input', 'laptop exec: command must be a string'));
         }
+
         const signal = readExecSignal({ context: args[1] });
         // Which machine this call is FOR. Undefined lets the transport and hub
         // answer the one-machine account exactly as before; a fleet with
         // several live machines refuses there instead of picking one.
         const deviceName = readDeviceSelection({ context: args[1] });
         const device = resolveForCall(transport, deviceName);
+
         if (device.kind === 'refusal') return device.refusal;
         const deviceId = device.deviceId;
         // The identity is minted HERE, before the frame goes out, because it is
@@ -388,8 +410,11 @@ export function createDeviceTunnelExecutor(
         // this command from the insert, so no handover has to race it.
         const backgroundJobId = ownership.owner?.() ?? null;
         const execOpts: DeviceExecOptions = { timeoutMs: 0, requestId };
+
         if (deviceId !== undefined) execOpts.deviceId = deviceId;
+
         if (backgroundJobId !== null) execOpts.backgroundJobId = backgroundJobId;
+
         try {
           const result = await raceAbort(
             // No transport deadline: this is arbitrary user work — a build, a
@@ -402,11 +427,15 @@ export function createDeviceTunnelExecutor(
             EXEC_NOT_STARTED,
             () => terminateDeviceExec(rpc, requestId, deviceId),
           );
+
           const parsed = v.parse(DeviceExecResultSchema, result);
+
           return commandResult(parsed);
         } catch (err) {
           if (isAbortError(err)) throw err;
+
           if (isDeviceNotConnectedError(err)) return refusalOf(new KinuError('unavailable', NOT_CONNECTED));
+
           // The machine cannot run a command under the tier it was given. That
           // is a REFUSAL with a named cause and a fix, not a transport fault,
           // and the message already reads as one — prefixing it with the
@@ -414,6 +443,7 @@ export function createDeviceTunnelExecutor(
           if (isSandboxUnavailableError(err)) {
             return refusalOf(new KinuError('denied', renderThrownChain({ cause: err })));
           }
+
           return refusalOf(deviceFailure({ doing: `laptop exec \`${command}\``, cause: err }));
         }
       },
@@ -424,16 +454,21 @@ export function createDeviceTunnelExecutor(
       description: 'Read a file from the user\'s local filesystem via the desktop daemon.',
       execute: async (...args: unknown[]): Promise<string> => {
         const path = parseInput(StringSchema, { value: args[0] });
+
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'laptop readFile: path must be a string'));
         }
+
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+
           if (target.kind === 'refusal') return refusalText(target.refusal);
           const view = target.view;
+
           return v.parse(v.string(), await view.readFile(path, { encoding: 'utf8' }));
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+
           return refusalText(deviceFailure({ doing: `laptop readFile ${path}`, cause: err }));
         }
       },
@@ -444,20 +479,26 @@ export function createDeviceTunnelExecutor(
       execute: async (...args: unknown[]): Promise<string> => {
         const path = parseInput(StringSchema, { value: args[0] });
         const content = parseInput(StringSchema, { value: args[1] });
+
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'laptop writeFile: path must be a string'));
         }
+
         if (content === undefined) {
           return refusalText(new KinuError('bad_input', 'laptop writeFile: content must be a string'));
         }
+
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[2] }));
+
           if (target.kind === 'refusal') return refusalText(target.refusal);
           const view = target.view;
           await view.writeFile(path, content);
+
           return `Written ${content.length} bytes to ${path}`;
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+
           return refusalText(deviceFailure({ doing: `laptop writeFile ${path}`, cause: err }));
         }
       },
@@ -468,16 +509,21 @@ export function createDeviceTunnelExecutor(
       description: 'List directory contents on the user\'s local machine.',
       execute: async (...args: unknown[]): Promise<string[] | string> => {
         const path = parseInput(OptionalStringSchema, { value: args[0] });
+
         if (args[0] !== undefined && path === undefined) {
           return refusalText(new KinuError('bad_input', 'laptop readdir: path must be a string'));
         }
+
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+
           if (target.kind === 'refusal') return refusalText(target.refusal);
           const view = target.view;
+
           return await view.readdir(path ?? await view.homeDir());
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+
           return refusalText(deviceFailure({ doing: `laptop readdir ${path || '/'}`, cause: err }));
         }
       },
@@ -488,6 +534,7 @@ export function createDeviceTunnelExecutor(
       description: 'Check if a path exists on the user\'s local machine.',
       execute: async (...args: unknown[]): Promise<boolean | string> => {
         const path = parseInput(StringSchema, { value: args[0] });
+
         // NEITHER answer is `false`: `false` claims the path is absent on the
         // user's machine. A call that was never made and one that could not
         // reach the device establish nothing about the path, so each refuses
@@ -495,13 +542,17 @@ export function createDeviceTunnelExecutor(
         if (path === undefined) {
           return refusalText(new KinuError('bad_input', 'laptop exists: path must be a string'));
         }
+
         try {
           const target = filesForCall(transport, consent, readDeviceSelection({ context: args[1] }));
+
           if (target.kind === 'refusal') return refusalText(target.refusal);
           const view = target.view;
+
           return await view.exists(path);
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED_REFUSAL;
+
           return refusalText(deviceFailure({ doing: `laptop exists ${path}`, cause: err }));
         }
       },
@@ -630,16 +681,22 @@ function resolveForCall(
   const fleet = transport.status().devices;
   const live = connectedDevices(fleet);
   const refuse = (error: KinuError): CallTarget => ({ kind: 'refusal', refusal: refusalOf(error) });
+
   if (named === undefined) {
     if (live.length > 1) return refuse(new KinuError('bad_input', deviceFleetAsk(fleet)));
+
     return { kind: 'target', deviceId: live[0]?.id };
   }
+
   if (fleet === undefined) {
     return refuse(new KinuError('unavailable',
       `the device list is not known here yet, so "${named}" cannot be matched — retry, or call without a device`));
   }
+
   const entry = deviceByName(fleet, named);
+
   if (entry) return { kind: 'target', deviceId: entry.id };
+
   return refuse(new KinuError('unavailable',
     `no connected machine is named "${named}" — connected: ${live.map((d) => d.name).join(', ') || 'none'}`));
 }
@@ -655,7 +712,9 @@ function filesForCall(
   named: string | undefined,
 ): CallView {
   const resolved = resolveForCall(transport, named);
+
   if (resolved.kind === 'refusal') return resolved;
+
   return { kind: 'view', view: deviceFiles(transport, consent, resolved.deviceId) };
 }
 
@@ -721,8 +780,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   // not described yet) sends no key and lets the hub resolve it.
   const target: DeviceExecOptions | undefined = deviceId === undefined ? undefined : { deviceId };
   const trimmed = (path: string): string => (path.length > 1 ? path.replace(/\/+$/, '') : path);
+
   const effectiveRoot = async (): Promise<string> => {
     const explicit = await consent.consentedRoot(deviceId);
+
     if (explicit) return trimmed(explicit);
     throw makeVfsError(
       'EACCES',
@@ -731,12 +792,15 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       '/',
     );
   };
+
   /** Where the view OPENS, which is not the same question as what it may
    *  reach: the full tier has no root and still needs somewhere to start. */
   const openingDir = async (): Promise<string> => {
     const root = await consent.consentedRoot(deviceId);
+
     if (root) return trimmed(root);
     const home = await consent.deviceHome(deviceId);
+
     if (home) return trimmed(home);
     throw makeVfsError('EACCES', 'this device reported neither a consented directory nor a home', '/');
   };
@@ -744,6 +808,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   const guard = async (path: string, op: string): Promise<string | null> => {
     if (await consent.unconfined(deviceId)) return null;
     const root = await effectiveRoot();
+
     // No fallback: a device that named no directory throws above rather than
     // widening to `/`. The daemon enforces the same view a second time, so
     // this lexical check is the cheap first line, never the boundary.
@@ -756,6 +821,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
         path,
       );
     }
+
     // The daemon resolves both root and path through realpath before the sink.
     // That is the authoritative traversal/symlink check; this lexical check
     // rejects obvious escapes before they cross the tunnel.
@@ -772,8 +838,11 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
   const asLosslessText = (bytes: Uint8Array): string | null => {
     const text = new TextDecoder('utf-8', { ignoreBOM: true }).decode(bytes);
     const encoded = new TextEncoder().encode(text);
+
     if (encoded.length !== bytes.length) return null;
+
     for (let i = 0; i < encoded.length; i++) if (encoded[i] !== bytes[i]) return null;
+
     return text;
   };
 
@@ -782,12 +851,16 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     async readFile(path, opts) {
       const root = await guard(path, 'open');
       const raw = await transport.rpc('readFile', [path, { encoding: 'base64', root }], target);
+
       if (raw !== undefined && isJsonObject(raw) && raw.encoding === 'base64') {
         const content = v.parse(v.string(), raw.content);
         const bytes = base64ToBytes(content);
+
         return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
       }
+
       const text = v.parse(v.string(), raw);
+
       return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
     },
 
@@ -795,17 +868,21 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
         throw makeVfsError('EIO', 'range offset and length must be positive safe integers', path);
       }
+
       const root = await guard(path, 'open');
       const raw = await transport.rpc('readRange', [path, offset, length, { root }], target);
+
       if (raw === undefined || !isJsonObject(raw) || raw.encoding !== 'base64') {
         throw makeVfsError('EIO', 'device returned an unreadable file range', path);
       }
+
       return base64ToBytes(v.parse(v.string(), raw.content));
     },
 
     async writeFile(path, data) {
       const root = await guard(path, 'open');
       let result: JsonValue | undefined;
+
       if (v.is(v.string(), data)) {
         result = await transport.rpc('writeFile', [path, data, { root }], target);
       } else {
@@ -814,25 +891,31 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
           ? await transport.rpc('writeFile', [path, text, { root }], target)
           : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64', root }], target);
       }
+
       const ok = result === 'ok'
         || (result !== undefined && isJsonObject(result) && result.success === true);
+
       if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);
     },
 
     async readdir(path) {
       const root = await guard(path, 'scandir');
       const entries = v.parse(DeviceListResultSchema, await transport.rpc('listFiles', [path, { root }], target));
+
       return entries.map((entry) => {
         if (isJsonObject(entry)) {
           const name = v.safeParse(v.string(), entry.name);
+
           if (name.success) return name.output;
         }
+
         return JSON.stringify(entry);
       });
     },
 
     async stat(path) {
       const root = await guard(path, 'stat');
+
       return v.parse(DeviceStatSchema, await transport.rpc('statPath', [path, { root }], target));
     },
 
@@ -848,6 +931,7 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 
     async exists(path) {
       const root = await guard(path, 'stat');
+
       return v.parse(v.boolean(), await transport.rpc('exists', [path, { root }], target));
     },
   };
@@ -862,8 +946,10 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
 export function deviceMountSegment(device: DeviceFleetEntry, fleet: readonly DeviceFleetEntry[] | undefined): string {
   const name = device.name.trim();
   const usable = name.length > 0 && !name.includes('/') && name !== '.' && name !== '..';
+
   if (!usable) return device.id;
   const others = connectedDevices(fleet).filter((d) => d.id !== device.id && d.name.trim() === name);
+
   return others.length === 0 ? name : device.id;
 }
 
@@ -895,11 +981,13 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
    *  when several machines are live and a segment must choose. */
   const single = (): DeviceVFS | null => {
     const machines = connectedDevices(transport.status().devices);
+
     return machines.length > 1 ? null : deviceFiles(transport, consent, machines[0]?.id);
   };
 
   const routes = (): DeviceRoute[] => {
     const fleet = transport.status().devices;
+
     return connectedDevices(fleet).map((device) => ({
       segment: deviceMountSegment(device, fleet),
       view: deviceFiles(transport, consent, device.id),
@@ -908,11 +996,13 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
 
   const routeOf = (path: string): { view: DeviceVFS; rest: string } | null => {
     const trimmed = path.replace(/^\/+/, '');
+
     if (trimmed === '') return null;
     const slash = trimmed.indexOf('/');
     const first = slash === -1 ? trimmed : trimmed.slice(0, slash);
     const rest = slash === -1 ? '/' : trimmed.slice(slash);
     const route = routes().find((r) => r.segment === first);
+
     return route ? { view: route.view, rest } : null;
   };
 
@@ -920,9 +1010,11 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     const fleet = transport.status().devices;
     const first = path.replace(/^\/+/, '').split('/')[0] ?? '';
     const segments = connectedDevices(fleet).map((d) => deviceMountSegment(d, fleet)).join(', ');
+
     const reason = first === ''
       ? `several machines are connected — each is mounted at /pc/<name>: ${segments}`
       : `no connected machine is named "${first}" — connected: ${segments}`;
+
     return makeVfsError('ENXIO', reason, `/pc${first === '' ? '' : `/${first}`}`);
   };
 
@@ -931,9 +1023,12 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
    *  handled by the callers that can answer it (readdir, stat, exists). */
   const dispatch = async <T>(path: string, op: (view: DeviceVFS, native: string) => Promise<T>): Promise<T> => {
     const one = single();
+
     if (one) return op(one, path);
     const route = routeOf(path);
+
     if (!route) throw noSuchDevice(path);
+
     return op(route.view, route.rest);
   };
 
@@ -946,6 +1041,7 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     // list at the mount point itself.
     homeDir: async () => {
       const one = single();
+
       return one ? one.homeDir() : '/';
     },
     async readFile(path, opts) {
@@ -959,13 +1055,16 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     },
     async readdir(path) {
       if (isFleetRoot(path)) return routes().map((route) => route.segment);
+
       return dispatch(path, (view, native) => view.readdir(native));
     },
     async stat(path): Promise<VfsEntryStat | null> {
       if (isFleetRoot(path)) return { size: 0, mtimeMs: 0, isDir: true };
       const one = single();
+
       if (one) return one.stat(path);
       const route = routeOf(path);
+
       return route ? route.view.stat(route.rest) : null;
     },
     async unlink(path) {
@@ -977,8 +1076,10 @@ function deviceFleetFiles(transport: DeviceTransport, consent: DeviceFileConsent
     async exists(path) {
       if (isFleetRoot(path)) return true;
       const one = single();
+
       if (one) return one.exists(path);
       const route = routeOf(path);
+
       return route ? route.view.exists(route.rest) : false;
     },
   };

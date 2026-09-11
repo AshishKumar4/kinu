@@ -31,10 +31,12 @@ interface CommandHintProps {
 
 /** The full-width palette instruction. Narrow frames use the compact form. */
 const FILTER_HINT = 'Type to filter · Enter runs a completed command';
+
 const COMPACT_FILTER_HINT = 'Type to filter · Enter runs';
 
 export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
   const { colors } = useTuiTheme();
+
   if (commands.length === 0) return null;
   const paletteHeight = Math.min(commands.length + 5, 11, Math.max(3, terminal.height - 2));
   const maxCommandRows = Math.max(1, paletteHeight - 5);
@@ -42,16 +44,19 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
   const visibleLimit = overflows ? Math.max(0, maxCommandRows - 1) : maxCommandRows;
   const visibleCommands = commands.slice(0, visibleLimit);
   const hiddenCount = commands.length - visibleCommands.length;
+
   const nameWidth = Math.min(
     18,
     Math.max(8, ...visibleCommands.map((command) => command.name.length)),
   );
+
   const moreLine = hiddenCount > 0 ? `… ${hiddenCount} more commands. Keep typing to filter.` : '';
   const filterHint = terminal.width < 52 ? COMPACT_FILTER_HINT : FILTER_HINT;
   const copyWidth = Math.max(filterHint.length, moreLine.length);
   const paletteWidth = boundedPaletteWidth(terminal, 0.46, Math.max(32, copyWidth + 4), 74);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'lower');
   const innerWidth = Math.max(1, paletteWidth - 4);
+
   return (
     <PaletteFrame
       title="Commands"
@@ -94,6 +99,7 @@ function PaletteSearchInput({
   const { colors } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
   const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
+
   return (
     <input
       focused={true}
@@ -101,10 +107,13 @@ function PaletteSearchInput({
       onInput={onInput}
       onKeyDown={(event) => {
         const result = dispatcher.feed(event, ['modal']);
+
         if (result.pending) {
           event.preventDefault();
+
           return;
         }
+
         if (result.actionId === 'modal.previous') selectRef.current?.moveUp();
         else if (result.actionId === 'modal.next') selectRef.current?.moveDown();
         else if (result.actionId === 'modal.activate') selectRef.current?.selectCurrent();
@@ -123,6 +132,7 @@ function PaletteSearchInput({
     />
   );
 }
+
 interface CommandPaletteProps {
   commands: readonly SlashCommandInfo[];
   terminal: OverlayGeometry;
@@ -133,23 +143,29 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
   const { colors } = useTuiTheme();
   const [filter, setFilter] = useState('');
   const selectRef = useRef<SelectRenderable | null>(null);
+
   const filtered = filter.trim() === ''
     ? commands
     : filterCommands(commands, `/${filter.trim().replace(/^\//, '')}`);
+
   const paletteWidth = boundedPaletteWidth(terminal, 0.58, 42, 78);
+
   const paletteHeight = Math.min(
     Math.max(filtered.length + 7, 10),
     Math.max(3, terminal.height - 2),
     20,
   );
+
   const compact = paletteHeight < 9;
   const innerWidth = Math.max(1, paletteWidth - 4);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+
   const options: SelectOption[] = filtered.map((command) => ({
     name: clipText(`${command.name.padEnd(14)} ${command.description}`, innerWidth),
     description: '',
     value: command,
   }));
+
   return (
     <PaletteFrame
       title="Commands"
@@ -178,6 +194,7 @@ export function CommandPaletteOverlay({ commands, terminal, onSelect }: CommandP
           wrapSelection={true}
           onSelect={(index) => {
             const command = filtered[index];
+
             if (command) onSelect(command);
           }}
           style={{
@@ -214,19 +231,24 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
   const [filter, setFilter] = useState('');
   const selectRef = useRef<SelectRenderable | null>(null);
   const query = filter.trim().toLowerCase();
+
   const filtered = query === ''
     ? settings
     : settings.filter((setting) =>
         `${setting.group} ${setting.label} ${setting.value}`.toLowerCase().includes(query));
+
   const paletteWidth = boundedPaletteWidth(terminal, 0.58, 42, 78);
+
   const paletteHeight = Math.min(
     Math.max(filtered.length + 7, 11),
     Math.max(3, terminal.height - 2),
     22,
   );
+
   const compact = paletteHeight < 10;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const innerWidth = Math.max(1, paletteWidth - 4);
+
   const options: SelectOption[] = filtered.map((setting) => ({
     name: paletteRow(
       `${setting.group} · ${setting.label}`,
@@ -236,6 +258,7 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
     description: '',
     value: setting,
   }));
+
   return (
     <PaletteFrame
       title="Settings"
@@ -270,6 +293,7 @@ export function SettingsOverlay({ settings, terminal, onSelect }: SettingsOverla
           wrapSelection={true}
           onSelect={(index) => {
             const setting = filtered[index];
+
             if (setting) onSelect(setting);
           }}
           style={{
@@ -305,8 +329,10 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
   const paletteWidth = boundedPaletteWidth(terminal, 0.52, 56, 84);
   const innerWidth = Math.max(1, paletteWidth - 4);
   const filteredModels = filterModels(models, filter);
+
   const options: SelectOption[] = filteredModels.map((model) => {
     const context = formatContextWindow(model.contextWindow);
+
     return {
       name: clipText([
         model.spec === currentSpec ? '✓' : ' ',
@@ -320,19 +346,24 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
       value: model,
     };
   });
+
   const failureLines = (failures ?? []).map((failure) =>
     `! ${failure.label ?? failure.provider} unavailable: ${failure.reason}`);
+
   const paletteHeight = Math.min(
     Math.max(models.length + failureLines.length + 7, 11),
     Math.max(3, terminal.height - 2),
     22,
   );
+
   const compact = paletteHeight < 9;
   const failureCapacity = compact ? 0 : Math.max(0, paletteHeight - 7);
   const hiddenFailures = Math.max(0, failureLines.length - failureCapacity);
+
   const shownFailureLines = hiddenFailures > 0
     ? failureLines.slice(0, Math.max(0, failureCapacity - 1))
     : failureLines.slice(0, failureCapacity);
+
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const selectedIndex = clamp(filteredModels.findIndex((model) => model.spec === currentSpec), 0, Math.max(0, options.length - 1));
   useEffect(() => {
@@ -384,6 +415,7 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
           wrapSelection={true}
           onSelect={(index) => {
             const selected = filteredModels[index];
+
             if (selected) onSelect(selected);
           }}
           style={{
@@ -427,14 +459,17 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
   const { colors } = useTuiTheme();
   const paletteWidth = boundedPaletteWidth(terminal, 0.56, 56, 90);
   const innerWidth = Math.max(1, paletteWidth - 4);
+
   const options: SelectOption[] = candidates.map((candidate, index) => ({
     name: clipText(`${index === 0 ? 'latest' : `-${index}`} · ${candidate.text.replace(/\s+/g, ' ')}`, innerWidth),
     description: '',
     value: candidate,
   }));
+
   const paletteHeight = Math.min(Math.max(options.length + 6, 10), Math.max(3, terminal.height - 2), 18);
   const compact = paletteHeight < 8;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+
   return (
     <PaletteFrame
       title="Walk back"
@@ -455,6 +490,7 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
         wrapSelection={true}
           onSelect={(index) => {
             const selected = candidates[index];
+
             if (selected) onSelect(selected);
         }}
         style={{
@@ -488,6 +524,7 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
   const { colors } = useTuiTheme();
   const paletteWidth = boundedPaletteWidth(terminal, 0.62, 60, 100);
   const innerWidth = Math.max(1, paletteWidth - 4);
+
   const options: SelectOption[] = view.entries.map((entry, index) => ({
     name: clipText(
       `${String(index + 1).padStart(2)}. ${CHANGE_KIND_GLYPH[entry.kind]} ${entry.summary.replace(/\s+/g, ' ')}`,
@@ -496,9 +533,11 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
     description: clipText(`${entry.evidence}${entry.revert ? ' · Enter reverts' : ' · informational'}`, innerWidth),
     value: entry,
   }));
+
   const paletteHeight = Math.min(Math.max(options.length * 2 + 6, 11), Math.max(3, terminal.height - 2), 24);
   const compact = paletteHeight < 8;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+
   return (
     <PaletteFrame
       title={`Evolution changelog${view.unseenCount > 0 ? ` · ${view.unseenCount} new` : ''}`}
@@ -522,6 +561,7 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
           wrapSelection={true}
           onSelect={(index) => {
             const selected = view.entries[index];
+
             if (selected) onSelect(selected);
           }}
           style={{
@@ -557,6 +597,7 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
   const paletteWidth = boundedPaletteWidth(terminal, 0.62, 60, 100);
   const innerWidth = Math.max(1, paletteWidth - 4);
   const current = set.chosenNodeId ?? set.winnerNodeId;
+
   const options: SelectOption[] = set.candidates.map((candidate, index) => ({
     name: clipText(
       `${index + 1}. ${candidate.nodeId === current ? '★' : ' '} ${candidate.text.replace(/\s+/g, ' ')}`,
@@ -568,9 +609,11 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
     ),
     value: candidate,
   }));
+
   const paletteHeight = Math.min(Math.max(options.length * 2 + 7, 12), Math.max(3, terminal.height - 2), 22);
   const compact = paletteHeight < 8;
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+
   return (
     <PaletteFrame
       title={`Alternate takes · ${set.candidates.length} explored`}
@@ -594,6 +637,7 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
         wrapSelection={true}
         onSelect={(index) => {
           const selected = set.candidates[index];
+
           if (selected) onSelect(selected);
         }}
         style={{
@@ -647,10 +691,13 @@ function deviceConsentLayout(
   // gets spare rows; a wide command never gets approved from an unseen tail.
   const commandColumns = Math.max(1, Math.floor(innerWidth / 2));
   const commandText = `Command: ${consent.command || '(command)'}`;
+
   const commandRows = commandText.split('\n')
     .reduce((rows, line) => rows + Math.max(1, Math.ceil([...line].length / commandColumns)), 0);
+
   const preferredHeight = commandRows + 7;
   const maxHeight = Math.max(3, terminal.height - 2);
+
   return {
     paletteWidth,
     paletteHeight: Math.min(Math.max(9, preferredHeight), maxHeight),
@@ -664,15 +711,18 @@ export function DeviceConsentOverlay({ consent, terminal }: DeviceConsentOverlay
   const { colors } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
   const layout = deviceConsentLayout(consent, terminal);
+
   const position = centeredPosition(
     terminal,
     layout.paletteWidth,
     layout.paletteHeight,
     'center',
   );
+
   const commandHeight = layout.canApprove
     ? layout.commandRows
     : Math.max(1, layout.paletteHeight - 8);
+
   return (
     <PaletteFrame
       title="Use your PC?"
@@ -707,8 +757,10 @@ function wrappedTextRows(text: string, width: number): number {
     const words = line.split(/\s+/u);
     let rows = 1;
     let used = 0;
+
     for (const word of words) {
       const wordColumns = Bun.stringWidth(word);
+
       if (used === 0) {
         rows += Math.max(0, Math.ceil(wordColumns / width) - 1);
         used = wordColumns % width || Math.min(wordColumns, width);
@@ -719,6 +771,7 @@ function wrappedTextRows(text: string, width: number): number {
         used += 1 + wordColumns;
       }
     }
+
     return total + rows;
   }, 0);
 }
@@ -738,12 +791,15 @@ export function DeviceConnectOverlay({ prompt, terminal }: DeviceConnectOverlayP
   const innerWidth = Math.max(1, paletteWidth - 4);
   const linking = prompt.phase === 'ask' ? `Linking registers this machine as "${prompt.deviceName}".` : '';
   const consequence = 'A workspace you approve runs commands here in a sandbox. Revoke it in Account settings → Devices.';
+
   const askHeight = prompt.phase === 'ask'
     ? 2 + wrappedTextRows(prompt.statusLine, innerWidth) + wrappedTextRows(linking, innerWidth)
       + wrappedTextRows(consequence, innerWidth) + 4
     : 9;
+
   const paletteHeight = Math.min(askHeight, Math.max(3, terminal.height - 2));
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
+
   return (
     <PaletteFrame
       title="Let this agent use this PC?"
@@ -806,7 +862,9 @@ interface ThemeChoice {
 }
 
 const THEME_LIST_COLUMNS = 34;
+
 const THEME_PREVIEW_MIN_COLUMNS = 34;
+
 /** Rows the preview transcript needs: strip, bubble, prose, well, composer, caption. */
 const THEME_PREVIEW_ROWS = 21;
 
@@ -814,6 +872,7 @@ function sameSelection(left: ThemeSelection, right: ThemeSelection): boolean {
   if (left.mode === 'theme' || right.mode === 'theme') {
     return left.mode === 'theme' && right.mode === 'theme' && left.themeId === right.themeId;
   }
+
   return left.darkThemeId === right.darkThemeId && left.lightThemeId === right.lightThemeId;
 }
 
@@ -827,9 +886,11 @@ export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePicke
   const { colors, registry, terminalAppearance } = useTuiTheme();
   const keybindings = useKeybindingRegistry();
   const dispatcher = useMemo(() => createKeyDispatcher(keybindings), [keybindings]);
+
   const choices = useMemo<ThemeChoice[]>(() => {
     const system = selection.mode === 'system' ? selection : SYSTEM_TUI_THEME_SELECTION;
     const systemTheme = resolveThemeSelection(registry, system, terminalAppearance);
+
     return [
       {
         key: 'system',
@@ -847,28 +908,35 @@ export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePicke
       })),
     ];
   }, [registry, selection, terminalAppearance]);
+
   const currentIndex = choices.findIndex((choice) => sameSelection(choice.selection, selection));
   const [highlighted, setHighlighted] = useState(Math.max(0, currentIndex));
   const choice = choices[Math.min(highlighted, choices.length - 1)]!;
 
   useKeyboard((event) => {
     const result = dispatcher.feed(event, ['modal']);
+
     if (result.pending) {
       event.preventDefault();
+
       return;
     }
+
     switch (result.actionId) {
       case 'modal.previous':
         event.preventDefault();
         setHighlighted((index) => (index - 1 + choices.length) % choices.length);
+
         return;
       case 'modal.next':
         event.preventDefault();
         setHighlighted((index) => (index + 1) % choices.length);
+
         return;
       case 'modal.activate':
         event.preventDefault();
         onSelect(choice.selection);
+
         return;
       default:
         return;
@@ -884,6 +952,7 @@ export function ThemePickerOverlay({ terminal, selection, onSelect }: ThemePicke
   const paletteHeight = Math.min(Math.max(choices.length + 7, previewFits ? THEME_PREVIEW_ROWS + 5 : 0), Math.max(3, terminal.height - 2));
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const compact = paletteHeight < choices.length + 6;
+
   return (
     <PaletteFrame
       title="Theme"
@@ -931,6 +1000,7 @@ function ThemeChoiceRow({ choice, width, highlighted, current }: {
   const swatch = choice.theme.colors;
   const badge = current ? ' current ' : '';
   const labelWidth = Math.max(4, width - 2 - 3 - badge.length - 3);
+
   return (
     <box style={{ height: 1, backgroundColor: highlighted ? colors.background.selection : undefined }}>
       <text>
@@ -956,6 +1026,7 @@ function ThemePreview({ theme, width }: { readonly theme: TuiThemeDefinition; re
   const ground = colors.background.canvas ?? REFERENCE_TERMINAL_GROUNDS[theme.appearance][0]!;
   const inner = Math.max(1, width - 2);
   const rule = '┄'.repeat(Math.max(1, inner - 4));
+
   return (
     <box flexDirection="column" style={{ width, flexShrink: 0, backgroundColor: ground, paddingLeft: 1, paddingRight: 1 }}>
       <box style={{ height: 2, border: ['bottom'], borderColor: colors.border.default, backgroundColor: colors.background.chrome, flexDirection: 'row', justifyContent: 'space-between' }}>
@@ -1002,6 +1073,7 @@ function PaletteLine(props: { text: string; width: number; color: string; accent
   const text = clipText(props.text, props.width);
   const prefix = props.accentPrefix ? text.slice(0, props.accentPrefix) : '';
   const suffix = props.accentPrefix ? text.slice(props.accentPrefix) : text;
+
   return (
     <box style={{ height: 1, flexShrink: 0 }}>
       <text>
@@ -1022,11 +1094,19 @@ export function PhaseLine({ label }: { label: string | null }) {
   const { colors } = useTuiTheme();
   const [frame, setFrame] = useState(0);
   useEffect(() => {
-    if (!label) { setFrame(0); return; }
+    if (!label) {
+      setFrame(0);
+
+      return;
+    }
+
     const id = setInterval(() => setFrame((f) => (f + 1) % SPINNER_FRAMES.length), 80);
+
     return () => clearInterval(id);
   }, [label]);
+
   if (!label) return null;
+
   return (
     <box style={{ paddingLeft: 2, marginBottom: 1 }}>
       <text><span fg={colors.intent.accent}>{SPINNER_FRAMES[frame]} </span><i fg={colors.text.muted}>{label}</i></text>
@@ -1050,6 +1130,7 @@ interface PaletteFrameProps {
  */
 function PaletteFrame({ title, width, height, left, top, children }: PaletteFrameProps) {
   const { colors } = useTuiTheme();
+
   return (
     <box
       flexDirection="column"
@@ -1078,15 +1159,19 @@ function PaletteFrame({ title, width, height, left, top, children }: PaletteFram
 
 function centeredPosition(terminal: OverlayGeometry, width: number, height: number, placement: 'center' | 'lower') {
   const left = Math.max(1, Math.floor((terminal.width - width) / 2));
+
   const rawTop = placement === 'center'
     ? Math.floor((terminal.height - height) / 2)
     : terminal.height - height - 5;
+
   const top = Math.max(1, Math.min(rawTop, Math.max(1, terminal.height - height - 1)));
+
   return { left, top };
 }
 
 function boundedPaletteWidth(terminal: OverlayGeometry, fraction: number, min: number, max: number): number {
   const available = Math.max(1, terminal.width - 2);
+
   return clamp(Math.floor(terminal.width * fraction), Math.min(min, available), Math.min(max, available));
 }
 
@@ -1096,6 +1181,7 @@ function paletteRow(primary: string, suffix: string, width: number): string {
   const suffixWidth = Math.min(suffix.length, Math.max(1, Math.floor(width * 0.6)));
   const shownSuffix = clipText(suffix, suffixWidth);
   const primaryWidth = Math.max(1, width - gap.length - shownSuffix.length);
+
   return `${clipText(primary, primaryWidth).padEnd(primaryWidth)}${gap}${shownSuffix}`;
 }
 

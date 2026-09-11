@@ -52,13 +52,17 @@ const TESTER: RoleDefinition = {
   preset: 'ideate',
   spawns: '*',
 };
+
 const TIERS: TierAssignments = { default: { model: 'test-model' } };
+
 const PROVIDER: ProviderCatalogSnapshot = { revision: 'rev-hosted-fixture', availableModels: ['test-model'] };
 
 function envelope(): ProfileCatalogEnvelope {
   const catalog = { roles: { tester: TESTER }, tiers: TIERS };
+
   return { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog };
 }
+
 const ENVELOPE = envelope();
 
 /** Every hosted actor of one workspace, and the seats their turns run on. */
@@ -143,6 +147,7 @@ export function hostedSeatsOver(input: {
         path: `actors/${bound.record.storageKey}/scaffold/agent.js`,
       }),
     };
+
     return { ...rt, actor: bound.handle, identity };
   };
 
@@ -150,7 +155,11 @@ export function hostedSeatsOver(input: {
     // This actor's OWN client, queue and timers — never the caller's.
     host: {
       broadcast: (event) => { broadcasts.push(event); },
-      enqueueTurn: async (turn) => { enqueued.push(turn); return { status: 'queued' }; },
+      enqueueTurn: async (turn) => {
+        enqueued.push(turn);
+
+        return { status: 'queued' };
+      },
       turnInFlight: () => host.hosted(bound.reference)?.session.inFlight ?? false,
       setTimer: (fn, ms) => { timers.push({ fn, ms }); },
     },
@@ -185,7 +194,9 @@ export function hostedSeatsOver(input: {
     kind: Exclude<WorkspaceActor['kind'], 'main' | 'branch'>,
   ): Promise<HostedNodeSeat> => {
     const known = seats.get(name);
+
     if (known) return known;
+
     // A head lives in the EXPLORATION address space, which the
     // directory enforces for every non-subordinate kind — a raw node id is
     // refused. The creation id is the caller's name, so re-seating one node is
@@ -197,9 +208,11 @@ export function hostedSeatsOver(input: {
       kind,
       lifetime: kind === 'subordinate' ? 'durable' : 'task',
     });
+
     const actor = await host.acquire({
       actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId,
     });
+
     const seated: HostedNodeSeat = {
       actor,
       runId,
@@ -216,7 +229,9 @@ export function hostedSeatsOver(input: {
       // there is nothing for a step to render. Stated, not defaulted.
       dynamic: () => ({}),
     };
+
     seats.set(name, seated);
+
     return seated;
   };
 

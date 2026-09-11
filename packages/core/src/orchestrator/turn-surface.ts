@@ -74,6 +74,7 @@ export async function resolveTurnSkills(opts: {
   roleSkills?: readonly string[];
 }): Promise<TurnSkillSurface> {
   const admissionTokens = stepContextLimit(opts.limits);
+
   try {
     return await admitTurnSkills(opts, admissionTokens);
   } catch (err) {
@@ -81,6 +82,7 @@ export async function resolveTurnSkills(opts: {
       'skills.discovery_failed',
       toKinuError({ doing: 'discover the turn\'s skills', cause: err, otherwise: 'io' }),
     );
+
     // The built-in floor: those bodies are module constants, so this surface
     // needs no VFS at all and cannot fail the way the walk just did.
     return {
@@ -102,13 +104,16 @@ async function admitTurnSkills(
 ): Promise<TurnSkillSurface> {
   const discovery = await discoverSkills(opts.vfs, { admissionTokens });
   const available = admitSkillsIndex(discovery, admissionTokens);
+
   const activated = resolveActiveSkills({
     available: discovery.skills,
     explicit: extractExplicitInvocations(opts.userText),
     userMessage: opts.userText,
     alwaysActive: [...opts.config.getAlwaysActiveSkills(), ...(opts.roleSkills ?? [])],
   });
+
   if (activated.length === 0) return { available, activeSkills: undefined };
+
   return {
     available,
     activeSkills: await admitActiveSkills({
@@ -148,7 +153,9 @@ export function filterToolNamesBySkills<T extends string>(
 ): T[] {
   if (!activeSkills) return [...names];
   const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
+
   if (allowedUnion.length === 0) return [...names];
+
   return names.filter((name) => toolAllowedBySkills(name, allowedUnion));
 }
 
@@ -157,11 +164,14 @@ export function filterToolNamesBySkills<T extends string>(
 export function filterToolSetBySkills(tools: ToolSet, activeSkills: ActiveSkillSet | undefined): ToolSet {
   if (!activeSkills) return tools;
   const allowedUnion = unionAllowedTools(trustedActiveSkills(activeSkills));
+
   if (allowedUnion.length === 0) return tools;
   const filtered: ToolSet = {};
+
   for (const [name, t] of Object.entries(tools)) {
     if (toolAllowedBySkills(name, allowedUnion)) filtered[name] = t;
   }
+
   return filtered;
 }
 

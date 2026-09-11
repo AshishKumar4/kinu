@@ -156,6 +156,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const rng = opts.random ?? Math.random;
 
   const pending = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
+
   if (!pending) return { skipped: true, reason: 'no_pending' };
 
   // ALREADY SCORED. The rollout below drives the pending scaffold through the
@@ -167,12 +168,15 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   const scored = opts.trialId === undefined
     ? null
     : scoredShadowTrial(opts.rt.storage.sql, opts.rt.actor, opts.trialId);
+
   if (scored) {
     const settled = await settlePromotion(opts, config, pending);
+
     return { skipped: false, evaluation: { ...scored }, ...settled };
   }
 
   const pendingCode = await readScaffoldVersion(opts.rt, pending.version);
+
   if (!pendingCode) return { skipped: true, reason: 'pending_unreadable' };
 
   // Run the pending scaffold against the same task. Capture all events; the
@@ -181,12 +185,14 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   // host.defaultInference is judged on its real output, not an empty string.
   const pendingEvents: string[] = [];
   let pendingResult: ScaffoldRunResult;
+
   try {
     pendingResult = await runScaffold({
       rt: opts.rt,
       task: opts.task,
       emit: (event) => {
         const text = scaffoldEventText(event);
+
         if (text !== null) pendingEvents.push(text);
       },
       llmStream: opts.llmStream,
@@ -206,6 +212,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       'scaffold.pending_run_failed',
       toKinuError({ doing: 'run the pending scaffold for a shadow trial', cause: err, otherwise: 'unavailable' }),
     );
+
     return { skipped: true, reason: 'pending_unreadable' };
   }
 
@@ -221,6 +228,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   };
 
   let judgeResult: ShadowTrialVerdict;
+
   try {
     judgeResult = await judgeTrialOrderSwapped({ ...evidence, judge: opts.judge, pendingFirst: rng() < 0.5 });
   } catch (err) {
@@ -228,6 +236,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
       'scaffold.judge_failed',
       toKinuError({ doing: 'judge a shadow trial', cause: err, otherwise: 'unavailable' }),
     );
+
     return { skipped: true };
   }
 
@@ -239,6 +248,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
     ...evidence,
     judgeResult,
   };
+
   recordShadowEvaluation(
     opts.rt.storage.sql,
     opts.rt.actor,
@@ -246,6 +256,7 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
   );
 
   const settled = await settlePromotion(opts, config, pending);
+
   return {
     skipped: false,
     evaluation: {
@@ -272,14 +283,18 @@ async function settlePromotion(
   pending: { version: number },
 ): Promise<{ decision: 'promote' | 'rollback' | 'continue'; applied: 'promote' | 'rollback' | null }> {
   const fresh = getPendingScaffold(opts.rt.storage.sql, opts.rt.actor);
+
   // A candidate that moved on is one this trial can no longer decide about.
   if (!fresh || fresh.version !== pending.version) return { decision: 'continue', applied: null };
   const decision = decidePromotion(fresh, config.shadowConfig).decision;
+
   if (!config.autoApply || decision === 'continue') return { decision, applied: null };
+
   try {
     // Report the action ACTUALLY applied — the promotion-time misevolution
     // recheck can convert a 'promote' into a 'rollback'.
     const outcome = await applyPromotionDecision(opts.rt, fresh, decision);
+
     if (outcome.vetoReason) {
       diagnostics.failure(
         'scaffold.promotion_vetoed',
@@ -287,6 +302,7 @@ async function settlePromotion(
         { scaffoldVersion: fresh.version, action: outcome.action },
       );
     }
+
     return { decision, applied: outcome.action };
   } catch (err) {
     diagnostics.failure(
@@ -294,6 +310,7 @@ async function settlePromotion(
       toKinuError({ doing: 'apply a scaffold promotion decision', cause: err, otherwise: 'io' }),
       { scaffoldVersion: fresh.version, decision },
     );
+
     return { decision, applied: null };
   }
 }
@@ -335,11 +352,13 @@ async function judgeTrialOrderSwapped(opts: JudgeTrialOpts): Promise<ShadowTrial
     opts.judge(buildJudgePrompt(opts, opts.pendingFirst), JudgeOutputSchema),
     opts.judge(buildJudgePrompt(opts, !opts.pendingFirst), JudgeOutputSchema),
   ]);
+
   const one = attributeCall(first, opts.pendingFirst);
   const two = attributeCall(second, !opts.pendingFirst);
 
   const agreed = one.winner === two.winner && one.winner !== 'tie';
   const flipped = one.winner !== 'tie' && two.winner !== 'tie' && one.winner !== two.winner;
+
   return {
     winner: agreed ? one.winner : 'tie',
     rationale: flipped
@@ -355,6 +374,7 @@ async function judgeTrialOrderSwapped(opts: JudgeTrialOpts): Promise<ShadowTrial
 function attributeCall(out: JudgeOutput, pendingIsA: boolean): ShadowTrialVerdict {
   const pendingSlot = pendingIsA ? 'a' : 'b';
   const currentSlot = pendingIsA ? 'b' : 'a';
+
   return {
     winner: out.winner === pendingSlot ? 'pending' : out.winner === currentSlot ? 'current' : 'tie',
     rationale: out.rationale,
@@ -370,6 +390,7 @@ function attributeCall(out: JudgeOutput, pendingIsA: boolean): ShadowTrialVerdic
 function buildJudgePrompt(opts: JudgeTrialOpts, pendingIsA: boolean): string {
   const responseA = pendingIsA ? opts.pendingOutput : opts.currentOutput;
   const responseB = pendingIsA ? opts.currentOutput : opts.pendingOutput;
+
   return [
     'You are judging two candidate responses to the SAME task.',
     'They are shown in a random order and are deliberately unlabelled — their',

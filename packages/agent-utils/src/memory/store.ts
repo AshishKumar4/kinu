@@ -95,6 +95,7 @@ export class MemoryStore {
 
 	shouldIndex(path: string): boolean {
 		if (this.indexedFiles.includes(path)) return true;
+
 		return this.indexedPrefixes.some((p) => path.startsWith(p));
 	}
 
@@ -104,6 +105,7 @@ export class MemoryStore {
 
 	async appendToFile(path: string, content: string): Promise<void> {
 		let existing = "";
+
 		try {
 			existing = await readVfsText(this.vfs, path);
 		} catch (err) {
@@ -111,21 +113,25 @@ export class MemoryStore {
 			// surface — silently overwriting here destroys the existing notes.
 			if (!isMissingFileError(err)) throw err;
 		}
+
 		await this.writeFile(path, existing + content);
 	}
 
 	async readFile(path: string, lineRange?: { start: number; end: number }): Promise<string | null> {
 		try {
 			const content = await readVfsText(this.vfs, path);
+
 			if (!lineRange) return content;
 			const lines = content.split("\n");
 			const start = Math.max(0, lineRange.start - 1);
 			const end = Math.min(lines.length, lineRange.end);
+
 			return lines.slice(start, end).join("\n");
 		} catch (err) {
 			// Only a missing file is absence. Any other read failure must surface:
 			// null here is indistinguishable from a file that is legitimately empty.
 			if (!isMissingFileError(err)) throw err;
+
 			return null;
 		}
 	}
@@ -145,6 +151,7 @@ export class MemoryStore {
 		const existing = this.sql<{ id: string; hash: string }>`
 			SELECT id, hash FROM memory_chunks WHERE path = ${path}
 		`;
+
 		const existingMap = new Map(existing.map((r) => [r.id, r.hash]));
 		const newIds = new Set<string>();
 		const upserted: IndexedChunk[] = [];
@@ -152,6 +159,7 @@ export class MemoryStore {
 		for (const chunk of chunks) {
 			const id = `${path}:${chunk.startLine}-${chunk.endLine}`;
 			newIds.add(id);
+
 			if (existingMap.get(id) === chunk.hash) continue;
 
 			void this.sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE id = ${id})`;
@@ -164,6 +172,7 @@ export class MemoryStore {
 		}
 
 		const deletedIds: string[] = [];
+
 		for (const [id] of existingMap) {
 			if (!newIds.has(id)) {
 				void this.sql`DELETE FROM memory_chunks_fts WHERE rowid IN (SELECT rowid FROM memory_chunks WHERE id = ${id})`;
@@ -171,6 +180,7 @@ export class MemoryStore {
 				deletedIds.push(id);
 			}
 		}
+
 		return { upserted, deletedIds };
 	}
 
@@ -183,6 +193,7 @@ export class MemoryStore {
 			SELECT id, path, start_line, end_line, text FROM memory_chunks
 			WHERE id > ${afterId} ORDER BY id LIMIT ${limit}
 		`;
+
 		return rows.map((r) => ({ id: r.id, path: r.path, startLine: r.start_line, endLine: r.end_line, text: r.text }));
 	}
 
@@ -203,6 +214,7 @@ export class MemoryStore {
 		const safeQuery = sanitizeFtsQuery(query);
 		const strict = this.runFtsQuery(safeQuery, limit);
 		const relaxed = strict.length >= limit ? null : relaxFtsQuery(safeQuery);
+
 		const rows = relaxed === null
 			? strict
 			: fillToCapacity(strict, this.runFtsQuery(relaxed, limit), limit, (row) => row.id);
@@ -236,12 +248,14 @@ export class MemoryStore {
 	todayLogPath(): string {
 		const d = new Date();
 		const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
 		return `${this.logsDir}/${date}.md`;
 	}
 
 	async listLogFiles(): Promise<string[]> {
 		try {
 			const entries = await this.vfs.readdir(this.logsDir);
+
 			return entries
 				.filter((name: string) => /^\d{4}-\d{2}-\d{2}\.md$/.test(name))
 				.sort((a: string, b: string) => b.localeCompare(a))
@@ -250,15 +264,18 @@ export class MemoryStore {
 			// A logs directory that was never created is genuinely no logs. Any
 			// other readdir failure must not read as an empty history.
 			if (!isMissingFileError(err)) throw err;
+
 			return [];
 		}
 	}
 
 	async listFiles(prefix?: string): Promise<string[]> {
 		const dir = prefix ?? this.memoryDir;
+
 		try { return await this.vfs.readdir(dir); }
 		catch (err) {
 			if (!isMissingFileError(err)) throw err;
+
 			return [];
 		}
 	}

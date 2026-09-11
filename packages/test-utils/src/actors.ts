@@ -50,12 +50,16 @@ export function createTestActors(
   initWorkspaceActorTable(execRaw);
   initAgentConfigTable(execRaw);
   initCodemodeStateTable(execRaw);
+
   const existing = sql<{ id: string; owner_user_id: string }>`
     SELECT id, owner_user_id FROM workspace_identity LIMIT 1
   `[0];
+
   const workspaceId = existing?.id ?? crypto.randomUUID();
   const name = opts.name ?? 'test';
+
   if (!existing) void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, ${name})`;
+
   // The owner is READ, never assumed. A directory whose authority disagrees with
   // the database's stated owner is refused outright — that check is the point of
   // the directory — so a fixture composing over a harness that already
@@ -65,7 +69,9 @@ export function createTestActors(
     workspaceId,
     ownerUserId: existing?.owner_user_id ?? '',
   });
+
   const main = directory.createMain({ name });
+
   return {
     main,
     workspaceId,

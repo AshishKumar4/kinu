@@ -55,6 +55,7 @@ function ownerLibrary(): ExperienceLibraryStore {
   const db = new Database(':memory:');
   const exec = sqlExec(db);
   initExperienceLibraryTables(exec);
+
   return createExperienceLibrary(exec);
 }
 
@@ -77,13 +78,16 @@ interface ExperienceTestInput {
 }
 
 const ErrorSchema = v.object({ error: v.string() });
+
 const PublishedSchema = v.object({ published: v.object({
   id: v.string(), source_workspace: v.string(),
 }) });
+
 const HitsSchema = v.object({ hits: v.array(v.object({
   id: v.string(), preview: v.string(), kind: v.string(), key: v.string(),
   source_workspace: v.string(), evidence: v.string(),
 })) });
+
 const ImportSchema = v.object({
   status: v.string(), payload: v.unknown(), error: v.optional(v.string()),
 });
@@ -111,6 +115,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   )`);
 
   const facts = createFactsStore(rt.storage.sql, rt.actor);
+
   // The seam the cloud backend implements over the UserDO capability gate: a
   // workspace publishes under its own name and never sees its own entries back.
   const deps = {
@@ -178,13 +183,17 @@ function winShadowTrials(ws: Workspace, version: number): void {
 /** Propose a loop and take it all the way live, through the real pipeline. */
 async function promoteScaffold(ws: Workspace, code: string): Promise<number> {
   const proposed = await modifyScaffold(ws.rt, SCAFFOLD_RATIONALE, code);
+
   if (!proposed.ok || proposed.version === undefined) {
     throw new Error(`proposal refused: ${proposed.error ?? 'no version'}`);
   }
+
   winShadowTrials(ws, proposed.version);
   const pending = getPendingScaffold(ws.rt.storage.sql, ws.rt.actor);
+
   if (!pending) throw new Error('the proposal did not land as pending');
   await applyPromotionDecision(ws.rt, pending, 'promote');
+
   return proposed.version;
 }
 
@@ -230,6 +239,7 @@ describe('publishing is gated on local evidence', () => {
 
     const proven = await findPublishable(publishSources(ws), 'craft', 'fetch_changelog');
     expect('refused' in proven).toBe(false);
+
     if ('refused' in proven) throw new Error(proven.refused);
     expect(proven.evidence).toBe('effective score 0.90 after 4 real uses');
 
@@ -240,9 +250,11 @@ describe('publishing is gated on local evidence', () => {
   test('a provisional lesson is refused; corroborating it makes it shareable', async () => {
     const ws = workspace('alpha', ownerLibrary());
     const sources = publishSources(ws);
+
     const provisional = recordLesson(ws.rt.storage.sql, ws.rt.actor, {
       turnIds: ['t1'], text: 'Check the build before claiming success.', source: 'turn_reflection', status: 'provisional',
     });
+
     expect(await findPublishable(sources, 'lesson', provisional)).toEqual({
       refused: `lesson "${provisional}" is still provisional — it is kept out of this workspace's own `
         + 'MEMORY.md until a real outcome corroborates it, so it is not shareable either',
@@ -251,8 +263,10 @@ describe('publishing is gated on local evidence', () => {
     const corroborated = recordLesson(ws.rt.storage.sql, ws.rt.actor, {
       turnIds: ['t2'], text: 'Wrangler needs the account id in CI.', source: 'session_reflection', status: 'corroborated',
     });
+
     const candidate = await findPublishable(sources, 'lesson', corroborated);
     expect('refused' in candidate).toBe(false);
+
     if ('refused' in candidate) throw new Error(candidate.refused);
     expect(candidate.title).toBe('Wrangler needs the account id in CI.');
   });
@@ -279,9 +293,11 @@ describe('publishing is gated on local evidence', () => {
     });
 
     const result = await ws.call({ action: 'publish' });
+
     const parsed = v.parse(v.object({
       publishable: v.array(v.object({ key: v.string() })),
     }), result);
+
     expect(parsed.publishable.map((candidate) => candidate.key).sort())
       .toEqual(['deploy.target', 'fetch_changelog']);
   });
@@ -300,6 +316,7 @@ describe('the owner library moves experience between workspaces', () => {
       PublishedSchema,
       await alpha.call({ action: 'publish', kind: 'craft', key: 'fetch_changelog' }),
     );
+
     expect(published.published.source_workspace).toBe('alpha');
 
     const ownHits = v.parse(HitsSchema, await alpha.call({ action: 'search', query: 'changelog' }));
@@ -317,12 +334,14 @@ describe('the owner library moves experience between workspaces', () => {
     const alpha = workspace('alpha', library);
     const beta = workspace('beta', library);
     alpha.facts.upsert('deploy.target', 'first.workers.dev', { confidence: 1 });
+
     const first = v.parse(
       PublishedSchema,
       await alpha.call({ action: 'publish', kind: 'fact', key: 'deploy.target' }),
     ).published;
 
     alpha.facts.upsert('deploy.target', 'second.workers.dev', { confidence: 1 });
+
     const second = v.parse(
       PublishedSchema,
       await alpha.call({ action: 'publish', kind: 'fact', key: 'deploy.target' }),
@@ -386,8 +405,10 @@ describe('every import passes the misevolution gate', () => {
 
       expect(result.error).toContain(`Misevolution veto (${criterion})`);
       expect(await importedRows(beta)).toEqual([]);
+
       const vetoes = beta.rt.storage.sql<{ type: string; message: string }>`
         SELECT type, message FROM evolution_events WHERE type = 'misevolution_veto'`;
+
       expect(vetoes).toHaveLength(1);
       expect(vetoes[0]?.message).toContain(criterion);
     });
@@ -412,6 +433,7 @@ describe('every import passes the misevolution gate', () => {
   test('the same entry cannot be imported twice', async () => {
     const library = ownerLibrary();
     const beta = workspace('beta', library);
+
     const published = library.publish({
       kind: 'lesson', key: 'lsn-1', title: 'A lesson', evidence: 'corroborated 2026-08-01',
       payload: { kind: 'lesson', text: 'Read the error before rerunning.' },
@@ -443,6 +465,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
         payload: { kind: 'fact', key: 'deploy.target', value: 'kinu.workers.dev', confidence: 1 },
       }, 'alpha'),
     ];
+
     for (const entry of entries) {
       expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: entry.id })).status).toBe('provisional');
     }
@@ -499,6 +522,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
   test('a discarded import can be imported again later', async () => {
     const library = ownerLibrary();
     const beta = workspace('beta', library, { 'reflect': 'noted' });
+
     const entry = library.publish({
       kind: 'fact', key: 'deploy.target', title: 'deploy.target', evidence: 'held at confidence 1.00',
       payload: { kind: 'fact', key: 'deploy.target', value: 'kinu.workers.dev', confidence: 1 },
@@ -516,10 +540,12 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
   test('an ungraded turn settles nothing — the import keeps waiting', async () => {
     const library = ownerLibrary();
     const beta = workspace('beta', library);
+
     const entry = library.publish({
       kind: 'fact', key: 'deploy.target', title: 'deploy.target', evidence: 'held at confidence 1.00',
       payload: { kind: 'fact', key: 'deploy.target', value: 'kinu.workers.dev', confidence: 1 },
     }, 'alpha');
+
     await beta.call({ action: 'import', id: entry.id });
 
     // No follow-up and no explicit verdict: the turn carries no user signal.
@@ -543,6 +569,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
 
     const events = beta.rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events WHERE type = 'experience_import'`;
+
     expect(events).toHaveLength(1);
     expect(events[0]?.message).toContain('Adopted imported experience after an accepted turn');
     expect(events[0]?.message).toContain('from alpha');
@@ -598,6 +625,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
 
     serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
     const candidate = await findPublishable(sources, 'scaffold', String(version));
+
     if ('refused' in candidate) throw new Error(candidate.refused);
     expect(candidate.evidence).toBe(
       `promoted here on 5 of 5 decisive shadow trials (win-rate 100%), then `
@@ -619,7 +647,9 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
       alpha.rt, SCAFFOLD_RATIONALE,
       'async function* run(rt, task) { await fetch("https://evil.example"); }',
     );
+
     expect(vetoed.error).toContain('Misevolution veto (network-egress)');
+
     const vetoAt = alpha.rt.storage.sql<{ created_at: number }>`
       SELECT created_at FROM evolution_events WHERE type = 'misevolution_veto'`[0].created_at;
 
@@ -660,6 +690,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
       VALUES (${alpha.rt.actor.actorId}, 'misevolution_veto', 'Misevolution veto (test)', ${'not-json'}, ${first + 1})`;
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
+
     try {
       const refused = await findPublishable(publishSources(alpha), 'scaffold', String(version));
       expect('refused' in refused && refused.refused).toBe(
@@ -683,6 +714,7 @@ describe('a scaffold crosses only on a promotion this workspace earned', () => {
 
     const listed = v.parse(v.object({ publishable: v.array(v.object({ kind: v.string(), key: v.string() })) }),
       await alpha.call({ action: 'publish' }));
+
     expect(listed.publishable).toContainEqual({ kind: 'scaffold', key: '1' });
 
     expect(v.parse(PublishedSchema, await alpha.call({ action: 'publish', kind: 'scaffold', key: '1' }))
@@ -704,7 +736,9 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     const version = await promoteScaffold(alpha, scaffoldSrc(tag));
     serveGradedTurns(alpha, version, DEFAULT_SHADOW_CONFIG.minTrials);
     const candidate = await findPublishable(publishSources(alpha), 'scaffold', String(version));
+
     if ('refused' in candidate) throw new Error(candidate.refused);
+
     return library.publish(candidate, 'alpha');
   }
 
@@ -755,6 +789,7 @@ describe('an imported scaffold is a proposal here, never an activation', () => {
     await gradeTurn(beta, 'turn-1', 'positive');
 
     const pending = getPendingScaffold(beta.rt.storage.sql, beta.rt.actor);
+
     if (!pending) throw new Error('the import did not land as a pending version');
     winShadowTrials(beta, pending.version);
     const applied = await applyPromotionDecision(beta.rt, pending, 'promote');
@@ -876,10 +911,12 @@ describe('the dispatcher answers honestly at its edges', () => {
 describe('a corrupt row is skipped, never staged or fatal', () => {
   test('a payload whose kind differs from the entry kind is refused with no row written', async () => {
     const library = ownerLibrary();
+
     const entry = library.publish({
       kind: 'craft', key: 'fetch_changelog', title: 'fetch a project changelog', evidence: 'effective score 0.90 after 4 real uses',
       payload: { kind: 'craft', name: 'fetch_changelog', description: 'fetch a project changelog', params: { url: 'string' }, code: 'async (args) => args.url', score: 0.9 },
     }, 'alpha');
+
     const beta = workspace('beta', library);
     // kind and payload are independent fields, so a mismatched entry is
     // type-legal to build and must be refused at runtime: staging it would
@@ -888,12 +925,14 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
 
     const first = stageImport(beta.rt, mismatched);
     expect(first.ok).toBe(false);
+
     if (first.ok) throw new Error('a kind-mismatched payload was staged');
     expect(first.reason).toContain('does not parse');
     expect(await importedRows(beta)).toEqual([]);
 
     const second = stageImport(beta.rt, mismatched);
     expect(second.ok).toBe(false);
+
     if (second.ok) throw new Error('a kind-mismatched payload was staged');
     expect(second.reason).toContain('does not parse');
     expect(beta.db.query<{ c: number }, []>(`SELECT count(*) AS c FROM imported_experience`).get()?.c).toBe(0);
@@ -917,6 +956,7 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
 
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
+
     try {
       expect(listImportedExperience(beta.rt.storage.sql, beta.rt.actor).map((row) => row.id)).toEqual(['imp-good']);
       expect(log.emitted.map((line) => line.event)).toContain('experience.import_row_unreadable');
@@ -945,6 +985,7 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
   test('a promoted lesson carries the settling turn id', async () => {
     const library = ownerLibrary();
     const beta = workspace('beta', library);
+
     const entry = library.publish({
       kind: 'lesson', key: 'lsn-1', title: 'Read the error before rerunning.',
       evidence: 'turn reflection corroborated 2026-08-01',
@@ -956,6 +997,7 @@ describe('a corrupt row is skipped, never staged or fatal', () => {
 
     const adopted = listLessons(beta.rt.storage.sql, beta.rt.actor, { status: 'corroborated' })
       .find((lesson) => lesson.text.includes('Read the error before rerunning.'));
+
     if (!adopted) throw new Error('the imported lesson was not adopted');
     expect(adopted.turnIds).toContain('turn-1');
   });

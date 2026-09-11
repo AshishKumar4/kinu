@@ -79,12 +79,16 @@ function candidateSpending(calls: number): string {
 async function measure(source: string): Promise<RatioMeasurement> {
   const { rt } = createTestRuntime();
   const { shell } = rt;
+
   if (!shell) throw new Error('this runtime has no shell, so nothing can run a measurement in it');
+
   const ctx: MeasurementContext = {
     vfs: rt.storage.vfs,
     exec: (command) => shell.exec(command),
   };
+
   await rt.storage.vfs.writeFile(SOLUTION_FILE, source);
+
   return await runRatioMeasurement(ctx, {
     params: { n: REFERENCE_CALLS },
     reference: REFERENCE,
@@ -97,9 +101,11 @@ async function measure(source: string): Promise<RatioMeasurement> {
 /** The limit the meter actually enforced, read off its own refusal. */
 function enforcedLimit(failure: string | null): number {
   const match = /oracle budget of (\d+) calls exhausted/.exec(failure ?? '');
+
   if (match?.[1] === undefined) {
     throw new Error(`the refusal did not name the budget it enforced: ${String(failure)}`);
   }
+
   return Number(match[1]);
 }
 
@@ -179,8 +185,10 @@ describe('every quantity the instrument reports is a key an archive can bin', ()
   test('the workspace as found and a measured candidate report the same finite quantities', async () => {
     const { rt } = createTestRuntime();
     const { shell } = rt;
+
     if (!shell) throw new Error('this runtime has no shell, so nothing can run a measurement in it');
     const ctx: MeasurementContext = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
+
     const instrument = resolveVerifier({
       kind: 'exec-ratio',
       spec: {
@@ -191,6 +199,7 @@ describe('every quantity the instrument reports is a key an archive can bin', ()
         lowerBoundOps: 1,
       },
     });
+
     if ('reason' in instrument) throw new Error(`the one registered kind must resolve: ${instrument.error}`);
 
     // THE WORKSPACE AS FOUND, which for this kind is the seeded reference — the same
@@ -213,6 +222,7 @@ describe('every quantity the instrument reports is a key an archive can bin', ()
     // reports — which is what lets a caller read a run's baseline without knowing which
     // kind produced it.
     const { baselineKey } = instrument;
+
     if (baselineKey === null) throw new Error('this kind declares a measured baseline, so it must name its key');
     expect(found).toContain(baselineKey);
 
@@ -246,10 +256,12 @@ describe('a measurement removes the modules it wrote', () => {
   test('a valid measurement reports its numbers, keeps the solution, and leaves no stamped module', async () => {
     const { rt } = createTestRuntime();
     const { shell } = rt;
+
     if (!shell) throw new Error('this runtime has no shell, so nothing can run a measurement in it');
     const ctx: MeasurementContext = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
     const candidate = candidateSpending(REFERENCE_CALLS * 2);
     await rt.storage.vfs.writeFile(SOLUTION_FILE, candidate);
+
     const measured = await runRatioMeasurement(ctx, {
       params: { n: REFERENCE_CALLS },
       reference: REFERENCE,
@@ -257,6 +269,7 @@ describe('a measurement removes the modules it wrote', () => {
       targetOps: REFERENCE_CALLS,
       lowerBoundOps: 1,
     });
+
     expect(measured.failure).toBeNull();
     expect(measured.correct).toBe(true);
     const entries = await rt.storage.vfs.readdir('');
@@ -267,6 +280,7 @@ describe('a measurement removes the modules it wrote', () => {
   test('a passing preflight leaves no probe module', async () => {
     const { rt } = createTestRuntime();
     const { shell } = rt;
+
     if (!shell) throw new Error('this runtime has no shell, so nothing can run a preflight in it');
     const ctx: MeasurementContext = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
     expect(await preflightRatioHarness(ctx)).toBeNull();
@@ -278,12 +292,14 @@ describe('a measurement removes the modules it wrote', () => {
     const { rt } = createTestRuntime();
     const candidate = candidateSpending(REFERENCE_CALLS * 2);
     await rt.storage.vfs.writeFile(SOLUTION_FILE, candidate);
+
     const ctx: MeasurementContext = {
       vfs: rt.storage.vfs,
       exec: async () => {
         throw new Error('the shell is down');
       },
     };
+
     await expect(runRatioMeasurement(ctx, {
       params: { n: REFERENCE_CALLS },
       reference: REFERENCE,

@@ -11,6 +11,7 @@ import {
 } from '../src/durability/contracts';
 
 const SHA = 'a'.repeat(64);
+
 const KEY = 'v1/boxes/box/attempts/op/try/data-a';
 
 describe('the durability wire contracts', () => {
@@ -100,6 +101,7 @@ describe('the durability wire contracts', () => {
       sha256: SHA,
       expiresAt: '100',
     });
+
     expect(intent.method).toBe('PUT');
     expect(v.parse(PayloadGrantSchema, {
       operationId: intent.operationId,

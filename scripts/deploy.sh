@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Kinu deploy pipeline — THE deploy path for BOTH environments.
-#   bun run deploy           → production, https://kinu.run
-#   bun run deploy:staging   → staging, https://staging.kinu.run
+# Kinu deploy pipeline — THE deploy path. One environment, https://kinu.run.
+#   bun run deploy
 #
 # Deploying any other way is how production once shipped without the CLI
 # download assets: the site was fine, but /downloads/* answered with the SPA
@@ -39,7 +38,7 @@
 # Usage:
 #   bun run deploy                           # production
 #   bun run deploy:staging                   # staging
-#   bash scripts/deploy.sh <production|staging> [--bootstrap]
+#   bash scripts/deploy.sh [--bootstrap]
 #   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh staging
 #
 # `--bootstrap` is for the deploy that DECLARES something only a deploy can
@@ -64,28 +63,16 @@ cd "$KINU_ROOT" || { echo -e "${RED}Cannot cd to Kinu root${NC}"; exit 1; }
 
 export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729eba250f1}"
 
-# ── Which environment ─────────────────────────────────────────
+# ── The one environment ──────────────────────────────────────────────────────
 #
-# The values that differ. Everything else in this file is shared. Both
-# environments serve the SAME unified shell — the landing carries the app
-# behind auth — so the smoke marker is one value, not a split.
-KINU_ENV="${1:-production}"
+# There is no staging. The product has no external users, so the deployed
+# worker IS the test target: every gate below, the first-run tier included,
+# drives https://kinu.run. The landing carries the app behind auth, so the
+# smoke marker is one value.
+KINU_ENV="production"
 KINU_APP_ROOT="landing-root"
-case "$KINU_ENV" in
-  production)
-    KINU_URL="https://kinu.run/"
-    KINU_WRANGLER_ARGS=()
-    ;;
-  staging)
-    KINU_URL="https://staging.kinu.run/"
-    KINU_WRANGLER_ARGS=(--env staging)
-    ;;
-  *)
-    echo -e "${RED}Unknown environment '$KINU_ENV'.${NC}"
-    echo "Usage: scripts/deploy.sh <production|staging> [--bootstrap]"
-    exit 2
-    ;;
-esac
+KINU_URL="https://kinu.run/"
+KINU_WRANGLER_ARGS=()
 
 # ── Bootstrap, or not ─────────────────────────────────────────
 #
@@ -107,12 +94,12 @@ esac
 # runs the full phase with no tolerance at all, unconditionally, in both
 # environments, and its findings fail the deployment.
 KINU_BOOTSTRAP=0
-case "${2:-}" in
+case "${1:-}" in
   "") ;;
   --bootstrap) KINU_BOOTSTRAP=1 ;;
   *)
-    echo -e "${RED}Unknown option '$2'.${NC}"
-    echo "Usage: scripts/deploy.sh <production|staging> [--bootstrap]"
+    echo -e "${RED}Unknown option '$1'.${NC}"
+    echo "Usage: scripts/deploy.sh [--bootstrap]"
     exit 2
     ;;
 esac
@@ -130,14 +117,7 @@ if [ "$KINU_BOOTSTRAP" = "1" ]; then
 else
   export KINU_INFRA_PHASE="full"
 fi
-# The Cloudflare Vite plugin resolves named Wrangler environments at build
-# time. Passing `--env` only to the generated deploy config is too late: that
-# config already carries the root Worker's name, bindings, routes and assets.
-if [ "$KINU_ENV" = "staging" ]; then
-  export CLOUDFLARE_ENV="staging"
-else
-  unset CLOUDFLARE_ENV
-fi
+unset CLOUDFLARE_ENV
 
 # Captured during deploy for final summary
 KINU_VERSION=""
@@ -484,7 +464,7 @@ run_required_gate "Cloudflare backend and conformance suite" bun test --parallel
 run_required_gate "Durable Object semantics under workerd" bun run test:workerd
 run_required_gate "CLI backend and conformance suite" bun test --parallel=4 packages/cli-backend/
 run_required_gate "Full production CLI suite" bun run test:cli
-run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts
+run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts
 run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts scripts/sandbox-durability-probe.test.ts scripts/storage-matrix-admission.test.ts scripts/storage-matrix-cleanup.test.ts scripts/storage-matrix-manifest.test.ts scripts/storage-matrix-protocol.test.ts scripts/deploy-substrate.test.ts scripts/payload-transport.test.ts scripts/devbox-e2e.test.ts scripts/fixtures/r2-bench/security/cells.test.ts
 run_required_gate "Gate self-tests: secrets, corpus, preflight" bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts
 run_required_gate "Secret scan" bun scripts/secret-scan.ts
@@ -785,24 +765,24 @@ if [ "$SMOKE_FAIL" -ne 0 ]; then
   exit 1
 fi
 
-# ── Step 4b: The first-run tier ──────────────────────────────────
+# ── Step 4b: The first-run tier ─────────────────────────────────────────────
 #
-# STAGING ONLY, and that is not a cost decision. The tier acts as the eval
-# identity, which is a STAGING construct by design: the same DEV_IDENTITY_SECRET
-# that lets a test act as a signed-in user without signing in is the whole
-# authority for that identity, and production deliberately carries neither it nor
-# DEV_USER_EMAIL (wrangler.jsonc:441-445, scripts/infra-manifest.ts:586-601) —
-# a first-run against production would need a service identity production is
-# built to refuse. The same bits reach production minutes after staging passed
-# them, so the product a production user meets IS the one this tier judged.
+# AGAINST THE DEPLOYED PRODUCT, every deploy. There is one environment, so the
+# worker this tier drives is the one a user meets. It acts as the eval service
+# identity: `DEV_USER_EMAIL` names it in wrangler.jsonc and `DEV_IDENTITY_SECRET`
+# is its whole authority, honoured only for a request presenting the secret and
+# refused by the admin gate regardless (control-plane/admin-caller.ts). Every
+# workspace a case creates carries the eval prefix and is torn down by the run.
 #
-# WHAT A NEW USER MEETS, on the build that just landed. Every gate above this
-# line ran BEFORE the upload, on this tree, over inputs their authors wrote. The
-# owner found four product defects by hand in two days that 33 such gates and an
-# 11,531-test census never touched — a crafted tool that would not run, an
-# Approve button that re-ticked every box, two machines flapping on one slot,
-# Enter not sending in the TUI — and every one of them had a green test, because
-# each test exercised what its author wrote instead of what a user brings.
+# WHY IT EXISTS. Every gate above this line ran BEFORE the upload, on this tree,
+# over inputs their authors wrote. The owner found product defects by hand that
+# those gates never touched — a crafted tool that would not run, an Approve
+# button that re-ticked every box, two machines flapping on one slot, Enter not
+# sending in the TUI, and on 2026-09-10 every workspace open failing on a query
+# no unit test ran — each with a green test, because each test exercised what
+# its author wrote instead of what a user brings. On 2026-09-10 this tier was
+# gated to a staging deploy that never happened, so production shipped without
+# it four times in one day. It is unconditional now.
 #
 # So this tier drives the DEPLOYED product the way a person does: a fresh
 # workspace per case over the public REST, the real model, a real click in
@@ -818,15 +798,11 @@ fi
 # session as the same identity `gate:infra` authenticates with. Two gates on one
 # account is how a fleet case measures a sibling's daemons.
 #
-# THE ENQUEUE LINE STAYS AT COLUMN 0, inside the guard. `scripts/ladder.ts`
-# parses these lines with `^run_required_gate`, so an indented one is invisible
-# to `deployGates`/`deployWaves` — the gate would run on staging while the
-# ladder, the CI-coverage assertion and the deploy contract all reported a tier
-# that does not exist. Measured: indenting it drops the gate from the parse and
-# leaves `deploy.test.ts` green over a wave it cannot see.
-if [ "$KINU_ENV" = "staging" ]; then
+# THE ENQUEUE LINE STAYS AT COLUMN 0. `scripts/ladder.ts` parses these lines
+# with `^run_required_gate`, so an indented one is invisible to `deployGates`/
+# `deployWaves`. Measured: indenting it drops the gate from the parse and leaves
+# `deploy.test.ts` green over a wave it cannot see.
 run_required_gate "First-run tier" bun run gate:first-run
-fi
 
 # BARRIER.
 flush_gates

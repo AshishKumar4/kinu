@@ -38,12 +38,15 @@ const DaemonSandboxModuleSchema = v.object({
   PROBE_HINTS: v.record(v.string(), v.string()),
   helloCapability: v.function(),
 });
+
 const DaemonHelloSandboxSchema = v.object({
   capability: v.string(),
   reason: v.nullable(v.string()),
   reasonDetail: v.optional(v.nullable(v.string())),
 });
+
 const require_ = createRequire(import.meta.url);
+
 const daemonSandbox = v.parse(
   DaemonSandboxModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/sandbox.js')),
 );
@@ -51,13 +54,16 @@ const daemonSandbox = v.parse(
 /** One of the daemon's status words, by the daemon's own name for it. */
 function daemonStatus(key: 'OK' | 'PROBE_FAILED'): string {
   const word = daemonSandbox.SANDBOX_STATUS[key];
+
   if (word === undefined) throw new Error(`the daemon's SANDBOX_STATUS has no ${key}`);
+
   return word;
 }
 
 /** The sandbox block the shipped daemon sends for one probe result, as JSON. */
 function daemonHello(status: string, detail: string | null): JsonValue {
   const wire = v.parse(DaemonHelloSandboxSchema, daemonSandbox.helloCapability({ status, detail }));
+
   return {
     capability: wire.capability,
     reason: wire.reason,
@@ -111,6 +117,7 @@ describe('a machine that cannot sandbox runs no command', () => {
     const refusal = harness.userDO.deviceRpc(harness.workspace, 'exec', ['make build'], {
       agentName: WORKSPACE,
     });
+
     await expect(refusal).rejects.toThrow(SANDBOX_UNAVAILABLE);
     // The reason the machine gave, and the fix the owner can act on, both reach
     // the model — a refusal nobody can act on is a dead end.
@@ -245,6 +252,7 @@ describe('the frame carries the calling workspace own home', () => {
     const sandboxes = harness.deviceFrames
       .filter((frame) => frame.method === 'exec')
       .map((frame) => v.parse(FrameSandboxSchema, frame.sandbox));
+
     expect(sandboxes).toEqual([
       {
         tier: 'sandboxed',
@@ -377,6 +385,7 @@ describe('the refusal carries what the daemon actually said', () => {
     const statuses = Object.values(daemonSandbox.SANDBOX_STATUS).filter((status) => status !== daemonStatus('OK'));
     expect([...statuses].sort())
       .toEqual(DEVICE_SANDBOX_REASONS.filter((reason) => reason !== 'daemon_outdated').sort());
+
     for (const status of statuses) {
       const reason = parseSandboxReason(status);
       expect(reason).not.toBeNull();

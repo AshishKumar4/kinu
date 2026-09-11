@@ -15,6 +15,7 @@ import { isToolUIPart } from "ai";
 import type { DynamicToolUIPart, ToolUIPart, UIMessage } from "ai";
 
 type Part = UIMessage["parts"][number];
+
 /** Exactly what `isToolUIPart` narrows to — a crafted or MCP tool arrives as
  *  the dynamic variant, and the chat draws both the same way. */
 export type AnyToolPart = ToolUIPart | DynamicToolUIPart;
@@ -46,13 +47,17 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
     // AI SDK step markers carry no visible content. Keeping them in the render
     // stream split one long sequential tool run into dozens of singleton rows.
     if (part.type === 'step-start') continue;
+
     if (isToolUIPart(part) && isFinished(part)) {
       run.push(part);
       continue;
     }
+
     flush();
     blocks.push({ kind: "part", part });
   }
+
   flush();
+
   return blocks;
 }

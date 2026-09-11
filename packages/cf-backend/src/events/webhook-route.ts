@@ -53,7 +53,9 @@ import { isWorkspaceName } from '../user/validate';
 /** Domain separation, versioned in the label AND in the URL segment, so a
  *  future v2 shape can never be verified by the v1 derivation. */
 const ROUTE_LABEL = 'kinu.webhook-route.v1';
+
 const CAPABILITY_PREFIX = 'v1-';
+
 /** 128 bits of a SHA-256 HMAC. Unguessable, and short enough to paste. */
 const CAPABILITY_HEX_CHARS = 32;
 
@@ -72,6 +74,7 @@ export const WEBHOOK_ROUTE_UNAVAILABLE =
  *  same secret, and an untrimmed one would verify nothing it minted. */
 export function webhookRouteSecret(env: WebhookRouteEnv): string | null {
   const secret = (env.WEBHOOK_ROUTE_SECRET ?? '').trim();
+
   return secret.length > 0 ? secret : null;
 }
 
@@ -93,6 +96,7 @@ export interface SignedWebhookRoute extends WebhookRouteIdentity {
 }
 
 const DELIVERY_SUBTREE = /^\/api\/workspaces\/[^/]+\/webhook(?:\/|$)/u;
+
 const SIGNED_DELIVERY = new RegExp(
   `^/api/workspaces/([^/]+)/webhook/([^/]+)/${CAPABILITY_PREFIX}([0-9a-f]{${CAPABILITY_HEX_CHARS}})$`,
   'u',
@@ -115,7 +119,9 @@ export async function webhookRoutePath(
       + `"${identity.triggerId}": not a workspace name and trigger id this deployment issues.`,
     );
   }
+
   const capability = await routeCapability(secret, identity);
+
   return `/api/workspaces/${identity.workspaceName}/webhook/${identity.triggerId}`
     + `/${CAPABILITY_PREFIX}${capability}`;
 }
@@ -125,13 +131,16 @@ export async function webhookRoutePath(
 export function matchWebhookDeliveryPath(pathname: string): WebhookRouteMatch | null {
   if (!DELIVERY_SUBTREE.test(pathname)) return null;
   const signed = SIGNED_DELIVERY.exec(pathname);
+
   if (!signed) return { kind: 'malformed' };
+
   const route = {
     kind: 'signed',
     workspaceName: signed[1],
     triggerId: signed[2],
     capability: signed[3],
   } as const;
+
   return routableIdentity(route) ? route : { kind: 'malformed' };
 }
 

@@ -31,10 +31,12 @@ const steerRow = (id: string, text: string, atStep: number): UIMessage => ({
 /** A turn of `steps` steps, each a `step-start` marker and one line of text. */
 function turn(id: string, steps: number): UIMessage {
   const parts: TranscriptPart[] = [];
+
   for (let step = 0; step < steps; step++) {
     parts.push({ type: 'step-start' });
     parts.push({ type: 'text', text: `step ${step}` });
   }
+
   return { id, role: 'assistant', parts };
 }
 
@@ -53,6 +55,7 @@ describe('reading a steer row', () => {
       steerRow('steer-a', 'use the swarm for this', 7),
       turn('a1', 9),
     ]);
+
     expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'a1']);
     expect(entries[1]!.steers.map((steer) => steer.atStep)).toEqual([7]);
     // The ordinary message stayed a message and collected nothing.
@@ -71,6 +74,7 @@ describe('reading a steer row', () => {
         { id: 'old-steer', role: 'user', parts: [{ type: 'text', text: 'wait' }], metadata },
         turn('a1', 6),
       ]);
+
       expect(entries.map((entry) => entry.message.id)).toEqual(['old-steer', 'a1']);
       expect(entries[1]!.steers).toEqual([]);
     }
@@ -109,6 +113,7 @@ describe('a steer inside the turn that read it', () => {
     const { entries } = buildTranscript([
       user('u1', 'go'), steerRow('steer-a', 'and the logs', 2),
     ]);
+
     expect(entries.map((entry) => entry.message.id)).toEqual(['u1', 'steer-a']);
     expect(entries[1]!.steers).toEqual([]);
   });
@@ -132,6 +137,7 @@ describe('the live splice and the reloaded row agree', () => {
       [user('u1', 'go'), steerRow('steer-a', 'use the swarm', 3), turn('a1', 6)],
       [live('steer-a', 'use the swarm', 3)],
     );
+
     expect(entries[1]!.steers.map((steer) => steer.id)).toEqual(['steer-a']);
   });
 
@@ -141,6 +147,7 @@ describe('the live splice and the reloaded row agree', () => {
     const { entries, trailing } = buildTranscript(
       [user('u1', 'go'), turn('a1', 6)], [queued('steer-a', 'wait')],
     );
+
     expect(entries[1]!.steers).toEqual([]);
     expect(trailing.map((steer) => steer.id)).toEqual(['steer-a']);
   });
@@ -150,6 +157,7 @@ describe('the live splice and the reloaded row agree', () => {
       [user('u1', 'go'), turn('a1', 6)],
       [{ id: 'steer-a', text: 'wait', atStep: null, state: 'landed' }],
     );
+
     expect(entries[1]!.steers).toEqual([]);
     expect(trailing.map((steer) => steer.id)).toEqual(['steer-a']);
   });
@@ -159,6 +167,7 @@ describe('the live splice and the reloaded row agree', () => {
       [user('u1', 'go'), steerRow('steer-a', 'wait', 2), turn('a1', 6)],
       [queued('steer-a', 'wait')],
     );
+
     expect(trailing).toEqual([]);
   });
 });
@@ -211,6 +220,7 @@ describe('cutting the turn at the steer', () => {
 
 function partLabel(part: TranscriptPart): string {
   if (part.type === 'step-start') return 'start';
+
   return part.type === 'text' ? part.text : part.type;
 }
 
@@ -227,10 +237,12 @@ describe('the resumable fold', () => {
     // the fold was cut, including exactly at it.
     user('u2', 'thanks'),
   ];
+
   const liveSteers: InlineSteer[] = [queued('steer-live', 'wait'), live('steer-a', 'use the swarm', 3)];
 
   test('sealing a fold extended in any two runs equals the one-shot build', () => {
     const whole = buildTranscript(conversation, liveSteers);
+
     for (let cut = 0; cut <= conversation.length; cut++) {
       const stable = extendTranscript(EMPTY_TRANSCRIPT_FOLD, conversation.slice(0, cut));
       const resumed = sealTranscript(extendTranscript(stable, conversation.slice(cut)), liveSteers);

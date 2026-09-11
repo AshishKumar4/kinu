@@ -19,11 +19,13 @@ describe('UserDO Codex credential revocation', () => {
       const body = new URLSearchParams(String(init?.body));
       expect(body.get('grant_type')).toBe('refresh_token');
       expect(body.get('refresh_token')).toBe('rt-revoked');
+
       return new Response(JSON.stringify({
         error: 'invalid_grant',
         error_description: 'The provided authorization grant is invalid',
       }), { status: 400, headers: { 'content-type': 'application/json' } });
     });
+
     try {
       const harness = createTestUserDO();
       const owner = await testOwner();
@@ -46,6 +48,7 @@ describe('UserDO Codex credential revocation', () => {
   test('a transient refresh failure keeps the credential in place', async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response('upstream exploded', { status: 503 }));
+
     try {
       const harness = createTestUserDO();
       const owner = await testOwner();

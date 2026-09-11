@@ -20,6 +20,7 @@ import {
 } from '../config/store';
 
 export type RoleChangeActor = 'user' | 'agent';
+
 export type RoleChangePolicy = 'allow' | 'approval' | 'locked';
 
 /** Why a change could not be made. Named because two places speak it: the
@@ -53,12 +54,14 @@ export function roleChangeOutcomeText(
   currentRole: string,
 ): string {
   const asked = JSON.stringify(requested);
+
   switch (outcome.kind) {
     case 'applied':
       return `role is now ${JSON.stringify(outcome.to)}, was ${JSON.stringify(outcome.from)}. `
         + 'It applies from the next turn; this one keeps the profile it already resolved.';
     case 'refused': {
       const live = JSON.stringify(currentRole);
+
       const because = {
         locked: `role changes are locked on this agent by its owner, so ${asked} cannot be set `
           + `here and retrying will not change that. ${live} stays active.`,
@@ -70,6 +73,7 @@ export function roleChangeOutcomeText(
         'approval-required': `role ${asked} widens what this agent can reach, so the switch needs owner approval. `
           + `${live} stays active.`,
       } satisfies Record<RoleChangeRefusal, string>;
+
       return because[outcome.reason];
     }
   }
@@ -88,13 +92,16 @@ export interface RoleStateStore {
  *  not, and two restricted lists compare by membership. */
 function roleWidensCapabilities(from: RoleDefinition, to: RoleDefinition): boolean {
   if (to.allowedTools === undefined) return from.allowedTools !== undefined;
+
   if (from.allowedTools === undefined) return false;
   const fromSet = new Set(from.allowedTools);
+
   return to.allowedTools.some((action) => !fromSet.has(action));
 }
 
 function roleOf(envelope: ProfileCatalogEnvelope, id: RoleId): RoleDefinition | null {
   const roles = effectiveRoleCatalog(envelope.catalog);
+
   return roles[id] ?? null;
 }
 
@@ -124,15 +131,20 @@ export function changeActiveRole(input: {
   const envelope = validateProfileCatalogEnvelope(input.envelope);
   const stored = input.config.get(AGENT_CONFIG_KEYS.roleSelection);
   const from = stored !== null && isValidRoleId(stored) ? stored : DEFAULT_ROLE_ID;
+
   if (!isValidRoleId(input.to)) return { kind: 'refused', reason: 'invalid-role-id' };
   const target = roleOf(envelope, input.to);
+
   if (!target) return { kind: 'refused', reason: 'unknown-role' };
 
   const policy = parseRoleChangePolicy(input.config.get(AGENT_CONFIG_KEYS.roleChangePolicy));
+
   if (policy === 'locked' && input.actor === 'agent') {
     return { kind: 'refused', reason: 'locked' };
   }
+
   const fromDef = roleOf(envelope, from);
+
   if (
     policy === 'approval'
     && input.actor === 'agent'
@@ -145,5 +157,6 @@ export function changeActiveRole(input: {
   }
 
   applyRole(input.config, envelope, from, input.to, input.actor);
+
   return { kind: 'applied', from, to: input.to, catalogVersion: envelope.version };
 }

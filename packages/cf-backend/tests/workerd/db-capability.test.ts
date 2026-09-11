@@ -53,6 +53,7 @@ function memberNames(): readonly string[] {
     apply: () => { throw new Error('not called'); },
     batch: () => { throw new Error('not called'); },
   };
+
   return Object.keys(createDbCodemodeProvider(unused).tools);
 }
 
@@ -129,6 +130,7 @@ describe('the db capability on Durable Object SQLite', () => {
       await db.insert('ledger', [{ key: 'shared', amount: ${owner === 'main' ? '1' : '2'} }]);
       return { mine: await db.select('ledger'), tables: (await db.listTables()).map((t) => t.name) };
     `;
+
     const mine = await probe('isolation').program(claim('main'), 'main');
     const theirs = await probe('isolation').program(claim('scout'), 'scout');
 
@@ -176,11 +178,13 @@ describe('the db capability on Durable Object SQLite', () => {
       },
       mine: 1,
     });
+
     // Every host table the program reached for is still there, and no table was
     // created under an injected name.
     for (const name of ['messages', 'workspace_actors', 'workspace_identity', 'agent_data_tables', 'run_events']) {
       expect(run.tables).toContain(name);
     }
+
     expect(run.tables.filter((name) => name.startsWith('app_'))).toEqual(['app_ledger']);
     expect(run.tables.some((name) => name.includes('DROP'))).toBe(false);
   });

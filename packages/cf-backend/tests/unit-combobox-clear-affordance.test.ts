@@ -11,10 +11,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const css = readFileSync(resolve(import.meta.dir, '../src/index.css'), 'utf8');
+
 const picker = readFileSync(resolve(import.meta.dir, '../src/components/ModelPicker.tsx'), 'utf8');
 
 /** The `[aria-label="…"]` the `.p-combobox-no-clear` rule hides. */
 const CSS_LABEL = css.match(/\.p-combobox-no-clear\s*>\s*\[aria-label="([^"]+)"\]/)?.[1];
+
 /** The label ModelPicker hands Kumo for the same button. */
 const TSX_LABEL = picker.match(/const CLEAR_LABEL_UNUSED = "([^"]+)"/)?.[1];
 

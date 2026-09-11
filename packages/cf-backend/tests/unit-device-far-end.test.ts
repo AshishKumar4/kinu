@@ -32,10 +32,12 @@ import {
 } from '@kinu.run/core';
 
 const TURN = 'turn-1';
+
 const RequestRowSchema = v.object({
   cancel_outcome: v.nullable(v.string()),
   cancel_claim: v.nullable(v.string()),
 });
+
 const UnstoppedRowSchema = v.object({ unstopped_at: v.nullable(v.number()) });
 
 /**
@@ -52,6 +54,7 @@ async function asked(harness: DeviceHarness, method: string): Promise<void> {
     setImmediate(resolve);
     await promise;
   }
+
   throw new Error(`the device was never asked to ${method}`);
 }
 
@@ -67,6 +70,7 @@ function requestRow(
   const row = harness.db.prepare(
     `SELECT cancel_outcome, cancel_claim FROM device_inflight_requests WHERE request_id = ?`,
   ).all(requestId)[0];
+
   return row === undefined ? undefined : v.parse(RequestRowSchema, row);
 }
 
@@ -79,8 +83,10 @@ function requestRow(
  */
 function holdingDaemon() {
   const held = Promise.withResolvers<JsonValue>();
+
   const responder: DeviceResponder =
     (frame) => (frame.method === 'exec' ? held.promise : daemon(frame));
+
   return {
     responder,
     release: () => held.resolve({ stdout: 'built', stderr: '', exitCode: 0 }),
@@ -104,6 +110,7 @@ function mispairingDaemon(frame: DeviceFrame): JsonValue {
   if (frame.method === DEVICE_CANCEL_METHOD) {
     return { requestId: 'rpc-elsewhere0-4', cancelled: 'terminated' };
   }
+
   return daemon(frame);
 }
 
@@ -156,14 +163,17 @@ describe('a device that answers a cancellation for another command', () => {
 describe('a completion held past its own cancellation', () => {
   test('publishes no row, frame or acknowledgement after the request settled', async () => {
     const { responder, release } = holdingDaemon();
+
     const harness = await deviceHarness('ashish@studio', (frame) => {
       // The command had already finished on the machine when the stop arrived,
       // so the daemon holds no control entry for it: the completion boundary.
       if (frame.method === DEVICE_CANCEL_METHOD) {
         return { requestId: String(frame.params[0]), cancelled: 'unknown' };
       }
+
       return responder(frame);
     });
+
     harness.consentDecision = 'always';
     const requestId = nextDeviceRequestId();
 

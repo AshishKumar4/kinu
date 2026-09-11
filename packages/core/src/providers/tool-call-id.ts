@@ -49,10 +49,12 @@ export interface ToolCallIdInput {
 export function toolCallIdFor({ scope, native, index }: ToolCallIdInput): string {
   const trimmed = (native ?? '').trim();
   const portable = isPortableToolCallId(trimmed);
+
   // Reuse and idempotence are the same rule: an id already scoped to this
   // response IS the key, so feeding an output back in as `native` — which is
   // what a replayed transcript does — is a fixed point, not a second scoping.
   if (portable && (trimmed.startsWith(`${scope}-n-`) || trimmed.startsWith(`${scope}-i-`))) return trimmed;
+
   // Native provider ids and positional fallbacks occupy disjoint namespaces:
   // native "1" can coexist with the first unnamed call in one response.
   return portable ? `${scope}-n-${trimmed}` : `${scope}-i-${index + 1}`;

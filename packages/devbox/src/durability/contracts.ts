@@ -24,9 +24,13 @@ const DecimalSchema = v.pipe(
   v.string(),
   v.regex(/^(?:0|[1-9]\d*)$/, 'Expected a canonical non-negative decimal string'),
 );
+
 const IdSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(128));
+
 const ObjectKeySchema = v.pipe(v.string(), v.minLength(1), v.maxLength(1024));
+
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/, 'Expected a lowercase SHA-256 digest'));
+
 const CountSchema = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
 
 /** What one restore did, in the dimensions a readiness claim has to be
@@ -42,6 +46,7 @@ export const RestoreWorkSchema = v.strictObject({
   mounts: CountSchema,
   replayUnits: CountSchema,
 });
+
 export type RestoreWork = v.InferOutput<typeof RestoreWorkSchema>;
 
 /** What one publish did: single PUTs of fresh bytes, and how many head CAS
@@ -51,6 +56,7 @@ export const PublishWorkSchema = v.strictObject({
   bytesPut: CountSchema,
   casAttempts: CountSchema,
 });
+
 export type PublishWork = v.InferOutput<typeof PublishWorkSchema>;
 
 /**
@@ -74,6 +80,7 @@ export type StoragePhase = 'storeMount' | 'baseAttach';
  *  fixture writes these as they land and the driver decodes them, so a start
  *  the platform reset still names its last phase. */
 export type RestorePhaseStamps = { readonly [P in RestorePhase]?: number };
+
 export const RestorePhaseStampsSchema: v.GenericSchema<RestorePhaseStamps> = v.object({
   containerStart: v.optional(CountSchema),
   storeMount: v.optional(CountSchema),
@@ -93,6 +100,7 @@ export const UploadIntentSchema = v.strictObject({
   sha256: Sha256Schema,
   expiresAt: DecimalSchema,
 });
+
 export type UploadIntent = v.InferOutput<typeof UploadIntentSchema>;
 
 export const RangeReadIntentSchema = v.strictObject({
@@ -107,6 +115,7 @@ export const RangeReadIntentSchema = v.strictObject({
   sha256: Sha256Schema,
   expiresAt: DecimalSchema,
 });
+
 export type RangeReadIntent = v.InferOutput<typeof RangeReadIntentSchema>;
 
 export const PayloadGrantSchema = v.strictObject({
@@ -115,6 +124,7 @@ export const PayloadGrantSchema = v.strictObject({
   expiresAt: DecimalSchema,
   opaque: v.pipe(v.string(), v.minLength(1), v.maxLength(4096)),
 });
+
 export type PayloadGrant = v.InferOutput<typeof PayloadGrantSchema>;
 
 /** The phases one durable operation passes through, in order. A cell that

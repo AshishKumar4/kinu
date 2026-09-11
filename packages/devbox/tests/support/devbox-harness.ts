@@ -73,6 +73,7 @@ export interface Gate {
 export function gate(): Gate {
   const entered = Promise.withResolvers<void>();
   const held = Promise.withResolvers<void>();
+
   return {
     reached: entered.promise,
     promise: held.promise,
@@ -115,6 +116,7 @@ export interface RunnerInvocation {
 /** The value after `--<name>` in a runner argv, or undefined when absent. */
 export function runnerOption(argv: readonly string[], name: string): string | undefined {
   const index = argv.indexOf(`--${name}`);
+
   return index === -1 ? undefined : argv[index + 1];
 }
 
@@ -123,11 +125,14 @@ export function runnerOption(argv: readonly string[], name: string): string | un
  *  and the journal daemon's argv produce. */
 function quotedWords(command: string): string[] {
   const words: string[] = [];
+
   for (const match of command.matchAll(/'((?:[^']|'\\'')*)'/g)) {
     words.push((match[1] ?? '').replaceAll("'\\''", "'"));
   }
+
   return words;
 }
+
 /** The single-quoted path segments of a composed shell command, in order. The
  *  chain's builders quote every path with `shellPath`, so the segments name
  *  the mount points, sources and targets without re-parsing shell syntax. */
@@ -175,12 +180,14 @@ export function scheduleTableOf(
   storage: DurableObjectStorage,
 ): { callback: string; time: number }[] {
   const held = scheduleTables.get(storage);
+
   if (held !== undefined) return held;
   // A box built on a storage this module did not make holds no rows: the fake
   // registers its table when it builds the handle, so an absent one is a fresh
   // table rather than a missing one.
   const fresh: { callback: string; time: number }[] = [];
   scheduleTables.set(storage, fresh);
+
   return fresh;
 }
 
@@ -224,6 +231,7 @@ export function fakeStorage(): FakeStorage {
    *  runtime isolates concurrent transactions, so the second committer fails
    *  instead of silently overwriting the first. Sequential flows never trip it. */
   const keyVersions = new Map<string, number>();
+
   // SAFETY: `DurableObjectStorage` declares the platform's whole storage API,
   // of which the methods under test reach exactly these five; the rest is
   // alarms and SQL beyond the one statement modelled below, which no line of
@@ -232,26 +240,34 @@ export function fakeStorage(): FakeStorage {
   const handle = {
     get: async (key: string): Promise<StoredValue> => {
       const held = gates[key];
+
       if (held !== undefined) {
         gates[key] = undefined;
         held.enter();
         await held.promise;
       }
+
       return rows.get(key);
     },
     put: (key: string, value: StoredValue): Promise<void> => {
       const fault = faults[key];
+
       if (fault !== undefined) {
         faults[key] = undefined;
+
         return Promise.reject(fault);
       }
+
       rows.set(key, value);
       keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
+
       return Promise.resolve();
     },
     delete: (key: string): Promise<boolean> => {
       const existed = rows.delete(key);
+
       if (existed) keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
+
       return Promise.resolve(existed);
     },
     // A DURABLE ROW'S READ-MODIFY-WRITE. The runtime runs the
@@ -266,12 +282,15 @@ export function fakeStorage(): FakeStorage {
       const staged = new Map<string, StoredValue>();
       const removed = new Set<string>();
       const seen = new Map<string, number>();
+
       const observe = (key: string): void => {
         if (!seen.has(key)) seen.set(key, keyVersions.get(key) ?? -1);
       };
+
       const transaction: DurableObjectTransaction = Object.create({
         get: async (key: string): Promise<StoredValue> => {
           observe(key);
+
           return removed.has(key) ? undefined : staged.get(key) ?? rows.get(key);
         },
         put: async (key: string, value: StoredValue): Promise<void> => {
@@ -283,28 +302,35 @@ export function fakeStorage(): FakeStorage {
           observe(key);
           staged.delete(key);
           removed.add(key);
+
           return rows.has(key);
         },
       });
+
       const result = await closure(transaction);
+
       for (const key of staged.keys()) {
         if ((keyVersions.get(key) ?? -1) !== (seen.get(key) ?? -1)) {
           throw new Error(`transaction conflict: ${key} changed during the transaction`);
         }
       }
+
       for (const key of removed) {
         if ((keyVersions.get(key) ?? -1) !== (seen.get(key) ?? -1)) {
           throw new Error(`transaction conflict: ${key} changed during the transaction`);
         }
       }
+
       for (const key of removed) {
         rows.delete(key);
         keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
       }
+
       for (const [key, value] of staged) {
         rows.set(key, value);
         keyVersions.set(key, (keyVersions.get(key) ?? -1) + 1);
       }
+
       return result;
     },
     // The DO's own SQLite, as the ONE statement the class issues sees it. A fake
@@ -315,7 +341,9 @@ export function fakeStorage(): FakeStorage {
         if (!query.includes('FROM container_schedules')) {
           throw new Error(`the fake Durable Object SQLite was asked an unmodelled statement: ${query}`);
         }
+
         const distinct = [...new Set(schedules.map((row) => row.callback))];
+
         return { toArray: () => distinct.map((callback) => ({ callback })) };
       },
     },
@@ -323,7 +351,9 @@ export function fakeStorage(): FakeStorage {
       new Map([...rows].filter(([key]) => key.startsWith(options.prefix))),
     ),
   } as DurableObjectStorage;
+
   scheduleTables.set(handle, schedules);
+
   return {
     rows,
     handle,
@@ -608,11 +638,15 @@ export class FakeSandbox {
    */
   #chdir(cwd: string | undefined): { stdout: string; stderr: string; exitCode: number } | null {
     if (cwd === undefined) return null;
+
     if (!this.directories.has(cwd)) {
       this.sequence.push(`chdirRefused:${cwd}`);
+
       return { stdout: '', stderr: `Failed to change directory to '${cwd}'`, exitCode: 1 };
     }
+
     this.sessionCwd = cwd;
+
     return null;
   }
 
@@ -636,15 +670,19 @@ export class FakeSandbox {
    */
   #execRemoval(command: string): { stdout: string; stderr: string; exitCode: number } | null {
     const removed = /^rm -r?f '([^']+)'$/.exec(command);
+
     const targets = removed !== null
       ? [removed[1] ?? '']
       : command.startsWith('rm -rf ') ? quotedSegments(command) : null;
+
     if (targets === null) return null;
+
     for (const target of targets) {
       for (const path of this.files.keys()) {
         if (path === target || path.startsWith(`${target}/`)) this.files.delete(path);
       }
     }
+
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
@@ -672,18 +710,23 @@ export class FakeSandbox {
   #execHolderRelease(command: string): { stdout: string; stderr: string; exitCode: number } | null {
     if (!command.includes('/proc/$pid/fd')) return null;
     const holder = this.workdirHolder;
+
     if (holder === undefined) return { stdout: 'none', stderr: '', exitCode: 0 };
     const named = `${String(holder.pid)}:${holder.comm}`;
+
     if (holder.session === true) {
       return { stdout: named, stderr: `not signalled, this session's own: ${named}`, exitCode: 0 };
     }
+
     if (holder.cwdOnly === true) {
       return { stdout: named, stderr: `not signalled, cwd-only holders: ${named}`, exitCode: 0 };
     }
+
     if (holder.survives) return { stdout: named, stderr: `signalling: ${named}`, exitCode: 0 };
     // Signalled, and it died: the re-scan at the end of the real command finds
     // nothing, so this answers `none` rather than the name it started with.
     this.workdirHolder = undefined;
+
     return { stdout: 'none', stderr: `signalling: ${named}`, exitCode: 0 };
   }
 
@@ -700,28 +743,39 @@ export class FakeSandbox {
     if (command.includes('/usr/bin/fuse-overlayfs')) {
       const quoted = quotedSegments(command);
       const target = quoted.at(-1);
+
       if (target !== undefined) this.overlayMounts.add(target);
+
       return { stdout: '', stderr: '', exitCode: 0 };
     }
+
     if (command.includes('/usr/bin/squashfuse')) {
       const quoted = quotedSegments(command);
       const mountPoint = quoted.at(-1);
+
       if (mountPoint !== undefined) this.layerMounts.add(mountPoint);
+
       return { stdout: '', stderr: '', exitCode: 0 };
     }
+
     if (command.includes('/usr/bin/mksquashfs')) {
       const tail = command.slice(command.indexOf('/usr/bin/mksquashfs'));
       const quoted = quotedSegments(tail);
       const sourceDir = quoted[0];
       const archivePath = quoted[1];
+
       if (sourceDir === undefined || archivePath === undefined) {
         throw new Error(`the archiver command names no source and target: ${command}`);
       }
+
       const bytes = this.synthesizeArchive(sourceDir);
       this.stagedArchives.set(archivePath, bytes);
+
       return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
     }
+
     if (command.includes('conv=fsync')) return this.#execPublish(command);
+
     // THE UPPER FINGERPRINT: a hash of what the changed set holds, so an
     // unchanged upper skips the commit the way the container's own walk
     // decides. Content-hashed rather than metadata-hashed: this stand-in
@@ -737,6 +791,7 @@ export class FakeSandbox {
         exitCode: 0,
       };
     }
+
     if (command.includes('then seen=1; break; fi')) {
       // The layer-visibility probe: `ready` exactly when the store holds the
       // object, which is what a re-list through the mount would find.
@@ -744,12 +799,16 @@ export class FakeSandbox {
       const store = this.chainStore;
       const relative = seen?.startsWith('/backups/') === true ? seen.slice('/backups/'.length) : undefined;
       const held = relative !== undefined && store?.objects.has(`${store.root}/${relative}`) === true;
+
       if (held) return { stdout: 'ready', stderr: '', exitCode: 0 };
+
       const holds = store === undefined
         ? ''
         : [...store.objects.keys()].filter((key) => key.startsWith(`${store.root}/`)).join(' ');
+
       return { stdout: `missing ${holds}`.trimEnd(), stderr: '', exitCode: 0 };
     }
+
     return null;
   }
 
@@ -759,19 +818,25 @@ export class FakeSandbox {
     const archivePath = /if='([^']+)'/.exec(command)?.[1];
     const mountedPath = /of='([^']+)'/.exec(command)?.[1];
     const store = this.chainStore;
+
     if (archivePath === undefined || mountedPath === undefined || store === undefined) {
       throw new Error(`the publish command names no archive, target or store: ${command}`);
     }
+
     const bytes = this.stagedArchives.get(archivePath);
+
     if (bytes === undefined) throw new Error(`the publish reads an archive nothing staged: ${archivePath}`);
+
     // The store mount exposes the chain root: the shipped `mountedLayerPath`
     // joins the fixed `/backups` mount and the key relative to that root, so
     // the same join here cannot drift from it without failing loudly below.
     const relative = mountedPath.startsWith('/backups/')
       ? mountedPath.slice('/backups/'.length)
       : undefined;
+
     if (relative === undefined) throw new Error(`the publish target is outside the store mount: ${mountedPath}`);
     store.objects.set(`${store.root}/${relative}`, bytes.slice());
+
     return { stdout: `0 ${String(bytes.byteLength)}`, stderr: '', exitCode: 0 };
   }
 
@@ -780,16 +845,19 @@ export class FakeSandbox {
     options?: { readonly cwd?: string },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const refused = sessionShellRefusal(command);
+
     if (refused !== undefined) {
       this.sequence.push(`sessionKilled:${command.split(' ')[0]}`);
       throw refused;
     }
+
     // TWO PRECONDITIONS BEFORE THE DISPATCH, each named: what the chdir does
     // to a cwd the container does not hold, and what a command does to the set
     // of directories it holds. The answers below are a dispatch a reader can
     // follow; these are a different kind of thing and do not belong mixed into
     // it.
     const refusedChdir = this.#chdir(options?.cwd);
+
     if (refusedChdir !== null) return refusedChdir;
     this.#recordDirectories(command);
     this.execs.push(command);
@@ -800,15 +868,19 @@ export class FakeSandbox {
       ? 'exec:release-workdir-holders'
       : `exec:${command.split(' ')[0]}`);
     const held = this.execGate;
+
     if (held !== undefined) {
       this.execGate = undefined;
       held.enter();
       await held.promise;
     }
+
     if (this.execDelayMs > 0) await scheduler.wait(this.execDelayMs);
+
     if (command === 'cat /tmp/devbox-boot-id 2>/dev/null || true') {
       return { stdout: this.bootId ?? '', stderr: '', exitCode: 0 };
     }
+
     if (command === 'cat /proc/mounts') {
       // EVERY path the box's own `mountBucket` holds, not just the work
       // directory — the same fact `/proc/mounts` reports in a real container,
@@ -834,37 +906,48 @@ export class FakeSandbox {
           (path) => `squashfuse ${path} fuse.squashfuse ro,nosuid,nodev,relatime 0 0`,
         ),
       ];
+
       return { stdout: `${lines.join('\n')}\n`, stderr: '', exitCode: 0 };
     }
+
     if (command.startsWith('sync')) {
       // `sync -f <dir> && sync; echo $?`: the flush this fake has no pages for,
       // answered with the success the real command reports.
       return { stdout: '0', stderr: '', exitCode: 0 };
     }
+
     if (command.startsWith('test -e')) {
       // `#pathExists` asks `test -e '<path>' && echo yes || echo no`; the fake
       // holds no filesystem, so the answer is yes for any path a strategy
       // asked about.
       return { stdout: 'yes', stderr: '', exitCode: 0 };
     }
+
     // THE JOURNAL SOCKET PROBE, answered the way the container answers it:
     // the words on stdout, with the exit code the `|| echo no` guarantees.
     // Readers must take the WORDS: the exit is 0 either way, so an exit-code
     // read cannot see a lost socket.
     if (command.startsWith('test -S ')) {
       const serving = this.journalRunning() && this.journalMounts && this.journalSocketUp;
+
       return { stdout: serving ? 'yes\n' : 'no\n', stderr: '', exitCode: 0 };
     }
+
     const removal = this.#execRemoval(command);
+
     if (removal !== null) return removal;
     const probed = /127\.0\.0\.1:(\d+)/.exec(command);
+
     if (probed !== null) {
       // '200|0' is an answer; '000|7' is curl's connection-refused exit.
       const port = Number(probed[1]);
+
       return { stdout: this.listening.has(port) ? '200|0' : '000|7', stderr: '', exitCode: 0 };
     }
+
     if (command.includes(STAMP_COMMAND)) {
       const stamp = this.stampGate;
+
       if (stamp !== undefined) {
         this.stampGate = undefined;
         stamp.enter();
@@ -872,10 +955,13 @@ export class FakeSandbox {
       }
 
       const fault = this.stampFaults.shift();
+
       if (fault !== undefined) throw fault;
       const bootId = /^printf %s ([^ ]+) > \/tmp\/devbox-boot-id$/.exec(command);
+
       if (bootId !== null) this.bootId = bootId[1];
     }
+
     // THE LAZY DETACH, which is the strategy's last resort for a reference it
     // may not revoke. `MNT_DETACH` removes the mount from the namespace even
     // while a holder lives, so it clears BOTH the mount and the fake's holder
@@ -884,10 +970,14 @@ export class FakeSandbox {
       this.sequence.push('exec:lazy-unmount');
       this.s3fsMounts.delete('/workspace');
       this.workdirHolder = undefined;
+
       return { stdout: '', stderr: '', exitCode: 0 };
     }
+
     const release = this.#execHolderRelease(command);
+
     if (release !== null) return release;
+
     // THE JOURNAL READINESS PROBE, answered as the container answers it: the
     // daemon serves once it has been started, unless a test says the mount
     // never lands. The command WAITS inside the container, so one exec is the
@@ -900,14 +990,18 @@ export class FakeSandbox {
     // recognising.
     if (command.includes('echo "socket=$socket mount=$mount"')) {
       const serving = this.journalRunning() && this.journalMounts;
+
       return {
         stdout: `socket=${serving ? 'yes' : 'no'} mount=${serving ? 'yes' : 'no'}\n`,
         stderr: '',
         exitCode: 0,
       };
     }
+
     const chain = this.#execChainCommand(command);
+
     if (chain !== null) return chain;
+
     return { stdout: '', stderr: '', exitCode: 0 };
   }
 
@@ -923,6 +1017,7 @@ export class FakeSandbox {
   async unmountBucket(mountPath: string): Promise<void> {
     this.mountCalls.push(`unmount:${mountPath}`);
     this.sequence.push(`unmount:${mountPath}`);
+
     // TWO REFERENCES REFUSE THIS, and the second one is the whole defect.
     //
     // A live holder is the obvious one. The other is THIS CALL'S OWN SESSION:
@@ -940,11 +1035,13 @@ export class FakeSandbox {
         + 'Device or resource busy',
       );
     }
+
     if (this.workdirHolder !== undefined && mountPath === '/workspace') {
       // The holder is still alive, so the mount is still busy: the refusal a
       // real fusermount gives, before any state changes hands.
       throw new Error(`fusermount: failed to unmount ${mountPath}: Device or resource busy`);
     }
+
     this.s3fsMounts.delete(mountPath);
   }
 
@@ -965,7 +1062,9 @@ export class FakeSandbox {
     const request = { operation, from, to, sessionId };
     this.fileOperations.push(request);
     const failure = this.fileOperationFailures[operation].shift();
+
     if (failure !== undefined) throw failure;
+
     return request;
   }
 
@@ -985,24 +1084,32 @@ export class FakeSandbox {
   ): Promise<LiveProcess> {
     this.starts.push({ command, cwd: options.cwd, processId: options.processId });
     const held = this.startGate;
+
     if (held !== undefined) {
       this.startGate = undefined;
       held.enter();
       await held.promise;
     }
+
     const fault = this.startFaults.shift();
+
     if (fault?.created === false) throw fault.error;
     const id = options.processId ?? `sdk-generated-${this.processes.size + 1}`;
+
     const row: FakeProcessRow = {
       id, pid: 1_000 + this.processes.size, status: 'running', command,
     };
+
     this.processes.set(id, row);
+
     // A fresh journal daemon brings a fresh control socket, the way the mount
     // line and the readiness probe already treat a fresh daemon as serving.
     if (command.includes('kinu-journal-daemon')) this.journalSocketUp = true;
+
     if (fault !== undefined) throw fault.error;
     const argv = quotedWords(command);
     const action = runnerOption(argv, 'action');
+
     if (action === undefined || this.runner === undefined) return this.#live(row);
     // THE RUNNER ANSWERS BEFORE START REPLIES, which is one shape the real one
     // has — a runner that completed before start replied — and the only
@@ -1010,15 +1117,18 @@ export class FakeSandbox {
     // first exit poll finds a settled row, and the reply is at its path.
     const resultPath = runnerOption(argv, 'result');
     const controlPath = runnerOption(argv, 'control');
+
     try {
       const control = controlPath === undefined ? undefined : this.files.get(controlPath);
       const reply = await this.runner({ action, resultPath, control, argv });
+
       if (resultPath !== undefined) this.files.set(resultPath, reply);
       this.processes.set(id, { ...row, status: 'completed', exitCode: 0 });
     } catch (cause) {
       this.processLogs.set(id, { stdout: '', stderr: describeThrown({ cause }) });
       this.processes.set(id, { ...row, status: 'failed', exitCode: 1 });
     }
+
     return this.#live(row);
   }
 
@@ -1026,7 +1136,9 @@ export class FakeSandbox {
    *  refusal for a path the container does not hold. */
   async readFile(path: string): Promise<{ content: string }> {
     const content = this.files.get(path);
+
     if (content === undefined) throw new Error(`File not found: ${path}`);
+
     return { content };
   }
 
@@ -1038,10 +1150,13 @@ export class FakeSandbox {
   async writeFile(path: string, content: string): Promise<{ success: true; path: string; timestamp: string }> {
     this.files.set(path, content);
     this.changeVersion += 1;
+
     if (path.startsWith('/workspace/')) {
       this.files.set(`/var/tmp/devbox/upper/${path.slice('/workspace/'.length)}`, content);
     }
+
     await this.fileWritten?.(path, content);
+
     return { success: true, path, timestamp: new Date().toISOString() };
   }
 
@@ -1056,6 +1171,7 @@ export class FakeSandbox {
   ): Promise<{ success: true; status: 'unchanged' | 'changed'; version: string; timestamp: string }> {
     const version = `v${String(this.changeVersion)}`;
     const status = options?.since === undefined || options.since === version ? 'unchanged' : 'changed';
+
     return { success: true, status, version, timestamp: new Date().toISOString() };
   }
 
@@ -1082,6 +1198,7 @@ export class FakeSandbox {
   }> {
     const prefix = path.endsWith('/') ? path : `${path}/`;
     const now = new Date().toISOString();
+
     const files = [...this.files.entries()]
       .filter(([entry]) => entry.startsWith(prefix))
       .map(([absolutePath, content]) => ({
@@ -1094,6 +1211,7 @@ export class FakeSandbox {
         mode: '644',
         permissions: { readable: true as const, writable: true as const, executable: false as const },
       }));
+
     return { success: true, path, files, count: files.length, timestamp: now };
   }
 
@@ -1107,21 +1225,27 @@ export class FakeSandbox {
    */
   synthesizeArchive(sourceDir: string): Uint8Array {
     const prefix = sourceDir.endsWith('/') ? sourceDir : `${sourceDir}/`;
+
     const entries = [...this.files.entries()]
       .filter(([entry]) => entry.startsWith(prefix))
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+
     const encoded = new TextEncoder();
     const parts: Uint8Array[] = [];
+
     for (const [entry, content] of entries) {
       parts.push(encoded.encode(`${entry} ${String(content.length)} `), encoded.encode(content));
     }
+
     const total = parts.reduce((sum, part) => sum + part.byteLength, 0);
     const out = new Uint8Array(total);
     let at = 0;
+
     for (const part of parts) {
       out.set(part, at);
       at += part.byteLength;
     }
+
     return out;
   }
 
@@ -1139,9 +1263,12 @@ export class FakeSandbox {
 
   getProcess(id: string): Promise<LiveProcess | null> {
     const fault = this.getFaults.shift();
+
     if (fault !== undefined) return Promise.reject(fault);
+
     if (this.stopsContainerOnPoll.has(id)) this.running.running = false;
     const row = this.processes.get(id);
+
     return Promise.resolve(row === undefined ? null : this.#live(row));
   }
 
@@ -1161,28 +1288,35 @@ export class FakeSandbox {
   killProcess(id: string): Promise<void> {
     this.kills.push(id);
     const targeted = this.killFaultsById.get(id);
+
     if (targeted !== undefined) return Promise.reject(targeted);
     const fault = this.killFaults.shift();
+
     if (fault !== undefined) return Promise.reject(fault);
     this.processes.delete(id);
+
     return Promise.resolve();
   }
 
   async exposePort(port: number, options: { token?: string; name?: string }): Promise<void> {
     const held = this.exposeGate;
+
     if (held !== undefined) {
       this.exposeGate = undefined;
       held.enter();
       await held.promise;
     }
+
     this.exposures.push({ port, token: options.token, name: options.name });
   }
 
   destroy(): Promise<void> {
     this.destroys += 1;
     const fault = this.destroyFault;
+
     if (fault !== undefined) return Promise.reject(fault);
     this.running.running = false;
+
     return Promise.resolve();
   }
   async containerFetch(): Promise<Response> {
@@ -1205,19 +1339,23 @@ export class FakeSandbox {
     // is allowed to do: nothing above it is durable yet, so the interleave
     // cannot be reached from any other seam.
     const admitting = this.containerStartGate;
+
     if (admitting !== undefined) {
       this.containerStartGate = undefined;
       admitting.enter();
       await admitting.promise;
     }
+
     // The standing refusal, checked after the park so a test can hold an
     // attempt inside a refusal that is not going to clear.
     if (this.containerUnavailable !== undefined) throw this.containerUnavailable;
     const beforeRunning = this.startFaultBeforeRunning;
     this.startFaultBeforeRunning = undefined;
+
     if (beforeRunning !== undefined) throw beforeRunning;
     const wasRunning = this.running.running;
     this.running.running = true;
+
     if (!wasRunning) this.containerStarts += 1;
       // THE INIT GATE, modelled where the SDK really opens it. `container.js`
       // runs this hook inside `ctx.blockConcurrencyWhile`, so for as long as it
@@ -1242,14 +1380,17 @@ export class FakeSandbox {
       // property that a re-entered hook fences nothing.
     const opened = Promise.withResolvers<void>();
     this.initGate = opened.promise;
+
     try {
       await this.onStart();
     } finally {
       this.initGate = undefined;
       opened.resolve();
     }
+
     const fault = this.startFaultAfterRunning;
     this.startFaultAfterRunning = undefined;
+
     if (fault !== undefined) throw fault;
   }
 
@@ -1274,24 +1415,31 @@ export class FakeSandbox {
     // spelling of unknown this file allows, and anything else waits on nothing.
     const single = v.safeParse(v.number(), args[0]);
     const list = v.safeParse(v.array(v.number()), args[0]);
+
     const options = v.safeParse(
       v.object({ ports: v.union([v.number(), v.array(v.number())]) }), args[0],
     );
+
     const decoded = single.success ? single.output
       : list.success ? list.output
       : options.success ? options.output.ports
       : undefined;
+
     const wanted: readonly number[] = decoded === undefined ? []
       : Array.isArray(decoded) ? decoded : [decoded];
+
     const dark = wanted.filter((port) => !this.listening.has(port));
+
     if (dark.length > 0) {
       const wasRunning = this.running.running;
       this.running.running = true;
+
       if (!wasRunning) this.containerStarts += 1;
       throw new Error(
         `port ${dark.join(', ')} never answered: admission waits for the instance, and per-port proofs live inside the restore`,
       );
     }
+
     await this.start();
   }
 
@@ -1317,6 +1465,7 @@ export class FakeSandbox {
     // them, for the next attach to adopt or replace.
     this.overlayMounts.clear();
     this.layerMounts.clear();
+
     return Promise.resolve();
   }
 
@@ -1335,6 +1484,7 @@ export class FakeSandbox {
   schedule(delaySeconds: number, callback: string): Promise<void> {
     this.schedules.push(callback);
     this.scheduleRows.push({ callback, time: Date.now() / 1000 + delaySeconds });
+
     return Promise.resolve();
   }
 }
@@ -1350,6 +1500,7 @@ function emptyFileChunks() {
     isBinary: true,
     encoding: 'base64' as const,
   };
+
   return {
     next: async () => ({ done: true as const, value: metadata }),
     return: async () => ({ done: true as const, value: metadata }),
@@ -1377,6 +1528,7 @@ Object.defineProperty(globalThis, 'scheduler', {
     wait: (ms: number): Promise<void> => {
       const { promise, resolve } = Promise.withResolvers<void>();
       setTimeout(resolve, ms);
+
       return promise;
     },
   },
@@ -1437,6 +1589,7 @@ export function harness<Box>(
   id: string = TEST_BOX_ID,
 ): Harness<Box> {
   const storage = fakeStorage();
+
   // SAFETY: `DurableObjectState` declares the platform handle a Durable Object
   // is constructed with. The class under test reads `storage`, `container` and
   // `id` from it and nothing else — the remaining members are WebSocket
@@ -1452,14 +1605,18 @@ export function harness<Box>(
     // would make the interleaving untestable and the assertion vacuous.
     blockConcurrencyWhile: async <T>(closure: () => Promise<T>): Promise<T> => await closure(),
   } as BoxState;
+
   const box = new Box(state, {});
   const container = FakeSandbox.last;
+
   if (container === undefined) {
     throw new Error('the substituted Sandbox base class did not run its constructor');
   }
+
   // Defined after construction because the class reads `ctx.container` only at
   // call time, and the fake owns the handle it flips on stop and destroy.
   Object.defineProperty(state, 'container', { value: container.running, configurable: true });
+
   return { box, container, rows: storage.rows, storage };
 }
 
@@ -1478,5 +1635,6 @@ export function harness<Box>(
  */
 export async function deliver<T>(container: FakeSandbox, work: () => Promise<T>): Promise<T> {
   await container.initGate;
+
   return await work();
 }

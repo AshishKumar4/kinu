@@ -39,7 +39,9 @@ import {
 } from '@kinu.run/test-utils';
 
 const RUNS = join(import.meta.dirname, 'eval/runs');
+
 const flashA = readRunRecord(join(RUNS, 'flash-a.json'));
+
 const flashB = readRunRecord(join(RUNS, 'flash-b.json'));
 
 function scoredOf(record: EvalRunRecord) {
@@ -85,6 +87,7 @@ describe('the shipped seven-task corpus fails the corpus-quality properties', ()
     // the day one of these seven ids appears in it, an honest upgrade becomes
     // possible and this goes red asking for one.
     const withGroundTruth = new Set(hardTaskCases().map((c) => c.id));
+
     for (const record of [flashA, flashB]) {
       const verifiable = record.declaredTasks.filter((id) => withGroundTruth.has(id));
       expect(verifiable).toEqual([]);
@@ -112,6 +115,7 @@ describe('the shipped seven-task corpus fails the corpus-quality properties', ()
     // rather than off a comparison that never runs.
     const comparison = compareRuns(flashA, flashB);
     expect(comparison.comparable).toBe(false);
+
     if (comparison.comparable) throw new Error('expected a refusal, not a comparison');
     expect(comparison.refusals.map((r) => r.field))
       .toEqual(['baseline.admissibility', 'candidate.admissibility']);
@@ -119,6 +123,7 @@ describe('the shipped seven-task corpus fails the corpus-quality properties', ()
     for (const record of [flashA, flashB]) {
       const unverified = scoredOf(record)
         .filter((o) => !o.scores.some((s) => s.name === TASK_OUTCOME));
+
       expect(unverified.length).toBe(12);
       expect(record.admissibility.inert).toBe(1);
     }
@@ -130,6 +135,7 @@ describe('the shipped seven-task corpus fails the corpus-quality properties', ()
     // `turns > 0 && toolCalls > 0` — satisfied by construction.
     const activityRates = [flashA, flashB].map((r) =>
       scoredOf(r).map((o) => (o.turns > 0 && o.toolCalls > 0 ? 1 : 0)));
+
     expect(activityRates[0]?.every((v) => v === 1)).toBe(true);
     expect(activityRates[1]?.every((v) => v === 1)).toBe(true);
   });
@@ -162,6 +168,7 @@ describe('the properties PASS on a corpus that declares ground truth and has hea
     const rates = [withOutcome('a', 4, 4), withOutcome('b', 4, 4)]
       .flatMap((o) => o.outcome === 'scored' ? o.scores : [])
       .map((s) => s.passed / s.eligible);
+
     expect(rates.some((r) => r < 1)).toBe(false);
   });
 });
@@ -188,6 +195,7 @@ describe('a run that attempted nothing writes no record at all', () => {
     const out = join(dir, 'run-record.json');
     const before = process.env.KINU_EVAL_RECORD;
     process.env.KINU_EVAL_RECORD = out;
+
     try {
       return { out, record: publishRunRecord(inputs(dir, observations)) };
     } finally {

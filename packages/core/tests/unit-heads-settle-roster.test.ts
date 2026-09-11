@@ -64,7 +64,9 @@ function seeded() {
   const actor = createTestActor(sql, execRaw, crypto.randomUUID(), 'settle-test');
   const journal = new HeadJournal(sql, actor);
   journal.recordSplit(RUN, 'Check every other call site that indexes rules by kind', 1_000);
+
   for (const id of ['h0', 'h1', 'h2', 'h3', 'h4']) journal.insertSpawn(spawn(id));
+
   for (const id of ['h0', 'h1', 'h3']) {
     journal.recordReport({
       id, status: 'completed', summary: `${id} reported`, evidence: [],
@@ -73,12 +75,14 @@ function seeded() {
       wallClockMs: 14_200, toolCalls: [], childHeadIds: [],
     });
   }
+
   journal.recordReport({
     id: 'h2', status: 'errored', summary: '', errorMessage: 'the admin package is not checked out',
     evidence: [], decisions: [], artifactRefs: [], fileChanges: [], stepCount: 1,
     usage: { input: 1_020, output: 0 },
     wallClockMs: 2_100, toolCalls: [], childHeadIds: [],
   });
+
   return { db, sql, journal, actor };
 }
 
@@ -86,6 +90,7 @@ function statuses(sql: SqlExecutor, actorId: string): Record<string, string> {
   const rows = sql<{ id: string; status: string }>`
     SELECT id, status FROM head_journal
     WHERE actor_id = ${actorId} AND root_id = ${RUN} ORDER BY id`;
+
   return Object.fromEntries(rows.map((row) => [row.id, row.status]));
 }
 
@@ -115,17 +120,21 @@ describe('a run that settles closes every head it did not hear from', () => {
   test('the closed head says why, in the settle transition’s own words', () => {
     const { sql, journal, actor } = seeded();
     journal.cacheMerge(RUN, MERGE, 'synthesize');
+
     const [row] = sql<{ status: string; error_message: string | null; completed_at: number | null }>`
       SELECT status, error_message, completed_at FROM head_journal
       WHERE actor_id = ${actor.actorId} AND id = 'h4'`;
+
     expect(row?.error_message).toBe(UNREPORTED_AT_MERGE_REASON);
     expect(row?.completed_at).toBeGreaterThan(0);
   });
 
   test('the counts stay total-consistent: a status moved, no row was added or lost', () => {
     const { sql, journal, actor } = seeded();
+
     const before = sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_journal
       WHERE actor_id = ${actor.actorId} AND root_id = ${RUN}`[0]!.n;
+
     journal.cacheMerge(RUN, MERGE, 'synthesize');
     const view = journal.readRun(RUN)!;
     expect(sql<{ n: number }>`SELECT COUNT(*) AS n FROM head_journal
@@ -140,6 +149,7 @@ describe('a run that settles closes every head it did not hear from', () => {
     const { sql, journal, actor } = seeded();
     journal.cacheMerge(RUN, MERGE, 'synthesize');
     const first = statuses(sql, actor.actorId);
+
     const closedAt = sql<{ completed_at: number | null }>`
       SELECT completed_at FROM head_journal
       WHERE actor_id = ${actor.actorId} AND id = 'h0'`[0]!.completed_at;

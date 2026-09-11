@@ -86,7 +86,9 @@ export const DELTA_OPS_PER_COMMAND = 250;
  *  a sidecar lives under `.devbox-delta`, so a workspace file collides only by
  *  naming that directory AND validating as a manifest. */
 export const DELTA_MANIFEST_NAME = '.devbox-delta/manifest.json';
+
 const DELTA_TREE_DIR = '.devbox-delta/tree';
+
 const DELTA_CHUNK_DIR = '.devbox-delta/chunks';
 
 function shellPath(path: string): string {
@@ -97,12 +99,16 @@ function shellPath(path: string): string {
 function ancestorDirs(path: string): string[] {
   const parts = path.split('/');
   const out: string[] = [];
+
   for (let depth = 1; depth < parts.length; depth += 1) out.push(parts.slice(0, depth).join('/'));
+
   return out;
 }
 
 const Count = v.pipe(v.number(), v.safeInteger(), v.minValue(0));
+
 const Hex64 = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/));
+
 const RelPath = v.pipe(
   v.string(),
   v.minLength(1),
@@ -137,7 +143,9 @@ export const DeltaManifestSchema = v.object({
   treplace: v.array(RelPath),
   links: v.array(v.pipe(v.array(RelPath), v.minLength(2))),
 });
+
 export type DeltaManifest = v.InferOutput<typeof DeltaManifestSchema>;
+
 export type DeltaManifestFile = DeltaManifest['files'][number];
 
 /** One upper entry as the probe reports it: eleven null-separated fields. */
@@ -163,15 +171,18 @@ export interface DeltaProbeEntry {
  */
 export function deltaProbeCommand(upperDir: string, excludes: readonly string[]): string {
   const pruned: string[] = [];
+
   for (const normalized of excludes) {
     pruned.push(
       `-path ${shellPath(`${upperDir}/${normalized}`)} -prune -o`,
       `-path ${shellPath(`${upperDir}/*/${normalized}`)} -prune -o`,
     );
   }
+
   const walk = `find ${shellPath(upperDir)} ${pruned.join(' ')} -mindepth 1 `
     + `-printf '%y\\0%i\\0%n\\0%m\\0%U\\0%G\\0%s\\0%T@\\0%C@\\0%l\\0%P\\0' 2>/dev/null `
     + '| base64 | tr -d \'\\n\'';
+
   return `# devbox-probe-v1\nout=$(${walk}); rc=$?; printf '%s %s' "$rc" "$out"`;
 }
 
@@ -179,33 +190,46 @@ export function deltaProbeCommand(upperDir: string, excludes: readonly string[])
 export function parseDeltaProbe(stdout: string): DeltaProbeEntry[] {
   const space = stdout.indexOf(' ');
   const rc = space === -1 ? stdout.trim() : stdout.slice(0, space);
+
   if (rc !== '0') throw new Error(`the delta probe failed (${rc}): ${stdout.slice(0, 200)}`);
   const payload = space === -1 ? '' : stdout.slice(space + 1).trim();
+
   if (payload === '') return [];
   const fields = Buffer.from(payload, 'base64').toString('utf8').split('\0');
+
   // Every record ends in a separator, so the split leaves one empty tail.
   if (fields.length > 0 && fields[fields.length - 1] === '') fields.pop();
   const STRIDE = 11;
+
   if (fields.length % STRIDE !== 0) {
     throw new Error(`the delta probe holds ${fields.length} fields, not a multiple of ${STRIDE}`);
   }
+
   const records: DeltaProbeEntry[] = [];
+
   for (let at = 0; at < fields.length; at += STRIDE) {
     const field = (offset: number): string => fields[at + offset] ?? '';
+
     const numbers = {
       ino: Number(field(1)), nlink: Number(field(2)), uid: Number(field(4)), gid: Number(field(5)), size: Number(field(6)),
     };
+
     if (!Object.values(numbers).every(Number.isSafeInteger)) {
       throw new Error(`the delta probe holds a non-count at record ${records.length}`);
     }
+
     const mode = field(3);
+
     if (!/^[0-7]+$/.test(mode)) throw new Error(`the delta probe holds a non-mode at record ${records.length}`);
     const path = field(10);
+
     if (path === '' || path.startsWith('/') || path.split('/').includes('..')) {
       throw new Error(`the delta probe holds a hostile path at record ${records.length}`);
     }
+
     records.push({ path, type: field(0), ...numbers, mode: Number.parseInt(mode, 8), target: field(9) });
   }
+
   return records;
 }
 
@@ -232,6 +256,7 @@ export function deltaBlockHashCommand(input: {
     `command -v split >/dev/null 2>&1 || { printf 'NOSPLIT\\n'; false; };`,
     `mkdir -p ${shellPath(input.workDir)}`,
   ];
+
   for (const file of input.files) {
     const u = `${input.workDir}/u${file.index}`;
     lines.push(
@@ -241,6 +266,7 @@ export function deltaBlockHashCommand(input: {
       `sha256sum ${shellPath(`${u}/`)}* 2>/dev/null || false`,
       `rm -rf ${shellPath(u)}`,
     );
+
     if (file.basePath !== null) {
       const b = `${input.workDir}/b${file.index}`;
       lines.push(
@@ -251,6 +277,7 @@ export function deltaBlockHashCommand(input: {
       );
     }
   }
+
   return lines.join('\n');
 }
 
@@ -265,7 +292,9 @@ export interface DeltaFileHashes {
 function parseSplitSuffix(suffix: string): number | null {
   if (!/^[a-z]+$/.test(suffix)) return null;
   let index = 0;
+
   for (const char of suffix) index = index * 26 + (char.charCodeAt(0) - 97);
+
   return index;
 }
 
@@ -281,53 +310,73 @@ export function parseDeltaBlockHashes(
   const bases = new Map<number, Map<number, string>>();
   const emptyBase = new Set<number>();
   let side: { into: Map<number, Map<number, string>>; index: number } | null = null;
+
   for (const raw of stdout.split('\n')) {
     const line = raw.trim();
     const tag = /^(USIDE|BSIDE|BEMPTY) (\d+)$/.exec(line);
+
     if (tag !== null) {
       const index = Number(tag[2]);
+
       if (tag[1] === 'BEMPTY') {
         emptyBase.add(index);
         side = null;
       } else {
         side = { into: tag[1] === 'USIDE' ? uppers : bases, index };
       }
+
       continue;
     }
+
     if (line === '' || line.startsWith('#')) continue;
+
     if (side === null) throw new Error(`a delta hash line names no side: ${line.slice(0, 80)}`);
     const digest = line.slice(0, 64);
+
     if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error(`a delta hash line is not a digest: ${line.slice(0, 80)}`);
     const block = parseSplitSuffix(line.slice(line.lastIndexOf('/') + 1).replace(/^x/, ''));
+
     if (block === null) throw new Error(`a delta hash line names no block: ${line.slice(0, 80)}`);
     let held = side.into.get(side.index);
+
     if (held === undefined) {
       held = new Map();
       side.into.set(side.index, held);
     }
+
     held.set(block, digest);
   }
+
   const out = new Map<number, DeltaFileHashes>();
+
   for (const [index, counts] of wanted) {
     const upper = uppers.get(index);
+
     if (upper === undefined || upper.size !== counts.upperBlocks) {
       throw new Error(`upper side of file ${index} holds ${upper?.size ?? 0} blocks, expected ${counts.upperBlocks}`);
     }
+
     let base: Map<number, string> | null = null;
+
     if (counts.baseBlocks !== null && !emptyBase.has(index)) {
       const held = bases.get(index);
+
       if (held === undefined || held.size !== counts.baseBlocks) {
         throw new Error(`base side of file ${index} holds ${held?.size ?? 0} blocks, expected ${counts.baseBlocks}`);
       }
+
       base = held;
     }
+
     out.set(index, { upper, base });
   }
+
   return out;
 }
 
 /** Base kinds in the planner's vocabulary; `stat -c %F` words map here once. */
 export type DeltaBaseKind = 'file' | 'dir' | 'link' | 'other';
+
 export interface DeltaBaseFact {
   readonly kind: DeltaBaseKind;
   readonly size: number;
@@ -337,34 +386,45 @@ export interface DeltaBaseFact {
  *  no name appears in the output. `ABSENT` marks a path the base lacks. */
 export function deltaBaseStatCommand(paths: readonly string[], lowerBase: string): string {
   const lines = ['# devbox-basestat-v1'];
+
   for (const path of paths) {
     lines.push(`stat -c '%F %s' ${shellPath(`${lowerBase}/${path}`)} 2>/dev/null || printf 'ABSENT\\n'`);
   }
+
   return lines.join('\n');
 }
 
 /** Parse what {@link deltaBaseStatCommand} printed, in path order. */
 export function parseDeltaBaseStat(stdout: string, paths: readonly string[]): Map<string, DeltaBaseFact | null> {
   const lines = stdout.split('\n').filter((line) => line !== '' && !line.startsWith('#'));
+
   if (lines.length !== paths.length) {
     throw new Error(`the delta base stat holds ${lines.length} lines for ${paths.length} paths`);
   }
+
   const out = new Map<string, DeltaBaseFact | null>();
   paths.forEach((path, at) => {
     const line = lines[at]!;
+
     if (line === 'ABSENT') {
       out.set(path, null);
+
       return;
     }
+
     const lastSpace = line.lastIndexOf(' ');
     const size = Number(line.slice(lastSpace + 1));
+
     if (!Number.isSafeInteger(size) || size < 0) throw new Error(`the delta base stat holds no size for ${path}`);
     const words = line.slice(0, lastSpace);
+
     const kind: DeltaBaseKind = words === 'regular file' || words === 'regular empty file'
       ? 'file'
       : words === 'directory' ? 'dir' : words === 'symbolic link' ? 'link' : 'other';
+
     out.set(path, { kind, size });
   });
+
   return out;
 }
 
@@ -418,15 +478,19 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
       dirs.push({ p: entry.path, mode: entry.mode, uid: entry.uid, gid: entry.gid });
       continue;
     }
+
     if (entry.type === 'c' && input.whiteouts.has(entry.path)) {
       deleted.push(entry.path);
       continue;
     }
+
     if (entry.type === 's') continue;
+
     if (entry.type !== 'f') {
       files.push({ kind: 'whole', p: entry.path, s: entry.size });
       continue;
     }
+
     if (entry.nlink > 1) {
       files.push({ kind: 'whole', p: entry.path, s: entry.size });
       const group = linkGroups.get(entry.ino) ?? [];
@@ -434,62 +498,83 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
       linkGroups.set(entry.ino, group);
       continue;
     }
+
     const index = hashIndex.get(entry.path);
+
     if (entry.size < DELTA_WHOLE_FILE_THRESHOLD || index === undefined) {
       files.push({ kind: 'whole', p: entry.path, s: entry.size });
       continue;
     }
+
     const hashed = input.hashes.get(index);
+
     if (hashed === undefined) throw new Error(`no block hashes for big file ${entry.path}`);
     const blockCount = Math.ceil(entry.size / DELTA_BLOCK_BYTES);
+
     if (hashed.upper.size !== blockCount) {
       throw new Error(`upper of ${entry.path} holds ${hashed.upper.size} blocks, probed size says ${blockCount}`);
     }
+
     let upperHoles = 0;
     const added: string[] = [];
     const over: Extract<DeltaManifestFile, { kind: 'chunked' }>['over'] = [];
+
     for (let block = 0; block < blockCount; block += 1) {
       const offset = block * DELTA_BLOCK_BYTES;
       const length = Math.min(DELTA_BLOCK_BYTES, entry.size - offset);
       const upper = hashed.upper.get(block);
+
       if (upper === undefined) throw new Error(`upper of ${entry.path} is missing block ${block}`);
       const upperZero = upper === zeroBlockDigest(length);
+
       if (upperZero) upperHoles += 1;
       const base = hashed.base?.get(block);
+
       if (upper === base) continue;
+
       if (upperZero) {
         over.push({ o: offset, src: 'hole' });
         continue;
       }
+
       over.push({ o: offset, src: 'chunk', d: upper });
+
       if (!chunks.has(upper)) {
         chunks.set(upper, { path: entry.path, block });
         added.push(upper);
       }
     }
+
     if (upperHoles / blockCount > DELTA_SPARSE_WHOLE_FRACTION) {
       files.push({ kind: 'whole', p: entry.path, s: entry.size });
+
       for (const digest of added) {
         const shared = files.some((file) => file.kind === 'chunked'
           && file.over.some((o) => o.src === 'chunk' && o.d === digest));
+
         if (!shared) chunks.delete(digest);
       }
+
       continue;
     }
+
     files.push({ kind: 'chunked', p: entry.path, s: entry.size, mode: entry.mode, uid: entry.uid, gid: entry.gid, over });
   }
 
   for (const group of linkGroups.values()) {
     if (group.length > 1) links.push([...group].sort());
   }
+
   // A file over a base DIRECTORY: the directory is removed through the merged
   // view before the file is planted, because only a whiteout hides its
   // children. A directory over a base file needs nothing: an upper directory
   // shadows a lower non-directory.
   for (const file of files) {
     const fact = input.baseFacts.get(file.p);
+
     if (fact !== undefined && fact !== null && fact.kind === 'dir') treplace.push(file.p);
   }
+
   // EVERY upper directory travels with its attributes: an empty directory, or
   // one whose mode alone changed, is a change the base does not hold.
   dirs.sort((a, b) => (a.p < b.p ? -1 : 1));
@@ -497,6 +582,7 @@ export function planDeltaPublication(input: DeltaPlanInput): DeltaPlan {
   deleted.sort();
   treplace.sort();
   links.sort((a, b) => (a[0]! < b[0]! ? -1 : 1));
+
   return { manifest: { v: 1, files, dirs, deleted, treplace, links }, chunks };
 }
 
@@ -522,7 +608,9 @@ export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): s
   const chunkDir = `${layout.pkgDir}/${DELTA_CHUNK_DIR}`;
   const ops = ['# devbox-stage-v1', `mkdir -p ${shellPath(treeDir)} ${shellPath(chunkDir)}`, ...directoryOps(plan.manifest, treeDir)];
   const linkFirst = new Map<string, string>();
+
   for (const group of plan.manifest.links) for (const rest of group.slice(1)) linkFirst.set(rest, group[0]!);
+
   for (const file of plan.manifest.files) {
     if (file.kind !== 'whole') continue;
     const first = linkFirst.get(file.p);
@@ -530,11 +618,14 @@ export function buildDeltaStageOps(plan: DeltaPlan, layout: DeltaStageLayout): s
       ? `ln ${shellPath(`${treeDir}/${first}`)} ${shellPath(`${treeDir}/${file.p}`)}`
       : `cp -a ${shellPath(`${layout.upperDir}/${file.p}`)} ${shellPath(`${treeDir}/${file.p}`)}`);
   }
+
   for (const [digest, chunk] of [...plan.chunks].sort(([a], [b]) => (a < b ? -1 : 1))) {
     ops.push(`dd if=${shellPath(`${layout.upperDir}/${chunk.path}`)} of=${shellPath(`${chunkDir}/${digest}`)} `
       + `bs=${DELTA_BLOCK_BYTES} skip=${chunk.block} count=1 2>/dev/null`);
   }
+
   ops.push(`printf %s ${shellPath(encodeDeltaManifest(plan.manifest))} | base64 -d > ${shellPath(`${layout.pkgDir}/${DELTA_MANIFEST_NAME}`)}`);
+
   return ops;
 }
 
@@ -557,13 +648,18 @@ export interface DeltaMaterializeOps {
  *  attributes, plus every ancestor a carried file needs. */
 function directoryOps(manifest: DeltaManifest, root: string): string[] {
   const wanted = new Set<string>();
+
   for (const file of manifest.files) for (const dir of ancestorDirs(file.p)) wanted.add(dir);
+
   for (const dir of manifest.dirs) wanted.add(dir.p);
   const ops: string[] = [];
+
   if (wanted.size > 0) ops.push(`mkdir -p ${[...wanted].sort().map((dir) => shellPath(`${root}/${dir}`)).join(' ')}`);
+
   for (const dir of manifest.dirs) {
     ops.push(`chown ${dir.uid}:${dir.gid} ${shellPath(`${root}/${dir.p}`)}`, `chmod ${dir.mode.toString(8)} ${shellPath(`${root}/${dir.p}`)}`);
   }
+
   return ops;
 }
 
@@ -582,32 +678,44 @@ export function buildDeltaMaterializeOps(manifest: DeltaManifest, layout: DeltaM
   const sideChunks = `${layout.sideDir}/${DELTA_CHUNK_DIR}`;
   const replaced = new Set(manifest.treplace);
   const linkFirst = new Map<string, string>();
+
   for (const group of manifest.links) for (const rest of group.slice(1)) linkFirst.set(rest, group[0]!);
+
   const plant = (file: DeltaManifestFile, root: string): string[] => {
     const dest = `${root}/${file.p}`;
     const first = linkFirst.get(file.p);
+
     if (first !== undefined) return [`ln ${shellPath(`${root}/${first}`)} ${shellPath(dest)}`];
+
     if (file.kind === 'whole') return [`cp -a ${shellPath(`${sideTree}/${file.p}`)} ${shellPath(dest)}`];
     const ops = [`cp ${shellPath(`${layout.lowerBase}/${file.p}`)} ${shellPath(dest)} 2>/dev/null || : > ${shellPath(dest)}`];
+
     for (const override of file.over) {
       const source = override.src === 'chunk' ? shellPath(`${sideChunks}/${override.d}`) : '/dev/zero';
       ops.push(`dd if=${source} of=${shellPath(dest)} bs=${DELTA_BLOCK_BYTES} seek=${override.o / DELTA_BLOCK_BYTES} count=1 conv=notrunc 2>/dev/null`);
     }
+
     ops.push(
       `truncate -s ${file.s} ${shellPath(dest)}`,
       `chown ${file.uid}:${file.gid} ${shellPath(dest)}`,
       `chmod ${file.mode.toString(8)} ${shellPath(dest)}`,
     );
+
     return ops;
   };
+
   for (const file of manifest.files) {
     if (!replaced.has(file.p)) pre.push(...plant(file, layout.upperDir));
   }
+
   for (const path of manifest.treplace) {
     post.push(`rm -rf ${shellPath(`${layout.mergedDir}/${path}`)}`);
     const file = manifest.files.find((row) => row.p === path);
+
     if (file !== undefined) post.push(...plant(file, layout.mergedDir));
   }
+
   for (const path of manifest.deleted) post.push(`rm -rf ${shellPath(`${layout.mergedDir}/${path}`)}`);
+
   return { pre, post };
 }

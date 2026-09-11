@@ -62,20 +62,25 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
   return async function* (call) {
     assertScaffoldActive(opts);
     const all = opts.tools();
+
     const toolSet: ToolSet = call.tools && call.tools.length > 0
       ? Object.fromEntries(call.tools.filter(name => all[name]).map(name => [name, all[name]]))
       : all;
+
     const spend = opts.spend;
     const operation = beginModelOperation(spend, 'stream');
     let usage: Usage = {};
     let modelId: string | undefined;
     const outputs = new Map<string, ScaffoldToolOutput>();
+
     const extensions = new ExtensionHost().register({ name: 'kinu.scaffold-lifetime',
       prepareStep: async ctx => {
         assertScaffoldActive(opts);
+
         return opts.streamOptions?.prepareStep?.(ctx);
       },
     });
+
     try {
       for await (const event of runChat({
         model: opts.model, system: call.system, history: call.messages, tools: toolSet,
@@ -92,19 +97,23 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
         },
       })) {
         if (event.type === 'step-finish' && event.usage) usage = addUsage(usage, event.usage);
+
         if (event.type === 'tool-result') {
           const output = event.success ? outputs.get(event.toolCallId)
             : { type: 'tool-output-error', toolCallId: event.toolCallId, errorText: event.error ?? event.result } satisfies ScaffoldToolOutput;
+
           if (output === undefined) throw new KinuError('missing', 'the SDK tool output was not observed');
           outputs.delete(event.toolCallId);
           yield { type: 'native-tool-output', output };
         }
+
         yield event;
       }
     } catch (cause) {
       operation.failed({ cause });
       throw cause;
     }
+
     operation.completed({ usage, modelId });
     spend?.report({ source: spend.source, usage, modelId });
   };
@@ -114,10 +123,14 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
  *  cannot exceed. A scaffold that wants the whole conversation pages for it,
  *  which is the point — navigation, not ingestion. */
 export const SCAFFOLD_HISTORY_DEFAULT_LIMIT = 20;
+
 export const SCAFFOLD_HISTORY_MAX_LIMIT = 100;
+
 /** Characters of one message, defaulted and capped. */
 export const SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS = 1_000;
+
 export const SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS = 8_000;
+
 /** Ceiling on a whole page, whatever the per-message budget allows. Without it
  *  `{ limit: 100, maxChars: 8000 }` would hand 800k characters back across the
  *  sandbox boundary — a read surface that can flood the caller is not budgeted. */
@@ -129,7 +142,9 @@ export const SCAFFOLD_HISTORY_MAX_PAGE_CHARS = 40_000;
  *  spilled and a re-read away when it is not. */
 function renderMessage(message: ModelMessage): string {
   const content = message.content;
+
   if (!Array.isArray(content)) return content;
+
   return content.map((part): string => {
     switch (part.type) {
       case 'text':
@@ -172,24 +187,30 @@ export function createScaffoldHistory(
     const messages = source();
     const total = messages.length;
     const limit = boundedInt(query.limit, SCAFFOLD_HISTORY_DEFAULT_LIMIT, 1, SCAFFOLD_HISTORY_MAX_LIMIT);
+
     const maxChars = boundedInt(
       query.maxChars, SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS, 1, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
     );
+
     const requested = query.offset !== undefined && Number.isFinite(query.offset)
       ? Math.floor(query.offset)
       : total - limit;
+
     const offset = Math.min(total, Math.max(0, requested < 0 ? total + requested : requested));
 
     const entries: ScaffoldHistoryEntry[] = [];
     let spent = 0;
     let clipped = false;
+
     for (const message of messages.slice(offset, offset + limit)) {
       const rendered = renderMessage(message);
       const text = evidenceWindow(rendered, maxChars);
+
       if (spent + text.length > SCAFFOLD_HISTORY_MAX_PAGE_CHARS && entries.length > 0) {
         clipped = true;
         break;
       }
+
       spent += text.length;
       entries.push({
         index: offset + entries.length,
@@ -203,6 +224,7 @@ export function createScaffoldHistory(
         truncated: rendered.length > maxChars,
       });
     }
+
     return { total, offset, entries, clipped } satisfies ScaffoldHistoryPage;
   };
 }
@@ -240,19 +262,25 @@ export function createScaffoldCallTool(
   // apart. Scoped ids stay `<scope>#<seq>` so a re-drive still dedupes.
   const nonce = nanoid();
   const control = { signal, assertActive };
+
   return async (name, args) => {
     assertScaffoldActive(control);
     const t = tools()[name];
+
     if (!t?.execute) throw new KinuError('missing', `tool not found: ${name}`);
+
     const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
       messages: [],
       toolCallId: callScope === undefined ? `scaffold-${nonce}#${seq++}` : `${callScope}#${seq++}`,
     };
+
     if (signal !== undefined) options.abortSignal = signal;
     const input = await safeValidateTypes({ value: args, schema: t.inputSchema });
+
     if (!input.success) throw new KinuError('bad_input', 'invalid scaffold tool arguments', { cause: input.error });
     assertScaffoldActive(control);
     const result = await t.execute(input.value, options);
+
     return result === undefined ? undefined : decodeJsonValue({ value: result });
   };
 }

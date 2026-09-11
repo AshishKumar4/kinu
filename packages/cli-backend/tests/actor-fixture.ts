@@ -27,6 +27,7 @@ export async function createHeadRuntime(parent: CLIRuntime, id: string, observer
   // bound to that object — so the fixture binds once and hands that handle
   // through `buildLocalActorRuntime`, exactly as a host does.
   const handle = bindLocalActor(parent.storage.sql, binding);
+
   return buildLocalActorRuntime(parent, { reference: binding.reference, handle }, observer);
 }
 
@@ -56,6 +57,7 @@ export function localTestActorHost(
 ): ActorHost {
   const exec = makeSqlExec(db);
   const { directory } = localActorDirectory(parent.actor);
+
   return createActorHost({
     storage: {
       sql: parent.storage.sql,
@@ -109,16 +111,20 @@ export function headSeatFactory(
     const binding = registerLocalActor(parent.actor, {
       name: explorationActorKey(input.id), creationId: input.id, kind: 'head', lifetime: 'task',
     });
+
     const agentName = headAgentName(binding.storageKey);
     writes?.set(binding.reference.actorId, observer);
     const actor = await host.acquire(binding.reference);
+
     return {
       actor,
       runId,
       profile: async (probe) => {
         const authority = parent.profiles;
+
         if (!authority) throw new Error('the parent runtime carries no profile authority');
         const inputs = await authority.inputs();
+
         return {
           profile: resolveAgentTurnProfile({
             ...inputs,
@@ -165,6 +171,7 @@ function execOver(rt: AgentRuntime): SqlExec {
       const parts = query.split('?');
       const strings: TemplateStringsArray = Object.assign(parts, { raw: parts });
       const rows = rt.storage.sql<Record<string, SqlValue>>(strings, ...bindings);
+
       return { toArray: () => rows };
     },
   };
@@ -187,11 +194,15 @@ function execOver(rt: AgentRuntime): SqlExec {
 export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: ActorHandle = rt.actor, runtime: AgentRuntime = rt) {
   const identity = rt.storage.sql<{ id: string; owner_user_id: string | null }>`
     SELECT id, owner_user_id FROM workspace_identity LIMIT 1`[0];
+
   if (!identity) throw new Error('this fixture runtime has no workspace identity to host an actor in');
+
   const directory = new WorkspaceActorDirectory(rt.storage.sql, {
     workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '',
   });
+
   const stores = createAgentStores(() => rt.storage.sql, () => handle, rt.storage.transactionSync);
+
   const session: ActorSession = new ActorSession({
     runtime,
     claims: stores.claims,
@@ -207,6 +218,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
       eventLog: new EventLog(execOver(rt), handle),
     },
   });
+
   const inputs: ProfileAuthorityInputs = {
     envelope: {
       authority: { kind: 'local' },
@@ -222,6 +234,7 @@ export function headLoopSeams(rt: AgentRuntime, runId = 'fixture-run', handle: A
     // rather than empty. Same convention as `test-utils/src/merge-policy.ts`.
     provider: { revision: '0', availableModels: [DEFAULT_WORKERS_AI_MODEL_SPEC] },
   };
+
   return {
     actor: {
       reference: actorReferenceOf(handle),
@@ -279,6 +292,7 @@ export function nodeSeatFactory(rt: CLIRuntime, runId = 'fixture-run'): (node: N
     // runtime and provision a home the loop never runs on.
     const runtime = await buildLocalActorRuntime(rt, { reference: actorReferenceOf(handle), handle }, undefined, true);
     const seams = headLoopSeams(rt, runId, handle, runtime);
+
     return { actor: seams.actor, runId: seams.runId, profile: seams.profile, dynamic: seams.dynamic };
   };
 }

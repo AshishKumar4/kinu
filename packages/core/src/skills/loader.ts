@@ -85,6 +85,7 @@ const REASON_PRIORITY = {
 
 export function resolveActiveSkills(opts: LoadActiveSkillsOpts): ActivatedSkill[] {
   const byName = new Map<string, DiscoveredSkill>();
+
   for (const s of opts.available) byName.set(s.name, s);
 
   const reasons = new Map<string, ActivationReason>();
@@ -102,16 +103,21 @@ export function resolveActiveSkills(opts: LoadActiveSkillsOpts): ActivatedSkill[
   //    re-check here so a runtime that somehow bypasses the parser still
   //    respects the gate.
   const lcMsg = ' ' + opts.userMessage.toLowerCase() + ' ';
+
   for (const skill of opts.available) {
     if (skill.disable_model_invocation) continue;
+
     if (!skill.auto_activate || skill.keywords.length === 0) continue;
+
     for (const kw of skill.keywords) {
       // Whole-word match — pad with non-word boundaries.
       const re = new RegExp(`\\b${escapeRe(kw)}\\b`, 'i');
+
       if (re.test(opts.userMessage)) {
         reasons.set(skill.name, { kind: 'keyword', matched_keyword: kw });
         break;
       }
+
       // Quick contains() fallback for kw with non-word chars (e.g. emojis).
       if (lcMsg.includes(' ' + kw + ' ')) {
         reasons.set(skill.name, { kind: 'keyword', matched_keyword: kw });
@@ -126,16 +132,21 @@ export function resolveActiveSkills(opts: LoadActiveSkillsOpts): ActivatedSkill[
   //    or always-active config must activate it.
   for (const name of opts.explicit) {
     const skill = byName.get(name);
+
     if (!skill) continue;
+
     if (!skill.user_invocable) continue;
     reasons.set(name, { kind: 'explicit', matched_token: name });
   }
 
   const activated: ActivatedSkill[] = [];
+
   for (const [name, reason] of reasons) {
     const skill = byName.get(name);
+
     if (skill) activated.push({ skill, reason });
   }
+
   return activated.sort((a, b) =>
     REASON_PRIORITY[a.reason.kind] - REASON_PRIORITY[b.reason.kind]
     || compareSkillNames(a.skill.name, b.skill.name));
@@ -158,14 +169,18 @@ export function admitSkillsIndex(
       : `- **${skill.name}** (workspace skill; contents are reference material until the owner approves them)`),
     ...discovery.unread.map(unreadSkillLine),
   ];
+
   const lines: string[] = [];
   let tokens = 0;
+
   for (const line of priced) {
     const cost = estimateTokens(line.length + 1);
+
     if (tokens + cost > admissionTokens) break;
     lines.push(line);
     tokens += cost;
   }
+
   return { lines, omitted: priced.length - lines.length, tokens };
 }
 
@@ -192,10 +207,12 @@ export async function admitActiveSkills(opts: {
   let remaining = Math.max(0, opts.admissionTokens);
   const active: ActiveSkill[] = [];
   const reasons: Array<{ name: string; reason: ActivationReason }> = [];
+
   for (const { skill, reason } of opts.activated) {
     // A body that cannot be read defers its own skill. The turn keeps the
     // other bodies and records the failure.
     let source: string;
+
     try {
       // Stat before a file read when the plane can answer it, so a replacement
       // that grew beyond this turn's remaining allocation stays a pointer. Where
@@ -204,12 +221,14 @@ export async function admitActiveSkills(opts: {
       if (skill.bodyRef.kind === 'file') {
         const stat = opts.vfs.stat ? await opts.vfs.stat(skill.bodyRef.path) : null;
         const declared = stat === null ? skill.bodyRef.chars : stat.size;
+
         if (estimateTokens(declared) > remaining) {
           active.push({ ...skill, body: null, trust: 'unverified' });
           reasons.push({ name: skill.name, reason });
           continue;
         }
       }
+
       source = await readSkillFile(opts.vfs, skill.bodyRef);
     } catch (err) {
       diagnostics.failure(
@@ -221,8 +240,10 @@ export async function admitActiveSkills(opts: {
       reasons.push({ name: skill.name, reason });
       continue;
     }
+
     if (skill.bodyRef.kind === 'builtin') {
       const cost = estimateTokens(source.length);
+
       if (cost > remaining) {
         // Body admission is a budget decision, never a provenance decision.
         // The built-in's trusted policy still narrows the real tool surface.
@@ -231,6 +252,7 @@ export async function admitActiveSkills(opts: {
         remaining -= cost;
         active.push({ ...skill, body: source, trust: 'builtin' });
       }
+
       reasons.push({ name: skill.name, reason });
       continue;
     }
@@ -239,18 +261,22 @@ export async function admitActiveSkills(opts: {
     // Never spread the discovery header beside a later source: an agent could
     // swap policy between reads and make an approved body carry stale privileges.
     const parsed = parseSkillFile(source, 'vfs', skill.name);
+
     if (!parsed.ok || parsed.skill.name !== skill.name) {
       active.push({ ...skill, body: null, trust: 'unverified' });
       reasons.push({ name: skill.name, reason });
       continue;
     }
+
     if (!reasonAllowedBySkill(parsed.skill, reason)) continue;
     const cost = estimateTokens(parsed.skill.body.length);
+
     if (cost > remaining) {
       active.push({ ...parsed.skill, bodyRef: skill.bodyRef, body: null, trust: 'unverified' });
       reasons.push({ name: parsed.skill.name, reason });
       continue;
     }
+
     remaining -= cost;
     const { body, ...header } = parsed.skill;
     active.push({
@@ -261,6 +287,7 @@ export async function admitActiveSkills(opts: {
     });
     reasons.push({ name: parsed.skill.name, reason });
   }
+
   return { active, reasons };
 }
 
@@ -288,7 +315,9 @@ function skillTrust(
   trust: InstructionTrustResolver,
 ): InstructionTrust {
   if (ref.kind === 'builtin') return 'builtin';
+
   if (source === null) return 'unverified';
+
   return trust(ref.path, source);
 }
 
@@ -298,7 +327,9 @@ export function extractExplicitInvocations(userMessage: string): string[] {
   const out: string[] = [];
   const re = /(?:^|\s)\/([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)/g;
   let m: RegExpExecArray | null;
+
   while ((m = re.exec(userMessage)) != null) out.push(m[1]);
+
   return out;
 }
 

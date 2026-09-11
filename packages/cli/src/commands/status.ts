@@ -18,14 +18,17 @@ import { createProfileAuthorityReader } from '../profiles';
 
 export async function statusCommand(name: string): Promise<void> {
   const target = resolveAgentTarget(name);
+
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
+
     const [status, tools, triggers, jobs] = await Promise.all([
       callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAgentStatus', CloudAgentStatusSchema),
       callAgentRpc(auth.origin, auth.token, target.cloudName, 'getToolDescriptions', CloudToolDescriptionsSchema),
       callAgentRpc(auth.origin, auth.token, target.cloudName, 'listTriggers', CloudTriggerListSchema),
       callAgentRpc(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', v.array(CloudBackgroundJobSchema), [10]),
     ]);
+
     printCloudStatus(target.name, status, {
       builtInTools: tools.builtIn.length,
       craftedTools: tools.crafted.length,
@@ -34,20 +37,25 @@ export async function statusCommand(name: string): Promise<void> {
       runningJobs: jobs.filter((j) => j.status === 'running').length,
       jobCount: jobs.length,
     });
+
     return;
   }
+
   const local = requireLocalAgent(target.requestedName, { adopt: false });
   const info = getLocalAgentInfo(local.name);
   const coordinates = getLocalProfileCoordinates(local.name);
   const envelope = await createProfileAuthorityReader()();
+
   if (envelope === null) {
     printAgentStatus(info, statSync(local.dbPath).size, {
       conversationCount: info.conversationCount,
       model: info.model,
       reasoningEffort: info.reasoningEffort,
     });
+
     return;
   }
+
   const roles = effectiveRoleCatalog(envelope.catalog);
   const role = roles[coordinates.roleId] ?? roles.general;
   const tierId = coordinates.assignedTier ?? role?.tier ?? 'default';

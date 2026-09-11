@@ -58,6 +58,7 @@ function main(): number {
 
   if (stale.length === 0) {
     console.log(`bench-corpus: ok — ${measured}, every seeded defect still applies to this tree`);
+
     return 0;
   }
 
@@ -83,8 +84,10 @@ function main(): number {
           + 'instead — but only after establishing that no live code still holds the property',
     }));
   }
+
   console.error(`bench-corpus: ${String(stale.length)} of ${String(total)} seeded patches no `
     + 'longer apply');
+
   return 1;
 }
 

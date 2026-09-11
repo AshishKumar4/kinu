@@ -37,8 +37,10 @@ async function refusalOf(publish: Promise<void>): Promise<{ name: string; messag
     await publish;
   } catch (cause) {
     if (cause instanceof Error) return { name: cause.name, message: cause.message };
+
     return { name: 'a thrown non-Error', message: String(cause) };
   }
+
   return { name: 'no refusal at all', message: 'the publish resolved' };
 }
 
@@ -68,11 +70,13 @@ async function walkRoster(harness: TestUserDO): Promise<string[]> {
   const owner = await testOwner();
   const names: string[] = [];
   let cursor: string | null = null;
+
   do {
     const page = await harness.userDO.listWorkspaces(owner, { limit: 1, cursor });
     names.push(...page.entries.map((entry) => entry.name));
     cursor = page.nextCursor;
   } while (cursor);
+
   return names;
 }
 
@@ -230,6 +234,7 @@ describe('publishWorkspaceReservation refuses anything that is not an open reser
     const refusal = await refusalOf(
       harness.userDO.publishWorkspaceReservation(owner, 'in-flight', reserved.entry.createdAt + 1, null),
     );
+
     expect(refusal.name).toBe('WorkspaceReservationNotPendingError');
     expect(refusal.message).toContain('no reservation of that name is open');
 
@@ -248,6 +253,7 @@ describe('publishWorkspaceReservation refuses anything that is not an open reser
     const refusal = await refusalOf(
       harness.userDO.publishWorkspaceReservation(owner, 'never-reserved', 1, null),
     );
+
     expect(refusal.name).toBe('WorkspaceReservationNotPendingError');
     expect(refusal.message).toContain('no reservation of that name is open');
 
@@ -263,6 +269,7 @@ describe('publishWorkspaceReservation refuses anything that is not an open reser
     const refusal = await refusalOf(
       harness.userDO.publishWorkspaceReservation(owner, 'ordinary', entry.createdAt, null),
     );
+
     expect(refusal.name).toBe('WorkspaceReservationNotPendingError');
     expect(refusal.message).toContain('already published');
 

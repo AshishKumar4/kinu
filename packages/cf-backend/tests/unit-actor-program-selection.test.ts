@@ -62,15 +62,19 @@ test('the real cancelAllChats stops new selected-program effects and preserves i
   const errors: string[] = [];
   rt.executor = { ...executor, execute: async (code, providers, options) => {
     const result = await executor.execute(code, providers, options);
+
     if (result.error) errors.push(result.error);
+
     return result;
   } };
   const turns: TurnContext[] = [];
   const beforeTurn = agent.beforeTurn.bind(agent);
   agent.beforeTurn = async context => {
     turns.push(context);
+
     return beforeTurn(context);
   };
+
   const files = rt.agentStateVfs ?? rt.storage.vfs;
   await files.mkdir('scaffold', { recursive: true });
   await files.writeFile(rt.identity.scaffold.path + '.v1', 'async function run() { await host.appendMemory("probe", "first"); await host.appendMemory("probe", "second"); }');
@@ -82,6 +86,7 @@ test('the real cancelAllChats stops new selected-program effects and preserves i
   const release = Promise.withResolvers<void>();
   const effects: string[] = [];
   rt.memory.append = async (_path, content) => { effects.push(content); started.resolve(); await release.promise; };
+
   const running = agent.runTurn({ input: 'Run until stopped.' });
   await started.promise;
   await agent.cancelAllChats();
@@ -89,6 +94,7 @@ test('the real cancelAllChats stops new selected-program effects and preserves i
   await running;
   expect(effects).toEqual(['first']);
   const signal = turns.at(-1)?.signal;
+
   if (signal === undefined) throw new Error('Think did not expose its actual turn signal');
   expect(signal.aborted).toBe(true);
   expect(errors.join('\n')).toContain(renderThrownChain({ cause: signal.reason }));

@@ -40,20 +40,24 @@ async function drain(): Promise<void> {
 function sharedOwner() {
   const lane = createResourceLane();
   const order: string[] = [];
+
   const client = (name: string) => ({
     /** Run a named operation over `scopes`, recording entry and exit. */
     op: (label: string, scopes: readonly Parameters<typeof scopesOverlap>[0][number][]) => {
       const gate = Promise.withResolvers<void>();
       const entered = Promise.withResolvers<void>();
+
       const done = lane.run(scopes, async () => {
         order.push(`${name}/${label}:enter`);
         entered.resolve();
         await gate.promise;
         order.push(`${name}/${label}:exit`);
       });
+
       return { done, entered: entered.promise, release: gate.resolve };
     },
   });
+
   return { lane, order, a: client('a'), b: client('b') };
 }
 
@@ -102,6 +106,7 @@ describe('what counts as the same resource', () => {
 
   test('a recursive mkdir is the one operation that claims the whole chain', () => {
     const recursive = pathScopes({ path: '/workspace/a/b/c', membership: true, ancestors: true });
+
     for (const above of ['/workspace', '/workspace/a', '/workspace/a/b']) {
       expect(scopesOverlap(pathScopes({ path: above }), recursive)).toBe(true);
     }
@@ -205,10 +210,12 @@ describe('two independent callers of one container', () => {
 
   test('a move claims both ends as ONE step, so it can never hold one and wait for the other', async () => {
     const owner = sharedOwner();
+
     const moved = [
       ...pathScopes({ path: '/workspace/from.txt', membership: true, recursive: true }),
       ...pathScopes({ path: '/workspace/to.txt', membership: true, recursive: true }),
     ];
+
     // Both ends are already claimed, by DIFFERENT callers, in the order that
     // would deadlock an implementation acquiring one key at a time.
     const from = owner.a.op('holds-from', [...pathScopes({ path: '/workspace/from.txt' })]);
@@ -349,6 +356,7 @@ describe('the read overrides derive their types instead of restating them', () =
       join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/sandbox-BtaWcmmG.d.ts'),
       'utf8',
     );
+
     expect(declaration).toContain("encoding: 'none';");
     expect(declaration).toContain("encoding?: Exclude<FileEncoding, 'none'>;");
   });

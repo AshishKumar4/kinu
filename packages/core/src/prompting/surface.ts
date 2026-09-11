@@ -21,6 +21,7 @@ const TurnMetadataSchema = v.object({
   kinuMode: v.optional(v.unknown()),
   kinuEvent: v.optional(v.unknown()),
 });
+
 const ExternalToolSchema = v.object({
   name: v.string(),
   source: v.optional(v.picklist(['mcp', 'crafted', 'external'])),
@@ -44,7 +45,9 @@ const ExternalToolSchema = v.object({
  */
 export function turnProvenanceForMetadata<Metadata>(metadata: Metadata): TurnProvenance {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
+
   if (!parsed.success) return 'chat';
+
   return parsed.output.kinuEvent === 'background_job' ? 'background_resume' : 'chat';
 }
 
@@ -54,7 +57,9 @@ export function turnProvenanceForMetadata<Metadata>(metadata: Metadata): TurnPro
  *  an autonomous wake never weakens one. */
 export function workModeForTurnMetadata<Metadata>(metadata: Metadata): WorkMode {
   const parsed = v.safeParse(TurnMetadataSchema, metadata);
+
   if (!parsed.success) return 'build';
+
   return parsed.output.kinuMode === 'plan' ? 'plan' : 'build';
 }
 
@@ -158,6 +163,7 @@ const EXECUTOR_PROMPT_ORDER = ['laptop', 'sandbox', 'workspace'];
 
 function executorSortKey(name: string): number {
   const idx = EXECUTOR_PROMPT_ORDER.indexOf(name);
+
   return idx === -1 ? 99 : idx;
 }
 
@@ -168,8 +174,10 @@ function sortExecutors(executors: PromptExecutorInfo[]): PromptExecutorInfo[] {
 
 function uniqueExecutors(names: readonly string[] = []): PromptExecutorInfo[] {
   const out = new Map<string, PromptExecutorInfo>();
+
   for (const raw of names) {
     const name = raw.trim();
+
     if (!name) continue;
     out.set(name, {
       name,
@@ -179,24 +187,31 @@ function uniqueExecutors(names: readonly string[] = []): PromptExecutorInfo[] {
       status: 'active',
     });
   }
+
   return sortExecutors([...out.values()]);
 }
 
 export function uniquePromptExecutors(opts: Pick<PromptSurfaceOptions, 'executors' | 'registeredExecutors'>): PromptExecutorInfo[] {
   const source = opts.executors ?? uniqueExecutors(opts.registeredExecutors);
   const out = new Map<string, PromptExecutorInfo>();
+
   for (const exec of source) {
     const name = exec.name.trim();
+
     if (!name) continue;
     out.set(name, { ...exec, name });
   }
+
   return sortExecutors([...out.values()]);
 }
 
 export function executorIsSelectable(exec: PromptExecutorInfo): boolean {
   if (exec.name === 'workspace') return exec.available !== false;
+
   if (exec.available === false) return false;
+
   if (exec.status === 'not_configured' || exec.status === 'disconnected' || exec.status === 'error') return false;
+
   return exec.available === true || exec.configured === true || exec.active === true;
 }
 
@@ -204,40 +219,54 @@ export function uniqueBuiltinTools(tools: readonly BuiltinToolName[] | undefined
   const source = tools ?? BUILTIN_TOOLS;
   const out: BuiltinToolName[] = [];
   const seen = new Set<string>();
+
   for (const toolName of source) {
     if (!BUILTIN_TOOL_NAMES.has(toolName) || seen.has(toolName)) continue;
     seen.add(toolName);
     out.push(toolName);
   }
+
   return out;
 }
 
 function normalizeExternalTool(tool: PromptExternalToolInfo | string): PromptExternalToolInfo | null {
   const toolName = v.safeParse(v.string(), tool);
+
   if (toolName.success) {
     const name = toolName.output.trim();
+
     if (!name || BUILTIN_TOOL_NAMES.has(name)) return null;
+
     return { name, source: isMcpToolKey(name) ? 'mcp' : 'external' };
   }
+
   const parsed = v.safeParse(ExternalToolSchema, tool);
+
   if (!parsed.success) return null;
   const raw = parsed.output;
   const name = raw.name.trim();
+
   if (!name || BUILTIN_TOOL_NAMES.has(name)) return null;
+
   const normalized: PromptExternalToolInfo = {
     name,
     source: raw.source ?? (isMcpToolKey(name) ? 'mcp' : 'external'),
   };
+
   if (raw.description) normalized.description = raw.description.trim();
+
   return normalized;
 }
 
 export function uniqueExternalTools(tools: readonly (PromptExternalToolInfo | string)[] | undefined): PromptExternalToolInfo[] {
   const out = new Map<string, PromptExternalToolInfo>();
+
   for (const raw of tools ?? []) {
     const tool = normalizeExternalTool(raw);
+
     if (tool) out.set(tool.name, tool);
   }
+
   return [...out.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
@@ -247,12 +276,14 @@ function uniqueAgentsActions(
 ): AgentsToolAction[] {
   if (!builtinTools.includes('agents')) return [];
   const source = actions ?? AGENTS_TOOL_ACTIONS;
+
   return AGENTS_TOOL_ACTIONS.filter((action) => source.includes(action));
 }
 
 export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface {
   const executors = uniquePromptExecutors(opts);
   const builtinTools = uniqueBuiltinTools(opts.availableTools);
+
   return {
     builtinTools,
     temporaryAsk: opts.temporaryAsk ?? false,

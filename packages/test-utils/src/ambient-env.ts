@@ -87,10 +87,12 @@ export const AMBIENT_DECORATION_ENV: readonly string[] = ['FORCE_COLOR', 'CLICOL
  */
 export function stripAmbientCredentials(env: Record<string, string | undefined>): readonly string[] {
   const removed: string[] = [];
+
   for (const name of [...AMBIENT_CREDENTIAL_ENV, ...AMBIENT_DECORATION_ENV]) {
     if (!(name in env)) continue;
     removed.push(name);
     delete env[name];
   }
+
   return removed;
 }

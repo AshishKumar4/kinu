@@ -46,12 +46,16 @@ const OUTPUT_TAIL_BYTES = 4000;
  *  a throwaway home; this is the promise, in code. */
 export function assertScratchRoot(runRoot: string, repoRoot: string): void {
   const root = resolve(runRoot);
+
   if (!root.startsWith(sep)) throw new Error(`bench run root must be absolute: ${runRoot}`);
   const home = resolve(homedir());
+
   if (root === home || root.startsWith(home + sep)) {
     throw new Error(`bench run root ${root} is inside the real home — every run must use a throwaway root outside it`);
   }
+
   const repo = resolve(repoRoot);
+
   if (root === repo || root.startsWith(repo + sep)) {
     throw new Error(`bench run root ${root} is inside the repo — sandboxes must not be created in the tree under test`);
   }
@@ -106,9 +110,11 @@ export interface CreateSandboxOptions {
  */
 function linkNodeModules(repo: string, dir: string): void {
   const nodeModules = join(repo, 'node_modules');
+
   if (!existsSync(nodeModules)) return;
 
   const packages = workspacePackages(repo);
+
   // The top-level node_modules entry each workspace package occupies: its scope
   // directory, or the bare name when it is unscoped. Those are rebuilt below, so
   // mirroring the donor's copy of them is what has to be skipped.
@@ -117,6 +123,7 @@ function linkNodeModules(repo: string, dir: string): void {
 
   const target = join(dir, 'node_modules');
   mkdirSync(target, { recursive: true });
+
   for (const entry of readdirSync(nodeModules)) {
     if (owned.has(entry)) continue;
     symlinkSync(join(nodeModules, entry), join(target, entry));
@@ -141,10 +148,12 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
   mkdirSync(kinuHome, { recursive: true });
 
   const repo = resolve(opts.repoRoot);
+
   const excluded = new Set([
     ...SANDBOX_EXCLUDES.map((e) => join(repo, e)),
     ...NESTED_CHECKOUT_DIRS.map((e) => join(repo, e)),
   ]);
+
   cpSync(repo, dir, {
     recursive: true,
     dereference: false,
@@ -166,6 +175,7 @@ export function createAttemptSandbox(opts: CreateSandboxOptions): AttemptSandbox
 export function applyPatch(dir: string, patch: string, opts: { reverse: boolean }): void {
   const args = ['apply', '--whitespace=nowarn', ...(opts.reverse ? ['-R'] : []), '-'];
   const res = Bun.spawnSync(['git', ...args], { cwd: dir, stdin: Buffer.from(patch), stdout: 'pipe', stderr: 'pipe' });
+
   if (res.exitCode !== 0) {
     throw new Error(`git apply${opts.reverse ? ' -R' : ''} failed in ${dir}: ${res.stderr.toString().trim()}`);
   }
@@ -180,16 +190,21 @@ export function restoreGuarded(dir: string, repoRoot: string, guarded: readonly 
       const [rootPart, pattern] = splitGlob(entry);
       const pristineFiles = new Set(walkMatching(join(repoRoot, rootPart), pattern));
       const sandboxFiles = new Set(walkMatching(join(dir, rootPart), pattern));
+
       for (const rel of pristineFiles) {
         cpSync(join(repoRoot, rootPart, rel), join(dir, rootPart, rel), { dereference: false });
       }
+
       for (const rel of sandboxFiles) {
         if (!pristineFiles.has(rel)) rmSync(join(dir, rootPart, rel), { force: true });
       }
+
       continue;
     }
+
     const from = join(repoRoot, entry);
     const to = join(dir, entry);
+
     if (!existsSync(from)) throw new Error(`guarded path ${entry} does not exist in the pristine tree`);
     rmSync(to, { recursive: true, force: true });
     cpSync(from, to, { recursive: true, dereference: false });
@@ -201,28 +216,37 @@ export function restoreGuarded(dir: string, repoRoot: string, guarded: readonly 
  *  nobody asked for. */
 function splitGlob(entry: string): [string, string] {
   const idx = entry.indexOf('**/');
+
   if (idx < 0) throw new Error(`unsupported guarded pattern: ${entry}`);
   const root = entry.slice(0, idx).replace(/\/$/, '');
   const pattern = entry.slice(idx + 3);
+
   if (pattern.includes('/') || !pattern.startsWith('*')) throw new Error(`unsupported guarded pattern: ${entry}`);
+
   return [root, pattern];
 }
 
 function walkMatching(root: string, pattern: string): string[] {
   const suffix = pattern.slice(1);
   const out: string[] = [];
+
   const visit = (abs: string): void => {
     // A directory removed between the parent listing and this read is fine; a permissions failure
     // is not, because it would silently shrink the set of files the guard claims to have scanned.
     const entries = tolerate(() => readdirSync(abs, { withFileTypes: true }), 'enoent');
+
     if (entries === undefined) return;
+
     for (const e of entries) {
       const child = join(abs, e.name);
+
       if (e.isDirectory()) visit(child);
       else if (e.isFile() && e.name.endsWith(suffix)) out.push(relative(root, child));
     }
   };
+
   if (existsSync(root) && statSync(root).isDirectory()) visit(root);
+
   return out;
 }
 
@@ -231,21 +255,27 @@ function walkMatching(root: string, pattern: string): string[] {
  *  the attempt so nothing lands in the real one. */
 export function sandboxEnv(kinuHome: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
+
   for (const [k, val] of Object.entries(process.env)) {
     if (val === undefined) continue;
+
     if (k.startsWith('KINU_') || k === 'HOME') continue;
     env[k] = val;
   }
+
   env.HOME = kinuHome;
   env.KINU_HOME = kinuHome;
   env.CI = '1';
+
   return env;
 }
 
 function runCheck(check: BenchCheck, dir: string, kinuHome: string): Promise<CheckOutcome> {
   const [cmd, ...args] = check.command;
+
   if (!cmd) throw new Error(`bench check ${check.id} has no command`);
   const started = Date.now();
+
   return new Promise((resolveOutcome) => {
     execFile(
       cmd, args,
@@ -258,6 +288,7 @@ function runCheck(check: BenchCheck, dir: string, kinuHome: string): Promise<Che
       (err, stdout, stderr) => {
         const combined = `${stdout}${stderr}`;
         const killed = err?.killed ?? false;
+
         const exitCode = killed
           ? null
           : err === null
@@ -265,6 +296,7 @@ function runCheck(check: BenchCheck, dir: string, kinuHome: string): Promise<Che
             : Number.isSafeInteger(err.code)
               ? Number(err.code)
               : 1;
+
         resolveOutcome({
           id: check.id,
           passed: exitCode === 0,
@@ -288,12 +320,16 @@ export async function scoreSandbox(
 ): Promise<{ checks: CheckOutcome[]; passed: boolean }> {
   restoreGuarded(sandbox.dir, repoRoot, task.guarded);
   const checks: CheckOutcome[] = [];
+
   for (const check of task.checks) {
     const outcome = await runCheck(check, sandbox.dir, sandbox.kinuHome);
     checks.push(outcome);
+
     if (!outcome.passed) break;
   }
+
   const passed = checks.length === task.checks.length && attemptPassed(checks);
+
   return { checks, passed };
 }
 
@@ -308,15 +344,18 @@ export interface BudgetSignal {
 export function budgetSignal(budget: AttemptBudget): BudgetSignal {
   const controller = new AbortController();
   let timedOut = false;
+
   const timer = setTimeout(() => {
     timedOut = true;
     controller.abort();
   }, budget.wallClockMs);
+
   return { signal: controller.signal, done: () => clearTimeout(timer), timedOut: () => timedOut };
 }
 
 export function ensureRunRoot(runRoot: string, repoRoot: string): string {
   assertScratchRoot(runRoot, repoRoot);
   mkdirSync(runRoot, { recursive: true });
+
   return resolve(runRoot);
 }

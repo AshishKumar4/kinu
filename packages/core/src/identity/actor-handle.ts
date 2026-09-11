@@ -8,19 +8,24 @@ export const ActorReferenceSchema = v.strictObject({
   workspaceId: v.pipe(v.string(), v.nonEmpty()),
   parentActorId: v.nullable(v.pipe(v.string(), v.nonEmpty())),
 });
+
 export type ActorReference = Readonly<v.InferOutput<typeof ActorReferenceSchema>>;
+
 const ActorIdentitySchema = v.strictObject({
   ...ActorReferenceSchema.entries, name: v.pipe(v.string(), v.nonEmpty()), storageKey: v.pipe(v.string(), v.nonEmpty()),
 });
+
 export type ActorIdentity = Readonly<v.InferOutput<typeof ActorIdentitySchema>>;
 
 /** Project a bound handle onto the immutable reference that can cross RPC. */
 export function actorReferenceOf(actor: ActorReference): ActorReference {
   return Object.freeze({ actorId: actor.actorId, workspaceId: actor.workspaceId, parentActorId: actor.parentActorId });
 }
+
 export function sameActorReference(left: ActorReference, right: ActorReference): boolean {
   return left.actorId === right.actorId && left.workspaceId === right.workspaceId && left.parentActorId === right.parentActorId;
 }
+
 export interface ActorHandle extends ActorIdentity {
   /** Re-run the binding's own validation, for a holder about to act as this
    *  actor without reading `config` or `programState` first. A store bound to a
@@ -40,15 +45,18 @@ export function bindActorHandle(sql: SqlExecutor, reference: ActorIdentity, vali
   validate();
   let config: AgentConfigStore | undefined;
   let programState: ProgramStateStore | undefined;
+
   return Object.freeze({
     ...identity,
     assertCurrent: validate,
     get config() {
       validate();
+
       return config ??= createAgentConfigStore(sql, identity.actorId, validate);
     },
     get programState() {
       validate();
+
       return programState ??= createProgramStateStore(sql, identity.actorId, validate);
     },
   });

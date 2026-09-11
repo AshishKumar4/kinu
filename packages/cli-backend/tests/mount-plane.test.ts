@@ -16,6 +16,7 @@ import { scratchDir, scratchPath } from '@kinu.run/test-utils';
 
 function freshRuntime() {
   const db = new Database(scratchPath('mount-plane', 'agent.db'), { create: true });
+
   return createCLIRuntime(db, {
     dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
@@ -60,7 +61,9 @@ describe('the local backend file plane', () => {
     const mounted = freshRuntime().storage.vfs;
 
     let error: unknown;
+
     try { await mounted.readdir('/sandbox'); } catch (caught) { error = caught; }
+
     if (!isVfsError(error)) throw new Error(`expected a classified refusal, got ${String(error)}`);
     expect(error.code).toBe('ENXIO');
     expect(error.message).toContain('/sandbox — no Sandbox container bound');

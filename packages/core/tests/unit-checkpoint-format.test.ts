@@ -123,6 +123,7 @@ describe('store-format constants pinned by the pc-agent daemon mirror', () => {
     for (const entry of ['.git/', 'node_modules/', 'dist/', '.venv/', '*.log'] as const) {
       expect(CHECKPOINT_EXCLUDES).toContain(entry);
     }
+
     expect(new Set(CHECKPOINT_EXCLUDES).size).toBe(CHECKPOINT_EXCLUDES.length);
   });
 });

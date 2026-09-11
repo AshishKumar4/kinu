@@ -45,24 +45,33 @@ function createNodeExecBuilder(codemodeProviders: CodemodeProvider[] = []): Exec
   return (surface) => {
     const codemode = surface.craftedTools();
     const nsBindings: Record<string, Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>> = {};
+
     for (const provider of surface.providers) {
       const namespace: Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>> = {};
+
       for (const [toolName, entry] of Object.entries(provider.tools)) {
         namespace[toolName] = async (...args) => await entry.execute(...args);
       }
+
       nsBindings[provider.name] = namespace;
     }
+
     for (const provider of codemodeProviders) {
       const namespace: Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>> = {};
+
       for (const [toolName, entry] of Object.entries(provider.tools)) {
         namespace[toolName] = async (...args) => {
           const result = await entry.execute(...args);
+
           return result === undefined ? undefined : projectJsonValue({ value: result });
         };
       }
+
       nsBindings[provider.name] = namespace;
     }
+
     const extras = Object.keys(nsBindings);
+
     return tool({
       description: 'test exec_tools',
       inputSchema: jsonSchema<{ code: string }>({
@@ -72,10 +81,13 @@ function createNodeExecBuilder(codemodeProviders: CodemodeProvider[] = []): Exec
         try {
           const fn = new Function('workspace', 'codemode', ...extras,
             'return (async () => { ' + a.code + ' })()');
+
           const rawResult = await fn({}, codemode, ...extras.map((name) => nsBindings[name]));
+
           const result = v.safeParse(v.undefined(), rawResult).success
             ? undefined
             : decodeJsonValue({ value: rawResult });
+
           return { result };
         } catch (error) {
           return { result: undefined, error: error instanceof Error ? error.message : String(error) };
@@ -100,16 +112,19 @@ interface StubFetch {
 /** Build a fetch stub from a URL→response map, recording the calls. */
 function stubFetch(handler: (url: string, init?: RequestInit) => StubResponse): StubFetch {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
+
   const fn = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new Request(input).url;
     calls.push({ url, init });
     const r = handler(url, init);
     const status = r.status ?? (r.ok === false ? 500 : 200);
+
     return new Response(r.body, {
       status,
       headers: new Headers(r.headers ?? { 'content-type': 'text/html' }),
     });
   }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
+
   return { fetch: fn, calls };
 }
 
@@ -145,12 +160,15 @@ describe('web provider — search', () => {
       if (this !== undefined) {
         throw new TypeError('Illegal invocation: function called with incorrect `this` reference');
       }
+
       const url = new Request(input).url;
       const isSearch = url.includes('html.duckduckgo.com');
+
       return new Response(isSearch ? DDG_HTML : '# Plain page\n\nFetched safely.', {
         headers: { 'content-type': isSearch ? 'text/html' : 'text/markdown' },
       });
     }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
+
     const provider = createDefaultWebSearchProvider({ fetch: thisSensitiveFetch });
 
     const searchResult = await provider.search('the topic');
@@ -167,14 +185,18 @@ describe('web provider — search', () => {
         { title: 'Doc', url: 'https://docs.example.com/x', content: 'Body text', published_date: '2026-01-02' },
       ],
     });
+
     const { fetch, calls } = stubFetch((url) => {
       if (url.includes('tavily.com')) return { body: tavilyBody, headers: { 'content-type': 'application/json' } };
+
       return { body: DDG_HTML };
     });
+
     const provider = createDefaultWebSearchProvider({
       fetch,
       getAuth: async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-test' } } : null),
     });
+
     const res = await provider.search('query', { limit: 3 });
 
     expect(res.source).toBe('tavily');
@@ -185,15 +207,19 @@ describe('web provider — search', () => {
   });
   test('an unreadable Tavily response maps to a non-retriable WebFetchError with cause', async () => {
     const bodies = ['not-json-at-all', JSON.stringify({ results: [{ url: 123 }] })];
+
     for (const body of bodies) {
       const { fetch } = stubFetch((url) => {
         if (url.includes('tavily.com')) return { body, headers: { 'content-type': 'application/json' } };
+
         return { body: DDG_HTML };
       });
+
       const provider = createDefaultWebSearchProvider({
         fetch,
         getAuth: async (key) => (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-test' } } : null),
       });
+
       const attempt = provider.search('query');
       await expect(attempt).rejects.toMatchObject({ name: 'WebFetchError', retriable: false });
       await expect(attempt).rejects.toThrow(/unreadable.*Tavily|Tavily.*unreadable/i);
@@ -249,10 +275,12 @@ describe('web provider — fetch', () => {
   test('htmlToMarkdown override (cf env.AI.toMarkdown) is used and base64-stripped', async () => {
     const html = '<html><body>x</body></html>';
     const { fetch } = stubFetch(() => ({ body: html }));
+
     const provider = createDefaultWebSearchProvider({
       fetch,
       htmlToMarkdown: async () => 'converted ![](data:image/png;base64,AAAA) tail',
     });
+
     const res = await provider.fetch('https://example.com');
     expect(res.markdown).toContain('converted');
     expect(res.markdown).not.toContain('base64,AAAA');
@@ -261,10 +289,12 @@ describe('web provider — fetch', () => {
   test('a throwing htmlToMarkdown override falls back to the local converter', async () => {
     const html = '<html><head><title>Hello</title></head><body><h1>Heading</h1><p>Para</p></body></html>';
     const { fetch } = stubFetch(() => ({ body: html, headers: { 'content-type': 'text/html' } }));
+
     const provider = createDefaultWebSearchProvider({
       fetch,
       htmlToMarkdown: async () => { throw new Error('cf AI.toMarkdown blew up'); },
     });
+
     const res = await provider.fetch('https://example.com/page');
     expect(res.markdown).toContain('# Heading');
     expect(res.markdown).toContain('Para');
@@ -281,18 +311,24 @@ describe('web provider — fetch', () => {
     // the platform itself chases Location (so the fake performs that hop);
     // with redirect:'manual' it hands the 302 back untouched.
     const calls: string[] = [];
+
     const fakeFetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = new Request(input).url;
       calls.push(url);
+
       if (url === 'https://example.com/start') {
         if ((init?.redirect ?? 'follow') === 'follow') {
           calls.push('http://169.254.169.254/');
+
           return new Response('metadata secret', { headers: { 'content-type': 'text/plain' } });
         }
+
         return new Response('', { status: 302, headers: { location: 'http://169.254.169.254/' } });
       }
+
       return new Response('unexpected hop', { headers: { 'content-type': 'text/plain' } });
     }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
+
     const provider = createDefaultWebSearchProvider({ fetch: fakeFetch });
     const attempt = provider.fetch('https://example.com/start');
     await expect(attempt).rejects.toMatchObject({ retriable: false });
@@ -306,8 +342,10 @@ describe('web provider — fetch', () => {
       if (url === 'https://example.com/start') {
         return { status: 302, body: '', headers: { location: '/final' } };
       }
+
       return { body: '# Final page', headers: { 'content-type': 'text/markdown' } };
     });
+
     const provider = createDefaultWebSearchProvider({ fetch });
     const res = await provider.fetch('https://example.com/start');
     expect(res.url).toBe('https://example.com/final');
@@ -326,20 +364,26 @@ describe('web provider — fetch', () => {
     let pulls = 0;
     const chunk = new Uint8Array(65_536);
     const totalChunks = 40; // ~2.5 MB, over the 2 MB cap
+
     const stream = new ReadableStream<Uint8Array>({
       pull(controller) {
         pulls += 1;
+
         if (pulls > totalChunks) {
           controller.close();
+
           return;
         }
+
         controller.enqueue(chunk);
       },
     });
+
     const bigFetch = Object.assign(
       async () => new Response(stream, { headers: { 'content-type': 'text/plain' } }),
       { preconnect: fetch.preconnect },
     ) satisfies typeof fetch;
+
     const provider = createDefaultWebSearchProvider({ fetch: bigFetch });
     const res = await provider.fetch('https://example.com/big');
     expect(res.markdown).toContain('[fetch truncated: kept the first');
@@ -359,10 +403,12 @@ describe('web provider — fetch', () => {
         controller.close();
       },
     });
+
     const slowFetch = Object.assign(
       async () => new Response(makeStream(), { headers: { 'content-type': 'text/plain' } }),
       { preconnect: fetch.preconnect },
     ) satisfies typeof fetch;
+
     const provider = createDefaultWebSearchProvider({ fetch: slowFetch, timeoutMs: 40 });
     await expect(provider.fetch('https://example.com/slow')).rejects.toMatchObject({
       name: 'WebFetchError',
@@ -466,6 +512,7 @@ type WebArgs = { action: 'search' | 'fetch'; query?: string; url?: string; limit
 
 function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?: WebSearchProvider) {
   const provider = webSearch ?? createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: DDG_HTML })).fetch });
+
   return buildActorTools({
     rt,
     craftedToolExecute: unusedCraftedExecute,
@@ -515,6 +562,7 @@ describe('web builtin', () => {
     const m = /full output saved to (\S+)/.exec(out);
     const savedPath = m?.[1];
     expect(savedPath).toContain(TOOL_OUTPUT_DIR);
+
     if (savedPath === undefined) throw new Error(`Expected a saved-output path in: ${out}`);
     const saved = await rt.storage.vfs.readFile(savedPath, { encoding: 'utf8' });
     expect(String(saved).length).toBeGreaterThan(out.length);
@@ -522,9 +570,11 @@ describe('web builtin', () => {
 
   test('a provider error preserves its message and retry metadata on the error channel', async () => {
     const { rt } = createTestRuntime();
+
     const failing = createDefaultWebSearchProvider({ fetch: stubFetch(url => ({
       status: url.includes('duckduckgo') ? 429 : 404, body: 'upstream refused',
     })).fetch });
+
     const execute = toolExecute<WebArgs, JsonValue>(buildWithWeb(rt, failing).web);
     await expect(execute({ action: 'search', query: 'x' })).rejects.toMatchObject({ message: expect.stringContaining('rate-limited'), retriable: true });
     await expect(execute({ action: 'fetch', url: 'https://example.com' })).rejects.toMatchObject({ message: expect.stringContaining('404'), retriable: false });
@@ -532,11 +582,13 @@ describe('web builtin', () => {
 
   test('codemode can call web.search() and web.fetch()', async () => {
     const { rt } = createTestRuntime();
+
     const provider = createDefaultWebSearchProvider({
       fetch: stubFetch((url) =>
         url.includes('duckduckgo') ? { body: DDG_HTML } : { body: '<html><body><p>page body</p></body></html>' },
       ).fetch,
     });
+
     const execute = toolExecute<{ code: string }, { result: JsonValue | undefined }>(
       buildWithWeb(rt, provider).execute_tools,
     );
@@ -544,11 +596,13 @@ describe('web builtin', () => {
     const searched = await execute({
       code: 'const r = await web.search("topic", { limit: 2 }); return r.results.length;',
     });
+
     expect(searched.result).toBe(2);
 
     const fetched = await execute({
       code: 'const r = await web.fetch("https://example.com/p"); return r.markdown;',
     });
+
     expect(String(fetched.result)).toContain('page body');
   });
 });

@@ -62,6 +62,7 @@ function PanelBlock(
  */
 function Rows({ value }: { value: JsonValue }): ReactNode {
   const count = Array.isArray(value) ? value.length : null;
+
   return (
     <>
       <div className="text-lg p-display tabular-nums">
@@ -96,6 +97,7 @@ export function WorkspaceDrilldown(
   const { load, reload } = useControlRead(
     () => fetchWorkspaceDetail(ownerUserId, workspace), [ownerUserId, workspace],
   );
+
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<{ tone: 'ok' | 'warn' | 'danger'; text: string } | null>(null);
   const [pending, setPending] = useState<PendingControl | null>(null);
@@ -106,6 +108,7 @@ export function WorkspaceDrilldown(
     setResult(null);
     const answer = await runAction(action);
     setBusy(false);
+
     if (answer.status === 'ok') {
       setResult({
         tone: answer.value.outcome === 'ok' ? 'ok' : 'warn',
@@ -113,8 +116,10 @@ export function WorkspaceDrilldown(
       });
       reload();
       onChanged?.();
+
       return answer.value.outcome === 'ok';
     }
+
     setResult({
       tone: answer.status === 'stale-auth' ? 'warn' : 'danger',
       text: answer.status === 'stale-auth'
@@ -123,6 +128,7 @@ export function WorkspaceDrilldown(
         ? `${answer.reason} Sign in again, then retry.`
         : answer.reason,
     });
+
     return false;
   }, [onChanged, reload]);
 
@@ -134,6 +140,7 @@ export function WorkspaceDrilldown(
   const runPending = useCallback(async () => {
     if (pending === null) return;
     const ok = await act(pending.action);
+
     if (ok) setPending(null);
   }, [act, pending]);
 
@@ -163,6 +170,7 @@ export function WorkspaceDrilldown(
           const userId = detail.userId;
           const jobs = panelRows(detail.jobs, BackgroundJobRowSchema);
           const approvals = panelRows(detail.approvals, DeferredApprovalRowSchema);
+
           return (
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2">
@@ -290,7 +298,9 @@ function JobRows(
   if (rows === null) {
     return <div className="text-xs p-text-3">This job list could not be read.</div>;
   }
+
   if (rows.length === 0) return <div className="text-xs p-text-3">No background jobs.</div>;
+
   return (
     <ul className="space-y-2">
       {rows.map((job) => (
@@ -371,7 +381,9 @@ function ApprovalRows(
   if (rows === null) {
     return <div className="text-xs p-text-3">This approval list could not be read.</div>;
   }
+
   if (rows.length === 0) return <div className="text-xs p-text-3">Nothing is parked on the owner.</div>;
+
   return (
     <ul className="space-y-2">
       {rows.map((approval) => (

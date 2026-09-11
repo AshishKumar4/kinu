@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const HOME = mkdtempSync(join(tmpdir(), 'kinu-additional-agent-home-'));
+
 const PROJECT = mkdtempSync(join(tmpdir(), 'kinu-additional-agent-project-'));
 
 afterAll(() => {
@@ -31,6 +32,7 @@ describe('local additional-agent creation', () => {
       console.log(db.query('SELECT mission FROM workspace_identity LIMIT 1').get().mission);
       db.close();
     `;
+
     const result = Bun.spawnSync(['bun', '-e', scenario], {
       cwd: join(import.meta.dir, '../../..'),
       env: {
@@ -40,6 +42,7 @@ describe('local additional-agent creation', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     expect(result.exitCode, result.stderr.toString()).toBe(0);
     expect(result.stdout.toString().trim()).toBe('Help the user with the work they assign.');
   });

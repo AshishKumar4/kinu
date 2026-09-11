@@ -51,10 +51,12 @@ export interface GroupedAgentWorkspaces<T extends ListedAgent = ListedAgent> {
  *  writes. Display-only — placement itself always stores the real id. */
 function workspaceIdForRoot(root: string): string {
   const base = root.replace(/\/+$/u, '').split('/').at(-1) ?? '';
+
   const candidate = base
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/gu, '-')
     .replace(/^-+|-+$/gu, '');
+
   return candidate === '' ? 'workspace' : candidate;
 }
 
@@ -65,8 +67,10 @@ function workspaceIdForRoot(root: string): string {
  */
 export function agentWorkspaceKey(agent: ListedAgent, projectRoot: string): string | null {
   if (agent.mode === 'cloud') return null;
+
   if (agent.cwd === undefined && agent.workspaceId === undefined) return 'unplaced';
   const cwd = agent.cwd ?? projectRoot;
+
   return `${cwd}\u0000${agent.workspaceId ?? workspaceIdForRoot(cwd)}`;
 }
 
@@ -83,23 +87,29 @@ export function groupAgentWorkspaces<T extends ListedAgent>(
   const groups = new Map<string, { cwd: string; workspaceId: string; agents: T[] }>();
   const unplaced: T[] = [];
   const remote: T[] = [];
+
   for (const agent of agents) {
     const key = agentWorkspaceKey(agent, projectRoot);
+
     if (key === null) {
       remote.push(agent);
       continue;
     }
+
     if (key === 'unplaced') {
       unplaced.push(agent);
       continue;
     }
+
     const cwd = agent.cwd ?? projectRoot;
     const group = groups.get(key) ?? { cwd, workspaceId: key.slice(cwd.length + 1), agents: [] };
     group.agents.push(agent);
     groups.set(key, group);
   }
+
   const ordered = [...groups.values()].sort((left, right) =>
     Number(right.cwd === projectRoot) - Number(left.cwd === projectRoot));
+
   return { projectRoot, workspaces: ordered, unplaced, remote };
 }
 
@@ -119,6 +129,7 @@ function localDisplay(dirName: string): Pick<ListedAgent, 'label' | 'readError'>
       toKinuError({ doing: 'reading a local workspace title', cause: error, otherwise: 'io' }),
       { workspace: dirName },
     );
+
     return { label: `(unreadable: ${reason})`, readError: reason };
   }
 }
@@ -165,6 +176,7 @@ export function listLocalAgentNames(cwd = process.cwd()): string[] {
 export function listSidebarAgents(cwd = process.cwd()): ListedAgent[] {
   const refs = listConfiguredAgentRefs();
   const byDirName = localRefsByDirName(refs);
+
   return [
     ...listLocalAgentNames(cwd).map((name) => localRow(byDirName.get(name), name)),
     ...refs
@@ -188,9 +200,11 @@ export function reconcileAgentRefs(
   const local = [...new Set(localAgentNames)].map((name) => localRow(localConfig.get(name), name));
 
   const seenCloudNames = new Set<string>();
+
   const cloud = cloudAgents.flatMap((agent) => {
     if (seenCloudNames.has(agent.name)) return [];
     seenCloudNames.add(agent.name);
+
     return [{
       name: agent.name,
       label: agent.displayName.trim() || UNTITLED_WORKSPACE_LABEL,
@@ -206,6 +220,7 @@ export function listKnownAgents(): ListedAgent[] {
   const localAgents = new Set(listLocalAgentNames());
   const refs = listConfiguredAgentRefs();
   const byDirName = localRefsByDirName(refs);
+
   return [
     ...[...localAgents].map((name) => localRow(byDirName.get(name), name)),
     ...refs
@@ -260,12 +275,15 @@ export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
     const current = config.agents ?? {};
     const cloudNames = new Set(cloudAgents.map((agent) => agent.name));
     const next: Record<string, KinuAgentConfig> = {};
+
     for (const [name, agent] of Object.entries(current)) {
       if (agent.mode === 'cloud' && !cloudNames.has(agent.cloudName ?? agent.name)) continue;
       next[name] = agent;
     }
+
     for (const agent of cloudAgents) {
       const existing = next[agent.name];
+
       if (existing?.mode === 'local') {
         collisions.push({
           name: agent.name,
@@ -274,6 +292,7 @@ export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
         });
         continue;
       }
+
       next[agent.name] = {
         ...existing,
         name: agent.name,
@@ -284,15 +303,19 @@ export async function syncCloudAgentRefs(): Promise<CloudRefSync> {
         updatedAt: now,
       };
     }
+
     config.agents = next;
+
     if (config.aliases) {
       for (const [alias, target] of Object.entries(config.aliases)) {
         const agent = next[target];
+
         if (!agent || (agent.mode === 'cloud' && !cloudNames.has(agent.cloudName ?? agent.name))) {
           delete config.aliases[alias];
         }
       }
     }
   });
+
   return { agents: listKnownAgents(), collisions };
 }

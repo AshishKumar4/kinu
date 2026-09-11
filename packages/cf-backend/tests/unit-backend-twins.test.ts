@@ -262,6 +262,7 @@ const CF_CLASSES = [
   ['packages/cf-backend/src/actor-agent.ts', 'ActorAgent'],
   ['packages/cf-backend/src/orchestrator.ts', 'OrchestratorAgent'],
 ] as const;
+
 const CLI_CLASS = ['packages/cli-backend/src/local-session.ts', 'LocalAgentSession'] as const;
 
 
@@ -276,16 +277,20 @@ interface TwinScan {
 function scanTwins(): TwinScan {
   const cf = new Set<string>();
   const cfBodies: string[] = [];
+
   for (const [file, cls] of CF_CLASSES) {
     const source = readFileSync(resolve(REPO, file), 'utf8');
     expect({ file, cls, found: source.includes(`class ${cls}`) })
       .toEqual({ file, cls, found: true });
     cfBodies.push(source);
+
     for (const member of declaredClassMembers(source)) cf.add(member.name);
   }
+
   const cliBody = readFileSync(resolve(REPO, CLI_CLASS[0]), 'utf8');
   expect(cliBody).toContain(`class ${CLI_CLASS[1]}`);
   const cli = new Set(declaredClassMembers(cliBody).map((member) => member.name));
+
   return { cf, cli, twins: [...cf].filter((name) => cli.has(name)).sort(), cfBodies, cliBody };
 }
 
@@ -301,8 +306,10 @@ const DECLARATION_HEAD =
 function containsCall(body: string, pattern: RegExp): boolean {
   for (const m of body.matchAll(pattern)) {
     const lineStart = body.lastIndexOf('\n', m.index) + 1;
+
     if (!DECLARATION_HEAD.test(body.slice(lineStart, m.index))) return true;
   }
+
   return false;
 }
 
@@ -319,8 +326,10 @@ function containsCall(body: string, pattern: RegExp): boolean {
 function delegatesTo(body: string, declared: string): boolean {
   if (declared.startsWith('.')) {
     const symbol = declared.slice(1);
+
     return containsCall(body, new RegExp(String.raw`(?<!\bthis)\.${symbol}\s*(?:<[^>\n]*>)?\(`, 'g'));
   }
+
   return containsCall(body, new RegExp(String.raw`(?<![.\w])${declared}\s*(?:<[^>\n]*>)?\(`, 'g'));
 }
 
@@ -381,6 +390,7 @@ describe('backend twin methods', () => {
       .filter(([, symbol]) =>
         !delegatesTo(cliBody, symbol) || !cfBodies.some((b) => delegatesTo(b, symbol)))
       .map(([name]) => name);
+
     expect(unproven).toEqual([]);
   });
 });
@@ -448,17 +458,22 @@ describe('interrupted work is reconciled at start of life on BOTH backends', () 
  *  Empty when the surface declares no such method. */
 function methodBody(body: string, name: string): string {
   const start = body.indexOf(`async ${name}(`);
+
   if (start < 0) return '';
   const open = body.indexOf('{', start);
+
   if (open < 0) return '';
   let depth = 0;
+
   for (let i = open; i < body.length; i += 1) {
     if (body[i] === '{') depth += 1;
     else if (body[i] === '}') {
       depth -= 1;
+
       if (depth === 0) return body.slice(open, i + 1);
     }
   }
+
   return body.slice(open);
 }
 
@@ -561,17 +576,22 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     // exists to refuse.
     expect(DIFFERENTIAL_SEAMS.length).toBeGreaterThan(0);
     const unreached: string[] = [];
+
     for (const entry of DIFFERENTIAL_SEAMS) {
       const cf = [...CF_CLASSES.map(([file]) => read(file)), read('packages/cf-backend/src/head-runtime.ts')];
+
       const cli = [read(CLI_CLASS[0]), read('packages/cli-backend/src/head-runtime.ts'),
         read('packages/cli-backend/src/agent-host/host.ts')];
+
       if (!cf.some((body) => body.includes(entry.coreSymbol))) {
         unreached.push(`${entry.seam} — no cf surface names \`${entry.coreSymbol}\``);
       }
+
       if (!cli.some((body) => body.includes(entry.coreSymbol))) {
         unreached.push(`${entry.seam} — no CLI surface names \`${entry.coreSymbol}\``);
       }
     }
+
     expect(unreached).toEqual([]);
   });
 
@@ -579,10 +599,12 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     // The differential proper. Two suites maintaining two expectations is how
     // the merge policy drifted: each looked correct alone.
     const drifted: string[] = [];
+
     for (const entry of DIFFERENTIAL_SEAMS) {
       for (const suite of entry.suites) {
         const body = read(suite);
         const pinned = entry.fixture.filter((name) => body.includes(name));
+
         if (pinned.length === 0) {
           drifted.push(
             `${entry.seam} — ${suite} pins none of [${entry.fixture.join(', ')}], so its `
@@ -591,6 +613,7 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
         }
       }
     }
+
     expect(drifted).toEqual([]);
   });
 
@@ -601,14 +624,17 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     const profile = mergePolicyProfile();
     const asked: { spec: string | null | undefined; effort: string }[] = [];
     const reports: { source: string }[] = [];
+
     const merge = headMergeLLM({
       profile: async () => profile,
       bindMergeModel: (route) => {
         asked.push({ spec: route.model, effort: route.reasoningEffort });
+
         return { model: mergeFixtureModel() };
       },
       reportModelCall: (report) => reports.push({ source: report.source }),
     });
+
     const output = await merge('merging two heads', MergeOutputSchema);
 
     // ONE expectation, exported once, compared here and in both backends'
@@ -637,7 +663,9 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
       approvals: { items: [], total: 0 },
       missingCapabilities: [],
     }));
+
     expect(block).not.toBeNull();
+
     for (const plane of ['the parser is sound', 'survives a reopen', 'prior art', 'four angles', 'aria']) {
       expect(String(block)).toContain(plane);
     }
@@ -648,9 +676,11 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     // function; the shape it produces is what core's own readers parse.
     const roles = ['researcher', 'Data Analyst', '', 'ünïcodé', 'a'.repeat(120), 'with/slash'];
     const minted = roles.map((role) => mintSubordinateName(role));
+
     for (const name of minted) {
       expect(name).toMatch(/^[a-z0-9-]+-[A-Za-z0-9_-]{6}$/);
     }
+
     // Distinct per call, which is what makes a roster row addressable.
     expect(new Set(minted.map((name) => name)).size).toBe(minted.length);
     expect(mintSubordinateName('')).toStartWith('subordinate-');

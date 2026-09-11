@@ -19,6 +19,7 @@ import { handleHealthRequest } from '../src/health-route';
 import { CLI_DIST_PATHS } from '../src/lib/deployed-assets';
 
 const ORIGIN = 'https://kinu.example.com';
+
 const SPA_SHELL = '<!doctype html>\n<html lang="en"><head><title>Kinu</title></head><body></body></html>';
 
 const STAMP = { version: '0.1.0+abc1234', sha: 'abc1234', builtAt: '2026-08-07T00:00:00.000Z' };
@@ -44,6 +45,7 @@ const HealthResponseSchema = v.object({
 
 function requiredResponse(response: Response | null): Response {
   if (!response) throw new Error('expected route to return a response');
+
   return response;
 }
 
@@ -51,8 +53,10 @@ function testEnv(assets: Pick<Env['ASSETS'], 'fetch'>): Env {
   const partialEnv: Partial<Env> = {
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
+
   // SAFETY: The CLI and health asset paths call only ASSETS.fetch, which this fixture constructs.
   partialEnv.ASSETS = assets as Env['ASSETS'];
+
   // SAFETY: These route tests provide every Env binding their exercised paths read.
   return partialEnv as Env;
 }
@@ -64,9 +68,11 @@ function envWithAssets(files: ReadonlyMap<string, PublishedAsset>): Env {
     async fetch(request: Request): Promise<Response> {
       const { pathname } = new URL(request.url);
       const file = files.get(pathname);
+
       if (file) {
         return new Response(file.body, { status: 200, headers: { 'content-type': file.contentType } });
       }
+
       return new Response(SPA_SHELL, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
     },
   });
@@ -85,9 +91,11 @@ const DOWNLOAD_PATHS = [...PUBLISHED.keys()];
 describe('CLI download assets', () => {
   test('serve the published asset with the declared content-type', async () => {
     const env = envWithAssets(PUBLISHED);
+
     for (const path of DOWNLOAD_PATHS) {
       const response = requiredResponse(await handleCliRequest(new Request(`${ORIGIN}${path}`), env));
       const asset = PUBLISHED.get(path);
+
       if (!asset) throw new Error(`missing published fixture for ${path}`);
       expect(response.status).toBe(200);
       expect(await response.text()).toBe(asset.body);
@@ -97,6 +105,7 @@ describe('CLI download assets', () => {
 
   test('404 instead of letting the SPA shell impersonate a download', async () => {
     const env = envWithAssets(new Map());
+
     for (const path of DOWNLOAD_PATHS) {
       const response = requiredResponse(await handleCliRequest(new Request(`${ORIGIN}${path}`), env));
       expect(response.status).toBe(404);
@@ -109,6 +118,7 @@ describe('CLI download assets', () => {
 
   test('404 when the asset worker itself errors', async () => {
     const env = testEnv({ async fetch() { return new Response('boom', { status: 500 }); } });
+
     for (const path of DOWNLOAD_PATHS) {
       const res = await handleCliRequest(new Request(`${ORIGIN}${path}`), env);
       expect(res?.status).toBe(404);
@@ -120,6 +130,7 @@ describe('CLI download assets', () => {
       new Request(`${ORIGIN}${DOWNLOAD_PATHS[0]}`, { method: 'HEAD' }),
       envWithAssets(PUBLISHED),
     );
+
     const publishedResponse = requiredResponse(published);
     expect(publishedResponse.status).toBe(200);
     expect(publishedResponse.body).toBeNull();
@@ -128,6 +139,7 @@ describe('CLI download assets', () => {
       new Request(`${ORIGIN}${DOWNLOAD_PATHS[0]}`, { method: 'HEAD' }),
       envWithAssets(new Map()),
     );
+
     const missingResponse = requiredResponse(missing);
     expect(missingResponse.status).toBe(404);
     expect(missingResponse.body).toBeNull();
@@ -147,6 +159,7 @@ describe('GET /api/health build stamp', () => {
       new Request(`${ORIGIN}/api/health`),
       envWithAssets(new Map()),
     ));
+
     const body = v.parse(HealthResponseSchema, await response.json());
     expect(body.ok).toBe(false);
     expect(body.build).toBeNull();
@@ -157,6 +170,7 @@ describe('GET /api/health build stamp', () => {
       const env = envWithAssets(new Map([
         ['/downloads/kinu-version.json', { body: malformed, contentType: 'application/json' }],
       ]));
+
       const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), env));
       const body = v.parse(HealthResponseSchema, await response.json());
       expect(body.ok).toBe(false);

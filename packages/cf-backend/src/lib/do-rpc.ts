@@ -112,31 +112,39 @@ const PLATFORM_TRANSIENT: ReadonlyArray<readonly [DOTransientClass, RegExp]> = [
  */
 export function classifyTransientDO(input: { cause: unknown }): DOTransientClass | null {
   const caught = input.cause;
+
   if (!(caught instanceof Error)) return null;
   const chain = renderCauseChain(caught);
+
   for (const [transient, pattern] of PLATFORM_TRANSIENT) {
     if (pattern.test(chain)) return transient;
   }
+
   // The `retryable` flag, at every link. It is read separately because it is a
   // PROPERTY rather than prose, so the rendered chain cannot carry it — and the
   // mirrored matcher checks it per link, so dropping that would be drift.
   const seen = new Set<Error>();
   let link: Error | null = caught;
+
   while (link !== null && !seen.has(link)) {
     seen.add(link);
     const flagged = 'retryable' in link && link.retryable === true;
+
     const overloaded = ('overloaded' in link && link.overloaded === true)
       || /Durable Object is overloaded/i.test(link.message);
+
     if (flagged && !overloaded) return 'retryable_flag';
     const cause: unknown = link.cause;
     link = cause instanceof Error ? cause : null;
   }
+
   return null;
 }
 
 /** Total attempts. Two retries is what a dropped connection or a deploy bounce
  *  needs; beyond that the object is not coming back inside this request. */
 const MAX_ATTEMPTS = 3;
+
 /** Full-jitter exponential backoff, in the shape the SDK itself uses. Kept short
  *  because every caller is on a request's critical path: at MAX_ATTEMPTS the only
  *  delays ever computed are 2¹·60 = 120 ms and 2²·60 = 240 ms, because attempt 3's
@@ -166,6 +174,7 @@ export async function retryTransientDO<T>(operation: string, call: () => Promise
       return await call();
     } catch (err) {
       const transient = classifyTransientDO({ cause: err });
+
       if (transient === null || attempt >= MAX_ATTEMPTS) throw err;
       diagnostics.failure('do_rpc.transient_retry', toKinuError({
         doing: `an idempotent Durable Object call (${operation})`,

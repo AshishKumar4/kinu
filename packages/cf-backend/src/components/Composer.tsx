@@ -33,6 +33,7 @@ import type { FileUIPart } from "ai";
 import { AttachmentChip } from "@/components/AttachmentChip";
 
 const CHAT_MODES = ["build", "plan"] as const;
+
 export type ChatMode = (typeof CHAT_MODES)[number];
 
 /** Tones a status row can take. `progress` is `neutral` plus a spinner — it is
@@ -68,6 +69,7 @@ const NOTICE_TONE = {
 function Notice({ notice }: { notice: ComposerNotice }) {
   const { tone, text, action, onDismiss } = notice;
   const { cls, icon } = NOTICE_TONE[tone];
+
   return (
     <div className={`flex items-start gap-2 px-2.5 py-1.5 p-meta ${cls}`}
       role={tone === "danger" ? "alert" : "status"}>
@@ -113,11 +115,13 @@ function ModeSegment({ value, onChange, locked, disabled }: {
       {CHAT_MODES.map((mode) => {
         const build = mode === "build";
         const selected = value === mode;
+
         const title = build && locked
           ? "Approve the active plan before starting an Auto turn."
           : build
             ? "Auto. The agent makes the change and shows what it ran."
             : "Plan. Review a plan before anything changes.";
+
         return (
           <button
             key={mode}
@@ -149,18 +153,22 @@ function ModeSegment({ value, onChange, locked, disabled }: {
  */
 function pastedFiles(data: DataTransfer): FileList {
   const { files, items } = data;
+
   if (files.length < 2) return files;
   const seenItems = new Set<DataTransferItem>();
   const seenFiles = new Set<File>();
   const unique = new DataTransfer();
+
   for (const item of items) {
     if (item.kind !== "file" || seenItems.has(item)) continue;
     seenItems.add(item);
     const file = item.getAsFile();
+
     if (file === null || seenFiles.has(file)) continue;
     seenFiles.add(file);
     unique.items.add(file);
   }
+
   // DataTransfer.files is authoritative when a browser supplies no matching
   // items. Keep it intact rather than guessing file identity from metadata.
   return unique.files.length === 0 || unique.files.length === files.length ? files : unique.files;
@@ -173,10 +181,13 @@ function pastedFiles(data: DataTransfer): FileList {
  * falls back to the raw string when the markup has no text node. */
 function pastedText(data: DataTransfer): string {
   const plain = data.getData("text/plain");
+
   if (plain !== "") return plain;
   const html = data.getData("text/html");
+
   if (html === "") return "";
   const rendered = new DOMParser().parseFromString(html, "text/html").body.textContent;
+
   return rendered === null || rendered === "" ? html : rendered;
 }
 
@@ -237,18 +248,26 @@ export function Composer({
       onPaste={(e) => {
         if (!attachments) return;
         const files = pastedFiles(e.clipboardData);
+
         if (files.length === 0) return; // a plain text paste — the browser's own insertion is right
         attachments.onAdd(files);
         const text = pastedText(e.clipboardData);
+
         // File-only means the clipboard carries no string flavor. Never infer
         // that from the string's content: a filename can be the intended text.
-        if (text === "") { e.preventDefault(); return; }
+        if (text === "") {
+          e.preventDefault();
+
+          return;
+        }
+
         // Mixed content. When a plain flavor exists, the browser's insertion
         // preserves it at the caret and in the undo stack, so only the files
         // need our handling. An HTML-only flavor needs plain-text insertion
         // because a textarea cannot accept rich content.
         if (e.clipboardData.getData("text/plain") !== "") return;
         e.preventDefault();
+
         if (e.target instanceof HTMLTextAreaElement && document.execCommand("insertText", false, text)) return;
         onValueChange(value === "" ? text : `${value}\n${text}`);
       }}>
@@ -271,11 +290,13 @@ export function Composer({
         <InputArea ref={textareaRef} value={value} onValueChange={onValueChange}
           onKeyDown={(e) => {
             if (e.key !== "Enter") return;
+
             // An Enter that commits IME composition belongs to the IME, not the
             // composer: submitting on it sends a half-composed draft. keyCode
             // 229 is the same fact on engines that fire a trailing keydown
             // after compositionend.
             if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
+
             if (e.shiftKey) {
               // Kumo's controlled InputArea does not supply the textarea's
               // native line break. Insert at the selection and restore its
@@ -286,8 +307,10 @@ export function Composer({
               const end = input.selectionEnd;
               onValueChange(`${value.slice(0, start)}\n${value.slice(end)}`);
               requestAnimationFrame(() => input.setSelectionRange(start + 1, start + 1));
+
               return;
             }
+
             e.preventDefault();
             submit?.();
           }}

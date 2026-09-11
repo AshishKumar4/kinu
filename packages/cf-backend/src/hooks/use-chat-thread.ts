@@ -95,6 +95,7 @@ export function useChatThread(
   steerRuns: readonly InlineSteer[] = NO_STEER_RUNS,
 ): ChatThread {
   const oldest = live[0]?.id;
+
   const history = usePagedScroll<ChatHistoryEntry>({
     grows: "up",
     fetchPage: useCallback(
@@ -112,6 +113,7 @@ export function useChatThread(
   // The live window's ids, keyed by content: the Set (and everything hanging
   // off it) is rebuilt when a message arrives or is replaced, not per token.
   const liveIdsKey = useMemo(() => live.map((message) => message.id).join("\n"), [live]);
+
   const liveIds = useMemo(
     () => liveIdsKey === "" ? NO_IDS : new Set(liveIdsKey.split("\n")),
     [liveIdsKey]);
@@ -123,6 +125,7 @@ export function useChatThread(
   const olderRows = useMemo(
     () => restored.filter((row) => !liveIds.has(row.id)),
     [restored, liveIds]);
+
   const transcript = useMemo(
     () => olderRows.length === 0 ? live : [...olderRows, ...live],
     [olderRows, live]);
@@ -131,6 +134,7 @@ export function useChatThread(
   // live window on top of it. Entry identities in the settled half are stable
   // for the same reason restored row identities are.
   const olderFold = useMemo(() => extendTranscript(EMPTY_TRANSCRIPT_FOLD, olderRows), [olderRows]);
+
   const thread = useMemo(
     () => sealTranscript(extendTranscript(olderFold, live), steerRuns),
     [olderFold, live, steerRuns]);

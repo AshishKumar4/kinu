@@ -38,6 +38,7 @@ export const PAYLOAD_ARMS = [
   'presigned-r2',
   'temp-s3-creds',
 ] as const;
+
 export type PayloadArmId = (typeof PAYLOAD_ARMS)[number];
 
 export interface ArmSpec {
@@ -103,6 +104,7 @@ export const armSpec = (id: PayloadArmId): ArmSpec =>
  * would have measured only the regime where nothing hurts.
  */
 export const PAYLOAD_SIZES_MIB = [8, 64, 256] as const;
+
 export type PayloadSizeMiB = (typeof PAYLOAD_SIZES_MIB)[number];
 
 /**
@@ -140,6 +142,7 @@ export const MIB = 1024 * 1024;
  * differently in the report.
  */
 export const CELL_STATUSES = ['ok', 'unavailable', 'failed', 'corrupt'] as const;
+
 export type CellStatus = (typeof CELL_STATUSES)[number];
 
 /**

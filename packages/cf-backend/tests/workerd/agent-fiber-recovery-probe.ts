@@ -35,6 +35,7 @@ export class FiberRecoveryProbeAgent extends Agent<Cloudflare.Env> {
 
   override async onFiberRecovered(ctx: FiberRecoveryContext): Promise<FiberRecoveryResult> {
     this.recovered.push(ctx.id);
+
     return { status: 'completed', snapshot: ctx.snapshot };
   }
 }

@@ -153,11 +153,14 @@ function record(
   tally: Tally, usage: Usage, usd: number | undefined, floorTokens?: number,
 ): void {
   tally.calls++;
+
   if (usageReported(usage)) {
     tally.usage = addUsage(tally.usage, usage);
+
     if (usd === undefined) tally.unpricedCalls++;
     else {
       tally.usd = (tally.usd ?? 0) + usd;
+
       if (floorTokens !== undefined) tally.floorPricedCalls++;
     }
   } else {
@@ -172,12 +175,16 @@ type Tallies = Map<SpendSource, Tally>;
 
 function tallyFor(tallies: Tallies, source: SpendSource): Tally {
   const existing = tallies.get(source);
+
   if (existing) return existing;
+
   const fresh: Tally = {
     calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
     unpricedCalls: 0, floorPricedCalls: 0,
   };
+
   tallies.set(source, fresh);
+
   return fresh;
 }
 
@@ -209,7 +216,9 @@ export interface WorkspaceSpendDeps {
  */
 export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
   const tallies: Tallies = new Map();
+
   for (const [source, tally] of deps.events.spendByProducer()) tallies.set(source, openTally(tally));
+
   for (const head of readHeadSpend(deps.sql, deps.actor)) record(tallyFor(tallies, 'head'), head, undefined);
 
   // Largest measured token total first: the panel's first job is to show where
@@ -218,6 +227,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
   const producers = SPEND_SOURCES
     .flatMap((source) => {
       const row = tallies.get(source);
+
       return row && row.calls > 0 ? [{ source, row }] : [];
     })
     .sort((a, b) => (usageTotal(b.row.usage) ?? -1) - (usageTotal(a.row.usage) ?? -1))
@@ -227,12 +237,14 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
     calls: 0, callsWithoutUsage: 0, usage: {}, usd: undefined,
     unpricedCalls: 0, floorPricedCalls: 0,
   };
+
   for (const p of producers) {
     total.calls += p.calls;
     total.callsWithoutUsage += p.callsWithoutUsage;
     total.unpricedCalls += p.unpricedCalls;
     total.floorPricedCalls += p.floorPricedCalls;
     total.usage = addUsage(total.usage, p.usage);
+
     if (p.usd !== undefined) total.usd = (total.usd ?? 0) + p.usd;
   }
 
@@ -241,6 +253,7 @@ export function workspaceSpend(deps: WorkspaceSpendDeps): WorkspaceSpend {
   // The turn loop's own tokens, absent when it measured none. `agent` is the one
   // producer the owner watched happen, so everything else is the off-turn half.
   const turnTokens = usageTotal(producers.find((p) => p.source === 'agent')?.usage ?? {}) ?? 0;
+
   return {
     producers,
     total: finishTotal(total),
@@ -268,6 +281,7 @@ function finishTotal(tally: Tally): SpendTally {
     unpricedCalls: tally.unpricedCalls,
     floorPricedCalls: tally.floorPricedCalls,
   };
+
   return tally.usd === undefined ? out : { ...out, usd: tally.usd };
 }
 

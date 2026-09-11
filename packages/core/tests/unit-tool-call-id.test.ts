@@ -17,6 +17,7 @@ import { describe, test, expect } from 'bun:test';
 import { isPortableToolCallId, toolCallIdFor } from '../src/providers/tool-call-id';
 
 const FIRST = 'call-chatcmpl-11111111-1111-4111-8111-111111111111';
+
 const SECOND = 'call-chatcmpl-22222222-2222-4222-8222-222222222222';
 
 /** Native ids as each provider family spells them, plus the three unusable
@@ -107,6 +108,7 @@ describe('isPortableToolCallId', () => {
     for (const id of [NATIVE.openai, NATIVE.anthropic, NATIVE.counter, 'a.b:c-d_e', FIRST]) {
       expect(isPortableToolCallId(id)).toBe(true);
     }
+
     for (const id of [NATIVE.empty, NATIVE.whitespace, NATIVE.spaces, NATIVE.slash, NATIVE.unicode, 'a\nb', '{"id":1}']) {
       expect(isPortableToolCallId(id)).toBe(false);
     }

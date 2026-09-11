@@ -97,13 +97,16 @@ export interface HammerRun {
  */
 export function measuredFiles(output: string): string[] {
   const seen = new Set<string>();
+
   for (const line of output.split('\n')) {
     // The per-test lines: `(pass) packages/<package>/tests/<name>.test.ts > name [1.00ms]`,
     // and bun's own file heading: `packages/<package>/tests/<name>.test.ts:`.
     const reported = /(?:^\((?:pass|fail|skip|todo)\)\s+|^)((?:packages|scripts|tests)\/[\w./-]+\.test\.tsx?)(?::|\s|$)/
       .exec(line.trim());
+
     if (reported?.[1] !== undefined) seen.add(reported[1]);
   }
+
   return [...seen].sort();
 }
 
@@ -119,6 +122,7 @@ export interface ReportedCounts {
 export function reportedCounts(output: string): ReportedCounts {
   const passed = /^\s*(\d+)\s+pass\s*$/m.exec(output)?.[1];
   const failed = /^\s*(\d+)\s+fail\s*$/m.exec(output)?.[1];
+
   return { passed: Number(passed ?? 0), failed: Number(failed ?? 0) };
 }
 
@@ -139,32 +143,41 @@ interface Burner {
 export function spawnContention(workers: number, ms: number): Burner[] {
   const spin = `const until = Date.now() + ${String(ms)};`
     + 'let x = 0; while (Date.now() < until) { x = Math.sqrt(x + 1); } if (x < 0) process.exit(1);';
+
   const burners: Burner[] = [];
+
   for (let index = 0; index < workers; index += 1) {
     const child = Bun.spawn(['bun', '-e', spin], {
       cwd: root, stdout: 'ignore', stderr: 'ignore', stdin: 'ignore',
     });
+
     burners.push({ kill: () => { child.kill(); } });
   }
+
   return burners;
 }
 
 /** One suite run under whatever contention is already live. */
 async function hammerOnce(index: number, deadlineMs: number): Promise<HammerRun> {
   const started = performance.now();
+
   const child = Bun.spawn(['bun', 'test', '--parallel=4', 'packages/cf-backend/'], {
     cwd: root, stdout: 'pipe', stderr: 'pipe',
   });
+
   let timedOut = false;
   const timer = setTimeout(() => { timedOut = true; child.kill(); }, deadlineMs);
+
   const [stdout, stderr] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
   ]);
+
   const exit = await child.exited;
   clearTimeout(timer);
   const output = `${stdout}${stderr}`;
   const counts = reportedCounts(output);
+
   return {
     index,
     exit: timedOut ? null : exit,
@@ -181,6 +194,7 @@ async function hammerOnce(index: number, deadlineMs: number): Promise<HammerRun>
  *  directory, which the test preload sweeps. */
 export function artifactPath(now: Date): string {
   const stamp = now.toISOString().replace(/[:.]/g, '-');
+
   return join(root, 'bench-artifacts', 'hammer', `${stamp}.json`);
 }
 
@@ -189,6 +203,7 @@ export async function hammer(runs: number, workers: number): Promise<HammerRun[]
   const perRunMs = Math.max(30_000, Math.floor(BUDGET_MS / runs));
   const burners = spawnContention(workers, BUDGET_MS + 60_000);
   const results: HammerRun[] = [];
+
   try {
     for (let index = 1; index <= runs; index += 1) {
       results.push(await hammerOnce(index, perRunMs));
@@ -196,6 +211,7 @@ export async function hammer(runs: number, workers: number): Promise<HammerRun[]
   } finally {
     for (const burner of burners) burner.kill();
   }
+
   return results;
 }
 
@@ -204,6 +220,7 @@ export async function hammer(runs: number, workers: number): Promise<HammerRun[]
 if (import.meta.main) {
   const declared = (process.env.KINU_HAMMER_RUNS ?? '').trim();
   const runs = declared === '' ? DEFAULT_RUNS : Number(declared);
+
   if (!Number.isInteger(runs) || runs < 1) {
     console.error(
       `hammer: KINU_HAMMER_RUNS=${declared} is not a positive integer. A run count that `
@@ -211,8 +228,10 @@ if (import.meta.main) {
     );
     process.exit(2);
   }
+
   const workers = Math.max(1, Math.floor(cpus().length / 2));
   const governed = claims(HAMMER_SUITE, trackedFiles());
+
   const measured = assertMeasured('hammer', [
     ['runs', runs],
     ['contention workers', workers],
@@ -226,8 +245,10 @@ if (import.meta.main) {
 
   const governedSet = new Set(governed);
   const findings: string[] = [];
+
   for (const run of results) {
     const label = `run ${String(run.index)}/${String(runs)}`;
+
     if (run.timedOut) {
       findings.push(finding({
         at: `${label} (${run.seconds.toFixed(1)}s)`,
@@ -239,6 +260,7 @@ if (import.meta.main) {
       }));
       continue;
     }
+
     if (run.exit !== 0) {
       findings.push(finding({
         at: `${label} (${run.seconds.toFixed(1)}s, ${String(run.failed)} failing test(s))`,
@@ -252,6 +274,7 @@ if (import.meta.main) {
       }));
       continue;
     }
+
     if (run.passed <= 0) {
       findings.push(finding({
         at: label,
@@ -263,8 +286,10 @@ if (import.meta.main) {
       }));
       continue;
     }
+
     const missing = governed.filter((file) => !run.measured.includes(file));
     const extra = run.measured.filter((file) => !governedSet.has(file));
+
     if (missing.length > 0 || extra.length > 0) {
       findings.push(finding({
         at: label,
@@ -315,6 +340,7 @@ if (import.meta.main) {
 
   if (findings.length > 0) {
     console.error(`\nhammer: ${String(findings.length)} finding(s) over ${String(runs)} run(s)\n`);
+
     for (const entry of findings) console.error(entry);
     console.error(`\nEvidence: ${artifact}`);
     process.exit(1);

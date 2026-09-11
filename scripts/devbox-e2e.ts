@@ -59,23 +59,30 @@ import {
 } from './fixtures/r2-bench/deploy-substrate';
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
+
 /** Where the in-container workload lives. OUTSIDE `/workspace`, so the harness
  *  is never part of the tree whose bytes are being verified — and therefore
  *  gone after every container replacement, which is why it is reinstalled
  *  before each phase that runs it. */
 const HARNESS_DIR = '/var/tmp/devbox-e2e';
+
 const HARNESS_PATH = `${HARNESS_DIR}/workload.ts`;
+
 const WORKLOAD_SOURCE = join(REPO_ROOT, 'scripts/fixtures/devbox-e2e/workload.ts');
+
 /** The subtree every arm writes through and every digest is taken over. */
 const WORK_ROOT = '/workspace/e2e';
+
 /** The mid-scale tree, in MiB of generated content. It is written npm-SHAPED
  *  but NOT into `node_modules`: the default exclude policy drops that tree on
  *  purpose, and a suite that wrote there would report the policy as data loss.
  *  See `npmPlan` in the workload fixture. */
 const MID_SCALE_MIB = 30;
+
 /** The files the small workload plants to have them deleted before the first
  *  checkpoint. A restore that brings one back fails `restore-verify` by name. */
 const DELETED_PATHS = ['delete-me-0.txt', 'delete-me-1.txt', 'delete-me-2.txt'] as const;
+
 /** The file a detached writer holds open across the checkpoint and the stop. */
 const OPEN_WRITE_PATH = 'open-write.bin';
 
@@ -104,9 +111,11 @@ export const CALIBRATION_RUN = 'devbox-e2e-e2ecal0901002202';
  *  calibration pass never reached the step. Named, because a ceiling whose
  *  basis is a different workload has to say so. */
 const SMOKE_RUN = 'the 20260831184750 smoke artifact';
+
 const LADDER_RUN = 'bench-artifacts/devbox-ab7.json';
 
 const G6 = 'the admission contract\'s COLD_ATTACH_CEILING_MS, unchanged';
+
 const measured = (ms: number): string =>
   `3x ${String(ms)} ms, the slowest arm that settled this step in ${CALIBRATION_RUN}`;
 
@@ -163,7 +172,9 @@ export const CEILINGS: readonly OperationCeiling[] = [
 
 export function ceilingFor(op: LifecycleOp, ceilings: readonly OperationCeiling[]): OperationCeiling {
   const found = ceilings.find((ceiling) => ceiling.op === op);
+
   if (found === undefined) throw new Error(`no ceiling is declared for ${op}`);
+
   return found;
 }
 
@@ -193,7 +204,9 @@ const CEILING_GRACE_MS = 15_000;
  *  provisioning that needs more asks than this is a finding the run reports
  *  rather than a wait it extends. */
 const PROVISION_OBSERVATIONS = 10;
+
 const PROVISION_OBSERVATION_INTERVAL_MS = 2_000;
+
 const PROVISION_OBSERVATION_TIMEOUT_MS = 15_000;
 
 // ── the verdict ─────────────────────────────────────────────────────────────
@@ -279,7 +292,9 @@ export function platformConsumed(
 // ── the deployed operations, behind one seam ────────────────────────────────
 
 export interface StartupOutcome { readonly ms: number; readonly kind: string; readonly detail: string }
+
 export interface SettleOutcome { readonly ms: number; readonly ok: boolean; readonly detail: string }
+
 export interface ExecOutcome { readonly exitCode: number; readonly stdout: string; readonly stderr: string }
 
 /**
@@ -311,11 +326,13 @@ export function deployedSeam(fixture: Fixture, box: string): LifecycleSeam {
   return {
     startup: async (kick, operation, allowed, deadlineMs): Promise<StartupOutcome> => {
       const completed = await startupOperation(fixture, box, kick, operation, allowed, { deadlineMs });
+
       return { ms: completed.ms, kind: completed.attach.kind, detail: completed.attach.detail };
     },
     checkpoint: async (what, deadlineMs): Promise<SettleOutcome> => {
       const settled = await checkpointOperation(fixture, box, 'quiesce', what, { deadlineMs });
       const kind = settled.outcome?.kind ?? 'unknown';
+
       return {
         ms: settled.ms ?? -1,
         ok: kind === 'committed',
@@ -325,6 +342,7 @@ export function deployedSeam(fixture: Fixture, box: string): LifecycleSeam {
     },
     stop: async (what, deadlineMs): Promise<SettleOutcome> => {
       const settled = await stopOperation(fixture, box, what, { deadlineMs });
+
       return {
         ms: settled.ms ?? -1,
         ok: settled.ok === true,
@@ -335,6 +353,7 @@ export function deployedSeam(fixture: Fixture, box: string): LifecycleSeam {
       const reply = await retryTransient(`exec ${command.slice(0, 40)}`, async () =>
         await execInBox(fixture, box, command),
       );
+
       return {
         exitCode: reply.exitCode ?? -1,
         stdout: reply.stdout ?? '',
@@ -344,6 +363,7 @@ export function deployedSeam(fixture: Fixture, box: string): LifecycleSeam {
     write: async (path, content): Promise<void> => { await writeFileInBox(fixture, box, path, content); },
     teardown: async (deadlineMs): Promise<void> => {
       const errors = await teardownLiveArms(fixture, [box], undefined, deadlineMs);
+
       if (errors.length > 0) throw new Error(`live teardown failed: ${errors.join('; ')}`);
     },
   };
@@ -381,13 +401,16 @@ export async function underCeiling<T>(
   // every wrong answer.
   const passedItsCeiling = new Error(`${what} passed its ${String(ceilingMs)} ms ceiling`);
   let timer: ReturnType<typeof setTimeout> | undefined;
+
   const expiry = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => { reject(passedItsCeiling); }, ceilingMs);
   });
+
   try {
     return await Promise.race([work, expiry]);
   } catch (error) {
     if (error !== passedItsCeiling) throw error;
+
     // The abandoned operation still settles, and its late outcome is evidence:
     // "the checkpoint answered 40 s after we stopped waiting" and "it never
     // answered at all" are different findings. Attaching the handler HERE is
@@ -401,6 +424,7 @@ export async function underCeiling<T>(
         logLine(`${what}: the abandoned operation later refused: ${describeThrown({ cause: late })}`);
       }
     };
+
     stranded.push({ what, settled: account() });
     throw error;
   } finally {
@@ -418,6 +442,7 @@ export interface TreeDigest {
   readonly bytes: number;
   readonly digest: string;
 }
+
 const TreeDigestSchema: v.GenericSchema<TreeDigest> = v.looseObject({
   ok: v.boolean(),
   files: v.number(),
@@ -427,6 +452,7 @@ const TreeDigestSchema: v.GenericSchema<TreeDigest> = v.looseObject({
 
 /** What a workload command answers when only its success is read. */
 interface WorkloadAck { readonly ok: boolean }
+
 const WorkloadAckSchema: v.GenericSchema<WorkloadAck> = v.looseObject({ ok: v.boolean() });
 
 /** What `workload.ts absent` answers: the deleted paths that came back. It is
@@ -437,6 +463,7 @@ interface AbsentReply {
   readonly ok: boolean;
   readonly resurrected: string[];
 }
+
 const AbsentReplySchema: v.GenericSchema<AbsentReply> = v.looseObject({
   ok: v.boolean(),
   resurrected: v.array(v.string()),
@@ -449,6 +476,7 @@ interface FileReply {
   readonly bytes: number;
   readonly content: string;
 }
+
 const FileReplySchema: v.GenericSchema<FileReply> = v.looseObject({
   ok: v.boolean(),
   exists: v.boolean(),
@@ -463,22 +491,28 @@ function decodeReply<TSchema extends v.GenericSchema>(
   schema: TSchema, what: string, outcome: ExecOutcome,
 ): v.InferOutput<TSchema> {
   const start = outcome.stdout.indexOf('{');
+
   if (start === -1) {
     throw new Error(
       `${what} printed no JSON (exit ${String(outcome.exitCode)}): `
       + `${(outcome.stdout + outcome.stderr).slice(0, 300)}`,
     );
   }
+
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(outcome.stdout.slice(start));
   } catch (error) {
     throw new Error(`${what} printed unparseable JSON: ${outcome.stdout.slice(start, start + 300)}`, { cause: error });
   }
+
   const parsed = v.safeParse(schema, decoded);
+
   if (!parsed.success) {
     throw new Error(`${what} answered a reply this suite cannot read: ${outcome.stdout.slice(start, start + 300)}`);
   }
+
   return parsed.output;
 }
 
@@ -524,10 +558,12 @@ export async function runLifecycle(
     const ceiling = ceilingFor(op, options.ceilings);
     const started = Date.now();
     options.log(`${strategy}: ${op} (ceiling ${String(ceiling.ms)} ms)`);
+
     try {
       const value = await underCeiling(`${strategy} ${op}`, ceiling.ms, stranded, run);
       steps.push({ op, ms: Date.now() - started, ceilingMs: ceiling.ms, ok: true, detail: 'settled' });
       options.settle?.(partial());
+
       return value;
     } catch (error) {
       const elapsed = Date.now() - started;
@@ -538,14 +574,17 @@ export async function runLifecycle(
       // reader deciding whether to re-sample needs the difference in front of
       // them rather than inferred from the wording of a SandboxError.
       const consumed = platformOpaque(detail);
+
       const text = consumed
         ? platformConsumed(strategy, op, elapsed, detail)
         : elapsed >= ceiling.ms
           ? ceilingRefusal(strategy, op, ceiling.ms, elapsed, detail)
           : wrongAnswer(strategy, op, elapsed, detail);
+
       const record: StepRecord = consumed
         ? { op, ms: elapsed, ceilingMs: ceiling.ms, ok: false, detail, platformOpaque: true }
         : { op, ms: elapsed, ceilingMs: ceiling.ms, ok: false, detail };
+
       steps.push(record);
       failures.push(text);
       options.settle?.(partial());
@@ -562,9 +601,11 @@ export async function runLifecycle(
   /** One workload command whose non-zero exit is a failure to run. */
   const workload = async (command: string, what: string): Promise<ExecOutcome> => {
     const outcome = await seam.exec(`cd ${HARNESS_DIR} && bun ${HARNESS_PATH} ${command}`);
+
     if (outcome.exitCode !== 0) {
       throw new Error(`${what} exited ${String(outcome.exitCode)}: ${(outcome.stdout + outcome.stderr).slice(0, 300)}`);
     }
+
     return outcome;
   };
 
@@ -601,15 +642,18 @@ export async function runLifecycle(
     const cold = await step('cold-attach', async (deadlineMs) =>
       await seam.startup('/create', `${strategy} cold attach`, ['empty', 'attached'], deadlineMs),
     );
+
     notes.push(`cold attach: ${cold.kind} — ${cold.detail}`);
 
     // ── ~1 MB of mixed files, written THROUGH the strategy's work directory ──
     smallDigest = await step('small-workload', async () => {
       await installHarness();
+
       const written = decodeReply(
         WorkloadAckSchema, 'small workload',
         await workload(`small --root ${WORK_ROOT} --seed ${options.seed}`, 'small workload'),
       );
+
       require(written.ok, 'the small workload did not report success');
       // The one file whose bytes THIS PROCESS knows, so the restore is checked
       // against the driver's own ground truth and not only against a digest the
@@ -625,13 +669,16 @@ export async function runLifecycle(
         + `--path ${OPEN_WRITE_PATH} --content ${openWriteContent} --hold-ms 1800000 `
         + '>/dev/null 2>&1 & echo spawned',
       );
+
       const held = decodeReply(
         FileReplySchema, 'open-write arming',
         await workload(`read --root ${WORK_ROOT} --path ${OPEN_WRITE_PATH}`, 'open-write arming'),
       );
+
       require(held.content === openWriteContent, `the open write was not flushed before the checkpoint: ${held.content}`);
       const taken = await digest('small tree digest');
       require(taken.files > 100, `the small tree holds ${String(taken.files)} files`);
+
       return taken.digest;
     });
 
@@ -639,13 +686,16 @@ export async function runLifecycle(
     await step('checkpoint-small', async (deadlineMs) => {
       const settled = await seam.checkpoint(`${strategy} first checkpoint`, deadlineMs);
       require(settled.ok, `the first checkpoint did not commit: ${settled.detail}`);
+
       return settled;
     });
     await step('stop-small', async (deadlineMs) => {
       const settled = await seam.stop(`${strategy} stop`, deadlineMs);
       require(settled.ok, `the stop did not confirm: ${settled.detail}`);
+
       return settled;
     });
+
     // ── the wake ──────────────────────────────────────────────────────────
     //
     // THE LIVE PROOF OF THE RESTORE'S VISIBILITY IS NOT WIRED HERE, deliberately,
@@ -663,6 +713,7 @@ export async function runLifecycle(
     const woke = await step('wake-attach', async (deadlineMs) =>
       await seam.startup('/wake', `${strategy} wake`, ['attached'], deadlineMs),
     );
+
     notes.push(`wake: ${woke.kind} — ${woke.detail}`);
 
     await step('restore-verify', async () => {
@@ -673,25 +724,30 @@ export async function runLifecycle(
         `the restored tree is not the tree that was checkpointed `
         + `(${String(restored.files)} files / ${String(restored.bytes)} B restored)`,
       );
+
       const readMarker = decodeReply(
         FileReplySchema, 'marker read',
         await workload(`read --root ${WORK_ROOT} --path marker.txt`, 'marker read'),
       );
+
       require(readMarker.content === marker, `the marker file came back as ${readMarker.content.slice(0, 60)}`);
       const back = await resurrected();
       require(
         back.length === 0,
         `a file deleted before the checkpoint came back after the restore: ${back.join(', ')}`,
       );
+
       const openWrite = decodeReply(
         FileReplySchema, 'open-write read',
         await workload(`read --root ${WORK_ROOT} --path ${OPEN_WRITE_PATH}`, 'open-write read'),
       );
+
       require(
         openWrite.content === openWriteContent,
         'the bytes a writer flushed before the checkpoint did not survive the recycle '
         + `(${String(openWrite.bytes)} B back)`,
       );
+
       return restored.digest;
     });
 
@@ -704,22 +760,26 @@ export async function runLifecycle(
           'mid workload',
         ),
       );
+
       require(written.ok, 'the mid-scale workload did not report success');
       const taken = await digest('mid tree digest');
       require(
         taken.bytes > options.midScaleMib * 1_000_000,
         `the mid tree holds ${String(taken.bytes)} B, short of the ${String(options.midScaleMib)} MiB asked for`,
       );
+
       return taken.digest;
     });
     await step('checkpoint-mid', async (deadlineMs) => {
       const settled = await seam.checkpoint(`${strategy} second checkpoint`, deadlineMs);
       require(settled.ok, `the second checkpoint did not commit: ${settled.detail}`);
+
       return settled;
     });
     await step('stop-mid', async (deadlineMs) => {
       const settled = await seam.stop(`${strategy} release`, deadlineMs);
       require(settled.ok, `the release did not confirm: ${settled.detail}`);
+
       return settled;
     });
 
@@ -727,6 +787,7 @@ export async function runLifecycle(
     const reattached = await step('cold-reattach', async (deadlineMs) =>
       await seam.startup('/create', `${strategy} cold reattach`, ['attached'], deadlineMs),
     );
+
     notes.push(`cold reattach: ${reattached.kind} — ${reattached.detail}`);
 
     await step('reattach-verify', async () => {
@@ -742,6 +803,7 @@ export async function runLifecycle(
         back.length === 0,
         `a file deleted two checkpoints ago came back on the cold reattach: ${back.join(', ')}`,
       );
+
       return restored.digest;
     });
   } catch (error) {
@@ -772,6 +834,7 @@ export async function runLifecycle(
 
   for (const abandoned of stranded) notes.push(`abandoned at its ceiling: ${abandoned.what}`);
   options.settle?.(partial());
+
   return { strategy, box, passed: failures.length === 0, steps, failures, notes };
 }
 
@@ -810,18 +873,25 @@ const HELP = `Usage: bun scripts/devbox-e2e.ts [options]
 export function parseOptions(argv: readonly string[]): Options {
   const value = (name: string, fallback: string): string => {
     const index = argv.indexOf(`--${name}`);
+
     return index === -1 ? fallback : argv[index + 1] ?? fallback;
   };
+
   const requested = value('arms', '').split(',').map((arm) => arm.trim()).filter((arm) => arm.length > 0);
   const unknown = requested.filter((arm) => !STRATEGIES.some((strategy) => strategy === arm));
+
   if (unknown.length > 0) throw new Error(`unknown arm(s): ${unknown.join(', ')}`);
+
   const arms = requested.length === 0
     ? STRATEGIES
     : STRATEGIES.filter((strategy) => requested.includes(strategy));
+
   const wedgeName = value('wedge', '');
   const wedge = STRATEGIES.find((arm) => arm === wedgeName) ?? null;
+
   if (wedgeName.length > 0 && wedge === null) throw new Error(`unknown arm to wedge: ${wedgeName}`);
   const runId = value('run-id', `e2e${new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14)}`);
+
   return {
     arms,
     runId,
@@ -838,6 +908,7 @@ export function parseOptions(argv: readonly string[]): Options {
 /** The ceilings a run judges by: the declared table, or the calibration wall. */
 export function ceilingsFor(calibrate: boolean): readonly OperationCeiling[] {
   if (!calibrate) return CEILINGS;
+
   return CEILINGS.map((ceiling) => ({
     op: ceiling.op,
     ms: CALIBRATION_CEILING_MS,
@@ -855,8 +926,10 @@ export function proposedCeilings(
   verdicts: readonly StrategyVerdict[],
 ): { op: LifecycleOp; measuredMs: number; arm: string; proposedMs: number }[] {
   const proposals: { op: LifecycleOp; measuredMs: number; arm: string; proposedMs: number }[] = [];
+
   for (const ceiling of CEILINGS) {
     let slowest = { arm: '', ms: -1 };
+
     for (const verdict of verdicts) {
       for (const step of verdict.steps) {
         if (step.op === ceiling.op && step.ok && step.ms > slowest.ms) {
@@ -864,6 +937,7 @@ export function proposedCeilings(
         }
       }
     }
+
     if (slowest.ms < 0) continue;
     proposals.push({
       op: ceiling.op,
@@ -872,6 +946,7 @@ export function proposedCeilings(
       proposedMs: Math.ceil((slowest.ms * 3) / 1_000) * 1_000,
     });
   }
+
   return proposals;
 }
 
@@ -880,11 +955,13 @@ export function proposedCeilings(
  *  names the arm and the operation. */
 export function wedgedSeam(seam: LifecycleSeam): LifecycleSeam {
   let wedged = false;
+
   return {
     ...seam,
     checkpoint: async (what, deadlineMs): Promise<SettleOutcome> => {
       if (wedged) return await seam.checkpoint(what, deadlineMs);
       wedged = true;
+
       return await new Promise<SettleOutcome>(() => {
         logLine(`WEDGE: ${what} will never settle; the ceiling is the only thing that can end it`);
       });
@@ -903,31 +980,44 @@ export function render(verdicts: readonly StrategyVerdict[], options: Options): 
   const ops = CEILINGS.map((ceiling) => ceiling.op);
   const header = ['operation'.padEnd(18), 'ceiling'.padStart(9), ...verdicts.map((verdict) => verdict.strategy.padStart(15))];
   lines.push(header.join(' '));
+
   for (const op of ops) {
     const ceiling = ceilingFor(op, ceilingsFor(options.calibrate));
+
     const cells = verdicts.map((verdict) => {
       const step = verdict.steps.find((row) => row.op === op);
+
       if (step === undefined) return 'not reached'.padStart(15);
+
       return `${step.ok ? '' : 'FAIL '}${String(step.ms)}`.padStart(15);
     });
+
     lines.push([op.padEnd(18), `${String(ceiling.ms)}`.padStart(9), ...cells].join(' '));
   }
+
   lines.push('');
+
   for (const verdict of verdicts) {
     lines.push(`${verdict.passed ? 'PASS' : 'FAIL'}  ${verdict.strategy}  (box ${verdict.box})`);
+
     for (const failure of verdict.failures) lines.push(`        ${failure}`);
   }
+
   lines.push('');
+
   if (options.calibrate) {
     lines.push('Proposed ceilings — 3x the slowest arm that settled:');
+
     for (const proposal of proposedCeilings(verdicts)) {
       lines.push(
         `  ${proposal.op.padEnd(18)} measured ${String(proposal.measuredMs).padStart(7)} ms `
         + `(${proposal.arm}) -> ${String(proposal.proposedMs)} ms`,
       );
     }
+
     lines.push('');
   }
+
   // THE BLIND SPOTS, ON THE GREEN PATH. A limitation visible only in red output
   // is invisible exactly when the tree is green.
   lines.push('What a green run here does NOT prove:');
@@ -937,6 +1027,7 @@ export function render(verdicts: readonly StrategyVerdict[], options: Options): 
   lines.push(`    (${String(options.midScaleMib)} MiB), or more than one recycle per size.`);
   lines.push('  - nothing about concurrency INSIDE one box: one writer, one lifecycle, no contention.');
   lines.push('  - nothing about a flaky arm: one lifecycle per arm per run, so one pass in ten reads green.');
+
   return lines.join('\n');
 }
 
@@ -964,23 +1055,29 @@ async function settleProvisioning(
   log: (message: string) => void,
 ): Promise<{ readonly asks: number; readonly ms: number }> {
   const started = Date.now();
+
   for (let ask = 1; ask <= PROVISION_OBSERVATIONS; ask += 1) {
     try {
       const reply = await fetch(`${fixture.origin}/state?box=${box}&strategy=${box.split('-').slice(1, -1).join('-')}`, {
         headers: { authorization: `Bearer ${fixture.token}` },
         signal: AbortSignal.timeout(PROVISION_OBSERVATION_TIMEOUT_MS),
       });
+
       if (reply.ok) {
         await reply.body?.cancel();
+
         return { asks: ask, ms: Date.now() - started };
       }
+
       log(`${box}: provisioning not settled on ask ${String(ask)} (${String(reply.status)})`);
       await reply.body?.cancel();
     } catch (error) {
       log(`${box}: provisioning observation ${String(ask)} did not answer: ${describeThrown({ cause: error })}`);
     }
+
     await delay(PROVISION_OBSERVATION_INTERVAL_MS);
   }
+
   return { asks: PROVISION_OBSERVATIONS, ms: Date.now() - started };
 }
 
@@ -1000,13 +1097,17 @@ interface Lane {
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
+
   if (argv.includes('--help')) {
     process.stdout.write(HELP);
+
     return 0;
   }
+
   const options = parseOptions(argv);
   const ceilings = ceilingsFor(options.calibrate);
   const planned = options.arms.map((arm) => `${arm}: box ab-${arm}-${options.runId}`);
+
   if (options.plan) {
     process.stdout.write(
       `Devbox deployed lifecycle suite\n\narms          ${options.arms.join(', ')}\n`
@@ -1015,18 +1116,22 @@ async function main(): Promise<number> {
       + `mid scale     ${String(options.midScaleMib)} MiB\nartifact      ${options.out}\n`
       + '\nNothing has run. Drop --plan to execute.\n',
     );
+
     return 0;
   }
 
   process.env.CLOUDFLARE_ACCOUNT_ID = BENCH_ACCOUNT_ID;
+
   if (runWrangler(REPO_ROOT, ['whoami'], { allowFailure: true }).startsWith(WRANGLER_FAILED)) {
     logLine('wrangler is not authenticated; nothing can be deployed and nothing can be proved');
+
     return 1;
   }
 
   const workloadSource = readFileSync(WORKLOAD_SOURCE, 'utf8');
   const startedAt = new Date().toISOString();
   const fixtures = createFixtureResources(options.runId, options.arms);
+
   const lanes: Lane[] = fixtures.arms.map((fixture) => ({
     fixture,
     box: `ab-${fixture.strategy}-${options.runId}`,
@@ -1037,15 +1142,19 @@ async function main(): Promise<number> {
     deployToCreateMs: null,
     provisioning: null,
   }));
+
   const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
   const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
+
   const residue = r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined
     ? r2ResiduePlane({ accountId: BENCH_ACCOUNT_ID, accessKeyId: r2AccessKeyId, secretAccessKey: r2SecretAccessKey })
     : null;
+
   if (residue === null) {
     logLine('R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY are absent: an interrupted run\'s bucket residue '
       + 'cannot be drained, and a bucket delete may refuse');
   }
+
   const token = `devbox-e2e-${crypto.randomUUID()}`;
   const verdicts: StrategyVerdict[] = [];
   const teardownErrors: string[] = [];
@@ -1056,28 +1165,36 @@ async function main(): Promise<number> {
   publishTeardown(async (): Promise<void> => {
     if (options.keep) {
       logLine('--keep left every Worker, container application, bucket and generated config in place');
+
       return;
     }
+
     for (const lane of lanes) {
       if (lane.live !== null) {
         const errors = await teardownLiveArms(lane.live, [lane.box]);
         teardownErrors.push(...errors);
       }
+
       const statuses = lane.stop?.() ?? [];
+
       for (const status of statuses.filter((status) => /failed/i.test(status))) {
         teardownErrors.push(`${lane.fixture.strategy}: ${status}`);
       }
+
       let deleted = runWrangler(REPO_ROOT, ['r2', 'bucket', 'delete', lane.fixture.bucket], { allowFailure: true });
+
       if (deleted.startsWith(WRANGLER_FAILED) && /not empty|10008/i.test(deleted) && residue !== null) {
         const drained = await drainBucketResidue(residue, lane.fixture.bucket);
         logLine(`${lane.fixture.bucket}: drained ${String(drained.objects)} object(s), `
           + `aborted ${String(drained.uploads)} upload(s)`);
         deleted = runWrangler(REPO_ROOT, ['r2', 'bucket', 'delete', lane.fixture.bucket], { allowFailure: true });
       }
+
       if (deleted.startsWith(WRANGLER_FAILED) && !/not found|does not exist/i.test(deleted)) {
         teardownErrors.push(`${lane.fixture.bucket}: ${deleted.slice(0, 200)}`);
       }
     }
+
     fixtures.disposeConfig();
     logLine(teardownErrors.length === 0
       ? 'teardown complete: every Worker, container application and bucket is gone'
@@ -1109,6 +1226,7 @@ async function main(): Promise<number> {
     verdicts.push(...await Promise.all(lanes.map(async (lane): Promise<StrategyVerdict> => {
       const live = lane.live;
       const arm = lane.fixture.strategy;
+
       // DURABLE PER-ARM, the same scheme the decisive driver uses: every
       // settled step is on disk the moment it settles, so a wedged sibling or
       // a killed driver cannot take this arm's evidence with it.
@@ -1119,6 +1237,7 @@ async function main(): Promise<number> {
           logLine(`${arm}: the durable arm artifact could not be written: ${describeThrown({ cause: error })}`);
         }
       };
+
       if (live === null) {
         const refused: StrategyVerdict = {
           strategy: arm,
@@ -1128,9 +1247,12 @@ async function main(): Promise<number> {
           failures: [`${arm}: ${lane.refusal ?? 'this arm was never deployed'}`],
           notes: [],
         };
+
         settle(refused);
+
         return refused;
       }
+
       // SETTLE BEFORE THE FIRST KICK, and record what the wait cost. Three
       // earlier samples died on `/create` with the runtime's opaque
       // `internal error; reference = …` at 314-656 ms — a container application
@@ -1142,6 +1264,7 @@ async function main(): Promise<number> {
         + `${String(lane.provisioning.ms)} ms; deploy -> /create gap `
         + `${String(lane.deployToCreateMs ?? -1)} ms`);
       const base = deployedSeam(live, lane.box);
+
       return await runLifecycle(
         arm,
         lane.box,
@@ -1189,6 +1312,7 @@ async function main(): Promise<number> {
     teardownErrors,
     proposals: options.calibrate ? proposedCeilings(verdicts) : [],
   };
+
   mkdirSync(dirname(join(REPO_ROOT, options.out)), { recursive: true });
   writeFileSync(join(REPO_ROOT, options.out), `${JSON.stringify(artifact, null, 2)}\n`);
   process.stdout.write(`${render(verdicts, options)}\n`);
@@ -1199,10 +1323,13 @@ async function main(): Promise<number> {
   // is exactly the mistake this line prevents.
   if (options.calibrate) return verdicts.every((verdict) => verdict.steps.length > 0) ? 0 : 1;
   const failed = verdicts.filter((verdict) => !verdict.passed);
+
   if (teardownErrors.length > 0) {
     logLine(`teardown errors: ${teardownErrors.join('; ')}`);
+
     return 1;
   }
+
   return failed.length === 0 ? 0 : 1;
 }
 

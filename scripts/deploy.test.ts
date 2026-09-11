@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   EXCLUSION_GROUPS, GATE_DEADLINES, SERIAL_GATES, deployDeadlines, deployExclusions,
-  deployGates, deployWaves,
+  deployWaves,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
@@ -13,6 +13,7 @@ import { isDocument, readRepositoryFile, trackedFiles } from "./sources";
 import * as v from "valibot";
 
 const REPO_ROOT = resolve(import.meta.dir, "..");
+
 const temporaryDirectories: string[] = [];
 
 /** The bench gate's argv AS THE FIXTURE REPO EXPANDS IT: the first seven words
@@ -56,7 +57,7 @@ const REQUIRED_GATES = [
   "bun run test:workerd",
   "bun test --parallel=4 packages/cli-backend/",
   "bun run test:cli",
-  "bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts",
+  "bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts",
   `bun test ${BENCH_GATE_FILES.join(" ")}`,
   "bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts",
   "bun scripts/secret-scan.ts",
@@ -148,6 +149,7 @@ function executable(path: string, source: string): void {
 function freshHome(directory: string) {
   const home = join(directory, "home");
   mkdirSync(home, { recursive: true });
+
   return { ...process.env, HOME: home, KINU_HOME: join(home, ".kinu") };
 }
 
@@ -157,6 +159,7 @@ function freshHome(directory: string) {
  *  the distribution no longer resolves. */
 function launchFailure(result: Bun.SyncSubprocess): string {
   const decoder = new TextDecoder();
+
   return [
     `exit=${String(result.exitCode)} signal=${String(result.signalCode)}`,
     decoder.decode(result.stderr).trim(),
@@ -213,7 +216,6 @@ function runDeploy({
   failingGate = "",
   killGate = "",
   dirty = false,
-  environment = "production",
   tmpdir: temporaryRoot,
   option,
   ambientPhase = "",
@@ -227,11 +229,13 @@ function runDeploy({
   mkdirSync(join(fixture, "scripts"));
   mkdirSync(join(fixture, "node_modules"));
   mkdirSync(join(fixture, "packages", "cf-backend"), { recursive: true });
+
   for (const relativePath of BENCH_GATE_FILES) {
     const path = join(fixture, relativePath);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, "");
   }
+
   executable(
     join(fixture, "scripts", "deploy.sh"),
     readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"),
@@ -260,8 +264,10 @@ printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 exit 87
 `);
 
-  const argv = ["/usr/bin/bash", "scripts/deploy.sh", environment];
+  const argv = ["/usr/bin/bash", "scripts/deploy.sh"];
+
   if (option !== undefined) argv.push(option);
+
   const run = Bun.spawnSync(argv, {
     cwd: fixture,
     env: {
@@ -284,13 +290,17 @@ exit 87
     stdout: "pipe",
     stderr: "pipe",
   });
+
   const events = existsSync(log)
     ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean)
     : [];
+
   const buildEnvironment = existsSync(buildEnvironmentLog)
     ? readFileSync(buildEnvironmentLog, "utf8").trim()
     : null;
+
   const infraPhase = existsSync(phaseLog) ? readFileSync(phaseLog, "utf8").trim() : null;
+
   return {
     status: run.exitCode, events, stdout: run.stdout.toString(), buildEnvironment, infraPhase,
   };
@@ -380,7 +390,9 @@ describe("deploy gate", () => {
     const declared = Object.fromEntries(
       Object.entries(GATE_DEADLINES).map(([run, entry]) => [run, entry.seconds]),
     );
+
     expect(deployDeadlines(source)).toEqual(declared);
+
     for (const [run, entry] of Object.entries(GATE_DEADLINES)) {
       // Both lists: a post-deploy gate needs its own wall for the same reason
       // a pre-deploy one might, and a deadline naming no gate is a stale
@@ -436,12 +448,15 @@ describe("deploy gate", () => {
     // declaration, so it is asserted once. Without this the measured reason
     // lives in TypeScript and the behaviour lives in shell, and either can move.
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
+
     const declared = Object.fromEntries(
       Object.entries(EXCLUSION_GROUPS).map(([group, entry]) => [group, [...entry.gates].sort()]),
     );
+
     const inRunner = Object.fromEntries(
       Object.entries(deployExclusions(source)).map(([group, gates]) => [group, [...gates].sort()]),
     );
+
     expect(inRunner).toEqual(declared);
 
     // A group member that is not a gate excludes nothing, and a group of one
@@ -449,6 +464,7 @@ describe("deploy gate", () => {
     for (const [group, entry] of Object.entries(EXCLUSION_GROUPS)) {
       expect(entry.gates.length, `group ${group} holds fewer than two gates`)
         .toBeGreaterThan(1);
+
       for (const gate of entry.gates) {
         const gates: string[] = [...REQUIRED_GATES];
         expect(gates, `${gate} is in group ${group} and is not a gate`).toContain(gate);
@@ -482,6 +498,7 @@ describe("deploy gate", () => {
     // by POSITION, and the pre-deploy gates come first in file order, so
     // `REQUIRED_GATES.indexOf` stays the exact index into it.
     expect(waveOfGate).toHaveLength(REQUIRED_GATES.length + POST_DEPLOY_GATES.length);
+
     for (const gate of REQUIRED_GATES) {
       const run = runDeploy({ failingGate: gate });
 
@@ -501,12 +518,15 @@ describe("deploy gate", () => {
       // thing only while that gate happened to be last — and silently stopped
       // saying anything about the wave that followed it.
       const failedWave = waveOfGate[REQUIRED_GATES.indexOf(gate)] ?? -1;
+
       const downstream = REQUIRED_GATES.filter(
         (_gate, index) => (waveOfGate[index] ?? -1) > failedWave,
       );
+
       for (const later of downstream) {
         expect(run.events, `${gate} failed and ${later} ran anyway`).not.toContain(later);
       }
+
       if (gate !== last) {
         expect(run.events.length, `${gate} failed and the whole tier ran anyway`)
           .toBeLessThan(REQUIRED_GATES.length);
@@ -521,65 +541,6 @@ describe("deploy gate", () => {
     // 4 s is declared, because a loaded box must not read as a broken deploy.
   }, REQUIRED_GATES.length * 4_000);
 
-  // ── After the upload ──────────────────────────────────────────
-  //
-  // The first-run tier is the only gate whose subject is the DEPLOYED build, so
-  // it is the only one this fixture cannot execute: the build stub fails on
-  // purpose and the pipeline never reaches step 4. What is checkable here is
-  // the wiring, and it is checked at the same three sites the census demands —
-  // deploy.sh runs it, `scripts/ladder.ts` declares it, and this list names it.
-  test("the first-run tier runs after the smoke test, alone, on staging only", () => {
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-    for (const gate of POST_DEPLOY_GATES) {
-      expect(deployGates(source)).toContain(gate);
-      // STAGING ONLY. The tier acts as the eval identity, which is a staging
-      // construct by design: the DEV_IDENTITY_SECRET that lets a test act as a
-      // signed-in user without signing in is the whole authority for that
-      // identity, and production deliberately carries neither it nor
-      // DEV_USER_EMAIL (wrangler.jsonc:441-445). A first-run against production
-      // would need a service identity production is built to refuse, and the
-      // same bits reach production minutes after staging passed them.
-      // The three lines together, and the enqueue at COLUMN 0 inside the
-      // guard: `deployGates` parses `^run_required_gate`, so an indented line
-      // would run on staging while the ladder, this contract and the
-      // CI-coverage assertion all reported a tier that does not exist.
-      expect(source).toContain(`if [ "$KINU_ENV" = "staging" ]; then
-run_required_gate "First-run tier" ${gate}
-fi`);
-      // AFTER the smoke test: a tier that judged the product before the smoke
-      // gate had said the deploy landed would report five product failures for
-      // one deployment failure.
-      const smokeAt = source.indexOf("Step 4: Post-deploy smoke test");
-      const gateAt = source.indexOf(`run_required_gate "First-run tier" ${gate}`);
-      expect(smokeAt).toBeGreaterThan(0);
-      expect(gateAt).toBeGreaterThan(smokeAt);
-      // And after the upload itself, which is what makes it a statement about
-      // the build that just shipped rather than about the previous one.
-      expect(gateAt).toBeGreaterThan(source.indexOf("Step 3: Deploying Kinu"));
-      // Alone, and declared alone: the wave assertion above proves the first,
-      // and SERIAL_GATES is where the reason lives.
-      expect(Object.keys(SERIAL_GATES)).toContain(gate);
-    }
-    // The pre- and post-deploy lists together are exactly what deploy.sh runs.
-    // Neither list may grow without the other being read, which is the property
-    // a single list stopped being able to state once a gate ran after the
-    // upload.
-    // By COUNT and by TAIL rather than by set equality: deploy.sh spells one
-    // pre-deploy gate with a glob and `REQUIRED_GATES` carries what bash
-    // expands it to, so the two lists are equal as gates and unequal as text —
-    // which the set-equality test above already establishes for the pre-deploy
-    // half. What is this test's own to say is that the post-deploy half is
-    // exactly these gates, and that nothing else joined the file unnoticed.
-    const parsed = deployGates(source);
-    expect(parsed).toHaveLength(REQUIRED_GATES.length + POST_DEPLOY_GATES.length);
-    expect(parsed.slice(-POST_DEPLOY_GATES.length)).toEqual([...POST_DEPLOY_GATES]);
-    // AND NOT ON PRODUCTION. The `if` guard is the enforcement, and this is its
-    // other direction: the same command, run as `deploy.sh production`, must
-    // hold the gate behind the staging branch — which the staging-only test
-    // above proves by holding the exact three lines together. A production run
-    // that reached this tier without the secret would fail on a credential
-    // nobody can mint there, which is the design refusing it, not a gap.
-  });
 
   test("a dirty checkout is rejected before verification or mutation", () => {
     const run = runDeploy({ dirty: true });
@@ -588,29 +549,7 @@ fi`);
     expect(run.events).toEqual([]);
   });
 
-  // ── The environment argument ───────────────────────────────────
-  //
-  // staging.kinu.run served for days with nothing deploying it, and the reason a
-  // second script was not written is asserted here: one script means the gate
-  // set, the asset check and the smoke gate cannot be present for production and
-  // absent for staging. The two environments differ in four values, and these
-  // tests are about the two an operator can see.
-  test("staging runs the same gates as production, against the staging route", () => {
-    const run = runDeploy({ environment: "staging" });
 
-    expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
-    expect(run.stdout).toContain("Environment:  staging");
-    expect(run.stdout).toContain("Target:       https://staging.kinu.run/");
-    expect(run.buildEnvironment).toBe("staging");
-  });
-
-  test("an unknown environment deploys nothing", () => {
-    const run = runDeploy({ environment: "preprod" });
-
-    expect(run.status).toBe(2);
-    expect(run.events).toEqual([]);
-    expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging>");
-  });
 
   // ── The bootstrap option and the phase it selects ──────────────
   //
@@ -626,7 +565,7 @@ fi`);
   // (no gate is added, dropped or softened), and it cannot be reached by
   // accident, ambient environment, or a typo.
   test("bootstrap changes the phase and not one gate", () => {
-    const bootstrap = runDeploy({ environment: "staging", option: "--bootstrap" });
+    const bootstrap = runDeploy({ option: "--bootstrap" });
 
     // Same gates, same set, same failure semantics as any other deploy. This is
     // the assertion that would catch a future `--bootstrap` that skipped a check
@@ -638,7 +577,7 @@ fi`);
     expect(bootstrap.stdout).toContain("BOOTSTRAP");
     expect(bootstrap.stdout).toContain("Still refused before the upload");
 
-    const normal = runDeploy({ environment: "staging" });
+    const normal = runDeploy();
     expect(normal.infraPhase).toBe("full");
     expect([...normal.events].sort()).toEqual([...bootstrap.events].sort());
     expect(normal.stdout).not.toContain("BOOTSTRAP");
@@ -653,15 +592,16 @@ fi`);
     // script assigns it in BOTH arms rather than reading whatever was exported —
     // otherwise `export KINU_INFRA_PHASE=bootstrap` in a shell would quietly
     // weaken every deploy launched from it.
-    const inherited = runDeploy({ environment: "staging", ambientPhase: "bootstrap" });
+    const inherited = runDeploy({ ambientPhase: "bootstrap" });
 
     expect(inherited.infraPhase).toBe("full");
     expect(inherited.stdout).not.toContain("BOOTSTRAP");
 
     // And the flag still wins when it is actually passed, ambient value or not.
     const asked = runDeploy({
-      environment: "staging", option: "--bootstrap", ambientPhase: "post-deploy",
+      option: "--bootstrap", ambientPhase: "post-deploy",
     });
+
     expect(asked.infraPhase).toBe("bootstrap");
   // Measured 3.0 s on a box at load 66-98 (2026-09-02 sweep, foreign mutation jobs on all
   // 24 threads), where bun's default 5 s bound read red and the test is green alone. A bound
@@ -672,12 +612,12 @@ fi`);
     // Refused rather than ignored. A silently-dropped `--bootstrp` would fail the
     // deploy at the infrastructure gate with a diagnostic about a Durable Object
     // namespace, which is the wrong thing to debug.
-    const run = runDeploy({ environment: "staging", option: "--bootstrp" });
+    const run = runDeploy({ option: "--bootstrp" });
 
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
     expect(run.infraPhase).toBeNull();
-    expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging> [--bootstrap]");
+    expect(run.stdout).toContain("Usage: scripts/deploy.sh [--bootstrap]");
   });
 
   // ── The post-deploy phase ──────────────────────────────────────
@@ -696,6 +636,7 @@ fi`);
     const lines = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")
       .split("\n")
       .filter((line) => !line.trimStart().startsWith("#"));
+
     const source = lines.join("\n");
 
     // At column zero, and after the upload: nested inside any `if`, this would be
@@ -739,14 +680,17 @@ fi`);
     // NEGATIVE scope assertion, and every one of them is required — so an absent
     // or unreadable row is a finding and `gate:infra` exits non-zero.
     const infrastructure = deriveInfrastructure();
+
     const access = infrastructure.resources.filter((resource) =>
       resource.id.startsWith('access-') && resource.environments.includes('production'));
+
     expect(access.map((resource) => resource.id).sort()).toEqual([
       'access-application.kinu.run',
       'access-organization.kinu.run',
       'access-policy.kinu.run',
       'access-scope.kinu.run',
     ]);
+
     for (const resource of access) expect(resource.required).toBe(true);
 
     // And the gate that observes them is a REQUIRED gate of this pipeline,
@@ -783,6 +727,7 @@ fi`);
     // application does not cover. Covering MORE puts an interactive login in
     // front of the public product.
     expect(CONTROL_PLANE_ACCESS_PATHS).toEqual(['/control*', '/api/control*']);
+
     const covered = (path: string): boolean => CONTROL_PLANE_ACCESS_PATHS.some((pattern) =>
       path.startsWith(pattern.slice(0, -1)));
 
@@ -792,6 +737,7 @@ fi`);
       expect(isControlPlaneSurface(path)).toBe(true);
       expect(covered(path)).toBe(true);
     }
+
     // The routes that must NOT be behind Access, and are not: the public product,
     // the two authenticated write endpoints any signed-in user reaches, and the
     // asset paths a preview app loads.
@@ -863,6 +809,7 @@ describe("one deploy path", () => {
 
   const ScriptsSchema = v.object({ scripts: v.optional(v.record(v.string(), v.string())) });
   const manifests = trackedFiles().filter((file) => basename(file) === "package.json");
+
   const scriptsOf = (manifest: string): Record<string, string> =>
     v.parse(ScriptsSchema, JSON.parse(readRepositoryFile(REPO_ROOT, manifest))).scripts ?? {};
 
@@ -876,8 +823,8 @@ describe("one deploy path", () => {
   test("the root scripts are the deploy script, one per environment", () => {
     const scripts = scriptsOf("package.json");
 
-    expect(scripts.deploy).toBe("bash scripts/deploy.sh production");
-    expect(scripts["deploy:staging"]).toBe("bash scripts/deploy.sh staging");
+    expect(scripts.deploy).toBe("bash scripts/deploy.sh");
+    expect(scripts["deploy:staging"]).toBeUndefined();
   });
 
   test("no package script publishes anything itself", () => {
@@ -896,6 +843,7 @@ describe("one deploy path", () => {
   // here whatever `x.ts` launches.
   test("no package script launches an eval outside the tier script", () => {
     let tierLaunches = 0;
+
     for (const manifest of manifests) {
       for (const [name, body] of Object.entries(scriptsOf(manifest))) {
         if (body.includes("scripts/eval-tier.sh")) tierLaunches += 1;
@@ -906,6 +854,7 @@ describe("one deploy path", () => {
           .not.toContain("scripts/eval.ts");
       }
     }
+
     // Non-vacuity: the corpus really does contain the eval launch site.
     expect(tierLaunches, "no package script launches the eval tier").toBeGreaterThan(0);
   });
@@ -917,12 +866,15 @@ describe("one deploy path", () => {
     expect(documents.length, "the document corpus collapsed").toBeGreaterThan(0);
 
     let rootCommands = 0;
+
     for (const document of documents) {
       const text = readRepositoryFile(REPO_ROOT, document);
       const scoped = PER_PACKAGE_DEPLOY.exec(text);
       expect(scoped?.[0], `${document} documents a per-package deploy command`).toBeUndefined();
+
       if (text.includes("bun run deploy")) rootCommands += 1;
     }
+
     // Non-vacuity: the check runs over prose that really does name the deploy.
     expect(rootCommands, "no document names the root deploy command")
       .toBeGreaterThan(0);
@@ -943,6 +895,7 @@ describe("one deploy path", () => {
    *  other questions. */
   const StepSchema = v.looseObject({ run: v.optional(v.string()) });
   const StepListSchema = v.looseObject({ steps: v.optional(v.array(StepSchema)) });
+
   const AutomationSchema = v.looseObject({
     jobs: v.optional(v.record(v.string(), StepListSchema)),
     runs: v.optional(StepListSchema),
@@ -963,6 +916,7 @@ describe("one deploy path", () => {
 
     return automationFiles.flatMap((file) => {
       const parsed = v.parse(AutomationSchema, Bun.YAML.parse(readRepositoryFile(REPO_ROOT, file)));
+
       return [
         ...Object.entries(parsed.jobs ?? {})
           .map(([job, definition]) => ({ label: `${file}#${job}`, bodies: bodiesOf(definition) })),
@@ -972,6 +926,7 @@ describe("one deploy path", () => {
   }
 
   const automation = automationJobs();
+
   const automationSteps = automation
     .flatMap(({ label, bodies }) => bodies.map((body) => ({ label, body })));
 
@@ -980,20 +935,19 @@ describe("one deploy path", () => {
   // Blind spot: what a body then executes — `bun scripts/<name>.ts` is one word here
   // whatever `x.ts` publishes.
   test("every automation file GitHub executes is in the denominator", () => {
-    expect(automationFiles, "the enumerator stopped listing the deploy workflow")
-      .toContain(".github/workflows/deploy-staging.yml");
+    expect(automationFiles, "the enumerator stopped listing the workflows")
+      .toContain(".github/workflows/ci.yml");
     expect(automationFiles, "the enumerator stopped listing the composite actions")
       .toContain(".github/actions/setup-lean/action.yml");
-    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(4);
+    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(3);
     expect(automationSteps.length, "the parse read no run body").toBeGreaterThan(10);
 
-    // Non-vacuity: the corpus really contains a deploy, and that deploy really
-    // does go through the root script. Without this the rule below is satisfied
-    // by a repository that deploys nothing.
+    // Deploys are run by a person through `bun run deploy`; no workflow deploys.
+    // Named so a workflow that starts deploying is a deliberate change here.
     const deploying = automationSteps.filter(({ body }) =>
       DEPLOY_ENTRYPOINTS.some((entrypoint) => body.includes(entrypoint)));
-    expect(deploying.map(({ label }) => label), "no workflow deploys through the deploy script")
-      .toContain(".github/workflows/deploy-staging.yml#deploy");
+
+    expect(deploying.map(({ label }) => label)).toEqual([]);
   });
 
   // Harness boundary: string containment over a step body, the same authority
@@ -1004,13 +958,14 @@ describe("one deploy path", () => {
     // Positive control, as a literal: a matcher that stops matching is
     // indistinguishable from a clean tree.
     expect(PUBLISH_COMMANDS.some((command) =>
-      "bunx wrangler deploy --env staging".includes(command))).toBe(true);
+      "bunx wrangler deploy".includes(command))).toBe(true);
 
     for (const { label, body } of automationSteps) {
       for (const command of PUBLISH_COMMANDS) {
         expect(body, `${label} publishes with \`${command}\` instead of running scripts/deploy.sh`)
           .not.toContain(command);
       }
+
       expect(PER_PACKAGE_DEPLOY.exec(body)?.[0], `${label} deploys one package around the deploy script`)
         .toBeUndefined();
     }
@@ -1041,6 +996,7 @@ describe("one deploy path", () => {
 
     for (const file of shellScripts) {
       if (file === SHELL_PUBLISHER) continue;
+
       for (const command of PUBLISH_COMMANDS) {
         expect(executable(file), `${file} publishes with \`${command}\`; the deploy path is ${SHELL_PUBLISHER}`)
           .not.toContain(command);
@@ -1055,6 +1011,7 @@ describe("one deploy path", () => {
   // credential aimed at production; this only proves the refusal is reachable.
   test("an eval a workflow launches resolves its target through the one resolver", () => {
     let launching = 0;
+
     for (const { label, bodies } of automation) {
       if (!bodies.some((body) => EVAL_LAUNCHERS.some((launcher) => body.includes(launcher)))) continue;
       launching += 1;
@@ -1063,6 +1020,7 @@ describe("one deploy path", () => {
         `${label} launches an eval without resolving its target through ${EVAL_RESOLVER}`,
       ).toBe(true);
     }
+
     // Non-vacuity: a workflow really does launch an eval with a credential.
     expect(launching, "no workflow launches an eval").toBeGreaterThan(0);
   });
@@ -1085,11 +1043,14 @@ describe("CLI distribution artifacts", () => {
   function buildDist(): string {
     const directory = mkdtempSync(join(tmpdir(), "kinu-cli-dist-test-"));
     temporaryDirectories.push(directory);
+
     const build = Bun.spawnSync(
       ["bash", join(REPO_ROOT, "scripts", "build-cli-dist.sh"), directory],
       { cwd: REPO_ROOT, stdout: "pipe", stderr: "pipe" },
     );
+
     expect(build.exitCode, new TextDecoder().decode(build.stderr)).toBe(0);
+
     return directory;
   }
 
@@ -1097,6 +1058,7 @@ describe("CLI distribution artifacts", () => {
     const decoder = new TextDecoder();
     const listing = Bun.spawnSync(["tar", "-tzf", archive], { stdout: "pipe", stderr: "pipe" });
     expect(listing.exitCode, decoder.decode(listing.stderr)).toBe(0);
+
     return new Set(decoder.decode(listing.stdout).trim().split("\n"));
   }
 
@@ -1131,6 +1093,7 @@ describe("CLI distribution artifacts", () => {
         [...entries].some((entry) => entry.startsWith(`kinu/node_modules/@opentui/core-${platform}/`)),
         `${platform} artifact carries no @opentui/core-${platform}`,
       ).toBe(true);
+
       // Every other platform's native library stays out of it.
       for (const other of PLATFORMS) {
         if (other === platform) continue;
@@ -1139,6 +1102,7 @@ describe("CLI distribution artifacts", () => {
           `${platform} artifact also ships ${other}`,
         ).toBe(false);
       }
+
       // The CPython blobs are 13.71 MiB gzipped and identical on every
       // platform. Four copies is 41 MiB of duplicate assets.
       expect(
@@ -1154,6 +1118,7 @@ describe("CLI distribution artifacts", () => {
 
   test("every artifact carries a matching checksum and fits the asset limit", () => {
     const directory = buildDist();
+
     for (const name of [...PLATFORMS.map((p) => `kinu-cli-${p}.tar.gz`), CPYTHON]) {
       const artifact = join(directory, name);
       const bytes = readFileSync(artifact);
@@ -1175,18 +1140,22 @@ describe("CLI distribution artifacts", () => {
     const host = `${process.platform}-${process.arch}`;
     const installed = join(directory, "installed");
     mkdirSync(installed);
+
     for (const name of [`kinu-cli-${host}.tar.gz`, CPYTHON]) {
       const unpack = Bun.spawnSync(["tar", "-xzf", join(directory, name), "-C", installed], {
         stdout: "pipe", stderr: "pipe",
       });
+
       expect(unpack.exitCode, decoder.decode(unpack.stderr)).toBe(0);
     }
+
     const root = join(installed, "kinu");
 
     const stamp = v.parse(
       v.object({ version: v.string(), sha: v.string(), builtAt: v.string() }),
       JSON.parse(readFileSync(join(directory, "kinu-version.json"), "utf8")),
     );
+
     // The base version read off the manifest rather than retyped: the literal
     // this pinned had to be edited on every minor bump, beside the file that
     // already declares it.
@@ -1194,11 +1163,13 @@ describe("CLI distribution artifacts", () => {
       v.object({ version: v.string() }),
       JSON.parse(readFileSync(join(REPO_ROOT, "packages", "cli", "package.json"), "utf8")),
     );
+
     expect(stamp.version).toBe(`${manifest.version}+${stamp.sha}`);
 
     const version = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--version"], {
       cwd: root, env: freshHome(directory), stdout: "pipe", stderr: "pipe",
     });
+
     expect(version.exitCode, launchFailure(version)).toBe(0);
     // The stamp the assets advertise is the stamp the program reports. Two
     // stamping sites is how `kinu update` learns to chase a version nothing has.
@@ -1208,6 +1179,7 @@ describe("CLI distribution artifacts", () => {
     const help = Bun.spawnSync([process.execPath, "run", join(root, "cli.js"), "--help"], {
       cwd: root, env: freshHome(directory), stdin: "ignore", stdout: "pipe", stderr: "pipe",
     });
+
     expect(help.exitCode, launchFailure(help)).toBe(0);
     expect(decoder.decode(help.stdout)).toMatch(/^[ \t]+setup[ \t]/m);
   }, 300_000);

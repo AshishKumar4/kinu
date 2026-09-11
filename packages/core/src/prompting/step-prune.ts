@@ -76,6 +76,7 @@ export interface ModelWindow {
 export function outputReserveTokens(limits: ModelWindow): number {
   const window = Math.max(0, Math.floor(limits.contextWindow));
   const answer = Math.max(0, Math.floor(limits.modelOutputLimit));
+
   return Math.min(answer, Math.floor(window / 2));
 }
 
@@ -132,6 +133,7 @@ export interface StepPruneBudget extends ModelWindow {
 }
 
 type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
+
 type ToolPart = ToolModelMessage['content'][number];
 
 /**
@@ -152,23 +154,31 @@ export function pruneStepToolOutputs(
   budget: StepPruneBudget,
 ): ModelMessage[] | undefined {
   const limit = stepContextLimit(budget);
+
   if (limit <= 0) return undefined;
 
   let total = budget.reservedTokens ?? 0;
+
   for (const message of messages) total += estimateMessageTokens(message);
   const over = total - limit;
+
   if (over <= 0) return undefined;
 
   const batch = stepPruneBatchTokens(budget);
   const target = Math.ceil(over / batch) * batch;
   const doomed = resultsToTruncate(messages, target);
+
   if (doomed.size === 0) return undefined;
   let changed = false;
+
   const next = messages.map((message) => {
     const rebuilt = pruneMessage(message, doomed);
+
     if (rebuilt !== message) changed = true;
+
     return rebuilt;
   });
+
   return changed ? next : undefined;
 }
 
@@ -184,18 +194,22 @@ export function pruneStepToolOutputs(
  */
 function resultsToTruncate(messages: readonly ModelMessage[], target: number): Set<ToolResultPart> {
   const candidates: ToolResultPart[] = [];
+
   for (const message of messages) candidates.push(...toolResultPartsOf(message));
   candidates.pop();
   const doomed = new Set<ToolResultPart>();
   let freed = 0;
+
   for (const part of candidates) {
     if (freed >= target) break;
     const before = serializedOutputLength(part);
     const truncated = truncateResultPart(part);
+
     if (truncated === part) continue;
     doomed.add(part);
     freed += Math.max(0, Math.round((before - serializedOutputLength(truncated)) / 4));
   }
+
   return doomed;
 }
 
@@ -203,10 +217,12 @@ function toolResultPartsOf(message: ModelMessage): ToolResultPart[] {
   if (message.role === 'tool') {
     return message.content.filter((part): part is ToolResultPart => part.type === 'tool-result');
   }
+
   if (message.role === 'assistant' && Array.isArray(message.content)) {
     // Provider-executed results ride inline in assistant content.
     return message.content.filter((part): part is ToolResultPart => part.type === 'tool-result');
   }
+
   return [];
 }
 
@@ -215,24 +231,34 @@ function toolResultPartsOf(message: ModelMessage): ToolResultPart[] {
 function pruneMessage(message: ModelMessage, doomed: ReadonlySet<ToolResultPart>): ModelMessage {
   if (message.role === 'tool') {
     let changed = false;
+
     const content = message.content.map((part): ToolPart => {
       if (part.type !== 'tool-result' || !doomed.has(part)) return part;
       const truncated = truncateResultPart(part);
+
       if (truncated !== part) changed = true;
+
       return truncated;
     });
+
     return changed ? { ...message, content } : message;
   }
+
   if (message.role === 'assistant' && Array.isArray(message.content)) {
     let changed = false;
+
     const content = message.content.map((part): AssistantPart => {
       if (part.type !== 'tool-result' || !doomed.has(part)) return part;
       const truncated = truncateResultPart(part);
+
       if (truncated !== part) changed = true;
+
       return truncated;
     });
+
     return changed ? { ...message, content } : message;
   }
+
   return message;
 }
 
@@ -241,12 +267,16 @@ function pruneMessage(message: ModelMessage, doomed: ReadonlySet<ToolResultPart>
  *  already-truncated ones) pass through untouched — idempotence. */
 function truncateResultPart(part: ToolResultPart): ToolResultPart {
   const serialized = serializeOutput(part);
+
   if (serialized === null) return part;
+
   if (serialized.includes('…[truncated:')) return part;
   const marker = `…[truncated: full output was ${serialized.length} chars; re-run the tool if needed]`;
+
   if (serialized.length <= PRUNED_OUTPUT_HEAD_CHARS + marker.length) return part;
   const value = serialized.slice(0, PRUNED_OUTPUT_HEAD_CHARS) + marker;
   const isError = part.output.type === 'error-text' || part.output.type === 'error-json';
+
   return { ...part, output: isError ? { type: 'error-text', value } : { type: 'text', value } };
 }
 
@@ -254,6 +284,7 @@ function truncateResultPart(part: ToolResultPart): ToolResultPart {
  *  estimate prices. Null for shapes with nothing to shrink. */
 function serializeOutput(part: ToolResultPart): string | null {
   const output = part.output;
+
   switch (output.type) {
     case 'text':
     case 'error-text':
@@ -279,6 +310,7 @@ const ESTIMATED_MEDIA_CHARS = 4_800;
 
 function estimateMessageTokens(message: ModelMessage): number {
   let chars = 0;
+
   if (!Array.isArray(message.content)) {
     chars = message.content.length;
   } else {
@@ -303,6 +335,7 @@ function estimateMessageTokens(message: ModelMessage): number {
       }
     }
   }
+
   return Math.max(0, Math.round(chars / 4));
 }
 
@@ -322,6 +355,8 @@ function jsonLength<Value>(value: Value): number {
  *  of bytes just to measure them. */
 function binaryReplacer<Value>(_key: string, value: Value): Value | string {
   if (value instanceof Uint8Array) return `[binary ${value.byteLength} bytes]`;
+
   if (value instanceof ArrayBuffer) return `[binary ${value.byteLength} bytes]`;
+
   return value;
 }

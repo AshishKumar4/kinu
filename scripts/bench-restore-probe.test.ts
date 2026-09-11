@@ -25,11 +25,14 @@ const PROBE_FIXTURE: Fixture = { origin: 'https://bench.invalid', token: 'bench-
 
 function stubFetch(answer: (url: string) => Response | Promise<Response>): () => void {
   const real = globalThis.fetch;
+
   const stub = async (
     input: Parameters<typeof globalThis.fetch>[0],
     _init?: Parameters<typeof globalThis.fetch>[1],
   ): Promise<Response> => answer(String(input));
+
   globalThis.fetch = Object.assign(stub, { preconnect: real.preconnect });
+
   return () => {
     globalThis.fetch = real;
   };
@@ -41,6 +44,7 @@ describe('the restore poll', () => {
       ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
       probe: { wallMs: 2347, at: 1_786_000_000_000 }, ms: 4,
     })));
+
     try {
       const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'post-ladder-wake', 4_259_840, []);
       expect(row).toEqual({
@@ -57,6 +61,7 @@ describe('the restore poll', () => {
       ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
       probe: { wallMs: 4542, at: 1_786_000_000_000, phases: { containerStart: 1210, attached: 3980, bootId: 4530 } }, ms: 4,
     })));
+
     try {
       const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, []);
       expect(row.outcome).toBe('ok');
@@ -75,7 +80,9 @@ describe('the restore poll', () => {
       ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
       probe: { wallMs: null, at: 1_786_000_000_000, phases: { containerStart: 28_400 } }, ms: 4,
     })));
+
     const notes: string[] = [];
+
     try {
       const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes);
       expect(row.wallMs).toBeNull();
@@ -93,7 +100,9 @@ describe('the restore poll', () => {
     const restore = stubFetch(() => new Response(JSON.stringify({
       ok: false, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe', ms: 3,
     })));
+
     const notes: string[] = [];
+
     try {
       const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes);
       expect(row.wallMs).toBeNull();
@@ -111,6 +120,7 @@ describe('the restore poll', () => {
       throw new Error('fetch failed: connection refused');
     }, { preconnect: real.preconnect });
     const notes: string[] = [];
+
     try {
       const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'complexity-restore', 65_536, notes);
       expect(row.wallMs).toBeNull();
@@ -123,6 +133,7 @@ describe('the restore poll', () => {
 
   test('old artifacts without the field read as unmeasured', () => {
     expect(decodeRestoreProbeRows(undefined)).toEqual([]);
+
     // BYTES, because bytes are what the driver decodes: a hand-edited file
     // can hold a row no typed literal can spell, and the decoder must drop
     // that row rather than trust it.
@@ -130,6 +141,7 @@ describe('the restore poll', () => {
       '[{"kind":"post-ladder-wake","treeBytes":100,"wallMs":200,"probeAt":300,"outcome":"ok"},'
       + '{"kind":"post-ladder-wake","treeBytes":"huge","wallMs":null,"probeAt":null,"outcome":"ok"}]',
     );
+
     expect(decodeRestoreProbeRows(mixed)).toEqual([
       { kind: 'post-ladder-wake', treeBytes: 100, wallMs: 200, probeAt: 300, outcome: 'ok' },
     ]);
@@ -144,7 +156,9 @@ describe('the restore poll', () => {
         phases: { containerStart: 900, storeMount: 2100, baseAttach: 3300, attached: 4100, bootId: 4500 },
       },
     ];
+
     const root = mkdtempSync(`${tmpdir()}/kinu-restore-probe-`);
+
     try {
       writeArmArtifact(root, 'probe-artifact', 'snapshot-chain', { restoreProbes: rows });
       const read = readArmArtifact(root, 'probe-artifact', 'snapshot-chain');

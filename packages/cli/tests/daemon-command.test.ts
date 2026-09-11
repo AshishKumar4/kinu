@@ -12,19 +12,23 @@ import { tolerate } from '@kinu.run/core/obs';
 import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
+
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
+
 const homes: string[] = [];
 
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
   homes.push(dir);
+
   return dir;
 }
 
 afterEach(() => {
   for (const home of homes.splice(0)) {
     const pid = readPid(home);
+
     if (pid !== null) tolerate(() => process.kill(pid, 'SIGKILL'), 'esrch');
     rmSync(home, { recursive: true, force: true });
   }
@@ -33,6 +37,7 @@ afterEach(() => {
 function makeHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'kinu-daemon-'));
   homes.push(home);
+
   return home;
 }
 
@@ -44,6 +49,7 @@ function runDaemon(home: string, action: string) {
     stderr: 'pipe',
     env: { ...process.env, KINU_HOME: home },
   });
+
   return {
     exitCode: proc.exitCode,
     stdout: proc.stdout.toString(),
@@ -53,21 +59,28 @@ function runDaemon(home: string, action: string) {
 
 function readPid(home: string): number | null {
   const pidfile = tolerate(() => readFileSync(join(home, 'daemon.pid'), 'utf-8'), 'enoent');
+
   if (pidfile === undefined) return null;
   const pid = Number(pidfile.trim());
+
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
 /** `kill(pid, 0)` throws EPERM for a process that is alive but not ours, so
  *  only ESRCH may be read as absent. */
 function isAlive(pid: number): boolean {
-  return tolerate(() => { process.kill(pid, 0); return true; }, 'esrch') ?? false;
+  return tolerate(() => {
+    process.kill(pid, 0);
+
+    return true;
+  }, 'esrch') ?? false;
 }
 
 /** `daemon start` returns as soon as the child is spawned, so anything the
  *  daemon itself does lands a moment later. */
 async function waitFor(condition: () => boolean, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
+
   while (!condition()) {
     if (Date.now() >= deadline) throw new Error('timed out waiting for the daemon');
     await Bun.sleep(25);
@@ -231,6 +244,7 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
       }
       console.log(JSON.stringify(payload));
     `;
+
     const proc = Bun.spawnSync({
       cmd: [process.execPath, '-e', script],
       cwd: repoRoot,
@@ -252,9 +266,11 @@ describe('a daemon-hosted agent resolves the same profile authority as an intera
         KINU_MODEL: '@cf/test/model',
       },
     });
+
     if (proc.exitCode !== 0) {
       throw new Error(`daemon tick scenario failed (${proc.exitCode}): ${proc.stderr.toString()}`);
     }
+
     return v.parse(DaemonTickRun, JSON.parse(proc.stdout.toString()));
   }
 

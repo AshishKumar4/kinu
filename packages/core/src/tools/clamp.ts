@@ -49,14 +49,18 @@ export async function clampToolResult(
 ): Promise<string> {
   const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
   const maxChars = opts.budget?.capFor(configured) ?? configured;
+
   if (text.length <= maxChars) {
     opts.budget?.admit(text.length);
+
     return text;
   }
 
   let savedPath: string | null = null;
+
   if (opts.vfs) {
     const path = `${TOOL_OUTPUT_DIR}/${nanoid(10)}.log`;
+
     try {
       await opts.vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
       await opts.vfs.writeFile(path, text);
@@ -78,9 +82,11 @@ export async function clampToolResult(
   // section roughly 3,000 tokens ahead of that point. Turns that never trip
   // the cap carry no explanation.
   const tightened = maxChars < configured;
+
   const reason = tightened
     ? ' This turn has already admitted enough tool output that the cap tightened for the rest of it — hand the bulk to a search or a subordinate rather than pulling more of it in here.'
     : '';
+
   // The marker promises workspace.readFile, which reads the same filesystem
   // the run tool's `workspace` shell runs over on every backend — so the
   // model can also grep the file it names.
@@ -89,7 +95,9 @@ export async function clampToolResult(
       'read or filter it with workspace.readFile inside execute_tools ' +
       `(oversize: name the path in a lifetime:"task" agents hire so that agent reads it, or range-read it), or rerun with a filter]${reason}`
     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]${reason}`;
+
   const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
+
   if (opts.budget) {
     opts.budget.admit(clamped.length);
     opts.budget.recordSpill({
@@ -99,6 +107,7 @@ export async function clampToolResult(
       tightened,
     });
   }
+
   return clamped;
 }
 
@@ -110,15 +119,20 @@ export async function clampSerializedToolResult(
   opts: ClampToolResultOptions = {},
 ): Promise<JsonValue | undefined> {
   const output = normalizeToolOutput(input);
+
   if (output == null) return output;
   const text = v.safeParse(v.string(), output);
+
   if (text.success) return clampToolResult(text.output, opts);
   const serialized = JSON.stringify(output);
   const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
+
   if (serialized.length <= (opts.budget?.capFor(configured) ?? configured)) {
     opts.budget?.admit(serialized.length);
+
     return output;
   }
+
   return clampToolResult(serialized, opts);
 }
 
@@ -129,7 +143,9 @@ export function withClampedToolResult(
   opts: ClampToolResultOptions,
 ): ToolSet[string] {
   const execute = toolEntry?.execute;
+
   if (!execute) return toolEntry;
+
   return {
     ...toolEntry,
     execute: async (input, options) => clampSerializedToolResult(
@@ -156,8 +172,10 @@ export function withClampedToolResults(
 function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined {
   if (input.output === undefined) return undefined;
   const value = { value: input.output };
+
   try {
     assertJsonValue(value);
+
     return value.value;
   } catch (error) {
     // Not already a JsonValue, so re-serialize. A cycle or a BigInt makes even
@@ -165,10 +183,12 @@ function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined 
     // string that carries nothing at all — so the reason takes its place.
     try {
       const serialized = JSON.stringify(input.output);
+
       if (serialized !== undefined) return parseJsonValue(serialized);
     } catch (error) {
       return `unserializable tool output: ${renderThrownChain({ cause: error })}`;
     }
+
     return `unserializable tool output: ${renderThrownChain({ cause: error })}`;
   }
 }

@@ -38,11 +38,13 @@ export async function resolveReviewingModelSelection(opts: {
   chatSpec: string | null;
 }): Promise<JudgeModelSelection> {
   const { registry } = opts;
+
   const selection = await selectJudgeModel({
     reviewSpec: opts.pinned,
     chatSpec: registry.normalizeSpecSync(opts.chatSpec),
     candidates: candidatesFor(registry),
   });
+
   return { ...selection, spec: registry.normalizeSpecSync(selection.spec) };
 }
 
@@ -58,10 +60,12 @@ export async function resolveEnsembleJudgeSelection(opts: {
   chatSpec: string | null;
 }): Promise<EnsembleJudgeSelection> {
   const { registry } = opts;
+
   const selection = await selectEnsembleJudges({
     specs: opts.specs,
     chatSpec: () => registry.normalizeSpecSync(opts.chatSpec),
     candidates: candidatesFor(registry),
   });
+
   return { ...selection, specs: selection.specs.map((spec) => registry.normalizeSpecSync(spec)) };
 }

@@ -187,11 +187,13 @@ export async function reportedMember(input: {
   readonly readOrigin: (path: string) => Promise<string | null>;
 }): Promise<MergeMember> {
   const { readOrigin } = input;
+
   const diff: MemberDiff = {
     nodeId: input.nodeId,
     files: [{ path: input.path, base: await readOrigin(input.path), after: input.answer }],
     provenance: 'reported',
   };
+
   return {
     nodeId: input.nodeId,
     diff,
@@ -227,6 +229,7 @@ export function singlePathApply(vfs: VFS): MemberApply {
         }. A per-file loop would publish a committed prefix if a later file failed, so it is `
         + "refused instead: wire the substrate's one-transaction batch write.");
     }
+
     for (const file of files) {
       if (file.after === null) await vfs.unlink(file.path);
       else await vfs.writeFile(file.path, file.after);
@@ -265,16 +268,20 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
     // been consumed: offering it again would re-apply bytes the origin holds and could
     // only disagree with a sibling an earlier fan-in already reconciled.
     const parents: FanInParent[] = [];
+
     for (const node of deps.nodes.values()) {
       if (node.depth !== atDepth || landed.has(node.id)) continue;
+
       if (node.artifact === null || node.score === null) {
         unusableParents.add(node.id);
         continue;
       }
+
       parents.push({
         id: node.id, answer: node.artifact, score: node.score, aggregated: node.aggregated,
       });
     }
+
     if (parents.length < 2 || atDepth + 1 > deps.maxDepth) {
       // NEITHER A REFUSAL NOR SILENCE. A fan-in over one parent is `sample` under another
       // name and the engine will not relabel it; a vertex past the cap is the one thing
@@ -283,6 +290,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
         preset: deps.preset, depth: atDepth, parents: parents.length,
         reason: parents.length < 2 ? 'no-level' : 'depth-cap',
       });
+
       return [];
     }
 
@@ -294,13 +302,17 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
     const consumed: FanInParent[] = [];
     const known = new Set<string>();
     const queue = [...parents];
+
     for (let member = queue.shift(); member !== undefined; member = queue.shift()) {
       if (known.has(member.id)) continue;
       known.add(member.id);
       consumed.push(member);
+
       for (const dep of member.aggregated) {
         const node = deps.nodes.get(dep);
+
         if (node === undefined || landed.has(dep) || known.has(dep)) continue;
+
         // An edge is only ever given to a node that produced a usable answer, so this
         // narrows the row rather than filtering it.
         if (node.artifact === null || node.score === null) continue;
@@ -309,6 +321,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
         });
       }
     }
+
     for (const row of deps.sql<{ id: string }>`
       SELECT id FROM search_nodes
       WHERE actor_id = ${deps.actor.actorId} AND root_id = ${deps.rootId} AND status = 'pruned'`) {
@@ -316,10 +329,12 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
     }
 
     const readOrigin = originReader(measureIn.vfs);
+
     const members = await Promise.all(consumed.map((member) => reportedMember({
       nodeId: member.id, answer: member.answer, score: member.score,
       path: instrument.artifact, deps: member.aggregated, readOrigin,
     })));
+
     const answers = new Map(consumed.map((member) => [member.id, member.answer]));
 
     /**
@@ -338,13 +353,16 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
      */
     const reverify: Reverifier = async ({ member, baseDigest }) => {
       const answer = answers.get(member.nodeId);
+
       if (answer === undefined) {
         return refusalOf(new KinuError('unavailable',
           `this fan-in holds no answer for node ${member.nodeId}, so nothing here can re-measure it `
           + 'against the base the members before it moved. A verdict that cannot be revalidated '
           + 'never applies.'));
       }
+
       const before = await readOrigin(instrument.artifact);
+
       const outcome = await deps.measureChild({
         ctx: measureIn,
         verifier: input.verifier,
@@ -353,18 +371,22 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
         baseline: input.baseline,
         artifact: answer,
       });
+
       await singlePathApply(measureIn.vfs)([
         { path: instrument.artifact, base: answer, after: before },
       ]);
+
       if (outcome.kind === 'instrument-faulted') {
         return refusalOf(new KinuError('unavailable',
           `the instrument faulted while re-checking ${member.nodeId} against the base this fan-in `
           + `moved: ${outcome.error}. That is the instrument breaking rather than the member `
           + 'failing, and it refuses the apply instead of guessing.'));
       }
+
       log.event('swarm.merge_reverified', {
         preset: deps.preset, node: member.nodeId, depth: atDepth, outcome: outcome.kind,
       });
+
       // CLEAN IS `scored` AND NOTHING ELSE. Rule 4 asks whether the verdict still holds on
       // the base this member would land on: unmeasurable is "not measurable there any
       // more", and sealed is the instrument disagreeing with itself about content it has
@@ -379,6 +401,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
     /** The vertex, in an array because it is assigned from inside the spawner and read
      *  after it: one element where a conflict was graded, none where there was none. */
     const vertices: V[] = [];
+
     const spawnMergeNode = async (request: MergeNodeRequest): Promise<string> => {
       // THE ROW HANGS OFF THE MEMBER ALREADY APPLIED — the state this vertex starts from —
       // and every other parent is a dependency edge, because one measurement must not
@@ -386,6 +409,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
       // for a vertex that is then not created is a child the run paid for and never ran.
       const primary = deps.nodes.get(request.parents[0]);
       const paid = primary === undefined ? 0 : deps.budget.take(1);
+
       if (primary === undefined || paid === 0) {
         // ONE OUTCOME, TWO REASONS, and the reason is a field. Merge-back has already named
         // the conflict; what is missing is the child that would resolve it — either because
@@ -396,10 +420,13 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
           preset: deps.preset, depth: atDepth, parents: parents.length,
           reason: primary === undefined ? 'no-parent' : 'budget',
         });
+
         return '';
       }
+
       const id = nanoid();
       let expanded = false;
+
       try {
         vertices.push(await deps.expandChild({
           parent: primary,
@@ -431,6 +458,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
         });
         deps.countLost();
       }
+
       if (!expanded) return '';
       // THE DAG'S EDGES, IN THE RECORD. `search_nodes` holds the selection edge and only
       // that, so this event is where the other k−1 are written down.
@@ -443,6 +471,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
         conflict: `${request.parents[0]},${request.parents[1]}`,
         paths: request.paths.length,
       });
+
       return id;
     };
 
@@ -458,6 +487,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
       applyMember: singlePathApply(measureIn.vfs),
       reverify,
     };
+
     const report = await mergeBack(
       { policy: 'sequential-rebase', members, settled: [...landed] },
       // THE SPAWNER IS ABSENT WHERE THE BUDGET CANNOT PAY, and absent is what merge-back
@@ -469,6 +499,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
 
     fanInLevels += 1;
     mergeOrder.push(...report.order);
+
     for (const outcome of report.outcomes) {
       if (outcome.kind !== 'applied') continue;
       landed.add(outcome.nodeId);
@@ -478,6 +509,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
       deps.markMerged(outcome.nodeId);
       fanInMerged += 1;
     }
+
     for (const vertex of vertices) aggregateVertices.push(vertex.id);
     log.event('swarm.aggregate_fan_in', {
       preset: deps.preset,
@@ -490,6 +522,7 @@ export function createLevelFanIn<N extends FanInNode, V extends { readonly id: s
       vertex: vertices[0]?.id ?? '',
       stopped_at: report.stoppedAt ?? '',
     });
+
     return vertices;
   };
 

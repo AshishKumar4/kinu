@@ -5,6 +5,7 @@ import * as v from 'valibot';
 import { diagnostics, toKinuError } from '@kinu.run/core/obs';
 
 export type ThemeAppearance = 'dark' | 'light';
+
 export type TerminalColorCapability = 'truecolor' | 'ansi256' | 'ansi16';
 
 /**
@@ -166,7 +167,9 @@ export interface ThemeRegistry {
 }
 
 const DEFAULT_DARK_TUI_THEME_ID = 'kinu-dark-solid';
+
 const DEFAULT_LIGHT_TUI_THEME_ID = 'kinu-light-solid';
+
 /**
  * What a fresh install paints: the web app's own canvas, chrome and cards,
  * whole. A panel keeps its edge and fill on every terminal, including one
@@ -178,6 +181,7 @@ export const DEFAULT_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
   mode: 'theme',
   themeId: DEFAULT_LIGHT_TUI_THEME_ID,
 });
+
 /** The optional appearance-following selection the picker offers explicitly. */
 export const SYSTEM_TUI_THEME_SELECTION: ThemeSelection = Object.freeze({
   mode: 'system',
@@ -197,6 +201,7 @@ export const REFERENCE_TERMINAL_GROUNDS: Readonly<Record<ThemeAppearance, readon
 
 /** WCAG AA for running text; 3:1 for marks, labels and the focus rule. */
 const TEXT_CONTRAST_MINIMUM = 4.5;
+
 const MARK_CONTRAST_MINIMUM = 3;
 
 /** The web's dark code surface; every theme's well unless it says otherwise. */
@@ -477,6 +482,7 @@ const ThemeColorSchema = v.pipe(
   v.regex(/^#[0-9A-F]{6}$/iu, 'must be a #RRGGBB color'),
   v.transform((color) => color.toUpperCase()),
 );
+
 const TuiThemeColorsSchema = v.strictObject({
   background: v.strictObject({
     canvas: v.optional(ThemeColorSchema),
@@ -521,6 +527,7 @@ const TuiThemeColorsSchema = v.strictObject({
     danger: ThemeColorSchema,
   }),
 });
+
 const CustomThemeSchema = v.strictObject({
   id: v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]{0,63}$/u)),
   label: v.pipe(v.string(), v.trim(), v.minLength(1)),
@@ -528,20 +535,27 @@ const CustomThemeSchema = v.strictObject({
   appearance: v.picklist(['dark', 'light']),
   colors: TuiThemeColorsSchema,
 });
+
 export function createThemeRegistry(themes: readonly TuiThemeDefinition[]): ThemeRegistry {
   const byId: Record<string, TuiThemeDefinition> = {};
+
   const validated = themes.map((theme) => {
     validateTheme(theme, theme.id);
+
     if (byId[theme.id] !== undefined) throw new Error(`Duplicate TUI theme id: ${theme.id}`);
     const frozen = freezeTheme(theme);
     byId[theme.id] = frozen;
+
     return frozen;
   });
+
   return Object.freeze({
     themes: Object.freeze(validated),
     get(themeId: string) {
       const theme = byId[themeId];
+
       if (theme === undefined) throw new Error(`Unknown TUI theme: ${themeId}`);
+
       return theme;
     },
   });
@@ -569,9 +583,12 @@ function themeOrDefault(
   terminalAppearance: ThemeAppearance,
 ): TuiThemeDefinition {
   const known = registry.themes.find((candidate) => candidate.id === themeId);
+
   if (known !== undefined) return known;
+
   const fallback = registry.themes.find((candidate) => candidate.appearance === terminalAppearance)
     ?? registry.themes[0];
+
   if (fallback === undefined) throw new Error('the TUI theme registry is empty');
   diagnostics.failure(
     'tui.theme_absent',
@@ -582,6 +599,7 @@ function themeOrDefault(
     }),
     { selected: themeId, applied: fallback.id },
   );
+
   return fallback;
 }
 
@@ -593,23 +611,29 @@ export function resolveThemeSelection(
   if (selection.mode === 'theme') {
     return themeOrDefault(registry, selection.themeId, terminalAppearance);
   }
+
   const wanted = terminalAppearance === 'dark' ? selection.darkThemeId : selection.lightThemeId;
   const theme = themeOrDefault(registry, wanted, terminalAppearance);
+
   if (theme.appearance !== terminalAppearance) {
     throw new Error(`System ${terminalAppearance} selection resolved ${theme.id}, which is ${theme.appearance}.`);
   }
+
   return theme;
 }
 
 
 export function parseCustomTheme(json: string, filename: string): TuiThemeDefinition {
   let raw: unknown;
+
   try {
     raw = JSON.parse(json);
   } catch (error) {
     throw new Error(`${filename}: invalid JSON`, { cause: error });
   }
+
   let parsed: v.InferOutput<typeof CustomThemeSchema>;
+
   try {
     parsed = v.parse(CustomThemeSchema, raw);
   } catch (error) {
@@ -618,16 +642,21 @@ export function parseCustomTheme(json: string, filename: string): TuiThemeDefini
           const path = issue.path
             ?.map((item: { readonly key: PropertyKey }) => String(item.key))
             .join('.') ?? '(root)';
+
           return `${path}: ${issue.message}`;
         }).join('; ')
       : 'invalid value';
+
     throw new Error(`${filename}: ${detail}`, { cause: error });
   }
+
   const theme: TuiThemeDefinition = {
     ...parsed,
     source: 'custom',
   };
+
   validateTheme(theme, filename);
+
   return freezeTheme(theme);
 }
 
@@ -648,12 +677,15 @@ export interface ThemeContrastPair {
 function themeContrastPairs(theme: TuiThemeDefinition): readonly ThemeContrastPair[] {
   const { background, border, text, intent, well } = theme.colors;
   const pairs: ThemeContrastPair[] = [];
+
   const push = (label: string, foreground: string, ground: string, minimum: number) => {
     pairs.push({ label, foreground, background: ground, minimum, ratio: contrastRatio(foreground, ground) });
   };
+
   const canvases: ReadonlyArray<readonly [string, string]> = background.canvas === undefined
     ? REFERENCE_TERMINAL_GROUNDS[theme.appearance].map((ground) => [`terminal ${ground}`, ground] as const)
     : [['background.canvas', background.canvas]];
+
   const painted: Array<readonly [string, string]> = [
     ...canvases,
     ...(background.chrome === undefined ? [] : [['background.chrome', background.chrome] as const]),
@@ -664,17 +696,24 @@ function themeContrastPairs(theme: TuiThemeDefinition): readonly ThemeContrastPa
     ['background.selection', background.selection],
     ['background.user', background.user],
   ];
+
   for (const ink of ['primary', 'strong', 'muted'] as const) {
     for (const [label, ground] of painted) push(`text.${ink}/${label}`, text[ink], ground, TEXT_CONTRAST_MINIMUM);
   }
+
   push('text.onAccent/background.accent', text.onAccent, background.accent, TEXT_CONTRAST_MINIMUM);
   const markGrounds = [...canvases, ['background.overlay', background.overlay] as const, ['background.recessed', background.recessed] as const];
+
   for (const hue of ['accent', 'accentStrong', 'info', 'success', 'warning', 'danger'] as const) {
     for (const [label, ground] of markGrounds) push(`intent.${hue}/${label}`, intent[hue], ground, MARK_CONTRAST_MINIMUM);
   }
+
   for (const [label, ground] of canvases) push(`border.focus/${label}`, border.focus, ground, MARK_CONTRAST_MINIMUM);
+
   for (const ink of ['ink', 'muted', 'code'] as const) push(`well.${ink}/well.fill`, well[ink], well.fill, TEXT_CONTRAST_MINIMUM);
+
   for (const hue of ['accent', 'success', 'danger'] as const) push(`well.${hue}/well.fill`, well[hue], well.fill, MARK_CONTRAST_MINIMUM);
+
   return pairs;
 }
 
@@ -699,7 +738,9 @@ function appearanceFromEnvironment(
 ): ThemeAppearance {
   const colorFgBg = environment.COLORFGBG?.split(';');
   const background = colorFgBg !== undefined && colorFgBg.length >= 2 ? Number.parseInt(colorFgBg[1]!, 10) : Number.NaN;
+
   if (!Number.isNaN(background)) return background < 8 ? 'dark' : 'light';
+
   return 'dark';
 }
 
@@ -717,16 +758,20 @@ function useTerminalAppearance(override?: ThemeAppearance): ThemeAppearance {
     setReported(renderer.themeMode);
     const onThemeMode = (mode: ThemeAppearance) => setReported(mode);
     renderer.on('theme_mode', onThemeMode);
+
     return () => {
       renderer.off('theme_mode', onThemeMode);
     };
   }, [renderer]);
+
   return override ?? reported ?? appearanceFromEnvironment();
 }
 
 function detectTerminalColorCapability(environment: Readonly<Record<string, string | undefined>> = process.env): TerminalColorCapability {
   const colorTerm = environment.COLORTERM?.toLowerCase() ?? '';
+
   if (colorTerm.includes('truecolor') || colorTerm.includes('24bit')) return 'truecolor';
+
   return environment.TERM?.includes('256color') === true ? 'ansi256' : 'ansi16';
 }
 
@@ -735,6 +780,7 @@ function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapabi
   const palette = capability === 'ansi256' ? ANSI_256 : ANSI_16;
   const project = (color: string): string => closestColor(color, palette);
   const colors = mapColors(theme.colors, project);
+
   return freezeTheme({ ...theme, colors });
 }
 
@@ -760,6 +806,7 @@ function projectTheme(theme: TuiThemeDefinition, capability: TerminalColorCapabi
  */
 function markdownSyntaxForTheme(theme: TuiThemeDefinition): SyntaxStyle {
   const { border, text, intent } = theme.colors;
+
   // Prose takes the bright ink: the body register sits beside thinking
   // (`text.muted`, italic, `messages.tsx` PhaseLine) and beside the dim
   // system annotations, and a grey body read as neither.
@@ -796,6 +843,7 @@ const DEFAULT_ACTIVE_THEME: ActiveTuiTheme = Object.freeze({
   terminalAppearance: 'dark',
   registry: DEFAULT_THEME_REGISTRY,
 });
+
 const ThemeContext = createContext<ActiveTuiTheme>(DEFAULT_ACTIVE_THEME);
 
 export function TuiThemeProvider(props: {
@@ -809,8 +857,10 @@ export function TuiThemeProvider(props: {
   const selection = props.selection ?? DEFAULT_TUI_THEME_SELECTION;
   const appearance = useTerminalAppearance(props.terminalAppearance);
   const capability = props.colorCapability ?? detectTerminalColorCapability();
+
   const active = useMemo(() => {
     const definition = projectTheme(resolveThemeSelection(registry, selection, appearance), capability);
+
     return Object.freeze({
       definition,
       colors: definition.colors,
@@ -819,6 +869,7 @@ export function TuiThemeProvider(props: {
       registry,
     });
   }, [appearance, capability, registry, selection]);
+
   return createElement(ThemeContext.Provider, { value: active }, props.children);
 }
 
@@ -828,9 +879,11 @@ export function useTuiTheme(): ActiveTuiTheme {
 
 function validateTheme(theme: TuiThemeDefinition, source: string): void {
   if (!/^[a-z0-9][a-z0-9-]{0,63}$/u.test(theme.id)) throw new Error(`${source}.id must be a lower-case theme id.`);
+
   if (theme.label.trim() === '') throw new Error(`${source}.label cannot be empty.`);
   v.parse(TuiThemeColorsSchema, theme.colors);
   const failures = themeContrastFailures(theme);
+
   if (failures.length > 0) throw new Error(`${source}: ${failures.join(' ')}`);
 }
 
@@ -855,13 +908,17 @@ function freezeTheme(theme: TuiThemeDefinition): TuiThemeDefinition {
 function contrastRatio(foreground: string, background: string): number {
   const luminance = (hex: string): number => {
     const channels = [1, 3, 5].map((offset) => Number.parseInt(hex.slice(offset, offset + 2), 16) / 255);
+
     const [red, green, blue] = channels.map((channel) => (
       channel <= 0.03928 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4
     ));
+
     return 0.2126 * red! + 0.7152 * green! + 0.0722 * blue!;
   };
+
   const foregroundLuminance = luminance(foreground);
   const backgroundLuminance = luminance(background);
+
   return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05)
     / (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
 }
@@ -878,9 +935,13 @@ function mapColors(colors: TuiThemeColors, map: (color: string) => string): TuiT
     accent: map(colors.background.accent),
     user: map(colors.background.user),
   };
+
   if (colors.background.canvas !== undefined) background.canvas = map(colors.background.canvas);
+
   if (colors.background.chrome !== undefined) background.chrome = map(colors.background.chrome);
+
   if (colors.background.surface !== undefined) background.surface = map(colors.background.surface);
+
   return {
     background,
     border: {
@@ -921,13 +982,16 @@ function closestColor(color: string, palette: readonly string[]): string {
   const rgb = [1, 3, 5].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
   let best = palette[0]!;
   let bestDistance = Number.POSITIVE_INFINITY;
+
   for (const candidate of palette) {
     const candidateRgb = [1, 3, 5].map((offset) => Number.parseInt(candidate.slice(offset, offset + 2), 16));
     const distance = rgb.reduce((sum, channel, index) => sum + (channel - candidateRgb[index]!) ** 2, 0);
+
     if (distance >= bestDistance) continue;
     best = candidate;
     bestDistance = distance;
   }
+
   return best;
 }
 
@@ -945,6 +1009,7 @@ const ANSI_256 = Object.freeze([
   )),
   ...Array.from({ length: 24 }, (_, index) => {
     const channel = 8 + index * 10;
+
     return `#${channel.toString(16).padStart(2, '0').repeat(3)}`;
   }),
 ]);

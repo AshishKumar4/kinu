@@ -24,9 +24,11 @@ mockAgentsSdk();
 const { default: worker } = await import('../src/server');
 
 const APP_HOST = 'app.example.com';
+
 /** Production shape: the preview suffix IS the app host, so every preview
  *  hostname is a strict subdomain of it (wrangler.jsonc PREVIEW_HOST_SUFFIX). */
 const PREVIEW_HOST = `3000-workspace-tok.${APP_HOST}`;
+
 /** Reachable over TLS but not claimed: neither the canonical origin nor under
  *  the preview suffix. Proves the upgrade and the pin follow what this
  *  deployment declares itself to be, not any host that arrives encrypted. */
@@ -41,6 +43,7 @@ function harness(assetResponse: () => Response) {
     ASSETS: {
       fetch: async (request: Request) => {
         assetRequests.push(new URL(request.url).pathname);
+
         return assetResponse();
       },
     },
@@ -53,6 +56,7 @@ function harness(assetResponse: () => Response) {
   // SAFETY: constructs both ExecutionContext methods; the routes under test
   // return before any handler calls either one.
   const ctx = partialCtx as ExecutionContext;
+
   return { env, ctx, assetRequests };
 }
 
@@ -63,6 +67,7 @@ const script = () => new Response('console.log(1)', {
 describe('plain HTTP is redirected, not served', () => {
   test('301s to the same path and query on https, and serves nothing', async () => {
     const { env, ctx, assetRequests } = harness(script);
+
     const response = await worker.fetch(
       new Request(`http://${APP_HOST}/assets/main.js?v=2`), env, ctx,
     );
@@ -76,6 +81,7 @@ describe('plain HTTP is redirected, not served', () => {
 
   test('a preview host is upgraded on its own hostname, not diverted to the app', async () => {
     const { env, ctx, assetRequests } = harness(script);
+
     const response = await worker.fetch(
       new Request(`http://${PREVIEW_HOST}/index.html`), env, ctx,
     );
@@ -87,6 +93,7 @@ describe('plain HTTP is redirected, not served', () => {
 
   test('a dev server on localhost is left on http', async () => {
     const { env, ctx, assetRequests } = harness(script);
+
     const response = await worker.fetch(
       new Request('http://localhost:5173/assets/main.js'), env, ctx,
     );
@@ -100,6 +107,7 @@ describe('plain HTTP is redirected, not served', () => {
 describe('HTTPS responses are pinned', () => {
   test('the header is present, one year, and not preloaded', async () => {
     const { env, ctx } = harness(script);
+
     const response = await worker.fetch(
       new Request(`https://${APP_HOST}/assets/main.js`), env, ctx,
     );
@@ -120,6 +128,7 @@ describe('HTTPS responses are pinned', () => {
   test('a 101 upgrade is returned untouched', async () => {
     const upgrade = new Response(null, { status: 101 });
     const { env, ctx } = harness(() => upgrade);
+
     const response = await worker.fetch(
       new Request(`https://${APP_HOST}/assets/socket`), env, ctx,
     );
@@ -134,9 +143,11 @@ describe('HTTPS responses are pinned', () => {
 describe('a host this deployment does not claim is left alone', () => {
   test('it is neither upgraded off cleartext nor pinned', async () => {
     const { env, ctx } = harness(script);
+
     const cleartext = await worker.fetch(
       new Request(`http://${FOREIGN_HOST}/assets/main.js`), env, ctx,
     );
+
     const secure = await worker.fetch(
       new Request(`https://${FOREIGN_HOST}/assets/main.js`), env, ctx,
     );
@@ -151,6 +162,7 @@ describe('a host this deployment does not claim is left alone', () => {
 describe('the preview route still runs before app auth', () => {
   test('an https preview host reaches the preview branch, pinned and contained', async () => {
     const { env, ctx, assetRequests } = harness(script);
+
     const response = await worker.fetch(
       new Request(`https://${PREVIEW_HOST}/`), env, ctx,
     );

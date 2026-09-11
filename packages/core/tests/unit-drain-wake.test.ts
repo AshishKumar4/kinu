@@ -35,6 +35,7 @@ function newEventLog(): EventLog {
   const db = new Database(':memory:');
   const sql = makeSqlExec(db);
   initEventsHubTables(sql);
+
   // The inbox is ONE actor's: a delivery admitted for a hired subordinate is
   // that subordinate's to drain, never the root's.
   return new EventLog(sql, createTestActorsOver(db).main);
@@ -68,16 +69,19 @@ function watchedHost(opts: { refuse?: boolean } = {}) {
   const enqueued: ProgrammaticTurn[] = [];
   const debounces: number[] = [];
   let durableArms = 0;
+
   const host: BackendHost = {
     broadcast: () => {},
     enqueueTurn: async (input) => {
       enqueued.push(input);
+
       return { status: opts.refuse === true ? 'skipped' : 'queued' };
     },
     turnInFlight: () => false,
     setTimer: (_fn, ms) => { debounces.push(ms); },
     reconcileDurableWake: () => { durableArms++; },
   };
+
   return { host, enqueued, debounces, durableArms: () => durableArms };
 }
 
@@ -85,6 +89,7 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
   const { sql, execRaw } = createTestSql();
   initCompletedTurnTable(execRaw);
   const store = createCompletedTurnStore(sql, createTestActors(sql, execRaw).main);
+
   return {
     enabled: false,
     sessionWindow: store,
@@ -198,6 +203,7 @@ describe('every drain path re-establishes the wake', () => {
     const log = newEventLog();
     const now = Date.now();
     log.publish({ descriptor: webhook('d1'), now });
+
     const orch = new AgentOrchestrator({
       host: watchedHost().host, engine: inertEngine(), eventLog: log,
     });

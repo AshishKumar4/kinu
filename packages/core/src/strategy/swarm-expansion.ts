@@ -80,10 +80,12 @@ interface ReadAnswer {
  */
 export function readAnswer(text: string): ReadAnswer {
   const marker = text.indexOf(PROPOSAL_MARKER);
+
   if (marker < 0) return { text: text.trim(), proposal: null, proposalError: null };
   const answer = text.slice(0, marker).trim();
   const requested = text.slice(marker + PROPOSAL_MARKER.length);
   let json: unknown;
+
   try {
     json = extractJsonObject(requested);
   } catch (error) {
@@ -94,7 +96,9 @@ export function readAnswer(text: string): ReadAnswer {
         + `could not be arbitrated: ${renderThrownChain({ cause: error })}`,
     };
   }
+
   const parsed = v.safeParse(BranchProposalSchema, json);
+
   if (!parsed.success) {
     return {
       text: answer,
@@ -103,6 +107,7 @@ export function readAnswer(text: string): ReadAnswer {
         + `not be arbitrated: ${renderIssues(parsed.issues)}`,
     };
   }
+
   return { text: answer, proposal: parsed.output, proposalError: null };
 }
 
@@ -138,6 +143,7 @@ function proposalInvitation(input: {
   readonly maxDepth: number;
 }): string {
   if (!isTreeAdvance(input.advance.kind) || input.atDepth + 1 > input.maxDepth) return '';
+
   return `\n\nIf one thread of this task deserves its own branch of the search, end your answer with `
     + `a line reading ${PROPOSAL_MARKER} followed by a JSON object: `
     + `{"rationale": why this thread deserves the budget, "branches": [{"task", "rationale", `
@@ -164,14 +170,17 @@ function pathFeedback(input: {
   readonly ancestors: readonly TreeNode[];
 }): string {
   const { measured, baseline } = input;
+
   if (input.context !== 'inherit' || !measured || baseline === null) return '';
   const direction = measured.direction === 'minimise' ? 'lower' : 'higher';
+
   const path = input.ancestors
     .filter((node) => node.measurement?.kind === 'measured')
     .map((node) => `An answer already on this path measured `
       + `${String(node.measurement?.kind === 'measured' ? node.measurement.value : 0)} `
       + `${measured.unit}.`)
     .join(' ');
+
   return `\n\nThe workspace as found measures ${String(baseline)} ${measured.unit} on `
     + `${measured.metric}. The target is ${String(measured.target)} ${measured.unit}, `
     + `${direction} is better, and only that number is measured. This is the environment's own `
@@ -196,6 +205,7 @@ function carriedFeedback(
   measured: MeasuredObjective | null, carried: ExplorationRecord | null,
 ): string {
   if (!measured || !carried) return '';
+
   return `\n\nAn earlier run of this same objective reached ${String(carried.value)} `
     + `${measured.unit} on ${measured.metric}. That is the number to beat, and this is what `
     + `reached it:\n${carried.artifact}`;
@@ -217,6 +227,7 @@ function carriedFeedback(
  */
 function aggregatedAnswers(parents: readonly FanInParent[]): string {
   if (parents.length === 0) return '';
+
   return `\n\nThe ${String(parents.length)} answers this fan-in combines, each under the node that `
     + `produced it:\n${
       parents.map((parent) => `--- ${parent.id} ---\n${parent.answer}`).join('\n')
@@ -268,20 +279,26 @@ export function branchPrompt(input: {
   // THE ANGLE SLOT: the brief whoever asked for this node wrote, or the engine's own
   // canned angle where nobody wrote one. Never both — see {@link BranchAssignment}.
   const angle = `\n\nYour angle: ${input.assignment?.brief ?? diversityAngle(index, branches)}.`;
+
   // Keyed off what this child ACTUALLY received rather than off an axis, because a
   // proposal may override inheritance per branch and the instruction has to match
   // the text above it.
   const instruction = input.inherited
     ? ' Improve what you have been given rather than starting over.'
     : ' Write your approach from scratch; do not assume what is already there is a good start.';
+
   const inherited = input.inherited
     ? `\n\nThe answer this branch continues from:\n${input.inherited}`
     : '';
+
   const combining = aggregatedAnswers(input.aggregated);
+
   const feedback = pathFeedback({
     context, measured: input.measured, baseline: input.baseline, ancestors: input.ancestors,
   });
+
   const carried = carriedFeedback(input.measured, input.carried);
+
   return explorePrompt({
     mode: input.mode,
     context: `${input.task}${feedback}${carried}${inherited}${combining}${angle}${instruction}`
@@ -339,8 +356,10 @@ const CONTEXT_COMPACTION_THRESHOLD = 0.85;
  */
 function modelSpecOf(model: LanguageModel): string {
   const asSpec = v.safeParse(v.string(), model);
+
   if (asSpec.success) return asSpec.output;
   const asModel = v.safeParse(v.object({ modelId: v.string() }), model);
+
   return asModel.success ? asModel.output.modelId : '';
 }
 
@@ -363,21 +382,29 @@ export async function sharedPrefix(input: {
   readonly preset: SwarmPreset;
 }): Promise<readonly ModelMessage[]> {
   const { parent } = input;
+
   if (parent.compacted) return parent.compacted;
+
   if (parent.transcript.length === 0) return parent.transcript;
+
   const chars = parent.transcript.reduce(
     (total, message) => total + JSON.stringify(message.content).length, 0,
   );
+
   const window = contextWindowForModel(modelSpecOf(input.model));
   const room = window * CONTEXT_COMPACTION_THRESHOLD;
+
   if (estimateTokens(chars) < room) return parent.transcript;
+
   if (!input.compactShared) {
     input.log.event('swarm.compaction_absent', {
       preset: input.preset, node: parent.id, depth: parent.depth,
       estimated_tokens: estimateTokens(chars), threshold: Math.round(room),
     });
+
     return parent.transcript;
   }
+
   // The key is the branch point's durable id, so a re-entered search replays the same
   // plan byte-stably instead of re-summarising; the window is the one this threshold
   // measured against, so the ladder and the policy never disagree about pressure.
@@ -385,11 +412,13 @@ export async function sharedPrefix(input: {
     contextWindow: window,
     key: `swarm:${parent.id}`,
   });
+
   parent.compacted = shared;
   input.log.event('swarm.context_compacted', {
     preset: input.preset, node: parent.id, depth: parent.depth,
     before: parent.transcript.length, after: shared.length,
   });
+
   return shared;
 }
 
@@ -422,20 +451,24 @@ export function branchSeed(input: {
 }): ModelMessage {
   const { parent, measured } = input;
   const parts: string[] = [];
+
   if (parent.conclusion) {
     parts.push(`What the node you continue from concluded:\n${parent.conclusion}`);
   }
+
   if (input.verifier && parent.artifact !== null) {
     // The PATH and a digest of the bytes, so the child reads the artifact rather than
     // being told about it in prose — prose about code is a lossy copy of code.
     parts.push(`Its candidate is at ${input.verifier.artifact} `
       + `(digest ${sha256Hex(parent.artifact, 12)}). Read it rather than reconstructing it.`);
   }
+
   if (measured && parent.measurement?.kind === 'measured') {
     parts.push(`That candidate measured ${String(parent.measurement.value)} ${measured.unit} on `
       + `${measured.metric}, against a target of ${String(measured.target)}. That is what you have `
       + 'to beat.');
   }
+
   if (input.aggregated.length > 0) {
     // WHAT EACH PARENT MEASURED, beside the answers themselves, because a fan-in is
     // asked to keep what each member earned and cannot tell what that was from the text
@@ -448,9 +481,11 @@ export function branchSeed(input: {
     }.`);
     parts.push(aggregatedAnswers(input.aggregated).trim());
   }
+
   parts.push(`You are at depth ${String(input.atDepth)} of ${String(input.maxDepth)}, so scope your `
     + 'work to what can finish here.');
   parts.push(`Your focus:\n${input.focus}`);
+
   return {
     role: 'user',
     content: parts.join('\n\n'),
@@ -569,6 +604,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
   const assignedModel = routed?.model ?? nodeModel;
   /** The DAG's edges as the row-writing loop needs them: ids, not nodes. */
   const edges = input.aggregated.map((fanned) => fanned.id);
+
   const prompt = branchPrompt({
     resolved, mode, languages, measured, baseline,
     index: input.index, branches: input.width,
@@ -583,6 +619,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     invite: !agentNodes,
     assignment: input.assignment,
   });
+
   if (!agentNodes) {
     const result = await generateText({
       model: assignedModel,
@@ -590,6 +627,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
       prompt: prompt.user,
       abortSignal: signal,
     });
+
     const spent = normalizeUsage(result.usage);
     reportModelCall?.({
       source: 'swarm',
@@ -603,6 +641,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     await charge(spent);
     const answer = readAnswer(result.text);
     const code = readProposalCode(answer.text, languages);
+
     return {
       id, parentId: parent.id, depth: atDepth, aggregated: edges,
       artifact: code?.kind === 'runnable' ? code.code : answer.text,
@@ -619,10 +658,12 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
       modelId: result.response.modelId,
     };
   }
+
   const seed = branchSeed({
     parent, measured, baseline, verifier, atDepth, maxDepth,
     focus: prompt.user, context: input.context, aggregated: input.aggregated,
   });
+
   const run = await runNodeAgent({
     nodeId: id, rootId, parentId: parent.id, depth: atDepth,
     task: input.task,
@@ -657,6 +698,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     // another's.
     ? { ...nodeDeps, model: assignedModel }
     : nodeDeps);
+
   log.event('swarm.node_settled', {
     preset: resolved.preset, node: id, depth: atDepth,
     status: run.report.status, steps: run.report.stepCount,
@@ -665,6 +707,7 @@ export async function expandChild(ctx: ExpandChildCtx, input: {
     isolation: run.isolation,
     reported: run.reportedItself ? 'self' : 'final-text',
   });
+
   // A NODE THAT REPORTED IS A CANDIDATE, whatever its report says — `errored` included,
   // and no status is an exception here. Throwing on that status sends a node that ran
   // for four minutes, wrote its work and then met an expired credential to the barrier

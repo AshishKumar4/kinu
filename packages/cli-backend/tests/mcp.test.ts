@@ -32,6 +32,7 @@ function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
     modelId: 'fake-model',
     doStream: async (options) => {
       sink((options.tools ?? []).map((t) => t.name));
+
       return {
         stream: new ReadableStream({
           start(controller) {
@@ -62,14 +63,18 @@ function sessionWithModel(model: LanguageModel) {
   // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+
   const rt = createCLIRuntime(db, {
     dbPath: db.filename,
     llm: DUMMY_LLM,
   });
+
   const events: SessionEvent[] = [];
+
   const session = new LocalAgentSession({
     rt, db, model, onEvent: (e) => events.push(e), noAutoEvolve: true,
   });
+
   return { session, events };
 }
 
@@ -81,6 +86,7 @@ describe('connectMcpServers', () => {
     // (`tool_<nanoid>_<name>`) on one side and the server name on the other
     // makes no reference to an MCP tool portable.
     const conn = await connectMcpServers(mcpServers());
+
     try {
       expect(conn.descriptors.map((d) => d.toolKey)).toEqual(
         [mcpToolKey('echo', 'echo'), mcpToolKey('echo', 'slow'), mcpToolKey('echo', 'huge')],
@@ -101,6 +107,7 @@ describe('connectMcpServers', () => {
     const conn = await connectMcpServers({
       echo: { command: 'node', args: [fixtureServer] },
     });
+
     try {
       await expect(conn.call('echo', 'slow', { ms: 6_000 })).resolves.toBe('slept 6000ms');
     } finally {
@@ -112,6 +119,7 @@ describe('connectMcpServers', () => {
     const conn = await connectMcpServers({
       echo: { command: 'node', args: [fixtureServer] },
     });
+
     try {
       const stop = new AbortController();
       const running = conn.call('echo', 'slow', { ms: 30_000 }, stop.signal);
@@ -128,6 +136,7 @@ describe('connectMcpServers', () => {
   test('connects to a stdio MCP server, lists tools, and proxies a call', async () => {
     const logs: string[] = [];
     const conn = await connectMcpServers(mcpServers(), (msg) => logs.push(msg));
+
     try {
       expect(conn.descriptors.map((d) => d.toolKey))
         .toEqual(['mcp_echo_echo', 'mcp_echo_slow', 'mcp_echo_huge']);
@@ -146,6 +155,7 @@ describe('LocalAgentSession MCP surface', () => {
   test.each([false, true])('MCP isError=%s determines the native SDK outcome, not content fields', async (fail) => {
     const text = '{"reason":"denied","error":"historical incident"}';
     let step = 0;
+
     const model = scriptedTurnModel({ doGenerate: () => ({
       content: ++step === 1
         ? [{ type: 'tool-call', toolCallId: 'mcp-outcome', toolName: 'mcp_echo_echo', input: JSON.stringify({ text, fail }) }]
@@ -154,11 +164,14 @@ describe('LocalAgentSession MCP surface', () => {
       usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined }, outputTokens: { total: 1, text: 1, reasoning: undefined } },
       warnings: [],
     }) });
+
     const { session, events } = sessionWithModel(model);
+
     try {
       await session.connectMcp(mcpServers());
       await session.send('Call the MCP tool.');
       const result = events.find((event) => event.type === 'tool-result' && event.toolName === 'mcp_echo_echo');
+
       if (fail) {
         expect(result).toMatchObject({ success: false, reason: null, result: expect.stringContaining('remote failure') });
         expect(result).not.toHaveProperty('execution');
@@ -171,6 +184,7 @@ describe('LocalAgentSession MCP surface', () => {
   test('connected MCP tools appear in /tools and in the next model turn', async () => {
     let captured: string[] = [];
     const { session } = sessionWithModel(capturingModel((tools) => { captured = tools; }));
+
     try {
       await session.connectMcp(mcpServers());
       expect(session.toolNames()).toContain('mcp_echo_echo');
@@ -183,6 +197,7 @@ describe('LocalAgentSession MCP surface', () => {
     }
   });
 });
+
 describe('LocalAgentSession MCP admission', () => {
   test('a tool larger than the session step allocation is deferred with its arithmetic', async () => {
     // The fixture's `huge` tool carries ~300KB of description and ~300KB of
@@ -191,6 +206,7 @@ describe('LocalAgentSession MCP admission', () => {
     // admission: the turn carried all 600KB and nothing reported a bound.
     let captured: string[] = [];
     const { session, events } = sessionWithModel(capturingModel((tools) => { captured = tools; }));
+
     try {
       await session.connectMcp(mcpServers());
       expect(session.toolNames()).toContain('mcp_echo_echo');
@@ -201,11 +217,13 @@ describe('LocalAgentSession MCP admission', () => {
       expect(captured).not.toContain('mcp_echo_huge');
 
       const deferrals: string[] = [];
+
       for (const e of events) {
         if (e.type === 'background' && e.event === 'mcp' && e.message.includes('deferred')) {
           deferrals.push(e.message);
         }
       }
+
       expect(deferrals).toHaveLength(1);
       expect(deferrals[0]).toContain('mcp: echo deferred:');
       // The arithmetic the admission reports: what did not fit, out of what.
@@ -221,6 +239,7 @@ describe('LocalAgentSession MCP admission', () => {
     // same servers: admission sorts by (server, tool) name, not by the config
     // object's key order. `zulu` is configured first here and must still lose.
     const { session } = sessionWithModel(capturingModel(() => {}));
+
     try {
       await session.connectMcp({
         zulu: { command: 'node', args: [fixtureServer] },

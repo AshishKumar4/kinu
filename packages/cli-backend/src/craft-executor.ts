@@ -49,17 +49,22 @@ export function createNodeCraftedExecute(): CraftedToolExecute {
       const fn = v.parse(v.function_(), factory());
       compiled = async (arg) => {
         const result = await fn(arg);
+
         return result === undefined ? undefined : decodeJsonValue({ value: result });
       };
+
       compiledFor = tool.code;
+
       return compiled;
     };
 
     const execute: CraftedToolExecuteFn = async (arg) => {
       requireBuild('Native crafted code without a constrained runtime');
       const fn = ensure();
+
       return fn(arg);
     };
+
     return execute;
   };
 }

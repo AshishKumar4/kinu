@@ -48,11 +48,15 @@ export function adaptMemory(
     append: (path, content) => store.appendToFile(path, content),
     async index(path) {
       const content = await store.readFile(path);
+
       if (!content) return;
       const delta = await store.indexFile(path, content);
+
       if (!vectorStore.available) return;
+
       try {
         if (delta.deletedIds.length > 0) await vectorStore.deleteChunks(delta.deletedIds);
+
         if (delta.upserted.length > 0) await vectorStore.upsertChunks(delta.upserted);
       } catch (err) {
         diagnostics.failure('memory.vector_sync_failed', toKinuError({
@@ -87,10 +91,12 @@ export async function backfillMemoryVectors(
   cap: number = MEMORY_VECTOR_BACKFILL_CAP,
 ): Promise<void> {
   if (!vectorStore.available) return;
+
   if (config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillDone) === 'true') return;
 
   const cursor = config.get(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor) ?? '';
   let chunks: IndexedChunk[];
+
   try {
     chunks = store.allChunksAfter(cursor, cap);
   } catch (err) {
@@ -99,10 +105,13 @@ export async function backfillMemoryVectors(
       cause: err,
       otherwise: 'io',
     }), { cursor });
+
     return;
   }
+
   if (chunks.length === 0) {
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
+
     return;
   }
 
@@ -118,10 +127,12 @@ export async function backfillMemoryVectors(
       cause: err,
       otherwise: 'unavailable',
     }), { cursor, chunks: chunks.length });
+
     return;
   }
 
   config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillCursor, chunks[chunks.length - 1].id);
+
   if (chunks.length < cap) {
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
   }

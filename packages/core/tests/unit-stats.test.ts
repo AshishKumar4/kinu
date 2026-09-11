@@ -41,8 +41,10 @@ describe('wilsonInterval — hand-checked against published values', () => {
   test('the half-widths the budgets were chosen against, at p = 0.5', () => {
     const halfWidth = (n: number) => {
       const i = wilsonInterval(n / 2, n);
+
       return (i.hi - i.lo) / 2;
     };
+
     expect(halfWidth(6)).toBeCloseTo(0.312, 3);
     expect(halfWidth(8)).toBeCloseTo(0.285, 3);
     expect(halfWidth(16)).toBeCloseTo(0.220, 3);

@@ -92,6 +92,7 @@ export function createBranchSpawner(
         + 'database is in-memory, so no second process can reach it.',
       );
     }
+
     const binding = registerLocalActor(config.parent, { name: explorationActorKey(branchId), creationId: branchId, kind: 'branch', lifetime: 'task' });
 
     // Locate the worker script relative to this file
@@ -108,6 +109,7 @@ export function createBranchSpawner(
       KINU_ROOT_DB: rootDbPath,
       KINU_ACTOR_BOOTSTRAP: JSON.stringify(localActorProcessBootstrap(config.parent, binding)),
     };
+
     if (config.codexConfigPath) env.KINU_CONFIG_PATH = config.codexConfigPath;
 
     const child = fork(workerPath, [], {
@@ -116,11 +118,13 @@ export function createBranchSpawner(
       env,
       // No execArgv needed — when running under bun, fork() inherits bun's runtime
     });
+
     activeBranches.set(branchId, child);
     const exited = Promise.withResolvers<void>();
     let nextId = 1;
     const pending = new Map<number, PendingCall>();
     const startup = Promise.withResolvers<void>();
+
     const failEveryCall = (error: Error): void => {
       for (const waiter of pending.values()) waiter.reject(error);
       pending.clear();
@@ -131,27 +135,37 @@ export function createBranchSpawner(
     // exactly the wait with its id.
     const onMessage = (raw: JsonValue): void => {
       const parsed = v.safeParse(BranchReplySchema, raw);
+
       if (!parsed.success) {
         diagnostics.failure('branch.reply_malformed', new KinuError(
           'bad_input',
           `branch worker sent a reply outside the protocol: ${parsed.issues.map((issue) => issue.message).join('; ')}`,
         ));
         failEveryCall(new Error('Branch worker sent a malformed reply'));
+
         return;
       }
+
       const reply = parsed.output;
+
       if (reply.method === BRANCH_READY) {
         startup.resolve();
+
         return;
       }
+
       const waiter = pending.get(reply.id);
+
       if (!waiter) {
         diagnostics.event('branch.reply_unmatched', { id: reply.id, method: reply.method });
+
         return;
       }
+
       pending.delete(reply.id);
       waiter.resolve(reply);
     };
+
     child.on('message', onMessage);
     // `error` fires for a spawn that failed and for a send the closed channel
     // refused; either way nothing pending can be answered. Settling an
@@ -167,14 +181,17 @@ export function createBranchSpawner(
     // cause, not timekeeping.
     child.once('exit', (code) => {
       child.off('message', onMessage);
+
       if (activeBranches.get(branchId) === child) activeBranches.delete(branchId);
       exited.resolve();
       startup.reject(code === 0 || code === null
         ? new Error('Branch worker exited before sending ready')
         : new Error(`Branch worker exited with code ${code}`));
+
       for (const waiter of pending.values()) {
         waiter.reject(new Error(`Branch worker exited before answering ${waiter.method}`));
       }
+
       pending.clear();
     });
 
@@ -187,8 +204,10 @@ export function createBranchSpawner(
       const { promise, resolve, reject } = Promise.withResolvers<BranchCallReply>();
       pending.set(id, { method, resolve, reject });
       child.send({ method, id, args });
+
       return promise;
     };
+
     // The ONLY thing a branch owns outside the workspace's database: its own
     // OS process. Retiring the actor row and ending the process that holds it
     // are one act, so both arms below present the same teardown — and it is
@@ -197,6 +216,7 @@ export function createBranchSpawner(
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
       await exited.promise;
     };
+
     try {
       await startup.promise;
     } catch (error) {
@@ -220,8 +240,10 @@ export function createBranchSpawner(
 
   const abort: AbortBranch = async (branchId: string, _reason?: string) => {
     const child = activeBranches.get(branchId);
+
     if (child) {
       child.kill('SIGTERM');
+
       if (activeBranches.get(branchId) === child) activeBranches.delete(branchId);
     }
   };
@@ -238,7 +260,9 @@ export function createBranchSpawner(
  */
 function resultOf(reply: BranchCallReply, method: BranchMethod): BranchExploration {
   if ('error' in reply) throw new Error(reply.error || `Branch worker failed ${method} without a message`);
+
   if (reply.method !== method) throw new Error(`Branch worker answered ${method} with ${reply.method}`);
+
   return reply.result;
 }
 

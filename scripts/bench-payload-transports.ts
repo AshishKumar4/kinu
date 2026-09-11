@@ -68,7 +68,9 @@ import type { HarnessResult, SetupReply } from './fixtures/payload-transport/wir
 import { summarize } from './fixtures/r2-bench/stats';
 
 const ROOT = dirname(dirname(new URL(import.meta.url).pathname));
+
 const FIXTURE_DIR = join(ROOT, 'scripts/fixtures/payload-transport');
+
 const ARTIFACT_ROOT = join(ROOT, 'bench-artifacts/payload-transport');
 
 const log = (message: string): void => {
@@ -104,6 +106,7 @@ const FixtureConfigSchema = v.looseObject({
 /** The image tag this instrument pins, read from its own wrangler config. */
 function fixtureConfig(): v.InferOutput<typeof FixtureConfigSchema> {
   const stripped = readFileSync(join(FIXTURE_DIR, 'wrangler.jsonc'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+
   return v.parse(FixtureConfigSchema, JSON.parse(stripped));
 }
 
@@ -135,13 +138,18 @@ export function withAuthoritativeBucket(
 function options(argv: readonly string[]): Options {
   const value = (name: string): string | undefined => {
     const index = argv.indexOf(name);
+
     return index < 0 ? undefined : argv[index + 1];
   };
+
   const number = (name: string, fallback: number): number => {
     const parsed = Number(value(name) ?? fallback);
+
     if (!Number.isSafeInteger(parsed) || parsed < 1) throw new Error(`${name} must be a positive integer`);
+
     return parsed;
   };
+
   return {
     plan: !argv.includes('--run'),
     reps: number('--reps', 3),
@@ -186,8 +194,10 @@ async function call<TSchema extends v.GenericSchema>(
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(3_600_000),
   });
+
   const text = await response.text();
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(text);
   } catch (error) {
@@ -195,12 +205,16 @@ async function call<TSchema extends v.GenericSchema>(
       cause: error,
     });
   }
+
   const object = v.parse(JsonObjectSchema, decoded);
+
   if (object['error'] !== undefined) {
     throw new Error(`${route}: ${v.parse(v.string(), object['error'])}`);
   }
+
   return v.parse(schema, object);
 }
+
 /**
  * How many consecutive probes must report the SAME running version before any
  * measurement is accepted, and how far apart they are spaced.
@@ -219,7 +233,9 @@ async function call<TSchema extends v.GenericSchema>(
  * one `wrangler secret put`, which is seconds.
  */
 const SETTLE_PROBES = 6;
+
 const SETTLE_GAP_MS = 3_000;
+
 const SETTLE_DEADLINE_MS = 420_000;
 
 /**
@@ -243,8 +259,10 @@ async function awaitDeploymentSettled(origin: string, token: string): Promise<st
   let stable = 0;
   let seen: string | null = null;
   let lastDisturbance = 'none observed';
+
   for (;;) {
     let reported: string | null;
+
     try {
       reported = (await call(origin, token, '/version', VersionReplySchema)).version;
     } catch (error) {
@@ -254,10 +272,12 @@ async function awaitDeploymentSettled(origin: string, token: string): Promise<st
       stable = 0;
       seen = null;
       reported = null;
+
       if (Date.now() >= deadline) break;
       await delay(SETTLE_GAP_MS);
       continue;
     }
+
     if (reported === null) {
       throw new Error(
         'the fixture cannot report which Worker version it is running, so a rollout '
@@ -265,17 +285,21 @@ async function awaitDeploymentSettled(origin: string, token: string): Promise<st
         + 'measuring across one. Expected the version_metadata binding CF_VERSION_METADATA.',
       );
     }
+
     if (reported === seen) {
       stable += 1;
+
       if (stable >= SETTLE_PROBES) return reported;
     } else {
       if (seen !== null) lastDisturbance = `version moved ${seen} → ${reported}`;
       seen = reported;
       stable = 1;
     }
+
     if (Date.now() >= deadline) break;
     await delay(SETTLE_GAP_MS);
   }
+
   throw new Error(
     `the deployment was still moving after ${String(Math.round(SETTLE_DEADLINE_MS / 1000))} s `
     + `(${String(stable)}/${String(SETTLE_PROBES)} consecutive quiet probes; last disturbance: `
@@ -285,17 +309,20 @@ async function awaitDeploymentSettled(origin: string, token: string): Promise<st
 
 async function setupFixture(origin: string, token: string): Promise<SetupReply> {
   let lastFailure = 'setup was not attempted';
+
   for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
       return await call(origin, token, '/setup', SetupReplySchema);
     } catch (error) {
       lastFailure = renderThrownChain({ cause: error });
+
       if (attempt < 4) {
         log(`setup attempt ${attempt} failed: ${lastFailure}`);
         await delay(attempt * 15_000);
       }
     }
   }
+
   throw new Error(`setup failed after four attempts: ${lastFailure}`);
 }
 
@@ -315,6 +342,7 @@ async function runOperation(
     OperationStartReplySchema,
     { operationId, kind, ...spec },
   );
+
   for (;;) {
     const poll = await call(
       origin,
@@ -323,18 +351,22 @@ async function runOperation(
       OperationPollReplySchema,
       { operationId },
     );
+
     if (poll.exitCode === null) {
       const settle = Promise.withResolvers<void>();
       setTimeout(settle.resolve, 500);
       await settle.promise;
       continue;
     }
+
     if (poll.exitCode !== 0) {
       throw new Error(`operation ${operationId} exited ${poll.exitCode}`);
     }
+
     if (poll.results === undefined) {
       throw new Error(`operation ${operationId} completed without result evidence`);
     }
+
     return poll.results;
   }
 }
@@ -345,12 +377,15 @@ interface SeededFile {
   readonly sizeBytes: number;
   readonly sha256: string;
 }
+
 function requiredSeed(
   seeded: ReadonlyMap<PayloadSizeMiB, SeededFile>,
   sizeMiB: PayloadSizeMiB,
 ): SeededFile {
   const found = seeded.get(sizeMiB);
+
   if (found === undefined) throw new Error(`seed evidence omitted ${sizeMiB} MiB`);
+
   return found;
 }
 
@@ -358,6 +393,7 @@ function singleResult(results: readonly HarnessResult[], operationId: string): H
   if (results.length !== 1 || results[0] === undefined) {
     throw new Error(`${operationId} returned ${results.length} results, expected one`);
   }
+
   return results[0];
 }
 
@@ -375,6 +411,7 @@ function seedEvidence(result: HarnessResult, sizeMiB: PayloadSizeMiB): SeedEvide
   if (result.bytes === undefined || result.sha256 === undefined) {
     throw new Error(`seed ${sizeMiB} MiB returned incomplete evidence`);
   }
+
   return { sizeBytes: result.bytes, sha256: result.sha256 };
 }
 
@@ -382,6 +419,7 @@ function measuredEvidence(result: HarnessResult, operationId: string): MeasuredE
   if (result.ms === undefined || result.sha256 === undefined) {
     throw new Error(`${operationId} returned incomplete measurement evidence`);
   }
+
   return { wallMs: result.ms, sha256: result.sha256 };
 }
 
@@ -391,16 +429,21 @@ function availability(keysPresent: boolean): Availability[] {
   // The arm list comes from PAYLOAD_ARMS, so a new arm defaults to credentialed
   // rather than silently joining the keyless set.
   const KEYLESS_ARMS = { 'do-base64': true, 'loopback-entrypoint': true } satisfies Partial<Record<PayloadArmId, true>>;
+
   if (!keysPresent) {
     return PAYLOAD_ARMS.map((arm) => arm in KEYLESS_ARMS
       ? { arm, available: true }
       : { arm, available: false, reason: absent });
   }
+
   return PAYLOAD_ARMS.map((arm) => ({ arm, available: true }));
 }
+
 function availabilityFor(rows: readonly Availability[], arm: PayloadArmId): Availability {
   const found = rows.find((row) => row.arm === arm);
+
   if (found === undefined) throw new Error(`availability omitted ${arm}`);
+
   return found;
 }
 
@@ -424,9 +467,12 @@ function planText(identity: RunIdentity, opts: Options): string {
  *  the same binding the fixture declares. */
 function fixtureBucketBinding(): string {
   const binding = fixtureConfig().r2_buckets?.[0]?.binding;
+
   if (binding === undefined) throw new Error('payload-transport fixture declares no R2 bucket binding');
+
   return binding;
 }
+
 function configFor(identity: RunIdentity): string {
   return JSON.stringify({
     ...fixtureConfig(),
@@ -444,13 +490,16 @@ async function main(): Promise<number> {
   const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
   const r2KeysPresent = r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined;
   const availabilityRows = availability(r2KeysPresent);
+
   if (!isValidResourceName(identity.workerName) || !isValidResourceName(identity.bucketName)) {
     throw new Error(configuredBucketName === undefined
       ? 'generated resource names are illegal'
       : 'PAYLOAD_BENCH_BUCKET_NAME is illegal');
   }
+
   if (opts.plan) {
     process.stdout.write(`${planText(identity, opts)}\n`);
+
     return 0;
   }
 
@@ -489,6 +538,7 @@ async function main(): Promise<number> {
   const teardown = async (): Promise<void> => {
     let inventoryProof: { readonly objects: number; readonly bytes: number } | undefined;
     let inventoryFailure: string | undefined;
+
     if (origin !== null) {
       try {
         await call(origin, token, '/purge', PurgeReplySchema);
@@ -502,6 +552,7 @@ async function main(): Promise<number> {
     // Worker still exists. Before a successful deploy there is no runtime/DO
     // to destroy; account-side application absence is the cleanup oracle.
     const destroyFailures: string[] = [];
+
     if (origin !== null) {
       for (const attempt of [1, 2] as const) {
         try {
@@ -516,24 +567,30 @@ async function main(): Promise<number> {
 
     const bucketProofs: boolean[] = [];
     const releasePasses: boolean[] = [];
+
     for (let pass = 1; pass <= 2; pass += 1) {
       let appOk = false;
       let appDetail = '';
+
       try {
         deleteContainerApps(ROOT, [containerApp], log);
+
         for (let poll = 0; poll < 6; poll += 1) {
           if (containerAppIds(ROOT, [containerApp], log).length === 0) {
             appOk = true;
             break;
           }
+
           await delay(10_000);
         }
+
         appDetail = appOk
           ? `listing confirms absent (pass ${pass})`
           : `still listed after 6 polls (pass ${pass})`;
       } catch (error) {
         appDetail = `container listing failed (pass ${pass}): ${renderThrownChain({ cause: error })}`;
       }
+
       const runtimeOk = destroyFailures.length === 0;
       cleanup.push({
         gate: 'container-application-absent',
@@ -547,6 +604,7 @@ async function main(): Promise<number> {
         identity.workerName,
         log,
       );
+
       cleanup.push({
         gate: 'fixture-worker-absent',
         ok: workerOk,
@@ -564,6 +622,7 @@ async function main(): Promise<number> {
 
       let localOk = true;
       let localDetail = `release pass ${pass} cleared generated config and durable ledger`;
+
       try {
         rmSync(configPath, { force: true });
         rmSync(ledgerPath, { force: true });
@@ -571,6 +630,7 @@ async function main(): Promise<number> {
         localOk = false;
         localDetail = `release pass ${pass}: ${renderThrownChain({ cause: error })}`;
       }
+
       cleanup.push({ gate: 'local-material-cleared', ok: localOk, detail: localDetail });
       releasePasses.push(appOk && runtimeOk && workerOk && bucketOk && localOk);
     }
@@ -578,6 +638,7 @@ async function main(): Promise<number> {
     const inventoryEmpty = inventoryProof !== undefined
       && inventoryProof.objects === 0
       && inventoryProof.bytes === 0;
+
     const deletionProvedEmpty = bucketProofs.length === 2 && bucketProofs.every(Boolean);
     cleanup.push({
       gate: 'bucket-state-empty',
@@ -599,25 +660,31 @@ async function main(): Promise<number> {
       detail: 'second release pass re-ran every route and re-polled the account listing',
     });
   };
+
   publishTeardown(teardown);
 
   try {
     if (wrangler(['whoami'], true).startsWith(WRANGLER_FAILED)) throw new Error('wrangler is not authenticated');
+
     // A named bucket is provisioned outside this driver; it remains the only
     // candidate and follows the same strict two-pass cleanup as generated runs.
     if (configuredBucketName === undefined) {
       wrangler(['r2', 'bucket', 'create', identity.bucketName]);
     }
+
     // Deploy NON-SECRET vars only. Bearer token and parent R2 credentials are
     // injected afterwards through stdin-only `wrangler secret put` — never as
     // command arguments, never into the generated config.
     const deployed = wrangler(['deploy', '--config', configPath, '--var', `ACCOUNT_ID:${accountId(ROOT)}`, '--var', `BUCKET_NAME:${identity.bucketName}`]);
     putSecret('BENCH_TOKEN', token, configPath);
+
     if (r2AccessKeyId !== undefined && r2SecretAccessKey !== undefined) {
       putSecret('R2_ACCESS_KEY_ID', r2AccessKeyId, configPath);
       putSecret('R2_SECRET_ACCESS_KEY', r2SecretAccessKey, configPath);
     }
+
     origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(deployed)?.[0] ?? null;
+
     if (origin === null) throw new Error('wrangler deploy returned no workers.dev origin');
     await awaitTokenAccepted(origin, token, '/shape', log);
     // DEPLOYMENT QUIESCENCE, proven before the container is even prepared: the
@@ -631,7 +698,9 @@ async function main(): Promise<number> {
     // censors the whole run as an infrastructure failure; it is never data.
     imageObserved = setup.imageVersion;
     const verdict = judgeImage(pinnedImage(), imageObserved);
+
     if (verdict.kind === 'unknown') throw new Error(`could not verify the running container image (pinned ${pinnedImage()}); censoring the run`);
+
     if (verdict.kind === 'stale') throw new Error(`stale container image: running ${verdict.observed}, pinned ${verdict.pinned}; censoring the run`);
     log(`image verified: ${verdict.observed}`);
     const liveOrigin = origin;
@@ -641,33 +710,42 @@ async function main(): Promise<number> {
       path: `/tmp/payload-bench/payload-${sizeMiB}.bin`,
       sizeMiB,
     }));
+
     const seededResults = await runOperation(origin, token, `seed-${identity.runId}`, 'seed', {
       files: JSON.stringify(seedFiles),
       seed: opts.seed,
     });
+
     if (seededResults.length !== PAYLOAD_SIZES_MIB.length) {
       throw new Error(`seed operation returned ${seededResults.length} results`);
     }
+
     const seeded = new Map<PayloadSizeMiB, SeededFile>();
+
     for (const [index, sizeMiB] of PAYLOAD_SIZES_MIB.entries()) {
       const result = seededResults[index];
+
       if (result === undefined) throw new Error(`seed result ${index} is absent`);
       const evidence = seedEvidence(result, sizeMiB);
+
       const file = {
         path: `/tmp/payload-bench/payload-${sizeMiB}.bin`,
         sizeMiB,
         ...evidence,
       };
+
       seeded.set(sizeMiB, file);
       log(`seeded ${sizeMiB} MiB → ${evidence.sha256.slice(0, 12)}…`);
     }
 
     const idleLatencies: number[] = [];
+
     for (let i = 0; i < 20; i += 1) {
       const started = Date.now();
       await fetch(`${origin}/control`, { method: 'POST', headers: { authorization: `Bearer ${token}` }, body: '{}' });
       idleLatencies.push(Date.now() - started);
     }
+
     controlRpc.push({ phase: 'idle', arm: null, latency: summarize(idleLatencies) });
 
     const independentChecks: { cell: Cell; key: string; file: SeededFile }[] = [];
@@ -681,6 +759,7 @@ async function main(): Promise<number> {
     ): Promise<Cell> => {
       const base = { arm, op, sizeMiB: file.sizeMiB, rep };
       const available = availabilityFor(availabilityRows, arm);
+
       if (!available.available) {
         return {
           ...base,
@@ -690,8 +769,10 @@ async function main(): Promise<number> {
           wallMs: null,
         };
       }
+
       const key = `payload/${keySuffix}`;
       const operationId = `${identity.runId}-${arm}-${op}-${rep}-${keySuffix.length}`;
+
       try {
         if (arm === 'do-base64') {
           const result = await call(
@@ -701,21 +782,27 @@ async function main(): Promise<number> {
             HarnessResultSchema,
             { file: file.path, key, op },
           );
+
           const measured = measuredEvidence(result, operationId);
+
           return judge(base, file, key, measured, 'owner-do');
         }
+
         if (arm === 'loopback-entrypoint') {
           // The binding literal matches the fixture's mountBucket call; both are
           // pinned by payload-transport.test.ts, which fails when either moves.
           const url = `http://r2.internal/BACKUP_BUCKET/${key}`;
+
           const result = singleResult(
             await runOperation(liveOrigin, token, operationId, 'transfer', {
               mode: 'loopback', file: file.path, url, op,
             }),
             operationId,
           );
+
           return judge(base, file, key, measuredEvidence(result, operationId), 'container');
         }
+
         if (arm === 'presigned-r2') {
           const grant = await call(
             liveOrigin,
@@ -724,6 +811,7 @@ async function main(): Promise<number> {
             PresignReplySchema,
             { key, op },
           );
+
           if (!grant.available) {
             return {
               ...base,
@@ -733,12 +821,14 @@ async function main(): Promise<number> {
               wallMs: null,
             };
           }
+
           const result = singleResult(
             await runOperation(liveOrigin, token, operationId, 'transfer', {
               mode: 'direct', file: file.path, url: grant.opaque, op,
             }),
             operationId,
           );
+
           return judge(
             base,
             file,
@@ -748,6 +838,7 @@ async function main(): Promise<number> {
             grant.fingerprint,
           );
         }
+
         const credentials = await call(
           liveOrigin,
           token,
@@ -755,6 +846,7 @@ async function main(): Promise<number> {
           TemporaryCredentialsReplySchema,
           { prefix: 'payload/' },
         );
+
         if (!credentials.available) {
           return {
             ...base,
@@ -764,6 +856,7 @@ async function main(): Promise<number> {
             wallMs: null,
           };
         }
+
         const result = singleResult(
           await runOperation(liveOrigin, token, operationId, 'transfer', {
             mode: 'sigv4',
@@ -777,6 +870,7 @@ async function main(): Promise<number> {
           }),
           operationId,
         );
+
         return judge(
           base,
           file,
@@ -813,16 +907,20 @@ async function main(): Promise<number> {
               timedBy,
               reason: 'in-container verification disagreed with the seeded digest',
             };
+
         if (grantFingerprint !== undefined) cell.grantFingerprint = grantFingerprint;
+
         if (cell.status === 'ok' && cellBase.op === 'put') {
           independentChecks.push({ cell, key: objectKey, file: seededFile });
         }
+
         return cell;
       }
     };
 
     for (const arm of PAYLOAD_ARMS) {
       if (!availabilityFor(availabilityRows, arm).available) continue;
+
       for (const sizeMiB of PAYLOAD_SIZES_MIB) {
         const file = requiredSeed(seeded, sizeMiB);
         // This is an observed pre-sample, not a retry: its pair gets a unique
@@ -831,15 +929,20 @@ async function main(): Promise<number> {
         const warmupRep = opts.reps;
         const warmupPut = await runCell(arm, 'put', file, warmupRep, warmupKey);
         warmups.push(warmupPut);
+
         if (warmupPut.status !== 'ok') {
           throw new Error(`warm-up PUT ${arm}/${sizeMiB}MiB failed: ${warmupPut.reason ?? warmupPut.status}`);
         }
+
         const warmupGet = await runCell(arm, 'get', file, warmupRep, warmupKey);
         warmups.push(warmupGet);
+
         if (warmupGet.status !== 'ok') {
           throw new Error(`warm-up GET ${arm}/${sizeMiB}MiB failed: ${warmupGet.reason ?? warmupGet.status}`);
         }
+
         log(`arm ${arm} ${sizeMiB} MiB warm-up done; excluded from rank samples`);
+
         for (let rep = 0; rep < opts.reps; rep += 1) {
           cells.push(await runCell(arm, 'put', file, rep, `put/${arm}/${sizeMiB}/${rep}`));
           cells.push(await runCell(arm, 'get', file, rep, `put/${arm}/${sizeMiB}/${rep}`));
@@ -858,6 +961,7 @@ async function main(): Promise<number> {
           ObjectVerificationReplySchema,
           { key: check.key },
         );
+
         if (verified.sha256 !== check.file.sha256 || verified.size !== check.file.sizeBytes) {
           check.cell.status = 'corrupt';
           check.cell.phase = 'failed';
@@ -876,15 +980,18 @@ async function main(): Promise<number> {
       const stop = { value: false };
       const loaded: number[] = [];
       let samplerFailure: string | undefined;
+
       const sampler = (async (): Promise<void> => {
         while (!stop.value) {
           const started = Date.now();
+
           try {
             const response = await fetch(`${liveOrigin}/control`, {
               method: 'POST',
               headers: { authorization: `Bearer ${token}` },
               body: '{}',
             });
+
             if (!response.ok) throw new Error(`control sample returned ${response.status}`);
             loaded.push(Date.now() - started);
           } catch (error) {
@@ -892,21 +999,26 @@ async function main(): Promise<number> {
             stop.value = true;
             break;
           }
+
           const settle = Promise.withResolvers<void>();
           setTimeout(settle.resolve, 150);
           await settle.promise;
         }
       })();
+
       const startedAt = Date.now();
       const contended = requiredSeed(seeded, CONCURRENCY_TIER_MIB);
+
       const results = await Promise.all(
         Array.from({ length: opts.concurrency }, (_, slot) =>
           runCell(arm, 'put', contended, 1000 + slot, `concurrent/${arm}/${slot}`)),
       );
+
       const wallMs = Date.now() - startedAt;
       stop.value = true;
       await sampler;
       const allOk = samplerFailure === undefined && results.every((cell) => cell.status === 'ok');
+
       if (allOk) {
         concurrencyRows.push({
           arm,
@@ -925,6 +1037,7 @@ async function main(): Promise<number> {
             ?? 'a concurrent transfer failed without a reason',
         });
       }
+
       controlRpc.push({ phase: 'loaded', arm, latency: summarize(loaded) });
     }
   } catch (error) {
@@ -934,6 +1047,7 @@ async function main(): Promise<number> {
   }
 
   const verdict = evaluateCleanup(cleanup);
+
   const planBase: Artifact['plan'] = {
     runId: identity.runId,
     workerName: identity.workerName,
@@ -945,9 +1059,11 @@ async function main(): Promise<number> {
     startedAt: new Date().toISOString(),
     imagePinned: pinnedImage(),
   };
+
   const plan: Artifact['plan'] = imageObserved === null
     ? planBase
     : { ...planBase, imageObserved };
+
   const artifact = validateArtifact({
     instrument: 'payload-transports',
     version: 1,
@@ -960,11 +1076,14 @@ async function main(): Promise<number> {
     verdicts: [...decideAll(cells)],
     cleanup: { steps: [...verdict.steps], residue: verdict.residue },
   });
+
   mkdirSync(dirname(artifactPath), { recursive: true });
   writeFileSync(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`);
   writeFileSync(artifactPath.replace(/\.json$/, '.md'), `${renderMarkdown(artifact)}\n`);
   log(`artifact written: ${artifactPath}`);
+
   if (failure !== null) log(`run failure: ${failure}`);
+
   return exitFor(failure, verdict);
 }
 

@@ -38,8 +38,11 @@ import { parseJsonc } from './jsonc';
  *  inspects rather than restated beside it: a second spelling of the id is how
  *  a query runs against one account while the deploy targets another. */
 const WRANGLER_CONFIG = new URL('../packages/cf-backend/wrangler.jsonc', import.meta.url).pathname;
+
 const WranglerRef = v.object({ account_id: v.string(), name: v.string() });
+
 const WRANGLER = parseJsonc(readFileSync(WRANGLER_CONFIG, 'utf8'), WranglerRef, 'wrangler.jsonc');
+
 const ACCOUNT = WRANGLER.account_id;
 
 interface Args {
@@ -52,17 +55,23 @@ interface Args {
 
 function parseArgs(argv: readonly string[]): Args {
   const mode = argv[0];
+
   if (mode !== 'live' && mode !== 'query') {
     throw new Error('usage: prod-logs.ts <live|query> [--worker kinu] [--seconds 120] [--since 6h] [--grep text]');
   }
+
   const opt = (name: string): string | null => {
     const at = argv.indexOf(`--${name}`);
+
     return at >= 0 && argv[at + 1] !== undefined ? argv[at + 1] : null;
   };
+
   const sinceRaw = opt('since') ?? '6h';
   const sinceMatch = /^(\d+)([hm])$/.exec(sinceRaw);
+
   if (sinceMatch === null) throw new Error(`--since takes 30m / 6h shapes, got ${sinceRaw}`);
   const sinceMs = Number(sinceMatch[1]) * (sinceMatch[2] === 'h' ? 3_600_000 : 60_000);
+
   return {
     mode,
     worker: opt('worker') ?? WRANGLER.name,
@@ -91,6 +100,7 @@ function linesOf(event: v.InferOutput<typeof TailEventSchema>): string[] {
   const out = (event.logs ?? []).map((lg) => {
     return `${lg.level ?? '?'} ${(lg.message ?? []).join(' ')}`;
   });
+
   return out.concat((event.exceptions ?? []).map((ex) => `EXCEPTION ${JSON.stringify(ex)}`));
 }
 
@@ -99,25 +109,32 @@ async function live(args: Args): Promise<void> {
     env: { ...process.env, CLOUDFLARE_ACCOUNT_ID: ACCOUNT },
     stdio: ['ignore', 'pipe', 'inherit'],
   });
+
   const stop = setTimeout(() => child.kill('SIGINT'), args.seconds * 1000);
   let buffer = '';
   child.stdout.on('data', (chunk: Buffer) => {
     buffer += chunk.toString();
     let brace = buffer.indexOf('\n');
+
     while (brace >= 0) {
       const line = buffer.slice(0, brace).trim();
       buffer = buffer.slice(brace + 1);
       brace = buffer.indexOf('\n');
+
       if (!line.startsWith('{')) continue;
       let raw: unknown;
+
       try {
         raw = JSON.parse(line);
       } catch (error) {
         if (!(error instanceof SyntaxError)) throw error; // JSON.parse's only throw
         continue; // a split frame; the remainder arrives with the next chunk
       }
+
       const event = v.safeParse(TailEventSchema, raw);
+
       if (!event.success) continue;
+
       for (const rendered of linesOf(event.output)) {
         if (args.grep === null || rendered.includes(args.grep)) console.log(rendered);
       }
@@ -128,8 +145,10 @@ async function live(args: Args): Promise<void> {
 
 async function query(args: Args): Promise<void> {
   const tokenFile = `${process.env['HOME']}/.config/kinu/obs-token`;
+
   const token = process.env['KINU_OBS_TOKEN']
     ?? (await Bun.file(tokenFile).exists() ? (await Bun.file(tokenFile).text()).trim() : undefined);
+
   if (token === undefined || token === '') {
     throw new Error(
       'historical queries need KINU_OBS_TOKEN, an API token with "Account > Workers '
@@ -137,7 +156,9 @@ async function query(args: Args): Promise<void> {
       + '2026-08-21). Mint once at dash.cloudflare.com -> My Profile -> API Tokens.',
     );
   }
+
   const now = Date.now();
+
   const response = await fetch(
     `https://api.cloudflare.com/client/v4/accounts/${ACCOUNT}/workers/observability/telemetry/query`,
     {
@@ -164,12 +185,16 @@ async function query(args: Args): Promise<void> {
       }),
     },
   );
+
   const body: unknown = await response.json();
+
   if (!response.ok) {
     throw new Error(`telemetry query answered ${response.status}: ${JSON.stringify(body).slice(0, 300)}`);
   }
+
   console.log(JSON.stringify(body, null, 1));
 }
 
 const args = parseArgs(process.argv.slice(2));
+
 await (args.mode === 'live' ? live(args) : query(args));

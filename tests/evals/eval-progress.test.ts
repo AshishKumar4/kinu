@@ -21,6 +21,7 @@ describe('an interrupted case is incomplete, never pass or fail', () => {
       outcome: 'incomplete',
       reason: 'cancelled by operator',
     };
+
     const assessed = assessAdmissibility(['cancelled-case'], [observation]);
 
     expect(assessed.scored).toBe(0);
@@ -55,6 +56,7 @@ describe('an interrupted case is incomplete, never pass or fail', () => {
       tokensOut: 20,
       ms: 5,
     };
+
     const unreachedRepetition: EvalObservation = {
       taskId: 'ran-once',
       repetition: 1,

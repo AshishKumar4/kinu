@@ -151,10 +151,13 @@ export class TerminalTransitions {
       now: deps.now,
       scheduleRetry: deps.scheduleRetry,
     };
+
     const withFault = deps.fault === undefined ? ledgerDeps : { ...ledgerDeps, fault: deps.fault };
+
     const withTransaction = deps.transaction === undefined
       ? withFault
       : { ...withFault, transaction: deps.transaction };
+
     this.ledger = new TerminalEffectLedger(withTransaction);
   }
 
@@ -181,6 +184,7 @@ export class TerminalTransitions {
   begin(transition: TerminalTransition | null): TerminalDisposition {
     if (transition === null) return 'unclaimed';
     const claim = claimToolEffect(this.deps.sql, this.deps.actor, this.key(transition));
+
     switch (claim.kind) {
       case 'claimed': return 'first';
       case 'indeterminate': return 'resumed';
@@ -194,8 +198,10 @@ export class TerminalTransitions {
    *  record. */
   enter(transition: TerminalTransition): boolean {
     const id = this.sequenceId(transition);
+
     if (this.inFlight.has(id)) return false;
     this.inFlight.add(id);
+
     return true;
   }
 
@@ -249,20 +255,25 @@ export class TerminalTransitions {
     // open claim with no rows behind it, because recovery reads an empty roster
     // as a finished one and closes over everything the response owed.
     const owed = declare();
+
     // No durable identity means no key to claim against — a response that never
     // opened on a persisted message. The sequence still has to run, so it runs
     // unledgered, and saying that is more honest than inventing an identity every
     // such response would share.
     if (transition === null) {
       await this.runUnledgered(owed);
+
       return;
     }
+
     if (!this.enter(transition)) {
       diagnostics.event('turn.terminal_transition_in_flight', {
         turn: transition.turnId, message: transition.messageId,
       });
+
       return;
     }
+
     // ONE COMMIT for the claim AND the roster it gates. Separately, a process
     // that died between them left an indeterminate claim with no rows — and a
     // recovery reads an empty roster as a finished turn, settles the claim, and
@@ -271,23 +282,32 @@ export class TerminalTransitions {
     // makes that loss silent rather than merely unlucky.
     const commit = this.deps.transaction ?? (<T>(body: () => T): T => body());
     let claimed: PendingRow[] = [];
+
     const disposition = commit(() => {
       const decided = this.begin(transition);
+
       if (decided === 'first') claimed = this.ledger.claim(this.sequenceId(transition), owed);
+
       return decided;
     });
+
     if (disposition === 'done') {
       this.leave(transition);
       diagnostics.event('turn.terminal_transition_replayed', {
         turn: transition.turnId, message: transition.messageId,
       });
+
       return;
     }
+
     if (disposition === 'resumed') {
       hold(transition, async () => { await this.resume(transition); });
+
       return;
     }
+
     let run: TerminalSequenceRun;
+
     try {
       run = await this.ledger.drive(this.sequenceId(transition), claimed);
     } catch (err) {
@@ -298,6 +318,7 @@ export class TerminalTransitions {
       await this.armRecovery(transition, { cause: err });
       throw err;
     }
+
     hold(transition, async () => {
       await run.reported;
       this.end(transition);
@@ -314,9 +335,12 @@ export class TerminalTransitions {
    */
   private async runUnledgered(owed: readonly OwedEffect[]): Promise<void> {
     const detached: Promise<void>[] = [];
+
     for (const effect of owed) {
       const body = this.deps.effects[effect.name];
+
       if (body === undefined) continue;
+
       const running = (async (): Promise<void> => {
         try {
           await body.run(effect.input, effect.scope);
@@ -328,9 +352,11 @@ export class TerminalTransitions {
           }), { sequence: '(unledgered)', effect: effect.name });
         }
       })();
+
       if (effect.lane === 'inline') await running;
       else detached.push(running);
     }
+
     await Promise.all(detached);
   }
 
@@ -354,16 +380,20 @@ export class TerminalTransitions {
     this.leave(transition);
     const sequenceId = this.sequenceId(transition);
     const owed = this.ledger.owed(sequenceId);
+
     if (owed.length > 0) {
       diagnostics.event('turn.terminal_effects_owed', {
         sequence: sequenceId, owed: owed.map((row) => row.key).join(','),
       });
+
       return;
     }
+
     // Disposition first, release second. Between the two the turn's answer is
     // already durable and its effects have already happened, so the only reader
     // that can arrive in between is a recovery — and it reads a settled row.
     settleToolEffect(this.deps.sql, this.deps.actor, this.key(transition), TERMINAL_TRANSITION_SETTLED);
+
     // The tool claims are released only once NO response of this durable turn
     // can still be settling. Transitions are per response and the close is
     // detached, so an auto-continuation's next response can already have claimed
@@ -377,6 +407,7 @@ export class TerminalTransitions {
       WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
         AND normalized_call_id LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}
         AND result_json IS NULL`[0]?.n ?? 0;
+
     // A live turn may still be MID-CONTINUATION: the next response can already
     // be executing tools under this turn id and will not have its own terminal
     // claim until it produces an answer, so an open-claim count of zero does not
@@ -386,6 +417,7 @@ export class TerminalTransitions {
         WHERE actor_id = ${this.deps.actor.actorId} AND turn_id = ${transition.turnId}
           AND normalized_call_id NOT LIKE ${`${TERMINAL_TRANSITION_CALL_ID}:%`}`;
     }
+
     this.ledger.prune(sequenceId);
   }
 
@@ -399,6 +431,7 @@ export class TerminalTransitions {
    */
   incomplete(): TerminalTransition[] {
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
+
     return this.deps.sql<{ turn_id: string; normalized_call_id: string }>`
       SELECT DISTINCT turn_id, normalized_call_id FROM tool_effect_claims
       WHERE actor_id = ${this.deps.actor.actorId}
@@ -413,6 +446,7 @@ export class TerminalTransitions {
    *  activation-time arm decision that must not materialize the roster. */
   hasIncomplete(): boolean {
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
+
     return this.deps.sql<{ present: number }>`
       SELECT 1 AS present FROM tool_effect_claims
       WHERE actor_id = ${this.deps.actor.actorId}
@@ -452,6 +486,7 @@ export class TerminalTransitions {
       // pass, snapshot the same pending row and invoke the same external effect
       // concurrently.
       if (!this.enter(transition)) continue;
+
       try {
         await this.resume(transition);
       } catch (err) {
@@ -488,16 +523,20 @@ export class TerminalTransitions {
    */
   async armOwedRecovery(): Promise<void> {
     const owed = this.incomplete();
+
     if (owed.length === 0) return;
     // The ledger's own instant when it has one, so a sequence mid-backoff is not
     // woken early only to defer itself again; the base delay otherwise, which is
     // what a claim with nothing owed behind it needs in order to be closed.
     const at = this.nextRetryAt() ?? this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS;
     const armed = await this.armWake(at);
+
     if (armed.armed) {
       diagnostics.event('turn.terminal_recovery_armed', { owed: owed.length, at });
+
       return;
     }
+
     diagnostics.failure('turn.terminal_recovery_unarmed', toKinuError({
       doing: 'arming the durable wake for the terminal sequences an interruption left owed',
       cause: armed.refusal,
@@ -528,6 +567,7 @@ export class TerminalTransitions {
     failure: { readonly cause: unknown },
   ): Promise<void> {
     const armed = await this.armWake(this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS);
+
     if (armed.armed) return;
     diagnostics.failure('turn.terminal_recovery_unarmed', toKinuError({
       doing: 'arming a durable wake for a terminal sequence whose ledger could not start',
@@ -545,14 +585,17 @@ export class TerminalTransitions {
    *  refusal differently, so the attempt is shared and the reporting is not. */
   private async armWake(atMs: number): Promise<{ armed: true } | { armed: false; refusal: unknown }> {
     let refusal: unknown;
+
     for (let attempt = 0; attempt < TERMINAL_RECOVERY_ARM_ATTEMPTS; attempt++) {
       try {
         await this.deps.scheduleRetry(atMs);
+
         return { armed: true };
       } catch (err) {
         refusal = err;
       }
     }
+
     return { armed: false, refusal };
   }
 
@@ -565,6 +608,7 @@ export class TerminalTransitions {
   async replayOwedAndRearm(): Promise<void> {
     await this.resumeAll();
     const next = this.nextRetryAt();
+
     if (next !== null) await this.deps.scheduleRetry(next);
   }
 }

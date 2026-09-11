@@ -273,6 +273,17 @@
     "PREVIEW_HOST_SUFFIX": "kinu.run",
     "CLI_PUBLIC_ORIGIN": "https://kinu.run",
     "CLI_APPROVAL_ORIGIN": "https://kinu.run",
+    // The eval service account: the one identity `DEV_IDENTITY_SECRET` buys.
+    // With one environment the first-run tier and the evals drive THIS worker,
+    // so the identity lives here. Two locks keep it from becoming authority:
+    // `authenticateRequest()` synthesizes it only for a request presenting the
+    // secret in `x-kinu-dev-identity`, and the admin gate refuses every
+    // `provider: 'dev'` identity regardless of CONTROL_PLANE_ADMINS
+    // (control-plane/admin-caller.ts). Every workspace it creates carries the
+    // eval prefix and is torn down by the run that made it, which is what keeps
+    // test debris out of the workspace list. Pinned as EVAL_SERVICE_EMAIL in
+    // packages/test-utils/src/eval-identity.ts.
+    "DEV_USER_EMAIL": "eval-service@kinu.run",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "edb106782fc08e60480306cf39411d90",
     // Scopes default to CLOUDFLARE_WORKERS_AI_SCOPES (lib/cloudflare-oauth.ts);
     // set CLOUDFLARE_OAUTH_SCOPES here only to override that one source.
@@ -427,209 +438,5 @@
   // RRF-merged FTS5 + Vectorize hits (384-dim to match the Workers AI embedder).
   "vectorize": [
     { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory" }
-  ],
-  // ── Staging environment: where tests and evals run ──────────────
-  //
-  // Nothing that measures this system may point at production. A test run and
-  // the owner working are otherwise the same event on the same account, and on
-  // 2026-08-20 that was not hypothetical: production held 28 workspaces of
-  // which 23 were test debris (22 `drill*` rows and one `settle-probe`), minted
-  // by harnesses driving the owner's signed-in session. So this environment is
-  // the eval plane, and `packages/test-utils/src/eval-identity.ts` refuses any
-  // other target unless KINU_EVAL_ALLOW_PROD=1 names the exception.
-  //
-  // Three things make it that, and each is pinned by a test in
-  // `packages/test-utils/tests/eval-identity.test.ts` so a rename here fails
-  // there rather than silently pointing the evals at a Worker that is gone:
-  //
-  //   * A DISTINCT WORKER NAME (`kinu-staging`), which is what gives it its own
-  //     Durable Object namespaces. Isolation is a consequence of the name, not
-  //     of a setting, so the name is the load-bearing part.
-  //   * ITS OWN STORES. Every stateful binding below differs from production's.
-  //     A shared one is a test writing into real data by another route — see
-  //     the R2 and Vectorize notes.
-  //   * `DEV_USER_EMAIL` set to the eval service account, naming the ONE
-  //     identity a caller may act as here without signing in. It names WHICH
-  //     identity, never that anyone may have it: off localhost,
-  //     `authenticateRequest()` (auth/session.ts) grants it only to a request
-  //     presenting the `DEV_IDENTITY_SECRET` secret in `x-kinu-dev-identity`.
-  //     Evals act as `eval-service` and never as a person, and a caller who
-  //     merely reaches staging.kinu.run acts as nobody. Set the secret with
-  //     `wrangler secret put DEV_IDENTITY_SECRET --env staging`; without it
-  //     this deployment grants no synthetic identity at all. Production must
-  //     leave both unset.
-  //
-  // Fully specified because wrangler inherits no bindings or vars into a named
-  // environment. Deploy: `wrangler deploy --env staging`.
-  //
-  // `staging.kinu.run` is a ROUTE, not a custom domain, and `workers_dev` is off.
-  // The route form is what makes precedence unambiguous against production's
-  // `*.kinu.run/*` preview wildcard: the most specific pattern wins, and an
-  // exact hostname is more specific than a wildcard. It needs a proxied DNS
-  // record for that name, created by hand — `custom_domain: true` would create
-  // the record for us but puts the two claims on different mechanisms whose
-  // relative precedence Cloudflare documents only for identical hostnames.
-  // workers.dev is off because a second origin on a worker that synthesizes an
-  // identity from DEV_USER_EMAIL is an auth bypass reachable at a guessable
-  // name — and with one origin the eval allowlist needs no workers.dev arm.
-  "env": {
-    "staging": {
-      "name": "kinu-staging",
-      "workers_dev": false,
-      "routes": [
-        { "pattern": "staging.kinu.run/*", "zone_name": "kinu.run" }
-      ],
-      "main": "src/server.ts",
-      "compatibility_date": "2025-12-01",
-      "compatibility_flags": ["nodejs_compat"],
-      // Spelled out here as well. `upload_source_maps` IS inheritable, unlike
-      // `observability` below, but this environment states every deployable key
-      // it depends on rather than reading the top of the file — and an
-      // environment whose stack traces cannot be read is where an eval failure
-      // becomes unexplainable.
-      "upload_source_maps": true,
-      // `traces` is a SEPARATE switch from `logs`, and wrangler does not inherit
-      // `observability` into a named environment — see the header. A bare
-      // `enabled: true` here governed logs only, so every span this Worker opened
-      // in staging reported isTraced false and was never recorded.
-      "observability": {
-        "logs": { "enabled": true, "head_sampling_rate": 1 },
-        "traces": { "enabled": true, "head_sampling_rate": 1 }
-      },
-      "worker_loaders": [{ "binding": "LOADER" }],
-      "assets": {
-        "directory": "dist/client",
-        "binding": "ASSETS",
-        "not_found_handling": "single-page-application",
-        "run_worker_first": true
-      },
-      "durable_objects": {
-        "bindings": [
-          { "class_name": "OrchestratorAgent", "name": "OrchestratorAgent" },
-          { "class_name": "UserDO", "name": "UserDO" },
-          { "class_name": "MonitorDO", "name": "MonitorDO" },
-          { "class_name": "KinuSandbox", "name": "Sandbox" },
-          { "class_name": "ControlPlaneDO", "name": "ControlPlaneDO" }
-        ]
-      },
-      // The same digest production runs, for the same reason and under the same
-      // gate — see the production `containers` block. An environment measuring
-      // the product on a different image measures a different product.
-      "containers": [
-        {
-          "class_name": "KinuSandbox",
-          "image": "docker.io/cloudflare/sandbox@sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f",
-          "max_instances": 5,
-          "instance_type": { "vcpu": 2, "memory_mib": 6144, "disk_mb": 8000 }
-        }
-      ],
-      // The same genesis migration as production, for the same reset: staging's
-      // old Worker is deleted (or renamed away) before this deploys, and the
-      // two environments stay one shape.
-      "migrations": [
-        {
-          "tag": "v1",
-          "new_sqlite_classes": [
-            "OrchestratorAgent", "KinuSandbox", "UserDO",
-            "MonitorDO", "ControlPlaneDO"
-          ]
-        }
-      ],
-      // No cron trigger and no OPS_ALERT_EMAIL here: staging has no OAuth
-      // providers and no mail route, so the probes would report a site that
-      // is missing on purpose. The class is registered so the two environments
-      // stay one shape.
-      // Staging has the binding for parity but no EMAIL_DOMAIN — the Mission
-      // Inbox stays off (no routing rule points here; outbound sends skip).
-      "send_email": [{ "name": "EMAIL" }],
-      // Spelled out here because `version_metadata` is NOT inherited — wrangler
-      // says so itself on a staging dry run ("exists at the top level, but not
-      // on env.staging"). Staging runs the same Durable Object code and writes
-      // the same durable turn claims, so without this binding every staging
-      // claim records its build as unknown while production names it.
-      "version_metadata": { "binding": "CF_VERSION_METADATA" },
-      "ai": { "binding": "AI" },
-      // Staging's OWN datasets. Analytics Engine datasets are account-scoped, so
-      // a shared name is an eval run writing into the numbers an operator reads —
-      // the same class of leak as the R2 and Vectorize notes below.
-      "analytics_engine_datasets": [
-        { "binding": "AGENT_METRICS", "dataset": "kinu_agent_metrics_staging" },
-        { "binding": "FEEDBACK_MARKERS", "dataset": "kinu_feedback_markers_staging" },
-        { "binding": "CONTROL_PLANE_OPS", "dataset": "kinu_control_plane_ops_staging" }
-      ],
-      // BACKUP_BUCKET is staging's OWN bucket. Pointing it at production's
-      // `kinu-backups` writes every /workspace snapshot an eval's sandbox takes
-      // into the bucket holding real users' archives — the same class of leak
-      // as running the evals against the production origin, by a route nobody
-      // is looking at.
-      //
-      // NIMBUS_RUNTIME_CACHE is deliberately still shared: a runtime artifact
-      // is content-addressed and immutable, so there is nothing to keep apart,
-      // and reading the same seeded blobs is what makes a staging `python3`
-      // prove the hosted path rather than a copy of it.
-      "r2_buckets": [
-        { "binding": "BACKUP_BUCKET", "bucket_name": "kinu-backups-staging" },
-        { "binding": "NIMBUS_RUNTIME_CACHE", "bucket_name": "nimbus-runtime-cache" },
-        { "binding": "FEEDBACK_BUCKET", "bucket_name": "kinu-feedback-staging" }
-      ],
-      // Staging's own memory index, at the 384 dimensions the Workers AI
-      // embedder produces. Production's index is NOT bound here: a shared one
-      // would put every eval episode's vectors into the corpus real searches
-      // read. Without a binding at all `runtime.ts` degrades to FTS5-only
-      // (buildVectorStore returns the noop), so staging would answer 200 while
-      // measuring a different retrieval path than production — the failure this
-      // environment exists to catch, not to have.
-      //
-      // Both stores are EMPTY AND NEW, never carried over from another
-      // deployment: rows keyed to userIds a different auth store assigned are
-      // orphans against the userIds this deployment assigns, and every one of
-      // them would skew a staging retrieval measurement.
-      "vectorize": [
-        { "binding": "MEMORY_VECTORS", "index_name": "kinu-memory-staging" }
-      ],
-      "kv_namespaces": [
-        { "binding": "AUTH_KV", "id": "c06cad3d9e2642258e80b4c4700e04be" }
-      ],
-      "vars": {
-        "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/kinu-ai-gateway/workers-ai/v1",
-        // Previews are off: they need a wildcard host per exposed port, and
-        // nothing under this origin serves one yet. `exposePort` tells the agent
-        // so rather than handing back a URL that cannot resolve; neither
-        // executor is disabled by it.
-        "PREVIEW_HOST_SUFFIX": "",
-        "CLI_PUBLIC_ORIGIN": "https://staging.kinu.run",
-        "CLI_APPROVAL_ORIGIN": "https://staging.kinu.run",
-        // The eval service account: the one identity `DEV_IDENTITY_SECRET`
-        // buys. Runs land on an account that holds nothing else, and
-        // `eval-service` in a workspace list is self-explaining. Pinned as
-        // EVAL_SERVICE_EMAIL in packages/test-utils/src/eval-identity.ts.
-        "DEV_USER_EMAIL": "eval-service@kinu.run",
-        // Same single choice as production — see the note on the production var.
-        "SANDBOX_TRANSPORT": "rpc",
-        // EMPTY, AND THIS IS THE LOAD-BEARING LINE IN THIS ENVIRONMENT.
-        // `DEV_USER_EMAIL` above resolves a secret-bearing request to one
-        // synthesized identity with a fresh auth time, so a non-empty allowlist
-        // here would hand full admin authority to whoever holds that secret.
-        // The admin gate independently refuses a `provider: 'dev'` identity, so
-        // this is the second of two locks rather than the only one — but it is
-        // the one a reader of this file can check.
-        //
-        // It is the THIRD lock as well, and the reason staging needs no
-        // Cloudflare Access application: with no operators, the two
-        // CONTROL_PLANE_ACCESS_* vars are not required here (`requiredIn` in
-        // scripts/infra-manifest.ts pairs them with a NON-EMPTY value of this
-        // one), and the admin surface stays disabled rather than half-gated.
-        // Filling this in for staging without also creating a staging Access
-        // application and setting both vars is refused by `bun run gate:infra`
-        // before the deploy — which is deliberate: the eval identity must never
-        // become an operator, on any environment.
-        "CONTROL_PLANE_ADMINS": "",
-        "CLOUDFLARE_ACCOUNT_ID": "f44999d1ddda7012e9a87729eba250f1",
-        // Staging binds its own `*_staging` datasets and shares production's
-        // account, so without this its metrics view would query — and present as
-        // its own — production's rows.
-        "ANALYTICS_DATASET_SUFFIX": "_staging"
-      }
-    }
-  }
+  ]
 }

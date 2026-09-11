@@ -102,47 +102,60 @@ function scaffoldStatusChangeAt(sql: SqlExecutor, actor: ActorHandle): Map<numbe
   // records both decisions with a timestamp — fold it in where present.
   const byVersion = new Map<number, number>();
   actor.assertCurrent();
+
   const rows = sql<{ type: string; payload: string; ts: string }>`
     SELECT type, payload, ts FROM run_events
     WHERE actor_id = ${actor.actorId}
       AND type IN ('scaffold_promotion', 'scaffold_rollback')`;
+
   for (const r of rows) {
     const at = Date.parse(r.ts);
+
     if (!Number.isFinite(at)) continue;
     // A payload written by an older shape is skipped and written_at stands;
     // that is the only failure here that is a value rather than a fault.
     const payload = tolerate(() => parseJsonValue(r.payload), 'malformed-input');
     const parsed = v.safeParse(ScaffoldRunEventSchema, payload);
+
     if (!parsed.success) continue;
+
     const version = r.type === 'scaffold_promotion'
       ? parsed.output.toVersion
       : parsed.output.fromVersion;
+
     if (version !== undefined && at > (byVersion.get(version) ?? 0)) {
       byVersion.set(version, at);
     }
   }
+
   return byVersion;
 }
 
 function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[] {
   const archive = listScaffoldArchive(sql, actor, 100).filter((e) => e.version > 0);
   const changedAt = scaffoldStatusChangeAt(sql, actor);
+
   return archive.map((e) => {
     const verb =
       e.status === 'current' ? 'Promoted scaffold'
       : e.status === 'pending' ? 'Proposed scaffold'
       : e.status === 'rolled_back' ? 'Rolled back scaffold'
       : 'Superseded scaffold';
+
     const record = e.trials > 0
       ? `shadow ${e.wins}W-${e.losses}L-${e.ties}T${e.winRate != null ? ` · win-rate ${pct(e.winRate)}` : ''}`
       : 'shadow untried';
+
     const trial = e.status === 'pending' ? ' (shadow trial in progress)' : '';
+
     // What problem the version was FOR — the line the operator audits a
     // self-change by. Re-derived from the stamped cell id, no label store.
     const targeting = e.pathology !== null
       ? ` · targets ${describePathology(e.pathology)}`
       : '';
+
     const revertable = e.status === 'current' || e.status === 'pending';
+
     const summary =
       e.status === 'current'
         ? `I improved how I work${e.trials > 0 ? ` (won ${e.wins} of ${e.trials} trial runs)` : ''}`
@@ -151,6 +164,7 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
           : e.status === 'rolled_back'
             ? 'I reverted a change to how I work'
             : 'I replaced an earlier way of working';
+
     const entry: ChangelogEntry = {
       id: `scaffold:v${e.version}:${e.status}`,
       kind: 'scaffold',
@@ -159,7 +173,9 @@ function scaffoldEntries(sql: SqlExecutor, actor: ActorHandle): ChangelogEntry[]
       evidence: `${verb} v${e.version}${trial} — ${e.rationale} · ${record}${targeting}`,
       scaffoldVersion: e.version,
     };
+
     if (revertable) entry.revert = { type: 'scaffold_rollback', target: String(e.version) };
+
     return entry;
   });
 }
@@ -169,6 +185,7 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
   const rows = sql<{ name: string; description: string; created_at: number; updated_at: number; score: number; uses: number }>`
     SELECT name, description, created_at, updated_at, score, uses
     FROM crafted_tools ORDER BY updated_at DESC LIMIT ${limit}`;
+
   return rows.map((r) => {
     const at = Math.max(r.updated_at, r.created_at);
     const verb = r.updated_at > r.created_at ? 'Updated crafted tool' : 'Crafted tool';
@@ -176,6 +193,7 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
     // Every tool is born scored at the neutral prior, so the EMA line is
     // always real — there is no unscored case to label.
     const score = `EMA ${r.score.toFixed(2)} over ${r.uses} uses`;
+
     // A crafted tool is not something the owner approves: the entry is
     // informational, with no revert. Retiring a tool stays on the Tools
     // surface's own path, not the Journal.
@@ -193,14 +211,19 @@ function humanizeFact(key: string, value: string): string {
   const normalizedKey = key.trim().toLowerCase();
   const segments = normalizedKey.split('.').filter(Boolean);
   const leaf = segments.at(-1) ?? normalizedKey;
+
   if (segments[0] === 'sandbox' && leaf.endsWith('_version')) {
     const software = leaf.slice(0, -'_version'.length).replace(/_/g, ' ');
+
     const runs = value.toLowerCase().startsWith(software.toLowerCase())
       ? value
       : `${software} ${value}`;
+
     return `Your sandbox runs ${runs}`;
   }
+
   const subject = normalizedKey.replace(/[._-]+/g, ' ').replace(/\s+/g, ' ').trim();
+
   return `Your ${subject} is ${value}`;
 }
 
@@ -211,6 +234,7 @@ type FactChangelogEntry = ChangelogEntry & {
 
 function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactChangelogEntry[] {
   actor.assertCurrent();
+
   const rows = sql<{
     key: string; value_json: string; confidence: number;
     source: string | null; last_observed_at: number;
@@ -218,14 +242,17 @@ function factEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): FactC
     SELECT key, value_json, confidence, source, last_observed_at
     FROM agent_facts WHERE actor_id = ${actor.actorId}
     ORDER BY last_observed_at DESC LIMIT ${limit}`;
+
   return rows.map((r) => {
     // Facts written before the value was JSON-encoded are stored as raw text —
     // the one parse failure this read treats as a value.
     const decoded = tolerate(() => parseJsonValue(r.value_json), 'malformed-input');
     const text = v.safeParse(v.string(), decoded);
+
     const value = text.success
       ? text.output
       : decoded === undefined ? r.value_json : JSON.stringify(decoded);
+
     return {
       id: `fact:${r.key}`,
       kind: 'fact' as const,
@@ -245,9 +272,11 @@ function factAggregate(
 ): ChangelogEntry | null {
   const items = factEntries(sql, actor, limit)
     .filter((entry) => since === undefined || entry.at > since);
+
   if (items.length === 0) return null;
   const at = items.reduce((newest, entry) => Math.max(newest, entry.at), 0);
   const ids = items.map((entry) => entry.id).sort();
+
   return {
     id: `facts:${ids.join('|')}`,
     kind: 'fact',
@@ -279,24 +308,29 @@ function gepaEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Chang
  *  auditing prompt growth should not have to open a diff to see it. */
 function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   const trials = promptSectionTrialRecord(sql, actor);
+
   return listPromptSectionVersions(sql, actor, limit).map((row) => {
     const bytes = Buffer.byteLength(row.source, 'utf8');
     const delta = bytes - row.incumbentBytes;
     const size = `${delta >= 0 ? '+' : ''}${String(delta)} bytes (${String(row.incumbentBytes)} → ${String(bytes)})`;
     const record = trials.get(`${row.sectionId}:${String(row.version)}`);
+
     const trial = record && record.wins + record.losses + record.ties > 0
       ? `shadow ${String(record.wins)}W-${String(record.losses)}L-${String(record.ties)}T`
       : 'shadow untried';
+
     const verb =
       row.status === 'current' ? 'Promoted'
       : row.status === 'pending' ? 'Proposed'
       : row.status === 'rolled_back' ? 'Rolled back'
       : 'Superseded';
+
     const summary =
       row.status === 'current' ? `I reworded my own ${row.sectionId} guidance`
       : row.status === 'pending' ? `I am testing new wording for my ${row.sectionId} guidance`
       : row.status === 'rolled_back' ? `I reverted new wording for my ${row.sectionId} guidance`
       : `I replaced earlier wording for my ${row.sectionId} guidance`;
+
     const entry: ChangelogEntry = {
       id: `prompt_section:${row.sectionId}:v${String(row.version)}:${row.status}`,
       kind: 'prompt_section',
@@ -304,11 +338,13 @@ function promptSectionEntries(sql: SqlExecutor, actor: ActorHandle, limit: numbe
       summary,
       evidence: `${verb} ${row.sectionId} v${String(row.version)} — ${row.rationale} · ${size} · ${trial}`,
     };
+
     // Informational once it is already off: a rolled_back or historical row is
     // not in the prompt, so there is nothing to take back.
     if (row.status === 'current' || row.status === 'pending') {
       entry.revert = { type: 'prompt_section_rollback', target: `${row.sectionId}:${String(row.version)}` };
     }
+
     return entry;
   });
 }
@@ -357,16 +393,20 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
     const trigger = request.trigger === 'explicit'
       ? 'you asked for it'
       : 'unresolved corrections accumulated';
+
     const turns = `${String(request.turnIds.length)} graded turn${request.turnIds.length === 1 ? '' : 's'}`;
+
     const items: ChangelogEntry[] = request.routes.map((route, index) => {
       // An EXCERPT of the bytes, read straight off the stored proposal. Enough
       // to recognise the change while scanning; the whole file is behind
       // `showRefinement`, which is the one endpoint that hands one out and the
       // one an owner decides from.
       const edit = request.proposal?.edits[index];
+
       const source = edit?.kind === 'prompt_section' || edit?.kind === 'skill'
         ? edit.source
         : undefined;
+
       const item: ChangelogEntry = {
         id: `refinement:${request.id}:${String(index)}`,
         kind: 'refinement',
@@ -381,20 +421,25 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
               ? `${source.slice(0, SOURCE_PREVIEW_CHARS)}\n… +${String(source.length - SOURCE_PREVIEW_CHARS)} chars`
               : source}`),
       };
+
       // Offered only while the decision is still owed. A decided row that kept
       // advertising the action would invite a click the backend refuses.
       if (route.disposition === 'pending_owner_approval' && route.kind === 'skill') {
         item.decision = { requestId: request.id, routeIndex: index };
       }
+
       // The owner's own revert, reached by the identity the route recorded.
       if (route.disposition === 'applied' && route.kind === 'fact') {
         item.revert = { type: 'fact_forget', target: route.target };
       }
+
       if (route.disposition === 'pending_trials' && route.kind === 'prompt_section') {
         item.revert = { type: 'prompt_section_rollback', target: route.target };
       }
+
       return item;
     });
+
     return {
       id: `refinement:${request.id}:${request.stage}`,
       kind: 'refinement' as const,
@@ -409,8 +454,10 @@ function refinementEntries(sql: SqlExecutor, actor: ActorHandle, limit: number):
 
 function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): ChangelogEntry[] {
   const rows = listReplayEvals(sql, actor, limit + 1);
+
   return rows.slice(0, limit).map((r, index) => {
     const previous = rows[index + 1];
+
     // A move is only called improved/declined when the two intervals don't
     // overlap. Two noisy means crossing is not a direction.
     const direction = previous
@@ -418,11 +465,13 @@ function replayEntries(sql: SqlExecutor, actor: ActorHandle, limit: number): Cha
         : r.interval.hi < previous.interval.lo ? 'declined'
           : 'held'
       : 'reached';
+
     const scoreSummary = direction === 'reached'
       ? `Self-test score reached ${formatScoreInterval(r.interval)}`
       : direction === 'held'
         ? `Self-test score held within noise at ${formatScoreInterval(r.interval)}`
         : `Self-test score ${direction} to ${formatScoreInterval(r.interval)}`;
+
     return {
       id: `replay:${r.id}`,
       kind: 'replay' as const,
@@ -475,17 +524,21 @@ function outcomeEntry(
 ): ChangelogEntry | null {
   const rows = listTurnOutcomes(sql, actor, { limit: 200 })
     .filter((r) => since === undefined || r.createdAt > since);
+
   if (rows.length === 0) return null;
   const count = (k: string) => rows.filter((r) => r.outcome === k).length;
   const newest = rows.reduce((acc, r) => Math.max(acc, r.createdAt), 0);
+
   const parts = TURN_OUTCOMES
     .map((k) => [k, count(k)] as const)
     .filter(([, n]) => n > 0)
     .map(([k, n]) => `${n} ${k}`);
+
   const provenance = TURN_OUTCOME_SOURCES
     .map((s) => [s, rows.filter((r) => r.source === s).length] as const)
     .filter(([, n]) => n > 0)
     .map(([s, n]) => `${n} ${OUTCOME_BATCH_PHRASE[s]}`);
+
   return {
     id: `outcomes:${newest}:${rows.length}`,
     kind: 'outcomes',
@@ -496,6 +549,7 @@ function outcomeEntry(
     // reads 200 rows to count them honestly, which is not a list anyone reads.
     items: rows.slice(0, limit).map((row) => {
       const request = row.userMessage.trim().replace(/\s+/gu, ' ');
+
       return {
         id: `outcome:${row.id}`,
         kind: 'outcomes' as const,
@@ -515,6 +569,7 @@ export function buildChangelog(
   sql: SqlExecutor, actor: ActorHandle, opts: BuildChangelogOptions = {},
 ): ChangelogEntry[] {
   const limit = opts.limit ?? 50;
+
   const entries = [
     ...scaffoldEntries(sql, actor),
     ...toolEntries(sql, limit),
@@ -523,11 +578,15 @@ export function buildChangelog(
     ...promptSectionEntries(sql, actor, limit),
     ...refinementEntries(sql, actor, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
+
   const facts = factAggregate(sql, actor, limit, opts.since);
+
   if (facts) entries.push(facts);
   const outcomes = outcomeEntry(sql, actor, opts.since, limit);
+
   if (outcomes) entries.push(outcomes);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
+
   return entries.slice(0, limit);
 }
 
@@ -567,18 +626,22 @@ export function renderChangelogText(
   if (entries.length === 0) {
     return 'Evolution changelog is empty — no self-changes recorded yet.';
   }
+
   const header = `Evolution changelog (${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}` +
     (opts.unseenCount ? ` · ${opts.unseenCount} unseen` : '') + ')';
+
   const lines = [header];
   entries.forEach((e, i) => {
     const when = new Date(e.at).toISOString().slice(0, 16).replace('T', ' ');
     lines.push(`${String(i + 1).padStart(3)}. ${CHANGE_KIND_GLYPH[e.kind]} ${e.summary}`);
     lines.push(`      ${when}${e.evidence ? ` · ${e.evidence}` : ''}${e.revert ? ' · revertable' : ''}`);
+
     for (const item of e.items ?? []) {
       lines.push(`      - ${item.summary}`);
       lines.push(`        ${item.evidence}`);
     }
   });
+
   return lines.join('\n');
 }
 
@@ -599,19 +662,24 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
   const sql = rt.storage.sql;
   const actor = rt.actor;
   actor.assertCurrent();
+
   const row = sql<{ status: string }>`
     SELECT status FROM scaffold_versions
     WHERE actor_id = ${actor.actorId} AND version = ${version} LIMIT 1`[0];
+
   if (!row) return { ok: false, error: `scaffold v${version} not found` };
 
   if (row.status === 'pending') {
     // Discard the in-trial pending through the existing decision machinery
     // (restores the live file from the current version, flips the status).
     const pending = getPendingScaffold(sql, actor);
+
     if (!pending || pending.version !== version) {
       return { ok: false, error: `scaffold v${version} is no longer the pending under trial` };
     }
+
     const result = await applyPromotionDecision(rt, pending, 'rollback');
+
     return { ok: true, detail: `discarded pending v${version}; current stays v${result.newCurrentVersion}` };
   }
 
@@ -626,9 +694,12 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
     SELECT version FROM scaffold_versions
     WHERE actor_id = ${actor.actorId} AND version < ${version}
     ORDER BY version DESC LIMIT 1`[0];
+
   if (!prev) return { ok: false, error: `scaffold v${version} has no earlier version to roll back to` };
   const restored = await rollbackScaffold(rt, prev.version);
+
   if (!restored.ok) return { ok: false, error: restored.error };
+
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
 
@@ -651,16 +722,21 @@ function revertPromptSection(
     SELECT status FROM prompt_section_versions
     WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
       AND version = ${version} LIMIT 1`[0];
+
   if (!row) return { ok: false, error: `prompt section ${sectionId} v${String(version)} not found` };
 
   if (row.status === 'pending') {
     const pending = getPendingPromptSection(sql, actor, sectionId);
+
     if (!pending || pending.version !== version) {
       return { ok: false, error: `${sectionId} v${String(version)} is no longer the pending under trial` };
     }
+
     applyPromptSectionDecision(sql, actor, pending, 'rollback');
+
     return { ok: true, detail: `discarded pending ${sectionId} v${String(version)}` };
   }
+
   if (row.status !== 'current') {
     return { ok: false, error: `${sectionId} v${String(version)} is already ${row.status} — nothing to revert` };
   }
@@ -670,11 +746,14 @@ function revertPromptSection(
     WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId}
       AND version < ${version} AND status = 'historical'
     ORDER BY version DESC LIMIT 1`[0];
+
   void sql`UPDATE prompt_section_versions SET status = 'rolled_back'
     WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${version}`;
+
   if (!prev) return { ok: true, detail: `${sectionId} is back on its built-in wording` };
   void sql`UPDATE prompt_section_versions SET status = 'current'
     WHERE actor_id = ${actor.actorId} AND section_id = ${sectionId} AND version = ${prev.version}`;
+
   return { ok: true, detail: `rolled ${sectionId} back to v${String(prev.version)}` };
 }
 
@@ -686,38 +765,50 @@ export async function executeChangelogRevert(
   switch (action.type) {
     case 'scaffold_rollback': {
       const version = Number(action.target);
+
       if (!Number.isInteger(version) || version <= 0) {
         return { ok: false, error: `invalid scaffold version: ${action.target}` };
       }
+
       return revertScaffoldVersion(ctx.rt, version);
     }
+
     case 'prompt_section_rollback': {
       const [sectionId, raw] = action.target.split(':');
       const version = Number(raw);
+
       if (!sectionId || !Number.isInteger(version) || version <= 0) {
         return { ok: false, error: `invalid prompt-section target: ${action.target}` };
       }
+
       return revertPromptSection(ctx.rt.storage.sql, ctx.rt.actor, sectionId, version);
     }
+
     case 'fact_forget': {
       if (!ctx.facts.recall(action.target)) {
         return { ok: false, error: `fact ${action.target} is already forgotten` };
       }
+
       ctx.facts.forget(action.target);
+
       return { ok: true, detail: `forgot fact ${action.target}` };
     }
+
     case 'fact_forget_many': {
       const forgotten: string[] = [];
       const failures: string[] = [];
+
       for (const target of action.targets) {
         try {
           const result = await executeChangelogRevert(ctx, { type: 'fact_forget', target });
+
           if (result.ok) forgotten.push(target);
           else failures.push(`${target}: ${result.error ?? 'unknown error'}`);
         } catch (error) {
           failures.push(`${target}: ${renderThrownChain({ cause: error })}`);
         }
       }
+
       if (failures.length > 0) {
         return {
           ok: false,
@@ -725,6 +816,7 @@ export async function executeChangelogRevert(
           error: `failed to forget ${failures.length} fact${failures.length === 1 ? '' : 's'}: ${failures.join('; ')}`,
         };
       }
+
       return { ok: true, detail: `forgot ${forgotten.length} fact${forgotten.length === 1 ? '' : 's'}` };
     }
   }
@@ -738,16 +830,23 @@ export async function revertChangelogEntryById(
   id: string,
 ): Promise<ChangelogRevertResult> {
   const entries = buildChangelog(ctx.rt.storage.sql, ctx.rt.actor, { limit: 200 });
+
   const findEntry = (candidates: ReadonlyArray<ChangelogEntry>): ChangelogEntry | undefined => {
     for (const candidate of candidates) {
       if (candidate.id === id) return candidate;
       const nested = findEntry(candidate.items ?? []);
+
       if (nested) return nested;
     }
+
     return undefined;
   };
+
   const entry = findEntry(entries);
+
   if (!entry) return { ok: false, error: `changelog entry ${id} not found` };
+
   if (!entry.revert) return { ok: false, error: `changelog entry ${id} is informational — nothing to revert` };
+
   return executeChangelogRevert(ctx, entry.revert);
 }

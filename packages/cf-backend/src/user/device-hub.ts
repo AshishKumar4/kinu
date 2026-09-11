@@ -27,6 +27,7 @@ import * as v from 'valibot';
 
 /** WebSocket.OPEN is 1 across every implementation. */
 const WS_OPEN = 1;
+
 const DEVICE_WS_TAG_PREFIX = 'device:';
 
 /**
@@ -95,6 +96,7 @@ function deviceTag(deviceId: string): string {
  *  owned by the agents SDK (their attachments carry `__pk`, not `device`). */
 export function deviceIdFromSocket(ws: DeviceSocket): string | null {
   const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+
   return attachment.success ? attachment.output.device : null;
 }
 
@@ -119,11 +121,13 @@ export class DeviceSocketHub {
    */
   accept(deviceId: string, server: DeviceSocket): void {
     this.dropTunnel(deviceId);
+
     for (const old of this.ctx.getWebSockets(deviceTag(deviceId))) {
       if (old.readyState !== WS_OPEN) continue;
       diagnostics.event('device.socket_replaced', { device: deviceId });
       old.close(1000, 'replaced by a new connection');
     }
+
     this.ctx.acceptWebSocket(server, [deviceTag(deviceId)]);
     server.serializeAttachment({ device: deviceId });
   }
@@ -133,6 +137,7 @@ export class DeviceSocketHub {
     for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
       if (ws.readyState === WS_OPEN) return ws;
     }
+
     return null;
   }
 
@@ -147,7 +152,9 @@ export class DeviceSocketHub {
    */
   toolchain(deviceId: string, now: number): DeviceToolchain | null {
     const probe = this.probeRecord(deviceId);
+
     if (probe === null || probe === PROBE_UNANSWERABLE) return null;
+
     return freshDeviceToolchain(probe, now);
   }
 
@@ -167,19 +174,25 @@ export class DeviceSocketHub {
    */
   async probeToolchain(deviceId: string, now: number): Promise<DeviceToolchain | null> {
     const existing = this.probeRecord(deviceId);
+
     // An install with no `which` will not grow one while this socket is open.
     if (existing === PROBE_UNANSWERABLE) return null;
     const fresh = existing === null ? null : freshDeviceToolchain(existing, now);
+
     if (fresh) return fresh;
 
     const tunnel = this.tunnel(deviceId);
+
     if (!tunnel) return null;
     let present: readonly string[];
+
     try {
       const answered = await tunnel.rpc('which', [[...TOOLCHAIN_PROBE_BINARIES]], {
         timeoutMs: PROBE_TIMEOUT_MS,
       });
+
       const parsed = v.safeParse(WhichResultSchema, answered);
+
       if (!parsed.success) throw new KinuError('io', 'device answered `which` with an unreadable payload');
       present = parsed.output.present;
     } catch (err) {
@@ -188,31 +201,40 @@ export class DeviceSocketHub {
       // Every other failure (a timeout, a dropped socket, a payload we could not
       // read) is transient: leave the record untouched so the next turn re-asks.
       const failure = toKinuError({ doing: 'probe the device toolchain', cause: err, otherwise: 'io' });
+
       if (isDeviceUnknownMethodError(err)) this.recordProbe(deviceId, PROBE_UNANSWERABLE);
       diagnostics.failure('device.toolchain_probe_failed', failure, { device: deviceId });
+
       return null;
     }
+
     const answer = deviceToolchainAnswer(present, now);
     this.recordProbe(deviceId, answer);
+
     return answer;
   }
 
   private probeRecord(deviceId: string): DeviceProbe | null {
     const ws = this.liveSocket(deviceId);
+
     if (!ws) return null;
     const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+
     return attachment.success ? attachment.output.probe ?? null : null;
   }
 
   private recordProbe(deviceId: string, probe: DeviceProbe): void {
     const ws = this.liveSocket(deviceId);
+
     if (!ws) return;
+
     // Written out field by field rather than spread: this is a wire shape that
     // outlives the code that wrote it, and `DeviceAttachmentSchema` above is the
     // only thing that will ever read it back.
     const stored: JsonValue = probe === PROBE_UNANSWERABLE
       ? probe
       : { present: [...probe.present], asked: [...probe.asked], probedAt: probe.probedAt };
+
     ws.serializeAttachment({ device: deviceId, probe: stored });
   }
 
@@ -224,10 +246,13 @@ export class DeviceSocketHub {
    *  the platform's, not a ranking: nothing here may read it as one. */
   connectedDeviceIds(): string[] {
     const ids: string[] = [];
+
     for (const ws of this.ctx.getWebSockets()) {
       const id = deviceIdFromSocket(ws);
+
       if (id && ws.readyState === WS_OPEN && !ids.includes(id)) ids.push(id);
     }
+
     return ids;
   }
 
@@ -247,6 +272,7 @@ export class DeviceSocketHub {
   connectedDeviceId(deviceId?: string): string | null {
     if (deviceId) return this.isConnected(deviceId) ? deviceId : null;
     const live = this.connectedDeviceIds();
+
     return live.length === 1 ? live[0]! : null;
   }
 
@@ -254,11 +280,14 @@ export class DeviceSocketHub {
    *  socket when this DO instance woke after the socket was accepted. */
   tunnel(deviceId: string): DeviceTunnel | null {
     const cached = this.tunnels.get(deviceId);
+
     if (cached?.tunnel.isConnected()) return cached.tunnel;
     const ws = this.liveSocket(deviceId);
+
     if (!ws) return null;
     const tunnel = new DeviceTunnel(ws);
     this.tunnels.set(deviceId, { tunnel, ws });
+
     return tunnel;
   }
 
@@ -273,6 +302,7 @@ export class DeviceSocketHub {
    *  the new tunnel). */
   handleClose(deviceId: string, ws: DeviceSocket): void {
     const cached = this.tunnels.get(deviceId);
+
     if (!cached || cached.ws !== ws) return;
     this.dropTunnel(deviceId);
   }
@@ -286,6 +316,7 @@ export class DeviceSocketHub {
   /** Close every socket for a device (revocation). */
   close(deviceId: string, reason: string): void {
     this.dropTunnel(deviceId);
+
     for (const ws of this.ctx.getWebSockets(deviceTag(deviceId))) {
       if (ws.readyState === WS_OPEN) ws.close(1000, reason);
     }

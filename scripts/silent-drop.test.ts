@@ -252,6 +252,7 @@ export function readCredential(read: () => string): string | null {
   try { return read(); } catch (error) { log.warn('no'); return null; }
 }
 `;
+
     // States the key the lock holds for this site. A format change, a lost sink
     // tag, or a moved anchor reads differently here.
     const KEY = 'logged_default/wire a.ts#readCredential';
@@ -265,8 +266,10 @@ export function readCredential(read: () => string): string | null {
 
   test('the live corpus is the one no-swallow measures, and it is not empty', () => {
     const sources = readSources();
+
     const catches = [...sources.values()]
       .reduce((total, text) => total + (text.match(/\bcatch\b/gu)?.length ?? 0), 0);
+
     expect(sources.size).toBeGreaterThan(0);
     expect(catches).toBeGreaterThan(0);
 

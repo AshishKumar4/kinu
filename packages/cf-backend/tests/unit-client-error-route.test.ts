@@ -34,10 +34,12 @@ import { reportRenderFailure } from '../src/client-error/report';
 import { APP_ROUTES, routeTemplateOf } from '../src/app-routes';
 
 const ORIGIN = 'https://kinu.example.com';
+
 const URL_ = `${ORIGIN}${CLIENT_ERROR_ENDPOINT}`;
 
 /** The build the fixture deployment serves. */
 const STAMP = { version: '0.1.0+abc1234', sha: 'abc1234', builtAt: '2026-08-07T00:00:00.000Z' };
+
 const SPA_SHELL = '<!doctype html>\n<html lang="en"><head><title>Kinu</title></head><body></body></html>';
 
 const ME: AuthIdentity = {
@@ -63,10 +65,12 @@ function envWithStamp(stamp: typeof STAMP | null): Env {
             headers: { 'content-type': 'application/json' },
           });
         }
+
         return new Response(SPA_SHELL, { headers: { 'content-type': 'text/html' } });
       },
     },
   });
+
   // SAFETY: the route reads only ASSETS.fetch, which this fixture constructs.
   return partialEnv as Env;
 }
@@ -95,6 +99,7 @@ function post(body: string, init: RequestInit = {}): Request {
 const AcceptedSchema = v.object({
   releaseMatch: v.picklist(['match', 'stale', 'unreported', 'undeployed'] as const),
 });
+
 async function verdict(response: Response): Promise<ReleaseMatch> {
   return v.parse(AcceptedSchema, await response.json()).releaseMatch;
 }
@@ -106,7 +111,9 @@ async function send(
   stamp: typeof STAMP | null = STAMP,
 ): Promise<Response> {
   const response = await handleClientErrorRequest(post(body), envWithStamp(stamp), identity);
+
   if (!response) throw new Error('the route did not answer its own endpoint');
+
   return response;
 }
 
@@ -118,6 +125,7 @@ async function recorded(
   const logs = createRecordingLogger();
   setDiagnosticsSink(logs);
   const response = await send(body, ME, stamp);
+
   return { response, lines: logs.emitted };
 }
 
@@ -136,6 +144,7 @@ describe('routing', () => {
     const response = await handleClientErrorRequest(
       new Request(URL_), envWithStamp(STAMP), ME,
     );
+
     expect(response?.status).toBe(405);
   });
 });
@@ -182,6 +191,7 @@ describe('a body that is not a report', () => {
     const response = await send(JSON.stringify({
       ...report(), errorName: 'Cannot read properties of undefined',
     }));
+
     expect(response.status).toBe(400);
   });
 
@@ -193,6 +203,7 @@ describe('a body that is not a report', () => {
       ...report(),
       stack: 'TypeError: the user said "my api key is sk-live-9x2"\n    at f (https://h/a.js:1:2)',
     }));
+
     expect(response.status).toBe(400);
   });
 
@@ -200,6 +211,7 @@ describe('a body that is not a report', () => {
     const response = await send(JSON.stringify({
       ...report(), componentStack: '    at Chat\nthe prompt was: draft the layoff email',
     }));
+
     expect(response.status).toBe(400);
   });
 
@@ -216,10 +228,12 @@ describe('the bound', () => {
     // One frame repeated past the ceiling: every line is a legal frame, so the
     // refusal is the SIZE and not the shape.
     const frame = '    at f (https://kinu.example.com/assets/index-a1b2c3.js:1:2345)';
+
     const huge = JSON.stringify({
       ...report(),
       stack: Array.from({ length: 400 }, () => frame).join('\n'),
     });
+
     expect(huge.length).toBeGreaterThan(CLIENT_ERROR_MAX_REQUEST_BYTES);
     expect((await send(huge)).status).toBe(413);
   });
@@ -228,19 +242,23 @@ describe('the bound', () => {
     // `readBounded` counts arriving bytes, so a body that declares nothing —
     // which is every chunked sender — is still refused at the ceiling.
     const frame = '    at f (https://kinu.example.com/assets/index-a1b2c3.js:1:2345)';
+
     const huge = JSON.stringify({
       ...report(),
       stack: Array.from({ length: 400 }, () => frame).join('\n'),
     });
+
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode(huge));
         controller.close();
       },
     });
+
     const response = await handleClientErrorRequest(
       new Request(URL_, { method: 'POST', body: stream }), envWithStamp(STAMP), ME,
     );
+
     expect(response?.status).toBe(413);
   });
 });
@@ -354,6 +372,7 @@ describe('the payload the browser builds', () => {
     '    at applyCoupon (https://kinu.example.com/assets/index-a1b2c3.js:1:2345)',
     '    at ChatMessages (https://kinu.example.com/assets/index-a1b2c3.js:1:9876)',
   ].join('\n');
+
   const COMPONENT_STACK = [
     '    at ChatMessages (https://kinu.example.com/assets/index-a1b2c3.js:1:9876)',
     '    at div',
@@ -371,8 +390,11 @@ describe('the payload the browser builds', () => {
     Object.assign(globalThis, { location: { pathname: '/workspace/demo' } });
     globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
+
       if (url.endsWith('/api/health')) throw new TypeError('offline');
+
       if (init?.method === 'POST') posts.push({ url, body: String(init.body ?? '') });
+
       return new Response('{}', { status: 202 });
     });
   });
@@ -387,12 +409,14 @@ describe('the payload the browser builds', () => {
     await reportRenderFailure(error, componentStack);
     expect(posts).toHaveLength(1);
     expect(posts[0].url).toBe(CLIENT_ERROR_ENDPOINT);
+
     return v.parse(ClientErrorReportSchema, JSON.parse(posts[0].body));
   }
 
   function failedRender(): Error {
     const error = new TypeError('Cannot read properties of undefined (reading \'kind\') for coupon SAVE20');
     error.stack = V8_STACK;
+
     return error;
   }
 
@@ -496,6 +520,7 @@ describe('fitting a report to the one bound', () => {
     // refuses — a truncation that produces an unsendable report is worse than
     // one that drops a frame.
     const fitted = fitClientErrorReport(oversized(400, 400));
+
     for (const line of [...fitted.stack.split('\n'), ...fitted.componentStack.split('\n')]) {
       expect(line).toBe(FRAME);
     }
@@ -510,9 +535,11 @@ describe('fitting a report to the one bound', () => {
     // The bound is on encoded bytes. Counting characters would let a stack of
     // multi-byte identifiers pass the fit and be refused at the route.
     const wide = `    at Iñtërnâtiônàlizætiøn☃ (https://kinu.example.com/assets/index-a1b2c3.js:1:2345)`;
+
     const fitted = fitClientErrorReport(report({
       stack: Array.from({ length: 400 }, () => wide).join('\n'),
     }));
+
     expect(new TextEncoder().encode(JSON.stringify(fitted)).byteLength)
       .toBeLessThanOrEqual(CLIENT_ERROR_MAX_REQUEST_BYTES);
   });

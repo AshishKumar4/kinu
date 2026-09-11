@@ -136,6 +136,7 @@ export async function acceptContainerEvent(
   now: number,
 ): Promise<ContainerEventResult> {
   const parsed = v.safeParse(ContainerEventEnvelopeSchema, body);
+
   if (!parsed.success) {
     return {
       status: 'rejected',
@@ -145,6 +146,7 @@ export async function acceptContainerEvent(
   }
 
   const envelope = parsed.output;
+
   const descriptor = envelope.kind === 'process_done'
     ? await processDoneDescriptor(deps, envelope)
     : fileChangedDescriptor(deps, envelope);
@@ -153,14 +155,17 @@ export async function acceptContainerEvent(
   // which variant: its `IngressRejectedError` becomes the 403 refusal.
   try {
     const { id, admitted } = deps.log.publish({ descriptor, now });
+
     // Only a newly admitted event wakes anything: a duplicate is already bound
     // or in flight, and waking for it would re-run a turn for work already seen.
     if (admitted) deps.onAdmitted();
+
     return { status: 'admitted', event_id: id, admitted };
   } catch (err) {
     if (err instanceof IngressRejectedError) {
       return { status: 'rejected', http_status: 403, reason: err.message };
     }
+
     throw err;
   }
 }
@@ -177,6 +182,7 @@ async function processDoneDescriptor(
     spillEventContent(deps.vfs, envelope.stdout),
     spillEventContent(deps.vfs, envelope.stderr),
   ]);
+
   return {
     ingress: 'sandbox_cb',
     variant: 'process_done',

@@ -102,9 +102,12 @@ export async function validateWithRetries(
   if (!Number.isInteger(retries) || retries < 0) throw new Error(`validate retries must be a non-negative integer, got ${retries}`);
   const budget = retries + 1;
   let first = '';
+
   for (let attempt = 1; attempt <= budget; attempt++) {
     const { ok, detail } = await check(attempt);
+
     if (attempt === 1) first = detail;
+
     if (ok) {
       return {
         ok: true,
@@ -113,10 +116,12 @@ export async function validateWithRetries(
         detail: attempt === 1 ? detail : `FLAKY: ${detail} — but attempt 1 failed (${first})`,
       };
     }
+
     if (attempt === budget) {
       return { ok: false, attempts: attempt, passedOnAttempt: null, detail: `failed all ${budget} attempt(s): ${detail}` };
     }
   }
+
   throw new Error('unreachable: the retry budget is at least 1');
 }
 
@@ -136,10 +141,12 @@ export class SealedSplit {
    *  here and never surfaced. */
   async evaluate(run: SealedPairRunner, opts: BootstrapOptions = {}): Promise<SealedScorecard> {
     const outcomes: PairedOutcome[] = [];
+
     for (const task of this.#tasks) {
       const { a, b } = await run(task);
       outcomes.push({ taskId: task.id, a, b });
     }
+
     return {
       tasks: this.#tasks.length,
       manifestHash: this.manifestHash,
@@ -163,14 +170,18 @@ export class SealedSplit {
   ): Promise<SealedValidation> {
     const invalid: string[] = [];
     const flaky: string[] = [];
+
     const selected = only === undefined
       ? this.#tasks
       : this.#tasks.filter((task) => only.includes(task.id));
+
     for (const task of selected) {
       const result = await check(task);
+
       if (!result.ok) invalid.push(task.id);
       else if ((result.passedOnAttempt ?? 1) > 1) flaky.push(task.id);
     }
+
     return { checked: selected.length, invalid, flaky };
   }
 
@@ -208,17 +219,23 @@ export interface PartitionOptions {
 export function partitionCorpus(tasks: readonly BenchTask[], opts: PartitionOptions = {}): BenchCorpus {
   const salt = opts.salt ?? SEAL_SALT;
   const sealedFraction = opts.sealedFraction ?? DEFAULT_SEALED_FRACTION;
+
   if (!Number.isFinite(sealedFraction) || sealedFraction < 0 || sealedFraction > 1) {
     throw new Error(`sealedFraction must be in [0, 1], got ${sealedFraction}`);
   }
+
   const ids = new Set<string>();
+
   for (const t of tasks) {
     if (ids.has(t.id)) throw new Error(`duplicate bench task id: ${t.id}`);
     ids.add(t.id);
   }
+
   const dev: BenchTask[] = [];
   const sealed: BenchTask[] = [];
+
   for (const t of tasks) (splitOf(t.id, salt, sealedFraction) === 'sealed' ? sealed : dev).push(t);
+
   return { dev, sealed: new SealedSplit(sealed), salt, sealedFraction, manifestHash: manifestHash(tasks) };
 }
 
@@ -226,11 +243,14 @@ export function partitionCorpus(tasks: readonly BenchTask[], opts: PartitionOpti
  *  or null when the prompt is clean. */
 export function promptLeaksFix(prompt: string, patch: string): string | null {
   const normalized = prompt.replace(/\s+/g, ' ');
+
   for (const raw of patch.split('\n')) {
     if (!raw.startsWith('-') || raw.startsWith('---')) continue;
     // A defect patch turns good code into bad; its '-' lines ARE the fix.
     const line = raw.slice(1).trim().replace(/\s+/g, ' ');
+
     if (line.length >= 16 && normalized.includes(line)) return line;
   }
+
   return null;
 }

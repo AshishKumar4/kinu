@@ -170,6 +170,7 @@ export function chatTurnFrames(input: {
   readonly replay?: boolean;
 }): readonly string[] {
   const replay = input.replay === true;
+
   return [
     ...input.chunks.map((chunk) => chatChunkFrame({ requestId: input.requestId, chunk, replay })),
     chatTerminalFrame({ requestId: input.requestId, replay }),

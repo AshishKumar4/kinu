@@ -87,6 +87,7 @@ describe('attachment budget admission', () => {
       mediaType: 'application/octet-stream',
       url: `data:application/octet-stream;base64,${'A'.repeat(LIMIT * 2)}`,
     };
+
     const admission = admitAttachments([], [nameless], LIMIT);
     expect(admission.parts).toEqual([]);
     expect(admission.refused).toEqual(['an attachment']);

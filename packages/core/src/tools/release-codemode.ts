@@ -106,10 +106,12 @@ function parseInput<TSchema extends v.GenericSchema>(
   input: { value: unknown },
 ): v.InferOutput<TSchema> | undefined {
   const result = v.safeParse(schema, input.value);
+
   return result.success ? result.output : undefined;
 }
 
 const StringSchema = v.string();
+
 const BindingSchema: v.GenericSchema<NonNullable<ReleaseActionInput['binding']>> = v.object({
   kind: v.optional(v.picklist(['local', 'github'])),
   label: v.optional(v.string()),
@@ -119,14 +121,18 @@ const BindingSchema: v.GenericSchema<NonNullable<ReleaseActionInput['binding']>>
   localRoot: v.optional(v.nullable(v.string())),
   deployTarget: v.optional(v.nullable(v.string())),
 });
+
 const UpdateSchema = v.object({
   plan: v.optional(v.nullable(v.string())),
   summary: v.optional(v.nullable(v.string())),
   patch: v.optional(v.nullable(v.string())),
   previewUrl: v.optional(v.nullable(v.string())),
 });
+
 const StatusSchema = v.picklist(RELEASE_STATUSES);
+
 const ApprovalTypeSchema = v.picklist(['apply', 'deploy_staging', 'deploy_production', 'rollback']);
+
 const CheckSchema: v.GenericSchema<NonNullable<ReleaseActionInput['check']>> = v.object({
   name: v.optional(v.string()),
   status: v.optional(v.picklist(['pending', 'running', 'passed', 'failed', 'skipped'])),
@@ -134,6 +140,7 @@ const CheckSchema: v.GenericSchema<NonNullable<ReleaseActionInput['check']>> = v
   stderr: v.optional(v.nullable(v.string())),
   durationMs: v.optional(v.nullable(v.number())),
 });
+
 const DeploymentSchema: v.GenericSchema<NonNullable<ReleaseActionInput['deployment']>> = v.object({
   environment: v.optional(v.picklist(['local', 'staging', 'production'])),
   workerVersionId: v.optional(v.nullable(v.string())),
@@ -141,13 +148,16 @@ const DeploymentSchema: v.GenericSchema<NonNullable<ReleaseActionInput['deployme
   rollbackTarget: v.optional(v.nullable(v.string())),
   command: v.optional(v.string()),
 });
+
 const ChecksSchema: v.GenericSchema<NonNullable<ReleaseActionInput['checks']>> = v.array(
   v.object({ name: v.optional(v.string()), command: v.optional(v.string()) }),
 );
+
 const PreviewSchema = v.object({
   port: v.optional(v.number()),
   startCommand: v.optional(v.string()),
 });
+
 const RollbackSchema = v.object({ command: v.optional(v.string()) });
 
 /** Marshal a member's positional call args into the ReleaseActionInput shape
@@ -165,6 +175,7 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
         userPrompt: v.optional(v.string()),
         plan: v.optional(v.nullable(v.string())),
       }), { value: args[0] });
+
       return {
         action,
         bindingId: input?.bindingId,
@@ -172,8 +183,10 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
         plan: input?.plan,
       };
     }
+
     case 'update': {
       const patch = parseInput(UpdateSchema, { value: args[1] });
+
       return {
         action,
         changeId: parseInput(StringSchema, { value: args[0] }),
@@ -183,6 +196,7 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
         previewUrl: patch?.previewUrl,
       };
     }
+
     case 'transition':
       return {
         action,
@@ -217,6 +231,7 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
       };
     case 'preview': {
       const opts = parseInput(PreviewSchema, { value: args[1] });
+
       return {
         action,
         changeId: parseInput(StringSchema, { value: args[0] }),
@@ -224,6 +239,7 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
         startCommand: opts?.startCommand,
       };
     }
+
     case 'deploy':
       return {
         action,
@@ -232,6 +248,7 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
       };
     case 'rollback': {
       const opts = parseInput(RollbackSchema, { value: args[1] });
+
       return {
         action,
         changeId: parseInput(StringSchema, { value: args[0] }),

@@ -69,8 +69,11 @@ const DecimalSchema = v.pipe(
   v.string(),
   v.regex(/^(?:0|[1-9]\d*)$/, 'Expected a canonical non-negative decimal string'),
 );
+
 const Sha256Schema = v.pipe(v.string(), v.regex(/^[0-9a-f]{64}$/, 'Expected a lowercase SHA-256 digest'));
+
 const ObjectKeySchema = v.pipe(v.string(), v.minLength(1), v.maxLength(1024));
+
 const IdSchema = v.pipe(v.string(), v.minLength(1), v.maxLength(128));
 
 const ImmutableObjectRefSchema = v.strictObject({
@@ -78,6 +81,7 @@ const ImmutableObjectRefSchema = v.strictObject({
   byteLength: DecimalSchema,
   sha256: Sha256Schema,
 });
+
 type ImmutableObjectRef = v.InferOutput<typeof ImmutableObjectRefSchema>;
 
 const CapturedCutSchema = v.strictObject({
@@ -103,6 +107,7 @@ const RootEnvelopeV1Schema = v.strictObject({
   /** Canonical sorted payload closure, written directly beside candidate objects. */
   closureObject: ImmutableObjectRefSchema,
 });
+
 export type RootEnvelopeV1 = v.InferOutput<typeof RootEnvelopeV1Schema>;
 
 const envelopeEncoder = new TextEncoder();
@@ -128,6 +133,7 @@ export interface CandidateStorePaths {
   readonly payloadPrefix: string;
   readonly envelopePrefix: string;
 }
+
 export function candidateStorePaths(boxPrefix: string, strategy: CandidateStrategy): CandidateStorePaths {
   return {
     payloadPrefix: `${boxPrefix}/candidate/${strategy}`,
@@ -213,10 +219,13 @@ async function listAllObjects(
 ): Promise<readonly { readonly key: string; readonly size: number }[]> {
   const rows: { readonly key: string; readonly size: number }[] = [];
   let cursor: string | undefined;
+
   for (;;) {
     const page = await reader.list(cursor === undefined ? { prefix } : { prefix, cursor });
     rows.push(...page.objects);
+
     if (!page.truncated) return rows;
+
     // A truncated page carrying no cursor cannot be continued. Returning its
     // partial rows would let a newer envelope or a fork hide on the next page,
     // so a missing cursor is a hard fact-collection failure, never a short
@@ -224,6 +233,7 @@ async function listAllObjects(
     if (page.cursor === undefined) {
       throw new Error(`candidate object listing for ${prefix} was truncated without a cursor`);
     }
+
     cursor = page.cursor;
   }
 }
@@ -238,18 +248,23 @@ const envelopeDecoder = new TextDecoder('utf-8', { fatal: true });
  *  one unreadable envelope must not hide the arm's other envelopes. */
 function decodeEnvelope(bytes: Uint8Array): EnvelopeDecode {
   let text: string;
+
   try {
     text = envelopeDecoder.decode(bytes);
   } catch (cause) {
     return { ok: false, reason: `is not UTF-8: ${describeThrown({ cause })}` };
   }
+
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(text);
   } catch (cause) {
     return { ok: false, reason: `is not JSON: ${describeThrown({ cause })}` };
   }
+
   const parsed = v.safeParse(RootEnvelopeV1Schema, decoded);
+
   return parsed.success
     ? { ok: true, envelope: parsed.output }
     : { ok: false, reason: `is not a root envelope: ${parsed.issues[0]?.message ?? 'unknown shape'}` };
@@ -271,18 +286,23 @@ export async function candidateStoreFacts(
   const listed = await listAllObjects(reader, envelopePrefix);
   const decoded: { readonly row: CandidateEnvelopeRow; readonly envelope: RootEnvelopeV1 }[] = [];
   const unreadable: string[] = [];
+
   for (const listedRow of listed) {
     const object = await reader.get(listedRow.key);
+
     if (object === null) {
       unreadable.push(`${listedRow.key} was listed but holds no bytes`);
       continue;
     }
+
     const bytes = new Uint8Array(await object.arrayBuffer());
     const result = decodeEnvelope(bytes);
+
     if (!result.ok) {
       unreadable.push(`${listedRow.key} ${result.reason}`);
       continue;
     }
+
     decoded.push({
       row: {
         key: listedRow.key,
@@ -304,11 +324,14 @@ export async function candidateStoreFacts(
   // one arbitrarily, so the fact says there is no head rather than choosing.
   const greatest = decoded.reduce<bigint | null>((best, entry) => {
     const generation = BigInt(entry.row.generation);
+
     return best === null || generation > best ? generation : best;
   }, null);
+
   const newest = greatest === null
     ? []
     : decoded.filter((entry) => BigInt(entry.row.generation) === greatest);
+
   const headEntry = newest.length === 1 ? newest[0] : undefined;
 
   // THE ENVELOPE'S KEYS ARE MOUNT-RELATIVE. The runner writes `obj/<sha>`
@@ -320,13 +343,16 @@ export async function candidateStoreFacts(
   // carries the joined key, so the driver's prefix check reads the address
   // the store was asked for.
   const closure: CandidateClosureRow[] = [];
+
   if (headEntry !== undefined) {
     const seen = new Set<string>();
+
     const refs: readonly ImmutableObjectRef[] = [
       headEntry.envelope.rootObject,
       headEntry.envelope.closureObject,
       ...headEntry.envelope.closure,
     ];
+
     for (const ref of refs) {
       if (seen.has(ref.key)) continue;
       seen.add(ref.key);

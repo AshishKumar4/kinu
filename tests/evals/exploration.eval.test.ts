@@ -50,7 +50,9 @@ import {
 } from '@kinu.run/test-utils';
 
 const TARGET = liveModelTarget('Exploration Evals');
+
 const liveTest = test.skipIf(!TARGET);
+
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-eval-exploration-' + String(Date.now()));
@@ -87,6 +89,7 @@ const EXPLORATION_TASK =
  * larger shapes bought and what this suite never scores.
  */
 const EVAL_SEARCH_BUDGET = 1;
+
 const EVAL_SEARCH_BRANCHES = 3;
 
 describe('Exploration evals — MCTS reached, ranked, and readable', () => {
@@ -190,6 +193,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     // the same thing about production: without this a search is invisible while it
     // runs.
     const progress: string[] = [];
+
     const result = await runMCTS(rt, makeSessionWriter(), EXPLORATION_TASK, {
       mode: 'build',
       budget: EVAL_SEARCH_BUDGET,
@@ -207,6 +211,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
       },
       reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
     });
+
     for (const line of progress) console.log(`    ${line}`);
 
     // The search's calls never reach this process as an SDK result, so the ledger
@@ -220,6 +225,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
     const score = scoreExploration(rt.storage.sql, rt.actor);
     console.log(`    searches: ${String(score.searchRuns)}, branched: ${String(score.branchedRuns)}, `
       + `ranked: ${String(score.rankedRuns)}, durably ranked: ${String(score.durablyRankedRuns)}`);
+
     for (const run of score.runs) {
       console.log(`      ${run.id}: ${String(run.branches)} branches, winner `
         + `${String(run.winnerScore)}, terminal nodes ${String(run.terminalNodes)}`);
@@ -302,6 +308,7 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
         for (const call of step.toolCalls ?? []) calls.push(call.toolName);
       },
     });
+
     recordLiveModelSpend(result.usage);
 
     const reached = calls.filter((name) => name === 'agents').length;

@@ -100,6 +100,7 @@ export async function discoverSkills(
   opts: DiscoverOpts,
 ): Promise<SkillsDiscovery> {
   const dir = opts.skillsDir ?? SKILLS_DIR;
+
   const onErr = opts.onParseError ?? ((file, err) => diagnostics.failure(
     'skills.parse_failed',
     toKinuError({ doing: 'parse a skill file', cause: err, otherwise: 'bad_input' }),
@@ -107,10 +108,12 @@ export async function discoverSkills(
   ));
 
   const byName = new Map<string, DiscoveredSkill>();
+
   for (const s of BUILTIN_SKILL_HEADERS) byName.set(s.name, s);
   const unread: UnreadSkillFile[] = [];
 
   let entries: string[] = [];
+
   try {
     if (vfs.readdir) entries = await vfs.readdir(dir);
   } catch (error) {
@@ -127,7 +130,9 @@ export async function discoverSkills(
     // directory name supply it), so an illegal stem is not a skill at all —
     // and learning that costs no read.
     const stemProblem = skillNameProblem(stem);
+
     if (stemProblem) { onErr(path, `filename stem ${stemProblem}`); continue; }
+
     // A built-in name is RESERVED (KINU-N028). This directory is writable by
     // the agent's own `file` tool and shell, so letting a file here take a
     // built-in's name would let the agent replace shipped doctrine — including
@@ -137,22 +142,28 @@ export async function discoverSkills(
       onErr(path, `"${stem}" is a built-in skill name and cannot be overridden by a workspace file`);
       continue;
     }
+
     try {
       const size = vfs.stat ? (await vfs.stat(path))?.size : undefined;
+
       if (size !== undefined && estimateTokens(size) > opts.admissionTokens) {
         unread.push({ name: stem, path, bytes: size });
         continue;
       }
+
       const text = await readTextFile(vfs, path);
       // The stem doubles as the fallback `name` so Claude-Code skills authored
       // without a `name:` line still parse. If frontmatter DOES specify a name,
       // we still require it to match the filename to avoid drift.
       const parsed = parseSkillFile(text, 'vfs', stem);
+
       if (!parsed.ok) { onErr(path, parsed.error); continue; }
+
       if (parsed.skill.name !== stem) {
         onErr(path, `filename "${entry}" does not match front-matter name "${parsed.skill.name}"`);
         continue;
       }
+
       byName.set(parsed.skill.name, discovered(parsed.skill, {
         kind: 'file',
         path,
@@ -196,10 +207,12 @@ export function skillPath(name: string, skillsDir = SKILLS_DIR): string {
  * lives. Admission derives every active policy field from its own raw snapshot. */
 function discovered(skill: ParsedSkill, bodyRef: SkillBodyRef): DiscoveredSkill {
   const { body: _body, ...header } = skill;
+
   return { ...header, bodyRef };
 }
 
 async function readTextFile(vfs: SkillsVfs, path: string): Promise<string> {
   const raw = await vfs.readFile(path, { encoding: 'utf8' });
+
   return raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
 }

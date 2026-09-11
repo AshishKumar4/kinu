@@ -31,6 +31,7 @@ async function addedAgent(seed: {
 }) {
   const parent = orchestratorHarness();
   const name = seed.name ?? 'quiet-harbor-1a4e20';
+
   const child = await hostedSubordinateHarness(parent, {
     name,
     displayName: seed.displayName,
@@ -38,6 +39,7 @@ async function addedAgent(seed: {
     mission: seed.mission ?? WORKSPACE_MISSION,
     roleId: seed.roleId ?? 'general',
   });
+
   // The roster LINK row: hiring binds stores and runtime, but the roster is
   // the reader-facing listing — without the link the child exists and nobody
   // lists it, which is exactly what the rename path below refuses.
@@ -54,6 +56,7 @@ async function addedAgent(seed: {
     lifetime: 'durable',
     taskEventId: null,
   });
+
   return { parent, child, name };
 }
 

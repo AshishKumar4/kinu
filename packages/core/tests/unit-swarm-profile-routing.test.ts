@@ -49,6 +49,7 @@ const TIERS_V1: TierAssignments = {
   default: { model: 'm-default' },
   deep: { model: 'm-deep-v1' },
 };
+
 /** The same catalog after the owner re-pointed `deep`. Nothing an in-flight
  *  search may notice. */
 const TIERS_V2: TierAssignments = {
@@ -65,6 +66,7 @@ const LEAD: RoleDefinition = {
   preset: 'ideate',
   spawns: '*',
 };
+
 /** Default preset `audit`, which is scored `verify` — so a composition resolved
  *  from THIS role refuses without an objective where one resolved from `lead`
  *  runs. That difference is what makes the stored preset observable. */
@@ -83,6 +85,7 @@ const PROVIDER: ProviderCatalogSnapshot = {
 
 function envelopeOf(tiers: TierAssignments, version: number): ProfileCatalogEnvelope {
   const catalog = { roles: { lead: LEAD, auditor: AUDITOR }, tiers };
+
   return {
     authority: { kind: 'local' },
     version,
@@ -105,10 +108,12 @@ interface CountingModel {
  *  zero and asserts nothing. */
 function countingModel(modelId: string): CountingModel {
   let calls = 0;
+
   const model = scriptedTurnModel({
     modelId,
     doGenerate: () => {
       calls += 1;
+
       return {
         content: [{ type: 'text', text: `answered by ${modelId}` }],
         finishReason: { unified: 'stop', raw: undefined },
@@ -120,6 +125,7 @@ function countingModel(modelId: string): CountingModel {
       };
     },
   });
+
   return { model, calls: () => calls };
 }
 
@@ -146,6 +152,7 @@ function harness(input: {
   const deepV1 = countingModel('m-deep-v1');
   const deepV2 = countingModel('m-deep-v2');
   const resolvedSpecs: string[] = [];
+
   const swarm: AgentsSwarmDeps = {
     rt,
     // One REAL actor per node, over the caller's own database: a routed run
@@ -157,21 +164,28 @@ function harness(input: {
     // table, so an unexpected spec is a named failure instead of an undefined.
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
+
       if (spec === 'm-default') return caller.model;
+
       if (spec === 'm-deep-v1') return deepV1.model;
+
       if (spec === 'm-deep-v2') return deepV2.model;
       throw new Error(`test fixture has no model for ${spec}`);
     },
   };
+
   const profile = (): AgentsProfileContext => ({
     envelope: input.envelope,
     provider: PROVIDER,
     roleId: input.roleId,
     availableTools: [],
   });
+
   const deps: AgentsToolDeps = { mode: 'build', swarm, profile };
   const entry = createAgentsTool(deps);
+
   if (!entry) throw new Error('Expected the agents tool to be created');
+
   return {
     execute: toolExecute<AgentsToolInput, JsonObject>(entry),
     rt,
@@ -208,6 +222,7 @@ function frozenSnapshot(roleId: string): SwarmProfileSnapshot {
     availableTools: [],
     activeSkills: [],
   });
+
   return {
     profile: resolved,
     sources: { roleSource: 'caller', tierSource: resolved.tier.source, presetSource: 'role_default' },
@@ -242,12 +257,14 @@ function seedInterruptedRun(input: {
     task: input.task, action: '', observation: input.task,
     codeUsed: null, depth: 0, msgId: null,
   });
+
   return rootId;
 }
 
 describe('a delegated tier routes the model its nodes run', () => {
   test('the deep tier\'s own model does the work, and the ledger names that model', async () => {
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'lead' });
+
     const result = v.parse(RoutedResultSchema, await h.execute({
       action: 'swarm',
       preset: 'ideate',
@@ -269,10 +286,13 @@ describe('a delegated tier routes the model its nodes run', () => {
     // and the provenance named a model that never ran.
     expect(result.profile.profile.tier).toEqual({ id: 'deep', model: 'm-deep-v1' });
     expect(result.profile.sources.tierSource).toBe('explicit');
+
     const [row] = h.rt.storage.sql<{ root_id: string }>`
       SELECT root_id FROM mcts_search_runs
       WHERE actor_id = ${h.rt.actor.actorId} AND engine = 'swarm' LIMIT 1`;
+
     expect(row).toBeDefined();
+
     if (!row) return;
     const stored = new MctsSearchStore(h.rt.storage.sql, h.rt.actor).readSwarmProfile(row.root_id);
     expect(stored?.profile.tier.model).toBe('m-deep-v1');
@@ -282,6 +302,7 @@ describe('a delegated tier routes the model its nodes run', () => {
     // `auditor` declares tier `deep`, and nothing in this call says so. The
     // provenance has to report role-derived rather than flatten it to explicit.
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'auditor' });
+
     const result = v.parse(RoutedResultSchema, await h.execute({
       action: 'swarm',
       preset: 'ideate',
@@ -289,6 +310,7 @@ describe('a delegated tier routes the model its nodes run', () => {
       branches: 1,
       depth: 1,
     }));
+
     expect(h.resolvedSpecs).toEqual(['m-deep-v1']);
     expect(h.deepV1Calls()).toBeGreaterThan(0);
     expect(h.callerCalls()).toBe(0);
@@ -300,14 +322,18 @@ describe('a delegated tier routes the model its nodes run', () => {
     // to route to, so the seam is never consulted and nothing refuses.
     const { rt, testSql } = createTestRuntime();
     const caller = countingModel('m-default');
+
     const entry = createAgentsTool({
       mode: 'build',
       swarm: { rt, hostNode: hostedSeatsOver({ rt, db: testSql.db }).hostNode, model: caller.model },
     });
+
     if (!entry) throw new Error('Expected the agents tool to be created');
+
     const result = v.parse(v.object({ preset: v.string() }), await toolExecute<AgentsToolInput, unknown>(entry)({
       action: 'swarm', preset: 'ideate', task: 'anything', branches: 1, depth: 1,
     }));
+
     expect(result.preset).toBe('ideate');
     expect(caller.calls()).toBeGreaterThan(0);
   }, 30_000);
@@ -358,9 +384,11 @@ describe('a re-drive continues under the profile it started under', () => {
 
     const flat = harness({ envelope: envelopeOf(TIERS_V2, 2), roleId: 'lead' });
     seedInterruptedRun({ rt: flat.rt, task, roleId: 'lead' });
+
     const result = v.parse(RoutedResultSchema, await flat.execute({
       action: 'swarm', task,
     }, REDRIVE));
+
     expect(result.preset).toBe('ideate');
     // The preset carries its own width, and nothing in the call named a number:
     // `ideate` fans 5. A preset read off the stored role brings its caps with it.
@@ -411,6 +439,7 @@ function perNodeHarness() {
   const a = countingModel('m-alpha');
   const b = countingModel('m-beta');
   const resolvedSpecs: string[] = [];
+
   const swarm: AgentsSwarmDeps = {
     rt,
     // One REAL actor per node, over the caller's own database: a routed run
@@ -420,15 +449,21 @@ function perNodeHarness() {
     model: caller.model,
     resolveModel: (spec) => {
       resolvedSpecs.push(spec);
+
       if (spec === 'm-alpha') return a.model;
+
       if (spec === 'm-beta') return b.model;
+
       if (spec === 'm-default') return caller.model;
       throw new Error(`test fixture has no model for ${spec}`);
     },
   };
+
   const deps: AgentsToolDeps = { mode: 'build', swarm };
   const entry = createAgentsTool(deps);
+
   if (!entry) throw new Error('Expected the agents tool to be created');
+
   return {
     execute: toolExecute<AgentsToolInput, JsonObject>(entry),
     resolvedSpecs,
@@ -441,10 +476,12 @@ function perNodeHarness() {
 describe('`models` routes each node to its own assigned model', () => {
   test('the default is unchanged: no field, one model for all nodes, seam never asked', async () => {
     const h = perNodeHarness();
+
     const result = v.parse(PerNodeResultSchema, await h.execute({
       action: 'swarm', preset: 'ideate', task: 'three angles on the cold start',
       branches: 2, depth: 1,
     }));
+
     expect(result.candidates).toHaveLength(2);
     // ONE model did the work and the resolver was NEVER consulted: no list, no
     // routing, and the caller's own model served every node — exactly the run
@@ -457,11 +494,13 @@ describe('`models` routes each node to its own assigned model', () => {
 
   test('a supplied list routes each node to its assigned resolved model, by slot', async () => {
     const h = perNodeHarness();
+
     const result = v.parse(PerNodeResultSchema, await h.execute({
       action: 'swarm', preset: 'ideate', task: 'recon then synthesis',
       models: ['m-alpha', 'm-beta'],
       branches: 4, depth: 1,
     }));
+
     expect(result.candidates).toHaveLength(4);
     // THE SEAM, ONCE PER SPEC: the whole list resolves before any node runs, not
     // per node mid-run, and not twice for a spec two slots share.
@@ -483,10 +522,12 @@ describe('`models` routes each node to its own assigned model', () => {
     // ONE spec names every node — the degenerate routed run, which must still be
     // a legal call rather than a demand for list.length === branches.
     const one = perNodeHarness();
+
     const oneResult = v.parse(PerNodeResultSchema, await one.execute({
       action: 'swarm', preset: 'ideate', task: 'one model everywhere',
       models: ['m-alpha'], branches: 3, depth: 1,
     }));
+
     expect(oneResult.candidates).toHaveLength(3);
     expect(one.aCalls()).toBeGreaterThanOrEqual(3);
     expect(one.bCalls()).toBe(0);
@@ -495,11 +536,13 @@ describe('`models` routes each node to its own assigned model', () => {
     // so a caller tuning one shared list across presets of different widths never
     // meets a composition rule.
     const long = perNodeHarness();
+
     const longResult = v.parse(PerNodeResultSchema, await long.execute({
       action: 'swarm', preset: 'ideate', task: 'a wide list on a narrow wave',
       models: ['m-alpha', 'm-beta', 'm-default', 'm-alpha', 'm-beta'],
       branches: 2, depth: 1,
     }));
+
     expect(longResult.candidates).toHaveLength(2);
     expect(long.resolvedSpecs).toEqual(['m-alpha', 'm-beta', 'm-default', 'm-alpha', 'm-beta']);
     expect(long.aCalls()).toBeGreaterThanOrEqual(1);
@@ -508,8 +551,10 @@ describe('`models` routes each node to its own assigned model', () => {
 
   test('an unresolvable spec is refused by name, before any node runs', async () => {
     const h = perNodeHarness();
+
     const pending = h.execute({ action: 'swarm', preset: 'ideate', task: 'refuse me cleanly',
       models: ['m-alpha', 'm-ghost'], branches: 2, depth: 1 });
+
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('m-ghost');
     await expect(pending).rejects.toThrow('models');
@@ -523,8 +568,10 @@ describe('`models` routes each node to its own assigned model', () => {
 
   test('naming models and tier together is refused rather than resolved by precedence', async () => {
     const h = harness({ envelope: envelopeOf(TIERS_V1, 1), roleId: 'lead' });
+
     const pending = h.execute({ action: 'swarm', preset: 'ideate', task: 'two routing decisions',
       models: ['m-alpha'], tier: 'deep', branches: 1, depth: 1 });
+
     await expect(pending).rejects.toMatchObject({ code: 'bad_input' });
     await expect(pending).rejects.toThrow('tier');
     await expect(pending).rejects.toThrow('models');
@@ -536,19 +583,24 @@ describe('`models` routes each node to its own assigned model', () => {
     // resolver: the digest is the record's identity key, so two runs differing
     // only in which model each node ran on must not collide in the store.
     const base = { preset: 'custom' as const, label: 'digest', task: 'same task' };
+
     const axes = {
       unit: { kind: 'answer' as const }, context: 'fresh' as const, expand: 'sample' as const,
       score: { kind: 'none' as const }, advance: { kind: 'none' as const },
       carry: { kind: 'none' as const },
     };
+
     const unrouted = resolveSwarm({ ...base, config: axes, branches: 2, depth: 1 });
     const alpha = resolveSwarm({ ...base, config: axes, branches: 2, depth: 1, models: ['m-alpha'] });
+
     const beta = resolveSwarm({
       ...base, config: axes, branches: 2, depth: 1, models: ['m-alpha', 'm-beta'],
     });
+
     if ('reason' in unrouted || 'reason' in alpha || 'reason' in beta) {
       throw new Error('the digest suite\'s own composition refused to resolve');
     }
+
     const unroutedDigest = configDigestOf(unrouted);
     const alphaDigest = configDigestOf(alpha);
     const betaDigest = configDigestOf(beta);

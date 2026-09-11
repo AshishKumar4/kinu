@@ -84,6 +84,7 @@ export type PublishRefusal = { refused: string };
 
 function titleOf(text: string, maxChars = 90): string {
   const line = text.trim().split('\n', 1)[0] ?? '';
+
   return line.length > maxChars ? `${line.slice(0, maxChars)}…` : line || 'untitled';
 }
 
@@ -103,19 +104,24 @@ function craftCandidate(
   now: number,
 ): PublishableCandidate | PublishRefusal {
   const tool = src.craftStore.get(name);
+
   if (!tool) return { refused: `no crafted tool named "${name}" in this workspace` };
   const score = scores.get(name);
+
   if (!score || score.uses < 1) {
     return { refused: `crafted tool "${name}" has never been used here, so nothing has proven it yet` };
   }
+
   const effective = effectiveScore(score.score, score.last_used_at, now);
   const bar = DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection;
+
   if (effective < bar) {
     return {
       refused: `crafted tool "${name}" scores ${effective.toFixed(2)} here, below the ${bar} bar `
         + 'this workspace itself uses to keep offering a tool',
     };
   }
+
   return {
     kind: 'craft',
     key: name,
@@ -134,13 +140,16 @@ function craftCandidate(
 
 function lessonCandidate(src: PublishSources, id: string): PublishableCandidate | PublishRefusal {
   const lesson = getLesson(src.sql, src.actor, id);
+
   if (!lesson) return { refused: `no lesson with id "${id}" in this workspace` };
+
   if (lesson.status !== 'corroborated') {
     return {
       refused: `lesson "${id}" is still provisional — it is kept out of this workspace's own `
         + 'MEMORY.md until a real outcome corroborates it, so it is not shareable either',
     };
   }
+
   return {
     kind: 'lesson',
     key: lesson.id,
@@ -152,13 +161,16 @@ function lessonCandidate(src: PublishSources, id: string): PublishableCandidate 
 
 function factCandidate(src: PublishSources, key: string): PublishableCandidate | PublishRefusal {
   const fact = src.facts.recall(key);
+
   if (!fact) return { refused: `no fact named "${key}" in this workspace` };
+
   if (fact.confidence < EXPERIENCE_MIN_FACT_CONFIDENCE) {
     return {
       refused: `fact "${key}" is held at confidence ${fact.confidence.toFixed(2)}, `
         + `below the ${EXPERIENCE_MIN_FACT_CONFIDENCE} publish bar`,
     };
   }
+
   return {
     kind: 'fact',
     key: fact.key,
@@ -181,10 +193,12 @@ function ownMisevolutionFlags(
   sql: SqlExecutor, actor: ActorHandle, from: number, to: number,
 ): number {
   actor.assertCurrent();
+
   const rows = sql<{ data: string | null }>`
     SELECT data FROM evolution_events
     WHERE actor_id = ${actor.actorId} AND type = 'misevolution_veto'
       AND created_at BETWEEN ${from} AND ${to}`;
+
   return rows.filter((row) => {
     // `data` is recordMisevolutionVeto's own write, so a payload that will not
     // parse is corruption in our row rather than a foreign format to shrug at —
@@ -194,6 +208,7 @@ function ownMisevolutionFlags(
     // artifacts is not one to hand another workspace on a read error.
     const decoded = tolerate(() => parseJsonValue(row.data ?? '{}'), 'malformed-input');
     const parsed = v.safeParse(VetoSurfaceSchema, decoded);
+
     if (!parsed.success) {
       diagnostics.failure(
         'experience.publishable_veto_unreadable',
@@ -203,8 +218,10 @@ function ownMisevolutionFlags(
           otherwise: 'bad_input',
         }),
       );
+
       return true;
     }
+
     return (parsed.output.surface ?? 'scaffold') !== 'import';
   }).length;
 }
@@ -215,14 +232,19 @@ async function scaffoldCandidate(
   now = nowMs(),
 ): Promise<PublishableCandidate | PublishRefusal> {
   const version = Number(key);
+
   if (key.trim() === '' || !Number.isInteger(version) || version < 0) {
     return { refused: `"${key}" is not a scaffold version — a scaffold is published by its version number` };
   }
+
   src.actor.assertCurrent();
+
   const row = src.sql<ScaffoldVersionRow>`
     SELECT version, status, rationale, written_at FROM scaffold_versions
     WHERE actor_id = ${src.actor.actorId} AND version = ${version} LIMIT 1`[0];
+
   if (!row) return { refused: `no scaffold version v${version} in this workspace` };
+
   if (row.status !== 'current') {
     return {
       refused: `scaffold v${version} is ${row.status}, not the version this workspace runs — `
@@ -235,11 +257,13 @@ async function scaffoldCandidate(
   // the v0 bootstrap (never tried) and a hand-forced promote (thin record) both
   // carry status='current' and neither earned it.
   const record = readShadowVerdict(src.sql, src.actor, version).summary;
+
   const gate = decidePromotion({
     trialsSoFar: record.trials,
     pendingWins: record.pendingWins,
     currentWins: record.currentWins,
   }, DEFAULT_SHADOW_CONFIG);
+
   if (gate.decision !== 'promote') {
     return {
       refused: `scaffold v${version} is live but its shadow record does not clear the promotion gate `
@@ -258,6 +282,7 @@ async function scaffoldCandidate(
     SELECT created_at FROM turn_outcomes
     WHERE actor_id = ${src.actor.actorId} AND scaffold_version = ${version}
     ORDER BY created_at ASC LIMIT ${EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS}`;
+
   if (turns.length < EXPERIENCE_SCAFFOLD_SURVIVAL_TURNS) {
     return {
       refused: `scaffold v${version} has served ${turns.length} graded turn`
@@ -266,7 +291,9 @@ async function scaffoldCandidate(
         + 'demands as evidence (DEFAULT_SHADOW_CONFIG.minTrials)',
     };
   }
+
   const flags = ownMisevolutionFlags(src.sql, src.actor, turns[0]?.created_at ?? now, now);
+
   if (flags > 0) {
     return {
       refused: `scaffold v${version} drew ${flags} misevolution veto${flags === 1 ? '' : 'es'} during its `
@@ -276,10 +303,13 @@ async function scaffoldCandidate(
   }
 
   const code = await src.readScaffoldVersion(version);
+
   if (code === null) {
     return { refused: `scaffold v${version} has no source in this workspace's version store, so there is nothing to share` };
   }
+
   const decisive = record.pendingWins + record.currentWins;
+
   return {
     kind: 'scaffold',
     key: String(version),

@@ -258,6 +258,7 @@ class Plane {
       // suite that took the default would be proving atomicity it never had.
       transaction: <T>(body: () => T): T => this.db.transaction(body)(),
     });
+
     return this.live;
   }
 
@@ -309,11 +310,14 @@ class Plane {
   async join(): Promise<void> {
     for (;;) {
       const close = this.deferred.shift();
+
       if (close === undefined) break;
       await this.capture(close);
     }
+
     const closing = this.closing;
     this.closing = null;
+
     if (closing !== null) await closing;
   }
 
@@ -341,17 +345,22 @@ class Plane {
       SELECT sequence_id, effect_key, effect_name, scope, seq, status, input_json, outcome,
              attempts, next_attempt_at, settled_at
       FROM terminal_effects ORDER BY sequence_id, seq, effect_key`;
+
     const runs: Record<string, number> = {};
+
     for (const row of this.sql<{ effect_key: string; runs: number }>`
       SELECT effect_key, COUNT(*) AS runs FROM conf_effect_runs
       GROUP BY effect_key ORDER BY effect_key`) {
       runs[row.effect_key] = row.runs;
     }
+
     const outputs: Record<string, string> = {};
+
     for (const row of this.sql<{ output_key: string; payload: string }>`
       SELECT output_key, payload FROM conf_effect_output ORDER BY output_key`) {
       outputs[row.output_key] = row.payload;
     }
+
     return {
       effects: rows.map((row) => ({
         sequence: row.sequence_id,
@@ -387,7 +396,9 @@ class Plane {
    *  an instant: the two planes run on deliberately unequal clocks. */
   private owedWake(): 'none' | 'due' | 'future' {
     const at = this.live?.nextRetryAt() ?? null;
+
     if (at === null) return 'none';
+
     return at <= this.clock ? 'due' : 'future';
   }
 
@@ -395,8 +406,10 @@ class Plane {
   private carry(close: () => Promise<void>): void {
     if (this.kind === 'alarm') {
       this.deferred.push(close);
+
       return;
     }
+
     this.closing = this.capture(close);
   }
 
@@ -416,7 +429,9 @@ class Plane {
 
   private fault(): TerminalEffectFault | null {
     const cut = this.cut;
+
     if (cut === null) return null;
+
     return (phase, name, scope) => {
       if (phase !== cut.phase || name !== cut.name) return;
       throw new TerminalEffectInterrupt(phase, name, scope);
@@ -435,18 +450,25 @@ class Plane {
       run: (input, scope) => {
         const key = terminalEffectKey(name, scope);
         void this.sql`INSERT INTO conf_effect_runs (effect_key) VALUES (${key})`;
+
         const runs = this.sql<{ runs: number }>`
           SELECT COUNT(*) AS runs FROM conf_effect_runs WHERE effect_key = ${key}`[0]?.runs ?? 0;
+
         if (runs === 1 && this.sql`SELECT effect_key FROM conf_held WHERE effect_key = ${key}`.length > 0) {
           return { status: 'owed', detail: 'the reply channel this answer owes is still open' };
         }
+
         void this.sql`INSERT OR IGNORE INTO conf_effect_output (output_key, payload)
           VALUES (${key}, ${input.answer})`;
+
         return { status: 'completed' };
       },
     });
+
     const table: { [K in TerminalEffectName]?: TerminalEffect } = {};
+
     for (const name of IMPLEMENTED) table[name] = declare(name);
+
     return table;
   }
 }
@@ -463,11 +485,13 @@ class Plane {
 async function conform(script: (plane: Plane) => Promise<void>): Promise<Snapshot> {
   const alarm = new Plane('alarm');
   const startup = new Plane('startup');
+
   try {
     await script(alarm);
     await script(startup);
     const detached = alarm.snapshot();
     expect(startup.snapshot()).toEqual(detached);
+
     return detached;
   } finally {
     alarm.close();
@@ -490,11 +514,13 @@ function claimState(snap: Snapshot): Record<string, string | null> {
 }
 
 const TERMINAL_CLAIM_CALL = `${TERMINAL_TRANSITION_CALL_ID}:${TRANSITION.messageId}`;
+
 // The stored result is the JSON encoding of the string 'settled'.
 const SETTLED = JSON.stringify('settled');
 
 /** Every declared effect ran exactly once, and wrote exactly one output. */
 const RAN_ONCE: Record<string, number> = Object.fromEntries(SEQUENCE.map((name) => [K(name), 1]));
+
 const EVERY_OUTPUT: Record<string, string> = Object.fromEntries(
   SEQUENCE.map((name) => [K(name), ANSWER]),
 );
@@ -652,6 +678,7 @@ describe('terminal transition conformance across two adapters', () => {
       let declared = 0;
       await plane.settle(() => {
         declared += 1;
+
         return roster([...SEQUENCE, LATE]);
       });
       await plane.join();
@@ -717,6 +744,7 @@ describe('terminal transition conformance across two adapters', () => {
         { name: 'auto_title', scope: TRANSITION.messageId, lane: 'detached', input: { answer: 'a' } },
         { name: 'turn_record', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'r' } },
       ];
+
       // Cut on the INLINE row, which the forward path reaches first: nothing runs,
       // so the replay is handed BOTH rows and its scheduling is what decides the
       // order below.
@@ -728,6 +756,7 @@ describe('terminal transition conformance across two adapters', () => {
       plane.advance(PAST_BACKOFF_MS);
       await plane.recover();
     });
+
     expect(snapshot.runOrder).toEqual([K('turn_record'), K('auto_title')]);
     expect(snapshot.runs[K('turn_record')]).toBe(1);
     expect(snapshot.runs[K('auto_title')]).toBe(1);
@@ -743,11 +772,13 @@ describe('terminal transition conformance across two adapters', () => {
    */
   test('a roster that fails part-way through inserts nothing', async () => {
     const plane = new Plane('alarm');
+
     try {
       // A roster whose second input cannot be serialized: the insert throws
       // inside the commit, after the first row has been written.
       const circular: JsonObject = {};
       circular.self = circular;
+
       const roster = (): readonly OwedEffect[] => [
         { name: 'takes', scope: TRANSITION.messageId, lane: 'inline', input: { answer: 'a' } },
         {
@@ -755,6 +786,7 @@ describe('terminal transition conformance across two adapters', () => {
           input: circular,
         },
       ];
+
       await expect(plane.settle(roster)).rejects.toThrow();
       const after = plane.snapshot();
       // NEITHER row. The first insert is rolled back with the failed one.

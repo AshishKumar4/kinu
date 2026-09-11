@@ -41,6 +41,7 @@ function workspace(outcome: 'accepted' | 'corrected' = 'corrected') {
   const { rt } = createTestRuntime({
     llmResponses: { [CLASSIFY]: `{"outcome":"${outcome}","confidence":0.9,"evidence":"test"}` },
   });
+
   return { rt, engine: new EvolutionEngine(rt) };
 }
 
@@ -48,6 +49,7 @@ function workspace(outcome: 'accepted' | 'corrected' = 'corrected') {
  *  the two things a deferral legitimately changes. */
 function comparable(row: TurnOutcomeRow): Omit<TurnOutcomeRow, 'id' | 'createdAt'> {
   const { id: _id, createdAt: _createdAt, ...rest } = row;
+
   return rest;
 }
 
@@ -85,6 +87,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
       turnId: 'msg-err',
       toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'exit 1' }],
     });
+
     const inline = workspace();
     await inline.engine.reviewTurn(headless(), null);
 
@@ -104,7 +107,11 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     const { rt, engine } = workspace();
     let completions = 0;
     const complete = rt.llm.complete.bind(rt.llm);
-    rt.llm.complete = async (prompt: string) => { completions++; return complete(prompt); };
+    rt.llm.complete = async (prompt: string) => {
+      completions++;
+
+      return complete(prompt);
+    };
 
     void rt.storage.sql`INSERT INTO completed_turns (actor_id, id, turn, followup, in_window, review, created_at)
       VALUES (${rt.actor.actorId}, 'rev-corrupt', ${'{not json at all'}, ${'a follow-up'}, 0, 'queued', 1)`;
@@ -135,6 +142,7 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     engine.deferTurnReview(makeTurn(), 'that broke the build');
     const reviewTurn = engine.reviewTurn.bind(engine);
     engine.reviewTurn = async () => { throw new Error('the classifier host is down'); };
+
     expect(await engine.runDeferredTurnReviews()).toEqual({ reviewed: 0, refused: [] });
     expect(engine.sessionWindow.countQueuedReviews()).toBe(1);   // carried forward
 
@@ -146,9 +154,11 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
   test('one open drains a bounded batch — a backlog is not the next turn\'s latency', async () => {
     const { rt, engine } = workspace();
     const owed = MAX_TURN_REVIEWS_PER_OPEN + 3;
+
     for (let i = 0; i < owed; i++) {
       engine.deferTurnReview(makeTurn({ turnId: `msg-${i}` }), `follow-up ${i}`);
     }
+
     expect(await engine.runDeferredTurnReviews())
       .toEqual({ reviewed: MAX_TURN_REVIEWS_PER_OPEN, refused: [] });
     expect(engine.sessionWindow.countQueuedReviews()).toBe(3);   // the rest waits for the next open
@@ -163,10 +173,13 @@ describe('EvolutionEngine.deferTurnReview — the one-shot turn-lane exit', () =
     // The contract, not the number: a ceiling exists, everything under it
     // queues, and the first refusal is exactly where the count stops moving.
     let queued = 0;
+
     while (engine.deferTurnReview(makeTurn({ turnId: `msg-${String(queued)}` }), null) === 'queued') {
       queued += 1;
+
       if (queued > 1_000) throw new Error('no ceiling: 1000 reviews queued without a refusal');
     }
+
     expect(queued).toBeGreaterThan(0);
     expect(engine.sessionWindow.countQueuedReviews()).toBe(queued);
     expect(engine.deferTurnReview(makeTurn({ turnId: 'still-refused' }), null)).toBe('queue_full');

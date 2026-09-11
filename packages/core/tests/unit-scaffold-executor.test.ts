@@ -24,6 +24,7 @@ import { createTestRuntime } from './helpers';
 function makeRtWithMockedExecutor(execute: Executor['execute']) {
   const { rt } = createTestRuntime();
   rt.executor = { languages: ['javascript'], execute };
+
   return rt;
 }
 
@@ -32,7 +33,9 @@ function hostProvider(
 ): ResolvedProvider {
   if (!Array.isArray(providers)) throw new Error('expected resolved providers');
   const host = providers.find((provider) => provider.name === 'host');
+
   if (!host) throw new Error('no host provider');
+
   return host;
 }
 
@@ -51,8 +54,10 @@ describe('runScaffold', () => {
       await host.fns.emit({ type: 'text_delta', text: 'hello ' });
       await host.fns.emit({ type: 'text_delta', text: 'world' });
       await host.fns.emit({ type: 'done', result: { ok: true } });
+
       return { result: undefined };
     });
+
     // Scaffold code must pass modifyScaffold's signature gate or runScaffold
     // would refuse — but for tests we override via rt.identity.scaffold.read.
     rt.identity.scaffold.read = async () => 'async function run() { /* mocked */ }';
@@ -99,11 +104,14 @@ describe('runScaffold', () => {
 
   test('synthesizes a done event if scaffold completes without emitting one', async () => {
     const events: ScaffoldEvent[] = [];
+
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
       const host = hostProvider(providers);
       await host.fns.emit({ type: 'text_delta', text: 'partial' });
+
       return { result: undefined };
     });
+
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     const result = await runScaffold({
@@ -119,10 +127,13 @@ describe('runScaffold', () => {
   test('shadow-mode override uses scaffoldCodeOverride instead of reading rt', async () => {
     const events: ScaffoldEvent[] = [];
     let receivedCode = '';
+
     const rt = makeRtWithMockedExecutor(async (code) => {
       receivedCode = code;
+
       return { result: undefined };
     });
+
     rt.identity.scaffold.read = async () => 'CURRENT SCAFFOLD';
 
     await runScaffold({
@@ -138,11 +149,14 @@ describe('runScaffold', () => {
 
   test('host.callTool dispatches to provided callTool fn', async () => {
     const calls: Array<{ name: string; args: JsonObject }> = [];
+
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
       const host = hostProvider(providers);
       const result = await host.fns.callTool('save_note', { content: 'hi' });
+
       return { result };
     });
+
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     const result = await runScaffold({
@@ -151,6 +165,7 @@ describe('runScaffold', () => {
       llmStream: () => asyncOf(),
       callTool: async (name, args) => {
         calls.push({ name, args });
+
         return 'ok';
       },
     });
@@ -160,11 +175,14 @@ describe('runScaffold', () => {
   });
   test('host.llmStream preserves the visible text of native model events', async () => {
     const events: ScaffoldEvent[] = [];
+
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
       const host = hostProvider(providers);
       const text = await host.fns.llmStream({ system: 's', messages: [] });
+
       return { result: text };
     });
+
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     await runScaffold({
@@ -183,13 +201,16 @@ describe('runScaffold', () => {
     // is observed directly instead of guessed from a wall-clock window.
     const gate = Promise.withResolvers<void>();
     let released = false;
+
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
       await gate.promise;
       released = true;
       const host = hostProvider(providers);
       await host.fns.emit({ type: 'text_delta', text: 'finally done' });
+
       return { result: undefined };
     });
+
     rt.identity.scaffold.read = async () => 'async function run() {}';
 
     const run = runScaffold({
@@ -213,22 +234,27 @@ describe('runScaffold', () => {
 
   test('a throwing generator scaffold emits exactly one error event', async () => {
     const events: ScaffoldEvent[] = [];
+
     const rt = makeRtWithMockedExecutor(async (code, providers) => {
       const arr: ResolvedProvider[] = Array.isArray(providers)
         ? providers
         : [{ name: 'workspace', fns: providers }];
+
       try {
         const fn = new Function(...arr.map((p) => p.name), `return (async () => {\n${code}\n})();`);
         await fn(...arr.map((p) => p.fns));
+
         return { result: undefined };
       } catch (err) {
         return { result: undefined, error: err instanceof Error ? err.message : String(err) };
       }
     });
+
     const result = await runScaffold({
       rt, task: 'x', emit: (e) => { events.push(e); }, llmStream: () => asyncOf(),
       scaffoldCodeOverride: `async function* run(rt, task) { throw new Error('boom'); }`,
     });
+
     expect(result.ok).toBe(false);
     expect(events.filter((e) => e.type === 'error')).toHaveLength(1);
   });

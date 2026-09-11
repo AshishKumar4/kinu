@@ -44,6 +44,7 @@ import * as v from 'valibot';
 import { parseJsonc } from '../../../../scripts/jsonc';
 
 const repoRoot = new URL('../../../../', import.meta.url).pathname;
+
 const workerEntry = new URL('./control-plane-do-worker.ts', import.meta.url).pathname;
 
 /* ── 1. What production declares ─────────────────────────────────────────── */
@@ -73,15 +74,18 @@ const wrangler = parseJsonc(
 );
 
 const binding = wrangler.durable_objects.bindings.find((entry) => entry.class_name === CLASS_NAME);
+
 assert.ok(binding, `wrangler.jsonc binds no Durable Object of class ${CLASS_NAME}`);
 
 const sqliteMigration = wrangler.migrations
   .find((entry) => (entry.new_sqlite_classes ?? []).includes(CLASS_NAME));
+
 assert.ok(
   sqliteMigration,
   `${CLASS_NAME} is in no migration's new_sqlite_classes, so it is not SQLite-backed and `
   + '`ctx.storage.sql` would not exist on it',
 );
+
 // The two arms are mutually exclusive in wrangler, and a class in `new_classes`
 // gets key-value storage instead. Stated because the whole persistence half of
 // this fixture rests on which list the class is in.
@@ -105,7 +109,9 @@ const bundle = await build({
   loader: { '.wasm': 'binary' },
   external: ['cloudflare:workers', 'cloudflare:sockets', 'node:*'],
 });
+
 const workerScript = bundle.outputFiles[0].text;
+
 const graph = Object.keys(bundle.metafile.inputs);
 
 /**
@@ -129,9 +135,11 @@ const FORBIDDEN_IN_DO_GRAPH = [
   'src/lib/kv.ts',
   'src/user/workspace-capability.ts',
 ];
+
 const leaked = FORBIDDEN_IN_DO_GRAPH.filter(
   (suffix) => graph.some((input) => input.endsWith(suffix)),
 );
+
 assert.deepEqual(
   leaked, [],
   `the ControlPlaneDO module graph reaches the admin/user-plane half: ${leaked.join(', ')}. `
@@ -141,6 +149,7 @@ assert.deepEqual(
 /* ── 3. The runtime, shaped the way production declares ──────────────────── */
 
 const SECRET = 'control-plane-workerd-fixture-root-secret';
+
 const persistencePath = mkdtempSync(join(tmpdir(), 'kinu-control-plane-'));
 
 /**
@@ -204,18 +213,23 @@ async function settle(miniflare, steps) {
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(steps),
   });
+
   const body = await response.text();
   assert.equal(response.status, 200, `fixture worker answered ${response.status}: ${body}`);
+
   return JSON.parse(body);
 }
 
 /* ── 4. The refusals ─────────────────────────────────────────────────────── */
 
 const AT = 1_770_000_000_000;
+
 const USER = { userId: 'user-alpha', email: 'alpha@example.test', displayName: 'Alpha', at: AT };
+
 const WORKSPACE = {
   userId: 'user-alpha', name: 'research', displayName: 'Research', createdAt: AT - 1000, at: AT,
 };
+
 const AUDIT = {
   actorEmail: 'operator@example.test', actorUserId: 'user-operator',
   operation: 'workspace.remove', targetKind: 'workspace', target: 'user-alpha/research',
@@ -265,6 +279,7 @@ const REFUSALS = [
 ];
 
 const first = runtime();
+
 const findings = { platform: {}, refusals: [], writes: {}, persistence: {} };
 
 /** The ids and the clock the OBJECT minted, carried across the process boundary
@@ -272,7 +287,9 @@ const findings = { platform: {}, refusals: [], writes: {}, persistence: {} };
  *  — the store owns both — so the only way the second runtime can name a row the
  *  first one wrote is to be told what came back. */
 let auditId = '';
+
 let intentId = '';
+
 let intentAt = 0;
 
 try {
@@ -334,6 +351,7 @@ try {
     { method: 'recordAudit', caller: 'admin', entry: INTENT },
     { method: 'overview', caller: 'admin' },
   ]);
+
   written.forEach((outcome, index) => {
     assert.equal(
       outcome.settled, 'resolved',
@@ -380,6 +398,7 @@ try {
 // from disk, which runs the constructor — and therefore `initControlPlaneSchema`
 // — against tables that already exist.
 const second = runtime();
+
 try {
   const survived = await settle(second, [
     { method: 'overview', caller: 'admin' },
@@ -413,6 +432,7 @@ try {
     overview, users, workspaces, audit,
     pendingBefore, settled, pendingAfter, replayed, refusedAfterRestart,
   ] = survived;
+
   assert.equal(overview.settled, 'resolved', `overview after restart: ${overview.message}`);
   assert.equal(
     overview.value.users, 1,
@@ -496,10 +516,12 @@ try {
 // and the operations dataset stays empty, which is a green test and no data.
 const installed = isolateDiagnostics
   .filter((line) => line.includes('"analytics.sink_installed"'));
+
 assert.ok(
   installed.length > 0,
   'the Durable Object never installed the analytics sink in its own isolate',
 );
+
 assert.ok(
   installed.every((line) => line.includes('"controlPlaneOps":true')),
   `the sink installed without the operations dataset in reach: ${installed.join(' | ')}`,
@@ -512,18 +534,22 @@ assert.ok(
 // the property: one attempt, one marker, whichever way it goes.
 const recorded = isolateDiagnostics
   .filter((line) => line.includes('"control_plane.operation_recorded"'));
+
 assert.equal(
   recorded.length, 2,
   `expected one marker per settled attempt, got ${recorded.length}`,
 );
+
 assert.ok(
   recorded.every((line) => line.includes(`"actor":"${AUDIT.actorDigest}"`)),
   `a marker was published without the actor digest: ${recorded.join(' | ')}`,
 );
+
 assert.ok(
   !recorded.some((line) => line.includes('"outcome":"pending"')),
   'a pending intent produced an operations row; only a settled attempt may',
 );
+
 // The reason slot is a CLOSED classification, never the row's detail. The detail
 // of a thrown failure is a rendered cause chain, and the sink's own rule is that
 // a cause chain never reaches a dataset this deployment does not age out.
@@ -531,6 +557,7 @@ assert.ok(
   recorded.some((line) => line.includes('"reason":"ok"')),
   `the settlement published no closed reason: ${recorded.join(' | ')}`,
 );
+
 assert.ok(
   !recorded.some((line) => line.includes('cancelled job-7') || line.includes('affected=1')),
   `an audit row's detail text reached the operations dataset: ${recorded.join(' | ')}`,
@@ -542,6 +569,7 @@ assert.ok(
 // because a leak anywhere on this path reaches a three-month dataset an admin UI
 // renders.
 const leakedAddress = isolateDiagnostics.filter((line) => line.includes(AUDIT.actorEmail));
+
 assert.deepEqual(
   leakedAddress, [],
   `the operator's address reached the diagnostics channel: ${leakedAddress.join(' | ')}`,
@@ -557,13 +585,21 @@ findings.isolate = {
 
 findings.platform.workerdVersion = (await import('workerd/package.json', { with: { type: 'json' } }))
   .default.version;
+
 findings.platform.compatibilityDate = wrangler.compatibility_date;
+
 findings.platform.compatibilityFlags = wrangler.compatibility_flags;
+
 findings.platform.storage = 'sqlite';
+
 findings.platform.migrationTag = sqliteMigration.tag;
+
 findings.platform.bindingName = binding.name;
+
 findings.platform.className = CLASS_NAME;
+
 findings.platform.doGraphModules = graph.length;
+
 findings.ok = true;
 
 process.stdout.write(`${JSON.stringify(findings)}\n`);

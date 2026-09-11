@@ -26,15 +26,19 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
 const SRC = join(import.meta.dir, '..', 'src');
+
 const CSS = readFileSync(join(SRC, 'index.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
+
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
+
     if (entry.isDirectory()) out.push(...sourceFiles(path));
     else if (entry.name.endsWith('.tsx') || entry.name.endsWith('.ts')) out.push(path);
   }
+
   return out;
 }
 
@@ -46,16 +50,20 @@ const asUtility: ReadonlySet<string> = new Set(
 /** Every `variant:p-name` written in the app, mapped to where it appears. */
 function variantUses(): Map<string, string[]> {
   const uses = new Map<string, string[]>();
+
   for (const file of sourceFiles(SRC)) {
     const text = readFileSync(file, 'utf8');
+
     for (const [, , name] of text.matchAll(
       /(?<![-\w])(hover|focus|focus-within|focus-visible|active|disabled|group-hover|aria-pressed):(p-[a-z0-9-]+)/g,
     )) {
       const at = uses.get(name!) ?? [];
+
       if (!at.includes(file)) at.push(file);
       uses.set(name!, at);
     }
   }
+
   return uses;
 }
 
@@ -64,6 +72,7 @@ describe('p-* utility variants', () => {
     const dead = [...variantUses()]
       .filter(([name]) => !asUtility.has(name))
       .map(([name, files]) => `${name} (${files.length} file(s), e.g. ${files[0]!.slice(SRC.length + 1)})`);
+
     expect(dead).toEqual([]);
   });
 
@@ -80,6 +89,7 @@ describe('p-* utility variants', () => {
     const duplicated = [...asUtility].filter((name) =>
       new RegExp(`^\\s*\\.${name}\\s*(,|\\{)`, 'm').test(CSS),
     );
+
     expect(duplicated).toEqual([]);
   });
 });

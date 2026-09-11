@@ -58,12 +58,16 @@ const ROOT: VfsCred = { uid: 0, gid: 0, groups: [0], umask: 0o022 };
 
 function sqlBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     const bytes = new Uint8Array(value.byteLength);
     const source = new DataView(value.buffer, value.byteOffset, value.byteLength);
+
     for (let index = 0; index < bytes.length; index += 1) bytes[index] = source.getUint8(index);
+
     return bytes;
   }
+
   return v.parse(v.union([v.string(), v.number(), v.bigint(), v.null()]), value);
 }
 
@@ -81,22 +85,28 @@ interface Fixture {
 async function openFixture(): Promise<Fixture> {
   const database = new Database(':memory:');
   databases.push(database);
+
   const sql: SqlDatabase = {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<SqlRow, SQLQueryBindings[]>(query);
       const bound = bindings.map(sqlBinding);
+
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
+
   const workspace = await NimbusWorkspace.create({
     sql,
     transactions: { storage: { transactionSync: <T,>(fn: () => T): T => database.transaction(fn)() } },
     generation: 1,
   });
+
   const durable = new Map<string, unknown>();
   const processes = new SessionProcessSupervisor();
+
   const host: ProgrammaticHost = {
     _w1SessionDestroyed: false,
     env: {},
@@ -124,7 +134,9 @@ async function openFixture(): Promise<Fixture> {
     ensureFacetManager: () => undefined,
     initSession: async () => { throw new Error('workspace is already composed'); },
   };
+
   await ensureProgrammaticReady(host);
+
   return {
     workspace,
     host,
@@ -134,6 +146,7 @@ async function openFixture(): Promise<Fixture> {
       const root = workspace.vfs.as(ROOT);
       provisionAgentHome(root, agentName, identity);
       confineAgentTmp(workspace.vfs, agentName, identity);
+
       return agentCred(identity);
     },
     pidFor: (cred) => processes.spawn('agent', ['agent'], WORKSPACE_ROOT, { cred }).pid,
@@ -143,7 +156,9 @@ async function openFixture(): Promise<Fixture> {
 
 async function statOf(workspace: NimbusWorkspace, path: string): Promise<{ uid: number; mode: number }> {
   const stat = await workspace.vfs.as(ROOT).stat(path);
+
   if (stat === null) throw new Error(`no inode at ${path}`);
+
   return { uid: stat.uid, mode: stat.mode & 0o777 };
 }
 

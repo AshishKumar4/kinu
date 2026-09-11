@@ -127,10 +127,12 @@ export function initAlternateTakesTable(execRaw: RawSqlExec): void {
 function ancestorPath(byId: ReadonlyMap<string, SearchNode>, nodeId: string): Set<string> {
   const path = new Set<string>();
   let current = byId.get(nodeId);
+
   while (current && !path.has(current.id)) {
     path.add(current.id);
     current = current.parent_id ? byId.get(current.parent_id) : undefined;
   }
+
   return path;
 }
 
@@ -151,15 +153,20 @@ export function findNearTiedRivals(
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const winnerPath = ancestorPath(byId, winner.id);
   const seenTexts = new Set([winner.observation.trim()]);
+
   return nodes
     .filter((n) => {
       if (n.id === winner.id || n.depth === 0) return false;
+
       if (n.value < winner.value - epsilon) return false;
+
       // Same-path nodes are refinements of the winner's approach, not rivals.
       if (winnerPath.has(n.id) || ancestorPath(byId, n.id).has(winner.id)) return false;
       const text = n.observation.trim();
+
       if (!text || seenTexts.has(text)) return false;
       seenTexts.add(text);
+
       return true;
     })
     .sort((a, b) => b.value - a.value || b.depth - a.depth)
@@ -178,19 +185,24 @@ export function captureAlternateTakes(
   input: { rootId: string; task: string; winnerId: string; epsilon: number; now?: number },
 ): string | null {
   actor.assertCurrent();
+
   const nodes = sql<SearchNode>`
     SELECT * FROM search_nodes
     WHERE actor_id = ${actor.actorId} AND root_id = ${input.rootId}
       AND status IN ('terminal', 'open')`;
+
   const winner = nodes.find((n) => n.id === input.winnerId);
+
   if (!winner) return null;
 
   const rivals = findNearTiedRivals(nodes, winner, input.epsilon);
+
   if (rivals.length === 0) return null;
 
   const toCandidate = (n: SearchNode): AlternateTakeCandidate => ({
     nodeId: n.id, text: n.observation, score: n.value, visits: n.visits, depth: n.depth,
   });
+
   const id = `take-${nanoid()}`;
   void sql`INSERT INTO alternate_takes
         (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id,
@@ -200,6 +212,7 @@ export function captureAlternateTakes(
          ${winner.id}, ${null},
          ${JSON.stringify([toCandidate(winner), ...rivals.map(toCandidate)])},
          ${input.now ?? nowMs()}, ${null})`;
+
   return id;
 }
 
@@ -228,11 +241,14 @@ export function recordBranchTakeSet(
 ): AlternateTakeSet | null {
   actor.assertCurrent();
   const settlementKey = input.settlementKey ?? null;
+
   if (settlementKey !== null) {
     const stored = sql<RawTakeRow>`
       SELECT * FROM alternate_takes
       WHERE actor_id = ${actor.actorId} AND settlement_key = ${settlementKey} LIMIT 1`[0];
+
     if (stored) return toTakeSet(stored);
+
     // The key is recorded but its row is gone. The set existed; re-minting one
     // is exactly the duplicate the key exists to prevent.
     if (effectAlreadyDone(sql, actor, BRANCH_SCOPE, settlementKey)) return null;
@@ -240,13 +256,16 @@ export function recordBranchTakeSet(
 
   const liveText = input.liveText.trim();
   const branchText = input.branchText.trim();
+
   if (!liveText || !branchText || liveText === branchText) return null;
 
   const id = `take-${nanoid()}`;
+
   const candidates: AlternateTakeCandidate[] = [
     { nodeId: `${id}-live`, text: liveText, score: 0.5, visits: 1, depth: 0, origin: 'live' },
     { nodeId: `${id}-branch`, text: branchText, score: 0.5, visits: 1, depth: 0, origin: 'branch' },
   ];
+
   const now = input.now ?? nowMs();
   void sql`INSERT INTO alternate_takes
         (actor_id, id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates,
@@ -256,9 +275,11 @@ export function recordBranchTakeSet(
          ${input.task.slice(0, 500)}, ${'branch'},
          ${candidates[0]!.nodeId}, ${null}, ${JSON.stringify(candidates)},
          ${settlementKey}, ${now}, ${null})`;
+
   // Same synchronous pass as the insert: the tombstone is what answers the
   // replay once this row has been retired.
   if (settlementKey !== null) recordEffectDone(sql, actor, BRANCH_SCOPE, settlementKey, now);
+
   return {
     id, turnId: input.turnId, sessionId: input.sessionId, task: input.task.slice(0, 500),
     source: 'branch', winnerNodeId: candidates[0]!.nodeId, chosenNodeId: null,
@@ -291,15 +312,19 @@ export function claimAlternateTakesForTurn(
   const actorId = actor.actorId;
   void sql`DELETE FROM alternate_takes
     WHERE actor_id = ${actorId} AND turn_id IS NULL AND created_at < ${input.startedAt}`;
+
   if (input.takeIds === undefined) {
     // One guarded statement: only rows still unclaimed move, and RETURNING
     // counts exactly the rows this call claimed.
     const claimed = sql<{ id: string }>`UPDATE alternate_takes
         SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
         WHERE actor_id = ${actorId} AND turn_id IS NULL RETURNING id`;
+
     return claimed.length;
   }
+
   let claimed = 0;
+
   for (const id of input.takeIds) {
     // Guarded on STILL being unclaimed: a recorded id another turn already
     // claimed, or that never existed, claims nothing here. RETURNING counts
@@ -307,8 +332,10 @@ export function claimAlternateTakesForTurn(
     const moved = sql<{ id: string }>`UPDATE alternate_takes
         SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
         WHERE actor_id = ${actorId} AND id = ${id} AND turn_id IS NULL RETURNING id`;
+
     claimed += moved.length;
   }
+
   return claimed;
 }
 
@@ -316,6 +343,7 @@ export function claimAlternateTakesForTurn(
  *  so its retry acts on the set the turn actually competed against. */
 export function unclaimedAlternateTakeIds(sql: SqlExecutor, actor: ActorHandle): string[] {
   actor.assertCurrent();
+
   return sql<{ id: string }>`SELECT id FROM alternate_takes
     WHERE actor_id = ${actor.actorId} AND turn_id IS NULL`
     .map((row) => row.id);
@@ -334,10 +362,13 @@ export function purgeUnclaimedAlternateTakes(
 ): void {
   actor.assertCurrent();
   const actorId = actor.actorId;
+
   if (takeIds === undefined) {
     void sql`DELETE FROM alternate_takes WHERE actor_id = ${actorId} AND turn_id IS NULL`;
+
     return;
   }
+
   for (const id of takeIds) {
     void sql`DELETE FROM alternate_takes
       WHERE actor_id = ${actorId} AND id = ${id} AND turn_id IS NULL`;
@@ -366,6 +397,7 @@ export function listAlternateTakeSets(
   sql: SqlExecutor, actor: ActorHandle, opts: { limit?: number } = {},
 ): AlternateTakeSet[] {
   actor.assertCurrent();
+
   return sql<RawTakeRow>`
     SELECT * FROM alternate_takes WHERE actor_id = ${actor.actorId}
     ORDER BY created_at DESC, id DESC LIMIT ${opts.limit ?? 50}`
@@ -392,15 +424,19 @@ export function recordTakePick(
   input: { takeId: string; nodeId: string; scaffoldVersion?: number | null; now?: number },
 ): TakePickRecord {
   actor.assertCurrent();
+
   const row = sql<RawTakeRow>`SELECT * FROM alternate_takes
     WHERE actor_id = ${actor.actorId} AND id = ${input.takeId}`[0];
+
   if (!row) throw new Error(`Unknown take set "${input.takeId}"`);
   const set = toTakeSet(row);
   const chosen = set.candidates.find((c) => c.nodeId === input.nodeId);
+
   if (!chosen) throw new Error(`Node "${input.nodeId}" is not a candidate of take set "${input.takeId}"`);
 
   const now = input.now ?? nowMs();
   const changedAnswer = chosen.nodeId !== set.winnerNodeId;
+
   // Branch-sourced candidates are synthetic (live answer vs head answer) —
   // there is no convergence record in search_nodes to re-point.
   if (changedAnswer && set.source === 'mcts') {
@@ -412,6 +448,7 @@ export function recordTakePick(
         ELSE status END
       WHERE actor_id = ${actor.actorId} AND id IN (${set.winnerNodeId}, ${chosen.nodeId})`;
   }
+
   void sql`UPDATE alternate_takes
       SET chosen_node_id = ${chosen.nodeId}, winner_node_id = ${chosen.nodeId}, picked_at = ${now}
       WHERE actor_id = ${actor.actorId} AND id = ${set.id}`;
@@ -420,10 +457,13 @@ export function recordTakePick(
   // explicit-thumbs path uses, through the canonical conversation store.
   let userMessage = set.task;
   let assistantResponse = '';
+
   if (set.turnId) {
     const pair = conversationTurnPair(sql, actor, set.turnId);
+
     if (pair) {
       assistantResponse = pair.response ?? '';
+
       if (pair.request !== null) userMessage = pair.request;
     }
   }
@@ -460,7 +500,9 @@ export function recordTakePick(
  *  side of the split they are. */
 export function takeEvidence(candidate: AlternateTakeCandidate): string {
   if (candidate.origin === 'live') return "the live turn's answer";
+
   if (candidate.origin === 'branch') return "the branched redirect's answer";
+
   return `score ${candidate.score.toFixed(2)} · ${candidate.visits} visit${candidate.visits === 1 ? '' : 's'} · depth ${candidate.depth}`;
 }
 
@@ -475,6 +517,7 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
       `and the user compared their findings and picked a different head's answer than the one you merged to:`
     : `While exploring "${evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho)}" you surfaced several near-tied approaches, ` +
       `and the user compared them and picked a different take than the one you answered with:`;
+
   return (
     `${framing}\n\n` +
     `${evidenceWindow(chosen.text, EVIDENCE_BUDGETS.takeChosen)}\n\n` +

@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 
 const ROOT = join(import.meta.dir, "..");
+
 const source = (path: string) => readFileSync(join(ROOT, path), "utf8");
 
 describe("the creation box is a mission, not a first prompt", () => {

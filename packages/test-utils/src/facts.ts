@@ -16,5 +16,6 @@ export function createTestFactsStore(): TestFacts {
   const testSql = createTestSql();
   const actors = createTestActors(testSql.sql, testSql.execRaw);
   initFactsTable(testSql.execRaw);
+
   return { facts: createFactsStore(testSql.sql, actors.main), testSql, actors, actor: actors.main };
 }

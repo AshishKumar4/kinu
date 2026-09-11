@@ -45,6 +45,7 @@ const MESSAGES = new Map(
     .filter((line) => line.trim().length > 0)
     .map((line) => {
       const record = v.parse(RecordSchema, JSON.parse(line));
+
       return [record.sha, record] as const;
     }),
 );
@@ -58,11 +59,14 @@ const MESSAGES = new Map(
 const CODE: ReadonlySet<string> = new Set([
   'OrchestratorAgent', 'EvolutionEngine', 'TurnAccumulator', 'ExecutorProvider', 'NimbusWorkspace',
 ]);
+
 const isCode = (name: string): boolean => CODE.has(name);
 
 const rulesFor = (sha: string): Rule[] => {
   const record = MESSAGES.get(sha);
+
   if (record === undefined) throw new Error(`no fixture record for ${sha}`);
+
   return [...new Set(inspect(record.message, isCode).map((violation) => violation.rule))].sort();
 };
 
@@ -72,6 +76,7 @@ describe('the fixture is the real thing', () => {
     // assertion below vacuous, which is the exact shape this repository's gates
     // exist to refuse.
     expect(MESSAGES.size).toBe(9);
+
     for (const [sha, record] of MESSAGES) {
       expect(sha).toMatch(/^[0-9a-f]{10}$/);
       expect(record.message.trim().length).toBeGreaterThan(200);
@@ -91,6 +96,7 @@ describe('a message that credits a named actor is refused', () => {
     const violations = inspect(MESSAGES.get('34e094f98b')?.message ?? '', isCode);
     const named = violations.filter((violation) => violation.rule === 'named-actor');
     expect(named).toHaveLength(3);
+
     for (const name of ['Main', 'AxisErgonomics', 'FixtureZero']) {
       expect(named.some((violation) => violation.fix.includes(name))).toBe(true);
     }
@@ -164,8 +170,10 @@ describe('a legitimate product possessive PASSES — the false-positive control'
 describe('a message that narrates the session or argues in the first person is refused', () => {
   test('a first-person retraction, and no prefix — one real commit carrying both', () => {
     expect(rulesFor('19acaed594')).toEqual(['narration', 'subject-prefix']);
+
     const quotes = inspect(MESSAGES.get('19acaed594')?.message ?? '', isCode)
       .map((violation) => violation.quote);
+
     expect(quotes.some((quote) => quote.includes('My earlier claim'))).toBe(true);
   });
 
@@ -175,6 +183,7 @@ describe('a message that narrates the session or argues in the first person is r
 
   test('an ACT credited to the owner is refused, in all four of its real spellings', () => {
     expect(rulesFor('85c1fb6509')).toEqual(['narration']);
+
     for (const body of [
       'Three things the owner asked for, now stated.',
       'The owner was right, and the cause was two bugs stacked.',
@@ -216,6 +225,7 @@ describe('a message that narrates the session or argues in the first person is r
       expect(inspect(`test(core): lock the fixes\n\n${body}`, isCode)
         .map((violation) => violation.rule)).toEqual(['narration']);
     }
+
     for (const body of [
       'Core owns the gates; this session owns the local clock and the ingress.',
       "This session's delegation deps are absent by design.",
@@ -284,9 +294,12 @@ describe('a message that narrates the session or argues in the first person is r
       + 'The digest is emitted as a background event so every entry is revertable.\n\n'
       + "    event: 'Self-change digest: N entries this session (…) — every line is revertable'\n\n"
       + 'The revert dispatch covers all three surfaces.';
+
     expect(inspect(indented, isCode)).toEqual([]);
+
     const fenced = 'docs(core): quote the shipped digest\n\nThe string is:\n\n```ts\n'
       + 'message: `Self-change digest: N entries this session`\n```\n\nUnchanged.';
+
     expect(inspect(fenced, isCode)).toEqual([]);
     expect(inspect('docs(core): quote the shipped digest\n\nIt emits `N entries this session` '
       + 'verbatim.', isCode)).toEqual([]);
@@ -299,6 +312,7 @@ describe('a message that narrates the session or argues in the first person is r
     // Raised against the live tree: readNodeTranscript / getNodeTranscript /
     // useNodeTranscript all exist, so the AST derivation spares the name.
     const live = codeIdentifierTest(readMatching(isParseable));
+
     for (const name of ['NodeTranscript', 'SwarmTree']) expect(live(name)).toBe(true);
   });
 });
@@ -330,6 +344,7 @@ describe('the subject convention', () => {
     // fail here, because a phrase before a colon is not a one-token prefix.
     const reveal = inspect('SqliteFS is gone: the durable files ARE the workspace filesystem',
       isCode);
+
     expect(reveal.map((violation) => violation.rule)).toEqual(['subject-prefix']);
     // And the residue this gate cannot see: a colon reveal BEHIND a legal prefix.
     expect(inspect('docs(bench): the detail that makes it work: a separate agent grades it',
@@ -380,6 +395,7 @@ describe('the subject convention', () => {
       expect(GENERATED_SUBJECT.test(subject)).toBe(true);
       expect(inspect(subject, isCode)).toEqual([]);
     }
+
     // A merge BODY is governed like any other body — the subject is git's, the
     // prose is not.
     expect(inspect("Merge branch 'fix/seal'\n\nSealSideDoor's seal work landed four exports.",
@@ -400,6 +416,7 @@ describe('the message git hands the hook is cleaned the way git cleans it', () =
       'diff --git a/x.ts b/x.ts',
       '+// Found by SpecAudit: the owner asked for this',
     ].join('\n');
+
     const cleaned = cleanMessage(raw);
     expect(cleaned).toBe('fix(core): charge the pruner once\n\nThe weave adds blocks back after '
       + 'the budget is taken.');
@@ -424,6 +441,7 @@ describe('the identifier allowlist is derived from code, not from prose', () => 
       ['scripts/probe.ts', '/** Found by `SpecAudit` while reading. */\nexport const digest = 1;'],
       ['scripts/other.ts', "const label = 'FixtureZero';\nexport class OrchestratorAgent {}"],
     ]));
+
     expect(live('SpecAudit')).toBe(false);
     expect(live('FixtureZero')).toBe(false);
     expect(live('OrchestratorAgent')).toBe(true);
@@ -433,9 +451,11 @@ describe('the identifier allowlist is derived from code, not from prose', () => 
     const corpus = readMatching(isParseable);
     expect(corpus.size).toBeGreaterThan(500);
     const live = codeIdentifierTest(corpus);
+
     for (const name of ['OrchestratorAgent', 'EvolutionEngine', 'TurnAccumulator', 'TextDecoder']) {
       expect(live(name)).toBe(true);
     }
+
     for (const name of ['SealSideDoor', 'FixtureZero', 'AxisErgonomics', 'LiteratureGate']) {
       expect(live(name)).toBe(false);
     }
@@ -467,6 +487,7 @@ function cutoverRepo() {
   writeFileSync(join(repo, 'src/read.ts'), 'export const rows = (ops: string[]): string[] => ops;\n');
   git(repo, 'add', '-A');
   git(repo, 'commit', '-qm', 'refactor(delta): retire the manifest schema');
+
   return { repo, cited, deletion: git(repo, 'rev-parse', 'HEAD').trim() };
 }
 
@@ -507,6 +528,7 @@ describe('a historical message is judged against the tree it shipped', () => {
     const live = codeIdentifierTest(new Map([
       ['src/new.ts', 'export class BrandNewThing {}'],
     ]));
+
     expect(live('BrandNewThing')).toBe(true);
     expect(live('SealSideDoor')).toBe(false);
   });
@@ -519,6 +541,7 @@ describe('history mode refuses a clone that has no history, and says how to get 
     const { repo } = cutoverRepo();
     const clone = join(scratchDir('commit-hygiene-shallow'), 'clone');
     git(repo, 'clone', '-q', '--depth', '1', `file://${repo}`, clone);
+
     return clone;
   };
 
@@ -557,9 +580,11 @@ describe('history mode refuses a clone that has no history, and says how to get 
     // to commit — a gate that blocks committing in the clone CI hands you would
     // be worse than the defect.
     const clone = shallowClone();
+
     const live = codeIdentifierTest(new Map([
       ['src/read.ts', readFileSync(join(clone, 'src/read.ts'), 'utf8')],
     ]));
+
     expect(live('rows')).toBe(true);
     expect(live('SealSideDoor')).toBe(false);
     expect(inspect('fix(delta): keep the rows honest\n\n`rows` no longer restates its element '
@@ -570,11 +595,14 @@ describe('history mode refuses a clone that has no history, and says how to get 
 describe('the gate states what it does not catch', () => {
   test('every blind spot names its measured size', () => {
     expect(BLIND_SPOTS.length).toBeGreaterThan(5);
+
     for (const spot of BLIND_SPOTS) expect(spot.length).toBeGreaterThan(80);
     const text = BLIND_SPOTS.join(' ');
+
     for (const named of ['COLON REVEALS', 'BINARY CONTRASTS', 'EM DASHES', 'SENTENCE LENGTH']) {
       expect(text).toContain(named);
     }
+
     // Each of the four carries a number, because "this gate does not check
     // style" is not a blind spot, it is a shrug.
     expect(text).toContain('302 of 1,898');
@@ -588,21 +616,5 @@ describe('the gate states what it does not catch', () => {
       expect(rule.instead.length).toBeGreaterThan(30);
       expect(rule.names.length).toBeGreaterThan(5);
     }
-  });
-
-  test('AGENTS.md states the same convention the gate enforces', () => {
-    // AGENTS.md is loaded into every agent session, so it is where an author
-    // learns the vocabulary instead of discovering it from a red gate. Two
-    // statements of one set is drift by construction unless the equality is
-    // asserted, which is what this is.
-    const guidance = readFileSync(resolve(root, 'AGENTS.md'), 'utf8');
-    const section = guidance.slice(guidance.indexOf('## Commit Messages'));
-    expect(section.startsWith('## Commit Messages')).toBe(true);
-    const stated = [...section.slice(0, section.indexOf('\n## ', 1)).matchAll(/`([a-z]+)`/g)]
-      .map((match) => match[1]);
-    for (const prefix of ALLOWED_PREFIXES) expect(stated).toContain(prefix);
-    expect(section).toContain(`at most ${String(SUBJECT_CEILING)} characters`);
-    expect(section).toContain(`at most ${String(MESSAGE_LINE_CEILING)} non-blank lines`);
-    for (const name of ROSTER) expect(section).toContain(name);
   });
 });

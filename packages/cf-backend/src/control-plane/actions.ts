@@ -43,7 +43,9 @@ import type { ControlPlaneEnv } from './stub';
  *  workspace name beside it an address rather than a guess. Exported because
  *  the drilldown routes refuse anything else with the same shape. */
 export const UserIdSchema = v.pipe(v.string(), v.regex(/^[a-f0-9]{32}$/));
+
 const WorkspaceSchema = v.pipe(v.string(), v.nonEmpty());
+
 const JobIdSchema = v.pipe(v.string(), v.nonEmpty());
 
 /**
@@ -167,6 +169,7 @@ export function describeAction(action: ControlAction): ActionIdentity {
   // operation across two group keys.
   const operation = action.action.replace(/\./g, '_');
   const owned = `${action.userId}/${action.workspace}`;
+
   switch (action.action) {
     case 'job.cancel':
     case 'job.retry':
@@ -215,6 +218,7 @@ export async function runControlAction(
       if (action.confirm !== action.workspace) {
         return { outcome: 'denied', detail: 'the typed name did not match', reason: 'name_mismatch' };
       }
+
       // The one arm that does NOT wake-and-claim. `UserDO.removeWorkspace` tears
       // the workspace's own Durable Object down BEFORE dropping the registry
       // row, and `destroyAgent` refuses unless the stored owner IS this account
@@ -228,24 +232,29 @@ export async function runControlAction(
       // Only after the registry says it is gone. A tombstone written first
       // would tell an operator the opposite of the truth on a failed teardown.
       await unindexWorkspace(env, { userId: action.userId, name: action.workspace });
+
       return {
         outcome: 'ok', detail: `removed ${action.workspace}`, reason: 'ok', affected: 1,
       };
     }
 
     const owned = await claimOwnedWorkspace(env, action.userId, action.workspace);
+
     if (!owned.ok) return notOwned(owned.error);
     const agent = owned.agent;
 
     switch (action.action) {
       case 'job.cancel': {
         const { ok } = await agent.cancelBackgroundJob(action.jobId);
+
         return ok
           ? { outcome: 'ok', detail: `cancelled ${action.jobId}`, reason: 'ok', affected: 1 }
           : { outcome: 'denied', detail: 'that job is not running', reason: 'not_running' };
       }
+
       case 'job.retry': {
         const result = await agent.retryBackgroundJob(action.jobId);
+
         // `RetryOutcome` carries its own refusal text — a job that already
         // succeeded, or one whose tool no longer exists — so the reason is
         // reported rather than flattened into a boolean. It is the WORKSPACE's
@@ -260,20 +269,26 @@ export async function runControlAction(
             reason: 'not_retriable',
           };
       }
+
       case 'job.dismiss': {
         const { ok } = await agent.dismissBackgroundJob(action.jobId);
+
         return ok
           ? { outcome: 'ok', detail: `dismissed ${action.jobId}`, reason: 'ok', affected: 1 }
           : { outcome: 'denied', detail: 'no such job', reason: 'no_such_job' };
       }
+
       case 'jobs.clear': {
         const { ok } = await agent.clearBackgroundJobs();
+
         return ok
           ? { outcome: 'ok', detail: 'cleared settled jobs', reason: 'ok' }
           : { outcome: 'denied', detail: 'nothing to clear', reason: 'nothing_to_clear' };
       }
+
       case 'approvals.decide': {
         const { decided } = await agent.decideDeferredApprovals(action.ids, action.decision);
+
         return decided.length > 0
           ? {
             outcome: 'ok',
@@ -286,15 +301,19 @@ export async function runControlAction(
             reason: 'none_pending', affected: 0,
           };
       }
+
       case 'shell_grants.revoke': {
         // Revoke exactly the grants that exist, read first: passing a guessed
         // set would silently no-op, and an audit row reading "revoked" with
         // nothing revoked is worse than no row.
         const { grants } = await agent.getShellApprovalGrants();
+
         if (grants.length === 0) {
           return { outcome: 'denied', detail: 'no standing grants', reason: 'no_grants' };
         }
+
         const after = await agent.revokeShellApprovalGrants(grants);
+
         return {
           outcome: 'ok',
           detail: `revoked ${String(grants.length)}, ${String(after.grants.length)} remain`,

@@ -124,6 +124,7 @@ describe('pairedBinaryComparison', () => {
       { a: true, b: false },
       { a: false, b: true }, { a: false, b: true }, { a: false, b: true },
     ]), { seed: 1, iterations: 1000 });
+
     expect(stats.pairs).toBe(7);
     expect(stats.bothPass).toBe(2);
     expect(stats.bothFail).toBe(1);
@@ -139,6 +140,7 @@ describe('pairedBinaryComparison', () => {
     const stats = pairedBinaryComparison(outcomes([
       { a: true, b: true }, { a: false, b: false }, { a: true, b: true },
     ]), { seed: 1, iterations: 500 });
+
     expect(stats.discordant).toBe(0);
     expect(stats.pValue).toBe(1);
     expect(stats.significant).toBe(false);
@@ -153,6 +155,7 @@ describe('pairedBinaryComparison', () => {
       ...Array.from({ length: 1 }, () => ({ a: true, b: false })),
       ...Array.from({ length: 25 }, () => ({ a: true, b: true })),
     ];
+
     const stats = pairedBinaryComparison(outcomes(spec), { seed: 5, iterations: 4000 });
     expect(stats.significant).toBe(true);
     expect(stats.resolvable).toBe(true);
@@ -168,6 +171,7 @@ describe('pairedBinaryComparison', () => {
       ...Array.from({ length: 10 }, () => ({ a: true, b: false })),
       ...Array.from({ length: 79 }, () => ({ a: true, b: true })),
     ];
+
     const stats = pairedBinaryComparison(outcomes(spec), { seed: 9, iterations: 2000 });
     expect(stats.effect).toBeCloseTo(0.01, 10);
     expect(stats.resolutionRatio).toBeLessThan(1);
@@ -201,6 +205,7 @@ describe('pairedBinaryComparison', () => {
       ...Array.from({ length: 2 }, () => ({ a: false, b: true })),
       ...Array.from({ length: 38 }, () => ({ a: true, b: true })),
     ];
+
     const stats = pairedBinaryComparison(outcomes(spec), { seed: 3, iterations: 500 });
     expect(stats.pairs).toBe(40);
     expect(stats.discordant).toBe(2);
@@ -218,6 +223,7 @@ describe('pairedBinaryComparison', () => {
       ...Array.from({ length: 6 }, () => ({ a: false, b: true })),
       ...Array.from({ length: 34 }, () => ({ a: true, b: true })),
     ];
+
     const stats = pairedBinaryComparison(outcomes(spec), { seed: 3, iterations: 500 });
     expect(stats.discordant).toBe(6);
     expect(stats.floorPValue).toBeCloseTo(2 / 64, 10);
@@ -245,6 +251,7 @@ describe('pairedBinaryComparison', () => {
       { a: false, b: true }, { a: false, b: true }, { a: true, b: false },
       { a: true, b: true }, { a: false, b: false },
     ];
+
     const fwd = pairedBinaryComparison(outcomes(spec), { seed: 2, iterations: 1000 });
     const rev = pairedBinaryComparison(outcomes(spec.map((s) => ({ a: s.b, b: s.a }))), { seed: 2, iterations: 1000 });
     expect(rev.effect).toBeCloseTo(-fwd.effect, 10);
@@ -277,6 +284,7 @@ describe('repeats — the unit of pairing stays the task', () => {
       spec.flatMap((s, t) => s.a.map((a, r) => ({ taskId: `t${t}-r${r}`, a: [a], b: [s.b[r]!] }))),
       { seed: 1, iterations: 2000 },
     );
+
     expect(naive.pairs).toBe(12);
     expect(naive.pValue).toBeLessThan(0.001);
     expect(naive.significant).toBe(true);
@@ -310,6 +318,7 @@ describe('repeats — the unit of pairing stays the task', () => {
       { a: false, b: true }, { a: true, b: false }, { a: true, b: true },
       { a: false, b: false }, { a: false, b: true },
     ];
+
     const stats = pairedBinaryComparison(outcomes(spec), { seed: 3, iterations: 1000 });
     expect(stats.repeats).toBe(1);
     expect(stats.passAllA).toBeCloseTo(stats.passAtOneA, 10);
@@ -350,6 +359,7 @@ describe('repeats — the unit of pairing stays the task', () => {
       { a: [true, true, true], b: [true, true, true] },
       { a: [false, false, false], b: [false, false, false] },
     ]), { seed: 5, iterations: 1000 });
+
     const single = pairedBinaryComparison(outcomes([
       { a: false, b: true }, { a: false, b: true },
       { a: true, b: true }, { a: false, b: false },
@@ -368,6 +378,7 @@ describe('repeats — the unit of pairing stays the task', () => {
       { a: [false, false, true], b: [true, true, true] },
       { a: [true, true, true], b: [false, true, true] },
     ];
+
     const first = pairedBinaryComparison(repeated(spec), { seed: 11, iterations: 3000 });
     const second = pairedBinaryComparison(repeated(spec), { seed: 11, iterations: 3000 });
     expect(first).toEqual(second);
@@ -400,6 +411,7 @@ describe('computeGain (stateful vs stateless)', () => {
       { taskId: 'c', stateful: 1, stateless: 0 },
       { taskId: 'd', stateful: 1, stateless: 1 },
     ], { seed: 4, iterations: 2000 });
+
     expect(g.statefulReward).toBe(1);
     expect(g.statelessReward).toBe(0.5);
     expect(g.gain).toBeCloseTo(0.5, 10);
@@ -418,6 +430,7 @@ describe('computeGain (stateful vs stateless)', () => {
       { taskId: 'c', stateful: 1, stateless: 1 },
       { taskId: 'd', stateful: 0, stateless: 0 },
     ], { seed: 4, iterations: 2000 });
+
     expect(g.gain).toBe(0);
     // An empty denominator is vacuous per task and a failure per design: no task
     // differed, so this contrast measured nothing and must not read as a neutral
@@ -434,6 +447,7 @@ describe('computeGain (stateful vs stateless)', () => {
       { taskId: 'c', stateful: 0, stateless: 1 },
       { taskId: 'd', stateful: 0, stateless: 1 },
     ], { seed: 4, iterations: 2000 });
+
     expect(g.gain).toBeCloseTo(-1, 10);
     expect(g.pValue).toBeCloseTo(2 / 16, 10);
     // Four differing pairs floor at p=0.125, above alpha, so the direction is
@@ -448,6 +462,7 @@ describe('computeGain (stateful vs stateless)', () => {
       Array.from({ length: 6 }, (_, i) => ({ taskId: `t${i}`, stateful: 0, stateless: 1 })),
       { seed: 4, iterations: 2000 },
     );
+
     expect(g.pairsWithDifference).toBe(6);
     expect(g.floorPValue).toBeCloseTo(2 / 64, 10);
     expect(g.canReachSignificance).toBe(true);
@@ -463,6 +478,7 @@ describe('computeGain (stateful vs stateless)', () => {
     for (const k of [1, 2, 3, 4, 5, 6, 7, 10]) {
       expect(floorPValue(k)).toBeCloseTo(2 ** (1 - k), 12);
     }
+
     expect(minimumPairsForSignificance()).toBe(6);
     expect(floorPValue(5)).toBeGreaterThan(DEFAULT_ALPHA);
     expect(floorPValue(6)).toBeLessThanOrEqual(DEFAULT_ALPHA);
@@ -473,6 +489,7 @@ describe('computeGain (stateful vs stateless)', () => {
       ...Array.from({ length: 5 }, (_, i) => ({ taskId: `d${i}`, stateful: 1, stateless: 0 })),
       ...Array.from({ length: 15 }, (_, i) => ({ taskId: `t${i}`, stateful: 1, stateless: 1 })),
     ], { seed: 4, iterations: 2000 });
+
     expect(g.tasks).toBe(20);
     expect(g.pairsWithDifference).toBe(5);
     expect(g.canReachSignificance).toBe(false);
@@ -490,6 +507,7 @@ describe('computeGain (stateful vs stateless)', () => {
       { taskId: 'hand4', stateful: 3.0, stateless: 3.0 },
       { taskId: 'hand5', stateful: -0.5, stateless: -2.0 },
     ], { seed: 4, iterations: 2000 });
+
     expect(g.gain).toBeCloseTo(-0.2, 10);
     expect(g.normalizedGain).toBeNull();
     expect(g.pairsWithDifference).toBe(2);
@@ -501,6 +519,7 @@ describe('computeGain (stateful vs stateless)', () => {
       { taskId: 'a', stateful: 1, stateless: 1 },
       { taskId: 'b', stateful: 1, stateless: 1 },
     ], { seed: 4, iterations: 500 });
+
     expect(g.normalizedGain).toBeNull();
     expect(Number.isFinite(g.gain)).toBe(true);
   });

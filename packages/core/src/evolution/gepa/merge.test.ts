@@ -10,8 +10,10 @@ import {
 
 function seededRng(seed: number): () => number {
   let s = seed;
+
   return () => {
     s = (s * 1664525 + 1013904223) % 0xffffffff;
+
     return s / 0xffffffff;
   };
 }
@@ -21,6 +23,7 @@ function mkCandidate(
 ): GepaCandidate {
   const m = new Map(Object.entries(scores));
   const total = Array.from(m.values()).reduce((a, b) => a + b, 0);
+
   return {
     id: source, parentId: null, source,
     scores: m, feedback: new Map(),
@@ -70,8 +73,10 @@ describe('findComplementaryPair', () => {
     const draws = 4000;
     const share = new Map<string, number>();
     const wins = new Map<string, string>();
+
     for (let step = 0; step < draws; step++) {
       const pair = findComplementaryPair([a, b, c], ids, () => (step + 0.5) / draws);
+
       if (!pair) throw new Error('a complementary pair exists in this pool');
       const key = [pair.a.id, pair.b.id].sort().join('');
       share.set(key, (share.get(key) ?? 0) + 1 / draws);
@@ -103,6 +108,7 @@ describe('renderMergePrompt', () => {
       aDominates: ['i1'],
       bDominates: ['i2'],
     };
+
     const prompt = renderMergePrompt({
       pair,
       evalSet: [
@@ -111,6 +117,7 @@ describe('renderMergePrompt', () => {
       ],
       artifactDescription: 'scaffold source',
     });
+
     expect(prompt).toContain('SOURCE-A');
     expect(prompt).toContain('SOURCE-B');
     expect(prompt).toContain('A wins on:');
@@ -140,12 +147,15 @@ describe('proposeMerge integrates with the LM', () => {
       aDominates: ['i1'],
       bDominates: [],
     };
+
     const reflectionLm = async () => '```\nMERGED-SOURCE\n```';
+
     const out = await proposeMerge({
       pair,
       evalSet: [{ id: 'i1', input: 'x' }],
       reflectionLm,
     });
+
     expect(out).toBe('MERGED-SOURCE');
   });
 });
@@ -166,18 +176,27 @@ describe('runGepa with Merge end-to-end', () => {
     // Override metric per-instance:
     const richMetric = async (source: string, inst: EvalInstance<string>): Promise<MetricOutcome> => {
       const i = inst.id;
+
       if (source === 'merged') return { score: 0.95, feedback: 'merged-best' };
+
       if (source === 'spec-A') return { score: i === 'i1' ? 0.9 : 0.3, feedback: 'spec-A' };
+
       if (source === 'spec-B') return { score: i === 'i1' ? 0.3 : 0.9, feedback: 'spec-B' };
+
       return { score: 0.5, feedback: 'seed' };
     };
 
     let lmCall = 0;
+
     const reflectionLm = async (prompt: string): Promise<string> => {
       lmCall++;
+
       if (prompt.includes('merging two')) return 'merged';
+
       if (lmCall === 1) return 'spec-A';
+
       if (lmCall === 2) return 'spec-B';
+
       return 'spec-A'; // shouldn't reach
     };
 

@@ -24,6 +24,7 @@ import { describe, expect, it } from 'vitest';
 import type { ProbeTally } from './spend-probe';
 
 const open = (name: string) => env.SPEND_PROBE.get(env.SPEND_PROBE.idFromName(name));
+
 const bySource = (rows: ProbeTally[]) =>
   Object.fromEntries(rows.map((row) => [row.source, row]));
 

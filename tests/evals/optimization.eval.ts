@@ -66,7 +66,9 @@ import {
 import { resolveArtifactRoot } from '../../scripts/bench-retention';
 
 const SUITE = 'Optimization Evals';
+
 const TARGET = liveModelTarget(SUITE);
+
 const liveTest = test.skipIf(!TARGET);
 
 const REPO_ROOT = join(import.meta.dirname, '../..');
@@ -85,20 +87,24 @@ const THRESHOLD = 0.5;
  *  instrument, and the swarm path is the expensive branch it is allowed to
  *  take. A hung child becomes a named red, never a runner timeout. */
 const WORKSPACE = 'optimization-eval';
+
 const EPISODE_TIMEOUT_MS = 1_800_000;
 
 function corpusCase(id: string): EvalCase {
   const found = hardTaskCases().find((candidate) => candidate.id === id);
+
   if (!found) {
     throw new Error(`the hard-task corpus has no "${id}", so this eval has no instrument: `
       + `it holds ${hardTaskCases().map((candidate) => candidate.id).join(', ')}`);
   }
+
   return found;
 }
 
 const CASE = corpusCase(TASK_ID);
 
 const TIER: EvalTier = process.env.KINU_EVAL_TIER === 'pro' ? 'pro' : 'flash';
+
 const LLM: LLMProviderConfig = TARGET === null
   ? UNCONFIGURED_LLM
   : { ...TARGET.llm, model: EVAL_MODELS[TIER] };
@@ -122,6 +128,7 @@ const TRANSCRIPTS = join(
 );
 
 const opened: Database[] = [];
+
 const observations: EvalObservation[] = [];
 
 /** What the episode's store says about search use: nothing asserted, everything
@@ -130,27 +137,36 @@ const observations: EvalObservation[] = [];
  *  read as zero rows rather than as an error. */
 function swarmTelemetry(db: Database, agentsCalls: number): EvalScoreRow {
   const sql = makeSql(db);
+
   const tree = sql<{ nodes: number; maxDepth: number | null }>`
     SELECT COUNT(*) AS nodes, MAX(depth) AS maxDepth FROM search_nodes`[0]
     ?? { nodes: 0, maxDepth: null };
+
   const byDepth = sql<{ depth: number; n: number }>`
     SELECT depth, COUNT(*) AS n FROM search_nodes GROUP BY depth ORDER BY depth`;
+
   const hasRecords = sql<{ name: string }>`
     SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'exploration_records'`
     .length > 0;
+
   const records = hasRecords
     ? sql<{ n: number }>`SELECT COUNT(*) AS n FROM exploration_records`[0]?.n ?? 0
     : 0;
+
   const best = sql<{ value: number | null }>`
     SELECT MAX(value) AS value FROM search_nodes WHERE status != 'failed'`[0]?.value;
+
   const used = tree.nodes > 0;
+
   const counts = {
     searchNodes: tree.nodes,
     maxDepth: tree.maxDepth ?? 0,
     recordsWritten: records,
     agentsCalls,
   };
+
   const measured = best !== null && best !== undefined ? { ...counts, bestNodeValue: best } : counts;
+
   return {
     name: 'swarm_use',
     asserts: 'the episode ran a swarm — recorded so attainment can be correlated with search '
@@ -175,6 +191,7 @@ afterAll(() => {
     arm: ARM, declaredTasks: [TASK_ID], observations, spend,
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
+
   for (const db of opened) db.close();
 });
 
@@ -197,16 +214,20 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
   liveTest('MEASURED: the agent attains the threshold on the metered instrument', async () => {
     mkdirSync(TRANSCRIPTS, { recursive: true });
     const home = join(TRANSCRIPTS, 'home');
+
     const workspace = {
       home, workspace: WORKSPACE, llm: LLM,
       purpose: 'A senior engineer working in the given workspace. Prefer real tool calls over '
         + 'describing what you would do, and break independent work apart.',
     };
+
     const hard: HardTask | undefined = hardTaskFor(CASE);
+
     if (hard === undefined) {
       throw new Error(`${TASK_ID} is not a hard-task corpus entry, so it carries no seed files and `
         + 'no verifier — this family would grade nothing');
     }
+
     const dbPath = cliWorkspaceDbPath(home, WORKSPACE);
 
     // Birth through the shipped CLI, then SEED and pre-flight through the
@@ -215,6 +236,7 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
     await createCliWorkspace(workspace);
     {
       const seedDb = new Database(dbPath);
+
       try {
         const { rt } = await openWorkspaceCLI(seedDb, dbPath, { llm: LLM, hostRoot: null });
         // Before anything is spent: a runtime that cannot execute is not a
@@ -234,6 +256,7 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
 
     const startedAt = Date.now();
     let child;
+
     try {
       child = await execCliTask({
         ...workspace, prompt: CASE.task,
@@ -246,6 +269,7 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
       });
       throw error;
     }
+
     const ms = Date.now() - startedAt;
 
     // The child's own store, reopened after it exited. `recordLiveModelEpisode`
@@ -265,14 +289,18 @@ describe('Optimization evals — a measured challenge with a pre-registered thre
     // freshly opened runtime because the verifier runs commands in its shell.
     const { rt: verifyRt } = await openWorkspaceCLI(db, dbPath, { llm: LLM, hostRoot: null });
     const shell = requireVerifierShell(TASK_ID, verifyRt);
+
     const outcome = await verifyHardTask(hard, {
       vfs: verifyRt.storage.vfs,
       exec: (command) => shell.exec(command),
     });
+
     const attained = outcome.rate !== null && outcome.rate >= THRESHOLD;
+
     const thresholdMeasured: EvalScoreRow['measured'] = outcome.rate !== null
       ? { threshold: THRESHOLD, score: outcome.rate }
       : { threshold: THRESHOLD };
+
     const thresholdRow: EvalScoreRow = {
       name: 'threshold_attained',
       asserts: `${TASK_OUTCOME} reached the pre-registered bar of ${String(THRESHOLD)} — the pass/fail `

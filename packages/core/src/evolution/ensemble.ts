@@ -173,6 +173,7 @@ const VerdictSchema = v.object({ verdict: v.picklist(OUTCOME_LABELS) });
 function parseVerdict(raw: string): OutcomeLabel | null {
   const answer = tolerate(() => extractJsonObject(raw), 'malformed-input');
   const parsed = v.safeParse(VerdictSchema, answer);
+
   return parsed.success ? parsed.output.verdict : null;
 }
 
@@ -234,6 +235,7 @@ function goldLabeledItems(
   universe: ReadonlyArray<UniverseRow>, sql: SqlExecutor, actor: ActorHandle,
 ): LabelingItem[] {
   const gold = goldLabels(sql, actor);
+
   return universe.filter((row) => gold.has(row.id)).map(labelingItem);
 }
 
@@ -282,29 +284,37 @@ export async function runEnsemble(
   // missing all three should be told about the labels first — that is the step
   // the whole flow is about, and the one that is free to check.
   const universe = calibrationUniverse(sql, actor);
+
   if (universe.length === 0) return { run: null, gap: { kind: 'no_population', judges: [] } };
   const items = goldLabeledItems(universe, sql, actor);
+
   if (items.length === 0) return { run: null, gap: { kind: 'no_gold_labels', judges: [] } };
   const specs = await panel.specs();
+
   if (specs.length < 2) {
     return { run: null, gap: { kind: 'too_few_judges', judges: [...specs] } };
   }
+
   const judges = specs.map((spec) => panel.judge(spec));
 
   const done = new Set(ensembleLabels(sql, actor).map((row) => `${row.outcomeId}\n${row.model}`));
   const judged: EnsembleRun['judged'] = [];
   let alreadyJudged = 0;
+
   for (const judge of judges) {
     const todo = items.filter((item) => !done.has(`${item.outcomeId}\n${judge.spec}`));
     alreadyJudged += items.length - todo.length;
     let stored = 0;
     let failed = 0;
+
     for (const item of todo) {
       const label = await askEnsembleJudge(judge, item);
+
       if (label === null) {
         failed++;
         continue;
       }
+
       recordEnsembleLabels(sql, actor, {
         model: judge.spec,
         labels: [{ outcomeId: item.outcomeId, label }],
@@ -312,8 +322,10 @@ export async function runEnsemble(
       });
       stored++;
     }
+
     judged.push({ model: judge.spec, stored, failed });
   }
+
   return { run: { judged, turns: items.length, alreadyJudged }, gap: null };
 }
 
@@ -334,6 +346,7 @@ export async function askEnsembleJudge(
  *  that is a hole in the measurement, not an abstention. */
 export function panelVerdict(perJudge: ReadonlyArray<OutcomeLabel>): OutcomeLabel | null {
   if (perJudge.length === 0) return null;
+
   return perJudge.every((label) => label === perJudge[0]) ? perJudge[0] : 'unclear';
 }
 
@@ -462,10 +475,12 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
   const rows = ensembleLabels(sql, actor);
 
   const models = [...new Set(rows.map((row) => row.model))].sort();
+
   /** Verdicts on turns the ledger still holds — a judge's rows about turns that
    *  have since aged out inform nothing and are not counted as coverage. */
   const labeledBy = (model: string): number =>
     rows.filter((row) => row.model === model && byId.has(row.outcomeId)).length;
+
   const empty = {
     members: models.map((model) => ({ model, labeled: labeledBy(model), kappa: null })),
     gold: [...gold.keys()].filter((id) => byId.has(id)).length,
@@ -477,11 +492,15 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
     accuracy: null,
     standIn: null,
   };
+
   if (universe.length === 0) return { ...empty, gap: { kind: 'no_population', judges: [] } };
+
   if (empty.gold === 0) return { ...empty, gap: { kind: 'no_gold_labels', judges: [] } };
+
   if (models.length < 2) return { ...empty, gap: { kind: models.length === 0 ? 'not_run' : 'too_few_judges', judges: models } };
 
   const byTurn = new Map<string, Map<string, OutcomeLabel>>();
+
   for (const row of rows) {
     const perModel = byTurn.get(row.outcomeId) ?? new Map<string, OutcomeLabel>();
     perModel.set(row.model, row.label);
@@ -491,22 +510,30 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
   let covered = 0;
   let split = 0;
   const compared: ComparedTurn[] = [];
+
   for (const [id, label] of gold) {
     const row = byId.get(id);
+
     if (!row) continue;
     const answered = byTurn.get(id);
+
     const perJudge = models.map((model) => answered?.get(model))
       .filter((v): v is OutcomeLabel => v !== undefined);
+
     // A judge with no answer for this turn leaves a hole; the panel has no
     // verdict for it and it is not counted as covered.
     if (perJudge.length < models.length) continue;
     const verdict = panelVerdict(perJudge);
+
     if (verdict === null) continue;
     covered++;
+
     if (verdict === 'unclear') split++;
+
     if (label.label === 'unclear') continue;
     compared.push({ predicted: row.predicted, human: label.label, ensemble: verdict, perJudge });
   }
+
   if (compared.length === 0) {
     return {
       ...empty,
@@ -517,6 +544,7 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
   }
 
   const populations = new Map<TurnOutcome, number>();
+
   for (const row of universe) {
     populations.set(row.predicted, (populations.get(row.predicted) ?? 0) + 1);
   }
@@ -526,6 +554,7 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
     humanClassifier: designWeightedKappa(kappaStrata(compared, populations, (r) => ({ a: r.predicted, b: r.human }))),
     ensembleClassifier: designWeightedKappa(kappaStrata(compared, populations, (r) => ({ a: r.predicted, b: r.ensemble }))),
   };
+
   const accuracy = resampledAccuracy(panelStrata(compared, populations)).accuracy;
 
   return {
@@ -559,11 +588,14 @@ export function ensembleReport(sql: SqlExecutor, actor: ActorHandle): EnsembleRe
  *  same honest-nulls rule the calibration report follows. */
 export function renderEnsembleReport(report: EnsembleReport): string {
   const lines = ['Judge panel — two cross-family models over the turns you labeled, blind'];
+
   if (report.gap !== null || report.standIn === null) {
     lines.push(`  ${report.gap === null ? 'not measurable from these labels' : describeEnsembleGap(report.gap)}`);
+
     if (report.members.length > 0) {
       lines.push(`  Judges so far: ${report.members.map((m) => `${m.model} (${m.labeled})`).join(', ')}`);
     }
+
     return lines.join('\n');
   }
 
@@ -583,10 +615,12 @@ export function renderEnsembleReport(report: EnsembleReport): string {
 
   if (report.confusion.length > 0) {
     lines.push('  Panel verdict vs yours:');
+
     for (const cell of report.confusion) {
       lines.push(`    panel ${cell.ensemble.padEnd(11)}you ${cell.human.padEnd(11)}${cell.count}`);
     }
   }
+
   if (report.accuracy !== null) {
     lines.push(
       '  On the negative class (corrected/frustrated), through the calibration estimator:',
@@ -598,9 +632,11 @@ export function renderEnsembleReport(report: EnsembleReport): string {
   lines.push(report.standIn.qualified
     ? '  Stand-in: CLEARS the pre-registered bar. Recalibration may be drawn by the panel with a hand-audited slice.'
     : '  Stand-in: the panel CANNOT stand in for you yet. Keep labeling by hand.');
+
   for (const condition of report.standIn.conditions) {
     lines.push(`    ${condition.met ? 'ok  ' : 'no  '}${condition.name} — ${condition.detail}`);
   }
+
   return lines.join('\n');
 }
 
@@ -612,6 +648,7 @@ function standInVerdict(
 ) {
   const pair = kappa.humanEnsemble;
   const against = kappa.humanClassifier;
+
   const conditions: StandInCondition[] = [
     {
       name: `κ(you ↔ panel) lower bound ≥ ${STAND_IN_THRESHOLDS.kappa.toFixed(2)}`,
@@ -638,5 +675,6 @@ function standInVerdict(
         : `recall ≥ ${accuracy.sensitivity.lo.toFixed(2)}, specificity ≥ ${accuracy.specificity.lo.toFixed(2)}`,
     },
   ];
+
   return { qualified: conditions.every((condition) => condition.met), conditions };
 }

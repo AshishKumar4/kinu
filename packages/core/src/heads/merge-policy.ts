@@ -93,7 +93,9 @@ export interface HeadMergePolicyDeps {
  */
 function resolveHeadMergeRoute(profile: ResolvedTurnProfile): ModelRouteResolution {
   const route = resolveModelRoute(HEAD_MERGE_SOURCE, profile);
+
   if (!route) throw new Error('the head merge cannot use the fixed platform model route');
+
   return route;
 }
 
@@ -115,6 +117,7 @@ export function headMergeLLM(deps: HeadMergePolicyDeps): MergeLLMFn {
     const { model, providerOptions } = deps.bindMergeModel(
       resolveHeadMergeRoute(await deps.profile()),
     );
+
     const options: Parameters<typeof generateJson<MergeOutput>>[0] = {
       model,
       schema: MergeOutputSchema,
@@ -125,7 +128,9 @@ export function headMergeLLM(deps: HeadMergePolicyDeps): MergeLLMFn {
         operations: deps.operations,
       },
     };
+
     if (providerOptions) options.providerOptions = providerOptions;
+
     return generateJson(options);
   };
 }

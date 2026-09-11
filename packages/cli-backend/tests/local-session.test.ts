@@ -27,7 +27,7 @@ import {
   initBackgroundJobsTable, BackgroundJobRunner, BackgroundJobStore, SignalDelivery,
   backgroundJobWakeTrigger, TURN_AUTHOR_METADATA_KEY, getChatHistoryPage,
   JsonObjectSchema, WORKSPACE_RUN_ID, BACKGROUND_POLICY,
-  profileCatalogDigest,
+  profileCatalogDigest, BUILTIN_ROLE_DEFINITIONS,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
   EventLog, TriggerRegistry, listTriggers,
   type AgentsToolDeps, type ModelInfo, type JsonObject, type JsonValue,
@@ -62,6 +62,7 @@ const resolverRest = {
  *  could never read back. */
 function governorDeps() {
   const db = new Database(':memory:');
+
   return { actor: createTestActorsOver(db).main, storage: createTestSql() };
 }
 
@@ -90,6 +91,7 @@ function fakeModel(
   usage: LanguageModelV2Usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 },
 ): TestLanguageModelV2 {
   const [a, b] = [answer.slice(0, answer.length >> 1), answer.slice(answer.length >> 1)];
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -122,6 +124,7 @@ function fakeModel(
  *  never going to settle. */
 function hangingModel(): LanguageModel {
   const base = fakeModel('unused');
+
   return new TestLanguageModelV2({
     provider: base.provider,
     modelId: base.modelId,
@@ -138,12 +141,14 @@ function hangingModel(): LanguageModel {
  *  test assert per-turn toolset filtering (e.g. by an active skill). */
 function capturingModel(answer: string, sink: (toolNames: string[]) => void): LanguageModel {
   const base = fakeModel(answer);
+
   return new TestLanguageModelV2({
     provider: base.provider,
     modelId: base.modelId,
     doGenerate: base.doGenerate,
     doStream: async (options) => {
       sink((options.tools ?? []).map((t) => t.name));
+
       return base.doStream(options);
     },
   });
@@ -151,12 +156,14 @@ function capturingModel(answer: string, sink: (toolNames: string[]) => void): La
 
 function historyCapturingModel(answer: string, sink: (messages: PromptMessage[]) => void): LanguageModel {
   const base = fakeModel(answer);
+
   return new TestLanguageModelV2({
     provider: base.provider,
     modelId: base.modelId,
     doGenerate: base.doGenerate,
     doStream: async (options) => {
       sink(options.prompt);
+
       return base.doStream(options);
     },
   });
@@ -166,6 +173,7 @@ function historyCapturingModel(answer: string, sink: (messages: PromptMessage[])
  *  role:'system' entry of the LanguageModelV2 prompt). */
 function systemCapturingModel(answer: string, sink: (system: string) => void): TestLanguageModelV2 {
   const base = fakeModel(answer);
+
   return new TestLanguageModelV2({
     provider: base.provider,
     modelId: base.modelId,
@@ -174,7 +182,9 @@ function systemCapturingModel(answer: string, sink: (system: string) => void): T
       const system = options.prompt.find(
         (message): message is Extract<PromptMessage, { role: 'system' }> => message.role === 'system',
       );
+
       sink(system?.content ?? '');
+
       return base.doStream(options);
     },
   });
@@ -192,6 +202,7 @@ function workspaceRuntime() {
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
+
   return { db, rt };
 }
 
@@ -204,11 +215,13 @@ function sqlFailingOnce(
   match: (query: string, values: readonly SqlValue[]) => boolean,
 ): SqlExecutor {
   let armed = true;
+
   return function <T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] {
     if (armed && match(strings.join('?'), values)) {
       armed = false;
       throw new Error('database disk image is malformed');
     }
+
     return real<T>(strings, ...values);
   };
 }
@@ -216,10 +229,12 @@ function sqlFailingOnce(
 function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<LocalAgentSessionOpts>) {
   const { db, rt } = workspaceRuntime();
   const events: SessionEvent[] = [];
+
   const session = new LocalAgentSession({
     rt, db, model: model ?? fakeModel(answer), onEvent: (e) => events.push(e), noAutoEvolve: true,
     ...extra,
   });
+
   return { db, rt, session, events };
 }
 
@@ -233,6 +248,7 @@ function hub(db: Database) {
   // the exact false green this scoping exists to make impossible.
   const actor = openWorkspaceMainActor(makeSql(db));
   const log = new EventLog(sql, actor);
+
   return {
     pending: () => log.pending({ limit: 50 }),
     recent: (opts: { variant?: EventVariant; limit?: number }) => log.query(opts),
@@ -251,15 +267,18 @@ async function fireTimer(session: LocalAgentSession, label: string, fireAt = Dat
 function executeToolsModel(code: string): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async () => {
       step += 1;
+
       return {
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
+
             if (step === 1) {
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call-1', toolName: 'execute_tools',
@@ -272,6 +291,7 @@ function executeToolsModel(code: string): LanguageModel {
               controller.enqueue({ type: 'text-end', id: '0' });
               controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
             }
+
             controller.close();
           },
         }),
@@ -284,6 +304,7 @@ function executeToolsModel(code: string): LanguageModel {
 function toolSequenceModel(calls: ReadonlyArray<{ name: string; input: JsonObject }>): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
@@ -293,6 +314,7 @@ function toolSequenceModel(calls: ReadonlyArray<{ name: string; input: JsonObjec
           controller.enqueue({ type: 'stream-start', warnings: [] });
           const call = calls[step];
           step += 1;
+
           if (call) {
             controller.enqueue({
               type: 'tool-call',
@@ -307,6 +329,7 @@ function toolSequenceModel(calls: ReadonlyArray<{ name: string; input: JsonObjec
             controller.enqueue({ type: 'text-end', id: '0' });
             controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
           }
+
           controller.close();
         },
       }),
@@ -321,16 +344,19 @@ function searchingModel(): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const base = fakeModel('head finding');
   let step = 0;
+
   return new TestLanguageModelV2({
     provider: base.provider,
     modelId: base.modelId,
     doGenerate: base.doGenerate,
     doStream: async () => {
       step += 1;
+
       return {
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
+
             if (step === 1) {
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call-1', toolName: 'agents',
@@ -346,6 +372,7 @@ function searchingModel(): LanguageModel {
               controller.enqueue({ type: 'text-end', id: '0' });
               controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
             }
+
             controller.close();
           },
         }),
@@ -361,16 +388,19 @@ function setupWithResolver(
 ) {
   const { db, rt } = workspaceRuntime();
   const events: SessionEvent[] = [];
+
   const session = new LocalAgentSession({
     rt, db, model: fakeModel('fallback'), modelResolver: resolver,
     onEvent: (event) => events.push(event), noAutoEvolve: true,
     ...extra,
   });
+
   return { db, rt, session, events };
 }
 
 async function waitFor(pred: () => boolean, timeoutMs = 1000): Promise<void> {
   const start = performance.now();
+
   while (!pred()) {
     if (performance.now() - start > timeoutMs) throw new Error('waitFor timeout');
     await new Promise<void>((r) => setTimeout(r, 2));
@@ -396,15 +426,18 @@ async function captureSettleTimings(run: () => Promise<void>): Promise<{ evoluti
     // The logger writes ONE JSON string per call; anything else on this stream
     // belongs to another writer and is parsed away rather than narrowed.
     const line = v.safeParse(v.string(), args[0]);
+
     if (!line.success || !line.output.includes('"session.settle_timings"')) return;
     const parsed = v.parse(SettleTimingsSchema, JSON.parse(line.output));
     timings = { evolutionMs: parsed.fields.evolutionMs };
   };
+
   try {
     await run();
   } finally {
     console.error = original;
   }
+
   return timings;
 }
 
@@ -416,13 +449,16 @@ async function captureFailures(event: string, run: () => Promise<void>): Promise
   const lines: string[] = [];
   console.error = (...args: unknown[]) => {
     const line = v.safeParse(v.string(), args[0]);
+
     if (line.success && line.output.includes(`"${event}"`)) lines.push(line.output);
   };
+
   try {
     await run();
   } finally {
     console.error = original;
   }
+
   return lines;
 }
 
@@ -430,13 +466,18 @@ function jobColumn(db: Database, id: string, column: 'status' | 'error' | 'resul
   const row = db.query<{ v: string | null }, [string]>(
     `SELECT ${column} v FROM background_jobs WHERE id=?`,
   ).get(id);
+
   return row?.v ?? '';
 }
+
 const jobStatus = (db: Database, id: string) => jobColumn(db, id, 'status');
+
 const jobError = (db: Database, id: string) => jobColumn(db, id, 'error');
+
 const jobResult = (db: Database, id: string) => jobColumn(db, id, 'result');
 
 const kinds = (events: SessionEvent[]) => events.map((e) => e.type);
+
 const turnStarts = (events: SessionEvent[]) =>
   events.filter((e): e is Extract<SessionEvent, { type: 'turn-start' }> => e.type === 'turn-start');
 
@@ -463,9 +504,11 @@ describe('LocalAgentSession.send — a user turn', () => {
       .filter((event): event is Extract<SessionEvent, { type: 'text-delta' }> => event.type === 'text-delta')
       .map((event) => event.delta)
       .join('');
+
     expect(streamed).toBe('hello there');
 
     const turnEnd = events.find((event) => event.type === 'turn-end');
+
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.userMessage).toBe('hi');
     expect(turnEnd.turn.assistantResponse).toBe('hello there');
@@ -473,6 +516,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const rows = db.query<{ role: string; content: string }, []>(
       `SELECT role, content FROM messages ORDER BY created_at`,
     ).all();
+
     expect(rows.map((r) => r.role)).toEqual(['user', 'assistant']);
     expect(rows[1]!.content).toBe('hello there');
   });
@@ -508,9 +552,11 @@ describe('LocalAgentSession.send — a user turn', () => {
     });
     expect(turns[1]!.turn.userMessage).toBe('second');
     expect(turns[1]!.turn.hadError).toBe(false);
+
     const assistants = db.query<{ content: string }, []>(
       `SELECT content FROM messages WHERE role = 'assistant'`,
     ).all();
+
     expect(assistants).toEqual([{ content: 'streamed answer' }]);
   });
 
@@ -531,7 +577,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     // attachment rides on the user's own message (the one carrying a file part).
     const user = [...observed].reverse().find((message) =>
       message.role === 'user' && message.content.some((part) => part.type === 'file'));
+
     expect(user).toBeDefined();
+
     if (!user || user.role !== 'user') throw new Error('user attachment message was not captured');
     const parts = user.content;
     expect(parts).toHaveLength(2);
@@ -542,6 +590,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const rows = db.query<{ role: string; content: string }, []>(
       `SELECT role, content FROM messages ORDER BY created_at`,
     ).all();
+
     expect(rows[0]).toEqual({ role: 'user', content: 'what is in this image?' });
   });
 
@@ -566,13 +615,16 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     // No file part survives to the model request.
     const observed = captures[0]!;
+
     const fileParts = observed.flatMap((message) =>
       message.role === 'system' ? [] : message.content.filter((part) => part.type === 'file'));
+
     expect(fileParts).toHaveLength(0);
 
     // The replacement text carries the content-addressed path…
     const referenced = observed.find((m) =>
       m.role === 'user' && JSON.stringify(m.content).includes('attachments/'));
+
     expect(referenced).toBeDefined();
     const referencedJson = JSON.stringify(referenced!.content);
     expect(referencedJson).toContain('resume.pdf');
@@ -586,8 +638,10 @@ describe('LocalAgentSession.send — a user turn', () => {
     // Second turn: the (unchanged) in-memory history re-sanitizes to the SAME
     // reference — byte-stable, so the prompt-cache prefix holds.
     await session.send('continue');
+
     const again = captures[1]!.find((m) =>
       m.role === 'user' && JSON.stringify(m.content).includes('attachments/'));
+
     expect(again).toBeDefined();
     expect(JSON.stringify(again!.content)).toBe(referencedJson);
   });
@@ -599,14 +653,17 @@ describe('LocalAgentSession.send — a user turn', () => {
     let observed: PromptMessage[] = [];
     let system = '';
     const systemModel = systemCapturingModel('ok', (value) => { system = value; });
+
     const combinedModel = new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake-model',
       doGenerate: fakeModel('ok').doGenerate,
       doStream: async (options) => {
         observed = options.prompt;
+
         return systemModel.doStream(options);
       },
     });
+
     const { db, rt, session } = setup('ok', combinedModel);
 
     await session.send('hi');
@@ -679,6 +736,7 @@ describe('LocalAgentSession.send — a user turn', () => {
       { type: 'file', data: 'data:image/png;base64,AAAA', mediaType: 'image/png', filename: 'square.png' },
       { type: 'text', text: 'what is this?' },
     ]);
+
     expect(serialized).not.toContain('base64,AAAA');
     expect(JSON.parse(serialized)).toEqual([
       { type: 'file', mediaType: 'image/png', filename: 'square.png' },
@@ -694,6 +752,7 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     let observed: PromptMessage[] = [];
     const events: SessionEvent[] = [];
+
     const resumed = new LocalAgentSession({
       rt,
       db,
@@ -710,6 +769,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     // — filter them for the order checks.
     const text = observed.map(messageText)
       .filter((t) => !isDynamicBlock(t) && !isWorkspaceInstructions(t));
+
     expect(text).toContain('remember this');
     expect(text).toContain('remembered answer');
     expect(text.at(-1)).toBe('what did I say?');
@@ -742,11 +802,13 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     function resume(db: Database, rt: ReturnType<typeof createCLIRuntime>) {
       let observed: PromptMessage[] = [];
+
       const session = new LocalAgentSession({
         rt, db,
         model: historyCapturingModel('ok', (messages) => { observed = messages; }),
         onEvent: () => {}, noAutoEvolve: true,
       });
+
       return {
         session,
         seen: () => observed.map(messageText)
@@ -809,11 +871,13 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
   function memoryThenTextModel(firstFinishUsage: LanguageModelV2Usage): LanguageModel {
     let step = 0;
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
     return new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
       doStream: async () => {
         step += 1;
+
         if (step === 1) {
           return {
             stream: new ReadableStream({
@@ -832,6 +896,7 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
             response: { headers: {} },
           };
         }
+
         return {
           stream: new ReadableStream({
             start(controller) {
@@ -858,10 +923,12 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
     await session.send('save a note please');
 
     const turnEnd = events.find((event) => event.type === 'turn-end');
+
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.hadError).toBe(true);
     // The error rode the tool-result path (my case), not the stream-abort catch.
     const toolResult = events.find((event) => event.type === 'tool-result');
+
     if (!toolResult || toolResult.type !== 'tool-result') throw new Error('tool-result event was not emitted');
     expect(toolResult).toBeDefined();
     expect(toolResult.result).toContain('disk full');
@@ -884,6 +951,7 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
     // mentioned a cache WRITE or reasoning tokens, so those fields are absent
     // rather than sitting at 0 and claiming the provider measured them.
     const turnEnd = events.find((event) => event.type === 'turn-end');
+
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.usage).toEqual({ input: 25, output: 12, cacheRead: 12 });
     await session.end();
@@ -916,6 +984,7 @@ async function writeFocusedSkill(rt: CLIRuntime): Promise<void> {
 
 function messageText(message: PromptMessage): string {
   if (message.role === 'system') return message.content;
+
   return message.content
     .map((part) => part.type === 'text' || part.type === 'reasoning' ? part.text : JSON.stringify(part))
     .join('');
@@ -1003,11 +1072,14 @@ describe('LocalAgentSession — programmatic turns (reactor / background-job wak
       signals: new SignalDelivery(session),
       scheduleDrain: () => {},
     });
+
     await runner.wake(JOB);
 
     const expectedId = `${'programmatic:'}${backgroundJobWakeTrigger(JOB)}`;
+
     const row = sql<{ metadata: string | null }>`
       SELECT metadata FROM messages WHERE id = ${expectedId}`[0];
+
     expect(row).toBeDefined();
     expect(JSON.parse(row!.metadata!)).toMatchObject({
       kinuEvent: 'background_job',
@@ -1035,13 +1107,16 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
   function overflowingModel(failures: number, answer = 'recovered'): LanguageModel {
     let calls = 0;
     const base = fakeModel(answer);
+
     return new TestLanguageModelV2({
       provider: base.provider,
       modelId: base.modelId,
       doGenerate: base.doGenerate,
       doStream: async (options) => {
         calls += 1;
+
         if (calls <= failures) throw new Error('context_length_exceeded: prompt is too long');
+
         return base.doStream(options);
       },
     });
@@ -1058,16 +1133,20 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
     expect(starts.map((s) => s.kind)).toEqual(['user', 'programmatic']);
     expect(starts[1]!.event).toBe('overflow_retry');
     expect(starts[1]!.text).toContain('compacted');
+
     // The retry turn completed…
     const streamed = events
       .filter((event): event is Extract<SessionEvent, { type: 'text-delta' }> => event.type === 'text-delta')
       .map((event) => event.delta)
       .join('');
+
     expect(streamed).toContain('recovered');
+
     // …and CONSUMED the armed flag: no compaction_state row stays armed.
     const armed = db.query<{ c: number }, []>(
       `SELECT COUNT(*) as c FROM compaction_state WHERE force_compaction = 1`,
     ).get();
+
     if (!armed) throw new Error('compaction state count row is missing');
     expect(armed.c).toBe(0);
   });
@@ -1085,6 +1164,7 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
   test('a rate-limit failure never force-compacts or retries', async () => {
     let calls = 0;
     const base = fakeModel('n/a');
+
     const model = new TestLanguageModelV2({
       provider: base.provider,
       modelId: base.modelId,
@@ -1094,14 +1174,17 @@ describe('LocalAgentSession — overflow recovery (context_length turn failures)
         throw new Error('Failed after 3 attempts. Last error: Too Many Requests');
       },
     });
+
     const { db, session, events } = setup('unused', model);
     await session.send('build the thing');
     await new Promise((r) => setTimeout(r, 25));
     expect(turnStarts(events)).toHaveLength(1);
     expect(calls).toBe(1);
+
     const armed = db.query<{ c: number }, []>(
       `SELECT COUNT(*) as c FROM compaction_state WHERE force_compaction = 1`,
     ).get();
+
     if (!armed) throw new Error('compaction state count row is missing');
     expect(armed.c).toBe(0);
   });
@@ -1126,7 +1209,9 @@ describe('LocalAgentSession — context window', () => {
         const info: ModelInfo = {
         id: 'house-model', label: 'house', capabilities: ['tools', 'streaming'],
         };
+
         if (contextWindow !== undefined) info.contextWindow = contextWindow;
+
         return info;
       },
       ...resolverRest,
@@ -1137,7 +1222,9 @@ describe('LocalAgentSession — context window', () => {
     const row = db.query<{ c: number }, []>(
       `SELECT COUNT(*) c FROM compaction_state WHERE plan_json IS NOT NULL`,
     ).get();
+
     if (!row) throw new Error('compaction plan count row is missing');
+
     return row.c > 0;
   };
 
@@ -1184,15 +1271,18 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     let connected = ['local/a'];
     let sweeps = 0;
     let revision = 1;
+
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => spec?.trim() || 'local/a',
       resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
       listProviders: async () => [],
       listModels: async () => {
         sweeps += 1;
+
         return {
           models: connected.map((spec) => {
             const [provider, id] = spec.split('/');
+
             return { provider, id, label: id, capabilities: ['streaming' as const] };
           }),
           failures: [],
@@ -1201,14 +1291,18 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       modelInfo: async () => null,
       ...resolverRest,
     };
+
     // The authority is read live, so the tier the account moves to arrives on
     // its own — and the listing re-sweeps on the revision rather than staying
     // frozen for the session.
     let tierModel = 'local/a';
+
     const envelope = (): ProfileCatalogEnvelope => {
       const catalog = { roles: {}, tiers: { default: { model: tierModel } } };
+
       return { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog };
     };
+
     const { session, events } = setupWithResolver(resolver, {
       profileAuthority: envelope,
       providerRevision: () => revision,
@@ -1234,9 +1328,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // signal the complete-but-stale listing makes `local/b` a configured model
     // nothing lists, which resolution refuses outright.
     expect(sweeps).toBe(2);
+
     const answers = events
       .filter((event) => event.type === 'turn-end')
       .map((event) => event.type === 'turn-end' ? event.turn.assistantResponse : '');
+
     expect(answers).toEqual(['from a', 'from a', 'from b']);
   });
 
@@ -1255,19 +1351,23 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       modelInfo: async () => null,
       ...resolverRest,
     };
+
     const catalog = { roles: {}, tiers: { default: { model: 'local/b' } } };
+
     const envelope: ProfileCatalogEnvelope = {
       authority: { kind: 'local' },
       version: 1,
       digest: profileCatalogDigest(catalog),
       catalog,
     };
+
     const { session, events } = setupWithResolver(resolver, {
       profileAuthority: () => envelope,
     });
 
     await session.send('first');
     const firstTurn = events.find((event) => event.type === 'turn-end');
+
     if (!firstTurn || firstTurn.type !== 'turn-end') throw new Error('first turn-end event was not emitted');
     expect(firstTurn.turn.assistantResponse).toBe('from b');
   });
@@ -1275,13 +1375,16 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('tier reasoning effort merges with prompt-cache options', async () => {
     let providerOptions: LanguageModelV2CallOptions['providerOptions'];
     const base = fakeModel('reasoned');
+
     const model = new TestLanguageModelV2({
       provider: base.provider, modelId: base.modelId, doGenerate: base.doGenerate,
       doStream: async (options) => {
         providerOptions = options.providerOptions;
+
         return base.doStream(options);
       },
     });
+
     const resolver: LocalModelResolver = {
       normalizeSpecSync: () => 'openai/gpt-5.5',
       resolveModel: () => model,
@@ -1293,16 +1396,19 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       modelInfo: async () => null,
       ...resolverRest,
     };
+
     const catalog = {
       roles: {},
       tiers: { default: { model: 'openai/gpt-5.5', reasoningEffort: 'high' as const } },
     };
+
     const envelope: ProfileCatalogEnvelope = {
       authority: { kind: 'local' },
       version: 1,
       digest: profileCatalogDigest(catalog),
       catalog,
     };
+
     const { session } = setupWithResolver(resolver, { profileAuthority: () => envelope });
 
     await session.send('think hard');
@@ -1329,6 +1435,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       modelInfo: async () => null,
       ...resolverRest,
     };
+
     const catalog = {
       roles: {},
       tiers: {
@@ -1336,12 +1443,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         slow: { model: 'local/b' },
       },
     };
+
     const envelope: ProfileCatalogEnvelope = {
       authority: { kind: 'local' },
       version: 1,
       digest: profileCatalogDigest(catalog),
       catalog,
     };
+
     const { session, events } = setupWithResolver(resolver, { profileAuthority: () => envelope });
 
     await session.send('slow once', { tier: 'slow' });
@@ -1356,6 +1465,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { session, events } = setup();
     session.broadcast({ type: 'job_update', jobId: 'x' });
     const b = events.find((event) => event.type === 'broadcast');
+
     if (!b || b.type !== 'broadcast') throw new Error('broadcast event was not emitted');
     expect(b.event.type).toBe('job_update');
   });
@@ -1363,6 +1473,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('one-shot timer triggers publish timer events and wake a programmatic turn', async () => {
     const { db, session, events } = setup('handled timer');
     const fireAt = Date.now() + 60_000;
+
     const created = await session.createTimerTrigger({
       atMs: fireAt,
       label: 'follow-up',
@@ -1439,7 +1550,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const row = db.query<{ id: string; turn_id: string | null; consumed_at: number | null }, []>(
       `SELECT id, turn_id, consumed_at FROM agent_log WHERE kind = 'event'`,
     ).get();
+
     if (!row) throw new Error('no event row');
+
     return row;
   }
 
@@ -1470,9 +1583,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       .run(published);
 
     const events: SessionEvent[] = [];
+
     const next = new LocalAgentSession({
       rt, db, model: fakeModel('recovered event'), onEvent: (e) => events.push(e), noAutoEvolve: true,
     });
+
     // Nothing can see it: `pending()` excludes a bound row, so the recovery
     // drain on its own would find no work and the event the log admitted
     // would simply never have happened.
@@ -1502,9 +1617,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // its turn reached disk. Re-pending it here would answer the same external
     // event twice, which is the failure mode a blind reclaim would introduce.
     const nextEvents: SessionEvent[] = [];
+
     const next = new LocalAgentSession({
       rt, db, model: fakeModel('should not run'), onEvent: (e) => nextEvents.push(e), noAutoEvolve: true,
     });
+
     next.reclaimStrandedEventDeliveries();
     await next.flushPendingDrains();
 
@@ -1534,6 +1651,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('Node execute fallback exposes the local agent.schedule namespace', async () => {
     const received: Array<{ atMs?: number; label?: string }> = [];
+
     const executeTool = createNodeExecuteToolFactory({
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
@@ -1541,6 +1659,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         setCurriculumTaskStatus: async () => ({ ok: true }),
         createTimerTrigger: async (opts) => {
           received.push({ atMs: opts.atMs, label: opts.label });
+
           return { id: 'trg-local', kind: opts.cron ? 'timer_cron' : 'timer_oneshot', nextFireAt: opts.atMs ?? 123 };
         },
         cancelTrigger: async () => ({ ok: true, changed: true }),
@@ -1553,6 +1672,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const result = await toolExecute<{ code: string }, unknown>(executeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
     });
+
     expect(result).toMatchObject({ result: { id: 'trg-local', kind: 'timer_oneshot' } });
     expect(received[0]?.label).toBe('local wake');
     expect(received[0]?.atMs).toBeGreaterThan(Date.now());
@@ -1560,6 +1680,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('Node execute fallback exposes agent.compactNow, arming the ladder for the next turn', async () => {
     let arms = 0;
+
     const executeTool = createNodeExecuteToolFactory({
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
@@ -1577,6 +1698,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const result = await toolExecute<{ code: string }, unknown>(executeTool)({
       code: 'return await agent.compactNow();',
     });
+
     expect(result).toMatchObject({ result: { armed: true, appliesAt: 'next-turn-assembly' } });
     expect(arms).toBe(1);
   });
@@ -1630,12 +1752,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     await writeFocusedSkill(rt);
     const path = `${SKILLS_DIR}/focused.md`;
     const reviewed = await session.readInstructionApproval(path);
+
     if (reviewed === null) throw new Error('expected focused skill');
 
     await rt.storage.vfs.writeFile(path, `${FOCUSED_SKILL}\n# changed after review\n`);
     const result = await session.approveInstruction(path, reviewed.digest);
 
     expect(result.ok).toBe(false);
+
     if (result.ok) throw new Error('expected rejection');
     expect(result.error).toContain('changed');
   });
@@ -1667,6 +1791,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('recoverBackgroundJobs re-drives an orphaned agents job whose row names the fork action', async () => {
     const { db, rt, session } = setup('resumed fork answer');
+
     // A row whose `action` is `'fork'` — a rung this tool does not offer. It is
     // HISTORY rather than a prompt, so the row is TRANSLATED onto the action
     // that runs ephemeral nodes instead of being refused: a refusal here would
@@ -1679,12 +1804,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         { task: 'test it', rationale: 'check it' },
       ],
     });
+
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-a', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f4', 'bg:agents', '{"phase":"running","jobId":"bgjob-a","kind":"agents"}', 1)`);
 
     const stderrLines: string[] = [];
     const originalError = console.error;
     console.error = (...args: unknown[]) => { stderrLines.push(args.map(String).join(' ')); };
+
     try {
       await session.recoverBackgroundJobs();
       await waitFor(() => jobStatus(db, 'bgjob-a') === 'completed');
@@ -1699,6 +1826,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       v.object({ preset: v.literal('ideate'), report: v.object({ expansions: v.number() }) }),
       JSON.parse(jobResult(db, 'bgjob-a')),
     );
+
     expect(settled.report.expansions).toBeGreaterThan(0);
     expect(jobResult(db, 'bgjob-a')).toContain('resumed fork answer');
 
@@ -1715,10 +1843,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // ends while it is in flight would pull SQLite out from under its settle
     // write — the CLI's version of evicting a DO mid-fiber.
     const slow = fakeModel('slow answer');
+
     const model = new TestLanguageModelV2({
       provider: slow.provider, modelId: slow.modelId, doStream: slow.doStream,
       doGenerate: async (options) => {
         await new Promise((resolve) => setTimeout(resolve, 50));
+
         return slow.doGenerate(options);
       },
     });
@@ -1769,6 +1899,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, rt, session, events } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true },
     });
+
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-hang', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fh', 'bg:agents', '{"phase":"running","jobId":"bgjob-hang","kind":"agents"}', 1)`);
@@ -1801,6 +1932,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, rt, session, events } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 50, wakesAfterTurn: true },
     });
+
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'edit the target file' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, label, work_mode, status, input_json, created_at)
       VALUES ('${rt.actor.actorId}', 'bgjob-quiet', 'agents', 'mcts: edit the target file', 'build', 'running', '${input}', 1)`);
@@ -1810,6 +1942,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const stderrLines: string[] = [];
     const originalError = console.error;
     console.error = (...args: unknown[]) => { stderrLines.push(args.map(String).join(' ')); };
+
     try {
       await session.settleBackgroundWork();
     } finally {
@@ -1833,6 +1966,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, rt, session } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true },
     });
+
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-e', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'fe', 'bg:agents', '{"phase":"running","jobId":"bgjob-e","kind":"agents"}', 1)`);
@@ -1856,9 +1990,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // seconds puts them 2 s apart, and the window below is TIGHTER than the old
     // one in units of grace (1.5x against 2.0x) rather than wider.
     const grace = 2_000;
+
     const { db, rt, session } = setup('unused', hangingModel(), {
       backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: grace, wakesAfterTurn: true },
     });
+
     const input = JSON.stringify({ action: 'swarm', preset: 'ideate', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, input_json, created_at) VALUES ('${rt.actor.actorId}', 'bgjob-2x', 'agents', 'build', 'running', '${input}', 1)`);
     db.exec(`INSERT INTO fibers (actor_id, id, name, snapshot, created_at) VALUES ('${rt.actor.actorId}', 'f2x', 'bg:agents', '{"phase":"running","jobId":"bgjob-2x","kind":"agents"}', 1)`);
@@ -1883,6 +2019,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       executeToolsModel('await new Promise(r => setTimeout(r, 120));\n"computed inline"'),
       { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true } },
     );
+
     await session.send('do the long thing');
 
     expect(events.some((e) => e.type === 'background' && e.event === 'bg_job_started')).toBe(false);
@@ -1902,6 +2039,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       executeToolsModel('await state.set("probe", "found")\nawait state.get("probe")'),
       { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, wakesAfterTurn: true } },
     );
+
     await session.send('remember this');
     const result = events.find((event) => event.type === 'tool-result');
     expect(JSON.stringify(result?.result)).toContain('found');
@@ -1913,6 +2051,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"computed late"'),
       { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 5_000, wakesAfterTurn: true } },
     );
+
     await session.send('do the long thing');
     await session.settleBackgroundWork();
 
@@ -1926,6 +2065,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"never detached"'),
       { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 500, wakesAfterTurn: true } },
     );
+
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       db.exec(`INSERT INTO background_jobs (actor_id, id, kind, work_mode, status, created_at) VALUES ('${rt.actor.actorId}', 'busy-${i}', 'run', 'build', 'running', 1)`);
     }
@@ -1947,6 +2087,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('toolNames exposes the full surface (agents/memory parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();
+
     // Full parity with the DO surface: execution + durable state + delegation.
     // No `skills` — read/create/edit/delete are workspace.readFile/writeFile/
     // readdir/exec calls now, not a separate tool.
@@ -1966,6 +2107,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         input: { code: 'return await workspace.writeFile("shared.txt", "changed by codemode");' },
       },
     ]);
+
     const { rt, session } = setup('unused', model);
     await rt.storage.vfs.writeFile('shared.txt', 'original');
 
@@ -1986,6 +2128,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         input: { action: 'write', path: 'shared.txt', content: 'changed by native file' },
       },
     ]);
+
     const { rt, session } = setup('unused', model);
     await rt.storage.vfs.writeFile('shared.txt', 'original');
 
@@ -2007,12 +2150,14 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     const capturedSteps: PromptMessage[][] = [];
     let step = 0;
+
     const model: LanguageModel = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
       doStream: async (options) => {
         step += 1;
         capturedSteps.push(options.prompt);
+
         if (step === 2) {
           // Real wall-clock delay standing in for a slower model round trip —
           // comfortably longer than the background job's own 60ms of work, so
@@ -2020,10 +2165,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
           // settled and (if the wake fired) already delivered its signal.
           await new Promise((r) => setTimeout(r, 150));
         }
+
         return {
           stream: new ReadableStream({
             start(controller) {
               controller.enqueue({ type: 'stream-start', warnings: [] });
+
               if (step === 1) {
                 controller.enqueue({
                   toolCallId: 'call-1', type: 'tool-call', toolName: 'execute_tools',
@@ -2042,6 +2189,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
                 controller.enqueue({ type: 'text-end', id: '0' });
                 controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
               }
+
               controller.close();
             },
           }),
@@ -2055,9 +2203,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
     expect(step).toBeGreaterThanOrEqual(3);
     const thirdStepMessages = capturedSteps[2]!;
+
     const injectedTexts = thirdStepMessages
       .filter((m) => m.role === 'user')
       .map((m) => JSON.stringify(m.content));
+
     const wakeText = injectedTexts.find((t) => t.includes('Background') && t.includes('completed'));
 
     // The wake reached the THIRD step's own request — the model was handed the
@@ -2086,30 +2236,38 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
     // The classifier + reflection ride rt.llm.complete — stub it so the review
     const completions: string[] = [];
+
     const reviewLlm = {
       stream: rt.llm.stream.bind(rt.llm),
       complete: async (prompt: string) => {
         completions.push(prompt);
+
         if (opts.gate) await opts.gate;
+
         return prompt.includes('Classify what the follow-up reveals')
           ? classifierJson
           : 'verify the cluster name before rotating keys';
       },
     };
+
     // runs without a network LLM.
     Object.defineProperty(rt, 'llm', { value: reviewLlm });
     const events: SessionEvent[] = [];
+
     const sessionOpts: LocalAgentSessionOpts = {
       rt, db,
       model: opts.model ?? fakeModel('rotated the production keys'),
       onEvent: (e) => events.push(e),
     };
+
     if (opts.oneShot) {
       sessionOpts.oneShot = true;
       sessionOpts.backgroundPolicy = BACKGROUND_POLICY['one-shot'];
     }
+
     const session = new LocalAgentSession(sessionOpts);
     rt.setModelForRoute?.(() => reviewLlm);
+
     return { db, rt, session, events, completions, reviewLlm };
   }
 
@@ -2122,18 +2280,22 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     await waitFor(() => db.query<{ c: number }, []>(
       `SELECT count(*) AS c FROM turn_outcomes`,
     ).get()?.c === 1, 3000);
+
     const row = db.query<{
       outcome: string; source: string; turn_id: string; session_id: string; followup: string;
     }, []>(`SELECT * FROM turn_outcomes`).get();
+
     if (!row) throw new Error('turn outcome row is missing');
     expect(row.outcome).toBe('corrected');
     expect(row.source).toBe('classifier');
     expect(row.followup).toContain('STAGING');
     expect(row.session_id).toBe('default');
+
     // Tied to the FIRST turn's durable assistant message id.
     const firstAssistant = db.query<{ id: string }, []>(
       `SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at, rowid LIMIT 1`,
     ).get();
+
     if (!firstAssistant) throw new Error('first assistant message row is missing');
     expect(row.turn_id).toBe(firstAssistant.id);
 
@@ -2182,6 +2344,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     const row = db.query<{ outcome: string; source: string }, []>(
       `SELECT outcome, source FROM turn_outcomes`,
     ).get();
+
     expect(row).toEqual({ outcome: 'corrected', source: 'classifier' });
     expect(db.query<{ c: number }, []>(
       `SELECT count(*) AS c FROM completed_turns WHERE in_window = 1`,
@@ -2199,9 +2362,11 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       '{"outcome":"accepted","confidence":0.9,"evidence":"x"}',
       { oneShot: true, model: runThenAnswerModel() },
     );
+
     await session.send('run the build and report');
 
     const timings = await captureSettleTimings(() => session.end());
+
     // The named instrument, quiet under 1s: a silent exit means the whole tail
     // fit under the threshold, and a loud one must still show an empty lane.
     // What makes that a fact rather than a coincidence of a fast stub is the
@@ -2217,10 +2382,12 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
 
   test('the next open of the same workspace runs the deferred review', async () => {
     const classifierJson = '{"outcome":"corrected","confidence":0.9,"evidence":"user re-asked"}';
+
     // A turn that DID tool work: the execution verdict is the only evidence a
     // headless turn carries, and it needs an acting call to read.
     const { db, rt, session } = setupWithEvolution(classifierJson,
       { oneShot: true, model: runThenAnswerModel() });
+
     await session.send('run the build and report');
     await session.end();
     const owed = db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c ?? 0;
@@ -2230,14 +2397,17 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
     // An interactive session (or the scheduler daemon) opening this workspace —
     // both drive `recoverBackgroundJobs`, which is the re-driver.
     const events: SessionEvent[] = [];
+
     const next = new LocalAgentSession({
       rt, db, model: fakeModel('here is the runbook'), onEvent: (e) => events.push(e),
     });
+
     await next.recoverBackgroundJobs();
 
     const row = db.query<{ outcome: string; source: string; followup: string | null }, []>(
       `SELECT outcome, source, followup FROM turn_outcomes`,
     ).get();
+
     expect(row).toEqual({ outcome: 'accepted', source: 'execution', followup: null });
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(0);
     expect(events.some((e) => e.type === 'evolution' && e.event === 'deferred_reviews_drained')).toBe(true);
@@ -2256,15 +2426,19 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       .run(rt.actor.actorId, 'rev-corrupt', '{truncated', null, 0, 'queued', 1);
 
     const events: SessionEvent[] = [];
+
     const next = new LocalAgentSession({
       rt, db, model: fakeModel('ok'), onEvent: (e) => events.push(e),
     });
+
     await next.recoverBackgroundJobs();
 
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(0);
+
     const drained = events.flatMap((e) =>
       e.type === 'evolution' && e.event === 'deferred_reviews_drained' ? [e.message] : []);
+
     expect(drained).toEqual(['0 deferred turn review(s) run, 1 unreadable row(s) dropped']);
     await next.end();
   });
@@ -2272,6 +2446,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
   test('a one-shot open does NOT re-drive — the cost would only move to the next task', async () => {
     const { db, rt, session } = setupWithEvolution('{"outcome":"accepted","confidence":0.9,"evidence":"x"}',
       { oneShot: true });
+
     await session.send('write the report');
     await session.end();
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(1);
@@ -2280,6 +2455,7 @@ describe('LocalAgentSession — turn-outcome review (Hermes-style forked review)
       rt, db, model: fakeModel('ok'), onEvent: () => {}, oneShot: true,
       backgroundPolicy: BACKGROUND_POLICY['one-shot'],
     });
+
     await nextExec.recoverBackgroundJobs();
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM completed_turns WHERE review = 'queued'`).get()?.c).toBe(1);
     expect(db.query<{ c: number }, []>(`SELECT count(*) AS c FROM turn_outcomes`).get()?.c).toBe(0);
@@ -2294,6 +2470,7 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
     const rows = db.query<{ key: string; value: string }, []>(
       `SELECT key, value FROM actor_config WHERE key IN ('display_name', 'name_origin')`,
     ).all();
+
     return {
       displayName: rows.find((row) => row.key === 'display_name')?.value ?? null,
       origin: rows.find((row) => row.key === 'name_origin')?.value ?? null,
@@ -2312,15 +2489,18 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
     // upgrade yields null and the title already on disk stands.
     const base = fakeModel('done');
     const asked: string[] = [];
+
     const model = new TestLanguageModelV2({
       provider: base.provider,
       modelId: base.modelId,
       doStream: base.doStream,
       doGenerate: async (options) => {
         asked.push(JSON.stringify(options.prompt));
+
         return base.doGenerate(options);
       },
     });
+
     const { db, session } = setup('unused', model);
     expect(naming(db)).toEqual({ displayName: null, origin: null });
 
@@ -2358,6 +2538,7 @@ describe('LocalAgentSession — the advisor lane joins the exit', () => {
     const { db, rt, session, events } = setup('rotated the staging keys');
     rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = { stream: async function* () { yield ''; }, complete: reply };
+
     return { db, rt, session, events };
   }
 
@@ -2380,9 +2561,11 @@ describe('LocalAgentSession — the advisor lane joins the exit', () => {
     // the race. 50ms against a 300s settle grace, and an exit that does NOT
     // join returns in about a millisecond.
     let reviewedAt = 0;
+
     const { db, session } = setupWithAdvisor(async () => {
       await Bun.sleep(50);
       reviewedAt = performance.now();
+
       return nit;
     });
 
@@ -2431,6 +2614,7 @@ describe('LocalAgentSession — the advisor lane joins the exit', () => {
       provider: 'fake', modelId: 'fake-model',
       doStream: async () => { throw new Error('upstream is on fire'); },
     });
+
     const { db, rt, session } = setup('unused', exploding);
     rt.actor.config.setAdvisorEnabled(true);
     rt.advisorLlm = {
@@ -2453,8 +2637,10 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
       openWorkspaceMainActor(sql),
       `local:${realpathSync(cwd)}`,
     );
+
     for (const path of paths) store.approve(path, instructionDigest(readFileSync(path, 'utf8')));
   }
+
   test('injects the APPROVED cwd AGENTS.md chain into the turn system prompt', async () => {
     const root = scratchDir('local-session-agentsmd');
     const nested = join(root, 'app');
@@ -2483,14 +2669,17 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     let system = '';
     let observed: PromptMessage[] = [];
     const systemModel = systemCapturingModel('ok', (value) => { system = value; });
+
     const combinedModel = new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake-model',
       doGenerate: fakeModel('ok').doGenerate,
       doStream: async (options) => {
         observed = options.prompt;
+
         return systemModel.doStream(options);
       },
     });
+
     const { session } = setup('ok', combinedModel, { cwd: root });
     // Nothing carries a file over: with no owner decision at all, a discovered
     // file starts unverified — sealed reference material, never system force.
@@ -2513,9 +2702,11 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
     writeFileSync(agentsPath, 'Root: unapproved doctrine.');
 
     let observed: PromptMessage[] = [];
+
     const { rt, session } = setup(
       'ok', historyCapturingModel('ok', (messages) => { observed = messages; }), { cwd: root },
     );
+
     new InstructionApprovalStore(
       rt.storage.sql,
       rt.actor,
@@ -2540,12 +2731,14 @@ describe('LocalAgentSession — AGENTS.md + session transcript recall', () => {
 
   test('omits the AGENTS.md block when no file exists up the tree', async () => {
     const root = scratchDir('local-session-noagents');
+
     // Ancestors of the tmpdir could theoretically carry an AGENTS.md on a
     // developer machine — only assert omission when the chain is truly empty.
     // The window is wide so a file up there counts as discovered either way.
     const chain = discoverAgentsMd(
       root, { contextWindow: 400_000, modelOutputLimit: 32_000 }, () => 'unverified',
     );
+
     if (chain.admitted.length + chain.referenced.length > 0) return;
     let system = '';
     const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }), { cwd: root });
@@ -2586,12 +2779,14 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     let calls = 0;
+
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
       doStream: async (options) => {
         prompts.push(options.prompt);
         calls += 1;
+
         if (calls === 1) {
           return {
             stream: new ReadableStream({
@@ -2609,6 +2804,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
             response: { headers: {} },
           };
         }
+
         return {
           stream: new ReadableStream({
             start(controller) {
@@ -2624,6 +2820,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
         };
       },
     });
+
     return { model, prompts, release };
   }
 
@@ -2633,6 +2830,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
+
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
@@ -2646,6 +2844,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
               controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
             }, { once: true });
             await gate;
+
             if (abortSignal?.aborted) return;
             controller.enqueue({ type: 'text-end', id: '0' });
             controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
@@ -2655,6 +2854,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
         response: { headers: {} },
       }),
     });
+
     return { model, release };
   }
 
@@ -2696,6 +2896,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const rows = db.query<{ role: string; content: string }, []>(
       `SELECT role, content FROM messages WHERE session_id = 'default' ORDER BY created_at, rowid`,
     ).all();
+
     expect(rows.map((r) => r.role)).toEqual(['user', 'user', 'user', 'assistant']);
     expect(rows[1]!.content).toBe('also check X');
     expect(rows[2]!.content).toBe('and Y');
@@ -2738,6 +2939,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const rows = db.query<{ role: string; content: string }, []>(
       `SELECT role, content FROM messages WHERE session_id = 'default' ORDER BY created_at, rowid`,
     ).all();
+
     expect(rows.map((r) => r.content)).toContain('also check X');
     expect(rows.some((r) => r.content.includes('mail from bob'))).toBe(false);
     await session.end();
@@ -2774,6 +2976,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const rows = db.query<{ role: string; content: string }, []>(
       `SELECT role, content FROM messages WHERE session_id = 'default' ORDER BY created_at, rowid`,
     ).all();
+
     expect(rows.map((r) => `${r.role}:${r.content}`)).toContain('user:follow up please');
     await session.end();
   });
@@ -2810,6 +3013,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
     const toolStep = Promise.withResolvers<void>();
     let calls = 0;
+
     // Call #1 announces a tool call and withholds its step boundary — the drain
     // window. Call #2 streams one delta then stays open until the abort, which is
     // a steer window with no boundary left in front of it.
@@ -2818,6 +3022,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
       modelId: 'fake-model',
       doStream: async ({ abortSignal }) => {
         calls += 1;
+
         if (calls === 1) {
           return {
             stream: new ReadableStream({
@@ -2835,6 +3040,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
             response: { headers: {} },
           };
         }
+
         return {
           stream: new ReadableStream({
             start(controller) {
@@ -2866,6 +3072,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     toolStep.resolve();
     await waitFor(() => steerStatuses(events).some((s) => s.status === 'landed'));
     const landed = steerStatuses(events).find((s) => s.status === 'landed');
+
     if (!landed) throw new Error('the landed steer was never announced');
     expect(landed.steerId).toBe(steerId);
     expect(landed.text).toBe('also check X');
@@ -2892,6 +3099,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const row = db.query<{ role: string; content: string; metadata: string | null }, [string]>(
       `SELECT role, content, metadata FROM messages WHERE id = ?`,
     ).get(steerId ?? '');
+
     if (!row) throw new Error('the landed steer left no durable row');
     expect(row.role).toBe('user');
     expect(row.content).toBe('also check X');
@@ -2919,12 +3127,14 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const prompts: PromptMessage[][] = [];
     let calls = 0;
+
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
       doStream: async (options) => {
         prompts.push(options.prompt);
         calls += 1;
+
         if (calls === 1) {
           return {
             stream: new ReadableStream({
@@ -2942,6 +3152,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
             response: { headers: {} },
           };
         }
+
         return {
           stream: new ReadableStream({
             start(controller) {
@@ -2980,10 +3191,13 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     // assistant call and its tool result — is the contract, and asserting the
     // raw provider string would re-pin the very drift normalization removes.
     const last = prompts.at(-1) ?? [];
+
     const callIds = last.flatMap((message) => message.role === 'assistant' && Array.isArray(message.content)
       ? message.content.flatMap((part) => part.type === 'tool-call' ? [part.toolCallId] : []) : []);
+
     const results = last.flatMap((message) => message.role === 'tool'
       ? message.content.filter((part) => part.type === 'tool-result') : []);
+
     expect(callIds.length).toBeGreaterThan(0);
     expect(results.map((r) => r.toolCallId)).toEqual(callIds);
     await session.end();
@@ -2997,12 +3211,14 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const prompts: PromptMessage[][] = [];
     let calls = 0;
+
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
       doStream: async (options) => {
         prompts.push(options.prompt);
         calls += 1;
+
         if (calls === 1) {
           return {
             stream: new ReadableStream({
@@ -3020,6 +3236,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
             response: { headers: {} },
           };
         }
+
         if (calls === 2) {
           return {
             stream: new ReadableStream({
@@ -3028,6 +3245,7 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
             response: { headers: {} },
           };
         }
+
         return {
           stream: new ReadableStream({
             start(controller) {
@@ -3140,8 +3358,10 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
     const { session, rt } = setup('answered with A');
     seedTakes(rt);
     await session.send('solve it');
+
     const turnId = rt.storage.sql<{ id: string }>`
       SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`[0]!.id;
+
     expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default', chosenNodeId: null });
     await session.end();
   });
@@ -3162,6 +3382,7 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
         response: { headers: {} },
       }),
     });
+
     const { session, rt, events } = setup('unused', erroringModel);
     seedTakes(rt);
 
@@ -3169,6 +3390,7 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
 
     expect(events.some((e) => e.type === 'error')).toBe(true);
     const turnEnd = events.find((event) => event.type === 'turn-end');
+
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.hadError).toBe(true);
     // The seeded (unclaimed) take was purged, not claimed for the failed turn.
@@ -3185,14 +3407,17 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
   test('a turn that answered despite a failing tool call still claims its takes', async () => {
     let step = 0;
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
     const failingToolModel = new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake-model',
       doStream: async () => {
         step += 1;
+
         return {
           stream: new ReadableStream({
             start(controller) {
               controller.enqueue({ type: 'stream-start', warnings: [] });
+
               if (step === 1) {
                 controller.enqueue({
                   type: 'tool-call', toolCallId: 'call-1', toolName: 'memory',
@@ -3205,6 +3430,7 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
                 controller.enqueue({ type: 'text-end', id: '0' });
                 controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
               }
+
               controller.close();
             },
           }),
@@ -3212,17 +3438,22 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
         };
       },
     });
+
     const { session, rt, events } = setup('unused', failingToolModel);
     rt.memory.append = async () => { throw new Error('disk full'); };
+
     seedTakes(rt);
 
     await session.send('solve it');
 
     const turnEnd = events.find((event) => event.type === 'turn-end');
+
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.hadError).toBe(true);
+
     const turnId = rt.storage.sql<{ id: string }>`
       SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`[0]!.id;
+
     expect(session.latestAlternateTakes()).toMatchObject({ turnId, sessionId: 'default' });
     await session.end();
   });
@@ -3238,6 +3469,7 @@ describe('LocalAgentSession — Alternate Takes parity', () => {
 
     const row = rt.storage.sql<{ outcome: string; source: string; followup: string | null; turn_id: string }>`
       SELECT outcome, source, followup, turn_id FROM turn_outcomes`[0]!;
+
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'go with approach B', turn_id: set.turnId });
     expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0]!.status).toBe('terminal');
     expect(rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'win'`[0]!.status).toBe('pruned');
@@ -3277,6 +3509,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
      *  both kinds now arrive through the same method. */
     const streamPrompts: PromptMessage[][] = [];
     let streams = 0;
+
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
@@ -3287,8 +3520,10 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
       // the gate before `session.branch` is ever called.
       doStream: async ({ prompt, abortSignal }) => {
         streams += 1;
+
         if (streams > 1) {
           const text = branchAnswer();
+
           return {
             stream: new ReadableStream({
               start(controller) {
@@ -3303,7 +3538,9 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
             response: { headers: {} },
           };
         }
+
         streamPrompts.push(prompt);
+
         return {
           stream: new ReadableStream({
             async start(controller) {
@@ -3314,6 +3551,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
                 controller.error(Object.assign(new Error('aborted'), { name: 'AbortError' }));
               }, { once: true });
               await gate;
+
               if (abortSignal?.aborted) return;
               controller.enqueue({ type: 'text-end', id: '0' });
               controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
@@ -3330,10 +3568,12 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
         warnings: [],
       }),
     });
+
     return { model, release, streamPrompts };
   }
 
   type BranchStatus = { type: 'branch_status'; status: string; branchId: string; task: string; message?: string; takeSetId?: string; turnId?: string };
+
   const branchEvents = (events: SessionEvent[]): BranchStatus[] =>
     events
       .filter((e): e is Extract<SessionEvent, { type: 'broadcast' }> => e.type === 'broadcast')
@@ -3357,6 +3597,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(turnStarts(events)).toHaveLength(1);
     expect(events.some((e) => e.type === 'error')).toBe(false);
     const turnEnd = events.find((event) => event.type === 'turn-end');
+
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.assistantResponse).toBe('the live answer');
     expect(streamPrompts).toHaveLength(1);
@@ -3368,9 +3609,11 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(set.candidates.map((c) => c.text)).toEqual(['the live answer', 'the branch answer']);
     expect(set.candidates.map((c) => c.origin)).toEqual(['live', 'branch']);
     expect(set.winnerNodeId).toBe(set.candidates[0]!.nodeId);
+
     const assistant = db.query<{ id: string }, []>(
       `SELECT id FROM messages WHERE role = 'assistant' ORDER BY created_at DESC LIMIT 1`,
     ).get();
+
     if (!assistant) throw new Error('assistant message row is missing');
     const assistantId = assistant.id;
     expect(set.turnId).toBe(assistantId);
@@ -3397,6 +3640,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
 
     const ledger = rt.storage.sql<{ outcome: string; source: string; followup: string | null }>`
       SELECT outcome, source, followup FROM turn_outcomes`[0]!;
+
     expect(ledger).toMatchObject({ outcome: 'corrected', source: 'take_pick', followup: 'the branch answer' });
 
     await waitFor(() => turnStarts(events).some((s) => s.kind === 'programmatic' && s.event === 'take_pick'), 5000);
@@ -3420,6 +3664,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     expect(session.latestAlternateTakes()).toBeNull();
     // The live turn still completed normally.
     const turnEnd = events.find((event) => event.type === 'turn-end');
+
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.assistantResponse).toBe('the live answer');
     await session.end();
@@ -3431,6 +3676,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
     const { model } = branchableModel('never finishes', () => 'unused');
     model.doGenerate = async () => {
       await branchGate;
+
       return {
         content: [{ type: 'text', text: 'late branch answer' }],
         finishReason: 'stop',
@@ -3438,6 +3684,7 @@ describe('LocalAgentSession.branch — Steer-as-Branch (mid-turn parallel redire
         warnings: [],
       };
     };
+
     const { session, events } = setup('unused', model);
 
     const turn = session.send('long task');
@@ -3470,12 +3717,14 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
         id: 'chatcmpl-1', object: 'chat.completion.chunk', created: 0, model,
         choices: [{ index: 0, ...choice }], ...extra,
       })}\n\n`;
+
     const body = [
       chunk({ delta: { role: 'assistant', content: deltas[0] }, finish_reason: null }),
       ...deltas.slice(1).map((delta) => chunk({ delta: { content: delta }, finish_reason: null })),
       chunk({ delta: {}, finish_reason: 'stop' }, { usage: { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 } }),
       'data: [DONE]\n\n',
     ].join('');
+
     return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
   }
 
@@ -3486,11 +3735,13 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
       model: JsonValue | undefined;
       stream: JsonValue | undefined;
     }> = [];
+
     const server = Bun.serve({
       port: 0,
       hostname: '127.0.0.1',
       async fetch(request) {
         const path = new URL(request.url).pathname;
+
         if (path === '/api/cli/models') {
           return Response.json({
             models: [{
@@ -3500,6 +3751,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
             failures: [],
           });
         }
+
         if (path === '/api/user/ai/v1/chat/completions') {
           const body = v.parse(JsonObjectSchema, await request.json());
           completions.push({
@@ -3508,13 +3760,17 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
             model: body.model,
             stream: body.stream,
           });
+
           return sseCompletion(String(body.model), ['local ', 'cloud turn']);
         }
+
         return new Response(`unexpected: ${path}`, { status: 500 });
       },
     });
+
     try {
       const origin = `http://127.0.0.1:${server.port}`;
+
       const resolver = createLocalModelResolver({
         // The llm config cli/config.ts derives for a signed-in user with no BYO keys.
         llm: {
@@ -3527,6 +3783,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
         cloud: { origin, token: TOKEN },
         sessionAffinity: 'kinu-jarvis',
       });
+
       const { db, session, events } = setupWithResolver(resolver);
       expect(session.getEffectiveModelSpec()).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
 
@@ -3536,8 +3793,10 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
         .filter((event): event is Extract<SessionEvent, { type: 'text-delta' }> => event.type === 'text-delta')
         .map((event) => event.delta)
         .join('');
+
       expect(streamed).toBe('local cloud turn');
       const turnEnd = events.find((event) => event.type === 'turn-end');
+
       if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
       expect(turnEnd.turn.assistantResponse).toBe('local cloud turn');
       expect(turnEnd.turn.hadError).toBe(false);
@@ -3571,9 +3830,11 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await session.send('hi');
 
     const runId = session.listRuns().items[0]!.runId;
+
     const streamed = events
       .filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
       .map((e) => e.event);
+
     expect(streamed).toEqual(session.getRunEvents(runId));
 
     await session.end();
@@ -3597,8 +3858,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await session.settleBackgroundWork();
 
     const events = session.listRuns().items.flatMap((r) => session.getRunEvents(r.runId));
+
     const dispatch = events.find((e): e is Extract<typeof events[number], { type: 'tool_call_end' }> =>
       e.type === 'tool_call_end' && e.name === 'agents');
+
     expect(dispatch).toBeDefined();
     // The call as SENT, so a reader of the ledger knows which search this was
     // rather than only that one happened.
@@ -3610,6 +3873,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
       v.object({ id: v.string(), status: v.string() }),
       db.query(`SELECT id, status FROM background_jobs WHERE kind = 'agents'`).get(),
     );
+
     expect(job.status).toBe('completed');
     // The halves are LINKED: the dispatch row names the job that carries the
     // outcome, so the ledger never leaves a spawn with no reachable result.
@@ -3625,6 +3889,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
       }),
       JSON.parse(rawJobResult),
     );
+
     expect(settled.report.stop).toBe('settled');
     expect(settled.report.expansions).toBe(2);
     expect(settled.candidates).toHaveLength(2);
@@ -3642,6 +3907,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // logged to stderr by the pump, and resolved the caller as if the turn had
     // simply produced nothing.
     const { db, rt } = workspaceRuntime();
+
     // Fails where the real runs did: in the per-turn setup, before the turn's
     // stream (and so before any failure path) exists. Which specific setup call
     // failed in production was never isolated; that the region had no failure
@@ -3653,7 +3919,9 @@ describe('LocalAgentSession — the durable run-event log', () => {
         tail: async () => { throw new Error('Failed after 3 attempts. Last error: Too Many Requests'); },
       },
     };
+
     const events: SessionEvent[] = [];
+
     const session = new LocalAgentSession({
       rt: failing, db, model: fakeModel('never reached'),
       onEvent: (e) => events.push(e), noAutoEvolve: true,
@@ -3688,13 +3956,16 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // on `turn-end` was acting on an answer the workspace might not hold.
     const { db, rt } = workspaceRuntime();
     const durableAtPublish: Array<string | null> = [];
+
     const session = new LocalAgentSession({
       rt, db, model: fakeModel('the rollback step is in the runbook'), noAutoEvolve: true,
       onEvent: (e) => {
         if (e.type !== 'turn-end') return;
+
         const row = db
           .query<{ content: string }, []>(`SELECT content FROM messages WHERE role = 'assistant'`)
           .get();
+
         durableAtPublish.push(row ? row.content : null);
       },
     });
@@ -3713,6 +3984,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // handed every observer a final result that no restart can read back.
     const { db, rt } = workspaceRuntime();
     const events: SessionEvent[] = [];
+
     const session = new LocalAgentSession({
       rt: {
         ...rt,
@@ -3738,6 +4010,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     const ends = events.filter((e) => e.type === 'turn-end');
     expect(ends).toHaveLength(1);
     const end = ends[0];
+
     if (!end || end.type !== 'turn-end') throw new Error('turn-end is missing');
     expect(end.turn.assistantResponse).toBe('');
     expect(end.turn.hadError).toBe(true);
@@ -3763,6 +4036,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // hands the event back rather than treating it as answered.
     const { db, rt } = workspaceRuntime();
     const leaseAtTurnEnd: Array<number | null> = [];
+
     const session = new LocalAgentSession({
       rt: {
         ...rt,
@@ -3813,11 +4087,13 @@ describe('LocalAgentSession — the durable run-event log', () => {
     ]);
 
     const start = events[0];
+
     if (!start || start.type !== 'run_start') throw new Error('run_start event is missing');
     expect(start.caused_by).toBe('chat');
     expect(start.userMessage).toBe('hi');
 
     const end = events.at(-1);
+
     if (!end || end.type !== 'run_end') throw new Error('run_end event is missing');
     expect(end.reason).toBe('completed');
     expect(end.error).toBeUndefined();
@@ -3839,10 +4115,13 @@ describe('LocalAgentSession — the durable run-event log', () => {
 
     const runs = session.listRuns().items;
     expect(new Set(runs.map((r) => r.runId)).size).toBe(2);
+
     const causes = runs.map((r) => {
       const start = session.getRunEvents(r.runId)[0];
+
       return start?.type === 'run_start' ? start.caused_by : null;
     });
+
     expect(causes.sort()).toEqual(['background_job', 'chat']);
 
     await session.end();
@@ -3853,6 +4132,7 @@ describe('LocalAgentSession — the durable run-event log', () => {
       provider: 'fake', modelId: 'fake-model',
       doStream: async () => { throw new Error('upstream is on fire'); },
     });
+
     const { session } = setup('unused', exploding);
     await session.send('hi');
 
@@ -3896,8 +4176,10 @@ describe('LocalAgentSession — the durable run-event log', () => {
     await turn;
 
     const run = session.listRuns().items[0];
+
     if (!run) throw new Error('the interrupted turn recorded no run');
     const end = session.getRunEvents(run.runId).at(-1);
+
     if (!end || end.type !== 'run_end') throw new Error('run_end event is missing');
     expect(end.reason).toBe('aborted');
     // There is no failure to describe, so nothing is invented to describe it.
@@ -3920,10 +4202,12 @@ describe('LocalAgentSession — the durable run-event log', () => {
   function capturedSink() {
     const { db, rt } = workspaceRuntime();
     const captured: SinkSlot = { sink: null };
+
     const session = new LocalAgentSession({
       rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
       db, model: fakeModel('unused'), onEvent: () => {}, noAutoEvolve: true,
     });
+
     return { session, captured };
   }
 
@@ -3955,19 +4239,23 @@ describe('LocalAgentSession — the durable run-event log', () => {
   test('a call made during a turn is filed under that run, not the workspace bucket', async () => {
     const { db, rt } = workspaceRuntime();
     const captured: SinkSlot = { sink: null };
+
     // Reported from inside the model call itself, which is when a real judge or
     // fast-tier call fires: mid-turn, with a run open.
     const model = new TestLanguageModelV2({
       provider: 'fake', modelId: 'fake-model',
       doStream: async (options) => {
         captured.sink?.({ source: 'reflection', usage: { input: 3 } });
+
         return fakeModel('answered').doStream(options);
       },
     });
+
     const session = new LocalAgentSession({
       rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
       db, model, onEvent: () => {}, noAutoEvolve: true,
     });
+
     await session.send('hi');
 
     const runId = session.listRuns().items[0]!.runId;
@@ -3995,6 +4283,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const tool = createNodeExecuteToolFactory({
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
     })({ native: {}, craftedTools: () => ({}), providers: [] });
+
     return (code: string, options?: ToolExecutionOptions) =>
       toolExecute<{ code: string }, JsonValue>(tool)({ code }, options);
   }
@@ -4010,15 +4299,26 @@ describe('agents.* codemode namespace — node sandbox', () => {
   function searchSandbox(answer = 'one approach'): SearchSandbox {
     const calls: SearchSandbox['calls'] = [];
     const base = fakeModel(answer);
+
     const record = (options: LanguageModelV2CallOptions) => {
       calls.push({ prompt: JSON.stringify(options.prompt), signal: options.abortSignal });
     };
+
     const model = new TestLanguageModelV2({
       provider: base.provider,
       modelId: base.modelId,
-      doGenerate: async (options) => { record(options); return base.doGenerate(options); },
-      doStream: async (options) => { record(options); return base.doStream(options); },
+      doGenerate: async (options) => {
+        record(options);
+
+        return base.doGenerate(options);
+      },
+      doStream: async (options) => {
+        record(options);
+
+        return base.doStream(options);
+      },
     });
+
     const db = new Database(':memory:');
     // THE PRODUCTION INITIALIZER. A swarm node is its own actor seated through
     // the host, and its turn claims and hydrates a working revision in the
@@ -4028,12 +4328,14 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // zero branches.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: ':memory:', llm: DUMMY_LLM });
+
     return { deps: { mode: 'build', swarm: { rt, model, hostNode: nodeSeatFactory(rt) } }, calls };
   }
 
   test('a script searches, branches on the result, and returns its own synthesis', async () => {
     const { deps, calls } = searchSandbox();
     const run = sandboxWith(deps);
+
     // The shape a workflow actually has: fan out, inspect, decide, aggregate.
     const result = await run(`
       const angles = ['auth', 'billing'];
@@ -4043,6 +4345,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       const ran = searched.filter((s) => !s.reason && s.report.expansions === 2);
       return { count: ran.length, branches: ran.map((s) => s.caps.branches.value) };
     `);
+
     expect(result).toEqual({ result: { count: 2, branches: [2, 2] } });
     // Each search reached the model carrying its OWN task, so the typed call
     // fields arrive at the run rather than only surviving the parse.
@@ -4054,16 +4357,19 @@ describe('agents.* codemode namespace — node sandbox', () => {
   test('a sandbox search runs in-process, and one with no preset is refused', async () => {
     const { deps, calls } = searchSandbox();
     const run = sandboxWith(deps);
+
     const dispatched = v.parse(
       v.object({ result: v.object({ preset: v.string(), report: v.object({ expansions: v.number() }) }) }),
       await run(`return await agents.swarm({ task: 'pick an approach', preset: 'ideate', branches: 2, depth: 1 });`),
     );
+
     expect(dispatched.result.preset).toBe('ideate');
     // The branches ran here, on this plane, and came back as a report — there
     // is no strategy and no facet between the sandbox call and the run.
     expect(dispatched.result.report.expansions).toBe(2);
     const expanded = calls.length;
     expect(expanded).toBeGreaterThan(0);
+
     // `preset` is the SHAPE of the search and none can be invented for a call
     // that named none, so it is refused before anything expands — and the
     // refusal names the missing field rather than only the action.
@@ -4071,12 +4377,14 @@ describe('agents.* codemode namespace — node sandbox', () => {
       v.object({ result: v.object({ reason: v.literal('bad_input'), error: v.string() }) }),
       await run(`return await agents.swarm({ task: 'pick an approach' });`),
     );
+
     expect(refused.result.error).toContain('swarm needs `preset`');
     expect(calls).toHaveLength(expanded);
   });
 
   test('a search refusal is a value the script can branch on, not a sandbox failure', async () => {
     const { deps, calls } = searchSandbox();
+
     // An illegal COMPOSITION rather than a missing field: `ideate` is flat by
     // design, so an objective riding it is refused on the axis. The script
     // reads that refusal as an ordinary return value and recovers from it.
@@ -4090,6 +4398,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       });
       return searched.error ? 'recovered: ' + searched.error.includes('no value signal') : 'no error';
     `);
+
     expect(result).toEqual({ result: 'recovered: true' });
     // Refused on the shape, so nothing was spent discovering it.
     expect(calls).toEqual([]);
@@ -4103,6 +4412,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
     const { deps, calls } = searchSandbox();
     const controller = new AbortController();
     controller.abort();
+
     const result = v.parse(
       v.object({ result: v.object({ report: v.object({ stop: v.string(), expansions: v.number() }) }) }),
       await sandboxWith(deps)(
@@ -4110,6 +4420,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
         { abortSignal: controller.signal, toolCallId: 'swarm-abort-test', messages: [] },
       ),
     );
+
     expect(result.result.report.stop).toBe('aborted');
     expect(result.result.report.expansions).toBe(0);
     expect(calls).toEqual([]);
@@ -4117,9 +4428,11 @@ describe('agents.* codemode namespace — node sandbox', () => {
 
   test('ungated actions are structurally absent from the local sandbox', async () => {
     const { deps } = searchSandbox();
+
     const result = await sandboxWith(deps)(
       'return { members: Object.keys(agents), hire: typeof agents.hire, swarm: typeof agents.swarm };',
     );
+
     // A standalone local turn wires the exploration substrate only.
     // LocalAgentHost supplies durable subordinate and peer routing for a daemon-owned workspace.
     expect(result).toEqual({ result: { members: ['swarm'], hire: 'undefined', swarm: 'function' } });
@@ -4135,6 +4448,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       }));
       return 'probed';
     `));
+
     await session.send('what can you delegate to?');
     expect(events.some((e) => e.type === 'tool-result' && e.toolName === 'execute_tools' && e.success)).toBe(true);
     // This standalone fixture wires only the exploration substrate; the daemon
@@ -4154,6 +4468,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       }));
       return 'probed';
     `;
+
     const plan = setup('done', executeToolsModel(probeCode('/workspace/probe/plan-tools.json')));
     await expect(plan.session.enqueueTurn({
       text: 'research a plan', metadata: { kinuMode: 'plan' },
@@ -4164,10 +4479,12 @@ describe('agents.* codemode namespace — node sandbox', () => {
     // Ordinary local Build behavior stays unchanged.
     const build = setup('done', executeToolsModel(probeCode('/workspace/probe/build-tools.json')));
     await build.session.send('implement the change');
+
     const buildProbe = JSON.parse(String(await build.rt.storage.vfs.readFile(
       '/workspace/probe/build-tools.json',
       { encoding: 'utf8' },
     )));
+
     expect(buildProbe).toEqual({ releaseType: 'object', workspaceType: 'object' });
     await build.session.end();
   });
@@ -4185,25 +4502,30 @@ describe('agents.* codemode namespace — node sandbox', () => {
 function runThenAnswerModel(confirmWith: 'text' | 'tool' = 'text'): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
+
   const answer = (controller: ReadableStreamDefaultController, text: string) => {
     controller.enqueue({ type: 'text-start', id: '0' });
     controller.enqueue({ type: 'text-delta', id: '0', delta: text });
     controller.enqueue({ type: 'text-end', id: '0' });
     controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
   };
+
   const call = (controller: ReadableStreamDefaultController, id: string, command: string) => {
     controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'run', input: JSON.stringify({ command }) });
     controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
   };
+
   return new TestLanguageModelV2({
     provider: 'fake', modelId: 'fake-model',
     doStream: async () => {
       step += 1;
       const at = step;
+
       return {
         stream: new ReadableStream({
           start(controller) {
             controller.enqueue({ type: 'stream-start', warnings: [] });
+
             if (at === 1) call(controller, 'call-1', 'echo working > gate-proof.txt');
             else if (at === 2) answer(controller, 'all done, the task is complete');
             else if (at === 3 && confirmWith === 'tool') call(controller, 'call-2', 'echo fixing > gate-proof.txt');
@@ -4263,6 +4585,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
       provider: 'fake', modelId: 'fake-model',
       doStream: async () => { throw new Error('upstream is on fire'); },
     });
+
     const { session, events } = setup('unused', exploding, { oneShot: true });
     await session.send('write the report');
     await session.settleBackgroundWork();
@@ -4279,6 +4602,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
     const gateRun = session.listRuns().items
       .map((r) => session.getRunEvents(r.runId))
       .find((evs) => evs.some((e) => e.type === 'completion_gate'));
+
     expect(gateRun).toBeDefined();
     expect(gateRun!.find((e) => e.type === 'completion_gate')).toMatchObject({ converted: true });
     await session.end();
@@ -4292,6 +4616,7 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
     const rows = session.listRuns().items
       .flatMap((r) => session.getRunEvents(r.runId))
       .filter((e) => e.type === 'completion_gate');
+
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ converted: false });
     await session.end();
@@ -4319,10 +4644,12 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
       text: 'job bgjob-1 finished',
       metadata: { kinuEvent: 'background_job', kinuMode: 'build' },
     });
+
     const system = observed
       .filter((message) => message.role === 'system')
       .map((message) => message.content)
       .join('\n');
+
     const turnMessages = observed.filter((message) => message.role !== 'system').map(messageText).join('\n');
     expect(system).not.toContain('the referenced job result first');
     expect(system).not.toContain('Background-resume');
@@ -4346,21 +4673,25 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
     // id from the workspace config and resolve it through the same catalog.
     const { db, rt } = workspaceRuntime();
     const events: SessionEvent[] = [];
+
     const setter = new LocalAgentSession({
       rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
       model: toolSequenceModel([{ name: 'tasks', input: { action: 'mode', role: 'researcher' } }]),
     });
+
     await setter.send('work carefully from here');
     await setter.end();
 
     let system = '';
+
     const next = new LocalAgentSession({
       rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
       model: systemCapturingModel('ok', (s) => { system = s; }),
     });
+
     await next.send('carry on');
     expect(system).toContain('Role: Researcher');
-    expect(system).toContain('Search before you conclude.');
+    expect(system).toContain(BUILTIN_ROLE_DEFINITIONS.researcher.instructions);
     await next.end();
   });
 
@@ -4373,10 +4704,12 @@ describe('LocalAgentSession — provenance and durable roles reach the model', (
     const vfs = rt.agentStateVfs ?? rt.storage.vfs;
     await vfs.writeFile('SOUL.md', '# Soul\n\nYou are Atlas. Hold the owner\'s stated intent above the letter of the ask.');
     let system = '';
+
     const session = new LocalAgentSession({
       rt, db, noAutoEvolve: true, onEvent: () => {},
       model: systemCapturingModel('ok', (s) => { system = s; }),
     });
+
     await session.send('first turn');
     expect(system).toContain('You are Atlas.');
 
@@ -4417,6 +4750,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
    */
   test('the head runtime a model rebind installs resolves per-search models and reports its merge to the session', async () => {
     const asked: string[] = [];
+
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => spec?.trim() || 'local/chat',
       // `resolveModel` admits a null/absent spec, which means "whatever this
@@ -4424,6 +4758,7 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
       // asked for, so only a named one is recorded.
       resolveModel: (spec) => {
         if (spec) asked.push(spec);
+
         return fakeModel(MERGE_ANSWER);
       },
       listProviders: async () => [],
@@ -4434,17 +4769,20 @@ describe('LocalAgentSession — delegation roles + head-runtime root wiring', ()
       modelInfo: async () => null,
       ...resolverRest,
     };
+
     const { session, events } = setupWithResolver(resolver);
 
     // Reading `headRuntime` claims the session model, which rebuilds the head
     // runtime: this handle is the rebind root's own.
     const runtime = session.headRuntime;
+
     const head = await runtime.spawnHead({
       id: 'h-fork', rootId: 'r1', parentId: null, depth: 0, mode: 'build',
       task: 'look at the parser', rationale: 'because', inheritedContext: [],
       budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
       loop: defaultLoopOrigin('head'), mergeStrategy: 'synthesize', model: 'local/fork',
     });
+
     await head.run();
     // The fork's OWN spec reached the resolver. Without `resolveModel` on this
     // root every fork silently ran the session's model instead, so a panel
@@ -4472,12 +4810,16 @@ test('an authorized Build turn queued behind Plan regains native file authority'
   const release = Promise.withResolvers<void>();
   let step = 0;
   const base = fakeModel('done');
+
   const model = new TestLanguageModelV2({
     provider: 'fake', modelId: 'fake-model', doGenerate: (options) => base.doGenerate(options),
     doStream: async (options) => {
       const current = step++;
+
       if (current === 0) { entered.resolve(); await release.promise; }
+
       if (current % 2 !== 0) return base.doStream(options);
+
       return { stream: new ReadableStream<LanguageModelV2StreamPart>({
         start(controller) {
           controller.enqueue({ type: 'stream-start', warnings: [] });
@@ -4488,6 +4830,7 @@ test('an authorized Build turn queued behind Plan regains native file authority'
       }) };
     },
   });
+
   const { session, rt, events } = setup('done', model);
   await session.setRole('planner');
   const plan = inWorkMode('plan', () => session.send('Inspect without changes.'));
@@ -4518,6 +4861,7 @@ test('the actual local turn executes its selected version instead of the mutable
   db.query("INSERT INTO scaffold_versions (actor_id, version, written_at, rationale, status) VALUES (?, 1, 1, 'selected source proof', 'current')")
     .run(rt.actor.actorId);
   rt.identity.scaffold.read = async () => changed;
+
   try {
     await session.send('run the selected program');
     expect(events.filter(event => event.type === 'text-delta').map(event => event.delta).join('')).toBe('selected version one');

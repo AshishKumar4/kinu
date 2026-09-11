@@ -31,11 +31,13 @@ export const Z_95 = 1.959964;
  *  reproducible from a seed, so none of them may reach for `Math.random`. */
 export function seededRandom(seed: number): () => number {
   let a = seed >>> 0;
+
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
@@ -64,6 +66,7 @@ export function wilsonInterval(successes: number, n: number): ScoreInterval {
   const denominator = 1 + z2 / n;
   const center = (p + z2 / (2 * n)) / denominator;
   const halfWidth = (Z_95 / denominator) * Math.sqrt((p * (1 - p)) / n + z2 / (4 * n * n));
+
   return {
     mean: p,
     lo: Math.max(0, center - halfWidth),

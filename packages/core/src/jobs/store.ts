@@ -100,6 +100,7 @@ function toJob(r: Row): BackgroundJob {
   const status: BackgroundJobStatus = r.status === 'completed' || r.status === 'failed' || r.status === 'cancelled'
     ? r.status
     : 'running';
+
   return {
     id: r.id, kind: r.kind, label: r.label, workMode: r.work_mode === 'plan' ? 'plan' : 'build', status,
     result: r.result, error: r.error, createdAt: r.created_at, settledAt: r.settled_at,
@@ -206,6 +207,7 @@ export class BackgroundJobStore {
           SELECT 1 FROM background_jobs replacement
           WHERE replacement.actor_id=source.actor_id AND replacement.retry_of=source.id
         )`;
+
     return this.sql<{ id: string }>`
       SELECT id FROM background_jobs WHERE actor_id=${this.actorId} AND id=${opts.id} LIMIT 1`.length === 1;
   }
@@ -253,11 +255,15 @@ export class BackgroundJobStore {
       SET epoch = epoch + 1, resume_attempts = resume_attempts + 1, attempt_started_at = ${now},
           resume_after = NULL
       WHERE actor_id=${this.actorId} AND id=${id} AND status='running'`;
+
     const rows = this.sql<{ epoch: number; resume_attempts: number; status: string }>`
       SELECT epoch, resume_attempts, status FROM background_jobs
       WHERE actor_id=${this.actorId} AND id=${id} LIMIT 1`;
+
     const row = rows[0];
+
     if (!row || row.status !== 'running') return null;
+
     return { epoch: row.epoch, attempts: row.resume_attempts };
   }
 
@@ -288,8 +294,10 @@ export class BackgroundJobStore {
    */
   nextResumeAtInWorkspace(): number | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ at: number | null }>`SELECT MIN(resume_after) AS at
       FROM background_jobs WHERE status='running' AND resume_after IS NOT NULL`;
+
     return rows[0]?.at ?? null;
   }
 
@@ -305,6 +313,7 @@ export class BackgroundJobStore {
    */
   resumeOwedIdsInWorkspace(now: number): string[] {
     this.actor.assertCurrent();
+
     return this.sql<{ id: string }>`SELECT id FROM background_jobs
       WHERE status='running' AND resume_after IS NOT NULL AND resume_after > ${now}`
       .map((r) => r.id);
@@ -315,8 +324,10 @@ export class BackgroundJobStore {
    *  answer for a job id another actor owns. */
   epochOf(id: string): number | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ epoch: number }>`SELECT epoch FROM background_jobs
       WHERE actor_id=${this.actorId} AND id=${id} LIMIT 1`;
+
     return rows[0]?.epoch ?? null;
   }
 
@@ -343,6 +354,7 @@ export class BackgroundJobStore {
     // Stated because the opposite inference has already been drawn once: an
     // actor-bound store whose method asserts its handle reads as scoped.
     this.actor.assertCurrent();
+
     return this.sql<{ present: number }>`
       SELECT 1 AS present FROM background_jobs WHERE status = 'running' LIMIT 1`.length > 0;
   }
@@ -357,13 +369,16 @@ export class BackgroundJobStore {
   /** The serialized tool input a job was created with — re-run source for retry. */
   getInput(id: string): string | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ input_json: string | null }>`
       SELECT input_json FROM background_jobs WHERE actor_id=${this.actorId} AND id=${id} LIMIT 1`;
+
     return rows[0]?.input_json ?? null;
   }
 
   get(id: string): BackgroundJob | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
       job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
@@ -372,11 +387,13 @@ export class BackgroundJobStore {
       LEFT JOIN background_jobs replacement
         ON replacement.actor_id=job.actor_id AND replacement.retry_of=job.id
       WHERE job.actor_id=${this.actorId} AND job.id=${id} LIMIT 1`;
+
     return rows[0] ? toJob(rows[0]) : null;
   }
 
   list(limit = 20): BackgroundJob[] {
     this.actor.assertCurrent();
+
     return this.sql<Row>`SELECT job.id, job.kind, job.label, job.work_mode,
       job.status, job.result, job.error, job.created_at, job.settled_at,
       job.epoch, job.resume_attempts, job.attempt_started_at, job.resume_after,
@@ -403,6 +420,7 @@ export class BackgroundJobStore {
     // explains; `assertCurrent` validates the binding, not the scope.
     this.actor.assertCurrent();
     const rows = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM background_jobs WHERE status='running'`;
+
     return rows[0]?.n ?? 0;
   }
 
@@ -421,6 +439,7 @@ export class BackgroundJobStore {
    */
   runningIds(): string[] {
     this.actor.assertCurrent();
+
     return this.sql<{ id: string }>`SELECT id FROM background_jobs
       WHERE actor_id=${this.actorId} AND status='running' ORDER BY created_at ASC`.map((r) => r.id);
   }
@@ -433,11 +452,14 @@ export class BackgroundJobStore {
    *  put a sibling's work in this actor's prompt. */
   listRunning(limit = 20): ActiveRoster<BackgroundJob> {
     this.actor.assertCurrent();
+
     const items = this.sql<Row>`SELECT id, kind, label, work_mode, status, result, error, created_at, settled_at, epoch, resume_attempts, attempt_started_at, resume_after, retried_by
       FROM background_jobs WHERE actor_id=${this.actorId} AND status='running'
       ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
+
     const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM background_jobs
       WHERE actor_id=${this.actorId} AND status='running'`[0]?.n ?? 0;
+
     return { items, total };
   }
 }

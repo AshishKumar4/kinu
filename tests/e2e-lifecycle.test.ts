@@ -65,8 +65,11 @@ import {
  * seam and drives whichever loop the plan named.
  */
 const BACKEND = resolveEvalBackend();
+
 if (BACKEND.kind === 'refused') throw new Error(`E2E Lifecycle: ${BACKEND.reason}`);
+
 const IN_PROCESS = BACKEND.backend === 'local';
+
 if (!IN_PROCESS) {
   console.warn(`[skip] E2E Lifecycle — ${EVAL_BACKEND_ENV}=cloud, and this suite certifies the `
     + 'in-process turn loop over a CLIRuntime, which a deployed workspace does not hand out. '
@@ -77,7 +80,9 @@ if (!IN_PROCESS) {
 // which target and cost basis this run used, or why it is skipping — and throws
 // on a half-configured environment rather than skipping green.
 const TARGET = IN_PROCESS ? liveModelTarget('E2E Lifecycle') : null;
+
 const liveTest = test.skipIf(!TARGET);
+
 /** The credential-free arm still needs the in-process store, so it is gated on
  *  the knob rather than on a credential. */
 const inProcessTest = test.skipIf(!IN_PROCESS);
@@ -85,6 +90,7 @@ const inProcessTest = test.skipIf(!IN_PROCESS);
 const LLM_CONFIG: LLMProviderConfig = TARGET?.llm ?? UNCONFIGURED_LLM;
 
 const TEST_DIR = join(tmpdir(), 'kinu-e2e-' + Date.now());
+
 const DB_PATH = join(TEST_DIR, 'agent.db');
 
 /** One turn's result, plus the exact message list that turn HANDED THE MODEL. */
@@ -133,6 +139,7 @@ async function chatTurn(
   // Snapshotted BEFORE the call and returned: `history` keeps growing in place,
   // so reading it afterwards would report what the NEXT turn will send.
   const sent: readonly ModelMessage[] = [...history];
+
   const result = await generateText({
     model,
     system: `${soul}\n\nKnowledge:\n${knowledge}`,
@@ -228,6 +235,7 @@ describe('E2E Lifecycle', () => {
     const tables = db.query<{ name: string }, []>(
       "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
     ).all().map(t => t.name);
+
     expect(tables).toContain('inodes');
     expect(tables).toContain('messages');
     expect(tables).toContain('search_nodes');
@@ -249,6 +257,7 @@ describe('E2E Lifecycle', () => {
     // chatTurn's header). Both are kept: a suite that only checked the
     // mechanism would pass on a model that ignored what it was handed.
     const history: ModelMessage[] = [];
+
     const messages = [
       // Named so turn 2's judgement is mechanical: turn 2's own prompt never
       // says "sortNumbers".
@@ -258,7 +267,9 @@ describe('E2E Lifecycle', () => {
       'Search your memory for notes about validation.',
       'Summarize what we discussed.',
     ];
+
     const sentPerTurn: (readonly ModelMessage[])[] = [];
+
     for (const [i, message] of messages.entries()) {
       console.log(`  Turn ${i + 1}: ${message.slice(0, 50)}...`);
       const { turn, sent } = await chatTurn(model, rt, tools, history, message);
@@ -267,6 +278,7 @@ describe('E2E Lifecycle', () => {
       await engine.reviewTurn(turn, null);
       expect(turn.assistantResponse.length).toBeGreaterThan(0);
       console.log(`    Response: ${turn.assistantResponse.slice(0, 80)}...`);
+
       if (turn.toolCalls.length > 0) console.log(`    Tools: ${turn.toolCalls.map(t => t.name).join(', ')}`);
     }
 
@@ -284,7 +296,9 @@ describe('E2E Lifecycle', () => {
         + 'conversation, which is the defect this suite exists to catch')
         .toBeGreaterThan(i);
     }
+
     const lastSent = sentPerTurn[4];
+
     if (!lastSent) throw new Error('turn 5 recorded no prompt');
     expect(JSON.stringify(lastSent),
       'turn 5 was handed no message carrying turn 1 — "Summarize what we discussed" reached the '
@@ -295,6 +309,7 @@ describe('E2E Lifecycle', () => {
     // ── The BEHAVIOUR: the model used what it was handed ────────────────────
     // Turn 2 continues turn 1's work; its own prompt never says "sortNumbers".
     const followUp = turns[1];
+
     if (!followUp) throw new Error('turn 2 was never recorded');
     expect(followUp.assistantResponse,
       'turn 2 does not reference sortNumbers — the turn-1 function never reached its context, '
@@ -307,12 +322,15 @@ describe('E2E Lifecycle', () => {
     // FTS stemming makes "validation" miss "validate", this goes red and that
     // is a PRODUCT finding to fix in the search, not a prompt to soften.
     const search = turns[3];
+
     if (!search) throw new Error('turn 4 was never recorded');
     expect(search.toolCalls.length,
       'turn 4 called no tool at all — "Search your memory" was answered from context, not memory')
       .toBeGreaterThan(0);
+
     const hits = search.toolCalls.filter((call) =>
       JSON.stringify(call.result ?? '').includes('input types'));
+
     expect(hits.length,
       `turn 4's memory search never returned the note turn 3 saved — searched via `
       + `${search.toolCalls.map((call) => call.name).join(', ')}, and no tool result carried `
@@ -322,6 +340,7 @@ describe('E2E Lifecycle', () => {
     // topics, by name. A model with no history answers that nothing was
     // discussed, which is exactly the red this assertion exists to produce.
     const summary = turns[4];
+
     if (!summary) throw new Error('turn 5 was never recorded');
     expect(summary.assistantResponse,
       'turn 5\'s summary never mentions sorting — the discussed work did not reach it')
@@ -346,18 +365,21 @@ describe('E2E Lifecycle', () => {
 
   liveTest('evolution events fired', () => {
     console.log(`  Events: ${events.length}`);
+
     for (const e of events) console.log(`    [${e.type}] ${e.message.slice(0, 70)}`);
     expect(events.length).toBeGreaterThan(0);
   });
 
   liveTest('memory has content', async () => {
     const mem = await rt.memory.read('memory/MEMORY.md');
+
     if (!mem) throw new Error('evolution did not write memory content');
     console.log(`  Memory: ${mem.length} chars`);
   });
 
   liveTest('MCTS evolution', async () => {
     const session = makeSessionWriter();
+
     const result = await runMCTS(rt, session, 'How can I improve as a TypeScript assistant?', {
       budget: 1, branches: 2, maxCostUSD: 5,
       // Every other test here holds an SDK result and reports it directly. A search
@@ -367,6 +389,7 @@ describe('E2E Lifecycle', () => {
       // liveness verdict refuses.
       reportModelCall: liveModelCallSink(rt.storage.sql, rt.actor),
     });
+
     recordLiveModelEpisode(rt.storage.sql, rt.actor);
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
     console.log(`  Nodes: ${nodes.length}`);

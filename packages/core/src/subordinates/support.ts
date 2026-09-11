@@ -59,6 +59,7 @@ export function readSubordinateLiveStatus(
   sql: SqlExec, actor: ActorHandle,
 ): SubordinateLiveStatus {
   actor.assertCurrent();
+
   const recentSteps = sql.exec(
     `SELECT event, detail, elapsed_ms, created_at
      FROM activity_log
@@ -68,8 +69,10 @@ export function readSubordinateLiveStatus(
     actor.actorId,
   ).toArray().flatMap((row) => {
     const parsed = v.safeParse(ActivityRowSchema, row);
+
     if (!parsed.success) return [];
     const { event, detail, elapsed_ms: elapsedMs, created_at: createdAt } = parsed.output;
+
     return [{
       event,
       summary: detail?.trim() || event,
@@ -77,6 +80,7 @@ export function readSubordinateLiveStatus(
       createdAt,
     }];
   });
+
   return {
     lastActivity: recentSteps[0]?.createdAt ?? null,
     recentSteps,
@@ -146,6 +150,7 @@ const IdentityRowSchema = v.object({
 
 function parseIdentityRow<Input>(row: Input): IdentityRow | null {
   const parsed = v.safeParse(IdentityRowSchema, row);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -158,9 +163,11 @@ function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
     depth: row.depth,
     lifetime: row.lifetime,
   };
+
   // Assigned rather than spread: a row with no credential leaves the key
   // ABSENT, because a reader decides whose identity to run as by presence.
   if (row.uid !== null && row.gid !== null) identity.cred = { uid: row.uid, gid: row.gid };
+
   return identity;
 }
 
@@ -169,9 +176,13 @@ function identitiesEqual(stored: SubordinateIdentity, attempted: SubordinateIden
     stored.ownerUserId !== attempted.ownerUserId
     || stored.parentWorkspace !== attempted.parentWorkspace
   ) return false;
+
   if (stored.name !== attempted.name || stored.mission !== attempted.mission) return false;
+
   if (stored.lifetime !== attempted.lifetime) return false;
+
   if (stored.cred?.uid !== attempted.cred?.uid || stored.cred?.gid !== attempted.cred?.gid) return false;
+
   return stored.depth === attempted.depth;
 }
 
@@ -212,10 +223,12 @@ export class SubordinateIdentityStore {
   seed(identity: SubordinateIdentity): void {
     this.actor.assertCurrent();
     const existing = this.read();
+
     if (existing) {
       if (identitiesEqual(existing, identity)) return;
       throw new Error('Subordinate identity is already initialized and cannot be changed.');
     }
+
     this.sql.exec(
       `INSERT INTO subordinate_identity
          (actor_id, id, name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid)
@@ -234,14 +247,18 @@ export class SubordinateIdentityStore {
 
   read(): SubordinateIdentity | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT name, mission, parent_workspace, owner_user_id, depth, lifetime, uid, gid
        FROM subordinate_identity WHERE actor_id = ? AND id = 1`,
       this.actorId,
     ).toArray();
+
     if (rows.length === 0) return null;
     const row = parseIdentityRow(rows[0]);
+
     if (!row) throw new Error('Stored subordinate identity is malformed.');
+
     return mapIdentityRow(row);
   }
 
@@ -264,6 +281,7 @@ export class SubordinateIdentityStore {
    */
   delegationBudget(): DelegationBudget {
     const identity = this.read();
+
     return delegationBudgetAtDepth(identity?.depth ?? DELEGATION_MAX_DEPTH);
   }
 }
@@ -306,12 +324,15 @@ export function subordinateDescriptorSource(config: AgentConfigStore): Subordina
 
 function requiredText(value: string, field: string): string {
   const text = value.trim();
+
   if (!text) throw new Error(`${field} must be non-empty`);
+
   return text;
 }
 
 function optionalText(value: string | undefined): string | undefined {
   const text = value?.trim();
+
   return text ? text : undefined;
 }
 
@@ -319,7 +340,9 @@ function optionalText(value: string | undefined): string | undefined {
 // window applied everywhere else: a subordinate's whole view of why it was
 // hired should not be one screen of head-only fragments.
 const SUBORDINATE_CONTEXT_MAX_CHARS = 9_600;
+
 const SUBORDINATE_CONTEXT_MAX_MESSAGES = 8;
+
 const SUBORDINATE_CONTEXT_MESSAGE_MAX_CHARS = 2_000;
 
 /** A bounded conversational handoff, not a fork of the parent's history. The
@@ -335,29 +358,37 @@ export function renderSubordinateInheritedContext(
       content: message.content.replace(/\s+/g, ' ').trim(),
     }))
     .filter((message) => message.content.length > 0);
+
   const relevant = conversational.slice(-SUBORDINATE_CONTEXT_MAX_MESSAGES);
+
   if (relevant.length === 0) return undefined;
 
   const omittedNote = conversational.length > relevant.length
     ? `(${conversational.length - relevant.length} earlier messages omitted)\n`
     : '';
+
   const header = '<inherited_context>\nRecent relevant parent conversation (digest only; subordinate history remains separate):\n' + omittedNote;
   const footer = '\n</inherited_context>';
   let remaining = SUBORDINATE_CONTEXT_MAX_CHARS - header.length - footer.length;
   const lines: string[] = [];
+
   for (let index = relevant.length - 1; index >= 0 && remaining > 0; index--) {
     const message = relevant[index];
+
     if (!message) continue;
     const prefix = `[${message.role}] `;
+
     const available = Math.min(
       SUBORDINATE_CONTEXT_MESSAGE_MAX_CHARS,
       remaining - prefix.length - (lines.length > 0 ? 1 : 0),
     );
+
     if (available <= 40) break;
     const line = `${prefix}${windowMessage(message.content, available)}`;
     lines.unshift(line);
     remaining -= line.length + (lines.length > 1 ? 1 : 0);
   }
+
   return lines.length > 0 ? `${header}${lines.join('\n')}${footer}` : undefined;
 }
 
@@ -372,6 +403,7 @@ function windowMessage(content: string, budget: number): string {
   const head = Math.ceil(keep / 2);
   const tail = keep - head;
   const cut = content.length - keep;
+
   return `${content.slice(0, head)}${marker(cut)}${tail > 0 ? content.slice(-tail) : ''}`;
 }
 
@@ -389,15 +421,20 @@ export function admitSubordinateTask(log: EventLog, input: {
   const body = requiredText(input.body, 'body');
   const deliverable = optionalText(input.deliverable);
   const inheritedContext = optionalText(input.inheritedContext);
+
   const payload = {
     from_workspace: fromWorkspace,
     kind: input.kind,
     body,
     kinu_mode: input.mode,
   };
+
   if (deliverable) Object.assign(payload, { deliverable });
+
   if (inheritedContext) Object.assign(payload, { inherited_context: inheritedContext });
+
   if (input.creationId !== undefined) Object.assign(payload, { creation_id: requiredText(input.creationId, 'creationId') });
+
   return log.publish({
     descriptor: {
       ingress: 'subordinate',
@@ -523,6 +560,7 @@ export function admitSubordinateReport(log: EventLog, input: {
   const fromSubordinate = requiredText(input.fromSubordinate, 'fromSubordinate');
   const content = normalizeReportContent(input.content);
   const task = optionalText(input.task);
+
   const payload = {
     from_subordinate: fromSubordinate,
     status: input.status,
@@ -530,9 +568,13 @@ export function admitSubordinateReport(log: EventLog, input: {
     sequence_id: requiredText(input.sequenceId, 'sequenceId'),
     kinu_mode: input.mode,
   };
+
   if (task) Object.assign(payload, { task });
+
   if (input.contentPath) Object.assign(payload, { content_path: input.contentPath });
+
   if (input.handoff) Object.assign(payload, input.handoff);
+
   return log.publish({
     descriptor: {
       ingress: 'subordinate',
@@ -589,6 +631,7 @@ function rollback<T>(error: T, action: () => void, operation: string): never {
       { cause: error },
     );
   }
+
   throw error;
 }
 
@@ -599,6 +642,7 @@ async function statusView(
   roster: SubordinateRosterEntry,
 ): Promise<SubordinateStatusView> {
   if (roster.status === 'dismissed') return { roster, live: null };
+
   try {
     return { roster, live: await runtime.status(roster.name) };
   } catch (error) {
@@ -652,6 +696,7 @@ export function createTeamToolDeps(deps: {
   const changed = () => {
     deps.broadcast({ type: 'subordinates_changed', subordinates: deps.roster.list() });
   };
+
   /** The durable verbs' one gate on the roster: a task-lifetime row is owned by
    *  the asking call that created it — its report resolves the port's waiter on
    *  `task_event_id` — so a durable assign/message/dismiss that retargeted it
@@ -665,6 +710,7 @@ export function createTeamToolDeps(deps: {
           + 'released by the call that asked it — assign, message and dismiss apply to durable subordinates only',
       );
     }
+
     return entry;
   };
 
@@ -682,6 +728,7 @@ export function createTeamToolDeps(deps: {
     subordinate: SubordinateRosterEntry;
   }> => {
     let selection: RoleId;
+
     if (input.role !== undefined) {
       selection = input.role;
     } else if (ownerCreated) {
@@ -692,12 +739,16 @@ export function createTeamToolDeps(deps: {
     } else {
       throw new Error('role must be non-empty');
     }
+
     const roleLabel = selection;
+
     const mission = ownerCreated
       ? requiredText(optionalText(input.mission) ?? deps.ownMission(), 'mission')
       : requiredText(input.mission ?? '', 'mission');
+
     const name = input.name?.trim() || deps.createName(roleLabel);
     requireSubordinateActorName(name);
+
     if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
 
     // Whose title this is, decided by what the caller actually supplied. A
@@ -711,6 +762,7 @@ export function createTeamToolDeps(deps: {
     const provisional = ownerCreated && input.role === undefined;
     const displayName = chosen ?? (provisional ? '' : displayNameForRole(roleLabel));
     const nameOrigin: 'user' | 'auto' = chosen ? 'user' : 'auto';
+
     const seed: SubordinateSeed = {
       name,
       displayName,
@@ -722,15 +774,19 @@ export function createTeamToolDeps(deps: {
       // can seed a child that retires itself.
       lifetime: 'durable',
     };
+
     if (input.tier !== undefined) seed.tier = input.tier;
     const createdAt = deps.now();
     let assignment: SubordinateBirth['assignment'] = null;
+
     if (!ownerCreated) {
       if (mode === null) throw new KinuError('bad_input', 'A subordinate task requires a work mode.');
       assignment = { body: mission, mode };
       const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
+
       if (inheritedContext) assignment.inheritedContext = inheritedContext;
     }
+
     const creationId = crypto.randomUUID();
     deps.roster.create({
       name, actorReference: null, birth: { creationId, seed, assignment }, deleteRequested: false,
@@ -739,6 +795,7 @@ export function createTeamToolDeps(deps: {
       createdAt, dismissedAt: null, lifetime: 'durable', taskEventId: null,
     });
     await finishSubordinateBirth(deps.roster, deps.runtime, name);
+
     return {
       name,
       displayName,
@@ -755,6 +812,7 @@ export function createTeamToolDeps(deps: {
     create: async (input) => {
       const { name, displayName, subordinate } = await provision(input, true, null);
       changed();
+
       return { name, displayName, subordinate };
     },
 
@@ -764,6 +822,7 @@ export function createTeamToolDeps(deps: {
       const displayName = requiredText(input.displayName, 'displayName');
       await deps.runtime.rename(input.name, displayName, 'user');
       changed();
+
       return {
         ok: true, name: input.name, displayName,
         subordinate: deps.roster.requireActive(input.name),
@@ -775,6 +834,7 @@ export function createTeamToolDeps(deps: {
     recordTitle: async (input) => {
       const displayName = requiredText(input.displayName, 'displayName');
       changed();
+
       return { ok: true, name: input.name, displayName };
     },
 
@@ -783,6 +843,7 @@ export function createTeamToolDeps(deps: {
       const { name, displayName, createdAt } = await provision(input, false, input.mode);
       changed();
       deps.broadcastTask({ subordinate: name, content: mission, timestamp: createdAt });
+
       return { name, displayName };
     },
 
@@ -791,14 +852,18 @@ export function createTeamToolDeps(deps: {
       const before = requireDurable(deps.roster.requireActive(input.name));
       deps.roster.assign(input.name, task);
       let handoff: SubordinateHandoff;
+
       try {
         const deliverable = optionalText(input.deliverable);
         const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
+
         const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
           body: task,
           mode: input.mode,
         };
+
         if (deliverable) Object.assign(assignment, { deliverable });
+
         if (inheritedContext) Object.assign(assignment, { inheritedContext });
         handoff = await deps.runtime.assign(input.name, assignment);
         // Inside the rollback scope, not after it: this write compensates the
@@ -808,8 +873,10 @@ export function createTeamToolDeps(deps: {
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate assignment');
       }
+
       changed();
       deps.broadcastTask({ subordinate: input.name, content: task, timestamp: deps.now() });
+
       return { ok: true, name: input.name, ...handoff };
     },
 
@@ -817,6 +884,7 @@ export function createTeamToolDeps(deps: {
 
     status: async (input) => {
       if (input.name) return statusView(deps.runtime, deps.roster.requireExisting(input.name));
+
       return Promise.all(deps.roster.list().map((entry) => statusView(deps.runtime, entry)));
     },
 
@@ -825,29 +893,38 @@ export function createTeamToolDeps(deps: {
       const before = requireDurable(deps.roster.requireActive(input.name));
       deps.roster.resumeAfterMessage(input.name);
       let handoff: SubordinateHandoff;
+
       try {
         handoff = await deps.runtime.message(input.name, content, input.mode);
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate message');
       }
+
       changed();
+
       return { ok: true, name: input.name, ...handoff };
     },
 
     dismiss: async (input) => {
       const before = requireDurable(deps.roster.requireExisting(input.name));
+
       if (before.createdBy === 'user' && input.requestedBy !== 'user') {
         throw new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`);
       }
+
       // Archive by default: the facet and its context are kept (merely no
       // longer addressed), so a dismissal is never silent data loss. Wiping
       // the subordinate's storage requires an explicit keepHistory=false.
       const keepHistory = input.keepHistory ?? true;
       const reference = before.actorReference;
+
       if (!reference) throw new KinuError('missing', 'The subordinate birth has not confirmed an actor reference.');
+
       if (keepHistory && before.deleteRequested) throw new KinuError('denied', 'Physical retirement is already requested.');
+
       if (keepHistory) deps.roster.dismiss(input.name, deps.now());
       else deps.roster.requestDeletion(input.name, reference, deps.now());
+
       if (keepHistory) {
         try { await deps.runtime.dismiss(input.name, true, reference); }
         catch (cause) { rollback(cause, () => deps.roster.restore(before), 'retained subordinate dismissal'); }
@@ -855,14 +932,18 @@ export function createTeamToolDeps(deps: {
         await deps.runtime.dismiss(input.name, false, reference);
         deps.roster.removeActor(input.name, reference);
       }
+
       changed();
+
       return { ok: true, name: input.name, historyKept: keepHistory };
     },
   };
+
   // Attached only when the backend built one. Assigned rather than spread from a
   // conditional empty object: an absent port has to be an ABSENT key, because
   // every gate on this rung — the schema, the sandbox declaration, the prompt —
   // reads its presence.
   if (deps.temporary) Object.assign(team, { temporary: deps.temporary });
+
   return team;
 }

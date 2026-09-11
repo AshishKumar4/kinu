@@ -180,10 +180,12 @@ export function hostedDelegationBudget(
 ): DelegationBudget {
   let depth = 0;
   let current: WorkspaceActor | null = actor.record;
+
   while (current !== null && current.parentActorId !== null) {
     depth += 1;
     current = seams.host.describe(current.parentActorId);
   }
+
   return delegationBudgetAtDepth(depth);
 }
 
@@ -251,9 +253,12 @@ function hostedLifetime(record: WorkspaceActor): SubordinateLifetime {
  */
 function hiringParent(seams: SubordinateHostSeams, record: WorkspaceActor): ActorReference {
   const parentId = record.parentActorId;
+
   if (parentId === null) throw new KinuError('denied', 'The workspace main actor was not hired by anyone.');
   const parent = seams.host.describe(parentId);
+
   if (parent === null) throw new KinuError('missing', 'The hiring actor is no longer registered.');
+
   return { actorId: parent.actorId, workspaceId: parent.workspaceId, parentActorId: parent.parentActorId };
 }
 
@@ -281,7 +286,9 @@ export async function admitHostedTask(
     if (input.creationId !== undefined && input.creationId !== actor.record.creationId) {
       throw new KinuError('denied', 'The birth assignment belongs to a different actor creation.');
     }
+
     const busy = actor.session.inFlight;
+
     const admission: Parameters<typeof admitSubordinateTask>[1] = {
       fromWorkspace: actor.record.workspaceId,
       kind: input.kind,
@@ -289,11 +296,16 @@ export async function admitHostedTask(
       mode: input.mode,
       now: Date.now(),
     };
+
     if (input.deliverable) admission.deliverable = input.deliverable;
+
     if (input.inheritedContext) admission.inheritedContext = input.inheritedContext;
+
     if (input.creationId !== undefined) admission.creationId = input.creationId;
     const result = admitSubordinateTask(new EventLog(seams.exec, actor.handle), admission);
+
     if (result.admitted) seams.scheduleDrain(actor);
+
     return {
       ...result,
       ...describeSubordinateHandoff({
@@ -332,6 +344,7 @@ export async function relayHostedReport(
 ): Promise<SubordinateEventResult> {
   const parent = hiringParent(seams, child.record);
   const name = child.record.name;
+
   return await seams.host.run(parent, async (hirer) => receiveSubordinateEvent({
     log: new EventLog(seams.exec, hirer.handle),
     roster: seams.roster(hirer),
@@ -398,6 +411,7 @@ export async function runHostedTask(
     // which the caller sees as an answer synthesised from nothing when the
     // turn produced no closing prose.
     const capture = new HeadCapture();
+
     // THE TURN, assembled once. Every member is a decision already made above,
     // and the tool builder gets all of them rather than resolving any again:
     // the model and the profile in particular are this turn's own resolution,
@@ -407,12 +421,14 @@ export async function runHostedTask(
       model: seams.resolveModel(resolved.profile.tier.model),
       profile: resolved,
     };
+
     // WHAT THIS TURN MAY CALL AND WHAT IT IS TOLD IT IS, asked once. Without
     // the framing the shared runner falls to its own default, which is a
     // FORK's: a hire would be told it is one of several parallel reasoning
     // threads whose findings a merge will combine, none of which is true of an
     // actor working the brief its hirer wrote.
     const profile = await seams.taskProfile(turn);
+
     // Annotated with the NAMED interface and assembled in statements: `mission`
     // is added only when this turn is budgeted, so an UNBUDGETED turn carries no
     // key at all rather than a spread of nothing. Absent and present are
@@ -433,14 +449,18 @@ export async function runHostedTask(
       profile: (request) => seams.profile({ actor, ...request }),
       dynamic: () => seams.dynamic(actor),
     };
+
     if (mission !== null) inference.mission = mission;
     const report = await runHeadInference(input, inference);
+
     const ending: TaskTurnEnding = report.status === 'completed'
       ? 'answered'
       : report.status === 'aborted' ? 'interrupted' : 'errored';
+
     const owed = reports.settled
       ? null
       : terminalTaskReport({ lifetime: hostedLifetime(actor.record), ending, assistantText: report.summary });
+
     const relayed = owed ?? (
       ending === 'answered' && subordinateRelaysTurnEnd({
         reportedThisTurn: reports.spoke, ownerDriven: false, assistantText: report.summary,
@@ -448,7 +468,9 @@ export async function runHostedTask(
         ? { status: 'progress' as const, content: report.summary }
         : null
     );
+
     if (relayed === null) return { text: report.summary, relayed: null };
+
     return {
       text: report.summary,
       relayed: await relayHostedReport(seams, actor, {
@@ -482,21 +504,27 @@ export function hostedSubordinateRuntime(
   ): Promise<ActorReference> => {
     const owner = parent();
     const budget = hostedDelegationBudget(seams, owner);
+
     if (action === 'register' && delegationExhausted(budget)) {
       throw new KinuError('denied', 'This actor cannot create a subordinate below its delegation depth.');
     }
+
     const entry = seams.directory.apply(owner.reference, seams.directory.storagePath(owner.reference), {
       action, name: input.name, creationId: input.creationId, kind: 'subordinate', lifetime: input.lifetime,
     });
+
     return entry.reference;
   };
 
   const resolve = (name: string): ActorReference => {
     const owner = parent();
+
     const entry = seams.directory.apply(owner.reference, seams.directory.storagePath(owner.reference), {
       action: 'resolve', name,
     });
+
     if (entry.kind !== 'subordinate') throw new KinuError('denied', 'The roster name does not identify a subordinate.');
+
     return entry.reference;
   };
 
@@ -516,13 +544,16 @@ export function hostedSubordinateRuntime(
         actor.stores.config.setDisplayNameOrigin(input.displayName, input.nameOrigin);
         actor.stores.config.setRoleSelection(input.role);
         actor.stores.config.setAssignedTier(input.tier ?? null);
+
         return Promise.resolve();
       });
+
       return reference;
     },
     cancelBirth: (input) => registerChild(input, 'cancelCreation'),
     assign: async (name, input) => {
       const task = { kind: 'task' as const, ...input };
+
       return await admitHostedTask(seams, resolve(name), task);
     },
     status: async (name) => await seams.host.run(resolve(name), async (actor) =>
@@ -548,6 +579,7 @@ export function hostedSubordinateRuntime(
       // rather than guess; a spread of nothing reads as the same thing and is
       // not, because the host's refusal depends on which it was told.
       const request: ActorRetirementRequest = { reference, name, keepHistory };
+
       if (claim !== null) request.observed = { turnId: claim.turnId, epoch: claim.epoch };
       await seams.host.retire(parent().reference, actorRetirementFor(request));
     },

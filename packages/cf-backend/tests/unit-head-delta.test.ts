@@ -29,7 +29,9 @@ function frames(
   ...sent: readonly [string, 'text' | 'reasoning', string][]
 ): ReadonlyMap<string, HeadDelta> {
   let map = NOTHING;
+
   for (const [headId, kind, delta] of sent) map = appendHeadDelta(map, headId, kind, delta);
+
   return map;
 }
 
@@ -45,6 +47,7 @@ describe('the accumulator', () => {
       ['h1', 'reasoning', 'the body.'],
       ['h1', 'text', 'It does.'],
     );
+
     expect(map.get('h1')).toEqual({ text: 'It does.', reasoning: 'The route bounds the body.' });
   });
 
@@ -143,6 +146,7 @@ describe('the journalled step, as the chat draws it', () => {
       step({ toolCalls: [{ name: 'read', input: { path: '/x' } }] }),
       2, 'h1',
     );
+
     expect(message.parts.at(-1)).toEqual({
       type: 'dynamic-tool', toolName: 'read', toolCallId: 'h1-s2-t0',
       state: 'input-available', input: { path: '/x' },
@@ -154,6 +158,7 @@ describe('the journalled step, as the chat draws it', () => {
       step({ toolCalls: [{ name: 'read', input: { path: '/x' }, output: 'ok' }] }),
       1, 'h1',
     );
+
     expect(message.parts.at(-1)).toEqual({
       type: 'dynamic-tool', toolName: 'read', toolCallId: 'h1-s1-t0',
       state: 'output-available', input: { path: '/x' }, output: 'ok',
@@ -200,6 +205,7 @@ describe('every painted delta comes from the hook that retires it', () => {
   test('nothing outside the owner reads the accumulator directly', () => {
     const bypassing = sources(SRC).filter((file) => file !== join(SRC, OWNER)
       && readFileSync(file, 'utf8').includes('headDeltas.get('));
+
     expect(bypassing).toEqual([]);
   });
 });
@@ -221,6 +227,7 @@ describe('the socket retires a delta on every fact that ends one', () => {
     const at = HOOK.indexOf(`msg.type === "${type}"`);
     expect(at).toBeGreaterThan(-1);
     const next = HOOK.indexOf('} else if (msg.type ===', at + 1);
+
     return HOOK.slice(at, next === -1 ? HOOK.length : next);
   }
 
@@ -255,7 +262,9 @@ describe('the socket retires a delta on every fact that ends one', () => {
 function sources(root: string): string[] {
   return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
     const path = join(root, entry.name);
+
     if (entry.isDirectory()) return sources(path);
+
     return /\.tsx?$/.test(entry.name) ? [path] : [];
   });
 }

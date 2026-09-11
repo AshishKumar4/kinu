@@ -43,7 +43,9 @@ const KINU_BUN_VERSION = '1.4.0';
  */
 function bunVersionKey(version: string): number {
   const parts = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+
   if (!parts) throw new Error(`Not a major.minor.patch version: ${version}`);
+
   return Number(parts[1]) * 1_000_000 + Number(parts[2]) * 1_000 + Number(parts[3]);
 }
 

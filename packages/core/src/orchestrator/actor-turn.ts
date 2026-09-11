@@ -43,6 +43,7 @@ export function startActorTurn(input: ActorTurnInput): AsyncIterable<ChatEvent> 
   const control = { signal: input.chat.signal, assertActive: input.assertActive };
   const { chat, program } = input;
   const defaultTurn = runChat(chat);
+
   const events = runWorkModeInvocation(input.mode, () => program.kind === 'builtin' ? defaultTurn : scaffoldChatTransform({
     program,
     chat: defaultTurn,
@@ -60,6 +61,7 @@ export function startActorTurn(input: ActorTurnInput): AsyncIterable<ChatEvent> 
       history: createScaffoldHistory(() => chat.history),
     },
   }));
+
   return inActorMode(events, input.mode, control);
 }
 
@@ -70,9 +72,11 @@ async function* inActorMode(events: AsyncIterable<ChatEvent>, mode: WorkMode, co
   assertScaffoldActive(control);
   const iterator = runWorkModeInvocation(mode, () => events[Symbol.asyncIterator]());
   const resume = () => iterator.next();
+
   try {
     for (;;) {
       const next = await runWorkModeInvocation(mode, resume);
+
       if (next.done) return;
       yield next.value;
     }

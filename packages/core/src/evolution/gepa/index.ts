@@ -14,22 +14,29 @@
  */
 
 export * from './types';
+
 export { computeParetoFront, sampleParentByWeight, bestAggregate, parentSelectionWeights } from './pareto';
+
 export { rolloutMinibatch, renderReflectionPrompt, proposeMutation } from './mutate';
+
 export { runGepa } from './engine';
+
 export {
   findComplementaryPair, renderMergePrompt, proposeMerge,
   type MergePair,
 } from './merge';
+
 export {
   runScaffoldGepa,
   type RunScaffoldGepaOpts, type RunScaffoldGepaResult,
 } from './scaffold-bridge';
+
 export {
   runSectionGepa, findPromptSectionTarget,
   PROMPT_SECTION_TARGETS,
   type RunSectionGepaOpts, type RunSectionGepaResult,
 } from './section-bridge';
+
 export {
   initGepaTables, startGepaRun, finishGepaRun,
   persistGepaCandidate,

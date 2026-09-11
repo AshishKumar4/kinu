@@ -72,10 +72,14 @@ export const REPORTED_ROUTES: readonly ReportedRoute[] = [
  */
 export function routeTemplateOf(pathname: string): ReportedRoute {
   const segments = pathname.replace(/\/+$/u, '').split('/');
+
   for (const template of Object.values(APP_ROUTES)) {
     const wanted = template.replace(/\/+$/u, '').split('/');
+
     if (wanted.length !== segments.length) continue;
+
     if (wanted.every((part, at) => part.startsWith(':') || part === segments[at])) return template;
   }
+
   return UNMATCHED_ROUTE;
 }

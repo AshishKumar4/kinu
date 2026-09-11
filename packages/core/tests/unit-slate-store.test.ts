@@ -8,6 +8,7 @@ const source = new ContentRef(`sha256:${'a'.repeat(64)}`);
 
 test('committed Slate history survives a new store and rejects stale writers', () => {
   const ws = createTestWorkspace();
+
   try {
     const open = () => new SqliteSlateStore(makeSqlExec(ws.db), (body) => ws.db.transaction(body)());
     const store = open();
@@ -33,6 +34,7 @@ test('committed Slate history survives a new store and rejects stale writers', (
 
 test('a failed Slate transaction retains neither a version nor an advanced head', () => {
   const ws = createTestWorkspace();
+
   try {
     const store = new SqliteSlateStore(makeSqlExec(ws.db), (body) => ws.db.transaction(body)());
     const slate = Slate.initial(new SlateId('notes'), new WorkspaceId('workspace'), source);

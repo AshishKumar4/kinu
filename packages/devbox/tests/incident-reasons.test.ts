@@ -23,6 +23,7 @@ describe('devboxIncidentReasons reports filed failures oldest first', () => {
     expect(reasons[1]?.reason).toContain('probe B');
     const atA = reasons[0]?.at;
     const atB = reasons[1]?.at;
+
     if (atA === undefined || atB === undefined) throw new Error('incident rows carry timestamps');
     expect(atA).toBeLessThanOrEqual(atB);
   });

@@ -154,6 +154,7 @@ export const ProbeRunSchema: v.GenericSchema<ProbeRun> = v.object({
  */
 export function parseProbeRun(text: string, source: string): ProbeRun {
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(text);
   } catch (error) {
@@ -163,7 +164,9 @@ export function parseProbeRun(text: string, source: string): ProbeRun {
       { cause: error },
     );
   }
+
   const result = v.safeParse(ProbeRunSchema, decoded);
+
   if (!result.success) {
     throw new Error(
       `${source}: probe payload does not match the probe contract: `
@@ -171,6 +174,7 @@ export function parseProbeRun(text: string, source: string): ProbeRun {
       + `\n${text.slice(0, 400)}`,
     );
   }
+
   return result.output;
 }
 
@@ -216,6 +220,7 @@ export interface SyncOutcome {
  * the report of a benchmark whose subject is R2 operation counts.
  */
 const SyncScalarSchema = v.union([v.number(), v.string(), v.boolean()]);
+
 const SyncPayloadSchema = v.record(
   v.string(),
   v.union([SyncScalarSchema, v.array(SyncScalarSchema), v.record(v.string(), SyncScalarSchema)]),
@@ -235,6 +240,7 @@ function tagScalar(name: string, value: number | string | boolean): SyncMeasurem
  */
 export function syncMeasurements(text: string, source: string): readonly SyncMeasurement[] {
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(text);
   } catch (error) {
@@ -244,7 +250,9 @@ export function syncMeasurements(text: string, source: string): readonly SyncMea
       { cause: error },
     );
   }
+
   const result = v.safeParse(SyncPayloadSchema, decoded);
+
   if (!result.success) {
     throw new Error(
       `${source}: sync payload is not an object of scalars, scalar lists and scalar groups: `
@@ -252,7 +260,9 @@ export function syncMeasurements(text: string, source: string): readonly SyncMea
       + `\n${text.slice(0, 400)}`,
     );
   }
+
   const measurements: SyncMeasurement[] = [];
+
   for (const [name, value] of Object.entries(result.output)) {
     if (v.is(SyncScalarSchema, value)) {
       measurements.push(tagScalar(name, value));
@@ -264,6 +274,7 @@ export function syncMeasurements(text: string, source: string): readonly SyncMea
       }
     }
   }
+
   return measurements;
 }
 
@@ -347,19 +358,24 @@ export type LayoutAggregates = Map<LayoutId, MetricAggregates>;
 
 export function aggregate(reps: readonly ProbeRun[]): MetricAggregates {
   const perMetric = new Map<string, { medians: number[]; p95s: number[]; throughputs: number[]; ops: number | null }>();
+
   for (const run of reps) {
     for (const phase of run.phases) {
       for (const metric of phase.metrics) {
         const bucket = perMetric.get(metric.name) ?? { medians: [], p95s: [], throughputs: [], ops: null };
         bucket.medians.push(metric.summary.p50);
         bucket.p95s.push(metric.summary.p95);
+
         if (metric.throughputMiBs !== undefined) bucket.throughputs.push(metric.throughputMiBs);
+
         if (metric.ops !== undefined) bucket.ops = metric.ops;
         perMetric.set(metric.name, bucket);
       }
     }
   }
+
   const out = new Map<string, MetricAggregate>();
+
   for (const [name, bucket] of perMetric) {
     const acrossReps = summarize(bucket.medians);
     out.set(name, {
@@ -372,6 +388,7 @@ export function aggregate(reps: readonly ProbeRun[]): MetricAggregates {
       unstable: isUnstable(acrossReps),
     });
   }
+
   return out;
 }
 
@@ -380,24 +397,30 @@ export function aggregate(reps: readonly ProbeRun[]): MetricAggregates {
  *  five is a worse result than one that never holds. */
 export function verdictTable(reps: readonly ProbeRun[]): { name: string; held: number; of: number; detail: string }[] {
   const seen = new Map<string, { held: number; of: number; detail: string }>();
+
   for (const run of reps) {
     for (const phase of run.phases) {
       for (const verdict of phase.verdicts) {
         const row = seen.get(verdict.name) ?? { held: 0, of: 0, detail: verdict.detail };
         row.of += 1;
+
         if (verdict.holds) row.held += 1;
         else row.detail = verdict.detail;
         seen.set(verdict.name, row);
       }
     }
   }
+
   return [...seen].map(([name, row]) => ({ name, ...row })).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 const num = (value: number, digits = 2): string => {
   if (!Number.isFinite(value)) return 'n/a';
+
   if (value === 0) return '0';
+
   if (Math.abs(value) >= 1000) return Math.round(value).toLocaleString('en-US');
+
   return value.toFixed(digits);
 };
 
@@ -425,6 +448,7 @@ export const HEADLINE_METRICS = [
 export function renderMarkdown(artifact: RunArtifact): string {
   const lines: string[] = [];
   const aggregates: LayoutAggregates = new Map();
+
   for (const layout of artifact.layouts) aggregates.set(layout.id, aggregate(layout.reps));
   const control = aggregates.get('native');
 
@@ -438,6 +462,7 @@ export function renderMarkdown(artifact: RunArtifact): string {
   lines.push('');
   lines.push('### What was run');
   lines.push('');
+
   for (const [key, value] of Object.entries(artifact.versions)) lines.push(`- ${key}: \`${value}\``);
   lines.push(`- mode: \`${artifact.mode}\``);
   lines.push(`- bucket: \`${artifact.bucket}\`, every object under \`${artifact.keyPrefix}\``);
@@ -448,9 +473,11 @@ export function renderMarkdown(artifact: RunArtifact): string {
   lines.push(artifact.containerFacts.trim());
   lines.push('```');
   lines.push('');
+
   if (artifact.conditions.length > 0) {
     lines.push('Conditions that bound how far these numbers travel:');
     lines.push('');
+
     for (const condition of artifact.conditions) lines.push(`- ${condition}`);
     lines.push('');
   }
@@ -459,9 +486,11 @@ export function renderMarkdown(artifact: RunArtifact): string {
   lines.push('');
   lines.push('| arm | what it is | question it answers |');
   lines.push('| --- | --- | --- |');
+
   for (const layout of artifact.layouts) {
     lines.push(`| \`${layout.id}\` | ${layout.label} | ${layout.question} |`);
   }
+
   lines.push('');
 
   lines.push('### Mount cost, R2 operations, and what each arm left behind');
@@ -470,6 +499,7 @@ export function renderMarkdown(artifact: RunArtifact): string {
     '| arm | mount cold (ms) | mount warm (ms) | R2 class A | R2 class B | R2 free | objects | MiB stored |',
   );
   lines.push('| --- | --- | --- | --- | --- | --- | --- | --- |');
+
   for (const layout of artifact.layouts) {
     const mib = layout.bytesAfter === null ? null : layout.bytesAfter / (1024 * 1024);
     lines.push(
@@ -479,6 +509,7 @@ export function renderMarkdown(artifact: RunArtifact): string {
       + `| ${cell(layout.objectsAfter, 0)} | ${cell(mib, 1)} |`,
     );
   }
+
   lines.push('');
 
   lines.push('### Latency and throughput');
@@ -493,16 +524,21 @@ export function renderMarkdown(artifact: RunArtifact): string {
   const header = ['metric', ...artifact.layouts.map((l) => `\`${l.id}\` p50 / p95`)];
   lines.push(`| ${header.join(' | ')} |`);
   lines.push(`| ${header.map(() => '---').join(' | ')} |`);
+
   for (const metric of HEADLINE_METRICS) {
     const cells = artifact.layouts.map((layout) => {
       const found = aggregates.get(layout.id)?.get(metric);
+
       if (found === undefined) return '—';
       const flag = found.unstable ? ' !' : '';
+
       return `${num(found.acrossReps.p50)} / ${num(found.p95OfReps)}${flag}`;
     });
+
     if (cells.every((c) => c === '—')) continue;
     lines.push(`| \`${metric}\` | ${cells.join(' | ')} |`);
   }
+
   lines.push('');
 
   lines.push('Throughput, MiB/s, median across repetitions:');
@@ -510,14 +546,18 @@ export function renderMarkdown(artifact: RunArtifact): string {
   const thHeader = ['metric', ...artifact.layouts.map((l) => `\`${l.id}\``)];
   lines.push(`| ${thHeader.join(' | ')} |`);
   lines.push(`| ${thHeader.map(() => '---').join(' | ')} |`);
+
   for (const metric of ['write-1MiB', 'write-10MiB', 'write-100MiB', 'read-1MiB', 'read-10MiB', 'read-100MiB', 'reread-10MiB']) {
     const cells = artifact.layouts.map((layout) => {
       const found = aggregates.get(layout.id)?.get(metric);
+
       return found?.throughputMiBs === null || found === undefined ? '—' : num(found.throughputMiBs);
     });
+
     if (cells.every((c) => c === '—')) continue;
     lines.push(`| \`${metric}\` | ${cells.join(' | ')} |`);
   }
+
   lines.push('');
 
   if (control !== undefined) {
@@ -526,17 +566,24 @@ export function renderMarkdown(artifact: RunArtifact): string {
     const sdHeader = ['metric', ...artifact.layouts.filter((l) => l.id !== 'native').map((l) => `\`${l.id}\``)];
     lines.push(`| ${sdHeader.join(' | ')} |`);
     lines.push(`| ${sdHeader.map(() => '---').join(' | ')} |`);
+
     for (const metric of HEADLINE_METRICS) {
       const base = control.get(metric)?.acrossReps.p50;
+
       if (base === undefined || base <= 0) continue;
+
       const cells = artifact.layouts.filter((l) => l.id !== 'native').map((layout) => {
         const found = aggregates.get(layout.id)?.get(metric);
+
         if (found === undefined || found.acrossReps.p50 <= 0) return '—';
+
         return `${num(found.acrossReps.p50 / base, 1)}x`;
       });
+
       if (cells.every((c) => c === '—')) continue;
       lines.push(`| \`${metric}\` | ${cells.join(' | ')} |`);
     }
+
     lines.push('');
   }
 
@@ -544,10 +591,12 @@ export function renderMarkdown(artifact: RunArtifact): string {
   lines.push('');
   lines.push('| arm | user CPU (ms) | system CPU (ms) | wall (ms) | CPU / wall |');
   lines.push('| --- | --- | --- | --- | --- |');
+
   for (const layout of artifact.layouts) {
     let user = 0;
     let system = 0;
     let wall = 0;
+
     for (const run of layout.reps) {
       for (const phase of run.phases) {
         user += phase.cpuUserMs;
@@ -555,6 +604,7 @@ export function renderMarkdown(artifact: RunArtifact): string {
         wall += phase.wallMs;
       }
     }
+
     const reps = Math.max(1, layout.reps.length);
     const ratio = wall > 0 ? (user + system) / wall : 0;
     lines.push(
@@ -562,6 +612,7 @@ export function renderMarkdown(artifact: RunArtifact): string {
       + `| ${num(wall / reps, 0)} | ${num(ratio, 2)} |`,
     );
   }
+
   lines.push('');
   lines.push(
     'A CPU/wall ratio well under 1 on an R2 arm is the measurement saying the arm is '
@@ -584,34 +635,47 @@ export function renderMarkdown(artifact: RunArtifact): string {
   lines.push(`| ${posixHeader.map(() => '---').join(' | ')} |`);
   const names = new Set<string>();
   const tables = new Map<LayoutId, Map<string, { held: number; of: number; detail: string }>>();
+
   for (const layout of artifact.layouts) {
     const rows = new Map<string, { held: number; of: number; detail: string }>();
+
     for (const row of verdictTable(layout.reps)) {
       rows.set(row.name, row);
       names.add(row.name);
     }
+
     tables.set(layout.id, rows);
   }
+
   for (const name of [...names].sort()) {
     const cells = artifact.layouts.map((layout) => {
       const row = tables.get(layout.id)?.get(name);
+
       if (row === undefined) return '—';
+
       if (row.held === row.of) return `yes ${row.held}/${row.of}`;
+
       if (row.held === 0) return `**no** 0/${row.of}`;
+
       return `**flaky** ${row.held}/${row.of}`;
     });
+
     lines.push(`| \`${name}\` | ${cells.join(' | ')} |`);
   }
+
   lines.push('');
   const failures: string[] = [];
+
   for (const layout of artifact.layouts) {
     for (const row of verdictTable(layout.reps)) {
       if (row.held < row.of) failures.push(`\`${layout.id}\` / \`${row.name}\`: ${row.detail}`);
     }
   }
+
   if (failures.length > 0) {
     lines.push('What the failures actually said:');
     lines.push('');
+
     for (const failure of failures) lines.push(`- ${failure}`);
     lines.push('');
   }
@@ -620,43 +684,53 @@ export function renderMarkdown(artifact: RunArtifact): string {
   lines.push('');
   lines.push('| arm | manifest survived | restart (ms) | detail |');
   lines.push('| --- | --- | --- | --- |');
+
   for (const layout of artifact.layouts) {
     if (layout.durability === null) {
       lines.push(`| \`${layout.id}\` | — | — | not exercised |`);
       continue;
     }
+
     lines.push(
       `| \`${layout.id}\` | ${layout.durability.verdict ? 'yes' : '**no**'} `
       + `| ${num(layout.durability.restartMs, 0)} | ${layout.durability.detail} |`,
     );
   }
+
   lines.push('');
 
   const synced = artifact.layouts.flatMap(
     (layout) => (layout.sync === null ? [] : [{ id: layout.id, sync: layout.sync }]),
   );
+
   if (synced.length > 0) {
     lines.push('### Explicit sync, for the overlay arm');
     lines.push('');
+
     for (const { id, sync } of synced) {
       lines.push(`\`${id}\`:`);
       lines.push('');
       lines.push(`- implementation: ${sync.implementation}`);
+
       if (sync.error !== null) lines.push(`- error: ${sync.error}`);
+
       for (const measurement of sync.measurements) {
         lines.push(
           `- ${measurement.name}: `
           + `${measurement.kind === 'count' ? num(measurement.count) : measurement.note}`,
         );
       }
+
       lines.push('');
     }
   }
 
   const arms = artifact.layouts.filter((l) => l.mountError !== null);
+
   if (arms.length > 0) {
     lines.push('### Arms that refused');
     lines.push('');
+
     for (const layout of arms) lines.push(`- \`${layout.id}\`: ${layout.mountError}`);
     lines.push('');
   }
@@ -685,13 +759,16 @@ export function renderMarkdown(artifact: RunArtifact): string {
   lines.push('');
   lines.push('| option | why not |');
   lines.push('| --- | --- |');
+
   for (const rejected of REJECTED_S3FS_OPTIONS) {
     lines.push(`| \`${rejected.option}\` | ${rejected.reason} |`);
   }
+
   lines.push('');
 
   lines.push('### Teardown');
   lines.push('');
+
   for (const [key, value] of Object.entries(artifact.teardown)) lines.push(`- ${key}: ${String(value)}`);
 
   lines.push('### Recommendation');
@@ -704,6 +781,7 @@ export function renderMarkdown(artifact: RunArtifact): string {
         : refusalText(artifact.admission),
   );
   lines.push('');
+
   return lines.join('\n');
 }
 
@@ -723,11 +801,13 @@ export function recommend(
   if (artifact.admission === undefined) {
     throw new Error('RECOMMENDATION REFUSED. This artifact carries no G0–G9 admission decision.');
   }
+
   requireAdmitted(artifact.admission);
   const native = aggregates.get('native');
   const uncached = aggregates.get('r2-uncached');
   const tuned = aggregates.get('r2-tuned');
   const overlay = aggregates.get('overlay');
+
   if (native === undefined) {
     return 'No native control completed, so no arm has a denominator and no recommendation is '
       + 'derivable from this run.';
@@ -736,7 +816,9 @@ export function recommend(
   const ratio = (side: Map<string, MetricAggregate> | undefined, metric: string): number | null => {
     const base = native.get(metric)?.acrossReps.p50;
     const other = side?.get(metric)?.acrossReps.p50;
+
     if (base === undefined || other === undefined || base <= 0 || other <= 0) return null;
+
     return other / base;
   };
 
@@ -748,8 +830,10 @@ export function recommend(
   const bigWriteRatio = ratio(uncached, 'write-100MiB') ?? ratio(uncached, 'write-10MiB');
 
   const posixBroken = new Set<string>();
+
   for (const layout of artifact.layouts) {
     if (layout.id === 'native') continue;
+
     for (const row of verdictTable(layout.reps)) {
       if (row.held < row.of) posixBroken.add(row.name);
     }
@@ -764,6 +848,7 @@ export function recommend(
       + '.',
     );
   }
+
   if (posixBroken.size > 0) {
     parts.push(
       `The R2 arms failed ${posixBroken.size} POSIX invariant`
@@ -775,6 +860,7 @@ export function recommend(
 
   const overlayBeatsFuse = overlayCreateRatio !== null && createRatio !== null
     && overlayCreateRatio < createRatio;
+
   if (overlayBeatsFuse) {
     parts.push(
       `The overlay arm creates small files ${num(createRatio / overlayCreateRatio, 1)}x faster than `
@@ -784,6 +870,7 @@ export function recommend(
   }
 
   let verdict: string;
+
   if (statRatio !== null && statRatio > 20 && (tunedStatRatio === null || tunedStatRatio > 5)) {
     verdict =
       'R2-PRIMARY IS REJECTED. Tuning moves the number but not the order of magnitude, and the '
@@ -806,6 +893,7 @@ export function recommend(
 
   const unstable = [...aggregates.entries()]
     .flatMap(([id, metrics]) => [...metrics.values()].filter((m) => m.unstable).map((m) => `${id}/${m.name}`));
+
   if (unstable.length > 0) {
     parts.push(
       `${unstable.length} metric-arm pair${unstable.length === 1 ? '' : 's'} exceeded the dispersion `

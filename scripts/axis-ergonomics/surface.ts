@@ -31,6 +31,7 @@
 export const AXIS_NAMES = [
   'unit', 'observe', 'expand', 'decorrelate', 'score', 'advance', 'carry',
 ] as const;
+
 export type AxisName = (typeof AXIS_NAMES)[number];
 
 /** The 28 values, per axis, verbatim from the design's matrix table. */
@@ -110,6 +111,7 @@ export const VALUE_GLOSS = {
 
 /** The five presets and `custom`, from the design's section 3 table. */
 export const PRESET_NAMES = ['ideate', 'research', 'audit', 'redteam', 'optimise'] as const;
+
 export type PresetName = (typeof PRESET_NAMES)[number];
 
 interface PresetDoc {
@@ -189,12 +191,14 @@ export const MODELS_FIELD_DESCRIPTION =
  *  and shows up in the report as a hole rather than as a model failure. */
 export function valueGloss(axis: AxisName, value: string): string {
   const perAxis: Record<string, string> = VALUE_GLOSS[axis];
+
   return perAxis[value] ?? '';
 }
 
 function presetLines(): string {
   return PRESET_NAMES.map((p) => {
     const d = PRESETS[p];
+
     return `  ${p} — ${d.intent}. Shape: ${d.topology}. Needs from you: ${d.needs}. Returns: ${d.returns}.`;
   }).join('\n');
 }
@@ -203,10 +207,13 @@ function axisLines(variant: SurfaceVariant): string {
   return AXIS_NAMES.map((axis) => {
     const values = AXIS_VALUES[axis];
     const head = `  ${axis}: ${values.join(' | ')} — ${AXIS_QUESTION[axis]}`;
+
     if (variant === 'bare') return head;
+
     const glosses = values
       .map((v) => `      ${v}: ${valueGloss(axis, v)}`)
       .join('\n');
+
     return `${head}\n${glosses}`;
   }).join('\n');
 }
@@ -265,9 +272,11 @@ export interface SwarmSchema {
 /** The JSON schema half of the surface — enums are the whole point, so they ship. */
 export function swarmSchema(): SwarmSchema {
   const axisProps: Record<string, SchemaProperty> = {};
+
   for (const axis of AXIS_NAMES) {
     axisProps[axis] = { type: 'string', enum: [...AXIS_VALUES[axis]], description: AXIS_QUESTION[axis] };
   }
+
   return {
     type: 'object',
     required: ['task', 'preset'],

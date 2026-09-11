@@ -26,18 +26,24 @@ import { createDirectWorkersAIFetch } from '../src/providers/direct-workers-ai-f
 import { createAgentProviderRegistry } from '../src/providers/agent-registry';
 
 const ID = 'id-1783943808747';
+
 const head = `"id":"${ID}","created":1783943808,"model":"@cf/zai-org/glm-5.2","object":"chat.completion.chunk"`;
+
 const tailHead = `"id":"${ID}","object":"chat.completion.chunk","created":1783943808,"model":"@cf/zai-org/glm-5.2"`;
 
 const DELTA_CHUNK = `data: {${head},"choices":[{"delta":{"content":"ok","reasoning_content":null},"finish_reason":null,"index":0,"logprobs":null,"matched_stop":null}]}`;
+
 // The model runtime's own usage chunk — carries the real cached count.
 const MODEL_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"completion_tokens":3,"prompt_tokens":14571,"prompt_tokens_details":{"cached_tokens":14528},"total_tokens":14574}}`;
+
 // The platform-appended duplicate — cached_tokens zeroed (the bug).
 const ZEROED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574,"prompt_tokens_details":{"cached_tokens":0}}}`;
+
 // The same duplicate as it arrives from deepseek-v4-pro: prompt_tokens_details
 // gone rather than zeroed. The SDK's `cached_tokens ?? 0` then reports 0 AND
 // leaves `raw` without the key, so neither the value nor its absence survives.
 const DROPPED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574}}`;
+
 // The null variant of the same loss.
 const NULLED_USAGE_CHUNK = `data: {${tailHead},"choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":14571,"completion_tokens":3,"total_tokens":14574,"prompt_tokens_details":null}}`;
 
@@ -52,17 +58,20 @@ function sseResponse(body: string): Response {
 /** Deliver `body` in fixed-size byte slices to exercise line reassembly. */
 function chunkedSseResponse(body: string, size: number): Response {
   const bytes = new TextEncoder().encode(body);
+
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
       for (let i = 0; i < bytes.length; i += size) controller.enqueue(bytes.slice(i, i + size));
       controller.close();
     },
   });
+
   return new Response(stream, { headers: { 'content-type': 'text/event-stream' } });
 }
 
 function lastCachedTokens(text: string): number | undefined {
   const usages = [...text.matchAll(/"cached_tokens":(\d+)/g)];
+
   return usages.length > 0 ? Number(usages[usages.length - 1][1]) : undefined;
 }
 
@@ -122,6 +131,7 @@ describe('repairSseCachedUsage', () => {
 
   test('repair works across arbitrary byte-boundary splits', async () => {
     const input = sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]');
+
     for (const size of [1, 7, 64]) {
       const out = await repairSseCachedUsage(chunkedSseResponse(input, size)).text();
       expect(lastCachedTokens(out)).toBe(14528);
@@ -153,6 +163,7 @@ describe('repairSseCachedUsage', () => {
       status: 200,
       headers: { 'content-type': 'text/event-stream', 'x-probe': 'yes' },
     });
+
     const out = repairSseCachedUsage(res);
     expect(out.status).toBe(200);
     expect(out.headers.get('x-probe')).toBe('yes');
@@ -181,10 +192,12 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
       ),
       workersAI: { sessionAffinity: 'kinu-jarvis' },
     });
+
     const result = streamText({
       model: reg.resolveModel('workers-ai/@cf/zai-org/glm-5.2'),
       prompt: 'ping',
     });
+
     await result.consumeStream();
     const usage = await result.usage;
     expect(usage.cachedInputTokens).toBe(14528);
@@ -202,10 +215,12 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
       ),
       workersAI: { sessionAffinity: 'kinu-stone-ash-71f2' },
     });
+
     const result = streamText({
       model: reg.resolveModel(`workers-ai/${DEFAULT_WORKERS_AI_MODEL_ID}`),
       prompt: 'ping',
     });
+
     await result.consumeStream();
     const usage = await result.usage;
     expect(usage.cachedInputTokens).toBe(14528);
@@ -234,6 +249,7 @@ describe('cached-usage repair through the direct binding pass', () => {
         return Promise.resolve(sseResponse(body));
       },
     };
+
     // SAFETY: the fixture above declares `run` with the exact signature
     // DirectWorkersAIRunner requires, and `createDirectWorkersAIFetch` narrows
     // its argument to that one member before calling anything — every other
@@ -247,6 +263,7 @@ describe('cached-usage repair through the direct binding pass', () => {
       method: 'POST',
       body: JSON.stringify({ model: GLM, messages: [{ role: 'user', content: 'ping' }], stream: true }),
     });
+
     return response.text();
   }
 

@@ -201,6 +201,7 @@ export function getLocalWorkspaceSpend(name: string): WorkspaceSpend {
   return withLocalDb(name, (db) => {
     const sql = makeSql(db);
     const actor = openWorkspaceMainActor(sql);
+
     return workspaceSpend({ events: new RunEventRecorder(sql, actor), sql, actor });
   });
 }
@@ -209,6 +210,7 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
   return withLocalDb(name, (db) => {
     const status = getLocalStatus(db);
     const actor = mainActor(db);
+
     return {
       name: status.name ?? name,
       purpose: status.purpose,
@@ -235,6 +237,7 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
     };
   });
 }
+
 export interface LocalProfileCoordinates {
   readonly roleId: string;
   readonly assignedTier: TierId | null;
@@ -245,7 +248,9 @@ export function getLocalProfileCoordinates(name: string): LocalProfileCoordinate
     if (!tableExists(db, 'actor_config')) {
       return { roleId: 'general', assignedTier: null };
     }
+
     const config = openWorkspaceMainActor(makeSql(db)).config;
+
     return {
       roleId: config.getRoleSelection(),
       assignedTier: config.getAssignedTier(),
@@ -266,8 +271,10 @@ export function readLocalMemory(name: string): string {
     if (!tableExists(db, 'memory_chunks')) return '';
     const cols = columnSet(db, 'memory_chunks');
     const column = cols.has('text') ? 'text' : cols.has('content') ? 'content' : null;
+
     if (!column) return '';
     const order = cols.has('start_line') ? 'start_line' : 'rowid';
+
     return all<{ body: string }>(
       db,
       `SELECT ${safeIdentifier(column)} AS body FROM memory_chunks
@@ -285,11 +292,14 @@ export function readLocalMemory(name: string): string {
  */
 export function searchLocalMemory(name: string, query: string, limit = 10): Array<{ path: string; text: string; score?: number; startLine?: number; endLine?: number }> {
   const q = query.trim();
+
   if (!q) return [];
   const window = boundedInt(limit, 10, 1, Number.MAX_SAFE_INTEGER);
+
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'memory_chunks')) return [];
     const cols = columnSet(db, 'memory_chunks');
+
     if (cols.has('text')) {
       return all<{ path: string; text: string; score?: number; start_line?: number; end_line?: number }>(
         db,
@@ -298,6 +308,7 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
         window,
       ).map((row) => ({ path: row.path, text: row.text, score: row.score, startLine: row.start_line, endLine: row.end_line }));
     }
+
     if (cols.has('content')) {
       return all<{ path: string; content: string }>(
         db,
@@ -306,6 +317,7 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
         window,
       ).map((row) => ({ path: row.path, text: row.content }));
     }
+
     return [];
   });
 }
@@ -313,10 +325,14 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
 export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): KinuEvent[] {
   return withLocalDb(name, (db) => {
     const actor = mainActor(db);
+
     if (!actor || !tableExists(db, 'agent_log')) return [];
     const filter: QueryFilter = { limit: opts.limit ?? 50 };
+
     if (opts.variant) filter.variant = v.parse(EventVariantSchema, opts.variant);
+
     if (opts.since) filter.since = opts.since;
+
     return new EventLog(hubSql(db), actor).query(filter);
   });
 }
@@ -327,6 +343,7 @@ export function listLocalRuns(name: string, limit = 50): RunListEntry[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'run_events')) return [];
     const sql = makeSql(db);
+
     return [...listRuns(new RunEventRecorder(sql, openWorkspaceMainActor(sql)), null, limit).items];
   });
 }
@@ -339,6 +356,7 @@ export function listLocalRunEvents(
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'run_events')) return [];
     const sql = makeSql(db);
+
     return new RunEventRecorder(sql, openWorkspaceMainActor(sql)).read(runId, opts);
   });
 }
@@ -352,18 +370,21 @@ export function listLocalRunEvents(
  */
 export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
   const window = boundedInt(limit, 100, 1, RUN_TIMELINE_MAX);
+
   return withLocalDb(name, (db) => {
     // WHOSE timeline. Every rail below is actor-scoped now, so the workspace's
     // MAIN actor is the one this whole-workspace read reports; another actor's
     // is reached by id through `getLocalActorInfo`.
     const actor = mainActor(db);
     const rows: JsonObject[] = [];
+
     // The durable run-event log of the most recent run — tool calls, steps and
     // turn boundaries. The cloud timeline spine leads with the same source.
     if (tableExists(db, 'run_events')) {
       const sql = makeSql(db);
       const recorder = new RunEventRecorder(sql, openWorkspaceMainActor(sql));
       const latest = listRuns(recorder, null, 1).items[0];
+
       if (latest) {
         rows.push(...recorder.read(latest.runId, { limit: window }).map((e) => ({
           id: `${e.runId}:${e.eventIndex}`,
@@ -374,6 +395,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         })));
       }
     }
+
     if (tableExists(db, 'agent_log')) {
       rows.push(...all<{
         id: string; kind: string; turn_id: string | null; step_idx: number | null; payload: string; received_at: number;
@@ -393,6 +415,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         ts: row.received_at,
       })));
     }
+
     if (actor && tableExists(db, 'evolution_events')) {
       rows.push(...all<{ id: string; type: string; message: string; data: string | null; created_at: number }>(
         db,
@@ -410,6 +433,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         ts: row.created_at,
       })));
     }
+
     if (actor && tableExists(db, 'search_nodes')) {
       rows.push(...all<{ id: string; action: string; value: number; status: string; created_at: number }>(
         db,
@@ -428,6 +452,7 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
         ts: row.created_at,
       })));
     }
+
     return rows.sort((a, b) => timestampOf(b) - timestampOf(a)).slice(0, window);
   });
 }
@@ -439,7 +464,9 @@ export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
 export function listLocalMcts(name: string): SearchNode[] {
   return withLocalDb(name, (db) => {
     const actor = mainActor(db);
+
     if (!actor || !tableExists(db, 'search_nodes')) return [];
+
     return all<SearchNode>(
       db,
       `SELECT id, parent_id, root_id, task, action, observation, code_used, visits, value, depth,
@@ -458,6 +485,7 @@ export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRun
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'mcts_search_runs')) return [];
     const sql = makeSql(db);
+
     return new MctsSearchStore(sql, openWorkspaceMainActor(sql)).list(limit);
   });
 }
@@ -515,6 +543,7 @@ export function listLocalHeads(name: string, limit = 20): HeadRunView[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'head_journal')) return [];
     const sql = makeSql(db);
+
     return new HeadJournal(sql, openWorkspaceMainActor(sql)).listRuns(limit);
   });
 }
@@ -523,6 +552,7 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'gepa_runs')) return [];
     const actor = mainActor(db);
+
     return actor ? listGepaRuns(makeSql(db), actor, limit) : [];
   });
 }
@@ -533,6 +563,7 @@ export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
 export async function getLocalChatHistory(name: string, limit = 100): Promise<ChatHistoryEntry[]> {
   return withLocalDb(name, (db) => {
     const sql = makeSql(db);
+
     return [...getChatHistoryPage(sql, openWorkspaceMainActor(sql), { limit }).items];
   });
 }
@@ -542,6 +573,7 @@ export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogV
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'actor_config')) initAgentConfigTable((ddl) => { db.exec(ddl); });
     const sql = makeSql(db);
+
     return getEvolutionChangelog(sql, openWorkspaceMainActor(sql), limit);
   });
 }
@@ -550,6 +582,7 @@ export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogV
 export function getLocalScaffoldVersions(name: string, limit = 20): ScaffoldVersionView[] {
   return withLocalDb(name, (db) => {
     const actor = mainActor(db);
+
     return actor && tableExists(db, 'scaffold_versions')
       ? listScaffoldVersions(makeSql(db), actor, limit)
       : [];
@@ -563,6 +596,7 @@ export function getLocalFacts(name: string, limit = 100): Array<{
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'agent_facts')) return [];
     const sql = makeSql(db);
+
     return createFactsStore(sql, openWorkspaceMainActor(sql)).recentTopK(limit).map((f) => ({
       key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
     }));
@@ -595,6 +629,7 @@ export async function recordLocalOutcomeLabels(
   return withLocalWritableDb(name, (db) => {
     const sql = makeSql(db);
     initTurnOutcomeTables((ddl) => { db.exec(ddl); });
+
     return ingestOutcomeLabels(sql, openWorkspaceMainActor(sql), input);
   });
 }
@@ -611,6 +646,7 @@ export function getLocalEnsemble(name: string): EnsembleReport {
  *  `runEnsemble` as a callback rather than calling it up front. */
 function localJudge(resolver: LocalModelResolver, named: string): EnsembleJudge {
   const spec = resolver.normalizeSpecSync(named);
+
   return { spec, llm: createCompletionLLM({ model: resolver.resolveModel(spec), spec, stage: 'judge' }) };
 }
 
@@ -630,6 +666,7 @@ export async function runLocalOutcomeEnsemble(
 ): Promise<EnsembleRunResult> {
   ensureLocalAgent(name);
   const db = new Database(agentDbPath(name));
+
   try {
     const sql = makeSql(db);
     initTurnOutcomeTables((ddl) => { db.exec(ddl); });
@@ -640,6 +677,7 @@ export async function runLocalOutcomeEnsemble(
     // panel is big enough to run — so a workspace with no labels, or a
     // one-model panel, is told that rather than told it is unauthenticated.
     const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+
     return await runEnsemble(sql, openWorkspaceMainActor(sql), {
       specs: async () => (await selectEnsembleJudges({
         specs,
@@ -669,15 +707,19 @@ export async function runLocalCorpusEval(name: string, input: {
 }): Promise<CorpusEvalReport> {
   ensureLocalAgent(name);
   const { resolver } = createConfiguredLocalModelResolver({ agentName: name });
+
   const chatSpec = resolver.normalizeSpecSync(
     withLocalDb(name, (db) => openWorkspaceMainActor(makeSql(db)).config.getModel()),
   );
+
   const selection = await selectEnsembleJudges({
     specs: input.specs,
     chatSpec: () => chatSpec,
     candidates: () => resolver.judgeCandidates(),
   });
+
   const judges = selection.specs.map((named) => localJudge(resolver, named));
+
   return runCorpusEval({
     turns: input.turns,
     labels: input.labels,
@@ -699,8 +741,10 @@ export function getLocalGepaRun(name: string, runId: string): LocalGepaRunDetail
     if (!tableExists(db, 'gepa_runs')) return null;
     const sql = makeSql(db);
     const actor = mainActor(db);
+
     if (!actor) return null;
     const run = listGepaRuns(sql, actor, 250).find((candidate) => candidate.runId === runId) ?? null;
+
     return run ? { run, candidates: loadGepaCandidates(sql, actor, runId) } : null;
   });
 }
@@ -747,7 +791,9 @@ export function getLocalToolSurface(name: string): {
 export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
   return withLocalDb(name, (db) => {
     const actor = mainActor(db);
+
     if (!actor || !tableExists(db, 'triggers')) return { triggers: [] };
+
     return { triggers: new TriggerRegistry(hubSql(db), actor, NOOP_ALARM).list() };
   });
 }
@@ -755,7 +801,9 @@ export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
 export async function cancelLocalTrigger(name: string, id: string): Promise<{ changed: boolean }> {
   return withLocalWritableDb(name, (db) => {
     const actor = mainActor(db);
+
     if (!actor || !tableExists(db, 'triggers')) return { changed: false };
+
     return { changed: new TriggerRegistry(hubSql(db), actor, NOOP_ALARM).revoke(id, Date.now()) };
   });
 }
@@ -764,6 +812,7 @@ export async function createLocalTimerTrigger(name: string, input: { cron?: stri
   return withLocalWritableDb(name, (db) => {
     initEventsHubTables(hubSql(db));
     const actor = openWorkspaceMainActor(makeSql(db));
+
     return createTimerTrigger(new TriggerRegistry(hubSql(db), actor, NOOP_ALARM), { ...input, trust: 'owner' }, Date.now());
   });
 }
@@ -772,6 +821,7 @@ export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'background_jobs')) return [];
     const sql = makeSql(db);
+
     return new BackgroundJobStore(sql, openWorkspaceMainActor(sql)).list(limit);
   });
 }
@@ -782,8 +832,10 @@ export async function cancelLocalJob(name: string, id: string): Promise<{ ok: bo
     const sql = makeSql(db);
     const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
     const before = store.get(id);
+
     if (!before || before.status !== 'running') return { ok: false };
     store.cancel(id, before.epoch, Date.now());
+
     return { ok: true };
   });
 }
@@ -791,13 +843,16 @@ export async function cancelLocalJob(name: string, id: string): Promise<{ ok: bo
 export async function executeLocalExecutor(name: string, executorId: string, command: string): Promise<LocalExecResult> {
   ensureLocalAgent(name);
   const normalized = executorId.toLowerCase();
+
   if (!['workspace', 'laptop', 'local', 'your-pc'].includes(normalized)) {
     throw new Error(`Executor "${executorId}" is not available for local agents.`);
   }
+
   // The one host-shell implementation: it owns the process contract (group
   // kill on abort, and settling when the COMMAND exits rather than when a
   // backgrounded grandchild finally closes the inherited pipe).
   const result = await createHostShell(process.cwd()).exec(command);
+
   return { executor: executorId, command, ...result };
 }
 
@@ -806,7 +861,9 @@ export function getLocalReleaseBoard(name: string, limit = 20): ReleaseBoard {
     if (!tableExists(db, 'release_sources') || !tableExists(db, 'release_changes')) {
       return { bindings: [], changes: [], checks: [], approvals: [], deployments: [] };
     }
+
     const store = createReleaseStore(releaseSqlFromExec(hubSql(db)));
+
     return store.board(name, limit);
   });
 }
@@ -823,12 +880,15 @@ export async function markLocalBackgroundJobsCancelled(name: string): Promise<st
     const store = new BackgroundJobStore(sql, openWorkspaceMainActor(sql));
     const cancelled: string[] = [];
     const now = Date.now();
+
     for (const id of store.runningIds()) {
       const job = store.get(id);
+
       if (!job || job.status !== 'running') continue;
       store.cancel(id, job.epoch, now);
       cancelled.push(id);
     }
+
     // Newest first, the order the raw read reported and the surfaces render.
     return cancelled.reverse();
   });
@@ -836,8 +896,10 @@ export async function markLocalBackgroundJobsCancelled(name: string): Promise<st
 
 function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
   const dbPath = agentDbPath(name);
+
   if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
   const db = new Database(dbPath, { readonly: true });
+
   try {
     return fn(db);
   } finally {
@@ -851,8 +913,10 @@ function withLocalDb<T>(name: string, fn: (db: SqliteDb) => T): T {
  *  point would hand the rest of the callback a closed database. */
 async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Promise<T>): Promise<T> {
   const dbPath = agentDbPath(name);
+
   if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
   const db = new Database(dbPath);
+
   try {
     return await fn(db);
   } finally {
@@ -862,6 +926,7 @@ async function withLocalWritableDb<T>(name: string, fn: (db: SqliteDb) => T | Pr
 
 function ensureLocalAgent(name: string): void {
   const dbPath = agentDbPath(name);
+
   if (!existsSync(dbPath)) throw new Error(`Workspace "${name}" not found. Create it with: kinu create ${name}`);
 }
 
@@ -915,7 +980,9 @@ function mainActor(db: SqliteDb): ActorHandle | null {
  */
 function requireMainActor(db: SqliteDb): ActorHandle {
   const actor = mainActor(db);
+
   if (!actor) throw new KinuError('missing', 'This workspace database has no durable identity to read as.');
+
   return actor;
 }
 
@@ -939,9 +1006,12 @@ export interface LocalActorRow {
  */
 function actorDirectory(db: SqliteDb): WorkspaceActorDirectory | null {
   if (!tableExists(db, 'workspace_actors') || !tableExists(db, 'workspace_identity')) return null;
+
   const identity = get<{ id: string; owner_user_id: string | null }>(
     db, `SELECT id, owner_user_id FROM workspace_identity LIMIT 1`);
+
   if (!identity) return null;
+
   return new WorkspaceActorDirectory(makeSql(db), {
     workspaceId: identity.id, ownerUserId: identity.owner_user_id ?? '',
   });
@@ -958,6 +1028,7 @@ function actorDirectory(db: SqliteDb): WorkspaceActorDirectory | null {
 export function listLocalActors(name: string, opts: { readonly retired?: boolean } = {}): LocalActorRow[] {
   return withLocalDb(name, (db) => {
     const directory = actorDirectory(db);
+
     if (!directory) return [];
     // The FULL set by default. `list()`'s own default excludes retired rows, so
     // `retired` is passed explicitly on every call rather than left to that
@@ -967,6 +1038,7 @@ export function listLocalActors(name: string, opts: { readonly retired?: boolean
     // workspace as smaller than its own archive, which is the one thing this
     // read exists to prevent.
     const rows = directory.list({ retired: opts.retired ?? true });
+
     return rows.map((row): LocalActorRow => ({
       actorId: row.actorId,
       name: row.name,
@@ -992,7 +1064,9 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
   return withLocalDb(name, (db) => {
     const directory = actorDirectory(db);
     const row = directory?.retained(actorId) ?? null;
+
     if (!row) return null;
+
     const config = tableExists(db, 'actor_config')
       ? createAgentConfigStore(makeSql(db), actorId, () => {
         if (!directory?.retained(actorId)) {
@@ -1000,6 +1074,7 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
         }
       })
       : null;
+
     return {
       name: row.name,
       purpose: '',
@@ -1049,16 +1124,19 @@ function columnSet(db: SqliteDb, table: string): Set<string> {
 
 function safeIdentifier(value: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) throw new Error(`Unsafe SQL identifier: ${value}`);
+
   return value;
 }
 
 function getLocalStatus(db: SqliteDb): LocalStatus {
   const hasIdentity = tableExists(db, 'workspace_identity');
   const actor = mainActor(db);
+
   const identity = hasIdentity
     ? get<{ name: string; created_at: number }>(
       db, `SELECT name, created_at FROM workspace_identity LIMIT 1`)
     : null;
+
   // The MISSION, off the identity row — not SOUL.md itself.
   //
   // This inspection opens the database READ-ONLY, and reading the document
@@ -1069,6 +1147,7 @@ function getLocalStatus(db: SqliteDb): LocalStatus {
   const mission = hasIdentity
     ? get<{ mission: string | null }>(db, `SELECT mission FROM workspace_identity LIMIT 1`)?.mission?.trim() || null
     : null;
+
   return {
     name: identity?.name ?? null,
     purpose: mission ?? '',
@@ -1105,6 +1184,7 @@ function getLocalToolSummary(db: SqliteDb): LocalToolSummary {
   const crafted = tableExists(db, 'crafted_tools')
     ? all<{ name: string; description: string }>(db, `SELECT name, description FROM crafted_tools ORDER BY name`)
     : [];
+
   return {
     builtIn: BUILTIN_TOOLS,
     crafted,
@@ -1125,15 +1205,18 @@ function hubSql(db: SqliteDb): SqlExec {
 
 function parseJson(value: string | null): JsonValue {
   if (value == null) return null;
+
   try {
     return parseJsonValue(value);
   } catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
+
     return value;
   }
 }
 
 function timestampOf(value: JsonObject): number {
   const parsed = v.safeParse(v.number(), value.ts);
+
   return parsed.success ? parsed.output : 0;
 }
