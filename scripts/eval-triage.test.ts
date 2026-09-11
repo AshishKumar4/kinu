@@ -25,6 +25,7 @@ import { render, triage, type Loaded, type Triage, type Verdict } from './eval-t
 function row(over: Partial<EvalScoreRow> & { name: string }): EvalScoreRow {
   const eligible = over.eligible ?? 1;
   const passed = over.passed ?? 0;
+
   return {
     asserts: 'asserted', eligible, passed, rate: eligible === 0 ? null : passed / eligible,
     detail: 'detail', ...over,
@@ -46,6 +47,7 @@ function loaded(over: Partial<EvalRunRecord> & { runId: string }, path?: string)
   const observations = over.observations ?? [];
   const declaredTasks = over.declaredTasks ?? observations.map((o) => o.taskId);
   clock += 1000;
+
   const record: EvalRunRecord = {
     schema: 1,
     createdAt: new Date(clock).toISOString(),
@@ -67,6 +69,7 @@ function loaded(over: Partial<EvalRunRecord> & { runId: string }, path?: string)
     observations,
     admissibility: over.admissibility ?? assessAdmissibility(declaredTasks, observations),
   };
+
   return { path: path ?? `/tmp/${over.runId}.json`, record };
 }
 
@@ -155,6 +158,7 @@ describe('dispersion is only dispersion inside one commit and one arm', () => {
       runId: 'same-arm',
       observations: [scored('ws-edit', 0, [passing]), scored('ws-edit', 1, [failing])],
     })], []);
+
     expect(classOf(result, 'behaviour/scorer/edit_landing/ws-edit')).toBe('flake');
   });
 
@@ -163,6 +167,7 @@ describe('dispersion is only dispersion inside one commit and one arm', () => {
       loaded({ runId: 'before', gitSha: 'aaaaaaaa', observations: [scored('ws-edit', 0, [passing])] }),
       loaded({ runId: 'after', gitSha: 'bbbbbbbb', observations: [scored('ws-edit', 0, [failing])] }),
     ], []);
+
     expect(classOf(result, 'behaviour/scorer/edit_landing/ws-edit')).toBe('model-behaviour');
   });
 
@@ -171,6 +176,7 @@ describe('dispersion is only dispersion inside one commit and one arm', () => {
       runId: 'outcome',
       observations: [scored('ws-edit', 0, [row({ name: TASK_OUTCOME, eligible: 4, passed: 1 })])],
     })], []);
+
     expect(classOf(result, `behaviour/scorer/${TASK_OUTCOME}/ws-edit`)).toBe('model-behaviour');
   });
 });
@@ -183,6 +189,7 @@ describe('an attempt that produced no score is classed by WHY it produced none',
         taskId: 'tool-001', repetition: 0, outcome: 'inert', reason: '0 turns, 12 tool calls',
       }],
     })], []);
+
     expect(classOf(result, 'behaviour/attempt/inert/tool-001')).toBe('eval-defect');
   });
 
@@ -193,6 +200,7 @@ describe('an attempt that produced no score is classed by WHY it produced none',
         taskId: 'tool-001', repetition: 0, outcome: 'errored', reason: 'TypeError: x is not a function',
       }],
     })], []);
+
     expect(classOf(result, 'behaviour/attempt/errored/tool-001')).toBe('product-defect');
   });
 });
@@ -208,6 +216,7 @@ describe('the record is never trusted about itself', () => {
         mechanismsExercised: ['edit_landing'], mechanismsAbsent: [], failures: [],
       },
     })], []);
+
     expect(classOf(result, 'behaviour/run/stored admissibility verdict is stale/*'))
       .toBe('eval-defect');
     expect(classOf(result, 'behaviour/run/no observation carried a task_outcome row/*'))
@@ -218,6 +227,7 @@ describe('the record is never trusted about itself', () => {
     const result = triage([loaded({
       runId: 'empty', declaredTasks: ['a', 'b'], observations: [], transcripts: '/tmp/gone-xyz',
     })], []);
+
     expect(result.groups.map((group) => group.key)).toEqual([
       'behaviour/run/the run attempted nothing and still wrote a record/*',
     ]);
@@ -229,6 +239,7 @@ describe('the record is never trusted about itself', () => {
       observations: [scored('ws-edit', 0, [row({ name: 'edit_landing', eligible: 1, passed: 0 })])],
       transcripts: '/tmp/eval-triage-absent-dir',
     })], []);
+
     expect(classOf(result, 'behaviour/run/the named transcripts directory is gone/*'))
       .toBe('eval-defect');
   });
@@ -236,6 +247,7 @@ describe('the record is never trusted about itself', () => {
 
 describe('the verdicts file annotates and cannot suppress', () => {
   const observations = [scored('ws-edit', 0, [row({ name: 'edit_landing', eligible: 1, passed: 0 })])];
+
   const verdict: Verdict = {
     group: 'behaviour/scorer/edit_landing/ws-edit',
     verdict: 'eval-defect',
@@ -255,6 +267,7 @@ describe('the verdicts file annotates and cannot suppress', () => {
     const result = triage([loaded({ runId: 'verdicted', observations })], [
       { ...verdict, group: 'behaviour/scorer/edit_landing/ws-gone' },
     ]);
+
     expect(result.staleVerdicts.map((stale) => stale.group))
       .toEqual(['behaviour/scorer/edit_landing/ws-gone']);
     expect(render(result).join('\n')).toContain('STALE VERDICT');

@@ -39,6 +39,7 @@ describe('ephemeral container application listings', () => {
       { id: 'app-1', name: 'wanted' },
       { id: 'app-2', name: 'other' },
     ])}`;
+
     expect(containerAppIds('/repo', ['wanted'], () => {}, listing(output))).toEqual([
       { id: 'app-1', name: 'wanted' },
     ]);
@@ -61,11 +62,13 @@ describe('ephemeral Worker deletion', () => {
       `${WRANGLER_FAILED}: config route failed`,
       `${WRANGLER_FAILED}: This Worker does not exist on your account. [code: 10007]`,
     ];
+
     const wrangle = (
       _repoRoot: string,
       _args: readonly string[],
       _options?: WranglerOptions,
     ): string => outputs.shift() ?? `${WRANGLER_FAILED}: no response`;
+
     expect(deleteFixtureWorker('/repo', '/tmp/config', 'worker', () => {}, wrangle)).toBe(true);
   });
 

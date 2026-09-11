@@ -126,20 +126,24 @@ export function auditPage(): PageAudit {
 
   const rulesOf = (sheet: CSSStyleSheet): CSSRule[] => {
     const flat: CSSRule[] = [];
+
     const walk = (list: CSSRuleList): void => {
       for (const rule of list) {
         flat.push(rule);
+
         // `@layer`, `@media`, `@supports`, `@container` and (with CSS nesting)
         // `CSSStyleRule` all group. Tailwind v4 emits everything inside
         // `@layer`, so a walk that does not descend sees almost nothing.
         if (rule instanceof CSSGroupingRule) walk(rule.cssRules);
       }
     };
+
     // No guard around `cssRules`: the gallery's CSS arrives as same-origin
     // inline <style> (vite in dev, and every seeded scenario in the gate's own
     // test), so it is always readable. A sheet this could not read would have
     // to fail the run, not shrink `checked` behind a verdict that reads clean.
     walk(sheet.cssRules);
+
     return flat;
   };
 
@@ -153,13 +157,17 @@ export function auditPage(): PageAudit {
       // defect, appears as four properties whose values contain no `var(` at
       // all. Iterating the declaration object cannot see this bug.
       const text = rule.style.cssText;
+
       if (!text.includes('var(')) continue;
+
       const declarations = [...text.matchAll(/(?:^|;)\s*([-\w]+)\s*:\s*([^;]*)/g)]
         .filter(([, , value]) => value!.includes('var('))
         .map(([, property, value]) => [property!, value!] satisfies [string, string]);
+
       if (declarations.length === 0) continue;
 
       let matched: Element[];
+
       try {
         matched = [...document.querySelectorAll(rule.selectorText)];
       } catch (error) {
@@ -168,20 +176,24 @@ export function auditPage(): PageAudit {
         if (!(error instanceof DOMException && error.name === 'SyntaxError')) throw error;
         continue;
       }
+
       if (matched.length === 0) continue;
 
       // One element per rule is enough: the token either exists at that scope
       // or it does not, and reporting 400 identical rows helps nobody.
       const element = matched[0]!;
       const computed = getComputedStyle(element);
+
       const label = element.tagName.toLowerCase()
         + (element.classList.length > 0 ? `.${[...element.classList].slice(0, 2).join('.')}` : '');
 
       for (const [property, value] of declarations) {
         for (const [, token] of value.matchAll(BARE_VAR)) {
           checked += 1;
+
           if (computed.getPropertyValue(token).trim() !== '') continue;
           const key = `${token}|${rule.selectorText}|${property}`;
+
           if (seen.has(key)) continue;
           seen.add(key);
           out.push({ token, selector: rule.selectorText, property, element: label });
@@ -189,6 +201,7 @@ export function auditPage(): PageAudit {
       }
     }
   }
+
   return { findings: out, checked };
 }
 
@@ -206,9 +219,11 @@ export async function audit(frames: readonly string[], themes: readonly Theme[] 
     const found: Unresolved[] = [];
     const perTheme: { theme: string; checked: number }[] = [];
     let checked = 0;
+
     for (const theme of themes) {
       const label = theme.mode;
       let themeChecked = 0;
+
       for (const frame of frames) {
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 1100 });
@@ -219,9 +234,11 @@ export async function audit(frames: readonly string[], themes: readonly Theme[] 
         await page.goto(`${origin}/gallery.html?frame=${frame}`, { waitUntil: 'networkidle0' });
         // React renders after the mock RPC stubs resolve; the mock is async.
         await Bun.sleep(600);
+
         const applied = await page.evaluate(() => ({
           mode: document.documentElement.dataset.mode,
         }));
+
         if (applied.mode !== theme.mode) {
           await page.close();
           throw new Error(
@@ -229,14 +246,18 @@ export async function audit(frames: readonly string[], themes: readonly Theme[] 
             + `${applied.mode} — the pass would have reported against the wrong theme`,
           );
         }
+
         const pageAudit = await page.evaluate(auditPage);
         themeChecked += pageAudit.checked;
+
         for (const hit of pageAudit.findings) found.push({ ...hit, frame, theme: label });
         await page.close();
       }
+
       perTheme.push({ theme: label, checked: themeChecked });
       checked += themeChecked;
     }
+
     return { found, checked, perTheme };
   });
 }
@@ -246,15 +267,18 @@ export async function audit(frames: readonly string[], themes: readonly Theme[] 
  *  much of the product it takes down and in which themes. */
 export function summarise(found: readonly Unresolved[]): string[] {
   const byToken = new Map<string, Unresolved[]>();
+
   for (const hit of found) {
     const key = `${hit.token} in ${hit.property}`;
     const bucket = byToken.get(key) ?? [];
     bucket.push(hit);
     byToken.set(key, bucket);
   }
+
   return [...byToken.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([key, hits]) => {
     const frames = [...new Set(hits.map((h) => h.frame))].sort();
     const themes = [...new Set(hits.map((h) => h.theme))].sort();
+
     return `  ${key} — unresolved at ${hits.length} rule(s) across ${frames.length} frame(s) `
       + `in ${themes.join(' / ')}: ${frames.join(', ')}\n      e.g. \`${hits[0]!.selector}\` on <${hits[0]!.element}>`;
   });
@@ -262,16 +286,21 @@ export function summarise(found: readonly Unresolved[]): string[] {
 
 if (import.meta.main) {
   const argv = process.argv.slice(2);
+
   const flag = (name: string): string | undefined => {
     const at = argv.indexOf(`--${name}`);
+
     return at === -1 ? undefined : argv[at + 1];
   };
+
   const mode = flag('mode');
   const themes = THEMES.filter((t) => !mode || t.mode === mode);
+
   if (themes.length === 0) {
     console.error(`computed-style: --mode ${mode} names no theme`);
     process.exit(1);
   }
+
   const named = argv.filter((a, i) => !a.startsWith('--') && argv[i - 1] !== '--mode');
   const frames = named.length > 0 ? named : FRAMES;
   const { found, checked, perTheme } = await audit(frames, themes);
@@ -280,17 +309,22 @@ if (import.meta.main) {
   // just in total, or three good themes would cover a fourth that measured
   // nothing at all.
   const empty = perTheme.filter((t) => t.checked === 0);
+
   if (checked === 0 || empty.length > 0) {
     const which = empty.length > 0 ? empty.map((t) => t.theme).join(', ') : 'every theme';
     console.error(`computed-style: resolved 0 tokens in ${which} across ${frames.length} frame(s) — nothing was measured`);
     process.exit(1);
   }
+
   const breakdown = perTheme.map((t) => `${t.theme} ${t.checked}`).join(', ');
+
   if (found.length === 0) {
     console.log(`computed-style: ok — ${checked} token resolutions across ${frames.length} frames × ${themes.length} themes (${breakdown})`);
     process.exit(0);
   }
+
   console.error(`computed-style: ${found.length} of ${checked} token reference(s) unresolved (${breakdown})\n`);
+
   for (const line of summarise(found)) console.error(line);
   process.exit(1);
 }

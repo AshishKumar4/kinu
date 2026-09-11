@@ -46,7 +46,9 @@ import type {
 } from './types';
 
 const GepaRunStatusSchema = v.picklist(['running', 'completed', 'aborted']);
+
 const ScoreMapSchema = v.record(v.string(), v.number());
+
 const FeedbackMapSchema = v.record(v.string(), v.string());
 
 export function initGepaTables(execRaw: RawSqlExec): void {
@@ -112,6 +114,7 @@ export function startGepaRun(
          winner_id, metric_calls, iterations, budget_json)
         VALUES (${actor.actorId}, ${runId}, ${opts.target}, ${opts.targetRef ?? null}, ${startedAt},
                 ${null}, ${'running'}, ${null}, ${null}, ${0}, ${0}, ${budgetJson})`;
+
   return runId;
 }
 
@@ -194,10 +197,12 @@ export function lastGepaRunPerTarget(
   sql: SqlExecutor, actor: ActorHandle, target: string,
 ): Map<string, number> {
   actor.assertCurrent();
+
   const rows = sql<{ target_ref: string; started_at: number }>`
     SELECT target_ref, MAX(started_at) AS started_at FROM gepa_runs
     WHERE actor_id = ${actor.actorId} AND target = ${target} AND target_ref IS NOT NULL
     GROUP BY target_ref`;
+
   return new Map(rows.map((row) => [row.target_ref, row.started_at]));
 }
 
@@ -217,18 +222,21 @@ export interface GepaRunSummary {
 
 export function listGepaRuns(sql: SqlExecutor, actor: ActorHandle, limit = 20): GepaRunSummary[] {
   actor.assertCurrent();
+
   type Row = {
     run_id: string; target: string; target_ref: string | null;
     started_at: number; ended_at: number | null; status: string;
     stop_reason: string | null; winner_id: string | null;
     metric_calls: number; iterations: number;
   };
+
   const rows = sql<Row>`SELECT run_id, target, target_ref, started_at, ended_at,
                                status, stop_reason, winner_id, metric_calls, iterations
                           FROM gepa_runs
                           WHERE actor_id = ${actor.actorId}
                           ORDER BY started_at DESC
                           LIMIT ${limit}`;
+
   return rows.map(r => ({
     runId: r.run_id,
     target: r.target,
@@ -250,19 +258,23 @@ export function loadGepaCandidates(
   runId: string,
 ): GepaCandidate[] {
   actor.assertCurrent();
+
   type Row = {
     id: string; parent_id: string | null; source: string;
     scores_json: string; feedback_json: string;
     aggregate: number; created_at: number;
   };
+
   const rows = sql<Row>`SELECT id, parent_id, source, scores_json, feedback_json,
                                aggregate, created_at
                           FROM gepa_candidates
                           WHERE actor_id = ${actor.actorId} AND run_id = ${runId}
                           ORDER BY iteration ASC, created_at ASC`;
+
   return rows.map(r => {
     const scoresObj = v.parse(ScoreMapSchema, JSON.parse(r.scores_json));
     const feedbackObj = v.parse(FeedbackMapSchema, JSON.parse(r.feedback_json));
+
     return {
       id: r.id,
       parentId: r.parent_id,
@@ -314,12 +326,16 @@ export function loadGepaParetoFront(
   sql: SqlExecutor, actor: ActorHandle, runId: string,
 ): GepaParetoEntry[] {
   actor.assertCurrent();
+
   const rows = sql<{ id: string; scores_json: string }>`
     SELECT id, scores_json FROM gepa_candidates
     WHERE actor_id = ${actor.actorId} AND run_id = ${runId} AND accepted = 1`;
+
   if (rows.length === 0) return [];
+
   const pool = rows.map((r): GepaCandidate => {
     const scoresObj = v.parse(ScoreMapSchema, JSON.parse(r.scores_json));
+
     return {
       id: r.id,
       parentId: null,
@@ -330,14 +346,17 @@ export function loadGepaParetoFront(
       createdAt: 0,
     };
   });
+
   const instanceIds = [...new Set(pool.flatMap((c) => [...c.scores.keys()]))];
   const { front } = computeParetoFront(pool, instanceIds);
   const entries: GepaParetoEntry[] = [];
+
   for (const candidate of front) {
     for (const [instanceId, score] of candidate.scores) {
       entries.push({ candidateId: candidate.id, instanceId, score });
     }
   }
+
   return entries.sort((a, b) =>
     a.instanceId.localeCompare(b.instanceId) || a.candidateId.localeCompare(b.candidateId));
 }

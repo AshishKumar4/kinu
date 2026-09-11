@@ -14,11 +14,13 @@ const roots: string[] = [];
 function cgroupfs(files: Record<string, string>): string {
   const root = mkdtempSync(join(tmpdir(), 'kinu-cgroup-'));
   roots.push(root);
+
   for (const [relative, content] of Object.entries(files)) {
     const path = join(root, relative);
     mkdirSync(join(path, '..'), { recursive: true });
     writeFileSync(path, content);
   }
+
   return root;
 }
 
@@ -28,6 +30,7 @@ function procSelf(content: string): string {
   roots.push(dir);
   const path = join(dir, 'cgroup');
   writeFileSync(path, content);
+
   return path;
 }
 
@@ -43,6 +46,7 @@ describe('cgroup v2', () => {
       'cpu.max': '100000 100000\n',
       'memory.max': `${2 * 1024 ** 3}\n`,
     });
+
     expect(readCgroupLimits({ root, procSelfCgroup: procSelf(NAMESPACED) }))
       .toEqual({ cpus: 1, memBytes: 2 * 1024 ** 3 });
   });
@@ -75,6 +79,7 @@ describe('cgroup v2', () => {
       'docker/abc123/cpu.max': '200000 100000\n',
       'docker/abc123/memory.max': `${4 * 1024 ** 3}\n`,
     });
+
     expect(readCgroupLimits({ root, procSelfCgroup: procSelf('0::/docker/abc123\n') }))
       .toEqual({ cpus: 2, memBytes: 4 * 1024 ** 3 });
   });
@@ -87,6 +92,7 @@ describe('cgroup v1', () => {
       'cpu/cpu.cfs_period_us': '100000\n',
       'memory/memory.limit_in_bytes': `${2 * 1024 ** 3}\n`,
     });
+
     expect(readCgroupLimits({ root, procSelfCgroup: procSelf('7:cpu,cpuacct:/\n9:memory:/\n') }))
       .toEqual({ cpus: 1, memBytes: 2 * 1024 ** 3 });
   });
@@ -97,6 +103,7 @@ describe('cgroup v1', () => {
       'cpu/cpu.cfs_period_us': '100000\n',
       'memory/memory.limit_in_bytes': '9223372036854771712\n',
     });
+
     expect(readCgroupLimits({ root, procSelfCgroup: procSelf('7:cpu:/\n9:memory:/\n') })).toBeNull();
   });
 
@@ -108,6 +115,7 @@ describe('cgroup v1', () => {
       'cpu/docker/abc/cpu.cfs_period_us': '100000\n',
       'memory/docker/abc/memory.limit_in_bytes': `${1024 ** 3}\n`,
     });
+
     expect(readCgroupLimits({
       root, procSelfCgroup: procSelf('7:cpu,cpuacct:/docker/abc\n9:memory:/docker/abc\n'),
     })).toEqual({ cpus: 4, memBytes: 1024 ** 3 });

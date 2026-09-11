@@ -70,11 +70,13 @@ export interface AgentSurfaceProps {
  */
 function ExposureBadge({ exposure, wired }: { exposure: ToolInfo["exposure"]; wired: boolean }) {
   const label = exposure === "both" ? "native · code mode" : exposure === "native" ? "native" : "code mode";
+
   const reach = exposure === "both"
     ? "The model can call this tool, and so can an execute_tools program."
     : exposure === "native"
       ? "The model can call this tool."
       : "Only an execute_tools program can call this tool.";
+
   return (
     <>
       <span

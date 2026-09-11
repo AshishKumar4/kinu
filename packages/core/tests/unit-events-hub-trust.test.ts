@@ -44,6 +44,7 @@ describe('deriveEventTrust', () => {
       ingress: 'chat_ws', variant: 'chat',
       payload: { text: 'hi' }, operator_user_id: 'u', session_id: 's',
     };
+
     expect(deriveEventTrust(d)).toBe('owner');
   });
   test('webhook_hmac → authenticated', () => {
@@ -52,6 +53,7 @@ describe('deriveEventTrust', () => {
       payload: { webhook_id: 'w', http_method: 'POST', http_headers: {}, body: {}, delivery_id: 'd' },
       auth_outcome: 'verified', webhook_id: 'w',
     };
+
     expect(deriveEventTrust(d)).toBe('authenticated');
   });
   test('timer_alarm inherits creator trust', () => {
@@ -60,6 +62,7 @@ describe('deriveEventTrust', () => {
       payload: { trigger_id: 't', scheduled_fire_at: 0 },
       trigger_creator_trust: 'authenticated',
     };
+
     expect(deriveEventTrust(d)).toBe('authenticated');
   });
   test('sandbox_cb collapses to min(self, head_trust) — external head launches sandbox', () => {
@@ -68,6 +71,7 @@ describe('deriveEventTrust', () => {
       payload: { process_id: 'p', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
       launching_head_trust: 'external',
     };
+
     expect(deriveEventTrust(d)).toBe('external');
   });
   test('sandbox_cb stays self when owner head launches sandbox', () => {
@@ -76,6 +80,7 @@ describe('deriveEventTrust', () => {
       payload: { process_id: 'p', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
       launching_head_trust: 'owner',
     };
+
     expect(deriveEventTrust(d)).toBe('owner');
   });
   test('peer_async same-owner → authenticated', () => {
@@ -84,6 +89,7 @@ describe('deriveEventTrust', () => {
       payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
       same_owner: true, receiver_grant_present: false,
     };
+
     expect(deriveEventTrust(d)).toBe('authenticated');
   });
   test('peer_async cross-owner with grant → external', () => {
@@ -92,6 +98,7 @@ describe('deriveEventTrust', () => {
       payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
       same_owner: false, receiver_grant_present: true,
     };
+
     expect(deriveEventTrust(d)).toBe('external');
   });
   test('peer_async cross-owner without grant rejects at ingress', () => {
@@ -100,6 +107,7 @@ describe('deriveEventTrust', () => {
       payload: { from_agent_name: 'a', from_user_id: 'u', topic: 't', body: {}, sender_event_id: 'ox1', kinu_mode: 'build' },
       same_owner: false, receiver_grant_present: false,
     };
+
     expect(() => deriveEventTrust(d)).toThrow(IngressRejectedError);
   });
   test('mcp_chat (operator) → owner', () => {
@@ -107,6 +115,7 @@ describe('deriveEventTrust', () => {
       ingress: 'mcp_streamable', variant: 'mcp_chat',
       payload: { client_id: 'c', method: 'm', arguments: {}, request_id: 'r' },
     };
+
     expect(deriveEventTrust(d)).toBe('owner');
   });
   test('mcp_third_party never becomes owner', () => {
@@ -114,6 +123,7 @@ describe('deriveEventTrust', () => {
       ingress: 'mcp_streamable', variant: 'mcp_third_party',
       payload: { client_id: 'c', client_label: 'x', method: 'm', arguments: {}, request_id: 'r' },
     };
+
     expect(deriveEventTrust(d)).toBe('authenticated');
   });
 });
@@ -156,6 +166,7 @@ describe('deriveFields', () => {
       payload: { webhook_id: 'w', http_method: 'POST', http_headers: {}, body: {}, delivery_id: 'd' },
       auth_outcome: 'verified', webhook_id: 'w',
     });
+
     expect(f.trust).toBe('authenticated');
     expect(f.priority).toBe('normal');
     expect(f.payload_visibility).toBe('redact');

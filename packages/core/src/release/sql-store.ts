@@ -152,12 +152,15 @@ export function initReleaseTables(sql: SqlExec): void {
 function cleanOptional<Value>(value: Value, max = 512): string | null {
   if (value == null) return null;
   const text = String(value).trim();
+
   return text ? text.slice(0, max) : null;
 }
 
 function cleanRequired<Value>(value: Value, label: string, max: number): string {
   const text = cleanOptional(value, max);
+
   if (!text) throw new Error(`${label} is required`);
+
   return text;
 }
 
@@ -166,7 +169,9 @@ function cleanLabel<Value>(value: Value, fallback: string): string {
 }
 
 const NullableString = v.nullable(v.string());
+
 const NullableNumber = v.nullable(v.number());
+
 const SourceRowSchema = v.object({
   id: v.string(),
   kind: v.picklist(['local', 'github']),
@@ -179,6 +184,7 @@ const SourceRowSchema = v.object({
   created_at: v.number(),
   updated_at: v.number(),
 });
+
 const ChangeRowSchema = v.object({
   id: v.string(),
   agent_name: v.string(),
@@ -192,6 +198,7 @@ const ChangeRowSchema = v.object({
   created_at: v.number(),
   updated_at: v.number(),
 });
+
 const CheckRowSchema = v.object({
   id: v.string(),
   change_id: v.string(),
@@ -203,6 +210,7 @@ const CheckRowSchema = v.object({
   created_at: v.number(),
   updated_at: v.number(),
 });
+
 const ApprovalRowSchema = v.object({
   id: v.string(),
   change_id: v.string(),
@@ -214,6 +222,7 @@ const ApprovalRowSchema = v.object({
   created_at: v.number(),
   decided_at: NullableNumber,
 });
+
 const DeploymentRowSchema = v.object({
   id: v.string(),
   change_id: v.string(),
@@ -223,13 +232,19 @@ const DeploymentRowSchema = v.object({
   rollback_target: NullableString,
   deployed_at: v.number(),
 });
+
 const IdRowSchema = v.object({ id: v.string() });
+
 const DeployTargetRowSchema = v.object({ deploy_target: NullableString });
 
 type SourceRow = v.InferOutput<typeof SourceRowSchema>;
+
 type ChangeRow = v.InferOutput<typeof ChangeRowSchema>;
+
 type CheckRow = v.InferOutput<typeof CheckRowSchema>;
+
 type ApprovalRow = v.InferOutput<typeof ApprovalRowSchema>;
+
 type DeploymentRow = v.InferOutput<typeof DeploymentRowSchema>;
 
 function mapReleaseSource(r: SourceRow): ReleaseSource {
@@ -327,21 +342,26 @@ export class ReleaseStore {
 
   upsertSourceBinding(input: ReleaseSourceInput & { id?: string }): ReleaseSource {
     const kind = input.kind;
+
     if (kind !== 'local' && kind !== 'github') throw new Error('source binding kind must be local or github');
     const label = cleanLabel(input.label, 'Kinu source');
     const id = input.id && /^psb-[A-Za-z0-9_-]{6,64}$/.test(input.id) ? input.id : this.makeId('psb', 10);
     const repoUrl = cleanOptional(input.repoUrl);
     const defaultBranch = cleanOptional(input.defaultBranch) ?? 'main';
+
     // A branch value that starts with a dash parses as a git flag wherever it
     // reaches a positional argument (notably `fetch origin <branch>`), so the
     // ref is validated here, the last point before the value is durable.
     if (defaultBranch.startsWith('-') || /\s/.test(defaultBranch) || defaultBranch.includes('..')) {
       throw new Error(`invalid defaultBranch ${JSON.stringify(defaultBranch)}: must not start with '-', contain whitespace, or contain '..'`);
     }
+
     const localDeviceId = cleanOptional(input.localDeviceId);
     const localRoot = cleanOptional(input.localRoot);
     const deployTarget = cleanOptional(input.deployTarget);
+
     if (kind === 'github' && !repoUrl) throw new Error('github source binding requires repoUrl');
+
     // The credential this binding's kind names is a GITHUB credential, and
     // `apply` installs it as an HTTP authorization header before cloning
     // whatever this URL says. So the URL decides where a GitHub token is sent,
@@ -349,6 +369,7 @@ export class ReleaseStore {
     // repoUrl pointing anywhere meant the token went there. Refused at the
     // ledger, which is the last point before the value is durable.
     if (kind === 'github' && repoUrl) assertGithubRepoUrl(repoUrl);
+
     if (kind === 'local' && !localRoot) throw new Error('local source binding requires localRoot');
     const now = this.now();
     this.sql.run(
@@ -366,19 +387,23 @@ export class ReleaseStore {
          updated_at = excluded.updated_at`,
       id, kind, label, repoUrl, defaultBranch, localDeviceId, localRoot, deployTarget, now, now,
     );
+
     const row = this.sql.all(
       SourceRowSchema,
       `SELECT id, kind, label, repo_url, default_branch, local_device_id, local_root, deploy_target, created_at, updated_at
        FROM release_sources WHERE id = ?`,
       id,
     )[0];
+
     if (!row) throw new Error('failed to upsert release source');
+
     return mapReleaseSource(row);
   }
 
   createChange(agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): ReleaseChange {
     this.validateAgentName?.(agentName);
     const binding = this.sql.all(IdRowSchema, `SELECT id FROM release_sources WHERE id = ?`, input.bindingId)[0];
+
     if (!binding) throw new Error(`unknown release source: ${input.bindingId}`);
     const prompt = cleanRequired(input.userPrompt, 'userPrompt', 4000);
     const plan = cleanOptional(input.plan, 12000);
@@ -391,13 +416,16 @@ export class ReleaseStore {
       id, agentName, input.bindingId, prompt, plan, now, now,
     );
     const change = this.getChange(id);
+
     if (!change) throw new Error('failed to create release change');
+
     return change;
   }
 
   listChanges(agentName?: string, limit = 20): ReleaseChange[] {
     if (agentName) this.validateAgentName?.(agentName);
     const n = Math.max(1, Math.min(limit, 100));
+
     const rows = agentName
       ? this.sql.all(
           ChangeRowSchema,
@@ -411,6 +439,7 @@ export class ReleaseStore {
            FROM release_changes ORDER BY updated_at DESC LIMIT ?`,
           n,
         );
+
     // Redacted HERE, on the DISPLAY read. `getChange` (and so `detail`, and so
     // everything the engine applies) returns the stored bytes untouched: a diff
     // that is redacted in storage is a diff `git apply` writes the redaction
@@ -427,6 +456,7 @@ export class ReleaseStore {
        FROM release_changes WHERE id = ?`,
       changeId,
     )[0];
+
     return row ? mapReleaseChange(row) : null;
   }
 
@@ -435,9 +465,11 @@ export class ReleaseStore {
     patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
   ): ReleaseChange {
     const existing = this.getChange(changeId);
+
     if (!existing) throw new Error(`unknown release change: ${changeId}`);
     const nextPlan = patch.plan === undefined ? existing.plan : cleanOptional(patch.plan, 12000);
     const nextSummary = patch.summary === undefined ? existing.summary : cleanOptional(patch.summary, 4000);
+
     // VERBATIM. This column is the one the engine writes to a file and hands to
     // `git apply`, so anything done to it here is done to the bytes that land in
     // the repository: a redacted ADDED line applies the literal marker into the
@@ -451,6 +483,7 @@ export class ReleaseStore {
         + 'limit — split the change rather than truncating the diff',
       );
     }
+
     const nextPatch = patch.patch === undefined ? existing.patch : (patch.patch == null ? null : String(patch.patch));
     const nextPreviewUrl = patch.previewUrl === undefined ? existing.previewUrl : cleanOptional(patch.previewUrl, 2048);
     this.sql.run(
@@ -460,21 +493,27 @@ export class ReleaseStore {
       nextPlan, nextSummary, nextPatch, nextPreviewUrl, this.now(), changeId,
     );
     const updated = this.getChange(changeId);
+
     if (!updated) throw new Error(`unknown release change after update: ${changeId}`);
+
     return updated;
   }
 
   transitionChange(changeId: string, to: ReleaseStatus): ReleaseChange {
     const existing = this.getChange(changeId);
+
     if (!existing) throw new Error(`unknown release change: ${changeId}`);
     const transition = assertReleaseTransition(existing.status, to);
+
     if (!transition.ok) throw new Error(transition.error);
     this.sql.run(
       `UPDATE release_changes SET status = ?, updated_at = ? WHERE id = ?`,
       to, this.now(), changeId,
     );
     const updated = this.getChange(changeId);
+
     if (!updated) throw new Error(`unknown release change after transition: ${changeId}`);
+
     return updated;
   }
 
@@ -484,6 +523,7 @@ export class ReleaseStore {
   ): ReleaseCheck {
     if (!this.getChange(changeId)) throw new Error(`unknown release change: ${changeId}`);
     const status = input.status;
+
     if (!['pending', 'running', 'passed', 'failed', 'skipped'].includes(status)) throw new Error('invalid check status');
     const id = this.makeId('pcc', 10);
     const now = this.now();
@@ -501,6 +541,7 @@ export class ReleaseStore {
       now,
       now,
     );
+
     return this.sql.all(
       CheckRowSchema,
       `SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at FROM release_checks WHERE id = ?`,
@@ -517,6 +558,7 @@ export class ReleaseStore {
       DeployTargetRowSchema,
       `SELECT deploy_target FROM release_sources WHERE id = ?`, change.bindingId,
     )[0];
+
     return deployTargetAsCommand(row?.deploy_target ?? null);
   }
 
@@ -526,14 +568,19 @@ export class ReleaseStore {
     opts?: { command?: string | null },
   ): ReleaseApproval {
     const existing = this.getChange(changeId);
+
     if (!existing) throw new Error(`unknown release change: ${changeId}`);
+
     if (!['apply', 'deploy_staging', 'deploy_production', 'rollback'].includes(approvalType)) throw new Error('invalid approval type');
+
     if (existing.status === 'preview_ready') this.transitionChange(changeId, 'awaiting_approval');
     else if (existing.status !== 'awaiting_approval' && approvalType !== 'rollback') {
       throw new Error(`approval requires preview_ready or awaiting_approval status, got ${existing.status}`);
     }
+
     const id = this.makeId('pca', 10);
     const now = this.now();
+
     // Bind the reviewable identity (patch + the command that will run). deploy
     // and rollback both recompute this and reject a mismatch, so an approval
     // can't be redirected to a mutated patch or an injected command.
@@ -553,12 +600,14 @@ export class ReleaseStore {
         ? opts.command
         : (approvalType === 'rollback' ? null : this.deployCommandForChange(existing)),
     });
+
     this.sql.run(
       `INSERT INTO release_approvals
          (id, change_id, approval_type, decision, approved_by, note, argument_digest, created_at, decided_at)
        VALUES (?, ?, ?, 'pending', NULL, NULL, ?, ?, NULL)`,
       id, changeId, approvalType, digest, now,
     );
+
     return this.sql.all(
       ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE id = ?`, id,
@@ -578,11 +627,14 @@ export class ReleaseStore {
        WHERE id = ? AND decision = 'pending'`,
       decision, cleanRequired(approvedBy, 'approvedBy', 200), cleanOptional(note, 2000), this.now(), approvalId,
     );
+
     const row = this.sql.all(
       ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE id = ?`, approvalId,
     ).map(mapReleaseApproval)[0];
+
     if (!row) throw new Error(`unknown release change approval: ${approvalId}`);
+
     return row;
   }
 
@@ -591,6 +643,7 @@ export class ReleaseStore {
     input: { environment: ReleaseDeployment['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
   ): ReleaseDeployment {
     if (!this.getChange(changeId)) throw new Error(`unknown release change: ${changeId}`);
+
     if (!['local', 'staging', 'production'].includes(input.environment)) throw new Error('invalid deployment environment');
     const id = this.makeId('pcd', 10);
     const deployedAt = this.now();
@@ -606,6 +659,7 @@ export class ReleaseStore {
       cleanOptional(input.rollbackTarget, 200),
       deployedAt,
     );
+
     return this.sql.all(
       DeploymentRowSchema,
       `SELECT id, change_id, environment, worker_version_id, deployment_id, rollback_target, deployed_at
@@ -617,30 +671,36 @@ export class ReleaseStore {
   /** Full ledger view of ONE change — the engine's read surface. */
   detail(changeId: string): ReleaseDetail {
     const change = this.getChange(changeId);
+
     if (!change) throw new Error(`unknown release change: ${changeId}`);
+
     const bindingRow = this.sql.all(
       SourceRowSchema,
       `SELECT id, kind, label, repo_url, default_branch, local_device_id, local_root, deploy_target, created_at, updated_at
        FROM release_sources WHERE id = ?`,
       change.bindingId,
     )[0];
+
     const checks = this.sql.all(
       CheckRowSchema,
       `SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at
        FROM release_checks WHERE change_id = ? ORDER BY updated_at DESC`,
       changeId,
     ).map(mapReleaseCheck);
+
     const approvals = this.sql.all(
       ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE change_id = ? ORDER BY created_at DESC`,
       changeId,
     ).map(mapReleaseApproval);
+
     const deployments = this.sql.all(
       DeploymentRowSchema,
       `SELECT id, change_id, environment, worker_version_id, deployment_id, rollback_target, deployed_at
        FROM release_deployments WHERE change_id = ? ORDER BY deployed_at DESC, id DESC`,
       changeId,
     ).map(mapReleaseDeployment);
+
     return {
       change,
       binding: bindingRow ? mapReleaseSource(bindingRow) : null,
@@ -653,27 +713,33 @@ export class ReleaseStore {
   board(agentName?: string, limit = 20): ReleaseBoard {
     const changes = this.listChanges(agentName, limit);
     const ids = changes.map((c) => c.id);
+
     if (ids.length === 0) {
       return { bindings: this.listSourceBindings(), changes, checks: [], approvals: [], deployments: [] };
     }
+
     const marks = ids.map(() => '?').join(',');
+
     const checks = this.sql.all(
       CheckRowSchema,
       `SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at
        FROM release_checks WHERE change_id IN (${marks}) ORDER BY updated_at DESC`,
       ...ids,
     ).map(mapReleaseCheck);
+
     const approvals = this.sql.all(
       ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE change_id IN (${marks}) ORDER BY created_at DESC`,
       ...ids,
     ).map(mapReleaseApproval);
+
     const deployments = this.sql.all(
       DeploymentRowSchema,
       `SELECT id, change_id, environment, worker_version_id, deployment_id, rollback_target, deployed_at
        FROM release_deployments WHERE change_id IN (${marks}) ORDER BY deployed_at DESC`,
       ...ids,
     ).map(mapReleaseDeployment);
+
     return { bindings: this.listSourceBindings(), changes, checks, approvals, deployments };
   }
 }

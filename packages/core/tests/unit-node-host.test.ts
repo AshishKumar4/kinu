@@ -70,6 +70,7 @@ function grant(): BranchDecision {
  */
 function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageModelV3 {
   let call = 0;
+
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-node-host',
@@ -78,6 +79,7 @@ function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageMo
       call += 1;
       const content: LanguageModelV3Content[] = [];
       let finish: 'stop' | 'tool-calls' = 'tool-calls';
+
       if (call === 1) {
         content.push({
           type: 'tool-call',
@@ -91,6 +93,7 @@ function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageMo
         content.push({ type: 'text', text: 'Reported.' });
         finish = 'stop';
       }
+
       return {
         content,
         finishReason: { unified: finish, raw: undefined },
@@ -106,6 +109,7 @@ function scriptedReporter(answer: string, offered?: Set<string>): MockLanguageMo
 
 function doubleProposer(): MockLanguageModelV3 {
   let call = 0;
+
   const proposal = (suffix: string) => ({
     rationale: `split ${suffix}`,
     branches: [
@@ -113,11 +117,13 @@ function doubleProposer(): MockLanguageModelV3 {
       { task: `right ${suffix}`, rationale: 'right', context: 'fresh' },
     ],
   });
+
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-double-proposer',
     doGenerate: async () => {
       call += 1;
+
       const content: LanguageModelV3Content[] = call === 1
         ? [
             {
@@ -135,6 +141,7 @@ function doubleProposer(): MockLanguageModelV3 {
               input: JSON.stringify({ status: 'completed', content: 'done' }),
             }]
           : [{ type: 'text', text: 'Reported.' }];
+
       return {
         content,
         finishReason: { unified: call < 3 ? 'tool-calls' : 'stop', raw: undefined },
@@ -172,6 +179,7 @@ async function fixture(opts?: {
   const { rt, db } = createTestRuntime();
   const seats = hostedSeatsOver({ rt, db });
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
+
   const input: NodeAgentInput = {
     nodeId: opts?.nodeId ?? 'n1',
     rootId: 'r1',
@@ -188,6 +196,7 @@ async function fixture(opts?: {
     arbitrate: opts?.arbitrate ?? null,
     modelSpec: opts?.modelSpec,
   };
+
   const deps: NodeAgentDeps = {
     // One hosted actor per node id, all of them over this fixture's ONE
     // database: a node's turn is a claimed turn on its own session now, so the
@@ -203,7 +212,9 @@ async function fixture(opts?: {
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
+
   if (opts?.mission !== undefined) deps.mission = opts.mission;
+
   return { input, deps, journal };
 }
 
@@ -237,6 +248,7 @@ describe('one node, run as an agent', () => {
     // charged nothing produces exactly the same candidate as one that charged
     // everything.
     const charged: number[] = [];
+
     const mission: MissionScope = {
       labels: ['nightly', 'sweep'],
       port: {
@@ -244,6 +256,7 @@ describe('one node, run as an agent', () => {
         debit: async (tokens) => { charged.push(tokens); },
       },
     };
+
     const { input, deps } = await fixture({ mission });
 
     const run = await runNodeAgent(input, deps);
@@ -288,9 +301,11 @@ describe('the arbiter is offered only when a branch could be granted', () => {
     // surface.
     const granted = grant();
     let asked = false;
+
     const { input, deps } = await fixture({
       arbitrate: async () => {
         asked = true;
+
         return granted;
       },
     });
@@ -305,10 +320,12 @@ describe('the arbiter is offered only when a branch could be granted', () => {
 
   test('same-step proposals share one arbitration and one budget debit', async () => {
     let calls = 0;
+
     const { input, deps } = await fixture({
       model: doubleProposer(),
       arbitrate: async () => {
         calls += 1;
+
         return {
           ...grant(),
           nodeIds: [`first-${String(calls)}-a`, `first-${String(calls)}-b`],
@@ -363,6 +380,7 @@ describe("what a node's run derives, and where each derivation lands", () => {
       front: 'synthesize',
       merge: 'synthesize',
     } satisfies Record<SwarmSettle, MergeStrategy>;
+
     // The two labels really do differ, so the table is not satisfied by a column holding
     // one constant — and the walk really does cover the table.
     expect(new Set(Object.values(EXPECTED)).size).toBe(2);
@@ -387,12 +405,14 @@ describe("what a node's run derives, and where each derivation lands", () => {
     // empty trajectory without spending a judge call, and `exec-ratio` reports it
     // unmeasurable. Everything the node's loop did learn would be discarded for nothing.
     const summary = 'the loop settled on a single scan';
+
     for (const blank of ['', ' ', '\n', '\t  \n ']) {
       const read = readNodeReport({
         report: reportWithSummary(summary),
         reported: { status: 'completed', content: blank },
         languages: ['javascript'],
       });
+
       expect(read.conclusion).toBe(summary);
       expect(read.candidate).toBe(summary);
     }
@@ -405,6 +425,7 @@ describe("what a node's run derives, and where each derivation lands", () => {
       reported: { status: 'completed', content: '  use the running maximum  ' },
       languages: ['javascript'],
     });
+
     expect(reported.conclusion).toBe('use the running maximum');
 
     // A node that called no report at all falls back the same way. The absent case both
@@ -413,6 +434,7 @@ describe("what a node's run derives, and where each derivation lands", () => {
     const unreported = readNodeReport({
       report: reportWithSummary(summary), reported: null, languages: ['javascript'],
     });
+
     expect(unreported.conclusion).toBe(summary);
   });
 });
@@ -424,21 +446,28 @@ describe('a proposal is answered at most once', () => {
     // for and never created. The refusal must happen BEFORE arbitration runs.
     let asked = 0;
     let firstDecision: BranchDecision | null = null;
+
     const { input, deps } = await fixture({
       arbitrate: (proposal) => {
         asked += 1;
+
         const decision: BranchDecision = {
           kind: 'granted', width: 2, nodeIds: ['c1', 'c2'], proposal,
         };
+
         if (asked === 1) firstDecision = decision;
+
         return decision;
       },
     });
+
     let call = 0;
+
     const usage = {
       inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
       outputTokens: { total: 7, text: 7, reasoning: undefined },
     };
+
     const propose = (id: string) => ({
       type: 'tool-call' as const,
       toolCallId: id,
@@ -451,11 +480,13 @@ describe('a proposal is answered at most once', () => {
         ],
       }),
     });
+
     deps.model = scriptedTurnModel({
       provider: 'fake',
       modelId: 'fake-double-propose',
       doGenerate: async () => {
         call += 1;
+
         if (call <= 2) {
           return {
             content: [propose(`propose-${String(call)}`)],
@@ -463,6 +494,7 @@ describe('a proposal is answered at most once', () => {
             usage, warnings: [],
           };
         }
+
         if (call === 3) {
           return {
             content: [{
@@ -475,6 +507,7 @@ describe('a proposal is answered at most once', () => {
             usage, warnings: [],
           };
         }
+
         return {
           content: [{ type: 'text' as const, text: 'Reported.' }],
           finishReason: { unified: 'stop' as const, raw: undefined },

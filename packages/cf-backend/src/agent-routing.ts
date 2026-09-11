@@ -76,6 +76,7 @@ const CLI_TICKET_AGENT_PATH_RE = new RegExp(
 
 export function extractOrchestratorAgentName(pathname: string): string | null {
   const match = pathname.match(ORCHESTRATOR_AGENT_PATH_RE);
+
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -84,6 +85,7 @@ export function extractOrchestratorAgentName(pathname: string): string | null {
  * refuses every other namespace. */
 export function extractTicketOrchestratorAgentName(pathname: string): string | null {
   const match = pathname.match(CLI_TICKET_AGENT_PATH_RE);
+
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -108,6 +110,8 @@ const HOSTED_ACTOR_PATH = new RegExp(
 export function hostedActorRoute(pathname: string): { name: string; suffix: string } | null {
   if (isForeignAgentNamespacePath(pathname)) return null;
   const match = pathname.match(HOSTED_ACTOR_PATH);
+
   if (!match || match[1] === undefined || match[2] === undefined) return null;
+
   return { name: decodeURIComponent(match[1]), suffix: match[2] };
 }

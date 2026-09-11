@@ -15,6 +15,7 @@ import { describe, expect, test } from 'bun:test';
 import * as v from 'valibot';
 
 const runner = new URL('./fixtures/control-plane-do-workerd.mjs', import.meta.url).pathname;
+
 const repoRoot = new URL('../../..', import.meta.url).pathname;
 
 /** What the fixture reports. Parsed rather than indexed: the fixture is a separate
@@ -78,11 +79,13 @@ const settled = (async () => {
   const spawned = Bun.spawn([process.execPath, runner], {
     cwd: repoRoot, stdout: 'pipe', stderr: 'pipe',
   });
+
   const [exitCode, stdout, stderr] = await Promise.all([
     spawned.exited,
     new Response(spawned.stdout).text(),
     new Response(spawned.stderr).text(),
   ]);
+
   return { exitCode, stdout, stderr };
 })();
 
@@ -96,11 +99,13 @@ const settled = (async () => {
  */
 const reported = (async () => {
   const { exitCode, stdout, stderr } = await settled;
+
   if (exitCode !== 0 || stdout.trim() === '') {
     throw new Error(
       `the workerd fixture exited ${exitCode} without a result.\n${stderr.trim()}`,
     );
   }
+
   return v.parse(ResultSchema, JSON.parse(stdout.trim()));
 })();
 
@@ -123,6 +128,7 @@ describe('ControlPlaneDO in workerd', () => {
     // attenuation itself — the genuine ingest token that the feedback endpoint and
     // the registration feed hold, asking an admin question.
     expect(result.refusals).toHaveLength(6);
+
     for (const refusal of result.refusals) {
       expect(refusal.settled, refusal.label).toBe('rejected');
       expect(refusal.message, refusal.label).toContain('ControlDeniedError');

@@ -19,6 +19,7 @@ import {
   readMatching,
   type HistoryObject,
 } from './sources';
+
 export type { HistoryObject, HistoryRefClass } from './sources';
 
 const REPO_ROOT = join(import.meta.dir, '..');
@@ -159,14 +160,17 @@ export interface Finding {
 export function scanText(file: string, text: string, patterns: readonly SecretPattern[] = PATTERNS): Finding[] {
   const findings: Finding[] = [];
   const lines = text.split('\n');
+
   for (const p of patterns) {
     lines.forEach((line, i) => {
       if (p.benign?.test(line)) return;
+
       for (const m of line.matchAll(p.regex)) {
         findings.push({ pattern: p.id, file, line: i + 1, match: m[0], text: line.trim() });
       }
     });
   }
+
   return findings;
 }
 
@@ -178,19 +182,25 @@ export function countDetections(
 ): Map<string, number> {
   const counts = new Map<string, number>();
   const lines = text.split('\n');
+
   for (const pattern of patterns) {
     let count = 0;
+
     for (const line of lines) {
       if (pattern.benign?.test(line)) continue;
+
       for (const _ of line.matchAll(pattern.regex)) count += 1;
     }
+
     if (count > 0) counts.set(pattern.id, count);
   }
+
   return counts;
 }
 
 
 export const MAX_HISTORY_BLOB_BYTES = 1024 * 1024;
+
 export const REMOVED_CREDENTIAL_BLOB = 'c9e579c076abdaa62188445f7cebce17895062be';
 
 const OBJECT_ID = /^[0-9a-f]{40,64}$/;
@@ -556,10 +566,12 @@ function parseHistoryAdjudications(serialized: string): HistoricalAdjudication[]
   return serialized.trim().split('\n').map((line) => {
     const fields = line.split('\t');
     const [oid, path, detector, count] = fields;
+
     if (fields.length !== 4 || oid === undefined || path === undefined || detector === undefined
       || count === undefined || !OBJECT_ID.test(oid) || !/^[1-9]\d*$/.test(count)) {
       throw new Error('history secret scan: malformed exact adjudication');
     }
+
     return { oid, path, detector, count: Number(count) };
   });
 }
@@ -576,12 +588,16 @@ export function adjudicateHistory(
   adjudications: readonly HistoricalAdjudication[] = HISTORY_ADJUDICATIONS,
 ): Pick<HistoryScanOutcome, 'findings' | 'adjudicated'> {
   const allowed = new Set<string>();
+
   for (const adjudication of adjudications) {
     const key = historyAdjudicationKey(adjudication);
+
     if (allowed.has(key)) throw new Error('history secret scan: duplicate exact adjudication');
     allowed.add(key);
   }
+
   const kept = findings.filter((finding) => !allowed.has(historyAdjudicationKey(finding)));
+
   return { findings: kept, adjudicated: findings.length - kept.length };
 }
 
@@ -589,9 +605,11 @@ export function adjudicateHistory(
 export function enumerateHistoricalReachability(repoRoot = REPO_ROOT): HistoryReachability {
   const refs = listHistoryRefs(repoRoot);
   const objects = historyObjects(repoRoot, refs);
+
   if (objects.some((object) => object.oid === REMOVED_CREDENTIAL_BLOB)) {
     throw new Error(`history secret scan: removed credential blob ${REMOVED_CREDENTIAL_BLOB} is reachable`);
   }
+
   return { refs: refs.length, objects };
 }
 
@@ -606,10 +624,13 @@ export async function scanHistory(options: {
 } = {}): Promise<HistoryScanOutcome> {
   const repoRoot = options.repoRoot ?? REPO_ROOT;
   const maxBlobBytes = options.maxBlobBytes ?? MAX_HISTORY_BLOB_BYTES;
+
   if (!Number.isSafeInteger(maxBlobBytes) || maxBlobBytes < 0) {
     throw new Error('history secret scan: invalid blob size cap');
   }
+
   const reachability = enumerateHistoricalReachability(repoRoot);
+
   const stats: HistoryStats = {
     refs: reachability.refs,
     objects: 0,
@@ -618,23 +639,32 @@ export async function scanHistory(options: {
     oversize: 0,
     scanned: 0,
   };
+
   const raw: HistoricalFinding[] = [];
   await readHistoryObjects(repoRoot, reachability.objects, maxBlobBytes, (object, blob) => {
     stats.objects += 1;
+
     if (blob.type !== 'blob') return;
     stats.blobs += 1;
+
     if (blob.size > maxBlobBytes) {
       stats.oversize += 1;
+
       return;
     }
+
     if (blob.bytes === undefined) {
       throw new Error('history secret scan: blob content was not returned below its size cap');
     }
+
     if (!isScannableBytes(blob.bytes)) {
       stats.nul += 1;
+
       return;
     }
+
     stats.scanned += 1;
+
     for (const [detector, count] of countDetections(bytesToText(blob.bytes))) {
       raw.push({
         detector,
@@ -649,6 +679,7 @@ export async function scanHistory(options: {
     || left.oid.localeCompare(right.oid)
     || left.path.localeCompare(right.path)
     || left.refClass.localeCompare(right.refClass));
+
   return { ...adjudicateHistory(raw, options.adjudications), stats };
 }
 
@@ -663,7 +694,9 @@ export function scanLiveIndex(): LiveScanResult {
   const self = relative(REPO_ROOT, import.meta.path);
   const corpus = readMatching((file) => isTextSource(file) && file !== self);
   const findings: Finding[] = [];
+
   for (const [file, text] of corpus) findings.push(...scanText(file, text));
+
   return { findings, corpusSize: corpus.size };
 }
 
@@ -675,12 +708,14 @@ function reportLive(result: LiveScanResult): boolean {
   for (const finding of result.findings) {
     console.error(`::error::detector=${finding.pattern} path=${printablePath(finding.file)} ref=live-index`);
   }
+
   if (result.findings.length > 0) {
     console.error(`Secret live/index scan FAILED — ${result.findings.length} finding(s).`);
     console.error('Deliberate fixtures must assemble secret-shaped bytes at runtime; source suppressions are not supported.');
   } else {
     console.log(`Secret live/index scan passed — ${PATTERNS.length} patterns over ${result.corpusSize} tracked or untracked text files.`);
   }
+
   return result.findings.length > 0;
 }
 
@@ -688,28 +723,37 @@ function reportHistory(result: HistoryScanOutcome): boolean {
   for (const finding of result.findings) {
     console.error(`::error::detector=${finding.detector} oid=${finding.oid} path=${printablePath(finding.path)} ref=${finding.refClass} count=${finding.count}`);
   }
+
   const { stats } = result;
   console.log(
     `Historical secret scan ${result.findings.length === 0 ? 'passed' : 'FAILED'} — refs=${stats.refs} objects=${stats.objects} blobs=${stats.blobs} nul=${stats.nul} oversize=${stats.oversize} scanned=${stats.scanned} adjudicated=${result.adjudicated}.`,
   );
+
   return result.findings.length > 0;
 }
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
+
   if (args.length > 1 || (args.length === 1 && args[0] !== '--history')) {
     console.error('Usage: bun scripts/secret-scan.ts [--history]');
     process.exitCode = 1;
+
     return;
   }
+
   if (PATTERNS.length === 0) {
     console.error('Secret scan FAILED — 0 patterns, the matcher is not matching.');
     process.exitCode = 1;
+
     return;
   }
+
   let failed = false;
+
   if (args[0] !== '--history') failed = reportLive(scanLiveIndex());
   failed = reportHistory(await scanHistory()) || failed;
+
   if (failed) process.exitCode = 1;
 }
 

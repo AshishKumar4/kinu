@@ -289,9 +289,12 @@ const BOUNDED_STORAGE_MARKER = 'BOUNDED_STORAGE_ONLY';
 function hasBoundedStorageMarker(body: SyntaxNode): boolean {
   for (const child of body.children) {
     if (child.raw.type === 'Identifier' && child.raw.name === BOUNDED_STORAGE_MARKER) return true;
+
     if (isFunctionLike(child)) continue;
+
     if (hasBoundedStorageMarker(child)) return true;
   }
+
   return false;
 }
 
@@ -305,6 +308,7 @@ const root = new URL('..', import.meta.url).pathname;
  *  decided by the member name and the base class the hook belongs to. */
 function declaredDurableObjects(): string[] {
   const text = readFileSync(`${root}packages/cf-backend/wrangler.jsonc`, 'utf8');
+
   // Deduped: the `migrations` block names every class a second time.
   return [...new Set([...text.matchAll(/"class_name"\s*:\s*"(\w+)"/g)].map(([, name]) => name!))].sort();
 }
@@ -466,35 +470,45 @@ const LOOPS: readonly string[] = [
 function rejectedInitAwaits(text: string, body: SyntaxNode | undefined): string[] {
   if (body === undefined) return [];
   const rejected: string[] = [];
+
   const spell = (node: SyntaxNode): string =>
     text.slice(node.start, node.end).replace(/\s+/g, ' ').trim();
+
   const collect = (node: SyntaxNode, inLoop: boolean): void => {
     for (const child of node.children) {
       const looping = inLoop || LOOPS.includes(child.type);
+
       if (child.type === 'AwaitExpression') {
         const spelled = spell(child);
+
         if (!ADMITTED_INIT_AWAITS.includes(spelled)) rejected.push(spelled);
         else if (looping) rejected.push(`${spelled} inside a loop`);
         continue;
       }
+
       if (child.type === 'ReturnStatement' && child.children.length > 0) {
         rejected.push(spell(child));
         continue;
       }
+
       if (child.type === 'ForOfStatement' && child.raw.type === 'ForOfStatement'
         && child.raw.await === true) {
         rejected.push(`for await (…) at ${spell(child).slice(0, 40)}`);
       }
+
       if (child.type === 'VariableDeclaration' && child.raw.type === 'VariableDeclaration'
         && child.raw.kind.startsWith('await ')) {
         rejected.push(spell(child));
         continue;
       }
+
       if (isFunctionLike(child)) continue;
       collect(child, looping);
     }
   };
+
   collect(body, false);
+
   return rejected;
 }
 
@@ -505,29 +519,37 @@ function rejectedInitAwaits(text: string, body: SyntaxNode | undefined): string[
 function admittedInitAwaits(text: string, body: SyntaxNode | undefined): number {
   if (body === undefined) return 0;
   let held = 0;
+
   const collect = (node: SyntaxNode): void => {
     for (const child of node.children) {
       if (child.type === 'AwaitExpression') {
         if (ADMITTED_INIT_AWAITS.includes(text.slice(child.start, child.end).replace(/\s+/g, ' ').trim())) {
           held += 1;
         }
+
         continue;
       }
+
       if (isFunctionLike(child)) continue;
       collect(child);
     }
   };
+
   collect(body);
+
   return held;
 }
 
 function ownScopeAwait(body: SyntaxNode): SyntaxNode | undefined {
   for (const child of body.children) {
     if (child.type === 'AwaitExpression') return child;
+
     if (isFunctionLike(child)) continue;
     const nested = ownScopeAwait(child);
+
     if (nested !== undefined) return nested;
   }
+
   return undefined;
 }
 
@@ -538,8 +560,10 @@ function nestedGate(body: SyntaxNode): SyntaxNode | undefined {
   let hit: SyntaxNode | undefined;
   walk(body, (node) => {
     if (hit !== undefined) return;
+
     if (memberCalleeName(node) === 'blockConcurrencyWhile') hit = node;
   });
+
   return hit;
 }
 
@@ -555,8 +579,10 @@ function modelSinkCalls(body: SyntaxNode): { readonly name: string; readonly nod
   const found: { name: string; node: SyntaxNode }[] = [];
   walk(body, (node) => {
     const name = memberCalleeName(node) ?? identifierCalleeName(node);
+
     if (name !== undefined && MODEL_SINKS.includes(name)) found.push({ name, node });
   });
+
   return found;
 }
 
@@ -565,10 +591,13 @@ function modelSinkCalls(body: SyntaxNode): { readonly name: string; readonly nod
 function boundedStart(body: SyntaxNode): SyntaxNode | undefined {
   for (const child of body.children) {
     if (identifierCalleeName(child) === START_DEADLINE) return child;
+
     if (isFunctionLike(child)) continue;
     const nested = boundedStart(child);
+
     if (nested !== undefined) return nested;
   }
+
   return undefined;
 }
 
@@ -580,25 +609,32 @@ function boundedStart(body: SyntaxNode): SyntaxNode | undefined {
  *  callback's. */
 function handedBack(body: SyntaxNode): SyntaxNode[] {
   const handed: SyntaxNode[] = [];
+
   const collect = (node: SyntaxNode): void => {
     for (const child of node.children) {
       if (isFunctionLike(child)) continue;
+
       if (child.type === 'ReturnStatement') {
         const returned = child.children[0];
+
         if (returned === undefined) {
           handed.push(child);
           continue;
         }
+
         handed.push(memberCalleeName(returned) === 'resolve'
           && identifierText(returned.children[0]?.children[0] ?? returned) === 'Promise'
           ? returned.children[1] ?? returned
           : returned);
         continue;
       }
+
       collect(child);
     }
   };
+
   collect(body);
+
   return handed;
 }
 
@@ -622,22 +658,28 @@ function armsIn(parsed: Parsed, file: string): ArmsDeclaration | null {
   let found: ArmsDeclaration | null = null;
   walk(parsed.root, (node) => {
     if (found !== null || node.type !== 'MethodDefinition') return;
+
     if ((declaredName(node) ?? '').replace(/^#/, '') !== START_GATE_ARMS) return;
     const body = blockBodyOf(functionOf(node) ?? node);
     const timers: string[] = [];
     const reaches: string[] = [];
     let deadlineWrapped = false;
+
     if (body !== undefined) {
       walk(body, (inner) => {
         const called = memberCalleeName(inner) ?? identifierCalleeName(inner);
+
         if (called === undefined) return;
+
         if (called === START_DEADLINE) deadlineWrapped = true;
         else if (DO_SIDE_TIMERS.includes(called)) timers.push(called);
         else if (CONTAINER_REACHES.includes(called)) reaches.push(called);
       });
     }
+
     found = { file, line: parsed.lineAt(node.start), deadlineWrapped, timers, reaches };
   });
+
   return found;
 }
 
@@ -648,9 +690,11 @@ function classifierIn(parsed: Parsed, file: string): ClassifierDeclaration | nul
   let found: ClassifierDeclaration | null = null;
   walk(parsed.root, (node) => {
     if (found !== null || node.type !== 'FunctionDeclaration') return;
+
     if (declaredName(node) !== RECOVERY_CLASSIFIER) return;
     found = { file, line: parsed.lineAt(node.start), async: isAsync(node) };
   });
+
   return found;
 }
 
@@ -672,24 +716,29 @@ function containerStartBounds(body: SyntaxNode): string[] {
   const reasons: string[] = [];
   const marked = hasBoundedStorageMarker(body);
   const wrapped = boundedStart(body) !== undefined;
+
   if (marked && wrapped) {
     reasons.push(`carries \`${BOUNDED_STORAGE_MARKER}\` yet routes through \`${START_DEADLINE}\` — `
       + 'a timer that cannot fire inside blockConcurrencyWhile is a paper bound, '
       + 'not a real one');
   }
+
   if (!marked && !wrapped) {
     reasons.push(`must route its work through \`${START_DEADLINE}\` — the container-start gate is `
       + 'cancelled at do.block_concurrency.cancel_ms by RESETTING the object, so the '
       + `work needs a budget of its own — or carry \`${BOUNDED_STORAGE_MARKER}\` and hand `
       + `back \`${START_GATE_ARMS}\`, plainly bounded writes to this object's own storage`);
   }
+
   if (!marked) return reasons;
+
   for (const returned of handedBack(body)) {
     if ((memberCalleeName(returned) ?? '').replace(/^#/, '') === START_GATE_ARMS) continue;
     reasons.push(`carries \`${BOUNDED_STORAGE_MARKER}\` yet hands the gate something other than `
       + `\`this.#${START_GATE_ARMS}()\` — the marker's claim is checked on that one method's `
       + 'declaration, so a promise from anywhere else is work nothing here has looked at');
   }
+
   return reasons;
 }
 
@@ -700,6 +749,7 @@ function armsViolations(file: string, arms: ArmsDeclaration | null): Violation[]
   if (arms === null) return [];
   const at = { file, line: arms.line, owner: START_GATE_ARMS, member: START_GATE_ARMS };
   const found: Violation[] = [];
+
   if (arms.deadlineWrapped) {
     found.push({
       ...at,
@@ -708,6 +758,7 @@ function armsViolations(file: string, arms: ArmsDeclaration | null): Violation[]
         + 'fire. Arm the schedule row and let a delivered frame do the work',
     });
   }
+
   for (const reached of arms.reaches) {
     found.push({
       ...at,
@@ -718,6 +769,7 @@ function armsViolations(file: string, arms: ArmsDeclaration | null): Violation[]
         + '(2026-09-10). Arm a schedule row and restore on a delivered frame',
     });
   }
+
   for (const timer of arms.timers) {
     found.push({
       ...at,
@@ -726,6 +778,7 @@ function armsViolations(file: string, arms: ArmsDeclaration | null): Violation[]
         + 'the platform answers by resetting the object',
     });
   }
+
   return found;
 }
 
@@ -742,19 +795,24 @@ export function auditFile(
     if (node.type !== 'ClassDeclaration') return;
     const owner = declaredName(node) ?? '(anonymous class)';
     const base = superClassName(node);
+
     const startHook: HookKind = base !== undefined && containerLineage.has(base)
       ? 'container-start'
       : 'per-request';
+
     for (const member of classMembers(node)) {
       if (member.type !== 'MethodDefinition') continue;
       const name = declaredName(member);
+
       if (name === undefined) continue;
+
       // Which rule this member is held to, decided by the member name first —
       // the recovery hooks are awaited in the same gate whatever the base is —
       // and then by the base class for the two `onStart` populations.
       const hook: HookKind | undefined = RECOVERY_HOOKS.includes(name)
         ? 'recovery'
         : name === 'onStart' ? startHook : undefined;
+
       if (hook === undefined) continue;
       const line = parsed.lineAt(member.start);
       inspected.push({ file, owner, member: name, hook });
@@ -776,14 +834,17 @@ export function auditFile(
       // model-reaching re-drive, which is the class of work that has no bounded
       // form on an init path at all.
       const admittedAsyncGate = isAsync(member) && hook === 'per-request';
+
       if (admittedAsyncGate) {
         const gateBody = blockBodyOf(functionOf(member) ?? member);
         const rejected = rejectedInitAwaits(text, gateBody);
+
         for (const awaitText of rejected) {
           fail(`holds the gate with \`${awaitText}\` — not on the admitted init-await list `
             + '(ADMITTED_INIT_AWAITS); the gate admits the workspace boot alone, once, '
             + 'outside every loop, and returns nothing');
         }
+
         // `async` is the admission's own cost, so a gate that holds nothing
         // admitted has paid it for nothing — and has left the synchronous
         // population's rules (no own-scope await, annotated `: void`) while
@@ -804,6 +865,7 @@ export function auditFile(
             + `under \`${BOUNDED_STORAGE_MARKER}\` and restore on a delivered frame`
           : 'declared `async` — its promise is what `blockConcurrencyWhile` waits on');
       }
+
       // The annotation is not decoration: the bases accept
       // `void | Promise<void>` and `Promise<void | FiberRecoveryResult>`, so the
       // return type silently changes the moment `async` is added, and the
@@ -814,9 +876,11 @@ export function auditFile(
       // instead WHAT it resolves to, because a `void` recovery result leaves a
       // managed fiber row `interrupted` for good.
       const returns = returnTypeOf(member);
+
       const annotated = returns === undefined
         ? undefined
         : text.slice(returns.start, returns.end).replace(/\s+/g, '');
+
       if (admittedAsyncGate) {
         // An admitted-async gate annotates the promise it now returns.
         if (annotated !== 'Promise<void>') {
@@ -829,21 +893,27 @@ export function auditFile(
         }
       } else {
         const wanted = hook === 'container-start' ? 'Promise<void>' : 'void';
+
         if (annotated !== wanted) {
           fail(`must annotate \`: ${wanted}\` explicitly (found \`${annotated ?? 'no annotation'}\`)`);
         }
       }
+
       const body = blockBodyOf(functionOf(member) ?? member);
+
       if (body === undefined) continue;
+
       if (!admittedAsyncGate && ownScopeAwait(body) !== undefined) {
         fail(hook === 'container-start'
           ? `awaits in its own scope — hand the work to \`${START_DEADLINE}\` and return it, `
             + 'so gate occupancy is bounded below do.block_concurrency.cancel_ms'
           : 'awaits in its own scope — every request on this object waits with it');
       }
+
       if (nestedGate(body) !== undefined) {
         fail('opens a nested `blockConcurrencyWhile` — the same gate by another name');
       }
+
       // The class of work, not the shape of the wait. Every check above asks
       // what the gate waits on; this one asks what the hook LAUNCHES, and so it
       // descends into the nested function expression a detached task is written
@@ -858,10 +928,13 @@ export function auditFile(
             + 'it with its rejection swallowed. Run it from a request frame instead');
         }
       }
+
       if (hook === 'container-start') {
         for (const reason of containerStartBounds(body)) fail(reason);
       }
+
       if (hook !== 'recovery') continue;
+
       // What a non-async method hands back is the only other thing the gate can
       // wait on, and the SDK awaits it. A call to the pinned classifier is the
       // sanctioned answer; a value with nothing to await (a decision taken
@@ -870,6 +943,7 @@ export function auditFile(
       // exists for, and it is invisible to the `async`/`await` checks above.
       for (const returned of handedBack(body)) {
         if (identifierCalleeName(returned) === RECOVERY_CLASSIFIER) continue;
+
         if (returned.type === 'ObjectExpression' || returned.type === 'Literal') continue;
         fail(`must hand its work to \`${RECOVERY_CLASSIFIER}\` (or resolve a decision inline) — `
           + 'the SDK awaits whatever this returns, inside the init gate, with no timeout');
@@ -879,6 +953,7 @@ export function auditFile(
   const arms = armsIn(parsed, file);
   violations.push(...armsViolations(file, arms));
   const classifier = classifierIn(parsed, file);
+
   if (classifier !== null && classifier.async) {
     violations.push({
       file, line: classifier.line, owner: RECOVERY_CLASSIFIER, member: RECOVERY_CLASSIFIER,
@@ -887,6 +962,7 @@ export function auditFile(
         + 'hand each re-drive to a detached durable carrier',
     });
   }
+
   return { inspected, violations, classifier, arms };
 }
 
@@ -896,6 +972,7 @@ export function audit(sources: ReadonlyMap<string, string>): InitGateAudit {
   let classifier: ClassifierDeclaration | null = null;
   let arms: ArmsDeclaration | null = null;
   const lineage = sandboxLineage(sources);
+
   for (const [file, text] of sources) {
     // The corpus is narrowed by the names this gate governs, so a file that
     // declares none of them is not parsed. The classifier's own module is in the
@@ -908,6 +985,7 @@ export function audit(sources: ReadonlyMap<string, string>): InitGateAudit {
     classifier ??= one.classifier;
     arms ??= one.arms;
   }
+
   return { inspected, violations, classifier, arms };
 }
 
@@ -918,8 +996,10 @@ if (import.meta.main) {
   // Denominator. A gate that finds nothing because it looked nowhere is the
   // failure this whole exercise is about.
   const declared = declaredDurableObjects();
+
   const ours = declared.filter((cls) =>
     [...sources].some(([, text]) => text.includes(`class ${cls} `)));
+
   // A class wrangler declares but this repo does not define is a vendor base
   // re-exported for the binding (NimbusSession). Its startup runs in the same
   // gate and does I/O we do not control; that is residual risk, not something
@@ -927,12 +1007,15 @@ if (import.meta.main) {
   const vendor = declared.filter((cls) => !ours.includes(cls));
 
   const problems: string[] = [];
+
   if (inspected.length === 0) {
     problems.push('found 0 governed hooks — the matcher is not matching');
   }
+
   if (ours.length === 0) {
     problems.push('parsed none of the Durable Object classes wrangler.jsonc declares');
   }
+
   // Three rules, three denominators. The narrow ones are what an exemption would
   // hide behind, so an empty population is a gate failure: it means a base was
   // renamed, or `CONTAINER_START_BASES` / `RECOVERY_HOOKS` stopped matching, and
@@ -942,16 +1025,19 @@ if (import.meta.main) {
     'container-start': 'no class belongs to the Sandbox lineage',
     recovery: `no class overrides one of ${RECOVERY_HOOKS.join(', ')}`,
   } satisfies Record<HookKind, string>;
+
   for (const hook of ['per-request', 'container-start', 'recovery'] as const) {
     if (inspected.some((i) => i.hook === hook)) continue;
     problems.push(`found 0 ${hook} hook implementations — ${empty[hook]}`);
   }
+
   // The recovery rule's other half. A pin nothing declares is a rule every hook
   // passes, which reads exactly like a rule every hook obeys.
   if (classifier === null) {
     problems.push(`no source declares \`${RECOVERY_CLASSIFIER}\` — the recovery hand-off rule `
       + 'is pinned to a name that no longer exists');
   }
+
   // The container-start rule's other half, and the same argument again: the ONE
   // call a marked hook may hand back is pinned by name, so a name nothing
   // declares would leave the marker's claim checked against nothing — and the
@@ -960,21 +1046,26 @@ if (import.meta.main) {
     problems.push(`no source declares \`${START_GATE_ARMS}\` — the container-start hook's `
       + 'handed-back method is pinned to a name that no longer exists');
   }
+
   // The sink rule's other half, and the same argument the classifier pin makes:
   // a name no source mentions is a rule every hook passes, which reads exactly
   // like a rule every hook obeys.
   const unmentioned = MODEL_SINKS.filter(
     (sink) => ![...sources].some(([, text]) => text.includes(sink)),
   );
+
   if (unmentioned.length > 0) {
     problems.push(`no source mentions ${unmentioned.join(', ')} — the model-sink pin is stale, `
       + 'so those names can no longer refuse anything');
   }
+
   if (problems.length > 0) {
     for (const problem of problems) console.error(`do-init-gate: ${problem}`);
     process.exit(1);
   }
+
   const counted = (hook: HookKind): number => inspected.filter((i) => i.hook === hook).length;
+
   if (violations.length === 0) {
     console.log(
       `do-init-gate: ok — ${inspected.length} governed hook(s) across `
@@ -1013,6 +1104,7 @@ if (import.meta.main) {
   }
 
   console.error(`do-init-gate: ${violations.length} violation(s) in the DO init gate\n`);
+
   for (const v of violations) console.error(`  ${v.file}:${v.line} ${v.owner}.${v.member} — ${v.reason}`);
   console.error(
     '\nAnything the init chain awaits stalls every request on the object, and at 30s'

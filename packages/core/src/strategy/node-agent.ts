@@ -77,9 +77,11 @@ import type {
 import type {
   CapturedReport, NodeArbiter, NodeLoopResult, NodeRunSpec,
 } from './node-host';
+
 export type {
   CapturedReport, NodeArbiter, NodeLoopResult, NodeRunSpec,
 } from './node-host';
+
 import type { HeadBudget, HeadInput, HeadReport, HeadStep, SerializedMessage } from '../heads/types';
 import type { HeadJournal } from '../heads/journal';
 import type { MissionScope } from '../mission-budget';
@@ -459,15 +461,19 @@ function buildProposeTool(
         // never created. Refusing BEFORE the arbiter runs keeps the first grant
         // the only one and the debit the only one.
         const priorAttempt = scratch.proposal;
+
         if (priorAttempt !== null) {
           const prior = await priorAttempt;
+
           if (prior.kind === 'granted') {
             return `Refused (already granted): ${String(prior.width)} children were reserved `
               + `(${prior.nodeIds.join(', ')}) when you proposed earlier. Finish and report — `
               + 'they are created from your report, so put in it what they will need.';
           }
+
           return `Refused (already proposed; ${prior.policy}): ${prior.error}`;
         }
+
         // The band is enforced by the arbiter and not by this schema, for
         // `BRANCH_PROPOSAL_WIDTH`'s own reason: an out-of-range request must
         // produce a reason-coded refusal the node can act on rather than being
@@ -484,14 +490,18 @@ function buildProposeTool(
             context: branch.context ?? 'fresh',
           })),
         }));
+
         // Reserved before the first await: AI SDK executes same-step tool calls
         // concurrently, so both calls must observe one shared arbitration.
         scratch.proposal = attempt;
         const decision = await attempt;
+
         if (decision.kind === 'refused') {
           return `Refused (${decision.policy}): ${decision.error}`;
         }
+
         scratch.granted = decision;
+
         return `Granted: ${String(decision.width)} children reserved (${decision.nodeIds.join(', ')}). `
           + 'They are created when you finish and report, and they receive your report as their seed, '
           + 'so put in it what they will need.';
@@ -523,6 +533,7 @@ function buildNodeToolSet(input: {
   readonly mode: WorkMode;
 }): ToolSet {
   const { deps, scratch } = input;
+
   // NAMED and ANNOTATED rather than written inline below, because this is the
   // one destination in the tree that declares `bodyOnly`: an unannotated
   // nested literal is a construction site nothing can attribute, and a field
@@ -542,6 +553,7 @@ function buildNodeToolSet(input: {
       const errors = await deps.gradeReport?.(
         candidateOf(content.trim(), deps.actor.runtime.executor.languages),
       );
+
       if (errors !== undefined && errors !== null) {
         // NOT WRITTEN TO `scratch.reported`, which is the whole of "blocks": the
         // loop's terminal condition is a report having landed, so a refused one
@@ -550,10 +562,13 @@ function buildNodeToolSet(input: {
         // value, the same shape the proposal tool answers an arbiter's denial with.
         return { accepted: false, errors };
       }
+
       scratch.reported = { status, content };
+
       return { received: true };
     },
   };
+
   // The proposal merges after the finish, so the sandbox never declares it;
   // the background wrap runs inside the capture, so the transcript records
   // the handle the model was told rather than a result it never saw.
@@ -617,6 +632,7 @@ function candidateOf(
   conclusion: string, languages: readonly [string, ...string[]],
 ): string {
   const code = readProposalCode(conclusion, languages);
+
   return code?.kind === 'runnable' ? code.code : conclusion;
 }
 
@@ -626,6 +642,7 @@ export function readNodeReport(input: {
   readonly languages: readonly [string, ...string[]];
 }): NodeReport {
   const conclusion = input.reported?.content.trim() || input.report.summary.trim();
+
   return { candidate: candidateOf(conclusion, input.languages), conclusion };
 }
 
@@ -654,6 +671,7 @@ export function nodeSystemPrompt(input: {
     + 'status:"completed" and your answer as `content`. An answer that exists only in the workspace '
     + 'or only in your reasoning is an answer the search cannot see.',
   ];
+
   if (input.toolNames.includes(PROPOSE_BRANCH_TOOL)) {
     parts.push(
       `If one thread of this task genuinely deserves its own budget, call \`${PROPOSE_BRANCH_TOOL}\` `
@@ -661,8 +679,10 @@ export function nodeSystemPrompt(input: {
       + 'and a refusal is your next instruction rather than something to retry.',
     );
   }
+
   parts.push(`Tools available to you: ${input.toolNames.join(', ')}. There are no others — in `
     + 'particular you cannot delegate to another agent, because the search owns that decision.');
+
   return parts.join('\n\n');
 }
 
@@ -694,12 +714,14 @@ async function runNodeLoop(
   deps: NodeLoopDeps,
 ): Promise<NodeLoopResult> {
   const capture = new HeadCapture();
+
   const scratch: NodeScratch = {
     reported: null,
     granted: null,
     proposal: null,
     produced: [],
   };
+
   // The node's wake path: the in-process counterpart of the actor's durable
   // message queue, behind the SAME `SignalDeliverer` seam, so the runner neither
   // knows nor can tell which kind of agent it is settling a job for.
@@ -708,6 +730,7 @@ async function runNodeLoop(
   // actor of the workspace, acquired per run, and nothing says its database has
   // already been opened for jobs by whoever ran before it.
   initBackgroundJobsTable(deps.actor.runtime.storage.execRaw);
+
   const runnerDeps: BackgroundJobRunnerDeps = {
     store: deps.actor.stores.jobs,
     fiber: deps.actor.runtime.schedule.fiber,
@@ -722,10 +745,12 @@ async function runNodeLoop(
     // node that no longer exists — and the queue above cannot fail to deliver, so
     // there is nothing to compensate. No `resume` for the same reason.
   };
+
   // Assigned rather than spread: an absent policy must be an ABSENT KEY, because the
   // runner reads presence to decide whether to fall back to the interactive default.
   if (deps.backgroundPolicy !== undefined) runnerDeps.policy = deps.backgroundPolicy;
   const jobRunner = new BackgroundJobRunner(runnerDeps);
+
   // ONE SPELLING for "a branch could be granted here": a null arbiter. A second
   // spelling of the same fact on the spec — a `canPropose` flag beside it — could only
   // ever disagree with the arbiter by bug, and the arbiter is what the grant path
@@ -770,18 +795,24 @@ async function runNodeLoop(
     // waits for is its next turn's last message.
     resume: async () => {
       if (scratch.reported !== null) return null;
+
       return wakes.next(() => jobRunner.inFlight > 0);
     },
   };
+
   // Assigned rather than spread: an absent seam must be an ABSENT KEY, because
   // `runHeadInference` reads presence to decide whether the behaviour exists.
   if (deps.mission !== undefined) inference.mission = deps.mission;
+
   if (deps.reportStep !== undefined) inference.reportStep = deps.reportStep;
+
   if (deps.reportDelta !== undefined) inference.reportDelta = deps.reportDelta;
+
   if (deps.signal !== undefined) inference.signal = deps.signal;
 
   try {
     const report = await runHeadInference(spec.headInput, inference);
+
     return {
       report,
       reported: scratch.reported,
@@ -827,6 +858,7 @@ export async function runNodeAgent(
     { nodeId: input.nodeId, rootId: input.rootId, depth: input.depth },
     deps.provisionHome,
   );
+
   // The swarm owns recursion. This node has no independent split budget.
   const nodeBudget: HeadBudget = {
     maxDepth: 0,
@@ -854,6 +886,7 @@ export async function runNodeAgent(
     // wrong program, so a node states its pointer rather than inheriting one.
     loop: defaultLoopOrigin('head'),
   };
+
   // THE LEDGER AND THE ROUTE THIS NODE WAS ASSIGNED, on the two fields of
   // `HeadInput` that already carry them. A node's own loop reads neither — its
   // ledger is the live `NodeLoopDeps.mission` port and its model is the resolved
@@ -865,6 +898,7 @@ export async function runNodeAgent(
   // holding `undefined` — "charges nothing" and "charges an unnamed ledger" are
   // different claims.
   if (deps.mission) Object.assign(headInput, { missionLabels: deps.mission.labels });
+
   if (input.modelSpec !== undefined) Object.assign(headInput, { model: input.modelSpec });
 
   deps.journal.insertSpawn(headInput);
@@ -889,6 +923,7 @@ export async function runNodeAgent(
   // can fail for reasons that are the node's own.
   const seat = await deps.hostNode({ nodeId: input.nodeId, rootId: input.rootId, depth: input.depth });
   let run: NodeLoopResult;
+
   try {
     // THE LOOP RUNS AS THE NODE. A home is uid/gid/mode on real inodes, so it
     // means nothing until the shell and the file plane the loop actually uses
@@ -908,6 +943,7 @@ export async function runNodeAgent(
       const reason = renderCauseChain(toKinuError({
         doing: `cancel node ${input.nodeId} of this search`, cause: abortCause(deps.signal), otherwise: 'cancelled',
       }));
+
       run = {
         report: unreportedNode(input.nodeId, nodeBudget.spawnedAt, {
           status: 'aborted',
@@ -921,6 +957,7 @@ export async function runNodeAgent(
       const failure = toKinuError({
         doing: `run node ${input.nodeId} of this search`, cause, otherwise: 'unavailable',
       });
+
       const chain = renderCauseChain(failure);
       deps.journal.recordReport(unreportedNode(input.nodeId, nodeBudget.spawnedAt, {
         status: 'errored',
@@ -939,6 +976,7 @@ export async function runNodeAgent(
     reported: run.reported,
     languages: run.languages,
   });
+
   return {
     report: run.report,
     candidate: read.candidate,
@@ -999,19 +1037,27 @@ function nodeLoopDeps(input: NodeAgentInput, deps: NodeAgentDeps, seat: HostedNo
     arbitrate: input.arbitrate,
     reportStep: (seq, step) => { deps.journal.appendStep(input.nodeId, seq, step); },
   };
+
   if (deps.signal !== undefined) loop.signal = deps.signal;
   // The run-level channel, bound to THIS node's id — the same binding
   // `reportStep` above makes for its durable rows.
   const publish = deps.publishHeadStream;
+
   if (publish !== undefined) {
     loop.reportDelta = (kind, delta) => {
       publish({ headId: input.nodeId, kind, delta });
     };
   }
+
   if (deps.mission !== undefined) loop.mission = deps.mission;
+
   if (deps.executeTool !== undefined) loop.executeTool = deps.executeTool;
+
   if (deps.webSearch !== undefined) loop.webSearch = deps.webSearch;
+
   if (deps.gradeReport !== undefined) loop.gradeReport = deps.gradeReport;
+
   if (deps.backgroundPolicy !== undefined) loop.backgroundPolicy = deps.backgroundPolicy;
+
   return loop;
 }

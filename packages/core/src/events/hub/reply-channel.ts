@@ -56,7 +56,9 @@ const ReplyChannelRowSchema = v.object({
   created_at: v.number(),
   updated_at: v.number(),
 });
+
 const IdRowSchema = v.object({ id: v.string() });
+
 const CountRowSchema = v.object({ n: v.number() });
 
 export interface OpenChannelOpts {
@@ -88,11 +90,14 @@ export class ReplyChannelStore {
    *  reply intent the same way. */
   open(opts: OpenChannelOpts, now: number): ReplyChannelId | null {
     this.actor.assertCurrent();
+
     if (opts.kind === 'none') return null;
     const id = ulid();
+
     const ttl = opts.kind === 'ws_session'
       ? 0
       : opts.ttl_ms_override ?? TTL_MS[opts.kind];
+
     const expires = ttl === 0 ? 0 : now + ttl;
     this.sql.exec(
       `INSERT INTO reply_channels
@@ -102,6 +107,7 @@ export class ReplyChannelStore {
       this.actorId, id, opts.event_id, opts.kind, opts.holder_addr, expires,
       opts.payload_policy, now, now,
     );
+
     return id;
   }
 
@@ -110,24 +116,29 @@ export class ReplyChannelStore {
    *  the ask event it was woken with. */
   findOpenByEvent(event_id: EventId, kind?: ReplyChannelKind): ReplyChannelRow | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT id FROM reply_channels
        WHERE actor_id = ? AND event_id = ? AND state = 'open'${kind ? ` AND kind = ?` : ''}
        ORDER BY created_at DESC LIMIT 1`,
       ...(kind ? [this.actorId, event_id, kind] : [this.actorId, event_id]),
     ).toArray().map((row) => v.parse(IdRowSchema, row));
+
     return rows.length > 0 ? this.get(rows[0].id) : null;
   }
 
   get(id: ReplyChannelId): ReplyChannelRow | null {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT id, event_id, kind, holder_addr, ttl_expires_at, payload_policy,
               state, reply_payload, attempt_count, created_at, updated_at
        FROM reply_channels WHERE actor_id = ? AND id = ?`, this.actorId, id,
     ).toArray();
+
     if (rows.length === 0) return null;
     const r = v.parse(ReplyChannelRowSchema, rows[0]);
+
     return {
       id: r.id,
       event_id: r.event_id,
@@ -166,23 +177,29 @@ export class ReplyChannelStore {
    */
   async reply(id: ReplyChannelId, payload: JsonValue, now: number): Promise<ReplyOutcome> {
     const channel = this.get(id);
+
     if (!channel) return { outcome: 'channel_not_found' };
+
     if (channel.state !== 'open') return { outcome: 'channel_closed', state: channel.state };
 
     // Expiry check (ws_session has TTL=0 — bound to holder, not clock).
     if (channel.kind !== 'ws_session' && now > channel.ttl_expires_at) {
       this.markState(id, 'expired', now);
+
       return { outcome: 'channel_closed', state: 'expired' };
     }
 
     const dispatcher = this.dispatchers[channel.kind];
+
     if (!dispatcher) {
       this.bumpAttempt(id, now);
+
       return { outcome: 'no_dispatcher', kind: channel.kind };
     }
 
     try {
       const r = await dispatcher.dispatch(channel, payload);
+
       if (r.delivered) {
         this.sql.exec(
           `UPDATE reply_channels
@@ -193,12 +210,16 @@ export class ReplyChannelStore {
            WHERE actor_id = ? AND id = ?`,
           JSON.stringify(payload ?? null), now, this.actorId, id,
         );
+
         return { outcome: 'delivered' };
       }
+
       this.bumpAttempt(id, now);
+
       return { outcome: 'failed', detail: r.detail };
     } catch (err) {
       this.bumpAttempt(id, now);
+
       return { outcome: 'failed', detail: renderThrownChain({ cause: err }) };
     }
   }
@@ -228,6 +249,7 @@ export class ReplyChannelStore {
        WHERE actor_id = ? AND state = 'open' AND ttl_expires_at > 0 AND ttl_expires_at < ?`,
       now, this.actorId, now,
     );
+
     return Math.max(0, before - this.countOpen());
   }
 
@@ -250,10 +272,12 @@ export class ReplyChannelStore {
 
   private countOpen(): number {
     this.actor.assertCurrent();
+
     const rows = this.sql.exec(
       `SELECT COUNT(*) AS n FROM reply_channels WHERE actor_id = ? AND state = 'open'`,
       this.actorId,
     ).toArray();
+
     return rows[0] ? v.parse(CountRowSchema, rows[0]).n : 0;
   }
 }

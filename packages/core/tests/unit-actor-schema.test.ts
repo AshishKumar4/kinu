@@ -53,6 +53,7 @@ describe('actor schema', () => {
       );
       db.close();
     }
+
     {
       const db = new Database(':memory:');
       initScaffoldTables((ddl) => db.exec(ddl));
@@ -72,18 +73,23 @@ describe('actor schema', () => {
       const db = new Database(':memory:');
       init((ddl) => db.exec(ddl), makeSql(db));
       const columns = columnNames(db, 'search_nodes');
+
       for (const column of ['code_used', 'code_language', 'root_id']) {
         expect(columns).toContain(column);
       }
+
       db.close();
     }
+
     {
       const db = new Database(':memory:');
       initSearchTables((ddl) => db.exec(ddl));
       const columns = columnNames(db, 'search_nodes');
+
       for (const column of ['code_used', 'code_language', 'root_id']) {
         expect(columns).toContain(column);
       }
+
       db.close();
     }
   });

@@ -81,6 +81,7 @@ function safeParse(json: string): JsonValue {
   try { return parseJsonValue(json); }
   catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
+
     return json;
   }
 }
@@ -104,6 +105,7 @@ export function normalizeFactKey(key: string): string {
 export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsStore {
   const actorId = actor.actorId;
   const authorize = actor.assertCurrent;
+
   return {
     upsert(key, value, opts = {}) {
       authorize();
@@ -112,16 +114,20 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
       const conf = Number.isFinite(raw) ? Math.min(1, Math.max(0, raw)) : 1;
       const src = opts.source ?? null;
       const valueJson = JSON.stringify(value);
+
       const existing = sql<{ value_json: string; last_observed_at: number }>`
         SELECT value_json, last_observed_at FROM agent_facts
           WHERE actor_id = ${actorId} AND key = ${canonical} LIMIT 1`[0];
+
       if (existing?.value_json === valueJson) {
         void sql`UPDATE agent_facts SET
               confidence = ${conf},
               source = COALESCE(${src}, source)
             WHERE actor_id = ${actorId} AND key = ${canonical}`;
+
         return 'unchanged';
       }
+
       const now = Math.max(Date.now(), (existing?.last_observed_at ?? -1) + 1);
       void sql`
         INSERT INTO agent_facts (actor_id, key, value_json, confidence, source, last_observed_at)
@@ -131,14 +137,17 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
           confidence       = excluded.confidence,
           source           = COALESCE(excluded.source, agent_facts.source),
           last_observed_at = excluded.last_observed_at`;
+
       return existing ? 'changed' : 'created';
     },
     recall(key) {
       authorize();
       const canonical = normalizeFactKey(key);
+
       const rows = sql<FactRow>`SELECT key, value_json, confidence, source, last_observed_at
                                   FROM agent_facts
                                   WHERE actor_id = ${actorId} AND key = ${canonical} LIMIT 1`;
+
       return rows[0] ? rowToFact(rows[0]) : null;
     },
     forget(key) {
@@ -148,15 +157,19 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
     },
     recentTopK(k) {
       authorize();
+
       const rows = sql<FactRow>`SELECT key, value_json, confidence, source, last_observed_at
                                   FROM agent_facts WHERE actor_id = ${actorId}
                                   ORDER BY last_observed_at DESC LIMIT ${k}`;
+
       return rows.map(rowToFact);
     },
     all() {
       authorize();
+
       const rows = sql<FactRow>`SELECT key, value_json, confidence, source, last_observed_at
                                   FROM agent_facts WHERE actor_id = ${actorId} ORDER BY key`;
+
       return rows.map(rowToFact);
     },
   };
@@ -166,21 +179,26 @@ export function createFactsStore(sql: SqlExecutor, actor: ActorHandle): FactsSto
  *  Returned format is concise YAML-ish so the LLM treats it as data, not prose. */
 export function renderFactsBlock(facts: Fact[], opts: { maxChars?: number } = {}): string {
   const max = opts.maxChars ?? 4000;
+
   if (facts.length === 0) return '';
   const lines: string[] = [];
   let shown = 0;
   let used = 0;
+
   for (const f of facts) {
     const text = v.safeParse(v.string(), f.value);
     const val = text.success ? text.output : JSON.stringify(f.value);
     const line = `${f.key}: ${val}`;
+
     if (used + line.length + 1 > max) break;
     lines.push(line);
     used += line.length + 1;
     shown++;
   }
+
   if (shown < facts.length) {
     lines.push(`# …and ${facts.length - shown} more facts not shown — memory recall reads any key`);
   }
+
   return lines.join('\n');
 }

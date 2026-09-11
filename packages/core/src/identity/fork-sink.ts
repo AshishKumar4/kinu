@@ -111,6 +111,7 @@ export class NativeSinkPlan implements ForkFileSink {
   async beginFile(path: string, staged: number): Promise<void> {
     if (this.target !== null) throw new Error(`fork file sink already stages ${JSON.stringify(this.target)}`);
     this.target = path;
+
     if (this.protect?.owns(path)) {
       // A protected destination is one frame in one activation, so there is no
       // staging of it to inherit. Bytes counted against one means the transfer
@@ -121,12 +122,15 @@ export class NativeSinkPlan implements ForkFileSink {
           + 'a protected write carries a whole file in one argument and stages nothing',
         );
       }
+
       return;
     }
+
     const slash = path.lastIndexOf('/');
     const dir = slash < 0 ? '' : path.slice(0, slash + 1);
     const name = slash < 0 ? path : path.slice(slash + 1);
     this.temp = `${dir}.${name}.fork-${this.tempSuffix}.tmp`;
+
     if (staged === 0) await this.files.writeRange(this.temp, 0, new Uint8Array(0));
     // Trim rather than truncate to zero: `staged` is what the target durably
     // counted, and a range the interrupted activation wrote but never got to
@@ -136,6 +140,7 @@ export class NativeSinkPlan implements ForkFileSink {
 
   async writeRange(path: string, offset: number, bytes: Uint8Array, last: boolean): Promise<void> {
     if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
+
     if (this.temp === null) {
       // A protected destination is published from one frame. A file that will
       // not fit one is refused on its FIRST range, so nothing is ever held for
@@ -146,11 +151,15 @@ export class NativeSinkPlan implements ForkFileSink {
           + 'the protected write carries a whole file in one argument and cannot be streamed',
         );
       }
+
       if (this.held !== null) throw new Error(`fork protected destination ${JSON.stringify(path)} received a second range`);
+
       if (offset !== 0) throw new Error(`fork protected destination ${JSON.stringify(path)} started at offset ${offset}`);
       this.held = bytes;
+
       return;
     }
+
     await this.files.writeRange(this.temp, offset, bytes);
   }
 
@@ -165,38 +174,50 @@ export class NativeSinkPlan implements ForkFileSink {
   async stagedDigest(path: string, bytes: number): Promise<string> {
     if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
     const hash = createHash('sha256');
+
     if (this.temp === null) {
       const held = this.held;
+
       if (held === null) throw new Error(`fork protected destination ${JSON.stringify(path)} received no bytes`);
       hash.update(held);
+
       return hash.digest('hex');
     }
+
     for (let offset = 0; offset < bytes; offset += FORK_FRAME_BYTES) {
       const length = Math.min(FORK_FRAME_BYTES, bytes - offset);
       const range = await this.files.readRange(this.temp, offset, length);
+
       if (range.byteLength !== length) {
         throw new Error(
           `fork transfer staged ${JSON.stringify(path)} read back ${range.byteLength} bytes of ${length} `
           + `at offset ${offset}; the staging is not what the transfer wrote`,
         );
       }
+
       hash.update(range);
     }
+
     return hash.digest('hex');
   }
 
   async commitFile(path: string): Promise<ForkFileCommit> {
     if (path !== this.target) throw new Error(`fork file sink has no open file ${JSON.stringify(path)}`);
+
     if (this.temp === null) {
       const publisher = this.protect;
       const bytes = this.held;
+
       if (!publisher || bytes === null) throw new Error(`fork protected destination ${JSON.stringify(path)} received no bytes`);
       this.clear();
+
       return publisher.publish(path, bytes);
     }
+
     const temp = this.temp;
     await this.files.rename(temp, path);
     this.clear();
+
     return {};
   }
 
@@ -206,6 +227,7 @@ export class NativeSinkPlan implements ForkFileSink {
     if (path !== this.target) return;
     const temp = this.temp;
     this.clear();
+
     if (temp !== null) await this.files.unlink(temp);
   }
 

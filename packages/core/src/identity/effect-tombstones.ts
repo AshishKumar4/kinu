@@ -48,6 +48,7 @@ export function effectAlreadyDone(
   sql: SqlExecutor, actor: ActorHandle, scope: string, key: string,
 ): boolean {
   actor.assertCurrent();
+
   return sql<{ n: number }>`
     SELECT 1 AS n FROM effect_tombstones
     WHERE actor_id = ${actor.actorId} AND scope = ${scope} AND key = ${key} LIMIT 1`.length > 0;

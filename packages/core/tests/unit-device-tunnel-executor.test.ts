@@ -11,10 +11,12 @@ function transport(resultFor: (method: string, params: JsonValue[]) => JsonValue
   calls: Array<{ method: string; params: JsonValue[] }>;
 } {
   const calls: Array<{ method: string; params: JsonValue[] }> = [];
+
   return {
     calls,
     ...staticTransport({ connected: true, registered: true, toolchain: null }, async (method, params) => {
       calls.push({ method, params });
+
       return resultFor(method, params);
     }),
   };
@@ -33,14 +35,17 @@ describe('createDeviceTunnelExecutor', () => {
   test('each exec reports its own durable identity to that call only', async () => {
     const issued: Array<{ reported: string; sent: string | undefined }> = [];
     const observed: string[] = [];
+
     const t: DeviceTransport = {
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
       rpc: async (_method, _params, opts) => {
         issued.push({ reported: observed[observed.length - 1] ?? '', sent: opts?.requestId });
+
         return { stdout: 'ok', stderr: '', exitCode: 0 };
       },
     };
+
     const provider = createDeviceTunnelExecutor(t);
 
     await provider.tools.exec.execute('first', { onDeviceRequest: (id: string) => observed.push(id) });
@@ -56,6 +61,7 @@ describe('createDeviceTunnelExecutor', () => {
   test('each exec carries the owner that held the scope at the moment it was issued', async () => {
     const issued: Array<{ requestId: string; backgroundJobId: string | undefined }> = [];
     const reported: string[] = [];
+
     const t: DeviceTransport = {
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
@@ -63,12 +69,15 @@ describe('createDeviceTunnelExecutor', () => {
         // Every device exec carries an identity, or nothing could cancel it.
         if (opts?.requestId === undefined) throw new Error('exec reached the device with no identity');
         issued.push({ requestId: opts.requestId, backgroundJobId: opts.backgroundJobId });
+
         return { stdout: 'ok', stderr: '', exitCode: 0 };
       },
     };
+
     const provider = createDeviceTunnelExecutor(t);
     // One scope whose owner changes under it, exactly as a detach does.
     let owner: string | null = null;
+
     const context = {
       onDeviceRequest: (id: string) => reported.push(id),
       deviceRequestOwner: () => owner,
@@ -89,6 +98,7 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('base consent cannot escape its subtree through native file tools', async () => {
     const t = transport(() => 'contents');
+
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => '/home/dev/project',
       deviceHome: async () => '/home/dev',
@@ -103,6 +113,7 @@ describe('createDeviceTunnelExecutor', () => {
     for (const answer of [read, write, list, exists]) {
       expect(String(answer)).toContain('outside the consented device directory');
     }
+
     expect(t.calls).toEqual([]);
     expect(await provider.tools.readFile.execute('/home/dev/project/readme.md')).toBe('contents');
     expect(t.calls).toEqual([{
@@ -125,6 +136,7 @@ describe('createDeviceTunnelExecutor', () => {
    */
   test('a device that named no directory has no base-tier reach, and asks for none', async () => {
     const t = transport(() => 'contents');
+
     const provider = createDeviceTunnelExecutor(t, {
       consentedRoot: async () => null,
       deviceHome: async () => '/home/dev',
@@ -141,6 +153,7 @@ describe('createDeviceTunnelExecutor', () => {
     ]) {
       expect(String(answer)).toContain('reported no consented directory');
     }
+
     expect(t.calls).toEqual([]);
 
     // The full tier still opens somewhere, from the home the machine reported
@@ -150,6 +163,7 @@ describe('createDeviceTunnelExecutor', () => {
       deviceHome: async () => '/home/dev',
       unconfined: async () => true,
     });
+
     // `homeDir` is the provider's own answer, not the VFS's.
     expect(await full.homeDir?.()).toBe('/home/dev');
     expect(t.calls).toEqual([]);
@@ -182,6 +196,7 @@ describe('createDeviceTunnelExecutor', () => {
       devices: [{ id: 'dev-1', name: 'ashish@studio', os: null, hostname: null, connected: false }],
       workspaceGranted: false,
     }, async () => undefined);
+
     expect(createDeviceTunnelExecutor(offline).getStatus?.()).toMatchObject({
       status: 'disconnected', label: 'ashish@studio', granted: false,
     });
@@ -196,11 +211,15 @@ describe('createDeviceTunnelExecutor', () => {
   test('file helpers use structured daemon RPCs instead of shell interpolation', async () => {
     const t = transport((method) => {
       if (method === 'readFile') return 'contents';
+
       if (method === 'writeFile') return { success: true };
+
       if (method === 'listFiles') return [{ name: 'a.txt', type: 'file' }];
+
       if (method === 'exists') return true;
       throw new Error(`unexpected method ${method}`);
     });
+
     const provider = createDeviceTunnelExecutor(t);
     const path = '/tmp/a; echo PWNED';
 
@@ -255,9 +274,11 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('a connected machine this workspace cannot use reads as reach, not liveness', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
+
     const ungranted = staticTransport({
       connected: true, registered: true, toolchain: null, workspaceGranted: false,
     }, rpc);
+
     const granted = staticTransport({
       connected: true, registered: true, toolchain: null, workspaceGranted: true,
     }, rpc);
@@ -275,6 +296,7 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('a caller with no workspace identity keeps the liveness reading', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
+
     // `workspaceGranted` absent — a non-workspace caller, or one whose snapshot
     // predates the field. The row stays as it always was.
     const status = createDeviceTunnelExecutor(staticTransport({
@@ -287,12 +309,14 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('a fleet entry answers reach for the machine it names, not the first one', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
+
     // One live machine whose own entry says ungranted: the row reads reach
     // from THAT entry, which is the machine the label names.
     const single = staticTransport({
       connected: true, registered: true, toolchain: null,
       devices: [{ id: 'dev-1', name: 'studio', os: 'linux', hostname: 's', connected: true, granted: false }],
     }, rpc);
+
     expect(createDeviceTunnelExecutor(single).getStatus?.()).toMatchObject({
       label: 'studio', granted: false, available: false, status: 'idle',
     });
@@ -300,6 +324,7 @@ describe('createDeviceTunnelExecutor', () => {
 
   test('two live machines have no "the" machine, so the row keeps liveness', () => {
     const rpc: DeviceTransport['rpc'] = async () => 'unused';
+
     // The fleet model leaves the top-level reach fields ABSENT with several
     // live machines, because there is no single machine to describe. The row
     // degrades the same way a caller with no workspace identity does: the
@@ -320,6 +345,7 @@ describe('createDeviceTunnelExecutor', () => {
     const hubRejects = staticTransport({ connected: false, registered: true, toolchain: null }, async () => {
       throw new Error('no device connected');
     });
+
     const tunnelDropped = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
       throw new Error('device tunnel not connected');
     });
@@ -342,6 +368,7 @@ describe('createDeviceTunnelExecutor', () => {
     const t = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
       throw new Error('permission denied');
     });
+
     // `io`, not `unavailable`: the device answered and its filesystem said no.
     // Pooling the two would read a permission problem as an absent machine.
     expect(await createDeviceTunnelExecutor(t).tools.exec.execute('ls')).toEqual({
@@ -354,6 +381,7 @@ describe('createDeviceTunnelExecutor', () => {
     const t = staticTransport({ connected: true, registered: true, toolchain: null }, async () => {
       throw new Error('permission denied');
     });
+
     const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
 
     // `false` would read as "the path is absent on your machine", which is what
@@ -369,6 +397,7 @@ describe('createDeviceTunnelExecutor', () => {
         { connected: true, registered: true, toolchain: null },
         async () => wire,
       );
+
       const answer = await createDeviceTunnelExecutor(t).tools.exists.execute('/tmp/a');
       expect(answer).not.toBe(false);
       expect(JSON.parse(String(answer))).toMatchObject({ reason: 'io' });
@@ -380,6 +409,7 @@ describe('createDeviceTunnelExecutor', () => {
       { connected: true, registered: true, toolchain: null },
       async () => ({ encoding: 'base64', content: 42 }),
     );
+
     const answer = await createDeviceTunnelExecutor(t).tools.readFile.execute('/tmp/a');
     expect(answer).not.toBe('');
     expect(JSON.parse(String(answer))).toMatchObject({ reason: 'io' });

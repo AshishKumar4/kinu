@@ -57,7 +57,9 @@ import {
 import type { SandboxHandle } from "@kinu.run/core";
 import { withHostedNodeExecution } from './node-home';
 import type { HostedNodeHome } from './node-home';
+
 export { withHostedNodeExecution, type HostedNodeHome } from './node-home';
+
 import { diagnostics, KinuError, renderThrownChain, toKinuError } from "@kinu.run/core/obs";
 import { getSandbox } from "@cloudflare/sandbox";
 import { kinuEgressParams } from "./egress/configure";
@@ -201,6 +203,7 @@ interface RuntimeUserDONamespace {
 
 function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClient | null {
   const userId = actor.ownerUserId();
+
   if (!userId) return null;
   // SAFETY: the generated Env.UserDO binding contract exposes these exact
   // UserDO RPC methods; the narrower view keeps each runtime call site on the
@@ -209,6 +212,7 @@ function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClie
   // `Object.assign` of one yields `{}` and every call on it is undefined (see
   // `listOwnerEgressVault`).
   const namespace: RuntimeUserDONamespace = env.UserDO;
+
   return namespace.get(namespace.idFromName(userId));
 }
 
@@ -220,6 +224,7 @@ async function listOwnerEgressVault(
 ): Promise<EgressSecretBinding[]> {
   try {
     const userId = actor.ownerUserId();
+
     if (!userId) return [];
     // The stub is USED, never COPIED. `Object.assign` transfers own enumerable
     // properties, and a JSRPC stub's methods live behind a Proxy rather than on
@@ -229,6 +234,7 @@ async function listOwnerEgressVault(
     // silently lost every injectable secret. The narrow interface still limits
     // what this call site may reach; it is the copy that was wrong, not the type.
     const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
+
     return [...await vault.listEgressSecrets(await ownerCaller(env))];
   } catch (err) {
     diagnostics.failure('egress.vault_unreadable', toKinuError({
@@ -236,6 +242,7 @@ async function listOwnerEgressVault(
       cause: err,
       otherwise: 'unavailable',
     }), { workspace: actor.workspaceName });
+
     return [];
   }
 }
@@ -248,7 +255,9 @@ interface EgressVaultClient {
  *  degrading to some weaker principal — when the workspace has no token. */
 async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
   const workspaceToken = actor.capabilityToken();
+
   if (!workspaceToken) throw new Error('This workspace has not been issued a capability token yet.');
+
   return { workspaceToken };
 }
 
@@ -268,9 +277,11 @@ async function fetchRootApprovalPolicy(
   const root: RootApprovalClient = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(workspaceName),
   );
+
   const [mode, grants] = await Promise.all([
     root.getShellApprovalMode(), root.getShellApprovalGrants(),
   ]);
+
   return { mode: mode.mode, grants: grants.grants };
 }
 
@@ -284,6 +295,7 @@ interface RootApprovalClient {
  *  the pre-existing behaviour for an ownerless agent. */
 function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCredentialSource | null {
   const stub = userDOStubFor(env, actor);
+
   return stub ? { stub, caller: () => userCallerFor(actor) } : null;
 }
 
@@ -424,14 +436,17 @@ export function createCFRuntime(
   // and a facet holds a client onto the orchestrator that did. This factory
   // reads neither — one box, one interface, either way.
   const workspaceBox = access.workspaceBox(actor.shellId);
+
   const executionBox = hooks.workspaceExecution
     ? withHostedNodeExecution(workspaceBox, hooks.workspaceExecution)
     : workspaceBox;
+
   // The workspace's OWN state — the scaffold views under `.kinu`, the memory
   // files under `memory/` — belongs to the session user, whose tree it is,
   // whichever actor's runtime this is. A facet acting as its uid could not
   // create an entry under the origin's `.kinu` at all.
   const originVfs = nimbusSessionFiles(workspaceBox);
+
   // BOTH OF THE ACTOR'S PLANES OR NEITHER. A home is uid/gid/mode on real
   // inodes, so a runtime whose commands were the facet's while its file tools
   // stayed the session user could not write its own home — measured `EACCES`
@@ -443,6 +458,7 @@ export function createCFRuntime(
   const baseWorkspaceVfs = hooks.workspaceExecution
     ? nimbusSessionFiles(workspaceBox, hooks.workspaceExecution.cred)
     : originVfs;
+
   const observedWorkspaceVfs = hooks.workspaceObserver
     ? observeWrites(baseWorkspaceVfs, hooks.workspaceObserver)
     : baseWorkspaceVfs;
@@ -493,16 +509,20 @@ export function createCFRuntime(
   const craftStore = adaptCraftStore(craftStoreImpl);
 
   const envForExec = env;
+
   if (!envForExec.LOADER) {
     throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
   }
+
   const executor = createExecutor(envForExec.LOADER);
+
   // Every non-turn model lane this runtime carries, off ONE binding of the
   // three inputs they all resolve from (see `createProfileLaneLLM`), so no
   // call site repeats that binding.
   const profileLane = (source: FixedTierSource): LLM | undefined => createProfileLaneLLM(
     agent, env, actor, hooks.turnProfile, hooks.resolveProfile, source, hooks.reportModelCall,
   );
+
   // The one REQUIRED lane. `judgeModel`/`fastLlm`/`advisorLlm` may be absent —
   // a caller that finds one missing skips that lane — but `AgentRuntime.llm` is
   // not optional, so a runtime built with no profile hooks at all still carries
@@ -513,6 +533,7 @@ export function createCFRuntime(
       throw new Error('reflection model lane has no active profile');
     },
   };
+
   const schedule = createRealSchedule(agent);
   // The scaffold is workspace state: written by the session user, read by
   // whichever actor this runtime belongs to.
@@ -549,6 +570,7 @@ export function createCFRuntime(
   // root's answers, intersected with any narrowing the hosted actor recorded for
   // itself, and no `remember`, so it can never widen.
   const isRootActor = actor.rootActor;
+
   const approvalPolicy: ShellApprovalPolicy = isRootActor
     ? {
       mode: () => memoryConfig.getShellApprovalMode(),
@@ -564,6 +586,7 @@ export function createCFRuntime(
       // so it inherits the root's set whole.
       ownGrants: () => memoryConfig.getShellApprovalGrants(),
     });
+
   // The shell is the authoritative Nimbus session's direct shell over the base
   // tree. It deliberately never receives the VFS-only `/pc` or `/sandbox`
   // mounts; only file operations can cross those executor boundaries.
@@ -582,6 +605,7 @@ export function createCFRuntime(
   // actors share every other mount and never share this one.
   const mounts = [...standardMounts((name) => executionRouter.getProvider(name))];
   const plane = hooks.contextPlane;
+
   if (plane) {
     mounts.push(contextMount({
       // The stores are a THUNK, read live at every file call: a plane outlives
@@ -591,6 +615,7 @@ export function createCFRuntime(
       children: plane.children,
     }));
   }
+
   const agentFileVfs = withMountTable(observedWorkspaceVfs, mounts);
   executionRouter.register(createNimbusWorkspaceExecutor({
     box: executionBox,
@@ -626,6 +651,7 @@ export function createCFRuntime(
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = sandboxIdForWorkspace(actor.workspaceName);
   let sandboxHandle: SandboxHandle | null = null;
+
   if (env.Sandbox) {
     try {
       // {@link SANDBOX_TRANSPORT} is the SDK's primary container-control path: one
@@ -659,6 +685,7 @@ export function createCFRuntime(
       const sdk = getSandbox(env.Sandbox, sandboxId, {
         normalizeId: true, transport: SANDBOX_TRANSPORT,
       });
+
       // Egress interception is configured before the container can run
       // anything, by the Durable Object that owns it, and awaited inside the
       // operation that needed it. Not in `onStart`: the Container base
@@ -676,6 +703,7 @@ export function createCFRuntime(
       // a lifecycle incident reaches its agent from a cold, evicted object.
       const handle = adaptCloudflareSandbox(sdk, async () => {
         const userId = actor.ownerUserId();
+
         if (!userId) return;
         await sdk.configureEgress(kinuEgressParams({
           workspaceName: actor.workspaceName,
@@ -690,6 +718,7 @@ export function createCFRuntime(
       // question is about. Absent binding, port exposure refuses rather than
       // minting a URL the edge would turn away.
       env.AUTH_KV ? sandboxPreviewExposures(env.AUTH_KV, sandboxId) : null);
+
       sandboxHandle = handle;
       // No restore wrapper here, deliberately. Restoring /workspace is the
       // container's own affair and happens in KinuSandbox.onStart, inside the
@@ -724,6 +753,7 @@ export function createCFRuntime(
   // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
   // one connected device serves all of the user's agents.
   const cliCwdForDevice = () => access.getCliCwdForDevice?.() ?? null;
+
   const deviceTransportOptions: HubDeviceTransportOpts = {
     hub: () => userDOStubFor(env, actor),
     caller: () => userCallerFor(actor),
@@ -731,7 +761,9 @@ export function createCFRuntime(
     cliCwd: cliCwdForDevice,
     checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
   };
+
   const deviceTransport = createHubDeviceTransport(deviceTransportOptions);
+
   // These independent maintenance operations belong to the runtime they warm:
   // retaining one non-rejecting promise keeps synchronous construction cheap
   // without dropping work after the factory returns. Turn start still awaits
@@ -762,6 +794,7 @@ export function createCFRuntime(
       })(),
     ]);
   })();
+
   // The executor's file view scopes paths to the ONE directory the owner named
   // at `kinu connect`, unless the owner turned this device's Sandbox switch
   // OFF, which lifts the view for the same reason it lifts the shell: one
@@ -788,10 +821,14 @@ export function createCFRuntime(
     deviceId: string | undefined,
   ): Promise<string | null> => {
     const hub = userDOStubFor(env, actor);
+
     if (!hub) return null;
+
     try {
       const status = await hub.deviceRuntimeStatus(await userCallerFor(actor));
+
       if (deviceId === undefined) return status[field] ?? null;
+
       return status.devices?.find((device) => device.id === deviceId)?.[field] ?? null;
     } catch (cause) {
       throw toKinuError({
@@ -801,12 +838,15 @@ export function createCFRuntime(
       });
     }
   };
+
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
     consentedRoot: async (deviceId) => cliCwdForDevice() ?? await deviceScope('consentedRoot', deviceId),
     deviceHome: async (deviceId) => cliCwdForDevice() ?? await deviceScope('deviceHome', deviceId),
     unconfined: async (deviceId) => {
       const hub = userDOStubFor(env, actor);
+
       if (!hub) return false;
+
       try {
         return (await hub.getDeviceFileView(await userCallerFor(actor), actor.workspaceName, deviceId)).unconfined;
       } catch (cause) {
@@ -837,6 +877,7 @@ export function createCFRuntime(
     vectorStore,
     sandboxHandle,
   };
+
   return runtime;
 }
 
@@ -862,13 +903,16 @@ function buildVectorStore(
 ): VectorStore {
   const aiBinding = env.AI;
   const vectorizeBinding = env.MEMORY_VECTORS;
+
   if (!aiBinding || !vectorizeBinding) {
     return createNoopVectorStore();
   }
+
   try {
     const embedder = reportModelCall
       ? createWorkersAIEmbedder({ aiBinding, model: EMBEDDING_MODEL, dimensions: 384, reportModelCall })
       : createWorkersAIEmbedder({ aiBinding, model: EMBEDDING_MODEL, dimensions: 384 });
+
     const store = createCloudflareVectorStore({
       index: vectorizeBinding,
       embedder,
@@ -876,7 +920,9 @@ function buildVectorStore(
       // and query to this workspace so memories never leak across agents.
       namespace: actor.workspaceName,
     });
+
     diagnostics.event('vector.store_registered', { namespace: actor.workspaceName });
+
     return store;
   } catch (err) {
     diagnostics.failure('vector.store_construction_failed', toKinuError({
@@ -884,6 +930,7 @@ function buildVectorStore(
       cause: err,
       otherwise: 'unavailable',
     }), { namespace: actor.workspaceName });
+
     return createNoopVectorStore();
   }
 }
@@ -902,6 +949,7 @@ function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
     },
     get(name) {
       const tool = impl.get(name);
+
       return tool ? adaptCraftedTool(tool) : undefined;
     },
     delete(name) { impl.delete(name); },
@@ -933,6 +981,7 @@ function adaptCraftedTool(t: ReturnType<AgentUtilsCraftStore['list']>[number]): 
 
 function createExecutor(loader: WorkerLoader): Executor {
   const dwe = new DynamicWorkerExecutor({ loader });
+
   return {
     languages: ['javascript'],
     async execute(code: string, providers: ResolvedProvider[]): Promise<ExecuteResult> {
@@ -940,6 +989,7 @@ function createExecutor(loader: WorkerLoader): Executor {
         const normalized = Array.isArray(providers)
           ? providers
           : [{ name: 'codemode', fns: providers }];
+
         const bridged = normalized.map((provider) => ({
           name: provider.name,
           fns: Object.fromEntries(Object.entries(provider.fns).map(([name, fn]) => [
@@ -947,11 +997,15 @@ function createExecutor(loader: WorkerLoader): Executor {
             async (...args: unknown[]) => fn(...args.map((value) => decodeJsonValue({ value }))),
           ])),
         }));
+
         const res = await dwe.execute(code, bridged);
         const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
         const output: ExecuteResult = { result };
+
         if (res.error !== undefined) output.error = res.error;
+
         if (res.logs !== undefined) output.logs = res.logs;
+
         return output;
       } catch (e) {
         return { result: undefined, error: renderThrownChain({ cause: e }) };
@@ -1030,25 +1084,32 @@ function createProfileLaneLLM(
   report?: ModelCallSink,
 ): LLM | undefined {
   if (!turnProfile && !resolveProfile) return undefined;
+
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       const profile = turnProfile?.() ?? await resolveProfile?.();
+
       if (!profile) throw new Error(`${source} model lane has no active profile`);
       const route = resolveModelRoute(source, profile);
+
       if (!route) throw new Error(`${source} cannot use the fixed platform model route`);
       const registry = actorProviderRegistry(agent, env, actor, `Kinu (${source})`);
+
       const providerOptions = reasoningEffortOptions(
         route.reasoningEffort,
         parseModelSpec(route.model).provider,
       );
+
       const request: Parameters<typeof generateText>[0] = {
         model: registry.resolveModel(route.model),
         prompt,
       };
+
       if (providerOptions) request.providerOptions = providerOptions;
       const result = await generateText(request);
       reportCall(report, source, route.model, result);
+
       return result.text.trim();
     },
   };
@@ -1065,6 +1126,7 @@ function createRealSchedule(agent: AgentHost): Schedule {
         const snapshot = sdkCtx.snapshot === null
           ? null
           : decodeJsonValue({ value: sdkCtx.snapshot });
+
         return fn({ stash: sdkCtx.stash, snapshot });
       });
     },
@@ -1102,9 +1164,11 @@ function createIdentity(
  */
 function requireBranches(hooks: CFRuntimeHooks): NonNullable<CFRuntimeHooks['branches']> {
   const branches = hooks.branches;
+
   if (!branches) {
     throw new KinuError('missing', 'This actor runtime was built without a branch host, so it cannot run MCTS rollouts.');
   }
+
   return branches;
 }
 

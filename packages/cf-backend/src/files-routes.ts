@@ -69,31 +69,41 @@ export async function handleFilesRequest(
   resolveAgent: (env: Env | null, agentName: string) => Promise<FilesRouteAgent | null> = defaultResolveAgent,
 ): Promise<Response | null> {
   const url = new URL(request.url);
+
   if (url.pathname !== `/api/workspaces/${agentName}/files`) return null;
+
   if (request.method !== 'PUT' && request.method !== 'GET') return err(405, 'use PUT or GET');
 
   const executorId = url.searchParams.get('executor');
   const path = url.searchParams.get('path');
+
   if (!executorId) return err(400, 'executor query parameter required');
+
   if (!path) return err(400, 'path query parameter required');
 
   const agent = await resolveAgent(env, agentName);
+
   if (!agent) return err(503, 'workspace agent unavailable');
 
   if (request.method === 'PUT') {
     const expectedRevision = expectedRevisionFrom(request);
+
     return expectedRevision === null
       ? err(400, 'If-Match must be a non-negative integer revision')
       : upload(request, agent, executorId, path, expectedRevision);
   }
+
   return download(agent, executorId, path, url);
 }
 
 function expectedRevisionFrom(request: Request): number | undefined | null {
   const value = request.headers.get('if-match');
+
   if (value === null) return undefined;
+
   if (!/^(?:0|[1-9]\d*)$/.test(value)) return null;
   const revision = Number(value);
+
   return Number.isSafeInteger(revision) ? revision : null;
 }
 
@@ -115,10 +125,12 @@ async function upload(
   expectedRevision: number | undefined,
 ): Promise<Response> {
   if (request.body === null) return err(400, 'request body required');
+
   const overLimit = () => err(
     413,
     `file exceeds the ${String(Math.floor(FILE_TRANSFER_MAX_BYTES / (1024 * 1024)))} MiB transfer limit`,
   );
+
   const transferId = crypto.randomUUID();
   const pending: Uint8Array[] = [];
   let pendingBytes = 0;
@@ -127,15 +139,19 @@ async function upload(
   const take = (want: number): Uint8Array => {
     const out = new Uint8Array(want);
     let at = 0;
+
     while (at < want) {
       const part = pending[0]!;
       const count = Math.min(part.byteLength, want - at);
       out.set(part.subarray(0, count), at);
+
       if (count === part.byteLength) pending.shift();
       else pending[0] = part.subarray(count);
       at += count;
     }
+
     pendingBytes -= want;
+
     return out;
   };
 
@@ -156,34 +172,45 @@ async function upload(
     const outcome = await readBoundedStream(request, FILE_TRANSFER_MAX_BYTES, async (value) => {
       pending.push(value);
       pendingBytes += value.byteLength;
+
       while (pendingBytes >= FILE_CHUNK_BYTES) {
         const written = await agent.writeExecutorFileChunk(
           executorId, path, transferId, offset, take(FILE_CHUNK_BYTES), false, expectedRevision,
         );
+
         if ('error' in written) throw new Error(written.error);
         offset += FILE_CHUNK_BYTES;
       }
     });
+
     if (outcome === 'too_large') {
       await abandon();
+
       return overLimit();
     }
+
     if (outcome instanceof KinuError) {
       await abandon();
       diagnostics.failure('files.upload_body_unreadable', outcome, { executorId, path });
+
       return err(400, 'the upload stopped before the whole file arrived');
     }
+
     const tail = pendingBytes > 0 ? take(pendingBytes) : new Uint8Array(0);
+
     const result = await agent.writeExecutorFileChunk(
       executorId, path, transferId, offset, tail, true, expectedRevision,
     );
+
     if ('conflict' in result) {
       return json(
         { error: 'This file changed after you opened it.', revision: result.revision },
         { status: 412 },
       );
     }
+
     if ('unsupported' in result) return json({ error: result.error }, { status: 409 });
+
     return 'error' in result ? err(400, result.error) : json(result);
   } catch (cause) {
     await abandon();
@@ -192,6 +219,7 @@ async function upload(
       cause,
       otherwise: 'unavailable',
     }), { executorId, path, bytes: offset + pendingBytes });
+
     return err(400, cause instanceof Error ? cause.message : 'upload failed');
   }
 }
@@ -204,16 +232,20 @@ async function download(
 ): Promise<Response> {
   const transferId = crypto.randomUUID();
   const opened = await agent.startExecutorFileDownload(executorId, path, transferId);
+
   if ('error' in opened) return err(opened.reason === 'too_large' ? 413 : 404, opened.error);
 
   let offset = 0;
+
   const stream = new ReadableStream<Uint8Array>({
     async pull(controller) {
       if (offset >= opened.size) {
         await agent.abortExecutorFileDownload(transferId);
         controller.close();
+
         return;
       }
+
       const chunk = await agent.readExecutorFileChunk(
         executorId,
         path,
@@ -221,16 +253,21 @@ async function download(
         offset,
         Math.min(FILE_CHUNK_BYTES, opened.size - offset),
       );
+
       if ('error' in chunk) {
         await agent.abortExecutorFileDownload(transferId);
         controller.error(new Error(chunk.error));
+
         return;
       }
+
       if (chunk.bytes.byteLength === 0) {
         await agent.abortExecutorFileDownload(transferId);
         controller.error(new Error(`file ended at ${String(offset)} of ${String(opened.size)} bytes`));
+
         return;
       }
+
       offset += chunk.bytes.byteLength;
       controller.enqueue(chunk.bytes);
     },
@@ -238,6 +275,7 @@ async function download(
       await agent.abortExecutorFileDownload(transferId);
     },
   });
+
   return new Response(stream, {
     headers: fileResponseHeaders(path, url.searchParams.get('download') !== null),
   });

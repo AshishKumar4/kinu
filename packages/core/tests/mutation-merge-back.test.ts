@@ -29,13 +29,16 @@ import type {
 type MergeBackModule = typeof pristine;
 
 const SOURCE = new URL('../src/strategy/merge-back.ts', import.meta.url).pathname;
+
 const SOURCE_DIR = dirname(SOURCE);
+
 // Canonical, because the loader resolves a copy's relative imports from its REAL
 // path: on macOS `tmpdir()` is `/var/folders/...`, a symlink to `/private/var/...`
 // one level deeper, so a specifier counted from the symlink lands one `../` short.
 const MUTANTS = realpathSync(scratchDir('mutation-merge-back'));
 
 symlinkSync(resolve(SOURCE_DIR, '../../../../node_modules'), join(MUTANTS, 'node_modules'), 'dir');
+
 /**
  * A copy of merge-back with `edits` applied, loaded as its own module.
  *
@@ -46,8 +49,10 @@ async function mutate(
   label: string, edits: readonly (readonly [find: string, replace: string])[],
 ): Promise<MergeBackModule> {
   let source = await Bun.file(SOURCE).text();
+
   for (const [find, replace] of edits) {
     const occurrences = source.split(find).length - 1;
+
     if (occurrences !== 1) {
       throw new Error(
         `mutation "${label}" expected exactly one occurrence of ${JSON.stringify(find)} in `
@@ -55,18 +60,23 @@ async function mutate(
         + 'mutation would have proven nothing — update the snippet rather than the assertion.',
       );
     }
+
     source = source.replace(find, replace);
   }
+
   const rewritten = source.replaceAll(
     /from '(\.[^']*)'/g,
     (_whole: string, specifier: string) => {
       const target = `${resolve(SOURCE_DIR, specifier)}.ts`;
       const path = relative(MUTANTS, target);
+
       return `from '${path.startsWith('.') ? path : `./${path}`}'`;
     },
   );
+
   const path = join(MUTANTS, `merge-back.mutant-${label}.ts`);
   writeFileSync(path, rewritten);
+
   // SAFETY: the mutant is `merge-back.ts`'s own text with `edits` applied, and every edit
   // is required above to have matched exactly once — so its export shape is the pristine
   // module's by construction. A dynamic specifier carries no static type, and a wrong
@@ -94,6 +104,7 @@ interface Origin {
 function tearingOrigin(initial: Record<string, string> = {}): Origin & { applyMember: MemberApply } {
   const at = new Map(Object.entries(initial));
   const transactions: (readonly MemberFileChange[])[] = [];
+
   return {
     at,
     transactions,
@@ -101,15 +112,19 @@ function tearingOrigin(initial: Record<string, string> = {}): Origin & { applyMe
     applyMember: async (files) => {
       transactions.push(files);
       let spent = 0;
+
       for (const file of files) {
         const bytes = file.after === null ? 0 : new TextEncoder().encode(file.after).length;
+
         if (spent + bytes > MAX_TX_BLOB_BYTES) {
           throw new Error(
             `E2BIG: transaction exceeded ${String(MAX_TX_BLOB_BYTES)} bytes after committing `
             + `${String(transactions.length)} wave(s)`,
           );
         }
+
         spent += bytes;
+
         if (file.after === null) at.delete(file.path);
         else at.set(file.path, file.after);
       }
@@ -129,6 +144,7 @@ async function memberOf(
     files: [...files].sort((a, b) => a.path.localeCompare(b.path)),
     provenance: 'private-home' as const,
   };
+
   return {
     nodeId,
     diff,
@@ -163,6 +179,7 @@ function runWith(
 // the shape a committed prefix needs: the first lands, the second cannot.
 function oversizedPair(): readonly MemberFileChange[] {
   const half = 'x'.repeat(Math.floor(MAX_TX_BLOB_BYTES * 0.75));
+
   return [
     { path: 'first.bin', base: null, after: half },
     { path: 'second.bin', base: null, after: half },
@@ -177,6 +194,7 @@ describe('the size refusal is load-bearing', () => {
     const report = await runWith(pristine, origin, 'apply-winner', [member]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('oversized');
     expect(outcome.refusal.error).toContain('blobBytes');
@@ -190,6 +208,7 @@ describe('the size refusal is load-bearing', () => {
       'const exceeded = memberApplyBound(plan);',
       'const exceeded = null;',
     ]]);
+
     const origin = tearingOrigin({});
     const member = await memberOf(origin, 'n1', oversizedPair(), mutant);
 
@@ -213,12 +232,14 @@ describe('the size refusal is load-bearing', () => {
       'const exceeded = memberApplyBound(plan);',
       'const exceeded = null;',
     ]]);
+
     const origin = tearingOrigin({});
     const member = await memberOf(origin, 'n1', oversizedPair(), mutant);
 
     const report = await runWith(mutant, origin, 'apply-winner', [member]);
 
     const [outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).not.toBe('oversized');
     expect(outcome.refusal.error).not.toContain('blobBytes');
@@ -248,6 +269,7 @@ describe('the stale-verdict refusal is load-bearing', () => {
 
     expect(report.stoppedAt).toBeNull();
     const [, outcome] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('verdict-stale');
   });
@@ -278,6 +300,7 @@ describe('the stale-verdict refusal is load-bearing', () => {
       STALE_COMPARISON,
       'if (member.verdict.memberDigest !== memberDigestOf(member.diff)) {',
     ]]);
+
     const origin = tearingOrigin({ 'shared.ts': 'V0\n' });
     const members = await rebasePair(origin, mutant);
 
@@ -294,6 +317,7 @@ describe('the stale-verdict refusal is load-bearing', () => {
       'if (fresh.baseDigest !== baseDigest) {',
       'if (false) {',
     ]]);
+
     const origin = tearingOrigin({ 'shared.ts': 'V0\n' });
     const members = await rebasePair(origin, mutant);
 
@@ -352,6 +376,7 @@ describe('the derived dependency order is load-bearing', () => {
     const mutant = await mutate('offered-order', [[
       DERIVED_ORDER, "({ kind: 'ordered' as const, members })",
     ]]);
+
     const origin = tearingOrigin({ 'a.ts': 'A0\n', 'c.ts': 'C0\n' });
     const members = await vertexBeforeParent(origin, mutant);
 
@@ -359,6 +384,7 @@ describe('the derived dependency order is load-bearing', () => {
 
     expect(report.order).toEqual(['vertex', 'parent']);
     const [outcome, landed] = report.outcomes;
+
     if (outcome?.kind !== 'refused') throw new Error('expected a refusal');
     expect(outcome.refusal.cause).toBe('dependency-unsettled');
     // The refusal is skipped rather than stopped at, so the parent still lands behind

@@ -69,7 +69,9 @@ import {
 } from './device-session';
 
 const SUITE = 'Device Evals';
+
 const REPO_ROOT = join(import.meta.dirname, '../..');
+
 const TASK_ID = 'device-connect-e2e';
 
 /** Which arm this process is — the same split the five sibling arms declare. */
@@ -117,11 +119,17 @@ const SETTLE_PROBES = 20;
  * cloud a missing credential fails the arm.
  */
 const BACKEND = resolveEvalBackend();
+
 const RESOLUTION = resolvePublicSessionPlan(SUITE, EVAL_MODELS[TIER]);
+
 const GATE = deviceArmGate(BACKEND.kind === 'ready' ? BACKEND.backend : 'refused', RESOLUTION);
+
 if (GATE.kind === 'skip') console.warn(`[skip] ${SUITE} — ${GATE.reason}`);
+
 const PLAN: PublicSessionPlan | null = RESOLUTION.kind === 'ready' ? RESOLUTION.plan : null;
+
 if (PLAN !== null) console.warn(`[live] ${SUITE} — ${PLAN.describe}`);
+
 const liveTest = test.skipIf(GATE.kind === 'skip');
 
 /**
@@ -170,8 +178,10 @@ interface DeviceCaseState {
 async function settles(check: () => Promise<boolean>): Promise<boolean> {
   const deadline = Date.now() + SETTLE_DEADLINE_MS;
   const between = Math.floor(SETTLE_DEADLINE_MS / SETTLE_PROBES);
+
   for (;;) {
     if (await check()) return true;
+
     if (Date.now() >= deadline) return false;
     const tick = Promise.withResolvers<void>();
     setTimeout(tick.resolve, between);
@@ -204,6 +214,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
       ))],
       turns: 0, toolCalls: 2, tokensIn: 0, tokensOut: 0, ms: 1_000,
     };
+
     expect(assessAdmissibility([TASK_ID], [scored]).outcomesScored).toBe(1);
 
     // And a run that recorded activity without a step verdict is NOT evidence
@@ -217,11 +228,13 @@ describe('Device evals — one machine, linked and driven through the deployed A
     if (GATE.kind !== 'run' || PLAN === null) {
       throw new Error(GATE.kind === 'run' ? 'unreachable: a running gate carries a plan' : GATE.reason);
     }
+
     // Before the daemon exists, so a developer's own device credential can never
     // be the one this case overwrites.
     requireIsolatedAgentHome();
 
     const startedAt = Date.now();
+
     // The bearer is RECOVERED from the resolved target rather than re-read from
     // the environment: two readings are two answers to where this run went.
     const account: DeviceAccount = {
@@ -229,9 +242,12 @@ describe('Device evals — one machine, linked and driven through the deployed A
       cliToken: workerSession(PLAN.llm).token,
       identity: PLAN.identity,
     };
+
     const observed: DeviceSubgoal[] = [];
+
     const note = (what: DeviceStep, reached: boolean, detail: string): boolean => {
       observed.push({ what, reached, detail });
+
       return reached;
     };
 
@@ -245,6 +261,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
       // `connectDevice` itself polls, so a 500 here explains a connect that
       // reported failure while the daemon was up.
       const before = await listDevicesOverCliRoute(account);
+
       if (!note('devices-route', before.status === 200 && before.rows !== null,
         `GET /api/cli/devices → ${String(before.status)}; ${before.rows === null
           ? `the deployment did not answer the declared device list: ${before.body}`
@@ -258,7 +275,9 @@ describe('Device evals — one machine, linked and driven through the deployed A
         label: `kinu-eval-${String(Date.now())}`,
         signal: AbortSignal.timeout(SETTLE_DEADLINE_MS),
       });
+
       if (result.kind !== 'already-running') state.deviceId = result.deviceId;
+
       if (!note('connect', result.kind === 'connected',
         `connectDevice → ${result.kind}${result.kind === 'cancelled'
           ? ` after ${String(SETTLE_DEADLINE_MS)}ms; daemon log tail: `
@@ -268,6 +287,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
       // ── listed ─────────────────────────────────────────────────────────
       const listed = await listDevicesOverCliRoute(account);
       const row = listed.rows?.find((device) => device.id === state.deviceId) ?? null;
+
       if (!note('listed', row?.connected === true,
         row === null
           ? `the new device ${String(state.deviceId)} is absent from the list (${String(listed.status)}): `
@@ -283,12 +303,16 @@ describe('Device evals — one machine, linked and driven through the deployed A
         subject: TASK_ID,
         purpose: 'Run one command on a linked device through the laptop executor.',
       });
+
       state.session = session;
+
       if (state.deviceId !== null) {
         await grantDeviceConsent(account, state.deviceId, session.workspace);
       }
+
       state.execCalls += 1;
       const answer = readDeviceCommand(await session.execute('laptop', `echo ${ROUNDTRIP_MARKER}`));
+
       if (!note('command', answer.kind === 'output' && answer.stdout.includes(ROUNDTRIP_MARKER),
         answer.kind === 'output'
           ? `laptop echo → ${JSON.stringify(answer.stdout.slice(0, 200))}`
@@ -298,16 +322,21 @@ describe('Device evals — one machine, linked and driven through the deployed A
       const revocation = state.deviceId === null
         ? { status: 0, body: 'no device id was recorded' }
         : await revokeDeviceOverUserRoute(account, state.deviceId);
+
       state.revoked = revocation.status === 200;
+
       const gone = state.revoked && await settles(async () => {
         const now = await listDevicesOverCliRoute(account);
+
         return now.rows?.some((device) => device.id === state.deviceId && device.connected) !== true;
       });
+
       // The daemon is still ALIVE and retrying — a revoked device is a closed
       // socket, not a dead process, and the CLI's own reconnect loop is what
       // makes that true. So the proof is its log, not its exit status.
       const log = readDaemonLogTail(DAEMON_LOG_PATH, 12) ?? '';
       const closed = /Disconnected|credentials were rejected/.test(log);
+
       if (!note('revoked', state.revoked && gone && closed,
         `DELETE → ${String(revocation.status)}${revocation.status === 200 ? '' : ` ${revocation.body}`}; `
         + `deployment reports it disconnected: ${String(gone)}; daemon socket closed: ${String(closed)}; `
@@ -315,9 +344,11 @@ describe('Device evals — one machine, linked and driven through the deployed A
 
       // ── refused ────────────────────────────────────────────────────────
       state.execCalls += 1;
+
       const after = readDeviceCommand(
         await session.execute('laptop', `echo ${ROUNDTRIP_MARKER}`),
       );
+
       note('refused', after.kind === 'refused' && !after.text.includes(ROUNDTRIP_MARKER),
         after.kind === 'refused'
           ? `laptop echo refused (${after.reason}): ${after.text.slice(0, 300)}`
@@ -326,6 +357,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
 
     let thrown: Error | null = null;
     let teardown: readonly string[] = [];
+
     try {
       await walk();
     } catch (error) {
@@ -341,6 +373,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
           run: async () => {
             if (state.deviceId === null || state.revoked) return;
             const answer = await revokeDeviceOverUserRoute(account, state.deviceId);
+
             if (answer.status !== 200) {
               throw new Error(`DELETE /api/user/devices/${state.deviceId} → `
                 + `${String(answer.status)} ${answer.body}`);
@@ -355,6 +388,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
 
     const subgoals = completeSubgoals(observed);
     const reached = subgoals.filter((subgoal) => subgoal.reached).length;
+
     const detail = subgoals
       .map((subgoal) => `${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`)
       .join('; ');
@@ -363,9 +397,11 @@ describe('Device evals — one machine, linked and driven through the deployed A
     // deliverable, and a failure whose server text lives only in an assertion
     // message is a failure nobody can act on.
     console.warn(`    [device] ${PLAN.describe}`);
+
     for (const subgoal of subgoals) {
       console.warn(`    [device] ${subgoal.what}: ${subgoal.reached ? 'ok' : 'MISSED'} — ${subgoal.detail}`);
     }
+
     if (teardown.length > 0) console.warn(`    [device] teardown: ${teardown.join('; ')}`);
 
     if (thrown !== null) {
@@ -388,6 +424,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
         turns: 0, toolCalls: state.execCalls,
       })),
     ];
+
     observations.push({
       taskId: TASK_ID, repetition: 0, outcome: 'scored', scores,
       turns: 0, toolCalls: state.execCalls, toolNames: ['laptop.exec'],
@@ -397,6 +434,7 @@ describe('Device evals — one machine, linked and driven through the deployed A
     for (const subgoal of subgoals) {
       expect(subgoal.reached, `${TASK_ID}/${subgoal.what}: ${subgoal.detail}`).toBe(true);
     }
+
     expect(teardown, 'the case left something behind').toEqual([]);
   });
 });

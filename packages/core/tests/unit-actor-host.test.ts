@@ -48,6 +48,7 @@ interface Fixture {
  */
 function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: string): Identity {
   const path = `agents/${name}/scaffold/agent.js`;
+
   return {
     id: `actor-${name}`,
     name,
@@ -66,12 +67,14 @@ function build(donor?: Database): Fixture {
   const db = donor ?? new Database(':memory:');
   const sql = sqlOver(db);
   const execRaw = (ddl: string): void => { db.exec(ddl); };
+
   const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw, sql, exec });
   initEventsHubTables(exec);
   initCompletedTurnTable(execRaw);
   const existing = sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`[0];
   const workspaceId = existing?.id ?? crypto.randomUUID();
+
   if (!existing) void sql`INSERT INTO workspace_identity (id, name) VALUES (${workspaceId}, 'hosted')`;
   const directory = new WorkspaceActorDirectory(sql, { workspaceId, ownerUserId: '' });
   const mainHandle = directory.createMain({ name: 'hosted' });
@@ -115,6 +118,7 @@ function build(donor?: Database): Fixture {
     runtimeFor: (bound) => {
       const plane = planes.get(bound.record.actorId) ?? createMemoryVfs().vfs;
       planes.set(bound.record.actorId, plane);
+
       return {
         ...template,
         actor: bound.handle,
@@ -139,6 +143,7 @@ function build(donor?: Database): Fixture {
         parent: mainHandle, name, creationId, kind,
         lifetime: kind === 'subordinate' ? 'durable' : 'task',
       });
+
       return { actorId: handle.actorId, workspaceId: handle.workspaceId, parentActorId: handle.parentActorId };
     },
     rebuild: () => build(db),
@@ -231,6 +236,7 @@ describe('one workspace database, many logical actors', () => {
       await held.promise;
       order.push('a1-end');
     });
+
     const second = fx.host.run(a, async () => { order.push('a2'); });
     await started.promise;
     // Another actor's work runs while this one is parked: one database, two
@@ -248,13 +254,16 @@ describe('one workspace database, many logical actors', () => {
     const hosted = await fx.host.acquire(ref);
     const held = Promise.withResolvers<void>();
     let finished = false;
+
     // The caller starts work and walks away — a client disconnecting, a request
     // returning. Nothing here observes the promise until after the fact.
     const work = fx.host.run(ref, async () => {
       await held.promise;
       finished = true;
+
       return 'answered';
     });
+
     held.resolve();
     await expect(work).resolves.toBe('answered');
     expect(finished).toBe(true);
@@ -368,12 +377,14 @@ describe('one workspace database, many logical actors', () => {
     const fx = build();
     const a = fx.child('alpha', 'c-alpha', 'subordinate');
     await fx.host.acquire(a);
+
     const resolver = childContextResolver({
       host: fx.host, directory: fx.directory, parent: fx.directory.open(fx.main.actorId),
       // The CHILD's own recorder, which is the point: an edit a parent makes to
       // a child's context is recorded against the child whose context moved.
       events: () => null,
     });
+
     const storageKey = fx.host.describe(a.actorId)?.storageKey ?? '';
     expect(resolver.list()).toContain(storageKey);
     expect(resolver.resolve(storageKey)?.actorId).toBe(a.actorId);

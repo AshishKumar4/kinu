@@ -120,9 +120,12 @@ function resolved(): ResolvedSwarm {
     depth: 1,
     branches: 2,
   });
+
   if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
   const illegal = swarmValidity(call);
+
   if (illegal) throw new Error(`the suite's own composition is not legal: ${illegal.error}`);
+
   return call;
 }
 
@@ -145,9 +148,11 @@ function isBranch(prompt: LanguageModelV3Prompt, index: number): boolean {
  */
 function ownTurns(prompt: LanguageModelV3Prompt): number {
   let lastUser = -1;
+
   for (const [index, message] of prompt.entries()) {
     if (message.role === 'user') lastUser = index;
   }
+
   return prompt.slice(lastUser + 1).filter((message) => message.role === 'assistant').length;
 }
 
@@ -185,11 +190,13 @@ function scriptedNodes(
     inputTokens: { total: 11, noCache: 11, cacheRead: undefined, cacheWrite: undefined },
     outputTokens: { total: 7, text: 7, reasoning: undefined },
   };
+
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-two-branches',
     doGenerate: async ({ prompt }) => {
       const outcome = outcomes[isBranch(prompt, 0) ? 0 : 1];
+
       if (ownTurns(prompt) === 0) {
         return {
           content: [{
@@ -200,13 +207,16 @@ function scriptedNodes(
           usage, warnings: [],
         };
       }
+
       if (outcome.ends === 'errored') throw new Error(PROVIDER_DIED);
+
       // THE SEARCH'S OWN CANCELLATION, arriving where a real one does: between this
       // node's turns, after it had already banked an answer. Both siblings script it,
       // so whichever reaches its second turn first cuts the wave and the other reads
       // the same signal at its own next boundary — the outcome is the same either way,
       // which is what makes it deterministic under `allSettled`.
       if (outcome.ends === 'aborted') cancel.abort();
+
       return {
         content: [{ type: 'text' as const, text: 'Reported.' }],
         finishReason: { unified: 'stop' as const, raw: undefined },
@@ -235,6 +245,7 @@ async function run(input: {
   const cancel = new AbortController();
   const seats = hostedSeatsOver({ rt, db });
   let seated = 0;
+
   const deps: SwarmRunDeps = {
     rt,
     // A REAL actor per node: the seat is what the expansion claims the node's turn
@@ -242,9 +253,11 @@ async function run(input: {
     // single database.
     hostNode: async (node) => {
       seated += 1;
+
       if (input.losesOne === true && seated === 2) {
         throw new Error(`node ${node.nodeId}: the actor host could not seat it`);
       }
+
       return await seats.hostNode(node);
     },
     model: scriptedNodes([input.branch0, input.branch1], cancel),
@@ -252,17 +265,22 @@ async function run(input: {
     logger,
     signal: cancel.signal,
   };
+
   // Assigned rather than spread conditionally, so a bound the caller did not declare is
   // an ABSENT KEY: "declared nothing" and "declared undefined" must not arrive at the
   // resolution under test as one input.
   const declared: SwarmRunDeps = { ...deps };
+
   if (input.maxWallClockMs !== undefined) {
     Object.assign(declared, { maxWallClockMs: input.maxWallClockMs });
   }
+
   const result = await runSwarm(declared, resolved());
+
   const rows = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
     ORDER BY depth ASC, created_at ASC`;
+
   return { result, rows };
 }
 
@@ -274,6 +292,7 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
       branch0: { ends: 'completed', content: fenced(WASTEFUL) },
       branch1: { ends: 'errored', content: fenced(OPTIMAL) },
     });
+
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
     expect(result.report.expansions).toBe(2);
     expect(result.candidates).toHaveLength(2);
@@ -281,6 +300,7 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
     // THE NODE THAT FINISHED, badly. It has a measurement, a score, and nothing to
     // explain — a bad number is a bad number.
     const measuredNode = result.candidates.find((candidate) => candidate.measured !== null);
+
     if (!measuredNode) throw new Error('the completed node produced no measurement');
     expect(measuredNode.measured?.value).toBeGreaterThan(N - 1);
     expect(measuredNode.score).toBeTypeOf('number');
@@ -295,6 +315,7 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
     // status word and the reason are asserted exactly, because those are what a run
     // that flattened every unfinished node into "unmeasurable" would lose.
     const cutNode = result.candidates.find((candidate) => candidate.id !== measuredNode.id);
+
     if (!cutNode) throw new Error('the unfinished node produced no candidate row at all');
     expect(cutNode.measured).toBeNull();
     expect(cutNode.score).toBeNull();
@@ -322,8 +343,10 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
       branch0: { ends: 'completed', content: fenced(WASTEFUL) },
       branch1: { ends: 'errored', content: fenced(OPTIMAL) },
     });
+
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
     const best = result.best;
+
     if (!best) throw new Error('the completed node was measurable, so something must be crowned');
     expect(best.incomplete).toBeNull();
     expect(best.artifact).toContain('let wins = 0');
@@ -339,9 +362,11 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
       branch0: { ends: 'aborted', content: fenced(OPTIMAL) },
       branch1: { ends: 'aborted', content: fenced(OPTIMAL) },
     });
+
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
     expect(result.best).toBeNull();
     expect(result.candidates).toHaveLength(2);
+
     for (const candidate of result.candidates) {
       expect(candidate.incomplete).toMatch(/^aborted after \d+ step\(s\) in \d+ ms: the search was aborted$/);
       expect(candidate.score).toBeNull();
@@ -360,6 +385,7 @@ describe('an unfinished node is distinguishable from a badly-measured one', () =
       branch1: { ends: 'completed', content: fenced(WASTEFUL) },
       maxWallClockMs: 0,
     });
+
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
     const cut = result.candidates.find((candidate) => candidate.incomplete !== null);
     expect(cut?.incomplete).toStartWith('budget_exceeded after ');
@@ -380,6 +406,7 @@ describe('every node runs to the deadline its caller declared, and to none other
       branch0: { ends: 'completed', content: fenced(WASTEFUL) },
       branch1: { ends: 'completed', content: fenced(WASTEFUL) },
     });
+
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
     expect(result.candidates).toHaveLength(2);
     expect(result.candidates.map((candidate) => candidate.incomplete)).toEqual([null, null]);
@@ -394,6 +421,7 @@ describe('every node runs to the deadline its caller declared, and to none other
     // clock does to one node's own steps; this pins that the RUN hands its nodes the
     // number the caller gave.
     const settled: Outcome = { ends: 'completed', content: fenced(WASTEFUL) };
+
     const cases = [
       // Big enough that the report gate's own instrument run cannot expire it: what is
       // under test is a clock that was DECLARED and did not fire, not a fast node.
@@ -406,9 +434,11 @@ describe('every node runs to the deadline its caller declared, and to none other
       const { result } = await run({
         branch0: settled, branch1: settled, ...declaration.declare,
       });
+
       if ('reason' in result) {
         throw new Error(`the run refused with ${declaration.name}: ${result.error}`);
       }
+
       // BOTH nodes, so a resolution that happened to be right for one node is not
       // mistaken for a run-wide one.
       expect({
@@ -442,6 +472,7 @@ describe('a node the run LOST is counted, and the count denies the run a clean s
       branch1: { ends: 'completed', content: fenced(WASTEFUL) },
       losesOne: true,
     });
+
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
 
     // Counted, not carried: the width was two and the run holds one.
@@ -456,6 +487,7 @@ describe('a node the run LOST is counted, and the count denies the run a clean s
       branch0: { ends: 'completed', content: fenced(OPTIMAL) },
       branch1: { ends: 'errored', content: fenced(WASTEFUL) },
     });
+
     if ('reason' in result) throw new Error(`the run refused: ${result.error}`);
 
     // The contrast that makes the previous case mean something: this node also
@@ -469,6 +501,7 @@ describe('a node the run LOST is counted, and the count denies the run a clean s
     const settled = {
       aborted: false, missionSpent: false, lost: 0, remainingBudget: 5, frontierOpen: false,
     };
+
     expect(deriveStop(settled)).toBe('settled');
     // One lost node is enough, at any remaining budget.
     expect(deriveStop({ ...settled, lost: 1 })).toBe('budget');

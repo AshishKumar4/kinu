@@ -23,9 +23,11 @@ import {
 
 /** The arm the security cells cover. */
 export const SECURITY_STRATEGIES = ['snapshot-chain'] as const;
+
 export type SecurityStrategy = (typeof SECURITY_STRATEGIES)[number];
 
 export type SecurityCellId = 'F7' | 'F10' | 'F11' | 'F12';
+
 export type SecurityCellStatus = 'refused' | 'accepted' | 'unable';
 
 export interface SecurityCellResult {
@@ -47,6 +49,7 @@ export interface SecurityCellsObservation {
   /** Isolated-namespace cleanup the fixture recorded; G8 owns it. */
   readonly cleanupErrors: readonly string[];
 }
+
 const SecurityCellSchema = v.looseObject({
   id: v.picklist(['F7', 'F10', 'F11', 'F12']),
   status: v.picklist(['refused', 'accepted', 'unable']),
@@ -74,6 +77,7 @@ export const SecurityCellsReplySchema = v.looseObject({
   security: v.optional(SecurityCellsObservationSchema),
   ms: v.optional(v.number()),
 });
+
 export type SecurityCellsReply = v.InferOutput<typeof SecurityCellsReplySchema>;
 
 export interface SecurityFixture {
@@ -105,6 +109,7 @@ export async function runSecurityFaultCells(
   timeoutMs = 120_000,
 ): Promise<{ observation: SecurityCellsObservation; notes: string[] }> {
   const path = `/security?box=${encodeURIComponent(box)}`;
+
   const response = await fetch(`${fixture.origin}${path}`, {
     method: 'POST',
     headers: {
@@ -114,26 +119,34 @@ export async function runSecurityFaultCells(
     body: JSON.stringify({ strategy, op: nonce }),
     signal: AbortSignal.timeout(timeoutMs),
   });
+
   const text = await response.text();
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(text);
   } catch (error) {
     throw new Error(`POST ${path} returned non-JSON (${response.status}): ${text.slice(0, 300)}`, { cause: error });
   }
+
   const parsed = v.safeParse(SecurityCellsReplySchema, decoded);
+
   if (!parsed.success) {
     throw new Error(
       `POST ${path} (${response.status}) does not match its reply contract: `
       + `${issueText(parsed.issues)}\n${text.slice(0, 300)}`,
     );
   }
+
   const reply = parsed.output;
+
   if (reply.ok !== true || reply.security === undefined) {
     throw new Error(`POST ${path} refused the security cells (${response.status}): ${(reply.error ?? text).slice(0, 240)}`);
   }
+
   const observation = reply.security;
   const notes = observation.cells.map((cell) => `security ${cell.id}: ${cell.status} — ${cell.detail.slice(0, 160)}`);
+
   return { observation, notes };
 }
 
@@ -161,13 +174,16 @@ export function summarizeSecurity(input: {
   readonly driverText: string;
 }): SecurityEvidence {
   const observations = input.rows.map((row) => row.observation);
+
   const completed = observations.length > 0
     && observations.every((observation) => observation !== null && observation.completed);
+
   let prefixEscapes = 0;
   let capabilityEscapesOrReplays = 0;
   let staleWriterAccepted = false;
   let hostileMetadataAccepted = false;
   const credentialLeaks: string[] = [];
+
   for (const observation of observations) {
     if (observation === null) continue;
     prefixEscapes += observation.prefixEscapes;
@@ -176,7 +192,9 @@ export function summarizeSecurity(input: {
     hostileMetadataAccepted = hostileMetadataAccepted || observation.hostileMetadataAccepted;
     credentialLeaks.push(...observation.credentialLeaks);
   }
+
   credentialLeaks.push(...findCredentialLeaks(input.driverText, [input.token]));
+
   return {
     credentialLeaks,
     securityCellsComplete: completed,

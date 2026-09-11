@@ -118,6 +118,7 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
   const id = createSessionId();
   const conversationId = opts.conversationId ?? id;
   const path = join(agentDir, `${id}.jsonl`);
+
   const header: CliSessionHeader = {
     type: 'session',
     version: 1,
@@ -127,6 +128,7 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
     startedAt: new Date().toISOString(),
     conversationId,
   };
+
   writeFileSync(path, `${JSON.stringify(header)}\n`, { mode: 0o600 });
 
   return fileSession(agent, path, id, conversationId);
@@ -134,7 +136,9 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
 
 export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'transcriptDir'> = {}): CliSessionInfo[] {
   const dir = join(transcriptRoot(opts), cleanPathSegment(agent));
+
   if (!existsSync(dir)) return [];
+
   return readdirSync(dir)
     .filter((name) => name.endsWith('.jsonl'))
     .map((name) => readSessionInfo(join(dir, name)))
@@ -151,9 +155,12 @@ export function findTranscriptPath(
 ): string | null {
   if (ref.includes('/') || ref.endsWith('.jsonl')) {
     const byPath = resolve(ref);
+
     return existsSync(byPath) ? byPath : null;
   }
+
   const byId = join(transcriptRoot(opts), cleanPathSegment(agent), `${ref}.jsonl`);
+
   return existsSync(byId) ? byId : null;
 }
 
@@ -163,9 +170,12 @@ export function readCliSessionTranscript(
   opts: Pick<CliSessionOptions, 'transcriptDir'> = {},
 ): CliSessionTranscript {
   const path = findTranscriptPath(agent, ref, opts);
+
   if (!path) throw new Error(`Transcript not found: ${ref}`);
   const parsed = readSessionRaw(path);
+
   if (!parsed.header) throw new Error(`Invalid transcript file: ${path}`);
+
   return {
     info: sessionInfoFromParsed(path, parsed.header, parsed.entryCount, parsed.firstUserText),
     entries: parsed.entries,
@@ -174,6 +184,7 @@ export function readCliSessionTranscript(
 
 function inMemorySession(agent: string): CliSession {
   const id = `ephemeral-${Date.now()}`;
+
   return {
     mode: 'none',
     id,
@@ -186,6 +197,7 @@ function inMemorySession(agent: string): CliSession {
 
 function fileSession(agent: string, path: string, id: string, conversationId: string): CliSession {
   let lastId: string | null = null;
+
   return {
     mode: 'record',
     id,
@@ -201,8 +213,10 @@ function fileSession(agent: string, path: string, id: string, conversationId: st
         timestamp: new Date().toISOString(),
         ...data,
       };
+
       appendFileSync(path, `${JSON.stringify(entry)}\n`);
       lastId = entry.id;
+
       return entry;
     },
   };
@@ -211,7 +225,9 @@ function fileSession(agent: string, path: string, id: string, conversationId: st
 
 function readSessionInfo(path: string): CliSessionInfo | null {
   const parsed = readSessionRaw(path);
+
   if (!parsed.header) return null;
+
   return sessionInfoFromParsed(path, parsed.header, parsed.entryCount, parsed.firstUserText);
 }
 
@@ -221,28 +237,36 @@ function readSessionRaw(path: string): ParsedSession {
   let entryCount = 0;
   let firstUserText: string | undefined;
   const content = readFileSync(path, 'utf-8');
+
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
     let decoded: JsonValue;
+
     try { decoded = parseJsonValue(line); } catch (error) {
       if (classify({ cause: error }) !== 'malformed-input') throw error;
       continue;
     }
+
     const parsedHeader = v.safeParse(CliSessionHeaderSchema, decoded);
+
     if (parsedHeader.success) {
       header = parsedHeader.output;
       continue;
     }
+
     const parsedEntry = v.safeParse(CliSessionEntrySchema, decoded);
+
     if (!parsedEntry.success) continue;
     const entry = parsedEntry.output;
     entries.push(entry);
     entryCount += 1;
     const text = v.safeParse(v.string(), entry.text);
+
     if (!firstUserText && entry.type === 'user' && text.success) {
       firstUserText = text.output.slice(0, 160);
     }
   }
+
   return { header, entries, entryCount, firstUserText };
 }
 
@@ -253,6 +277,7 @@ export function transcriptMessages(entries: CliSessionEntry[], maxEntries = 40):
     .slice(-maxEntries)
     .flatMap((entry) => {
       const message = entryToMessage(entry);
+
       return message ? [message] : [];
     });
 }
@@ -274,6 +299,7 @@ function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
     case 'tool_call':
       {
         const toolName = v.safeParse(v.string(), entry.toolName);
+
         return {
           id: entry.id,
           role: 'tool_call',
@@ -282,27 +308,34 @@ function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
           args: safeJson(entry.args),
         };
       }
+
     case 'tool_result':
       {
         const result = v.safeParse(v.string(), entry.result);
         const success = v.safeParse(v.boolean(), entry.success);
+
         const message: AgentTranscriptMessage = {
           id: entry.id,
           role: 'tool_result',
           content: result.success ? result.output : safeJson(entry.result),
         };
+
         if (success.success) message.success = success.output;
+
         return message;
       }
+
     case 'error':
       {
         const message = v.safeParse(v.string(), entry.message);
+
         return {
           id: entry.id,
           role: 'system',
           content: `Error: ${message.success ? message.output : safeJson(entry.message)}`,
         };
       }
+
     default:
       return null;
   }
@@ -310,20 +343,26 @@ function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
 
 function textEntry(entry: CliSessionEntry, role: 'user' | 'assistant'): AgentTranscriptMessage | null {
   const parsedText = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), entry.text);
+
   if (!parsedText.success) return null;
   const message: AgentTranscriptMessage = { id: entry.id, role, content: parsedText.output };
+
   if (entry.steered === true) message.steered = true;
+
   if (entry.branched === true) message.branched = true;
+
   return message;
 }
 
 function safeJson(value: JsonValue): string {
   const parsedString = v.safeParse(v.string(), value);
+
   return parsedString.success ? parsedString.output : JSON.stringify(value);
 }
 
 function createSessionId(): string {
   const time = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+
   return `${time}-${randomUUID().slice(0, 8)}`;
 }
 
@@ -342,6 +381,7 @@ function sessionInfoFromParsed(
   firstUserText: string | undefined,
 ): CliSessionInfo {
   const st = statSync(path);
+
   return {
     id: header.id,
     path,

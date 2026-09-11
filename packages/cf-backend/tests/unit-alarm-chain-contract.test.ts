@@ -13,11 +13,14 @@ const SRC = join(import.meta.dir, '..', 'src');
 
 function tsSources(dir: string): string[] {
   const out: string[] = [];
+
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const path = join(dir, entry.name);
+
     if (entry.isDirectory()) out.push(...tsSources(path));
     else if (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx')) out.push(path);
   }
+
   return out;
 }
 
@@ -28,9 +31,11 @@ function tsSources(dir: string): string[] {
 function alarmMethods(source: string): string[] {
   const declaration = /^[ \t]*(?:(?:public|protected|private|override|static|readonly|async)[ \t]+)*alarm[ \t]*(?:\([^)]*\)[^{;]*|=[^;{]*)\{/gm;
   const bodies: string[] = [];
+
   for (const match of source.matchAll(declaration)) {
     let depth = 0;
     const start = match.index + match[0].length - 1;
+
     for (let i = start; i < source.length; i++) {
       if (source[i] === '{') depth++;
       else if (source[i] === '}' && --depth === 0) {
@@ -39,6 +44,7 @@ function alarmMethods(source: string): string[] {
       }
     }
   }
+
   return bodies;
 }
 
@@ -62,6 +68,7 @@ describe('DO alarm chain', () => {
         .filter((body) => !/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body)))
         .map(() => path),
     );
+
     expect(broken).toEqual([]);
   });
 
@@ -86,6 +93,7 @@ describe('DO alarm chain', () => {
     const direct = sources
       .filter(({ text }) => /\.\s*(?:setAlarm|deleteAlarm)\s*\(/.test(text))
       .map(({ path }) => path);
+
     expect(direct).toEqual([]);
   });
 });
@@ -114,6 +122,7 @@ describe('the Kinu timer rides the SDK scheduler', () => {
       orchestrator.indexOf('async _kinuTimerTick(): Promise<void>'),
       orchestrator.indexOf('/** Compute the next firing time for a cron expression'),
     );
+
     expect(tick).toContain('if (next !== null) await this.armTimer(next)');
   });
 
@@ -136,6 +145,7 @@ describe('the Kinu timer rides the SDK scheduler', () => {
       orchestrator.indexOf('private sweepUnrunnableSchedules('),
       orchestrator.indexOf('protected get engine()'),
     );
+
     expect(sweep).toContain("type IN ('delayed', 'scheduled')");
     expect(sweep).toContain('STALE_SCHEDULE_HORIZON_MS');
     // Dropping a row a STATE-driven wake rides stops the work it carries; running
@@ -154,11 +164,13 @@ describe('the Kinu timer rides the SDK scheduler', () => {
   test('a comment or string mentioning super.alarm() does not satisfy the guard', () => {
     const commented = `class Bad extends Agent<Env> {\n  async alarm() {\n    // deliberately no super.alarm()\n    doWork();\n  }\n}`;
     const stringy = `class Bad2 extends Agent<Env> {\n  async alarm() {\n    log("call super.alarm() next time");\n  }\n}`;
+
     for (const source of [commented, stringy]) {
       const [body] = alarmMethods(source);
       expect(body).toBeDefined();
       expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(body!))).toBe(false);
     }
+
     const real = `class Good extends Agent<Env> {\n  async alarm() {\n    await super.alarm(); // chained\n  }\n}`;
     const [goodBody] = alarmMethods(real);
     expect(/\bsuper\s*\.\s*alarm\s*\(/.test(stripCommentsAndStrings(goodBody!))).toBe(true);

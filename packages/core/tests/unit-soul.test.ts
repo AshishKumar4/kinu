@@ -24,6 +24,7 @@ function freshWorkspace() {
   const sql = makeSql(db);
   initAllTables(makeExecRaw(db), makeSql(db));
   void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'W'}, ${'atlas'}, ${100})`;
+
   return { db, sql, vfs: createWorkspaceBundle(db).vfs };
 }
 
@@ -95,6 +96,7 @@ describe('workspace birth', () => {
   test('createWorkspace seeds a readable soul and a matching mission', async () => {
     const db = new Database(':memory:');
     const agentDb = makeAgentDatabase(db);
+
     const rt = await createWorkspace(agentDb, {
       name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
@@ -107,6 +109,7 @@ describe('workspace birth', () => {
 
   test('the seeds are real files the agent can read back', async () => {
     const db = new Database(':memory:');
+
     const rt = await createWorkspace(makeAgentDatabase(db), {
       name: 'quiet-harbor-1a4e20', title: 'Atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
@@ -123,11 +126,13 @@ describe('workspace birth', () => {
     const titled = await createWorkspace(makeAgentDatabase(new Database(':memory:')), {
       name: 'quiet-harbor-1a4e20', title: 'Callback Audit', purpose: 'Audit it.', llm: TEST_LLM,
     });
+
     expect(await readSoul(titled.storage.vfs)).toStartWith('# Callback Audit');
 
     const untitled = await createWorkspace(makeAgentDatabase(new Database(':memory:')), {
       name: 'quiet-harbor-1a4e20', purpose: 'Audit it.', llm: TEST_LLM,
     });
+
     const soul = await readSoul(untitled.storage.vfs) ?? '';
     expect(soul).toStartWith('# Kinu');
     expect(soul).not.toContain('quiet-harbor-1a4e20');
@@ -143,6 +148,7 @@ describe('the mission of a document that is still bytes', () => {
   // that boundary, an empty mission that falls back to the first content line,
   // and a document that is one enormous line.
   const filler = (bytes: number): string => 'filler line\n'.repeat(Math.ceil(bytes / 12));
+
   const documents = {
     'the shape every SOUL is written in': '# Atlas\n\n## Mission\n\nHelp with testing.\n',
     'a mission far past a fixed prefix': `# Atlas\n\n${filler(96 * 1024)}\n## Mission\n\nHelp late in the file.\n`,

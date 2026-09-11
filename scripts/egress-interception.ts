@@ -86,6 +86,7 @@ import { classMembers, declaredName, literalText, parse, superClassName, walk, t
 const root = new URL('..', import.meta.url).pathname;
 
 const WRANGLER = 'packages/cf-backend/wrangler.jsonc';
+
 const WORKER_ENTRY = 'packages/cf-backend/src/server.ts';
 
 /** Fields that must be present, with this exact value, on every container
@@ -104,6 +105,7 @@ const FORBIDDEN_FIELDS: readonly string[] = ['allowedHosts', 'deniedHosts'];
  *  required; Bun decodes JSONC natively, so a commented-out block never reaches
  *  the schema. */
 const ContainerList = v.optional(v.array(v.object({ class_name: v.string() })));
+
 export const WranglerContainers = v.object({
   containers: ContainerList,
   env: v.optional(v.record(v.string(), v.object({ containers: ContainerList }))),
@@ -116,9 +118,11 @@ export const WranglerContainers = v.object({
  *  it were bound. */
 export function wranglerContainerClasses(declared: v.InferOutput<typeof WranglerContainers>): string[] {
   const names = new Set<string>();
+
   for (const scope of [declared, ...Object.values(declared.env ?? {})]) {
     for (const { class_name } of scope.containers ?? []) names.add(class_name);
   }
+
   return [...names].sort();
 }
 
@@ -151,14 +155,18 @@ export function wranglerContainerClasses(declared: v.InferOutput<typeof Wrangler
 export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
   const lineage = new Set<string>(['Sandbox']);
   let grew = true;
+
   while (grew) {
     grew = false;
+
     for (const [file, text] of sources) {
       if (!text.includes('Sandbox') && !text.includes('Devbox')) continue;
       walk(parse(file, text).root, (node) => {
         const base = superClassName(node);
+
         if (base === undefined || !lineage.has(base)) return;
         const name = declaredName(node);
+
         if (name !== undefined && !lineage.has(name)) {
           lineage.add(name);
           grew = true;
@@ -166,22 +174,28 @@ export function sandboxLineage(sources: ReadonlyMap<string, string>): ReadonlySe
       });
     }
   }
+
   return lineage;
 }
 
 export function declaredSandboxClasses(sources: ReadonlyMap<string, string>): string[] {
   const lineage = sandboxLineage(sources);
   const names = new Set<string>();
+
   for (const [file, text] of sources) {
     if (!file.startsWith('packages/cf-backend/')) continue;
+
     if (!text.includes('Sandbox') && !text.includes('Devbox')) continue;
     walk(parse(file, text).root, (node) => {
       const base = superClassName(node);
+
       if (base === undefined || !lineage.has(base)) return;
       const name = declaredName(node);
+
       if (name !== undefined) names.add(name);
     });
   }
+
   return [...names].sort();
 }
 
@@ -202,9 +216,12 @@ export interface InterceptionAudit {
 function fieldValue(member: SyntaxNode): string | undefined {
   for (const child of member.children) {
     const literal = literalText(child);
+
     if (literal !== undefined) return literal;
+
     if (child.type === 'Literal') return String(child.raw);
   }
+
   return undefined;
 }
 
@@ -222,18 +239,22 @@ export function auditInterception(
     walk(parsed.root, (node) => {
       if (node.type !== 'ClassDeclaration') return;
       const owner = declaredName(node);
+
       if (owner === undefined || !wanted.has(owner)) return;
       inspected.push({ file, owner });
       const line = parsed.lineAt(node.start);
       const fail = (reason: string): void => void violations.push({ file, line, owner, reason });
 
       const declared = new Map<string, string | undefined>();
+
       for (const member of classMembers(node)) {
         const name = declaredName(member);
+
         if (member.type === 'PropertyDefinition' && name !== undefined) {
           declared.set(name, fieldValue(member));
         }
       }
+
       for (const [field, value] of Object.entries(REQUIRED_FIELDS)) {
         if (!declared.has(field)) {
           fail(`does not declare \`${field} = ${value}\` — see this gate's header for the path that opens`);
@@ -241,6 +262,7 @@ export function auditInterception(
           fail(`declares \`${field} = ${String(declared.get(field))}\`, must be \`${value}\``);
         }
       }
+
       for (const field of FORBIDDEN_FIELDS) {
         if (declared.has(field)) {
           fail(`declares \`${field}\` — an allow/deny list must not be what totality rests on`);
@@ -248,6 +270,7 @@ export function auditInterception(
       }
     });
   }
+
   return { inspected, violations };
 }
 
@@ -264,6 +287,7 @@ export function exportsContainerProxy(entry: string): boolean {
  *  while the Worker reaches the nested copy through `@cloudflare/sandbox`. So the
  *  resolution starts at Sandbox's own module, never at this repository. */
 const CONTAINERS = '@cloudflare/containers';
+
 const CONTAINERS_HOST = '@cloudflare/sandbox';
 
 /** The module that declares the default, spelled the way Containers' own entry
@@ -308,10 +332,12 @@ function resolveFrom(from: string, specifier: string): string {
 function copyVersion(module: string): string {
   for (let dir = dirname(module); dir !== dirname(dir); dir = dirname(dir)) {
     const manifest = join(dir, 'package.json');
+
     if (existsSync(manifest)) {
       return v.parse(CopyVersion, JSON.parse(readFileSync(manifest, 'utf8'))).version;
     }
   }
+
   throw new Error(finding({
     invariant: `the ${CONTAINERS} copy the artifact binds reports its own version`,
     at: module,
@@ -334,6 +360,7 @@ function copyVersion(module: string): string {
 export function boundContainers(): BoundContainers {
   const host = resolveFrom(`${root}package.json`, CONTAINERS_HOST);
   const module = resolveFrom(resolveFrom(host, CONTAINERS), CONTAINERS_MODULE);
+
   return { module, version: copyVersion(module) };
 }
 
@@ -349,10 +376,13 @@ export function sdkDefaultsHttpsInterceptionOff(containerBundle: string): boolea
 export function catchAllIsBound(sources: ReadonlyMap<string, string>): boolean {
   let registered = false;
   let bound = false;
+
   for (const [, text] of sources) {
     if (/outboundHandlers\s*=\s*\{/.test(text) && text.includes('EGRESS_HANDLER')) registered = true;
+
     if (/setOutboundHandler\(\s*EGRESS_HANDLER/.test(text)) bound = true;
   }
+
   return registered && bound;
 }
 
@@ -364,15 +394,19 @@ if (import.meta.main) {
   const { inspected, violations } = auditInterception(sources, classes);
 
   const problems: string[] = [];
+
   if (fromWrangler.length === 0) {
     problems.push(`parsed no "containers" class_name out of ${WRANGLER} — nothing is bound to a container image`);
   }
+
   if (fromSource.length === 0) {
     problems.push('found no class extending the Sandbox lineage in the deployment source — the matcher is not matching');
   }
+
   if (inspected.length === 0) {
     problems.push(`found none of the container classes (${classes.join(', ') || 'none'}) in the source`);
   }
+
   // A name in one source and not the other is always worth reporting: bound but
   // absent from source means the scan missed a container, and the union is what
   // stops a corrected binding from silently shrinking the corpus.
@@ -381,12 +415,14 @@ if (import.meta.main) {
       problems.push(`${name} is bound to a container in ${WRANGLER} but no class ${name} extending the Sandbox lineage was found`);
     }
   }
+
   if (problems.length > 0) {
     for (const problem of problems) console.error(`egress-interception: ${problem}`);
     process.exit(1);
   }
 
   const entry = sources.get(WORKER_ENTRY) ?? readFileSync(`${root}${WORKER_ENTRY}`, 'utf8');
+
   if (!exportsContainerProxy(entry)) {
     console.error(finding({
       invariant: 'the Worker entry re-exports ContainerProxy, without which no interception is installed at all',
@@ -412,6 +448,7 @@ if (import.meta.main) {
   }
 
   const containers = boundContainers();
+
   const httpsStillOffByDefault = sdkDefaultsHttpsInterceptionOff(
     readFileSync(containers.module, 'utf8'),
   );
@@ -425,6 +462,7 @@ if (import.meta.main) {
 
   if (violations.length > 0) {
     console.error(`egress-interception: ${violations.length} un-intercepted egress path(s)`);
+
     for (const v of violations) console.error(`  ${v.file}:${v.line} ${v.owner} — ${v.reason}`);
     process.exit(1);
   }
@@ -433,12 +471,14 @@ if (import.meta.main) {
   console.log(`egress-interception: read the SDK default from ${CONTAINERS} ${containers.version} `
     + `at ${relative(root, containers.module)}, the copy ${CONTAINERS_HOST} resolves for itself and `
     + 'the only copy the artifact binds');
+
   if (!httpsStillOffByDefault) {
     // Not a failure: upstream turning it on is good news. But our source
     // comments assert the opposite, so say it loudly rather than let them rot.
     console.log(`egress-interception: NOTE — ${CONTAINERS} ${containers.version} no longer defaults `
       + 'interceptHttps to false. Update the comments in kinu-sandbox.ts and this gate.');
   }
+
   console.log('egress-interception: DNS RESIDUAL — MEASURED CLOSED on the deployed container '
     + '(0.2.0+28bc79307): raw UDP/53 and TCP/53 to public resolvers get no reply, and every name '
     + 'resolves to the same private ULA fd00::119:1 including a TLD that cannot exist, so nothing '

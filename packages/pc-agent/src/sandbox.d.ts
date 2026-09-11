@@ -3,4 +3,5 @@
 // than as a wildcard pattern in the CLI, because TypeScript consults a pattern
 // only where normal resolution finds nothing, and it finds sandbox.js.
 declare const source: string;
+
 export default source;

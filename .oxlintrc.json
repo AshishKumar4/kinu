@@ -34,6 +34,7 @@
     "typescript/unbound-method": "off",
     "typescript/return-await": ["error", "error-handling-correctness-only"],
     "typescript/use-unknown-in-catch-callback-variable": "error",
+    "oxc/no-accumulating-spread": "error",
     "anti-slop/no-chained-type-assertions": "error",
     "anti-slop/no-conditional-empty-object-spread": "error",
     "anti-slop/no-copy-rpc-stub": "error",
@@ -45,6 +46,7 @@
     "anti-slop/no-module-mocking": "error",
     "anti-slop/no-object-parameters": "error",
     "anti-slop/no-unaccounted-catch": "error",
+    "anti-slop/no-reduce-accumulator-copy": "error",
     "anti-slop/no-reflect-apply": "error",
     "anti-slop/no-reflect-get": "error",
     "anti-slop/no-runtime-typeof": "error",
@@ -59,6 +61,7 @@
     "anti-slop/no-wait-until-in-durable-object": "error",
     "anti-slop/no-widen-then-assert": "error",
     "anti-slop/require-cause-on-rethrow": "error",
+    "anti-slop/require-readable-spacing": "error",
     "anti-slop/require-runtime-import-extension": "error",
     "anti-slop/require-safety-comment-for-type-assertion": "error"
   },

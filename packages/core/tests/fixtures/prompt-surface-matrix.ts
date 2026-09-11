@@ -33,15 +33,19 @@ import type { ActiveSkill, SkillHeader, SkillsIndex } from '../../src/skills/typ
 const WORKSPACE: PromptExecutorInfo = {
   name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active',
 };
+
 const SANDBOX: PromptExecutorInfo = {
   name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active',
 };
+
 const LAPTOP: PromptExecutorInfo = {
   name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
 };
+
 const LAPTOP_OFFLINE: PromptExecutorInfo = {
   name: 'laptop', kind: 'laptop', available: false, configured: true, active: false, status: 'disconnected',
 };
+
 const CUSTOM: PromptExecutorInfo = {
   name: 'gpu', kind: 'laptop', available: true, configured: true, active: true, status: 'active',
 };

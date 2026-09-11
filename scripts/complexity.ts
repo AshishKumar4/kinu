@@ -79,6 +79,7 @@ import { isParseable, readMatching } from './sources';
 import { declaredName, parse, type SyntaxNode } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/complexity.lock.json`;
 
 /** How many of the inventory the report prints by name. Twenty is the list a
@@ -99,6 +100,7 @@ const isCallable = (type: string): boolean => Object.hasOwn(CALLABLE, type);
 /** What one node adds to the function that encloses it. */
 function decisions(node: SyntaxNode): number {
   const { raw } = node;
+
   switch (raw.type) {
     case 'CatchClause':
     case 'ConditionalExpression':
@@ -147,12 +149,15 @@ export interface Measured {
 /** The name a class gives the method sitting inside it. */
 function enclosingClassName(member: SyntaxNode): string | undefined {
   let up: SyntaxNode | undefined = member.parent;
+
   while (up !== undefined) {
     if (up.type === 'ClassDeclaration' || up.type === 'ClassExpression') {
       return declaredName(up) ?? '(class)';
     }
+
     up = up.parent;
   }
+
   return undefined;
 }
 
@@ -161,12 +166,16 @@ function enclosingClassName(member: SyntaxNode): string | undefined {
  *  it survives the line moving, which a `:1255` key does not. */
 function calleeLabel(call: SyntaxNode): string | undefined {
   const { raw } = call;
+
   if (raw.type !== 'CallExpression') return undefined;
+
   if (raw.callee.type === 'Identifier') return raw.callee.name;
+
   if (raw.callee.type === 'MemberExpression' && !raw.callee.computed
     && raw.callee.property.type === 'Identifier') {
     return raw.callee.property.name;
   }
+
   return undefined;
 }
 
@@ -174,25 +183,34 @@ function calleeLabel(call: SyntaxNode): string | undefined {
 function labelOf(fn: SyntaxNode): string {
   const own = declaredName(fn);
   const parent = fn.parent;
+
   if (parent === undefined) return own ?? 'fn';
 
   if (parent.type === 'MethodDefinition' || parent.type === 'TSAbstractMethodDefinition'
     || parent.type === 'PropertyDefinition') {
     const member = declaredName(parent) ?? 'member';
     const owner = enclosingClassName(parent);
+
     return owner === undefined ? member : `${owner}.${member}`;
   }
+
   if (parent.raw.type === 'Property') return declaredName(parent) ?? own ?? 'fn';
+
   if (parent.raw.type === 'VariableDeclarator') {
     return declaredName(parent) ?? own ?? 'fn';
   }
+
   if (own !== undefined) return own;
+
   if (parent.raw.type === 'ExportDefaultDeclaration') return 'default';
   const callee = calleeLabel(parent);
+
   if (callee !== undefined) return callee;
+
   if (parent.raw.type === 'JSXExpressionContainer' && parent.parent?.raw.type === 'JSXAttribute') {
     return declaredName(parent.parent) ?? 'prop';
   }
+
   return 'fn';
 }
 
@@ -211,8 +229,10 @@ export function measureFile(file: string, text: string): Measured[] {
   const visit = (node: SyntaxNode, enclosing: string | undefined): void => {
     if (!isCallable(node.type)) {
       for (const child of node.children) visit(child, enclosing);
+
       return;
     }
+
     const label = labelOf(node);
     const qualified = enclosing === undefined ? label : `${enclosing}>${label}`;
     // Two callbacks to the same function inside the same owner would otherwise
@@ -223,28 +243,34 @@ export function measureFile(file: string, text: string): Measured[] {
     const name = seen === 1 ? qualified : `${qualified}#${String(seen)}`;
 
     let complexity = 1;
+
     const inner = (current: SyntaxNode): void => {
       for (const child of current.children) {
         if (isCallable(child.type)) {
           visit(child, name);
           continue;
         }
+
         complexity += decisions(child);
         inner(child);
       }
     };
+
     inner(node);
     found.push({ file, line: lineAt(node.start), offset: node.start, name, complexity });
   };
 
   visit(tree, undefined);
+
   return found;
 }
 
 /** Every function in the corpus, worst first. */
 export function census(files: ReadonlyMap<string, string>): Measured[] {
   const found: Measured[] = [];
+
   for (const [file, text] of files) found.push(...measureFile(file, text));
+
   return found.sort((a, b) => b.complexity - a.complexity
     || a.file.localeCompare(b.file) || a.name.localeCompare(b.name));
 }
@@ -262,8 +288,10 @@ export interface Distribution {
 
 export function distribution(measured: readonly Measured[]): Distribution {
   const sorted = measured.map((entry) => entry.complexity).sort((a, b) => a - b);
+
   const at = (quantile: number): number =>
     sorted[Math.min(sorted.length - 1, Math.floor(quantile * sorted.length))] ?? 0;
+
   return {
     functions: sorted.length,
     p50: at(0.5),
@@ -319,6 +347,7 @@ export function readBudget(path = LOCK): Budget {
 
 export function writeBudget(budget: Budget, path = LOCK): number {
   writeFileSync(path, `${JSON.stringify(budget, null, 2)}\n`);
+
   return budget.inventory.length;
 }
 
@@ -344,6 +373,7 @@ export function judge(measured: readonly Measured[], budget: Budget): Verdict {
     entrants: inventory(measured, budget.line).filter((entry) => !locked.has(keyOf(entry))),
     grown: [...locked].flatMap(([key, was]) => {
       const entry = current.get(key);
+
       return entry !== undefined && entry.complexity > was ? [{ entry, was }] : [];
     }),
     stale: [...locked]
@@ -398,6 +428,7 @@ function printTier(measured: readonly Measured[], line: number): void {
   const held = inventory(measured, line);
   console.log(`\nthe worst ${String(TIER_SIZE)} functions, by name `
     + `(of ${String(held.length)} at or above the budget line of ${String(line)}):`);
+
   for (const entry of topTier(measured)) {
     console.log(`  ${String(entry.complexity).padStart(4)}  ${entry.file}:${String(entry.line)} `
       + `${entry.name}`);
@@ -431,6 +462,7 @@ if (import.meta.main) {
         key: keyOf(entry), complexity: entry.complexity,
       })),
     });
+
     printDistribution(spread, files.size);
     console.log(`complexity: locked a ceiling of ${String(spread.ceiling)}, a budget line of `
       + `${String(spread.line)} and ${String(count)} function(s) at or above it, over ${summary}`);
@@ -447,11 +479,13 @@ if (import.meta.main) {
       + `${String(budget.line)}, ${String(budget.inventory.length)} function(s) pinned at or `
       + `above it, all measured ${budget.measuredAt} over ${String(budget.functions)} functions. `
       + `${summary}`);
+
     for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
     process.exit(0);
   }
 
   const findings: string[] = [];
+
   for (const entry of verdict.over) {
     findings.push(finding({
       at: `${entry.file}:${String(entry.line)} ${entry.name}`,
@@ -463,6 +497,7 @@ if (import.meta.main) {
         + 'decision to argue with evidence, never a way to clear a red gate',
     }));
   }
+
   for (const entry of verdict.entrants) {
     findings.push(finding({
       at: `${entry.file}:${String(entry.line)} ${entry.name}`,
@@ -476,6 +511,7 @@ if (import.meta.main) {
         + '`bun scripts/complexity.ts --lock` and say in the commit body why it has to be there',
     }));
   }
+
   for (const { entry, was } of verdict.grown) {
     findings.push(finding({
       at: `${entry.file}:${String(entry.line)} ${entry.name}`,
@@ -486,15 +522,20 @@ if (import.meta.main) {
       fix: 'take the growth back out, or re-lock with the number and the reason in the commit body',
     }));
   }
+
   if (verdict.stale.length > 0) {
     console.error(`\ncomplexity: ${String(verdict.stale.length)} locked entr(ies) no longer `
       + 'reproduce at their recorded number.');
+
     for (const line of verdict.stale) console.error(`  ${line}`);
     console.error('Run `bun scripts/complexity.ts --lock` to record it.');
   }
+
   if (findings.length > 0) {
     console.error(`\ncomplexity: ${String(findings.length)} finding(s)\n`);
+
     for (const line of findings) console.error(line);
   }
+
   process.exit(1);
 }

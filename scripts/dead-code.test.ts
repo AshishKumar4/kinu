@@ -35,9 +35,11 @@ import {
 import { isManifest, readRepositoryFile, trackedFiles } from './sources';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const read = (file: string): string => readRepositoryFile(root, file);
 
 const NOTHING = { specifiers: ['left-pad'], commands: ['left-pad'] };
+
 const forms = (name: string, commands: readonly string[] = []) => ({
   specifiers: [name], commands: [name, ...commands],
 });
@@ -124,6 +126,7 @@ describe('which files a manifest serves', () => {
       dependencies: { clsx: '^2' }, devDependencies: { oxlint: '1' },
       scripts: { lint: 'oxlint .' },
     }));
+
     expect(commands).not.toContain('clsx');
     expect(commands).toContain('oxlint .');
   });
@@ -132,6 +135,7 @@ describe('which files a manifest serves', () => {
 /* ── The census, red in both directions ────────────────────────────────── */
 
 const MANIFEST = 'packages/probe/package.json';
+
 const probe = (
   declarations: Record<string, string>,
   files: Record<string, string>,
@@ -153,12 +157,14 @@ describe('the census', () => {
   test('and is not reported once one file imports it', () => {
     const found = probe({ 'left-pad': '^1' },
       { 'packages/probe/src/a.ts': `import pad from 'left-pad';` });
+
     expect(found).toEqual([]);
   });
 
   test('an import in ANOTHER package does not save a workspace declaration', () => {
     const found = probe({ 'left-pad': '^1' },
       { 'packages/other/src/a.ts': `import pad from 'left-pad';` });
+
     expect(found.map((d) => d.name)).toEqual(['left-pad']);
   });
 
@@ -181,8 +187,11 @@ describe('the census', () => {
 /* ── The tree as it stands ─────────────────────────────────────────────── */
 
 const tracked = trackedFiles();
+
 const manifests = tracked.filter(isManifest);
+
 const installed = readInstalled(read('bun.lock'));
+
 const live = unusedDependencies(
   manifests, tracked, read,
   (name) => installed.binaries.get(name) ?? [],
@@ -205,9 +214,11 @@ describe('this repository', () => {
         }),
         JSON.parse(read(manifest)),
       );
+
       return [...Object.keys(parsed.dependencies), ...Object.keys(parsed.devDependencies)]
         .map((name) => `${manifest}#${name}`);
     }));
+
     for (const gone of [
       'package.json#workers-ai-provider', 'package.json#puppeteer-core',
       'packages/agent-utils/package.json#minimist',
@@ -230,8 +241,10 @@ describe('this repository', () => {
     for (const found of live) {
       expect(dependencyReason(dependencyKeyOf(found))).toBeDefined();
     }
+
     // And no reason outlives its row.
     const keys = new Set(live.map(dependencyKeyOf));
+
     for (const key of Object.keys(DEPENDENCY_REASONS)) expect(keys.has(key)).toBe(true);
   });
 
@@ -261,6 +274,7 @@ function knipDependencies(): Set<string> {
     ['--no-progress', '--include', 'dependencies', '--reporter', 'json'],
     { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   );
+
   const Report = v.object({
     issues: v.optional(v.array(v.object({
       file: v.string(),
@@ -268,13 +282,16 @@ function knipDependencies(): Set<string> {
       devDependencies: v.optional(v.array(v.object({ name: v.string() })), []),
     })), []),
   });
+
   const parsed = v.parse(Report, JSON.parse(run.stdout));
   const found = new Set<string>();
+
   for (const issue of parsed.issues) {
     for (const entry of [...issue.dependencies, ...issue.devDependencies]) {
       found.add(`${issue.file}#${entry.name}`);
     }
   }
+
   return found;
 }
 

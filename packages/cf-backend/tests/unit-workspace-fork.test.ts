@@ -14,6 +14,7 @@ async function source() {
   await writeSoul(ws.vfs, ws.sql, 'p');
   void ws.sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
     VALUES (${actor.actorId}, ${'m1'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
+
   return { ...ws, actor };
 }
 
@@ -21,9 +22,11 @@ function harness(options: {
   conflict?: boolean; publishError?: Error; copyError?: Error; renewed?: boolean;
 } = {}) {
   const calls: string[] = [];
+
   const registry: CloudForkRegistry = {
     async reserveWorkspace(_caller, name) {
       calls.push(`reserve:${name}`);
+
       return {
         entry: { name, displayName: name, createdAt: 1, lastVisited: 1, archivedAt: null },
         reserved: !options.conflict,
@@ -31,28 +34,36 @@ function harness(options: {
     },
     async renewWorkspaceReservation(_caller, name, createdAt) {
       calls.push(`renew:${name}:${createdAt}`);
+
       return options.renewed ?? true;
     },
     async releaseWorkspaceReservation(_caller, name, createdAt) {
       calls.push(`release:${name}:${createdAt}`);
+
       return true;
     },
     async publishWorkspaceReservation(_caller, name, createdAt, capabilityHash) {
       calls.push(`publish:${name}:${createdAt}:${capabilityHash}`);
+
       if (options.publishError) throw options.publishError;
     },
     async removeWorkspace(_caller, name, owner) { calls.push(`destroy:${name}:${owner}`); },
   };
+
   const target: CloudForkTarget = {
     async rawCopyFromFork(name, frame, owner) {
       calls.push(`frame:${name}:${frame.seq}:${frame.kind}:${owner}`);
+
       if (options.copyError) throw options.copyError;
+
       if (frame.kind === 'commit') {
         return { ok: true, status: 'published' as const, agentId: 'TGT', capabilityHash: 'cap', forkPointMs: 1 };
       }
+
       return { ok: true, status: 'staged' as const };
     },
   };
+
   return { calls, registry, target };
 }
 

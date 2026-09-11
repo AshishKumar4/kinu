@@ -194,10 +194,12 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
     // Idempotent per activation — `createMain` returns the registered main
     // when the name matches, and the identity row is inserted once.
     const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
+
     if (identity.length === 0) {
       void this.sql`INSERT INTO workspace_identity (id, name, created_at)
         VALUES (${'probe-workspace'}, ${'probe'}, ${Date.now()})`;
     }
+
     new WorkspaceActorDirectory(this.sql, { workspaceId: 'probe-workspace', ownerUserId: '' })
       .createMain({ name: 'probe' });
     this.execRaw(`CREATE TABLE IF NOT EXISTS probe_effect_runs (
@@ -217,6 +219,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
    *  activation holds no handles across evictions, and opening is a read. */
   private probeActor(): ActorHandle {
     this.ensureInit();
+
     return openWorkspaceMainActor(this.sql);
   }
 
@@ -262,10 +265,12 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       scheduleRetry: async (atMs) => {
         const at = Math.max(atMs, Date.now() + WAKE_FLOOR_MS);
         const armed = await this.ctx.storage.getAlarm();
+
         if (armed !== null && armed <= at) return;
         await this.ctx.storage.setAlarm(at);
       },
     });
+
     return this._transitions;
   }
 
@@ -284,19 +289,26 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       run: (input, scope) => {
         const key = terminalEffectKey(name, scope);
         void this.sql`INSERT INTO probe_effect_runs (effect_key, ran_at) VALUES (${key}, ${Date.now()})`;
+
         const runs = this.sql<{ runs: number }>`
           SELECT COUNT(*) AS runs FROM probe_effect_runs WHERE effect_key = ${key}`[0]?.runs ?? 0;
+
         if (name === HELD_EFFECT && runs === 1
           && this.sql`SELECT scope FROM probe_held_scope WHERE scope = ${scope}`.length > 0) {
           return { status: 'owed', detail: 'the reply channel this answer owes is still open' };
         }
+
         void this.sql`INSERT OR IGNORE INTO probe_effect_output (output_key, payload)
           VALUES (${key}, ${input.answer})`;
+
         return { status: 'completed' };
       },
     });
+
     const table: { [K in TerminalEffectName]?: TerminalEffect } = {};
+
     for (const name of PROBE_SEQUENCE) table[name] = declare(name);
+
     return table;
   }
 
@@ -326,9 +338,11 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
     turnId: string, messageId: string, answer: string, opts?: ProbeSettleOpts,
   ): Promise<string | null> {
     this.ensureInit();
+
     if (opts?.holdReply === true) {
       void this.sql`INSERT OR IGNORE INTO probe_held_scope (scope) VALUES (${messageId})`;
     }
+
     const cut = opts?.cutAt;
     this.fault = cut === undefined
       ? null
@@ -336,10 +350,12 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
         if (phase !== cut.phase || name !== cut.name) return;
         throw new TerminalEffectInterrupt(phase, name, scope);
       };
+
     // AWAITED, unlike the Durable Object's fiber: this RPC is what keeps the
     // object alive for the close, so a test observes the same state a fiber would
     // have reached rather than racing it.
     let closing: Promise<void> = Promise.resolve();
+
     try {
       await this.transitions.settle({
         transition: { turnId, messageId },
@@ -349,9 +365,12 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
       await closing;
     } catch (err) {
       if (!(err instanceof TerminalEffectInterrupt)) throw err;
+
       return err.message;
     }
+
     await this.releaseWakeIfConverged();
+
     return null;
   }
 
@@ -366,11 +385,14 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
    */
   async settleTwice(turnId: string, messageId: string, answer: string): Promise<number> {
     this.ensureInit();
+
     const both = [
       this.settle(turnId, messageId, answer),
       this.settle(turnId, messageId, answer),
     ];
+
     await Promise.all(both);
+
     return this.sql<{ runs: number }>`
       SELECT COUNT(*) AS runs FROM probe_effect_runs
       WHERE effect_key = ${terminalEffectKey(PROBE_SEQUENCE[0], messageId)}`[0]?.runs ?? 0;
@@ -388,10 +410,12 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
   async resume(jump: boolean): Promise<void> {
     this.ensureInit();
     this.clockSkewMs = 0;
+
     if (jump) {
       const due = this.transitions.nextRetryAt();
       this.clockSkewMs = due === null ? 0 : Math.max(0, due - Date.now());
     }
+
     await this.transitions.resumeAll();
     await this.releaseWakeIfConverged();
   }
@@ -416,6 +440,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
    *  recovery makes before it has hydrated anything. */
   incompleteSequences(): string[] {
     this.ensureInit();
+
     return this.transitions.incomplete().map((t) => this.transitions.sequenceId(t));
   }
 
@@ -449,6 +474,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
   claimTool(call: ProbeToolCall): ProbeToolClaim {
     this.ensureInit();
     const claim = claimToolEffect(this.sql, this.probeActor(), this.toolKey(call));
+
     return {
       kind: claim.kind,
       result: claim.kind === 'settled' ? JSON.stringify(claim.result) : null,
@@ -466,6 +492,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
 
   effectRows(turnId: string, messageId: string): ProbeEffectRow[] {
     this.ensureInit();
+
     return this.sql<EffectLedgerSqlRow>`
       SELECT effect_key, effect_name, status, input_json
       FROM terminal_effects WHERE sequence_id = ${`${turnId}/${messageId}`}
@@ -482,11 +509,13 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
    *  a fresh activation asks before it has hydrated anything. */
   owedSequences(): readonly string[] {
     this.ensureInit();
+
     return this.transitions.ledger.pendingSequences();
   }
 
   executions(): ProbeExecution[] {
     this.ensureInit();
+
     return this.sql<{ effect_key: string; runs: number }>`
       SELECT effect_key, COUNT(*) AS runs FROM probe_effect_runs
       GROUP BY effect_key ORDER BY MIN(rowid)`
@@ -495,6 +524,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
 
   outputs(): ProbeOutput[] {
     this.ensureInit();
+
     return this.sql<{ output_key: string; payload: string }>`
       SELECT output_key, payload FROM probe_effect_output ORDER BY rowid`
       .map((row) => ({ key: row.output_key, payload: row.payload }));
@@ -503,6 +533,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
   claims(): ProbeClaim[] {
     this.ensureInit();
     const prefix = `${TERMINAL_TRANSITION_CALL_ID}:`;
+
     return this.sql<{ turn_id: string; normalized_call_id: string; result_json: string | null }>`
       SELECT turn_id, normalized_call_id, result_json FROM tool_effect_claims
       WHERE normalized_call_id LIKE ${`${prefix}%`}
@@ -520,6 +551,7 @@ export class TerminalEffectProbeDO extends DurableObject<Cloudflare.Env> {
 
   alarmRuns(): number {
     this.ensureInit();
+
     return this.sql<{ runs: number }>`SELECT COUNT(*) AS runs FROM probe_alarm_runs`[0]?.runs ?? 0;
   }
 }

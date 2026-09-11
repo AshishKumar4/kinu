@@ -19,6 +19,7 @@ import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 
 const PATH = '/repo/AGENTS.md';
+
 const OWNER = 'user-abc/workspace-main';
 
 /** The approvals table, the actor that holds the decisions, and the database
@@ -31,6 +32,7 @@ function store(scope = OWNER) {
   const execRaw = makeExecRaw(db);
   initInstructionApprovalsTable(execRaw);
   const actor = createTestActors(sql, execRaw).main;
+
   return {
     db,
     actor,

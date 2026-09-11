@@ -126,7 +126,9 @@ export interface MsgSendResult {
  *  whether cross-talk is CONTENDING — is only meaningful across turns, because
  *  the agents contending are in different ones. */
 let sentTotal = 0;
+
 let inflight = 0;
+
 let receivedTotal = 0;
 
 /**
@@ -148,9 +150,11 @@ export async function countedMsgSend<Result>(
   sentTotal += 1;
   const sequence = sentTotal;
   inflight += 1;
+
   try {
     const result = await send();
     emitSent(fact, read(result), started, concurrent, sequence);
+
     return result;
   } catch (cause) {
     emitSent(fact, { outcome: 'failed' }, started, concurrent, sequence);
@@ -285,10 +289,12 @@ export type WriteAuthor = number;
  *  write from something that could change under it. */
 export function newWriteAuthor(): WriteAuthor {
   authorCount += 1;
+
   return authorCount;
 }
 
 let authorCount = 0;
+
 let collisionCount = 0;
 
 /**
@@ -315,8 +321,10 @@ export function countSharedWrite(author: WriteAuthor, path: string): void {
   lastWriteByPath.delete(path);
   lastWriteByPath.set(path, { writer: author, at });
   evictOldestPaths();
+
   if (previous === undefined || previous.writer === author) return;
   const gap = at - previous.at;
+
   if (gap > WRITE_SETTLE_WINDOW_MS) return;
   collisionCount += 1;
   diagnostics.event('agents.msg.write_collision', {
@@ -333,6 +341,7 @@ export function countSharedWrite(author: WriteAuthor, path: string): void {
 function evictOldestPaths(): void {
   while (lastWriteByPath.size > TRACKED_PATHS) {
     const oldest = lastWriteByPath.keys().next();
+
     if (oldest.done === true) return;
     lastWriteByPath.delete(oldest.value);
   }

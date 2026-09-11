@@ -278,13 +278,18 @@ interface HostSlot {
 function actorScopedTables(sql: SqlExecutor): readonly string[] {
   const rows = sql<{ name: string; sql: string }>`
     SELECT name, sql FROM sqlite_master WHERE type = 'table' AND sql IS NOT NULL`;
+
   const names: string[] = [];
+
   for (const row of rows) {
     if (row.name === 'workspace_actors' || row.name.startsWith('sqlite_')) continue;
+
     if (/^\s*CREATE\s+VIRTUAL\s+TABLE/i.test(row.sql)) continue;
+
     if (!/\bactor_id\b/.test(row.sql)) continue;
     names.push(row.name);
   }
+
   return names;
 }
 
@@ -294,10 +299,13 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
   const slotFor = (reference: ActorReference): HostSlot | null => {
     const slot = slots.get(reference.actorId);
+
     if (!slot) return null;
+
     if (!sameActorReference(slot.actor.reference, reference)) {
       throw new KinuError('denied', 'The hosted actor reference does not match the one this root issued.');
     }
+
     return slot;
   };
 
@@ -309,24 +317,30 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     // what the directory's own validation plus `also` below covers.
     deps.directory.validate(reference, deps.directory.storagePath(reference));
     const record = deps.directory.retained(reference.actorId);
+
     if (!record) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+
     if (record.workspaceId !== reference.workspaceId || record.parentActorId !== reference.parentActorId) {
       throw new KinuError('denied', 'The actor reference does not match its workspace and parent.');
     }
+
     // The release fence rides THIS binding's own validation: a store bound to
     // this handle asks it before every statement, so dropping the actor is
     // what stops its writes rather than everybody remembering to stop calling.
     const fence: ReleaseFence = { released: false };
+
     const handle = deps.directory.openFenced(reference.actorId, () => {
       if (fence.released) {
         throw new KinuError('missing', 'The hosted actor was released by its root.');
       }
     });
+
     const stores = createAgentStores(
       () => deps.storage.sql,
       () => handle,
       (write) => deps.storage.transactionSync(write),
     );
+
     return { bound: { reference: actorReferenceOf(reference), record, handle, stores }, fence };
   };
 
@@ -348,33 +362,43 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     // so there is no revocation for a stale root handle to escape, and the
     // exemption cannot widen into the hole the child rule closes.
     const rootBinding = reference.parentActorId === null;
+
     if (runtime.actor !== bound.handle
       && !(rootBinding && runtime.actor.actorId === bound.handle.actorId)) {
       throw new KinuError('denied', 'A hosted runtime must be built over the handle the host bound.');
     }
+
     // Before the session exists, so no turn of this actor can be admitted
     // against a program pointer nobody set. Idempotent: an actor that already
     // has a pointer keeps it, and a promotion it has since made stands.
     const seed = await deps.loopFor({ ...bound, runtime });
     await seedActorLoop(runtime, seed.parent, seed.origin);
     const orchestration = await deps.orchestrationFor({ ...bound, runtime });
+
     const session = new ActorSession({
       runtime, orchestration, claims: bound.stores.claims, installedBuild: deps.installedBuild,
       events: deps.contextEvents(bound),
     });
+
     return { actor: { ...bound, runtime, session }, fence };
   };
 
   const acquire = async (reference: ActorReference): Promise<HostedActor> => {
     const live = slotFor(reference);
+
     if (live && !live.fence.released) return live.actor;
     const pending = opening.get(reference.actorId);
+
     if (pending) return await pending;
+
     const work = build(reference).then(({ actor, fence }) => {
       slots.set(reference.actorId, { actor, fence, queue: Promise.resolve() });
+
       return actor;
     });
+
     opening.set(reference.actorId, work);
+
     try {
       return await work;
     } finally {
@@ -384,7 +408,9 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
 
   const requireSlot = (reference: ActorReference): HostSlot => {
     const slot = slotFor(reference);
+
     if (!slot || slot.fence.released) throw new KinuError('missing', 'The actor is not hosted by this root.');
+
     return slot;
   };
 
@@ -398,11 +424,15 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       throw new KinuError('denied',
         'The workspace root is not released individually; its runtime belongs to whoever opened the workspace.');
     }
+
     const slot = slotFor(reference);
+
     if (!slot || slot.fence.released) return;
+
     if (slot.actor.session.inFlight) {
       throw new KinuError('denied', 'An actor holding a turn in flight cannot be released; cancel or settle the turn first.');
     }
+
     slot.fence.released = true;
     slots.delete(reference.actorId);
   };
@@ -411,6 +441,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     acquire,
     hosted: (reference) => {
       const slot = slotFor(reference);
+
       return slot && !slot.fence.released ? slot.actor : null;
     },
     describe: (actorId) => deps.directory.retained(actorId),
@@ -430,12 +461,14 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
       // failure forward — a refused operation must not poison the next one.
       const result = slot.queue.then(() => work(actor));
       slot.queue = Promise.allSettled([result]);
+
       return await result;
     },
     release,
     releaseAll: () => {
       for (const reference of [...slots.values()].map((slot) => slot.actor.reference)) {
         const slot = slotFor(reference);
+
         if (!slot) continue;
         slot.fence.released = true;
         slots.delete(reference.actorId);
@@ -443,20 +476,26 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
     },
     retire: async (parent, retirement) => {
       const record = deps.directory.retained(retirement.reference.actorId);
+
       if (!record) throw new KinuError('missing', 'The actor is not registered in this workspace.');
+
       if (record.name !== retirement.name) {
         throw new KinuError('denied', 'The retirement names an alias this actor no longer holds.');
       }
+
       if (retirement.observed) {
         const owner = deps.storage.sql<{ epoch: number }>`
           SELECT epoch FROM actor_turn_claims
           WHERE actor_id = ${record.actorId} AND turn_id = ${retirement.observed.turnId} LIMIT 1`[0]?.epoch;
+
         if (owner !== undefined && owner > retirement.observed.epoch) {
           throw new KinuError('denied',
             `this retirement was formed against execution epoch ${retirement.observed.epoch}, and epoch ${owner} owns the turn`);
         }
       }
+
       const slot = slotFor(retirement.reference);
+
       if (slot && !slot.fence.released) {
         // A destroyed actor's in-flight turn is cut here rather than left to
         // discover its rows are gone; a retained dismissal waits for it.
@@ -486,29 +525,36 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
               actor: record.name, cause: renderThrownChain({ cause }),
             });
           }
+
           if (slot.actor.session.inFlight) {
             throw new KinuError('denied', 'This actor holds a turn in flight; retire it once the turn settles.');
           }
         }
+
         slot.fence.released = true;
         slots.delete(retirement.reference.actorId);
       }
+
       const parentPath = deps.directory.storagePath(parent);
       deps.directory.apply(parent, parentPath, {
         action: 'retire', name: retirement.name, reference: retirement.reference,
       });
+
       if (retirement.destroy) {
         purgeActorRows(deps.storage, record.actorId);
         await deps.discardBytes?.(record);
       }
+
       deps.directory.apply(parent, parentPath, {
         action: 'release', name: retirement.name, reference: retirement.reference,
       });
     },
     resumable: (limit = 50) => {
       const resumable: ResumableActorTurn[] = [];
+
       for (const record of deps.directory.list()) {
         const claims = unsettledClaimsOf(deps.storage.sql, record.actorId, limit);
+
         for (const claim of claims) {
           resumable.push({
             reference: { actorId: record.actorId, workspaceId: record.workspaceId, parentActorId: record.parentActorId },
@@ -516,6 +562,7 @@ export function createActorHost(deps: ActorHostDeps): ActorHost {
           });
         }
       }
+
       return resumable;
     },
   };
@@ -554,6 +601,7 @@ function unsettledClaimsOf(sql: SqlExecutor, actorId: string, limit: number): re
             program_build, consumed_revision, claimed_at
      FROM actor_turn_claims WHERE actor_id = ${actorId} AND status = 'admitted'
      ORDER BY claimed_at DESC LIMIT ${limit}`;
+
   return rows.map((row) => Object.freeze({
     actorId, turnId: row.turn_id, runId: row.run_id, epoch: row.epoch, workMode: row.work_mode,
     program: Object.freeze({
@@ -600,16 +648,21 @@ export function childContextResolver(deps: {
 }): ChildContextResolver {
   const children = (): readonly WorkspaceActor[] => {
     const parent = deps.directory.describe(deps.parent);
+
     return deps.directory.list().filter((actor) => actor.parentActorId === parent.actorId);
   };
+
   return {
     list: () => children().map((actor) => actor.storageKey),
     resolve: (storageKey: string): ActorContextStores | null => {
       const child = children().find((actor) => actor.storageKey === storageKey);
+
       if (!child) return null;
+
       const bound = deps.host.bindStores({
         actorId: child.actorId, workspaceId: child.workspaceId, parentActorId: child.parentActorId,
       });
+
       return { actorId: child.actorId, claims: bound.stores.claims, events: deps.events(bound) };
     },
   };
@@ -660,15 +713,18 @@ export async function recoverActorTurns(
   // settlement from a failure to look, and an operator unable to tell a
   // workspace that answered from one that could not be opened.
   const unreadable: string[] = [];
+
   for (const turn of host.resumable(limit)) {
     try {
       const actor = await host.acquire(turn.reference);
+
       const verdict = await verifyClaimedProgram(
         turn.claim,
         (version) => readVersionedScaffoldSource(actor.runtime, version),
         (source) => sha256Hex(source),
         () => actor.stores.claims.consumedContext(turn.claim.turnId),
       );
+
       // `verified` is the only arm a turn may be resumed under. `source_changed`
       // means the version's retained bytes no longer digest to what the claim
       // named, and `build_unknown` means this host publishes no identity for the
@@ -678,6 +734,7 @@ export async function recoverActorTurns(
         resumed.push(turn.claim.turnId);
         continue;
       }
+
       refused.push(turn.claim.turnId);
       actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'indeterminate');
     }
@@ -691,5 +748,6 @@ export async function recoverActorTurns(
       }), { actor: turn.record.name });
     }
   }
+
   return { resumed, refused, unreadable };
 }

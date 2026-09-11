@@ -92,9 +92,11 @@ export function jobRedriveResumeGate(deps: {
 }): (roots: readonly string[]) => Promise<readonly string[]> {
   return async (offered) => {
     const redriven = await deps.recoverOrphans();
+
     if (redriven.length === 0) return [];
     const offeredRoots = new Set(offered);
     const claimed = new Set<string>();
+
     for (const job of redriven) {
       for (const root of deps.rootsForTask(taskOf(deps.inputOf(job.id)))) {
         // Only what this reconciliation actually offered: a re-drive of some other
@@ -102,6 +104,7 @@ export function jobRedriveResumeGate(deps: {
         if (offeredRoots.has(root)) claimed.add(root);
       }
     }
+
     return [...claimed];
   };
 }
@@ -125,15 +128,19 @@ const ResumableJobInputSchema = v.looseObject({ task: v.optional(v.string()) });
 function taskOf(input: string | null): string {
   if (input === null) return '';
   const raw = tolerate(() => parseJsonValue(input), 'malformed-input');
+
   if (raw === undefined) {
     diagnostics.failure('head.resume_gate_input_unreadable', toKinuError({
       doing: 'reading the task out of a stored background-job input',
       cause: new Error('the stored input is not JSON'),
       otherwise: 'bad_input',
     }));
+
     return '';
   }
+
   const parsed = v.safeParse(ResumableJobInputSchema, raw);
+
   return parsed.success ? parsed.output.task ?? '' : '';
 }
 
@@ -155,6 +162,7 @@ export function resumableForkRoots(stores: {
   if (task === '') return [];
   const roots = stores.ledger.findRunningSwarms(task).map((row) => row.rootId);
   const heads = stores.journal.findResumableRun(task);
+
   return heads === null ? roots : [...roots, heads];
 }
 
@@ -186,6 +194,7 @@ const MAX_NAMED_RUNS = 4;
 
 function describeRun(run: AbandonedHeadRun): string {
   const why = run.rationale ? ` (${run.rationale})` : '';
+
   return `${run.rootId}${why}: ${run.abandoned} of ${run.total} heads`;
 }
 
@@ -197,6 +206,7 @@ export function forkInterruptedWake(runs: readonly AbandonedHeadRun[]): string {
   const rest = runs.length - named.length;
   const roster = rest > 0 ? [...named, `and ${rest} more`] : named;
   const heads = runs.reduce((n, run) => n + run.abandoned, 0);
+
   return (
     `${heads} head(s) across ${runs.length} fork run(s) were still marked running from an ` +
     `activation that has ended, so nothing is executing them and no report will arrive. ` +
@@ -292,6 +302,7 @@ export async function reconcileInterruptedForks(deps: {
   // could not.
   closeUnterminatedRuns(deps.runEvents, startedAt, deps.logActivity);
   const interrupted = deps.journal.markInterrupted({ spawnedBefore: startedAt }, startedAt);
+
   if (interrupted.length > 0) {
     deps.logActivity?.(
       'fork_runs_interrupted',
@@ -309,6 +320,7 @@ export async function reconcileInterruptedForks(deps: {
   // resume path runs on every activation even with no offered roots. A second
   // call would reclaim a job out from under the executor the first call started.
   const offeredRoots = new Set(deps.journal.unfinishedRoots(startedAt));
+
   for (const root of deps.search?.runningSwarmRoots(startedAt) ?? []) offeredRoots.add(root);
   const outcome = await resumeOutcome(deps.resume, [...offeredRoots]);
 
@@ -325,6 +337,7 @@ export async function reconcileInterruptedForks(deps: {
   // with nothing offered there is nothing here to close either.
   if (deps.search) {
     const closed = deps.search.closeUnclaimed(outcome.claimed, startedAt);
+
     if (closed.length > 0) deps.logActivity?.('swarm_runs_closed', closed.join(', '));
   }
 
@@ -337,6 +350,7 @@ export async function reconcileInterruptedForks(deps: {
     { spawnedBefore: startedAt, exceptRoots: [...outcome.claimed] },
     startedAt,
   );
+
   if (runs.length === 0) return runs;
   deps.logActivity?.(
     'fork_runs_abandoned',
@@ -356,6 +370,7 @@ export async function reconcileInterruptedForks(deps: {
       heads: runs.reduce((n, run) => n + run.abandoned, 0),
     },
   });
+
   return runs;
 }
 
@@ -379,12 +394,16 @@ function closeUnterminatedRuns(
   logActivity: ((event: string, detail?: string) => void) | undefined,
 ): void {
   if (!ledger) return;
+
   try {
     const open = ledger.unterminatedRuns(undefined, startedBefore);
+
     if (open.length === 0) return;
+
     for (const runId of open) {
       ledger.emit(runId, { type: 'run_end', reason: RUN_INTERRUPTED_REASON });
     }
+
     logActivity?.('runs_closed_interrupted', open.join(', '));
   } catch (err) {
     diagnostics.failure('run.interrupted_close_failed', toKinuError({
@@ -416,6 +435,7 @@ async function resumeOutcome(
   roots: readonly string[],
 ): Promise<ResumeOutcome> {
   if (!resume) return { kind: 'absent', claimed: new Set<string>() };
+
   try {
     return { kind: 'answered', claimed: new Set(await resume(roots)) };
   } catch (err) {
@@ -424,6 +444,7 @@ async function resumeOutcome(
       cause: err,
       otherwise: 'io',
     }), { runs: roots.length, protected: roots.length });
+
     return { kind: 'gate-failed' };
   }
 }
@@ -440,9 +461,11 @@ function recordAbandonedRuns(
   runs: readonly AbandonedHeadRun[],
 ): void {
   if (!ledger) return;
+
   for (const run of runs) {
     try {
       const runId = ledger.runForHeadSplit(run.rootId);
+
       if (!runId) continue;
       ledger.emit(runId, {
         type: 'head_abandoned',

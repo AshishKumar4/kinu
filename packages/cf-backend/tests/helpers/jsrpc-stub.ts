@@ -34,5 +34,6 @@ export function jsrpcStub<T extends object>(methods: T): T {
   // `Object.create` is typed `any` by the standard library; naming the binding
   // is what re-establishes the type, with no assertion to justify.
   const stub: T = Object.create(methods);
+
   return stub;
 }

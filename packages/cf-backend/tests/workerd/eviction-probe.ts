@@ -91,6 +91,7 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
           finishReason: { unified: 'tool-calls' as const, raw: undefined }, usage: USAGE, warnings: [],
         }),
     });
+
     return this._model;
   }
 
@@ -101,13 +102,17 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
         inputSchema: jsonSchema({ type: 'object', properties: {} }),
         execute: async () => {
           const parked = await this.ctx.storage.get<boolean>('parked');
+
           if (parked === true) {
             // The recovered turn. Reported to the witness, so the test learns
             // the turn continued without ever addressing this object.
             await this.witness().record('turn:resumed');
+
             return 'resumed';
           }
+
           await this.ctx.storage.put('parked', true);
+
           // Never settles. The activation is reset while this is held, which is
           // exactly the eviction a keepAlive heartbeat cannot survive.
           return new Promise<string>(() => undefined);
@@ -145,6 +150,7 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
     id: string; name: string; snapshot: unknown; createdAt: number;
   }): Promise<{ status: 'completed'; snapshot: unknown }> {
     await this.witness().record(`fiber:${ctx.name}`);
+
     return { status: 'completed', snapshot: { lane: ctx.name, recovered: true } };
   }
 
@@ -159,6 +165,7 @@ export class EvictionProbeDO extends Think<Cloudflare.Env> {
       [{ id: `probe-${idempotencyKey}`, role: 'user', parts: [{ type: 'text', text }] }],
       { idempotencyKey },
     );
+
     return { submissionId: result.submissionId, accepted: result.accepted, status: result.status };
   }
 

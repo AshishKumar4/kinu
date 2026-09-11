@@ -31,6 +31,7 @@ import { sandboxHandleLifecycle } from './helpers/sandbox-handle-lifecycle';
 // ── Fake sandbox exec seam ─────────────────────────────────────────────────
 
 type ExecResult = { stdout?: string; stderr?: string; exitCode?: number };
+
 type Rule = { match: RegExp; handle: (command: string) => ExecResult };
 
 class FakeSandbox implements ReleaseExec {
@@ -42,11 +43,13 @@ class FakeSandbox implements ReleaseExec {
 
   on(match: RegExp, result: ExecResult): this {
     this.rules.push({ match, handle: () => result });
+
     return this;
   }
 
   onDynamic(match: RegExp, handle: Rule['handle']): this {
     this.rules.push({ match, handle });
+
     return this;
   }
 
@@ -56,12 +59,15 @@ class FakeSandbox implements ReleaseExec {
 
   async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     this.commands.push(command);
+
     for (const rule of this.rules) {
       if (rule.match.test(command)) {
         const r = rule.handle(command);
+
         return { stdout: r.stdout ?? '', stderr: r.stderr ?? '', exitCode: r.exitCode ?? 0 };
       }
     }
+
     // Unmatched commands succeed (exit 0); emulate the pathExists probe's
     // `test -e … && echo yes || echo no` so success reads as existing.
     return { stdout: command.includes('echo yes') ? 'yes' : '', stderr: '', exitCode: 0 };
@@ -73,6 +79,7 @@ class FakeSandbox implements ReleaseExec {
 
   async exposePort(port: number, name?: string): Promise<{ url: string } | { error: string }> {
     this.exposed.push({ port, name });
+
     return this.exposeResult;
   }
 }
@@ -84,6 +91,7 @@ function makeStore(): ReleaseStore {
   const exec = makeSqlExec(db);
   initReleaseTables(exec);
   let seq = 0;
+
   return createReleaseStore(releaseSqlFromExec(exec), {
     id: (prefix) => `${prefix}-${String(++seq).padStart(10, '0')}`,
   });
@@ -123,12 +131,15 @@ function setup(opts?: {
 }): Setup {
   const store = makeStore();
   const sandbox = new FakeSandbox();
+
   const engine = new ReleaseEngine({
     exec: sandbox,
     ledger: makeLedger(store),
     gitHubAuth: opts?.gitHubAuth,
   });
+
   const kind = opts?.binding?.kind ?? 'local';
+
   const binding = store.upsertSourceBinding({
     kind,
     label: 'test source',
@@ -137,8 +148,11 @@ function setup(opts?: {
     localRoot: kind === 'local' ? '/home/user/site' : null,
     deployTarget: opts?.binding?.deployTarget ?? null,
   });
+
   const change = store.createChange('jarvis', { bindingId: binding.id, userPrompt: 'ship the hello page' });
+
   if (opts?.patch !== null) store.updateChange(change.id, { patch: opts?.patch ?? PATCH });
+
   return { store, engine, sandbox, changeId: change.id, workdir: `/workspace/releases/${change.id}` };
 }
 
@@ -155,6 +169,7 @@ async function applyAndPass(s: Setup): Promise<void> {
   const applied = await s.engine.apply(s.changeId);
   expect(applied.ok).toBe(true);
   const checks = await s.engine.runChecks(s.changeId, [{ name: 'build', command: 'bun run build' }]);
+
   if (!checks.ok || !checks.allPassed) throw new Error('expected passing checks');
 }
 
@@ -190,6 +205,7 @@ describe('engine.apply', () => {
     const s = setup({ patch: null });
     const result = await s.engine.apply(s.changeId);
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('no patch');
     expect(s.store.getChange(s.changeId)?.status).toBe('draft');
   });
@@ -201,6 +217,7 @@ describe('engine.apply', () => {
 
     const result = await s.engine.apply(s.changeId);
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('patch does not apply');
 
     const detail = s.store.detail(s.changeId);
@@ -214,6 +231,7 @@ describe('engine.apply', () => {
       binding: { kind: 'github', repoUrl: 'https://github.com/acme/site', defaultBranch: 'main' },
       gitHubAuth: async () => 'Basic dGVzdA==',
     });
+
     scriptLocalGit(s.sandbox);
 
     const result = await s.engine.apply(s.changeId);
@@ -233,6 +251,7 @@ describe('engine.apply', () => {
       binding: { kind: 'github', repoUrl: 'https://github.com/acme/site' },
       gitHubAuth: async () => 'Basic dGVzdA==',
     });
+
     scriptLocalGit(s.sandbox);
     expect((await s.engine.apply(s.changeId)).ok).toBe(true);
 
@@ -250,6 +269,7 @@ describe('engine.apply', () => {
       binding: { kind: 'github', repoUrl: 'https://github.com/acme/site', defaultBranch: 'main' },
       gitHubAuth: async () => 'Basic dGVzdA==',
     });
+
     s.sandbox
       .on(/test -e .*\.git/, { stdout: 'yes' })  // clone already present
       .on(/rev-parse HEAD~1/, { stdout: 'ba5eba5eba5e0000000000000000000000000000' })
@@ -276,10 +296,12 @@ describe('engine.apply', () => {
 
     const result = await s.engine.apply(s.changeId);
     expect(result.ok).toBe(false);
+
     if (!result.ok) {
       expect(result.error).toContain('no GitHub credential');
       expect(result.error).toContain("credential named 'github'");
     }
+
     expect(s.store.detail(s.changeId).checks[0]?.status).toBe('failed');
   });
   test('github fetch names the explicit refspec so a branch value never parses as a flag', async () => {
@@ -287,6 +309,7 @@ describe('engine.apply', () => {
       binding: { kind: 'github', repoUrl: 'https://github.com/acme/site', defaultBranch: 'main' },
       gitHubAuth: async () => 'Basic dGVzdA==',
     });
+
     s.sandbox
       .on(/test -e .*\.git/, { stdout: 'yes' })
       .on(/rev-parse HEAD~1/, { stdout: 'ba5eba5eba5e0000000000000000000000000000' })
@@ -303,6 +326,7 @@ describe('engine.apply', () => {
     const engine = new ReleaseEngine({ exec: null, ledger: makeLedger(store) });
     const binding = store.upsertSourceBinding({ kind: 'local', label: 'x', localRoot: '/x' });
     const change = store.createChange('jarvis', { bindingId: binding.id, userPrompt: 'x' });
+
     for (const result of [
       await engine.apply(change.id),
       await engine.runChecks(change.id, [{ name: 'a', command: 'true' }]),
@@ -311,6 +335,7 @@ describe('engine.apply', () => {
       await engine.rollback(change.id),
     ]) {
       expect(result.ok).toBe(false);
+
       if (!result.ok) expect(result.error).toContain('no sandbox container');
     }
   });
@@ -332,7 +357,9 @@ describe('engine.runChecks', () => {
       { name: 'build', command: 'bun run build' },
       { name: 'tests', command: 'bun test' },
     ]);
+
     expect(result.ok).toBe(true);
+
     if (result.ok) {
       expect(result.allPassed).toBe(false);
       expect(result.results).toEqual([
@@ -350,6 +377,7 @@ describe('engine.runChecks', () => {
     // Rerun with the failure fixed → advances to preview_ready.
     const rerun = await s.engine.runChecks(s.changeId, [{ name: 'tests', command: 'bun run test:fixed' }]);
     expect(rerun.ok).toBe(true);
+
     if (rerun.ok) expect(rerun.status).toBe('preview_ready');
     expect(s.store.getChange(s.changeId)?.status).toBe('preview_ready');
   });
@@ -358,6 +386,7 @@ describe('engine.runChecks', () => {
     const s = setup();
     const before = await s.engine.runChecks(s.changeId, [{ name: 'a', command: 'true' }]);
     expect(before.ok).toBe(false);
+
     if (!before.ok) expect(before.error).toContain('apply the change first');
 
     scriptLocalGit(s.sandbox);
@@ -365,6 +394,7 @@ describe('engine.runChecks', () => {
     s.sandbox.on(new RegExp(`test -e '${s.workdir}'`), { stdout: 'no' });
     const gone = await s.engine.runChecks(s.changeId, [{ name: 'a', command: 'true' }]);
     expect(gone.ok).toBe(false);
+
     if (!gone.ok) expect(gone.error).toContain('re-run apply');
   });
 });
@@ -389,6 +419,7 @@ describe('engine.preview', () => {
 
     const result = await s.engine.preview(s.changeId, { port: 8080 });
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('nothing is listening');
     expect(s.store.getChange(s.changeId)?.previewUrl).toBeNull();
   });
@@ -408,6 +439,7 @@ describe('engine.deploy', () => {
 
     const result = await s.engine.deploy(s.changeId, { environment: 'staging' });
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain("APPROVED 'deploy_staging' approval");
     expect(s.store.getChange(s.changeId)?.status).toBe('preview_ready');
   });
@@ -452,6 +484,7 @@ describe('engine.deploy', () => {
     const result = await s.engine.deploy(s.changeId, { environment: 'staging' });
 
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('different arguments');
     // Fail-closed: the deploy command never ran, status stays pre-deploy.
     expect(s.sandbox.commands.some((c) => c.includes('wrangler deploy'))).toBe(false);
@@ -470,6 +503,7 @@ describe('engine.deploy', () => {
     });
 
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('different arguments');
     expect(s.sandbox.commands.some((c) => c.includes('curl evil'))).toBe(false);
   });
@@ -486,6 +520,7 @@ describe('engine.deploy', () => {
     });
 
     expect(result.ok).toBe(true);
+
     if (result.ok) expect(result.workerVersionId).toBe('0b1d2f3a-4c5e-6789-abcd-ef0123456789');
   });
 
@@ -497,6 +532,7 @@ describe('engine.deploy', () => {
 
     const result = await s.engine.deploy(s.changeId, { environment: 'staging' });
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('Authentication error');
 
     const detail = s.store.detail(s.changeId);
@@ -526,10 +562,12 @@ describe('engine.deploy', () => {
 
     const result = await s.engine.deploy(s.changeId, { environment: 'local' });
     expect(result.ok).toBe(false);
+
     if (!result.ok) {
       expect(result.error).toContain('no deploy command');
       expect(result.error).toContain('run preview first');
     }
+
     expect(s.store.getChange(s.changeId)?.status).toBe('awaiting_approval');
   });
   test.each([
@@ -543,6 +581,7 @@ describe('engine.deploy', () => {
 
     const result = await s.engine.deploy(s.changeId, { environment });
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('deploy command');
     expect(s.store.getChange(s.changeId)?.status).toBe('awaiting_approval');
     expect(s.store.detail(s.changeId).deployments).toEqual([]);
@@ -565,10 +604,12 @@ describe('engine.rollback', () => {
       .onDynamic(/test -e .*\.git/, () => ({ stdout: hasGit ? 'yes' : 'no' }))
       .onDynamic(/init -b main/, () => {
         hasGit = true;
+
         return {};
       })
       .onDynamic(/reset --hard '([0-9a-f]+)'/, (cmd) => {
         head = /reset --hard '([0-9a-f]+)'/.exec(cmd)![1];
+
         return {};
       })
       .on(/rev-parse HEAD~1/, { stdout: BASE_SHA })
@@ -577,12 +618,14 @@ describe('engine.rollback', () => {
     // Walk to deployed through the real ledger + engine.
     expect((await s.engine.apply(s.changeId)).ok).toBe(true);
     expect((await s.engine.runChecks(s.changeId, [{ name: 'build', command: 'true' }])).ok).toBe(true);
+
     if (!opts?.deployTarget) expect((await s.engine.preview(s.changeId, { port: 8080 })).ok).toBe(true);
     const approvalType = opts?.deployTarget ? 'deploy_staging' : 'apply';
     const approval = s.store.requestApproval(s.changeId, approvalType);
     s.store.decideApproval(approval.id, 'approved', 'owner-1');
     const deployed = await s.engine.deploy(s.changeId, { environment: opts?.deployTarget ? 'staging' : 'local' });
     expect(deployed.ok).toBe(true);
+
     return { ...s, head: () => head };
   }
 
@@ -590,6 +633,7 @@ describe('engine.rollback', () => {
     const s = await deployedSetup();
     const result = await s.engine.rollback(s.changeId);
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain("APPROVED 'rollback' approval");
     expect(s.store.getChange(s.changeId)?.status).toBe('deployed');
   });
@@ -636,6 +680,7 @@ describe('engine.rollback', () => {
 
     const result = await s.engine.rollback(s.changeId);
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('NOT verified');
     expect(sBadHead()).toBe(APPLY_SHA);
     const detail = s.store.detail(s.changeId);
@@ -657,12 +702,15 @@ describe('engine.rollback', () => {
       workerVersionId: 'ffffffff-1111-2222-3333-444444444444',
       rollbackTarget: PLATFORM_TARGET,
     });
+
     // A platform rollback runs a command, so the approval binds THAT command —
     // an approval that named nothing is not authority to run anything.
     const approval = opts.approvedCommand === undefined
       ? s.store.requestApproval(s.changeId, 'rollback')
       : s.store.requestApproval(s.changeId, 'rollback', { command: opts.approvedCommand });
+
     s.store.decideApproval(approval.id, 'approved', 'owner-1');
+
     return s;
   }
 
@@ -674,10 +722,12 @@ describe('engine.rollback', () => {
 
     const result = await s.engine.rollback(s.changeId);
     expect(result.ok).toBe(false);
+
     if (!result.ok) {
       expect(result.error).toContain('platform version id');
       expect(result.error).toContain(`bunx wrangler rollback ${PLATFORM_TARGET}`);
     }
+
     expect(s.sandbox.commands.slice(before).some((c) => c.includes('reset --hard'))).toBe(false);
     expect(s.store.getChange(s.changeId)?.status).toBe('deployed');
   });
@@ -709,6 +759,7 @@ describe('engine.rollback', () => {
 
     const result = await s.engine.rollback(s.changeId, { command: PLATFORM_ROLLBACK_COMMAND });
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('does not exist');
 
     const detail = s.store.detail(s.changeId);
@@ -731,6 +782,7 @@ describe('engine.rollback', () => {
 
     const result = await s.engine.rollback(s.changeId);
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('no rollback target');
   });
 });
@@ -773,11 +825,13 @@ describe('createSandboxReleaseExec', () => {
       ...sandboxHandleLifecycle,
     };
   }
+
   test('an exec result without an exit code reads as failure, never success', async () => {
     const exec = createSandboxReleaseExec(
       makeHandle(async () => ({ output: 'some output' })),
       {},
     );
+
     const res = await exec.exec('bun run build');
     expect(res.stdout).toBe('some output');
     expect(res.exitCode).toBe(1);
@@ -785,13 +839,16 @@ describe('createSandboxReleaseExec', () => {
 
   test('passes raw exit codes and cwd through with no work deadline; normalizes the SDK\'s `output` field', async () => {
     const calls: Array<{ command: string; opts?: Parameters<SandboxHandle['exec']>[1] }> = [];
+
     const exec = createSandboxReleaseExec(
       makeHandle(async (command, opts) => {
         calls.push({ command, opts });
+
         return { output: 'output-field out', stderr: 'boom', exitCode: 3 };
       }),
       {},
     );
+
     const res = await exec.exec('bun test', { cwd: '/workspace/pc' });
     expect(res).toEqual({ stdout: 'output-field out', stderr: 'boom', exitCode: 3 });
     // No `timeout` reaches the handle: an absent one is the process lane, and a
@@ -801,14 +858,18 @@ describe('createSandboxReleaseExec', () => {
 
   test('retries once on a transient container disconnect, then returns the real result', async () => {
     let attempts = 0;
+
     const exec = createSandboxReleaseExec(
       makeHandle(async () => {
         attempts += 1;
+
         if (attempts === 1) throw new Error('Container suddenly disconnected, try again');
+
         return { stdout: 'ok', stderr: '', exitCode: 0 };
       }),
       {},
     );
+
     const res = await exec.exec('true');
     expect(res.exitCode).toBe(0);
     expect(attempts).toBe(2);
@@ -816,16 +877,19 @@ describe('createSandboxReleaseExec', () => {
 
   test('exposePort maps the provider result: supported → url, unsupported → the honest reason', async () => {
     const handle = makeHandle(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
+
     const ok = createSandboxReleaseExec(handle, {
       exposePort: async (port, opts) => ({
         supported: true, url: `https://${port}-sb-t.previews.example/`, port, name: opts?.name, verified_listening: true,
       }),
     });
+
     expect(await ok.exposePort(8080, 'pc-x')).toEqual({ url: 'https://8080-sb-t.previews.example/' });
 
     const refused = createSandboxReleaseExec(handle, {
       exposePort: async () => ({ supported: false, reason: 'nothing is listening on port 8080 inside the sandbox' }),
     });
+
     expect(await refused.exposePort(8080)).toEqual({ error: 'nothing is listening on port 8080 inside the sandbox' });
 
     const none = createSandboxReleaseExec(handle, {});
@@ -848,6 +912,7 @@ describe('release dispatcher with an engine wired', () => {
 
   function buildTool(opts?: { engine?: false }): BuiltReleaseTool {
     const s = setup();
+
     const deps: ReleaseToolDeps = {
       board: async () => s.store.board('jarvis', 20),
       bindSource: async (input) => s.store.upsertSourceBinding(input),
@@ -859,6 +924,7 @@ describe('release dispatcher with an engine wired', () => {
       recordDeployment: async (changeId, input) => s.store.recordDeployment(changeId, input),
       engine: opts?.engine === false ? undefined : s.engine,
     };
+
     return { s, execute: (args) => runReleaseAction(deps, args) };
   }
 
@@ -874,11 +940,13 @@ describe('release dispatcher with an engine wired', () => {
 
   test('refuses record_deployment — deployment identity comes from action=deploy', async () => {
     const { s, execute } = buildTool();
+
     const result = await execute({
       action: 'record_deployment',
       changeId: s.changeId,
       deployment: { environment: 'staging', workerVersionId: 'asserted-fake-id' },
     });
+
     expect(result).toMatchObject({ error: expect.stringContaining('action=deploy') });
     expect(s.store.detail(s.changeId).deployments).toEqual([]);
   });
@@ -897,11 +965,13 @@ describe('release dispatcher with an engine wired', () => {
     scriptLocalGit(s.sandbox);
     expect(await execute({ action: 'apply', changeId: s.changeId })).toMatchObject({ ok: true });
     s.sandbox.on(/bun test/, { exitCode: 1, stderr: 'FAIL' });
+
     const result = await execute({
       action: 'run_checks',
       changeId: s.changeId,
       checks: [{ name: 'tests', command: 'bun test' }],
     });
+
     expect(result).toMatchObject({ ok: true, allPassed: false });
     expect(s.store.detail(s.changeId).checks.find((c) => c.name === 'tests')?.status).toBe('failed');
   });

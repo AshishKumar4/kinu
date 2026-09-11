@@ -32,11 +32,13 @@ function streamJsonLines(text: string, usage: UsageFixture | null = {}): string 
     type: 'stream_event',
     event: { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
   });
+
   const deltaLines = chunk(text).map((piece) =>
     JSON.stringify({
       type: 'stream_event',
       event: { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: piece } },
     }));
+
   const base = {
     type: 'result',
     subtype: 'success',
@@ -45,6 +47,7 @@ function streamJsonLines(text: string, usage: UsageFixture | null = {}): string 
     result: text,
     stop_reason: 'end_turn',
   };
+
   const resultLine = JSON.stringify(usage
     ? {
       ...base,
@@ -55,6 +58,7 @@ function streamJsonLines(text: string, usage: UsageFixture | null = {}): string 
       },
     }
     : base);
+
   return [
     JSON.stringify({ type: 'system', subtype: 'init', model: 'claude-sonnet-4-6', tools: [] }),
     JSON.stringify({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed' } }),
@@ -68,6 +72,7 @@ function chunk(text: string): string[] {
   // Split into a couple of pieces to exercise incremental delta accumulation.
   if (text.length <= 2) return [text];
   const mid = Math.ceil(text.length / 2);
+
   return [text.slice(0, mid), text.slice(mid)];
 }
 
@@ -90,10 +95,12 @@ interface FakeSpawn {
 function fakeSpawn(handler: (args: string[]) => FakeProc): FakeSpawn {
   const calls: string[][] = [];
   const state = { killed: 0 };
+
   const spawn: ClaudeSpawn = (args, opts) => {
     calls.push(args);
     const proc = handler(args);
     let killed = false;
+
     const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
       if (proc.hangUntilAbort) {
         opts.signal?.addEventListener('abort', () => {
@@ -101,24 +108,31 @@ function fakeSpawn(handler: (args: string[]) => FakeProc): FakeSpawn {
           state.killed++;
           resolve({ code: null, signal: 'SIGTERM' });
         });
+
         return;
       }
+
       queueMicrotask(() => resolve({
         code: proc.code === undefined ? 0 : proc.code,
         signal: proc.signal ?? null,
       }));
     });
+
     async function* lines(value: string | undefined): AsyncGenerator<Uint8Array> {
       if (proc.hangUntilAbort) {
         // Emit nothing until the process is aborted, then end the stream.
         await exit;
+
         return;
       }
+
       const enc = new TextEncoder();
+
       for (const line of (value ?? '').split(/(?<=\n)/)) {
         if (line) yield enc.encode(line);
       }
     }
+
     return {
       stdout: lines(proc.stdout),
       stderr: lines(proc.stderr),
@@ -127,6 +141,7 @@ function fakeSpawn(handler: (args: string[]) => FakeProc): FakeSpawn {
       exit,
     } satisfies SpawnedClaude;
   };
+
   return { spawn, get calls() { return calls; }, get killed() { return state.killed; } };
 }
 
@@ -135,7 +150,9 @@ function fakeSpawn(handler: (args: string[]) => FakeProc): FakeSpawn {
 function availableSpawn(text = 'Hello from Claude.', usage?: UsageFixture | null) {
   return fakeSpawn((args) => {
     if (args[0] === '--version') return { stdout: '2.1.174 (Claude Code)\n', code: 0 };
+
     if (args[0] === 'auth' && args[1] === 'status') return { stdout: JSON.stringify({ loggedIn: true, subscriptionType: 'max' }), code: 0 };
+
     return { stdout: streamJsonLines(text, usage), code: 0 };
   });
 }
@@ -148,10 +165,14 @@ async function finishUsage(model: LanguageModelV2): Promise<LanguageModelV2Usage
     prompt: [{ role: 'user', content: [{ type: 'text', text: 'ping' }] }],
     includeRawChunks: false,
   });
+
   const reader = stream.getReader();
+
   for (;;) {
     const { done, value } = await reader.read();
+
     if (done) throw new Error('stream ended without a finish part');
+
     if (value.type === 'finish') return value.usage;
   }
 }
@@ -166,6 +187,7 @@ describe('claude-cli provider — doStream', () => {
 
     const result = streamText({ model, prompt: 'ping' });
     let text = '';
+
     for await (const delta of result.textStream) text += delta;
     expect(text).toBe('PONG.');
 
@@ -237,9 +259,12 @@ describe('claude-cli provider — doStream', () => {
   test('a non-zero exit with a login error surfaces an actionable message', async () => {
     const spawn = fakeSpawn((args) => {
       if (args[0] === '--version') return { stdout: '2.1.174\n', code: 0 };
+
       if (args[0] === 'auth') return { stdout: JSON.stringify({ loggedIn: true }), code: 0 };
+
       return { stdout: '', stderr: 'Error: Not logged in. Please run claude login.', code: 1 };
     }).spawn;
+
     const provider = createClaudeCliProvider({ spawn });
     const model = provider.createModel('claude-opus-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false });
     await expect(generateText({ model, prompt: 'q' })).rejects.toThrow(/sign in to your Claude subscription/i);
@@ -251,6 +276,7 @@ describe('claude-cli provider — doStream', () => {
       code: null,
       signal: 'SIGKILL',
     })).spawn;
+
     const provider = createClaudeCliProvider({ spawn });
     const model = provider.createModel('claude-opus-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false });
 
@@ -261,11 +287,15 @@ describe('claude-cli provider — doStream', () => {
 
   test('a result error event surfaces a clean error', async () => {
     const errLine = JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, api_error_status: 'overloaded_error', result: '' });
+
     const spawn = fakeSpawn((args) => {
       if (args[0] === '--version') return { stdout: '2.1.174\n', code: 0 };
+
       if (args[0] === 'auth') return { stdout: JSON.stringify({ loggedIn: true }), code: 0 };
+
       return { stdout: errLine + '\n', code: 0 };
     }).spawn;
+
     const provider = createClaudeCliProvider({ spawn });
     const model = provider.createModel('claude-opus-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false });
     await expect(generateText({ model, prompt: 'q' })).rejects.toThrow(/overloaded_error/i);
@@ -278,25 +308,33 @@ describe('claude-cli provider — abort', () => {
   test('aborting mid-stream kills the child and the stream finishes', async () => {
     const fake = fakeSpawn((args) => {
       if (args[0] === '--version') return { stdout: '2.1.174\n', code: 0 };
+
       if (args[0] === 'auth') return { stdout: JSON.stringify({ loggedIn: true }), code: 0 };
+
       return { hangUntilAbort: true };
     });
+
     const provider = createClaudeCliProvider({ spawn: fake.spawn });
     const model = provider.createModel('claude-opus-4-x');
     const controller = new AbortController();
+
     const { stream } = await model.doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
       includeRawChunks: false,
       abortSignal: controller.signal,
     });
+
     const reader = stream.getReader();
     queueMicrotask(() => controller.abort());
     const types: string[] = [];
+
     for (;;) {
       const { done, value } = await reader.read();
+
       if (done) break;
       types.push(value.type);
     }
+
     expect(fake.killed).toBeGreaterThanOrEqual(1);
     expect(types).toContain('finish');
     expect(types).not.toContain('error');
@@ -335,8 +373,10 @@ describe('claude-cli provider — availability', () => {
   test('default probe: version fails → binary absent', async () => {
     const spawn = fakeSpawn((args) => {
       if (args[0] === '--version') return { stdout: '', code: 127 };
+
       return { stdout: '', code: 0 };
     }).spawn;
+
     const provider = createClaudeCliProvider({ spawn });
     expect(await provider.isAvailable(deps())).toBe(false);
     expect(await provider.unavailableReason!(deps())).toMatch(/Install Claude Code/i);
@@ -345,8 +385,10 @@ describe('claude-cli provider — availability', () => {
   test('default probe: auth status not loggedIn → logged out', async () => {
     const spawn = fakeSpawn((args) => {
       if (args[0] === '--version') return { stdout: '2.1.174\n', code: 0 };
+
       return { stdout: JSON.stringify({ loggedIn: false }), code: 0 };
     }).spawn;
+
     const provider = createClaudeCliProvider({ spawn });
     expect(await provider.isAvailable(deps())).toBe(false);
     expect(await provider.unavailableReason!(deps())).toMatch(/sign in/i);
@@ -355,8 +397,10 @@ describe('claude-cli provider — availability', () => {
   test('probes `claude auth status` with no unsupported flags', async () => {
     const fake = fakeSpawn((args) => {
       if (args[0] === '--version') return { stdout: '2.1.174\n', code: 0 };
+
       return { stdout: JSON.stringify({ loggedIn: true }), code: 0 };
     });
+
     const provider = createClaudeCliProvider({ spawn: fake.spawn });
     await provider.isAvailable(deps());
     const authCall = fake.calls.find((a) => a[0] === 'auth')!;
@@ -383,6 +427,7 @@ describe('buildClaudePrompt', () => {
       { role: 'system', content: 'sys' },
       { role: 'user', content: [{ type: 'text', text: 'hello' }] },
     ]));
+
     expect(built.system).toBe('sys');
     expect(built.prompt).toBe('hello');
   });
@@ -394,6 +439,7 @@ describe('buildClaudePrompt', () => {
       { role: 'tool', content: [{ type: 'tool-result', toolCallId: 't1', toolName: 'read', output: { type: 'text', value: 'file contents' } }] },
       { role: 'user', content: [{ type: 'text', text: 'follow up' }] },
     ]));
+
     expect(built.prompt).toContain('first');
     expect(built.prompt).toContain('Assistant: reply');
     expect(built.prompt).toContain('Tool results:\nfile contents');
@@ -417,6 +463,7 @@ describe('claude-cli provider — tool loop composition', () => {
       tools: { noop: tool({ description: 'noop', inputSchema: z.object({}), execute: async () => 'ran' }) },
       stopWhen: stepCountIs(2),
     });
+
     expect(result.text).toBe('Working on it.');
   });
 
@@ -424,7 +471,9 @@ describe('claude-cli provider — tool loop composition', () => {
     const openaiLlm: LLMProviderConfig = {
       name: 'openai', baseURL: 'https://api.openai.com/v1', headers: { Authorization: 'Bearer sk' }, model: 'gpt-4o-mini',
     };
+
     const { spawn, calls } = availableSpawn('The capital of France is Paris.');
+
     const resolver = createLocalModelResolver({
       llm: openaiLlm,
       credentials: {},
@@ -439,6 +488,7 @@ describe('claude-cli provider — tool loop composition', () => {
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const rt = createCLIRuntime(db, { dbPath: db.filename, llm: openaiLlm });
     const events: SessionEvent[] = [];
+
     const session = new LocalAgentSession({
       rt, db,
       model: resolver.resolveModel('claude/claude-opus-4-x'),
@@ -451,6 +501,7 @@ describe('claude-cli provider — tool loop composition', () => {
     await session.send('What is the capital of France?');
 
     const turnEnd = events.find((event) => event.type === 'turn-end');
+
     if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.assistantResponse).toBe('The capital of France is Paris.');
 
@@ -483,6 +534,7 @@ describe('claude-cli provider — tool calls', () => {
     const model = provider.createModel('claude-opus-4-x', modelDeps());
 
     let executed: { query: string } | undefined;
+
     const result = await generateText({
       model,
       prompt: 'what is the capital of France?',
@@ -490,7 +542,11 @@ describe('claude-cli provider — tool calls', () => {
         lookup: tool({
           description: 'look up a fact',
           inputSchema: z.object({ query: z.string() }),
-          execute: async (args) => { executed = args; return 'Paris'; },
+          execute: async (args) => {
+            executed = args;
+
+            return 'Paris';
+          },
         }),
       },
       stopWhen: stepCountIs(2),
@@ -505,6 +561,7 @@ describe('claude-cli provider — tool calls', () => {
     const { spawn } = availableSpawn(FC_BLOCK);
     const provider = createClaudeCliProvider({ spawn });
     const model = provider.createModel('claude-opus-4-x', modelDeps());
+
     const { stream } = await model.doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
       includeRawChunks: false,
@@ -512,20 +569,24 @@ describe('claude-cli provider — tool calls', () => {
 
     const parts: LanguageModelV2StreamPart[] = [];
     const reader = stream.getReader();
+
     for (;;) {
       const { done, value } = await reader.read();
+
       if (done) break;
       parts.push(value);
     }
 
     const calls = parts.filter((p) => p.type === 'tool-call');
     expect(calls).toHaveLength(1);
+
     if (calls[0].type !== 'tool-call') throw new Error('unreachable');
     expect(calls[0].toolName).toBe('lookup');
     expect(JSON.parse(calls[0].input)).toEqual({ query: 'capital of France' });
     expect(calls[0].toolCallId.length).toBeGreaterThan(0);
 
     const finish = parts.find((p) => p.type === 'finish');
+
     if (!finish || finish.type !== 'finish') throw new Error('no finish part');
     expect(finish.finishReason).toBe('tool-calls');
 
@@ -548,9 +609,11 @@ describe('claude-cli provider — tool calls', () => {
       '</invoke>',
       '</function_calls>',
     ].join('\n');
+
     const { spawn } = availableSpawn(twoBlocks);
     const provider = createClaudeCliProvider({ spawn });
     const model = provider.createModel('claude-opus-4-x', modelDeps());
+
     const { stream } = await model.doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
       includeRawChunks: false,
@@ -558,8 +621,10 @@ describe('claude-cli provider — tool calls', () => {
 
     const parts: LanguageModelV2StreamPart[] = [];
     const reader = stream.getReader();
+
     for (;;) {
       const { done, value } = await reader.read();
+
       if (done) break;
       parts.push(value);
     }
@@ -581,6 +646,7 @@ describe('claude-cli provider — tool calls', () => {
         inputSchema: { type: 'object', properties: { query: { type: 'string' } }, required: ['query'] },
       }],
     });
+
     expect(built.system).toContain('lookup');
     expect(built.system).toContain('<function_calls>');
     expect(built.system).toContain('<invoke name="TOOL_NAME">');

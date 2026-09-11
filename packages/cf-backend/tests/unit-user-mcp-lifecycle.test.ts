@@ -57,13 +57,17 @@ async function readSurface(h: TestUserDO, owner: UserCaller): Promise<McpToolSur
  */
 function persistedServerOptions(id: string): string {
   const row = recordedMcpServers().find((server) => server.id === id);
+
   if (!row) throw new Error(`No SDK row for ${id}`);
+
   if (row.server_options === null) throw new Error(`SDK row ${id} persisted no options`);
+
   return row.server_options;
 }
 
 function harness(options?: TestUserDOOptions): TestUserDO {
   resetRecordedMcp();
+
   return createTestUserDO(options);
 }
 
@@ -82,10 +86,13 @@ async function seedServer(
      VALUES (?, ?, ?, 'auto', NULL, NULL, 0, 0)`,
     id, fields.name ?? id, fields.url ?? `https://${id}.example/sse`,
   );
+
   if (fields.headers) {
     await h.userDO.userMcp_update(await testOwner(), id, { headers: fields.headers });
+
     return;
   }
+
   // A read over a non-empty table is what hydrates the manager, and every test
   // below asks a question about hydrated state.
   await h.userDO.userMcp_list(await testOwner());
@@ -94,6 +101,7 @@ async function seedServer(
 function storedName(h: TestUserDO, id: string): string | undefined {
   const row = sqlExec(h.db).exec('SELECT name FROM user_mcp_servers WHERE id = ?', id).toArray()[0];
   const parsed = v.safeParse(v.string(), row?.name);
+
   return parsed.success ? parsed.output : undefined;
 }
 
@@ -135,8 +143,13 @@ describe('a server name is one identity, enforced by the database', () => {
     const h = harness();
     await seedServer(h, 'srv1', { name: 'github' });
     const owner = await testOwner();
+
     const addRefusal = (name: string): string => {
-      try { validateMcpServerInput({ name, serverUrl: 'https://mcp.example/sse' }); return ''; }
+      try {
+        validateMcpServerInput({ name, serverUrl: 'https://mcp.example/sse' });
+
+        return '';
+      }
       catch (err) { return err instanceof Error ? err.message : String(err); }
     };
 
@@ -178,6 +191,7 @@ describe('a server name is one identity, enforced by the database', () => {
       h.userDO.userMcp_update(owner, 'srv1', { name: 'shared' }),
       h.userDO.userMcp_update(owner, 'srv2', { name: 'Shared' }),
     ]);
+
     expect(settled.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
     expect(settled.filter((r) => r.status === 'rejected')).toHaveLength(1);
     expect([storedName(h, 'srv1'), storedName(h, 'srv2')].filter((n) => n?.toLowerCase() === 'shared'))
@@ -332,6 +346,7 @@ describe('the descriptor read is off the connection critical path', () => {
     const deferred = new Set(surface.unavailable.map((u) => u.server));
     expect([...named]).toEqual(['ready']);
     expect([...deferred]).toEqual(['pending']);
+
     for (const server of deferred) expect(named.has(server)).toBe(false);
     h.close();
   });
@@ -499,19 +514,24 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
 
     const seen: string[] = [];
     const real = globalThis.fetch;
+
     const record = async (
       _url: Request | URL | RequestInfo,
       init?: RequestInit,
     ): Promise<Response> => {
       seen.push(new Headers(init?.headers).get('authorization') ?? 'none');
+
       return new Response('{}');
     };
+
     globalThis.fetch = Object.assign(record, { preconnect: real.preconnect });
+
     try {
       const send = liveMcpFetch('srv1');
       expect(send).not.toBeNull();
       await send?.('https://srv1.example/sse');
     } finally { globalThis.fetch = real; }
+
     expect(seen).toEqual(['Bearer sealed']);
     woken.close();
     first.close();
@@ -576,6 +596,7 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
 
     const seen: string[] = [];
     const real = globalThis.fetch;
+
     // `typeof globalThis.fetch` carries `preconnect` beside the call signature.
     // The stub is COMPLETED with the real one's rather than asserted into shape,
     // and the two parameters take their platform types by inference.
@@ -584,9 +605,12 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
       init?: RequestInit,
     ): Promise<Response> => {
       seen.push(new Headers(init?.headers).get('authorization') ?? 'none');
+
       return new Response('{}');
     };
+
     globalThis.fetch = Object.assign(record, { preconnect: real.preconnect });
+
     try {
       // Spent through the helper's validated accessor, so the signature is
       // established rather than asserted here.
@@ -594,6 +618,7 @@ describe('a stored MCP credential never reaches the SDK as data', () => {
       expect(send).not.toBeNull();
       await send?.('https://srv1.example/sse');
     } finally { globalThis.fetch = real; }
+
     expect(seen).toEqual(['Bearer rotated']);
     h.close();
   });

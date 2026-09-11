@@ -22,14 +22,17 @@ const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, mod
 describe('workspace diff lifecycle', () => {
   test('workspace birth captures seed files before any agent work', async () => {
     const db = new Database(':memory:');
+
     const rt = await createWorkspace(makeAgentDatabase(db), {
       name: 'atlas', purpose: 'Test output lifecycle.', llm: TEST_LLM,
     });
 
     expect((await getWorkspaceDiff(rt)).files).toEqual([]);
+
     const baseline = db.query<{ path: string }, []>(
       "SELECT path FROM vfs_baseline WHERE active = 1 AND path <> '' ORDER BY path",
     ).all().map((row) => row.path);
+
     expect(baseline).toEqual(Object.keys(await collectWorkspaceTextFiles(rt)).sort());
     expect(baseline).toContain('scaffold/agent.js.v0');
   });
@@ -67,10 +70,12 @@ describe('workspace diff lifecycle', () => {
     const { rt } = createTestRuntime();
     await rt.storage.vfs.mkdir('.git', { recursive: true });
     await rt.storage.vfs.mkdir('node_modules/pkg', { recursive: true });
+
     for (let i = 0; i < 401; i++) {
       await rt.storage.vfs.writeFile(`.git/object-${i}`, 'metadata');
       await rt.storage.vfs.writeFile(`node_modules/pkg/file-${i}.js`, 'dependency');
     }
+
     await rt.storage.vfs.writeFile('app.ts', 'export const visible = true;');
 
     const files = await collectWorkspaceTextFiles(rt);
@@ -82,9 +87,11 @@ describe('workspace diff lifecycle', () => {
 
   test('excluded binary and oversized files cannot consume the text snapshot budget', async () => {
     const { rt } = createTestRuntime();
+
     for (let i = 0; i < 401; i++) {
       await rt.storage.vfs.writeFile(`binary-${i}.dat`, new Uint8Array([0, i % 255]));
     }
+
     await rt.storage.vfs.writeFile('app.ts', 'export const visible = true;');
 
     const files = await collectWorkspaceTextFiles(rt);
@@ -96,6 +103,7 @@ describe('workspace diff lifecycle', () => {
   test('the change-set never holds more than one baseline body at a time', async () => {
     const { rt } = createTestRuntime();
     initWorkspaceBaselineTable(rt.storage.execRaw);
+
     for (let i = 0; i < 20; i++) await rt.storage.vfs.writeFile(`f-${i}.txt`, `v1 ${i}`);
     await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.writeFile('f-7.txt', 'v2 7');
@@ -119,10 +127,13 @@ describe('workspace diff lifecycle', () => {
     rt.storage.sql = <T>(query: TemplateStringsArray, ...values: SqlValue[]): T[] => {
       const rows = sql<T>(query, ...values);
       const text = query.join('?');
+
       if (text.includes('vfs_baseline')) baselineRowsRead += rows.length;
+
       if (text.includes('content FROM vfs_baseline')) {
         peakBodiesInOneResult = Math.max(peakBodiesInOneResult, rows.length);
       }
+
       return rows;
     };
 
@@ -150,6 +161,7 @@ describe('workspace diff lifecycle', () => {
     const result = await getWorkspaceDiff(rt);
 
     const file = result.files.find((f) => f.path === 'agent.log');
+
     if (!file) throw new Error('the changed file must appear in the change-set');
     expect(file.status).toBe('changed');
     expect(file.added).toBe(1);
@@ -174,6 +186,7 @@ describe('workspace diff lifecycle', () => {
     const result = await getWorkspaceDiff(rt);
 
     const file = result.files.find((f) => f.path === 'bundle.min.js');
+
     if (!file) throw new Error('the oversized file must still appear in the change-set');
     expect(file.status).toBe('changed');
     expect(file.truncated).toBe(true);
@@ -194,9 +207,11 @@ describe('workspace diff lifecycle', () => {
       WHEN NEW.path = 'bad.txt' BEGIN SELECT RAISE(FAIL, 'forced baseline failure'); END`);
 
     await expect(resetWorkspaceBaseline(rt)).rejects.toThrow('forced baseline failure');
+
     const rows = db.query<{ path: string; content: string; active: number }, []>(
       "SELECT path, content, active FROM vfs_baseline WHERE path <> ''",
     ).all();
+
     // The generation that failed is neither active nor left behind, and the
     // previous one still holds the content it was captured with.
     expect(rows.filter((r) => r.path === 'bad.txt')).toEqual([]);
@@ -225,13 +240,16 @@ describe('workspace diff lifecycle', () => {
     const readFile = rt.storage.vfs.readFile.bind(rt.storage.vfs);
     rt.storage.vfs.readFile = async (path, options) => {
       if (path === 'kept.txt') throw new Error('read interrupted');
+
       return readFile(path, options);
     };
 
     await expect(resetWorkspaceBaseline(rt)).rejects.toThrow('could not read "kept.txt"');
+
     const rows = db.query<{ path: string; content: string; active: number }, []>(
       "SELECT path, content, active FROM vfs_baseline WHERE path <> ''",
     ).all();
+
     expect(rows.filter((r) => r.active === 0)).toEqual([]);
     // Still the captured content, not the unreadable newer one.
     expect(rows.find((r) => r.path === 'kept.txt')).toMatchObject({ content: 'before', active: 1 });
@@ -239,6 +257,7 @@ describe('workspace diff lifecycle', () => {
 
   test('a failed git subcommand is an Output error, never an empty successful diff', async () => {
     const responses: CommandResult[] = ['/repo', 'yes', { reason: 'io', error: 'Error (exit 128)\nfatal: index corrupt' }];
+
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']),
       homeDir: async () => '/workspace',
@@ -250,11 +269,13 @@ describe('workspace diff lifecycle', () => {
         },
       },
     };
+
     const router: ExecutionRouter = {
       register: () => {}, unregister: () => {},
       getProvider: (name) => name === 'sandbox' ? provider : undefined,
       getProviders: () => [], listExecutors: () => [],
     };
+
     const { rt } = createTestRuntime();
     rt.executionRouter = router;
 
@@ -280,8 +301,10 @@ describe('workspace diff lifecycle', () => {
       const result = Bun.spawnSync(['bash', '-lc', command], {
         cwd: repo, env: gitEnv(), stdout: 'pipe', stderr: 'pipe',
       });
+
       return commandResult({ stdout: result.stdout.toString(), stderr: result.stderr.toString(), exitCode: result.exitCode });
     };
+
     const provider: ExecutorProvider = {
       name: 'sandbox', kind: 'sandbox', capabilities: new Set(['git']),
       homeDir: async () => '/workspace',
@@ -291,16 +314,19 @@ describe('workspace diff lifecycle', () => {
           description: 'test shell',
           execute: async (...args) => {
             const [command] = v.parse(v.tuple([v.string()]), args);
+
             return exec(command);
           },
         },
       },
     };
+
     const router: ExecutionRouter = {
       register: () => {}, unregister: () => {},
       getProvider: (name) => name === 'sandbox' ? provider : undefined,
       getProviders: () => [], listExecutors: () => [],
     };
+
     const { rt } = createTestRuntime();
     rt.executionRouter = router;
     const before = readFileSync(join(repo, '.git/index'));

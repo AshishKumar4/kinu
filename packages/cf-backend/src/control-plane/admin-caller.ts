@@ -155,14 +155,19 @@ function operatorEmail(env: AdminGateEnv, identity: AuthIdentity): OperatorLooku
   if (!(env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim()) {
     return { ok: false, denial: 'unconfigured' };
   }
+
   if (identity.provider === 'dev') return { ok: false, denial: 'dev_identity' };
+
   if (identity.cliScopes !== undefined) return { ok: false, denial: 'token_identity' };
 
   const admins = controlPlaneAdmins(env);
+
   if (admins.length === 0) return { ok: false, denial: 'no_admins_configured' };
 
   const email = identity.email.trim().toLowerCase();
+
   if (email.length === 0 || !admins.includes(email)) return { ok: false, denial: 'not_admin' };
+
   return { ok: true, email };
 }
 
@@ -207,10 +212,13 @@ export function authorizeAdmin(
   options: { readonly mutating: boolean; readonly now?: number },
 ): AdminAuthorization {
   const operator = operatorEmail(env, identity);
+
   if (!operator.ok) return { ok: false, denial: operator.denial };
+
   if (operator.email !== access.email) return { ok: false, denial: 'access_mismatch' };
 
   const fresh = isFreshAuthTime(identity.authTime, options.now ?? Date.now());
+
   if (options.mutating && !fresh) return { ok: false, denial: 'stale_auth' };
 
   return { ok: true, admin: { email: operator.email, userId: identity.userId, fresh, access } };
@@ -277,7 +285,9 @@ export function adminDenialMessage(denial: AdminDenial): string {
  */
 export function actorDigest(env: ControlSecretEnv, email: string): Promise<string> {
   const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
+
   if (!secret) throw new ControlPlaneUnconfiguredError();
+
   return hmacSha256Hex(secret, `kinu.control-plane.actor.v1\u0000${email.trim().toLowerCase()}`)
     .then((hex) => hex.slice(0, 32));
 }

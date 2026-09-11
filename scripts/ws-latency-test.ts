@@ -12,7 +12,9 @@
 import { tolerate } from "../packages/core/src/obs/index";
 
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
+
 const AGENT_NAME = process.argv[3] ?? "latency-test-agent";
+
 const TIMEOUT_MS = 120_000;
 
 function wsUrl(): string {
@@ -39,6 +41,7 @@ interface TimingResult {
 
 async function measureChatLatency(message: string): Promise<TimingResult> {
   const t0 = performance.now();
+
   const result: TimingResult = {
     connectMs: -1,
     historyReceivedMs: -1,
@@ -91,11 +94,13 @@ async function measureChatLatency(message: string): Promise<TimingResult> {
 
           // Now send the chat message
           reqId = uid();
+
           const userMessage = {
             id: uid(),
             role: "user",
             parts: [{ type: "text", text: message }],
           };
+
           ws.send(JSON.stringify({
             type: "cf_agent_use_chat_request",
             id: reqId,
@@ -106,6 +111,7 @@ async function measureChatLatency(message: string): Promise<TimingResult> {
           }));
           result.messageSentMs = performance.now() - t0;
           console.log(`  [${result.messageSentMs.toFixed(0)}ms] Message sent: "${message}"`);
+
           return;
         }
 
@@ -124,6 +130,7 @@ async function measureChatLatency(message: string): Promise<TimingResult> {
             clearTimeout(timer);
             ws.close();
             resolve(result);
+
             return;
           }
 
@@ -132,12 +139,14 @@ async function measureChatLatency(message: string): Promise<TimingResult> {
             clearTimeout(timer);
             ws.close();
             resolve(result);
+
             return;
           }
 
           // A body chunk is JSON when it carries a typed stream event and plain text otherwise.
           if (msg.body) {
             const chunk = tolerate(() => JSON.parse(msg.body), "malformed-input");
+
             if (chunk !== undefined) {
               if (result.firstContentChunkMs < 0) {
                 result.firstContentChunkMs = performance.now() - t0;
@@ -198,23 +207,33 @@ async function main() {
   console.log("╔════════════════════════╦════════╦═══════════╦═══════════╦═══════════╦═══════════╦═════════╗");
   console.log("║ Test                   ║Connect ║ 1st Frame ║1st Content║1st Think  ║ 1st Text  ║  Total  ║");
   console.log("╠════════════════════════╬════════╬═══════════╬═══════════╬═══════════╬═══════════╬═════════╣");
+
   for (const { label, result: r } of results) {
     const pad = (ms: number) => ms < 0 ? "   N/A" : `${(ms / 1000).toFixed(1)}s`.padStart(6);
     const name = label.padEnd(22);
     console.log(`║ ${name} ║${pad(r.connectMs)}  ║ ${pad(r.firstWsFrameMs)}   ║ ${pad(r.firstContentChunkMs)}   ║ ${pad(r.firstThinkingMs)}   ║ ${pad(r.firstTextMs)}   ║${pad(r.streamDoneMs)}   ║`);
+
     if (r.error) console.log(`║   ERROR: ${r.error.padEnd(68)}║`);
   }
+
   console.log("╚════════════════════════╩════════╩═══════════╩═══════════╩═══════════╩═══════════╩═════════╝");
 
   console.log("\nTiming breakdown (from message sent):");
+
   for (const { label, result: r } of results) {
     if (r.error) { console.log(`  ${label}: ERROR — ${r.error}`); continue; }
+
     const sent = r.messageSentMs;
     console.log(`  ${label}:`);
+
     if (r.firstWsFrameMs > 0) console.log(`    SDK overhead (send → first WS frame): ${(r.firstWsFrameMs - sent).toFixed(0)}ms`);
+
     if (r.firstContentChunkMs > 0) console.log(`    To first content:                     ${(r.firstContentChunkMs - sent).toFixed(0)}ms`);
+
     if (r.firstThinkingMs > 0) console.log(`    To first thinking token:              ${(r.firstThinkingMs - sent).toFixed(0)}ms`);
+
     if (r.firstTextMs > 0) console.log(`    To first text token:                  ${(r.firstTextMs - sent).toFixed(0)}ms`);
+
     if (r.streamDoneMs > 0) console.log(`    To stream complete:                   ${(r.streamDoneMs - sent).toFixed(0)}ms`);
   }
 }

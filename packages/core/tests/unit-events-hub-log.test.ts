@@ -13,6 +13,7 @@ import type { SqlExec } from '../src/index';
  *  ARE the default page and the ceiling. A restated literal would be a
  *  second copy of the policy that drifts silently. */
 const DEFAULT_PAGE = boundEventQuery().limit;
+
 const UNTRUSTED_CEILING = boundEventQuery({ limit: Number.MAX_SAFE_INTEGER }).limit;
 
 import type { JsonValue } from '../src/utils/json';
@@ -33,6 +34,7 @@ interface Hub {
 
 function makeSql(): Hub {
   const db = new Database(':memory:');
+
   return { sql: makeSqlExec(db), actor: createTestActorsOver(db).main };
 }
 
@@ -201,12 +203,14 @@ describe('EventLog audit + non-event rows', () => {
     const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
+
     const id = log.appendNonEventRow({
       kind: 'step',
       turn_id: 'turn-1', step_idx: 0, parent_id: null, trace_id: 'trace-1',
       payload: { finished: true, tool_call_count: 0 },
       now: 1,
     });
+
     expect(id.length).toBeGreaterThan(0);
     const steps = log.turnSteps('turn-1');
     expect(steps).toHaveLength(1);
@@ -261,9 +265,11 @@ describe('EventLog.query admits only a finite positive integer limit', () => {
     const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
+
     for (let i = 0; i < count; i++) {
       log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
     }
+
     return log;
   }
 
@@ -326,9 +332,11 @@ describe('EventLog.pending admits only a finite positive integer limit', () => {
     const { sql, actor } = makeSql();
     initEventsHubTables(sql);
     const log = new EventLog(sql, actor);
+
     for (let i = 0; i < count; i++) {
       log.publish({ descriptor: chatDescriptor(`event ${i}`), now: 1000 + i });
     }
+
     return log;
   }
 
@@ -392,6 +400,7 @@ describe('EventLog skips corrupt payload rows', () => {
     sql.exec(`UPDATE agent_log SET payload = ? WHERE id = ?`, 'not-json{{{', bad);
     const rec = createRecordingLogger();
     const restore = setDiagnosticsSink(rec);
+
     try {
       // Both reads, because either one throwing takes the whole drain with it.
       expect(log.pending().map((event) => event.id)).toEqual([good]);
@@ -399,6 +408,7 @@ describe('EventLog skips corrupt payload rows', () => {
     } finally {
       restore();
     }
+
     expect(rec.emitted.map((line) => [line.event, line.fields])).toEqual([
       ['event.row_unreadable', { id: bad }],
       ['event.row_unreadable', { id: bad }],
@@ -414,23 +424,28 @@ describe('EventLog skips corrupt payload rows', () => {
     JSON.parse = function parseAbort(): never {
       throw new KinuError('cancelled', 'injected abort');
     };
+
     try {
       // A cancelled decode is the caller's own abort, not a corrupt payload:
       // it must throw with its class intact, never read as "no events". (The
       // message names the seam's `doing`; the class rides on `code`.)
       let pendingPropagated = false;
+
       try { log.pending(); } catch (error) {
         if (!(error instanceof KinuError)) throw error;
         expect(error.code).toBe('cancelled');
         pendingPropagated = true;
       }
+
       expect(pendingPropagated).toBe(true);
       let queryPropagated = false;
+
       try { log.query({}); } catch (error) {
         if (!(error instanceof KinuError)) throw error;
         expect(error.code).toBe('cancelled');
         queryPropagated = true;
       }
+
       expect(queryPropagated).toBe(true);
     } finally {
       JSON.parse = realParse;

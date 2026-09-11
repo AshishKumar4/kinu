@@ -44,9 +44,13 @@ import {
 import * as v from 'valibot';
 
 export const AGENT_HOME = kinuHome();
+
 export const CONFIG_PATH = join(AGENT_HOME, 'config.json');
+
 export const BIN_DIR = join(AGENT_HOME, 'bin');
+
 const KINU_IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+
 const RESERVED_ALIASES = new Set([
   'kinu',
   'create',
@@ -78,6 +82,7 @@ const RESERVED_ALIASES = new Set([
   'uninstall',
   'doctor',
 ]);
+
 const DEFAULT_ORIGIN = 'https://kinu.run';
 
 export type AgentMode = 'local' | 'cloud';
@@ -177,6 +182,7 @@ export interface CloudAuthConfig {
 }
 
 const StringMapSchema = v.record(v.string(), v.string());
+
 const KinuAgentConfigSchema = v.object({
   name: v.string(),
   mode: v.picklist(['local', 'cloud']),
@@ -190,18 +196,21 @@ const KinuAgentConfigSchema = v.object({
   createdAt: v.string(),
   updatedAt: v.string(),
 });
+
 const McpServerConfigSchema = v.object({
   command: v.string(),
   args: v.optional(v.array(v.string())),
   env: v.optional(StringMapSchema),
   timeoutMs: v.optional(v.number()),
 });
+
 const OpenAiCompatConfigSchema = v.object({
   baseURL: v.string(),
   apiKey: v.optional(v.string()),
   headers: v.optional(StringMapSchema),
   extraHeaders: v.optional(StringMapSchema),
 });
+
 const KinuConfigSchema: v.GenericSchema<KinuConfig> = v.object({
   origin: v.optional(v.string()),
   accessToken: v.optional(v.string()),
@@ -259,6 +268,7 @@ export function ensureBinDir(): void {
  *  to read as a different place, not abort the command with a bare `lstat`. */
 export function canonicalProjectRoot(cwd = process.cwd()): string {
   const absolute = resolve(cwd);
+
   return existsSync(absolute) ? realpathSync(absolute) : absolute;
 }
 
@@ -269,6 +279,7 @@ export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
     .toLowerCase()
     .replace(/[^a-z0-9_-]+/gu, '-')
     .replace(/^-+|-+$/gu, '');
+
   return candidate && KINU_IDENTIFIER_RE.test(candidate) ? candidate : 'workspace';
 }
 
@@ -276,6 +287,7 @@ export function defaultVirtualWorkspaceId(cwd = process.cwd()): string {
  *  with an agent name. A virtual workspace groups these; it never nests them. */
 export function agentDir(name: string): string {
   validateAgentName(name);
+
   return join(AGENT_HOME, name);
 }
 
@@ -306,13 +318,16 @@ export interface ResolvedLocalAgent extends LocalAgentRef {
  *  whichever directory the CLI happened to start in. */
 function placedRef(agent: KinuAgentConfig): LocalAgentRef | null {
   if (agent.mode !== 'local' || !agent.cwd || !agent.workspaceId) return null;
+
   // A recorded directory that no longer exists places nothing: the planes cannot
   // bind to it, and treating the ref as placed anyway would drop the agent out
   // of both this listing and the unplaced one, which is how renaming a project
   // directory would make its agents disappear from every roster.
   if (!existsSync(agent.cwd)) return null;
   const name = agent.localName ?? agent.name;
+
   if (!KINU_IDENTIFIER_RE.test(name)) return null;
+
   return {
     name,
     cwd: agent.cwd,
@@ -334,6 +349,7 @@ export function listLocalRefsAllProjects(): LocalAgentRef[] {
  *  attributed here — attribution is adoption, and adoption is per-agent. */
 function listLocalRefs(cwd = process.cwd()): LocalAgentRef[] {
   const root = canonicalProjectRoot(cwd);
+
   return listLocalRefsAllProjects().filter((ref) => ref.cwd === root);
 }
 
@@ -351,6 +367,7 @@ export function listAgentDirs(cwd = process.cwd()): string[] {
 export function listUnplacedAgentNames(): string[] {
   if (!existsSync(AGENT_HOME)) return [];
   const placed = new Set(listLocalRefsAllProjects().map((ref) => ref.name));
+
   return readdirSync(AGENT_HOME)
     .filter((name) => KINU_IDENTIFIER_RE.test(name)
       && !placed.has(name)
@@ -368,13 +385,17 @@ export function readWorkspaceIdentityId(dbPath: string): string | null {
   // open database file". That reached the owner's own log, reading back the
   // title of a workspace nothing had open.
   const db = new Database(dbPath);
+
   try {
     const present = db.query<{ n: number }, []>(
       `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'workspace_identity'`,
     ).get();
+
     if (!present || present.n === 0) return null;
     const row = db.query<{ id: string }, []>(`SELECT id FROM workspace_identity LIMIT 1`).get();
+
     if (row?.id) return row.id;
+
     return null;
   } finally {
     db.close();
@@ -390,11 +411,14 @@ export function readWorkspaceDisplayName(dbPath: string): string | null {
   // published WAL database has no `-shm`, and only a writable connection may
   // build one.
   const db = new Database(dbPath);
+
   try {
     const present = db.query<{ n: number }, []>(
       `SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'actor_config'`,
     ).get();
+
     if (!present || present.n === 0) return null;
+
     return openWorkspaceMainActor(makeSql(db)).config.getDisplayName();
   } finally {
     db.close();
@@ -414,14 +438,19 @@ export interface AdoptUnplacedAgentOptions {
  */
 export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOptions = {}): LocalAgentRef {
   const dbPath = agentDbPath(name);
+
   if (!existsSync(dbPath)) {
     throw new Error(`Workspace "${name}" not found at ${dbPath}.`);
   }
+
   const existing = loadConfigFile().agents?.[name];
+
   if (existing && existing.mode !== 'local') {
     throw new Error(`"${name}" is already configured as a cloud workspace.`);
   }
+
   const already = existing ? placedRef(existing) : null;
+
   if (already) return already;
   const cwd = canonicalProjectRoot(opts.cwd);
   const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
@@ -434,6 +463,7 @@ export function adoptUnplacedLocalAgent(name: string, opts: AdoptUnplacedAgentOp
     workspaceId,
     identityId: readWorkspaceIdentityId(dbPath) ?? undefined,
   });
+
   return { name, cwd, workspaceId, dbPath };
 }
 
@@ -465,22 +495,30 @@ export interface ResolveLocalAgentOptions {
  */
 export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions = {}): ResolvedLocalAgent {
   const ref = resolveAgentRef(input);
+
   if (ref && ref.mode !== 'local') {
     throw new Error(`"${input}" is a cloud workspace; this needs a local one.`);
   }
+
   const name = ref?.localName ?? ref?.name ?? input;
   const dbPath = agentDbPath(name);
+
   if (!existsSync(dbPath)) throw new MissingLocalWorkspaceError(name);
   const placed = ref ? placedRef(ref) : null;
+
   if (ref && placed) {
     assertIdentityUnchanged(ref, placed);
+
     return { ...placed, placement: 'recorded' };
   }
+
   const cwd = canonicalProjectRoot(opts.cwd);
   const workspaceId = opts.workspaceId ?? defaultVirtualWorkspaceId(cwd);
+
   if (opts.adopt === false) {
     return { name, cwd, workspaceId, dbPath, placement: 'unplaced' };
   }
+
   return { ...adoptUnplacedLocalAgent(name, { cwd, workspaceId }), placement: 'adopted' };
 }
 
@@ -490,6 +528,7 @@ export function resolveLocalAgent(input: string, opts: ResolveLocalAgentOptions 
 function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): void {
   if (!agent.identityId) return;
   const actual = readWorkspaceIdentityId(ref.dbPath);
+
   if (actual === null || actual === agent.identityId) return;
   throw new Error(
     `Workspace "${ref.name}" at ${ref.dbPath} is not the one recorded for ${ref.cwd}: `
@@ -500,6 +539,7 @@ function assertIdentityUnchanged(agent: KinuAgentConfig, ref: LocalAgentRef): vo
 
 export function loadConfigFile(): KinuConfig {
   if (!existsSync(CONFIG_PATH)) return {};
+
   try {
     return v.parse(KinuConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
   } catch (error) {
@@ -511,6 +551,7 @@ export function loadConfigFile(): KinuConfig {
 
 export function setDefaultModel(spec: string): void {
   const normalized = spec.trim();
+
   if (!normalized) throw new Error('model spec required');
   updateConfigFile((config) => { config.model = normalized; });
 }
@@ -532,6 +573,7 @@ export function updateConfigFile(mutator: (config: KinuConfig) => KinuConfig | v
     const config = loadConfigFile();
     const next = mutator(config) ?? config;
     writeConfigFileUnlocked(next);
+
     return next;
   });
 }
@@ -565,6 +607,7 @@ export function bumpProviderRevision(): number {
     next = (config.providerRevision ?? 0) + 1;
     config.providerRevision = next;
   });
+
   return next;
 }
 
@@ -577,7 +620,9 @@ export function requireAuthConfig(): CloudAuthConfig {
   // token from `kinu tokens create`) wins over the stored interactive
   // session. Long-lived by design — the server is the validity authority.
   const envToken = process.env.KINU_TOKEN?.trim();
+
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
+
   return storedAuthConfig('Not authenticated. Run: kinu auth (or set KINU_TOKEN)');
 }
 
@@ -588,12 +633,15 @@ export function requireStoredAuthConfig(): CloudAuthConfig {
 function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
   const config = loadConfigFile();
   const token = config.accessToken;
+
   if (!token) {
     throw new Error(missingTokenMessage);
   }
+
   if (sessionExpired(config)) {
     throw new Error('Your Kinu CLI session has expired. Run: kinu auth');
   }
+
   return { origin: resolveCloudOrigin(), token, user: config.user };
 }
 
@@ -602,6 +650,7 @@ function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
 export function sessionExpired(config: KinuConfig): boolean {
   if (!config.tokenExpiresAt) return false;
   const expiresAt = Date.parse(config.tokenExpiresAt);
+
   return Number.isFinite(expiresAt) && expiresAt <= Date.now();
 }
 
@@ -610,16 +659,20 @@ export function sessionExpired(config: KinuConfig): boolean {
  *  than catching: an unreadable config is not a signed-out user. */
 export function resolveCloudSession(): LocalCloudSession | null {
   const envToken = process.env.KINU_TOKEN?.trim();
+
   if (envToken) return { origin: resolveCloudOrigin(), token: envToken };
   const config = loadConfigFile();
   const token = config.accessToken;
+
   if (!token || sessionExpired(config)) return null;
+
   return { origin: resolveCloudOrigin(), token };
 }
 
 export function resolveAgentRef(input: string): KinuAgentConfig | null {
   const config = loadConfigFile();
   const canonical = config.aliases?.[input] ?? input;
+
   return config.agents?.[canonical] ?? null;
 }
 
@@ -630,9 +683,13 @@ export function listConfiguredAgentRefs(): KinuAgentConfig[] {
 
 export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'updatedAt'> & Partial<Pick<KinuAgentConfig, 'createdAt' | 'updatedAt'>>): KinuAgentConfig {
   validateAgentName(agent.name);
+
   if (agent.alias) validateAliasName(agent.alias);
+
   if (agent.localName) validateAgentName(agent.localName);
+
   if (agent.cloudName) validateAgentName(agent.cloudName);
+
   if (agent.workspaceId) validateWorkspaceId(agent.workspaceId);
   const now = new Date().toISOString();
   let saved!: KinuAgentConfig;
@@ -646,6 +703,7 @@ export function upsertAgentConfig(agent: Omit<KinuAgentConfig, 'createdAt' | 'up
     };
     config.agents = { ...config.agents, [agent.name]: saved };
   });
+
   return saved;
 }
 
@@ -654,19 +712,23 @@ export function removeCloudAgentConfig(cloudName: string): boolean {
   updateConfigFile((config) => {
     const agents = config.agents ?? {};
     const removedNames = new Set<string>();
+
     for (const [name, agent] of Object.entries(agents)) {
       if (agent.mode !== 'cloud' || (agent.cloudName ?? agent.name) !== cloudName) continue;
       delete agents[name];
       removedNames.add(name);
       removed = true;
     }
+
     if (config.aliases) {
       for (const [alias, target] of Object.entries(config.aliases)) {
         if (removedNames.has(target)) delete config.aliases[alias];
       }
     }
+
     config.agents = agents;
   });
+
   return removed;
 }
 
@@ -676,6 +738,7 @@ function setAliasConfig(agentName: string, alias: string): void {
   updateConfigFile((config) => {
     config.aliases = { ...config.aliases, [alias]: agentName };
     const existing = config.agents?.[agentName];
+
     if (existing) {
       config.agents = {
         ...config.agents,
@@ -688,7 +751,9 @@ function setAliasConfig(agentName: string, alias: string): void {
 function removeAliasConfig(alias: string): void {
   updateConfigFile((config) => {
     const agentName = config.aliases?.[alias];
+
     if (config.aliases) delete config.aliases[alias];
+
     if (agentName && config.agents?.[agentName]?.alias === alias) {
       config.agents[agentName] = { ...config.agents[agentName], alias: undefined, updatedAt: new Date().toISOString() };
     }
@@ -697,6 +762,7 @@ function removeAliasConfig(alias: string): void {
 
 function aliasPath(alias: string): string {
   validateAliasName(alias);
+
   return join(BIN_DIR, alias);
 }
 
@@ -705,14 +771,17 @@ export function writeAliasShim(agentName: string, alias: string): string {
   validateAliasName(alias);
   ensureBinDir();
   const path = aliasPath(alias);
+
   const script = `#!/usr/bin/env sh
 set -eu
 bin_dir="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 exec "$bin_dir/kinu" run ${shellQuote(agentName)} "$@"
 `;
+
   writeFileSync(path, script, { mode: 0o755 });
   chmodSync(path, 0o755);
   setAliasConfig(agentName, alias);
+
   return path;
 }
 
@@ -745,6 +814,7 @@ export function validateWorkspaceId(workspaceId: string): void {
 
 function validateAliasName(alias: string): void {
   validateIdentifier(alias, 'Alias');
+
   if (RESERVED_ALIASES.has(alias)) {
     throw new Error(`Alias "${alias}" is reserved. Choose another alias.`);
   }
@@ -790,6 +860,7 @@ export function resolveLLMConfig(opts?: {
   }
 
   const cloud = resolveCloudSession();
+
   // The signed-in account IS the default inference path, and it owns the native
   // model families. Both halves matter: no selection lands on the platform
   // default rather than on whichever BYO key happens to sit on disk, and a
@@ -805,14 +876,17 @@ export function resolveLLMConfig(opts?: {
         model: workersAIModelId(model),
       }
     : null;
+
   if (cloudConfig && (!model || isNativeCloudSpec(model))) return cloudConfig;
 
   // An explicit spec naming a registry-only family resolves to that family —
   // ahead of any credential default, which exists to answer BARE ids.
   const family = registryFamilyMarker(model);
+
   if (family) return family;
 
   const derived = deriveLLMConfigFromProviderCredentials(file, model);
+
   if (derived) return derived;
 
   if (cloudConfig) return cloudConfig;
@@ -840,6 +914,7 @@ export function requireLLMConfig(opts?: {
   auth?: string;
 }): LLMProviderConfig {
   const config = resolveLLMConfig(opts);
+
   if (config) return config;
   throw new Error(
     'No LLM configured.\n' +
@@ -854,6 +929,7 @@ export function requireLLMConfig(opts?: {
  *  Env wins over ~/.kinu/config.json so temporary shell overrides work. */
 export function resolveProviderCredentials(): LocalProviderCredentials {
   const file = loadConfigFile();
+
   return {
     openaiApiKey: process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey,
     anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? file.providers?.anthropic?.apiKey,
@@ -875,6 +951,7 @@ export function resolveMcpServers(): Record<string, McpServerConfig> {
 function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string | undefined): LLMProviderConfig | null {
   const providerModel = model ?? preferredModelFromCredentials(file);
   const hasCodexCredential = Boolean(process.env.CODEX_ACCESS_TOKEN || file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken);
+
   if (hasCodexCredential && (!providerModel || providerModel.startsWith('codex/') || !providerModel.includes('/'))) {
     return {
       name: 'codex',
@@ -885,6 +962,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   }
 
   const openaiKey = process.env.OPENAI_API_KEY ?? file.providers?.openai?.apiKey;
+
   if (openaiKey && (!providerModel || providerModel.startsWith('openai/') || !providerModel.includes('/'))) {
     return {
       name: 'openai',
@@ -895,6 +973,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   }
 
   const openrouterKey = process.env.OPENROUTER_API_KEY ?? file.providers?.openrouter?.apiKey;
+
   if (openrouterKey && providerModel?.startsWith('openrouter/')) {
     return {
       name: 'openrouter',
@@ -908,6 +987,7 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   }
 
   const anthropicKey = process.env.ANTHROPIC_API_KEY ?? file.providers?.anthropic?.apiKey;
+
   if (anthropicKey && providerModel?.startsWith('anthropic/')) {
     return {
       name: 'anthropic',
@@ -921,13 +1001,16 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
   }
 
   const compat = file.providers?.openaiCompat?.default;
+
   // The local endpoint answers for any model id it might serve, but never for a
   // native Cloudflare spec: an Ollama on this machine will accept
   // `@cf/deepseek-ai/…` as a model name and serve something else entirely.
   if (compat && !(providerModel && isNativeCloudSpec(providerModel))) {
     const headers = { ...compat.headers };
+
     if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
     Object.assign(headers, compat.extraHeaders);
+
     return {
       name: 'openai-compat',
       baseURL: compat.baseURL,
@@ -945,21 +1028,29 @@ function deriveLLMConfigFromProviderCredentials(file: KinuConfig, model: string 
  *  the family rather than a place to send HTTP. */
 function registryFamilyMarker(model: string | undefined): LLMProviderConfig | null {
   if (!model) return null;
+
   if (model.startsWith('claude/')) {
     return { name: 'claude', baseURL: '', headers: {}, model: stripProvider(model, 'claude') };
   }
+
   if (model.startsWith('opencode/')) {
     return { name: 'opencode', baseURL: '', headers: {}, model: stripProvider(model, 'opencode') };
   }
+
   return null;
 }
 
 function preferredModelFromCredentials(file: KinuConfig): string | undefined {
   if (file.model) return file.model;
+
   if (file.providers?.codex?.accessToken || file.providers?.codex?.refreshToken || process.env.CODEX_ACCESS_TOKEN) return `codex/${CODEX_DEFAULT_MODEL}`;
+
   if (file.providers?.openai?.apiKey || process.env.OPENAI_API_KEY) return `openai/${OPENAI_DEFAULT_MODEL}`;
+
   if (file.providers?.openrouter?.apiKey || process.env.OPENROUTER_API_KEY) return 'openrouter/openai/gpt-4o-mini';
+
   if (file.providers?.anthropic?.apiKey || process.env.ANTHROPIC_API_KEY) return `anthropic/${ANTHROPIC_DEFAULT_MODEL}`;
+
   return undefined;
 }
 
@@ -972,7 +1063,9 @@ function stripProvider(model: string, provider: string): string {
  *  (non-workers-ai specs still resolve per-spec through the registry). */
 function workersAIModelId(model: string | undefined): string {
   const stripped = stripProvider(model ?? '', WORKERS_AI_PROVIDER_ID);
+
   if (stripped !== (model ?? '')) return stripped || DEFAULT_WORKERS_AI_MODEL_ID;
+
   return model?.startsWith(WORKERS_AI_MODEL_ID_PREFIX) ? model : DEFAULT_WORKERS_AI_MODEL_ID;
 }
 
@@ -985,9 +1078,14 @@ function isNativeCloudSpec(model: string): boolean {
 
 function directEndpointModelId(model: string): string {
   if (model.startsWith('workers-ai/')) return model.slice('workers-ai/'.length);
+
   if (model.startsWith('openai/')) return model.slice('openai/'.length);
+
   if (model.startsWith('openrouter/')) return model.slice('openrouter/'.length);
+
   if (model.startsWith('openai-compat/')) return model.slice('openai-compat/'.length);
+
   if (model.startsWith('opencode/')) return model.slice('opencode/'.length);
+
   return model;
 }

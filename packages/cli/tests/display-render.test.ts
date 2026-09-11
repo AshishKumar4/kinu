@@ -18,11 +18,13 @@ function captureConsole(run: () => void): string[] {
   console.log = (...args: unknown[]) => {
     lines.push(args.map(String).join(' '));
   };
+
   try {
     run();
   } finally {
     console.log = original;
   }
+
   return lines;
 }
 
@@ -40,6 +42,7 @@ describe('printToolResult', () => {
   test('a multi-line refusal keeps its continuation lines', () => {
     const lines = captureConsole(() =>
       printToolResult('first\nsecond', { success: false, reason: 'io' }));
+
     const text = lines.join('\n');
     expect(text).toContain('first');
     expect(text).toContain('second');
@@ -79,23 +82,28 @@ describe('createTurnStatus', () => {
        one argument. `finally` restores the original before the test returns. */
     process.stdout.write = function typedWrite(chunk: Uint8Array | string): boolean {
       writes.push(String(chunk));
+
       return true;
     } as typeof process.stdout.write;
+
     try {
       run();
     } finally {
       process.stdout.write = original;
     }
+
     return writes;
   }
 
   test('a shown label draws on the row and clear releases it', () => {
     vi.useFakeTimers();
     const status = createTurnStatus({ tty: true });
+
     const drawn = captureWrites(() => {
       status.show('calling run');
       vi.advanceTimersByTime(240);
     });
+
     const released = captureWrites(() => status.clear());
     expect(drawn.join('')).toContain('calling run');
     expect(released.join('')).toContain('\r');

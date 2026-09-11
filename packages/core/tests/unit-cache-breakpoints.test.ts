@@ -19,9 +19,11 @@ import {
 } from '../src/index';
 
 const EPHEMERAL = { type: 'ephemeral' };
+
 const ProviderOptionsCarrierSchema = v.object({
   providerOptions: v.optional(JsonObjectSchema),
 });
+
 const MessagePartsSchema = v.array(v.object({
   providerOptions: v.optional(JsonObjectSchema),
 }));
@@ -50,6 +52,7 @@ function history(n: number): ModelMessage[] {
 function anthropicMarkerCount(messages: ReadonlyArray<ModelMessage>): number {
   return messages.filter((m) => {
     const ns = m.providerOptions?.anthropic;
+
     return ns !== undefined && 'cacheControl' in ns;
   }).length;
 }
@@ -102,6 +105,7 @@ describe('resolvePromptCacheStrategy', () => {
       { provider: 'my-gateway', model: 'openai/gpt-5.5', expected: { kind: 'openai-compat', bodyNamespace: 'my-gateway', markers: false } },
       { provider: 'workers-ai', model: '@cf/moonshotai/kimi-k2.6', expected: { kind: 'none' } },
     ];
+
     for (const { provider, model, expected } of rows) {
       // 'short' states the default explicitly, so it reads the same literal.
       expect(resolvePromptCacheStrategy(provider, model, 'short')).toEqual(expected);
@@ -114,6 +118,7 @@ describe('resolvePromptCacheStrategy', () => {
       expect(resolvePromptCacheStrategy(provider, 'anthropic/claude-sonnet-4.6', 'none'))
         .toEqual({ kind: 'none' });
     }
+
     // …which means no markers AND no cache key — not just a shorter TTL.
     const off = resolvePromptCacheStrategy('anthropic', 'claude-opus-4-7', 'none');
     expect(hasCacheMarkers(off)).toBe(false);
@@ -179,8 +184,10 @@ describe('markCacheTail', () => {
   test('total anthropic breakpoints (tool + system + tail) stay within the API limit', () => {
     const tools: ToolSet = { a: cacheTool('a'), b: cacheTool('b') };
     markLastToolForAnthropicCache(tools);
+
     const toolMarkers = Object.values(tools)
       .filter((entry) => providerOptions({ value: entry })?.anthropic).length;
+
     const system = cacheableSystem('sys', anthropic);
     v.parse(v.object({ role: v.literal('system') }), system);
     const systemMarkers = 1;
@@ -194,6 +201,7 @@ describe('markCacheTail', () => {
       { role: 'assistant', content: 'a' },
       { role: 'user', content: 'new' },
     ];
+
     const marked = markCacheTail(input, anthropic);
     expect(marked[0].providerOptions).toEqual({ anthropic: { other: 'keep' }, google: { thought: true } });
     expect(marked[2].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
@@ -204,6 +212,7 @@ describe('markCacheTail', () => {
       { role: 'system', content: 'sys' },
       { role: 'user', content: 'hi' },
     ];
+
     const marked = markCacheTail(input, anthropic);
     expect(marked[0].providerOptions).toBeUndefined();
     expect(marked[1].providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
@@ -211,6 +220,7 @@ describe('markCacheTail', () => {
 
   test('openaiCompatible namespace: user/tool markers ride the last content part', () => {
     const openrouterClaude = { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true } as const;
+
     const input: ModelMessage[] = [
       { role: 'user', content: 'q1' },
       {
@@ -219,6 +229,7 @@ describe('markCacheTail', () => {
       },
       { role: 'user', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] },
     ];
+
     const marked = markCacheTail(input, openrouterClaude);
     // The @ai-sdk/openai-compatible converter only reads part metadata for
     // tool results and single-text user messages — markers must sit there.
@@ -273,6 +284,7 @@ describe('applyCacheBreakpoints', () => {
       providerId: 'anthropic', modelId: 'claude-opus-4-7',
       system: 'sys', messages: history(4), sessionKey: 'kinu-x',
     });
+
     expect(plan.strategy).toEqual({ kind: 'anthropic' });
     expect(hasCacheMarkers(plan.strategy)).toBe(true);
     expect(providerOptions({ value: plan.system })).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
@@ -282,10 +294,12 @@ describe('applyCacheBreakpoints', () => {
 
   test('none plan is a byte-preserving pass-through', () => {
     const messages = history(3);
+
     const plan = applyCacheBreakpoints({
       providerId: 'workers-ai', modelId: '@cf/moonshotai/kimi-k2.6',
       system: 'sys', messages, sessionKey: 'kinu-x',
     });
+
     expect(plan.system).toBe('sys');
     expect(plan.messages).toEqual(messages);
     expect(plan.providerOptions).toBeUndefined();

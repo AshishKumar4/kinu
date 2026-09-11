@@ -24,6 +24,7 @@ describe('buildTree', () => {
       row({ id: 'a', parent_id: 'r', depth: 1, created_at: 110 }),
       row({ id: 'b', parent_id: 'r', depth: 1, created_at: 120 }),
     ]);
+
     expect(tree.id).toBe('r');
     expect(tree.children.map((c) => c.id).sort()).toEqual(['a', 'b']);
   });
@@ -38,6 +39,7 @@ describe('buildTree', () => {
       row({ id: 'new-a', parent_id: 'new-root', depth: 1, created_at: 210 }),
       row({ id: 'new-a1', parent_id: 'new-a', depth: 2, created_at: 220 }),
     ]);
+
     expect(tree.id).toBe('new-root');
     expect(tree.children).toHaveLength(1);
     expect(tree.children[0]!.children[0]!.id).toBe('new-a1');
@@ -49,6 +51,7 @@ describe('buildTree', () => {
       // Parent missing from the payload — depth says it is not a root.
       row({ id: 'orphan', parent_id: 'gone', depth: 3, created_at: 999 }),
     ]);
+
     expect(tree.id).toBe('root');
   });
 

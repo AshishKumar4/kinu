@@ -64,8 +64,10 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
         sql: this.ctx.storage.sql,
         transactions: this.ctx,
       });
+
       return workspace.vfs.as(CRED_SESSION_USER);
     })();
+
     return this._session;
   }
 
@@ -76,6 +78,7 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
    */
   private async box(): Promise<NimbusSandboxHandle> {
     const vfs = await this.session();
+
     const files: NimbusSandboxHandle['files'] = {
       read: async (path) => absentAsNull(() => vfs.readFileString(path)),
       readBytes: async (path) => absentAsNull(() => vfs.readFile(path)),
@@ -84,10 +87,12 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
         vfs.readdir(path ?? '/').map((entry) => ({ name: entry.name, type: entry.type })),
       stat: async (path) => absentAsNull(() => {
         const s = vfs.stat(path);
+
         return { type: s.type, size: s.size, mtime: s.mtime };
       }),
       lstat: async (path) => absentAsNull(() => {
         const s = vfs.lstat(path);
+
         return { type: s.type, size: s.size, mtime: s.mtime, mode: s.mode };
       }),
       rename: async (from, to) => { vfs.rename(from, to); },
@@ -100,11 +105,22 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
       // probe holds the behavior.
       readRange: async (path, offset, length) => absentAsNull(() => vfs.readRange(path, offset, length)),
       delete: async (path, options) => {
-        if (options?.recursive) { vfs.removeRecursive(path); return; }
-        if (vfs.stat(path).type === 'directory') { vfs.rmdir(path); return; }
+        if (options?.recursive) {
+          vfs.removeRecursive(path);
+
+          return;
+        }
+
+        if (vfs.stat(path).type === 'directory') {
+          vfs.rmdir(path);
+
+          return;
+        }
+
         vfs.unlink(path);
       },
     };
+
     return {
       files,
       ready: async () => undefined,
@@ -125,8 +141,10 @@ export class FilesEioProbeDO extends DurableObject<Cloudflare.Env> {
   async readRange(path: string, offset: number, length: number): Promise<RangeReadReport> {
     this.execs = [];
     const plane = nimbusSessionFiles(await this.box());
+
     try {
       const bytes = await plane.readRange(path, offset, length);
+
       return { execs: [...this.execs], error: null, content: new TextDecoder().decode(bytes) };
     } catch (cause) {
       return {

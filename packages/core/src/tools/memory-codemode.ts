@@ -54,9 +54,11 @@ const TYPES_FACTS = `
  */
 export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): CodemodeProvider {
   const hasFacts = !!deps().facts;
+
   const dispatch = (action: string) => (...args: unknown[]) => branchableToolCall(async (): Promise<JsonValue> => {
     const d = deps();
     const run = createMemoryDispatcher(d);
+
     switch (action) {
       case 'save':
         return decodeMemoryResult({ pending: run({ action: 'save', content: String(args[0] ?? '') }) });
@@ -64,12 +66,17 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
         return decodeMemoryResult({ pending: run({ action: 'search', query: String(args[0] ?? '') }) });
       case 'conversations': {
         const options = v.safeParse(SessionOptionsSchema, args[0] ?? {});
+
         if (!options.success) return { error: 'memory.conversations: invalid options' };
+
         return decodeMemoryResult({ pending: run({ action: 'conversations', ...options.output }) });
       }
+
       case 'remember': {
         const confidence = v.safeParse(ConfidenceSchema, args[2]);
+
         if (!confidence.success) return { error: 'memory.remember: confidence must be a number' };
+
         return decodeMemoryResult({
           pending: run({
             action: 'remember',
@@ -79,6 +86,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
           }),
         });
       }
+
       case 'recall':
         return decodeMemoryResult({ pending: run({ action: 'recall', key: String(args[0] ?? '') }) });
       case 'forget':
@@ -93,6 +101,7 @@ export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): Codemo
     search: { planAllowed: true, description: 'Search memory notes (hybrid FTS5 + Vectorize when wired).', execute: dispatch('search') },
     conversations: { planAllowed: true, description: 'Read this agent’s past conversation: search, scroll, or browse.', execute: dispatch('conversations') },
   };
+
   if (hasFacts) {
     tools.remember = { planAllowed: true, description: 'Upsert a keyed fact you look up by name later.', execute: dispatch('remember') };
     tools.recall = { planAllowed: true, description: 'Recall a keyed fact by name.', execute: dispatch('recall') };

@@ -29,6 +29,7 @@ const subprocessResultSchema = v.variant('ok', [
 ]);
 
 type ProviderFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
+
 interface ExecutorNamespace {
   [toolName: string]: ProviderFunction;
 }
@@ -41,11 +42,13 @@ function detectLanguages(): readonly [string, ...string[]] {
   const installed = [...INTERPRETERS]
     .filter(([, { command }]) => Bun.which(command) !== null)
     .map(([language]) => language);
+
   return ['javascript', ...installed];
 }
 
 export function createSandboxedExecutor(): Executor {
   let detectedLanguages: readonly [string, ...string[]] | undefined;
+
   return {
     get languages() { return detectedLanguages ??= detectLanguages(); },
     async execute(code, providers, opts): Promise<ExecuteResult> {
@@ -63,15 +66,18 @@ export function createSandboxedExecutor(): Executor {
         const interpreter = this.languages.includes(language)
           ? INTERPRETERS.get(language)
           : undefined;
+
         if (!interpreter) {
           return { result: undefined, error: `Executor does not support language "${language}"` };
         }
+
         return executeWithInterpreter(code, interpreter, timeoutMs);
       }
 
       // If providers are needed, we can't pass functions across process
       // boundaries. Fall back to in-process vm for tool-backed execution.
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
+
       if (providerList.some(p => Object.keys(p.fns).length > 0)) {
         return executeInProcess(code, providerList, timeoutMs);
       }
@@ -87,7 +93,9 @@ async function executeWithInterpreter(
   timeoutMs?: number,
 ): Promise<ExecuteResult> {
   const run = await runToCompletion([interpreter.command], code, interpreter.extension, timeoutMs);
+
   if (run.error) return { result: undefined, error: run.error };
+
   return run.exitCode === 0
     ? { result: run.stdout.trim() || null }
     : { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
@@ -114,25 +122,31 @@ async function runToCompletion(
   writeFileSync(tmpFile, code);
   writeFileSync(outFile, '');
   writeFileSync(errFile, '');
+
   try {
     const proc = Bun.spawn([...argv, tmpFile], {
       stdout: Bun.file(outFile),
       stderr: Bun.file(errFile),
       env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
     });
+
     let killedByTimeout = false;
+
     // No deadline asked for, no kill armed. The process ends when it ends.
     const timeout = timeoutMs === undefined
       ? undefined
       : setTimeout(() => { killedByTimeout = true; proc.kill(); }, timeoutMs);
+
     const exitCode = await proc.exited;
     clearTimeout(timeout);
+
     if (killedByTimeout) {
       return {
         exitCode, stdout: '', stderr: '',
         error: `Execution timeout (${Math.round((timeoutMs ?? 0) / 1000)}s)`,
       };
     }
+
     return {
       exitCode,
       stdout: await Bun.file(outFile).text(),
@@ -150,6 +164,7 @@ async function executeInSubprocess(code: string, timeoutMs?: number): Promise<Ex
   // A compiled binary may have no bun CLI beside it. The in-process adapter
   // binds the same providers but cannot supply module-only runtime features.
   const bunBin = Bun.which('bun');
+
   if (!bunBin) return executeInProcess(code, [], timeoutMs);
 
   const wrapper = `
@@ -164,17 +179,24 @@ async function executeInSubprocess(code: string, timeoutMs?: number): Promise<Ex
   `;
 
   const run = await runToCompletion([bunBin, 'run'], wrapper, '.mjs', timeoutMs);
+
   if (run.error) return { result: undefined, error: run.error };
+
   if (run.exitCode !== 0) {
     return { result: undefined, error: run.stderr.trim() || `Process exited with code ${run.exitCode}` };
   }
+
   const lastLine = run.stdout.trim().split('\n').pop() ?? '';
+
   try {
     const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
+
     if (parsed.ok) return { result: parsed.result };
+
     return { result: undefined, error: parsed.error ?? 'Unknown error' };
   } catch (error) {
     if (classify({ cause: error }) !== 'malformed-input') throw error;
+
     return { result: run.stdout.trim() || undefined };
   }
 }
@@ -183,7 +205,9 @@ function normalizeProviders(
   providers?: ResolvedProvider[] | Record<string, ProviderFunction>,
 ): ResolvedProvider[] {
   if (!providers) return [];
+
   if (Array.isArray(providers)) return providers;
+
   return [{ name: 'codemode', fns: providers }];
 }
 
@@ -207,7 +231,9 @@ async function executeInProcess(
         // content)), and dropping all but the first silently truncated them.
         return async (...args: JsonValue[]) => {
           const fn = p.fns[toolName];
+
           if (!fn) throw new Error(`Tool "${toolName}" not found in "${p.name}"`);
+
           return fn(...args);
         };
       },
@@ -219,10 +245,13 @@ async function executeInProcess(
   const argValues = argNames.map(k => context[k]);
 
   let timer: ReturnType<typeof setTimeout> | undefined;
+
   try {
     const fn = new Function(...argNames, `return (\n${normalizeCode(code)}\n)()`);
+
     const settled = Promise.resolve(fn(...argValues)).then((value) =>
       value === undefined ? undefined : decodeJsonValue({ value }));
+
     if (timeoutMs === undefined) return { result: await settled };
     // A caller that ASKED for a deadline gets one. Cleared in the finally — a
     // scaffold turn's budget is minutes, and a live timer would hold the
@@ -233,6 +262,7 @@ async function executeInProcess(
       timeoutMs,
     );
     const result = await Promise.race([settled, deadline.promise]);
+
     return { result };
   } catch (error) {
     return {

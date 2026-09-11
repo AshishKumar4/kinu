@@ -51,6 +51,7 @@ function live() {
   initHeadsTables(sql.execRaw);
   const actor = createTestActorsOver(sql.db).main;
   const announced: string[] = [];
+
   return {
     sql, announced,
     journal: new LiveHeadJournal(sql.sql, actor, (id) => { announced.push(id); }),
@@ -93,9 +94,11 @@ describe('LiveHeadJournal', () => {
     // would send a client to an empty ledger, and an announcement that
     // overtook its own write is indistinguishable from a dropped one.
     const seen: (string | null)[] = [];
+
     const journal = new LiveHeadJournal(sql.sql, actor, (id) => {
       seen.push(journal.readHead(id)?.status ?? null);
     });
+
     journal.insertSpawn(spawn('n1', 'root-1'));
     journal.recordReport(report('n1'));
     expect(seen).toEqual(['running', 'completed']);
@@ -104,9 +107,11 @@ describe('LiveHeadJournal', () => {
   test('a failed announcement does not fail the write it was announcing', () => {
     const sql = createTestSql();
     initHeadsTables(sql.execRaw);
+
     const journal = new LiveHeadJournal(sql.sql, createTestActorsOver(sql.db).main, () => {
       throw new Error('no listeners');
     });
+
     // The caller is core, mid-search. A socket with nobody on it must not cost
     // the search its journal — the row is the durable fact, the announcement is
     // a courtesy.

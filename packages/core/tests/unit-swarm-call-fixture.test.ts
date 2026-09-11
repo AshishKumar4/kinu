@@ -62,16 +62,19 @@ import { JsonObjectSchema } from '../src/utils/json';
  *  a missing task means the example quotes figures nothing measures. */
 function majorityVote(): HardTask {
   const found = HARD_TASKS.find((task) => task.id === 'hard-majority-vote');
+
   if (!found) {
     throw new Error(
       'hard-majority-vote is absent from HARD_TASKS, so entry zero quotes numbers '
       + 'no shipped task measures',
     );
   }
+
   return found;
 }
 
 const TASK = majorityVote();
+
 const PROBLEM = TASK.problem;
 
 /**
@@ -157,10 +160,12 @@ const CALL = {
  *  over. Derived from the parse rather than hand-written beside it, so the two
  *  spellings cannot drift into disagreeing about the same field. */
 const PARSED = parseAgentsToolInput(CALL);
+
 const OBJECTIVE = v.parse(
   v.custom<ScalarObjective>((input) => v.is(v.object({ kind: v.literal('scalar') }), input)),
   PARSED.objective,
 );
+
 const FLOOR: Floor = v.parse(
   v.custom<Floor>((input) => v.is(v.object({ bestKnownHonest: v.number() }), input)),
   OBJECTIVE.floor,
@@ -175,6 +180,7 @@ const FLOOR: Floor = v.parse(
  * for nothing past it.
  */
 const OPTIMISE = SWARM_PRESET_POINTS.optimise;
+
 const VERIFIER_TREE: SwarmConfig = OPTIMISE.config;
 
 /** The tree selectors *Settle is derived* is exercised over. */
@@ -205,6 +211,7 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
     expect(VERIFIER_KINDS).toContain('exec-ratio');
     const resolved = resolveVerifier(VERIFY);
     expect('reason' in resolved).toBe(false);
+
     if ('reason' in resolved) return;
     // *The closed verifier registry*'s guard, made real: the kind resolved to an
     // INSTRUMENT — one that says where a candidate is written and which quantity is the
@@ -221,6 +228,7 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
     expect(fabricated).toMatchObject({ reason: 'bad_input' });
     expect('error' in fabricated ? fabricated.error : '').toContain(unregisteredKindRefusal());
     expect('error' in fabricated ? fabricated.error : '').not.toContain('closure');
+
     // A spec missing the floor's input leaves *Floor margin* with no numbers to show,
     // and the refusal NAMES the field rather than reporting a shape mismatch.
     const incomplete = resolveVerifier({
@@ -230,6 +238,7 @@ describe('entry zero crosses a JSON tool boundary, or it is not a call', () => {
         body: PROBLEM.body, targetOps: PROBLEM.targetOps,
       },
     });
+
     expect(incomplete).toMatchObject({ reason: 'bad_input' });
     expect('error' in incomplete ? incomplete.error : '').toContain('lowerBoundOps');
   });
@@ -302,6 +311,7 @@ describe('validity over entry zero, as far as the document defines it', () => {
     expect(resolveSwarm({ ...entry, from: 'ideate' })).toMatchObject({ reason: 'bad_input' });
     expect(resolveSwarm({ ...entry, label: 'x' })).toMatchObject({ reason: 'bad_input' });
     const keyed = resolveSwarm({ ...entry, key: 'coverage' });
+
     if ('reason' in keyed) throw new Error('a named preset must resolve, and this one refused');
     expect(swarmValidity(keyed)).toMatchObject({ reason: 'bad_input' });
     // AND `objective` MISSING — a legal call rather than a refusal, and that is the
@@ -315,12 +325,14 @@ describe('validity over entry zero, as far as the document defines it', () => {
     // objective was named: `verify` needs an instrument, none was supplied, so the
     // row's judged sweep is what actually runs.
     const unmeasured = resolveSwarm({ preset: 'optimise', task: entry.task });
+
     if ('reason' in unmeasured) throw new Error('a named preset must resolve, and this one refused');
     expect(swarmValidity(unmeasured)).toBeNull();
     expect(unmeasured.config.score.kind).toBe('judge');
     expect(unmeasured.config.advance).toEqual({ kind: 'none' });
     // The measured row is still what an objective buys, and it is unchanged.
     const measured = resolveSwarm({ preset: 'optimise', task: entry.task, objective: OBJECTIVE });
+
     if ('reason' in measured) throw new Error(measured.error);
     expect(swarmValidity(measured)).toBeNull();
     expect(measured.config.score.kind).toBe('verify');
@@ -333,6 +345,7 @@ describe('validity over entry zero, as far as the document defines it', () => {
     // nothing about what the resolver produces.
     const resolved = resolveSwarm(swarmCall());
     expect('reason' in resolved).toBe(false);
+
     if ('reason' in resolved) return;
     expect(resolved.config).toEqual(VERIFIER_TREE);
     expect(resolved.settle).toBe('best');
@@ -359,11 +372,13 @@ describe('validity over entry zero, as far as the document defines it', () => {
     expect(PARSED.branches).toBeUndefined();
     expect(PARSED.depth).toBeUndefined();
     const resolved = resolveSwarm(swarmCall());
+
     if ('reason' in resolved) throw new Error(resolved.error);
     expect(resolved.caps.depth).toEqual({ value: 5, origin: 'preset' });
     expect(resolved.caps.branches).toEqual({ value: 3, origin: 'preset' });
     // A caller who says so owns the number, and the record can tell the two apart.
     const widened = resolveSwarm({ ...swarmCall(), branches: 8 });
+
     if ('reason' in widened) throw new Error(widened.error);
     expect(widened.caps.branches).toEqual({ value: 8, origin: 'call' });
   });
@@ -389,6 +404,7 @@ describe('resolve(custom): `config` overrides `from`\'s row, and only where it s
       label: 'optimise, run fresh and carrying nothing forward',
       config: { context: 'fresh', carry: { kind: 'none' } },
     });
+
     if ('reason' in composed) throw new Error(composed.error);
     // Both directions in one equality: the two axes the call named are the call's,
     // and the four it did not are the row's, verifier and selector included.
@@ -426,13 +442,16 @@ describe('what the live tool surface does with entry zero', () => {
       branches: 8,
       depth: 4,
     });
+
     expect(smuggle).toThrow(/field "preset" does not apply to action "hire"/);
     expect(smuggle).toThrow(/it is read by swarm/);
+
     // Every one of them, not just the first: a refusal that named one field at a
     // time would cost a round trip per field of the call entry zero writes.
     for (const field of ['objective', 'branches', 'depth']) {
       expect(smuggle).toThrow(new RegExp(`field "${field}" does not apply to action "hire"`));
     }
+
     // And the correction: what `hire` does take, so a caller can fix the call
     // from the message alone rather than guessing again.
     expect(smuggle).toThrow(/action "hire" takes: role, mission, agent/);
@@ -450,6 +469,7 @@ describe('what the live tool surface does with entry zero', () => {
     const camelCase = () => parseAgentsToolInput({
       action: 'swarm', preset: PARSED.preset, task: CALL.task, budgetUsd: 5, budgetLabel: 'zero',
     });
+
     expect(camelCase).toThrow(/unknown field "budgetUsd" — did you mean "budget_usd"\?/);
     expect(camelCase).toThrow(/unknown field "budgetLabel" — did you mean "budget_label"\?/);
 
@@ -544,6 +564,7 @@ describe('the implementation, asserted against the shipped strategy modules', ()
     const refusal = resolveSwarm({ preset: 'custom', task: 'x', label: 'l', config: {} });
     expect(refusal).toMatchObject({ reason: 'bad_input' });
     const error = 'error' in refusal ? refusal.error : '';
+
     for (const axis of [
       'unit', 'context', 'expand', 'score', 'advance', 'carry',
     ]) {
@@ -571,6 +592,7 @@ describe('the implementation, asserted against the shipped strategy modules', ()
     for (const preset of NAMED_SWARM_PRESETS) {
       expect(SWARM_PRESET_POINTS[preset].config).toBeDefined();
     }
+
     // THE ARCHIVE IS WHAT AN `objective` BUYS, so the call that asks for one has to
     // name it. `{preset, task}` alone resolves to the row's unmeasured point — a
     // judged sweep at `advance:'none'` — because `verify` needs an instrument and a
@@ -579,23 +601,28 @@ describe('the implementation, asserted against the shipped strategy modules', ()
     for (const preset of ['research', 'audit', 'redteam'] as const) {
       const resolved = resolveSwarm({ preset, task: 'x', key: 'k', objective: OBJECTIVE });
       expect(resolved).not.toMatchObject({ reason: 'bad_input' });
+
       if ('reason' in resolved) throw new Error(resolved.error);
       expect(resolved.config.advance).toEqual({ kind: 'archive', novelty: 0.4 });
     }
+
     // And a bare call takes the fallback instead of refusing, which is the whole
     // ergonomics contract: `preset` + `task` is a complete call on every row.
     for (const preset of ['research', 'audit', 'redteam'] as const) {
       const bare = resolveSwarm({ preset, task: 'x' });
+
       if ('reason' in bare) throw new Error(bare.error);
       expect(bare.config.advance).toEqual({ kind: 'none' });
       expect(bare.config.score.kind).toBe('judge');
     }
+
     // And the carry split that separates them: a research finding is for publication,
     // an exploit corpus is not.
     for (const preset of ['research', 'audit'] as const) {
       expect(SWARM_PRESET_POINTS[preset].config.carry)
         .toEqual({ kind: 'artifacts', threshold: 0.8 });
     }
+
     expect(SWARM_PRESET_POINTS.redteam.config.carry).toEqual({ kind: 'elites' });
   });
 });

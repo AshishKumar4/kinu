@@ -104,19 +104,25 @@ export function checkedProjects(
 
   const projects = new Set<string>();
   const visited = new Set<string>();
+
   const walk = (name: string): void => {
     if (visited.has(name)) return;
     visited.add(name);
     const body = scripts[name];
+
     if (body === undefined) return;
+
     for (const match of body.matchAll(/-p\s+(\S+)/g)) {
       if (match[1] !== undefined) projects.add(match[1]);
     }
+
     for (const match of body.matchAll(/bun run\s+([\w:.-]+)/g)) {
       if (match[1] !== undefined) walk(match[1]);
     }
   };
+
   walk('check');
+
   return [...projects].sort();
 }
 
@@ -136,9 +142,11 @@ export async function programFiles(
 ): Promise<string[]> {
   const compiler = new API();
   const fileNames = new Set<string>();
+
   try {
     for (const project of projects) {
       const parsed = await compiler.parseConfigFile(configPath(project, repoRoot));
+
       for (const fileName of parsed.fileNames) {
         fileNames.add(relative(repoRoot, fileName).split(sep).join('/'));
       }
@@ -146,6 +154,7 @@ export async function programFiles(
   } finally {
     await compiler.close();
   }
+
   return [...fileNames].sort();
 }
 
@@ -174,6 +183,7 @@ export function testCoverage(
 ): TestCoverage {
   const programs = new Set(typechecked);
   const declared = new Set(Object.keys(exceptions));
+
   return {
     governed: tests.filter((file) => programs.has(file) || declared.has(file)),
     missing: tests.filter((file) => !programs.has(file) && !declared.has(file)),
@@ -195,6 +205,7 @@ export function scriptDebtCoverage(
 ): ScriptDebtCoverage {
   const programs = new Set(typechecked);
   const untyped = scripts.filter((file) => !programs.has(file));
+
   return {
     undeclared: untyped.filter((file) => !Object.hasOwn(SCRIPT_TYPECHECK_DEBT, file)),
     stale: Object.keys(SCRIPT_TYPECHECK_DEBT).filter((file) => !untyped.includes(file)).sort(),
@@ -205,17 +216,21 @@ function exceptionRowProblems(
   exceptions: Readonly<Record<string, TestException>> = UNTYPECHECKED_TESTS,
 ): string[] {
   const problems: string[] = [];
+
   for (const [file, row] of Object.entries(exceptions)) {
     if (row.runner.trim() === '' || row.reason.trim() === '') {
       problems.push(`${file}: an exception needs both a runner and a reason`);
     }
+
     if (row.kind === 'declared compiler debt' && !Object.hasOwn(SCRIPT_TYPECHECK_DEBT, file)) {
       problems.push(`${file}: compiler-debt test exception is not a declared script-debt row`);
     }
+
     if (row.kind === 'standalone config' && row.config.trim() === '') {
       problems.push(`${file}: standalone-config exception has no config`);
     }
   }
+
   return problems;
 }
 
@@ -227,6 +242,7 @@ async function main(): Promise<number> {
   const coverage = testCoverage(tests, typechecked);
   const debt = scriptDebtCoverage(scripts, typechecked);
   const exceptionProblems = exceptionRowProblems();
+
   const measured = assertMeasured('typecheck-coverage', [
     ['tracked runnable test files', tests.length],
     ['scripts TypeScript files', scripts.length],
@@ -246,7 +262,9 @@ async function main(): Promise<number> {
       `typecheck-coverage: ok — measured ${String(tests.length)} runnable test files = governed `
       + `${String(coverage.governed.length)} exact program-or-exception rows (${measured})`,
     );
+
     for (const spot of BLIND_SPOTS) console.log(`  blind: ${spot}`);
+
     return 0;
   }
 
@@ -261,9 +279,11 @@ async function main(): Promise<number> {
         + 'standalone config with a real runner and reason may receive an exact exception row.',
     }));
   }
+
   for (const file of coverage.staleExceptions) {
     console.error(`typecheck-coverage: stale test exception ${file} is no longer needed or is not runnable`);
   }
+
   for (const file of debt.undeclared) {
     console.error(finding({
       invariant: 'the scripts compiler-debt list is the exact set of untypechecked scripts/*.ts files',
@@ -273,10 +293,13 @@ async function main(): Promise<number> {
       fix: 'typecheck the file through `bun run check`, or add a named debt row only for an existing compiler error.',
     }));
   }
+
   for (const file of debt.stale) {
     console.error(`typecheck-coverage: stale script-debt row ${file} is now typechecked or no longer exists`);
   }
+
   for (const problem of exceptionProblems) console.error(`typecheck-coverage: invalid test exception ${problem}`);
+
   return 1;
 }
 

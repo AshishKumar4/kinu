@@ -94,11 +94,14 @@ export function createProviderRegistry(): ProviderRegistry {
     failures: ProviderFailure[];
   }> {
     const providers = [...ordered];
+
     if (!dynamic) return { providers, failures: [] };
+
     try {
       for (const id of await dynamic.listIds(deps)) {
         if (byId.has(id)) continue;
         const provider = dynamic.get(id);
+
         if (provider) providers.push(provider);
       }
     } catch (err) {
@@ -111,12 +114,14 @@ export function createProviderRegistry(): ProviderRegistry {
         }],
       };
     }
+
     return { providers, failures: [] };
   }
 
   function providerFor(providerId: string): ModelProvider | undefined {
     return byId.get(providerId) ?? dynamic?.get(providerId);
   }
+
   /**
    * Probe every provider AT ONCE, isolate each failure, and answer in
    * REGISTRATION ORDER.
@@ -170,10 +175,13 @@ export function createProviderRegistry(): ProviderRegistry {
     async listProviders(deps) {
       const { providers, failures } = await allProviders(deps);
       const out: ProviderInfo[] = [];
+
       for (const probed of await probeEach(providers, async (p) => {
         const available = await p.isAvailable(deps);
         const info: ProviderInfo = { id: p.id, label: p.label, available };
+
         if (!available && p.unavailableReason) info.unavailableReason = await p.unavailableReason(deps);
+
         return info;
       })) {
         out.push(probed.ok ? probed.value : {
@@ -183,9 +191,11 @@ export function createProviderRegistry(): ProviderRegistry {
           unavailableReason: providerFailureReason({ error: probed.error }),
         });
       }
+
       for (const failure of failures) {
         out.push({ id: failure.provider, label: failure.label, available: false, unavailableReason: failure.reason });
       }
+
       return out;
     },
 
@@ -193,6 +203,7 @@ export function createProviderRegistry(): ProviderRegistry {
       const { providers, failures: sourceFailures } = await allProviders(deps);
       const models: Array<ModelInfo & { provider: string }> = [];
       const failures = [...sourceFailures];
+
       // An UNAVAILABLE provider is not a failure — it is a provider nobody
       // connected — so it contributes neither models nor a row, exactly as the
       // sequential form did. `null` carries that "available: false" answer out
@@ -208,19 +219,24 @@ export function createProviderRegistry(): ProviderRegistry {
           });
           continue;
         }
+
         if (probed.value === null) continue;
+
         for (const m of probed.value) models.push({ ...m, provider: probed.provider.id });
       }
+
       return { models, failures };
     },
 
     resolve(spec, deps) {
       const parsed = parseModelSpec(spec);
       const provider = providerFor(parsed.provider);
+
       if (!provider) {
         const known = Array.from(byId.keys()).join(', ');
         throw new Error(`Unknown provider ${JSON.stringify(parsed.provider)} (registered: ${known || 'none'}).`);
       }
+
       return provider.createModel(parsed.modelId, deps);
     },
 
@@ -238,12 +254,14 @@ export function createProviderRegistry(): ProviderRegistry {
         try {
           if (!(await p.isAvailable(deps))) continue;
           const modelId = p.defaultModel ?? (await p.listModels(deps))[0]?.id;
+
           if (modelId) return `${p.id}/${modelId}`;
         } catch (error) {
           diagnostics.event('providers.default_model_unavailable', { error: renderThrownChain({ cause: error }) });
           continue;
         }
       }
+
       return null;
     },
   };

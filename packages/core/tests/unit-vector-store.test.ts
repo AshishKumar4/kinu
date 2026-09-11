@@ -63,40 +63,54 @@ describe('reciprocalRankFusion', () => {
 
 function makeMockIndex() {
   const records = new Map<string, { values: number[]; metadata?: JsonObject }>();
+
   const index: VectorizeIndex = {
     async insert(vecs) {
       for (const v of vecs) records.set(v.id, { values: [...v.values], metadata: v.metadata });
+
       return { ids: vecs.map((v) => v.id) };
     },
     async upsert(vecs) {
       for (const v of vecs) records.set(v.id, { values: [...v.values], metadata: v.metadata });
+
       return { ids: vecs.map((v) => v.id) };
     },
     async query(vector, options) {
       const topK = options?.topK ?? 10;
+
       // Score by cosine similarity (assumes already-normalized — simplistic, but enough for tests).
       const scored = [...records.entries()].map(([id, rec]) => {
         let dot = 0;
+
         for (let i = 0; i < Math.min(vector.length, rec.values.length); i++) {
           dot += vector[i] * rec.values[i];
         }
+
         return {
           id,
           score: dot,
           metadata: options?.returnMetadata ? rec.metadata : undefined,
         };
       });
+
       scored.sort((a, b) => b.score - a.score);
+
       return { matches: scored.slice(0, topK) };
     },
-    async deleteByIds(ids) { for (const id of ids) records.delete(id); return {}; },
+    async deleteByIds(ids) {
+      for (const id of ids) records.delete(id);
+
+      return {};
+    },
     async getByIds(ids) {
       return ids.flatMap((id) => {
         const r = records.get(id);
+
         return r ? [{ id, values: r.values, metadata: r.metadata }] : [];
       });
     },
   };
+
   return { index, records };
 }
 
@@ -105,12 +119,15 @@ const constEmbedder: Embedder = {
   async embed(text) {
     // Deterministic toy embedding: length → 3-dim with simple character bucket counts.
     const buckets = [0, 0, 0];
+
     for (const c of text.toLowerCase()) {
       if (c >= 'a' && c <= 'i') buckets[0]++;
       else if (c >= 'j' && c <= 'r') buckets[1]++;
       else if (c >= 's' && c <= 'z') buckets[2]++;
     }
+
     const norm = Math.sqrt(buckets.reduce((acc, v) => acc + v * v, 0)) || 1;
+
     return buckets.map((v) => v / norm);
   },
 };
@@ -125,6 +142,7 @@ describe('CloudflareVectorStore', () => {
       startLine: 1, endLine: 5,
       text: 'apples and bananas',
     };
+
     await store.upsertChunk(chunk);
     expect(records.has('mem-1')).toBe(true);
     expect(records.get('mem-1')!.metadata?.path).toBe('memory/MEMORY.md');
@@ -140,11 +158,13 @@ describe('CloudflareVectorStore', () => {
   test('upsertChunks (batched) inserts all + survives single embedBatch path', async () => {
     const { index } = makeMockIndex();
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder });
+
     const chunks: IndexedChunk[] = [
       { id: 'a', path: 'p', startLine: 0, endLine: 0, text: 'apple' },
       { id: 'b', path: 'p', startLine: 1, endLine: 1, text: 'banana' },
       { id: 'c', path: 'p', startLine: 2, endLine: 2, text: 'zebra' },
     ];
+
     await store.upsertChunks(chunks);
     const hits = await store.search('apple', 5);
     const ids = hits.map((h) => h.id);
@@ -170,6 +190,7 @@ describe('CloudflareVectorStore', () => {
       async deleteByIds() { return {}; },
       async getByIds() { return []; },
     };
+
     const store = createCloudflareVectorStore({ index: failingIndex, embedder: constEmbedder });
     expect(store.available).toBe(true);
     const hits = await store.search('anything');
@@ -185,6 +206,7 @@ describe('CloudflareVectorStore', () => {
       async deleteByIds() { throw new Error('vectorize down'); },
       async getByIds() { return []; },
     };
+
     const store = createCloudflareVectorStore({ index: failingIndex, embedder: constEmbedder });
     const chunk: IndexedChunk = { id: 'x', path: 'p', startLine: 1, endLine: 2, text: 'hello' };
 
@@ -200,16 +222,27 @@ describe('CloudflareVectorStore', () => {
 
   test('availability re-arms after the cooldown instead of latching off forever', async () => {
     let down = true;
+
     const flakyIndex: VectorizeIndex = {
       async insert() { return {}; },
-      async upsert() { if (down) throw new Error('vectorize down'); return {}; },
-      async query() { if (down) throw new Error('vectorize down'); return { matches: [] }; },
+      async upsert() {
+        if (down) throw new Error('vectorize down');
+
+        return {};
+      },
+      async query() {
+        if (down) throw new Error('vectorize down');
+
+        return { matches: [] };
+      },
       async deleteByIds() { return {}; },
       async getByIds() { return []; },
     };
+
     const store = createCloudflareVectorStore({ index: flakyIndex, embedder: constEmbedder });
     const start = Date.now();
     setSystemTime(new Date(start));
+
     try {
       await store.search('anything');
       expect(store.available).toBe(false);
@@ -235,29 +268,42 @@ describe('CloudflareVectorStore', () => {
 // storage ids workspace-unique. A query filters to its namespace.
 function makeNamespacedIndex() {
   const records = new Map<string, { values: number[]; namespace?: string; metadata?: JsonObject }>();
+
   const put = (vecs: readonly VectorRecord[]) => {
     for (const v of vecs) records.set(v.id, { values: [...v.values], namespace: v.namespace, metadata: v.metadata });
+
     return { ids: vecs.map((v) => v.id) };
   };
+
   const index: VectorizeIndex = {
     async insert(vecs) { return put(vecs); },
     async upsert(vecs) { return put(vecs); },
     async query(vector, options) {
       const topK = options?.topK ?? 10;
       const ns = options?.namespace;
+
       const scored = [...records.entries()]
         .filter(([, rec]) => ns === undefined || rec.namespace === ns)
         .map(([id, rec]) => {
           let dot = 0;
+
           for (let i = 0; i < Math.min(vector.length, rec.values.length); i++) dot += vector[i] * rec.values[i];
+
           return { id, score: dot, metadata: options?.returnMetadata ? rec.metadata : undefined };
         });
+
       scored.sort((a, b) => b.score - a.score);
+
       return { matches: scored.slice(0, topK) };
     },
-    async deleteByIds(ids) { for (const id of ids) records.delete(id); return {}; },
+    async deleteByIds(ids) {
+      for (const id of ids) records.delete(id);
+
+      return {};
+    },
     async getByIds() { return []; },
   };
+
   return { index, records };
 }
 
@@ -305,6 +351,7 @@ describe('CloudflareVectorStore — workspace isolation', () => {
     const store = createCloudflareVectorStore({ index, embedder: constEmbedder, namespace: 'a-fairly-long-workspace-name-xyz' });
     const longId = 'memory/logs/2026-07-13-some-very-long-session-file-name.md:100000-100050';
     await store.upsertChunk({ id: longId, path: 'memory/logs/x.md', startLine: 100000, endLine: 100050, text: 'hello world' });
+
     for (const key of records.keys()) expect(new TextEncoder().encode(key).length).toBeLessThanOrEqual(64);
     const hits = await store.search('hello', 5);
     expect(hits[0].id).toBe(longId);
@@ -325,12 +372,15 @@ describe('createNoopVectorStore', () => {
 describe('createWorkersAIEmbedder', () => {
   test('forwards single embed to ai.run with model + text', async () => {
     const calls: Array<{ model: string; input: { text: string | string[] } }> = [];
+
     const ai = {
       async run(model: string, input: { text: string | string[] }) {
         calls.push({ model, input });
+
         return { data: [[0.1, 0.2, 0.3, 0.4]] };
       },
     };
+
     const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 4 });
     const vec = await embedder.embed('hello');
     expect(vec).toEqual([0.1, 0.2, 0.3, 0.4]);
@@ -345,8 +395,10 @@ describe('createWorkersAIEmbedder', () => {
         return { data: [[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]] };
       },
     };
+
     const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 2 });
     const embedBatch = embedder.embedBatch;
+
     if (!embedBatch) throw new Error('expected batch embed support');
     const out = await embedBatch(['a', 'b', 'c']);
     expect(out).toEqual([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]);
@@ -354,14 +406,18 @@ describe('createWorkersAIEmbedder', () => {
 
   test('embedBatch falls back to single-embed if response is wrong length', async () => {
     let callCount = 0;
+
     const ai = {
       async run(_model: string, input: { text: string | string[] }) {
         callCount++;
+
         // First call (batch): return wrong length → triggers fallback.
         if (Array.isArray(input.text)) return { data: [[0.1, 0.2]] };
+
         return { data: [[Number(callCount), 0]] };
       },
     };
+
     const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 2 });
     const out = await embedder.embedBatch!(['a', 'b']);
     expect(out.length).toBe(2);

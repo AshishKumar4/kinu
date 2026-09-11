@@ -25,11 +25,13 @@ const MAX = 72;
 
 function str(input: JsonObject, key: string): string {
   const value = input[key];
+
   return v.is(v.string(), value) ? value.trim() : "";
 }
 
 function nested(input: JsonObject, key: string): JsonObject {
   const value = input[key];
+
   return v.is(JsonObjectSchema, value) ? value : {};
 }
 
@@ -73,14 +75,20 @@ const OBSERVING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
  */
 export function toolCallEffect<Input>(toolName: string, input: Input): ToolCallEffect {
   const parsed = v.safeParse(JsonObjectSchema, input);
+
   if (!parsed.success) return 'unknown';
   const action = str(parsed.output, 'action');
+
   if (toolName === 'tasks' && action === 'mode') {
     return str(parsed.output, 'role') ? 'mutate' : 'observe';
   }
+
   if (MUTATING_ACTIONS.get(toolName)?.has(action) === true) return 'mutate';
+
   if (OBSERVING_ACTIONS.get(toolName)?.has(action) === true) return 'observe';
+
   if (toolName === 'web_search' || toolName === 'web_fetch') return 'observe';
+
   return 'unknown';
 }
 
@@ -88,11 +96,13 @@ export function toolCallEffect<Input>(toolName: string, input: Input): ToolCallE
  *  when it isn't. */
 export function clip(value: string, max: number = MAX): string {
   const flat = value.replace(/\s+/g, " ").trim();
+
   return flat.length <= max ? flat : `${flat.slice(0, max - 1).trimEnd()}…`;
 }
 
 function quoted(value: string, max: number = MAX): string {
   const clipped = clip(value, max);
+
   return clipped ? `"${clipped}"` : "";
 }
 
@@ -104,6 +114,7 @@ function words(...parts: Array<string | undefined>): string {
 function actionOn(action: string, target?: string, body?: string): string {
   const head = words(action, target ? clip(target, 40) : undefined);
   const tail = body ? quoted(body, 48) : "";
+
   return tail ? `${head} — ${tail}` : head;
 }
 
@@ -112,15 +123,19 @@ function actionOn(action: string, target?: string, body?: string): string {
 function firstCodeLine(code: string): string {
   for (const raw of code.split("\n")) {
     const line = raw.trim();
+
     if (!line || line.startsWith("//") || line.startsWith("/*") || line.startsWith("*")) continue;
+
     return line;
   }
+
   return "";
 }
 
 /** The first nonblank line is the model's user-facing codemode intent. */
 function codemodeIntent(code: string): string {
   const first = code.split("\n").find((line) => line.trim().length > 0)?.trim() ?? "";
+
   return first.startsWith("//") ? clip(first.slice(2), 72) : "";
 }
 
@@ -128,6 +143,7 @@ function summarizeThink(input: JsonObject): string {
   const heads = Array.isArray(input.heads) ? input.heads.length : 0;
   const label = heads > 0 ? `${heads} heads` : str(input, "strategy");
   const task = quoted(str(input, "task"), 56);
+
   return [label, task].filter(Boolean).join(": ");
 }
 
@@ -138,27 +154,35 @@ function summarizeThink(input: JsonObject): string {
 function summarizeAgents(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
+
   switch (action) {
     case "swarm": {
       const preset = str(input, "preset");
       const task = quoted(str(input, "task"), 56);
       const label = preset ? `swarm ${preset}` : "swarm";
+
       return task ? `${label}: ${task}` : label;
     }
+
     case "fork": {
       const forks = Array.isArray(input.forks) ? input.forks.length : 0;
       const label = forks > 0 ? `${forks} forks` : "fork";
       const task = quoted(str(input, "task"), 56);
+
       return task ? `${label}: ${task}` : label;
     }
+
     case "hire": {
       if (str(input, "scope") === "workspace") return actionOn("hire workspace", agent, str(input, "mission"));
       const role = str(input, "role");
+
       // No `role` is a hire handed to an agent that already exists, and then
       // `message` is the workstream rather than `mission`.
       if (!role) return actionOn(action, agent, str(input, "message"));
+
       return actionOn(str(input, "lifetime") === "task" ? "hire (task)" : action, agent || role, agent ? role : "");
     }
+
     case "msg":
       return agent
         ? actionOn(action, agent, str(input, "topic") || str(input, "message"))
@@ -175,10 +199,13 @@ function summarizeAgents(input: JsonObject): string {
  *  query, keyed-fact actions by their key. */
 function summarizeMemory(input: JsonObject): string {
   const action = str(input, "action");
+
   if (action === "save") return actionOn(action, undefined, str(input, "content"));
   const key = str(input, "key");
+
   if (key) return actionOn(action, key);
   const query = str(input, "query");
+
   return query ? `${action} ${quoted(query, 56)}` : action;
 }
 
@@ -188,9 +215,11 @@ function summarizeFile(input: JsonObject): string {
   const action = str(input, "action");
   const path = str(input, "path");
   const edits = input.edits;
+
   if (action === "edit" && Array.isArray(edits) && edits.length > 1) {
     return `${action} ${clip(path, 56)} (${edits.length} edits)`;
   }
+
   return path ? `${action} ${clip(path, 60)}` : action;
 }
 
@@ -198,14 +227,17 @@ function summarizeFile(input: JsonObject): string {
 function summarizeWeb(input: JsonObject): string {
   const action = str(input, "action");
   const url = str(input, "url");
+
   if (url) return `${action} ${clip(url, 56)}`;
   const query = str(input, "query");
+
   return query ? `${action} ${quoted(query, 56)}` : action;
 }
 
 function summarizeTeam(input: JsonObject): string {
   const action = str(input, "action");
   const name = str(input, "name");
+
   switch (action) {
     case "spawn":   return actionOn(action, name || str(input, "role"), name ? str(input, "role") : "");
     case "assign":  return actionOn(action, name, str(input, "task"));
@@ -217,6 +249,7 @@ function summarizeTeam(input: JsonObject): string {
 function summarizePeers(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
+
   switch (action) {
     case "ask":
     case "send":            return actionOn(action, agent, str(input, "topic") || str(input, "message"));
@@ -230,51 +263,67 @@ function summarizePeers(input: JsonObject): string {
  *  moved and where to. */
 function summarizeTasks(input: JsonObject): string {
   const action = str(input, "action");
+
   if (action === "add") {
     const titles = Array.isArray(input.titles) ? input.titles.filter((title): title is string => v.is(v.string(), title)) : [];
     const parent = str(input, "parent");
     const head = titles.length > 1 ? `add ${titles.length} tasks` : "add";
     const target = parent ? `${head} under ${parent}` : head;
+
     return titles.length === 1 ? actionOn(target, undefined, titles[0]) : target;
   }
+
   if (action === "update") return actionOn(action, str(input, "id"), str(input, "status"));
+
   return action;
 }
 
 function summarizeRelease(input: JsonObject): string {
   const action = str(input, "action");
   const changeId = str(input, "changeId").slice(0, 8);
+
   switch (action) {
     case "create":
       return actionOn(action, undefined, str(input, "userPrompt"));
     case "bind_source": {
       const binding = nested(input, "binding");
+
       return actionOn(action, str(binding, "label") || str(binding, "kind"));
     }
+
     case "transition":
       return words(actionOn(action, changeId), str(input, "status") ? `→ ${str(input, "status")}` : undefined);
     case "record_check": {
       const check = nested(input, "check");
+
       return words(actionOn(action, str(check, "name") || changeId), str(check, "status") || undefined);
     }
+
     case "run_checks": {
       const checks = Array.isArray(input.checks) ? input.checks : [];
+
       const names = checks
         .map((check) => (v.is(JsonObjectSchema, check) ? str(check, "name") : ""))
         .filter(Boolean)
         .join(", ");
+
       return names ? `${action} — ${clip(names, 48)}` : actionOn(action, changeId);
     }
+
     case "preview": {
       const port = v.is(v.number(), input.port) ? `:${input.port}` : "";
+
       return words(actionOn(action, changeId), port || undefined);
     }
+
     case "deploy":
     case "rollback":
     case "record_deployment": {
       const environment = str(nested(input, "deployment"), "environment");
+
       return words(actionOn(action, changeId), environment || undefined);
     }
+
     case "request_approval":
       return words(actionOn(action, changeId), str(input, "approvalType") || undefined);
     default:
@@ -283,6 +332,7 @@ function summarizeRelease(input: JsonObject): string {
 }
 
 type ToolSummarizer = (input: JsonObject) => string;
+
 const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
   execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
   run: (input) => clip(str(input, "command")),
@@ -328,9 +378,12 @@ const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
 function argv(command: string): string[] {
   const parts = command.trim().split(/\s+/).filter(Boolean);
   let i = 0;
+
   while (i < parts.length && (/^[A-Z_][A-Z0-9_]*=/.test(parts[i]!) || parts[i] === "sudo" || parts[i] === "env")) i++;
   const rest = parts.slice(i);
+
   if (rest.length > 0) rest[0] = rest[0]!.split("/").pop()!;
+
   return rest;
 }
 
@@ -355,16 +408,20 @@ const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: 
 /** What a shell command is for, from its own argv. */
 export function describeCommand(command: string): string {
   const words = argv(command);
+
   if (words.length === 0) return "";
+
   // Every git verb reads fine as "Git <verb>", and flattening them all to one
   // phrase would lose the only thing the operator cares about.
   if (words[0] === "git" && words[1]) return `Git ${words[1]}`;
+
   // A runner and the tool it drives both sit in front of the verb
   // (`bunx wrangler deploy`, `npm run build`), so look a few words in — but
   // only a few, or a path argument starts deciding what the command was for.
   for (const word of words.slice(0, 3)) {
     for (const [test, verb] of RUN_VERBS) if (test(word)) return verb;
   }
+
   return "";
 }
 
@@ -385,27 +442,36 @@ const MEMORY_VERBS = new Map(Object.entries({
 /** The last path segment — the part a person reads. */
 function basename(path: string): string {
   const trimmed = path.replace(/\/+$/, "");
+
   return trimmed.split("/").pop() || trimmed;
 }
 
 function describeAgents(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
+
   switch (action) {
     case "swarm": {
       const preset = str(input, "preset");
+
       return preset ? `Ran a ${preset} search` : "Ran a search";
     }
+
     // Stored history: the removed ephemeral rung still has to render.
     case "fork": {
       const forks = Array.isArray(input.forks) ? input.forks.length : 0;
+
       return forks > 0 ? `Delegated to ${forks} parallel ${forks === 1 ? "fork" : "forks"}` : "Delegated to a fork";
     }
+
     case "hire":
       if (str(input, "scope") === "workspace") return "Hired a workspace";
+
       // No `role` is a hire handed to an agent that already exists.
       if (!str(input, "role")) return agent ? `Asked ${agent}` : "Asked a subordinate";
+
       if (str(input, "lifetime") === "task") return agent ? `Asked ${agent} for one answer` : "Asked one agent for one answer";
+
       return agent ? `Hired ${agent}` : "Hired a subordinate";
     case "msg":     return agent ? `Messaged ${agent}` : "Answered an agent message";
     // Stored history: the three verbs `msg` replaced still have to render.
@@ -420,12 +486,15 @@ function describeAgents(input: JsonObject): string {
 }
 
 type ToolDescriber = (input: JsonObject) => string;
+
 const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   run: (input) => describeCommand(str(input, "command")),
   file: (input) => {
     const verb = FILE_VERBS.get(str(input, "action"));
+
     if (!verb) return "";
     const path = str(input, "path");
+
     return path ? `${verb} ${basename(path)}` : verb;
   },
   agents: describeAgents,
@@ -437,16 +506,23 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   execute_tools: (input) => codemodeIntent(str(input, "code")) || "Ran a tool program",
   think: (input) => {
     const heads = Array.isArray(input.heads) ? input.heads.length : 0;
+
     return heads > 0 ? `Explored with ${heads} heads` : "Explored the problem";
   },
   skills: (input) => (str(input, "action") === "run" ? "Ran a skill" : ""),
   release: (input) => {
     const action = str(input, "action");
+
     if (action === "create") return "Opened a change";
+
     if (action === "run_checks" || action === "record_check") return "Checked a change";
+
     if (action === "deploy") return "Deployed a change";
+
     if (action === "rollback") return "Rolled a change back";
+
     if (action === "request_approval") return "Asked you to approve";
+
     return "";
   },
   report: (input) => (str(input, "status") ? `Reported ${str(input, "status")}` : "Reported back"),
@@ -460,7 +536,9 @@ const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
  */
 export function describeToolCall<Input>(toolName: string, input: Input): string {
   const parsed = v.safeParse(JsonObjectSchema, input);
+
   if (!parsed.success) return "";
+
   return DESCRIBERS.get(toolName)?.(parsed.output) ?? "";
 }
 
@@ -471,6 +549,7 @@ export function describeToolCall<Input>(toolName: string, input: Input): string 
 function summarizeUnknownTool(input: JsonObject): string {
   const strings = Object.values(input).filter((value): value is string =>
     v.is(v.string(), value) && value.trim().length > 0);
+
   return strings.length === 1 ? clip(strings[0] ?? '') : "";
 }
 
@@ -481,7 +560,9 @@ function summarizeUnknownTool(input: JsonObject): string {
  */
 export function summarizeToolCall<Input>(toolName: string, input: Input): string {
   const parsed = v.safeParse(JsonObjectSchema, input);
+
   if (!parsed.success) return "";
   const summarize = SUMMARIZERS.get(toolName);
+
   return summarize ? summarize(parsed.output) : summarizeUnknownTool(parsed.output);
 }

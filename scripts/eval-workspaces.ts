@@ -49,19 +49,26 @@ function parseArgs(argv: readonly string[]): Options {
   let origin: string | null = null;
   let all = false;
   const prefixes = [EVAL_WORKSPACE_PREFIX];
+
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
+
     if (arg === '--all') { all = true; continue; }
+
     if (arg === '--origin' || arg === '--prefix') {
       const value = argv[i + 1];
+
       if (!value) throw new Error(`${arg} needs a value`);
+
       if (arg === '--origin') origin = value;
       else prefixes.push(value);
       i += 1;
       continue;
     }
+
     throw new Error(`unknown argument ${String(arg)}`);
   }
+
   return { origin, all, prefixes };
 }
 
@@ -85,21 +92,27 @@ interface AccountAccess {
  */
 function credentials(options: Options): AccountAccess {
   const resolved = resolveEvalIdentity();
+
   if (resolved.kind === 'ready') {
     const identity: EvalIdentity = resolved.identity;
+
     if (!options.origin || options.origin === identity.origin) {
       return { origin: identity.origin, token: identity.token, via: identity.account };
     }
   }
+
   if (!options.origin) {
     throw new Error('no eval credential and no --origin. Set KINU_EVAL_TOKEN to read the eval '
       + "account, or pass --origin to read the signed-in session's account.");
   }
+
   const session = resolveCloudSession();
+
   if (!session) {
     throw new Error(`no credential for ${options.origin}: neither KINU_EVAL_TOKEN nor a `
       + 'signed-in CLI session. Run `kinu auth` or export KINU_EVAL_TOKEN.');
   }
+
   return { origin: options.origin, token: session.token, via: 'signed-in session' };
 }
 
@@ -116,9 +129,11 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
 
   lines.push(`${String(evalRows.length)} of ${String(agents.length)} workspace(s) match `
     + `${options.prefixes.map((p) => `\`${p}\``).join(' or ')}:`);
+
   for (const agent of [...evalRows].sort((a, b) => a.createdAt - b.createdAt)) {
     lines.push(`  ${agent.name}  ${when(agent.createdAt)}  ${agent.displayName}`);
   }
+
   if (evalRows.length === 0) lines.push('  (none)');
 
   if (options.all) {
@@ -126,17 +141,22 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
     lines.push(`${String(others.length)} workspace(s) do not. A row here that is test debris `
       + 'predates the naming rule, so only its owner can say so — name its shape with '
       + '--prefix to have the delete command rendered for it:');
+
     for (const agent of [...others].sort((a, b) => a.createdAt - b.createdAt)) {
       lines.push(`  ${agent.name}  ${when(agent.createdAt)}  ${agent.displayName}`);
     }
+
     if (others.length === 0) lines.push('  (none)');
   }
 
   lines.push('');
+
   if (evalRows.length === 0) {
     lines.push('Nothing to clean.');
+
     return lines;
   }
+
   // ONE line to approve and run. `kinu workspace delete` rather than a raw
   // DELETE loop because it also prunes the local config reference, which a bare
   // API call leaves behind; it takes one name at a time, hence the loop. The
@@ -145,6 +165,7 @@ function render(agents: readonly CloudAgent[], options: Options, origin: string)
   lines.push('To remove them, run:');
   lines.push(`  KINU_ORIGIN=${origin} sh -c 'for w in ${evalRows.map((a) => a.name).join(' ')};`
     + " do kinu workspace delete -y \"$w\"; done'");
+
   return lines;
 }
 
@@ -153,6 +174,7 @@ async function main(argv: readonly string[]): Promise<number> {
   const { origin, token, via } = credentials(options);
   console.log(`account at ${origin}, read as ${via}`);
   console.log(render(await listCloudAgents(origin, token), options, origin).join('\n'));
+
   return 0;
 }
 

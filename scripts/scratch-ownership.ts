@@ -142,7 +142,9 @@ const MINTS = /mkdtempSync\(|mkdirSync\(\s*[^)]*(?:tmpdir\(\)|\/tmp\/)/;
 
 /** A removal that still runs when the test body threw. */
 const RELEASES = /afterEach\(|afterAll\(|finally\s*\{/;
+
 const REMOVES = /rmSync\(|\brm\(/;
+
 const USES_HELPER = /\bscratch(?:Dir|Path)\b/;
 
 /** A mint that is NOT the helper — the other half of a half-migrated file. */
@@ -160,17 +162,24 @@ const RAW_MINT = /mkdtempSync\(/;
 function code(source: string): string {
   const lines = source.split('\n');
   let inBlock = false;
+
   return lines.map((line) => {
     const trimmed = line.trimStart();
+
     if (inBlock) {
       if (trimmed.includes('*/')) inBlock = false;
+
       return '';
     }
+
     if (trimmed.startsWith('/*')) {
       if (!trimmed.includes('*/')) inBlock = true;
+
       return '';
     }
+
     if (trimmed.startsWith('//') || trimmed.startsWith('*')) return '';
+
     return line;
   }).join('\n');
 }
@@ -192,9 +201,11 @@ export interface ScratchAudit {
 /** Line number of the first match, 1-based, for a finding a reader can open. */
 function lineOf(source: string, pattern: RegExp): number {
   const lines = source.split('\n');
+
   for (const [index, line] of lines.entries()) {
     if (new RegExp(pattern.source).test(line)) return index + 1;
   }
+
   return 1;
 }
 
@@ -205,12 +216,15 @@ export function auditScratchOwnership(sources: ReadonlyMap<string, string>): Scr
 
   for (const [path, source] of sources) {
     if (EXEMPT.some((exempt) => exempt === path)) continue;
+
     for (const match of code(source).matchAll(MKDTEMP_PREFIX)) {
       const prefix = match[1];
+
       // A composed prefix is the helper minting its own namespace, which is
       // catalogued by construction — there is no literal to check.
       if (prefix === undefined || prefix.includes('${')) continue;
       prefixes.add(prefix);
+
       if (!SCRATCH_PREFIXES.some((known) => prefix.startsWith(known))) {
         problems.push({
           rule: 'catalogued',
@@ -254,8 +268,11 @@ export function auditScratchOwnership(sources: ReadonlyMap<string, string>): Scr
 
     if (!MINTS.test(body)) continue;
     mintingFiles += 1;
+
     if (!isSuiteFile(path)) continue;
+
     if (USES_HELPER.test(body)) continue;
+
     if (RELEASES.test(body) && REMOVES.test(body)) continue;
     problems.push({
       rule: 'released',
@@ -283,12 +300,14 @@ export function readScannableSources(): Map<string, string> {
 
 if (import.meta.main) {
   const audit = auditScratchOwnership(readScannableSources());
+
   const measured = assertMeasured('scratch-ownership', [
     ['source files read', audit.files],
     ['files that mint temp scratch', audit.mintingFiles],
     ['distinct mkdtemp prefixes', audit.prefixes.length],
     ['catalogued prefixes', SCRATCH_PREFIXES.length],
   ]);
+
   if (audit.problems.length === 0) {
     console.log(
       `scratch-ownership: ok — ${measured}, every suite that mints releases through `
@@ -298,7 +317,9 @@ if (import.meta.main) {
     console.log('  blind: a leak inside a helper that takes the path as an argument. The mint site is what is checked, and the mint site is where the name is chosen');
     process.exit(0);
   }
+
   console.error(`scratch-ownership: ${String(audit.problems.length)} unowned scratch site(s)\n`);
+
   for (const problem of audit.problems) {
     console.error(finding({
       at: `${problem.file}:${String(problem.line)} (${problem.rule})`,
@@ -313,5 +334,6 @@ if (import.meta.main) {
         + 'directory in afterEach/afterAll/finally so a failing assertion still cleans up',
     }));
   }
+
   process.exit(1);
 }

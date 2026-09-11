@@ -64,6 +64,7 @@ describe('createHostShell', () => {
       await shell.exec('sleep 20 & echo started');
       // Nothing else keeps this process alive. If it lingers, the shell does.
     `;
+
     const started = Date.now();
     const proc = Bun.spawn(['bun', '-e', script], { stdout: 'ignore', stderr: 'pipe' });
     const exitCode = await proc.exited;

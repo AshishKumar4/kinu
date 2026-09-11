@@ -29,6 +29,7 @@ const PYTEST = {
 const runToolOver = (shell: Shell): RunTool => {
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
+
   return {
     execute: toolExecute<{ command: string; runtime?: string }, CommandResult>(
       buildBuiltinTools({ rt: runtime }).run,
@@ -89,9 +90,11 @@ describe('the surfaces the model reads', () => {
     const shell: Shell = { exec: async () => ({ stdout, stderr: '', exitCode: 0 }) };
     expect(await runToolOver(shell).execute({ command: 'cat incident.json' })).toBe(stdout);
     const { rt } = createTestRuntime();
+
     const provider = createInlineExecutor({
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore, shell,
     });
+
     expect(await provider.tools.exec?.execute('cat incident.json')).toBe(stdout);
   });
 
@@ -102,10 +105,12 @@ describe('the surfaces the model reads', () => {
 
   test('codemode `workspace.exec` surfaces the same failure detail as `run`', async () => {
     const { rt } = createTestRuntime();
+
     const provider = createInlineExecutor({
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => PYTEST },
     });
+
     const out = await provider.tools.exec?.execute('pytest');
     expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('1 failed, 2 passed') });
   });
@@ -124,6 +129,7 @@ describe('the surfaces the model reads', () => {
         },
       },
     });
+
     const out = await nimbus.tools.exec?.execute('pytest');
     expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
   });
@@ -134,6 +140,7 @@ describe('the surfaces the model reads', () => {
       status: () => ({ connected: true, registered: true, toolchain: null }),
       refreshStatus: async () => ({ connected: true, registered: true, toolchain: null }),
     });
+
     const out = await laptop.tools.exec?.execute('pytest');
     expect(out).toMatchObject({ reason: 'io', error: expect.stringContaining('test_add - assert 3 == 4') });
   });
@@ -151,6 +158,7 @@ describe('the surfaces the model reads', () => {
         },
       },
     });
+
     const out = String(await nimbus.tools.readFile!.execute('/missing.txt'));
     expect(parseJsonValue(out)).toMatchObject({ reason: 'missing' });
   });
@@ -169,6 +177,7 @@ describe('the surfaces the model reads', () => {
         },
       },
     });
+
     const out = String(await nimbus.tools.readFile!.execute('/empty.txt'));
     expect(out).toBe('');
   });

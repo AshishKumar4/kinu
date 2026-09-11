@@ -26,11 +26,13 @@ describe('Scaffold modification (4-gate)', () => {
   test('rejects code with import statement', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
+
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
       'import fs from "fs";\nasync function* run(rt, task) {}',
     );
+
     expect(result.ok).toBe(false);
     expect(result.stage).toBe(1);
     expect(result.error).toContain('Forbidden pattern');
@@ -39,11 +41,13 @@ describe('Scaffold modification (4-gate)', () => {
   test('rejects code with require()', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
+
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
       'const x = require("fs");\nasync function* run(rt, task) {}',
     );
+
     expect(result.ok).toBe(false);
     expect(result.stage).toBe(1);
   });
@@ -51,11 +55,13 @@ describe('Scaffold modification (4-gate)', () => {
   test('rejects code with eval()', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
+
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
       'eval("malicious"); async function* run(rt, task) {}',
     );
+
     expect(result.ok).toBe(false);
     expect(result.stage).toBe(1);
   });
@@ -63,11 +69,13 @@ describe('Scaffold modification (4-gate)', () => {
   test('rejects code with globalThis', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
+
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
       'globalThis.fetch("evil"); async function* run(rt, task) {}',
     );
+
     expect(result.ok).toBe(false);
     expect(result.stage).toBe(1);
   });
@@ -75,11 +83,13 @@ describe('Scaffold modification (4-gate)', () => {
   test('rejects code without required signature', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
+
     const result = await modifyScaffold(
       rt,
       'This is a long enough rationale to pass the 50 char minimum check.',
       'function wrongSignature() { return 42; }',
     );
+
     expect(result.ok).toBe(false);
     expect(result.stage).toBe(1);
     expect(result.error).toContain('async function* run(rt, task)');
@@ -88,14 +98,17 @@ describe('Scaffold modification (4-gate)', () => {
   test('accepts valid scaffold code', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
+
     const validCode = `async function* run(rt, task) {
       yield { type: "chunk", data: "hello" };
     }`;
+
     const result = await modifyScaffold(
       rt,
       'Simplified scaffold to return hello — improves response time for basic queries.',
       validCode,
     );
+
     expect(result.ok).toBe(true);
     expect(result.version).toBeDefined();
   });
@@ -110,23 +123,28 @@ describe('Scaffold modification (4-gate)', () => {
     initScaffoldTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield "v0"; }');
     const before = await rt.identity.scaffold.read();
+
     const pendingCode = `async function* run(rt, task) {
       yield { type: "chunk", data: "pending" };
     }`;
+
     const result = await modifyScaffold(
       rt,
       'Pending scaffold proposal — should land in versioned file, not live.',
       pendingCode,
     );
+
     expect(result.ok).toBe(true);
     // Live file must be untouched.
     const liveAfter = await rt.identity.scaffold.read();
     expect(liveAfter).toBe(before);
+
     // Pending code must be readable from the versioned file.
     const pending = await rt.storage.vfs.readFile(
       `scaffold/agent.js.v${result.version}`,
       { encoding: 'utf8' },
     );
+
     const pendingText = pending instanceof Uint8Array ? new TextDecoder().decode(pending) : pending;
     expect(pendingText).toBe(pendingCode);
   });
@@ -169,10 +187,13 @@ describe('scaffold host callTool ids', () => {
     // claim IS the row.
     const { sql, execRaw } = createTestSql();
     initToolEffectClaimTable(execRaw);
+
     const deps: EffectClaimDeps = {
       sql, actor: createTestActors(sql, execRaw).main, turnId: () => 'turn-1',
     };
+
     const calls: string[] = [];
+
     const entry = tool({
       description: 'send the invoice',
       inputSchema: jsonSchema<{ to: string }>({
@@ -180,14 +201,17 @@ describe('scaffold host callTool ids', () => {
       }),
       execute: async (input: { to: string }) => {
         calls.push(input.to);
+
         return { sent: input.to, attempt: calls.length };
       },
     });
+
     const claimed = () => withEffectClaims({ run: entry }, deps);
     const firstHost = createScaffoldCallTool(claimed);
     const secondHost = createScaffoldCallTool(claimed);
     const realNow = Date.now;
     Date.now = () => 1_700_000_000_000;
+
     try {
       const first = await firstHost('run', { to: 'ops@example.test' });
       const second = await firstHost('run', { to: 'ops@example.test' });

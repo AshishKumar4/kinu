@@ -70,6 +70,7 @@ export interface EnvironmentSurfaceProps {
 function filesRootFor(name: string): string | null {
   if (name === "workspace") return "/";
   const prefixes: Record<string, string | undefined> = EXECUTOR_MOUNTS;
+
   return prefixes[name] ?? null;
 }
 
@@ -83,10 +84,15 @@ export function statusOf(mount: MountInfo, exec: ExecutorInfo | undefined): Stat
   if (mount.live && mount.name === "laptop" && exec?.granted === false) {
     return { word: "needs approval", dotClass: "p-info" };
   }
+
   if (!mount.live) return { word: "offline", dotClass: "p-text-3" };
+
   if (exec?.status === "error") return { word: "error", dotClass: "p-danger" };
+
   if (exec && isExecutorActive(exec)) return { word: "active", dotClass: "p-success" };
+
   if (exec?.status === "idle" || exec?.configured) return { word: "idle", dotClass: "p-info" };
+
   return { word: "live", dotClass: "p-success" };
 }
 
@@ -120,8 +126,10 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const defaultMount = useMemo(() => {
     const preferred = pickDefaultExecutor(executors, lastActiveExecutor);
     const match = mounts.find((m) => m.name === preferred);
+
     return match?.name ?? mounts.find((m) => m.live)?.name ?? mounts[0]?.name ?? null;
   }, [executors, lastActiveExecutor, mounts]);
+
   const selectedName = selected ?? defaultMount;
   const selectedMount = mounts.find((m) => m.name === selectedName) ?? null;
   const selectedExec = selectedMount ? execByName.get(selectedMount.name) : undefined;
@@ -208,6 +216,7 @@ function EnvironmentCard({ mount, exec, active, onSelect, onOpenFiles, onConnect
   const filesRoot = filesRootFor(executor);
   // The device's own name where the user gave one; the generic label elsewhere.
   const title = executor === "laptop" && exec?.label ? exec.label : executorLabel(executor);
+
   return (
     <div
       data-env-card={mount.name}
@@ -273,9 +282,11 @@ function UnavailableMount({ mount, exec, onConnectDevice }: {
   // `laptop`, not `pc`: rows are named by their EXECUTOR now, and the old
   // mount name left this branch — the whole connect call-to-action — dead.
   if (mount.name === "laptop") return <PcConnectCta onConnectDevice={onConnectDevice} />;
+
   const docs = mount.name === "sandbox"
       ? { text: "This deployment has no Linux sandbox. Use the Workspace shell instead.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment is not enabled here.", href: "https://github.com/AshishKumar4/kinu/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
+
   return (
     <div className="h-full flex items-center justify-center p-6">
       <div className="max-w-md text-center space-y-3">
@@ -298,6 +309,7 @@ function UnavailableMount({ mount, exec, onConnectDevice }: {
  *  from the card the agent's next command raises. */
 function NeedsApprovalMount({ exec }: { exec: ExecutorInfo }) {
   const name = exec.label ?? executorLabel(exec.name);
+
   return (
     <div className="h-full flex items-center justify-center p-6" data-env-needs-approval>
       <div className="max-w-md text-center space-y-3">
@@ -326,6 +338,7 @@ function PcConnectCta({ onConnectDevice }: { onConnectDevice: () => void }) {
   const live = (devices ?? []).filter((device) => device.revokedAt === null);
   const registered = live.length > 0;
   const labels = live.map((d) => d.label).join(", ");
+
   return (
     <div className="h-full flex items-center justify-center overflow-y-auto p-6">
       <div className="max-w-md w-full space-y-3">

@@ -46,6 +46,7 @@ interface FakeWorkspace {
 }
 
 const RUN = 'run-test';
+
 let nextIndex = 0;
 
 /** One stamped event. The union is wide and only a few variants matter here, so
@@ -53,6 +54,7 @@ let nextIndex = 0;
  *  every variant shares. */
 function event(body: JsonObject): RunEvent {
   nextIndex += 1;
+
   // SAFETY: constructed below — each call site passes exactly one variant's own
   // fields beside its `type` discriminator, and this adds the three base fields
   // every `RunEvent` variant carries.
@@ -69,12 +71,15 @@ function event(body: JsonObject): RunEvent {
 function cappedTrail(): RunEvent[] {
   nextIndex = 0;
   const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
+
   for (let step = 0; step < 10; step += 1) {
     events.push(event({ type: 'tool_call_end', name: 'execute_tools', toolCallId: `tc-${String(step)}` }));
     events.push(event({ type: 'step_finish', stepIndex: step, reason: 'tool-calls' }));
   }
+
   events.push(event({ type: 'turn_end', usage: { input: 190_979, output: 6_016 } }));
   events.push(event({ type: 'run_end', reason: 'completed' }));
+
   return events;
 }
 
@@ -83,13 +88,16 @@ function cappedTrail(): RunEvent[] {
 function naturalTrail(): RunEvent[] {
   nextIndex = 0;
   const events: RunEvent[] = [event({ type: 'turn_start', turnIndex: 0 })];
+
   for (let step = 0; step < 4; step += 1) {
     events.push(event({ type: 'tool_call_end', name: 'read', toolCallId: `tc-${String(step)}` }));
     events.push(event({ type: 'step_finish', stepIndex: step, reason: 'tool-calls' }));
   }
+
   events.push(event({ type: 'step_finish', stepIndex: 4, reason: 'stop' }));
   events.push(event({ type: 'turn_end', usage: { input: 100, output: 20 } }));
   events.push(event({ type: 'run_end', reason: 'completed' }));
+
   return events;
 }
 
@@ -144,10 +152,12 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
 
   test('a failing tool call and a failing run both reach `failures`', () => {
     nextIndex = 0;
+
     const totals = ledgerTotalsFromEvents([
       event({ type: 'tool_call_end', name: 'run', toolCallId: 'tc-1', error: 'exit 127' }),
       event({ type: 'run_end', reason: 'error', error: 'provider refused' }),
     ]);
+
     // Named, because "0 tool calls" is equally consistent with a model that
     // declined to act and a provider that rejected every request, and a
     // degenerate run that cannot say which is a dead end for whoever reads it.
@@ -160,6 +170,7 @@ describe('ledgerTotalsFromEvents — one reducer, both targets', () => {
       event({ type: 'tool_call_end', name: 'run', toolCallId: 'failed', outcome: { success: false, reason: 'io', execution: { exitCode: 7 } }, error: 'test command failed with useful details' }),
       event({ type: 'tool_call_end', name: 'run', toolCallId: 'untyped', error: 'a bare error string, no outcome' }),
     ]);
+
     expect(totals.failures).toEqual(['run: test command failed with useful details', 'run: a bare error string, no outcome']);
   });
 
@@ -261,6 +272,7 @@ describe('resolveEvalBackend — the one knob', () => {
     // cloud arm's banner, which is the class of error this seam removes.
     const refused = resolveEvalBackend({ [EVAL_BACKEND_ENV]: 'Cloud' });
     expect(refused.kind).toBe('refused');
+
     if (refused.kind !== 'refused') throw new Error('unreachable');
     expect(refused.reason).toContain(EVAL_BACKEND_ENV);
     expect(refused.reason).toContain('cloud');
@@ -278,16 +290,20 @@ describe('resolveEvalBackend — the one knob', () => {
 function fakeWorkspace(reply: { stdout: string; exitCode: number }): FakeWorkspace {
   const written = new Map<string, string>();
   const commands: string[] = [];
+
   const unavailable = (member: string) => (): never => {
     throw new Error(`the probe read \`${member}\`, which it is not supposed to need`);
   };
+
   const vfs: VFS = {
     writeFile: (path, data) => {
       written.set(path, String(data));
+
       return Promise.resolve();
     },
     unlink: (path) => {
       written.delete(path);
+
       return Promise.resolve();
     },
     readFile: unavailable('readFile'),
@@ -296,6 +312,7 @@ function fakeWorkspace(reply: { stdout: string; exitCode: number }): FakeWorkspa
     mkdir: unavailable('mkdir'),
     exists: unavailable('exists'),
   };
+
   return {
     written,
     commands,
@@ -303,6 +320,7 @@ function fakeWorkspace(reply: { stdout: string; exitCode: number }): FakeWorkspa
       vfs,
       exec: (command) => {
         commands.push(command);
+
         return Promise.resolve(reply);
       },
     },
@@ -314,8 +332,10 @@ describe('probeVerifier — the one instrument both arms run', () => {
     const { workspace, written, commands } = fakeWorkspace({
       stdout: 'KINU_VERIFIER_PROBE_OK\n', exitCode: 0,
     });
+
     const probe = await probeVerifier(workspace);
     expect(probe.kind).toBe('runs');
+
     if (probe.kind !== 'runs') throw new Error('unreachable');
     // The evidence is what the shell SAID, so a reader can see which shell
     // answered rather than taking the verdict on trust.
@@ -335,8 +355,10 @@ describe('probeVerifier — the one instrument both arms run', () => {
     const { workspace } = fakeWorkspace({
       stdout: 'error: Cannot use "wasmModule" outside a browser\n', exitCode: 1,
     });
+
     const probe = await probeVerifier(workspace);
     expect(probe.kind).toBe('unavailable');
+
     if (probe.kind !== 'unavailable') throw new Error('unreachable');
     expect(probe.reason).toContain('exited 1');
     // The shell's own words survive: a refusal that hid the cause would trade one
@@ -352,7 +374,9 @@ describe('probeVerifier — the one instrument both arms run', () => {
       vfs: fakeWorkspace({ stdout: '', exitCode: 0 }).workspace.vfs,
       exec: () => Promise.reject(new Error('no executor on this target')),
     });
+
     expect(probe.kind).toBe('unavailable');
+
     if (probe.kind !== 'unavailable') throw new Error('unreachable');
     expect(probe.reason).toContain('no executor on this target');
   });
@@ -361,10 +385,12 @@ describe('probeVerifier — the one instrument both arms run', () => {
 describe('RUN_END_FAILURE_PREFIX — one spelling, producer and consumer', () => {
   test('the reducer stamps a turn error with the prefix the classifier reads', () => {
     nextIndex = 0;
+
     const totals = ledgerTotalsFromEvents([
       event({ type: 'tool_call_end', name: 'run', toolCallId: 'tc-1', error: 'exit 1' }),
       event({ type: 'run_end', reason: 'error', error: 'Internal Server Error' }),
     ]);
+
     // A TOOL failure is the agent's episode and carries the tool's name; the
     // TURN's own provider error carries this prefix, and the eval harness's
     // infra-vs-behaviour rule matches on it. Two literals would agree until one

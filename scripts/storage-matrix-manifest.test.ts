@@ -20,6 +20,7 @@ test('the storage experiment vocabulary is complete and collision-free', () => {
   expect(ids(STORAGE_FAULTS)).toEqual(Array.from({ length: 16 }, (_, at) => `F${at}`));
   expect(ids(STORAGE_GATES)).toEqual(Array.from({ length: 10 }, (_, at) => `G${at}`));
   expect(ids(STORAGE_CLEANUP_GATES)).toEqual(Array.from({ length: 7 }, (_, at) => `C${at + 1}`));
+
   for (const rows of [
     STORAGE_TREE_CASES,
     STORAGE_CHANGE_CASES,
@@ -40,6 +41,7 @@ test('the staged plan names best representative adversarial and scaling evidence
   expect(STORAGE_STAGES.find(stage => stage.id === 'adversarial')?.trees)
     .toEqual(['T3', 'T4', 'T5']);
   const scaling = STORAGE_STAGES.find(stage => stage.id === 'scaling');
+
   if (scaling === undefined) throw new Error('scaling stage is absent');
   expect(scaling.scales).toEqual({
     pending: [0, 1, 16, 256, 4096, 4097],

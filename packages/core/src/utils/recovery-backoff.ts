@@ -32,5 +32,6 @@
  */
 export function recoveryBackoffMs(attempts: number): number {
   if (!Number.isFinite(attempts)) return 60_000;
+
   return Math.min(1000 * 2 ** Math.min(Math.max(0, Math.trunc(attempts)), 6), 60_000);
 }

@@ -38,8 +38,10 @@ describe('subordinate wiring', () => {
     const { agent } = orchestratorHarness();
     const actor = await agent.actorDirectory({ action: 'register', creationId: 'temporary-proof', name: 'temporary-child', kind: 'subordinate', lifetime: 'task' });
     const identity = await agent.getSubordinateBootstrapIdentity({ name: actor.name, reference: actor.reference });
+
     if ('reason' in identity) throw new Error(identity.error);
     expect(identity.lifetime).toBe('task');
+
     for (const ending of TASK_TURN_ENDINGS) {
       const report = terminalTaskReport({ lifetime: identity.lifetime, ending, assistantText: ending === 'answered' ? 'The evidence is complete.' : '' });
       expect(report?.status).toBe(ending === 'answered' ? 'completed' : 'blocked');
@@ -53,6 +55,7 @@ describe('subordinate wiring', () => {
   test('the temporary rung carries no timer, deadline or elapsed bound', () => {
     const rung = readFileSync(
       join(import.meta.dir, '..', '..', 'core', 'src', 'subordinates', 'temporary.ts'), 'utf8');
+
     // Code shapes only: the module's prose explains WHY there is no deadline,
     // and banning the word would ban the explanation.
     for (const banned of ['setTimeout(', 'setInterval(', 'AbortSignal.timeout', 'timeoutMs', 'silenceLimit']) {
@@ -96,6 +99,7 @@ describe('subordinate wiring', () => {
     const actor = source('actor-agent.ts');
     const execTools = source('execute-tools.ts');
     const hosting = source('subordinate-hosting.ts');
+
     for (const [name, text] of [
       ['actor-agent.ts', actor],
       ['execute-tools.ts', execTools],
@@ -104,6 +108,7 @@ describe('subordinate wiring', () => {
       expect({ name, hit: /createRLMProvider|rlmAvailable|rlm\.query/u.test(text) })
         .toEqual({ name, hit: false });
     }
+
     // The sandbox factory takes no model registry: nothing in it calls a model
     // directly. Pinned on the options interface's member list, not on a
     // syllable's absence from the file — `modelSpecForSource` (spend
@@ -113,6 +118,7 @@ describe('subordinate wiring', () => {
       execTools.indexOf('export interface ExecuteToolsFactoryOptions {'),
       execTools.indexOf('export function createExecuteToolsFactory'),
     );
+
     expect(options.length).toBeGreaterThan(0);
     expect(options).not.toMatch(/^\s*(?:model|registry|rlm)\??:/mu);
   });
@@ -141,9 +147,11 @@ describe('subordinate wiring', () => {
     // would run bytes its own claim could not verify after the parent
     // promoted again, so the per-actor subtree is the load-bearing half.
     const workspace = orchestratorHarness();
+
     const child = await hostedSubordinateHarness(workspace, {
       name: 'reader-1', displayName: 'Reader', nameOrigin: 'user', mission: 'Read what you may',
     });
+
     const key = child.actor.handle.storageKey;
     expect(child.actor.runtime.identity.scaffold.path)
       .toBe(`.kinu/agents/${encodeURIComponent(key)}/scaffold/agent.js`);
@@ -163,12 +171,14 @@ describe('subordinate wiring', () => {
     const workspace = orchestratorHarness();
     const orchTools = workspace.agent.observeRawTools();
     expect(Object.keys(orchTools)).not.toContain(REPORT_TOOL);
+
     const child = await hostedSubordinateHarness(workspace, {
       name: 'confinement-child',
       displayName: 'Confinement Child',
       nameOrigin: 'user',
       mission: 'prove confinement',
     });
+
     const { tools: subTools } = await workspace.agent.observeHostedTaskProfile(child.actor, 'prove confinement');
     const subKeys = Object.keys(subTools);
     // A hire is a colleague with a role: it gets the same builtins the
@@ -236,10 +246,12 @@ describe('subordinate wiring', () => {
 
   test('stale roster reads cannot overwrite a mutation, broadcast, or actor reset', () => {
     const hook = source('hooks/use-kinu.ts');
+
     const refresh = hook.slice(
       hook.indexOf('const refreshSubordinates = useCallback'),
       hook.indexOf('\n\n  useEffect(() => {', hook.indexOf('const refreshSubordinates = useCallback')),
     );
+
     expect(refresh).toContain('const generation = ++subordinateRefreshGeneration.current;');
     expect(refresh.match(/generation !== subordinateRefreshGeneration\.current/g)).toHaveLength(1);
     expect(refresh).toContain('thrown !== null && generation === subordinateRefreshGeneration.current');
@@ -253,10 +265,12 @@ describe('subordinate wiring', () => {
   // over: on a DO the admit + roster write must share one storage transaction.
   test('the parent ingress runs core’s sequence inside the DO storage transaction', () => {
     const actor = source('actor-agent.ts');
+
     const ingress = actor.slice(
       actor.indexOf('async receiveSubordinateEvent('),
       actor.indexOf('override maxSteps'),
     );
+
     expect(ingress).toContain('return receiveSubordinateEvent({');
     expect(ingress).toContain('transaction: (body) => this.ctx.storage.transactionSync(body),');
   });
@@ -310,10 +324,12 @@ describe('subordinate wiring', () => {
     // team policy on every spawn/assign/message/dismiss, independently of
     // whether any report was admitted.
     expect(actor).toContain('broadcast: (event) => this.broadcastSubordinatesChanged(event),');
+
     const changed = actor.slice(
       actor.indexOf('protected broadcastSubordinatesChanged('),
       actor.indexOf('protected broadcastSubordinateEvent('),
     );
+
     expect(changed).not.toContain('parentAdmitsSubordinateReport');
   });
 });

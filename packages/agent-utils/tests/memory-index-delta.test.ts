@@ -11,12 +11,15 @@ function createStore() {
 	const fs = createMemoryVfs();
 	const store = new MemoryStore(fs, sql);
 	store.ensureSchema();
+
 	return { store };
 }
 
 const PATH = "memory/MEMORY.md";
+
 // Lines long enough that the content spans multiple chunks (target 1600 chars).
 const line = (tag: string, n: number, fill = "x") => `${tag} line ${n} ${fill.repeat(40)}`;
+
 const doc = (count: number, fill = "x") =>
 	Array.from({ length: count }, (_, i) => line("note", i + 1, fill)).join("\n");
 
@@ -26,6 +29,7 @@ describe("MemoryStore.indexFile delta", () => {
 		const delta = await store.indexFile(PATH, doc(60));
 		expect(delta.deletedIds).toEqual([]);
 		expect(delta.upserted.length).toBeGreaterThan(1);
+
 		for (const c of delta.upserted) {
 			expect(c.id).toBe(`${PATH}:${c.startLine}-${c.endLine}`);
 			expect(c.path).toBe(PATH);
@@ -58,10 +62,12 @@ describe("MemoryStore.indexFile delta", () => {
 		const bigIds = new Set(big.upserted.map((c) => c.id));
 		const small = await store.indexFile(PATH, doc(3));
 		expect(small.deletedIds.length).toBeGreaterThan(0);
+
 		// Every deleted id was a chunk of the larger version…
 		for (const id of small.deletedIds) expect(bigIds.has(id)).toBe(true);
 		// …and no surviving chunk is both upserted and deleted.
 		const upsertedIds = new Set(small.upserted.map((c) => c.id));
+
 		for (const id of small.deletedIds) expect(upsertedIds.has(id)).toBe(false);
 	});
 });

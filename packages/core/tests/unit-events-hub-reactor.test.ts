@@ -40,6 +40,7 @@ describe('isLegalDecision — drop requires authenticated + external events', ()
       dec({ kind: 'keep' }, { kind: 'drop', reason: 'noise' }),
       { ...ctxOwner, events_trust_class: 'owner' },
     );
+
     expect(r).toBe(false);
   });
   test('drop by external-trust reactor — illegal', () => {
@@ -47,6 +48,7 @@ describe('isLegalDecision — drop requires authenticated + external events', ()
       dec({ kind: 'keep' }, { kind: 'drop', reason: 'noise' }),
       { ...ctxAuth, reactor_head_trust: 'external' },
     );
+
     expect(r).toBe(false);
   });
 });

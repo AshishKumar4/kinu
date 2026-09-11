@@ -6,22 +6,31 @@ import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
+
 const { handleRunEventsRequest } = await import('../src/run-events-routes');
 
 function sseEnv(wire: () => string = () => '[]') {
   let polls = 0;
+
   const stub = {
-    async getRunEventsWire() { polls += 1; return wire(); },
+    async getRunEventsWire() {
+      polls += 1;
+
+      return wire();
+    },
   };
+
   const bindings = {
     OrchestratorAgent: { idFromName: (n: string) => n, get: () => stub },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
   };
+
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, bindings);
   // SAFETY: the SSE route only reaches the locally constructed orchestrator
   // namespace and credential secret in this suite.
   const env = partialEnv as Env;
+
   return { env, pollCount: () => polls };
 }
 
@@ -31,10 +40,12 @@ describe('run-events SSE client disconnect', () => {
   test('aborting the request stops the DO poll loop', async () => {
     const { env, pollCount } = sseEnv();
     const aborter = new AbortController();
+
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
       { signal: aborter.signal },
     ), env);
+
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toContain('text/event-stream');
     // No wildcard CORS on this cookie-authenticated route.
@@ -55,9 +66,11 @@ describe('run-events SSE client disconnect', () => {
 
   test('cancelling the response stream stops the DO poll loop', async () => {
     const { env, pollCount } = sseEnv();
+
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
     ), env);
+
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();
     await sleep(1200);
@@ -80,21 +93,28 @@ describe('run-events SSE client disconnect', () => {
     const { env, pollCount } = sseEnv(() => JSON.stringify([{
       eventIndex: 3, runId: 'run-1', type: 'run_end', timestamp: new Date(0).toISOString(),
     }]));
+
     const res = await handleRunEventsRequest(new Request(
       'https://kinu.example.com/api/workspaces/jarvis/runs/run-1/stream',
     ), env);
+
     if (!res?.body) throw new Error('Expected an SSE response body');
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let body = '';
     let finished = false;
     const deadline = sleep(3000).then((): 'timed-out' => 'timed-out');
+
     for (;;) {
       const next = await Promise.race([reader.read(), deadline]);
+
       if (next === 'timed-out') break;
+
       if (next.done) { finished = true; break; }
+
       body += decoder.decode(next.value, { stream: true });
     }
+
     await reader.cancel();
     expect(body).toContain('run_end'); // the replay still reaches the reader
     expect(finished).toBe(true); // the stream ended instead of polling dead reads

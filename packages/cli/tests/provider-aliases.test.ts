@@ -8,7 +8,9 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { canonicalProviderName } from '../src/commands/setup';
 
 const repoRoot = resolve(__dirname, '../../..');
+
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -19,6 +21,7 @@ function scratchHome(): string {
   const home = mkdtempSync(join(tmpdir(), 'kinu-alias-home-'));
   tempDirs.push(home);
   writeFileSync(join(home, 'config.json'), JSON.stringify({ agents: {}, aliases: {} }));
+
   return home;
 }
 
@@ -29,11 +32,13 @@ async function runCli(home: string, args: string[]) {
     stdout: 'pipe',
     stderr: 'pipe',
   });
+
   const [stdout, stderr, exitCode] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
     proc.exited,
   ]);
+
   return { stdout, stderr, exitCode };
 }
 
@@ -61,6 +66,7 @@ describe('canonicalProviderName', () => {
       ['opencode', 'opencode'],
       ['  CF  ', 'cloudflare'],
     ];
+
     for (const [alias, canonical] of cases) expect(canonicalProviderName(alias)).toBe(canonical);
   });
 

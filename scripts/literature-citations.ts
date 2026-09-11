@@ -207,15 +207,18 @@ function comments(text: string): string {
   let joined = '';
   let end = 0;
   let previousLine = false;
+
   for (const match of text.matchAll(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g)) {
     const line = match[0].startsWith('//');
     // Whitespace spanning at most one newline: the next comment is the next line.
     const contiguous = /^[^\S\n]*\n?[^\S\n]*$/.test(text.slice(end, match.index));
+
     if (end > 0) joined += contiguous && line && previousLine ? '\n' : '\n\n';
     joined += match[0];
     end = match.index + match[0].length;
     previousLine = line;
   }
+
   return joined;
 }
 
@@ -260,6 +263,7 @@ export function citable(file: string, text: string): string {
   const stripped = isParseable(file)
     ? comments(text)
     : text.replace(/```[\s\S]*?```/g, ' ');
+
   return stripped
     // JSDoc continuation leaders, so a citation wrapped across lines reads as one
     // string — the same normalisation `lean-citations.ts` needs.
@@ -325,6 +329,7 @@ function claimNumbers(sentence: string): string[] {
     .replace(/\b\d+\.\d+\([a-z]\)/g, ' ')
     .replace(/\b[a-z]\s*=\s*\d+(?:\.\d+)?/gi, ' ')
     .replace(/(?<![\w.])(?:19|20)\d{2}(?![\w])(?!\.\d)/g, ' ');
+
   // The trailing guard rejects a word character and a further `.digit`, but NOT a
   // sentence-ending period: `(?![\w.])` silently dropped every number that ended a
   // sentence, which is where a citation most often puts one.
@@ -359,13 +364,18 @@ function claimKey(claim: Claim): string {
  *  experimental parameters, plus the numbers inside its locators and conditions —
  *  a compute condition prose is allowed to restate. */
 const licensed = new Map<string, Set<string>>();
+
 for (const work of WORKS) licensed.set(work.id, new Set(work.parameters?.map(normalise) ?? []));
+
 const byWork = new Map<string, Claim[]>();
+
 for (const claim of CLAIMS) {
   byWork.set(claim.work, [...(byWork.get(claim.work) ?? []), claim]);
   const set = licensed.get(claim.work);
+
   if (set === undefined) continue;
   set.add(normalise(claim.value));
+
   for (const number of claimNumbers(`${claim.where} ${claim.condition ?? ''}`)) {
     set.add(normalise(number));
   }
@@ -380,29 +390,36 @@ for (const claim of CLAIMS) {
 export function auditRegister(): string[] {
   const findings: string[] = [];
   const works = new Map(WORKS.map((work) => [work.id, work]));
+
   if (works.size !== WORKS.length) findings.push('two works share an id in the register');
 
   const seen = new Set<string>();
+
   for (const claim of CLAIMS) {
     if (seen.has(claimKey(claim))) {
       findings.push(`two register entries claim ${claim.value} for ${claim.work}`);
     }
+
     seen.add(claimKey(claim));
+
     if (!works.has(claim.work)) {
       findings.push(`register entry ${claim.work} ${claim.value} names a work that is not registered`);
     }
+
     if (claim.hand === 'artifact' && claim.via === undefined) {
       findings.push(
         `${claim.work} ${claim.value}: hand is 'artifact' with no \`via\` — a second-hand`
         + ' number whose hand is not named is indistinguishable from a first-hand one',
       );
     }
+
     if ((claim.hand === 'unverified' || claim.hand === 'withdrawn') && claim.note === undefined) {
       findings.push(
         `${claim.work} ${claim.value}: hand is '${claim.hand}' with no note — say what a`
         + ' verifier should do, or what replaced it',
       );
     }
+
     if (claim.where === NO_LOCATOR) {
       if (claim.note === undefined) {
         findings.push(
@@ -410,6 +427,7 @@ export function auditRegister(): string[] {
           + ' where the number is nor that nobody knows is the defect this register replaces',
         );
       }
+
       if (claim.hand === 'primary') {
         findings.push(`${claim.work} ${claim.value}: read first-hand but no locator recorded`);
       }
@@ -419,6 +437,7 @@ export function auditRegister(): string[] {
         + ` — use a Table/Figure/Appendix/§ designator, or "${NO_LOCATOR}"`,
       );
     }
+
     if (claim.computeDependent !== true) {
       if (claim.condition !== undefined) {
         findings.push(
@@ -426,11 +445,14 @@ export function auditRegister(): string[] {
           + ' computeDependent',
         );
       }
+
       continue;
     }
+
     // Ordered weakest-first: a condition that says nothing cannot also be judged on
     // whether what it says is a claim of ours or the source's.
     const condition = claim.condition ?? '';
+
     if (condition.length === 0) {
       findings.push(
         `${claim.work} ${claim.value}: the argument depends on a compute condition and none is`
@@ -448,6 +470,7 @@ export function auditRegister(): string[] {
       );
     }
   }
+
   return findings;
 }
 
@@ -522,6 +545,7 @@ export function auditProse(
   // are collected so `auditCoverage` can refuse a register entry that lives only
   // there, and no finding is raised against it either way.
   const recording = RECORDING.test(source);
+
   if (recording) seen.recordings.add(file);
   const blame = !recording;
   const ledger = recording ? seen.recorded : seen.files;
@@ -530,8 +554,10 @@ export function auditProse(
 
   for (const paragraph of pieces(source, PARAGRAPH_BREAK)) {
     if (!narrow && paragraph.raw.startsWith('#')) carried = [];
+
     for (const sentence of sentences(paragraph.raw)) {
       const at = paragraph.at + sentence.at;
+
       // The window a citation reaches over: the structural unit, cut to REACH
       // characters either side of the sentence. Paragraph-shaped prose is shorter
       // than that, so the window IS the paragraph and nothing changes; a
@@ -541,15 +567,19 @@ export function auditProse(
         Math.max(0, sentence.at - REACH),
         sentence.at + sentence.width + REACH,
       );
+
       const reach = narrow ? sentence.text : nearby;
       const here = WORKS.filter((work) => work.cites.some((cite) => reach.includes(cite)));
+
       if (!narrow) {
         if (here.length > 0) {
           carried = here;
           carriedAt = at;
         } else if (at - carriedAt > REACH) carried = [];
       }
+
       const numbers = claimNumbers(sentence.text);
+
       if (numbers.length === 0) continue;
       const mentioned = here.length > 0 || narrow ? here : carried;
       const allowed = new Set(mentioned.flatMap((work) => [...(licensed.get(work.id) ?? [])]));
@@ -562,10 +592,13 @@ export function auditProse(
             + ` — "${sentence.text.slice(0, 180)}"`,
           );
         }
+
         continue;
       }
+
       if (blame) {
         seen.sites += 1;
+
         for (const work of mentioned) seen.works.add(work.id);
       }
 
@@ -573,7 +606,9 @@ export function auditProse(
       // this source's registered numbers distinctively enough to be its fingerprint.
       const attributed = cited
         || numbers.some((number) => allowed.has(normalise(number)) && FINGERPRINT.test(number));
+
       const matched: Claim[] = [];
+
       for (const number of numbers) {
         if (!allowed.has(normalise(number))) {
           if (attributed && blame) {
@@ -583,8 +618,10 @@ export function auditProse(
               + ` — "${sentence.text.slice(0, 180)}"`,
             );
           }
+
           continue;
         }
+
         for (const work of mentioned) {
           for (const claim of byWork.get(work.id) ?? []) {
             if (normalise(claim.value) !== normalise(number)) continue;
@@ -593,6 +630,7 @@ export function auditProse(
           }
         }
       }
+
       if (matched.length === 0 || recording) continue;
 
       // A withdrawn number inside the paragraph that withdraws it is a QUOTATION of
@@ -600,6 +638,7 @@ export function auditProse(
       // for this sentence — they would demand the correction be reworded into a
       // claim.
       const withdrawn = matched.filter((claim) => claim.hand === 'withdrawn');
+
       if (withdrawn.length > 0) {
         if (!RETRACTION.test(nearby)) {
           findings.push(
@@ -609,11 +648,13 @@ export function auditProse(
             + ` Sentence: "${sentence.text.slice(0, 180)}"`,
           );
         }
+
         continue;
       }
 
       const parity = BARE_PARITY.exec(sentence.text);
       const dependent = matched.find((claim) => claim.computeDependent === true);
+
       if (parity !== null && dependent !== undefined) {
         findings.push(
           `${file}: "${parity[0]}" is an adjective where a compute condition belongs, beside a`
@@ -622,11 +663,13 @@ export function auditProse(
           + ` Sentence: "${sentence.text.slice(0, 180)}"`,
         );
       }
+
       // Compared only when the sentence names exactly ONE paper locator. Two means
       // it is discussing two, and which number belongs to which is not readable from
       // the text — `32.0% (Fig. 2) against re-ranking (Appendix A.2, Fig. 6)` is one
       // legitimate sentence with three.
       const locators = [...sentence.text.matchAll(PAPER_LOCATOR)].map((m) => canonical(m[0]));
+
       for (const claim of matched) {
         if (claim.hedge !== undefined
           && !sentence.text.toLowerCase().includes(claim.hedge.toLowerCase())) {
@@ -636,6 +679,7 @@ export function auditProse(
             + ` Sentence: "${sentence.text.slice(0, 180)}"`,
           );
         }
+
         // Read over the window, not the sentence: an author names a unit once and
         // then argues. The unit WORD is exact for the same reason — the drift said
         // "discriminator", the thing, where the unit is "discrimination", and a stem
@@ -648,6 +692,7 @@ export function auditProse(
             + ` Sentence: "${sentence.text.slice(0, 180)}"`,
           );
         }
+
         if (locators.length === 1 && claim.where !== NO_LOCATOR
           && !canonical(claim.where).includes(locators[0] ?? '')) {
           findings.push(
@@ -659,6 +704,7 @@ export function auditProse(
       }
     }
   }
+
   return findings;
 }
 
@@ -681,12 +727,16 @@ export function auditProse(
  */
 export function auditFile(file: string, text: string, seen: Coverage): string[] {
   const findings = auditProse(file, citable(file, text), seen, windowOf(file));
+
   if (!isParseable(file)) return findings;
   const prose = renderedProse(file, text);
+
   for (const [name, doc] of prose.docs) seen.docs.set(name, doc);
   seen.quotes.push(...prose.quotes);
+
   for (const unit of prose.units) {
     seen.literals += 1;
+
     // A unit with no digit cannot produce a finding or a citation: every path below
     // `claimNumbers` requires a number, and `claimNumbers` requires a digit. Stated
     // as the reason rather than as a fast path, because a filter that skipped a
@@ -694,6 +744,7 @@ export function auditFile(file: string, text: string, seen: Coverage): string[] 
     if (!/\d/.test(unit)) continue;
     findings.push(...auditProse(file, unit, seen, 'sentence'));
   }
+
   return findings;
 }
 
@@ -704,6 +755,7 @@ export function auditFile(file: string, text: string, seen: Coverage): string[] 
  *  the blind spot is a declared set rather than a silent one. */
 export function auditCoverage(seen: Coverage): string[] {
   const findings: string[] = [];
+
   for (const work of WORKS) {
     if (!seen.works.has(work.id)) {
       findings.push(
@@ -712,11 +764,14 @@ export function auditCoverage(seen: Coverage): string[] {
       );
     }
   }
+
   for (const claim of CLAIMS) {
     if (claim.hand === 'withdrawn') continue;
     const key = claimKey(claim);
+
     if (seen.files.has(key)) continue;
     const quoted = seen.recorded.get(key);
+
     if (quoted !== undefined) {
       findings.push(
         `register entry ${claim.work} ${claim.value} is quoted only inside recorded output`
@@ -726,15 +781,18 @@ export function auditCoverage(seen: Coverage): string[] {
       );
       continue;
     }
+
     findings.push(
       `register entry ${claim.work} ${claim.value} is cited nowhere — delete it or cite it`,
     );
   }
+
   if (seen.sites === 0) {
     findings.push(
       'no claim site found at all, so this gate cannot fail — an empty corpus certifies nothing',
     );
   }
+
   return findings;
 }
 
@@ -743,10 +801,12 @@ export function auditCoverage(seen: Coverage): string[] {
 if (import.meta.main) {
   const seen = coverage();
   const findings = [...auditRegister()];
+
   for (const [file, text] of readMatching(isTextSource)) {
     if (Object.hasOwn(SELF, file)) continue;
     findings.push(...auditFile(file, text, seen));
   }
+
   findings.push(...auditCoverage(seen), ...auditQuotations(seen));
 
   if (process.argv.includes('--list-claims')) {
@@ -757,6 +817,7 @@ if (import.meta.main) {
         [...(seen.files.get(claimKey(claim)) ?? [])].join(' '),
       ].join('\t'));
     }
+
     process.exit(findings.length > 0 ? 1 : 0);
   }
 
@@ -768,6 +829,7 @@ if (import.meta.main) {
 
   const depth = (hand: Claim['hand']): string =>
     String(CLAIMS.filter((claim) => claim.hand === hand).length);
+
   const worklist = CLAIMS.filter((claim) => claim.hand !== 'primary' || claim.where === NO_LOCATOR);
   const compared = seen.quotes.filter((quote) => seen.docs.has(quote.target));
   const outside = seen.quotes.filter((quote) => !seen.docs.has(quote.target));

@@ -18,6 +18,7 @@ afterEach(() => {
 function makeLog(): string {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-daemon-log-'));
   dirs.push(dir);
+
   return join(dir, 'daemon.log');
 }
 
@@ -63,6 +64,7 @@ describe('daemon log rotation', () => {
     const path = makeLog();
     writeFileSync(path, 'x'.repeat(64));
     const fd = openSync(path, 'a');
+
     try {
       appendDaemonLog(path, 'rolled\n', 32);
       writeSync(fd, 'from the inherited fd\n');

@@ -91,14 +91,17 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
   return {
     async read(path) {
       const vfs = await open();
+
       return absentAsNull(() => vfs.readFileString(path));
     },
     async readBytes(path) {
       const vfs = await open();
+
       return absentAsNull(() => vfs.readFile(path));
     },
     async readRange(path, offset, length) {
       const vfs = await open();
+
       return absentAsNull(() => vfs.readRange(path, offset, length));
     },
     async write(path, content) {
@@ -107,23 +110,30 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
       // pid-less write always did, and bootstrapScaffold writes
       // `scaffold/agent.js` into a fresh workspace with no mkdir of its own.
       const cut = path.lastIndexOf('/');
+
       if (cut > 0) {
         const parent = path.slice(0, cut);
+
         if (!vfs.exists(parent)) vfs.mkdir(parent, { recursive: true });
       }
+
       vfs.writeFile(path, content);
     },
     async stat(path) {
       const vfs = await open();
+
       return absentAsNull(() => {
         const stat = vfs.stat(path);
+
         return { type: stat.type, size: stat.size, mtime: stat.mtime };
       });
     },
     async lstat(path) {
       const vfs = await open();
+
       return absentAsNull(() => {
         const stat = vfs.lstat(path);
+
         return { type: stat.type, size: stat.size, mtime: stat.mtime, mode: stat.mode };
       });
     },
@@ -136,11 +146,22 @@ function workspaceBoxFiles(open: () => Promise<CredentialedVfs>): NimbusSandboxH
     async mkdir(path) { (await open()).mkdir(path, { recursive: true }); },
     async delete(path, options) {
       const vfs = await open();
-      if (options?.recursive) { vfs.removeRecursive(path); return; }
+
+      if (options?.recursive) {
+        vfs.removeRecursive(path);
+
+        return;
+      }
+
       // A non-recursive delete of a directory is `rmdir`, which refuses a
       // populated one — the same distinction `rm` and `rmdir` draw, kept because
       // the SDK surface has one method for both.
-      if (vfs.isDirectory(path)) { vfs.rmdir(path); return; }
+      if (vfs.isDirectory(path)) {
+        vfs.rmdir(path);
+
+        return;
+      }
+
       vfs.unlink(path);
     },
   };
@@ -247,6 +268,7 @@ const RECYCLED_PREVIEW = {
  */
 export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspace {
   const sql = deps.ctx.storage.sql;
+
   const bundle = createWorkspace({
     sql,
     transactions: deps.ctx,
@@ -258,6 +280,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
     // halves `git clone` refuses before it spawns anything.
     fabric: HOST_FABRIC_COMPOSITION,
   });
+
   if (deps.onFilesChanged) bundle.onFilesChanged(deps.onFilesChanged);
 
   // One registry per isolate, exactly as a session has one: a port is a live
@@ -270,6 +293,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
   const portRegistry = new PortRegistry();
   const portOwners = new Map<number, string>();
   let composing: Promise<ProgrammaticHost> | undefined;
+
   const host = async (): Promise<ProgrammaticHost> => {
     composing ??= (async (): Promise<ProgrammaticHost> => {
       try {
@@ -281,6 +305,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // both are real here.
         const { registerGitCommands } = await nimbusProgrammatic();
         registerGitCommands(session.registry, session.vfs, deps.ctx, deps.env);
+
         // Nothing here refuses the network `git` subcommands or the fetching
         // `npm` subcommands. `git clone` and friends reach their dynamic-worker
         // facets through the composed fabric, and `npm install` streams in
@@ -296,6 +321,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         throw cause;
       }
     })();
+
     return await composing;
   };
 
@@ -309,18 +335,23 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
     },
     box(shellId) {
       const held = boxes.get(shellId);
+
       if (held) return held;
       const built = workspaceBox({ host, files, shellId, previewUrl: deps.previewUrl });
       boxes.set(shellId, built);
+
       return built;
     },
     async registerPort(pid, port, target, owner) {
       const occupied = portRegistry.get(port);
+
       if (occupied !== undefined && occupied.pid !== pid) throw new KinuError('io', `Workspace port ${port} is already in use`);
+
       if (owner !== undefined) portOwners.set(pid, owner);
       portRegistry.bindFacetStub(pid, target);
       portRegistry.register(port, pid);
       const retained = await readPortExposure(deps.ctx, port);
+
       if (retained !== null && retained.owner === (owner ?? null) && portRegistry.get(port)?.pid === pid) {
         portRegistry.restoreCapability(port, retained.capability);
       }
@@ -328,6 +359,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
     unregisterPorts(pid) { portRegistry.unregisterByPid(pid); portOwners.delete(pid); },
     async routePreview(port, handle, request, pathname) {
       const capability = portRegistry.get(port)?.capability;
+
       // A port re-exposed under a fresh capability: the link named an exposure
       // that is not this one, in an isolate that still holds one.
       if (capability !== undefined) {
@@ -344,19 +376,24 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         // resolves again. A bare 404 would hide that from both the visitor and
         // the operator; this names it.
         const persisted = await readPortExposure(deps.ctx, port);
+
         if (persisted !== null && persisted.capability.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) === handle) {
           return new Response(RECYCLED_PREVIEW.body, {
             status: RECYCLED_PREVIEW.status,
             headers: { 'cache-control': 'no-store', 'content-type': 'application/json' },
           });
         }
+
         return new Response('Not found', { status: 404, headers: { 'cache-control': 'no-store' } });
       }
+
       // Booted only past the miss arm: a stale or unknown link is answered
       // above without composing the workspace.
       await deps.refreshPreview?.(port);
       const refreshed = portRegistry.get(port)?.capability;
+
       if (refreshed === undefined) return new Response(RECYCLED_PREVIEW.body, { status: RECYCLED_PREVIEW.status, headers: { 'cache-control': 'no-store', 'content-type': 'application/json' } });
+
       if (refreshed.slice(0, PREVIEW_CAPABILITY_HANDLE_LENGTH) !== handle) return new Response('Not found', { status: 404 });
       const publicRequest = new Request(request);
       // The visitor's own header is dropped first, then the host names this
@@ -364,8 +401,10 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
       // is what stops retained preview bindings standing in for a deeper one.
       publicRequest.headers.delete('x-slate-call');
       const invocation = deps.slateInvocation?.(port) ?? null;
+
       if (invocation !== null) publicRequest.headers.set('x-slate-call', invocation.value);
       const self = await host();
+
       // An upgrade cannot cross a Durable Object RPC boundary as a 101, which is
       // why Nimbus keeps a fetch route for exactly this case. This method is
       // reached through the orchestrator's own `fetch`, so it can hand one back.
@@ -373,6 +412,7 @@ export function createHostedWorkspace(deps: HostedWorkspaceDeps): HostedWorkspac
         if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
           return await (await nimbusProgrammatic()).routeCapabilityPort(self, port, refreshed, publicRequest, pathname);
         }
+
         return await (await nimbusProgrammatic()).rpcRouteCapabilityPort(self, port, refreshed, publicRequest, pathname);
       } finally {
         invocation?.release();
@@ -399,9 +439,11 @@ function programmaticHost(
 ): ProgrammaticHost {
   const storage = deps.ctx.storage;
   const catalog = deps.env.NIMBUS_RUNTIME_CACHE;
+
   return {
     portCapabilityOwner: (port) => {
       const entry = portRegistry.get(port);
+
       return entry === undefined ? null : portOwners.get(entry.pid) ?? null;
     },
     _w1SessionDestroyed: false,
@@ -466,6 +508,7 @@ function programmaticHost(
  *  unexpected shape is a named failure rather than an `[object Object]`. */
 async function json(result: Promise<unknown>): Promise<JsonValue | undefined> {
   const value = await result;
+
   return value === undefined ? undefined : decodeJsonValue({ value });
 }
 
@@ -476,6 +519,7 @@ function workspaceBox(deps: {
   previewUrl(port: number, capability: string): Promise<WorkspacePreviewUrl>;
 }): NimbusSandboxHandle {
   const { host, shellId } = deps;
+
   return {
     ready: async () => { await (await nimbusProgrammatic()).ensureProgrammaticReady(await host()); },
     // `shellId` on every command: each actor's work goes into ITS named durable
@@ -509,11 +553,14 @@ function workspaceBox(deps: {
       // retry cannot change that.
       expose: async (port) => {
         const exposed = await (await nimbusProgrammatic()).rpcExposePort(await host(), port);
+
         if (!exposed.capability) throw new Error(`No process is listening on workspace port ${port}`);
         const answer = await deps.previewUrl(port, exposed.capability);
+
         if (answer.url === undefined) {
           throw new KinuError('unsupported', `workspace port ${port} is listening and has no preview URL: ${answer.unavailable}`);
         }
+
         return { ...exposed, url: answer.url };
       },
       unexpose: async (port) => await json((await nimbusProgrammatic()).rpcUnexposePort(await host(), port)),

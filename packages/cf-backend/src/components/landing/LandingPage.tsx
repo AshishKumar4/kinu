@@ -12,9 +12,13 @@ import { LandingHero } from './LandingHero';
 import { LandingShowcases, RuleLabel } from './LandingShowcases';
 
 const REPOSITORY = 'https://github.com/AshishKumar4/kinu';
+
 const SHELL = 'landing-shell';
+
 const SECTION = 'border-t p-border py-20 lg:py-[104px] lg:pb-24';
+
 const CARD = 'min-w-0 rounded-[14px] border p-border p-surface';
+
 const SAMPLE_NOTE = 'flex flex-wrap justify-between gap-2 px-1 pt-3 text-[11px] leading-relaxed p-text-4';
 
 function SectionTitle({ children, className = '' }: { children: ReactNode; className?: string }): ReactElement {
@@ -28,6 +32,7 @@ function Accent({ children }: { children: ReactNode }): ReactElement {
 function PlatformSection({ install }: { install: string }): ReactElement {
   const { status, copy } = useCopy();
   const localStart = 'kinu create workshop --mode local\nkinu chat workshop';
+
   return (
     <section id="platform" className={SECTION}>
       <RuleLabel>01 · Where agents work</RuleLabel>
@@ -162,8 +167,10 @@ function EvolutionSection(): ReactElement {
       detail: 'A proposal must pass validation and shadow evaluation before promotion. A rejected proposal does not replace the live scaffold, and a promoted version keeps a rollback path. More experience does not guarantee improvement.',
     },
   ] as const;
+
   const [activeIndex, setActiveIndex] = useState(0);
   const active = stages[activeIndex] ?? stages[0];
+
   return (
     <section id="evolution" data-evolution-stage={activeIndex} className={SECTION}>
       <RuleLabel>05 · Self-evolution</RuleLabel>
@@ -230,6 +237,7 @@ function OpenSourceSection(): ReactElement {
 
 function Header(): ReactElement {
   const theme = useTheme();
+
   return (
     <header className="sticky top-0 z-20 border-b p-border bg-[color-mix(in_srgb,var(--c-bg)_90%,transparent)] backdrop-blur-[10px]">
       <div className={`${SHELL} flex h-[60px] items-center justify-between gap-5`}>

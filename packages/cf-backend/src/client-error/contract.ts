@@ -184,11 +184,14 @@ function contentBytes(text: string): number {
  */
 function fitFrames(lines: readonly string[], budget: number): string {
   let kept = '';
+
   for (const line of lines) {
     const next = kept === '' ? line : `${kept}\n${line}`;
+
     if (contentBytes(next) > budget) break;
     kept = next;
   }
+
   return kept;
 }
 
@@ -215,6 +218,7 @@ export function fitClientErrorReport(report: ClientErrorReport): ClientErrorRepo
 
   const bare: ClientErrorReport = { ...report, stack: '', componentStack: '' };
   const room = CLIENT_ERROR_MAX_REQUEST_BYTES - reportBytes(bare);
+
   if (room <= 0) return bare;
 
   const wantedStack = contentBytes(report.stack);

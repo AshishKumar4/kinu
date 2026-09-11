@@ -30,6 +30,7 @@ ${runB.error ? `ERROR: ${runB.error}` : evidenceWindow(runB.output, EVIDENCE_BUD
 Score each strategy from 0.0 to 1.0 on task completion + correctness +
 clarity. Pick the winner ('a', 'b', or 'tie' if scores are within 0.05).
 Be terse — rationale should be under 30 words.`;
+
     return await llmJudge(prompt, VerdictSchema);
   };
 }

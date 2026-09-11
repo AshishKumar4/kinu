@@ -31,6 +31,7 @@ import { uiMessageText } from '../utils/ui-message';
  *  read-back path — a recall surface whose reads are capped with no way to
  *  ask for more is a keyhole, not recall. */
 const MAX_MESSAGE_CHARS = 700;
+
 const SNIPPET_TOKENS = 24;
 
 /** Caller max_chars at the scroll boundary. Finite integers of 50 or more
@@ -82,6 +83,7 @@ function truncate(text: string, maxChars = MAX_MESSAGE_CHARS): string {
 /** A row as its owning store writes it: the pane stamps whole-second
  *  datetimes, plain rows stamp ms numbers. */
 interface PaneRaw { id: string; session_id: string; role: string; content: string; created_at: string; rid: number }
+
 interface PlainRaw { id: string; session_id: string; role: string; content: string; created_at: number; rid: number }
 
 /** A fetched row with its stamp already normalized to UTC ms — done at the
@@ -92,11 +94,13 @@ interface FetchedRow extends Omit<PaneRaw, 'created_at'> {
 
 function withPaneStamp(row: PaneRaw): FetchedRow {
   const { created_at, ...rest } = row;
+
   return { ...rest, createdAtMs: paneStampMs(created_at) };
 }
 
 function withPlainStamp(row: PlainRaw): FetchedRow {
   const { created_at, ...rest } = row;
+
   return { ...rest, createdAtMs: created_at };
 }
 
@@ -141,14 +145,17 @@ export class ConversationSearchStore {
     this.actor.assertCurrent();
     this.ensure();
     this.refreshIndex();
+
     if (!query.trim()) return [];
     const capacity = boundedInt(limit, 1, 1, 10);
     const safe = sanitizeFtsQuery(query);
     const strict = this.runFtsQuery(safe, capacity);
     const relaxed = strict.length >= capacity ? null : relaxFtsQuery(safe);
+
     const rows = relaxed === null
       ? strict
       : fillToCapacity(strict, this.runFtsQuery(relaxed, capacity), capacity, (row) => row.msg_id);
+
     return rows.map(toHit);
   }
 
@@ -161,12 +168,15 @@ export class ConversationSearchStore {
     // The anchor resolves in whichever store owns it: the pane for default-chat
     // ids, `messages` for non-default trees.
     const pane = hasPaneStore(this.sql);
+
     const paneAnchor = pane
       ? this.sql<PaneRaw>`
           SELECT id, session_id, role, content, created_at, rowid AS rid
           FROM assistant_messages WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}`[0]
       : undefined;
+
     let anchor: FetchedRow;
+
     if (paneAnchor !== undefined) {
       anchor = withPaneStamp(paneAnchor);
     } else {
@@ -184,9 +194,11 @@ export class ConversationSearchStore {
         : this.sql<PlainRaw>`
             SELECT id, session_id, role, content, created_at, rowid AS rid
             FROM messages WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}`[0]);
+
       if (plainAnchor === undefined) return null;
       anchor = withPlainStamp(plainAnchor);
     }
+
     const source: IndexRegime = paneAnchor !== undefined ? 'pane' : 'plain';
     const row = anchor;
     const w = boundedInt(window, 1, 1, 20);
@@ -196,6 +208,7 @@ export class ConversationSearchStore {
     // window/count queries are written out per store: the operators are SQL,
     // and SQL cannot ride a binding.
     const paneSide = source === 'pane';
+
     const before = (paneSide
       ? this.sql<PaneRaw>`
           SELECT id, role, content, created_at, rowid AS rid FROM assistant_messages
@@ -205,6 +218,7 @@ export class ConversationSearchStore {
           SELECT id, role, content, created_at, rowid AS rid FROM messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}
           ORDER BY rowid DESC LIMIT ${w}`.map(withPlainStamp)).reverse();
+
     const after = paneSide
       ? this.sql<PaneRaw>`
           SELECT id, role, content, created_at, rowid AS rid FROM assistant_messages
@@ -214,6 +228,7 @@ export class ConversationSearchStore {
           SELECT id, role, content, created_at, rowid AS rid FROM messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}
           ORDER BY rowid ASC LIMIT ${w}`.map(withPlainStamp);
+
     const totalBefore = (paneSide
       ? this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM assistant_messages
@@ -221,6 +236,7 @@ export class ConversationSearchStore {
       : this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}`)[0]!.c;
+
     const totalAfter = (paneSide
       ? this.sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM assistant_messages
@@ -230,9 +246,11 @@ export class ConversationSearchStore {
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}`)[0]!.c;
 
     const parsedMaxChars = v.safeParse(MaxCharsSchema, maxChars);
+
     const perMessage = parsedMaxChars.success && parsedMaxChars.output !== undefined
       ? parsedMaxChars.output
       : MAX_MESSAGE_CHARS;
+
     // Pane rows carry the serialized UI message; its text parts are what a
     // recall surface quotes. Plain rows already hold plain text.
     const toMessage = (m: FetchedRow): ConversationScrollMessage => ({
@@ -240,6 +258,7 @@ export class ConversationSearchStore {
       content: truncate(source === 'pane' ? uiMessageText(m.content) : m.content, perMessage),
       createdAt: m.createdAtMs,
     });
+
     return {
       conversationId: sessionIdOf(row.session_id),
       messages: [...before.map(toMessage), { ...toMessage(row), anchor: true }, ...after.map(toMessage)],
@@ -254,9 +273,13 @@ export class ConversationSearchStore {
     this.ensure();
     this.refreshIndex();
     const lim = boundedInt(limit, 1, 1, 20);
+
     interface GroupBase { session_id: string; n: number }
+
     interface PaneGroup extends GroupBase { started_at: string; last_active: string }
+
     interface PlainGroup extends GroupBase { started_at: number; last_active: number }
+
     interface Group extends GroupBase {
       source: 'pane' | 'plain';
       startedAtMs: number;
@@ -267,10 +290,12 @@ export class ConversationSearchStore {
      *  at the fetch site — the pane's datetimes via {@link paneStampMs}. */
     const withPaneStamps = (g: PaneGroup): Group =>
       ({ source: 'pane', session_id: g.session_id, n: g.n, startedAtMs: paneStampMs(g.started_at), lastActiveAtMs: paneStampMs(g.last_active) });
+
     const withPlainStamps = (g: PlainGroup): Group =>
       ({ source: 'plain', session_id: g.session_id, n: g.n, startedAtMs: g.started_at, lastActiveAtMs: g.last_active });
 
     let groups: Group[];
+
     if (hasPaneStore(this.sql)) {
       groups = [
         // Default chat lives in the pane; plain default rows would be the
@@ -307,6 +332,7 @@ export class ConversationSearchStore {
               WHERE actor_id = ${this.actorId} AND session_id = ${conversation.session_id}
                 AND role = 'user'
               ORDER BY rowid ASC LIMIT 1`.map(withPlainStamp)[0];
+
         return {
           conversationId: sessionIdOf(conversation.session_id),
           messageCount: conversation.n,
@@ -373,6 +399,7 @@ export class ConversationSearchStore {
       UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
     void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_messages_ad AFTER DELETE ON messages BEGIN
       UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
+
     if (!pane) return;
     void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_pane_ai AFTER INSERT ON assistant_messages BEGIN
       UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
@@ -390,16 +417,20 @@ export class ConversationSearchStore {
     const pane = hasPaneStore(this.sql);
     this.ensureRevisionTriggers(pane);
     const regime: IndexRegime = pane ? 'pane' : 'plain';
+
     const state = this.sql<{ actor_id: string; regime: string; rev: number; synced_rev: number }>`
       SELECT actor_id, regime, rev, synced_rev FROM conversation_fts_state WHERE id = 1`[0]!;
+
     if (state.actor_id === this.actorId && state.regime === regime && state.rev === state.synced_rev) return;
 
     void this.sql`DELETE FROM conversation_fts`;
+
     const paneRows = pane
       ? this.sql<PaneRaw>`
           SELECT id, session_id, role, content, created_at, rowid AS rid
           FROM assistant_messages WHERE actor_id = ${this.actorId} ORDER BY rowid ASC`.map(withPaneStamp)
       : [];
+
     const plainRows = pane
       ? this.sql<PlainRaw>`
           SELECT id, session_id, role, content, created_at, rowid AS rid FROM messages
@@ -408,6 +439,7 @@ export class ConversationSearchStore {
       : this.sql<PlainRaw>`
           SELECT id, session_id, role, content, created_at, rowid AS rid FROM messages
           WHERE actor_id = ${this.actorId} AND session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp);
+
     this.indexRows(paneRows, true);
     this.indexRows(plainRows, false);
     void this.sql`

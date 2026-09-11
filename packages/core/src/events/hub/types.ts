@@ -102,10 +102,15 @@ export type EventVariant = (typeof EVENT_VARIANTS)[number];
 // ── Causality / identity ─────────────────────────────────────────
 
 export type EventId = string;     // ULID, monotonic per DO
+
 export type TraceId = string;     // root event id; constant down the causal chain
+
 export type TurnId = string;
+
 export type HeadId = string;
+
 export type TriggerId = string;
+
 export type ReplyChannelId = string;
 
 // ── ReplyChannel ─────────────────────────────────────────────────
@@ -525,17 +530,22 @@ export function isLegalDecision(d: ReactorDecision, ctx: {
   // `drop` requires reactor head trust >= authenticated AND event trust = external.
   if (d.event_op.kind === 'drop') {
     if (TRUST_ORDER[ctx.reactor_head_trust] < TRUST_ORDER.authenticated) return false;
+
     if (ctx.events_trust_class !== 'external') return false;
   }
+
   // `abort_one`, `abort_all`, `add` require `eventOp: handle` (you can't
   // defer/drop while also acting on heads in response to the event).
   if (d.head_op.kind === 'abort_one' || d.head_op.kind === 'abort_all' || d.head_op.kind === 'add') {
     if (d.event_op.kind !== 'handle') return false;
   }
+
   // `merge_now` permits handle or defer but not drop.
   if (d.head_op.kind === 'merge_now' && d.event_op.kind === 'drop') return false;
+
   // `add` after merge has begun is rejected.
   if (d.head_op.kind === 'add' && ctx.current_phase === 'merging') return false;
+
   return true;
 }
 

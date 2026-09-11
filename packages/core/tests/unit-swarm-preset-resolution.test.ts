@@ -57,9 +57,11 @@ const MEASURED: ScalarObjective = {
  *  requires an objective gets one; a coverage preset gets its `key`. */
 function callFor(preset: (typeof NAMED_SWARM_PRESETS)[number]): SwarmInput {
   if (preset === 'ideate') return { preset, task: 'three ways to cache this' };
+
   if (preset === 'research' || preset === 'audit' || preset === 'redteam') {
     return { preset, task: 'cover the failure modes', key: 'behaviour', objective: MEASURED };
   }
+
   return { preset, task: 'beat the baseline', objective: MEASURED };
 }
 
@@ -67,9 +69,12 @@ function callFor(preset: (typeof NAMED_SWARM_PRESETS)[number]): SwarmInput {
  *  failure names the axis rather than an undefined. */
 function legal(input: SwarmInput): ResolvedSwarm {
   const resolved = resolveSwarm(input);
+
   if ('reason' in resolved) throw new Error(`resolve refused: ${resolved.error}`);
   const invalid = swarmValidity(resolved);
+
   if (invalid) throw new Error(`validity refused: ${invalid.error}`);
+
   return resolved;
 }
 
@@ -110,7 +115,9 @@ describe('the caller can assign the first level node by node', () => {
     const refusal = resolveSwarm({
       preset: 'ideate', task: 'make it faster', nodes: ASSIGNED, branches: 5,
     });
+
     expect('reason' in refusal).toBe(true);
+
     if ('reason' in refusal) {
       expect(refusal.error).toContain('branch count');
       expect(refusal.error).toContain('would be ignored');
@@ -121,12 +128,15 @@ describe('the caller can assign the first level node by node', () => {
     // The duplication the field exists to remove, restated by the caller. A search
     // that asks one question twice pays twice for one answer.
     const first = ASSIGNED[0] ?? { task: '', prompt: '' };
+
     const refusal = resolveSwarm({
       preset: 'ideate',
       task: 'make it faster',
       nodes: [first, { task: first.task, prompt: 'a different brief entirely' }],
     });
+
     expect('reason' in refusal).toBe(true);
+
     if ('reason' in refusal) expect(refusal.error).toContain('two of yours are the same');
   });
 });
@@ -170,6 +180,7 @@ describe('every named preset resolves to a tuple validity accepts', () => {
     for (const preset of ['research', 'audit'] as const) {
       expect(legal(callFor(preset)).config.carry).toEqual({ kind: 'artifacts', threshold: 0.8 });
     }
+
     expect(legal(callFor('redteam')).config.carry).toEqual({ kind: 'elites' });
   });
 
@@ -212,6 +223,7 @@ describe('custom seeded from a preset resolves on the axes the caller states', (
         },
         depth: 3,
       });
+
       expect(resolved.preset).toBe('custom');
       expect(resolved.from).toBe(from);
       expect(resolved.config.advance).toEqual({ kind: 'uct' });
@@ -231,6 +243,7 @@ describe('custom seeded from a preset resolves on the axes the caller states', (
       // One axis overridden: this run publishes its cells where `redteam` keeps them.
       config: { carry: { kind: 'artifacts', threshold: 0.8 } },
     });
+
     // Everything else is the row's, caps included.
     expect(resolved.config.advance).toEqual({ kind: 'archive', novelty: 0.4 });
     expect(resolved.caps.depth).toEqual({ value: 1, origin: 'preset' });
@@ -249,6 +262,7 @@ describe('a judged tree is funded at the ensemble it was admitted at', () => {
       maxLLMCalls: judgeCallPool(JUDGE_MARGINALISATION_MIN),
       offersRunnableCode: true,
     });
+
     expect(budget.ensemble).toBe(JUDGE_MARGINALISATION_MIN);
     // And the check suite is still bought: the pool is the ensemble PLUS that one
     // call, which is the split `judgeCallBudget` already documents.
@@ -261,6 +275,7 @@ describe('a judged tree is funded at the ensemble it was admitted at', () => {
       maxLLMCalls: judgeCallPool(JUDGE_MARGINALISATION_MIN),
       offersRunnableCode: false,
     });
+
     expect(budget.ensemble).toBe(JUDGE_MARGINALISATION_MIN);
     expect(budget.generatesChecks).toBe(false);
   });
@@ -310,10 +325,13 @@ describe('`{preset, task}` is a complete call on every row', () => {
   test('every declared preset resolves AND validates from `preset` and `task` alone', () => {
     for (const preset of NAMED_SWARM_PRESETS) {
       const resolved = resolveSwarm({ preset, task: 'work out what to do here' });
+
       if ('reason' in resolved) {
         throw new Error(`${preset} refused a bare call at resolve: ${resolved.error}`);
       }
+
       const invalid = swarmValidity(resolved);
+
       if (invalid) throw new Error(`${preset} refused a bare call at validity: ${invalid.error}`);
     }
   });
@@ -325,8 +343,10 @@ describe('`{preset, task}` is a complete call on every row', () => {
     // three rather than accepting them and ignoring them.
     for (const preset of NAMED_SWARM_PRESETS) {
       const row = SWARM_PRESET_POINTS[preset];
+
       if (row.config.score.kind !== 'verify') continue;
       const resolved = resolveSwarm({ preset, task: 'x' });
+
       if ('reason' in resolved) throw new Error(resolved.error);
       expect(resolved.config.score).toEqual({ kind: 'judge', samples: UNMEASURED_JUDGE_SAMPLES });
       expect(resolved.config.advance).toEqual({ kind: 'none' });
@@ -346,6 +366,7 @@ describe('`{preset, task}` is a complete call on every row', () => {
     // back the moment there is an instrument to measure with.
     for (const preset of NAMED_SWARM_PRESETS) {
       const row = SWARM_PRESET_POINTS[preset];
+
       if (row.config.score.kind !== 'verify') continue;
       const resolved = legal(callFor(preset));
       expect(resolved.config).toEqual(row.config);
@@ -364,8 +385,10 @@ describe('`{preset, task}` is a complete call on every row', () => {
         score: { kind: 'verify' }, advance: { kind: 'none' }, carry: { kind: 'none' },
       },
     });
+
     if ('reason' in composed) throw new Error(composed.error);
     const refusal = swarmValidity(composed);
+
     if (!refusal) throw new Error('a composed score:"verify" with no objective must be refused');
     expect(refusal.error).toContain('score:"verify"');
     // And the way out it names has to be one `custom` can actually take: offering
@@ -377,6 +400,7 @@ describe('`{preset, task}` is a complete call on every row', () => {
     const task = 'reduce the oracle calls our solver spends';
     // CALL 1, the one the model actually made in the incident — refusal #1 of its 5.
     const bare = resolveSwarm({ preset: 'optimise', task });
+
     if ('reason' in bare) throw new Error(bare.error);
     expect(swarmValidity(bare)).toBeNull();
 
@@ -387,8 +411,10 @@ describe('`{preset, task}` is a complete call on every row', () => {
       preset: 'optimise', task,
       objective: { ...MEASURED, verify: { kind: 'script', spec: { path: 'measure.py' } } },
     });
+
     if ('reason' in invented) throw new Error(invented.error);
     const kindRefusal = swarmValidity(invented);
+
     if (!kindRefusal) throw new Error('an unregistered kind must be refused');
     expect(kindRefusal.error).toContain('exec-ratio');
     expect(kindRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"…"}');
@@ -399,12 +425,16 @@ describe('`{preset, task}` is a complete call on every row', () => {
       preset: 'optimise', task,
       objective: { ...MEASURED, verify: { kind: 'exec-ratio', spec: {} } },
     });
+
     if ('reason' in empty) throw new Error(empty.error);
     const specRefusal = swarmValidity(empty);
+
     if (!specRefusal) throw new Error('an empty spec must be refused');
+
     for (const field of VERIFIER_KIND_DOC['exec-ratio'].specFields) {
       expect(specRefusal.error).toContain(field);
     }
+
     expect(specRefusal.error).toContain('{action:"swarm", preset:"optimise", task:"…"}');
   });
 
@@ -415,19 +445,24 @@ describe('`{preset, task}` is a complete call on every row', () => {
     // two together behaviourally, in both directions.
     for (const kind of VERIFIER_KINDS) {
       const fields = VERIFIER_KIND_DOC[kind].specFields;
+
       const full: JsonObject = Object.fromEntries(
         fields.map((field) => [field, EXEC_RATIO_SPEC[field]]),
       );
+
       // SUFFICIENT: a spec built from the documented fields ALONE binds. A field the
       // schema requires and this list omits would fail here.
       const bound = resolveVerifier({ kind, spec: full });
+
       if ('reason' in bound) throw new Error(`${kind}: documented fields did not bind: ${bound.error}`);
+
       // NECESSARY: dropping any one of them refuses. A field this list names that the
       // schema does not actually require would survive its own removal.
       for (const omitted of fields) {
         const partial: JsonObject = { ...full };
         delete partial[omitted];
         const refused = resolveVerifier({ kind, spec: partial });
+
         if (!('reason' in refused)) {
           throw new Error(`${kind}: spec bound without "${omitted}", so the doc names a field the schema ignores`);
         }

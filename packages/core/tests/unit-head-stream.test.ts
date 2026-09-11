@@ -79,6 +79,7 @@ function chunkedHead(chunks: readonly string[]): LanguageModel {
       warnings: [],
     }),
   });
+
   model.doStream = async () => {
     const parts: ModelStreamPart[] = [
       { type: 'stream-start', warnings: [] },
@@ -94,6 +95,7 @@ function chunkedHead(chunks: readonly string[]): LanguageModel {
         },
       },
     ];
+
     return {
       stream: new ReadableStream<ModelStreamPart>({
         start(controller) {
@@ -103,6 +105,7 @@ function chunkedHead(chunks: readonly string[]): LanguageModel {
       }),
     };
   };
+
   return model;
 }
 
@@ -129,6 +132,7 @@ function headInput(): HeadInput {
 async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Promise<HeadInferenceDeps> {
   const { rt, testSql } = createTestRuntime();
   const seat = await hostedSeatsOver({ rt, db: testSql.db }).seat('head-stream', 'head');
+
   return {
     ...seat,
     model, tools: {}, capture: new HeadCapture(), isAborted: () => false,
@@ -139,6 +143,7 @@ async function deps(model: LanguageModel, over?: Partial<HeadInferenceDeps>): Pr
 describe('a running head publishes what it is producing', () => {
   test('both halves of a step reach the channel, each tagged with its own kind', async () => {
     const frames: Frame[] = [];
+
     const report = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'weighing the two lexers', text: 'the lexer handles UTF-8' }),
       { reportDelta: (kind, delta) => { frames.push({ kind, delta }); } },
@@ -237,9 +242,11 @@ describe('a running head publishes what it is producing', () => {
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
       { reportDelta: () => { /* published nowhere */ } },
     ));
+
     const without = await runHeadInference(headInput(), await deps(
       streamingHead({ reasoning: 'thinking', text: 'answer' }),
     ));
+
     expect(without.status).toBe(withSink.status);
     expect(without.summary).toBe(withSink.summary);
     expect(without.stepCount).toBe(withSink.stepCount);
@@ -253,6 +260,7 @@ test('a cancelled head retains its already-settled SDK tool conversation', async
   const produced: ModelMessage[] = [];
   const value = { retained: 'structured payload' };
   let calls = 0;
+
   const model = scriptedTurnModel({ doGenerate: options => {
     if (calls++ === 0) return {
       content: [{ type: 'tool-call', toolCallId: 'kept-call', toolName: 'probe', input: '{}' }],
@@ -261,10 +269,13 @@ test('a cancelled head retains its already-settled SDK tool conversation', async
         outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
     };
     const signal = options.abortSignal;
+
     if (signal !== undefined) signal.addEventListener('abort', () => { pending.reject(signal.reason); }, { once: true });
     secondStarted.resolve();
+
     return pending.promise;
   } });
+
   const running = runHeadInference(headInput(), await deps(model, {
     signal: abort.signal, isAborted: () => abort.signal.aborted,
     tools: { probe: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
@@ -272,8 +283,10 @@ test('a cancelled head retains its already-settled SDK tool conversation', async
     }) },
     reportMessages: messages => { produced.push(...messages); },
   }));
+
   await secondStarted.promise;
   abort.abort(new Error('stopped after the evidence step'));
+
   try {
     expect((await running).status).toBe('aborted');
     expect(produced.flatMap(message => message.role === 'tool' ? message.content : []))

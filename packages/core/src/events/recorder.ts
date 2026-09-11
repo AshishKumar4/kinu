@@ -43,6 +43,7 @@ const BaseFields = {
   runId: v.string(),
   timestamp: v.string(),
 };
+
 const ContextCompositionSchema = v.object({
   segments: v.array(v.object({
     plane: v.picklist(['system', 'tools', 'messages', 'ephemeral']),
@@ -52,6 +53,7 @@ const ContextCompositionSchema = v.object({
   charsPerToken: v.number(),
   estimatedTokens: v.number(),
 });
+
 const HeadFileChangeSetSchema = v.object({
   id: v.string(),
   changes: v.array(v.object({
@@ -62,6 +64,7 @@ const HeadFileChangeSetSchema = v.object({
     binary: v.optional(v.boolean()),
   })),
 });
+
 /**
  * The canonical run-event union, as valibot.
  *
@@ -311,10 +314,13 @@ type SpendAggregateRow = Readonly<Record<keyof Usage, number | null>> & {
  *  zero, and only one of the two may be printed as a number. */
 function spendTallyOf(row: SpendAggregateRow): SpendTally {
   const usage: { -readonly [K in keyof Usage]: number } = {};
+
   for (const field of USAGE_FIELDS) {
     const summed = row[field];
+
     if (summed !== null) usage[field] = summed;
   }
+
   const tally = {
     calls: row.calls,
     callsWithoutUsage: row.callsWithoutUsage,
@@ -322,6 +328,7 @@ function spendTallyOf(row: SpendAggregateRow): SpendTally {
     unpricedCalls: row.unpricedCalls,
     floorPricedCalls: row.floorPricedCalls,
   };
+
   return row.usd === null ? tally : { ...tally, usd: row.usd };
 }
 
@@ -339,6 +346,7 @@ export class RunEventRecorder {
   emit(runId: string, input: RunEventInput): RunEvent {
     const deferred = this.emitDeferred(runId, input);
     deferred.publish();
+
     return deferred.event;
   }
 
@@ -365,6 +373,7 @@ export class RunEventRecorder {
   emitDeferred(runId: string, input: RunEventInput): DeferredRunEvent {
     const event = stampRunEvent(input, this.allocateIndex(runId), runId);
     this.persist(event);
+
     return {
       event,
       publish: () => {
@@ -383,19 +392,24 @@ export class RunEventRecorder {
 
   private allocateIndex(runId: string): number {
     const cached = this.nextIndex.get(runId);
+
     if (cached != null) {
       this.nextIndex.set(runId, cached + 1);
+
       return cached;
     }
+
     // Load from DB — this actor's rows only: `run_id` is minted per activation
     // and `event_index` restarts per run, so another actor's row under the same
     // run id would hand this one an index it does not own.
     const rows = this.sql<{ max_idx: number | null }>`
       SELECT MAX(event_index) AS max_idx FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
+
     const max = rows[0]?.max_idx ?? -1;
     const next = max + 1;
     this.nextIndex.set(runId, next + 1);
+
     return next;
   }
 
@@ -431,8 +445,10 @@ export class RunEventRecorder {
         WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${since}
         ORDER BY event_index ASC
         LIMIT ${limit}`;
+
       return rows.map((r) => parseStoredRunEvent(r.payload));
     }
+
     // Tagged-template SQL cannot safely build dynamic IN-clauses across all
     // SqlExecutor implementations (parameter binding is positional), so the
     // filter runs client-side. A filtered read pages forward on `event_index`
@@ -442,22 +458,29 @@ export class RunEventRecorder {
     const matched: RunEvent[] = [];
     let cursor = since;
     const fetchLimit = Math.min(limit * 4, 2000);
+
     while (matched.length < limit) {
       const rows = this.sql<{ payload: string; event_index: number }>`
         SELECT payload, event_index FROM run_events
         WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index >= ${cursor}
         ORDER BY event_index ASC
         LIMIT ${fetchLimit}`;
+
       const last = rows[rows.length - 1];
+
       if (last === undefined) break;
+
       for (const row of rows) {
         if (matched.length >= limit) break;
         const event = parseStoredRunEvent(row.payload);
+
         if (types.has(event.type)) matched.push(event);
       }
+
       if (rows.length < fetchLimit) break;
       cursor = last.event_index + 1;
     }
+
     return matched;
   }
 
@@ -487,14 +510,18 @@ export class RunEventRecorder {
    */
   runForHeadSplit(rootId: string, window = 500): string | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ run_id: string; payload: string }>`
       SELECT run_id, payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = 'head_split'
       ORDER BY ts DESC LIMIT ${window}`;
+
     for (const row of rows) {
       const ev = parseStoredRunEvent(row.payload);
+
       if (ev.type === 'head_split' && ev.rootId === rootId) return row.run_id;
     }
+
     return null;
   }
 
@@ -519,21 +546,26 @@ export class RunEventRecorder {
    */
   unterminatedRuns(window = 500, startedBefore = Number.POSITIVE_INFINITY): string[] {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ run_id: string; type: string; ts: string }>`
       SELECT run_id, type, ts FROM run_events
       WHERE actor_id = ${this.actorId} AND (type = 'run_start' OR type = 'run_end')
       ORDER BY ts DESC LIMIT ${window}`;
+
     const closed = new Set(rows.filter((row) => row.type === 'run_end').map((row) => row.run_id));
     const open: string[] = [];
     const seen = new Set<string>();
+
     for (const row of rows) {
       if (row.type !== 'run_start' || closed.has(row.run_id) || seen.has(row.run_id)) continue;
       seen.add(row.run_id);
+
       // The ACTIVATION CUTOFF: the caller that closes these no longer runs at
       // start of life, so a run a live request started after the activation
       // began must not read as abandoned.
       if (Date.parse(row.ts) < startedBefore) open.push(row.run_id);
     }
+
     return open;
   }
 
@@ -561,15 +593,19 @@ export class RunEventRecorder {
    */
   unterminatedModelOperations(window = 500): Array<Extract<RunEvent, { type: 'model_operation' }>> {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = ${'model_operation' satisfies RunEventType}
       ORDER BY ts DESC, rowid DESC LIMIT ${window}`;
+
     const events = rows.map((row) => parseStoredRunEvent(row.payload))
       .flatMap((event) => event.type === 'model_operation' ? [event] : []);
+
     const ended = new Set(
       events.filter((event) => event.phase === 'end').map((event) => event.operationId),
     );
+
     return events.filter((event) => event.phase === 'start' && !ended.has(event.operationId));
   }
 
@@ -589,11 +625,13 @@ export class RunEventRecorder {
    */
   completedWorkTurns(sinceTs: string | null): number {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM run_events
       WHERE actor_id = ${this.actorId} AND type = ${'turn_end' satisfies RunEventType}
         AND (${sinceTs} IS NULL OR ts > ${sinceTs})
         AND json_extract(payload, '$.workMode') != 'plan'`;
+
     return rows[0]?.n ?? 0;
   }
 
@@ -608,11 +646,13 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
     // Same invariant as `read`: only a finite positive integer reaches SQL.
     const capped = boundedInt(limit, RUN_EVENT_LIMIT_MAX, 1, Number.MAX_SAFE_INTEGER);
+
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND event_index > ${afterIndex}
       ORDER BY event_index ASC
       LIMIT ${capped}`;
+
     return rows.map((r) => parseStoredRunEvent(r.payload));
   }
 
@@ -632,12 +672,15 @@ export class RunEventRecorder {
    */
   transcript(runId: string): ModelMessage[] {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE actor_id = ${this.actorId} AND run_id = ${runId} AND type = ${'step_finish' satisfies RunEventType}
       ORDER BY event_index ASC`;
+
     return rows.flatMap((r) => {
       const event = parseStoredRunEvent(r.payload);
+
       return event.type === 'step_finish' ? event.messages ?? [] : [];
     });
   }
@@ -661,11 +704,13 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
     // Same invariant as `read`: only a finite positive integer reaches SQL.
     const capped = boundedInt(limit, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
+
     const rows = this.sql<{ payload: string }>`
       SELECT payload FROM run_events
       WHERE actor_id = ${this.actorId} AND type = ${type}
       ORDER BY ts DESC, rowid DESC
       LIMIT ${capped}`;
+
     return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
   }
 
@@ -715,6 +760,7 @@ export class RunEventRecorder {
    */
   spendByProducer(): ReadonlyMap<SpendSource, SpendTally> {
     this.actor.assertCurrent();
+
     const rows = this.sql<SpendAggregateRow>`
       WITH call AS (
         SELECT CASE type
@@ -757,9 +803,12 @@ export class RunEventRecorder {
              SUM(reasoning) AS reasoning, SUM(neurons) AS neurons
       FROM measured
       GROUP BY source`;
+
     const byProducer = new Map<SpendSource, SpendTally>();
+
     for (const row of rows) {
       const source = SPEND_SOURCES.find((known) => known === row.source);
+
       if (source === undefined) {
         // Unwritable through this recorder: `RunEventSchema` validates `source`
         // against the same picklist on the way in. So a row here is a corrupt
@@ -775,22 +824,27 @@ export class RunEventRecorder {
         );
         continue;
       }
+
       byProducer.set(source, spendTallyOf(row));
     }
+
     return byProducer;
   }
 
   /** Subscribe to future events; returns an unsubscribe function. */
   observe(listener: RunEventListener): () => void {
     this.listeners.add(listener);
+
     return () => { this.listeners.delete(listener); };
   }
 
   /** Total event count for a run. */
   count(runId: string): number {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ n: number }>`
       SELECT COUNT(*) AS n FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
+
     return rows[0]?.n ?? 0;
   }
 
@@ -827,6 +881,7 @@ export class RunEventRecorder {
     this.actor.assertCurrent();
     // Same invariant as `read`: only a finite positive integer reaches SQL.
     const capped = boundedInt(count, RUN_EVENT_LIMIT_DEFAULT, 1, Number.MAX_SAFE_INTEGER);
+
     return this.sql<RunListEntry>`
       SELECT run_id AS runId, MAX(ts) AS lastTs, COUNT(*) AS eventCount
       FROM run_events
@@ -842,8 +897,10 @@ export class RunEventRecorder {
    *  run raises instead of reading as an exhausted history. */
   runSeq(runId: string): number | null {
     this.actor.assertCurrent();
+
     const rows = this.sql<{ seq: number | null }>`
       SELECT MAX(rowid) AS seq FROM run_events WHERE actor_id = ${this.actorId} AND run_id = ${runId}`;
+
     return rows[0]?.seq ?? null;
   }
 }

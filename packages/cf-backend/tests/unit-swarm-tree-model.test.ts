@@ -12,6 +12,7 @@ import {
 } from '../src/components/swarm-tree-model';
 
 let seq = 0;
+
 function node(over: Partial<ForkNode> = {}): ForkNode {
   return {
     id: `n${seq++}`, parentId: null, depth: 0, value: 0.5, visits: 1,
@@ -22,6 +23,7 @@ function node(over: Partial<ForkNode> = {}): ForkNode {
 describe('principalVariation', () => {
   test('follows the most-visited child to a leaf', () => {
     const winner = node({ id: 'win', visits: 8, depth: 2 });
+
     const root = node({
       id: 'root', visits: 20,
       children: [
@@ -29,6 +31,7 @@ describe('principalVariation', () => {
         node({ id: 'b', visits: 12, depth: 1, children: [winner, node({ id: 'lose', visits: 2, depth: 2 })] }),
       ],
     });
+
     expect([...principalVariation(root)]).toEqual(['root', 'b', 'win']);
   });
 
@@ -40,6 +43,7 @@ describe('principalVariation', () => {
         node({ id: 'hi', visits: 2, value: 0.9 }),
       ],
     });
+
     expect(principalVariation(root).has('hi')).toBe(true);
     expect(principalVariation(root).has('lo')).toBe(false);
   });
@@ -51,6 +55,7 @@ describe('principalVariation', () => {
 
 describe('ancestorIds', () => {
   const deep = node({ id: 'deep' });
+
   const root = node({
     id: 'root',
     children: [node({ id: 'a' }), node({ id: 'b', children: [node({ id: 'c', children: [deep] })] })],
@@ -75,6 +80,7 @@ describe('treeStats', () => {
         node({ depth: 1 }),
       ],
     });
+
     expect(treeStats(root)).toEqual({ nodes: 6, depth: 3 });
   });
 });
@@ -85,6 +91,7 @@ describe('stored tree fields', () => {
       id: 'root', parent_id: null, depth: 0, visits: 0, value: 0,
       status: 'open', action: 'root',
     };
+
     const head: HeadRunView = {
       rootId: 'root', task: 'inspect the tree', rationale: 'depth fixture',
       status: 'running', spawnedAt: 1, merge: null,
@@ -111,6 +118,7 @@ describe('live selection', () => {
       id: 'root',
       children: [node({ id: 'branch', status: 'running', visits: 1, value: null })],
     });
+
     const next = node({
       id: 'root',
       children: [node({ id: 'branch', status: 'terminal', visits: 8, value: 0.91 })],
@@ -128,6 +136,7 @@ describe('settled winner', () => {
       id: 'root',
       children: [node({ id: 'provisional', status: 'running', value: 0.99 })],
     });
+
     expect(terminalForkNode(root)).toBeNull();
   });
 
@@ -139,6 +148,7 @@ describe('settled winner', () => {
         node({ id: 'chosen', status: 'terminal', value: 0.81 }),
       ],
     });
+
     expect(terminalForkNode(root)?.id).toBe('chosen');
   });
 });
@@ -185,6 +195,7 @@ describe('folding', () => {
         node({ id: 'open', children: [node({ id: 'open-kid' })] }),
       ],
     });
+
     expect([...losingBranchIds(root)].sort()).toEqual(['failed', 'pruned']);
   });
 
@@ -204,6 +215,7 @@ describe('folding', () => {
         id: 'root', status,
         children: [node({ id: 'a', children: [node({ id: 'a-kid' })] }), node({ id: 'b' })],
       });
+
       expect([...losingBranchIds(root)]).toEqual([]);
     }
   });
@@ -216,6 +228,7 @@ describe('folding', () => {
         node({ id: 'won', status: 'terminal' }),
       ],
     });
+
     expect([...losingBranchIds(root)]).toEqual(['lost']);
   });
 

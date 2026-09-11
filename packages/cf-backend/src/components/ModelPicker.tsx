@@ -27,6 +27,7 @@ const ModelMenuEntrySchema = v.object({
 
 function modelMenuEntry<Input>(input: Input): ModelMenuEntry | null {
   const parsed = v.safeParse(ModelMenuEntrySchema, input);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -59,6 +60,7 @@ export function ModelPicker({
     () => groupModelMenu(models, value).map((g) => ({ value: g.provider, items: g.models })),
     [models, value],
   );
+
   const selected = useMemo(() => models.find((m) => m.spec === value) ?? null, [models, value]);
 
   return (
@@ -67,6 +69,7 @@ export function ModelPicker({
       value={selected}
       onValueChange={<Next,>(next: Next) => {
         const entry = modelMenuEntry(next);
+
         if (entry) onChange(entry.spec);
         else if (clearable) onChange("");
       }}
@@ -74,6 +77,7 @@ export function ModelPicker({
       itemToStringValue={<Item,>(item: Item) => modelMenuEntry(item)?.spec ?? ''}
       filter={<Item,>(item: Item, query: string) => {
         const model = modelMenuEntry(item);
+
         return model ? modelMatchesQuery(model, query) : false;
       }}
       size={size}
@@ -123,17 +127,21 @@ export function ConnectedModelPicker({
   renderEmpty?: () => React.ReactNode;
 }) {
   const [menu, setMenu] = useState<ModelMenu | null | "error">(null);
+
   const fetchModels = useCallback(() => {
     const loadFailed = <Thrown,>(thrown: Thrown): void => {
       diagnostics.event("model_picker.load_failed", { error: renderThrownChain({ cause: thrown }) });
       setMenu("error");
     };
+
     setMenu(null);
     listAvailableModels()
       .then(setMenu)
       .catch(loadFailed);
   }, []);
+
   useEffect(() => { fetchModels(); }, [fetchModels]);
+
   if (menu === null) {
     return (
       <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 text-[11px] p-text-3" aria-label="Loading models">
@@ -141,6 +149,7 @@ export function ConnectedModelPicker({
       </span>
     );
   }
+
   if (menu === "error") {
     return (
       <button
@@ -154,6 +163,7 @@ export function ConnectedModelPicker({
       </button>
     );
   }
+
   if (menu.models.length === 0) {
     // A menu that is empty BECAUSE every provider failed is not an
     // unconnected account — sending it through the OAuth CTA would be a lie.
@@ -170,7 +180,9 @@ export function ConnectedModelPicker({
         </button>
       );
     }
+
     if (renderEmpty) return <>{renderEmpty()}</>;
+
     return (
       <a
         href={cloudflareReconnectPath(window.location.pathname)}
@@ -182,6 +194,7 @@ export function ConnectedModelPicker({
       </a>
     );
   }
+
   return (
     <ModelPicker
       models={menu.models}
@@ -200,6 +213,7 @@ export function ConnectedModelPicker({
  *  explains a gap in the list rather than offering a choice. */
 function ProviderFailureNotice({ failures }: { failures?: ProviderFailure[] }) {
   if (!failures?.length) return null;
+
   return (
     <div className="border-t p-border px-2 py-1.5">
       {failures.map((failure) => (
@@ -220,6 +234,7 @@ function failureTitle(failures: ProviderFailure[]): string {
 
 function ModelPickerItem({ model }: { model: ModelMenuEntry }) {
   const context = formatContextWindow(model.contextWindow);
+
   return (
     <Combobox.Item value={model}>
       <span className="flex w-full min-w-0 items-center gap-2">

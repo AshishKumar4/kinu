@@ -30,6 +30,7 @@ export function boundedInt(
 ): number {
   if (min > max) throw new Error(`boundedInt: min ${min} exceeds max ${max}`);
   const n = value !== undefined && Number.isFinite(value) ? Math.trunc(value) : fallback;
+
   return Math.min(max, Math.max(min, n));
 }
 

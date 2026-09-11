@@ -31,6 +31,7 @@ const interruptedHistory: ModelMessage[] = [
 describe('cf beforeTurn assembly over an interrupted history', () => {
   test('hands the model a terminal result for the orphaned call', async () => {
     const { agent } = orchestratorHarness();
+
     const config = await agent.beforeTurn({
       system: 'sys',
       messages: interruptedHistory,
@@ -39,12 +40,14 @@ describe('cf beforeTurn assembly over an interrupted history', () => {
       continuation: false,
       body: {},
     });
+
     const assembled = config?.messages ?? [];
     expect(assembled.length).toBeGreaterThan(0);
 
     // Every non-provider-executed tool call in the assembled request has a
     // result — the exact condition `convertToLanguageModelPrompt` enforces.
     const unpaired = new Set<string>();
+
     for (const message of assembled) {
       if (message.role === 'assistant' && Array.isArray(message.content)) {
         for (const part of message.content) {
@@ -56,12 +59,14 @@ describe('cf beforeTurn assembly over an interrupted history', () => {
         }
       }
     }
+
     expect([...unpaired]).toEqual([]);
 
     // And the result says the turn was cut, rather than pretending the call was
     // never made or that it definitely did not run.
     const results = assembled.flatMap((message) => message.role === 'tool'
       ? message.content.filter((part) => part.type === 'tool-result') : []);
+
     expect(results.find((r) => r.toolCallId === ORPHAN_ID)?.output)
       .toEqual({ type: 'error-text', value: INTERRUPTED_TOOL_RESULT });
 

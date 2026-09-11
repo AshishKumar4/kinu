@@ -76,6 +76,7 @@ function fakeSeam(faults: FakeFaults = {}, overrides: Partial<LifecycleSeam> = {
   /** The container has been recycled at least once: everything the restore is
    *  judged on is read after this flips. */
   let woken = false;
+
   const fake: FakeSeam = {
     asked,
     written,
@@ -83,64 +84,87 @@ function fakeSeam(faults: FakeFaults = {}, overrides: Partial<LifecycleSeam> = {
     seam: {
       startup: async (kick, _operation, allowed): Promise<StartupOutcome> => {
         asked.push(`startup ${kick}`);
+
         if (kick === '/wake') woken = true;
+
         return { ms: 1, kind: allowed[0] ?? 'attached', detail: 'the work directory is mounted' };
       },
       checkpoint: async (): Promise<SettleOutcome> => {
         asked.push('checkpoint');
+
         return { ms: 2, ok: true, detail: 'committed' };
       },
       stop: async (): Promise<SettleOutcome> => {
         asked.push('stop');
+
         return { ms: 3, ok: true, detail: 'stopped' };
       },
       exec: async (command): Promise<ExecOutcome> => {
         asked.push(command);
+
         const reply = (body: Record<string, string | number | boolean | readonly string[]>): ExecOutcome =>
           ({ exitCode: 0, stdout: JSON.stringify({ ok: true, ...body }), stderr: '' });
+
         if (command.includes('test -f')) return { exitCode: 0, stdout: 'YES', stderr: '' };
+
         if (command.includes('hold-open')) {
           openWrite = /--content (\S+)/.exec(command)?.[1] ?? '';
+
           return { exitCode: 0, stdout: 'spawned', stderr: '' };
         }
+
         if (command.includes('mkdir -p')) return { exitCode: 0, stdout: '', stderr: '' };
+
         if (command.includes('workload.ts small')) return reply({ files: 128, bytes: 922_624 });
+
         if (command.includes('workload.ts npm')) {
           digest = 'digest-after-npm';
           files = 2_801;
           bytes = 32_530_944;
+
           return reply({ files: 2_675, bytes: 31_610_368 });
         }
+
         if (command.includes('workload.ts delete')) return reply({ removed: [], present: [] });
+
         if (command.includes('workload.ts digest')) {
           return woken && faults.driftTree === true
             ? reply({ files, bytes: bytes - 1, digest: 'digest-of-something-else' })
             : reply({ files, bytes, digest });
         }
+
         if (command.includes('workload.ts absent')) {
           const back = woken ? faults.resurrect ?? [] : [];
+
           return back.length === 0
             ? reply({ resurrected: [] })
             : { exitCode: 1, stdout: JSON.stringify({ ok: false, resurrected: back }), stderr: '' };
         }
+
         if (command.includes('--path marker.txt')) {
           const answer = woken && faults.forgetMarker === true ? 'devbox-e2e-a-different-run' : marker;
+
           return reply({ exists: true, bytes: answer.length, content: answer });
         }
+
         if (command.includes(`--path ${OPEN_WRITE_FILE}`)) {
           const answer = woken && faults.loseOpenWrite === true ? '' : openWrite;
+
           return reply({ exists: answer.length > 0, bytes: answer.length, content: answer });
         }
+
         return reply({});
       },
       write: async (path, content): Promise<void> => {
         written.push(path);
+
         if (path.endsWith('marker.txt')) marker = content;
       },
       teardown: async (): Promise<void> => { fake.teardowns += 1; },
       ...overrides,
     },
   };
+
   return fake;
 }
 
@@ -167,6 +191,7 @@ describe('the ceilings are traceable', () => {
       'restore-verify', 'mid-workload', 'checkpoint-mid', 'stop-mid', 'cold-reattach',
       'reattach-verify', 'teardown',
     ];
+
     for (const op of ops) {
       const ceiling = ceilingFor(op, CEILINGS);
       expect(ceiling.ms).toBeGreaterThan(0);
@@ -174,6 +199,7 @@ describe('the ceilings are traceable', () => {
       // bound is a number somebody liked the look of.
       expect(ceiling.source).toMatch(/COLD_ATTACH_CEILING_MS|3x [\d,]+ ms|^PROVISIONAL: /);
     }
+
     expect(CEILINGS).toHaveLength(ops.length);
   });
 
@@ -192,6 +218,7 @@ describe('the ceilings are traceable', () => {
       expect(ceiling.ms).toBe(CALIBRATION_CEILING_MS);
       expect(ceiling.source).toContain('not an oracle');
     }
+
     expect(ceilingsFor(false)).toBe(CEILINGS);
   });
 });
@@ -251,6 +278,7 @@ describe('the ceiling is the oracle', () => {
     const hung = fakeSeam({}, {
       startup: async (): Promise<StartupOutcome> => await new Promise<StartupOutcome>(() => {}),
     });
+
     const refused = fakeSeam({}, {
       checkpoint: async (): Promise<SettleOutcome> =>
         ({ ms: 4, ok: false, detail: 'skipped (work directory is unchanged)' }),
@@ -292,6 +320,7 @@ describe('a sample the platform ate is reported, never hidden and never retried'
       // nothing may retry it: a driver retry hides how often the platform eats a
       // sample, and a product retry is the defect class this programme refuses.
       let asks = 0;
+
       const eaten = fakeSeam({}, {
         startup: async (): Promise<StartupOutcome> => {
           asks += 1;

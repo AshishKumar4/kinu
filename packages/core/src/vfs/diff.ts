@@ -13,6 +13,7 @@
 import { PLATFORM_CATALOG } from '../platform-catalog';
 
 export interface DiffLine { kind: 'add' | 'del' | 'ctx'; text: string }
+
 export interface LineDiff {
   lines: DiffLine[]; added: number; removed: number;
   /** Set when the body is bounded rather than complete — either the alignment
@@ -61,8 +62,10 @@ export function diffLines(before: string, after: string): LineDiff {
   // Whole-file alignment was never needed for it — identical prefixes and
   // suffixes are exactly what an LCS would have matched anyway.
   let head = 0;
+
   while (head < a.length && head < b.length && a[head] === b[head]) head++;
   let tail = 0;
+
   while (
     tail < a.length - head && tail < b.length - head
     && a[a.length - 1 - tail] === b[b.length - 1 - tail]
@@ -86,13 +89,21 @@ export function diffLines(before: string, after: string): LineDiff {
 
   const lines: DiffLine[] = [];
   let added = 0, removed = 0, dropped = false;
+
   // Counting happens here and is never gated on the row bound: a body that
   // stopped must not present its short count as the file's totals.
   const emit = (kind: DiffLine['kind'], text: string): void => {
     if (kind === 'add') added++; else if (kind === 'del') removed++;
-    if (lines.length >= MAX_LINES_PER_FILE) { dropped = true; return; }
+
+    if (lines.length >= MAX_LINES_PER_FILE) {
+      dropped = true;
+
+      return;
+    }
+
     lines.push({ kind, text });
   };
+
   const done = (): LineDiff =>
     dropped ? { lines, added, removed, truncated: true } : { lines, added, removed };
 
@@ -104,6 +115,7 @@ export function diffLines(before: string, after: string): LineDiff {
   // file is diffed against an empty baseline.
   if (n === 0 || m === 0) {
     for (let k = 0; k < n; k++) emit('del', a[head + k]!);
+
     for (let k = 0; k < m; k++) emit('add', b[head + k]!);
   } else {
     // lcs[i][j] = length of the longest common subsequence of mid-a[i:] and
@@ -112,6 +124,7 @@ export function diffLines(before: string, after: string): LineDiff {
       { length: n + 1 },
       () => Array.from<number>({ length: m + 1 }).fill(0),
     );
+
     for (let i = n - 1; i >= 0; i--) {
       for (let j = m - 1; j >= 0; j--) {
         lcs[i]![j] = a[head + i] === b[head + j]
@@ -119,21 +132,27 @@ export function diffLines(before: string, after: string): LineDiff {
           : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
       }
     }
+
     let i = 0, j = 0;
+
     while (i < n && j < m) {
       if (a[head + i] === b[head + j]) { emit('ctx', a[head + i]!); i++; j++; }
       else if (lcs[i + 1]![j]! >= lcs[i]![j + 1]!) { emit('del', a[head + i]!); i++; }
       else { emit('add', b[head + j]!); j++; }
     }
+
     while (i < n) emit('del', a[head + i++]!);
+
     while (j < m) emit('add', b[head + j++]!);
   }
 
   for (let k = a.length - tail; k < a.length; k++) emit('ctx', a[k]!);
+
   return done();
 }
 
 export type FileStatus = 'added' | 'removed' | 'changed';
+
 export interface FileDiff {
   path: string; status: FileStatus; added: number; removed: number; lines: DiffLine[];
   /** Set when the file's body outran {@link MAX_LINES_PER_FILE} and only the
@@ -146,7 +165,12 @@ export interface FileDiff {
 /** Carry a row into the file's body, or mark the body bounded. Counting
  *  happens at the call site and is never gated on this. */
 function carry(file: FileDiff, l: DiffLine): void {
-  if (file.lines.length >= MAX_LINES_PER_FILE) { file.truncated = true; return; }
+  if (file.lines.length >= MAX_LINES_PER_FILE) {
+    file.truncated = true;
+
+    return;
+  }
+
   file.lines.push(l);
 }
 
@@ -157,13 +181,16 @@ function carry(file: FileDiff, l: DiffLine): void {
 export function computeWorkspaceDiff(baseline: Record<string, string>, current: Record<string, string>): FileDiff[] {
   const paths = new Set([...Object.keys(baseline), ...Object.keys(current)]);
   const out: FileDiff[] = [];
+
   for (const path of paths) {
     const before = baseline[path];
     const after = current[path];
+
     if (before === after) continue;
     const status: FileStatus = before === undefined ? 'added' : after === undefined ? 'removed' : 'changed';
     out.push(fileDiff(path, status, diffLines(before ?? '', after ?? '')));
   }
+
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
@@ -172,6 +199,7 @@ export function computeWorkspaceDiff(baseline: Record<string, string>, current: 
  *  must produce the same shape as the batch form. */
 export function fileDiff(path: string, status: FileStatus, d: LineDiff): FileDiff {
   const { added, removed, lines } = d;
+
   return d.truncated
     ? { path, status, added, removed, lines, truncated: true }
     : { path, status, added, removed, lines };
@@ -207,31 +235,58 @@ export function parseGitDiff(unified: string): FileDiff[] {
       isNew = isDeleted = false;
       // diff --git a/<old> b/<new>
       const m = /^diff --git a\/(.+?) b\/(.+)$/.exec(line);
+
       if (m) { oldPath = m[1]; newPath = m[2]; }
+
       continue;
     }
+
     if (!cur) continue;
+
     if (line.startsWith('new file mode')) { isNew = true; continue; }
+
     if (line.startsWith('deleted file mode')) { isDeleted = true; continue; }
+
     if (line.startsWith('rename to ')) { newPath = line.slice('rename to '.length).trim(); continue; }
+
     if (line.startsWith('rename from ')) { oldPath = line.slice('rename from '.length).trim(); continue; }
-    if (line.startsWith('--- ')) { const p = line.slice(4).trim(); if (p !== '/dev/null') oldPath = p.replace(/^a\//, ''); continue; }
-    if (line.startsWith('+++ ')) { const p = line.slice(4).trim(); if (p !== '/dev/null') newPath = p.replace(/^b\//, ''); continue; }
+
+    if (line.startsWith('--- ')) {
+      const p = line.slice(4).trim();
+
+      if (p !== '/dev/null') oldPath = p.replace(/^a\//, '');
+      continue;
+    }
+
+    if (line.startsWith('+++ ')) {
+      const p = line.slice(4).trim();
+
+      if (p !== '/dev/null') newPath = p.replace(/^b\//, '');
+      continue;
+    }
+
     if (line.startsWith('index ') || line.startsWith('old mode') || line.startsWith('new mode')
       || line.startsWith('similarity index') || line.startsWith('\\ No newline')) continue;
+
     if (line.startsWith('Binary files')) { carry(cur, { kind: 'ctx', text: '(binary file differs)' }); continue; }
+
     if (line.startsWith('@@')) { carry(cur, { kind: 'ctx', text: line }); continue; }
+
     // Count FIRST, carry second. The bound lives inside `carry`, below the
     // counters, so a file past the limit stops SHOWING without stopping
     // COUNTING — a bound above them presents the undercount as the file's +/-
     // totals.
     const kind: DiffLine['kind'] | null =
       line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : line.startsWith(' ') ? 'ctx' : null;
+
     if (kind === null) continue;
+
     if (kind === 'add') cur.added++;
     else if (kind === 'del') cur.removed++;
     carry(cur, { kind, text: line.slice(1) });
   }
+
   flush();
+
   return out;
 }

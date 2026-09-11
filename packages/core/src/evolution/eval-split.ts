@@ -46,6 +46,7 @@ const ChatRunStartSchema = v.object({
  *  wrote, so it propagates rather than being counted as "no such event". */
 function parseRunEvent(payload: string): StoredRunEvent | null {
   const parsed = v.safeParse(StoredRunEventSchema, parseJsonValue(payload));
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -60,15 +61,20 @@ function parseRunEvent(payload: string): StoredRunEvent | null {
  */
 function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRecord[] {
   const results = new Map<string, JsonValue>();
+
   for (const message of messages) {
     if (message.role !== 'tool') continue;
+
     for (const part of message.content) {
       if (part.type === 'tool-result') results.set(part.toolCallId, projectJsonValue({ value: part.output }));
     }
   }
+
   const calls: ToolCallRecord[] = [];
+
   for (const message of messages) {
     if (message.role !== 'assistant' || !Array.isArray(message.content)) continue;
+
     for (const part of message.content) {
       if (part.type !== 'tool-call') continue;
       const args = v.safeParse(JsonObjectSchema, part.input);
@@ -79,6 +85,7 @@ function toolCallsFromTranscript(messages: readonly ModelMessage[]): ToolCallRec
       });
     }
   }
+
   return calls;
 }
 
@@ -93,6 +100,7 @@ function turnProcessEvidence(
   // INNER-join semantics preserved: a turn with no user row behind it has no
   // window and no evidence.
   const pair = conversationTurnPair(sql, actor, turnId);
+
   if (!pair || pair.request === null || pair.startedAtMs === null) return undefined;
 
   const from = new Date(pair.startedAtMs).toISOString();
@@ -101,32 +109,41 @@ function turnProcessEvidence(
   // a free function rather than a store, so nothing else re-verifies the binding
   // before the statements run.
   actor.assertCurrent();
+
   const starts = sql<{ runId: string; payload: string }>`
     SELECT run_id AS runId, payload FROM run_events
     WHERE actor_id = ${actor.actorId} AND type = 'run_start'
       AND ts >= ${from} AND ts <= ${to}
     ORDER BY ts DESC LIMIT 20`;
+
   const expectedUserMessage = pair.request.slice(0, 500);
+
   const runId = starts.find(({ payload }) => {
     const parsed = v.safeParse(ChatRunStartSchema, parseJsonValue(payload));
+
     return parsed.success && parsed.output.userMessage === expectedUserMessage;
   })?.runId;
+
   if (!runId) return undefined;
 
   const rows = sql<{ payload: string; ts: string }>`
     SELECT payload, ts FROM run_events
     WHERE actor_id = ${actor.actorId} AND run_id = ${runId}
     ORDER BY event_index`;
+
   const events = rows.map((row) => ({ event: parseRunEvent(row.payload), at: Date.parse(row.ts) }))
     .filter((row): row is { event: StoredRunEvent; at: number } => row.event !== null && Number.isFinite(row.at));
+
   if (events.length === 0) return undefined;
 
   // The turn's real trajectory, from the rows written as each step finished.
   const toolCalls = toolCallsFromTranscript(new RunEventRecorder(sql, actor).transcript(runId));
   const steps = events.filter(({ event }) => event.type === 'step_finish').length;
   const startAt = events.find(({ event }) => event.type === 'run_start')?.at ?? events[0].at;
+
   const endAt = [...events].reverse().find(({ event }) => event.type === 'run_end')?.at ??
     events[events.length - 1]?.at ?? startAt;
+
   return renderDelegationFeatures(delegationFeatures({
     toolCalls,
     steps,
@@ -194,6 +211,7 @@ function flattenAdvisorTexts(row: RawAdvisorRow): RawAdvisorRow {
 function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): AdvisorNegativeRow[] {
   if (limit <= 0) return [];
   actor.assertCurrent();
+
   // The conversation comes from the canonical store: the pane's serialized UI
   // rows where the backend keeps one, plain `messages` otherwise — the same
   // authority every other conversational reader answers from.
@@ -228,8 +246,10 @@ function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): 
             SELECT 1 FROM turn_outcomes o
             WHERE o.actor_id = ${actor.actorId} AND o.turn_id = turn.id)
         ORDER BY e.created_at DESC, e.id DESC LIMIT ${limit}`;
+
   return rows.map((row) => {
     const data = v.parse(AdvisorRowDataSchema, parseJsonValue(row.data));
+
     return {
       id: row.id,
       turnId: row.turnId,
@@ -353,6 +373,7 @@ export function buildOutcomeEvalSplit(sql: SqlExecutor, actor: ActorHandle, budg
   });
 
   const drawnNegatives = negatives.slice(0, negativeCount);
+
   // A single failure cannot be both trained on and held out, so it stays in
   // train and the split reports that selection is blind to improvement.
   const holdoutCount = drawnNegatives.length >= 2
@@ -360,6 +381,7 @@ export function buildOutcomeEvalSplit(sql: SqlExecutor, actor: ActorHandle, budg
     : 0;
 
   const train = drawnNegatives.slice(holdoutCount).map((r, i) => toInstance(r, i, 'neg'));
+
   const val = [
     ...drawnNegatives.slice(0, holdoutCount).map((r, i) => toInstance(r, i, 'held')),
     ...accepted.slice(0, acceptedCount).map((r, i) => toInstance(ledgerDraw(r), i, 'pos')),

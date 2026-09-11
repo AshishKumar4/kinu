@@ -33,15 +33,18 @@ describe('assembleTurnMessages', () => {
   test('onTurnStart fires before transformContext, and the transform sees the durable history only', async () => {
     const order: string[] = [];
     let transformSaw: readonly ModelMessage[] = [];
+
     const extensions = new ExtensionHost().register({
       name: 'test.probe',
       onTurnStart: () => { order.push('turn-start'); },
       transformContext: async (ctx) => {
         order.push('transform');
         transformSaw = ctx.messages;
+
         return undefined;
       },
     });
+
     await assembleTurnMessages({
       ...base(),
       extensions,
@@ -54,15 +57,18 @@ describe('assembleTurnMessages', () => {
 
   test('the turn-local tail lands last, on the TRANSFORMED history', async () => {
     const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }];
+
     const extensions = new ExtensionHost().register({
       name: 'test.compact',
       transformContext: async () => compacted,
     });
+
     const out = await assembleTurnMessages({
       ...base(),
       extensions,
       turnLocal: [{ role: 'user', content: 'turn-local' }],
     });
+
     expect(out).toEqual([...compacted, { role: 'user', content: 'turn-local' }]);
   });
 
@@ -73,11 +79,13 @@ describe('assembleTurnMessages', () => {
       ...base(),
       turnLocal: [{ role: 'user', content: 'turn-local' }],
     });
+
     expect(JSON.stringify(out)).not.toContain('<dynamic_context');
   });
 
   test('the transform receives sessionKey, window, trigger, and the measured token signal', async () => {
     const seen: Array<{ sessionKey: string; contextWindow: number; trigger: string; providerReportedTokens?: number }> = [];
+
     const extensions = new ExtensionHost().register({
       name: 'test.ctx',
       transformContext: async (ctx) => {
@@ -85,9 +93,11 @@ describe('assembleTurnMessages', () => {
           sessionKey: ctx.sessionKey, contextWindow: ctx.contextWindow, trigger: ctx.trigger,
           providerReportedTokens: ctx.providerReportedTokens,
         });
+
         return undefined;
       },
     });
+
     await assembleTurnMessages({ ...base(), extensions, providerReportedTokens: 1234, trigger: 'force' });
     expect(seen[0]).toEqual({ sessionKey: 'k', contextWindow: 200_000, trigger: 'force', providerReportedTokens: 1234 });
   });
@@ -99,11 +109,18 @@ describe('assembleTurnMessages', () => {
         { type: 'text', text: 'read this' },
       ] },
     ];
+
     let transformSaw: readonly ModelMessage[] = [];
+
     const extensions = new ExtensionHost().register({
       name: 'test.sanitize-order',
-      transformContext: async (ctx) => { transformSaw = ctx.messages; return undefined; },
+      transformContext: async (ctx) => {
+        transformSaw = ctx.messages;
+
+        return undefined;
+      },
     });
+
     const out = await assembleTurnMessages({
       ...base(),
       history: withFile,
@@ -112,6 +129,7 @@ describe('assembleTurnMessages', () => {
       // attachments at all, which is what strips the PDF below.
       attachments: { accepts: new Set<MediaModality>(), vfs: createMemoryVFS(new Database(':memory:')) },
     });
+
     expect(out.length).toBe(1);
     // The transform saw the sanitized message, not the raw PDF part.
     expect(JSON.stringify(transformSaw)).not.toContain('base64,AAAA');
@@ -126,17 +144,20 @@ describe('measureCompactionTrigger', () => {
   function reader(tokens: number | null, armed: boolean) {
     const asked: Array<{ key: string; length: number }> = [];
     let flag = armed;
+
     return {
       asked,
       takes: 0,
       loadPromptTokens(key: string, length: number): number | null {
         asked.push({ key, length });
+
         return tokens;
       },
       takeForceCompaction(): boolean {
         this.takes += 1;
         const was = flag;
         flag = false;
+
         return was;
       },
     };

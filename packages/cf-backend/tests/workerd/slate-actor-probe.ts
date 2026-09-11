@@ -51,7 +51,9 @@ export { OrchestratorAgent } from '../../src/orchestrator';
 export class CodemodeEgress extends ProductionEgress {
   override async fetch(): Promise<Response> { return new Response('network allowed'); }
 }
+
 type ProbeEnv = ConstructorParameters<typeof ProductionOrchestrator>[1];
+
 export type SlateActorFamily = 'subordinate' | 'exploration';
 
 export class SlateActorProbeRoot extends Agent<ProbeEnv> {
@@ -90,16 +92,19 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
     // and read its own WeakMap, so the call returns the registry answer a live
     // instance returns. That one member is all this receiver is used for.
     const browserCallable = (Object.create(ProductionOrchestrator.prototype) as Agent<never>).getCallableMethods().has('slateBindingDispatch');
+
     return { answer, browserCallable };
   }
 
   async code(mode: WorkMode, code: string): Promise<{ answer: string; file: string }> {
     const files = new SqliteVFS(this.ctx.storage.sql, this.ctx).as(CRED_SESSION_USER);
     files.mkdir('/home/user', { recursive: true });
+
     if (!files.exists('/home/user/plan-data.txt')) files.writeFile('/home/user/plan-data.txt', 'original');
     const sql = bindAgentSql(this);
     this.ctx.storage.sql.exec('CREATE TABLE IF NOT EXISTS crafted_tools(name TEXT, score REAL, last_used_at INTEGER)');
     initCodemodeStateTable((statement) => { this.ctx.storage.sql.exec(statement); });
+
     const factory = createExecuteToolsFactory({
       loader: this.env.LOADER, egress: codemodeEgress(), sql, workspace: 'mode-probe',
       webSearch: createDefaultWebSearchProvider({ fetch }),
@@ -113,15 +118,22 @@ export class SlateActorProbeRoot extends Agent<ProbeEnv> {
           name: 'workspace', positionalArgs: true,
           tools: {
             readFile: { planAllowed: true, description: 'Read the fixture file', execute: async () => files.readFileString('/home/user/plan-data.txt') },
-            writeFile: { description: 'Modify the fixture file', execute: async () => { files.writeFile('/home/user/plan-data.txt', 'changed'); return 'written'; } },
+            writeFile: { description: 'Modify the fixture file', execute: async () => {
+              files.writeFile('/home/user/plan-data.txt', 'changed');
+
+              return 'written';
+            } },
           },
         }] },
       },
     });
+
     const tool = toolsInWorkMode(mode, { execute_tools: factory.toolFor({}) }).execute_tools;
     const execute = tool?.execute;
+
     if (execute === undefined) throw new Error('No callable codemode tool');
     const answer = await execute({ code }, { toolCallId: 'mode-probe', messages: [] });
+
     return { answer: JSON.stringify(answer ?? null), file: files.readFileString('/home/user/plan-data.txt') };
   }
 }

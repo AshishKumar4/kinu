@@ -6,6 +6,7 @@ import * as v from 'valibot';
 import { parseWorkerOutput } from './bench-worker-protocol';
 
 const REPO_ROOT = join(import.meta.dir, '..');
+
 const scratch: string[] = [];
 
 afterAll(() => {
@@ -32,7 +33,9 @@ function completion(model: string): Response {
       choices: [], usage: { prompt_tokens: 8, completion_tokens: 1, total_tokens: 9 },
     },
   ];
+
   const body = `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('')}data: [DONE]\n\n`;
+
   return new Response(body, { headers: { 'content-type': 'text/event-stream' } });
 }
 
@@ -48,15 +51,18 @@ async function runWorker(verifierRetry: boolean): Promise<{
   const requests: Array<v.InferOutput<typeof RequestSchema>> = [];
   const authorizations: Array<string | null> = [];
   const model = '@cf/zai-org/glm-5.2';
+
   const upstream = Bun.serve({
     port: 0,
     async fetch(request) {
       authorizations.push(request.headers.get('authorization'));
       const decoded = v.parse(RequestSchema, await request.json());
       requests.push(decoded);
+
       return completion(model);
     },
   });
+
   try {
     const input = {
       agentDir: join(home, 'pi-agent'),
@@ -76,6 +82,7 @@ async function runWorker(verifierRetry: boolean): Promise<{
       repoRoot: REPO_ROOT,
       verifierRetry,
     };
+
     const proc = Bun.spawn(['bun', join(REPO_ROOT, 'scripts', 'bench-pi-worker.ts')], {
       cwd: dir,
       env: { ...process.env, HOME: home, KINU_HOME: home },
@@ -83,12 +90,16 @@ async function runWorker(verifierRetry: boolean): Promise<{
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     const [stdout, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text(),
     ]);
+
     await proc.exited;
+
     if (proc.exitCode !== 0) throw new Error(`Pi worker exited ${proc.exitCode}: ${stderr}`);
+
     return { output: parseWorkerOutput(stdout.trim()), requests, authorizations };
   } finally {
     await upstream.stop(true);
@@ -109,9 +120,11 @@ describe('official Pi baseline worker', () => {
     const result = await runWorker(true);
     expect(result.output).toMatchObject({ tokens: 18, steps: 2, modelCalls: 2, hadError: false });
     expect(result.requests).toHaveLength(2);
+
     const retryMessages = result.requests[1]!.messages
       .filter((message) => message.role === 'user')
       .map((message) => JSON.stringify(message.content));
+
     expect(retryMessages.some((message) => message.includes('machine verifier still fails'))).toBe(true);
   });
 });

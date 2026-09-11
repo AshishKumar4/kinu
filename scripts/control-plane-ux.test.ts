@@ -36,7 +36,9 @@ interface CannedAnswer {
 }
 
 const OPERATOR = 'ops@kinu.run';
+
 const USER_ID = 'a'.repeat(32);
+
 const OTHER_ID = 'b'.repeat(32);
 
 /**
@@ -81,32 +83,43 @@ async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe>
   await browserPage.setRequestInterception(true);
   browserPage.on('request', async (request: HTTPRequest) => {
     const url = new URL(request.url());
+
     if (!url.pathname.startsWith('/api/control/')) {
       await request.continue();
+
       return;
     }
+
     if (request.method() === 'POST') {
       const body = request.postData();
+
       if (body !== undefined) probe.posted.push(v.parse(JsonValueSchema, JSON.parse(body)));
     }
+
     probe.asked.push(url.pathname + url.search);
     const suffix = url.pathname.replace('/api/control/', '');
+
     // Longest declared prefix wins, so `users/<id>` beats `users`.
     const key = Object.keys(fixture)
       .filter((candidate) => suffix === candidate || suffix.startsWith(`${candidate}/`))
       .sort((a, b) => b.length - a.length)[0];
+
     const answer = key === undefined ? undefined : fixture[key];
+
     if (answer === undefined) {
       await request.respond({
         status: 404, contentType: 'application/json', body: JSON.stringify({ error: 'Not found' }),
       });
+
       return;
     }
+
     const { status, body } = await answer(url);
     await request.respond({
       status, contentType: 'application/json', body: JSON.stringify(body),
     });
   });
+
   return probe;
 }
 
@@ -120,7 +133,9 @@ async function serveControl(browserPage: Page, fixture: Fixture): Promise<Probe>
  */
 function headingFor(tab: string): string {
   const heading = Object.entries(TAB_HEADINGS).find(([label]) => label === tab)?.[1];
+
   if (heading === undefined) throw new Error(`no heading declared for control tab ${tab}`);
+
   return heading;
 }
 
@@ -128,14 +143,18 @@ async function openControl(
   browserPage: Page, origin: string, tab = 'overview',
 ): Promise<void> {
   await browserPage.goto(`${origin}/gallery.html?frame=control`, { waitUntil: 'networkidle0' });
+
   if (tab !== 'overview') {
     const clicked = await browserPage.evaluate((label: string) => {
       const button = [...document.querySelectorAll('nav button')]
         .find((node) => node.textContent?.trim() === label);
+
       if (!(button instanceof HTMLElement)) return false;
       button.click();
+
       return true;
     }, tab);
+
     // A tab that was not found is a failure here, not later: the alternative is a
     // test that reads the OVERVIEW body and reports a missing string from the tab
     // it never opened, which is the least useful failure a browser test can give.
@@ -237,8 +256,10 @@ async function clickButton(browserPage: Page, label: string): Promise<boolean> {
   return await browserPage.evaluate((wanted: string) => {
     const button = [...document.querySelectorAll('button')]
       .find((node) => node.textContent?.trim() === wanted && !node.hasAttribute('disabled'));
+
     if (!(button instanceof HTMLElement)) return false;
     button.click();
+
     return true;
   }, label);
 }
@@ -267,13 +288,18 @@ async function confirmControl(
   browserPage: Page, open: string, answer: string,
 ): Promise<string> {
   await waitForEnabled(browserPage, open);
+
   if (!await clickButton(browserPage, open)) throw new Error(`no enabled control labelled ${open}`);
   await browserPage.waitForSelector('[role="dialog"]', { timeout: 15_000 });
+
   const shown = await browserPage.evaluate(() =>
     document.querySelector('[role="dialog"]')?.textContent ?? '');
+
   await waitForEnabled(browserPage, answer);
+
   if (!await clickButton(browserPage, answer)) throw new Error(`the ${open} dialog offered no ${answer}`);
   await browserPage.waitForSelector('[role="dialog"]', { hidden: true, timeout: 15_000 });
+
   return shown;
 }
 
@@ -336,9 +362,11 @@ describe('the control plane in a browser', () => {
 
       const text = await browserPage.evaluate(() => document.body.innerText);
       expect(text).toContain('fresh sign-in');
+
       // The remedy has to be reachable, or the message is just an apology.
       const href = await browserPage.evaluate(() =>
         [...document.querySelectorAll('a')].map((a) => a.getAttribute('href')));
+
       expect(href).toContain('/login');
       await browserPage.close();
     });
@@ -380,13 +408,17 @@ describe('the control plane in a browser', () => {
       browserPage.on('request', async (request: HTTPRequest) => {
         if (!new URL(request.url()).pathname.startsWith('/api/control/')) {
           await request.continue();
+
           return;
         }
+
         if (!serveOk) {
           refused += 1;
           await request.abort('connectionrefused');
+
           return;
         }
+
         await request.respond({
           status: 200, contentType: 'application/json', body: JSON.stringify(OVERVIEW),
         });
@@ -406,6 +438,7 @@ describe('the control plane in a browser', () => {
       await diagnosticsSettled(diagnostics, refused);
       expect(refused).toBeGreaterThanOrEqual(1);
       expect(diagnostics).toHaveLength(refused);
+
       for (const line of diagnostics) {
         expect(line.event).toBe('control.read_failed');
         expect(line.code).toBe('io');
@@ -429,6 +462,7 @@ describe('the control plane in a browser', () => {
   test('the account list is walkable: the cursor the server issued comes back', async () => {
     await withGallery(async ({ browser, origin }) => {
       const browserPage = await browser.newPage();
+
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         users: (url) => url.searchParams.get('cursor') === null
@@ -442,6 +476,7 @@ describe('the control plane in a browser', () => {
             items: [userRow(OTHER_ID, 'later@example.com', 2_000)],
           }),
       });
+
       await openControl(browserPage, origin, 'Users');
 
       expect(await browserPage.evaluate(() => document.body.innerText)).toContain(OPERATOR);
@@ -449,6 +484,7 @@ describe('the control plane in a browser', () => {
       await browserPage.evaluate(() => {
         const next = [...document.querySelectorAll('button')]
           .find((node) => node.textContent?.includes('Next page'));
+
         if (next instanceof HTMLElement) next.click();
       });
       await browserPage.waitForNetworkIdle();
@@ -456,6 +492,7 @@ describe('the control plane in a browser', () => {
       const text = await browserPage.evaluate(() => document.body.innerText);
       expect(text).toContain('later@example.com');
       expect(text).toContain('end of list');
+
       // The page asked for exactly TWO distinct reads: one with no cursor, and
       // one carrying the cursor the first answer issued. Asserted as a SET, not a
       // call count, because the gallery mounts under `StrictMode` and a repeated
@@ -465,6 +502,7 @@ describe('the control plane in a browser', () => {
       const walk = new Set(probe.asked
         .filter((path) => path.startsWith('/api/control/users'))
         .map((path) => new URL(path, 'https://x').searchParams.get('cursor') ?? 'first'));
+
       expect(walk).toEqual(new Set(['first', `3000\u0000${USER_ID}`]));
       await browserPage.close();
     });
@@ -474,16 +512,20 @@ describe('the control plane in a browser', () => {
     await withGallery(async ({ browser, origin }) => {
       const browserPage = await browser.newPage();
       const rowsReady = Promise.withResolvers<void>();
+
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         workspaces: async (url) => {
           if (url.pathname.endsWith('/workspaces')) {
             await rowsReady.promise;
+
             return answer(200, { status: 'end', items: [workspaceRow()] });
           }
+
           return answer(200, detailBody({ executors: { status: 'failed', reason: 'the sandbox is not reachable' } }));
         },
       });
+
       await openControl(browserPage, origin, 'Workspaces');
       const opened = openWorkspaceRow(browserPage);
       // Let the click attempt run while the list response is still held.
@@ -551,6 +593,7 @@ describe('the control plane in a browser', () => {
   test('every job and approval control sends its action, bound to the owning account', async () => {
     await withGallery(async ({ browser, origin }) => {
       const browserPage = await browser.newPage();
+
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         workspaces: (url) => url.pathname.endsWith('/workspaces')
@@ -561,6 +604,7 @@ describe('the control plane in a browser', () => {
           })),
         actions: page(200, { outcome: 'ok', detail: 'done' }),
       });
+
       await openControl(browserPage, origin, 'Workspaces');
       await openWorkspaceRow(browserPage);
 
@@ -595,6 +639,7 @@ describe('the control plane in a browser', () => {
   test('the two workspace-wide controls also confirm before they act', async () => {
     await withGallery(async ({ browser, origin }) => {
       const browserPage = await browser.newPage();
+
       const probe = await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         workspaces: (url) => url.pathname.endsWith('/workspaces')
@@ -602,6 +647,7 @@ describe('the control plane in a browser', () => {
           : answer(200, detailBody({})),
         actions: page(200, { outcome: 'ok', detail: 'done' }),
       });
+
       await openControl(browserPage, origin, 'Workspaces');
       await openWorkspaceRow(browserPage);
 
@@ -623,11 +669,13 @@ describe('the control plane in a browser', () => {
     // it had been reconciled against the registry.
     await withGallery(async ({ browser, origin }) => {
       const browserPage = await browser.newPage();
+
       const rows = Array.from({ length: 250 }, (_, i) => ({
         userId: OTHER_ID, email: 'owner@example.com',
         name: `w${String(i).padStart(3, '0')}`, displayName: `Workspace ${String(i)}`,
         createdAt: 1_000, lastSeenAt: 2_000_000 - i, removedAt: null,
       }));
+
       await serveControl(browserPage, {
         overview: page(200, OVERVIEW),
         users: page(200, { status: 'end', items: [userRow(OTHER_ID, 'owner@example.com', 3_000)] }),
@@ -636,6 +684,7 @@ describe('the control plane in a browser', () => {
           const start = cursor === null ? 0 : Number(cursor.split('\u0000')[1]);
           const slice = rows.slice(start, start + 200);
           const end = start + slice.length;
+
           return answer(200, {
             user: userRow(OTHER_ID, 'owner@example.com', 3_000),
             // The server reconciles only on the first page, because the
@@ -654,6 +703,7 @@ describe('the control plane in a browser', () => {
       await browserPage.evaluate(() => {
         const row = [...document.querySelectorAll('tbody tr')]
           .find((node) => node.textContent?.includes('owner@example.com'));
+
         if (row instanceof HTMLElement) row.click();
       });
       await browserPage.waitForNetworkIdle();

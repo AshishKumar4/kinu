@@ -54,6 +54,7 @@ function reportTwice(seen: string[]): NodeAgentDeps['model'] {
       const refused = text.includes(UNRUNNABLE);
       const accepted = text.includes('"received":true');
       seen.push(refused ? 'saw-refusal' : accepted ? 'saw-acceptance' : 'first');
+
       const content: LanguageModelV3Content[] = accepted
         ? [{ type: 'text', text: 'Reported.' }]
         : [{
@@ -65,6 +66,7 @@ function reportTwice(seen: string[]): NodeAgentDeps['model'] {
             content: refused ? 'function f(){ return 1 }' : 'functi0n f(){',
           }),
         }];
+
       return {
         content,
         finishReason: { unified: content[0]?.type === 'tool-call' ? 'tool-calls' as const : 'stop' as const, raw: undefined },
@@ -84,6 +86,7 @@ function reportOnceBroken(): NodeAgentDeps['model'] {
     modelId: 'fake-stubborn',
     doGenerate: ({ prompt }) => {
       const attempts = JSON.stringify(prompt).split(UNRUNNABLE).length - 1;
+
       const content: LanguageModelV3Content[] = attempts >= 2
         ? [{ type: 'text', text: 'I cannot fix it.' }]
         : [{
@@ -92,6 +95,7 @@ function reportOnceBroken(): NodeAgentDeps['model'] {
           toolName: 'report',
           input: JSON.stringify({ status: 'completed', content: 'functi0n f(){' }),
         }];
+
       return {
         content,
         finishReason: { unified: content[0]?.type === 'tool-call' ? 'tool-calls' as const : 'stop' as const, raw: undefined },
@@ -115,6 +119,7 @@ function fixture(over: {
   // The node's turn is a claimed turn on its OWN actor's session: one hosted
   // actor per node id, over this runtime's one database.
   const seats = hostedSeatsOver({ rt, db });
+
   const input: NodeAgentInput = {
     nodeId: 'n1', rootId: 'r1', parentId: null, depth: 1,
     task: 'Make the reference implementation cheaper.',
@@ -127,13 +132,16 @@ function fixture(over: {
     settle: 'best',
     arbitrate: null,
   };
+
   const deps: NodeAgentDeps = {
     hostNode: seats.hostNode, model: over.model, journal,
 
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
+
   if (over.gradeReport !== undefined) deps.gradeReport = over.gradeReport;
+
   return { input, deps };
 }
 
@@ -144,10 +152,12 @@ describe('the verifier blocks the report and answers the node', () => {
     // node long gone.
     const graded: string[] = [];
     const seen: string[] = [];
+
     const { input, deps } = fixture({
       model: reportTwice(seen),
       gradeReport: (candidate) => {
         graded.push(candidate);
+
         return Promise.resolve(candidate.includes('functi0n') ? UNRUNNABLE : null);
       },
     });

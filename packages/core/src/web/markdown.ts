@@ -54,8 +54,11 @@ export function htmlToMarkdown(html: string): string {
   // Links → [text](href).
   s = s.replace(/<a\b[^>]*?href=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href: string, inner: string) => {
     const text = stripTags(inner).trim();
+
     if (!text) return '';
+
     if (!href || href.startsWith('#') || href.startsWith('javascript:')) return text;
+
     return `[${text}](${href})`;
   });
 
@@ -92,8 +95,11 @@ export function stripTags(html: string): string {
 export function looksLikeHtml(text: string, contentType?: string): boolean {
   if (contentType) {
     const ct = contentType.toLowerCase();
+
     if (ct.includes('text/markdown') || ct.includes('text/plain')) return false;
+
     if (ct.includes('text/html') || ct.includes('application/xhtml')) return true;
   }
+
   return /<html[\s>]|<body[\s>]|<!doctype html/i.test(text.slice(0, 2000));
 }

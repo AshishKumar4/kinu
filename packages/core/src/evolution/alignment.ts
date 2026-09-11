@@ -102,6 +102,7 @@ export interface AlignmentConvergence {
 
 function rateInterval(negatives: number, turns: number): RateInterval {
   const { lo: low, hi: high } = wilsonInterval(negatives, turns);
+
   return {
     per100: turns > 0 ? (negatives / turns) * 100 : 0,
     lowPer100: low * 100,
@@ -137,6 +138,7 @@ function pool(segments: ReadonlyArray<AlignmentSegment>): AlignmentTotals {
   const sum = (pick: (s: AlignmentSegment) => number): number => segments.reduce((n, s) => n + pick(s), 0);
   const turns = sum((s) => s.turns);
   const negatives = sum((s) => s.negatives);
+
   return {
     turns,
     negatives,
@@ -162,13 +164,16 @@ function decideTrend(
   const reliable = segments.filter((s) => s.rate.reliable);
   const from = reliable[0];
   const to = reliable[reliable.length - 1];
+
   if (!from || !to || from === to) {
     return { trend: 'insufficient', deltaPer100: null, comparedVersions: null };
   }
+
   const trend: AlignmentTrend =
     to.rate.highPer100 < from.rate.lowPer100 ? 'improving'
     : to.rate.lowPer100 > from.rate.highPer100 ? 'worsening'
     : 'flat';
+
   return {
     trend,
     deltaPer100: to.rate.per100 - from.rate.per100,
@@ -178,15 +183,18 @@ function decideTrend(
 
 function buildNote(segments: ReadonlyArray<AlignmentSegment>, gradedTurns: number, trend: AlignmentTrend): string {
   if (gradedTurns === 0) return 'No graded turns recorded yet — K_align is undefined.';
+
   if (trend === 'insufficient') {
     return segments.some((s) => s.rate.reliable)
       ? 'Only one scaffold version has enough graded turns to read — there is no before/after to compare yet.'
       : `Too few graded turns to read a rate: every scaffold segment's 95% interval is wider than ` +
         `±${(RELIABLE_INTERVAL_WIDTH / 2) * 100} points per 100 turns. Nothing here is a signal yet.`;
   }
+
   if (trend === 'flat') {
     return 'The intervals overlap: no change is detectable at this sample size. That is not evidence of no change.';
   }
+
   return `The correction rate ${trend === 'improving' ? 'fell' : 'rose'} by more than both 95% intervals allow for chance.`;
 }
 
@@ -197,6 +205,7 @@ function buildNote(segments: ReadonlyArray<AlignmentSegment>, gradedTurns: numbe
  */
 export function alignmentConvergence(sql: SqlExecutor, actor: ActorHandle): AlignmentConvergence {
   actor.assertCurrent();
+
   // Asked rather than caught: a missing table is the one expected condition, and a catch
   // cannot tell it from a locked database — the doctrine's own named example.
   const rows: RawSegmentRow[] = tableExists(sql, 'turn_outcomes')
@@ -212,9 +221,11 @@ export function alignmentConvergence(sql: SqlExecutor, actor: ActorHandle): Alig
         WHERE actor_id = ${actor.actorId}
         GROUP BY scaffold_version`
     : [];
+
   const segments = rows.map(toSegment).sort((a, b) => a.firstAt - b.firstAt);
   const overall = pool(segments);
   const trend = decideTrend(segments);
+
   return { segments, overall, ...trend, note: buildNote(segments, overall.turns, trend.trend) };
 }
 
@@ -228,6 +239,7 @@ export function renderAlignmentConvergence(k: AlignmentConvergence): string {
   const delta = k.deltaPer100 === null ? '' :
     ` (${k.deltaPer100 > 0 ? '+' : ''}${k.deltaPer100.toFixed(1)} per 100 turns` +
     `${k.comparedVersions ? `, v${k.comparedVersions.from ?? '?'} → v${k.comparedVersions.to ?? '?'}` : ''})`;
+
   const lines = [
     'K_align — correction rate (corrected + frustrated), 95% Wilson intervals',
     `Overall: ${formatRate(k.overall.rate)} over ${k.overall.turns} user-graded turns` +
@@ -238,11 +250,14 @@ export function renderAlignmentConvergence(k: AlignmentConvergence): string {
     `Trend: ${k.trend}${delta}`,
     k.note,
   ];
+
   if (k.segments.length > 0) {
     lines.push('By scaffold version (oldest first):');
+
     for (const s of k.segments) {
       lines.push(`  v${s.scaffoldVersion ?? '?'}  n=${s.turns}  ${formatRate(s.rate)}`);
     }
   }
+
   return lines.join('\n');
 }

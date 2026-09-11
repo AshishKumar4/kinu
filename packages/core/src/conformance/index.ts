@@ -24,6 +24,7 @@ export {
   type ObservedSurface,
   type RootStatuses,
 } from './manifest';
+
 export {
   compareSurface,
   normalizeObservedTables,

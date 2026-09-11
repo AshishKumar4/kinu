@@ -51,6 +51,7 @@ export interface ChatOptions {
 `;
 
 const WIRED = `{ model: m, system: s, history: h, tools: t, extensions: host }`;
+
 const BARE = `{ model: m, system: s, history: h, tools: t }`;
 
 function surveyTurn(cf: string, cli: string) {
@@ -99,6 +100,7 @@ describe('a literal missing a required member is not the contract', () => {
       `const options = { ...base, model: m, extensions: host };`,
       `const options = ${WIRED};`,
     );
+
     expect(parity.skipped).toEqual(['ChatOptions']);
     expect(parity.asymmetries.map(keyOf)).toEqual([]);
   });

@@ -117,6 +117,7 @@ export class CraftCycle {
     const known = this.ledger.names();
     const before = this.seen;
     this.seen = new Set(known);
+
     if (isBackgroundOutcomeText(ctx.result)) return;
     const submitted = ctx.args.code;
     const parsedCode = v.safeParse(v.string(), submitted);
@@ -131,7 +132,9 @@ export class CraftCycle {
     }
 
     const sites = craftInvocationSites(code, known);
+
     if (sites.length === 0) return;
+
     for (const name of sites) this.invokedNames.add(name);
     this.usage.noteCraftedToolUse(sites);
 
@@ -141,12 +144,14 @@ export class CraftCycle {
     const blamed = craftFailureBlame(ctx.result, sites);
     this.raised += blamed.length;
     this.record(blamed, CRAFT_INVOCATION_QUALITY.raised);
+
     if (isFailingToolResult(ctx)) return;
 
     // Positive credit only for tools that already existed when the call
     // started: a tool cannot certify itself in the same breath that created it
     // (craft/in-episode.ts, property 2).
     const earned = sites.filter((name) => before.has(name) && !blamed.includes(name));
+
     for (const name of earned) if (this.crafted.has(name)) this.reused.add(name);
     this.returned += earned.length;
     this.record(earned, CRAFT_INVOCATION_QUALITY.returned);
@@ -154,6 +159,7 @@ export class CraftCycle {
 
   private record(names: readonly string[], quality: number): void {
     if (names.length === 0) return;
+
     for (const name of this.ledger.observe(names, quality)) this.dropped.add(name);
   }
 
@@ -162,6 +168,7 @@ export class CraftCycle {
    *  that did neither writes no row. */
   snapshot(): CraftCycleRecord | null {
     if (this.crafted.size === 0 && this.invokedNames.size === 0) return null;
+
     return {
       crafted: [...this.crafted],
       invoked: [...this.invokedNames],

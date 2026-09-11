@@ -11,11 +11,13 @@ import {
 function run(state: InputState, ...events: InputMachineEvent[]) {
   let current = state;
   const effects = [];
+
   for (const event of events) {
     const next = reduceInput(current, event);
     current = next.state;
     effects.push(...next.effects);
   }
+
   return { state: current, effects };
 }
 
@@ -92,6 +94,7 @@ describe('Esc / Esc-Esc state machine', () => {
       { type: 'queue', text: 'held follow-up' },
       { type: 'open-walkback' },
     );
+
     const settled = reduceInput(busy.state, { type: 'turn-settled' });
     expect(settled.state.walkbackOpen).toBe(true);
     const activeAgain = reduceInput(settled.state, { type: 'turn-start' });
@@ -109,10 +112,12 @@ describe('Esc / Esc-Esc state machine', () => {
 describe('queue ordering', () => {
   test('the queue shortcut stores drafts in FIFO order, one per settled turn', () => {
     const busy = run(initialInputState, { type: 'turn-start' });
+
     const queued = run(busy.state,
       { type: 'queue-shortcut', draft: 'first queued' },
       { type: 'queue-shortcut', draft: 'second queued' },
     );
+
     expect(queued.state.queue).toEqual(['first queued', 'second queued']);
     expect(queued.effects).toEqual([{ kind: 'clear-input' }, { kind: 'clear-input' }]);
 
@@ -142,6 +147,7 @@ describe('queue ordering', () => {
       { type: 'queue-shortcut', draft: 'keep' },
       { type: 'queue-shortcut', draft: 'edit me' },
     );
+
     const popped = reduceInput(busy.state, { type: 'backspace', draft: '' });
     expect(popped.effects).toEqual([{ kind: 'set-input', text: 'edit me' }]);
     expect(popped.state.queue).toEqual(['keep']);
@@ -158,6 +164,7 @@ describe('queue ordering', () => {
       { type: 'queue-shortcut', draft: 'next thing' },
       { type: 'queue-shortcut', draft: 'after that' },
     );
+
     const interrupted = reduceInput(busy.state, esc(1_000, { draft: 'half typed' }));
     expect(interrupted.effects).toEqual([
       { kind: 'interrupt' },
@@ -177,6 +184,7 @@ describe('queue ordering', () => {
       { type: 'queue-shortcut', draft: 'after both' },
       { type: 'turn-settled' },
     );
+
     expect(overlapped.effects.filter((effect) => effect.kind === 'send-queued')).toEqual([]);
     const drained = reduceInput(overlapped.state, { type: 'turn-settled' });
     expect(drained.effects).toEqual([{ kind: 'send-queued', text: 'after both' }]);

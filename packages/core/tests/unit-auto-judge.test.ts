@@ -24,6 +24,7 @@ const LIVE_OUTPUT = '<<live-answer>>';
 function judgePromptResponses(prompt: string): [string, string] {
   const head = '\nResponse A:\n', mid = '\n\nResponse B:\n', tail = '\n\nRespond with';
   const bMark = prompt.indexOf(mid);
+
   return [
     prompt.slice(prompt.indexOf(head) + head.length, bMark),
     prompt.slice(bMark + mid.length, prompt.indexOf(tail)),
@@ -45,10 +46,13 @@ function makeJudge(
     const [a] = judgePromptResponses(prompt);
     const currentSlot = a.includes(currentOutput) ? 'a' : 'b';
     const pendingSlot = currentSlot === 'a' ? 'b' : 'a';
+
     const verdict: JudgeOutput['winner'] =
       winner === 'current' ? currentSlot : winner === 'pending' ? pendingSlot : 'tie';
+
     const scoreFor = (slot: 'a' | 'b') =>
       slot === currentSlot ? (winner === 'current' ? 0.8 : 0.4) : (winner === 'pending' ? 0.8 : 0.4);
+
     return { winner: verdict, rationale, scoreA: scoreFor('a'), scoreB: scoreFor('b') };
   };
 }
@@ -71,6 +75,7 @@ async function setup(): Promise<ReturnType<typeof createTestRuntime>['rt']> {
   await rt.identity.scaffold.write(
     'async function* run(rt, task) { yield { type: "chunk", data: "current: " + task }; }',
   );
+
   return rt;
 }
 
@@ -79,11 +84,13 @@ describe('runAutoShadowEval', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
+
     const result = await runAutoShadowEval({
       rt, task: 'hello', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('current', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
     });
+
     expect(result.skipped).toBe(true);
     expect(result.reason).toBe('no_pending');
   });
@@ -92,12 +99,18 @@ describe('runAutoShadowEval', () => {
     const rt = await setup();
     const inner = makeJudge('pending', LIVE_OUTPUT);
     let judgeCalls = 0;
+
     const result = await runAutoShadowEval({
       rt, task: 'compute 2+2', currentOutput: LIVE_OUTPUT,
-      judge: async (prompt, schema) => { judgeCalls++; return inner(prompt, schema); },
+      judge: async (prompt, schema) => {
+        judgeCalls++;
+
+        return inner(prompt, schema);
+      },
       llmStream: noOpLlmStream,
       config: { autoApply: false },
     });
+
     expect(judgeCalls).toBe(2); // one call per presentation order
     expect(result.skipped).toBe(false);
     expect(result.evaluation?.winner).toBe('pending');
@@ -110,24 +123,28 @@ describe('runAutoShadowEval', () => {
 
   test('returns decision=continue when below minTrials', async () => {
     const rt = await setup();
+
     const result = await runAutoShadowEval({
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
       random: () => 0,
     });
+
     expect(result.decision).toBe('continue');
     expect(result.applied).toBeNull();
   });
 
   test('auto-applies when conclusive + autoApply=true', async () => {
     const rt = await setup();
+
     // Seed 5 prior pending wins so this 6th call crosses the promote threshold.
     for (let i = 0; i < 5; i++) {
       void rt.storage.sql`INSERT INTO scaffold_evaluations (actor_id, id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
         VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
+
     const result = await runAutoShadowEval({
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
@@ -135,6 +152,7 @@ describe('runAutoShadowEval', () => {
       config: { autoApply: true },
       random: () => 0,
     });
+
     expect(result.decision).toBe('promote');
     expect(result.applied).toBe('promote');
 
@@ -142,6 +160,7 @@ describe('runAutoShadowEval', () => {
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
+
     const map = new Map(statuses.map((s) => [s.version, s.status]));
     expect(map.get(1)).toBe('current');
     expect(map.get(0)).toBe('historical');
@@ -149,6 +168,7 @@ describe('runAutoShadowEval', () => {
 
   test('auto-applies ROLLBACK on regressions beyond tolerance (regression veto, end-to-end)', async () => {
     const rt = await setup();
+
     // Seed 5 pending wins + 1 loss (a strong 5-1 record, within the
     // maxRegressions=1 tolerance); this turn the judge picks 'current' again —
     // the SECOND regression must roll the pending back despite the 5-2 record
@@ -160,6 +180,7 @@ describe('runAutoShadowEval', () => {
          current_score, pending_score, winner, judge_rationale, evaluated_at)
         VALUES (${rt.actor.actorId}, ${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, ${winner}, 'seed', ${Date.now()})`;
     }
+
     const result = await runAutoShadowEval({
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('current', LIVE_OUTPUT), // the regression
@@ -167,12 +188,14 @@ describe('runAutoShadowEval', () => {
       config: { autoApply: true },
       random: () => 0,
     });
+
     expect(result.decision).toBe('rollback');
     expect(result.applied).toBe('rollback');
 
     const statuses = rt.storage.sql<{ version: number; status: string }>`
       SELECT version, status FROM scaffold_versions
       WHERE actor_id = ${rt.actor.actorId} ORDER BY version`;
+
     const map = new Map(statuses.map((s) => [s.version, s.status]));
     expect(map.get(0)).toBe('current');      // live scaffold unchanged
     expect(map.get(1)).toBe('rolled_back');  // bad pending discarded
@@ -200,11 +223,13 @@ describe('runAutoShadowEval', () => {
       llmStream: noOpLlmStream,
       random: () => 0,
     });
+
     expect(result.skipped).toBe(false);
 
     const row = rt.storage.sql<{ current_version: number; pending_version: number }>`
       SELECT current_version, pending_version FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId}`[0]!;
+
     expect(row.pending_version).toBe(3);
     expect(row.current_version).toBe(0); // the live status='current' row, NOT 2
   });
@@ -229,6 +254,7 @@ describe('runAutoShadowEval', () => {
       llmStream: noOpLlmStream,
       random: () => 0,
     });
+
     // One outcome, not two. This accepted BOTH — skipped with the reason, or
     // not skipped with an evaluation recorded — so the claim in the title was
     // undefended: a regression that stopped skipping and judged a missing
@@ -273,15 +299,18 @@ describe('runAutoShadowEval', () => {
       execute: async () => {
         await gate.promise;
         executorReleased = true;
+
         return { result: undefined };
       },
     };
+
     const evalPromise = runAutoShadowEval({
       rt, task: 'slow candidate', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
       random: () => 0,
     });
+
     await Promise.resolve();
     let settled = false;
     const settledPromise = evalPromise.then(() => { settled = true; });
@@ -307,9 +336,14 @@ describe('order-swapped double-win judging', () => {
   /** Records every prompt the judge saw and answers with a fixed slot. */
   function recordingJudge(answer: (call: number) => JudgeOutput): RecordingJudge {
     const prompts: string[] = [];
+
     return {
       prompts,
-      fn: async (prompt) => { prompts.push(prompt); return answer(prompts.length - 1); },
+      fn: async (prompt) => {
+        prompts.push(prompt);
+
+        return answer(prompts.length - 1);
+      },
     };
   }
 
@@ -317,6 +351,7 @@ describe('order-swapped double-win judging', () => {
    *  order of the FIRST call (< 0.5 → pending first). */
   async function runTrial(judge: StructuredJudgeFn, orderRoll: number) {
     const rt = await setup();
+
     return runAutoShadowEval({
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge,
@@ -343,6 +378,7 @@ describe('order-swapped double-win judging', () => {
     // The floor: a containment claim over an empty set is true of nothing, so a
     // trial that never reached the judge would satisfy every line below.
     expect(judge.prompts).toHaveLength(2);
+
     for (const prompt of judge.prompts) {
       expect(prompt).not.toContain('CURRENT');
       expect(prompt).not.toContain('PENDING');
@@ -391,6 +427,7 @@ describe('order-swapped double-win judging', () => {
     const judge = recordingJudge((call) => call === 0
       ? { winner: 'a', rationale: 'first', scoreA: 0.8, scoreB: 0.4 }
       : { winner: 'tie', rationale: 'second', scoreA: 0.6, scoreB: 0.6 });
+
     const result = await runTrial(judge.fn, 0);
     expect(result.evaluation?.winner).toBe('tie');
     expect(result.evaluation?.rationale).not.toContain('Order-swap flip');
@@ -404,9 +441,11 @@ describe('order-swapped double-win judging', () => {
       llmStream: noOpLlmStream,
       random: () => 0,
     });
+
     const row = rt.storage.sql<{ winner: string; current_score: number; pending_score: number }>`
       SELECT winner, current_score, pending_score FROM scaffold_evaluations
       WHERE actor_id = ${rt.actor.actorId}`[0]!;
+
     expect(row.winner).toBe('pending');
     expect(row.pending_score).toBe(0.8);
     expect(row.current_score).toBe(0.4);

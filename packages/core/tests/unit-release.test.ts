@@ -37,6 +37,7 @@ describe('release lifecycle', () => {
   test('rejects applying a release change before owner approval', () => {
     const result = assertReleaseTransition('preview_ready', 'applying');
     expect(result.ok).toBe(false);
+
     if (!result.ok) expect(result.error).toContain('not allowed');
   });
 });
@@ -93,6 +94,7 @@ describe('release sql store', () => {
     const db = new Database(':memory:');
     const exec = makeExec(db);
     initReleaseTables(exec);
+
     const store = createReleaseStore(releaseSqlFromExec(exec), {
       now: () => 1700000000000,
       id: (prefix, size) => `${prefix}-${size}`,
@@ -138,6 +140,7 @@ describe('release authority', () => {
     const db = new Database(':memory:');
     const exec = makeExec(db);
     initReleaseTables(exec);
+
     return createReleaseStore(releaseSqlFromExec(exec));
   }
 

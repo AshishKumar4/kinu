@@ -13,7 +13,9 @@ export const PATTERN_CATEGORIES = {
   scanner: 'CANDIDATE: a named scanner combines iteration with string slicing. Review its input grammar.',
   shell: 'NECESSARY: a shell pattern command selects or transforms command output. Structured inputs need review.',
 };
+
 export type PatternCategory = keyof typeof PATTERN_CATEGORIES;
+
 export interface PatternSite {
   readonly file: string;
   readonly line: number;
@@ -24,7 +26,9 @@ export interface PatternSite {
 }
 
 const CODE_PATTERN = /(?:\^.*\b(?:import|export|function|class|interface)\b|\b(?:import|export|require|function|interface)\\[s(]|<a\[|<[^>]+>)/;
+
 const SCANNER_NAME = /^(?:parse|scan|strip|tokenize|lex|extract|split|decode)/i;
+
 const STRING_OPERATIONS = {
   slice: true, split: true, charAt: true, charCodeAt: true, indexOf: true,
 } satisfies Readonly<Record<string, true>>;
@@ -34,31 +38,41 @@ export function inventoryJavaScript(file: string, source: string): PatternSite[]
   const sites: PatternSite[] = [];
   walk(tree.root, node => {
     const pattern = regexPattern(node);
+
     if (pattern !== undefined) {
       sites.push({ file, line: tree.lineAt(node.start), kind: 'regex-literal', owner: ownerName(node) ?? '<module>',
         source: source.slice(node.start, node.end), category: CODE_PATTERN.test(pattern) ? 'code' : 'lexical' });
+
       return;
     }
+
     const raw = node.raw;
+
     if ((raw.type === 'NewExpression' || raw.type === 'CallExpression')
       && raw.callee.type === 'Identifier' && raw.callee.name === 'RegExp') {
       sites.push({ file, line: tree.lineAt(node.start), kind: 'regexp-constructor', owner: ownerName(node) ?? '<module>',
         source: source.slice(node.start, node.end), category: /\b(?:import|export|require|function|class|interface)\b/.test(source.slice(node.start, node.end)) ? 'code' : 'composition' });
     }
+
     if (raw.type !== 'FunctionDeclaration' && raw.type !== 'FunctionExpression' && raw.type !== 'ArrowFunctionExpression') return;
     const name = declaredName(node) ?? ownerName(node) ?? '<anonymous>';
+
     if (!SCANNER_NAME.test(name)) return;
     let loop = false;
     let slicing = false;
     walk(node, child => {
       if (child.type === 'ForStatement' || child.type === 'WhileStatement' || child.type === 'ForOfStatement') loop = true;
+
       if (child.raw.type === 'MemberExpression' && child.raw.computed) slicing = true;
       const operation = memberCalleeName(child);
+
       if (operation !== undefined && Object.hasOwn(STRING_OPERATIONS, operation)) slicing = true;
     });
+
     if (loop && slicing) sites.push({ file, line: tree.lineAt(node.start), kind: 'hand-parser', owner: name,
       source: source.slice(node.start, node.end), category: 'scanner' });
   });
+
   return sites;
 }
 
@@ -93,6 +107,7 @@ for file, text in json.load(sys.stdin):
     Scan().visit(tree)
 print(json.dumps(rows))
 `;
+
 const SiteSchema = v.object({
   file: v.string(), line: v.number(), kind: v.string(), owner: v.string(), source: v.string(),
   category: v.picklist(['lexical', 'composition', 'code', 'scanner', 'shell']),
@@ -115,10 +130,12 @@ export const PATTERN_REVIEWS = {
   schema: 'DEFERRED: reads a restricted DDL corpus without executing it. Replacing it with SQLite changes validation and side effects; preserve the schema gate contract first.',
   protected: 'DEFERRED: layergate and devbox are explicit non-goals. The inventory includes their candidates without changing their checks.',
 };
+
 const ReviewedSiteSchema = v.object({
   file: v.string(), kind: v.string(), owner: v.string(), sourceSha256: v.string(),
   decision: v.picklist(Object.keys(PATTERN_REVIEWS)),
 });
+
 type PatternReview = v.InferOutput<typeof ReviewedSiteSchema>;
 
 function sourceHash(source: string): string {
@@ -133,9 +150,11 @@ export function buildPatternInventory(corpus: ReadonlyMap<string, string>, revie
   const sites: PatternSite[] = [];
   const python: [string, string][] = [];
   const measured: string[] = [];
+
   for (const [file, source] of corpus) {
     if (!isPatternSource(file)) throw new Error(`outside the pattern source set: ${file}`);
     measured.push(file);
+
     if (isParseable(file)) sites.push(...inventoryJavaScript(file, source));
     else if (file.endsWith('.py')) python.push([file, source]);
     else {
@@ -146,16 +165,21 @@ export function buildPatternInventory(corpus: ReadonlyMap<string, string>, revie
       }
     }
   }
+
   if (python.length > 0) sites.push(...v.parse(v.array(SiteSchema), JSON.parse(execFileSync('python3', ['-c', PYTHON_SCANNER], {
     input: JSON.stringify(python), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
   }))));
   sites.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.kind.localeCompare(b.kind));
   const counts = { lexical: 0, composition: 0, code: 0, scanner: 0, shell: 0 };
+
   for (const site of sites) counts[site.category]++;
   const reviewed = new Map<string, string>();
+
   for (const review of reviews) reviewed.set(reviewKey(review, review.sourceSha256), review.decision);
+
   const candidates = sites.filter(site => site.category === 'code' || site.category === 'scanner')
     .map(site => ({ ...site, decision: reviewed.get(reviewKey(site, sourceHash(site.source))) ?? null }));
+
   return { measured: measured.sort(), categories: PATTERN_CATEGORIES, reviews: PATTERN_REVIEWS, counts, sites, candidates };
 }
 
@@ -165,14 +189,18 @@ function located<TSite extends PatternSite>({ source, ...fields }: TSite) {
 
 if (import.meta.main) {
   const corpus = readMatching(isPatternSource);
+
   const recorded = v.parse(v.object({ candidates: v.array(ReviewedSiteSchema) }),
     JSON.parse(readFileSync(new URL('./pattern-inventory.json', import.meta.url), 'utf8')));
+
   const result = buildPatternInventory(corpus, recorded.candidates);
   const governed = trackedFiles().filter(isPatternSource).sort();
   assert.deepEqual(result.measured, governed);
   assert.ok(result.sites.length > 0 && result.counts.composition > 0, 'pattern census is empty');
   const pending = result.candidates.filter(site => site.decision === null);
+
   for (const site of pending) process.stderr.write(`${site.file}:${site.line} ${site.owner}: ${site.kind}\n`);
+
   const replacements = [{ file: 'packages/cli-backend/src/executor.ts', owner: 'createSandboxedExecutor',
       classification: 'REPLACED', replacement: 'Package-owned @cloudflare/codemode/normalize through typed local runtime adapters',
       proof: 'bun test packages/cli-backend/tests/executor.test.ts packages/cli-backend/tests/execute-tools-factory.test.ts' },
@@ -185,15 +213,18 @@ if (import.meta.main) {
     { file: 'scripts/bench-devbox-strategies.ts', owner: 'parseOptions', classification: 'REPLACED',
       replacement: 'node:util.parseArgs tokenizes declared options; benchmark domain validation remains local',
       proof: 'bun test scripts/bench-restore-probe.test.ts --test-name-pattern "refuses at parse time and names G3|an armed decisive parse succeeds"' }];
+
   if (process.argv.includes('--write') && pending.length === 0) writeFileSync(new URL('./pattern-inventory.json', import.meta.url), `${JSON.stringify({
     candidates: result.candidates.map(({ file, kind, owner, source, decision }) => ({
       file, kind, owner, sourceSha256: sourceHash(source), decision,
     })),
   }, null, 2)}\n`);
+
   if (process.argv.includes('--json')) {
     process.stdout.write(`${JSON.stringify({ ...result, sites: result.sites.map(located), candidates: result.candidates.map(located), replacements }, null, 2)}\n`);
   } else {
     process.stdout.write(`pattern-inventory: ${result.measured.length} measured = ${governed.length} governed files; ${result.sites.length} sites; ${JSON.stringify(result.counts)}; ${result.candidates.length} candidates; ${pending.length} unreviewed; ${replacements.length} parsers replaced. Blind spots: runtime aliases of RegExp, implicit regex coercion, unnamed scanners, other native languages, and vendored agent-core output. Python uses its AST; shell entries identify whole pattern commands, not each embedded language token. Classification is syntactic. A review matches only unchanged source bytes, file, owner and kind; changed dependencies or surrounding semantics need human review. Review decisions in the artifact remain author assertions. --json emits the complete current inventory.\n`);
   }
+
   if (pending.length > 0) process.exitCode = 1;
 }

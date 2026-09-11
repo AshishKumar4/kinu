@@ -6,11 +6,19 @@ async function serveSlate(page: Page): Promise<void> {
   await page.setRequestInterception(true);
   page.on('request', async (request) => {
     const url = new URL(request.url());
-    if (!url.hostname.endsWith('.preview.example.test')) { await request.continue(); return; }
-    if (url.pathname === '/ping') {
-      await request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ message: 'served by the slate' }) });
+
+    if (!url.hostname.endsWith('.preview.example.test')) {
+      await request.continue();
+
       return;
     }
+
+    if (url.pathname === '/ping') {
+      await request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ message: 'served by the slate' }) });
+
+      return;
+    }
+
     await request.respond({ status: 200, contentType: 'text/html', body: [
       '<!doctype html><p data-slate-preview>pending</p><script>',
       'fetch("/ping").then(r => r.json()).then(value => { document.querySelector("p").textContent = value.message; })',
@@ -22,6 +30,7 @@ async function serveSlate(page: Page): Promise<void> {
 
 async function selectPlan(page: Page, label: string): Promise<void> {
   const value = await page.$eval('[aria-label="Plan history"]', (element, text) => [...element.querySelectorAll('option')].find(option => option.textContent?.includes(text))?.value, label);
+
   if (!value) throw new Error('Missing plan: ' + label);
   await page.select('[aria-label="Plan history"]', value);
 }
@@ -44,20 +53,27 @@ describe('the Slate preview frame', () => {
     await withGallery(async ({ browser, origin }) => {
       const page = await browser.newPage();
       page.setDefaultTimeout(60_000);
+
       try {
         await serveSlate(page);
         await page.setViewport({ width: 720, height: 800 });
         await page.goto(`${origin}/gallery.html?frame=slate`, { waitUntil: 'networkidle0' });
         const frameElement = await page.waitForSelector('iframe');
+
         if (frameElement === null) throw new Error('Slate preview iframe did not mount');
         const frame = await frameElement.contentFrame();
+
         if (!frame) throw new Error('the Slate preview did not create an iframe context');
         await frame.waitForSelector('[data-slate-preview]', { timeout: 30_000 });
         expect(await frame.$eval('[data-slate-preview]', (element) => element.textContent))
           .toBe('served by the slate');
         expect(await frame.evaluate(() => {
           try { return window.parent.document.title; }
-          catch (cause) { if (!(cause instanceof DOMException)) throw cause; return cause.name; }
+          catch (cause) {
+            if (!(cause instanceof DOMException)) throw cause;
+
+            return cause.name;
+          }
         })).toBe('SecurityError');
       } finally {
         await page.close();
@@ -69,6 +85,7 @@ describe('the Slate preview frame', () => {
     await withGallery(async ({ browser, origin }) => {
       const page = await browser.newPage();
       page.setDefaultTimeout(60_000);
+
       try {
         await serveSlate(page);
         await page.setViewport({ width: 720, height: 800 });
@@ -90,23 +107,30 @@ describe('the Slate preview frame', () => {
 test('preview tabs lead the strip from its left edge and the frame keeps two controls', async () => {
   await withGallery(async ({ browser, origin }) => {
     const page = await browser.newPage();
+
     try {
       await serveSlate(page);
+
       for (const width of [1100, 390]) {
         await page.setViewport({ width, height: 850 });
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
         await page.waitForSelector('[aria-label="Dashboard"]');
+
         const strip = await page.$eval('[aria-label="Dashboard"]', (first) => {
           const box = first.parentElement;
+
           if (!(box instanceof HTMLElement)) throw new Error('the tab strip is not an element');
           // Offsets inside the strip's own scrollable content. A phone-width
           // strip is a scroller that brings the current tab into view, so a
           // viewport-relative left would measure the scroll, not the layout.
           const origin = box.getBoundingClientRect().left - box.scrollLeft;
+
           const tabs = [...box.querySelectorAll<HTMLElement>('button')]
             .map((tab) => ({ name: tab.getAttribute('aria-label'), left: tab.getBoundingClientRect().left - origin }));
+
           return { padding: parseFloat(getComputedStyle(box).paddingLeft), tabs };
         });
+
         // Flush with the strip's own content edge: not centred, not indented,
         // and ahead of the fixed surfaces rather than behind them.
         expect(strip.tabs[0]?.name).toBe('Dashboard');
@@ -118,17 +142,22 @@ test('preview tabs lead the strip from its left edge and the frame keeps two con
 
         await page.click('[aria-label="Dashboard"]');
         await page.waitForSelector('iframe');
+
         const chrome = await page.$eval('iframe', (frame) => {
           const header = frame.previousElementSibling;
+
           if (!(header instanceof HTMLElement)) throw new Error('the preview frame has no header');
           const url = header.querySelector('code');
+
           if (!(url instanceof HTMLElement)) throw new Error('the preview header shows no URL');
+
           return {
             offset: Math.round(url.getBoundingClientRect().left
               - (header.getBoundingClientRect().left + parseFloat(getComputedStyle(header).paddingLeft))),
             controls: [...header.querySelectorAll('button, a')].map((control) => control.getAttribute('title')),
           };
         });
+
         // The URL is the header's first thing, flush left — no indent, because
         // the tabs own the label it would otherwise be separated from.
         expect(chrome.offset).toBe(0);
@@ -142,8 +171,10 @@ test('preview tabs lead the strip from its left edge and the frame keeps two con
 test('preview tabs deduplicate live slates, fill the surface and keep plans in Work', async () => {
   await withGallery(async ({ browser, origin }) => {
     const page = await browser.newPage();
+
     try {
       await serveSlate(page);
+
       for (const width of [1100, 390]) {
         await page.setViewport({ width, height: 850 });
         await page.goto(`${origin}/gallery.html?frame=previewtabs`, { waitUntil: 'networkidle0' });
@@ -152,21 +183,26 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         expect(await page.$('[aria-label="Duplicate dashboard port"]')).toBeNull();
         expect(await page.$('[data-work-plans]')).toBeNull();
         expect(await page.$('[aria-label="Diffs"]')).toBeNull();
+
         for (const title of ['Dashboard', 'Sandbox app', 'Device app']) {
           await page.click(`[aria-label="${title}"]`);
           const iframe = await page.waitForSelector('iframe');
+
           if (!iframe) throw new Error('Preview missing');
           const frame = await iframe.contentFrame();
+
           if (!frame) throw new Error('Preview frame missing');
           await frame.waitForSelector('[data-slate-preview]');
           expect(await frame.$eval('[data-slate-preview]', el => el.textContent)).toBe('served by the slate');
           expect(await iframe.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThan(600);
         }
+
         await page.click('[data-new-plan]');
         await page.waitForSelector('[data-plan-review-root]');
         expect(await page.$eval('[aria-label="Work"]', el => el.getAttribute('aria-current'))).toBe('true');
         await page.evaluate(() => {
           const button = [...document.querySelectorAll('button')].find(el => el.textContent?.includes('Approve & implement'));
+
           if (!button) throw new Error('Approval missing');
           button.click();
         });
@@ -179,6 +215,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.click('[data-break-plans]');
         await page.waitForFunction(() => !document.querySelector('[data-work-plans]')?.textContent?.includes('Plan history temporarily unavailable'));
         const earlier = await page.$eval('[aria-label="Plan history"]', el => [...el.querySelectorAll('option')].find(option => option.textContent?.includes('Earlier'))?.value);
+
         if (!earlier) throw new Error('Earlier plan revision missing');
         await page.select('[aria-label="Plan history"]', earlier);
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Earlier'));
@@ -278,6 +315,7 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         // are both in its history, so what it opened on is settled.
         await page.waitForFunction(() => {
           const labels = [...document.querySelectorAll('[aria-label="Plan history"] option')].map(el => el.textContent ?? '');
+
           return labels.some(label => label.includes('Worker revision two')) && labels.some(label => label.includes('Courier rollout'));
         });
         await readCycleElapsed(page);

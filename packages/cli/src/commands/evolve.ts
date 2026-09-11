@@ -19,11 +19,14 @@ export async function evolveCommand(name: string, opts: {
   runMcts?: typeof runMCTS;
 }): Promise<void> {
   const configured = resolveAgentRef(name);
+
   if (configured?.mode === 'cloud') {
     console.log(`\n${DIM('Cloud workspace evolution runs in the Durable Object backend after turns.')}`);
     console.log(`${DIM('Use:')} ${ACCENT(`kinu run ${configured.name} "improve yourself"`)}\n`);
+
     return;
   }
+
   const local = requireLocalAgent(name);
   name = local.name;
   const dbPath = local.dbPath;
@@ -37,6 +40,7 @@ export async function evolveCommand(name: string, opts: {
   const llmConfig = requireLLMConfig(opts);
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
+
   const { rt, info } = await openWorkspaceCLI(db, dbPath, {
     llm: llmConfig,
     providerCredentials: resolveProviderCredentials(),
@@ -65,19 +69,23 @@ export async function evolveCommand(name: string, opts: {
 
   try {
     const run = deps?.runMcts ?? runMCTS;
+
     const result = await run(rt, session, task, {
       budget, branches, maxCostUSD,
       onProgress: (event) => {
         if (event.type === 'branch-failed') failed++;
         const line = formatMctsProgress(event, budget);
+
         if (line.sink === 'status') spinner.update(line.text);
         else spinner.note(line.text);
       },
     });
+
     spinner.stop('Exploration complete');
 
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes
       WHERE actor_id = ${rt.actor.actorId} ORDER BY depth, created_at`;
+
     printSearchTree(nodes);
 
     if (result.converged) {
@@ -85,18 +93,22 @@ export async function evolveCommand(name: string, opts: {
     } else {
       console.log(`${WARN('○')} Did not converge. Best score: ${ACCENT(result.winnerValue.toFixed(3))}`);
     }
+
     if (failed > 0) {
       console.log(`${WARN('!')} ${plural(failed, 'branch failure')}. Those branches scored 0, so this result understates the ideas.`);
     }
 
     const memory = await rt.memory.read('memory/MEMORY.md');
+
     if (memory?.includes('Failure lesson') || memory?.includes('Successful approach')) {
       console.log(DIM('  Reflections stored in memory.'));
     }
 
     const tools = rt.craftStore.list();
+
     if (tools.length > 0) {
       console.log(DIM(`\n  Crafted tools: ${tools.length}`));
+
       for (const t of tools) {
         console.log(`    ${ACCENT(t.name)} ${DIM('—')} ${MUTED(t.description.slice(0, 50))}`);
       }
@@ -164,6 +176,7 @@ function iterationTag(current: number, total: number): string {
 function createEvolveSession(rt: AgentRuntime): SessionWriter {
   const messages: Array<{ id: string; parentId?: string | null; role: string; content: string }> = [];
   const { actorId } = rt.actor;
+
   return {
     async appendMessage(msg: SessionMessage, parentId?: string | null) {
       const content = msg.parts.map(p => p.text).join('');
@@ -175,10 +188,12 @@ function createEvolveSession(rt: AgentRuntime): SessionWriter {
       if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));
       const result: Array<{ role: string; content: string }> = [];
       let current = messages.find(m => m.id === leafId);
+
       while (current) {
         result.unshift({ role: current.role, content: current.content });
         current = current.parentId ? messages.find(m => m.id === current!.parentId) : undefined;
       }
+
       return result;
     },
   };

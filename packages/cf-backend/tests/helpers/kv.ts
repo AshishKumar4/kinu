@@ -22,11 +22,15 @@ export function makeKv(): FakeKv {
 
   const live = (key: string): Entry | null => {
     const entry = entries.get(key);
+
     if (!entry) return null;
+
     if (entry.expiresAt <= Date.now()) {
       entries.delete(key);
+
       return null;
     }
+
     return entry;
   };
 

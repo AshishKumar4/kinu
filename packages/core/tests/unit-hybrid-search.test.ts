@@ -60,9 +60,11 @@ describe('hybridSearch', () => {
 
   test('handles lexical failure gracefully', async () => {
     const failing: LexicalSearchFn = async () => { throw new Error('FTS down'); };
+
     const out = await hybridSearch('q', failing, vectorStore(semanticCorpus));
     // semantic-only
     expect(out.length).toBeGreaterThan(0);
+
     for (const h of out) {
       expect(h.sources).toEqual(['semantic']);
     }
@@ -76,8 +78,10 @@ describe('hybridSearch', () => {
       async deleteChunks() {},
       async search() { throw new Error('vectorize down'); },
     };
+
     const out = await hybridSearch('q', lexicalFn, failingStore);
     expect(out.length).toBeGreaterThan(0);
+
     for (const h of out) expect(h.sources).toEqual(['lexical']);
   });
 
@@ -92,14 +96,21 @@ describe('hybridSearch', () => {
     // there is no snippet to borrow — and a blank one is useless to the reader.
     const lines = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n');
     const reads: string[] = [];
+
     const memory = {
-      read: async (path: string) => { reads.push(path); return path === 'x.md' ? lines : null; },
+      read: async (path: string) => {
+        reads.push(path);
+
+        return path === 'x.md' ? lines : null;
+      },
     };
+
     const sem: VectorSearchHit[] = [
       { id: 'x.md:3-5', path: 'x.md', startLine: 3, endLine: 5, score: 0.9 },
       { id: 'x.md:7-8', path: 'x.md', startLine: 7, endLine: 8, score: 0.8 },
       { id: 'gone.md:1-2', path: 'gone.md', startLine: 1, endLine: 2, score: 0.7 },
     ];
+
     const out = await hybridSearch('q', async () => [], vectorStore(sem), {
       rehydrate: memorySnippetRehydrator(memory),
     });
@@ -116,21 +127,26 @@ describe('hybridSearch', () => {
 
   test('a lexical snippet is never replaced by a rehydrated one', async () => {
     const memory = { read: async () => 'rehydrated text' };
+
     const out = await hybridSearch('q', lexicalFn, vectorStore(semanticCorpus), {
       rehydrate: memorySnippetRehydrator(memory),
     });
+
     expect(out.find((h) => h.id === 'shared')!.snippet).toBe('shared snippet');
   });
 
   test('fuses lexical + semantic hits keyed on the canonical chunk id', async () => {
     // The production id both sources emit for a chunk: `path:start-end`.
     const chunkId = 'memory/MEMORY.md:1-5';
+
     const lex: LexicalHit[] = [
       { id: chunkId, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, score: 0.4, snippet: 'the actual chunk text' },
     ];
+
     const sem: VectorSearchHit[] = [
       { id: chunkId, path: 'memory/MEMORY.md', startLine: 1, endLine: 5, score: 0.9 },
     ];
+
     const out = await hybridSearch('q', async () => lex, vectorStore(sem));
     // One fused hit, not two — the matching ids merge.
     expect(out.length).toBe(1);
@@ -143,13 +159,16 @@ describe('hybridSearch', () => {
   test('a throwing rehydrator degrades that hit to an empty snippet', async () => {
     const log = createRecordingLogger();
     const restore = setDiagnosticsSink(log);
+
     try {
       const sem: VectorSearchHit[] = [
         { id: 'x.md:1-2', path: 'x.md', startLine: 1, endLine: 2, score: 0.9 },
       ];
+
       const out = await hybridSearch('q', async () => [], vectorStore(sem), {
         rehydrate: async () => { throw new Error('rehydrate boom'); },
       });
+
       expect(out.length).toBe(1);
       expect(out[0].snippet).toBe('');
       expect(out[0].sources).toEqual(['semantic']);
@@ -161,13 +180,17 @@ describe('hybridSearch', () => {
 
   test('a rejected memo entry is evicted so the next hit retries the read', async () => {
     let calls = 0;
+
     const memory = {
       read: async (_path: string): Promise<string | null> => {
         calls++;
+
         if (calls === 1) throw new Error('transient read');
+
         return 'line1\nline2';
       },
     };
+
     const rehydrate = memorySnippetRehydrator(memory);
     const hit: VectorSearchHit = { id: 'x.md:1-1', path: 'x.md', startLine: 1, endLine: 1, score: 1 };
     await expect(rehydrate(hit)).rejects.toThrow('transient read');

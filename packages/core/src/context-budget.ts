@@ -141,7 +141,9 @@ export class TurnContextBudget {
   recordSpill(trip: SpillTrip): void {
     this.omitted += trip.omitted;
     this.tripsByProducer.set(trip.producer, (this.tripsByProducer.get(trip.producer) ?? 0) + 1);
+
     if (trip.referenced) this.referenced++;
+
     if (trip.tightened) this.tightened++;
   }
 
@@ -152,7 +154,9 @@ export class TurnContextBudget {
 
   snapshot(): ContextBudgetSnapshot {
     const trips: Partial<Record<BulkProducer, number>> = {};
+
     for (const [producer, count] of this.tripsByProducer) trips[producer] = count;
+
     return {
       admittedChars: this.admitted,
       omittedChars: this.omitted,
@@ -185,6 +189,8 @@ export class TurnContextBudget {
  */
 export function citesSpillAddress<Args>(args: Args): boolean {
   const text = JSON.stringify(args);
+
   if (!text) return false;
+
   return SPILL_DIR_VALUES.some((dir) => text.includes(`${dir}/`));
 }

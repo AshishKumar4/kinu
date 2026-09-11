@@ -32,12 +32,14 @@ import type { SubordinateHandoff } from '../src/index';
 function handoff(): SubordinateHandoff {
   return { eventId: 'evt-1', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
 }
+
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator';
 import { buildDrainBatch } from '../src/events/hub/drain';
 import type { KinuEvent } from '../src/events/hub/types';
 
 function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');
+
   return new MissionGovernor({
     storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
     // A mission cap is one actor's ledger, so the governor is bound to a real
@@ -80,13 +82,19 @@ function expandingModel(usage: 'reported' | 'silent' = 'reported') {
  *  ledger below came from an expansion, so a movement observed here is the
  *  budget's. */
 const TWO_BRANCHES = { preset: 'ideate' as const, branches: 2, depth: 1 };
+
 const RUN_TOKENS = 2 * PER_EXPANSION_TOKENS;
+
 /** The sandbox's view of `agents.*`, over deps that record every spawn. */
 function sandbox(deps: AgentsToolDeps) {
   const provider = createAgentsCodemodeProvider(() => deps);
+
   type ProviderExecute = typeof provider.tools[string]['execute'];
+
   const ns: Record<string, ProviderExecute> = {};
+
   for (const [name, entry] of Object.entries(provider.tools)) ns[name] = entry.execute;
+
   return ns;
 }
 
@@ -97,6 +105,7 @@ function searchableDeps(opts: {
 }): AgentsToolDeps {
   const { rt, db } = createTestRuntime();
   const spawns = opts.spawns ?? [];
+
   return {
     mode: 'build',
     swarm: {
@@ -121,11 +130,23 @@ function searchableDeps(opts: {
         subordinate: { name: input.name, displayName: input.displayName, role: 'general', actorReference: null, birth: null, deleteRequested: false, createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null, lifetime: 'durable', taskEventId: null },
       }),
       recordTitle: async (input) => ({ ok: true, name: input.name, displayName: input.displayName, applied: true }),
-      spawn: async (input) => { spawns.push(`hire:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
-      assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
+      spawn: async (input) => {
+        spawns.push(`hire:${input.role}`);
+
+        return { name: 'helper', displayName: 'Helper' };
+      },
+      assign: async (input) => {
+        spawns.push(`ask:${input.name}`);
+
+        return { ok: true, name: input.name, ...handoff() };
+      },
       knows: async () => true,
       status: async () => ({}),
-      message: async (input) => { spawns.push(`send:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
+      message: async (input) => {
+        spawns.push(`send:${input.name}`);
+
+        return { ok: true, name: input.name, ...handoff() };
+      },
       dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
     },
     budget: opts.budget,
@@ -136,12 +157,14 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
   const SearchReportSchema = v.object({
     report: v.object({ expansions: v.number(), tokens: v.nullable(v.number()) }),
   });
+
   const SearchBudgetSchema = v.object({
     mission_budget: v.optional(v.object({
       label: v.string(),
       remaining: v.object({ tokens: v.optional(v.number()) }),
     })),
   });
+
   const BudgetRefusalSchema = v.object({
     error: v.literal('budget_exhausted'),
     seam: v.picklist(['model_call', 'spawn']),
@@ -181,10 +204,12 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
     governor.declare('nightly', {});
     governor.activate(['nightly']);
     const deps = searchableDeps({ budget: governor });
+
     const out = v.parse(
       SearchBudgetSchema,
       await sandbox(deps).swarm!({ task: 'x', ...TWO_BRANCHES, budget_tokens: 1_000, budget_label: 'sweep' }),
     );
+
     expect(out.mission_budget?.label).toBe('sweep');
     expect(out.mission_budget?.remaining.tokens).toBe(1_000 - RUN_TOKENS);
   }, 60_000);
@@ -212,6 +237,7 @@ describe('spawn seam — transitive debit through a search from codemode', () =>
       expect(refusal.seam).toBe('spawn');
       expect(refusal.label).toBe('nightly');
     }
+
     expect(spawns).toEqual([]);
   });
 
@@ -262,6 +288,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor });
+
     const out = v.parse(
       SearchReportSchema,
       await sandbox(deps).swarm!({ task: 'explore', ...TWO_BRANCHES }),
@@ -313,6 +340,7 @@ describe('spawn seam — the run charges its own calls and the spawn charges no 
     governor.activate(['nightly']);
 
     const deps = searchableDeps({ budget: governor });
+
     const out = v.parse(SearchReportSchema, await sandbox(deps).swarm!({
       task: 'explore', preset: 'custom', from: 'ideate', label: 'toolless',
       config: { unit: { kind: 'thought' } }, branches: 2, depth: 1,
@@ -357,9 +385,11 @@ describe('model-call seam — the step pipeline declines the next request', () =
     governor.declare('nightly', { tokens: 1 });
     governor.activate(['nightly']);
     governor.debit(1);
+
     for (let i = 0; i < 3; i++) {
       expect(() => composePrepareStep({ budget: governor }, ctx)).toThrow();
     }
+
     expect(seen).toHaveLength(1);
     expect(seen[0]?.seam).toBe('model_call');
   });
@@ -393,11 +423,13 @@ describe('model-call seam — the turn accumulator is the meter', () => {
 
   test("the step's usage split is priced at the resolved model's catalog rates", () => {
     const db = new Database(':memory:');
+
     const governor = new MissionGovernor({
       storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
       actor: createTestActorsOver(db).main,
       pricing: () => ({ input: 3, output: 15, cacheRead: 0.3 }),
     });
+
     governor.declare('nightly', {});
     governor.activate(['nightly']);
     new TurnAccumulator({}, governor).recordStep(step);
@@ -426,6 +458,7 @@ describe('mission scope reaches the woken turn', () => {
       reply_channel: null,
       dedupe_key: null,
     };
+
     return missionLabel
       ? { ...event, payload: { ...event.payload, mission_label: missionLabel } }
       : event;

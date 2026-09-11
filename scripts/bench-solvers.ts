@@ -36,6 +36,7 @@ export function createOracleSolver(patches: PatchLookup): Solver {
     description: 'reverse-applies the defect — must pass every task',
     async solve(ctx: SolverContext): Promise<SolverResult> {
       applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
+
       return NO_MODEL_SPEND;
     },
   };
@@ -49,12 +50,15 @@ export function createOracleSolver(patches: PatchLookup): Solver {
  *  rates are a known-truth pair: the harness must recover the gap between them. */
 export function createNoisyOracleSolver(patches: PatchLookup, rate: number, label: string): Solver {
   if (!(rate >= 0 && rate <= 1)) throw new Error(`noisy oracle rate must be in [0,1], got ${rate}`);
+
   return {
     id: label,
     description: `synthetic solver with a ${(rate * 100).toFixed(0)}% success rate`,
     async solve(ctx: SolverContext): Promise<SolverResult> {
       const draw = unitHash(`${label}:${ctx.seed}:${ctx.task.id}:${ctx.repeat}`);
+
       if (draw < rate) applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
+
       return NO_MODEL_SPEND;
     },
   };
@@ -62,7 +66,9 @@ export function createNoisyOracleSolver(patches: PatchLookup, rate: number, labe
 
 function patchFor(patches: PatchLookup, taskId: string): string {
   const patch = patches.get(taskId);
+
   if (!patch) throw new Error(`no defect patch for task ${taskId}`);
+
   return patch;
 }
 
@@ -97,9 +103,11 @@ export interface AgentWorkerOptions extends Omit<AgentSolverOptions, 'id' | 'des
  *  the asks say and what gets removed between them. */
 export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverResult> {
   const { ctx } = opts;
+
   const home = opts.state === 'shared'
     ? (opts.sharedHome ?? (() => { throw new Error('shared-state solver needs a sharedHome'); })())
     : ctx.kinuHome;
+
   const workspaceName = opts.state === 'shared' ? 'bench' : `bench-${ctx.task.id}`;
 
   const input = {
@@ -234,28 +242,39 @@ async function spawnWorker(opts: {
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
+
   await proc.exited;
 
   const line = stdout.trim().split('\n').filter(Boolean).pop();
+
   if (!line) {
     return { error: `worker produced no result (exit ${proc.exitCode}): ${stderr.slice(-800)}` };
   }
+
   let parsed;
+
   try {
     parsed = parseWorkerOutput(line);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
+
     return { error: `worker emitted invalid output: ${detail}; ${line.slice(0, 400)}` };
   }
+
   const error = parsed.error ?? (parsed.hadError ? 'worker reported an error without a diagnostic' : undefined);
   // A worker that crashed before its meter could report omits the token fields
   // entirely, so they are copied only when the worker actually stated them —
   // filling them in here would invent a cost for an attempt nobody measured.
   const result: SolverResult = {};
+
   if (parsed.tokens !== undefined) result.tokens = parsed.tokens;
+
   if (parsed.peakPromptTokens !== undefined) result.peakPromptTokens = parsed.peakPromptTokens;
+
   if (parsed.modelCalls !== undefined) result.modelCalls = parsed.modelCalls;
+
   if (error) result.error = error;
+
   return result;
 }
 

@@ -64,6 +64,7 @@ export type RowOutcome = 'ok' | 'refused' | 'failed' | 'denied';
 export type AgentRowKind = 'turn' | 'model' | 'tool' | 'ttft' | 'event';
 
 type AgentRow = AnalyticsRow<typeof AGENT_METRICS_SCHEMA>;
+
 type OpsRow = AnalyticsRow<typeof CONTROL_PLANE_OPS_SCHEMA>;
 
 /**
@@ -93,6 +94,7 @@ function agentRow(input: {
   usd?: number;
 }): AgentRow {
   const usage = input.usage ?? {};
+
   return {
     workspace: analyticsDigest(input.workspace),
     kind: input.kind,

@@ -12,10 +12,12 @@ function fakeBox() {
   const files = new Map<string, Uint8Array>();
   const decoder = new TextDecoder();
   const encoder = new TextEncoder();
+
   const box: NimbusSandboxHandle = {
     ready: async () => {},
     exec: async (command) => {
       const match = /^cat (.+)$/.exec(command);
+
       return {
         command,
         success: true,
@@ -54,6 +56,7 @@ function fakeBox() {
       url: (port) => `https://${port}.example.test`,
     },
   };
+
   return box;
 }
 
@@ -73,6 +76,7 @@ describe('hosted Nimbus workspace provider', () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();
     const vfs = nimbusSessionFiles(box);
+
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
@@ -121,6 +125,7 @@ describe('hosted Nimbus workspace provider', () => {
     let requestEnv: Record<string, string> | undefined;
     box.exec = async (command, options) => {
       requestEnv = options?.env;
+
       return {
         command,
         success: true,
@@ -146,6 +151,7 @@ describe('hosted Nimbus workspace provider', () => {
   test('declares inbound networking only when the host can publish previews', () => {
     const { rt } = createTestRuntime();
     const box = fakeBox();
+
     const inline = {
       vfs: nimbusSessionFiles(box),
       shell: nimbusSessionShell(box),
@@ -174,6 +180,7 @@ describe('hosted Nimbus workspace provider', () => {
       unexpose: async () => ({ ok: true }),
       list: async () => [{ port: 4321, unavailable: reason }],
     };
+
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
@@ -201,6 +208,7 @@ describe('hosted Nimbus workspace provider', () => {
       unexpose: async () => ({ ok: true }),
       list: async () => [{ port: 4321, url: 'https://4321.example.test' }, { port: 9090 }],
     };
+
     const provider = createNimbusWorkspaceExecutor({
       box,
       inline: {
@@ -220,6 +228,7 @@ describe('a workspace whose host cannot compile node programs', () => {
 
   function blockedProvider(box: NimbusSandboxHandle) {
     const { rt } = createTestRuntime();
+
     return createNimbusWorkspaceExecutor({
       box,
       inline: {
@@ -245,6 +254,7 @@ describe('a workspace whose host cannot compile node programs', () => {
     // names an executor that can rather than quoting the compiler.
     const box = fakeBox();
     box.exec = async () => { throw new Error(CODEGEN_STDERR); };
+
     const refusal = await createNimbusExecutor({ box }).tools.exec.execute('node server.js');
     expect(refusal).toMatchObject({ reason: 'unsupported', error: expect.stringContaining('sandbox') });
     expect(String(JSON.stringify(refusal))).not.toContain('Code generation from strings disallowed');
@@ -256,6 +266,7 @@ describe('a workspace whose host cannot compile node programs', () => {
     // the model a retry is pointless when it is not.
     const box = fakeBox();
     box.exec = async () => { throw new Error(CODEGEN_STDERR); };
+
     expect(await createNimbusExecutor({ box }).tools.exec.execute('cat build.log')).toMatchObject({ reason: 'io' });
   });
 

@@ -117,6 +117,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
   opts: RunSectionGepaOpts<I, E>,
 ): Promise<RunSectionGepaResult> {
   const section = findPromptSectionTarget(opts.sectionId);
+
   if (!section) {
     return {
       sectionId: opts.sectionId, gepa: null,
@@ -145,16 +146,20 @@ export async function runSectionGepa<I = unknown, E = unknown>(
       maxSizeBytes: PROMPT_SECTION_MAX_BYTES,
       customCheck: (source) => {
         let offered;
+
         try {
           offered = templateContract(section.id, source);
         } catch (err) {
           return renderThrownChain({ cause: err });
         }
+
         if (`${offered.slots.join('|')}//${offered.flags.join('|')}` !== wantedKey) {
           return `slot contract changed — expected {slots: ${wanted.slots.join(', ') || '(none)'}; `
             + `flags: ${wanted.flags.join(', ') || '(none)'}}`;
         }
+
         const misevolution = checkMisevolution(source);
+
         return misevolution.ok
           ? null
           : `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}`;
@@ -190,6 +195,7 @@ export async function runSectionGepa<I = unknown, E = unknown>(
     incumbentScore,
     candidateScore: winnerScore,
   });
+
   if (!proposal.ok) {
     return {
       ...base, proposed: false, pendingVersion: null,
@@ -197,5 +203,6 @@ export async function runSectionGepa<I = unknown, E = unknown>(
       proposeError: { code: proposal.code, error: proposal.error },
     };
   }
+
   return { ...base, proposed: true, pendingVersion: proposal.version };
 }

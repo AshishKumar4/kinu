@@ -25,6 +25,7 @@ type ExecuteTool = (args: { code: string }) => Promise<ExecuteToolResult>;
 
 function makeTool(): ExecuteTool {
   const factory = createNodeExecuteToolFactory();
+
   return toolExecute(factory({ native: {}, craftedTools: () => ({}), providers: [] }));
 }
 
@@ -33,6 +34,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
     const out = await makeTool()({
       code: 'const a = "hello";\nconsole.log(a, 42);\nconsole.log({ x: 1 });',
     });
+
     expect(out.logs).toEqual(['hello 42', '{"x":1}']);
   });
 
@@ -100,6 +102,7 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
  *  about. */
 function makeToolWithFailingProvider(error: Error) {
   const calls: string[] = [];
+
   const provider: CodemodeProvider = {
     name: 'workspace',
     tools: {
@@ -109,12 +112,15 @@ function makeToolWithFailingProvider(error: Error) {
       },
     },
   };
+
   const factory = createNodeExecuteToolFactory({
     extraProviders: [provider],
   });
+
   const tool = toolExecute<{ code: string }, ExecuteToolResult>(
     factory({ native: {}, craftedTools: () => ({}), providers: [] }),
   );
+
   return { tool, calls };
 }
 
@@ -127,6 +133,7 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
     const { tool, calls } = makeToolWithFailingProvider(
       new Error("ENOENT: no such file or directory, scandir '/app'"),
     );
+
     const out = await tool({ code: 'workspace.readdir("/app");\n"kept going"' });
 
     expect(calls).toEqual(['/app']);
@@ -139,6 +146,7 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
     const { tool } = makeToolWithFailingProvider(
       new Error("ENOENT: no such file or directory, scandir '/app' — workspace.* is the agent's own virtual filesystem"),
     );
+
     const pending = tool({ code: 'const e = await workspace.readdir("/app");\ne' });
     await expect(pending).rejects.toThrow('ENOENT');
     await expect(pending).rejects.toThrow("workspace.* is the agent's own virtual filesystem");
@@ -146,9 +154,11 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
 
   test('a rejection caught by the model\'s own code is handled there, not swallowed', async () => {
     const { tool } = makeToolWithFailingProvider(new Error('ENOENT: nope'));
+
     const out = await tool({
       code: 'try { await workspace.readdir("/app"); } catch (e) { return "caught:" + e.message }',
     });
+
     expect(out.result).toBe('caught:ENOENT: nope');
   });
 
@@ -174,6 +184,7 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
         tools: { save: { description: 'save a note', execute: async () => 'ok' } },
       }],
     });
+
     const built = factory({
       native: {},
       craftedTools: () => ({}),
@@ -183,6 +194,7 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
         tools: { readdir: { description: 'list a directory', execute: async () => [] } },
       }],
     });
+
     expect(built.description).toContain('export declare const memory: {');
     expect(built.description).toContain('save(content: string)');
     expect(built.description).toContain('export declare const workspace: {');
@@ -203,6 +215,7 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
       ),
       providers: [],
     });
+
     return toolExecute(built);
   }
 
@@ -224,6 +237,7 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
     const store = new Map<string, CraftedToolSet[string]['execute']>([
       ['double', async (n) => Number(n) * 2],
     ]);
+
     const out = await makeToolOverStore(store)({ code: 'return await tools.double(2);' });
     expect(out.result).toBe(4);
   });
@@ -235,11 +249,13 @@ describe('createNodeExecuteToolFactory — crafted tools, on the episode clock',
         name: 'tools',
         tools: { hijack: { description: 'x', execute: async () => 'provider' } },
     };
+
     const built = createNodeExecuteToolFactory({ extraProviders: [provider] })({
       native: {},
       craftedTools: () => ({ real: { description: 'r', execute: async () => 'crafted' } }),
       providers: [],
     });
+
     const execute = toolExecute<{ code: string }, ExecuteToolResult>(built);
     const out = await execute({ code: 'return await tools.real();' });
     expect(out.result).toBe('crafted');
@@ -271,14 +287,21 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
     // every native tool is `tools.<name>(input)` and the CLI bound none of
     // them, so `tools.run(...)` answered `tools.run is not a function`.
     const seen: string[] = [];
+
     const built = createNodeExecuteToolFactory()({
-      native: surfaceWith(async ({ command }) => { seen.push(command); return `ran ${command}`; }),
+      native: surfaceWith(async ({ command }) => {
+        seen.push(command);
+
+        return `ran ${command}`;
+      }),
       craftedTools: () => ({}),
       providers: [],
     });
+
     const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({
       code: 'return await tools.run({ command: "ls" });',
     });
+
     expect(out.error).toBeUndefined();
     expect(out.result).toBe('ran ls');
     expect(seen).toEqual(['ls']);
@@ -290,6 +313,7 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
       craftedTools: () => ({ double: { description: 'Doubles a number', execute: async () => 2 } }),
       providers: [],
     });
+
     expect(built.description).toContain('export declare const tools: {');
     expect(built.description).toContain('run(input: { command: string }): Promise<unknown>;');
     expect(built.description).toContain('double(...args: unknown[]): Promise<unknown>;');
@@ -302,9 +326,11 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
       craftedTools: () => ({}),
       providers: [],
     });
+
     const out = await toolExecute<{ code: string }, ExecuteToolResult>(built)({
       code: 'return typeof tools.execute_tools;',
     });
+
     expect(out.result).toBe('undefined');
   });
 });
@@ -312,6 +338,7 @@ describe('createNodeExecuteToolFactory — native tools under tools.<name>', () 
 test('Plan refuses native JavaScript before it can use machine require, while Build stays native', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'kinu-plan-native-'));
   const path = join(directory, 'native-write');
+
   try {
     const execute = makeTool();
     const code = 'require("node:fs").writeFileSync(' + JSON.stringify(path) + ', "native effect"); return "done";';

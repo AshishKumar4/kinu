@@ -82,6 +82,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
   // The head's kind tools: the merge-back accumulators (self-recording, so
   // outside the capture wrap) plus the depth-gated split.
   const extra: ToolSet = { ...buildHeadAccumulatorTools(capture) };
+
   // Recursion depth is fixed for a head's whole run — nothing decrements
   // `input.budget.maxDepth` in place — so a head with none left cannot split
   // at any moment of it, and is not offered the tool rather than being handed
@@ -121,30 +122,40 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
         // unrecorded refusal leaves no trace in the journal, so how often heads
         // are stopped mid-plan was unanswerable from the ledger.
         const exhausted = budgetExhausted(input.budget);
+
         if (exhausted.exhausted) {
           const failure = new KinuError('denied', 'Cannot split: budget exhausted (' + exhausted.reason + ').');
           capture.recordToolCall('split_subheads', { rationale, heads }, failure.message, failedToolOutcome({ cause: failure }));
           throw failure;
         }
+
         try {
           const result = await deps.split({
             rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,
           });
+
           for (const id of result.childHeadIds) capture.childHeadIds.push(id);
           capture.recordToolCall('split_subheads', { rationale, heads }, 'merged ' + result.headCount, { success: true });
           const lines: string[] = [result.narrative];
+
           if (result.decisions.length) {
             lines.push('', "Children's selected decisions:");
+
             for (const d of result.decisions) lines.push(`- ${d.question}: ${d.choice}`);
           }
+
           if (result.unresolvedQuestions.length) {
             lines.push('', 'Open questions:');
+
             for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
           }
+
           if (result.blindSpots.length) {
             lines.push('', 'Not covered by any child:');
+
             for (const b of result.blindSpots) lines.push(`- ${b}`);
           }
+
           return lines.join('\n');
         } catch (err) {
           capture.recordToolCall('split_subheads', { rationale, heads }, renderThrownChain({ cause: err }), failedToolOutcome({ cause: err }));
@@ -153,6 +164,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
       },
     }));
   }
+
   return buildToolSurface({
     rt: deps.rt,
     workMode: input.mode,

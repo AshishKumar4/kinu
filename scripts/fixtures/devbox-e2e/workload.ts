@@ -52,11 +52,13 @@ interface Plan {
 function payload(seed: string, path: string, bytes: number): Buffer {
   const chunks: Buffer[] = [];
   let produced = 0;
+
   for (let index = 0; produced < bytes; index += 1) {
     const chunk = createHmac('sha256', seed).update(`${path}:${String(index)}`).digest();
     chunks.push(chunk);
     produced += chunk.length;
   }
+
   return Buffer.concat(chunks).subarray(0, bytes);
 }
 
@@ -71,12 +73,15 @@ function smallPlan(root: string): Plan[] {
     { path: join(root, 'assets/logo.bin'), bytes: 262_144 },
     { path: join(root, 'assets/data.bin'), bytes: 262_144 },
   ];
+
   for (let index = 0; index < 120; index += 1) {
     plans.push({ path: join(root, `notes/note-${String(index).padStart(3, '0')}.txt`), bytes: 3_072 });
   }
+
   for (let index = 0; index < 3; index += 1) {
     plans.push({ path: join(root, `delete-me-${String(index)}.txt`), bytes: 1_024 });
   }
+
   return plans;
 }
 
@@ -99,13 +104,16 @@ function npmPlan(root: string, targetBytes: number): Plan[] {
   const perFile = 12_288;
   const filesPerPackage = 24;
   const packages = Math.max(1, Math.ceil(targetBytes / (perFile * filesPerPackage)));
+
   for (let pkg = 0; pkg < packages; pkg += 1) {
     const base = join(root, `pkg-${String(pkg).padStart(3, '0')}`);
     plans.push({ path: join(base, 'package.json'), bytes: 512 });
+
     for (let file = 0; file < filesPerPackage; file += 1) {
       plans.push({ path: join(base, 'lib', `mod-${String(file).padStart(2, '0')}.js`), bytes: perFile });
     }
   }
+
   return plans;
 }
 
@@ -118,11 +126,13 @@ interface Written {
 /** Write one plan, creating parents, and answer what it cost. */
 function materialise(plans: readonly Plan[], seed: string): Written {
   let bytes = 0;
+
   for (const plan of plans) {
     mkdirSync(dirname(plan.path), { recursive: true });
     writeFileSync(plan.path, payload(seed, plan.path, plan.bytes));
     bytes += plan.bytes;
   }
+
   return { files: plans.length, bytes };
 }
 
@@ -131,14 +141,18 @@ function materialise(plans: readonly Plan[], seed: string): Written {
  *  read in. */
 function walk(root: string): string[] {
   const found: string[] = [];
+
   const visit = (directory: string): void => {
     for (const entry of readdirSync(directory, { withFileTypes: true })) {
       const path = join(directory, entry.name);
+
       if (entry.isDirectory()) visit(path);
       else if (entry.isFile()) found.push(path);
     }
   };
+
   if (existsSync(root)) visit(root);
+
   return found.map((path) => relative(root, path)).sort();
 }
 
@@ -152,12 +166,14 @@ function digestTree(root: string): TreeDigest {
   const listing = createHash('sha256');
   let bytes = 0;
   const relatives = walk(root);
+
   for (const path of relatives) {
     const absolute = join(root, path);
     const content = readFileSync(absolute);
     bytes += content.length;
     listing.update(`${createHash('sha256').update(content).digest('hex')}  ${path}\n`);
   }
+
   return { files: relatives.length, bytes, digest: listing.digest('hex') };
 }
 
@@ -166,6 +182,7 @@ function digestTree(root: string): TreeDigest {
 function argument(argv: readonly string[], name: string, fallback: string): string {
   const index = argv.indexOf(`--${name}`);
   const value = index === -1 ? undefined : argv[index + 1];
+
   return value ?? fallback;
 }
 
@@ -184,13 +201,17 @@ function holdOpen(path: string, content: string, holdMs: number): void {
   writeSync(handle, content);
   fsyncSync(handle);
   const releaseAt = Date.now() + holdMs;
+
   const tick = (): void => {
     if (Date.now() >= releaseAt) {
       closeSync(handle);
+
       return;
     }
+
     setTimeout(tick, 1_000);
   };
+
   tick();
 }
 
@@ -205,39 +226,52 @@ function main(argv: readonly string[]): Outcome {
   const command = argv[0] ?? '';
   const root = argument(argv, 'root', '/workspace/e2e');
   const seed = argument(argv, 'seed', 'devbox-e2e');
+
   if (command === 'small') {
     const written = materialise(smallPlan(root), seed);
     process.stdout.write(`${JSON.stringify({ ok: true, command, ...written })}\n`);
+
     return exitWith(0);
   }
+
   if (command === 'npm') {
     const mib = Number.parseInt(argument(argv, 'mib', '30'), 10);
     const written = materialise(npmPlan(join(root, MID_SCALE_DIRECTORY), mib * 1_048_576), seed);
     process.stdout.write(`${JSON.stringify({ ok: true, command, ...written })}\n`);
+
     return exitWith(0);
   }
+
   if (command === 'delete') {
     const removed: string[] = [];
+
     for (const name of argument(argv, 'paths', '').split(',').filter((entry) => entry.length > 0)) {
       const path = join(root, name);
       rmSync(path, { force: true });
       removed.push(name);
     }
+
     const present = removed.filter((name) => existsSync(join(root, name)));
     process.stdout.write(`${JSON.stringify({ ok: present.length === 0, command, removed, present })}\n`);
+
     return exitWith(present.length === 0 ? 0 : 1);
   }
+
   if (command === 'hold-open') {
     const path = join(root, argument(argv, 'path', 'open-write.bin'));
     const content = argument(argv, 'content', 'devbox-e2e-open-write');
     holdOpen(path, content, Number.parseInt(argument(argv, 'hold-ms', '1800000'), 10));
     process.stdout.write(`${JSON.stringify({ ok: true, command, path, bytes: content.length })}\n`);
+
     return { kind: 'hold' };
   }
+
   if (command === 'digest') {
     process.stdout.write(`${JSON.stringify({ ok: true, command, ...digestTree(root) })}\n`);
+
     return exitWith(0);
   }
+
   if (command === 'absent') {
     // The DELETION half of the restore proof, asked as its own question so a
     // resurrected file is named rather than showing up as a digest mismatch.
@@ -245,9 +279,12 @@ function main(argv: readonly string[]): Outcome {
       .split(',')
       .filter((entry) => entry.length > 0)
       .filter((name) => existsSync(join(root, name)));
+
     process.stdout.write(`${JSON.stringify({ ok: back.length === 0, command, resurrected: back })}\n`);
+
     return exitWith(back.length === 0 ? 0 : 1);
   }
+
   if (command === 'read') {
     const path = join(root, argument(argv, 'path', ''));
     const exists = existsSync(path);
@@ -258,13 +295,17 @@ function main(argv: readonly string[]): Outcome {
       bytes: exists ? statSync(path).size : 0,
       content: exists ? readFileSync(path, 'utf8').slice(0, 4_096) : '',
     })}\n`);
+
     return exitWith(exists ? 0 : 1);
   }
+
   process.stdout.write(`${JSON.stringify({ ok: false, error: `no such command: ${command}` })}\n`);
+
   return exitWith(2);
 }
 
 const outcome = main(process.argv.slice(2));
+
 // A `hold` outcome deliberately falls off the end: the pending timer keeps this
 // process — and therefore the open handle — alive. Exiting here is what an
 // earlier draft did, and it closed the handle before the checkpoint that the

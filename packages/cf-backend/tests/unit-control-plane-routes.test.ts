@@ -28,17 +28,23 @@ import { mockAgentsSdk } from './helpers/agents-sdk';
 import { sqlExec } from './helpers/user-do';
 
 mockAgentsSdk();
+
 // `routes.ts` reaches the orchestrator's module graph at load, so it is imported
 // after the mock is registered.
 const { handleControlRequest: routeControlRequest } = await import('../src/control-plane/routes');
+
 const { requireControl } = await import('../src/control-plane/capability');
+
 /** The bindings the route reads. Named for its role rather than its structure:
  *  it is the environment these routes run in. */
 type ControlRoutesEnv = Parameters<typeof routeControlRequest>[1];
 
 const SECRET = 'routes-test-secret-0123456789';
+
 const OPERATOR = 'ops@kinu.run';
+
 const USER_ID = 'a'.repeat(32);
+
 const OTHER_ID = 'b'.repeat(32);
 
 /** What each workspace stub was asked to do, so an assertion can say WHICH
@@ -124,27 +130,44 @@ function harness(options: World = {}): Harness {
       caller: PresentedCaller, userId: string, live: readonly store.RosterWorkspace[],
     ) {
       await gate(caller, 'index.reconcile');
+
       return store.replaceUserWorkspaces(sql, userId, live);
     },
-    async overview(caller: PresentedCaller) { await gate(caller, 'overview.read'); return store.overview(sql); },
+    async overview(caller: PresentedCaller) {
+      await gate(caller, 'overview.read');
+
+      return store.overview(sql);
+    },
     async listUsers(caller: PresentedCaller, request = {}) {
-      await gate(caller, 'users.read'); return store.listUsers(sql, request);
+      await gate(caller, 'users.read');
+
+      return store.listUsers(sql, request);
     },
     async getUser(caller: PresentedCaller, userId: string) {
-      await gate(caller, 'users.read'); return store.getUser(sql, userId);
+      await gate(caller, 'users.read');
+
+      return store.getUser(sql, userId);
     },
     async listWorkspaces(caller: PresentedCaller, request = {}, filter = {}) {
-      await gate(caller, 'workspaces.read'); return store.listWorkspaces(sql, request, filter);
+      await gate(caller, 'workspaces.read');
+
+      return store.listWorkspaces(sql, request, filter);
     },
     async listFeedback(caller: PresentedCaller, request = {}) {
-      await gate(caller, 'feedback.read'); return store.listFeedback(sql, request);
+      await gate(caller, 'feedback.read');
+
+      return store.listFeedback(sql, request);
     },
     async listAudit(caller: PresentedCaller, request = {}) {
-      await gate(caller, 'audit.read'); return store.listAudit(sql, request);
+      await gate(caller, 'audit.read');
+
+      return store.listAudit(sql, request);
     },
     async recordAudit(caller: PresentedCaller, entry: store.AuditDraft) {
       await gate(caller, 'audit.write');
+
       if (options.audit === 'append') throw new Error('the control plane is unreachable');
+
       return store.appendAudit(sql, entry);
     },
     async settleAudit(
@@ -152,9 +175,12 @@ function harness(options: World = {}): Harness {
       settlement: { id: string; outcome: store.AuditSettlement; detail: string },
     ) {
       await gate(caller, 'audit.write');
+
       if (options.audit === 'settle') throw new Error('the control plane is unreachable');
       const row = store.settleAudit(sql, settlement);
+
       if (row === null) throw new Error(`no pending audit row ${settlement.id}`);
+
       return row;
     },
   };
@@ -167,64 +193,80 @@ function harness(options: World = {}): Harness {
     async claimOwner(userId: string) {
       rpc.calls.push({ workspace: name, method: 'claimOwner', args: [userId] });
       const current = owners.get(name);
+
       if (current === undefined) {
         owners.set(name, userId);
+
         return { owner: userId, capabilityHash: null };
       }
+
       if (current !== userId) {
         throw new Error(
           `Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`,
         );
       }
+
       return { owner: current, capabilityHash: null };
     },
     async cancelBackgroundJob(jobId: string) {
       if (behaviour.throws) throw new Error(behaviour.throws);
       rpc.calls.push({ workspace: name, method: 'cancelBackgroundJob', args: [jobId] });
+
       return behaviour.cancel ?? { ok: true };
     },
     async retryBackgroundJob(jobId: string) {
       rpc.calls.push({ workspace: name, method: 'retryBackgroundJob', args: [jobId] });
+
       return behaviour.retry ?? { ok: true, jobId };
     },
     async dismissBackgroundJob(jobId: string) {
       rpc.calls.push({ workspace: name, method: 'dismissBackgroundJob', args: [jobId] });
+
       return { ok: true };
     },
     async clearBackgroundJobs() {
       rpc.calls.push({ workspace: name, method: 'clearBackgroundJobs', args: [] });
+
       return behaviour.clear ?? { ok: true };
     },
     async decideDeferredApprovals(ids: string[], decision: string) {
       rpc.calls.push({ workspace: name, method: 'decideDeferredApprovals', args: [ids, decision] });
+
       return { decided: behaviour.decided ?? ids };
     },
     async getShellApprovalGrants() {
       rpc.calls.push({ workspace: name, method: 'getShellApprovalGrants', args: [] });
+
       return behaviour.grants ?? { grants: [{ kind: 'git' }] };
     },
     async revokeShellApprovalGrants(grants: unknown[]) {
       rpc.calls.push({ workspace: name, method: 'revokeShellApprovalGrants', args: [grants] });
+
       return { grants: [] };
     },
     async getRunSummaries() {
       rpc.calls.push({ workspace: name, method: 'getRunSummaries', args: [] });
+
       return { status: 'end', items: [] };
     },
     async getActivitySnapshot() {
       rpc.calls.push({ workspace: name, method: 'getActivitySnapshot', args: [] });
+
       return { spend: { usd: 0 } };
     },
     async listBackgroundJobs() {
       rpc.calls.push({ workspace: name, method: 'listBackgroundJobs', args: [] });
+
       return [];
     },
     async listDeferredApprovals() {
       rpc.calls.push({ workspace: name, method: 'listDeferredApprovals', args: [] });
+
       return [];
     },
     async listPendingConsents() {
       rpc.calls.push({ workspace: name, method: 'listPendingConsents', args: [] });
+
       return [];
     },
     async getExecutors() {
@@ -245,6 +287,7 @@ function harness(options: World = {}): Harness {
     async listWorkspaces() {
       if (options.rosterError) throw new Error(options.rosterError);
       const entries = rosters.get(userId) ?? [];
+
       return { entries, total: entries.length, nextCursor: null };
     },
     async removeWorkspace(_caller: PresentedCaller, workspace: string, owner: string) {
@@ -254,6 +297,7 @@ function harness(options: World = {}): Harness {
       // means here.
       const stored = owners.get(workspace);
       rpc.calls.push({ workspace, method: 'destroyAgent', args: [owner] });
+
       if (stored !== owner) throw new Error('Agent owner mismatch; refusing to destroy.');
       owners.delete(workspace);
       rosters.set(userId, (rosters.get(userId) ?? []).filter((row) => row.name !== workspace));
@@ -278,6 +322,7 @@ function harness(options: World = {}): Harness {
       },
     })),
   };
+
   const partialEnv: Partial<ControlRoutesEnv> = {};
   Object.assign(partialEnv, raw);
   // SAFETY: the control-plane route contract reads only the locally constructed
@@ -286,6 +331,7 @@ function harness(options: World = {}): Harness {
   // namespaces carry the platform's nominal DurableObjectNamespace brand, which
   // no locally built object can hold and which no route path reads.
   const env = partialEnv as ControlRoutesEnv;
+
   return { env, sql, rpc, removed, close: () => db.close() };
 }
 
@@ -346,6 +392,7 @@ function post(path: string, body: JsonValue): Request {
  *  a path it owns, which is a failure rather than something to assert away. */
 function answered(response: Response | null): Response {
   if (response === null) throw new Error('the control plane declined a path it owns');
+
   return response;
 }
 
@@ -356,9 +403,11 @@ async function bodyOf(response: Response | null): Promise<JsonValue> {
 describe('the gate, over HTTP', () => {
   test('a path outside the control plane is declined, not answered', async () => {
     const h = harness();
+
     const answer = await handleControlRequest(
       new Request('https://kinu.run/api/user/profile'), h.env, identity(),
     );
+
     expect(answer).toBe(null);
     h.close();
   });
@@ -373,9 +422,11 @@ describe('the gate, over HTTP', () => {
 
   test('a dev-synthesized identity is refused even when allowlisted', async () => {
     const h = harness({ admins: 'eval-service@kinu.run' });
+
     const answer = await handleControlRequest(
       get('/overview'), h.env, identity({ email: 'eval-service@kinu.run', provider: 'dev' }),
     );
+
     expect(answer?.status).toBe(404);
     h.close();
   });
@@ -416,9 +467,11 @@ describe('the gate, over HTTP', () => {
     // and admitting it would make two gates behave as one.
     const h = harness();
     store.observeUser(h.sql, { userId: USER_ID, email: OPERATOR, at: 1_000 });
+
     const answer = await handleControlRequest(
       get('/overview'), h.env, identity(), access({ email: 'someone-else@kinu.run' }),
     );
+
     expect(answer?.status).toBe(404);
     expect(await bodyOf(answer)).toEqual({ error: 'Not found' });
     h.close();
@@ -429,10 +482,12 @@ describe('the gate, over HTTP', () => {
     // an operator. Access is an outer gate, never a substitute for the allowlist,
     // so an Access policy that admits the whole company still admits nobody here.
     const h = harness();
+
     const answer = await handleControlRequest(
       get('/overview'), h.env, identity({ email: 'colleague@kinu.run' }),
       access({ email: 'colleague@kinu.run' }),
     );
+
     expect(answer?.status).toBe(404);
     h.close();
   });
@@ -441,10 +496,12 @@ describe('the gate, over HTTP', () => {
     // Access sessions last hours by configuration; the step-up window is five
     // minutes and is this deployment's own. A valid assertion must not satisfy it.
     const h = harness();
+
     const answer = await handleControlRequest(
       post('/actions', { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' }),
       h.env, identity({ authTime: Date.now() - 6 * 60 * 1000 }), access(),
     );
+
     expect(answer?.status).toBe(403);
     expect(h.rpc.calls).toEqual([]);
     h.close();
@@ -457,6 +514,7 @@ describe('mutations', () => {
     // that left no trace would be the one gap an audit log may not have.
     const h = harness();
     const stale = identity({ authTime: Date.now() - 6 * 60 * 1000 });
+
     const answer = await handleControlRequest(
       post('/actions', { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' }), h.env, stale,
     );
@@ -474,10 +532,12 @@ describe('mutations', () => {
 
   test('a body the schema does not recognize is refused AND audited', async () => {
     const h = harness();
+
     const answer = await handleControlRequest(
       post('/actions', { action: 'setModel', userId: USER_ID, workspace: 'alpha', model: 'anything' }),
       h.env, identity(),
     );
+
     expect(answer?.status).toBe(400);
     expect(h.rpc.calls).toEqual([]);
     expect(store.listAudit(h.sql).items[0]).toMatchObject({
@@ -488,6 +548,7 @@ describe('mutations', () => {
 
   test('a fresh operator action reaches the existing RPC and is audited as ok', async () => {
     const h = harness();
+
     const answer = await handleControlRequest(
       post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
@@ -506,6 +567,7 @@ describe('mutations', () => {
 
   test('a refusal by the owning object is a 409, and its reason is the audited detail', async () => {
     const h = harness({ behaviour: { retry: { ok: false, error: 'that job already succeeded' } } });
+
     const answer = await handleControlRequest(
       post('/actions', { action: 'job.retry', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
@@ -520,10 +582,12 @@ describe('mutations', () => {
 
   test('a throwing RPC is a 502 audited as failed, kept apart from a refusal', async () => {
     const h = harness({ behaviour: { throws: 'the workspace is evicted' } });
+
     const answer = await handleControlRequest(
       post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
     );
+
     expect(answer?.status).toBe(502);
     const row = store.listAudit(h.sql).items[0];
     expect(row?.outcome).toBe('failed');
@@ -548,10 +612,12 @@ describe('mutations', () => {
 
   test('revoking nothing is a refusal, not an "ok" with nothing revoked', async () => {
     const h = harness({ behaviour: { grants: { grants: [] } } });
+
     const answer = await handleControlRequest(
       post('/actions', { action: 'shell_grants.revoke', userId: USER_ID, workspace: 'alpha' }),
       h.env, identity(),
     );
+
     expect(answer?.status).toBe(409);
     expect(h.rpc.calls.map((c) => c.method)).toEqual(['claimOwner', 'getShellApprovalGrants']);
     expect(store.listAudit(h.sql).items[0]?.outcome).toBe('denied');
@@ -560,12 +626,14 @@ describe('mutations', () => {
 
   test('removing a workspace needs the name retyped, and the refusal is audited', async () => {
     const h = harness({ rosters: { [OTHER_ID]: roster('alpha') }, owners: { alpha: OTHER_ID } });
+
     const answer = await handleControlRequest(
       post('/actions', {
         action: 'workspace.remove', workspace: 'alpha', userId: OTHER_ID, confirm: 'alpha-typo',
       }),
       h.env, identity(),
     );
+
     expect(answer?.status).toBe(409);
     expect(h.removed).toEqual([]);
     // The typo is caught before anything is woken, so not even the identity
@@ -580,6 +648,7 @@ describe('mutations', () => {
   test('a confirmed removal proxies to the registry and tombstones the index', async () => {
     const h = harness({ rosters: { [OTHER_ID]: roster('alpha') }, owners: { alpha: OTHER_ID } });
     store.observeWorkspace(h.sql, { userId: OTHER_ID, name: 'alpha', displayName: 'Alpha', at: 1_000 });
+
     const answer = await handleControlRequest(
       post('/actions', {
         action: 'workspace.remove', workspace: 'alpha', userId: OTHER_ID, confirm: 'alpha',
@@ -613,10 +682,13 @@ describe('mutations', () => {
       // Refused shapes count too: an unaudited rejected attempt is the gap.
       { action: 'nonsense' },
     ];
+
     const h = harness();
+
     for (const attempt of attempts) {
       await handleControlRequest(post('/actions', attempt), h.env, identity());
     }
+
     const rows = store.listAudit(h.sql, { limit: 50 }).items;
     expect(rows.length).toBe(attempts.length);
     expect(store.listPendingAudit(h.sql)).toEqual([]);
@@ -635,6 +707,7 @@ describe('the audit log is written before the action, not after', () => {
     // failed append lets a successful job clear, an approval decision or a grant
     // revocation return 200 with no durable record that anybody had done it.
     const h = harness({ audit: 'append' });
+
     const attempts: JsonValue[] = [
       { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'j' },
       { action: 'jobs.clear', userId: USER_ID, workspace: 'alpha' },
@@ -644,10 +717,12 @@ describe('the audit log is written before the action, not after', () => {
       // And the refusals: a plane that cannot record its own refusal says so.
       { action: 'nonsense' },
     ];
+
     for (const attempt of attempts) {
       const answer = await handleControlRequest(post('/actions', attempt), h.env, identity());
       expect(answer?.status).toBe(503);
     }
+
     expect(h.rpc.calls).toEqual([]);
     expect(h.removed).toEqual([]);
     expect(store.listAudit(h.sql).items).toEqual([]);
@@ -658,6 +733,7 @@ describe('the audit log is written before the action, not after', () => {
     // The action has already happened; the honest answer is that its outcome was
     // not recorded, plus a durable row an operator can find.
     const h = harness({ audit: 'settle' });
+
     const answer = await handleControlRequest(
       post('/actions', { action: 'job.cancel', userId: USER_ID, workspace: 'alpha', jobId: 'job-7' }),
       h.env, identity(),
@@ -759,16 +835,20 @@ describe('a global-name collision between two accounts', () => {
 
   test('the owner reaches the workspace and the other account does not', async () => {
     const h = collided();
+
     const mine = await handleControlRequest(
       get(`/workspaces/contested?userId=${USER_ID}`), h.env, identity(),
     );
+
     expect(mine?.status).toBe(200);
     expect(await bodyOf(mine)).toMatchObject({ workspace: 'contested', userId: USER_ID });
 
     h.rpc.calls.length = 0;
+
     const theirs = await handleControlRequest(
       get(`/workspaces/contested?userId=${OTHER_ID}`), h.env, identity(),
     );
+
     // 403: a genuine cross-user collision, refused by the workspace's own
     // identity row rather than by a guess about the name.
     expect(theirs?.status).toBe(403);
@@ -780,6 +860,7 @@ describe('a global-name collision between two accounts', () => {
 
   test('a stale roster row cannot mutate the account that really owns the name', async () => {
     const h = collided();
+
     const attempts: JsonValue[] = [
       { action: 'job.cancel', userId: OTHER_ID, workspace: 'contested', jobId: 'j' },
       { action: 'job.retry', userId: OTHER_ID, workspace: 'contested', jobId: 'j' },
@@ -789,6 +870,7 @@ describe('a global-name collision between two accounts', () => {
       { action: 'shell_grants.revoke', userId: OTHER_ID, workspace: 'contested' },
       { action: 'workspace.remove', userId: OTHER_ID, workspace: 'contested', confirm: 'contested' },
     ];
+
     for (const attempt of attempts) {
       const answer = await handleControlRequest(post('/actions', attempt), h.env, identity());
       expect(answer?.status, JSON.stringify(attempt)).not.toBe(200);
@@ -803,6 +885,7 @@ describe('a global-name collision between two accounts', () => {
     const rows = store.listAudit(h.sql, { limit: 50 }).items;
     expect(rows.length).toBe(7);
     expect(store.listPendingAudit(h.sql)).toEqual([]);
+
     for (const row of rows) expect(row.outcome).not.toBe('ok');
     h.close();
   });
@@ -816,6 +899,7 @@ describe('a global-name collision between two accounts', () => {
       rosters: { [USER_ID]: roster('contested'), [OTHER_ID]: [] },
       owners: { contested: USER_ID },
     });
+
     store.observeUser(h.sql, { userId: OTHER_ID, email: 'loser@example.com', at: 1_000 });
 
     const answer = await handleControlRequest(get(`/users/${OTHER_ID}`), h.env, identity());
@@ -831,6 +915,7 @@ describe('a global-name collision between two accounts', () => {
 describe('paging over HTTP', () => {
   test('250 accounts are walkable past the 200-row page ceiling', async () => {
     const h = harness();
+
     for (let i = 0; i < 250; i += 1) {
       store.observeUser(h.sql, {
         userId: `u${String(i).padStart(4, '0')}`, email: `u${String(i)}@x`, at: 1_000_000 - i,
@@ -844,11 +929,14 @@ describe('paging over HTTP', () => {
 
     const seen: string[] = [];
     let query = '?limit=200';
+
     for (let pages = 0; pages < 5; pages += 1) {
       const answer = await handleControlRequest(get(`/users${query}`), h.env, identity());
       expect(answer?.status).toBe(200);
       const page = v.parse(PageSchema, await answered(answer).json());
+
       for (const row of page.items) seen.push(row.userId);
+
       if (page.status === 'end') break;
       query = `?limit=200&cursor=${encodeURIComponent(page.next.after)}`;
     }
@@ -887,12 +975,15 @@ describe('paging over HTTP', () => {
     const seen: string[] = [];
     const reconciles: string[] = [];
     let query = '?limit=200';
+
     for (let pages = 0; pages < 5; pages += 1) {
       const answer = await handleControlRequest(get(`/users/${USER_ID}${query}`), h.env, identity());
       expect(answer?.status).toBe(200);
       const detail = v.parse(DetailSchema, await answered(answer).json());
       reconciles.push(detail.reconcile.status);
+
       for (const row of detail.workspaces.items) seen.push(row.name);
+
       if (detail.workspaces.status === 'end') break;
       query = `?limit=200&cursor=${encodeURIComponent(detail.workspaces.next.after)}`;
     }
@@ -918,9 +1009,11 @@ describe('paging over HTTP', () => {
 describe('reads that reach through', () => {
   test('the workspace drilldown reports a down panel instead of blanking the page', async () => {
     const h = harness();
+
     const answer = await handleControlRequest(
       get(`/workspaces/alpha?userId=${USER_ID}`), h.env, identity(),
     );
+
     const detail = await bodyOf(answer);
     expect(detail).toMatchObject({
       workspace: 'alpha',

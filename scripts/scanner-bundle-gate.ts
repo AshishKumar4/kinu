@@ -61,12 +61,16 @@ export async function buildScannerBundle(root: string = REPO_ROOT): Promise<stri
     format: 'esm',
     banner: BUNDLE_BANNER,
   });
+
   if (!built.success) {
     throw new Error(`building ${SCANNER_SOURCE}: ${built.logs.map((log) => log.message).join('; ')}`);
   }
+
   const [artifact] = built.outputs;
+
   if (artifact === undefined) throw new Error(`building ${SCANNER_SOURCE} produced no output`);
   const text = await artifact.text();
+
   return text.split('\n').filter((line) => !MODULE_PATH_COMMENT.test(line)).join('\n');
 }
 
@@ -78,6 +82,7 @@ export interface BundleVerdict {
 /** Judge a committed bundle against a fresh build and the bunfig wiring. */
 export function judgeBundle(committed: string, fresh: string, bunfig: string): BundleVerdict {
   const findings: string[] = [];
+
   if (committed !== fresh) {
     findings.push(finding({
       invariant: `${SCANNER_BUNDLE} is byte-identical to a fresh build of ${SCANNER_SOURCE}`,
@@ -88,6 +93,7 @@ export function judgeBundle(committed: string, fresh: string, bunfig: string): B
       fix: 'bun run build:scanner   # then commit the bundle beside the source',
     }));
   }
+
   if (BARE_IMPORT.test(fresh)) {
     findings.push(finding({
       invariant: `${SCANNER_BUNDLE} imports nothing outside itself`,
@@ -98,6 +104,7 @@ export function judgeBundle(committed: string, fresh: string, bunfig: string): B
       fix: `remove the external import from ${SCANNER_SOURCE} or mark it bundleable`,
     }));
   }
+
   if (!bunfig.split('\n').some((line) => new RegExp(`^scanner\\s*=\\s*"\\./${SCANNER_BUNDLE}"`, 'u').test(line))) {
     findings.push(finding({
       invariant: `bunfig.toml [install.security] scanner is "./${SCANNER_BUNDLE}"`,
@@ -107,30 +114,39 @@ export function judgeBundle(committed: string, fresh: string, bunfig: string): B
       fix: `set scanner = "./${SCANNER_BUNDLE}" in bunfig.toml`,
     }));
   }
+
   return { findings, bytes: fresh.length };
 }
 
 async function main(args: readonly string[]): Promise<number> {
   const fresh = await buildScannerBundle();
   const bundlePath = join(REPO_ROOT, SCANNER_BUNDLE);
+
   if (args.includes('--write')) {
     writeFileSync(bundlePath, fresh);
     console.log(`${GATE}: wrote ${SCANNER_BUNDLE} — ${String(fresh.length)} bytes from ${SCANNER_SOURCE}`);
+
     return 0;
   }
+
   const committed = readFileSync(bundlePath, 'utf8');
   const bunfig = readFileSync(join(REPO_ROOT, 'bunfig.toml'), 'utf8');
   const verdict = judgeBundle(committed, fresh, bunfig);
+
   if (verdict.findings.length > 0) {
     console.error(`${GATE}: ${String(verdict.findings.length)} finding(s)\n`);
+
     for (const each of verdict.findings) console.error(each);
+
     return 1;
   }
+
   console.log(
     `${GATE}: ok — ${SCANNER_BUNDLE} is a fresh build of ${SCANNER_SOURCE} (${String(verdict.bytes)} bytes), `
     + 'imports nothing, and is the scanner bunfig.toml names',
   );
   console.log(`  blind: whether the bundled decoder behaves as the source — that is scripts/dependency-advisory-gate.ts, at the ci tier, over a real \`bun pm scan\``);
+
   return 0;
 }
 

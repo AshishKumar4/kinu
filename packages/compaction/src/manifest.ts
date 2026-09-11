@@ -49,6 +49,7 @@ export interface ArchiveIndexStore {
 }
 
 const ASK_SNIPPET_CHARS = 120;
+
 /** Newest ranges kept in the rendered manifest. A thousand-turn session folds
  *  dozens of times; the index must stay a glance, not a second transcript. */
 const RENDERED_RANGES = 24;
@@ -66,22 +67,27 @@ export function deriveArchiveRange(
   indexed: readonly ArchiveRange[],
 ): { range: ArchiveRange; reset: boolean } | null {
   const previous = indexed.at(-1);
+
   const carried = previous !== undefined
     && previous.endTurn <= compacted.length
     && rangeHash(compacted.slice(0, previous.endTurn)) === previous.rangeHash
     ? previous.endTurn
     : 0;
+
   const reset = previous !== undefined && carried === 0;
   const delta = compacted.slice(carried);
+
   if (delta.length === 0) return null;
 
   const startTurn = carried + 1;
   let userTurns = 0;
   let assistantTurns = 0;
   let firstUserAsk = '';
+
   for (const turn of delta) {
     if (turn.role === 'user') {
       userTurns++;
+
       if (!firstUserAsk) firstUserAsk = askSnippet(turn);
     } else {
       assistantTurns++;
@@ -107,6 +113,7 @@ export function renderArchiveManifest(ranges: readonly ArchiveRange[]): string {
   if (ranges.length === 0) return '';
   const rendered = ranges.slice(-RENDERED_RANGES);
   const elided = ranges.length - rendered.length;
+
   return [
     '## Compaction Archive',
     'Ranges folded out of this conversation, archived verbatim. To recover exact prior wording or ' +
@@ -130,11 +137,14 @@ export function renderArchiveManifest(ranges: readonly ArchiveRange[]): string {
  */
 export function withArchiveManifest(turns: readonly Turn[], manifest: string): Turn[] {
   if (!manifest) return [...turns];
+
   const target = turns.reduce(
     (found, turn, index) => (turn.handle === undefined ? index : found),
     -1,
   );
+
   if (target < 0) return [...turns];
+
   return turns.map((turn, index) =>
     index === target
       ? { ...turn, items: [...turn.items, { kind: 'synthetic' as const, key: `${turn.key}#archive-manifest`, text: manifest }] }
@@ -146,7 +156,9 @@ function formatRange(range: ArchiveRange): string {
   const span = range.startTurn === range.endTurn
     ? `turn ${range.startTurn}`
     : `turns ${range.startTurn}-${range.endTurn}`;
+
   const ask = range.firstUserAsk ? `"${range.firstUserAsk}"` : '(no user ask)';
+
   return `- ${span} (${range.userTurns} user / ${range.assistantTurns} assistant) — ${ask} — ${range.path}`;
 }
 
@@ -156,5 +168,6 @@ function askSnippet(turn: Turn): string {
     .join(' ')
     .replace(/\s+/g, ' ')
     .trim();
+
   return text.length > ASK_SNIPPET_CHARS ? `${text.slice(0, ASK_SNIPPET_CHARS - 1)}…` : text;
 }

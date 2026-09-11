@@ -194,6 +194,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
       noAutoEvolve: !this.opts.evolution,
       oneShot: true,
     });
+
     await session.send(text);
     await session.settleBackgroundWork();
   }
@@ -214,6 +215,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
       noAutoEvolve: true,
       oneShot: true,
     });
+
     return this.seatingSession.hostNode(node);
   }
   private seatingSession: LocalAgentSession | undefined;
@@ -238,15 +240,18 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
 
   workspaceFiles(): EvalTargetWorkspace {
     const shell = this.runtime.shell;
+
     if (!shell) {
       throw new Error(`local target ${this.opts.workspace} has no rt.shell, so a measured task's `
         + 'verifier could not run its harness and every attempt would score zero for a reason '
         + 'that is not about the agent. Open the workspace through openWorkspaceCLI.');
     }
+
     return {
       vfs: this.runtime.storage.vfs,
       exec: async (command) => {
         const outcome = await shell.exec(command);
+
         return { stdout: outcome.stdout, exitCode: outcome.exitCode };
       },
     };
@@ -265,6 +270,7 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
   searchLedger(): Promise<EvalSearchLedger> {
     const sql = this.runtime.storage.sql;
     const actor = this.runtime.actor;
+
     return Promise.resolve({
       searchRuns: this.stores.mctsSearchStore.list(LEDGER_PAGE).length,
       forkRuns: listForkRuns(sql, actor, null, LEDGER_PAGE).items.length,
@@ -291,12 +297,14 @@ class LocalEvalTarget implements LocalAgentEvalTarget {
   roster(): Promise<readonly string[]> {
     const roster = new SubordinateRosterStore(makeSqlExec(this.db), this.runtime.actor);
     roster.ensureSchema();
+
     return Promise.resolve(roster.list().map((entry) => entry.name).sort());
   }
 
   teardown(): Promise<void> {
     this.db.close();
     rmSync(this.opts.dir, { recursive: true, force: true });
+
     return Promise.resolve();
   }
 }

@@ -20,9 +20,12 @@ export async function prepareActorProgram(input: ScaffoldRunControl & {
   readonly version: number;
 }): Promise<ActorTurnProgram> {
   assertScaffoldActive(input);
+
   if (input.mode === 'plan' || input.version <= 0) return BUILTIN_PROGRAM;
   const source = await readVersionedScaffoldSource(input.runtime, input.version);
   assertScaffoldActive(input);
+
   if (source === null) throw new KinuError('missing', 'scaffold version ' + input.version + ' has no source');
+
   return Object.freeze({ kind: 'scaffold', version: input.version, source, digest: sha256Hex(source) });
 }

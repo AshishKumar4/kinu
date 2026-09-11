@@ -15,11 +15,13 @@ import {
 
 function configFixture(files: Readonly<Record<string, string>>) {
   const root = scratchDir('typecheck-coverage');
+
   for (const [file, content] of Object.entries(files)) {
     const path = join(root, file);
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, content);
   }
+
   return { root, remove: () => rmSync(root, { recursive: true, force: true }) };
 }
 
@@ -32,6 +34,7 @@ describe('checkedProjects', () => {
         'test:anti-slop': 'tsc --noEmit -p tools/oxlint/anti-slop && node x.ts',
       },
     }));
+
     expect(projects).toEqual(['packages/core', 'tools/oxlint/anti-slop']);
   });
 
@@ -39,6 +42,7 @@ describe('checkedProjects', () => {
     const projects = checkedProjects(JSON.stringify({
       scripts: { check: 'bun run a', a: 'bun run b', b: 'bun run a && tsc --noEmit -p pkg' },
     }));
+
     expect(projects).toEqual(['pkg']);
   });
 
@@ -61,6 +65,7 @@ describe('programFiles', () => {
       'child/tsconfig.json': '{ "compilerOptions": { "composite": true }, "files": ["referenced.test.ts"] }',
       'child/referenced.test.ts': 'export const referenced = true;\n',
     });
+
     try {
       expect(await programFiles(['include', 'listed', 'parent'], fixture.root)).toEqual([
         'include/included/covered.test.ts',

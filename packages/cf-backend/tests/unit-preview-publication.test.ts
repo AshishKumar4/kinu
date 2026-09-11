@@ -33,8 +33,11 @@ import {
 import type { KinuSandbox } from '../src/kinu-sandbox';
 
 const SUFFIX = 'previews.example';
+
 const SANDBOX_ID = 'kinu-hello';
+
 const PORT = 8080;
+
 const TOKEN = 'p8080_ab12cd34';
 
 /** The exposure lifetime these cases pin: thirty days without observation. */
@@ -47,7 +50,9 @@ afterAll(() => { setSystemTime(); });
 async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
   const logger = createRecordingLogger();
   const restore = setDiagnosticsSink(logger);
+
   try { await body(); } finally { restore(); }
+
   return logger.emitted;
 }
 
@@ -68,10 +73,12 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
   const revoked: number[] = [];
   const removed: number[] = [];
   const token = options.token ?? TOKEN;
+
   const box: KinuSandbox = Object.create({
     ensureReady: async () => {},
     exposePort: async (port: number, opts: { hostname: string }) => {
       exposed.push(port);
+
       return {
         url: `https://${String(port)}-${SANDBOX_ID}-${token}.${opts.hostname}/`,
         port,
@@ -80,6 +87,7 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
     unexposePort: async (port: number) => {
       if (options.failRevoke === true) throw new Error('container unreachable');
       revoked.push(port);
+
       return undefined;
     },
     notePortRemoved: async (port: number) => { removed.push(port); },
@@ -89,6 +97,7 @@ function portBox(options: { token?: string; failRevoke?: boolean } = {}): PortBo
       status: 'active',
     }],
   });
+
   return { exposed, revoked, removed, box };
 }
 
@@ -146,6 +155,7 @@ describe('exposing a port publishes the preview the edge will be asked about', (
 
   test('a minted URL the deployment cannot parse is a failure, not a silent link', async () => {
     const kv = makeKv();
+
     // An SDK that changed its URL shape: the record could not name the token,
     // so the edge would refuse the link the agent is about to hand out.
     const box: KinuSandbox = Object.create({
@@ -240,6 +250,7 @@ describe('listing ports re-observes what the container still reports', () => {
   test('a store that refuses the refresh does not empty the Ports panel', async () => {
     const kv = makeKv();
     const { box } = portBox();
+
     // The record is already correct; only the maintenance write fails. A
     // workspace whose ports are all live must not see an empty panel because
     // the store hiccupped — and the failure is reported, never dropped.
@@ -248,10 +259,12 @@ describe('listing ports re-observes what the container still reports', () => {
       put: async () => { throw new Error('KV PUT failed: 429'); },
       delete: (key) => kv.delete(key),
     };
+
     const emitted = await recordDiagnostics(async () => {
       const rows = await adaptCloudflareSandbox(
         box, async () => {}, sandboxPreviewExposures(refusing, SANDBOX_ID),
       ).getExposedPorts(SUFFIX);
+
       expect(rows.map((row) => row.port)).toEqual([PORT]);
     });
 

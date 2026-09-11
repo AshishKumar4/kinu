@@ -30,6 +30,7 @@ import { makeSqlExec } from './helpers';
 type ToolResult = object | string | number | boolean | null | undefined;
 
 let restore: (() => void) | null = null;
+
 afterEach(() => {
   restore?.();
   restore = null;
@@ -39,6 +40,7 @@ afterEach(() => {
 function recording() {
   const logger = createRecordingLogger();
   restore = setDiagnosticsSink(logger);
+
   return logger;
 }
 
@@ -48,6 +50,7 @@ function linesFor(logger: { emitted: readonly RecordedLog[] }, event: string): r
 
 function agentsTool(deps: Omit<AgentsToolDeps, 'mode'>) {
   const entry = createAgentsTool({ mode: 'build', ...deps });
+
   return toolExecute<AgentsToolInput, ToolResult>(entry);
 }
 
@@ -55,26 +58,32 @@ interface Call { action: string }
 
 function makePeers(overrides: Partial<PeersToolDeps> = {}) {
   const calls: Call[] = [];
+
   const deps: PeersToolDeps = {
     listPeers: async () => [{ name: 'scout' }],
     ask: async (input) => {
       calls.push({ action: 'ask' });
+
       return { status: 'replied', from: input.agent, reply: 'answer' };
     },
     send: async () => {
       calls.push({ action: 'send' });
+
       return { status: 'delivered', message_id: 'ox1' };
     },
     reply: async () => {
       calls.push({ action: 'reply' });
+
       return { ok: true };
     },
     spawnWorkspace: async (input) => {
       calls.push({ action: 'spawn_workspace' });
+
       return { agent: input.name ?? 'specialist', created: true, status: 'replied', from: 'specialist', reply: 'done' };
     },
     ...overrides,
   };
+
   return { deps, calls };
 }
 
@@ -90,6 +99,7 @@ const rosterEntry: SubordinateRosterEntry = {
 function makeTeam(delivery: SubordinateDelivery) {
   const calls: Call[] = [];
   const handoff = { eventId: 'ev-1', delivery, phase: { busy: false, lastActivityAt: null, workingOn: null } };
+
   const deps: TeamToolDeps = {
     delegation: ROOT_DELEGATION_BUDGET,
     list: async () => [rosterEntry],
@@ -101,9 +111,18 @@ function makeTeam(delivery: SubordinateDelivery) {
     spawn: async () => ({ name: rosterEntry.name, displayName: 'Researcher' }),
     status: async () => ({ roster: [rosterEntry] }),
     dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
-    assign: async (input) => { calls.push({ action: 'assign' }); return { ok: true, name: input.name, ...handoff }; },
-    message: async (input) => { calls.push({ action: 'message' }); return { ok: true, name: input.name, ...handoff }; },
+    assign: async (input) => {
+      calls.push({ action: 'assign' });
+
+      return { ok: true, name: input.name, ...handoff };
+    },
+    message: async (input) => {
+      calls.push({ action: 'message' });
+
+      return { ok: true, name: input.name, ...handoff };
+    },
   };
+
   return { deps, calls };
 }
 
@@ -152,12 +171,15 @@ describe('agents.msg.sent', () => {
   // actually asked of.
   test('each transport\'s answer maps onto one outcome vocabulary', async () => {
     const logger = recording();
+
     const queued = makePeers({
       send: async () => ({ status: 'queued', message_id: 'ox9' }),
     });
+
     const refused = makePeers({
       send: async () => ({ status: 'rejected', reason: 'no grant' }),
     });
+
     const team = makeTeam('queued');
 
     await agentsTool({ peers: queued.deps })({ action: 'msg', agent: 'scout', message: 'a' });
@@ -214,10 +236,12 @@ describe('agents.msg.sent', () => {
 
     const lines = linesFor(logger, 'agents.msg.sent');
     expect(lines).toHaveLength(4);
+
     for (const line of lines) {
       for (const value of Object.values(line.fields)) {
         expect(String(value)).not.toContain(secret);
       }
+
       // …and the size IS recorded, so "nothing leaked" cannot be satisfied by
       // an instrument that recorded nothing at all.
       expect(line.fields.chars).toBe(secret.length);
@@ -233,6 +257,7 @@ describe('agents.msg.received', () => {
     const sql = makeSqlExec(db);
     initEventsHubTables(sql);
     const { rt } = createTestRuntime();
+
     return {
       log: new EventLog(sql, createTestActorsOver(db).main),
       vfs: rt.storage.vfs,

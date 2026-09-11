@@ -9,6 +9,7 @@ import { asFetchFunction } from '@kinu.run/core';
 import { TURN, cleanupChats, fakeClient, mountChat } from './helpers/chat-app-fixture';
 
 afterEach(cleanupChats);
+
 describe('ChatApp terminal interaction', () => {
   test('command palette exposes only truthful local and cloud capabilities', async () => {
     const local = fakeClient({ name: 'local' });
@@ -47,6 +48,7 @@ describe('ChatApp terminal interaction', () => {
       mode: 'cloud',
       consents: { listPending: async () => [], resolve: async () => ({ ok: true }) },
     });
+
     const cloudScreen = await mountChat(cloud.client);
     cloudScreen.mockInput.pressKey('k', { ctrl: true });
     await cloudScreen.waitFor('the cloud command palette', () => cloudScreen.frame().includes('Filter commands'));
@@ -59,6 +61,7 @@ describe('ChatApp terminal interaction', () => {
     const controlled = fakeClient({ name: 'alpha' });
     const screen = await mountChat(controlled.client);
     await screen.mockInput.typeText('preserve this draft');
+
     for (let index = 0; index < 5; index += 1) screen.mockInput.pressArrow('left');
     screen.mockInput.pressKey('k', { ctrl: true });
     await screen.waitFor('the command palette', () => screen.frame().includes('Filter commands'));
@@ -69,10 +72,12 @@ describe('ChatApp terminal interaction', () => {
   });
   test('closing a loading model panel cannot reopen it from a stale result', async () => {
     const pending = Promise.withResolvers<AgentModelMenu>();
+
     const controlled = fakeClient({
       name: 'alpha',
       listModels: () => pending.promise,
     });
+
     const screen = await mountChat(controlled.client);
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the loading model panel', () => screen.frame().includes('Loading models'));
@@ -80,6 +85,7 @@ describe('ChatApp terminal interaction', () => {
     pending.resolve({ models: [], failures: [] });
     await screen.waitFor('the model panel to close', () =>
       !screen.frame().includes('Select model'));
+
     for (let index = 0; index < 6; index += 1) await screen.renderOnce();
     expect(screen.frame()).not.toContain('Select model');
     expect(screen.frame()).toContain('Send a message');
@@ -90,6 +96,7 @@ describe('ChatApp terminal interaction', () => {
       name: 'alpha',
       setModel: async () => { throw new Error('Unavailable model'); },
     });
+
     const screen = await mountChat(controlled.client);
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
@@ -102,15 +109,18 @@ describe('ChatApp terminal interaction', () => {
 
   test('a slow model selection blocks newer surfaces until it settles', async () => {
     const pending = Promise.withResolvers<{ spec: string }>();
+
     const controlled = fakeClient({
       name: 'alpha',
       setModel: () => pending.promise,
     });
+
     const screen = await mountChat(controlled.client);
     screen.mockInput.pressKey('l', { ctrl: true });
     await screen.waitFor('the model picker', () => screen.frame().includes('Select model'));
     screen.mockInput.pressEnter();
     screen.mockInput.pressKey('g', { ctrl: true });
+
     for (let index = 0; index < 4; index += 1) await screen.renderOnce();
     expect(screen.frame()).not.toContain('Filter settings');
     pending.resolve({ spec: 'openai/gpt-5.5' });
@@ -125,9 +135,11 @@ describe('ChatApp terminal interaction', () => {
         throw new Error('the workspace socket refused', { cause: new Error('ECONNREFUSED 127.0.0.1') });
       },
     });
+
     const screen = await mountChat(controlled.client, {
       settled: (frame) => frame.includes('the workspace socket refused'),
     });
+
     // The whole chain reaches the person; the composer says the truth about readiness.
     expect(screen.frame()).toContain('Error: the workspace socket refused: ECONNREFUSED 127.0.0.1');
     expect(screen.frame()).toContain('Connecting…');
@@ -140,6 +152,7 @@ describe('ChatApp terminal interaction', () => {
         throw new Error('the rename was refused', { cause: new Error('name already taken') });
       },
     });
+
     const screen = await mountChat(controlled.client);
     await screen.mockInput.typeText('/rename beta');
     screen.mockInput.pressEnter();
@@ -148,11 +161,13 @@ describe('ChatApp terminal interaction', () => {
   });
   test('failed workspace connection keeps the current workspace usable', async () => {
     const controlled = fakeClient({ name: 'alpha' });
+
     const candidate = fakeClient({
       name: 'missing',
       mode: 'cloud',
       connect: async () => { throw new Error('Workspace is unavailable'); },
     });
+
     const screen = await mountChat(controlled.client, {
       listWorkspaces: () => [
         { name: 'alpha', label: 'Alpha', mode: 'local' },
@@ -161,6 +176,7 @@ describe('ChatApp terminal interaction', () => {
       onWorkspaceSelect: async () => candidate.client,
       width: 80,
     });
+
     screen.mockInput.pressKey('w', { meta: true });
     await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
     // The selection starts on the open agent; the cloud section below it
@@ -184,6 +200,7 @@ describe('ChatApp terminal interaction', () => {
     const beta = fakeClient({ name: 'beta', mode: 'cloud' });
     const candidate = Promise.withResolvers<AgentClient>();
     let selections = 0;
+
     const screen = await mountChat(alpha.client, {
       listWorkspaces: () => [
         { name: 'alpha', label: 'Alpha', mode: 'local' },
@@ -191,10 +208,12 @@ describe('ChatApp terminal interaction', () => {
       ],
       onWorkspaceSelect: () => {
         selections += 1;
+
         return candidate.promise;
       },
       width: 80,
     });
+
     screen.mockInput.pressKey('w', { meta: true });
     await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
     screen.mockInput.pressArrow('down');
@@ -203,6 +222,7 @@ describe('ChatApp terminal interaction', () => {
     screen.mockInput.pressArrow('down');
     screen.mockInput.pressEnter();
     screen.mockInput.pressEnter();
+
     for (let index = 0; index < 4; index += 1) await screen.renderOnce();
     expect(selections).toBe(1);
     candidate.resolve(beta.client);
@@ -212,20 +232,25 @@ describe('ChatApp terminal interaction', () => {
   test('workspace switching waits for an in-flight workspace action', async () => {
     const pending = Promise.withResolvers<AgentClientStatus>();
     let statusCalls = 0;
+
     const controlled = fakeClient({
       name: 'alpha',
       status: async () => {
         statusCalls += 1;
+
         if (statusCalls === 1) {
           return { name: 'alpha', purpose: 'alpha', model: null, reasoningEffort: null };
         }
+
         return pending.promise;
       },
     });
+
     const screen = await mountChat(controlled.client, {
       listWorkspaces: () => [{ name: 'alpha', label: 'Alpha', mode: 'local' }],
       width: 80,
     });
+
     await screen.mockInput.typeText('/status');
     screen.mockInput.pressEnter();
     screen.mockInput.pressKey('w', { meta: true });
@@ -237,6 +262,7 @@ describe('ChatApp terminal interaction', () => {
   });
   test('Alt+W switches workspaces without retaining the previous status', async () => {
     const alpha = fakeClient({ name: 'alpha' });
+
     const beta = fakeClient({
       name: 'beta',
       mode: 'cloud',
@@ -253,6 +279,7 @@ describe('ChatApp terminal interaction', () => {
         success: true,
       }],
     });
+
     beta.client.connect = async () => {
       beta.emit({ type: 'evolution', event: 'startup', message: 'Recovered buffered event' });
       beta.emit({ type: 'turn-start', kind: 'programmatic', text: 'recovered turn' });
@@ -265,6 +292,7 @@ describe('ChatApp terminal interaction', () => {
       });
       beta.emit({ type: 'turn-end', turn: TURN });
     };
+
     const screen = await mountChat(alpha.client, {
       listWorkspaces: () => [
         { name: 'alpha', label: 'Alpha', mode: 'local' },
@@ -273,6 +301,7 @@ describe('ChatApp terminal interaction', () => {
       onWorkspaceSelect: async () => beta.client,
       width: 80,
     });
+
     expect(screen.frame()).not.toContain('Filter workspaces');
     screen.mockInput.pressKey('w', { meta: true });
     await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
@@ -311,11 +340,14 @@ describe('ChatApp terminal interaction', () => {
 
   test('the Agent Hub creates a local peer with one key and opens its conversation', async () => {
     const main = fakeClient({ name: 'checkout' });
+
     const peer = fakeClient({ name: 'agent-1', status: async () => ({
       name: 'agent-1', purpose: '', model: 'openai/gpt-5.5', reasoningEffort: 'medium',
     }) });
+
     const cwd = process.cwd();
     let created = 0;
+
     const screen = await mountChat(main.client, {
       hubData: HUB_FIXTURE,
       listWorkspaces: () => [
@@ -324,11 +356,13 @@ describe('ChatApp terminal interaction', () => {
       ],
       onWorkspaceSelect: async (name) => {
         if (name !== 'agent-1') throw new Error(`unexpected switch to ${name}`);
+
         return peer.client;
       },
       onNewAgent: async (client) => {
         created += 1;
         expect(client.mode).toBe('local');
+
         return { name: 'agent-1', displayName: '', kind: 'local-peer' };
       },
     });
@@ -356,20 +390,25 @@ describe('ChatApp terminal interaction', () => {
   test('the Agent Hub opens and renames a cloud additional agent', async () => {
     const cloud = fakeClient({ name: 'shop-cloud', mode: 'cloud' });
     const renamed: string[] = [];
+
     const child = fakeClient({
       name: 'sub-1',
       mode: 'cloud',
       rename: async (displayName) => {
         renamed.push(displayName);
+
         return { name: 'sub-1', displayName };
       },
     });
+
     let created = 0;
+
     const screen = await mountChat(cloud.client, {
       hubData: HUB_FIXTURE,
       onNewAgent: async (client) => {
         created += 1;
         expect(client.mode).toBe('cloud');
+
         return {
           name: 'sub-1',
           displayName: '',
@@ -378,6 +417,7 @@ describe('ChatApp terminal interaction', () => {
         };
       },
     });
+
     screen.mockInput.pressKey('a', { meta: true });
     await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
     screen.mockInput.pressKey('n');
@@ -405,6 +445,7 @@ describe('ChatApp terminal interaction', () => {
   test('drafts stay with their conversation across a workspace switch', async () => {
     const alpha = fakeClient({ name: 'alpha' });
     const beta = fakeClient({ name: 'beta' });
+
     const screen = await mountChat(alpha.client, {
       listWorkspaces: () => [
         { name: 'alpha', label: 'Alpha', mode: 'local' },
@@ -412,11 +453,13 @@ describe('ChatApp terminal interaction', () => {
       ],
       onWorkspaceSelect: async (name) => {
         if (name === 'alpha') return alpha.client;
+
         if (name === 'beta') return beta.client;
         throw new Error(`unexpected switch to ${name}`);
       },
       width: 80,
     });
+
     await screen.mockInput.typeText('half a thought for alpha');
     screen.mockInput.pressKey('w', { meta: true });
     await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
@@ -457,6 +500,7 @@ describe('ChatApp terminal interaction', () => {
     let created = 0;
     const reported: unknown[] = [];
     const consoleError = spyOn(console, 'error').mockImplementation((...args: unknown[]) => { reported.push(args[0]); });
+
     try {
       const screen = await mountChat(second.client, {
         hubData: HUB_FIXTURE,
@@ -467,9 +511,11 @@ describe('ChatApp terminal interaction', () => {
         onWorkspaceSelect: async () => peer.client,
         onNewAgent: async () => {
           created += 1;
+
           return { name: 'agent-9', displayName: '', kind: 'local-peer' };
         },
       });
+
       screen.mockInput.pressKey('a', { meta: true });
       await screen.waitFor('the agent hub', () => screen.frame().includes('Agent Hub'));
       screen.mockInput.pressKey('n');
@@ -478,6 +524,7 @@ describe('ChatApp terminal interaction', () => {
     } finally {
       consoleError.mockRestore();
     }
+
     // The dead surface reported nothing into the live one's run.
     expect(reported).toEqual([]);
   });
@@ -490,10 +537,13 @@ describe('ChatApp terminal interaction', () => {
   test('the hub key pressed while its read is in flight still opens the hub', async () => {
     const client = fakeClient({ name: 'slowhub' });
     const read = Promise.withResolvers<void>();
+
     const readHub = async () => {
       await read.promise;
+
       return HUB_FIXTURE;
     };
+
     const screen = await mountChat(client.client, { readHub });
     // The read has not answered, so there is no hub yet.
     expect(screen.frame()).not.toContain('Agent Hub');
@@ -521,8 +571,10 @@ describe('ChatApp terminal interaction', () => {
     // Records every outbound request and still answers — a spy, not a stub.
     globalThis.fetch = asFetchFunction(async (input) => {
       seen.push(input);
+
       return realFetch(input);
     });
+
     try {
       const screen = await mountChat(alpha.client, {
         hubData: HUB_FIXTURE,
@@ -532,6 +584,7 @@ describe('ChatApp terminal interaction', () => {
         ],
         onWorkspaceSelect: async () => beta.client,
       });
+
       screen.mockInput.pressKey('w', { meta: true });
       await screen.waitFor('the workspace drawer', () => screen.frame().includes('Esc close'));
       screen.mockInput.pressArrow('down');

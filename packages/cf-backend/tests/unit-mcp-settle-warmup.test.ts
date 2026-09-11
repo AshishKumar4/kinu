@@ -43,17 +43,22 @@ function warmingActor(behaviour: { holdsCapability?: boolean; fail?: Error } = {
     failWarm: behaviour.fail ?? null,
     titles: [],
   };
+
   const harness = orchestratorHarness(userPlane);
+
   if (behaviour.holdsCapability === false) harness.agent.harnessHoldsNoCapability();
   else harness.agent.harnessHoldsCapability('harness-token');
+
   return { harness, userPlane };
 }
 
 async function recordDiagnostics(body: () => Promise<void>): Promise<readonly RecordedLog[]> {
   const logger = createRecordingLogger();
   const restore = setDiagnosticsSink(logger);
+
   try {
     await body();
+
     return logger.emitted;
   } finally {
     restore();
@@ -81,6 +86,7 @@ describe('the settled turn warms the next turn’s MCP connections', () => {
     const logs = await recordDiagnostics(
       async () => await harness.agent.harnessWarmUserMcp(),
     );
+
     expect(logs.map((line) => line.event)).toContain('mcp.settle_warmup_failed');
     expect(userPlane.warmConnections).toHaveLength(1);
   });
@@ -91,6 +97,7 @@ describe('the settled turn warms the next turn’s MCP connections', () => {
     const logs = await recordDiagnostics(
       async () => await harness.agent.harnessWarmUserMcp(),
     );
+
     expect(logs.map((line) => line.event)).toContain('mcp.settle_warmup_failed');
     expect(userPlane.warmConnections).toHaveLength(1);
 

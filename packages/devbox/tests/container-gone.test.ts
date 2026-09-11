@@ -111,9 +111,11 @@ describe('a stop or a discard on a box whose container is gone resurrects nothin
     await arm.box.writeFile('/workspace/ladder/c64.bin', 'sixty-four KiB of ladder bytes');
     expect((await arm.box.checkpointNow('quiesce')).kind).toBe('committed');
     const head = chainHead(arm.rows);
+
     if (head === null) throw new Error('the quiesce published no generation');
     arm.container.running.running = false;
     arm.container.processes.clear();
+
     return { ...arm, head };
   }
 

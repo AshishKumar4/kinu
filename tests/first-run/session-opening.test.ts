@@ -11,6 +11,7 @@ test('session opening failures remain attempted cases with explicitly unavailabl
   const root = mkdtempSync(join(parent, 'kinu-first-open-'));
   const firstRunModule = new URL('./first-run.ts', import.meta.url).href;
   const testUtilsModule = new URL('../../packages/test-utils/src/index.ts', import.meta.url).href;
+
   try {
     const script = `
       import { runFirstRunCase } from ${JSON.stringify(firstRunModule)};
@@ -33,15 +34,19 @@ test('session opening failures remain attempted cases with explicitly unavailabl
       console.log(JSON.stringify({ observations, ran, sameError, phase: stored.phase,
         unavailable: collection.map(row => row.status), unmeasured: spend.episodesUnmeasured, noModel: spend.episodesWithoutModel }));
     `;
+
     const run = spawnSync('bun', ['-e', script], {
       cwd: join(import.meta.dirname, '../..'), encoding: 'utf8',
       env: { PATH: process.env.PATH, HOME: root, BENCH_ARTIFACTS: root },
     });
+
     expect(run.status, run.stderr).toBe(0);
+
     const result = v.parse(v.object({
       observations: v.array(v.looseObject({ taskId: v.string(), repetition: v.number(), outcome: v.string(), reason: v.string() })),
       ran: v.boolean(), sameError: v.boolean(), phase: v.string(), unavailable: v.array(v.string()), unmeasured: v.number(), noModel: v.number(),
     }), JSON.parse(run.stdout));
+
     expect(result.observations).toEqual([{ taskId: 'slate', repetition: 0, outcome: 'errored', reason: 'created workspace but connection failed' }]);
     expect(result.ran).toBe(false);
     expect(result.sameError).toBe(true);

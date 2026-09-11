@@ -25,6 +25,7 @@ export {
   CommandSchema, ImageIdentityError, RunIdentitySchema,
   SANDBOX_IMAGE, SANDBOX_IMAGE_VERSION, handleProbeOp, isAuthorized,
 } from './worker-contract';
+
 export type { ProbeBox, ProbeCommand, RunIdentity } from './worker-contract';
 
 // ── reference content model ──────────────────────────────────────────────────
@@ -37,7 +38,9 @@ export const TREE_SEED = 0x5f00d;
  *  A candidate restore design must answer a slice of such a file without
  *  materializing it; this file is the instrument for that question. */
 export const BIG_FILE_BYTES = 32 * 1024 * 1024;
+
 export const CHUNK_BYTES = 128 * 1024;
+
 export const BIG_FILE_CHUNKS = BIG_FILE_BYTES / CHUNK_BYTES;
 
 /** xorshift32 stream, byte-wise little-endian. Pure and cheap: the daemon
@@ -45,7 +48,9 @@ export const BIG_FILE_CHUNKS = BIG_FILE_BYTES / CHUNK_BYTES;
 export function canonicalChunk(seed: number, chunkIndex: number): Uint8Array {
   const out = new Uint8Array(CHUNK_BYTES);
   let state = (seed ^ Math.imul(chunkIndex + 1, 0x9e3779b1)) >>> 0;
+
   if (state === 0) state = 0xa5a5_5aa5;
+
   for (let offset = 0; offset < CHUNK_BYTES; offset += 4) {
     state ^= state << 13; state >>>= 0;
     state ^= state >>> 17;
@@ -55,6 +60,7 @@ export function canonicalChunk(seed: number, chunkIndex: number): Uint8Array {
     out[offset + 2] = (state >>> 16) & 0xff;
     out[offset + 3] = (state >>> 24) & 0xff;
   }
+
   return out;
 }
 
@@ -72,6 +78,7 @@ export function canonicalRange(seed: number, offset: number, length: number): Ui
   const first = Math.floor(offset / CHUNK_BYTES);
   const last = Math.floor((offset + length - 1) / CHUNK_BYTES);
   let written = 0;
+
   for (let chunk = first; chunk <= last; chunk++) {
     const bytes = canonicalChunk(seed, chunk);
     const from = Math.max(offset, chunk * CHUNK_BYTES) - chunk * CHUNK_BYTES;
@@ -79,12 +86,14 @@ export function canonicalRange(seed: number, offset: number, length: number): Ui
     out.set(bytes.subarray(from, to), written);
     written += to - from;
   }
+
   return out;
 }
 
 export function sha256Hex(bytes: Uint8Array): string {
   const hasher = new Bun.CryptoHasher('sha256');
   hasher.update(bytes);
+
   return hasher.digest('hex');
 }
 
@@ -98,6 +107,7 @@ export function verifyChunk(
 ): { ok: true } | { ok: false; reason: string } {
   const expected = chunkDigest(seed, chunkIndex);
   const seen = corrupt ? sha256Hex(xorByte(actual)) : sha256Hex(actual);
+
   return seen === expected ? { ok: true } : { ok: false, reason: `chunk ${chunkIndex} digest mismatch` };
 }
 
@@ -105,6 +115,7 @@ function xorByte(bytes: Uint8Array): Uint8Array {
   const copy = new Uint8Array(bytes.length);
   copy.set(bytes);
   copy[0] ^= 0xff;
+
   return copy;
 }
 
@@ -136,6 +147,7 @@ export function buildRangeIntent(input: {
 }
 
 export { RangeReadIntentSchema };
+
 export type { RangeReadIntent };
 
 // ── syscall surface ───────────────────────────────────────────────────────────
@@ -160,7 +172,9 @@ export function syscallNumbers(arch: string): SyscallNumbers {
 }
 
 export const RESOLVE_BENEATH = 0x02;
+
 export const RESOLVE_NO_SYMLINKS = 0x08;
+
 export const OPEN_HOW_SIZE = 24;
 
 /** struct open_how { u64 flags; u64 mode; u64 resolve; } */
@@ -169,14 +183,18 @@ export function packOpenHow(flags: bigint, mode: bigint, resolve: bigint): Buffe
   buf.writeBigUInt64LE(flags, 0);
   buf.writeBigUInt64LE(mode, 8);
   buf.writeBigUInt64LE(resolve, 16);
+
   return buf;
 }
 
 /** struct __user_cap_header_struct { u32 version; i32 pid; } and one
  *  __user_cap_data_struct triple per 32 capabilities (v3 => two triples). */
 export const CAP_V3_VERSION = 0x20080522;
+
 export const CAP_USER_HEADER_SIZE = 8;
+
 export const CAP_DATA_SIZE = 12;
+
 export const CAP_SYS_ADMIN_BIT = 21;
 
 export const CAPABILITY_NAMES: readonly string[] = [
@@ -201,11 +219,14 @@ export function decodeCapabilitiesV3(words: readonly [number, number, number, nu
   const effLo = words[0] ?? 0;
   const effHi = words[1] ?? 0;
   const names: string[] = [];
+
   for (let bit = 0; bit < CAPABILITY_NAMES.length; bit++) {
     const word = bit < 32 ? effLo : effHi;
     const name = CAPABILITY_NAMES[bit];
+
     if (name !== undefined && (word & (1 << (bit % 32))) !== 0) names.push(name);
   }
+
   return { effective: names, sysAdmin: (effLo & (1 << 21)) !== 0 };
 }
 
@@ -225,6 +246,7 @@ const ERRNO_BY_CODE = new Map<number, string>(
 
 export function errnoName(errno: number | undefined | null): string | undefined {
   if (errno === undefined || errno === null) return undefined;
+
   return ERRNO_BY_CODE.get(-errno) ?? ERRNO_BY_CODE.get(errno) ?? `errno-${errno}`;
 }
 
@@ -241,6 +263,7 @@ export const FUSE_OPCODES = {
 } as const;
 
 export const IN_HEADER_SIZE = 40;
+
 export const OUT_HEADER_SIZE = 16;
 
 export const INIT_FLAGS = {
@@ -251,6 +274,7 @@ export const INIT_FLAGS = {
 } as const;
 
 export const FUSE_PROTOCOL_MAJOR = 7;
+
 export const FUSE_PROTOCOL_MINOR_MAX = 38;
 
 /** struct fuse_attr — 88 bytes. */
@@ -299,6 +323,7 @@ export function packEntryOut(nodeid: number, attr: FuseAttrInput): Buffer {
   buf.writeUInt32LE(0, 32);
   buf.writeUInt32LE(0, 36);
   packFuseAttr(attr, buf, 40);
+
   return buf;
 }
 
@@ -312,6 +337,7 @@ export function packGetattrOut(attr: FuseAttrInput): Buffer {
   buf.writeUInt32LE(0, 8);
   buf.writeUInt32LE(0, 12);
   packFuseAttr(attr, buf, 16);
+
   return buf;
 }
 
@@ -323,6 +349,7 @@ export function packOpenOut(fh: bigint): Buffer {
   buf.writeBigUInt64LE(fh, 0);
   buf.writeUInt32LE(0, 8);
   buf.writeUInt32LE(0, 12);
+
   return buf;
 }
 
@@ -337,6 +364,7 @@ export function packDirent(ino: number, cookie: number, type: number, name: stri
   buf.writeUInt32LE(nameBytes.length, 16);
   buf.writeUInt32LE(type, 20);
   nameBytes.copy(buf, 24);
+
   return buf;
 }
 
@@ -357,6 +385,7 @@ export function packStatfs(files: number): Buffer {
   buf.writeUInt32LE(4096, 40); // bsize
   buf.writeUInt32LE(255, 44); // namelen
   buf.writeUInt32LE(4096, 48); // frsize
+
   return buf;
 }
 
@@ -365,9 +394,11 @@ export const INIT_OUT_PAYLOAD_SIZE = 64;
 
 export function packInitOut(kernelMinor: number, kernelFlags: number, maxReadahead: number): Buffer {
   const minor = Math.min(kernelMinor, FUSE_PROTOCOL_MINOR_MAX);
+
   const flags =
     INIT_FLAGS.ASYNC_READ | INIT_FLAGS.BIG_WRITES |
     INIT_FLAGS.PARALLEL_DIROPS | INIT_FLAGS.MAX_PAGES;
+
   const buf = Buffer.alloc(INIT_OUT_PAYLOAD_SIZE);
   buf.writeUInt32LE(FUSE_PROTOCOL_MAJOR, 0);
   buf.writeUInt32LE(minor, 4);
@@ -383,6 +414,7 @@ export function packInitOut(kernelMinor: number, kernelFlags: number, maxReadahe
   buf.writeUInt32LE(0, 36); // max_stack_depth
   buf.writeUInt16LE(0, 40); // request_timeout
   void kernelFlags;
+
   return buf;
 }
 
@@ -392,6 +424,7 @@ export function packOutHeader(payloadLength: number, unique: bigint, error = 0):
   header.writeUInt32LE(OUT_HEADER_SIZE + payloadLength, 0);
   header.writeInt32LE(error, 4);
   header.writeBigUInt64LE(unique, 8);
+
   return header;
 }
 
@@ -430,8 +463,10 @@ export function summarizeLatencies(samplesMs: readonly number[]): LatencySummary
   if (samplesMs.length === 0) return undefined;
   const sorted = [...samplesMs].sort((a, b) => a - b);
   const sum = sorted.reduce((total, value) => total + value, 0);
+
   const percentile = (p: number): number =>
     sorted[Math.min(sorted.length - 1, Math.ceil(p * sorted.length) - 1)]!;
+
   return {
     n: sorted.length,
     minMs: sorted[0]!,
@@ -464,10 +499,12 @@ export function classifyBootstrap(samples: readonly { entries: number; ms: numbe
   const sumXX = samples.reduce((t, s) => t + s.entries ** 2, 0);
   const sumXY = samples.reduce((t, s) => t + s.entries * s.ms, 0);
   const denominator = n * sumXX - sumX ** 2;
+
   if (denominator === 0) return undefined;
   const b = (n * sumXY - sumX * sumY) / denominator;
   const a = (sumY - b * sumX) / n;
   const largest = Math.max(...samples.map((s) => s.entries));
+
   return { eager: Math.abs(b) * largest > 3 * Math.abs(a) && b > 0, interceptMs: a, msPerEntry: b, largestEntries: largest };
 }
 
@@ -516,6 +553,7 @@ export const CensusSchema = v.looseObject({
    *  never pretended present — absence is the finding when absence is true. */
   imageFormats: v.array(BinaryCensusRowSchema),
 });
+
 export type Census = v.InferOutput<typeof CensusSchema>;
 
 export const Openat2ReportSchema = v.looseObject({
@@ -539,6 +577,7 @@ export const Openat2ReportSchema = v.looseObject({
     outcomes: v.record(v.string(), v.number()),
   }),
 });
+
 export type Openat2Report = v.InferOutput<typeof Openat2ReportSchema>;
 
 const MountAttemptSchema = v.looseObject({
@@ -613,6 +652,7 @@ export const Stage1ReportSchema = v.looseObject({
   }),
   mountsPresentAtExit: v.array(v.string()),
 });
+
 export type Stage1Report = v.InferOutput<typeof Stage1ReportSchema>;
 
 /** Writable FUSE is a separate, stronger stage. It uses the image's pinned
@@ -698,6 +738,7 @@ export const Stage3ReportSchema = v.looseObject({
   reapBounded: v.boolean(),
   linearizable: v.boolean(),
 });
+
 export type Stage3Report = v.InferOutput<typeof Stage3ReportSchema>;
 
 export const Stage2ReportSchema = v.looseObject({
@@ -722,6 +763,7 @@ export const Stage2ReportSchema = v.looseObject({
     replayClean: v.boolean(),
   }),
 });
+
 export type Stage2Report = v.InferOutput<typeof Stage2ReportSchema>;
 
 // ── verdict classification ───────────────────────────────────────────────────
@@ -765,6 +807,7 @@ export interface ProbeVerdict {
  *  its availability is independent of whether FUSE mounts work. */
 export function classifyMaterialization(openat2: Openat2Report): ProbeVerdict {
   const detections: Detection[] = [];
+
   if (openat2.race.escapesObserved > 0) {
     detections.push({
       kind: 'escape-observed',
@@ -772,6 +815,7 @@ export function classifyMaterialization(openat2: Openat2Report): ProbeVerdict {
         + `${openat2.race.escapesObserved} time(s) under concurrent symlink swaps`,
     });
   }
+
   if (!openat2.supported) {
     return {
       outcome: 'no_go',
@@ -782,6 +826,7 @@ export function classifyMaterialization(openat2: Openat2Report): ProbeVerdict {
       detections,
     };
   }
+
   return { outcome: detections.length === 0 ? 'pass' : 'defect', noGo: [], detections };
 }
 
@@ -796,6 +841,7 @@ export function classifyWritableMmap(stage3: Stage3Report | undefined): ProbeVer
       detections: [],
     };
   }
+
   const required: ReadonlyArray<readonly [string, boolean]> = [
     ['header-checked libfuse ABI', stage3.protocol.kernelHeader !== null],
     ['mount', stage3.mounted],
@@ -830,8 +876,11 @@ export function classifyWritableMmap(stage3: Stage3Report | undefined): ProbeVer
       && stage3.mountResidueAbsent && stage3.pathResidueAbsent],
     ['probe conclusion', stage3.linearizable],
   ];
+
   const absent = required.filter(([, holds]) => !holds).map(([name]) => name);
+
   if (stage3.mutation !== 'none') absent.push(`negative mutation ${stage3.mutation} did not run as the control`);
+
   return absent.length === 0
     ? { outcome: 'pass', noGo: [], detections: [] }
     : {
@@ -843,6 +892,7 @@ export function classifyWritableMmap(stage3: Stage3Report | undefined): ProbeVer
         detections: [],
       };
 }
+
 export type WritableMmapMutation = Exclude<Stage3Report['mutation'], 'none'>;
 
 /** Every mutation is a separate real C invocation. Its exit/report pair stays
@@ -853,6 +903,7 @@ export interface WritableMmapControl {
   readonly report: Stage3Report;
   readonly verdict: ProbeVerdict;
 }
+
 /** A control must expose the particular invariant it breaks. The mutation
  * label alone is not evidence; otherwise a binary could report a generic
  * failure without exercising the intended negative path. */
@@ -892,14 +943,18 @@ export function classifyWritableMmapControls(
     'restart-truncation',
     'skip-recovery',
   ];
+
   const failures: string[] = expected.filter((mutation) => {
     const matches = controls?.filter((candidate) => candidate.mutation === mutation) ?? [];
     const control = matches[0];
+
     return matches.length !== 1 || control === undefined || control.exitCode !== 86
       || control.report.mutation !== mutation || control.report.linearizable
       || !mutationRefusalObserved(control.report) || control.verdict.outcome !== 'no_go';
   });
+
   if (controls?.length !== expected.length) failures.push('exactly-one-each');
+
   return failures.length === 0
     ? { outcome: 'pass', noGo: [], detections: [] }
     : {
@@ -924,23 +979,29 @@ export function classifyRun(
       detections: [],
     };
   }
+
   if (crashDetail !== undefined) {
     return { outcome: 'no_go', noGo: [{ kind: 'runtime-crash', detail: crashDetail }], detections: [] };
   }
+
   const noGo: NoGoReason[] = [];
   const detections: Detection[] = [];
+
   if (!stage1.census.devFuse.exists) {
     noGo.push({ kind: 'fuse-device-absent', detail: stage1.census.devFuse.detail ?? '/dev/fuse not present in the container' });
   }
+
   if (!stage1.mounted) {
     const attempts = stage1.mountAttempts
       .map((a) => `${a.route}:${a.ok ? 'ok' : `failed${a.errnoName ? ` (${a.errnoName})` : ''}`}`)
       .join(', ');
+
     noGo.push({ kind: 'mount-refused', detail: `every mount route refused — ${attempts}` });
   }
 
   if (stage1.mounted) {
     const bootstrap = classifyBootstrap(stage1.bootstrapSamples);
+
     if (bootstrap?.eager === true) {
       detections.push({
         kind: 'eager-bootstrap',
@@ -949,6 +1010,7 @@ export function classifyRun(
           + `${bootstrap.largestEntries} entries`,
       });
     }
+
     if (stage1.integrity.servedWrongBytes || (!stage1.integrity.refused && !stage1.integrity.errnoName)) {
       detections.push({
         kind: 'range-integrity-missing',
@@ -956,6 +1018,7 @@ export function classifyRun(
           + (stage1.integrity.servedWrongBytes ? ' and with wrong bytes' : ''),
       });
     }
+
     if (!stage1.integrity.digestRefusal.refused) {
       detections.push({
         kind: 'digest-refusal-missing',
@@ -980,6 +1043,7 @@ export function classifyRun(
   }
 
   const outcome = noGo.length > 0 ? 'no_go' : detections.length > 0 ? 'defect' : 'pass';
+
   return { outcome, noGo, detections };
 }
 
@@ -988,6 +1052,7 @@ export function classifyRun(
  *  verdict, and the artifact composer drops every stage cell. */
 export function imageMismatchVerdict(identity: RunIdentity | undefined): ProbeVerdict | undefined {
   if (identity === undefined || identity.actualVersion === identity.expectedVersion) return undefined;
+
   return {
     outcome: 'no_go',
     noGo: [{

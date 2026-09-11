@@ -69,6 +69,7 @@ abstract class TurnProbe extends Think<Cloudflare.Env> {
       provider: 'fake', modelId: 'step-cap-probe',
       doGenerate: (options) => {
         const delivered = options.prompt.filter((m) => m.role === 'tool').length;
+
         return delivered >= TOOL_CALLING_STEPS
           ? {
             content: [{ type: 'text' as const, text: `answered after ${String(delivered)} tool steps` }],
@@ -85,6 +86,7 @@ abstract class TurnProbe extends Think<Cloudflare.Env> {
           };
       },
     });
+
     return this._model;
   }
 
@@ -120,6 +122,7 @@ abstract class TurnProbe extends Think<Cloudflare.Env> {
     const answered = this.messages.some((message) =>
       message.role === 'assistant'
       && message.parts.some((part) => part.type === 'text' && part.text.startsWith('answered after')));
+
     return { steps: this.steps, lastFinishReason: this.lastFinishReason, answered };
   }
 }

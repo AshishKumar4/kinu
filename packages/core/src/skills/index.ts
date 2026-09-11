@@ -21,15 +21,19 @@
  */
 
 export * from './types';
+
 export {
   parseSkillFile, stringifySkillFile, skillNameProblem,
 } from './parse';
+
 export {
   discoverSkills, readSkillFile, readSkillBody, skillPath, compareSkillNames,
   BUILTIN_SKILL_HEADERS, BUILTIN_SKILL_NAMES,
   type SkillsVfs, type DiscoverOpts, type SkillsDiscovery, type UnreadSkillFile,
 } from './discover';
+
 export { BUILTIN_SKILLS } from './builtins';
+
 export {
   resolveActiveSkills,
   extractExplicitInvocations,
@@ -38,6 +42,7 @@ export {
   type LoadActiveSkillsOpts,
   type ActivatedSkill,
 } from './loader';
+
 export {
   renderActiveSkillsSection,
   renderSkillsIndexSection,

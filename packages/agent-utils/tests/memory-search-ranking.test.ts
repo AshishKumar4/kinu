@@ -13,6 +13,7 @@ function createStore() {
 	const fs = createMemoryVfs();
 	const store = new MemoryStore(fs, sql);
 	store.ensureSchema();
+
 	return { store };
 }
 
@@ -21,10 +22,12 @@ const PATH = "memory/MEMORY.md";
 describe("MemoryStore.search ranking", () => {
 	test("a document saturated with the query terms is still returned", async () => {
 		const { store } = createStore();
+
 		// Dense repetition drives |bm25| far past the old 19 cutoff.
 		const dense = Array.from({ length: 120 }, () =>
 			"kinu workspace sandbox provisioning failure diagnosis",
 		).join("\n");
+
 		const filler = Array.from({ length: 40 }, (_, i) => `unrelated filler line ${i}`).join("\n");
 		await store.indexFile(PATH, `${dense}\n${filler}`);
 		const hits = store.search("kinu workspace sandbox provisioning failure diagnosis");

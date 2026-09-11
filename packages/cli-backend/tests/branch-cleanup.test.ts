@@ -17,10 +17,15 @@ import { createBranchSpawner } from '../src/branch-process';
 import { localActorDirectory } from '../src/actor-identity';
 import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime';
 import { initActorStateSchema } from '@kinu.run/core';
+
 const dir = mkdtempSync(join(tmpdir(), 'kinu-branch-cleanup-'));
+
 const parentDbPath = `${dir}.db`;
+
 const parentDb = new Database(parentDbPath, { create: true });
+
 const parentRuntime = createCLIRuntime(parentDb, { dbPath: parentDbPath, llm: null, hostRoot: null, agentName: 'branch-parent' });
+
 initActorStateSchema(makeWorkspaceSchemaSql(parentDb));
 
 afterAll(() => {
@@ -30,7 +35,9 @@ afterAll(() => {
 });
 
 const HISTORY = [{ role: 'user', content: 'ship a parser' }];
+
 const LANGUAGES: [string, ...string[]] = ['typescript'];
+
 const wireBodySchema = v.record(v.string(), JsonValueSchema);
 
 /** An OpenAI-compatible endpoint whose status code each test chooses. */
@@ -39,11 +46,13 @@ function startModelEndpoint(status: number) {
     port: 0,
     async fetch(request) {
       v.parse(wireBodySchema, await request.json());
+
       if (status >= 400) {
         return Response.json({
           error: { message: 'upstream refused', type: 'server_error' },
         }, { status });
       }
+
       return Response.json({
         id: 'cmpl-branch-cleanup',
         object: 'chat.completion',
@@ -61,6 +70,7 @@ function startModelEndpoint(status: number) {
       });
     },
   });
+
   return {
     stop: () => server.stop(true),
     llm: {
@@ -82,6 +92,7 @@ function startModelEndpoint(status: number) {
  */
 function branchRow(branchId: string) {
   const { directory } = localActorDirectory(parentRuntime.actor);
+
   return directory.apply(parentRuntime.actor, [], { action: 'resolveCreation', creationId: branchId });
 }
 
@@ -96,6 +107,7 @@ function branchStores(storageKey: string): string[] {
 
 test('a released branch leaves no store of its own and gives up its name', async () => {
   const endpoint = startModelEndpoint(200);
+
   try {
     // The workspace's ONE database, not a base path the spawner decorates:
     // `branch-worker.ts` refuses a `KINU_ROOT_DB` its root-issued bootstrap

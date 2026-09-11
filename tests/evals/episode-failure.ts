@@ -80,15 +80,19 @@ const PROVIDER_SERVER_PATTERNS: readonly RegExp[] = [
  */
 export function environmentFailure(failures: readonly string[]): string | null {
   const turnError = failures.find((failure) => failure.startsWith(RUN_END_FAILURE_PREFIX));
+
   if (turnError === undefined) return null;
   const error = turnError.slice(RUN_END_FAILURE_PREFIX.length);
   const kind = classifyTurnFailure(error);
+
   if (kind === 'rate_limit' || kind === 'auth') {
     return `${INFRA_FAILURE_MARKER} (${kind}): ${turnError}`;
   }
+
   if (kind === 'transient' && PROVIDER_SERVER_PATTERNS.some((pattern) => pattern.test(error))) {
     return `${INFRA_FAILURE_MARKER} (provider_server): ${turnError}`;
   }
+
   return null;
 }
 
@@ -165,6 +169,8 @@ export function disposeFailedCase(error: Error): FailedCaseDisposition {
       ? { kind: 'settled', outcome: 'inert' }
       : { kind: 'resumable', outcome: 'incomplete' };
   }
+
   if (error.message.includes(INFRA_FAILURE_MARKER)) return { kind: 'resumable', outcome: 'incomplete' };
+
   return { kind: 'settled', outcome: 'errored' };
 }

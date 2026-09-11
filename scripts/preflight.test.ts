@@ -18,7 +18,9 @@ import { join } from 'node:path';
 import { PROJECT_MARKERS, engineBoundsTempWalk, judge, type Environment } from './preflight';
 
 const REPO_ROOT = new URL('..', import.meta.url).pathname;
+
 const ENGINE = 'packages/cli-backend/src/checkpoints.ts';
+
 const engineSource = readFileSync(join(REPO_ROOT, ENGINE), 'utf8');
 
 /** A healthy machine, so each case below moves exactly one fact. */
@@ -59,6 +61,7 @@ describe('the engine bound this gate reads', () => {
       'if (probe === temp || real === realTemp) break;',
       '',
     );
+
     expect(unbounded).not.toBe(engineSource);
     expect(engineBoundsTempWalk(unbounded)).toBe(false);
   });
@@ -73,6 +76,7 @@ describe('a project marker above the temp directory', () => {
     const [problem] = judge({
       ...HEALTHY, markedAncestors: ['/tmp'], workdirWalkBounded: false,
     });
+
     expect(problem).toContain('/tmp');
     expect(problem).toContain(ENGINE);
     expect(problem).toContain('24,483 ms');

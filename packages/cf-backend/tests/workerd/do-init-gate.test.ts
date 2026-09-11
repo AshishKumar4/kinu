@@ -25,6 +25,7 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 
 const STALL_MS = 700;
+
 /** The gate is the only thing that can cost time here — `ping()` is
  *  `SELECT 1`. Half the stall is comfortably above scheduling noise and
  *  comfortably below the real stall. */

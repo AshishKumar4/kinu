@@ -13,13 +13,16 @@ import { _rpcWriteProtectedRootFile } from '../../../node_modules/@nimbus-sh/wor
 const repositoryRoot = join(import.meta.dir, '../../..');
 
 type NativeSqlValue = string | number | bigint | null | Uint8Array;
+
 type NativeSqlRow = Record<string, NativeSqlValue>;
 
 function nativeBinding(value: SqlValue): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
+
   if (ArrayBuffer.isView(value)) {
     return new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
   }
+
   return value;
 }
 
@@ -28,8 +31,10 @@ function workspaceSql(database: Database): SqlDatabase {
     exec(query: string, ...bindings: SqlValue[]) {
       const statement = database.prepare<NativeSqlRow, SQLQueryBindings[]>(query);
       const bound = bindings.map(nativeBinding);
+
       if (statement.columnNames.length > 0) return statement.all(...bound);
       statement.run(...bound);
+
       return [];
     },
   };
@@ -43,6 +48,7 @@ describe('installed Nimbus dependency integrity', () => {
         _rpcReady: async () => ({ ok: true as const, preinstalled: [] }),
       }),
     };
+
     const box = Nimbus.fromEnv(
       { NIMBUS_SESSION: namespace },
       { sandboxes: { default: { runtimes: { allow: ['node'], onDemand: true } } } },
@@ -55,12 +61,14 @@ describe('installed Nimbus dependency integrity', () => {
 
   test('xargs null mode preserves leading whitespace in the first argument', async () => {
     const db = new Database(':memory:');
+
     const workspace = await NimbusWorkspace.create({
       sql: workspaceSql(db),
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => db.transaction(fn)() } },
       generation: 1,
       cwd: '/home/user',
     });
+
     const result = await workspace.exec('xargs -0 -n 1 echo', { stdin: ' leading\0second\0' });
 
     expect(result).toMatchObject({ exitCode: 0, stdout: ' leading\nsecond\n' });
@@ -69,12 +77,14 @@ describe('installed Nimbus dependency integrity', () => {
 
   test('a protected root file is host-writable and immutable to the session user', async () => {
     const db = new Database(':memory:');
+
     const workspace = await NimbusWorkspace.create({
       sql: workspaceSql(db),
       transactions: { storage: { transactionSync: <T,>(fn: () => T): T => db.transaction(fn)() } },
       generation: 1,
       cwd: '/home/user',
     });
+
     const host = {
       ensureSqliteFs() {},
       sqliteFs: workspace.vfs,
@@ -103,6 +113,7 @@ describe('installed Nimbus dependency integrity', () => {
       repositoryRoot,
       'node_modules/@nimbus-sh/core/src/vfs/sqlite-vfs.ts',
     ), 'utf8');
+
     const workerInstalled = readFileSync(join(
       repositoryRoot,
       'node_modules/@nimbus-sh/worker/dist/session/rpc.js',

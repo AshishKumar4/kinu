@@ -16,6 +16,7 @@ export interface RunEvalPairOpts {
 
 export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> {
   const out: EvalResult[] = [];
+
   for (const c of opts.cases) {
     const runA = await runOne(opts.strategyA, c, opts.buildContext);
     const runB = await runOne(opts.strategyB, c, opts.buildContext);
@@ -29,6 +30,7 @@ export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> 
       verdict, runA, runB,
     });
   }
+
   return out;
 }
 
@@ -38,8 +40,10 @@ async function runOne(
   buildContext: (c: EvalCase) => StrategyContext,
 ): Promise<EvalRun> {
   const t0 = Date.now();
+
   try {
     const result = await strategy.explore(buildContext(c));
+
     return {
       caseId: c.id,
       strategyId: strategy.id,
@@ -50,6 +54,7 @@ async function runOne(
     };
   } catch (err) {
     const message = renderThrownChain({ cause: err });
+
     return {
       caseId: c.id,
       strategyId: strategy.id,

@@ -21,10 +21,12 @@ const CLI_DIST_PLATFORMS = [
  *  scripts/build-cli-dist.sh. Every artifact carries a sibling `.sha256` the
  *  launcher verifies before it unpacks anything. */
 export const CLI_RUNTIME_PATH = '/downloads/kinu-runtime-cpython.tar.gz';
+
 export const CLI_DIST_PATHS: string[] = [
   ...CLI_DIST_PLATFORMS.map((platform) => `/downloads/kinu-cli-${platform}.tar.gz`),
   CLI_RUNTIME_PATH,
 ];
+
 export const CLI_VERSION_PATH = '/downloads/kinu-version.json';
 
 /** Identity of the build that produced the deployed asset bundle. */
@@ -33,6 +35,7 @@ export interface BuildStamp {
   sha: string;
   builtAt: string;
 }
+
 const BuildStampSchema = v.object({
   version: v.pipe(v.string(), v.trim(), v.minLength(1)),
   sha: v.pipe(v.string(), v.trim(), v.minLength(1)),
@@ -52,8 +55,11 @@ export async function fetchDeployedAsset(
   pathname: string,
 ): Promise<Response | null> {
   const res = await env.ASSETS.fetch(new Request(new URL(pathname, base), { method: 'GET' }));
+
   if (!res.ok) return null;
+
   if ((res.headers.get('content-type') ?? '').toLowerCase().includes('text/html')) return null;
+
   return res;
 }
 
@@ -62,7 +68,9 @@ export async function fetchDeployedAsset(
  *  incomplete and its CLI download endpoints are broken. */
 export async function readBuildStamp(env: Env, base: string | URL): Promise<BuildStamp | null> {
   const res = await fetchDeployedAsset(env, base, CLI_VERSION_PATH);
+
   if (!res) return null;
   const parsed = v.safeParse(BuildStampSchema, await tolerateAsync(() => res.json(), 'malformed-input'));
+
   return parsed.success ? parsed.output : null;
 }

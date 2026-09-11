@@ -15,33 +15,41 @@ import './index.css';
  */
 
 const realFetch = window.fetch.bind(window);
+
 window.fetch = Object.assign(
   (input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]): Promise<Response> => {
     const parsedInput = v.safeParse(v.string(), input);
     const parsedUrl = v.safeParse(v.instance(URL), input);
     const parsedRequest = v.safeParse(v.instance(Request), input);
+
     const url = parsedInput.success ? parsedInput.output
       : parsedUrl.success ? parsedUrl.output.href
       : parsedRequest.success ? parsedRequest.output.url : location.href;
+
     const path = url.startsWith('/') ? url : new URL(url, window.location.origin).pathname;
     const method = (init?.method ?? (parsedRequest.success ? parsedRequest.output.method : 'GET')).toUpperCase();
+
     if (method === 'GET' && path === '/api/user/profile') {
       return Promise.resolve(
         new Response(JSON.stringify(LANDING_PROFILE), { headers: { 'content-type': 'application/json' } }),
       );
     }
+
     if (method === 'GET' && path === '/api/user/workspaces') {
       return Promise.resolve(
         new Response(JSON.stringify(LANDING_ROSTER), { headers: { 'content-type': 'application/json' } }),
       );
     }
+
     return realFetch(input, init);
   },
   { preconnect: realFetch.preconnect },
 );
 
 const mount = document.getElementById('landing-root');
+
 if (mount === null) throw new Error('landing root is missing');
 
 const install = buildCliInstallCommand({ origin: window.location.origin });
+
 createRoot(mount).render(<LandingPage install={install} />);

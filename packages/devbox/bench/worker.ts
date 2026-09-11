@@ -125,13 +125,19 @@ const FLUSH_EVERY = 64;
  *  strategy measures. `RestoreWork` counts the two separately, so the tally
  *  declares both rather than leaving one of them absent. */
 const BYTE_CLASSES = ['payload', 'metadata'] as const;
+
 type ByteClass = (typeof BYTE_CLASSES)[number];
+
 export type ByteTally = Partial<Record<ByteClass, number>>;
 
 const pending: OpTally = {};
+
 const pendingBytes: ByteTally = {};
+
 let pendingCount = 0;
+
 let inFlight: Promise<void> | undefined;
+
 let flushEnv: BenchEnv | undefined;
 
 function countOp(name: OpName): void {
@@ -147,8 +153,11 @@ function countBytes(served: number): void {
  *  the whole object otherwise. */
 function servedBytes(object: R2ObjectBody): number {
   const range = object.range;
+
   if (range === undefined) return object.size;
+
   if ('suffix' in range) return range.suffix;
+
   return range.length ?? object.size - (range.offset ?? 0);
 }
 
@@ -159,12 +168,16 @@ function servedBytes(object: R2ObjectBody): number {
  *  counter object is what joins them. */
 async function flushOps(env: BenchEnv): Promise<void> {
   if (inFlight !== undefined) await inFlight;
+
   if (pendingCount === 0) return;
   const batch = { ...pending } satisfies OpTally;
   const bytes = { ...pendingBytes } satisfies ByteTally;
+
   for (const name of OP_NAMES) delete pending[name];
+
   for (const cls of BYTE_CLASSES) delete pendingBytes[cls];
   pendingCount = 0;
+
   const run = (async () => {
     try {
       await env.BenchOpCounter.get(env.BenchOpCounter.idFromName('bench-ops')).bump(batch, bytes);
@@ -172,6 +185,7 @@ async function flushOps(env: BenchEnv): Promise<void> {
       inFlight = undefined;
     }
   })();
+
   inFlight = run;
   await run;
 }
@@ -197,28 +211,39 @@ async function holdPublicationAck(env: BenchEnv, key: string, bytes: number): Pr
 function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
   const observed = publicationBucket(bucket, env.BENCH_PUBLICATION_CUT,
     (key, bytes) => holdPublicationAck(env, key, bytes));
+
   const counted: Partial<R2Bucket> = {
-    head: async (key) => { countOp('head'); await maybeFlush(); return await bucket.head(key); },
+    head: async (key) => {
+      countOp('head');
+      await maybeFlush();
+
+      return await bucket.head(key);
+    },
     delete: async (keys) => {
       countOp('delete');
       await maybeFlush();
+
       return await bucket.delete(keys);
     },
     list: async (options) => {
       countOp('list');
       await maybeFlush();
+
       return await bucket.list(options);
     },
     createMultipartUpload: async (key, options) => {
       countOp('createMultipartUpload');
       await maybeFlush();
+
       return countingMultipart(await observed.createMultipartUpload(key, options));
     },
     resumeMultipartUpload: (key, uploadId) => {
       countOp('resumeMultipartUpload');
+
       return countingMultipart(observed.resumeMultipartUpload(key, uploadId));
     },
   };
+
   // `get` and `put` are counted through the prototype chain below, because their
   // overload sets are what a caller relies on and restating them here would
   // narrow what this fixture can do.
@@ -228,14 +253,17 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
   // other member resolves through the prototype to the binding itself. Nothing
   // is recovered from `any` and no raw payload is validated here.
   const delegate: R2Bucket = Object.create(bucket);
+
   return Object.assign(delegate, counted, {
     get: async (key: string, options?: R2GetOptions) => {
       countOp('get');
       await maybeFlush();
       const object = await bucket.get(key, options);
+
       // A conditional `get` whose condition failed answers an `R2Object` with
       // no body, so it served nothing.
       if (object !== null && 'body' in object) countBytes(servedBytes(object));
+
       return object;
     },
     put: async (
@@ -245,6 +273,7 @@ function countingBucket(bucket: R2Bucket, env: BenchEnv): R2Bucket {
     ) => {
       countOp('put');
       await maybeFlush();
+
       return await observed.put(key, value, options);
     },
   });
@@ -260,12 +289,18 @@ function countingMultipart(upload: R2MultipartUpload): R2MultipartUpload {
     uploadPart: async (partNumber, value) => {
       countOp('uploadPart');
       await maybeFlush();
+
       return await upload.uploadPart(partNumber, value);
     },
-    abort: async () => { countOp('abort'); return await upload.abort(); },
+    abort: async () => {
+      countOp('abort');
+
+      return await upload.abort();
+    },
     complete: async (parts) => {
       countOp('complete');
       await maybeFlush();
+
       return await upload.complete(parts);
     },
   };
@@ -288,10 +323,15 @@ function summarize(counts: OpCounts): OpSummary {
   let classB = 0;
   let classFree = 0;
   let total = 0;
+
   for (const name of OP_NAMES) total += calls[name] ?? 0;
+
   for (const name of CLASS_A) classA += calls[name] ?? 0;
+
   for (const name of CLASS_B) classB += calls[name] ?? 0;
+
   for (const name of CLASS_FREE) classFree += calls[name] ?? 0;
+
   return { calls, classA, classB, classFree, total, bytes: counts.bytes };
 }
 
@@ -306,26 +346,34 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
   async armCut(token: string, prefix: string): Promise<void> {
     await this.ctx.storage.transaction(async (txn) => {
       const current = await txn.get<PublicationCut>('publication-cut');
+
       if (current?.token === token) return;
+
       if (current?.state === 'armed' || current?.state === 'held') {
         throw new Error('another publication cut is active');
       }
+
       await txn.put('publication-cut', armPublicationCut(token, prefix));
     });
   }
 
   async readCut(token: string): Promise<PublicationCut> {
     const row = await this.ctx.storage.get<PublicationCut>('publication-cut');
+
     if (row?.token !== token) throw new Error('no publication cut has this token');
+
     return row;
   }
 
   async reachCut(key: string, bytes: number): Promise<PublicationCut | null> {
     return await this.ctx.storage.transaction(async (txn) => {
       const row = await txn.get<PublicationCut>('publication-cut');
+
       if (row === undefined || !key.startsWith(row.prefix)) return null;
       const next = reachPublicationCut(row, key, bytes);
+
       if (next !== row) await txn.put('publication-cut', next);
+
       return next;
     });
   }
@@ -333,9 +381,11 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
   async finishCut(token: string, stopped: boolean): Promise<PublicationCut> {
     return await this.ctx.storage.transaction(async (txn) => {
       const row = await txn.get<PublicationCut>('publication-cut');
+
       if (row === undefined) throw new Error('no publication cut is armed');
       const next = finishPublicationCut(row, token, stopped);
       await txn.put('publication-cut', next);
+
       return next;
     });
   }
@@ -343,23 +393,30 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
   async clearCut(token: string): Promise<void> {
     await this.ctx.storage.transaction(async (txn) => {
       const row = await txn.get<PublicationCut>('publication-cut');
+
       if (row?.token === token) await txn.delete('publication-cut');
     });
   }
 
   async bump(batch: OpTally, bytes: ByteTally): Promise<void> {
     const tally = (await this.ctx.storage.get<OpTally>('tally')) ?? {};
+
     for (const name of OP_NAMES) {
       const count = batch[name];
+
       if (count === undefined) continue;
       tally[name] = (tally[name] ?? 0) + count;
     }
+
     const served = (await this.ctx.storage.get<ByteTally>('bytes')) ?? {};
+
     for (const cls of BYTE_CLASSES) {
       const count = bytes[cls];
+
       if (count === undefined) continue;
       served[cls] = (served[cls] ?? 0) + count;
     }
+
     await this.ctx.storage.put({ tally, bytes: served });
   }
 
@@ -373,6 +430,7 @@ export class BenchOpCounter extends DurableObject<BenchEnv> {
   async reset(): Promise<OpCounts> {
     const counts = await this.read();
     await this.ctx.storage.delete(['tally', 'bytes']);
+
     return counts;
   }
 }
@@ -431,6 +489,7 @@ interface BenchOperationRow {
 }
 
 const OPERATION_PREFIX = 'bench:operation:';
+
 const OPERATION_ID_PREFIX = 'bench:operation-id:';
 
 /** One second, matching the startup row: the delay exists so the request can
@@ -458,11 +517,13 @@ interface RestoreProbe {
 /** The two key spellings, in one place each: four call sites read or write
  *  these rows, and a key spelled twice is a row nobody can find. */
 const operationKey = (token: string): string => `${OPERATION_PREFIX}${token}`;
+
 const operationIdKey = (op: string): string => `${OPERATION_ID_PREFIX}${op}`;
 
 /** What an armed schedule row carries to its callback: the token naming the
  *  outcome row to settle, and nothing else. */
 const OperationPayloadSchema = v.object({ token: v.string() });
+
 type BenchOperationPayload = v.InferOutput<typeof OperationPayloadSchema>;
 
 // ── the box ─────────────────────────────────────────────────────────────────
@@ -514,10 +575,13 @@ class BenchBox extends Devbox<BenchEnv> {
     const probe = phase === 'opened'
       ? { at: Date.now(), wallMs: null, phases: {} }
       : this.#probe;
+
     if (probe === undefined) return;
+
     const row: RestoreProbe = phase === 'opened' ? probe
       : phase === 'settled' ? { ...probe, wallMs: atMs }
       : { ...probe, phases: { ...probe.phases, [phase]: atMs } };
+
     this.#probe = row;
     void this.ctx.storage.put(RESTORE_PROBE_KEY, row)
       .then(async () => await this.ctx.storage.sync())
@@ -567,6 +631,7 @@ class BenchBox extends Devbox<BenchEnv> {
     // one by one so no representation check decides what counts. BENCH_TOKEN
     // itself is the scanned secret, never a scanned surface.
     const envValues: Array<{ readonly name: string; readonly value: string }> = [];
+
     for (const entry of [
       { name: 'ALLOW_EXTRACTION', value: this.env.ALLOW_EXTRACTION },
       { name: 'BENCH_SELECTED_ARMS', value: this.env.BENCH_SELECTED_ARMS },
@@ -575,6 +640,7 @@ class BenchBox extends Devbox<BenchEnv> {
         envValues.push({ name: entry.name, value: entry.value });
       }
     }
+
     return await runBenchSecurityCells({
       strategy,
       boxPrefix,
@@ -590,6 +656,7 @@ class BenchBox extends Devbox<BenchEnv> {
    * deleting that state and must free the class's only instance first. */
   async stopForTeardown(): Promise<void> {
     await this.stop('SIGTERM');
+
     while (this.ctx.container?.running === true) await scheduler.wait(100);
   }
 
@@ -621,11 +688,15 @@ class BenchBox extends Devbox<BenchEnv> {
     readonly kind: CheckpointKind;
   }): Promise<BenchOperationRow> {
     const armed = await this.ctx.storage.get<string>(operationIdKey(request.op));
+
     if (armed !== undefined) {
       const existing = await this.ctx.storage.get<BenchOperationRow>(operationKey(armed));
+
       if (existing !== undefined) return existing;
     }
+
     const token = `${request.operation}-${crypto.randomUUID()}`;
+
     const row: BenchOperationRow = {
       token,
       op: request.op,
@@ -634,6 +705,7 @@ class BenchBox extends Devbox<BenchEnv> {
       state: 'pending',
       armedAt: Date.now(),
     };
+
     await this.ctx.storage.put(operationKey(token), row);
     await this.ctx.storage.put(operationIdKey(request.op), token);
     await this.schedule(
@@ -641,6 +713,7 @@ class BenchBox extends Devbox<BenchEnv> {
       request.operation === 'checkpoint' ? 'benchCheckpointOperation' : 'benchStopOperation',
       { token },
     );
+
     return row;
   }
 
@@ -681,15 +754,20 @@ class BenchBox extends Devbox<BenchEnv> {
     run: (row: BenchOperationRow) => Promise<CheckpointOutcome>,
   ): Promise<void> {
     const parsed = v.safeParse(OperationPayloadSchema, payload);
+
     if (!parsed.success) {
       console.error('[bench] a scheduled operation carried no token and was dropped');
+
       return;
     }
+
     const key = operationKey(parsed.output.token);
     const row = await this.ctx.storage.get<BenchOperationRow>(key);
+
     if (row === undefined || row.state !== 'pending') return;
     const startedAt = Date.now();
     await this.ctx.storage.put(key, { ...row, startedAt });
+
     try {
       const outcome = await run(row);
       await this.ctx.storage.put(key, {
@@ -721,7 +799,9 @@ class BenchBox extends Devbox<BenchEnv> {
   async killWithoutQuiesce(): Promise<boolean> {
     if (this.ctx.container?.running !== true) return false;
     await this.stop('SIGKILL');
+
     while (this.ctx.container?.running === true) await scheduler.wait(100);
+
     return true;
   }
 
@@ -738,6 +818,7 @@ class BenchBox extends Devbox<BenchEnv> {
   async destroyContainerForBench(): Promise<boolean> {
     if (this.ctx.container?.running !== true) return false;
     await this.destroy();
+
     return true;
   }
 
@@ -838,11 +919,14 @@ function json<Answer>(payload: Answer, status = 200): Response {
 function authorized(request: Request, expected: string | undefined): boolean {
   if (expected === undefined || expected.length === 0) return false;
   const offered = (request.headers.get('authorization') ?? '').replace(/^Bearer\s+/i, '');
+
   if (offered.length !== expected.length) return false;
   let diff = 0;
+
   for (let i = 0; i < expected.length; i += 1) {
     diff |= offered.charCodeAt(i) ^ expected.charCodeAt(i);
   }
+
   return diff === 0;
 }
 
@@ -856,7 +940,9 @@ function boxOf(
   name: string,
 ): BenchStub {
   const binding = env.SnapshotChainBox;
+
   if (binding === undefined) throw new Error(`no durable-object binding for ${strategy}`);
+
   return binding.get(binding.idFromName(`${strategy}:${name}`));
 }
 
@@ -878,17 +964,21 @@ const DriverBodySchema = v.object({
   prefix: v.optional(v.string()),
   whole: v.optional(v.boolean()),
 });
+
 type DriverBody = v.InferOutput<typeof DriverBodySchema>;
 
 
 async function body(request: Request): Promise<DriverBody> {
   if (request.method !== 'POST') return {};
   const text = await request.text();
+
   if (text.length === 0) return {};
   const parsed = v.safeParse(DriverBodySchema, JSON.parse(text));
+
   if (!parsed.success) {
     throw new Error(`body does not match the driver contract: ${parsed.issues[0]?.message ?? ''}`);
   }
+
   return parsed.output;
 }
 
@@ -909,6 +999,7 @@ async function serveInstrumentRoutes(
   switch (route) {
     case 'GET /state': {
       const state = await box.devboxState();
+
       return json({
         ok: true,
         strategy,
@@ -926,6 +1017,7 @@ async function serveInstrumentRoutes(
       // settles: the number is what the readiness gate held the first
       // operation for, not the driver's own round trip.
       const probe = await box.readRestoreProbe();
+
       return json({ ok: probe !== undefined, strategy, box: name, probe, ms: Date.now() - started });
     }
 
@@ -933,39 +1025,51 @@ async function serveInstrumentRoutes(
       if (env.BENCH_PUBLICATION_CUT !== '1') {
         throw new Error('NOT-CUT: this Worker boot did not enable --fault-cuts');
       }
+
       const op = input.op ?? '';
+
       if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
       const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
       await counter.armCut(op, storePrefixOf(env, strategy, name));
       const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
+
       return json({ ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started }, 202);
     }
+
     case 'GET /fault-cut':
       return json(await counter.readCut(url.searchParams.get('token') ?? ''));
     case 'POST /fault-cut/kill': {
       const token = url.searchParams.get('token') ?? '';
       const receipt = await counter.readCut(token);
+
       if (receipt.prefix !== storePrefixOf(env, strategy, name)) {
         throw new Error('the publication cut belongs to another box');
       }
+
       if (receipt.state !== 'held') return json(await counter.finishCut(token, false));
       const stopped = await box.killWithoutQuiesce();
+
       return json(await counter.finishCut(token, stopped));
     }
+
     case 'POST /fault-cut/cancel':
       return json(await counter.finishCut(url.searchParams.get('token') ?? '', false));
     case 'POST /fault-cut/clear': {
       await counter.clearCut(url.searchParams.get('token') ?? '');
+
       return json({ ok: true });
     }
   }
+
   if (route === 'GET /incidents') {
     // Every filed failure, oldest first. Totals say how many; only the
     // reasons say what. Called after the ladder and after the wake but
     // before teardown, with full arrays archived.
     const incidents = await box.devboxIncidentReasons();
+
     return json({ ok: true, strategy, box: name, incidents, ms: Date.now() - started });
   }
+
   if (route === 'POST /security') {
     // G4 FAULT CELLS, storage-only. `op` doubles as the isolated namespace
     // nonce: one call, one `security-cells/<op>/` prefix and one set of
@@ -973,13 +1077,18 @@ async function serveInstrumentRoutes(
     // the namespace and a new op cannot collide with it. No new body field:
     // DriverBodySchema stays closed.
     const nonce = input.op ?? '';
+
     if (nonce.length === 0) return json({ ok: false, error: 'op is required' }, 400);
+
     if (!/^[A-Za-z0-9-]{8,64}$/.test(nonce)) {
       return json({ ok: false, error: 'op must be an 8-64 char id for the isolated namespace' }, 400);
     }
+
     const security = await box.runSecurityCells(nonce);
+
     return json({ ok: true, strategy, box: name, security, ms: Date.now() - started });
   }
+
   return null;
 }
 
@@ -988,17 +1097,21 @@ export default {
     if (!authorized(request, env.BENCH_TOKEN)) return json({ ok: false, error: 'unauthorized' }, 401);
 
     const url = new URL(request.url);
+
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true });
     flushEnv = env;
     const name = url.searchParams.get('box') ?? 'devbox-bench';
     let input: DriverBody;
+
     try {
       input = await body(request);
     } catch (error) {
       return json({ ok: false, error: `malformed body: ${describeThrown({ cause: error })}` }, 400);
     }
+
     const requested = input.strategy ?? url.searchParams.get('strategy');
     const strategy = parseDevboxStrategyName(requested);
+
     if (strategy === null) {
       return json({
         ok: false,
@@ -1022,17 +1135,22 @@ export default {
     try {
       const route = `${request.method} ${url.pathname}`;
       const aside = await serveInstrumentRoutes(route, input, env, strategy, box, name, started, url, counter);
+
       if (aside !== null) return aside;
+
       switch (route) {
         case 'POST /create': {
           await box.kickStartup();
+
           return json({ ok: true, strategy, box: name, ms: Date.now() - started });
         }
 
         case 'GET /head': {
           const key = url.searchParams.get('key') ?? '';
+
           if (key.length === 0) return json({ ok: false, error: 'key is required' }, 400);
           const object = await env.BACKUP_BUCKET.head(key);
+
           return json({
             ok: object !== null,
             key,
@@ -1054,8 +1172,10 @@ export default {
           // minutes, with no option raising it, so a slow arm that batches its
           // phases reports nothing at all.
           const options: ExecOptions = {};
+
           if (input.cwd !== undefined) options.cwd = input.cwd;
           const result = await box.exec(input.command ?? 'true', options);
+
           return json({
             ok: result.exitCode === 0,
             exitCode: result.exitCode,
@@ -1071,8 +1191,10 @@ export default {
           // by calling this again.
           const path = input.path ?? '';
           const content = input.content ?? '';
+
           if (path.length === 0) return json({ ok: false, error: 'path is required' }, 400);
           await box.writeFile(path, content);
+
           return json({ ok: true, path, bytes: content.length, ms: Date.now() - started });
         }
 
@@ -1082,9 +1204,11 @@ export default {
         // repairs and why the request could not stay the operation's clock.
         case 'POST /checkpoint': {
           const op = input.op ?? '';
+
           if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
           const kind: CheckpointKind = input.kind === 'tick' ? 'tick' : 'quiesce';
           const row = await box.armBenchOperation({ op, operation: 'checkpoint', kind });
+
           return json({
             ok: true, token: row.token, kind, state: row.state, ms: Date.now() - started,
           }, 202);
@@ -1096,8 +1220,10 @@ export default {
           // armed rather than awaited: a final checkpoint over a large tree is
           // exactly the work that outlived the request deadline.
           const op = input.op ?? '';
+
           if (op.length === 0) return json({ ok: false, error: 'op is required' }, 400);
           const row = await box.armBenchOperation({ op, operation: 'stop', kind: 'quiesce' });
+
           return json({
             ok: true, token: row.token, state: row.state, ms: Date.now() - started,
           }, 202);
@@ -1105,8 +1231,10 @@ export default {
 
         case 'GET /operation': {
           const token = url.searchParams.get('token') ?? '';
+
           if (token.length === 0) return json({ ok: false, error: 'token is required' }, 400);
           const row = await box.readBenchOperation(token);
+
           // AN UNKNOWN TOKEN IS DEFINITIVE, not a slow answer: the row is
           // written before the request that armed it returns, so a token this
           // box never armed names an operation nobody is running and the poll
@@ -1114,6 +1242,7 @@ export default {
           if (row === undefined) {
             return json({ ok: false, token, error: 'no operation is armed under this token' }, 404);
           }
+
           return json({
             ok: row.state !== 'failed',
             token,
@@ -1131,6 +1260,7 @@ export default {
           // A container stop with NO final checkpoint: the witness instrument
           // for a recovery replay. See `killWithoutQuiesce`.
           await box.killWithoutQuiesce();
+
           return json({ ok: true, strategy, box: name, ms: Date.now() - started });
         }
 
@@ -1140,11 +1270,13 @@ export default {
           // instance and restores the committed generation onto it. See
           // `destroyContainerForBench`.
           const destroyed = await box.destroyContainerForBench();
+
           return json({ ok: true, strategy, box: name, destroyed, ms: Date.now() - started });
         }
 
         case 'POST /wake': {
           await box.kickStartup();
+
           return json({ ok: true, strategy, box: name, ms: Date.now() - started });
         }
 
@@ -1158,6 +1290,7 @@ export default {
           await box.flushOpTally();
           await flushOps(env);
           await scheduler.wait(750);
+
           return json({ ok: true, ...summarize(await counter.read()) });
         }
 
@@ -1170,6 +1303,7 @@ export default {
           // value.
           await box.flushOpTally();
           await flushOps(env);
+
           return json({ ok: true, ...summarize(await counter.read()) });
         }
 
@@ -1177,6 +1311,7 @@ export default {
           await box.flushOpTally();
           await flushOps(env);
           await scheduler.wait(750);
+
           return json({ ok: true, ...summarize(await counter.reset()) });
         }
 
@@ -1184,25 +1319,30 @@ export default {
           await box.stopForTeardown();
           await box.discardState();
           let purged = 0;
+
           // An empty prefix means the whole store, which is only ever correct
           // when the caller created it for this run. Requiring the intent to be
           // spelled out is what keeps a typo from emptying a real bucket.
           if (input.purge === true) {
             const prefix = input.prefix ?? '';
+
             if (prefix.length === 0 && input.whole !== true) {
               return json({
                 ok: false,
                 error: 'an empty prefix means the whole bucket; pass whole:true to mean it',
               }, 400);
             }
+
             for (;;) {
               const page = await env.BACKUP_BUCKET.list({ prefix });
               const keys = page.objects.map(object => object.key);
+
               if (keys.length === 0) break;
               await env.BACKUP_BUCKET.delete(keys);
               purged += keys.length;
             }
           }
+
           return json({
             ok: true,
             discarded: true,

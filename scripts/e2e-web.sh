@@ -3,9 +3,9 @@
 # Requires the local dev server (wrangler/vite) running on localhost:5173.
 #
 # It CREATES an agent on whatever it is pointed at, so where it points is not a
-# detail. The default is a loopback dev server; a staging origin is the other
-# accepted target, and anything else is refused unless KINU_EVAL_ALLOW_PROD=1
-# names the exception. The rule and its one implementation live in
+# detail. The default is a loopback dev server; the deployment is the other
+# accepted target, and anything else is refused. The rule and its one
+# implementation live in
 # packages/test-utils/src/eval-identity.ts — this script asks that module rather
 # than keeping a second opinion about which hosts are safe.
 #

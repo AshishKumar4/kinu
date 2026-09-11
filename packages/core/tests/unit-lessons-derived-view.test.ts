@@ -47,6 +47,7 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
         'In one sentence': 'check the cluster name before rotating keys',
       },
     });
+
     const engine = new EvolutionEngine(rt);
 
     // A wrong turn graded through the user's own reply: the lesson is born
@@ -72,7 +73,12 @@ describe('S5 — the corroborated lessons view survives a MEMORY.md reset', () =
     });
     const prompts: string[] = [];
     const complete = rt.llm.complete.bind(rt.llm);
-    rt.llm.complete = async (prompt: string) => { prompts.push(prompt); return complete(prompt); };
+    rt.llm.complete = async (prompt: string) => {
+      prompts.push(prompt);
+
+      return complete(prompt);
+    };
+
     await engine.onSessionComplete({
       sessionId: 'default', startedAt: Date.now() - 60_000, endedAt: Date.now(),
       turns: [makeTurn(), makeTurn({ turnId: 'msg-2' }), makeTurn({ turnId: 'msg-3' })],
@@ -89,6 +95,7 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
   function setup() {
     const rt = createTestRuntime().rt;
     initTurnOutcomeTables(rt.storage.execRaw);
+
     return rt;
   }
 
@@ -126,6 +133,7 @@ describe('S8 — an explicit verdict overrules the classifier without erasing it
     const written = recordOutcomeLabels(rt.storage.sql, rt.actor, {
       labeler: 'owner', labels: [{ outcomeId: classifierRow!.id, label: 'corrected' }],
     });
+
     expect(written).toBe(1);
     const gold = goldLabels(rt.storage.sql, rt.actor);
     expect(gold.get(classifierRow!.id)!.label).toBe('corrected');

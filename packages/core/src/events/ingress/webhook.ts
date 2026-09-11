@@ -124,6 +124,7 @@ export interface RegisteredWebhook {
 function freshWebhookSecret(): string {
   const bytes = new Uint8Array(32);
   crypto.getRandomValues(bytes);
+
   return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
@@ -151,6 +152,7 @@ export async function registerDurableWebhook(
   const rate_limit_per_min = normalizeWebhookRateLimitPerMin(opts.rate_limit_per_min);
   const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
   const secret = opts.auth_mode === 'mtls' ? null : (opts.secret?.trim() || freshWebhookSecret());
+
   const trigger_id = await registry.register({
     kind: 'webhook_durable',
     spec: {
@@ -162,6 +164,7 @@ export async function registerDurableWebhook(
     creator_trust: 'owner',
     rate_limit_per_min,
   }, now);
+
   if (secret !== null) {
     try {
       secrets.put(secret_id, trigger_id, secret, now);
@@ -171,6 +174,7 @@ export async function registerDurableWebhook(
       throw new Error(`webhook "${opts.label}" was not created: its secret could not be stored`, { cause });
     }
   }
+
   return { trigger_id, secret_id, auth_mode: opts.auth_mode, secret };
 }
 
@@ -197,18 +201,25 @@ async function verifyWebhookAuth(
   if (spec.auth_mode === 'hmac') {
     if (!spec.secret_id) return { ok: false, reason: 'no hmac secret configured' };
     const secret = await deps.secrets.get(spec.secret_id);
+
     if (!secret) return { ok: false, reason: 'secret revoked' };
+
     if (!opts.hmac_signature || !opts.hmac_timestamp) {
       return { ok: false, reason: 'missing hmac headers' };
     }
+
     const ts = parseInt(opts.hmac_timestamp, 10);
+
     if (!Number.isFinite(ts) || Math.abs(opts.now - ts) > HMAC_TIMESTAMP_WINDOW_MS) {
       return { ok: false, reason: 'timestamp out of window' };
     }
+
     const expected = await hmacSha256Hex(secret, `${ts}.${opts.body_text}`);
+
     if (!timingSafeEqual(expected, opts.hmac_signature)) {
       return { ok: false, reason: 'signature mismatch' };
     }
+
     return {
       ok: true,
       ingress: 'webhook_hmac',
@@ -223,22 +234,30 @@ async function verifyWebhookAuth(
       },
     };
   }
+
   if (spec.auth_mode === 'bearer') {
     if (!spec.secret_id) return { ok: false, reason: 'no bearer secret' };
     const stored = await deps.secrets.get(spec.secret_id);
+
     if (!stored) return { ok: false, reason: 'secret revoked' };
+
     if (!opts.bearer_header || !opts.bearer_header.startsWith('Bearer ')) {
       return { ok: false, reason: 'missing bearer' };
     }
+
     const presented = opts.bearer_header.slice('Bearer '.length).trim();
+
     if (!timingSafeEqual(stored, presented)) {
       return { ok: false, reason: 'bearer mismatch' };
     }
+
     return { ok: true, ingress: 'webhook_bearer' };
   }
+
   if (!opts.cf_mtls_verified) {
     return { ok: false, reason: 'client cert not verified' };
   }
+
   return { ok: true, ingress: 'webhook_mtls' };
 }
 
@@ -248,10 +267,13 @@ export async function acceptWebhookDelivery(
   opts: WebhookDelivery,
 ): Promise<WebhookDeliveryResult> {
   const trigger = deps.triggers.get(opts.trigger_id);
+
   if (!trigger) return { status: 'rejected', http_status: 404, reason: 'trigger not found' };
+
   if (trigger.state !== 'active') {
     return { status: 'rejected', http_status: 503, reason: `trigger ${trigger.state}` };
   }
+
   if (trigger.kind !== 'webhook_durable' && trigger.kind !== 'webhook_ephemeral') {
     return { status: 'rejected', http_status: 400, reason: 'not a webhook trigger' };
   }
@@ -259,19 +281,23 @@ export async function acceptWebhookDelivery(
   const spec: Partial<WebhookTriggerSpec> = trigger.spec;
 
   const receivedCT = opts.content_type?.split(';')[0].trim() ?? '';
+
   if (spec.accepted_content_type && spec.accepted_content_type !== receivedCT) {
     return { status: 'rejected', http_status: 415, reason: `expected ${spec.accepted_content_type}` };
   }
 
   const auth = await verifyWebhookAuth(deps, spec, opts);
+
   if (!auth.ok) return { status: 'rejected', http_status: 401, reason: auth.reason };
 
   const rate = tryConsumeWebhookRateLimit(deps.sql, opts.trigger_id, trigger.rate_limit_per_min, opts.now);
+
   if (!rate.allowed) {
     return { status: 'rejected', http_status: 429, reason: `rate limit exceeded (${rate.limit}/min)` };
   }
 
   let parsedBody: unknown;
+
   try {
     parsedBody = receivedCT.includes('json') ? JSON.parse(opts.body_text) : opts.body_text;
   } catch (error) {
@@ -295,6 +321,7 @@ export async function acceptWebhookDelivery(
   // because it never saw our 202 and an attacker replaying the capture are the
   // same bytes, and the honest answer to both is "already have it".
   const held = auth.claim ? claimSignedDelivery(deps.sql, opts.trigger_id, auth.claim, opts.now) : null;
+
   if (held !== null) {
     return { status: 'admitted', event_id: held.event_id ?? undefined, admitted: false };
   }
@@ -340,6 +367,7 @@ export async function acceptWebhookDelivery(
     },
     now: opts.now,
   });
+
   // What the claim above now stands for, so a replay is answered with the event
   // rather than with a bare acknowledgement.
   if (auth.claim) bindClaimedDelivery(deps.sql, opts.trigger_id, auth.claim.key, id);
@@ -405,16 +433,19 @@ function claimSignedDelivery(
   now: number,
 ): { event_id: string | null } | null {
   sql.exec(`DELETE FROM webhook_replay_claims WHERE expires_at <= ?`, now);
+
   const held = v.safeParse(ClaimRowSchema, sql.exec(
     `SELECT event_id FROM webhook_replay_claims WHERE trigger_id = ? AND claim = ?`,
     triggerId, claim.key,
   ).toArray()[0]);
+
   if (held.success) return { event_id: held.output.event_id };
   sql.exec(
     `INSERT INTO webhook_replay_claims (trigger_id, claim, event_id, claimed_at, expires_at)
      VALUES (?, ?, NULL, ?, ?)`,
     triggerId, claim.key, now, claim.expiresAt,
   );
+
   return null;
 }
 

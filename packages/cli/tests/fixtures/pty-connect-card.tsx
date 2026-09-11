@@ -20,8 +20,11 @@ import { fakeClient, soloHub } from '../helpers/chat-app-fixture';
 
 /** Prose the agent "writes", so a submitted turn is visible on the surface. */
 const REPLY = 'agent prose reply';
+
 const TURN = { text: REPLY, toolCalls: [], steps: 1, durationMs: 1, hadError: false };
+
 const CONNECT_MS = 800;
+
 /** How long the fixture turn runs before it answers, so the running-turn
  *  placeholder is on screen long enough for a wait to meet it. */
 const TURN_MS = 1500;
@@ -31,7 +34,9 @@ const devices = Bun.serve({
   port: 0,
   fetch: () => Response.json([]),
 });
+
 process.env.KINU_ORIGIN = `http://127.0.0.1:${String(devices.port)}`;
+
 process.env.KINU_TOKEN = 'pty-connect-card';
 
 const agent = fakeClient({
@@ -43,12 +48,15 @@ const agent = fakeClient({
     await new Promise<void>((resolve) => { setTimeout(resolve, TURN_MS); });
     agent.emit({ type: 'text-delta', delta: REPLY });
     agent.emit({ type: 'turn-end', turn: TURN });
+
     return TURN;
   },
 });
 
 const renderer = await createCliRenderer({ exitOnCtrlC: false, useMouse: true });
+
 await renderer.waitForThemeMode(250);
+
 createRoot(renderer).render(
   <ChatApp
     client={agent.client}
@@ -57,4 +65,5 @@ createRoot(renderer).render(
     readHub={async (target) => soloHub(target)}
   />,
 );
+
 await new Promise<void>(() => {});

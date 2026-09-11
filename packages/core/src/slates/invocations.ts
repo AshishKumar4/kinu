@@ -12,6 +12,7 @@ const InvocationRow = v.object({
   request: v.string(), attempt: v.number(), owner_epoch: v.string(),
   state: v.picklist(['prepared', 'running', 'succeeded', 'failed', 'indeterminate']),
 });
+
 const ReceiptRow = v.object({
   id: v.string(), invocationId: v.string(), attempt: v.number(),
   outcome: v.picklist(['succeeded', 'failed', 'indeterminate']),
@@ -38,6 +39,7 @@ export class SqliteSlateInvocations extends SlateInvocationSeam {
     this.db.exec(`INSERT INTO slate_invocations (id, slate_id, request, attempt, owner_epoch, state)
       VALUES (?, ?, ?, 0, ?, 'prepared')`, id.value, request.slateId.value,
     new TextDecoder().decode(canonicalSlateInvocationRequest(request)), this.epoch);
+
     return id;
   }
 
@@ -57,24 +59,32 @@ export class SqliteSlateInvocations extends SlateInvocationSeam {
 
   private async execute<Result>(request: SlateInvocationRequest, id: InvocationId, effect: (context: SlateEffectContext) => Promise<Result>): Promise<SlateInvocationResult<Result>> {
     this.authority.assertCurrent();
+
     const attempt = this.atomic(() => {
       const stored = this.db.exec('SELECT request, attempt, owner_epoch, state FROM slate_invocations WHERE id = ?', id.value).toArray()[0];
+
       if (stored === undefined) throw new KinuError('missing', 'Slate invocation was not prepared');
       const row = v.parse(InvocationRow, stored);
+
       if (row.request !== new TextDecoder().decode(canonicalSlateInvocationRequest(request))) {
         throw new KinuError('denied', 'Slate invocation does not match its admitted intent');
       }
+
       if (row.state === 'running' && row.owner_epoch === this.epoch) {
         throw new KinuError('denied', 'Slate invocation already has a live effect');
       }
+
       const next = row.attempt + 1;
       this.db.exec("UPDATE slate_invocations SET attempt = ?, owner_epoch = ?, state = 'running' WHERE id = ?", next, this.epoch, id.value);
+
       return next;
     });
+
     const receiptId = new ReceiptId(nanoid());
     const context = new SlateEffectContext(id, 0, attempt, `slate:${id.value}:0`);
     let result: SlateInvocationResult<Result>;
     let failure: string | null = null;
+
     try {
       result = { outcome: 'succeeded', receiptId, value: await effect(context) };
     } catch (cause) {
@@ -82,15 +92,18 @@ export class SqliteSlateInvocations extends SlateInvocationSeam {
       failure = error.message;
       result = { outcome: CODE_WORK_DID_NOT_START[error.code] ? 'failed' : 'indeterminate', receiptId };
     }
+
     this.atomic(() => {
       const changed = this.db.exec(`UPDATE slate_invocations SET state = ?
         WHERE id = ? AND attempt = ? AND owner_epoch = ? AND state = 'running' RETURNING id`,
       result.outcome, id.value, attempt, this.epoch).toArray();
+
       if (changed.length === 0) throw new KinuError('denied', 'Slate invocation ownership changed before its receipt');
       this.db.exec(`INSERT INTO slate_receipts (id, invocation_id, attempt, outcome, error, finished_at)
         VALUES (?, ?, ?, ?, ?, ?)`, receiptId.value, id.value, attempt, result.outcome, failure, Date.now());
     });
     this.authority.assertCurrent();
+
     return result;
   }
 }

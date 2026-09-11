@@ -55,11 +55,15 @@ function replicatedKv(): ReplicatedKv {
   const view = (lag: { writes?: boolean; deletes?: boolean }): KvStore => ({
     async get(key) {
       const current = live(origin.get(key));
+
       // A write is not readable at a colo it has not reached yet.
       if (current) return !lag.writes || Date.now() >= current.replicatedAt ? current.value : null;
+
       if (!lag.deletes) return null;
       const stale = lagging.get(key);
+
       if (stale && Date.now() < stale.until) return live(stale.entry)?.value ?? null;
+
       return null;
     },
     async put(key, value, options) {
@@ -72,6 +76,7 @@ function replicatedKv(): ReplicatedKv {
     },
     async delete(key) {
       const entry = origin.get(key);
+
       if (entry) lagging.set(key, { entry, until: Date.now() + KV_REPLICATION_LAG_MS });
       origin.delete(key);
     },
@@ -126,10 +131,12 @@ function fleet(): Fleet {
 
   const objectFor = (userId: string): TestUserDO => {
     let harness = objects.get(userId);
+
     if (!harness) {
       harness = createTestUserDO({ durableObjectId: userId });
       objects.set(userId, harness);
     }
+
     return harness;
   };
 
@@ -137,9 +144,11 @@ function fleet(): Fleet {
     idFromName: (name: string) => name,
     get: (id: string) => {
       const real = objectFor(id).userDO;
+
       const refuse = (method: SessionMethod) => (broken === method
         ? Promise.reject(new Error('Durable Object unreachable'))
         : null);
+
       // A double with a stub's shape: methods on the prototype, so the
       // delegation cannot be flattened away by a copy.
       return jsrpcStub({
@@ -173,6 +182,7 @@ function envWith(
     UserDO: namespace,
     CREDENTIAL_ENCRYPTION_KEY: credentialEncryptionKey,
   });
+
   // SAFETY: sign-in, verification and logout read exactly the constructed KV
   // namespace, UserDO namespace and credential key; every reachable binding is
   // present above.
@@ -196,12 +206,14 @@ async function refusalFor(token: string, env: AuthEnv): Promise<AuthError> {
   const request = new Request('https://kinu.example.com/api/workspaces', {
     headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}` },
   });
+
   try {
     await authenticateRequest(request, env);
   } catch (error) {
     if (error instanceof AuthError) return error;
     throw error;
   }
+
   throw new Error('the cookie was accepted');
 }
 
@@ -214,23 +226,28 @@ async function rejection(call: Promise<unknown>): Promise<Error> {
     if (error instanceof Error) return error;
     throw error;
   }
+
   throw new Error('the call did not fail');
 }
 
 function logoutRequest(token: string, returnTo?: string): Request {
   const url = new URL('https://kinu.example.com/logout');
+
   if (returnTo !== undefined) url.searchParams.set('return_to', returnTo);
+
   return new Request(url, {
     headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(token)}` },
   });
 }
 
 const open: Fleet[] = [];
+
 const restoreSinks: Array<() => void> = [];
 
 function openFleet(): Fleet {
   const built = fleet();
   open.push(built);
+
   return built;
 }
 
@@ -239,12 +256,15 @@ function openFleet(): Fleet {
 function recordDiagnostics(): RecordingLogger {
   const logger = createRecordingLogger();
   restoreSinks.push(setDiagnosticsSink(logger));
+
   return logger;
 }
 
 afterEach(() => {
   setSystemTime();
+
   while (restoreSinks.length > 0) restoreSinks.pop()?.();
+
   while (open.length > 0) open.pop()?.close();
 });
 
@@ -577,9 +597,11 @@ describe('a sign-in is usable before its KV projection has replicated', () => {
     // What comes back is the row's own copy, and it is the identity the
     // projection would have carried, not a thinner stand-in for it.
     expect(await verifySession(cold, session.token)).toMatchObject(session.identity);
+
     const request = new Request('https://kinu.example.com/api/workspaces', {
       headers: { cookie: `${SESSION_COOKIE_NAME}=${encodeURIComponent(session.token)}` },
     });
+
     expect(await authenticateRequest(request, cold)).toMatchObject(session.identity);
   });
 

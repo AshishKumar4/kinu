@@ -79,7 +79,9 @@ const SCROLLBACK_LINES = 5_000;
 
 export function TerminalPane({ workspace, executor, outputs, onExecute }: TerminalPaneProps) {
   const lane = terminalLane(executor);
+
   if (lane.mode !== "pty") return <LineTerminal executor={executor} outputs={outputs ?? []} onExecute={onExecute} />;
+
   return executor === "laptop"
     ? <DeviceTerminal workspace={workspace} executor={executor} />
     : <PtyTerminal workspace={workspace} executor={executor} />;
@@ -126,9 +128,12 @@ function mountPtyTerminal(
   // already produce.
   term.attachCustomKeyEventHandler((event) => {
     const copyChord = (event.ctrlKey || event.metaKey) && event.shiftKey && event.code === "KeyC";
+
     if (!copyChord || event.type !== "keydown") return true;
     const selection = term.getSelection();
+
     if (!selection) return true;
+
     if (copyOperation.current !== null) return false;
     const owner: TerminalOperation = { promise: null };
     // The key handler must return its boolean synchronously, so install the
@@ -147,6 +152,7 @@ function mountPtyTerminal(
         if (copyOperation.current === owner) copyOperation.current = null;
       }
     })();
+
     return false;
   });
 
@@ -157,6 +163,7 @@ function mountPtyTerminal(
   const observer = new ResizeObserver(() => {
     if (host.clientWidth > 0 && host.clientHeight > 0) fit.fit();
   });
+
   observer.observe(host);
 
   return {
@@ -180,6 +187,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
 
   useEffect(() => {
     const host = hostRef.current;
+
     if (!host) return;
 
     const { term, dispose: disposeChrome } = mountPtyTerminal(host, theme.mode, copyOperation, setFailure);
@@ -199,6 +207,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
         setFailure(error ? error.message : null);
       },
     });
+
     term.loadAddon(addon);
     addonRef.current = addon;
     addon.connect({ sandboxId: workspace });
@@ -217,11 +226,13 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
   // imperatively on every theme change — both axes, since either can move.
   useEffect(() => {
     const term = termRef.current;
+
     if (term) term.options.theme = terminalTheme(theme.mode);
   }, [theme]);
 
   useEffect(() => {
     if (state !== "connected") return;
+
     const beat = setInterval(() => {
       const keepaliveKey = crypto.randomUUID();
       const owner: TerminalOperation = { promise: null };
@@ -235,6 +246,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
             + `?executor=${encodeURIComponent(executor)}`,
             { method: "POST", credentials: "same-origin" },
           );
+
           // A missed beat costs at most one idle cycle of lease, so it is not
           // fatal — but it is shown rather than discarded, because the reason
           // (container gone, attach failed) arrives here before the socket says so.
@@ -252,6 +264,7 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
         }
       })();
     }, KEEPALIVE_MS);
+
     return () => {
       clearInterval(beat);
       keepaliveOperations.current.clear();
@@ -262,15 +275,19 @@ function PtyTerminal({ workspace, executor }: { workspace: string; executor: str
   // attach is handed, so the way back has to be reachable from the pane itself.
   const restart = async () => {
     setFailure(null);
+
     const response = await fetch(
       `/api/workspaces/${encodeURIComponent(workspace)}/terminal/reset`
       + `?executor=${encodeURIComponent(executor)}`,
       { method: "POST", credentials: "same-origin" },
     );
+
     if (!response.ok) {
       setFailure(describeError(await response.text()));
+
       return;
     }
+
     termRef.current?.reset();
     addonRef.current?.disconnect();
     addonRef.current?.connect({ sandboxId: workspace });
@@ -333,6 +350,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
 
   useEffect(() => {
     const host = hostRef.current;
+
     if (!host) return;
     setState("connecting");
     setFailure(null);
@@ -348,10 +366,12 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
     // relative URL would resolve against `http(s):` and the constructor
     // rejects that.
     const origin = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}`;
+
     const socket = new WebSocket(
       `${origin}/api/workspaces/${encodeURIComponent(workspace)}/terminal`
       + `?executor=${encodeURIComponent(executor)}&cols=${term.cols}&rows=${term.rows}`,
     );
+
     // Output arrives as bytes rather than the default Blob, so it can go
     // straight into xterm with no read step in between.
     socket.binaryType = "arraybuffer";
@@ -371,14 +391,18 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
     socket.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(event.data));
+
         return;
       }
+
       if (event.data instanceof Blob) return;
       // A frame that is not JSON is the one failure tolerated here by name;
       // the socket carries what the server wrote. Anything else propagates.
       const parsed = v.safeParse(DeviceTerminalMessageSchema, tolerate(() => JSON.parse(String(event.data)), "malformed-input"));
+
       if (!parsed.success) return;
       const message = parsed.output;
+
       switch (message.type) {
         case "ready":
           setState("connected");
@@ -394,6 +418,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
           break;
       }
     };
+
     socket.onclose = () => setState("disconnected");
     socket.onerror = () => {
       setState("disconnected");
@@ -418,6 +443,7 @@ function DeviceTerminal({ workspace, executor }: { workspace: string; executor: 
   // imperatively on every theme change — both axes, since either can move.
   useEffect(() => {
     const term = termRef.current;
+
     if (term) term.options.theme = terminalTheme(theme.mode);
   }, [theme]);
 
@@ -454,6 +480,7 @@ function LineTerminal(
   const hostRef = useRef<HTMLDivElement | null>(null);
   const termRef = useRef<Terminal | null>(null);
   const lineStateRef = useRef<LineTerminalState | null>(null);
+
   if (lineStateRef.current === null) lineStateRef.current = new LineTerminalState();
   const lineState = lineStateRef.current;
   const commandOperation = useRef<TerminalOperation | null>(null);
@@ -467,6 +494,7 @@ function LineTerminal(
   useEffect(() => {
     const generation = lineState.reset();
     const host = hostRef.current;
+
     if (!host) return;
     const term = newTerminal(theme.mode);
     const fit = new FitAddon();
@@ -478,10 +506,12 @@ function LineTerminal(
 
     const typing = term.onData((data) => {
       const run = execute.current;
+
       if (lineState.running || !run) return;
       // The editor owns the echo and decides when a command is finished; a
       // heredoc and a pasted script both reach here as ordinary chunks.
       const cmd = feedInput(term, lineState, data);
+
       if (cmd === null) return;
       // Keystrokes are dropped while a command runs, so say so; the marker
       // is cleared by whichever of the two paths below lands.
@@ -501,13 +531,17 @@ function LineTerminal(
           // failed and one that did not, instead of as a return out of the
           // handler that reads identically for a stale row and a failed one.
           let thrown: { readonly cause: unknown } | undefined;
+
           try {
             await run(cmd);
           } catch (cause) {
             thrown = { cause };
           }
+
           if (!lineState.finishCommand(generation)) return;
+
           if (termRef.current !== term) return;
+
           if (thrown !== undefined) {
             // A rejected exec produces no output row, so nothing else would
             // ever clear the marker or reprint the prompt.
@@ -529,6 +563,7 @@ function LineTerminal(
     const observer = new ResizeObserver(() => {
       if (host.clientWidth > 0 && host.clientHeight > 0) fit.fit();
     });
+
     observer.observe(host);
 
     return () => {
@@ -543,20 +578,24 @@ function LineTerminal(
 
   useEffect(() => {
     const term = termRef.current;
+
     if (term) term.options.theme = terminalTheme(theme.mode);
   }, [theme]);
 
   // New outputs as ANSI rows, deduped so a re-render never reprints a row.
   useEffect(() => {
     const term = termRef.current;
+
     if (!term) return;
     let wrote = false;
+
     for (const out of outputs) {
       if (!lineState.recordOutput(out.id)) continue;
       clearBusy(term, lineState);
       writeOutputRow(term, out);
       wrote = true;
     }
+
     if (wrote) writePrompt(term);
   }, [outputs]);
 
@@ -607,6 +646,7 @@ const ANSI_UNTOKENED = {
 function terminalTheme(mode: ThemeMode): NonNullable<ConstructorParameters<typeof Terminal>[0]>["theme"] {
   const cs = getComputedStyle(document.documentElement);
   const tok = (name: string) => cs.getPropertyValue(name).trim();
+
   return {
     background: tok("--c-bg"),
     foreground: tok("--c-text"),

@@ -23,7 +23,9 @@ import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/
 import * as v from 'valibot';
 
 const tempDirs: string[] = [];
+
 const repoRoot = resolve(__dirname, '../../..');
+
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
 
 afterEach(() => {
@@ -33,7 +35,9 @@ afterEach(() => {
 // ── Fixture builders ─────────────────────────────────────────────
 
 let clock = 0;
+
 let uuidSeq = 0;
+
 const nextUuid = (): string => `u${++uuidSeq}`;
 
 interface Line extends JsonObject {}
@@ -56,16 +60,19 @@ class Session {
       ...entry,
     });
     this.parent = uuid;
+
     return uuid;
   }
 
   user(content: JsonValue, extra: Line = {}): this {
     this.push({ type: 'user', message: { role: 'user', content }, ...extra });
+
     return this;
   }
 
   assistant(blocks: JsonValue[], extra: Line = {}): this {
     this.push({ type: 'assistant', message: { role: 'assistant', content: blocks }, ...extra });
+
     return this;
   }
 
@@ -73,12 +80,14 @@ class Session {
    *  boundaries. Part of the chain, and not part of the conversation. */
   system(subtype: string): this {
     this.push({ type: 'system', subtype, content: '' });
+
     return this;
   }
 
   /** Fork the chain back to an earlier message, the way a rewind does. */
   rewindTo(uuid: string | null): this {
     this.parent = uuid;
+
     return this;
   }
 
@@ -99,12 +108,15 @@ class Session {
 function newRoot(): string {
   const dir = mkdtempSync(join(tmpdir(), 'cc-corpus-'));
   tempDirs.push(dir);
+
   return dir;
 }
 
 const text = (t: string) => [{ type: 'text', text: t }];
+
 const toolUse = (name: string, input: JsonObject) =>
   ({ type: 'tool_use', name, input, id: `t${++uuidSeq}` });
+
 const toolResult = (content: JsonValue, extra: JsonObject = {}) =>
   ({ type: 'tool_result', content, ...extra });
 
@@ -198,6 +210,7 @@ describe('the signals survive schema drift', () => {
 
     const mined = mineTranscripts({ root });
     expect(mined.turns).toHaveLength(4);
+
     for (const project of ['new-cli', 'old-cli']) {
       const first = mined.turns.find((t) => t.project === project && t.item.userMessage.includes('six'));
       expect(first?.signals.interrupted).toBe(true);
@@ -358,6 +371,7 @@ describe('what the reader could not read is reported', () => {
 describe('the corpus a caller asks for is the corpus they get', () => {
   test('--projects filters, and the traversal order is stable', () => {
     const root = newRoot();
+
     for (const project of ['alpha', 'beta']) {
       new Session()
         .user(`${project} — the first request`).assistant(text('a'))
@@ -412,6 +426,7 @@ describe('mined artifacts cannot be committed', () => {
         cwd: repoRoot,
         env: gitEnv(),
       });
+
       expect({ path, ignored: result.exitCode === 0 }).toEqual({ path, ignored: true });
     }
   });
@@ -432,11 +447,13 @@ describe('kinu label mine', () => {
       .write(root, 'proj-a', 's1');
 
     const out = join(newRoot(), 'report', 'CC-CORPUS-test.md');
+
     const result = Bun.spawnSync({
       cmd: [process.execPath, cliBin, 'label', 'mine', '--root', root, '--out', out],
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1' },
     });
+
     const stdout = `${result.stdout.toString()}${result.stderr.toString()}`;
 
     expect(result.exitCode).toBe(0);
@@ -461,6 +478,7 @@ describe('kinu label mine', () => {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1' },
     });
+
     const parsed = v.parse(v.object({
       stats: v.object({
         turns: v.number(), labeled: v.number(),
@@ -484,6 +502,7 @@ describe('kinu label mine', () => {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1', KINU_HOME: newRoot() },
     });
+
     expect(`${result.stdout.toString()}${result.stderr.toString()}`)
       .toContain('is a cloud agent');
     expect(result.exitCode).not.toBe(0);
@@ -508,6 +527,7 @@ describe('kinu label mine', () => {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1', KINU_HOME: home },
     });
+
     expect(`${result.stdout.toString()}${result.stderr.toString()}`)
       .toContain('no rule fired on any mined turn');
     expect(result.exitCode).toBe(0);
@@ -527,6 +547,7 @@ describe('kinu label mine', () => {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1' },
     });
+
     expect(`${result.stdout.toString()}${result.stderr.toString()}`)
       .toContain('no rule fired on any mined turn');
   });

@@ -26,9 +26,11 @@ import type { JsonObject } from '../src/utils/json';
 import { makeSqlExec } from './helpers';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
+
 /** The session's first ask — a fresh multi-part request, the shape that must
  *  draw nothing at all. */
 const fresh = 'add caching to the api and update the docs';
+
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 
 /** A FOLLOW-UP turn's opening context: an ask with this agent's own work behind
@@ -38,6 +40,7 @@ const followUp = (text: string): ModelMessage[] => [user('earlier'), assistant('
 /** The turn's steering rows, and the last of them: the one reactive steer on
  *  every turn where one fired. */
 const rows = (orch: AgentOrchestrator) => orch.steering.snapshot();
+
 const lastSteer = (orch: AgentOrchestrator) => orch.steering.snapshot().at(-1) ?? null;
 
 /** The loop steers never name the delegation ladder: no `agents`, no swarm,
@@ -59,11 +62,13 @@ function newTurn(): AgentOrchestrator {
     turnInFlight: () => false,
     setTimer: () => {},
   };
+
   const { rt, testSql } = createTestRuntime();
   // The orchestrator's inbox over the runtime's OWN database and actor: a log
   // bound to a second database would drain an inbox no turn ever writes to.
   const sql = makeSqlExec(testSql.db);
   initEventsHubTables(sql);
+
   return new AgentOrchestrator({
     host, engine: new EvolutionEngine(rt, { enabled: false }),
     eventLog: new EventLog(sql, rt.actor),
@@ -74,9 +79,12 @@ function newTurn(): AgentOrchestrator {
  *  unchanged input when nothing was injected). */
 function step(orch: AgentOrchestrator, stepNumber: number, messages: ModelMessage[]): ModelMessage[] {
   const prepareStep = orch.turnExtension.prepareStep;
+
   if (!prepareStep) throw new Error('Expected turn steering prepareStep extension');
   const prepared = prepareStep({ stepNumber, messages });
+
   if (prepared instanceof Promise) throw new Error('Turn steering prepareStep must remain synchronous');
+
   return prepared ?? messages;
 }
 
@@ -84,6 +92,7 @@ function injected(messages: readonly ModelMessage[]): string[] {
   return messages
     .map((message) => {
       const content = v.safeParse(v.string(), message.content);
+
       return content.success ? content.output : '';
     })
     .filter((text) => text.startsWith(TURN_STEERING_HEADER));
@@ -92,6 +101,7 @@ function injected(messages: readonly ModelMessage[]): string[] {
 /** Distinct failures of one tool: a different call, answered differently, every
  *  time — so this exercises the failure streak and never the repeat detector. */
 let attempt = 0;
+
 async function fail(orch: AgentOrchestrator, toolName: string, times = 1): Promise<void> {
   for (let i = 0; i < times; i++) {
     attempt += 1;
@@ -206,11 +216,13 @@ describe('repeated-call trigger', () => {
 
   test('a repeat whose OUTPUT changed is not a repeat — the model learned something', async () => {
     const orch = newTurn();
+
     for (let i = 0; i < 6; i++) {
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'make' }, result: `progress ${i}`, success: true,
       });
     }
+
     expect(injected(step(orch, 3, [user('q')]))).toEqual([]);
     expect(lastSteer(orch)).toBeNull();
   });
@@ -221,11 +233,13 @@ describe('repeated-call trigger', () => {
     // must not claim these taught the model nothing.
     const orch = newTurn();
     const banner = 'platform linux -- pytest 8.2.0\n'.repeat(200);
+
     for (let i = 0; i < IDENTICAL_CALLS_BEFORE_STEER + 2; i++) {
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'pytest' }, result: `${banner}${i} failed`, success: true,
       });
     }
+
     expect(injected(step(orch, 3, [user('q')]))).toEqual([]);
     expect(lastSteer(orch)).toBeNull();
   });
@@ -241,9 +255,11 @@ describe('repeated-call trigger', () => {
 
   test('different arguments are different work, however many calls', async () => {
     const orch = newTurn();
+
     for (const command of ['ls', 'pwd', 'cat a', 'cat b', 'grep x']) {
       await repeat(orch, 'run', { command });
     }
+
     expect(injected(step(orch, 1, [user('q')]))).toEqual([]);
   });
 
@@ -256,11 +272,13 @@ describe('repeated-call trigger', () => {
 
   test('it outranks the failure streak, because it can name what is repeating', async () => {
     const orch = newTurn();
+
     for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) {
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'make' }, result: 'Error (exit 2): boom', success: true,
       });
     }
+
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
@@ -301,6 +319,7 @@ describe('no-progress trigger', () => {
       toolName: 'run', args: { command: 'git status' }, result: 'clean 0', success: true,
     });
     let steered: string[] = [];
+
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) {
       steered = injected(step(orch, s, [user('ship it')]));
       // Nothing new happens between boundaries: the same command, a different
@@ -308,8 +327,10 @@ describe('no-progress trigger', () => {
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
+
       if (s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER) expect(steered).toEqual([]);
     }
+
     steered = injected(step(orch, STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, [user('ship it')]));
     expect(steered).toHaveLength(1);
     expect(steered[0]).toContain('steps in a row with nothing new');
@@ -326,12 +347,14 @@ describe('no-progress trigger', () => {
     // investigation would be spam, and the owner's rule is no spam. A fresh
     // command every step keeps the frontier moving past the stall threshold.
     const orch = newTurn();
+
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 5; s++) {
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: `grep pattern${s} src/` }, result: 'no match', success: true,
       });
       expect(injected(step(orch, s, [user('q')]))).toEqual([]);
     }
+
     expect(lastSteer(orch)).toBeNull();
   });
 
@@ -343,11 +366,13 @@ describe('no-progress trigger', () => {
     const orch = newTurn();
     let boundary = 0;
     let answer = 0;
+
     const idle = async () => {
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'ls' }, result: `listing ${++answer}`, success: true,
       });
     };
+
     const runStall = async () => {
       for (let i = 0; i < STEPS_WITHOUT_PROGRESS_BEFORE_STEER - 1; i++) {
         expect(injected(step(orch, ++boundary, [user('q')]))).toEqual([]);
@@ -369,19 +394,23 @@ describe('no-progress trigger', () => {
     // that spent and moved nothing, and the ledger is what can tell.
     const orch = newTurn();
     const missed = newTurn();
+
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
       for (const o of [orch, missed]) {
         await o.turnExtension.onToolResult!({
           toolName: 'execute_tools', args: { code: 'edit()' }, result: `attempt ${s}`, success: true,
         });
       }
+
       if (s === 3) {
         orch.acc.files.recordEdit('/a.ts', null);
         missed.acc.files.recordEdit('/a.ts', 'ambiguous');
       }
+
       injected(step(orch, s, [user('q')]));
       injected(step(missed, s, [user('q')]));
     }
+
     // Both turns re-issue an identical-looking call, so neither trips the
     // repeat detector on args alone; only the landed edit is progress.
     expect(lastSteer(orch)).toBeNull();
@@ -391,6 +420,7 @@ describe('no-progress trigger', () => {
   test('the identical-call steer still outranks it — it can name what repeats', async () => {
     const orch = newTurn();
     await repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
+
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) step(orch, s, [user('q')]);
     expect(lastSteer(orch)?.trigger).toBe('repeated_call');
   });
@@ -403,12 +433,14 @@ describe('no-progress trigger', () => {
       toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
     });
     let fired: string[] = [];
+
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 5 && fired.length === 0; s++) {
       fired = injected(step(orch, s, [user('q')]));
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
     }
+
     expect(lastSteer(orch)?.trigger).toBe('no_progress');
     expect(lastSteer(orch)).toMatchObject({ step: STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1 });
   });
@@ -418,12 +450,14 @@ describe('no-progress trigger', () => {
     await orch.turnExtension.onToolResult!({
       toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
     });
+
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
       step(orch, s, [user('q')]);
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
       });
     }
+
     expect(lastSteer(orch)).toMatchObject({ trigger: 'no_progress', converted: false });
 
     // Re-covering the same ground is not a conversion…
@@ -440,9 +474,11 @@ describe('no-progress trigger', () => {
     await orch.turnExtension.onToolResult!({
       toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
     });
+
     for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) step(orch, s, [user('q')]);
     orch.beginTurn(Date.now());
     expect(lastSteer(orch)).toBeNull();
+
     for (let s = 0; s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) {
       expect(injected(step(orch, s, followUp('next')))).toEqual([]);
     }
@@ -481,12 +517,14 @@ describe('no turn-start or length steering', () => {
     // Twenty-five steps of new ground is not a length to steer for: a turn that
     // keeps reaching new calls draws nothing at any step count.
     const orch = newTurn();
+
     for (let s = 0; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 15; s++) {
       await orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: `grep pattern${s} src/` }, result: 'no match', success: true,
       });
       expect(injected(step(orch, s, [user('q')]))).toEqual([]);
     }
+
     expect(lastSteer(orch)).toBeNull();
   });
 
@@ -494,10 +532,12 @@ describe('no turn-start or length steering', () => {
     const orch = newTurn();
     await fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
+
     // Still one line in the conversation however long the turn then runs.
     for (let s = 2; s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 10; s++) {
       expect(injected(step(orch, s, [user('q')]))).toHaveLength(1);
     }
+
     expect(lastSteer(orch)?.trigger).toBe('repeated_failure');
   });
 
@@ -513,15 +553,18 @@ describe('no turn-start or length steering', () => {
 describe('execution-recovery detection (the failure ledger\'s second reader)', () => {
   const failing = (s: TurnSteering, args: JsonObject) =>
     s.onToolResult({ toolName: 'run', args, result: 'Error: boom', success: false, reason: null });
+
   const clean = (s: TurnSteering, args: JsonObject) =>
     s.onToolResult({ toolName: 'run', args, result: 'ok', success: true });
 
   test('a steer-worthy streak broken by a CHANGED call reports the recovery, echoes bounded', () => {
     const steering = new TurnSteering();
     const long = 'x'.repeat(500);
+
     for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) {
       expect(failing(steering, { command: `npm test ${long} ${i}` })).toBeNull();
     }
+
     const recovery = clean(steering, { command: 'bun test' })!;
     expect(recovery.tool).toBe('run');
     expect(recovery.failures).toBe(CONSECUTIVE_FAILURES_BEFORE_STEER);
@@ -542,12 +585,14 @@ describe('execution-recovery detection (the failure ledger\'s second reader)', (
 
   test('the SAME call finally working is a lucky retry, not a recovery', () => {
     const steering = new TurnSteering();
+
     for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: 'make' });
     expect(clean(steering, { command: 'make' })).toBeNull();
   });
 
   test('another tool\'s success neither claims nor clears the streak', () => {
     const steering = new TurnSteering();
+
     for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: `try ${i}` });
     expect(steering.onToolResult({ toolName: 'web_fetch', args: { url: 'x' }, result: 'page', success: true })).toBeNull();
     expect(clean(steering, { command: 'the fix' })).not.toBeNull();
@@ -555,6 +600,7 @@ describe('execution-recovery detection (the failure ledger\'s second reader)', (
 
   test('reset drops a streak with the rest of the turn state', () => {
     const steering = new TurnSteering();
+
     for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: `try ${i}` });
     steering.reset();
     expect(clean(steering, { command: 'unrelated' })).toBeNull();
@@ -611,15 +657,18 @@ function parsePrompt(input: { value: unknown }): PromptMessage[] {
 
 function grindingModel(prompts: PromptMessage[][]) {
   let step = 0;
+
   return new MockLanguageModelV3({
     doStream: async (opts) => {
       prompts.push(parsePrompt({ value: opts.prompt }));
       step += 1;
       const done = step > 4;
+
       return {
         stream: new ReadableStream<LanguageModelV3StreamPart>({
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
+
             if (done) {
               c.enqueue({ type: 'text-start', id: 't' });
               c.enqueue({ type: 'text-delta', id: 't', delta: 'giving up' });
@@ -641,6 +690,7 @@ function grindingModel(prompts: PromptMessage[][]) {
                 },
               });
             }
+
             c.close();
           },
         }),
@@ -654,6 +704,7 @@ function grindingModel(prompts: PromptMessage[][]) {
 function promptText(messages: PromptMessage[]): string {
   return messages.map((message) => {
     const text = v.safeParse(v.string(), message.content);
+
     return text.success
       ? text.output
       : v.parse(v.array(v.object({ text: v.optional(v.string()) })), message.content)
@@ -666,6 +717,7 @@ describe('through a real runChat turn', () => {
     const prompts: PromptMessage[][] = [];
     let flakyCalls = 0;
     const orch = newTurn();
+
     const tools = {
       flaky: tool({
         description: 'raises a distinct failure on each invocation',
@@ -673,6 +725,7 @@ describe('through a real runChat turn', () => {
         execute: async (): Promise<string> => { throw new Error('build failed on attempt ' + (++flakyCalls)); },
       }),
     };
+
     for await (const _ of runChat({
       model: grindingModel(prompts),
       system: 'sys',
@@ -688,10 +741,12 @@ describe('through a real runChat turn', () => {
     expect(seen.slice(0, 3)).toEqual([false, false, false]);
     expect(seen[3]).toBe(true);
     expect(promptText(prompts[3] ?? [])).toContain('`flaky` has failed 3 times in a row');
+
     // …and it says it exactly once, however many more steps the turn runs.
     for (const prompt of prompts.slice(3)) {
       expect(promptText(prompt).split(TURN_STEERING_HEADER)).toHaveLength(2);
     }
+
     expect(lastSteer(orch)).toEqual({
       trigger: 'repeated_failure', step: 3, tool: 'flaky', converted: false,
     });
@@ -703,6 +758,7 @@ describe('through a real runChat turn', () => {
     // comparing empty objects and every tool looks like one repeating call.
     const prompts: PromptMessage[][] = [];
     const orch = newTurn();
+
     const tools = {
       run: tool({
         description: 'runs a command',
@@ -710,6 +766,7 @@ describe('through a real runChat turn', () => {
         execute: async () => 'make: nothing to be done for `all`.',
       }),
     };
+
     for await (const _ of runChat({
       model: repeatingModel(prompts, 'make'),
       system: 'sys',
@@ -732,6 +789,7 @@ describe('through a real runChat turn', () => {
   test('the same tool with DIFFERENT commands is never called a repeat, through the same path', async () => {
     const prompts: PromptMessage[][] = [];
     const orch = newTurn();
+
     const tools = {
       run: tool({
         description: 'runs a command',
@@ -739,6 +797,7 @@ describe('through a real runChat turn', () => {
         execute: async () => 'the same output every time',
       }),
     };
+
     for await (const _ of runChat({
       model: repeatingModel(prompts, null),
       system: 'sys',
@@ -758,6 +817,7 @@ describe('through a real runChat turn', () => {
     // reaches the model until a loop detector has evidence.
     const prompts: PromptMessage[][] = [];
     const orch = newTurn();
+
     const tools = {
       run: tool({
         description: 'runs a command',
@@ -765,6 +825,7 @@ describe('through a real runChat turn', () => {
         execute: async () => 'ok',
       }),
     };
+
     for await (const _ of runChat({
       model: repeatingModel(prompts, null),
       system: 'sys',
@@ -777,6 +838,7 @@ describe('through a real runChat turn', () => {
     for (const prompt of prompts) {
       expect(promptText(prompt)).not.toContain(TURN_STEERING_HEADER);
     }
+
     expect(rows(orch)).toEqual([]);
   });
 });
@@ -785,15 +847,18 @@ describe('through a real runChat turn', () => {
  *  fresh command each step (different work). */
 function repeatingModel(prompts: PromptMessage[][], command: string | null) {
   let step = 0;
+
   return new MockLanguageModelV3({
     doStream: async (opts) => {
       prompts.push(parsePrompt({ value: opts.prompt }));
       step += 1;
       const done = step > 4;
+
       return {
         stream: new ReadableStream<LanguageModelV3StreamPart>({
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
+
             if (done) {
               c.enqueue({ type: 'text-start', id: 't' });
               c.enqueue({ type: 'text-delta', id: 't', delta: 'giving up' });
@@ -818,6 +883,7 @@ function repeatingModel(prompts: PromptMessage[][], command: string | null) {
                 },
               });
             }
+
             c.close();
           },
         }),

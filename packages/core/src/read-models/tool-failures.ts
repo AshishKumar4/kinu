@@ -125,16 +125,21 @@ export type ToolFailurePart = 'refused' | 'work-failed' | 'runtime-absent' | 'br
  */
 function partOfReason(reason: string): ToolFailurePart {
   if (/^exit_-?\d+$/.test(reason)) return 'work-failed';
+
   if (reason === RUNTIME_ABSENT_REASON) return 'runtime-absent';
   const known = v.safeParse(ToolReasonSchema, reason);
+
   if (!known.success) return 'broke';
+
   if (known.output === 'unavailable') return 'runtime-absent';
+
   return REASON_IS_REFUSAL[known.output] ? 'refused' : 'broke';
 }
 
 /** The reason and its three flags, so a branch below states the reason once. */
 function attribute(reason: string): Pick<ToolFailure, 'reason' | 'refused' | 'workFailed' | 'runtimeMissing'> {
   const part = partOfReason(reason);
+
   return {
     reason,
     refused: part === 'refused',
@@ -190,16 +195,20 @@ export function classifyToolFailure(
   const action = args.success ? v.safeParse(v.string(), args.output.action) : null;
   const base = { tool: row.name, action: action?.success ? action.output : null };
   const outcome = row.outcome;
+
   if (outcome === undefined) {
     return row.error != null && row.error !== ''
       ? { ...base, ...attribute(row.error === FAILURE_WITHOUT_ERROR ? 'failed_without_error' : 'threw') }
       : null;
   }
+
   if (outcome.success) return null;
   const exit = outcome.execution?.exitCode;
+
   if (exit !== undefined && exit !== 0) {
     return { ...base, ...attribute(EXEC_REASON_BY_EXIT.get(exit) ?? 'exit_' + String(exit)) };
   }
+
   return { ...base, ...attribute(outcome.reason ?? 'unclassified') };
 }
 
@@ -252,15 +261,20 @@ export function censusToolFailures(
   rows: readonly Extract<RunEvent, { type: 'tool_call_end' }>[],
 ): ToolFailureCensus {
   const failures: ToolFailure[] = [];
+
   for (const row of rows) {
     const failure = classifyToolFailure(row);
+
     if (failure) failures.push(failure);
   }
+
   const counts = new Map<string, number>();
+
   for (const failure of failures) {
     const key = toolFailureKey(failure);
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
+
   return {
     failures,
     byKey: [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),

@@ -48,6 +48,7 @@ function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
     getEvolutionConfig: async () => { throw new Error('not used'); },
     setEvolutionConfig: async () => { throw new Error('not used'); },
   };
+
   return client;
 }
 
@@ -56,24 +57,29 @@ function realEngineClient(opts: { gitBin?: string } = {}) {
   const work = join(root, 'project');
   mkdirSync(work, { recursive: true });
   const engine = createHostCheckpoints({ agent: 'undo-test', base: join(root, 'shadow'), gitBin: opts.gitBin });
+
   // Composed exactly as LocalAgentClient wires it through the session: one call
   // carries reachability with the entries, so no caller can read an empty list
   // as a statement about the turn.
   const checkpoints: FileCheckpointSurface = {
     list: async (limit, turnId) => {
       const availability = await engine.status();
+
       if (!availability.available) return { availability, entries: [] };
+
       return { availability, entries: await engine.list({ limit, turnId }) };
     },
     plan: (dir, id) => engine.plan(dir, id),
     restore: (dir, id) => engine.restore(dir, id),
   };
+
   return { root, work, engine, client: { checkpoints }, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 
 describe('performUndo', () => {
   test('restores the last turn by default, reporting paths and counts first', async () => {
     const { work, engine, client, cleanup } = realEngineClient();
+
     try {
       writeFileSync(join(work, 'app.ts'), 'turn zero');
       engine.beginTurn({ turnId: 'turn-1', sessionId: 'default' });
@@ -94,12 +100,14 @@ describe('performUndo', () => {
 
   test('/undo n walks back n turns; an out-of-range n lists the turns instead', async () => {
     const { work, engine, client, cleanup } = realEngineClient();
+
     try {
       for (let i = 0; i < 3; i++) {
         writeFileSync(join(work, 'state.txt'), `before turn ${i}`);
         engine.beginTurn({ turnId: `turn-${i}`, sessionId: 'default' });
         await engine.ensureCheckpoint(work);
       }
+
       writeFileSync(join(work, 'state.txt'), 'final damage');
 
       const listing = await performUndo(client, '99');
@@ -128,22 +136,28 @@ describe('performUndo', () => {
    */
   test('a turn split across directories is restored whole, not just the part in the window', async () => {
     const root = mkdtempSync(join(tmpdir(), 'kinu-undo-split-'));
+
     try {
       const dirs = ['one', 'two', 'three'].map((name) => {
         const dir = join(root, name);
         mkdirSync(dir, { recursive: true });
         writeFileSync(join(dir, 'f.txt'), 'original');
+
         return dir;
       });
+
       const engine = createHostCheckpoints({ agent: 'undo-split', base: join(root, 'shadow') });
       engine.beginTurn({ turnId: 'wide-turn', sessionId: 'default' });
+
       // One checkpoint per directory: each take returns the commit it wrote,
       // so a skipped directory (null) fails here rather than restoring short.
       for (const dir of dirs) expect(await engine.ensureCheckpoint(dir)).toMatch(/^[0-9a-f]{40}$/);
+
       for (const dir of dirs) writeFileSync(join(dir, 'f.txt'), 'clobbered');
 
       // The browse can only see 2 of the 3; a turn-keyed read sees all 3.
       const browseLimit = 2;
+
       const checkpoints: FileCheckpointSurface = {
         list: async (limit, turnId) => ({
           availability: await engine.status(),
@@ -152,10 +166,12 @@ describe('performUndo', () => {
         plan: (dir, id) => engine.plan(dir, id),
         restore: (dir, id) => engine.restore(dir, id),
       };
+
       expect(await engine.list({ limit: browseLimit })).toHaveLength(2);
 
       const result = await performUndo({ checkpoints });
       expect(result.restored).toBe(true);
+
       // All three, not the two the window held.
       for (const dir of dirs) {
         expect(readFileSync(join(dir, 'f.txt'), 'utf8')).toBe('original');
@@ -165,6 +181,7 @@ describe('performUndo', () => {
 
   test('"/undo 1" after a restore undoes the restore, as the success hint promises', async () => {
     const { work, engine, client, cleanup } = realEngineClient();
+
     try {
       writeFileSync(join(work, 'app.ts'), 'turn zero');
       engine.beginTurn({ turnId: 'turn-1', sessionId: 'default' });
@@ -187,6 +204,7 @@ describe('performUndo', () => {
 
   test('reports honestly when nothing changed since the checkpoint', async () => {
     const { work, engine, client, cleanup } = realEngineClient();
+
     try {
       writeFileSync(join(work, 'a.txt'), 'stable');
       engine.beginTurn({ turnId: 't', sessionId: 'default' });
@@ -199,6 +217,7 @@ describe('performUndo', () => {
 
   test('degrades honestly: no checkpoints yet, no surface, and no git', async () => {
     const { client, cleanup } = realEngineClient();
+
     try {
       const empty = await performUndo(client);
       expect(empty.restored).toBe(false);
@@ -210,6 +229,7 @@ describe('performUndo', () => {
     expect(noSurface.text).toContain('not available');
 
     const { client: degraded, cleanup: cleanup2 } = realEngineClient({ gitBin: '/nonexistent/git' });
+
     try {
       const result = await performUndo(degraded);
       expect(result.restored).toBe(false);
@@ -229,8 +249,10 @@ describe('/undo command surface', () => {
       { ...entry('c2a', 'turn-1', 20) },
       { ...entry('c1', null, 10) },
     ];
+
     const change: FileRestoreChange = { kind: 'modify', path: 'a.txt' };
     const restored: Array<{ dir: string; id: string }> = [];
+
     const surface: FileCheckpointSurface = {
       list: async (_limit?: number, turnId?: string) => ({
         availability: { available: true },
@@ -239,9 +261,11 @@ describe('/undo command surface', () => {
       plan: async (dir: string, id: string) => ({ dir, id, files: [change] }),
       restore: async (dir: string, id: string) => {
         restored.push({ dir, id });
+
         return { dir, id, files: [], preRestoreId: null };
       },
     };
+
     const client = slashClient(surface);
 
     const first = await performUndo(client);
@@ -263,6 +287,7 @@ describe('/undo command surface', () => {
       consents: null,
       checkpoints: inertCheckpointSurface(),
     };
+
     const without = { localControls: null, consents: null, checkpoints: null };
     expect(commandsForClient(withSurface).some((c) => c.name === '/undo')).toBe(true);
     expect(commandsForClient(without).some((c) => c.name === '/undo')).toBe(false);
@@ -277,6 +302,7 @@ describe('/undo command surface', () => {
       consents: null,
       checkpoints: null,
     };
+
     const commands = commandsForClient(capabilities).map((command) => command.name);
 
     expect(commands).not.toContain('/resume');
@@ -291,16 +317,19 @@ describe('/undo command surface', () => {
       { name: '/settings', description: 'Open interactive settings' },
       { name: '/status', description: 'Show workspace state' },
     ];
+
     expect(filterCommands(commands, '/status').map((command) => command.name))
       .toEqual(['/status']);
     expect(filterCommands(commands, '/set').map((command) => command.name))
       .toEqual(['/setup', '/settings']);
     expect(filterCommands(commands, '/sttus').map((command) => command.name))
       .toEqual(['/status']);
+
     const fullRegistry = Array.from({ length: 12 }, (_, index) => ({
       name: `/command-${String(index)}`,
       description: `Command ${String(index)}`,
     }));
+
     expect(filterCommands(fullRegistry, '/')).toHaveLength(12);
   });
 
@@ -326,6 +355,7 @@ describe('/advisor command surface', () => {
       advisorEnabled: false,
       advisorMinSeverity: DEFAULT_ADVISOR_MIN_SEVERITY,
     };
+
     return {
       ...slashClient(null),
       getEvolutionConfig: async () => config,
@@ -335,7 +365,9 @@ describe('/advisor command surface', () => {
 
   async function advisorText(client: AgentClient, input: string): Promise<string> {
     const outcome = await executeSlashCommand(client, input);
+
     if (outcome.kind !== 'text') throw new Error(`expected text outcome, got ${outcome.kind}`);
+
     return outcome.text;
   }
 
@@ -346,6 +378,7 @@ describe('/advisor command surface', () => {
         consents: null,
         checkpoints,
       });
+
       expect(commands.some((command) => command.name === '/advisor')).toBe(true);
     }
   });
@@ -374,9 +407,11 @@ describe('/advisor command surface', () => {
 
   test('an unusable argument answers with the usage line, naming every value', async () => {
     const client = advisorClient();
+
     for (const input of ['/advisor maybe', '/advisor severity', '/advisor severity urgent', '/advisor on off']) {
       expect(await advisorText(client, input)).toBe('Usage: /advisor on | off | severity <nit | concern | blocker>');
     }
+
     // Nothing was written by any of them.
     expect(await advisorText(client, '/advisor')).toContain('Advisor: off.');
   });

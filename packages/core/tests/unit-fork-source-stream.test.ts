@@ -13,29 +13,36 @@ function isRowFrame(frame: ForkFrame): frame is ForkRowFrame {
 function isFileFrame(frame: ForkFrame): frame is ForkFileFrame {
   return frame.kind === 'file';
 }
+
 import { openWorkspaceMainActor, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
+
 async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
   void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'origin'}, ${100})`;
   const actor = new WorkspaceActorDirectory(ws.sql, { workspaceId: 'SRC', ownerUserId: '' }).createMain({ name: 'origin' });
   await writeSoul(ws.vfs, ws.sql, 'carry this purpose');
+
   const messages = [
     { id: 'm1', parent: null, role: 'user', text: 'first' },
     { id: 'm2', parent: 'm1', role: 'assistant', text: 'second' },
     { id: 'm3', parent: 'm2', role: 'user', text: 'third' },
   ] as const;
+
   for (const [index, message] of messages.entries()) {
     void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${actor.actorId}, ${message.id}, ${'default'}, ${message.parent}, ${message.role},
               ${message.text}, ${1000 + index})`;
   }
+
   if (pane) {
     ws.execRaw(SDK_SESSION_DDL);
+
     for (const message of messages) {
       const content = JSON.stringify({ id: message.id, role: message.role, parts: [{ type: 'text', text: message.text }] });
       void ws.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
         VALUES (${actor.actorId}, ${message.id}, ${''}, ${message.parent}, ${message.role}, ${content}, ${'1970-01-01 00:00:01'})`;
     }
   }
+
   void ws.sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
     VALUES (${'tool'}, ${'description'}, ${null}, ${'return 1'}, ${'local'}, ${10}, ${11})`;
   void ws.sql`INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
@@ -67,11 +74,14 @@ interface FramesBySection {
 
 function reassemble(frames: ForkFrame[]): ForkSnapshot {
   const begin = frames[0];
+
   if (begin?.kind !== 'begin') throw new Error('missing begin frame');
   const files = new Map<string, Uint8Array[]>();
+
   const sections: FramesBySection = {
     agentConfig: [], craftedTools: [], memoryChunks: [], assistantMessages: [], messages: [],
   };
+
   for (const frame of frames) {
     if (frame.kind === 'file') {
       const ranges = files.get(frame.path) ?? [];
@@ -81,7 +91,9 @@ function reassemble(frames: ForkFrame[]): ForkSnapshot {
       sections[frame.kind].push(frame);
     }
   }
+
   const decoder = new TextDecoder();
+
   return {
     source: begin.head.source,
     cut: begin.head.cut,
@@ -116,6 +128,7 @@ function rowPayloadBytes(frame: ForkFrame): number {
       return 0;
   }
 }
+
 describe('forkTransferFrames source streamer', () => {
   test('reassembles exactly to plain and pane snapshots, with ordered contiguous sections', async () => {
     for (const pane of [false, true]) {
@@ -159,6 +172,7 @@ describe('forkTransferFrames source streamer', () => {
     expect(frames.length).toBeGreaterThan(FORK_ROW_SECTIONS.length);
     const huge = rowFrames.find((frame) => frame.kind === 'messages' && frame.rows[0]?.id === 'm3');
     expect(huge?.kind).toBe('messages');
+
     if (huge?.kind === 'messages') {
       expect(huge.rows).toHaveLength(1);
       expect(huge.rows[0]?.content).toBe(million);
@@ -177,6 +191,7 @@ describe('forkTransferFrames source streamer', () => {
     expect(new TextDecoder().decode(bytes)).toBe('abcdefghij'.repeat(100));
     const last = ranged.at(-1);
     expect(last?.kind).toBe('file');
+
     if (last?.kind === 'file') expect(last.fileDigest).toBe(new Bun.CryptoHasher('sha256').update(bytes).digest('hex'));
     const empty = frames.filter(isFileFrame).filter((frame) => frame.path === 'memory/empty.md');
     expect(empty).toHaveLength(1);
@@ -196,10 +211,12 @@ describe('forkTransferFrames source streamer', () => {
     void cycle.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${openWorkspaceMainActor(cycle.sql).actorId}, ${'loop'}, ${'default'}, ${'loop'}, ${'user'},
               ${'self-parented'}, ${9})`;
+
     const frames = await Array.fromAsync(forkTransferFrames({
       sql: cycle.sql, actor: openWorkspaceMainActor(cycle.sql), vfs: cycle.vfs,
       untilMessageId: 'loop', transferId: 'cycle', targetAuthority: 'plain', frameBytes: 2048,
     }));
+
     const messages = frames.filter((frame) => frame.kind === 'messages').flatMap((frame) => frame.rows);
     expect(messages.length).toBeGreaterThan(0);
     expect(messages.every((row) => row.id === 'loop')).toBe(true);

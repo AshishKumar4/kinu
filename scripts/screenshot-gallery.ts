@@ -22,11 +22,16 @@ import { withGallery } from './gallery-harness';
 const REPO = join(import.meta.dir, '..');
 
 const args = process.argv.slice(2);
+
 const outIndex = args.indexOf('--out');
+
 const outDir = outIndex === -1 ? join(REPO, 'docs', 'screenshots', 'gallery') : args[outIndex + 1]!;
+
 const frames = args.filter((a, i) => !a.startsWith('--') && i !== outIndex + 1
   && args[i - 1] !== '--widths');
+
 if (frames.length === 0) frames.push('views');
+
 /**
  * The widths a frame may be photographed at, by the number a reader would ask
  * for. Each carries the viewport HEIGHT its width is read at; the shot itself
@@ -43,9 +48,11 @@ const WIDTH_BY_TOKEN = new Map(Object.entries(NAMED_WIDTHS));
 
 function widthSpec(token: string): { name: string; width: number; height: number } {
   const spec = WIDTH_BY_TOKEN.get(token.trim());
+
   if (!spec) {
     throw new Error(`--widths takes ${[...WIDTH_BY_TOKEN.keys()].join('/')}; got "${token}"`);
   }
+
   return spec;
 }
 
@@ -57,6 +64,7 @@ const WIDTHS = args.includes('--widths')
   : args.includes('--desktop')
     ? [widthSpec('1280')]
     : [widthSpec('1280'), widthSpec('390')];
+
 if (WIDTHS.length === 0) throw new Error('--widths names at least one width');
 
 async function shoot(
@@ -75,10 +83,12 @@ async function shoot(
     // change under review, and a before/after diff of the gallery is unreadable
     // noise. Pinning the clock makes a frame a pure function of the code.
     const FIXED = 1_770_000_000_000;
+
     const pinnedDate = new Proxy(Date, {
       construct: (target, args, newTarget) =>
         Reflect.construct(target, args.length === 0 ? [FIXED] : args, newTarget),
     });
+
     Object.defineProperty(pinnedDate, 'now', { value: () => FIXED });
     globalThis.Date = pinnedDate;
   }, theme);
@@ -113,16 +123,20 @@ async function shoot(
   await page.screenshot({ path, fullPage: true });
   const applied = await page.evaluate(() => document.documentElement.dataset.mode);
   await page.close();
+
   // A shot named for a theme it is not in is worse than no shot: it is evidence
   // for the wrong claim.
   if (applied !== theme.mode) {
     throw new Error(`${frame}: asked for ${label}, page rendered ${String(applied)}`);
   }
+
   if (failures.length > 0) console.warn(`  ! ${frame}/${label} console errors:\n    ${failures.join('\n    ')}`);
+
   return path;
 }
 
 mkdirSync(outDir, { recursive: true });
+
 await withGallery(async ({ browser, origin }) => {
   for (const frame of frames) {
     for (const size of WIDTHS) {

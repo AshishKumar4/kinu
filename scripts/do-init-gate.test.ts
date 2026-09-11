@@ -78,6 +78,7 @@ describe('DO init-gate purity', () => {
         this.ctx.blockConcurrencyWhile(async () => { await this.rt.identity.scaffold.exists(); });
       }
     }`;
+
     expect(reasons(sneaky)).toEqual([expect.stringContaining('nested `blockConcurrencyWhile`')]);
   });
 
@@ -91,6 +92,7 @@ describe('DO init-gate purity', () => {
         void (async () => { await reconcileInterruptedForks(this.rt); })();
       }
     }`;
+
     expect(reasons(detached)).toEqual([]);
   });
 
@@ -127,6 +129,7 @@ describe('DO init-gate purity — container-start hook', () => {
         void withContainerStartDeadline('x', 1, () => this.start(), () => {});
       }
     }`;
+
     expect(reasons(detached))
       .toEqual([expect.stringContaining('must annotate `: Promise<void>`')]);
   });
@@ -137,6 +140,7 @@ describe('DO init-gate purity — container-start hook', () => {
         return this.restoreWorkspace();
       }
     }`;
+
     expect(reasons(unbounded))
       .toEqual([expect.stringContaining('must route its work through `withContainerStartDeadline`')]);
   });
@@ -152,6 +156,7 @@ describe('DO init-gate purity — container-start hook', () => {
         await this.#restoreInStartGate();
       }
     }`;
+
     const found = reasons(inGate);
     expect(found).toEqual([
       expect.stringContaining('five of six starts reset'),
@@ -168,6 +173,7 @@ describe('DO init-gate purity — container-start hook', () => {
         return withContainerStartDeadline('x', 1, () => this.start(), () => {});
       }
     }`;
+
     expect(reasons(impostor))
       .toEqual([expect.stringContaining('must annotate `: void`')]);
   });
@@ -183,6 +189,7 @@ describe('DO init-gate purity — container-start hook', () => {
         return this.#noteContainerStart();
       }
     }`;
+
     expect(reasons(marked)).toEqual([]);
   });
 
@@ -193,6 +200,7 @@ describe('DO init-gate purity — container-start hook', () => {
         return withContainerStartDeadline('x', 1, () => this.start(), () => {});
       }
     }`;
+
     expect(reasons(both)).toEqual([
       expect.stringContaining('yet routes through `withContainerStartDeadline`'),
       expect.stringContaining('hands the gate something other than'),
@@ -208,6 +216,7 @@ describe('DO init-gate purity — container-start hook', () => {
         return this.armSchedules();
       }
     }`;
+
     expect(reasons(other))
       .toEqual([expect.stringContaining('hands the gate something other than `this.#noteContainerStart()`')]);
   });
@@ -219,6 +228,7 @@ describe('DO init-gate purity — container-start hook', () => {
         onStart(): Promise<void> { return this.restoreWorkspace(); }
       }`],
     ]);
+
     const result = audit(sources);
     expect(result.inspected).toEqual([
       {
@@ -340,6 +350,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
         return { status: 'completed', snapshot: { disposition } };
       }
     }`;
+
     expect(reasons(inGateLlm)).toEqual([
       expect.stringContaining('async'),
       expect.stringContaining('awaits in its own scope'),
@@ -363,6 +374,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
         return this.terminal.replayOwedAndRearm();
       }
     }`;
+
     expect(reasons(handedOff))
       .toEqual([expect.stringContaining('must hand its work to `classifyRecoveredFiber`')]);
   });
@@ -375,6 +387,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
         return Promise.resolve({ status: 'error', error: 'no lane owns ' + ctx.name });
       }
     }`;
+
     expect(reasons(inline)).toEqual([]);
   });
 
@@ -382,6 +395,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
     const unannotated = `export class ActorAgent extends Think {
       override onFiberRecovered(ctx) { return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx)); }
     }`;
+
     expect(reasons(unannotated))
       .toEqual([expect.stringContaining('must annotate what its promise resolves to')]);
   });
@@ -400,6 +414,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
         await this.resumeStream(ctx);
       }
     }`;
+
     const found = auditFile('actor-agent.ts', internal);
     expect(found.inspected.map((i) => `${i.member}:${i.hook}`)).toEqual([
       '_handleInternalFiberRecovery:recovery', 'onChatRecovery:recovery',
@@ -417,6 +432,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
       await transports.reviewAdvisorSnapshot(snapshot);
       return { status: 'completed' };
     }`;
+
     const found = auditFile('fiber-recovery.ts', seam);
     expect(found.classifier).toMatchObject({ file: 'fiber-recovery.ts', async: true });
     expect(found.violations).toEqual([expect.objectContaining({
@@ -432,6 +448,7 @@ describe('DO init-gate purity — the SDK-awaited recovery hook', () => {
       transports.redrive(ctx.name, ctx.snapshot, () => transports.runDueSessionEvolution());
       return { status: 'completed' };
     }`;
+
     const found = auditFile('fiber-recovery.ts', seam);
     expect(found.classifier).toMatchObject({ async: false });
     expect(found.violations).toEqual([]);
@@ -489,6 +506,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
     // No name on the list is decoration. Both shapes, because both exist: a lane
     // reached on `this`, and a provider entry point called as a free function.
     expect(MODEL_SINKS.length).toBeGreaterThan(0);
+
     for (const sink of MODEL_SINKS) {
       for (const call of [`this.${sink}(input)`, `${sink}(input)`]) {
         const spawned = `export class A extends Agent {
@@ -496,6 +514,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
             void (async () => { await ${call}; })();
           }
         }`;
+
         expect(reasons(spawned)).toEqual([expect.stringContaining(`reaches \`${sink}\``)]);
       }
     }
@@ -506,6 +525,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
     const direct = `export class A extends Agent {
       onStart(): void { void this.applyAutoTitle(this.ownMission()); }
     }`;
+
     expect(reasons(direct)).toEqual([expect.stringContaining('reaches `applyAutoTitle`')]);
   });
 
@@ -533,6 +553,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
         })();
       }
     }`;
+
     expect(reasons(bounded)).toEqual([]);
   });
 
@@ -546,6 +567,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
         return this.#noteContainerStart();
       }
     }`;
+
     expect(reasons(container)).toEqual([expect.stringContaining('reaches `streamText`')]);
   });
 
@@ -560,6 +582,7 @@ describe('DO init-gate purity — model work spawned from the init gate', () => 
         return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));
       }
     }`;
+
     expect(reasons(recovery)).toEqual([]);
   });
 });
@@ -610,6 +633,7 @@ export class A extends Agent {
   }
 }
 `);
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('return this.unboundedRemoteThing()');
     expect(found[0]).toContain('not on the admitted init-await list');
@@ -628,6 +652,7 @@ export class A extends Agent {
   }
 }
 `);
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('inside a loop');
   });
@@ -645,6 +670,7 @@ export class A extends Agent {
   }
 }
 `);
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('for await');
   });
@@ -660,6 +686,7 @@ export class A extends Agent {
   }
 }
 `);
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('await using lease');
   });
@@ -676,6 +703,7 @@ export class A extends Agent {
   }
 }
 `);
+
     expect(found).toHaveLength(1);
     expect(found[0]).toContain('holding no admitted init await');
   });
@@ -692,6 +720,7 @@ export class A extends Agent {
       '      await this.hostedWorkspace().bundle.session();',
       '      await this.hostedWorkspace().bundle.session();\n      await this.runDueSessionEvolution();',
     );
+
     expect(widened).not.toBe(real);
     const { violations } = auditFile(file, widened);
     expect(violations.map((v) => v.owner)).toContain('OrchestratorAgent');
@@ -721,9 +750,10 @@ export class A extends Agent {
     expect(real).toBeDefined();
 
     const inGate = real!.replace(
-      '  override onStart(): Promise<void> {\n    void BOUNDED_STORAGE_ONLY;\n    return this.#noteContainerStart();',
+      '  override onStart(): Promise<void> {\n    void BOUNDED_STORAGE_ONLY;\n\n    return this.#noteContainerStart();',
       '  override async onStart(): Promise<void> {\n    await this.#noteContainerStart();\n    await this.#drive(\'request\');',
     );
+
     expect(inGate).not.toBe(real);
     const { violations } = auditFile(file, inGate);
     expect(violations.map((v) => v.owner)).toEqual(['Devbox', 'Devbox', 'Devbox']);
@@ -735,10 +765,12 @@ export class A extends Agent {
     // issued from the method the hook hands the gate.
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
+
     const reaching = real!.replace(
       '    this.#adoptionPending = true;\n    await this.#armContainerSchedules();',
       '    this.#adoptionPending = true;\n    await this.exec(\'cat /proc/mounts\');\n    await this.#armContainerSchedules();',
     );
+
     expect(reaching).not.toBe(real);
     const { violations } = auditFile(file, reaching);
     expect(violations.map((v) => v.member)).toEqual(['noteContainerStart']);
@@ -748,10 +780,12 @@ export class A extends Agent {
   test('cut the wire: a Durable Object sleep in the real hand-back goes red', () => {
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
+
     const slept = real!.replace(
       '    this.#adoptionPending = true;\n    await this.#armContainerSchedules();',
       '    this.#adoptionPending = true;\n    await scheduler.wait(100);\n    await this.#armContainerSchedules();',
     );
+
     expect(slept).not.toBe(real);
     const { violations } = auditFile(file, slept);
     expect(violations.map((v) => v.member)).toEqual(['noteContainerStart']);
@@ -776,10 +810,12 @@ export class A extends Agent {
     // waits on is work the runtime drops on eviction.
     const file = 'packages/devbox/src/devbox.ts';
     const real = SOURCES.get(file);
+
     const detached = real!.replace(
-      '  override onStart(): Promise<void> {\n    void BOUNDED_STORAGE_ONLY;\n    return this.#noteContainerStart();',
+      '  override onStart(): Promise<void> {\n    void BOUNDED_STORAGE_ONLY;\n\n    return this.#noteContainerStart();',
       '  override onStart(): void {\n    void BOUNDED_STORAGE_ONLY;\n    void this.#noteContainerStart();',
     );
+
     expect(detached).not.toBe(real);
     const { violations } = auditFile(file, detached);
     expect(violations.map((v) => v.reason)).toEqual([
@@ -799,6 +835,7 @@ export class A extends Agent {
       'return Promise.resolve(classifyRecoveredFiber(this.fiberLanes, ctx));',
       'return this.terminal.replayOwedAndRearm();',
     );
+
     expect(inlined).not.toBe(real);
     const { violations } = auditFile(file, inlined);
     expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['ActorAgent.onFiberRecovered']);
@@ -813,6 +850,7 @@ export class A extends Agent {
     const widened = real!.replace(
       'export function classifyRecoveredFiber(', 'export async function classifyRecoveredFiber(',
     );
+
     expect(widened).not.toBe(real);
     const { violations, classifier } = auditFile(file, widened);
     expect(classifier).toMatchObject({ async: true });
@@ -831,6 +869,7 @@ export class A extends Agent {
 
     const anchor = '    const sweepsTruncated = this.maintenanceSweeps();\n';
     expect(real).toContain(anchor);
+
     const respawned = real!.replace(anchor, `${anchor}    if (this.getOwnerUserId()) {
       this.detachOwned(async () => {
         await this.hydrateTitle();
@@ -839,6 +878,7 @@ export class A extends Agent {
       });
     }
 `);
+
     expect(respawned).not.toBe(real);
     const { violations } = auditFile(file, respawned);
     expect(violations.map((v) => `${v.owner}.${v.member}`)).toEqual(['OrchestratorAgent.onStart']);

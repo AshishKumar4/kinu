@@ -20,17 +20,24 @@ import { createCLIRuntime } from '@kinu.run/cli-backend';
 // from `process.env`. Once the imports have bound it, the variable has done its
 // work and the process is put back the way it was found.
 const HOME = mkdtempSync(join(tmpdir(), 'kinu-title-home-'));
+
 const inheritedHome = process.env.KINU_HOME;
+
 process.env.KINU_HOME = HOME;
+
 const { autoTitleLocalWorkspace } = await import('../src/local-agent-client');
+
 const { loadConfigFile, upsertAgentConfig } = await import('../src/config');
+
 if (inheritedHome === undefined) delete process.env.KINU_HOME;
 else process.env.KINU_HOME = inheritedHome;
+
 afterAll(() => rmSync(HOME, { recursive: true, force: true }));
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'openai-compat', baseURL: 'http://localhost:0', headers: { Authorization: 'x' }, model: 'fake-model',
 };
+
 const tempDirs: string[] = [];
 
 afterEach(() => {
@@ -44,9 +51,12 @@ function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'u
   const rt = createCLIRuntime(db, { dbPath: join(dir, 'agent.db'), llm: DUMMY_LLM });
   initAgentConfigTable(rt.storage.execRaw);
   const config = rt.actor.config;
+
   if (stored.displayName !== undefined) config.setDisplayName(stored.displayName);
+
   if (stored.nameOrigin) config.setNameOrigin(stored.nameOrigin);
   upsertAgentConfig({ name, mode: 'local', localName: name, displayName: stored.displayName ?? name });
+
   return { rt, config };
 }
 
@@ -54,6 +64,7 @@ function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'u
 const suggests = (title: string) => ({
   generate: async () => JSON.stringify({ title, slug: 'oauth-callback-audit' }),
 });
+
 /**
  * An agent the owner ADDED to a virtual workspace inherits that workspace's
  * mission, which every peer in it shares. Titling from that would name the
@@ -70,6 +81,7 @@ describe('local agent auto-titling on its first owner message', () => {
       { mission: 'Audit the OAuth callback flow' },
       suggests('Callback Audit'),
     );
+
     // The deterministic title lands synchronously; the model upgrades it after.
     expect(config.getDisplayName()).toBe('Audit the OAuth callback flow');
     await titleTask;

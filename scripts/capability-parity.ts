@@ -83,6 +83,7 @@ import {
 } from './syntax';
 
 const root = new URL('..', import.meta.url).pathname;
+
 const LOCK = `${root}scripts/capability-parity.lock.json`;
 
 /** The two adapter closures, and the shared packages that belong to neither. A
@@ -91,9 +92,11 @@ const CLOSURES = {
   cf: ['packages/cf-backend/src/'],
   cli: ['packages/cli-backend/src/', 'packages/cli/src/'],
 } as const;
+
 const SHARED = ['packages/core/src/', 'packages/agent-utils/src/', 'packages/compaction/src/'];
 
 export type Closure = keyof typeof CLOSURES;
+
 /* SAFETY: `CLOSURES` is an `as const` object literal declared immediately above,
    so its runtime own-enumerable keys are exactly the literal union `Closure`.
    `Object.keys` is typed `string[]` because a wider object could reach it at
@@ -207,18 +210,23 @@ const isShared = (file: string): boolean => SHARED.some((prefix) => file.startsW
 function referencedTypeName(type: SyntaxNode | undefined): string | undefined {
   if (type === undefined) return undefined;
   const { raw } = type;
+
   if (raw.type === 'TSUnionType') {
     return type.children.map((child) => referencedTypeName(child)).find((name) => name !== undefined);
   }
+
   if (raw.type !== 'TSTypeReference' && raw.type !== 'TSImportType') return undefined;
   let name: string | undefined;
+
   for (const child of type.children) {
     if (child.raw.type === 'TSTypeParameterInstantiation') continue;
     walk(child, (node) => {
       const text = identifierText(node);
+
       if (text !== undefined) name = text;
     });
   }
+
   return name;
 }
 
@@ -236,19 +244,25 @@ function referencedTypeName(type: SyntaxNode | undefined): string | undefined {
  */
 export function behaviourTypes(sources: ReadonlyMap<string, string>): ReadonlySet<string> {
   const names = new Set<string>();
+
   for (const [file, text] of sources) {
     if (!isShared(file)) continue;
     const { root: tree } = parse(file, text);
+
     for (const statement of tree.children) {
       const { node: declaration, exported } = declarationOf(statement);
+
       if (!exported) continue;
       const name = declaredName(declaration);
+
       if (name === undefined) continue;
       const { raw } = declaration;
+
       if (raw.type === 'TSInterfaceDeclaration' || raw.type === 'ClassDeclaration') {
         names.add(name);
         continue;
       }
+
       // A `type X = (…) => …` alias is a collaborator too — that is how
       // `CraftedToolExecute` and `ExecuteToolsBuilder` are declared.
       if (raw.type === 'TSTypeAliasDeclaration'
@@ -257,6 +271,7 @@ export function behaviourTypes(sources: ReadonlyMap<string, string>): ReadonlySe
       }
     }
   }
+
   return names;
 }
 
@@ -281,10 +296,13 @@ export function declaredContracts(
 ): Contract[] {
   const { root: tree, lineAt } = parse(file, text);
   const out: Contract[] = [];
+
   for (const statement of tree.children) {
     const { node: declaration, exported } = declarationOf(statement);
+
     if (!exported || declaration.raw.type !== 'TSInterfaceDeclaration') continue;
     const name = declaredName(declaration);
+
     if (name === undefined) continue;
     const members = new Set<string>();
     const required = new Set<string>();
@@ -293,24 +311,37 @@ export function declaredContracts(
     walk(declaration, (node) => {
       if (node.raw.type === 'TSInterfaceHeritage') {
         const base = identifierText(node.children[0]);
+
         if (base !== undefined) heritage.push(base);
+
         return;
       }
+
       if (node.parent?.raw.type !== 'TSInterfaceBody') return;
       const member = declaredName(node);
+
       if (member === undefined) return;
       members.add(member);
-      if (!isOptionalMember(node)) { required.add(member); return; }
+
+      if (!isOptionalMember(node)) {
+        required.add(member);
+
+        return;
+      }
+
       const type = node.children.find((child) => child.raw.type === 'TSTypeAnnotation')?.children[0];
+
       const behaviour = node.raw.type === 'TSMethodSignature'
         || type?.raw.type === 'TSFunctionType'
         || behaviours.has(referencedTypeName(type) ?? '');
+
       if (behaviour) optional.push(member);
     });
     out.push({
       name, file, line: lineAt(declaration.start), members, required, optional, heritage,
     });
   }
+
   return out;
 }
 
@@ -326,22 +357,30 @@ export function declaredContracts(
  */
 function resolveHeritage(declared: readonly Contract[]): Contract[] {
   const byName = new Map(declared.map((contract) => [contract.name, contract]));
+
   const closeOver = (contract: Contract, seen: Set<string>): Contract => {
     const members = new Set(contract.members);
     const required = new Set(contract.required);
     const optional = new Set(contract.optional);
+
     for (const base of contract.heritage) {
       if (seen.has(base)) continue;
       seen.add(base);
       const resolved = byName.get(base);
+
       if (resolved === undefined) continue;
       const full = closeOver(resolved, seen);
+
       for (const member of full.members) members.add(member);
+
       for (const member of full.required) required.add(member);
+
       for (const member of full.optional) optional.add(member);
     }
+
     return { ...contract, members, required, optional: [...optional] };
   };
+
   return declared.map((contract) => closeOver(contract, new Set([contract.name])));
 }
 
@@ -355,13 +394,18 @@ function objectLiterals(file: string, text: string): Site[] {
     if (node.raw.type !== 'ObjectExpression') return;
     const supplied = new Set<string>();
     let opaque = false;
+
     for (const child of node.children) {
       if (child.raw.type === 'SpreadElement') { opaque = true; continue; }
+
       const key = declaredName(child);
+
       if (key !== undefined) supplied.add(key);
     }
+
     if (supplied.size > 0) out.push({ file, line: lineAt(node.start), supplied, opaque });
   });
+
   return out;
 }
 
@@ -406,9 +450,12 @@ function attribute(site: Site, contracts: readonly Contract[]): Contract | undef
   if (site.supplied.size < MIN_OVERLAP) return undefined;
   let best: Contract | undefined;
   let bestFit = 0;
+
   for (const contract of contracts) {
     let every = true;
+
     for (const key of site.supplied) if (!contract.members.has(key)) { every = false; break; }
+
     // A spread makes `supplied` a lower bound, so a required member absent from
     // the written keys may still arrive through it and the omission is not
     // observable here. Only an explicit literal proves the shape it is not —
@@ -416,13 +463,16 @@ function attribute(site: Site, contracts: readonly Contract[]): Contract | undef
     if (every && !site.opaque) {
       for (const key of contract.required) if (!site.supplied.has(key)) { every = false; break; }
     }
+
     if (!every) continue;
     const fit = site.supplied.size / contract.members.size;
+
     if (fit > bestFit || (fit === bestFit && best !== undefined && contract.name < best.name)) {
       best = contract;
       bestFit = fit;
     }
   }
+
   return best;
 }
 
@@ -467,27 +517,38 @@ const TsconfigSchema = v.object({
 export function withoutComments(text: string): string {
   let out = '';
   let mode: 'code' | 'string' | 'line' | 'block' = 'code';
+
   for (let i = 0; i < text.length; i += 1) {
     const pair = text.slice(i, i + 2);
+
     if (mode === 'code') {
       if (pair === '//') { mode = 'line'; i += 1; continue; }
+
       if (pair === '/*') { mode = 'block'; i += 1; continue; }
+
       if (text[i] === '"') mode = 'string';
       out += text[i];
       continue;
     }
+
     if (mode === 'string') {
       out += text[i];
+
       if (text[i] === '\\') { out += text[i + 1] ?? ''; i += 1; continue; }
+
       if (text[i] === '"') mode = 'code';
       continue;
     }
+
     if (mode === 'line') {
       if (text[i] === '\n') { mode = 'code'; out += '\n'; }
+
       continue;
     }
+
     if (pair === '*/') { mode = 'code'; i += 1; }
   }
+
   return out;
 }
 
@@ -506,11 +567,15 @@ export function withoutComments(text: string): string {
  */
 function aliasesOf(pkg: string): readonly (readonly [string, string])[] {
   const path = `${root}${pkg}/tsconfig.json`;
+
   if (!existsSync(path)) return [];
   const { compilerOptions } = v.parse(TsconfigSchema, JSON.parse(withoutComments(readFileSync(path, 'utf8'))));
+
   return Object.entries(compilerOptions?.paths ?? {}).flatMap(([pattern, targets]) => {
     const target = targets[0];
+
     if (!pattern.endsWith('/*') || target === undefined || !target.endsWith('/*')) return [];
+
     return [[pattern.slice(0, -1), `${pkg}/${target.replace(/^\.\//, '').slice(0, -1)}`] as const];
   });
 }
@@ -538,11 +603,15 @@ function resolveLocal(
   aliases: readonly (readonly [string, string])[],
 ): Local {
   const alias = aliases.find(([prefix]) => spec.startsWith(prefix));
+
   const base = spec.startsWith('.')
     ? normalize(join(dirname(from), spec))
     : alias === undefined ? undefined : `${alias[1]}${spec.slice(alias[0].length)}`;
+
   if (base === undefined) return { kind: 'external' };
+
   if (base.split('/').includes('node_modules')) return { kind: 'installed' };
+
   // One spelling per regime: no extension under a bundler or Bun, an explicit
   // `.ts` inside the raw-Node closure. `base` covers the second and the genuine
   // assets (`.css`, `.json`, `packages/pc-agent/src/index.js`); the rest is the
@@ -552,8 +621,11 @@ function resolveLocal(
   ]) {
     if (known.has(candidate)) return { kind: 'file', file: candidate };
   }
+
   const extension = base.slice(base.lastIndexOf('/') + 1).includes('.');
+
   if (!extension) return { kind: 'missing' };
+
   // A path that names a real file outside the governed source set is a
   // dependency, not a missing module: `packages/pc-agent/src/index.js` is the
   // CommonJS daemon, which `PRODUCT_SOURCE` (`.tsx?` only) never enumerates.
@@ -576,13 +648,16 @@ interface Graph {
 function buildGraph(sources: ReadonlyMap<string, string>): Graph {
   const known = new Set(sources.keys());
   const specifiers = new Map<string, readonly string[]>();
+
   for (const [file, text] of sources) {
     specifiers.set(file, moduleSpecifiers(parse(file, text).root));
   }
 
   const importable = new Set<string>();
+
   for (const [file, list] of specifiers) {
     if (!isShared(file)) continue;
+
     for (const spec of list) if (!spec.startsWith('.')) importable.add(spec);
   }
 
@@ -590,17 +665,22 @@ function buildGraph(sources: ReadonlyMap<string, string>): Graph {
   const blockers = new Map<string, readonly string[]>();
   const deps = new Map<string, readonly string[]>();
   let edges = 0;
+
   for (const [file, list] of specifiers) {
     const pkg = file.split('/').slice(0, 2).join('/');
     let packageAliases = aliases.get(pkg);
+
     if (packageAliases === undefined) {
       packageAliases = aliasesOf(pkg);
       aliases.set(pkg, packageAliases);
     }
+
     const blocked: string[] = [];
     const local: string[] = [];
+
     for (const spec of list) {
       const resolved = resolveLocal(file, spec, known, packageAliases);
+
       if (resolved.kind === 'missing') {
         throw new Error(
           `capability-parity: ${file} imports '${spec}', which resolves to no tracked`
@@ -608,18 +688,23 @@ function buildGraph(sources: ReadonlyMap<string, string>): Graph {
           + ` dependency-free module, which reports the file as movable when it is not.`,
         );
       }
+
       if (resolved.kind === 'file') {
         local.push(resolved.file);
         edges += 1;
         continue;
       }
+
       if (resolved.kind === 'asset' || resolved.kind === 'installed') { blocked.push(spec); continue; }
+
       if (SHARED_PACKAGE.test(spec) || importable.has(spec)) continue;
       blocked.push(spec);
     }
+
     blockers.set(file, blocked);
     deps.set(file, local);
   }
+
   return { blockers, deps, importable, edges };
 }
 
@@ -628,17 +713,22 @@ function buildGraph(sources: ReadonlyMap<string, string>): Graph {
  *  that only need each other are movable together. */
 function movableIn(file: string, graph: Graph, memo: Map<string, boolean>, open: Set<string>): boolean {
   const cached = memo.get(file);
+
   if (cached !== undefined) return cached;
+
   if (open.has(file)) return true;
   open.add(file);
   let ok = (graph.blockers.get(file) ?? []).length === 0;
+
   if (ok) {
     for (const dep of graph.deps.get(file) ?? []) {
       if (!movableIn(dep, graph, memo, open)) { ok = false; break; }
     }
   }
+
   open.delete(file);
   memo.set(file, ok);
+
   return ok;
 }
 
@@ -647,10 +737,13 @@ export function findMovable(sources: ReadonlyMap<string, string>): Shareable {
   const memo = new Map<string, boolean>();
   const movable: Movable[] = [];
   let closureFiles = 0;
+
   for (const [file, text] of sources) {
     const closure = closureOf(file);
+
     if (closure === undefined) continue;
     closureFiles += 1;
+
     if (!movableIn(file, graph, memo, new Set())) continue;
     movable.push({
       file,
@@ -659,29 +752,38 @@ export function findMovable(sources: ReadonlyMap<string, string>): Shareable {
       through: [...(graph.deps.get(file) ?? [])].sort(),
     });
   }
+
   movable.sort((a, b) => a.file.localeCompare(b.file));
+
   return { movable, importable: graph.importable, closureFiles, edges: graph.edges };
 }
 
 export function findAsymmetries(sources: ReadonlyMap<string, string>): Parity {
   const behaviours = behaviourTypes(sources);
   const declared: Contract[] = [];
+
   for (const [file, text] of sources) {
     if (!isShared(file)) continue;
     declared.push(...declaredContracts(file, text, behaviours));
   }
+
   const allContracts = resolveHeritage(declared);
   const contracts = allContracts.filter((contract) => contract.optional.length > 0);
 
   const sites = new Map<string, Map<Closure, Site[]>>();
   const opaque = new Set<string>();
   const sitesPerClosure = new Map<Closure, number>(CLOSURE_NAMES.map((name) => [name, 0]));
+
   for (const [file, text] of sources) {
     const closure = closureOf(file);
+
     if (closure === undefined) continue;
+
     for (const site of objectLiterals(file, text)) {
       const contract = attribute(site, allContracts);
+
       if (contract === undefined) continue;
+
       if (site.opaque) opaque.add(contract.name);
       const byClosure = sites.get(contract.name) ?? new Map<Closure, Site[]>();
       const list = byClosure.get(closure) ?? [];
@@ -694,20 +796,27 @@ export function findAsymmetries(sources: ReadonlyMap<string, string>): Parity {
 
   const compared: Contract[] = [];
   const asymmetries: Asymmetry[] = [];
+
   for (const contract of contracts) {
     const byClosure = sites.get(contract.name);
+
     if (byClosure === undefined || opaque.has(contract.name)) continue;
+
     if (!CLOSURE_NAMES.every((name) => (byClosure.get(name)?.length ?? 0) > 0)) continue;
     compared.push(contract);
+
     const suppliedIn = new Map<Closure, Set<string>>(CLOSURE_NAMES.map((name) => [
       name,
       new Set((byClosure.get(name) ?? []).flatMap((site) => [...site.supplied])),
     ]));
+
     for (const field of contract.optional) {
       const wiring = CLOSURE_NAMES.filter((name) => suppliedIn.get(name)?.has(field) === true);
+
       if (wiring.length !== 1) continue;
       const [present] = wiring;
       const absent = CLOSURE_NAMES.find((name) => name !== present);
+
       if (present === undefined || absent === undefined) continue;
       asymmetries.push({
         contract,
@@ -722,6 +831,7 @@ export function findAsymmetries(sources: ReadonlyMap<string, string>): Parity {
 
   asymmetries.sort((a, b) => keyOf(a).localeCompare(keyOf(b)));
   const shareable = findMovable(sources);
+
   return {
     contracts,
     compared,
@@ -741,6 +851,7 @@ export const movableKeyOf = (entry: Movable): string => `movable ${entry.file}`;
 export function describe(entry: Asymmetry): string {
   const where = (sites: readonly Site[]): string =>
     [...new Set(sites.map((site) => `${site.file}:${String(site.line)}`))].sort().join(', ');
+
   return finding({
     at: `${entry.contract.name}.${entry.field} — ${entry.contract.file}:${String(entry.contract.line)}`,
     invariant: `both adapter closures wire it, or neither does`,
@@ -755,6 +866,7 @@ export function describe(entry: Asymmetry): string {
 
 export function describeMovable(entry: Movable): string {
   const other = CLOSURE_NAMES.find((name) => name !== entry.closure) ?? entry.closure;
+
   return finding({
     at: `${entry.file}:1 — ${String(entry.lines)} lines`,
     invariant: 'a module that would compile in a shared package lives in one',
@@ -770,6 +882,7 @@ export function describeMovable(entry: Movable): string {
 
 if (import.meta.main) {
   const parity = findAsymmetries(readSources());
+
   const measured = assertMeasured('capability-parity', [
     ['core contracts with optional members', parity.contracts.length],
     ['built by both closures', parity.compared.length],
@@ -780,10 +893,13 @@ if (import.meta.main) {
     ['resolved local imports', parity.edges],
     ['specifiers a shared package already imports', parity.importable.size],
   ]);
+
   const coverage = parity.skipped.length === 0
     ? measured
     : `${measured}, ${String(parity.skipped.length)} skipped as spread: ${parity.skipped.join(', ')}`;
+
   const keys = [...parity.asymmetries.map(keyOf), ...parity.movable.map(movableKeyOf)];
+
   if (process.argv.includes('--lock')) {
     const count = writeLock(keys, LOCK);
     console.log(`capability-parity: locked ${String(count)} divergence(s) — ${coverage}`);
@@ -792,6 +908,7 @@ if (import.meta.main) {
       ...parity.asymmetries.map((entry) => [keyOf(entry), describe(entry)] as const),
       ...parity.movable.map((entry) => [movableKeyOf(entry), describeMovable(entry)] as const),
     ]);
+
     process.exit(report(
       'capability-parity',
       reconcile(keys, LOCK),

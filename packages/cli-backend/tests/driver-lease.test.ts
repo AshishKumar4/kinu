@@ -40,6 +40,7 @@ function workspace() {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-lease-'));
   const db = new Database(join(dir, 'agent.db'));
   db.exec('PRAGMA journal_mode = WAL');
+
   return { db, dir };
 }
 
@@ -51,12 +52,14 @@ function workspace() {
  */
 function driver(db: Database, pid: number, alive: Set<number>, kind: DriverKind): DriverLeaseHold {
   const proc: LeaseProcess = { pid, isAlive: (other) => alive.has(other) };
+
   return new DriverLeaseHold({ sql: makeSql(db), execRaw: makeExecRaw(db), proc }, kind);
 }
 
 describe('the local driver lease', () => {
   test('an uncontended driver takes it, and the row names that process', () => {
     const { db, dir } = workspace();
+
     try {
       const daemon = driver(db, 101, new Set([101]), 'daemon');
       expect(daemon.acquire()).toBeNull();
@@ -70,12 +73,14 @@ describe('the local driver lease', () => {
 
   test('a daemon does NOT interrupt a live interactive owner, and the refusal names it', () => {
     const { db, dir } = workspace();
+
     try {
       const alive = new Set([201, 202]);
       const owner = driver(db, 201, alive, 'interactive');
       expect(owner.acquire()).toBeNull();
 
       const refusal = driver(db, 202, alive, 'daemon').acquire();
+
       if (!refusal) throw new Error('a daemon must not preempt a live interactive owner');
       expect(refusal.holder).toEqual({ pid: 201, kind: 'interactive' });
       // `unavailable`, not `denied`: the driver is taken, not forbidden.
@@ -93,6 +98,7 @@ describe('the local driver lease', () => {
 
   test('an interactive process DOES take it from a live daemon', () => {
     const { db, dir } = workspace();
+
     try {
       const alive = new Set([301, 302]);
       const daemon = driver(db, 301, alive, 'daemon');
@@ -113,6 +119,7 @@ describe('the local driver lease', () => {
 
   test('a dead holder yields to anyone, with no clock involved', () => {
     const { db, dir } = workspace();
+
     try {
       const alive = new Set([401, 402]);
       const crashed = driver(db, 401, alive, 'interactive');
@@ -126,6 +133,7 @@ describe('the local driver lease', () => {
       // expired: the only thing that changed is that the pid no longer exists.
       alive.delete(401);
       const retry = daemon.acquire();
+
       if (retry) throw new Error(`a dead holder must yield: ${retry.refused.error}`);
       expect(leaseHolder(db)).toEqual({ pid: 402, kind: 'daemon' });
     } finally {
@@ -136,6 +144,7 @@ describe('the local driver lease', () => {
 
   test('release only matches its own token, so a preempted holder cannot evict its successor', () => {
     const { db, dir } = workspace();
+
     try {
       const alive = new Set([501, 502]);
       const first = driver(db, 501, alive, 'daemon');
@@ -164,6 +173,7 @@ describe('the local driver lease', () => {
 
   test('re-acquiring in the same process keeps one claim rather than racing itself', () => {
     const { db, dir } = workspace();
+
     try {
       const alive = new Set([601]);
       const me = driver(db, 601, alive, 'interactive');
@@ -188,6 +198,7 @@ describe('the local driver lease', () => {
 
   test('two concurrent claimants over one database leave exactly one holder', () => {
     const { db, dir } = workspace();
+
     try {
       const alive = new Set([701, 702]);
       // Both read an empty lease before either writes — the interleaving a

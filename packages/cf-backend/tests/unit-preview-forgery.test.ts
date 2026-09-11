@@ -40,13 +40,19 @@ import { sandboxPreviewExposures } from '../src/lib/preview-exposures';
 const { default: worker } = await import('../src/server');
 
 const APP = 'https://app.example';
+
 const SUFFIX = 'previews.example';
+
 /** The workspace whose container the forged labels aim at. */
 const WORKSPACE = 'hello';
+
 const SANDBOX_ID = `kinu-${WORKSPACE}`;
+
 const PORT = 8080;
+
 /** The shape `exposePort` mints: `p<port>_<random>`. */
 const MINTED_TOKEN = 'p8080_ab12cd34';
+
 const FORGED_TOKEN = 'p8080_deadbeef';
 
 // Two cases pin the clock; the rest of the run must not inherit it.
@@ -76,12 +82,14 @@ function probe(): SandboxProbe {
     Sandbox: {
       idFromName(name: string) {
         resolved.push(name);
+
         return { name };
       },
       get(_id: { name: string }) {
         return {
           async fetch(request: Request) {
             forwarded.push(request);
+
             return new Response('<h1>container</h1>', {
               headers: { 'content-type': 'text/html' },
             });
@@ -97,6 +105,7 @@ function probe(): SandboxProbe {
   });
   const partialCtx: Partial<ExecutionContext> = {};
   Object.assign(partialCtx, { waitUntil() {}, passThroughOnException() {} });
+
   return {
     resolved,
     forwarded,
@@ -177,6 +186,7 @@ describe('a preview hostname nobody minted', () => {
 
   test('a sandbox id outside the shape this deployment mints is refused on sight', async () => {
     const p = probe();
+
     // The SDK admits any id up to 63 characters. This one is a legal SDK label
     // and not a Kinu container, so it is refused before any lookup.
     const res = await worker.fetch(
@@ -217,6 +227,7 @@ describe('a preview this deployment published', () => {
     // The real SDK ran: these are its own preview-proxy headers, carrying the
     // token onward for the object to validate.
     const forwarded = p.forwarded[0];
+
     if (!forwarded) throw new Error('expected the container to receive the request');
     expect(forwarded.headers.get('x-sandbox-preview-token')).toBe(MINTED_TOKEN);
     expect(forwarded.headers.get('x-sandbox-preview-port')).toBe(String(PORT));
@@ -284,6 +295,7 @@ describe('the premise this gate rests on', () => {
       join(import.meta.dir, '../../../node_modules/@cloudflare/sandbox/dist/index.js'),
       'utf8',
     );
+
     const resolve = sdk.indexOf('getSandbox(env.Sandbox, sandboxId');
     const forward = sdk.indexOf('await sandbox.fetch(previewRequest)');
     expect(resolve).toBeGreaterThan(-1);

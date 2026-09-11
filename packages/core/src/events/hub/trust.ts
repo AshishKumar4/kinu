@@ -35,7 +35,9 @@ export function meetTrust(a: TrustLevel, b: TrustLevel): TrustLevel {
 export function meetAll(trusts: ReadonlyArray<TrustLevel>): TrustLevel {
   if (trusts.length === 0) return 'self';
   let acc: TrustLevel = trusts[0];
+
   for (let i = 1; i < trusts.length; i++) acc = meetTrust(acc, trusts[i]);
+
   return acc;
 }
 
@@ -80,6 +82,7 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
 
     case 'peer_async':
       if (d.same_owner) return 'authenticated';
+
       if (d.receiver_grant_present) return 'external';
       throw new IngressRejectedError('peer_async',
         'cross-owner peer message requires explicit receiver-side grant');
@@ -94,6 +97,7 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
       // Even when the operator minted the token for a third party, the
       // resulting calls are NEVER owner — third-party never gets owner.
       if (d.variant === 'mcp_chat') return 'owner';
+
       return 'authenticated';
 
     case 'email_inbound':
@@ -157,13 +161,16 @@ export function derivePriority(trust: TrustLevel, variant: EventVariant): Priori
       ['email', 'background'],
     ])],
   ]);
+
   const prio = table.get(trust)?.get(variant);
+
   if (!prio) {
     throw new IngressRejectedError(
       'invalid_combination',
       `trust=${trust} + variant=${variant} is not a permitted combination`,
     );
   }
+
   return prio;
 }
 
@@ -194,6 +201,7 @@ export interface DerivedFields {
 export function deriveFields(d: IngressDescriptor): DerivedFields {
   const trust = deriveEventTrust(d);
   const priority = derivePriority(trust, d.variant);
+
   // Email bodies ARE the turn input, and every email sender passed an
   // explicit owner grant (own address or the email_route allowlist) — the
   // per-trigger visibility override the spec allows. `redact` keeps content
@@ -202,5 +210,6 @@ export function deriveFields(d: IngressDescriptor): DerivedFields {
   const payload_visibility = d.ingress === 'email_inbound'
     ? 'redact'
     : deriveDefaultVisibility(trust);
+
   return { trust, priority, payload_visibility };
 }

@@ -34,6 +34,7 @@ test("importing the setup/chat command graph leaves stdin untouched and opentui 
     encoding: "utf8",
     timeout: 30_000,
   });
+
   expect(run.status).toBe(0);
   const result = JSON.parse(run.stdout.trim().split("\n").at(-1)!);
   expect(result.afterCommands.stdin).toEqual({ data: 0, readable: 0, keypress: 0, isRaw: false });

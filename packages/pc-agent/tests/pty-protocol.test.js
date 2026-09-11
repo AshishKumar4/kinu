@@ -8,6 +8,7 @@
  * bypassed either would be a way around the owner's own Sandbox switch.
  */
 'use strict';
+
 const { afterEach, describe, expect, test } = require('bun:test');
 
 /**
@@ -31,16 +32,21 @@ const {
   PTY_EXIT_FRAME,
   SESSION_COMMAND,
 } = require('../src/index.js');
+
 const { createSessions, TERMINAL_NAME } = require('../src/pty.js');
 
 const TEST_MS = 60_000;
+
 const SETTLE_MS = 15_000;
 
 async function until(predicate, what, budgetMs = SETTLE_MS) {
   const started = Date.now();
+
   for (;;) {
     const value = predicate();
+
     if (value) return value;
+
     if (Date.now() - started > budgetMs) throw new Error(`${what} did not happen within ${budgetMs} ms`);
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
@@ -50,6 +56,7 @@ async function until(predicate, what, budgetMs = SETTLE_MS) {
  *  property the daemon reads to decide a socket is too far behind. */
 function fakeWs(bufferedAmount = 0) {
   const frames = [];
+
   return {
     frames,
     bufferedAmount,
@@ -76,18 +83,23 @@ function context() {
   const plans = [];
   const sessions = createSessions({ log: () => {} });
   const realOpen = sessions.open;
+
   const wrapped = {
     ...sessions,
     open(request) {
       plans.push({ argv: request.argv, env: request.env });
+
       return realOpen(request);
     },
   };
+
   live.push(sessions);
+
   return { ctx: { sessions: wrapped, checkpoints: null }, plans, sessions };
 }
 
 const live = [];
+
 afterEach(() => {
   while (live.length > 0) live.pop().closeAll();
 });
@@ -196,11 +208,13 @@ describe('a terminal is confined exactly as a command is', () => {
   test('the same refusal reaches exec, so neither path is the softer one', async () => {
     const { ctx } = context();
     const ws = fakeWs();
+
     const frame = {
       method: 'exec',
       params: ['echo hello'],
       sandbox: { tier: 'sandboxed', agentHome: `${require('node:os').homedir()}/.kinu/agents/w1/home`, roots: [] },
     };
+
     handle({ ...frame, id: 'rpc-abcdefghij-7' }, ws, ctx);
     const execReply = await ws.response('rpc-abcdefghij-7');
     handle({ ...frame, method: PTY_OPEN_METHOD, params: ['pane-g', 80, 24], id: 'rpc-abcdefghij-8' }, ws, ctx);

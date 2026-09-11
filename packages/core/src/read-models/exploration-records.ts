@@ -102,8 +102,10 @@ export interface RecordCellSummary {
 
 /** Comparable sets per page. Twenty, matching the fork list. */
 const DEFAULT_OBJECTIVE_PAGE = 20;
+
 /** Cells per page. A grid is read as a whole; fifty is a screen of it. */
 const DEFAULT_CELL_PAGE = 50;
+
 /**
  * Occupants per page.
  *
@@ -151,6 +153,7 @@ export function listRecordObjectives(
   const at = after?.lastRecordedAt ?? 0;
   const objective = after?.objectiveId ?? '';
   const floor = after === null ? '' : after.floorDigest ?? '';
+
   const groups = sql<ObjectiveGroup>`
     SELECT objective_id,
            floor_digest,
@@ -178,6 +181,7 @@ export function listRecordObjectives(
   return mapPage(seekPage(groups, page, objectiveCursor), (rows) => rows.map((row) => {
     const direction = asDirection(row.direction);
     const handle = { objectiveId: row.objective_id, floorDigest: row.floor_digest };
+
     return {
       ...handle,
       metric: row.metric,
@@ -225,11 +229,13 @@ export function listRecordCells(
   limit = DEFAULT_CELL_PAGE,
 ): Page<RecordCellSummary> {
   const direction = directionOf(sql, actor, handle);
+
   if (direction === null) return { status: 'end', items: [] };
   const page = boundedInt(limit, DEFAULT_CELL_PAGE, 1, MAX_RECORD_PAGE);
   const after = cursor === null ? null : cellAnchorOf(sql, actor, handle, cursor.after);
   const from = after === null ? 0 : 1;
   const descriptor = after === null ? null : after.descriptor;
+
   const cells = sql<{ descriptor: string | null; occupants: number }>`
     SELECT descriptor, COUNT(*) AS occupants
       FROM exploration_records
@@ -267,9 +273,11 @@ export function readRecordCell(
   limit = DEFAULT_OCCUPANT_PAGE,
 ): Page<ExplorationRecord> {
   const direction = directionOf(sql, actor, handle);
+
   if (direction === null) return { status: 'end', items: [] };
   const page = boundedInt(limit, DEFAULT_OCCUPANT_PAGE, 1, MAX_RECORD_PAGE);
   const seek = cursor === null ? null : occupantSeek(sql, actor, handle, cursor.after);
+
   return seekPage(recordsInCell(sql, actor, handle, direction, seek, page + 1), page,
     (record) => record.artifactDigest);
 }
@@ -288,7 +296,9 @@ function directionOf(
   sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle,
 ): ObjectiveDirection | null {
   const described = describeObjective(sql, actor, handle);
+
   if (described.identity !== null) return described.identity.direction;
+
   if (described.rows > 0) {
     throw new Error(
       `exploration_records holds ${described.rows} row(s) under objective ${handle.objectiveId}`
@@ -296,6 +306,7 @@ function directionOf(
       + ' they can be neither ordered nor presented.',
     );
   }
+
   return null;
 }
 
@@ -337,11 +348,14 @@ function objectiveCursor(row: ObjectiveGroup): string {
 
 function objectiveAnchorOf(sql: SqlExecutor, actor: ActorHandle, after: string): ObjectiveAnchor {
   const handle = parseAnchor('objective list', after, ObjectiveAnchorSchema);
+
   const row = sql<{ last_recorded_at: number | null }>`
     SELECT MAX(first_recorded_at) AS last_recorded_at FROM exploration_records
      WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
        AND floor_digest IS ${handle.floorDigest}`[0];
+
   if (!row || row.last_recorded_at === null) throw new StaleCursorError('objective list', after);
+
   return { ...handle, lastRecordedAt: row.last_recorded_at };
 }
 
@@ -353,12 +367,15 @@ function cellAnchorOf(
   sql: SqlExecutor, actor: ActorHandle, handle: RecordObjectiveHandle, after: string,
 ): CellAnchor {
   const anchor = parseAnchor('cell list', after, CellAnchorSchema);
+
   const present = sql<{ present: number }>`
     SELECT 1 AS present FROM exploration_records
      WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
        AND floor_digest IS ${handle.floorDigest}
        AND descriptor IS ${anchor.descriptor} LIMIT 1`;
+
   if (present.length === 0) throw new StaleCursorError('cell list', after);
+
   return anchor;
 }
 
@@ -378,7 +395,9 @@ function occupantSeek(
      WHERE actor_id = ${actor.actorId} AND objective_id = ${handle.objectiveId}
        AND floor_digest IS ${handle.floorDigest}
        AND descriptor IS ${handle.descriptor} AND artifact_digest = ${after} LIMIT 1`[0];
+
   if (!row) throw new StaleCursorError('cell', after);
+
   return { value: row.value, firstRecordedAt: row.first_recorded_at, artifactDigest: after };
 }
 

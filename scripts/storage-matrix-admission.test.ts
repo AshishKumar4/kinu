@@ -24,6 +24,7 @@ import {
 } from './bench-devbox-strategies';
 
 const cell: CellCompletion = { stage: 'blank', tree: 'T0', change: 'C0', cache: 'K0', completed: true };
+
 const deciding: MeasuredCell = { id: cell, values: [100, 105], wallMs: 1_000 };
 
 /**
@@ -167,6 +168,7 @@ describe('G0-G9 storage run admission', () => {
         semanticsPassed: false,
       })],
     };
+
     expect(evaluateRun(record).admitted).toBe(true);
   });
 
@@ -183,6 +185,7 @@ describe('G0-G9 storage run admission', () => {
         witnessChecks: [],
       })),
     };
+
     const verdict = evaluateRun(record);
     expect(verdict.admitted).toBe(false);
     const g2 = verdict.gates.find((row) => row.gate === 'G2');
@@ -212,11 +215,14 @@ describe('G0-G9 storage run admission', () => {
       decisiveTicks: [],
       witnessChecks: controlWitnessChecks('snapshot-chain', WITNESSED_FACTS),
     });
+
     expect(observed.expectedRedChecks).toEqual(['mutable-delta', 'delta-layer-collapse']);
+
     const record: StorageRunRecord = {
       ...validRecord(),
       arms: [...validRecord().arms, observed],
     };
+
     const g2 = evaluateRun(record).gates.find((row) => row.gate === 'G2');
     expect(g2?.reasons).toEqual([]);
     expect(g2?.ok).toBe(true);
@@ -244,6 +250,7 @@ describe('G0-G9 storage run admission', () => {
         },
       }),
     });
+
     expectsGate(
       { ...validRecord(), arms: [...validRecord().arms, arm] },
       'G2',
@@ -349,6 +356,7 @@ describe('G0-G9 storage run admission', () => {
         arm: 'red-overlay', expected: true, work: null, claim: 'unbounded', mechanicalBoundVerified: false,
       }],
     };
+
     expect(evaluateRun(withControl).gates.find((row) => row.gate === 'G5')?.ok).toBe(true);
 
     // The same claim on a candidate refuses three ways.
@@ -384,6 +392,7 @@ describe('G0-G9 storage run admission', () => {
       publication: { ...validRecord().publication, faultCutCompleted: false },
       security: { ...validRecord().security, securityCellsComplete: false },
     };
+
     const verdict = evaluateRun(controlsOnly);
     expect(verdict.gates.find((row) => row.gate === 'G3')?.ok).toBe(true);
     expect(verdict.gates.find((row) => row.gate === 'G4')?.ok).toBe(true);
@@ -415,6 +424,7 @@ describe('G0-G9 storage run admission', () => {
         cleanup: { ...cleanCleanup(), [field]: false },
       }, 'G8', phrase);
     }
+
     expectsGate({ ...validRecord(), cleanup: { ...cleanCleanup(), kept: true } }, 'G8', '--keep');
     expectsGate({
       ...validRecord(),
@@ -584,12 +594,15 @@ const completeArms = (): ArmResult[] => REQUESTED_ARMS.map((strategy) => measure
 describe('the devbox run\'s own admission requirements', () => {
   test('a complete run holds G0, G6, G7 and G9, so the refusals below are discriminating', () => {
     const verdict = devboxVerdict(completeArms());
+
     for (const gate of ['G0', 'G1', 'G2', 'G6', 'G7', 'G8', 'G9'] as const) {
       expect(gateHeld(verdict, gate), `${gate}: ${gateReasons(verdict, gate)}`).toBe(true);
     }
+
     // Still not admitted, and for the honest reasons: no fault-cut cells, no
     // security cells, and no counted restore anywhere in this instrument.
     expect(verdict.admitted).toBe(false);
+
     for (const gate of ['G3', 'G4', 'G5'] as const) expect(gateHeld(verdict, gate)).toBe(false);
   });
   test('G0 refuses every identity field on its own rather than defaulting it', () => {
@@ -600,6 +613,7 @@ describe('the devbox run\'s own admission requirements', () => {
       ['imageSha256', 'container-image-digest'],
       ['dirtyDigest', 'source-tree'],
     ];
+
     for (const [field, recorded] of blanked) {
       const verdict = devboxVerdict(completeArms(), REQUESTED_ARMS, fullIdentity({ [field]: '' }));
       expect(gateHeld(verdict, 'G0'), field).toBe(false);
@@ -613,6 +627,7 @@ describe('the devbox run\'s own admission requirements', () => {
       REQUESTED_ARMS,
       fullIdentity({ dirtyDigest: 'dirty' }),
     );
+
     expect(gateReasons(verdict, 'G0')).toContain('neither `clean` nor a digest');
   });
 
@@ -622,6 +637,7 @@ describe('the devbox run\'s own admission requirements', () => {
       REQUESTED_ARMS,
       fullIdentity({ image: 'docker.io/cloudflare/sandbox:0.12.8' }),
     );
+
     expect(gateReasons(tagged, 'G0')).toContain('is not pinned to');
 
     const malformed = devboxVerdict(
@@ -629,6 +645,7 @@ describe('the devbox run\'s own admission requirements', () => {
       REQUESTED_ARMS,
       fullIdentity({ imageSha256: 'sha256:not-a-digest' }),
     );
+
     expect(gateReasons(malformed, 'G0')).toContain('is not a sha256 digest');
   });
 
@@ -637,12 +654,14 @@ describe('the devbox run\'s own admission requirements', () => {
       startedAt: '2026-08-30T00:00:00.000Z',
       finishedAt: '2026-08-30T00:00:00.000Z',
     }));
+
     expect(gateReasons(verdict, 'G0')).toContain('no run was timed');
   });
 
   test('G5 refuses every requested arm for an uncounted restore instead of passing an empty array', () => {
     const verdict = devboxVerdict(completeArms());
     expect(gateHeld(verdict, 'G5')).toBe(false);
+
     // The refusal names the missing source per field, not a blanket sentence:
     // an arm whose bracket never landed says which bill is missing, and the
     // byte fields refuse on their own line.
@@ -656,6 +675,7 @@ describe('the devbox run\'s own admission requirements', () => {
     const verdict = devboxVerdict([
       measuredArm('snapshot-chain', { attachColdMs: COLD_ATTACH_CEILING_MS + 1 }),
     ]);
+
     expect(gateHeld(verdict, 'G6')).toBe(false);
     expect(gateReasons(verdict, 'G6')).toContain(`past the ${COLD_ATTACH_CEILING_MS} ms admission ceiling`);
     // The declared cell is incomplete for the same reason, rather than being
@@ -667,6 +687,7 @@ describe('the devbox run\'s own admission requirements', () => {
     const verdict = devboxVerdict([
       measuredArm('snapshot-chain', { attachColdMs: COLD_ATTACH_CEILING_MS }),
     ]);
+
     expect(gateHeld(verdict, 'G6'), gateReasons(verdict, 'G6')).toBe(true);
   });
 
@@ -674,11 +695,13 @@ describe('the devbox run\'s own admission requirements', () => {
     const noCold = devboxVerdict([
       measuredArm('snapshot-chain', { attachColdMs: null }),
     ]);
+
     expect(gateReasons(noCold, 'G6')).toContain('recorded no cold attach');
 
     const wrongKind = devboxVerdict([
       measuredArm('snapshot-chain', { attachWarmKind: 'empty' }),
     ]);
+
     expect(gateReasons(wrongKind, 'G6')).toContain('did not observe the unchanged generation');
 
     // `attached` alone is not evidence of unchanged state: a replacement can
@@ -687,11 +710,13 @@ describe('the devbox run\'s own admission requirements', () => {
     const replaced = devboxVerdict([
       measuredArm('snapshot-chain', { attachWarmBootId: 'replacement-generation' }),
     ]);
+
     expect(gateReasons(replaced, 'G6')).toContain('warm attach changed generation');
 
     const unrecorded = devboxVerdict([
       measuredArm('snapshot-chain', { wakeBootId: null, attachWarmBootId: null }),
     ]);
+
     expect(gateReasons(unrecorded, 'G6')).toContain('unchanged attach was not evidenced');
   });
 
@@ -699,6 +724,7 @@ describe('the devbox run\'s own admission requirements', () => {
     const verdict = devboxVerdict([
       measuredArm('snapshot-chain', { checkpoints: ladderRows.slice(0, EXPECTED_LADDER_ROWS - 1) }),
     ]);
+
     expect(gateReasons(verdict, 'G6')).toContain(
       `recorded ${EXPECTED_LADDER_ROWS - 1} of ${EXPECTED_LADDER_ROWS} ladder checkpoints`,
     );
@@ -708,6 +734,7 @@ describe('the devbox run\'s own admission requirements', () => {
     const verdict = devboxVerdict([
       measuredArm('snapshot-chain', { ops: null }),
     ]);
+
     expect(gateHeld(verdict, 'G7')).toBe(false);
     expect(gateReasons(verdict, 'G7')).toContain('arm `snapshot-chain` recorded no `/ops` tally');
     // And the summed row is withheld entirely, so the shared gate cannot price
@@ -719,6 +746,7 @@ describe('the devbox run\'s own admission requirements', () => {
     const verdict = devboxVerdict([
       measuredArm('snapshot-chain', { ops: { calls: { put: 1 }, classA: 1, classB: 0, classFree: 0 } }),
     ]);
+
     expect(gateReasons(verdict, 'G7')).toContain('reported a tally carrying no total');
   });
 
@@ -726,6 +754,7 @@ describe('the devbox run\'s own admission requirements', () => {
     const verdict = devboxVerdict([
       measuredArm('snapshot-chain', { phases: [probeRun(1.10)] }),
     ]);
+
     expect(gateHeld(verdict, 'G9')).toBe(false);
     expect(gateReasons(verdict, 'G9')).toContain(
       `measured the deciding metric \`${DECIDING_METRIC}\` 1 time(s)`,
@@ -745,6 +774,7 @@ describe('the devbox run\'s own admission requirements', () => {
       fullIdentity(),
       2,
     );
+
     expect(gateHeld(twice, 'G9'), gateReasons(twice, 'G9')).toBe(true);
 
     const once = devboxVerdict(
@@ -753,6 +783,7 @@ describe('the devbox run\'s own admission requirements', () => {
       fullIdentity(),
       1,
     );
+
     expect(gateHeld(once, 'G9')).toBe(false);
     expect(gateReasons(once, 'G9')).toContain('fewer than two repetitions');
   });
@@ -767,6 +798,7 @@ describe('the devbox run\'s own admission requirements', () => {
       fullIdentity(),
       3,
     );
+
     expect(gateHeld(verdict, 'G9')).toBe(false);
     expect(gateReasons(verdict, 'G9')).toContain('2 time(s) where the run asked for 3');
   });
@@ -775,6 +807,7 @@ describe('the devbox run\'s own admission requirements', () => {
     const verdict = devboxVerdict([
       measuredArm('snapshot-chain', { phases: [] }),
     ]);
+
     expect(gateReasons(verdict, 'G9')).toContain('0 time(s)');
   });
 
@@ -782,12 +815,14 @@ describe('the devbox run\'s own admission requirements', () => {
     const verdict = devboxVerdict([
       measuredArm('snapshot-chain', { phases: [probeRun(1), probeRun(100)] }),
     ]);
+
     expect(gateHeld(verdict, 'G9')).toBe(false);
     expect(gateReasons(verdict, 'G9')).toContain('CV');
   });
 
   test('G5, G6 and G9 each refuse an arm set that is not exactly the requested one', () => {
     const lost = devboxVerdict([]);
+
     for (const gate of ['G5', 'G6', 'G9'] as const) {
       expect(gateReasons(lost, gate)).toContain(
         'arm `snapshot-chain` was requested but contributed no result row',
@@ -798,6 +833,7 @@ describe('the devbox run\'s own admission requirements', () => {
       [...completeArms(), measuredArm('snapshot-chain')],
       REQUESTED_ARMS,
     );
+
     for (const gate of ['G5', 'G6', 'G9'] as const) {
       expect(gateReasons(duplicate, gate)).toContain(
         'arm `snapshot-chain` produced 2 result rows but was requested 1 time(s)',
@@ -805,6 +841,7 @@ describe('the devbox run\'s own admission requirements', () => {
     }
 
     const unrequested = devboxVerdict(completeArms(), []);
+
     for (const gate of ['G5', 'G6', 'G9'] as const) {
       expect(gateReasons(unrequested, gate)).toContain(
         'arm `snapshot-chain` produced a result row without being requested',
@@ -812,6 +849,7 @@ describe('the devbox run\'s own admission requirements', () => {
     }
 
     const none = devboxVerdict([], []);
+
     for (const gate of ['G5', 'G6', 'G9'] as const) {
       expect(gateReasons(none, gate)).toContain('no expected arm set to complete');
     }
@@ -828,6 +866,7 @@ describe('the devbox run\'s own admission requirements', () => {
         }],
       }),
     ]);
+
     expect(gateHeld(verdict, 'G6')).toBe(false);
     expect(gateReasons(verdict, 'G6')).toContain('T0/C0/K0');
     expect(refusalText(verdict)).toContain('G6 Complete cells.');

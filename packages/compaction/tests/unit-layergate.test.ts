@@ -12,6 +12,7 @@ import {
 } from '../src/index';
 
 const subjects = createCompactionLadderSubjects();
+
 const allProbes = COMPACTION_LAYERS.flatMap((layer) => layer.probes);
 
 describe('compaction-ladder layer gate', () => {
@@ -19,9 +20,11 @@ describe('compaction-ladder layer gate', () => {
     const report = await runLayerGate({
       subjects, baseline: COMPACTION_LOCKED_BASELINE, layers: COMPACTION_LAYERS,
     });
+
     const moved = report.layers
       .filter((score) => score.drifted.length > 0 || score.unlocked.length > 0)
       .map((score) => ({ layer: score.layer, drifted: score.drifted, unlocked: score.unlocked }));
+
     expect(moved).toEqual([]);
     expect(report.aggregate).toBe(1);
   });
@@ -39,6 +42,7 @@ describe('compaction-ladder layer gate', () => {
   test('probe ids are unique and namespaced by their layer', () => {
     const ids = allProbes.map((probe) => probe.id);
     expect(new Set(ids).size).toBe(ids.length);
+
     for (const layer of COMPACTION_LAYERS) {
       for (const probe of layer.probes) expect(probe.id.startsWith(`${layer.id}/`)).toBe(true);
     }
@@ -50,10 +54,12 @@ describe('compaction-ladder layer gate', () => {
       expect(fault.patches.every((subject) => owned.includes(subject))).toBe(true);
       expect(fault.patches.length).toBeGreaterThan(0);
     }
+
     const impacts = await runFaultMatrix(subjects, COMPACTION_FAULTS, COMPACTION_LAYERS);
     // The floor packages/core's copy of this test carries and this one did not:
     // a matrix that produced no rows satisfies every localization claim below.
     expect(impacts).toHaveLength(COMPACTION_FAULTS.length);
+
     for (const impact of impacts) {
       expect(impact.ownDropPp).toBeGreaterThanOrEqual(LOCALIZATION_OWN_MIN_PP);
     }

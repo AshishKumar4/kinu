@@ -16,6 +16,7 @@ import type { LocalCodexAuthStore } from './codex-auth-store';
 import type { Database } from 'bun:sqlite';
 import type { LocalActorConfig } from './actor-identity';
 import { KinuError } from '@kinu.run/core/obs';
+
 export interface WorkspaceInfo {
   id: string;
   name: string;
@@ -46,8 +47,11 @@ interface CLIOpenOptions {
   /** Shadow-git checkpoints kept per working directory. */
   checkpointKeep?: number;
 }
+
 export type CLIOpenConfig = CLIOpenOptions & LocalActorConfig;
+
 interface OpenedWorkspaceIdentity { readonly id: string; readonly name: string; readonly created_at: number }
+
 /**
  * Open an existing workspace using the full CLI backend runtime. It uses:
  * - the workspace plane `config.cwd` names, or the Nimbus filesystem with none
@@ -71,20 +75,24 @@ export async function openWorkspaceCLI(
   db.exec('PRAGMA journal_mode = WAL');
 
   let identity: OpenedWorkspaceIdentity;
+
   if (config.facet !== undefined) {
     initActorStateSchema(makeWorkspaceSchemaSql(db));
     identity = { id: config.actorBinding.reference.actorId, name: config.actorBinding.name, created_at: config.actorBinding.createdAt };
   } else {
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const stored = sql<OpenedWorkspaceIdentity>`SELECT id, name, created_at FROM workspace_identity LIMIT 1`[0];
+
     if (!stored) throw new KinuError('missing', 'The workspace has no durable identity.');
     identity = stored;
   }
+
   initWorkspaceBaselineTable((ddl) => db.exec(ddl));
   const rt = createCLIRuntime(db, { ...config, dbPath, agentName: identity.name });
 
   // SOUL belongs to the agent, not to the shared physical project directory.
   const soul = await readSoul(rt.agentStateVfs ?? rt.storage.vfs);
+
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
   // Gather stats for WorkspaceInfo display
@@ -98,8 +106,10 @@ export async function openWorkspaceCLI(
   // catalog per workspace (see identity/schema.ts) and this count reports the
   // catalog, not this actor's eligible slice of it.
   const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
+
   const searchNodeCount = sql<{ c: number }>`
     SELECT COUNT(*) as c FROM search_nodes WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
+
   const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history
     WHERE actor_id = ${rt.actor.actorId}`[0]?.c ?? 0;
 

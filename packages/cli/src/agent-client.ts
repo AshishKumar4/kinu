@@ -27,6 +27,7 @@ export type AgentClientMode = 'local' | 'cloud';
 /** A user prompt: plain text, or text plus file attachments (data-URL
  *  PromptFiles, built from @path mentions by the chat surfaces). */
 export type AgentPrompt = string | { text: string; files: ReadonlyArray<PromptFile> };
+
 const AgentPromptObjectSchema = v.object({
   text: v.string(),
   files: v.array(v.object({ filename: v.string(), mediaType: v.string(), url: v.string() })),
@@ -34,11 +35,13 @@ const AgentPromptObjectSchema = v.object({
 
 export function promptText(prompt: AgentPrompt): string {
   const text = v.safeParse(v.string(), prompt);
+
   return text.success ? text.output : v.parse(AgentPromptObjectSchema, prompt).text;
 }
 
 export function promptFiles(prompt: AgentPrompt): ReadonlyArray<PromptFile> {
   const text = v.safeParse(v.string(), prompt);
+
   return text.success ? [] : v.parse(AgentPromptObjectSchema, prompt).files;
 }
 
@@ -172,12 +175,16 @@ export function findForkPivot(
 ): number {
   let remaining = point.occurrenceFromEnd;
   const target = point.text.trim();
+
   for (let i = rows.length - 1; i >= 0; i--) {
     const row = rows[i]!;
+
     if (row.role !== 'user' || row.content.trim() !== target) continue;
     remaining -= 1;
+
     if (remaining === 0) return i;
   }
+
   return -1;
 }
 
@@ -189,15 +196,19 @@ export function forkCandidates(
 ): ForkPoint[] {
   const seen = new Map<string, number>();
   const candidates: ForkPoint[] = [];
+
   for (let i = messages.length - 1; i >= 0 && candidates.length < limit; i--) {
     const message = messages[i]!;
+
     if (message.role !== 'user') continue;
     const text = message.content.trim();
+
     if (!text) continue;
     const occurrence = (seen.get(text) ?? 0) + 1;
     seen.set(text, occurrence);
     candidates.push({ text, occurrenceFromEnd: occurrence });
   }
+
   return candidates;
 }
 
@@ -403,7 +414,9 @@ export function createUserUiMessage(text: string, files: ReadonlyArray<PromptFil
   const parts: AgentUiMessagePart[] = files.map((file) => ({
     type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.url,
   }));
+
   if (text || files.length === 0) parts.push({ type: 'text', text });
+
   return {
     id: crypto.randomUUID(),
     role: 'user',

@@ -91,12 +91,16 @@ import { installAnalyticsDiagnostics } from "./analytics/install";
 // for a second class, a second worker registration or a facet registration to
 // carry.
 export { OrchestratorAgent } from "./orchestrator";
+
 export { KinuSandbox } from "./kinu-sandbox";
+
 // The loopback Fetcher every `fetch()` inside an `execute_tools` program rides
 // (codemode-egress.ts). Resolved by `enable_ctx_exports` like the Nimbus
 // entrypoints below; absent, the sandbox has no network at all.
 export { CodemodeEgress } from "./codemode-egress";
+
 export { SlateBinding } from "./slates/bindings";
+
 // REQUIRED for outbound interception, and silent if forgotten. The Sandbox DO
 // builds its interception fetchers from `ctx.exports.ContainerProxy`, so
 // without this export `applyOutboundInterception` throws and no egress handler
@@ -104,11 +108,15 @@ export { SlateBinding } from "./slates/bindings";
 // while the secret vault still believed it was substituting. Pinned by
 // tests/unit-egress-interception.test.ts.
 export { ContainerProxy } from "@cloudflare/sandbox";
+
 export { UserDO } from "./user/user-do";
+
 // Synthetic monitoring's durable state: open incidents + the alert outbox.
 export { MonitorDO } from "./monitor/monitor-do";
+
 // The admin control plane's index and audit log. One instance ("site").
 export { ControlPlaneDO } from "./control-plane/control-plane-do";
+
 // This module's exports are the names workerd hangs on `ctx.exports`
 // (`enable_ctx_exports`; compatibility date 2025-12-01 clears the >= 2025-11-17
 // threshold). Three consumers read names out of that bag. The agents SDK
@@ -164,6 +172,7 @@ export { SupervisorRPC } from "../../../node_modules/@nimbus-sh/worker/dist/sess
 async function serveApp(request: Request, env: Env): Promise<Response> {
   const suffix = previewHostSuffix(env);
   const asset = await env.ASSETS.fetch(request);
+
   const configured = suffix && asset.headers.get('content-type')?.includes('text/html')
     ? new HTMLRewriter().on('head', {
         element(element) {
@@ -171,6 +180,7 @@ async function serveApp(request: Request, env: Env): Promise<Response> {
         },
       }).transform(asset)
     : asset;
+
   return withAppSecurityHeaders(
     configured,
     new URL(request.url),
@@ -183,11 +193,13 @@ function authError(request: Request, e: AuthError): Response {
     const url = new URL(request.url);
     const login = new URL('/login', url.origin);
     login.searchParams.set('return_to', url.pathname + url.search + url.hash);
+
     return new Response(null, {
       status: 302,
       headers: { location: login.toString(), 'cache-control': 'no-store' },
     });
   }
+
   return new Response(JSON.stringify({ error: e.message }), {
     status: e.status,
     headers: { 'content-type': 'application/json' },
@@ -203,16 +215,20 @@ async function ensureAgentOwnership(
   agentName: string,
 ): Promise<Response | null> {
   const result = await claimOwnedWorkspace(env, identity.userId, agentName);
+
   return result.ok ? null : err(result.status, result.error);
 }
 
 function extractAgentName(pathname: string): string | null {
   // /api/workspaces/<name>/...
   let m = pathname.match(/^\/api\/workspaces\/([^/]+)/);
+
   if (m) return decodeURIComponent(m[1]);
   // /agents/orchestrator-agent/<name>/...  (Think framework convention)
   const orchestratorName = extractOrchestratorAgentName(pathname);
+
   if (orchestratorName) return orchestratorName;
+
   return null;
 }
 
@@ -223,35 +239,44 @@ async function authenticateCliAgentTicketRequest(
   const url = new URL(request.url);
   const agentName = extractTicketOrchestratorAgentName(url.pathname);
   const ticket = url.searchParams.get('ticket');
+
   if (!agentName || !ticket) return null;
+
   if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') {
     return new Response(JSON.stringify({ error: 'CLI agent tickets are only valid for WebSocket connections.' }), {
       status: 400,
       headers: { 'content-type': 'application/json' },
     });
   }
+
   const userId = parseCliAgentConnectTicketUserId(ticket);
+
   if (!userId) {
     return new Response(JSON.stringify({ error: 'Invalid CLI agent connect ticket.' }), {
       status: 401,
       headers: { 'content-type': 'application/json' },
     });
   }
+
   try {
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
+
     const verified = await userDO.verifyCliAgentConnectTicket(await ownerCaller(env), ticket, {
       userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,
       capability: 'agent.websocket',
     });
+
     if (!verified.ok || !verified.user) {
       return new Response(JSON.stringify({ error: verified.error ?? 'Invalid CLI agent connect ticket.' }), {
         status: 401,
         headers: { 'content-type': 'application/json' },
       });
     }
+
     url.searchParams.delete('ticket');
+
     const identity: AuthIdentity = {
         userId: verified.user.id,
         email: verified.user.email,
@@ -260,13 +285,16 @@ async function authenticateCliAgentTicketRequest(
         provider: 'cli',
         authTime: Date.now(),
     };
+
     if (verified.scopes) identity.cliScopes = verified.scopes;
+
     // The socket's own authority, carried so the DO can persist it on the
     // connection: without the token hash a revocation has nothing to name, and
     // without the generation it cannot tell which sockets predate it.
     if (verified.tokenHash && verified.authGeneration !== undefined) {
       identity.cliBearer = { tokenHash: verified.tokenHash, generation: verified.authGeneration };
     }
+
     return {
       identity,
       request: new Request(url.toString(), request),
@@ -296,7 +324,9 @@ export default {
     // Cleartext gets a redirect and nothing else; everything actually served
     // leaves through the one pin.
     const upgrade = httpsUpgrade(url, env);
+
     if (upgrade) return upgrade;
+
     return withTransportSecurity(await route(request, env, ctx, url), url, env);
   },
 
@@ -318,6 +348,7 @@ export default {
       try {
         const monitor = env.MonitorDO.get(env.MonitorDO.idFromName(MONITOR_SINGLETON));
         const result = await monitor.check();
+
         if (result.failing.length > 0 || result.recovered.length > 0) {
           diagnostics.event('monitor.check_settled', {
             failing: result.failing.length,
@@ -341,35 +372,44 @@ export default {
 function appendIdentityHeaders(h: Headers, identity: AuthIdentity): Headers {
   const next = new Headers(h);
   next.set(USER_ID_HEADER, identity.userId);
+
   if (identity.authTime) next.set(AUTH_TIME_HEADER, String(identity.authTime));
   // Always rewritten from the verified identity so a client can never smuggle
   // (or strip) the scope restriction the DO websocket boundary enforces.
   next.delete(CLI_SCOPES_HEADER);
+
   if (identity.cliScopes) next.set(CLI_SCOPES_HEADER, identity.cliScopes.join(','));
   // Same rule for the bearer the socket runs on, and for the same reason: it is
   // what the frame-time revocation check names, so a client that could set it
   // could name somebody else's live token instead of its own.
   next.delete(CLI_BEARER_HEADER);
+
   if (identity.cliBearer) {
     next.set(CLI_BEARER_HEADER, `${identity.cliBearer.tokenHash}:${identity.cliBearer.generation}`);
   }
+
   // And the same rule a third time for the browser session: the hash of the
   // cookie the upgrade authenticated, rewritten from the verified identity so
   // a browser connection cannot present somebody else's session (or strip its
   // own) on the way to the workspace websocket boundary.
   next.delete(SESSION_BEARER_HEADER);
+
   if (identity.sessionTokenHash) {
     next.set(SESSION_BEARER_HEADER, identity.sessionTokenHash);
   }
+
   return next;
 }
 
 function wantsHtml(request: Request): boolean {
   const url = new URL(request.url);
+
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/agents/')) {
     return false;
   }
+
   const accept = request.headers.get('accept') ?? '';
+
   return request.method === 'GET' && (accept.includes('text/html') || accept.includes('*/*'));
 }
 
@@ -384,6 +424,7 @@ function wantsHtml(request: Request): boolean {
  */
 function isPublishedHost(url: URL, env: Env): boolean {
   if (isPreviewHostRequest(url, env)) return true;
+
   return url.hostname.toLowerCase() === hostOf(env.CLI_PUBLIC_ORIGIN);
 }
 
@@ -392,6 +433,7 @@ function isPublishedHost(url: URL, env: Env): boolean {
  * a published host. */
 function isViteDevAssetPath(url: URL, env: Env): boolean {
   if (isPublishedHost(url, env)) return false;
+
   return ['/src/', '/@vite/', '/@fs/', '/node_modules/', '/.vite/']
     .some((prefix) => url.pathname.startsWith(prefix))
     || url.pathname === '/@react-refresh'
@@ -411,6 +453,7 @@ function isViteDevAssetPath(url: URL, env: Env): boolean {
  */
 function httpsUpgrade(url: URL, env: Env): Response | null {
   if (url.protocol !== 'http:' || !isPublishedHost(url, env)) return null;
+
   // The port is dropped rather than carried: Cloudflare's other plaintext
   // ports (8080, 2052, …) have no TLS counterpart on this zone.
   return Response.redirect(`https://${url.hostname}${url.pathname}${url.search}`, 301);
@@ -439,8 +482,10 @@ function withTransportSecurity(response: Response, url: URL, env: Env): Response
   if (url.protocol !== 'https:' || response.status === 101 || !isPublishedHost(url, env)) {
     return response;
   }
+
   const headers = new Headers(response.headers);
   headers.set('strict-transport-security', HSTS);
+
   return new Response(response.body, {
     status: response.status,
     statusText: response.statusText,
@@ -457,7 +502,9 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //    (lib/preview-origin.ts).
   if (isPreviewHostRequest(url, env)) {
     const nimbus = await handleNimbusPreviewHostRequest(request, env);
+
     if (nimbus) return containPreviewResponse(nimbus);
+
     return servePreviewRequest(request, env);
   }
 
@@ -492,29 +539,37 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //     verified exactly once per request and the admin routes cannot be reached
   //     without it.
   let controlAccess: AccessIdentity | null = null;
+
   if (isControlPlaneSurface(url.pathname)) {
     const access = await verifyControlPlaneAccess(request, env);
+
     if (!access.ok) {
       reportAdminDenial(access.denial, url.pathname, request.method);
+
       return err(adminDenialStatus(access.denial), adminDenialMessage(access.denial));
     }
+
     controlAccess = access.access;
   }
 
   // 3. OAuth/OIDC login, callback, session, logout.
   const appAuthResp = await handleAuthRequest(request, env, ctx);
+
   if (appAuthResp) return appAuthResp;
 
   // 4. Public landing page for visitors with no Kinu session.
   const landingResp = await handleLandingRequest(request, env);
+
   if (landingResp) return landingResp;
 
   // 5. CLI install + device-code auth + token-authenticated account API.
   const cliResp = await handleCliRequest(request, env, ctx);
+
   if (cliResp) return cliResp;
 
   // 6. Public — build-info health.
   const healthResp = await handleHealthRequest(request, env);
+
   if (healthResp) return healthResp;
 
   // 6b. MCP server — its own auth (CLI bearer token for external MCP
@@ -522,6 +577,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //     session/dev identity otherwise) + per-agent ownership inside.
   if (url.pathname.startsWith("/mcp/v1/")) {
     const mcpResp = await handleMcpRequest(request, env);
+
     if (mcpResp) return mcpResp;
   }
 
@@ -542,13 +598,16 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //     workspace object; the per-trigger HMAC / Bearer / mTLS check then
   //     authenticates the payload inside the workspace.
   const webhookResp = await handleWebhookDeliveryRequest(request, env);
+
   if (webhookResp) return webhookResp;
 
   // 8. Auth gate. Everything below requires an authenticated identity.
   let identity: AuthIdentity;
   let authenticatedRequest = request;
   const cliAgentTicket = await authenticateCliAgentTicketRequest(request, env);
+
   if (cliAgentTicket instanceof Response) return cliAgentTicket;
+
   if (cliAgentTicket) {
     identity = cliAgentTicket.identity;
     authenticatedRequest = cliAgentTicket.request;
@@ -557,6 +616,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     catch (e) {
       if (e instanceof AuthError) return authError(request, e);
       const message = renderThrownChain({ cause: e });
+
       return new Response(JSON.stringify({ error: message }), {
         status: 500, headers: { 'content-type': 'application/json' },
       });
@@ -566,6 +626,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   // 8b. CSRF. Everything below is reachable with the ambient session cookie,
   //     so a state-changing request must prove the app issued it.
   const crossSite = crossSiteRejection(request);
+
   if (crossSite) return crossSite;
 
   // The control-plane index learns WHO exists here, retained so it never delays
@@ -583,6 +644,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //    session, so an unauthenticated writer would be an anonymous upload
   //    endpoint.
   const feedbackResp = await handleFeedbackRequest(authenticatedRequest, env, identity);
+
   if (feedbackResp) return feedbackResp;
 
   // 8a. /api/client-errors — the browser's own render failures. Behind the auth
@@ -591,6 +653,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   //     log-injection endpoint. The route refuses a null identity itself as
   //     well, so its guard does not depend on this call site.
   const clientErrorResp = await handleClientErrorRequest(authenticatedRequest, env, identity);
+
   if (clientErrorResp) return clientErrorResp;
 
   // 8b. /api/control/* — the admin control plane. The allowlist, the
@@ -604,11 +667,13 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     const controlResp = await handleControlRequest(
       authenticatedRequest, env, identity, controlAccess,
     );
+
     if (controlResp) return controlResp;
   }
 
   // 9. /api/user/* — user-scoped routes.
   const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
+
   if (userResp) return userResp;
 
   // 10. Per-agent routes — reject every namespace/facet path outside the
@@ -620,6 +685,7 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
   // Verify ownership of the root workspace. A direct subordinate facet is
   // owned through its parent workspace; extractAgentName returns that parent.
   const agentName = extractAgentName(url.pathname);
+
   if (agentName) {
     // SECURITY (F1): routeAgentRequest (partyserver) maps EVERY DO namespace
     // binding by slug, and its facet router recursively resolves literal
@@ -627,12 +693,14 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // UserDO and KinuSandbox worker-side-only, and now refuses the `sub`
     // segment outright: there is no facet class left for it to resolve.
     const denial = await ensureAgentOwnership(env, identity, agentName);
+
     if (denial) return denial;
     // Now the path's workspace name is evidence: this account has been shown to
     // own it. Indexed here rather than at the auth gate, where a 403'd request
     // for a name the caller invented would still have written a row attributed
     // to them.
     observeWorkspaceUse(env, identity, agentName, { retain: ctx });
+
     // Inject the userId so downstream handlers can resolve UserDO without
     // re-running auth. Worker → DO requests preserve headers.
     const reqWithId = new Request(authenticatedRequest, {
@@ -640,18 +708,22 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     });
 
     const runEventsResp = await handleRunEventsRequest(reqWithId, env);
+
     if (runEventsResp) return runEventsResp;
     // EventsHub authenticated routes: /triggers, /events
     const hubResp = await handleHubRequest(reqWithId, env, agentName);
+
     if (hubResp) return hubResp;
     // File uploads: HTTP rather than an agent RPC, because the RPC transport
     // is the chat WebSocket and its frame ceiling is below ordinary files.
     const filesResp = await handleFilesRequest(reqWithId, env, agentName);
+
     if (filesResp) return filesResp;
     // The interactive terminal's own WebSocket. Same reason files are HTTP: the
     // agents SDK's RPC rail is the chat socket, which carries JSON text under a
     // 1 MiB frame ceiling, and PTY bytes are neither.
     const terminalResp = await handleTerminalRequest(reqWithId, env, agentName, ctx);
+
     if (terminalResp) return terminalResp;
     // A hosted actor's chat is checked here and routed UNCHANGED: the target is
     // this same object, so nothing rewrites the path and no facet storage key is
@@ -659,12 +731,16 @@ async function route(request: Request, env: Env, ctx: ExecutionContext, url: URL
     // to do before handing the request over is refuse a name this workspace does
     // not host, which keeps a 404/403 at the edge instead of inside the actor.
     const hosted = hostedActorRoute(url.pathname);
+
     if (hosted) {
       const root = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(agentName));
       const target = await root.resolveHostedActorRoute(hosted.name);
+
       if ('reason' in target) return Response.json(target, { status: target.reason === 'missing' ? 404 : target.reason === 'denied' ? 403 : 500 });
     }
+
     const agentResp = await routeAgentRequest(reqWithId, env);
+
     if (agentResp) return agentResp;
   }
 

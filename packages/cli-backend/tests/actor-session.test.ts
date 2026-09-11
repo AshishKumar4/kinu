@@ -12,10 +12,12 @@ import { createTestRuntime, makeSqlExec } from '../../core/tests/helpers';
 import { KinuError } from '@kinu.run/core/obs';
 
 const catalog = { roles: {}, tiers: { default: { model: 'fake/actor-model' } } };
+
 const profiles: ProfileAuthorityInputs = {
   envelope: { authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog },
   provider: { revision: 'actor-fixture', availableModels: ['fake/actor-model'] },
 };
+
 const usage = {
   inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
   outputTokens: { total: 1, text: 1, reasoning: undefined },
@@ -24,13 +26,17 @@ const usage = {
 function sessions() {
   const { rt, db } = createTestRuntime();
   const owner = rt.storage.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity WHERE id = ${rt.actor.workspaceId}`[0];
+
   if (owner === undefined) throw new Error('the real runtime fixture must have a workspace owner');
+
   const directory = new WorkspaceActorDirectory(rt.storage.sql, {
     workspaceId: rt.actor.workspaceId, ownerUserId: owner.owner_user_id,
   });
+
   const parent = directory.main();
   const eventSql = makeSqlExec(db);
   initEventsHubTables(eventSql);
+
   const create = (name: string) => {
     const handle = directory.create({ parent, name, kind: 'subordinate', lifetime: 'durable', creationId: 'admitted-' + name });
     const runtime: AgentRuntime = { ...rt, actor: handle, identity: { ...rt.identity, id: handle.actorId, name: handle.name } };
@@ -38,6 +44,7 @@ function sessions() {
     // The REAL store bundle, so a turn's claim is written through the same
     // memoized ledger production uses rather than a fixture beside it.
     const stores = createAgentStores(() => runtime.storage.sql, () => handle, runtime.storage.transactionSync);
+
     const actor: ActorSession = new ActorSession({ runtime, claims: stores.claims, installedBuild: null, orchestration: {
       engine: new EvolutionEngine(runtime, { enabled: false }), eventLog: new EventLog(eventSql, handle),
       host: {
@@ -47,8 +54,10 @@ function sessions() {
         setTimer: () => { throw new Error('this bounded actor fixture must not schedule background work'); },
       },
     } });
+
     return { actor, broadcasts, claims: stores.claims, handle };
   };
+
   return { left: create('left'), right: create('right'), db };
 }
 
@@ -57,6 +66,7 @@ function bind(actor: ActorSession, turnId: string, mode: WorkMode, message: Mode
   actor.bindProfile(lease, resolveTurnProfile({ ...profiles, roleId: 'general', workMode: mode,
     availableTools: Object.keys(tools), activeSkills: [] }), profiles);
   actor.appendInput(lease, message);
+
   return lease;
 }
 
@@ -68,39 +78,50 @@ test('logical actors in one store keep live context, mode and structured tool da
   const releaseLeft = Promise.withResolvers<void>();
   let step = 0;
   const data = { error: 'ordinary successful data', owner: 'left' };
+
   const leftModel = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => {
     const first = step++ === 0;
+
     return { content: first
       ? [{ type: 'tool-call', toolCallId: 'left-data', toolName: 'data', input: '{}' }]
       : [{ type: 'text', text: 'left finished' }],
     finishReason: { unified: first ? 'tool-calls' : 'stop', raw: undefined }, usage, warnings: [] };
   } });
+
   const rightModel = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: async () => {
     rightStarted.resolve();
     await release.promise;
+
     return { content: [{ type: 'text', text: 'right finished' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] };
   } });
+
   const tools = { data: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
     execute: async () => {
       leftStarted.resolve();
       requireBuild('actor fixture write');
       await releaseLeft.promise;
+
       return data;
     },
   }) };
+
   const leftInput: ModelMessage = { role: 'user', content: [
     { type: 'text', text: 'left private input' },
     { type: 'file', data: new Uint8Array([1, 2, 3]), mediaType: 'application/pdf' },
   ] };
+
   const leftLease = bind(left.actor, 'left-turn', 'build', leftInput, tools);
   const rightLease = bind(right.actor, 'right-turn', 'plan', { role: 'user', content: 'right private input' });
   const events: ChatEvent[] = [];
+
   const leftRun = left.actor.execute(leftLease, { task: 'left', loopVersion: 0,
     chat: { model: leftModel, system: 'sys', tools }, extensions: [], dynamic: () => ({ memoryTail: 'left dynamic context' }),
   }, event => { events.push(event); });
+
   const rightRun = right.actor.execute(rightLease, { task: 'right', loopVersion: 0,
     chat: { model: rightModel, system: 'sys', tools: {} }, extensions: [], dynamic: () => ({ memoryTail: 'right dynamic context' }),
   }, event => { events.push(event); });
+
   try {
     await Promise.all([leftStarted.promise, rightStarted.promise]);
     expect(right.actor.steer({ id: 'right-steer', text: 'right-only steer' })).toBe(true);
@@ -141,11 +162,14 @@ test('a released lease cannot mutate or execute a newer turn of the same actor',
   actor.finishTurn(old);
   const current = actor.beginTurn({ runId: 'run-new', turnId: 'new-turn' }, 'build', Date.now());
   const profile = resolveTurnProfile({ ...profiles, roleId: 'general', workMode: 'build', availableTools: [], activeSkills: [] });
+
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: () => ({
     content: [{ type: 'text', text: 'new answer' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [],
   }) });
+
   const input = { task: 'new', loopVersion: 0, chat: { model, system: 'sys', tools: {} }, extensions: [], dynamic: () => ({}) };
   const events: ChatEvent[] = [];
+
   try {
     expect(() => actor.bindProfile(old, profile, profiles)).toThrow(KinuError);
     expect(() => actor.appendInput(old, { role: 'user', content: 'stale private input' })).toThrow(KinuError);
@@ -170,34 +194,45 @@ test.each(['dispatch', 'published'])('interrupting one actor at %s preserves its
   const held = Promise.withResolvers<string>();
   const callSeen = Promise.withResolvers<void>();
   const releaseRight = Promise.withResolvers<void>();
+
   const model = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: options => ({
     content: options.prompt.some(message => message.role === 'tool')
       ? [{ type: 'text', text: 'after tool' }]
       : [{ type: 'tool-call', toolCallId: 'held-call', toolName: 'hold', input: '{}' }],
     finishReason: { unified: 'tool-calls', raw: undefined }, usage, warnings: [],
   }) });
+
   const otherModel = scriptedTurnModel({ provider: 'fake', modelId: 'actor-model', doGenerate: async () => {
     await releaseRight.promise;
+
     return { content: [{ type: 'text', text: 'sibling completed' }], finishReason: { unified: 'stop', raw: undefined }, usage, warnings: [] };
   } });
+
   const tools = { hold: tool({ inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
     execute: (_args, { abortSignal }) => {
       if (abortSignal === undefined) throw new Error('actor tool was not cancellable');
       abortSignal.addEventListener('abort', () => held.reject(abortSignal.reason), { once: true });
       started.resolve();
+
       return held.promise;
     },
   }) };
+
   const first = bind(left.actor, 'cancelled-turn', 'build', { role: 'user', content: 'hold this tool' }, tools);
   const second = bind(right.actor, 'sibling-turn', 'build', { role: 'user', content: 'finish your work' });
   const events: ChatEvent[] = [];
+
   const running = left.actor.execute(first, { task: 'hold', loopVersion: 0, chat: { model, system: 'sys', tools }, extensions: [], dynamic: () => ({}) }, event => {
     events.push(event);
+
     if (event.type === 'tool-call') callSeen.resolve();
   });
+
   const sibling = right.actor.execute(second, { task: 'finish', loopVersion: 0, chat: { model: otherModel, system: 'sys', tools: {} }, extensions: [], dynamic: () => ({}) }, event => { events.push(event); });
+
   try {
     await started.promise;
+
     if (boundary === 'published') await callSeen.promise;
     expect(() => left.actor.beginTurn({ runId: 'run-overlap', turnId: 'overlap' }, 'build', Date.now())).toThrow(KinuError);
     expect(() => left.actor.finishTurn(first)).toThrow(KinuError);

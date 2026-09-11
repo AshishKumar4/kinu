@@ -28,6 +28,7 @@ export function createProgramStateStore(sql: SqlExecutor, actorId: string, autho
       authorize();
       v.parse(KeySchema, key);
       const row = sql<{ value: string }>`SELECT value FROM actor_program_state WHERE actor_id = ${actorId} AND key = ${key}`[0];
+
       return row === undefined ? null : parseJsonValue(row.value);
     },
     set(key, value) {
@@ -45,6 +46,7 @@ export function createProgramStateStore(sql: SqlExecutor, actorId: string, autho
     list(prefix) {
       authorize();
       const pattern = `${(prefix ?? '').replace(/[%_\\]/g, (ch) => `\\${ch}`)}%`;
+
       return sql<{ key: string }>`SELECT key FROM actor_program_state
         WHERE actor_id = ${actorId} AND key LIKE ${pattern} ESCAPE '\\' ORDER BY updated_at ASC, key ASC`
         .map((row) => row.key);

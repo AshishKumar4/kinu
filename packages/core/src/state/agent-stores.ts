@@ -134,5 +134,6 @@ export function createAgentStores(sql: () => SqlExecutor, actor: () => ActorHand
       }));
     },
   };
+
   return bundle;
 }

@@ -47,17 +47,25 @@ import type { JsonValue } from '@kinu.run/core';
 // imports workerd-only `cloudflare:*` modules that crash bun's loader. Same
 // shape, and same reason, as unit-files-routes.test.ts.
 const { createSession, deriveUserId } = await import('../src/auth/store');
+
 const { SESSION_COOKIE_NAME } = await import('../src/auth/session');
+
 const worker = (await import('../src/server')).default;
 
 const ORIGIN = 'https://kinu.example.com';
+
 const OWNER_EMAIL = 'owner@kinu.example.com';
+
 const STRANGER_EMAIL = 'stranger@kinu.example.com';
+
 /** The device's own absolute paths, as the daemon reports them. */
 const DEVICE_HOME = '/home/dev';
+
 const DEVICE_FILE = `${DEVICE_HOME}/notes.md`;
+
 /** The same file as the file manager addresses it: the `/pc` mount point. */
 const PC_FILE = `/pc${DEVICE_FILE}`;
+
 const WORKSPACE_FILE = '/home/user/report.bin';
 
 /** Device methods that MOVE or REVEAL a file. `which` (the toolchain probe) and
@@ -72,6 +80,7 @@ const FILE_METHODS = {
 const Base64WriteSchema = v.object({ encoding: v.literal('base64') });
 
 const ErrorReplySchema = v.object({ error: v.string() });
+
 const OkReplySchema = v.object({ ok: v.literal(true) });
 
 /** A daemon over an in-memory filesystem: the far end has to answer, or a call
@@ -80,6 +89,7 @@ function daemon(files: Map<string, string>) {
   return (frame: DeviceFrame): JsonValue => {
     const path = String(frame.params[0] ?? '');
     const body = files.get(path);
+
     switch (frame.method) {
       case 'which': return { present: [] };
       case 'statPath': return body === undefined ? null : { size: body.length, mtimeMs: 1, isDir: false };
@@ -89,12 +99,16 @@ function daemon(files: Map<string, string>) {
       case 'listFiles': return [...files.keys()]
         .filter((name) => name.startsWith(`${path}/`))
         .map((name) => ({ name: name.slice(path.length + 1), type: 'file' }));
-      case 'unlinkPath': files.delete(path); return { success: true };
+      case 'unlinkPath': files.delete(path);
+
+        return { success: true };
       case 'writeFile': {
         const raw = String(frame.params[1] ?? '');
         files.set(path, v.is(Base64WriteSchema, frame.params[2]) ? atob(raw) : raw);
+
         return { success: true };
       }
+
       // The consented root: the file view asks the machine where its home is.
       default: return { stdout: DEVICE_HOME, stderr: '', exitCode: 0 };
     }
@@ -169,6 +183,7 @@ async function seam(options: {
   await user.sendDeviceHello({ ...CAPABLE_HELLO, root: DEVICE_HOME, home: DEVICE_HOME });
 
   const actors = new Map<string, ActorHarness<HarnessOrchestratorAgent>>();
+
   for (const workspace of options.workspaces) {
     const token = await provisionTestWorkspace(user, workspace, workspace);
     const actor = orchestratorHarness(undefined, { userDO: user.userDO, workspace, ownerUserId });
@@ -178,12 +193,14 @@ async function seam(options: {
     await actor.agent.harnessRefreshDeviceStatus();
     actors.set(workspace, actor);
   }
+
   for (const workspace of options.strangerWorkspaces ?? []) {
     await stranger.userDO.registerWorkspace(owner, workspace, workspace);
   }
 
   const users = new Map([[ownerUserId, user], [strangerUserId, stranger]]);
   const kv = makeKv();
+
   const bindings = {
     AUTH_KV: kv,
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
@@ -192,7 +209,9 @@ async function seam(options: {
       idFromName: (name: string) => name,
       get: (id: string) => {
         const harness = users.get(id);
+
         if (!harness) throw new Error(`no Durable Object for user ${id}`);
+
         return harness.userDO;
       },
     },
@@ -200,11 +219,14 @@ async function seam(options: {
       idFromName: (name: string) => name,
       get: (name: string) => {
         const actor = actors.get(name);
+
         if (!actor) throw new Error(`no workspace actor named ${name}`);
+
         return actor.agent;
       },
     },
   };
+
   const partial: Partial<Env> = {};
   Object.assign(partial, bindings);
   // SAFETY: the Worker path under test reads exactly the bindings constructed
@@ -232,7 +254,9 @@ async function seam(options: {
     strangerSession: await signIn(STRANGER_EMAIL, 'cf-stranger'),
     actorFor: (workspace) => {
       const actor = actors.get(workspace);
+
       if (!actor) throw new Error(`no workspace actor named ${workspace}`);
+
       return actor.agent;
     },
     fileFrames: () => user.deviceFrames.filter((frame) => Object.hasOwn(FILE_METHODS, frame.method)),
@@ -249,9 +273,12 @@ async function seam(options: {
       url.searchParams.set('executor', input.executor ?? 'workspace');
       url.searchParams.set('path', input.path);
       const headers: Record<string, string> = {};
+
       if (input.ifMatch !== undefined) headers['if-match'] = input.ifMatch;
       const init: RequestInit = { method: input.method ?? 'GET', headers };
+
       if (input.body !== undefined) init.body = input.body;
+
       return built.fetch(url.toString(), input.session, init);
     },
     removeWorkspace: async (name) => {
@@ -261,6 +288,7 @@ async function seam(options: {
       const rows = user.db
         .query<{ token_hash: string }, []>('SELECT token_hash FROM user_browser_sessions')
         .all();
+
       for (const row of rows) await user.userDO.revokeBrowserSession(owner, row.token_hash);
     },
     close: async () => {
@@ -269,7 +297,9 @@ async function seam(options: {
       stranger.close();
     },
   };
+
   open.push(built);
+
   return built;
 }
 
@@ -290,6 +320,7 @@ describe('a workspace the caller does not hold', () => {
     const rail = await seam({ workspaces: ['authority-own'] });
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'authority-other', path: PC_FILE });
+
     const write = await rail.files({
       session: rail.ownerSession, workspace: 'authority-other', path: PC_FILE,
       method: 'PUT', body: 'overwritten',
@@ -317,6 +348,7 @@ describe('a workspace the caller does not hold', () => {
 
   test('the same gate stands in front of the transport rename and delete ride', async () => {
     const rail = await seam({ workspaces: ['authority-own'] });
+
     // The endpoint the chat pane's own transport uses, and the one the file
     // manager's rename/delete RPCs ride behind.
     const transport = (workspace: string) =>
@@ -341,9 +373,11 @@ describe('a device the workspace has no grant on', () => {
     rail.user.consentDecision = 'deny';
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'device-a', path: PC_FILE });
+
     const write = await rail.files({
       session: rail.ownerSession, workspace: 'device-a', path: PC_FILE, method: 'PUT', body: 'overwritten',
     });
+
     const agent = rail.actorFor('device-a');
     const renamed = await agent.renameExecutorFile('workspace', PC_FILE, MOVED);
     const deleted = await agent.deleteExecutorFile('workspace', PC_FILE);
@@ -360,14 +394,17 @@ describe('a device the workspace has no grant on', () => {
     const rail = await seam({ workspaces: ['device-granted', 'device-ungranted'] });
 
     rail.user.consentDecision = 'always';
+
     const granted = await rail.files({
       session: rail.ownerSession, workspace: 'device-granted', path: PC_FILE,
     });
+
     expect([granted.status, await bytesOf(granted)]).toEqual([200, 'hello']);
 
     // The sibling holds no grant of its own, and consent is keyed on the PROVEN
     // workspace behind the capability token — never the name a caller passes.
     rail.user.consentDecision = 'deny';
+
     const sibling = await rail.files({
       session: rail.ownerSession, workspace: 'device-ungranted', path: PC_FILE,
     });
@@ -423,17 +460,21 @@ describe('an executor id the caller made up', () => {
       const read = await rail.files({
         session: rail.ownerSession, workspace: 'executor-forged', path: DEVICE_FILE, executor,
       });
+
       const write = await rail.files({
         session: rail.ownerSession, workspace: 'executor-forged', path: DEVICE_FILE,
         executor, method: 'PUT', body: 'overwritten',
       });
+
       // Named in the assertion, so a failure says WHICH id was let through.
       const refusal = executor === ''
         ? 'executor query parameter required'
         : `Executor "${executor}" has no file plane`;
+
       expect(`${executor} → ${await errorOf(read)}`).toBe(`${executor} → ${refusal}`);
       expect(`${executor} → ${await errorOf(write)}`).toBe(`${executor} → ${refusal}`);
     }
+
     expect(rail.fileFrames()).toEqual([]);
     expect(rail.device.get(DEVICE_FILE)).toBe('hello');
   });
@@ -509,6 +550,7 @@ describe('a request the authority behind it has since withdrawn', () => {
     await rail.signOutAtAuthority();
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'stale-session', path: PC_FILE });
+
     const write = await rail.files({
       session: rail.ownerSession, workspace: 'stale-session', path: PC_FILE,
       method: 'PUT', body: 'overwritten',
@@ -529,6 +571,7 @@ describe('the authority the caller does hold', () => {
       session: rail.ownerSession, workspace: 'allowed-workspace', path: WORKSPACE_FILE,
       method: 'PUT', body: payload,
     });
+
     const read = await rail.files({
       session: rail.ownerSession, workspace: 'allowed-workspace', path: WORKSPACE_FILE,
     });
@@ -542,9 +585,11 @@ describe('the authority the caller does hold', () => {
     rail.user.consentDecision = 'always';
 
     const read = await rail.files({ session: rail.ownerSession, workspace: 'allowed-device', path: PC_FILE });
+
     const write = await rail.files({
       session: rail.ownerSession, workspace: 'allowed-device', path: PC_FILE, method: 'PUT', body: 'rewritten',
     });
+
     const renamed = await rail.actorFor('allowed-device').renameExecutorFile('workspace', PC_FILE, MOVED);
     const deleted = await rail.actorFor('allowed-device').deleteExecutorFile('workspace', MOVED);
 
@@ -561,6 +606,7 @@ describe('a transfer that does not finish', () => {
   test('an upload cut mid-body publishes nothing, and leaves the transfer reusable', async () => {
     const rail = await seam({ workspaces: ['upload-cut'] });
     rail.user.consentDecision = 'always';
+
     const cut = new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(new TextEncoder().encode('half a fi'));
@@ -582,6 +628,7 @@ describe('a transfer that does not finish', () => {
     const retried = await rail.files({
       session: rail.ownerSession, workspace: 'upload-cut', path: PC_FILE, method: 'PUT', body: 'all of it',
     });
+
     expect(v.parse(OkReplySchema, await retried.json())).toEqual({ ok: true });
     expect(rail.device.get(DEVICE_FILE)).toBe('all of it');
   });
@@ -598,10 +645,12 @@ describe('a transfer that does not finish', () => {
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,
       method: 'PUT', body: 'second', ifMatch: '1',
     });
+
     const mountedConditional = await rail.files({
       session: rail.ownerSession, workspace: 'upload-conditional', path: PC_FILE,
       method: 'PUT', body: 'device second', ifMatch: '1',
     });
+
     const malformed = await rail.files({
       session: rail.ownerSession, workspace: 'upload-conditional', path: WORKSPACE_FILE,
       method: 'PUT', body: 'third', ifMatch: 'W/"etag"',

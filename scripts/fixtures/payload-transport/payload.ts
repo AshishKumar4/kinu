@@ -24,6 +24,7 @@ const NAME_STEM = 'kinu-payload-bench';
 export function runIdentity(now = new Date(), randomHex = randomSuffix()): RunIdentity {
   const stamp = now.toISOString().replace(/[^0-9]/g, '').slice(0, 14);
   const suffix = `${stamp.slice(2)}x${randomHex}`;
+
   return {
     runId: `${stamp}-${randomHex}`,
     workerName: `${NAME_STEM}-${suffix}`,
@@ -77,6 +78,7 @@ export function transitFor(
   sizeBytes: number,
 ): TransitBytes {
   const carried = arm.base64AtBoundary ? base64Length(sizeBytes) : null;
+
   return {
     payloadBytes: sizeBytes,
     base64CarriedBytes: carried,

@@ -39,23 +39,29 @@ import { JsonObjectSchema, type JsonObject } from '../src/utils/json';
 function recordingHost() {
   const turns: StoredRowProjection[] = [];
   const cards: JsonObject[] = [];
+
   const CardFrameSchema = v.looseObject({
     type: v.optional(v.string()),
     metadata: v.optional(JsonObjectSchema),
   });
+
   const host: BackendHost = {
     broadcast: (event) => {
       const frame = v.safeParse(CardFrameSchema, event);
+
       if (!frame.success) return;
+
       if (frame.output.type === 'signal_card' && frame.output.metadata) cards.push(frame.output.metadata);
     },
     enqueueTurn: async ({ text, metadata }) => {
       turns.push(metadata === undefined ? { text } : { text, metadata });
+
       return { status: 'queued' };
     },
     turnInFlight: () => false,
     setTimer: () => {},
   };
+
   return { host, turns, cards };
 }
 
@@ -63,6 +69,7 @@ describe('the seam stamps who wrote the turn', () => {
   test('every signal-queued turn is the harness unless its producer says otherwise', async () => {
     const { host, turns } = recordingHost();
     const signals = new SignalDelivery(host);
+
     for (const kind of [
       'background_job', 'event_drain', 'workspace_created', 'deferred_approval',
       FORK_INTERRUPTED_SIGNAL, COMPLETION_GATE_EVENT, OVERFLOW_RETRY_EVENT, 'take_pick',
@@ -70,7 +77,9 @@ describe('the seam stamps who wrote the turn', () => {
     ]) {
       await signals.deliver({ kind, text: `${kind} happened` });
     }
+
     expect(turns).toHaveLength(9);
+
     for (const turn of turns) {
       expect(turn.metadata?.[TURN_AUTHOR_METADATA_KEY]).toBe('harness');
       expect(turnAuthor({ metadata: turn.metadata })).toBe('harness');
@@ -173,6 +182,7 @@ describe('a row that carries no stamp is read from what it does carry', () => {
       parts: [{ type: 'text', text: '23 head(s) across 6 fork run(s)…' }],
       metadata: { kinuEvent: 'fork_interrupted', [TURN_AUTHOR_METADATA_KEY]: 'harness' },
     });
+
     expect(uiMessageRow(content)).toEqual({
       text: '23 head(s) across 6 fork run(s)…',
       metadata: { kinuEvent: 'fork_interrupted', [TURN_AUTHOR_METADATA_KEY]: 'harness' },

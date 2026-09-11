@@ -21,6 +21,7 @@ describe('diversity angles', () => {
 
   test('each branch in an N-way expansion is handed every OTHER branch angle', () => {
     const n = 3;
+
     for (let i = 0; i < n; i++) {
       const sibs = siblingAngles(i, n);
       expect(sibs.length).toBe(n - 1);
@@ -44,6 +45,7 @@ describe('diversity angles', () => {
     for (const n of [7, 12, 30]) {
       const angles = Array.from({ length: n }, (_unused, i) => diversityAngle(i, n));
       expect(new Set(angles).size).toBe(n);
+
       // …and no branch is ever told to differ from its own angle.
       for (let i = 0; i < n; i += 1) {
         expect(siblingAngles(i, n)).not.toContain(diversityAngle(i, n));
@@ -67,6 +69,7 @@ describe('diversity angles', () => {
     expect(directive).toMatch(/DISTINCT/);
   });
 });
+
 describe('explorePrompt — the one question every substrate asks', () => {
   const base = {
     mode: 'build' as const,
@@ -87,10 +90,12 @@ describe('explorePrompt — the one question every substrate asks', () => {
 
   test('crafted tools ride as prior art; none means no empty heading', () => {
     expect(explorePrompt(base).system).not.toContain('Known patterns');
+
     const withTools = explorePrompt({
       ...base,
       craftedTools: [{ name: 'parse_log', description: 'split a log into records' }],
     });
+
     expect(withTools.system).toContain('Known patterns');
     expect(withTools.system).toContain('- parse_log: split a log into records');
   });

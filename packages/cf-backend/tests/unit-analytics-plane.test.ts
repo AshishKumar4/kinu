@@ -64,6 +64,7 @@ interface FakeDataset {
 
 function fakeDataset(): FakeDataset {
   const points: Captured[] = [];
+
   return {
     points,
     writeDataPoint(point?: Captured): void {
@@ -85,6 +86,7 @@ function fakeEnv(): FakePlane {
   const agent = fakeDataset();
   const feedback = fakeDataset();
   const ops = fakeDataset();
+
   return {
     agent,
     feedback,
@@ -98,6 +100,7 @@ function fakeEnv(): FakePlane {
  *  written", which is the interesting answer. */
 function onlyPoint(dataset: FakeDataset): Captured {
   expect(dataset.points).toHaveLength(1);
+
   return dataset.points[0];
 }
 
@@ -129,6 +132,7 @@ function blobAt(point: Captured, schema: typeof AGENT_METRICS_SCHEMA, name: stri
 function installSink(plane: FakePlane): () => void {
   const restore = installAnalyticsDiagnostics(plane.env);
   plane.agent.points.length = 0;
+
   return restore;
 }
 
@@ -137,6 +141,7 @@ function installSink(plane: FakePlane): () => void {
  *  mystery. */
 function throughSink(plane: FakePlane, emit: () => void): void {
   const restore = installSink(plane);
+
   try {
     emit();
   } finally {
@@ -185,6 +190,7 @@ describe('the slot layout is one declaration', () => {
       'kinu_control_plane_ops',
       'kinu_feedback_markers',
     ]);
+
     for (const schema of ANALYTICS_SCHEMAS) {
       expect(() => assertWithinPlatformLimits({
         dataset: schema.dataset,
@@ -255,11 +261,15 @@ describe('the slot layout is one declaration', () => {
 
   test('no reserved name is publishable through any shipped schema', () => {
     const published = new Set<string>();
+
     for (const schema of ANALYTICS_SCHEMAS) {
       published.add(schema.index.name);
+
       for (const slot of schema.blobs) published.add(slot.name);
+
       for (const slot of schema.doubles) published.add(slot.name);
     }
+
     for (const reserved of RESERVED_LOG_FIELDS) expect(published.has(reserved)).toBe(false);
   });
 });
@@ -323,6 +333,7 @@ describe('column resolution is derived, never spelled', () => {
     // a schema cannot carry a column that no query is able to reach.
     for (const schema of ANALYTICS_SCHEMAS) {
       for (const slot of schema.blobs) expect(blobColumn(schema, slot.name)).toMatch(/^blob\d+$/);
+
       for (const slot of schema.doubles) {
         expect(doubleColumn(schema, slot.name)).toMatch(/^double\d+$/);
       }
@@ -353,10 +364,12 @@ describe('the writer holds the limits the platform enforces silently', () => {
   test('the write window admits 250 points and refuses the 251st', () => {
     const plane = fakeEnv();
     const { feedback, window } = analyticsPlane(plane.env);
+
     const row = {
       feedbackId: 'f', kind: 'feedback', outcome: 'accepted', rejectReason: '', routeFamily: 'home',
       count: 1, screenshot: 0, screenshotBytes: 0, noteLength: 0, annotated: 0,
     } as const;
+
     for (let at = 0; at < MAX_WRITES_PER_INVOCATION + 5; at += 1) feedback.write(row);
     expect(plane.feedback.points).toHaveLength(MAX_WRITES_PER_INVOCATION);
     expect(feedback.stats.written).toBe(MAX_WRITES_PER_INVOCATION);
@@ -367,18 +380,22 @@ describe('the writer holds the limits the platform enforces silently', () => {
   test('the budget is shared across datasets, because the platform counts every call', () => {
     const plane = fakeEnv();
     const window = analyticsPlane(plane.env).window;
+
     for (let at = 0; at < 100; at += 1) {
       recordToolRow(plane.env, {
         workspace: 'w', agentKind: 'orchestrator', tool: 'read', failed: false, durationMs: 1,
       });
     }
+
     expect(window.remaining).toBe(MAX_WRITES_PER_INVOCATION - 100);
+
     for (let at = 0; at < 100; at += 1) {
       recordReleaseTransition(plane.env, {
         actor: 'u', operation: 'transition', reason: 'merged', target: 'c',
         outcome: 'ok', code: '',
       });
     }
+
     // Two datasets, one budget: 200 spent, not 100 out of 250 twice.
     expect(window.remaining).toBe(MAX_WRITES_PER_INVOCATION - 200);
   });
@@ -391,6 +408,7 @@ describe('the writer holds the limits the platform enforces silently', () => {
     expect(window.take()).toBe(true);
     window.open();
     expect(window.remaining).toBe(MAX_WRITES_PER_INVOCATION);
+
     for (let at = 0; at < MAX_WRITES_PER_INVOCATION; at += 1) expect(window.take()).toBe(true);
     expect(window.take()).toBe(false);
   });
@@ -411,21 +429,25 @@ describe('the writer holds the limits the platform enforces silently', () => {
     // with the one `window_exhausted` event refused by the same spent window
     // that produced it.
     const oneInvocation = fakeEnv();
+
     for (let at = 0; at <= MAX_WRITES_PER_INVOCATION; at += 1) {
       recordToolRow(oneInvocation.env, {
         workspace: 'w', agentKind: 'orchestrator', tool: 'read', failed: false, durationMs: 1,
       });
     }
+
     expect(oneInvocation.agent.points).toHaveLength(MAX_WRITES_PER_INVOCATION);
     expect(analyticsPlane(oneInvocation.env).agent.stats.refused).toBe(1);
 
     // The same 251 rows, split by one invocation boundary — every one written.
     const twoInvocations = fakeEnv();
+
     for (let at = 0; at < MAX_WRITES_PER_INVOCATION; at += 1) {
       recordToolRow(twoInvocations.env, {
         workspace: 'w', agentKind: 'orchestrator', tool: 'read', failed: false, durationMs: 1,
       });
     }
+
     openAnalyticsWindow(twoInvocations.env);
     recordToolRow(twoInvocations.env, {
       workspace: 'w', agentKind: 'orchestrator', tool: 'read', failed: false, durationMs: 1,
@@ -513,6 +535,7 @@ describe('nothing a person said reaches the dataset', () => {
   test('a diagnostic\'s reserved fields never reach a data point', () => {
     const plane = fakeEnv();
     const restore = installSink(plane);
+
     // A PARSED PAYLOAD, which is the case the runtime arm exists for and the one
     // `LoggableFields` cannot see: the declared type names one field, the value
     // carries four. That is what a spread, an RPC hop or a JSON body looks like
@@ -523,6 +546,7 @@ describe('nothing a person said reaches the dataset', () => {
       headers: 'authorization: Bearer hunter2',
       provider: 'workers-ai',
     }));
+
     diagnostics.event('provider.error', smuggled);
     restore();
     const serialized = JSON.stringify(onlyPoint(plane.agent));
@@ -682,6 +706,7 @@ describe('the diagnostics sink routes by event name', () => {
     // composite in another composite — that is one row per event, not two, and it
     // is the reason `installAnalyticsDiagnostics` is idempotent per isolate.
     const second = installAnalyticsDiagnostics(plane.env);
+
     try {
       diagnostics.event('rpc_gate.denied', { workspace: 'first-actor' });
       diagnostics.event('rpc_gate.denied', {});
@@ -690,6 +715,7 @@ describe('the diagnostics sink routes by event name', () => {
       second();
       restore();
     }
+
     expect(plane.agent.points).toHaveLength(3);
     expect(plane.agent.points[0].indexes?.[0]).toBe(analyticsDigest('first-actor'));
     // Honestly absent, and specifically NOT the first actor's digest.
@@ -737,6 +763,7 @@ describe('a denial is a row that says denied', () => {
    *  emit sites did not. */
   async function throughAsyncSink(plane: FakePlane, emit: () => Promise<void>): Promise<void> {
     const restore = installSink(plane);
+
     try {
       await emit();
     } finally {
@@ -779,6 +806,7 @@ describe('a denial is a row that says denied', () => {
       'access_unconfigured', 'access_missing', 'access_invalid', 'access_no_email',
       'access_mismatch',
     ];
+
     for (const denial of denials) {
       const plane = fakeEnv();
       throughSink(plane, () => { reportAdminDenial(denial, '/api/control', 'POST'); });
@@ -794,6 +822,7 @@ describe('a denial is a row that says denied', () => {
       { method: 'getAgentStatus', scopes: 'ai.proxy', reason: 'scope_missing' },
       { method: 'setModel', scopes: 'workspace.read', reason: 'interactive_only' },
     ] as const;
+
     for (const arm of arms) {
       const plane = fakeEnv();
       const tag = cliScopesConnectionTag(arm.scopes);
@@ -813,9 +842,11 @@ describe('a denial is a row that says denied', () => {
 
   test('a capability refusal lands as denied, with its reason and no workspace prose', async () => {
     const plane = fakeEnv();
+
     const sql: SqlExec = {
       exec(): never { throw new Error('the refused path must not reach SQL'); },
     };
+
     const env: OwnerCapabilityEnv = {};
     await throughAsyncSink(plane, async () => {
       await expect(requireTier(sql, env, {}, 'credentials.other')).rejects.toThrow(/no valid caller identity/);
@@ -941,6 +972,7 @@ describe('a feedback marker carries no report', () => {
 
   test('a rejection is a row too, because a lost report is invisible otherwise', () => {
     const plane = fakeEnv();
+
     for (const reason of ['too_large', 'storage_unavailable', 'row_write_failed'] as const) {
       writeFeedbackMarker(plane.env, {
         feedbackId: `fb_${reason}`,
@@ -953,6 +985,7 @@ describe('a feedback marker carries no report', () => {
         annotated: false,
       });
     }
+
     expect(plane.feedback.points.map((p) => p.blobs?.[2]))
       .toEqual(['too_large', 'storage_unavailable', 'row_write_failed']);
     // Accepted rows carry '' and rejections never do, so `rejectReason != ''` is
@@ -1015,6 +1048,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     // both the expression and the column it is reported under.
     const { turns, tokens, firstToken } =
       controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
+
     // A weighted count: the sample interval IS the count, one surviving row
     // standing for `_sample_interval` originals.
     expect(turns).toContain('SUM(_sample_interval) AS turns');
@@ -1061,10 +1095,12 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     // surface renders every row it is handed with no cursor, so the bound is the
     // panel's own top-N, and each of these already orders by volume descending.
     const built = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' });
+
     for (const name of ['latency', 'tokens', 'toolFailures', 'firstToken'] as const) {
       expect(built[name]).toContain('LIMIT 50');
       expect(built[name]).toMatch(/ORDER BY \w+ DESC/u);
     }
+
     // And a closed vocabulary takes none: `outcome` and `code` are a four-member
     // union and core's own error codes, and `operation` is the tail of a declared
     // `control_plane.*` event. A bound there could only hide a row.
@@ -1078,10 +1114,12 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
     // named the unsuffixed dataset would answer a staging panel with production's
     // rows — a wrong number under the right heading.
     const queries = controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '_staging' });
+
     // Every FROM in every panel, extracted rather than spot-checked: the defect
     // shape is one builder out of six naming the unsuffixed dataset.
     const named = Object.values(queries).flatMap((sql) => [...sql.matchAll(/FROM (\S+)/gu)]
       .map((match) => match[1]));
+
     expect(named).toHaveLength(6);
     expect(named.every((dataset) => dataset.endsWith('_staging'))).toBe(true);
     expect(new Set(named)).toEqual(new Set([
@@ -1098,6 +1136,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('no shipped query uses an unweighted aggregate', () => {
     const queries = Object.values(controlPlaneMetricsQueries({ sinceHours: 24, datasetSuffix: '' }));
+
     for (const sql of queries) {
       // The bare forms an unsampled dataset would allow. `SUM(` is legal only in
       // the weighted shape, which always multiplies by the sample interval.
@@ -1125,9 +1164,11 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
 
   test('a workspace filter compares index1 to a digest, and never leaks to the audit dataset', () => {
     const digest = analyticsDigest('my-workspace');
+
     const queries = controlPlaneMetricsQueries({
       sinceHours: 6, datasetSuffix: '', workspaceDigest: digest,
     });
+
     expect(queries.turns).toContain(`index1 = '${digest}'`);
     expect(queries.latency).toContain(`index1 = '${digest}'`);
     expect(queries.tokens).toContain(`index1 = '${digest}'`);
@@ -1139,6 +1180,7 @@ describe('every aggregate is weighted, because the dataset is sampled', () => {
   test('the lookback is a whole positive number of hours whatever the caller passes', () => {
     const hours = (sinceHours: number): string =>
       controlPlaneMetricsQueries({ sinceHours, datasetSuffix: '' }).turns;
+
     expect(hours(0)).toContain("INTERVAL '1' HOUR");
     expect(hours(-5)).toContain("INTERVAL '1' HOUR");
     expect(hours(24.9)).toContain("INTERVAL '24' HOUR");
@@ -1158,6 +1200,7 @@ describe('the composite sink adds a destination instead of replacing one', () =>
   test('installing puts the analytics half in the composite, not in place of it', () => {
     const plane = fakeEnv();
     const restore = installAnalyticsDiagnostics(plane.env);
+
     try {
       // The install announces itself THROUGH the sink it just installed, so this
       // row existing is the analytics half being inside the composite rather than
@@ -1172,6 +1215,7 @@ describe('the composite sink adds a destination instead of replacing one', () =>
     } finally {
       restore();
     }
+
     // And the restore really restores: a line after it reaches whatever sink was
     // there before, not this plane. The sink is module-global, so a restore that
     // did nothing would make every later test's row count somebody else's.
@@ -1189,10 +1233,12 @@ describe('the composite sink adds a destination instead of replacing one', () =>
 
   test('a broken member does not stop the others, and the failure is not hidden', () => {
     const reached = createRecordingLogger();
+
     const broken = {
       event(): void { throw new Error('sink is down'); },
       failure(): void { throw new Error('sink is down'); },
     };
+
     const after = createRecordingLogger();
     const composite = createCompositeLogger([reached, broken, after]);
     expect(() => composite.event('turn.settled', {})).toThrow('sink is down');

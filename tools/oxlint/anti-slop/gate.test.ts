@@ -15,6 +15,7 @@ const expectedRules = [
   "anti-slop/no-known-value-widening",
   "anti-slop/no-module-mocking",
   "anti-slop/no-object-parameters",
+  "anti-slop/no-reduce-accumulator-copy",
   "anti-slop/no-reflect-apply",
   "anti-slop/no-reflect-get",
   "anti-slop/no-runtime-typeof",
@@ -30,6 +31,7 @@ const expectedRules = [
   "anti-slop/no-wait-until-in-durable-object",
   "anti-slop/no-widen-then-assert",
   "anti-slop/require-cause-on-rethrow",
+  "anti-slop/require-readable-spacing",
   "anti-slop/require-runtime-import-extension",
   "anti-slop/require-safety-comment-for-type-assertion",
 ];
@@ -40,7 +42,6 @@ const pluginPackage = JSON.parse(
   readFileSync("tools/oxlint/anti-slop/package.json", "utf8"),
 );
 const ci = readFileSync(".github/workflows/ci.yml", "utf8");
-const agentGuide = readFileSync("AGENTS.md", "utf8");
 
 assert.deepEqual(
   Object.keys(config.rules).filter((name) => name.startsWith("anti-slop/")).sort(),
@@ -360,8 +361,6 @@ assert.match(
   /run: 'bun run check',\s*\n\s*tier: '(?:commit|push|ci)',/u,
   "the ladder must claim `bun run check` at or before the ci tier",
 );
-assert.match(agentGuide, /bun run lint\s+# strict Oxlint/u);
-assert.doesNotMatch(agentGuide, /No lint command configured/u);
 
 function isForbiddenLintDirective(line: string): boolean {
   const directive = line.match(

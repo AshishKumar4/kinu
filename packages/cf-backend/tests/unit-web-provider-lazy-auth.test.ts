@@ -19,6 +19,7 @@ const TAVILY_BODY = JSON.stringify({
 });
 
 const realFetch = globalThis.fetch;
+
 afterEach(() => { globalThis.fetch = realFetch; });
 
 interface FetchRecorder { readonly authHeaders: Array<string | null> }
@@ -27,12 +28,16 @@ function stubGlobalFetch(): FetchRecorder {
   const authHeaders: Array<string | null> = [];
   globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new Request(input, init).url;
+
     if (url.includes('tavily.com')) {
       authHeaders.push(new Headers(init?.headers).get('authorization'));
+
       return new Response(TAVILY_BODY, { headers: { 'content-type': 'application/json' } });
     }
+
     return new Response(DDG_HTML, { headers: { 'content-type': 'text/html' } });
   }, { preconnect: realFetch.preconnect });
+
   return { authHeaders };
 }
 
@@ -59,8 +64,10 @@ describe('buildCfWebSearchProvider — lazy per-call getAuth', () => {
 
   test('the resolver is consulted every call and its credential reaches the request', async () => {
     const { authHeaders } = stubGlobalFetch();
+
     const resolver: AuthResolver = async (key) =>
       (key === 'tavily' ? { headers: { authorization: 'Bearer tvly-live' } } : null);
+
     const provider = buildCfWebSearchProvider({}, () => resolver);
 
     await provider.search('one');

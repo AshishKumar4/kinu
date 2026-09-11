@@ -4,6 +4,7 @@ import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema';
 import { actorScaffoldPath, initWorkspaceActorTable, WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { initAgentConfigTable } from '../src/config/store';
 import { initCodemodeStateTable } from '../src/identity/program-state';
+
 function workspace(id: string, owner: string) {
   const database = createTestSql();
   database.execRaw(WORKSPACE_IDENTITY_DDL);
@@ -11,6 +12,7 @@ function workspace(id: string, owner: string) {
   initWorkspaceActorTable(database.execRaw);
   initAgentConfigTable(database.execRaw);
   initCodemodeStateTable(database.execRaw);
+
   return { ...database, directory: new WorkspaceActorDirectory(database.sql, { workspaceId: id, ownerUserId: owner }) };
 }
 
@@ -67,6 +69,7 @@ describe('one workspace actor directory', () => {
     directory.apply(main, [], { action: 'retire', name: 'researcher', reference });
     const cold = new WorkspaceActorDirectory(sql, { workspaceId: 'workspace', ownerUserId: 'owner' });
     const pending = cold.retirements()[0];
+
     if (!pending) throw new Error('The interrupted deletion was lost.');
     expect(() => cold.create({ parent: cold.main(), name: 'researcher', kind: 'subordinate', lifetime: 'durable', creationId: crypto.randomUUID() })).toThrow(expect.objectContaining({ code: 'denied' }));
     expect(() => config.setModel('model/replay')).toThrow(expect.objectContaining({ code: 'missing' }));

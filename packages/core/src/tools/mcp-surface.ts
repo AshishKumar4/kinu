@@ -64,6 +64,7 @@ export const SerializableToolDescriptorSchema = v.object({
   outputSchema: v.optional(JsonObjectSchema),
   readOnly: v.optional(v.literal(true)),
 });
+
 /** The whole descriptor surface `userMcp_toolDescriptors` serializes. */
 export const McpToolSurfaceSchema = v.object({
   descriptors: v.array(SerializableToolDescriptorSchema),
@@ -104,12 +105,18 @@ export function describeMcpTool(
     toolKey: mcpToolKey(server.name, tool.name),
     inputSchema: v.parse(JsonObjectSchema, tool.inputSchema),
   };
+
   const description = nonBlank(tool.description);
+
   if (description !== undefined) descriptor.description = description;
   const title = nonBlank(tool.title) ?? nonBlank(tool.annotations?.title);
+
   if (title !== undefined) descriptor.title = title;
+
   if (tool.outputSchema) descriptor.outputSchema = v.parse(JsonObjectSchema, tool.outputSchema);
+
   if (tool.annotations?.readOnlyHint === true) descriptor.readOnly = true;
+
   return descriptor;
 }
 
@@ -185,6 +192,7 @@ export function admitMcpDescriptors(
   budget: McpSurfaceBudget,
 ): McpDescriptorAdmission {
   const total = Math.max(0, stepContextLimit(budget) - budget.nativeToolTokens);
+
   const ordered = [...descriptors].sort((a, b) =>
     a.serverName === b.serverName
       ? (a.name < b.name ? -1 : a.name > b.name ? 1 : 0)
@@ -193,16 +201,20 @@ export function admitMcpDescriptors(
   const admitted: SerializableToolDescriptor[] = [];
   const lost = new Map<string, number>();
   let spent = 0;
+
   for (const [index, descriptor] of ordered.entries()) {
     const bounded = withProseInside(descriptor, Math.floor((total - spent) / (ordered.length - index)));
     const cost = toolSurfaceTokens(bounded);
+
     if (spent + cost > total) {
       lost.set(descriptor.serverName, (lost.get(descriptor.serverName) ?? 0) + 1);
       continue;
     }
+
     spent += cost;
     admitted.push(bounded);
   }
+
   const deferred = [...lost].map(([server, count]) => ({
     server,
     reason: `${String(count)} of its tools did not fit this turn's remaining tool budget of `
@@ -211,6 +223,7 @@ export function admitMcpDescriptors(
       + `${String(budget.nativeToolTokens)} already spent by this agent's own tools) `
       + '— those tools are absent',
   }));
+
   return { admitted, deferred };
 }
 
@@ -234,12 +247,17 @@ function withProseInside(
   delete bare.title;
   let left = Math.max(0, share - toolSurfaceTokens(bare));
   const description = clampProse(descriptor.description, left);
+
   if (description !== undefined) left -= estimateTokens(description.length);
   const title = clampProse(descriptor.title, left);
+
   if (description === descriptor.description && title === descriptor.title) return descriptor;
   const bounded: SerializableToolDescriptor = { ...descriptor };
+
   if (description === undefined) delete bounded.description; else bounded.description = description;
+
   if (title === undefined) delete bounded.title; else bounded.title = title;
+
   return bounded;
 }
 
@@ -249,8 +267,11 @@ function withProseInside(
  *  the estimator stays the only scale in play. */
 function clampProse(text: string | undefined, tokens: number): string | undefined {
   if (text === undefined) return undefined;
+
   if (tokens <= 0) return undefined;
   const cost = estimateTokens(text.length);
+
   if (cost <= tokens) return text;
+
   return `${text.slice(0, Math.floor(text.length * (tokens / cost)))}…`;
 }

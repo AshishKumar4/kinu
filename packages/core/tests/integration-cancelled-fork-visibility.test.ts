@@ -32,8 +32,11 @@ import { createTestActorsOver } from '@kinu.run/test-utils';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
 
 const HEADS = 4;
+
 const ROOT = 'root-research';
+
 const RATIONALE = 'four angles on the research question';
+
 /** The run the fork was dispatched from — the one carrying its `head_split`. */
 const RUN = 'run-dispatched-the-fork';
 
@@ -68,6 +71,7 @@ function workspace() {
     label: 'search: survey the prior art',
   });
   journal.recordSplit(ROOT, RATIONALE, now);
+
   for (let i = 1; i <= HEADS; i++) {
     journal.insertSpawn({
       id: `h${i}`, parentId: null, rootId: ROOT, depth: 1,
@@ -77,10 +81,12 @@ function workspace() {
       loop: defaultLoopOrigin('head'),
     });
   }
+
   // The operator cancel, as `kinu stop` / the repair path writes it: the job
   // registry only. Nothing reaches the heads, because the process that owned
   // them is gone.
   jobs.cancel('bgjob-fork', 0, now + 1_000);
+
   return { db, journal, jobs };
 }
 
@@ -100,12 +106,18 @@ function nextStepBlock(w: ReturnType<typeof workspace>): string | null {
  *  "the agent learns at its next step" means when no turn is running. */
 function idleAgent() {
   const enqueued: ProgrammaticTurn[] = [];
+
   const host: BackendHost = {
     broadcast: () => {},
-    enqueueTurn: async (turn) => { enqueued.push(turn); return { status: 'queued' }; },
+    enqueueTurn: async (turn) => {
+      enqueued.push(turn);
+
+      return { status: 'queued' };
+    },
     turnInFlight: () => false,
     setTimer: () => {},
   };
+
   return { enqueued, signals: new SignalDelivery(host) };
 }
 
@@ -143,6 +155,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // synthesis — is that surface's own wording; the invariant here is only
     // that it is no longer 'running'.)
     expect(w.journal.readRun(ROOT)?.status).not.toBe('running');
+
     for (const head of w.journal.readTree(ROOT)) {
       expect(head.status).toBe('aborted');
       expect(head.error_message).toContain('no executor');
@@ -320,6 +333,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
       runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
+
     expect(String(before.at(-1)?.content)).toContain(`${HEADS} of ${HEADS} nodes running`);
 
     await reconcileInterruptedForks({ journal: w.journal, signals: idleAgent().signals });
@@ -330,6 +344,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
       factsBlock: 'workspace = kinu', memoryTail: undefined, recoveryFindings: [], executors: [],
       runningJobs: { items: [], total: 0 }, openTasks: { items: [], total: 0 }, liveHeadRuns: w.journal.listLive(), missingCapabilities: [],
     }));
+
     expect(ledger.size).toBe(2);
     expect(after[1]).toEqual(before.at(-1)!);
     expect(String(after.at(-1)?.content)).not.toContain('heads running');
@@ -362,6 +377,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     });
 
     const agent = idleAgent();
+
     const settled = await reconcileInterruptedForks({
       journal: w.journal, signals: agent.signals, now: activationStart,
     });
@@ -401,11 +417,13 @@ describe('an operator-cancelled fork is not reported as running', () => {
     // this root by task through findResumableRun.
     const agent = idleAgent();
     const offered: string[][] = [];
+
     const settled = await reconcileInterruptedForks({
       journal: w.journal,
       signals: agent.signals,
       resume: async (roots) => {
         offered.push([...roots]);
+
         return roots.filter((root) => root === ROOT);
       },
       now: firstActivation + 1_000,
@@ -426,6 +444,7 @@ describe('an operator-cancelled fork is not reported as running', () => {
     w.journal.markInterrupted({ spawnedBefore: firstActivation }, firstActivation);
 
     const agent = idleAgent();
+
     const settled = await reconcileInterruptedForks({
       journal: w.journal, signals: agent.signals,
       resume: async () => [],
@@ -446,10 +465,12 @@ describe('the operator cancel of ONE job reaches the agent', () => {
   test('a cancelled job leaves the roster with nothing to correct the record', () => {
     const w = workspace();
     expect(w.jobs.listRunning()).toEqual({ items: [], total: 0 });
+
     const block = renderDynamicContextBlock(agentDynamicContext({
       factsBlock: undefined, memoryTail: undefined, recoveryFindings: [], executors: [],
       runningJobs: w.jobs.listRunning(), openTasks: { items: [], total: 0 }, liveHeadRuns: { items: [], total: 0 }, missingCapabilities: [],
     }));
+
     expect(block).toBeNull();
   });
 });

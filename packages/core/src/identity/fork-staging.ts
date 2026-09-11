@@ -102,7 +102,9 @@ export class ForkStagingState {
              want_pane_messages, want_messages, want_files, published
       FROM fork_transfer WHERE id = 1 LIMIT 1
     `[0];
+
     if (row === undefined) return null;
+
     return {
       head: row.head_declared === 0 ? null : {
         source: { workspaceId: row.head_source_id, workspaceName: row.head_source_name },

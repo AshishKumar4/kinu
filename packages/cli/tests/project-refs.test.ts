@@ -50,8 +50,11 @@ const OFFLINE_PROVIDER = {
 };
 
 const projects: string[] = [];
+
 const workspaces: string[] = [];
+
 let configBefore: KinuConfig = {};
+
 let daemonBefore: string | undefined;
 
 beforeAll(() => {
@@ -68,6 +71,7 @@ afterEach(() => {
 afterAll(() => {
   for (const dir of projects.splice(0)) rmSync(dir, { recursive: true, force: true });
   updateConfigFile(() => configBefore);
+
   if (daemonBefore === undefined) delete process.env.KINU_SKIP_DAEMON;
   else process.env.KINU_SKIP_DAEMON = daemonBefore;
 });
@@ -85,11 +89,13 @@ function workspaceLabels(cwd: string): string[] {
 function project(): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-project-')));
   projects.push(dir);
+
   return dir;
 }
 
 async function create(name: string, cwd: string, workspaceId?: string): Promise<CreatedCliAgent> {
   workspaces.push(name);
+
   return await createCliAgent({
     name,
     mode: 'local',
@@ -107,6 +113,7 @@ function unplacedWorkspace(name: string, identityId: string): string {
   workspaces.push(name);
   const dbPath = agentDbPath(name);
   const db = new Database(dbPath, { create: true });
+
   try {
     db.exec('CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)');
     db.query('INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)')
@@ -114,12 +121,14 @@ function unplacedWorkspace(name: string, identityId: string): string {
   } finally {
     db.close();
   }
+
   return dbPath;
 }
 
 /** A local create always reports its database; a cloud one has none. */
 function createdDbPath(created: CreatedCliAgent): string {
   if (!created.dbPath) throw new Error(`create reported no database for ${created.name}`);
+
   return created.dbPath;
 }
 
@@ -130,6 +139,7 @@ function messageOf(run: () => void): string {
   } catch (error) {
     return error instanceof Error ? error.message : String(error);
   }
+
   throw new Error('expected a refusal, got none');
 }
 
@@ -196,11 +206,13 @@ describe('the same label in two projects is two workspaces', () => {
     await create('claimed-name', first, 'app');
 
     let message = '';
+
     try {
       await create('claimed-name', second, 'app');
     } catch (error) {
       message = error instanceof Error ? error.message : String(error);
     }
+
     expect(message).toContain('already exists');
     expect(message).toContain('workspace "app"');
     expect(message).toContain(first);
@@ -216,6 +228,7 @@ describe('renaming changes no identity and moves no database', () => {
     const created = await create('renamed-label', cwd, 'bound');
     const dbPath = createdDbPath(created);
     const identity = readWorkspaceIdentityId(dbPath);
+
     if (identity === null) throw new Error(`the workspace at ${dbPath} carries no identity`);
     // Creation records it on the ref too, keyed on the database rather than on
     // the name — that recorded value is the only thing `resolveLocalAgent` can
@@ -346,6 +359,7 @@ describe('an unplaced workspace is adopted one at a time', () => {
     adoptUnplacedLocalAgent('recycled', { cwd, workspaceId: 'bound' });
 
     const db = new Database(agentDbPath('recycled'));
+
     try {
       db.query('UPDATE workspace_identity SET id = ?').run('ws-replacement');
     } finally {

@@ -7,6 +7,7 @@ import { createTestWorkspace, createWorkspaceBundle, makeSqlExec } from './helpe
 
 test('a Slate tree restores binaries, executable modes, symlinks and empty directories', async () => {
   const ws = createTestWorkspace();
+
   try {
     const session = await createWorkspaceBundle(ws.db).session();
     const vfs = session.vfs.as(CRED_SESSION_USER);

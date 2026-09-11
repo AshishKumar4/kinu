@@ -71,6 +71,7 @@ const STORE_ROOT = chainStoreRoot('boxes/conformance-box');
  *  mounted anywhere else is not seen as served, the next commit archives an
  *  empty upper, and the chain cells read the tree back short. */
 const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
+
 const deltaLayerMountPoint = (chainId: string): string => `${CHAIN_DELTA_LAYER_ROOT}/${chainId}`;
 
 // ── deaths ──────────────────────────────────────────────────────────────────
@@ -161,6 +162,7 @@ export class DeathWatch {
   /** Reached one seam. Throws when this is the armed one, exactly once. */
   at(seam: string): void {
     this.#record(seam);
+
     if (this.#armed !== seam) return;
     this.#armed = null;
     throw new ContainerDied(seam);
@@ -174,6 +176,7 @@ export class DeathWatch {
    */
   reset(seam: string): void {
     this.#record(seam);
+
     if (this.#armed !== seam) return;
     this.#armed = null;
     throw new IsolateReset(seam);
@@ -198,8 +201,10 @@ export class DeathWatch {
     if (this.#exhausted !== null) throw this.#exhausted;
     this.reached.push(seam);
     const budget = this.#budgets.get(seam);
+
     if (budget === undefined) return;
     const visits = this.visits(seam);
+
     if (visits <= budget) return;
     this.#exhausted = new SeamBudgetExceeded(seam, visits);
     throw this.#exhausted;
@@ -262,12 +267,14 @@ export class DurableStore {
     this.objects.set(key, { bytes: bytes.slice(), version, meta: { ...meta } });
     this.writes.push(`put:${key}`);
     this.ops.push({ op: 'put', key, bytes: bytes.byteLength });
+
     return version;
   }
 
   get(key: string): Uint8Array | null {
     const held = this.objects.get(key);
     this.ops.push({ op: 'get', key, bytes: held?.bytes.byteLength ?? 0 });
+
     return held?.bytes ?? null;
   }
 
@@ -279,7 +286,9 @@ export class DurableStore {
   head(key: string): { size: number; digest: string; version: string } | null {
     this.ops.push({ op: 'head', key, bytes: 0 });
     const held = this.objects.get(key);
+
     if (held === undefined) return null;
+
     return {
       size: held.bytes.byteLength,
       digest: createHash('sha256').update(held.bytes).digest('hex'),
@@ -289,27 +298,33 @@ export class DurableStore {
 
   delete(key: string): void {
     this.ops.push({ op: 'delete', key, bytes: 0 });
+
     if (this.objects.delete(key)) this.writes.push(`delete:${key}`);
   }
 
   list(prefix: string): string[] {
     this.ops.push({ op: 'list', key: prefix, bytes: 0 });
+
     return this.#keysUnder(prefix);
   }
 
   deletePrefix(prefix: string): number {
     const keys = this.list(prefix);
+
     for (const key of keys) this.delete(key);
+
     return keys.length;
   }
 
   inventory(prefix: string): StoreInventory {
     let objects = 0;
     let bytes = 0;
+
     for (const key of this.#keysUnder(prefix)) {
       objects += 1;
       bytes += this.objects.get(key)!.bytes.byteLength;
     }
+
     return { objects, bytes };
   }
 
@@ -322,14 +337,18 @@ export class DurableStore {
    */
   corrupt(key: string, how: 'truncate' | 'flip'): void {
     const held = this.objects.get(key);
+
     if (held === undefined) throw new Error(`nothing to corrupt at ${key}`);
     const bytes = held.bytes.slice();
+
     if (how === 'flip') {
       if (bytes.byteLength === 0) throw new Error(`cannot flip a byte of empty ${key}`);
       bytes[Math.floor(bytes.byteLength / 2)] ^= 0xff;
       this.objects.set(key, { bytes, version: held.version, meta: held.meta });
+
       return;
     }
+
     this.objects.set(key, {
       bytes: bytes.subarray(0, Math.max(1, bytes.byteLength - 17)),
       version: held.version,
@@ -378,6 +397,7 @@ const ArchiveMetadataSchema = v.strictObject({
   mtimeNs: v.string(),
   xattrs: v.record(v.string(), v.string()),
 });
+
 const ArchiveEntrySchema = v.strictObject({
   path: v.string(),
   kind: v.picklist(['file', 'dir', 'symlink']),
@@ -389,6 +409,7 @@ const ArchiveEntrySchema = v.strictObject({
   /** Data runs only: `[offset, base64 bytes]`. Holes are what is between them. */
   runs: v.optional(v.array(v.tuple([v.number(), v.string()]))),
 });
+
 const ArchiveSchema = v.strictObject({
   archive: v.literal(2),
   entries: v.array(ArchiveEntrySchema),
@@ -440,6 +461,7 @@ export class ContainerDisk {
 
   #alive(what: string): void {
     if (this.dead) throw new ContainerDied(`a dead container was asked to ${what}`);
+
     if (this.stopped) throw new ContainerStopped(what);
   }
 
@@ -450,49 +472,61 @@ export class ContainerDisk {
     // neither costs disk quota. Asked here rather than at each call site, so
     // no writer needs to know which paths are disk and which are not.
     if (path.startsWith('/dev/shm/') || path === '/dev/shm') return;
+
     if (path.startsWith('/var/tmp/devbox/lower-base') || path.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`) || path.startsWith('/var/tmp/devbox/lower-empty')) return;
+
     if (delta > 0 && this.quotaBytes !== null && this.usedBytes + delta > this.quotaBytes) {
       throw new DiskFull(path, delta, Math.max(0, this.quotaBytes - this.usedBytes));
     }
+
     this.usedBytes += delta;
   }
 
   /** The tree at `dir`, created empty on first use and charged to this disk. */
   tree(dir: string): LiveTree {
     let held = this.trees.get(dir);
+
     if (held === undefined) {
       held = new LiveTree((delta) => this.charge(delta, dir));
       this.trees.set(dir, held);
       this.mkdirp(dir);
     }
+
     return held;
   }
 
   mkdirp(path: string): void {
     this.#alive(`mkdir ${path}`);
+
     for (const step of ancestors(path)) this.dirs.add(step);
   }
 
   rmrf(path: string): void {
     this.#alive(`rm -rf ${path}`);
     const owner = this.#overlayOwner(path);
+
     if (owner !== undefined) {
       // Through the merged view: the upper's subtree goes, and a name a lower
       // still holds is masked, subtree included.
       this.tree(owner.overlay.upper).remove(owner.relative);
       this.#mask(owner);
+
       return;
     }
+
     for (const [key, bytes] of this.files) {
       if (key === path || key.startsWith(`${path}/`)) {
         this.files.delete(key);
+
         if (!this.mountServed.has(key)) this.charge(-bytes.byteLength, key);
         this.mountServed.delete(key);
       }
     }
+
     for (const key of this.dirs) {
       if (key === path || key.startsWith(`${path}/`)) this.dirs.delete(key);
     }
+
     for (const [dir, tree] of this.trees) {
       if (dir === path || dir.startsWith(`${path}/`)) {
         tree.clear();
@@ -503,18 +537,23 @@ export class ContainerDisk {
 
   exists(path: string): boolean {
     this.#alive(`stat ${path}`);
+
     if (this.dirs.has(path) || this.files.has(path)) return true;
+
     return this.#treeAt(path) !== undefined;
   }
 
   writeFile(path: string, bytes: Uint8Array): void {
     this.#alive(`write ${path}`);
     const owner = this.#overlayOwner(path);
+
     if (owner !== undefined) {
       this.tree(owner.overlay.upper).writeFile(owner.relative, bytes);
       this.whiteouts.get(owner.point)?.delete(owner.relative);
+
       return;
     }
+
     const held = this.files.get(path);
     const heldCharge = held === undefined || this.mountServed.has(path) ? 0 : held.byteLength;
     this.charge(bytes.byteLength - heldCharge, path);
@@ -531,6 +570,7 @@ export class ContainerDisk {
   serveFromMount(path: string, bytes: Uint8Array): void {
     this.#alive(`serve ${path}`);
     const held = this.files.get(path);
+
     if (held !== undefined && !this.mountServed.has(path)) this.charge(-held.byteLength);
     this.mountServed.add(path);
     this.mkdirp(parentOf(path));
@@ -540,25 +580,34 @@ export class ContainerDisk {
   readFile(path: string): Uint8Array | undefined {
     this.#alive(`read ${path}`);
     const direct = this.files.get(path);
+
     if (direct !== undefined) return direct;
     const located = this.#treeAt(path);
+
     if (located === undefined || located.node.kind !== 'file' || located.node.content === undefined) return undefined;
     const content = located.node.content;
+
     if (content.kind === 'dense') return content.bytes;
     const out = new Uint8Array(content.size);
+
     for (const run of content.runs) out.set(run.bytes.subarray(0, Math.max(0, content.size - run.offset)), run.offset);
+
     return out;
   }
 
   removeFile(path: string): void {
     this.#alive(`unlink ${path}`);
     const owner = this.#overlayOwner(path);
+
     if (owner !== undefined) {
       this.tree(owner.overlay.upper).remove(owner.relative);
       this.#mask(owner);
+
       return;
     }
+
     const held = this.files.get(path);
+
     if (held !== undefined && !this.mountServed.has(path)) this.charge(-held.byteLength);
     this.mountServed.delete(path);
     this.files.delete(path);
@@ -568,6 +617,7 @@ export class ContainerDisk {
    *  overlay, or the tree whose directory holds it. */
   node(path: string): LiveInode | undefined {
     this.#alive(`stat ${path}`);
+
     return this.#treeAt(path)?.node;
   }
 
@@ -578,17 +628,22 @@ export class ContainerDisk {
   writable(path: string): { readonly tree: LiveTree; readonly relative: string } | undefined {
     this.#alive(`write ${path}`);
     const owner = this.#overlayOwner(path);
+
     if (owner !== undefined) {
       this.whiteouts.get(owner.point)?.delete(owner.relative);
+
       return { tree: this.tree(owner.overlay.upper), relative: owner.relative };
     }
+
     const holder = this.#treeDirAbove(path);
+
     return holder === undefined ? undefined : { tree: this.trees.get(holder)!, relative: path.slice(holder.length + 1) };
   }
 
   /** Every file under `dir`, as paths relative to it, through any overlay. */
   entries(dir: string): string[] {
     this.#alive(`list ${dir}`);
+
     return this.snapshot(dir).filter((entry) => entry.kind === 'file').map((entry) => entry.path);
   }
 
@@ -600,10 +655,12 @@ export class ContainerDisk {
   snapshot(dir: string): NodeEntry[] {
     this.#alive(`walk ${dir}`);
     const overlay = this.overlays.get(dir);
+
     if (overlay !== undefined) {
       const merged = new Map<string, NodeEntry>();
       const masked = this.whiteouts.get(dir) ?? new Set<string>();
       let inoBase = 0;
+
       // Lowers first, oldest last in the list, so a newer layer's row replaces
       // an older one's. Inode ids are made disjoint across layers by offset,
       // and stay shared within a layer. A whiteout hides a lower's name and
@@ -612,23 +669,32 @@ export class ContainerDisk {
       for (const layer of [...overlay.lowers].reverse()) {
         inoBase = this.#mergeLayer(merged, layer, inoBase);
       }
+
       for (const path of merged.keys()) {
         if (isMasked(masked, path)) merged.delete(path);
       }
+
       this.#mergeLayer(merged, overlay.upper, inoBase);
+
       return sortedByPath([...merged.values()]);
     }
+
     const tree = this.trees.get(dir);
+
     if (tree !== undefined) return tree.snapshot();
     const above = this.#treeDirAbove(dir);
+
     if (above !== undefined) {
       const prefix = `${dir.slice(above.length + 1)}/`;
+
       return this.trees.get(above)!.snapshot()
         .filter((entry) => entry.path.startsWith(prefix))
         .map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) }));
     }
+
     const rows: NodeEntry[] = [];
     let ino = 1;
+
     for (const [key, bytes] of [...this.files].sort(([a], [b]) => (a < b ? -1 : 1))) {
       if (!key.startsWith(`${dir}/`)) continue;
       rows.push({
@@ -640,6 +706,7 @@ export class ContainerDisk {
         content: { kind: 'dense', bytes },
       });
     }
+
     return rows;
   }
 
@@ -661,6 +728,7 @@ export class ContainerDisk {
   pack(dir: string): Uint8Array {
     const entries = this.snapshot(dir).map((entry): v.InferOutput<typeof ArchiveEntrySchema> => {
       const metadata = entry.metadata!;
+
       const row: v.InferOutput<typeof ArchiveEntrySchema> = {
         path: entry.path,
         kind: entry.kind,
@@ -668,15 +736,19 @@ export class ContainerDisk {
         ino: entry.ino,
         metadata: { uid: metadata.uid, gid: metadata.gid, mtimeNs: metadata.mtimeNs, xattrs: { ...metadata.xattrs } },
       };
+
       if (entry.kind === 'symlink') row.target = entry.target;
+
       if (entry.kind === 'file' && entry.content !== undefined) {
         row.size = contentSize(entry.content);
         row.runs = paintedSegments(entry.content).segments
           .filter((segment) => !segment.zeros)
           .map((segment) => [segment.start, bytesToBase64(segment.view!)]);
       }
+
       return row;
     });
+
     return new TextEncoder().encode(JSON.stringify({ archive: 2, entries }));
   }
 
@@ -685,11 +757,13 @@ export class ContainerDisk {
     // though this module wrote them: a truncated archive must fail to parse
     // exactly as a truncated squashfs fails to mount.
     let archive: v.InferOutput<typeof ArchiveSchema>;
+
     try {
       archive = v.parse(ArchiveSchema, JSON.parse(decoder.decode(bytes)));
     } catch (error) {
       throw new Error('the archive superblock is not readable', { cause: error });
     }
+
     const entries = archive.entries.map((row): NodeEntry => {
       // squashfuse reports the one stored time for all three.
       const metadata: PosixMetadata = {
@@ -700,17 +774,22 @@ export class ContainerDisk {
         ctimeNs: row.metadata.mtimeNs,
         xattrs: row.metadata.xattrs,
       };
+
       const base = { path: row.path, kind: row.kind, mode: row.mode, ino: row.ino, metadata };
+
       if (row.kind === 'symlink') return { ...base, target: row.target };
+
       if (row.kind !== 'file') return base;
       const runs = (row.runs ?? []).map(([offset, body]) => ({ offset, bytes: base64ToBytes(body) }));
       const size = row.size ?? 0;
       const dense = runs.length === 1 && runs[0]!.offset === 0 && runs[0]!.bytes.byteLength === size;
+
       return {
         ...base,
         content: dense ? { kind: 'dense', bytes: runs[0]!.bytes } : { kind: 'sparse', size, runs },
       };
     });
+
     const tree = this.tree(dir);
     tree.clear();
     tree.plant(entries);
@@ -718,6 +797,7 @@ export class ContainerDisk {
 
   procMounts(): string {
     this.#alive('read /proc/mounts');
+
     return [...this.mounts].map(
       ([point, row]) => `${row.source} ${point} ${row.fstype} ${row.options} 0 0`,
     ).join('\n');
@@ -726,6 +806,7 @@ export class ContainerDisk {
   mount(point: string, row: MountRow): void {
     this.#alive(`mount ${point}`);
     this.mountCalls += 1;
+
     if (row.fstype.includes('squashfuse')) this.layerMountCalls += 1;
     this.mkdirp(point);
     this.mounts.set(point, row);
@@ -751,12 +832,15 @@ export class ContainerDisk {
   /** Plant one layer's rows over `merged`; answers the next layer's inode offset. */
   #mergeLayer(merged: Map<string, NodeEntry>, layer: string, inoBase: number): number {
     const tree = this.trees.get(layer);
+
     if (tree === undefined) return inoBase;
     let highest = 0;
+
     for (const entry of tree.snapshot()) {
       highest = Math.max(highest, entry.ino);
       merged.set(entry.path, { ...entry, ino: entry.ino + inoBase });
     }
+
     return inoBase + highest;
   }
 
@@ -765,14 +849,18 @@ export class ContainerDisk {
   #mask(owner: { point: string; overlay: OverlayRow; relative: string }): void {
     const below = owner.overlay.lowers.some((layer) => {
       const tree = this.trees.get(layer);
+
       return tree !== undefined && tree.paths().some((path) => path === owner.relative || path.startsWith(`${owner.relative}/`));
     });
+
     if (!below) return;
     let masked = this.whiteouts.get(owner.point);
+
     if (masked === undefined) {
       masked = new Set();
       this.whiteouts.set(owner.point, masked);
     }
+
     masked.add(owner.relative);
   }
 
@@ -780,29 +868,40 @@ export class ContainerDisk {
    *  another tree's directory answers for its own names. */
   #treeDirAbove(path: string): string | undefined {
     let deepest: string | undefined;
+
     for (const dir of this.trees.keys()) {
       if (path.startsWith(`${dir}/`) && (deepest === undefined || dir.length > deepest.length)) deepest = dir;
     }
+
     return deepest;
   }
 
   /** The node a path names through an overlay or a tree directory. */
   #treeAt(path: string): { node: LiveInode } | undefined {
     const owner = this.#overlayOwner(path);
+
     if (owner !== undefined) {
       const upper = this.trees.get(owner.overlay.upper)?.node(owner.relative);
+
       if (upper !== undefined) return { node: upper };
       const masked = this.whiteouts.get(owner.point);
+
       if (masked !== undefined && isMasked(masked, owner.relative)) return undefined;
+
       for (const layer of owner.overlay.lowers) {
         const node = this.trees.get(layer)?.node(owner.relative);
+
         if (node !== undefined) return { node };
       }
+
       return undefined;
     }
+
     const dir = this.#treeDirAbove(path);
+
     if (dir === undefined) return undefined;
     const node = this.trees.get(dir)!.node(path.slice(dir.length + 1));
+
     return node === undefined ? undefined : { node };
   }
 
@@ -812,6 +911,7 @@ export class ContainerDisk {
         return { point, overlay, relative: path.slice(point.length + 1) };
       }
     }
+
     return undefined;
   }
 }
@@ -820,41 +920,51 @@ function ancestors(path: string): string[] {
   const parts = path.split('/').filter(part => part !== '');
   const steps: string[] = [];
   let at = '';
+
   for (const part of parts) {
     at = `${at}/${part}`;
     steps.push(at);
   }
+
   return steps;
 }
 
 /** Whether a whiteout set hides `path`: the name itself or an ancestor. */
 function isMasked(masked: ReadonlySet<string>, path: string): boolean {
   if (masked.has(path)) return true;
+
   for (const ancestor of ancestors(path)) {
     if (masked.has(ancestor.slice(1))) return true;
   }
+
   return false;
 }
 
 function parentOf(path: string): string {
   const at = path.lastIndexOf('/');
+
   return at <= 0 ? '/' : path.slice(0, at);
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
   let text = '';
+
   for (const byte of bytes) text += String.fromCharCode(byte);
+
   return btoa(text);
 }
 
 function base64ToBytes(encoded: string): Uint8Array {
   const text = atob(encoded);
   const bytes = new Uint8Array(text.length);
+
   for (let at = 0; at < text.length; at += 1) bytes[at] = text.charCodeAt(at);
+
   return bytes;
 }
 
 const encoder = new TextEncoder();
+
 const decoder = new TextDecoder();
 
 // ── the uniform arm ─────────────────────────────────────────────────────────
@@ -1090,11 +1200,13 @@ interface OpWindow {
 function publishWorkSince(durable: DurableStore, window: OpWindow, casAttempts: number): PublishWork {
   let objectsPut = 0;
   let bytesPut = 0;
+
   for (const op of durable.ops.slice(window.from)) {
     if (op.op !== 'put') continue;
     objectsPut += 1;
     bytesPut += op.bytes;
   }
+
   return { objectsPut, bytesPut, casAttempts };
 }
 
@@ -1108,12 +1220,15 @@ function restoreWorkSince(
   let total = 0;
   let metadataBytes = 0;
   let payloadBytes = 0;
+
   for (const op of durable.ops.slice(window.from)) {
     if (op.op === 'put' || op.op === 'delete') continue;
     total += 1;
+
     if (payloadPrefixes.some((prefix) => op.key.startsWith(prefix))) payloadBytes += op.bytes;
     else metadataBytes += op.bytes;
   }
+
   return {
     serialRemoteOps: total,
     totalRemoteOps: total,
@@ -1131,12 +1246,16 @@ function restoreWorkSince(
 function withOptionalMembers(raw: DevboxStorage, metered: Pick<DevboxStorage, 'attach' | 'checkpoint' | 'discard'>): DevboxStorage {
   const storage: DevboxStorage = { ...metered };
   const detach = raw.detach;
+
   if (detach !== undefined) storage.detach = async () => await detach.call(raw);
+
   return storage;
 }
 
 const NO_SEAL: SealWork = { bytesStaged: 0, bytesChunked: 0, chunksHashed: 0, nodesRewritten: 0, wholeFiles: 0 };
+
 const NO_PUBLISH: PublishWork = { objectsPut: 0, bytesPut: 0, casAttempts: 0 };
+
 const NO_RESTORE: RestoreWork = {
   serialRemoteOps: 0, totalRemoteOps: 0, metadataBytes: 0, payloadBytes: 0, cpuSteps: 0, mounts: 0, replayUnits: 0,
 };
@@ -1159,21 +1278,26 @@ function wholeTreeSeal(entries: readonly NodeEntry[], chunkBytes: number): SealW
   let chunksHashed = 0;
   let wholeFiles = 0;
   const seen = new Set<number>();
+
   for (const entry of entries) {
     if (entry.kind !== 'file' || entry.content === undefined || seen.has(entry.ino)) continue;
     seen.add(entry.ino);
     wholeFiles += 1;
     bytesStaged += runBytes(entry.content);
+
     for (const segment of paintedSegments(entry.content).segments) {
       if (!segment.zeros) chunksHashed += Math.ceil((segment.end - segment.start) / chunkBytes);
     }
   }
+
   let envelope = 0;
+
   if (entries.some((entry) => entry.path === DELTA_MANIFEST_NAME)) {
     const home = DELTA_MANIFEST_NAME.slice(0, DELTA_MANIFEST_NAME.lastIndexOf('/'));
     envelope = entries.filter((entry) => entry.kind === 'dir'
       && (entry.path === home || home.startsWith(`${entry.path}/`) || parentOf(entry.path) === home)).length;
   }
+
   return { bytesStaged, bytesChunked: bytesStaged, chunksHashed, nodesRewritten: entries.length - envelope, wholeFiles };
 }
 
@@ -1194,9 +1318,11 @@ class OneShotGate {
     if (this.#waiting !== null) throw new Error('a finalize gate is already held');
     this.#waiting = new Promise<void>((resolve) => { this.#release = resolve; });
     const entered = new Promise<void>((resolve) => { this.#entered = resolve; });
+
     return {
       release: () => {
         const release = this.#release;
+
         if (release === null) return;
         this.#release = null;
         this.#waiting = null;
@@ -1208,6 +1334,7 @@ class OneShotGate {
 
   async cross(): Promise<void> {
     const waiting = this.#waiting;
+
     if (waiting === null) return;
     const entered = this.#entered;
     this.#entered = null;
@@ -1239,7 +1366,9 @@ export class ArmRefused extends Error {
  * chain rather than about a stub.
  */
 type ShellReply = DeltaShellReply;
+
 const shellOk = (stdout = ''): ShellReply => ({ stdout, stderr: '', exitCode: 0 });
+
 const shellFail = (stderr: string): ShellReply => ({ stdout: '', stderr, exitCode: 1 });
 
 /**
@@ -1253,16 +1382,20 @@ function checkpointCommand(
   publish: (archivePath: string, mountedPath: string) => number | undefined,
 ): ShellReply | undefined {
   const squash = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups;
+
   if (squash !== undefined) {
     const archive = disk.pack(squash.source!);
+
     try {
       disk.writeFile(squash.archive!, archive);
     } catch (error) {
       // mksquashfs on a full disk: a non-zero rc on stdout, its own words on
       // stderr, exactly as the real command reports it.
       if (!(error instanceof DiskFull)) throw error;
+
       return { stdout: '1 0', stderr: `FATAL ERROR: Failed to write to output filesystem: ${error.message}`, exitCode: 0 };
     }
+
     // `<exit> <bytes>`, the one command that builds and measures.
     return shellOk(`0 ${archive.byteLength}`);
   }
@@ -1276,8 +1409,10 @@ function checkpointCommand(
   // for a key nothing lives under yet.
   const published = /dd if='(?<archive>[^']+)' of='(?<mounted>[^']+)' bs=4M conv=fsync;/
     .exec(command)?.groups;
+
   if (published !== undefined) {
     const landed = publish(published.archive!, published.mounted!);
+
     // `<exit> <bytes>` on stdout either way, exactly as the real command
     // reports it: dd's own failure is a non-zero code there, not a thrown
     // shell error.
@@ -1288,6 +1423,7 @@ function checkpointCommand(
         exitCode: 0,
       };
     }
+
     return shellOk(`0 ${landed}`);
   }
 
@@ -1296,12 +1432,16 @@ function checkpointCommand(
     // needs about its data bytes, and the disk has what its quota leaves.
     // Without a quota the disk never fills and the gate never refuses.
     const source = /find '(?<source>[^']+)'/.exec(command)?.groups?.source;
+
     const need = source === undefined ? 1 : Math.max(1, disk.snapshot(source).reduce(
       (sum, entry) => sum + (entry.content === undefined ? 0 : runBytes(entry.content)), 0,
     ));
+
     const free = disk.quotaBytes === null ? Number.MAX_SAFE_INTEGER : Math.max(0, disk.quotaBytes - disk.usedBytes);
+
     return shellOk(`${need} ${free}`);
   }
+
   return undefined;
 }
 
@@ -1310,48 +1450,62 @@ function checkpointCommand(
  *  command. */
 function mountCommand(command: string, disk: ContainerDisk, deaths: DeathWatch): ShellReply | undefined {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
+
   // Releasing every delta layer this container serves, whichever generation
   // mounted it.
   if (command.includes('awk -v r=')) {
     const root = unquote(/awk -v r='(?<root>[^']+)'/.exec(command)?.groups?.root ?? '');
+
     for (const point of [...disk.mounts.keys()].filter((path) => path.startsWith(root))) {
       disk.unmount(point);
     }
+
     return shellOk();
   }
+
   // The BOUNDED release: the loop is the strategy's, the unmount is this
   // container's, and the path is still the one the command names.
   const released = /\/usr\/bin\/fusermount3 -u(?:z)? '(?<path>[^']+)'/.exec(command)?.groups?.path;
+
   if (released !== undefined) {
     disk.unmount(unquote(released));
+
     return shellOk();
   }
 
   const layer = /squashfuse '(?<archive>[^']+)' '(?<point>[^']+)'/.exec(command)?.groups;
+
   if (layer !== undefined) {
     const bytes = disk.readFile(layer.archive!);
+
     if (bytes === undefined) return shellFail(`bad mount point: ${layer.archive!} is absent`);
+
     try {
       disk.unpack(bytes, layer.point!);
     } catch (error) {
       return shellFail(`squashfuse: ${error instanceof Error ? error.message : String(error)}`);
     }
+
     disk.mount(layer.point!, { source: layer.archive!, fstype: 'fuse.squashfuse', options: 'ro' });
     // The layer is mounted on the container when the isolate may go.
     deaths.reset('attach:after-layer-mount');
+
     return shellOk();
   }
 
   const overlay = /fuse-overlayfs -o lowerdir=(?<lowers>.+?),upperdir=(?<upper>[^,]+),workdir=[^ ]+ (?<dir>'[^']+')$/
     .exec(command)?.groups;
+
   if (overlay !== undefined) {
     disk.mountOverlay(unquote(overlay.dir!), {
       lowers: overlay.lowers!.split(':').map(unquote),
       upper: unquote(overlay.upper!),
     });
     deaths.reset('attach:after-overlay');
+
     return shellOk();
   }
+
   return undefined;
 }
 
@@ -1363,19 +1517,24 @@ function chainExec(
   publish: (archivePath: string, mountedPath: string) => number | undefined,
 ) {
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
+
   return async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
     // The session shell first: a command it would refuse never reaches a
     // strategy's answer, on a deployment or here. See `session-shell.ts`.
     const refused = sessionShellRefusal(command);
+
     if (refused !== undefined) throw refused;
     const ok = shellOk;
     // The chunked delta's own shell, answered with real bytes. See
     // `delta-shell.ts`.
     const delta = deltaCommand(command, disk);
+
     if (delta !== undefined) return delta;
+
     if (command === 'cat /proc/mounts') return ok(disk.procMounts());
 
     const exists = /^test -e '(?<path>[^']+)'/.exec(command)?.groups?.path;
+
     if (exists !== undefined) return ok(disk.exists(exists) ? 'yes' : 'no');
 
     // The BOUNDED visibility probe: one command that asks the store mount for a
@@ -1399,20 +1558,27 @@ function chainExec(
     // is proven.
     if (command.includes('printf ready')) {
       const awaited = /test -e '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
+
       if (disk.readFile(awaited) !== undefined) return ok('ready');
       const listed = /ls -1A '(?<path>[^']+)'/.exec(command)?.groups?.path ?? '';
+
       return ok(`missing ${disk.entries(listed).join(' ')}`);
     }
+
     const mounted = mountCommand(command, disk, deaths);
+
     if (mounted !== undefined) return mounted;
 
     const seed = /^cp -a '(?<lower>[^']+)\/\.' '(?<upper>[^']+)\//.exec(command)?.groups;
+
     if (seed !== undefined) {
       disk.copyTree(seed.lower!, seed.upper!);
+
       return ok();
     }
 
     const checkpoint = checkpointCommand(command, disk, publish);
+
     if (checkpoint !== undefined) return checkpoint;
 
     if (command.includes('sha256sum') && command.includes('sort -z')) {
@@ -1420,17 +1586,22 @@ function chainExec(
       // ctime, link target, path — metadata only, never content, so a hole is
       // never read and a 1 GiB sparse file costs one row.
       const upper = `${DEVBOX_RUNTIME_DIR}/upper`;
+
       const rows = disk.snapshot(upper).map((entry) => [
         entry.ino, entry.kind, entry.mode, entry.content === undefined ? 0 : contentSize(entry.content),
         entry.metadata?.mtimeNs ?? '0', entry.metadata?.ctimeNs ?? '0', entry.target ?? '', entry.path,
       ].join('\0'));
+
       const digest = (text: string): string => createHash('sha256').update(text).digest('hex');
+
       return ok(digest(rows.length === 0 ? 'empty' : rows.sort().join('\0')));
     }
 
     const statted = /^stat -c %s '(?<path>[^']+)'/.exec(command)?.groups?.path;
+
     if (statted !== undefined) {
       const bytes = disk.readFile(statted);
+
       return ok(bytes === undefined ? '' : String(bytes.byteLength));
     }
 
@@ -1438,20 +1609,24 @@ function chainExec(
     // upper is filled before its overlay is mounted, and a layer is mounted
     // inside a root that was reset the same way.
     const reset = /^rm -rf (?<paths>.+?) && mkdir -p /.exec(command)?.groups?.paths;
+
     if (reset !== undefined) {
       for (const path of reset.split(' ').map(unquote)) {
         disk.rmrf(path);
         disk.tree(path);
       }
+
       return ok();
     }
 
     const removed = /^rm -rf '(?<path>[^']+)'$/.exec(command)?.groups?.path;
+
     if (removed !== undefined) {
       // The staging directory is dropped after a commit is durable: the last
       // sub-step, and the one a death must not be able to un-commit.
       if (removed === `${DEVBOX_RUNTIME_DIR}/stage`) deaths.at('before-cleanup');
       disk.rmrf(removed);
+
       return ok();
     }
 
@@ -1459,8 +1634,10 @@ function chainExec(
       for (const path of command.slice('mkdir -p'.length).trim().split(' ').map(unquote)) {
         disk.mkdirp(path);
       }
+
       return ok();
     }
+
     return ok();
   };
 }
@@ -1476,6 +1653,7 @@ function snapshotChainArm(): ConformanceArm {
     ...(row.fallback === undefined ? [] : [row.fallback.base.id]),
     ...(row.orphans ?? []),
   ];
+
   const payloadPrefixes = (): readonly string[] => generations().map(id => `${STORE_ROOT}/${id}/`);
 
   /** One container boot. Every field below dies with it except the shared row
@@ -1500,24 +1678,29 @@ function snapshotChainArm(): ConformanceArm {
           if (!this.disk.overlays.has(DEVBOX_WORKDIR)) {
             throw new Error('the chain workspace is not attached, so a write has nowhere to land');
           }
+
           this.disk.writeFile(`${DEVBOX_WORKDIR}/${path}`, encoder.encode(text));
         },
         read: async (path) => {
           const bytes = this.disk.readFile(`${DEVBOX_WORKDIR}/${path}`);
+
           return bytes === undefined ? undefined : decoder.decode(bytes);
         },
         remove: async (path) => this.disk.removeFile(`${DEVBOX_WORKDIR}/${path}`),
         paths: async () => this.disk.entries(DEVBOX_WORKDIR),
         plant: async (entries) => {
           const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
+
           if (overlay === undefined) throw new Error('the chain workspace is not attached');
           this.disk.tree(overlay.upper).plant(entries);
         },
         snapshot: async () => this.disk.snapshot(DEVBOX_WORKDIR),
         pwrite: async (path, offset, bytes) => {
           const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
+
           if (overlay === undefined) throw new Error('the chain workspace is not attached');
           const upper = this.disk.tree(overlay.upper);
+
           if (!upper.has(path)) {
             // fuse-overlayfs copy-up: the WHOLE lower file is copied before one
             // page is changed. This is the reason the sqlite cell rejects the
@@ -1526,6 +1709,7 @@ function snapshotChainArm(): ConformanceArm {
             const names = new Set([...ancestorsOf(path), path]);
             upper.plant(merged.filter((entry) => names.has(entry.path)));
           }
+
           upper.pwrite(path, offset, bytes);
         },
       };
@@ -1578,29 +1762,36 @@ function snapshotChainArm(): ConformanceArm {
     evictCleanBytes(): number {
       if (row?.delta === undefined) return 0;
       const overlay = this.disk.overlays.get(DEVBOX_WORKDIR);
+
       if (overlay === undefined) return 0;
       const upper = this.disk.tree(overlay.upper);
       const held = upper.bytesHeld();
+
       if (held === 0) return 0;
       const chainId = row.base.id;
       const deltaKey = deltaObjectKey(STORE_ROOT, chainId);
       const bytes = durable.get(deltaKey);
+
       if (bytes === null) return 0;
       const mountPoint = deltaLayerMountPoint(chainId);
       this.disk.unpack(bytes, mountPoint);
       this.disk.mount(mountPoint, { source: deltaKey, fstype: 'fuse.squashfuse', options: 'ro' });
       const manifestBytes = this.disk.readFile(`${mountPoint}/${DELTA_MANIFEST_NAME}`);
       const manifest = manifestBytes === undefined ? null : v.safeParse(DeltaManifestSchema, JSON.parse(decoder.decode(manifestBytes)));
+
       if (manifest === null || !manifest.success) {
         this.disk.mountOverlay(DEVBOX_WORKDIR, { lowers: [mountPoint, ...overlay.lowers], upper: overlay.upper });
         upper.clear();
+
         return held;
       }
+
       // WHERE THE SIDECAR KEEPS ITS WHOLE FILES IS OBSERVED, not restated: the
       // directory under which the first whole file's path is found.
       const whole = manifest.output.files.filter((file) => file.kind === 'whole');
       const rows = this.disk.snapshot(mountPoint);
       const first = whole[0] === undefined ? undefined : rows.find((row) => row.kind === 'file' && row.path.endsWith(`/${whole[0]!.p}`));
+
       if (whole[0] === undefined || first === undefined) return 0;
       const sideRelative = first.path.slice(0, first.path.length - whole[0].p.length - 1);
       const sideTree = `${mountPoint}/${sideRelative}`;
@@ -1608,7 +1799,9 @@ function snapshotChainArm(): ConformanceArm {
         .filter((entry) => entry.path.startsWith(`${sideRelative}/`))
         .map((entry) => ({ ...entry, path: entry.path.slice(sideRelative.length + 1) })));
       this.disk.mountOverlay(DEVBOX_WORKDIR, { lowers: [sideTree, ...overlay.lowers], upper: overlay.upper });
+
       for (const file of whole) upper.remove(file.p);
+
       return held - upper.bytesHeld();
     }
 
@@ -1627,6 +1820,7 @@ function snapshotChainArm(): ConformanceArm {
               replayUnits: this.disk.layerMountCalls - layers,
             }),
           };
+
           return outcome;
         },
         checkpoint: async (kind) => {
@@ -1634,6 +1828,7 @@ function snapshotChainArm(): ConformanceArm {
           const workspaceBefore = await this.workspace.snapshot();
           this.#packed = undefined;
           const outcome = await raw.checkpoint(kind);
+
           // WHAT THE ARCHIVER PACKED, not the workspace beside it: the upper
           // for a legacy delta, a staged sidecar for a chunked one, the merged
           // view for a fresh base. The mksquashfs command recorded which, and
@@ -1641,11 +1836,13 @@ function snapshotChainArm(): ConformanceArm {
           const seal = outcome.kind === 'committed'
             ? wholeTreeSeal(this.#packed ?? workspaceBefore, 128 * 1024)
             : NO_SEAL;
+
           this.#rows = {
             ...this.#rows,
             seal,
             publish: publishWorkSince(durable, window, outcome.kind === 'committed' ? 1 : 0),
           };
+
           return outcome;
         },
         discard: async () => await raw.discard(),
@@ -1665,31 +1862,42 @@ function snapshotChainArm(): ConformanceArm {
           throw new Error(`payload must not be written through the isolate: ${key}`);
         },
       };
+
       /** The store as the mount reaches it: whole objects, container-side. */
       const mounted = {
         get: (key: string) => durable.get(key),
         put: (key: string, bytes: Uint8Array) => durable.put(key, bytes),
       };
+
       /** One archive, moved by the container into the store. */
       const publish = (archivePath: string, mountedPath: string): number | undefined => {
         deaths.at('before-payload');
         const mount = this.#publishing;
+
         if (mount === undefined || !mountedPath.startsWith(`${mount.at}/`)) {
           throw new Error(`nothing writable is mounted for ${mountedPath}`);
         }
+
         const bytes = this.disk.readFile(archivePath);
+
         if (bytes === undefined) return undefined;
         this.disk.serveFromMount(mountedPath, bytes);
         mounted.put(`${mount.prefix}${mountedPath.slice(mount.at.length + 1)}`, bytes);
         deaths.at('after-payload');
+
         return bytes.byteLength;
       };
+
       const chain = chainExec(this.disk, deaths, publish);
+
       const exec: typeof chain = async (command) => {
         const packed = /mksquashfs '(?<source>[^']+)' '(?<archive>[^']+)'/.exec(command)?.groups?.source;
+
         if (packed !== undefined) this.#packed = this.disk.snapshot(packed);
+
         return await chain(command);
       };
+
       const ports: SnapshotChainPorts = {
         containerRunning: () => !this.disk.dead && !this.disk.stopped,
         allowExtraction: () => false,
@@ -1704,8 +1912,10 @@ function snapshotChainArm(): ConformanceArm {
           // The Durable Object's read-compare-put, as one step: nothing runs
           // between the comparison and the write.
           const stored = row?.rev ?? null;
+
           if (stored !== expectedRev) throw new ChainRecordAdvanced(expectedRev, stored);
           row = next;
+
           if (next.lastFailure !== undefined) this.failures.push(next.lastFailure.reason);
           deaths.at('after-pointer');
         },
@@ -1719,26 +1929,33 @@ function snapshotChainArm(): ConformanceArm {
         mountStore: async (at) => {
           if (this.disk.dead) throw new ContainerDied('mountStore on a dead container');
           this.disk.mount(at, { source: `r2:${STORE_ROOT}`, fstype: 'fuse.s3fs', options: 'rw' });
+
           for (const key of durable.list(`${STORE_ROOT}/`)) {
             const relative = key.slice(STORE_ROOT.length + 1);
             this.disk.serveFromMount(`${at}/${relative}`, mounted.get(key)!);
           }
+
           this.#publishing = { at, prefix: `${STORE_ROOT}/` };
           deaths.reset('attach:after-store-mount');
         },
         unmountStore: async (at) => {
           if (this.#publishing?.at === at) this.#publishing = undefined;
+
           if (this.disk.dead || this.disk.stopped) return;
+
           for (const path of this.disk.entries(at)) this.disk.removeFile(`${at}/${path}`);
           this.disk.unmount(at);
         },
         objectFacts: async (key) => {
           const held = isolate.head(key);
+
           if (held === null) return undefined;
+
           return { bytes: held.size, digest: held.digest, objectVersion: held.version };
         },
         deleteObjects: async (keys) => {
           deaths.at('before-cleanup');
+
           for (const key of keys) isolate.delete(key);
         },
         countEntries: async (dir) => this.disk.snapshot(dir).length,
@@ -1749,11 +1966,13 @@ function snapshotChainArm(): ConformanceArm {
         now: () => Date.now(),
         log: () => undefined,
       };
+
       return this.#meter(snapshotChainStorage(ports));
     }
   }
 
   let current = new ChainBoot();
+
   return {
     name: 'snapshot-chain',
     storage: () => current.storage(),
@@ -1779,11 +1998,13 @@ function snapshotChainArm(): ConformanceArm {
     }),
     declaredPayload: async () => {
       if (row === null) return [];
+
       const declared: DeclaredObject[] = [{
         key: baseObjectKey(STORE_ROOT, row.base.id),
         byteLength: row.base.bytes,
         names: [baseObjectKey(STORE_ROOT, row.base.id), 'base'],
       }];
+
       if (row.delta !== undefined) {
         declared.push({
           key: deltaObjectKey(STORE_ROOT, row.base.id),
@@ -1791,6 +2012,7 @@ function snapshotChainArm(): ConformanceArm {
           names: [deltaObjectKey(STORE_ROOT, row.base.id), 'delta'],
         });
       }
+
       return declared;
     },
     committedHeads: async () => row === null ? [] : [`${row.base.id}#${row.rev}`],

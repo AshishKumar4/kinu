@@ -66,6 +66,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     if (vs && vs.available) {
       const lexicalFn = async (q: string, k: number): Promise<LexicalHit[]> => {
         const results = await memory.search(q, k);
+
         return results.map((r) => ({
           // Canonical chunk id (`path:start-end`) — matches the id the vector
           // store returns, so RRF fuses the lexical and semantic hits.
@@ -74,17 +75,23 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
           score: r.score, snippet: r.snippet,
         }));
       };
+
       const hits = await hybridSearch(query, lexicalFn, vs, {
         finalK: 10, rehydrate: memorySnippetRehydrator(memory),
       });
+
       if (hits.length === 0) return 'No results found.';
+
       return hits.map((h) =>
         `[${h.path}:${h.startLine}-${h.endLine}] ` +
         `(rrf ${h.rrfScore.toFixed(3)}, sources: ${h.sources.join('+')})\n${h.snippet}`,
       ).join('\n\n');
     }
+
     const results = await memory.search(query, 10);
+
     if (results.length === 0) return 'No results found.';
+
     return results
       .map((r) => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`)
       .join('\n\n');
@@ -94,15 +101,20 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   // messages table. Mode is inferred from the input:
   // around_message_id -> scroll, query -> search, neither -> browse.
   const conversationSearch = new ConversationSearchStore(deps.sql, deps.actor);
+
   const runConversationsAction = (args: MemoryToolInput): JsonValue => {
     try {
       if (args.around_message_id) {
         const view = conversationSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
+
         if (!view) throw new KinuError('missing', 'no message with id ' + args.around_message_id);
+
         return decodeJsonValue({ value: { mode: 'scroll', ...view } });
       }
+
       if (args.query?.trim()) {
         const hits = conversationSearch.search(args.query, args.limit ?? 5);
+
         return decodeJsonValue({ value: {
           mode: 'search', query: args.query, hits,
           hint: hits.length > 0
@@ -110,6 +122,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
             : 'No matches. Multi-word queries require all terms; try fewer or different keywords.',
         } });
       }
+
       return decodeJsonValue({
         value: { mode: 'browse', conversations: conversationSearch.browse(args.limit ?? 10) },
       });
@@ -127,26 +140,36 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   ): JsonValue => {
     if (!facts) throw new KinuError('unsupported', 'the keyed-fact actions are not available on this runtime');
     const key = v.safeParse(FactKeySchema, args.key);
+
     if (!key.success) {
       throw new KinuError('bad_input', 'key must be a non-empty string');
     }
+
     if (action === 'remember') {
       let value: JsonValue;
+
       try { value = decodeJsonValue({ value: args.value }); }
       catch (error) { throw new KinuError('bad_input', 'value not JSON-serializable', { cause: error }); }
+
       facts.upsert(key.output, value, { confidence: args.confidence });
+
       return { ok: true, key: key.output };
     }
+
     if (action === 'recall') {
       const f = facts.recall(key.output);
+
       if (!f) return { found: false, key: key.output };
+
       return decodeJsonValue({ value: {
         found: true, key: f.key, value: f.value, confidence: f.confidence,
         source: f.source, lastObservedAt: f.lastObservedAt,
       } });
     }
+
     const existed = facts.recall(key.output) !== null;
     facts.forget(key.output);
+
     return { ok: true, key: key.output, existed };
   };
 
@@ -161,15 +184,19 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
     // `memoryActionsFor` the enum in the schema is built from, so the words in
     // the refusal are exactly the words that work.
     const action = v.safeParse(ActionSchema, args.action);
+
     if (!action.success) {
       throw new KinuError('bad_input', unknownActionError('memory', 'action', args.action, actions));
     }
+
     switch (action.output) {
       case 'save':
         if (!args.content) throw new KinuError('bad_input', 'memory.save requires `content`.');
+
         return appendMemoryNote(memory, args.content);
       case 'search':
         if (!args.query) throw new KinuError('bad_input', 'memory.search requires `query`.');
+
         return searchMemory(args.query);
       case 'conversations':
         return runConversationsAction(args);

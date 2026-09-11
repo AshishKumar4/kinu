@@ -30,7 +30,9 @@ import PC_AGENT_SANDBOX_SOURCE from '../../pc-agent/src/sandbox.js' with { type:
 import PC_AGENT_PTY_SOURCE from '../../pc-agent/src/pty.js' with { type: 'text' };
 
 const PID_PATH = join(AGENT_HOME, 'pc-agent.pid');
+
 const SCRIPT_PATH = join(AGENT_HOME, 'pc-agent.js');
+
 /**
  * Every module the daemon `require`s beside itself, by the name it requires.
  *
@@ -51,12 +53,16 @@ const DAEMON_SIBLINGS: readonly { readonly name: string; readonly source: string
 function daemonSiblingNames(daemonSource: string): readonly string[] {
   return [...daemonSource.matchAll(/require\('\.\/([^']+)'\)/g)].map((m) => m[1] ?? '').filter((n) => n !== '');
 }
+
 export const DAEMON_LOG_PATH = join(AGENT_HOME, 'pc-agent.log');
+
 export const DEVICE_CONFIG_PATH = join(AGENT_HOME, 'device.json');
+
 /** Where this machine keeps agent homes. The daemon reports this ROOT to the
  *  hub on HELLO and the hub composes `<root>/<workspace>/home` per command, so
  *  the CLI creates the root and the daemon owns everything under it. */
 const AGENT_ROOT = join(AGENT_HOME, 'agents');
+
 const CONNECT_POLL_MS = 1_000;
 
 /** The name a machine has when nobody named it. */
@@ -71,6 +77,7 @@ const UNNAMED_DEVICE_NAME = 'Your PC';
 export function defaultDeviceName(): string {
   const user = (tolerate(() => userInfo().username, 'enoent') ?? process.env.USER ?? '').trim();
   const host = hostname().trim();
+
   return user && host ? `${user}@${host}` : UNNAMED_DEVICE_NAME;
 }
 
@@ -123,8 +130,10 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   if (opts.session && runningDaemonPid() !== null) {
     // The running daemon owns device.json and its credentials — leave it alone.
     const devices = await listDevicesForConnect(auth, 'checking whether the installed daemon is connected');
+
     return { kind: 'already-running', connected: devices.some((device) => device.connected) };
   }
+
   assertDaemonPlatformSupported();
   const runtime = daemonRuntime();
   const device = await registerDeviceForConnect(auth, opts.label);
@@ -133,8 +142,10 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
   // Don't trust the spawn — the daemon must show up as connected on the
   // server before we claim success.
   const connected = await waitForDeviceConnected(auth, device.deviceId, launch, opts);
+
   if (connected === undefined) return { kind: 'cancelled', deviceId: device.deviceId };
   anyDeviceConnected = true;
+
   return { kind: 'connected', deviceId: device.deviceId, sandbox: connected.sandbox };
 }
 
@@ -160,6 +171,7 @@ export function daemonStatus(): DaemonStatus {
 // ── Connect prompt policy ────────────────────────────────────────
 
 let offerConsumed = false;
+
 let anyDeviceConnected: boolean | null = null;
 
 /**
@@ -170,9 +182,12 @@ let anyDeviceConnected: boolean | null = null;
  */
 export async function shouldOfferDeviceConnect(): Promise<boolean> {
   if (offerConsumed) return false;
+
   if (loadConfigFile().deviceConnectPromptDismissed) return false;
   const auth = resolveCloudSession();
+
   if (!auth) return false;
+
   if (anyDeviceConnected === null) {
     try {
       const devices = await listCloudDevices(auth.origin, auth.token);
@@ -182,11 +197,14 @@ export async function shouldOfferDeviceConnect(): Promise<boolean> {
       // is connected. A malformed origin is ours, not the network's: swallowing it would disable
       // the prompt for good with nothing to show for it.
       if (classify({ cause: error }) === 'malformed-input') throw error;
+
       return false;
     }
   }
+
   if (anyDeviceConnected) return false;
   offerConsumed = true;
+
   return true;
 }
 
@@ -204,11 +222,15 @@ export async function deviceStatusLine(): Promise<string> {
     const devices = await listCloudDevices(auth.origin, auth.token);
     anyDeviceConnected = devices.some((device) => device.connected);
     const connected = devices.filter((device) => device.connected);
+
     if (connected.length > 0) {
       const named = connected.map((device) => `${device.label} (${sandboxStateTag(device.sandbox)})`);
+
       return `Connected: ${named.join(', ')}`;
     }
+
     if (devices.length > 0) return `${devices.length} registered device${devices.length === 1 ? '' : 's'}, none connected.`;
+
     return 'No PC is connected to your account yet.';
   } catch (err) {
     return `Device status unavailable: ${renderThrownChain({ cause: err })}`;
@@ -277,6 +299,7 @@ function sandboxStateTag(sandbox: CloudDeviceSandbox): string {
 // ── Internals ────────────────────────────────────────────────────
 
 let sessionDaemon: ChildProcess | null = null;
+
 let sessionCleanupInstalled = false;
 
 
@@ -303,6 +326,7 @@ async function registerDeviceForConnect(auth: DeviceAuth, label: string | undefi
     return await registerCloudDevice(auth.origin, auth.token, label);
   } catch (cause) {
     const detail = redactSecrets(renderThrownChain({ cause }), [auth.token]);
+
     if (/\b(?:duplicate|already exists|already in use)\b/i.test(detail)) {
       throw new KinuError(
         'bad_input',
@@ -310,6 +334,7 @@ async function registerDeviceForConnect(auth: DeviceAuth, label: string | undefi
         { cause: new Error(detail) },
       );
     }
+
     throw new KinuError(
       classifyErrorCode({ cause }) ?? 'unavailable',
       'registering this device with Kinu',
@@ -320,9 +345,11 @@ async function registerDeviceForConnect(auth: DeviceAuth, label: string | undefi
 
 function redactSecrets(text: string, secrets: string[]): string {
   let redacted = text;
+
   for (const secret of secrets) {
     if (secret.length > 0) redacted = redacted.split(secret).join('[redacted]');
   }
+
   return redacted;
 }
 
@@ -348,12 +375,14 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
     // base-tier file call to it.
     root: process.cwd(),
   }, null, 2)}\n`;
+
   const scriptTemporary = stageInstallFile(
     SCRIPT_PATH,
     PC_AGENT_DAEMON_SOURCE,
     0o700,
     (temporary) => verifyStagedDaemon(temporary),
   );
+
   // The daemon requires these beside itself, so they are not optional and
   // they are not fetched: each ships in the same release as the code that
   // reads it, or a released daemon dies on its first require. The table is
@@ -361,9 +390,11 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
   const required = daemonSiblingNames(PC_AGENT_DAEMON_SOURCE);
   const shipped = new Set(DAEMON_SIBLINGS.map((sibling) => sibling.name));
   const unshipped = required.filter((name) => !shipped.has(name));
+
   if (unshipped.length > 0) {
     throw new KinuError('io', `this CLI ships no ${unshipped.join(', ')} beside the device daemon that requires it`);
   }
+
   const siblingTemporaries = DAEMON_SIBLINGS.map((sibling) => ({
     target: join(AGENT_HOME, sibling.name),
     temporary: stageInstallFile(
@@ -377,9 +408,11 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
       },
     ),
   }));
+
   let scriptPending: string | null = scriptTemporary;
   const siblingsPending = new Set(siblingTemporaries.map((entry) => entry.temporary));
   let configPending: string | null = null;
+
   try {
     const configTemporary = stageInstallFile(
       DEVICE_CONFIG_PATH,
@@ -391,6 +424,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
         }
       },
     );
+
     configPending = configTemporary;
 
     // The config activates the replacement on the next daemon start, so it
@@ -404,6 +438,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
       siblingsPending.delete(entry.temporary);
       enforceOwnerOnly(entry.target, 0o700);
     }
+
     renameSync(scriptTemporary, SCRIPT_PATH);
     scriptPending = null;
     enforceOwnerOnly(SCRIPT_PATH, 0o700);
@@ -423,6 +458,7 @@ function installDaemonFiles(device: { origin: string; userId: string; token: str
         otherwise: 'io',
       });
     }
+
     if (cause instanceof KinuError) throw cause;
     throw toKinuError({ doing: 'installing the device daemon', cause, otherwise: 'io' });
   }
@@ -436,17 +472,21 @@ function stageInstallFile(
 ): string {
   const temporary = `${file}.tmp-${process.pid}-${randomBytes(8).toString('hex')}`;
   let created = false;
+
   try {
     const descriptor = openSync(temporary, 'wx', mode);
     created = true;
+
     try {
       writeFileSync(descriptor, content);
       fsyncSync(descriptor);
     } finally {
       closeSync(descriptor);
     }
+
     enforceOwnerOnly(temporary, mode);
     verify(temporary);
+
     return temporary;
   } catch (cause) {
     if (created) {
@@ -460,6 +500,7 @@ function stageInstallFile(
         });
       }
     }
+
     if (cause instanceof KinuError) throw cause;
     throw toKinuError({ doing: `preparing the device install at ${file}`, cause, otherwise: 'io' });
   }
@@ -480,6 +521,7 @@ function verifyStagedDaemon(temporary: string): void {
 function syncAgentDirectory(): void {
   if (process.platform === 'win32') return;
   const descriptor = openSync(AGENT_HOME, 'r');
+
   try {
     fsyncSync(descriptor);
   } finally {
@@ -504,6 +546,7 @@ async function waitForDeviceConnected(
   const stop = new AbortController();
   const stopOnCaller = () => stop.abort();
   opts.signal?.addEventListener('abort', stopOnCaller, { once: true });
+
   const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
     const outcome = signal ?? (code === null ? 'unknown exit' : `exit code ${code}`);
     launch.failure = new KinuError(
@@ -512,20 +555,28 @@ async function waitForDeviceConnected(
     );
     stop.abort();
   };
+
   const onError = () => stop.abort();
   launch.child.once('exit', onExit);
   // spawnDaemonChild's own listener records the failure; this one ends the wait.
   launch.child.once('error', onError);
+
   if (launch.failure !== null) stop.abort();
   const wait: StoppableWaitOptions = { intervalMs: CONNECT_POLL_MS, signal: stop.signal };
+
   if (opts.onWaiting) wait.onWaiting = opts.onWaiting;
+
   try {
     const connected = await waitForAnswer(async () => {
       const devices = await listDevicesForConnect(auth, 'checking whether the device daemon connected');
+
       return devices.find((device) => device.id === deviceId && device.connected);
     }, wait);
+
     if (connected !== undefined) return connected;
+
     if (launch.failure !== null) throw launch.failure;
+
     return undefined;
   } finally {
     launch.child.off('exit', onExit);
@@ -536,6 +587,7 @@ async function waitForDeviceConnected(
 
 function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch {
   assertDaemonPlatformSupported();
+
   try {
     ensureAgentHome();
   } catch (cause) {
@@ -545,17 +597,23 @@ function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch 
       otherwise: 'io',
     });
   }
+
   const executable = runtime ?? daemonRuntime();
   killSessionDaemon();
+
   if (!session) stopRunningDaemon();
 
   const launch = spawnDaemonChild(executable, session);
+
   if (session) {
     sessionDaemon = launch.child;
     installSessionCleanup();
+
     return launch;
   }
+
   if (!launch.child.pid) return launch;
+
   try {
     if (!claimDaemonPid(launch.child.pid)) {
       throw new KinuError(
@@ -567,12 +625,15 @@ function startInstalledDaemon(session: boolean, runtime?: string): DaemonLaunch 
     tolerate(() => launch.child.kill('SIGTERM'), 'esrch');
     throw cause;
   }
+
   launch.child.unref();
+
   return launch;
 }
 
 function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
   let logDescriptor: number;
+
   try {
     // The daemon writes through this append fd for its whole life, so the
     // roll happens here, before the handle exists: copy-truncate keeps the
@@ -586,14 +647,17 @@ function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
       otherwise: 'io',
     });
   }
+
   try {
     const child = spawn(runtime, [SCRIPT_PATH], session
       ? { stdio: ['ignore', logDescriptor, logDescriptor] }
       : { detached: true, stdio: ['ignore', logDescriptor, logDescriptor] });
+
     const launch: DaemonLaunch = { child, failure: null };
     child.once('error', (cause) => {
       launch.failure = toKinuError({ doing: 'starting the device daemon', cause, otherwise: 'io' });
     });
+
     return launch;
   } catch (cause) {
     throw toKinuError({ doing: 'starting the device daemon', cause, otherwise: 'io' });
@@ -606,41 +670,51 @@ function spawnDaemonChild(runtime: string, session: boolean): DaemonLaunch {
 function recordedDaemonPid(): number | null {
   if (!existsSync(PID_PATH)) return null;
   let contents: string;
+
   try {
     contents = readFileSync(PID_PATH, 'utf-8');
   } catch (cause) {
     throw toKinuError({ doing: `reading the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
   }
+
   const pid = Number(contents.trim());
+
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
 /** The pid of the daemon that owns this machine, or null when none runs. */
 function runningDaemonPid(): number | null {
   const pid = recordedDaemonPid();
+
   if (pid === null) return null;
+
   return processAlive(pid) ? pid : null;
 }
 
 function claimDaemonPid(pid: number): boolean {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (writePidfile(pid)) return true;
+
     // The daemon claims this same file at startup, so a pidfile that already
     // names the process being claimed for is this claim, not a competing one.
     if (recordedDaemonPid() === pid) return true;
+
     if (runningDaemonPid() !== null) return false;
+
     try {
       rmSync(PID_PATH, { force: true });
     } catch (cause) {
       throw toKinuError({ doing: `removing the stale device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
     }
   }
+
   return false;
 }
 
 function writePidfile(pid: number): boolean {
   let descriptor: number | null = null;
   let created = false;
+
   try {
     descriptor = openSync(PID_PATH, 'wx', 0o600);
     created = true;
@@ -650,10 +724,13 @@ function writePidfile(pid: number): boolean {
     descriptor = null;
     enforceOwnerOnly(PID_PATH, 0o600);
     syncAgentDirectory();
+
     return true;
   } catch (cause) {
     if (descriptor !== null) closeSync(descriptor);
+
     if (!created && classify({ cause }) === 'eexist') return false;
+
     if (created) {
       try {
         rmSync(PID_PATH, { force: true });
@@ -665,12 +742,14 @@ function writePidfile(pid: number): boolean {
         });
       }
     }
+
     throw toKinuError({ doing: `writing the device daemon pidfile at ${PID_PATH}`, cause, otherwise: 'io' });
   }
 }
 
 function stopRunningDaemon(): void {
   const pid = runningDaemonPid();
+
   if (pid && processIsInstalledDaemon(pid)) {
     try {
       tolerate(() => process.kill(pid, 'SIGTERM'), 'esrch');
@@ -678,6 +757,7 @@ function stopRunningDaemon(): void {
       throw toKinuError({ doing: `stopping the device daemon (pid ${pid})`, cause, otherwise: 'io' });
     }
   }
+
   try {
     rmSync(PID_PATH, { force: true });
   } catch (cause) {
@@ -690,18 +770,23 @@ function processIsInstalledDaemon(pid: number): boolean {
     if (process.platform === 'linux') {
       return readFileSync(`/proc/${pid}/cmdline`, 'utf-8').split('\0').includes(SCRIPT_PATH);
     }
+
     if (process.platform === 'darwin') {
       return execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf-8' }).includes(SCRIPT_PATH);
     }
+
     return false;
   } catch (cause) {
     if (classify({ cause }) === 'enoent') return false;
+
     if (cause instanceof Error && 'code' in cause && (cause.code === 'EACCES' || cause.code === 'EPERM')) {
       return false;
     }
+
     if (process.platform === 'darwin' && cause instanceof Error && 'status' in cause && cause.status === 1) {
       return false;
     }
+
     throw toKinuError({
       doing: `checking whether pid ${pid} is the installed device daemon`,
       cause,
@@ -712,6 +797,7 @@ function processIsInstalledDaemon(pid: number): boolean {
 
 export function killSessionDaemon(): void {
   const daemon = sessionDaemon;
+
   if (daemon && daemon.exitCode === null && !daemon.killed) {
     try {
       tolerate(() => daemon.kill('SIGTERM'), 'esrch');
@@ -719,6 +805,7 @@ export function killSessionDaemon(): void {
       throw toKinuError({ doing: 'stopping the session device daemon', cause, otherwise: 'io' });
     }
   }
+
   sessionDaemon = null;
 }
 
@@ -738,9 +825,11 @@ function installSessionCleanup(): void {
 function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
+
     return true;
   } catch (cause) {
     if (classify({ cause }) === 'esrch') return false;
+
     if (cause instanceof Error && 'code' in cause && cause.code === 'EPERM') return true;
     throw toKinuError({ doing: `checking whether the device daemon pid ${pid} is running`, cause, otherwise: 'io' });
   }

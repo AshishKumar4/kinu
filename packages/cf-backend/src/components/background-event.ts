@@ -45,6 +45,7 @@ const ProgrammaticMetadataSchema = v.looseObject({
   decision: v.optional(v.string()),
   count: v.optional(v.number()),
 });
+
 const SignalCardEventSchema = v.variant('state', [
   v.object({ type: v.literal('signal_card'), id: v.string(), state: v.picklist(['shown', 'undelivered']) }),
   v.object({
@@ -88,6 +89,7 @@ export function classifyProgrammaticTurn<Metadata>(
   if (turnAuthor({ id, metadata }) === "operator") return null;
   const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
   const turn = parsed.success ? parsed.output : {};
+
   switch (turn.kinuEvent) {
     case "event_drain":
       return { kind: "event_drain" };
@@ -118,7 +120,9 @@ export function classifyProgrammaticTurn<Metadata>(
 /** The signal id a programmatic message carries, joining it to its card. */
 export function messageSignalId<Metadata>(metadata: Metadata): string | null {
   const parsed = v.safeParse(v.looseObject({ [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()) }), metadata);
+
   if (!parsed.success) return null;
+
   return parsed.output[SIGNAL_ID_METADATA_KEY] || null;
 }
 
@@ -128,6 +132,7 @@ export function messageSignalId<Metadata>(metadata: Metadata): string | null {
  *  it appears inside another turn's work. */
 export function isSteeredMessage<Metadata>(metadata: Metadata): boolean {
   const parsed = v.safeParse(v.looseObject({ kinuSteer: v.optional(v.boolean()) }), metadata);
+
   return parsed.success && parsed.output.kinuSteer === true;
 }
 
@@ -163,17 +168,23 @@ export function applySignalCard(
     const card: SignalCard = {
       id: event.id, metadata: event.metadata, text: event.text, state: "pending",
     };
+
     const existing = cards.findIndex((c) => c.id === card.id);
+
     if (existing >= 0) return cards.map((c, i) => i === existing ? card : c);
+
     return [...cards.slice(-(MAX_LIVE_CARDS - 1)), card];
   }
+
   if (event.state === "undelivered") return cards.filter((c) => c.id !== event.id);
+
   return cards.map((c) => c.id === event.id ? { ...c, state: "shown" } : c);
 }
 
 /** Parse a broadcast frame into a card event, or null when it is not one. */
 export function parseSignalCardEvent<Value>(value: Value): SignalCardEvent | null {
   const parsed = v.safeParse(SignalCardEventSchema, value);
+
   return parsed.success ? parsed.output : null;
 }
 
@@ -192,6 +203,7 @@ export interface DrainedEvent {
 // `- [variant] from source: brief`, where the source may itself carry a
 // parenthesized label containing colons (`schedule (deploy:nightly)`).
 const EVENT_LINE = /^- \[([^\]]+)\] from ((?:[^:(]|\([^)]*\))+): ([\s\S]*)$/;
+
 const REPLY_HINT = /\s*\[the sender awaits your answer[\s\S]*\]$/;
 
 /**
@@ -203,13 +215,17 @@ const REPLY_HINT = /\s*\[the sender awaits your answer[\s\S]*\]$/;
  */
 export function parseDrainedEvents(text: string): DrainedEvent[] {
   const events: DrainedEvent[] = [];
+
   for (const line of text.split("\n")) {
     const match = EVENT_LINE.exec(line);
+
     if (!match) continue;
     const [, variant, source, brief] = match;
+
     if (variant === undefined || source === undefined || brief === undefined) continue;
     events.push({ variant, source: source.trim(), brief, replyExpected: false });
   }
+
   for (const event of events) {
     event.replyExpected = REPLY_HINT.test(event.brief);
     // The drain flattens every untrusted CR/LF into a visible `\n` escape so a
@@ -221,6 +237,7 @@ export function parseDrainedEvents(text: string): DrainedEvent[] {
       .replace(/\\n/g, "\n")
       .trim();
   }
+
   return events;
 }
 

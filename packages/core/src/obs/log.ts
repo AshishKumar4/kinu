@@ -245,6 +245,7 @@ export function createLineLogger(write: (line: string) => void): Logger {
 export function createCompositeLogger(members: readonly Logger[]): Logger {
   const fan = (deliver: (member: Logger) => void): void => {
     let thrown: { value: unknown } | null = null;
+
     for (const member of members) {
       try {
         deliver(member);
@@ -252,8 +253,10 @@ export function createCompositeLogger(members: readonly Logger[]): Logger {
         thrown ??= { value: error };
       }
     }
+
     if (thrown) throw thrown.value;
   };
+
   // Parameters are deliberately NOT annotated: they are contextually typed from
   // `Logger`, so `fields` arrives as the caller's own already-checked generic and
   // is forwarded as one. Writing `fields?: LogFields` here would narrow it to the
@@ -296,6 +299,7 @@ export function createCompositeLogger(members: readonly Logger[]): Logger {
 export function createConsoleLogger(): Logger {
   return createLineLogger((line) => console.error(line));
 }
+
 /**
  * The diagnostic sink for the call sites that have no dependency seam to inject
  * one through — a free function three layers inside `core`, a `.catch()` on a
@@ -342,6 +346,7 @@ let diagnosticsSink: Logger = createConsoleLogger();
 export function setDiagnosticsSink(logger: Logger): () => void {
   const previous = diagnosticsSink;
   diagnosticsSink = logger;
+
   return () => {
     diagnosticsSink = previous;
   };
@@ -388,6 +393,7 @@ export interface RecordingLogger extends Logger {
  */
 export function createRecordingLogger(): RecordingLogger {
   const emitted: RecordedLog[] = [];
+
   return {
     emitted,
     event(name: LogEventName, fields?: LogFields): void {

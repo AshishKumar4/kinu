@@ -51,6 +51,7 @@ describe("contextWindowForModel", () => {
       listCredentials: async () => [],
       getCredentialBaseURL: async () => null,
     });
+
     const reg = createAgentProviderRegistry({ env: {}, userDO: userDOStub });
     const effectiveSpec = reg.normalizeSpecSync(null);
     expect(effectiveSpec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
@@ -72,6 +73,7 @@ describe("catalogModelInfo", () => {
         { id: "@cf/openai/gpt-oss-120b", contextWindow: 128_000 },
       ],
     };
+
     const info = await catalogModelInfo(provider, deps, "@cf/moonshotai/kimi-k2.6");
     expect(info?.contextWindow).toBe(262_144);
     expect(info?.inputModalities).toEqual(["text", "image"]);

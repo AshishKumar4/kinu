@@ -23,16 +23,20 @@ export function headProducedFindings(
   r: Pick<HeadReport, "status" | "evidence" | "decisions" | "artifactRefs">,
 ): boolean {
   if (r.status === "completed") return true;
+
   return r.evidence.length > 0 || r.decisions.length > 0 || r.artifactRefs.length > 0;
 }
 
 interface StepLike { text?: string }
+
 interface ResultLike { text?: string; reasoningText?: string; steps?: ReadonlyArray<StepLike> }
 
 /** ai-SDK v6 step shape we read for the trace. toolCalls carry `.input`, their
  *  results carry `.output`, matched by `toolCallId`. */
 interface ToolCallLike { toolName?: string; name?: string; input?: unknown; toolCallId?: string }
+
 interface ToolResultLike { toolName?: string; output?: unknown; result?: unknown; toolCallId?: string }
+
 export interface TraceStepLike {
   text?: string;
   reasoningText?: string;
@@ -55,20 +59,26 @@ export interface TraceStepLike {
 export function toHeadStep(step: TraceStepLike): HeadStep | null {
   const calls = Array.isArray(step.toolCalls) ? step.toolCalls : [];
   const results = Array.isArray(step.toolResults) ? step.toolResults : [];
+
   const toolCalls = calls.map((c, i) => {
     const match = c.toolCallId
       ? results.find((r) => r.toolCallId === c.toolCallId)
       : results[i];
+
     const output = match?.output ?? match?.result;
+
     return {
       name: String(c.toolName ?? c.name ?? "?"),
       input: digestJsonValue({ value: c.input }),
       output: output === undefined ? undefined : digestJsonValue({ value: output }),
     };
   });
+
   const text = step.text?.trim() ?? "";
   const reasoning = step.reasoningText?.trim() || undefined;
+
   if (!text && !reasoning && toolCalls.length === 0) return null;
+
   return { text, reasoning, toolCalls };
 }
 
@@ -76,12 +86,16 @@ export function toHeadStep(step: TraceStepLike): HeadStep | null {
  *  step), falling back to the model's reasoning text. */
 export function extractFinalText(result: ResultLike): string {
   const direct = result.text?.trim();
+
   if (direct) return direct;
   const steps = result.steps ?? [];
+
   for (let i = steps.length - 1; i >= 0; i--) {
     const t = steps[i]?.text?.trim();
+
     if (t) return t;
   }
+
   return result.reasoningText?.trim() ?? "";
 }
 
@@ -94,14 +108,18 @@ export function synthesizeHeadSummary(opts: {
   toolCalls: ReadonlyArray<{ name: string }>;
 }): string | null {
   const parts: string[] = [];
+
   if (opts.decisions.length) {
     parts.push("Decisions: " + opts.decisions.map((d) => `${d.question} → ${d.choice}`).join("; "));
   }
+
   if (opts.evidence.length) {
     parts.push("Findings: " + opts.evidence.slice(0, 6).map((e) => e.body).join(" | "));
   }
+
   if (!parts.length && opts.toolCalls.length) {
     parts.push(`Ran ${opts.toolCalls.length} tool call(s): ` + opts.toolCalls.slice(0, 8).map((t) => t.name).join(", "));
   }
+
   return parts.length ? parts.join(". ").slice(0, 1500) : null;
 }

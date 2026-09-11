@@ -57,18 +57,22 @@ export function watchDeviceConsents(
   const tick = async () => {
     try {
       const pending = await consents.listPending();
+
       if (abort.signal.aborted) return;
 
       // Forget ids that left the pending list — they can never reappear, and
       // the set stays bounded across a long turn.
       const live = new Set(pending.map((item) => item.consentId));
+
       for (const id of handled) if (!live.has(id)) handled.delete(id);
 
       const consent = pending.find((item) => !handled.has(item.consentId));
+
       if (!consent) return;
 
       const outcome = await opts.present(consent, abort.signal);
       handled.add(consent.consentId);
+
       if (outcome === 'cancelled') {
         // The turn settled mid-question: deny so the blocked device RPC unblocks instead of
         // waiting out its timeout. Reported here rather than below because 'cancelled' means the
@@ -78,11 +82,15 @@ export function watchDeviceConsents(
         } catch (err) {
           opts.note('error', `Could not withdraw the PC access request. The device waits out its timeout: ${renderThrownChain({ cause: err })}`);
         }
+
         return;
       }
+
       if (outcome === null) return; // instructions printed — nothing to resolve
       const result = await consents.resolve(consent.consentId, outcome);
+
       if (abort.signal.aborted) return;
+
       if (result.ok) opts.note('resolved', decisionFeedback(outcome));
       else opts.note('stale', 'That PC access request is no longer pending.');
     } catch (err) {
@@ -100,6 +108,7 @@ export function watchDeviceConsents(
     try {
       await waitForAnswer(async () => {
         await tick();
+
         return undefined;
       }, { intervalMs: CONSENT_POLL_MS, signal: abort.signal });
     } catch (cause) {
@@ -109,6 +118,7 @@ export function watchDeviceConsents(
       );
     }
   })();
+
   return {
     stop() {
       abort.abort();
@@ -138,13 +148,16 @@ export function watchTerminalConsents(
   askLine: ConsentAskLine,
 ): ConsentWatcher {
   const tty = process.stdin.isTTY === true && process.stdout.isTTY === true;
+
   return watchDeviceConsents(consents, {
     present: (consent, signal) => {
       if (!tty) {
         console.log(`\n${WARN('PC access requested')} (${consent.method} on ${consent.deviceLabel}: ${consent.command || 'command'}).`);
         console.log(MUTED(`  Approve or deny from the Kinu app, or run: kinu chat ${agentName}`));
+
         return Promise.resolve(null);
       }
+
       return promptConsentDecision(consent, askLine, signal);
     },
     note: (kind, message) => {
@@ -166,9 +179,11 @@ export function watchHeadlessConsents(
   opts: { json: boolean; onDenied(): void },
 ): ConsentWatcher {
   const instructions = `Pre-authorize with "always allow" via kinu chat ${agentName} or the Kinu app, then re-run.`;
+
   return watchDeviceConsents(consents, {
     present: (consent) => {
       opts.onDenied();
+
       if (opts.json) {
         process.stdout.write(`${JSON.stringify({
           type: 'consent_denied',
@@ -182,6 +197,7 @@ export function watchHeadlessConsents(
         console.error(`\n${WARN('PC access denied (headless run)')} ${consent.method} on ${consent.deviceLabel}: ${consent.command || '(command)'}`);
         console.error(MUTED(`  ${instructions}`));
       }
+
       return Promise.resolve('deny');
     },
     note: (kind, message) => {
@@ -201,15 +217,22 @@ async function promptConsentDecision(
   console.log(`  ${DIM('Device:')}  ${consent.deviceLabel}`);
   console.log(`  ${DIM('Method:')}  ${consent.method}`);
   console.log(`  ${DIM('Command:')} ${consent.command || '(command)'}`);
+
   while (!signal.aborted) {
     const answer = await askLine(`${DIM('[y] allow once · [a] always allow · [n] deny ›')} `, signal);
+
     if (signal.aborted) return 'cancelled';
+
     if (answer === null) return 'deny'; // EOF — stdin is gone
     const normalized = answer.trim().toLowerCase();
+
     if (normalized === 'y' || normalized === 'yes' || normalized === 'o') return 'once';
+
     if (normalized === 'a' || normalized === 'always') return 'always';
+
     if (normalized === 'n' || normalized === 'no') return 'deny';
     console.log(DIM('  Please answer y, a, or n.'));
   }
+
   return 'cancelled';
 }

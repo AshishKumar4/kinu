@@ -55,9 +55,11 @@ export function buildProviderCatalogSnapshot(
   failures: readonly ProviderFailure[],
 ): ProviderCatalogSnapshot {
   const availableModels = [...new Set(models)].sort();
+
   const unavailableProviders = failures
     .map(({ provider, label, reason }) => ({ provider, label: label ?? provider, reason }))
     .sort((a, b) => a.provider.localeCompare(b.provider) || a.reason.localeCompare(b.reason));
+
   return {
     revision: sha256Hex([
       ...availableModels,
@@ -116,11 +118,13 @@ export class ProviderListingCache {
 
   async read(): Promise<{ listing: ProviderListing; cache: ProviderCacheOutcome }> {
     if (this.cached) return { listing: this.cached, cache: 'hit' };
+
     if (this.inFlight) return { listing: await this.inFlight, cache: 'joined' };
     const generation = this.generation;
     const sweep = this.sweep();
     this.inFlight = sweep;
     let listing: ProviderListing;
+
     try {
       listing = await sweep;
     } finally {
@@ -128,7 +132,9 @@ export class ProviderListingCache {
       // and clearing unconditionally would discard a newer sweep started after.
       if (this.inFlight === sweep) this.inFlight = null;
     }
+
     if (listing.failures.length === 0 && generation === this.generation) this.cached = listing;
+
     return { listing, cache: 'miss' };
   }
 

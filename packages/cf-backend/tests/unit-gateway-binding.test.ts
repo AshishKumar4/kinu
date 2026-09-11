@@ -32,7 +32,9 @@ const providerDeps = (env: Parameters<typeof resolvePlatformGateway>[0]) => ({
  *  parses it — not hand-built, so a parser change cannot pass unnoticed. */
 function testTarget(): GatewayTarget {
   const target = parseGatewayTarget(TEST_GATEWAY_URL);
+
   if ('reason' in target) throw new Error(`fixture URL should parse: ${target.reason}`);
+
   return target;
 }
 
@@ -76,6 +78,7 @@ describe('parseGatewayTarget', () => {
 describe('gateway binding transport', () => {
   test('an AI SDK chat call arrives as the universal request the gateway accepts', async () => {
     const stub = stubAiBinding(() => Response.json(completion));
+
     const model = createOpenAICompatible({
       name: 'ai-gateway',
       baseURL: TEST_GATEWAY_URL,
@@ -99,7 +102,9 @@ describe('gateway binding transport', () => {
       'data: {"id":"1","object":"chat.completion.chunk","created":1,"model":"m","choices":[{"index":0,"delta":{"content":"ING"},"finish_reason":"stop"}]}\n\n',
       'data: [DONE]\n\n',
     ].join('');
+
     const stub = stubAiBinding(() => new Response(sse, { headers: { 'content-type': 'text/event-stream' } }));
+
     const model = createOpenAICompatible({
       name: 'ai-gateway',
       baseURL: TEST_GATEWAY_URL,
@@ -107,6 +112,7 @@ describe('gateway binding transport', () => {
     }).chatModel('@cf/test/model');
 
     let text = '';
+
     for await (const delta of (await streamText({ model, prompt: 'hi' })).textStream) text += delta;
 
     expect(text).toBe('BINDING');
@@ -185,6 +191,7 @@ describe('gateway binding transport', () => {
       { name: 'AiGatewayError', internalCode: 2008, message: 'Invalid provider' },
       { status: 400 },
     ));
+
     const transport = createGatewayBindingFetch({ binding: stub.binding, target: testTarget() });
 
     const res = await transport(`${TEST_GATEWAY_URL}/chat/completions`, {
@@ -289,6 +296,7 @@ describe('user-billed providers stay off the platform binding', () => {
       const model = provider.createModel('@cf/test/model', {
         env, getAuth: async () => null, hasCredential: async () => false,
       });
+
       // No user credential ⇒ the credential path answers 401. It must NOT take a
       // free ride on the platform binding sitting right there in the same env.
       await expect(generateText({ model, prompt: 'hi' })).rejects.toThrow();
@@ -299,12 +307,14 @@ describe('user-billed providers stay off the platform binding', () => {
   test('they bill the user: each request carries the user credential to the user account', async () => {
     const stub = stubAiBinding(() => Response.json(completion));
     const seen: Array<{ url: string; authorization: string | null }> = [];
+
     const deps = {
       env: platformGatewayEnv(stub),
       getAuth: async () => userAuth,
       hasCredential: async () => true,
       fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
         seen.push({ url: String(input), authorization: new Headers(init?.headers).get('authorization') });
+
         return Response.json(completion);
       }),
     };
@@ -314,10 +324,12 @@ describe('user-billed providers stay off the platform binding', () => {
     }
 
     expect(seen).toHaveLength(2);
+
     for (const call of seen) {
       expect(call.url).toStartWith(userAuth.baseURL);
       expect(call.authorization).toBe('Bearer user-oauth-token');
     }
+
     // The platform binding was available the whole time and was never called.
     expect(stub.runs).toHaveLength(0);
   });

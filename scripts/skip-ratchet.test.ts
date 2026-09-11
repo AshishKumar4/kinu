@@ -179,6 +179,7 @@ describe('parseJUnit', () => {
       '<skipped />',
       '<failure message="INFRA FAILURE — the deployed worker did not answer: 503" />',
     );
+
     const [failure] = parseJUnit(outage).failed;
     expect(failure?.infra).toBe(true);
 
@@ -194,6 +195,7 @@ describe('parseJUnit', () => {
       '<skipped />',
       '<failure message="INFRA FAILURE &amp;mdash; the worker did not answer" />',
     );
+
     expect(parseJUnit(escaped).failed[0]?.infra).toBe(true);
   });
 
@@ -249,6 +251,7 @@ describe('reconcileSkips', () => {
     const verdict = reconcileSkips(report, [
       { key: 'tests/a.test.ts › Suite A › skips one', reason: 'declared' },
     ]);
+
     expect(verdict.added).toEqual(['tests/a.test.ts › Suite A › skips two & more']);
     expect(verdict.stale).toEqual([]);
   });
@@ -259,6 +262,7 @@ describe('reconcileSkips', () => {
       { key: 'tests/a.test.ts › Suite A › skips two & more', reason: 'declared' },
       { key: 'tests/a.test.ts › Suite A › runs', reason: 'was skipping' },
     ]);
+
     expect(verdict.added).toEqual([]);
     expect(verdict.stale).toEqual(['tests/a.test.ts › Suite A › runs']);
   });
@@ -268,6 +272,7 @@ describe('reconcileSkips', () => {
       { key: 'tests/a.test.ts › Suite A › skips one', reason: 'declared' },
       { key: 'tests/a.test.ts › Suite A › skips two & more', reason: 'declared' },
     ]);
+
     expect(verdict).toEqual({ added: [], stale: [] });
   });
 
@@ -276,10 +281,12 @@ describe('reconcileSkips', () => {
   // KINU_EVAL_REPEATS turns red for no defect.
   test('a family entry declares every generated case under its prefix', () => {
     const vitest = parseJUnit(VITEST_REPORT);
+
     const verdict = reconcileSkips(vitest, [{
       key: 'tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger',
       reason: 'needs a live model', family: true,
     }]);
+
     expect(verdict).toEqual({ added: [], stale: [] });
   });
 
@@ -291,6 +298,7 @@ describe('reconcileSkips', () => {
       { key: 'tests/a.test.ts › Suite A › skips two & more', reason: 'declared' },
       { key: 'tests/evals/behaviour.eval.ts › Agent behaviour', reason: 'gone', family: true },
     ]);
+
     expect(verdict.stale).toEqual(['tests/evals/behaviour.eval.ts › Agent behaviour']);
   });
 
@@ -299,10 +307,12 @@ describe('reconcileSkips', () => {
       'corpus quality — can this corpus rank anything at all &gt; the corpus is large enough for significance to be reachable" time="0.001">',
       'corpus quality — can this corpus rank anything at all &gt; the corpus is not saturated" time="0"><skipped/>',
     ));
+
     const verdict = reconcileSkips(vitest, [{
       key: 'tests/evals/behaviour.eval.ts › Agent behaviour over the run-event ledger',
       reason: 'needs a live model', family: true,
     }]);
+
     expect(verdict.added).toEqual([
       'tests/evals/behaviour.eval.ts › corpus quality — can this corpus rank anything at all > the corpus is not saturated',
     ]);
@@ -340,6 +350,7 @@ describe('unmatchedTargets', () => {
     </testcase>
   </testsuite>
 </testsuites>`;
+
   const BENCH_EXTERNAL_REPORT = `<?xml version="1.0"?>
 <testsuites name="bun test" tests="1" failures="0" skipped="0">
   <testsuite name="scripts/bench-external.test.ts" file="scripts/bench-external.test.ts" tests="1">
@@ -366,6 +377,7 @@ describe('unmatchedTargets', () => {
         TRAJECTORY_REPORT, DEVICE_REPORT]
         .map((xml) => parseJUnit(xml)),
     );
+
     expect(unmatchedTargets(merged)).toEqual([]);
   });
 
@@ -381,9 +393,11 @@ describe('unmatchedTargets', () => {
       { file: './tests/evals/trajectory.eval.ts', xml: TRAJECTORY_REPORT },
       { file: './tests/evals/device.eval.ts', xml: DEVICE_REPORT },
     ];
+
     // The fixture set and the target list are the same set, or an arm added to
     // one and not the other would silently shrink this proof.
     expect(arms.map((arm) => arm.file).sort()).toEqual([...SKIP_RATCHET_VITEST_TARGETS].sort());
+
     for (const arm of arms) {
       expect(unmatchedTargets(parseJUnit(arm.xml))).toEqual([
         ...SKIP_RATCHET_TARGETS,
@@ -400,6 +414,7 @@ describe('the committed lock', () => {
     // through valibot, so an entry with no reason fails here.
     const lock = readSkipLock();
     expect(lock.length).toBeGreaterThan(0);
+
     for (const entry of lock) {
       expect(entry.reason.trim().length).toBeGreaterThan(0);
       expect(entry.key).toContain('›');
@@ -417,6 +432,7 @@ describe('the committed lock', () => {
   test('every family entry names a suite, never a bare file', () => {
     const families = readSkipLock().filter((e) => e.family === true);
     expect(families.length).toBeGreaterThan(0);
+
     for (const entry of families) {
       expect(entry.key).toContain('.ts › ');
       expect(entry.key.split(' › ')[1]?.length ?? 0).toBeGreaterThan(0);
@@ -426,8 +442,10 @@ describe('the committed lock', () => {
   test('the gate declares both runners\' targets and its lock path', () => {
     expect(SKIP_RATCHET_TARGETS.length).toBeGreaterThan(0);
     expect(SKIP_RATCHET_VITEST_TARGETS.length).toBeGreaterThan(0);
+
     // The leading `./` is load bearing — see unmatchedTargets above.
     for (const target of ALL_SKIP_RATCHET_TARGETS) expect(target.startsWith('./')).toBe(true);
+
     // The vitest arm is named as a FILE on purpose: a directory would be
     // satisfied by the bun suites that sit in the same one.
     for (const target of SKIP_RATCHET_VITEST_TARGETS) expect(target.endsWith('.eval.ts')).toBe(true);
@@ -507,6 +525,7 @@ describe('the target set is the executed set', () => {
     <testcase name="plans" classname="tests/evals/planning.eval.ts" />
   </testsuite>
 </testsuites>`);
+
     expect(unmatchedTargets(vitestOnly, ['./tests/'])).toEqual(['./tests/']);
   });
 
@@ -522,6 +541,7 @@ describe('the target set is the executed set', () => {
       expect(target.startsWith('./')).toBe(true);
       expect(target.endsWith('/') || target.endsWith('.test.ts')).toBe(true);
     }
+
     expect(SKIP_RATCHET_TARGETS.length).toBeGreaterThan(1);
   });
 
@@ -529,9 +549,11 @@ describe('the target set is the executed set', () => {
     // A lock entry whose file no target reaches can never go stale and can never
     // be reconciled: it is a reason nobody will ever have to defend again.
     const prefixes = ALL_SKIP_RATCHET_TARGETS.map((target) => target.replace(/^\.\//, ''));
+
     const orphans = readSkipLock(SKIP_LOCK_PATH)
       .filter((entry) => !prefixes.some((prefix) => entry.key.startsWith(prefix)))
       .map((entry) => entry.key);
+
     expect(orphans).toEqual([]);
   });
 });

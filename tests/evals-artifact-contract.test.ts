@@ -47,6 +47,7 @@ import * as v from 'valibot';
 const ChildFailureSchema = v.looseObject(
   { stdout: v.optional(v.string()), stderr: v.optional(v.string()) },
 );
+
 const REPO_ROOT = join(import.meta.dir, '..');
 
 /** Two fixtures sharing one judge that always scores 1 — the vacuous judge whose
@@ -113,9 +114,11 @@ interface ReportTask {
   status?: string;
   meta?: { eval?: { avgScore?: number } | undefined; harness?: unknown };
 }
+
 interface Report { testResults?: { name: string; status: string; assertionResults?: ReportTask[] }[] }
 
 let dir: string;
+
 let tasks: ReportTask[] = [];
 
 beforeAll(() => {
@@ -134,6 +137,7 @@ beforeAll(() => {
   // below: swallowing a child's error is how a check that never ran reports
   // success.
   let childOutput = '';
+
   try {
     childOutput = execFileSync('bun', ['--bun', join(REPO_ROOT, 'node_modules/.bin/vitest'),
       'run', '--root', dir, '--reporter=json', '--outputFile=report.json'], {
@@ -153,9 +157,11 @@ beforeAll(() => {
   }
 
   const out = join(dir, 'report.json');
+
   if (!existsSync(out)) {
     throw new Error(`the child vitest emitted no report — it never ran the fixtures.\n${childOutput}`);
   }
+
   const report: Report = JSON.parse(readFileSync(out, 'utf8'));
   tasks = (report.testResults ?? []).flatMap((file) => file.assertionResults ?? []);
 });
@@ -166,10 +172,12 @@ afterAll(() => {
 
 function taskNamed(fragment: string): ReportTask {
   const found = tasks.find((t) => t.fullName.includes(fragment));
+
   if (!found) {
     throw new Error(`no task matching "${fragment}" in the report; saw: `
       + tasks.map((t) => t.fullName).join(' | '));
   }
+
   return found;
 }
 

@@ -12,6 +12,7 @@ import type { UserCaller } from '../src/user/workspace-capability';
 import type { PublishableCandidate } from '@kinu.run/core';
 
 const ALPHA = 'workspace-a';
+
 const BETA = 'workspace-b';
 
 function lesson(text: string): PublishableCandidate {
@@ -28,6 +29,7 @@ async function twoWorkspaces() {
   const harness = createTestUserDO();
   const alpha: UserCaller = { workspaceToken: await provisionTestWorkspace(harness, ALPHA, 'Alpha') };
   const beta: UserCaller = { workspaceToken: await provisionTestWorkspace(harness, BETA, 'Beta') };
+
   return { harness, alpha, beta };
 }
 

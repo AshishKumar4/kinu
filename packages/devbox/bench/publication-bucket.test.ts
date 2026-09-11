@@ -15,6 +15,7 @@ async function measureWrites(mode: 'original' | 'unarmed' | 'armed') {
       },
     }],
   });
+
   try {
     const real = await runtime.getR2Bucket('BUCKET');
     let storeOperations = 0;
@@ -23,34 +24,41 @@ async function measureWrites(mode: 'original' | 'unarmed' | 'armed') {
     Object.assign(counted, {
       put: async (...args: Parameters<typeof real.put>) => {
         storeOperations += 1;
+
         return await real.put(...args);
       },
       createMultipartUpload: async (...args: Parameters<typeof real.createMultipartUpload>) => {
         storeOperations += 1;
         const upload = await real.createMultipartUpload(...args);
+
         return {
           key: upload.key,
           uploadId: upload.uploadId,
           uploadPart: async (number: number, bytes: Uint8Array) => {
             storeOperations += 1;
+
             return await upload.uploadPart(number, bytes);
           },
           complete: async (parts: R2UploadedPart[]) => {
             storeOperations += 1;
+
             return await upload.complete(parts);
           },
           abort: async () => { await upload.abort(); },
         };
       },
     });
+
     const bucket = mode === 'original' ? counted : publicationBucket(counted,
       mode === 'armed' ? '1' : undefined, async () => { controlRpcs += 1; });
+
     await bucket.put('one', 'first');
     await bucket.put('two', 'second');
     const upload = await bucket.createMultipartUpload('multipart');
     const part = await upload.uploadPart(1, new TextEncoder().encode('third'));
     await upload.complete([part]);
     const bodies = await Promise.all(['one', 'two', 'multipart'].map(async (key) => (await real.get(key))?.text()));
+
     return { storeOperations, controlRpcs, bodies };
   } finally {
     await runtime.dispose();

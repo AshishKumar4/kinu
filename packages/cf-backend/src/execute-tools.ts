@@ -77,12 +77,16 @@ function withDeviceOwnership(args: unknown[], channel: DeviceRequestChannel | un
   // the script's own argument outranks ownership reporting. `looseObject`
   // admits exactly a plain object and keeps every member it carries.
   const parsedContext = v.safeParse(v.looseObject({}), context);
+
   if (context !== undefined && !parsedContext.success) return args;
+
   const ownership = {
     onDeviceRequest: (requestId: string) => { channel.report(requestId); },
     deviceRequestOwner: () => channel.owningJobId,
   };
+
   const merged = parsedContext.success ? { ...parsedContext.output, ...ownership } : ownership;
+
   return [args[0], merged, ...args.slice(2)];
 }
 
@@ -97,6 +101,7 @@ export interface ExecuteToolsFactory {
 
 export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): ExecuteToolsFactory {
   const { loader, rt, sql, webSearch } = options;
+
   if (!loader) throw new Error("CF runtime missing LOADER binding");
 
   const stateProvider = createStateCodemodeProvider(rt.actor.programState);
@@ -105,8 +110,10 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
   const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
   // `web.*` — same web search/fetch provider that backs the web_* tools.
   const webProvider = createWebCodemodeProvider(webSearch);
+
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
     const wrapped: typeof p.tools = {};
+
     for (const [name, entry] of Object.entries(p.tools)) {
       // Ownership rides only `exec`, because `exec` is the only entry that mints
       // a durable device-request identity (core execution/
@@ -119,11 +126,14 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
           const result = await entry.execute(
             ...(carriesOwnership ? withDeviceOwnership(args, options.deviceRequests?.()) : args),
           );
+
           options.onExecutorUsed?.(p.name);
+
           return result;
         },
       };
     }
+
     return { name: p.name, tools: wrapped, types: p.types, positionalArgs: p.positionalArgs };
   });
 
@@ -132,6 +142,7 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
       const build = (mode: WorkMode): Tool => {
         const executor = new KinuSandboxExecutor({ loader, egress: mode === 'plan' ? null : options.egress });
         const crafted = selectInjectableCraftedTools(rt.craftStore, sql);
+
         // The `tools` namespace: native tools dispatched to the host, crafted
         // tools defined in the prelude. The declaration is rendered from the set
         // as it is NOW; the callable half, prelude included, is re-read on every
@@ -145,8 +156,11 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
           types: renderToolsDeclaration(native, crafted),
           positionalArgs: true,
         };
+
         const providers: CodemodeProvider[] = [toolsProvider, stateProvider];
+
         if (agentsProvider) providers.push(agentsProvider);
+
         if (options.extraProviders) providers.push(...options.extraProviders());
         providers.push(webProvider, ...executorProviders);
   
@@ -174,19 +188,24 @@ export function createExecuteToolsFactory(options: ExecuteToolsFactoryOptions): 
                   }
                   : provider)
                 : resolved;
+
               return executor.execute(code, live);
             },
           },
         });
       };
+
       const unrestricted = build('build');
       let planning: Tool | undefined;
+
       return permitInPlan({
         ...unrestricted,
         execute: (input, context) => {
           const selected = currentWorkMode() === 'plan' ? (planning ??= build('plan')) : unrestricted;
           const execute = selected.execute;
+
           if (execute === undefined) throw new Error('Codemode executor is not callable');
+
           return execute(input, context);
         },
       });

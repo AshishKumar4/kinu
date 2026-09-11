@@ -26,6 +26,7 @@ const ArrivedSchema = v.object({
   userAgent: v.nullable(v.string()),
   bytes: v.number(),
 });
+
 type Arrived = v.InferOutput<typeof ArrivedSchema>;
 
 /** A body whose length nothing knows — what a chunked upload looks like to a
@@ -41,10 +42,12 @@ function unknownLength(text: string): ReadableStream<Uint8Array> {
 
 function inbound(body: BodyInit | null, headers: HeadersInit = {}): Request {
   const init: RequestInit & { duplex?: 'half' } = { method: 'POST', headers };
+
   if (body !== null) {
     init.body = body;
     init.duplex = 'half';
   }
+
   return new Request('https://container.test/upload', init);
 }
 
@@ -59,6 +62,7 @@ describe('re-originated transfer framing', () => {
       'https://upstream.test/upload',
       { headers: new Headers({ 'content-type': 'text/plain' }), redirect: 'manual' },
     ));
+
     expect(arrived.contentLength).toBe(String(PAYLOAD.length));
     expect(arrived.transferEncoding).toBeNull();
     expect(arrived.bytes).toBe(PAYLOAD.length);
@@ -70,6 +74,7 @@ describe('re-originated transfer framing', () => {
       'https://upstream.test/upload',
       { headers: new Headers(), redirect: 'manual' },
     ));
+
     expect(arrived.transferEncoding).toBe('chunked');
     expect(arrived.contentLength).toBeNull();
     expect(arrived.bytes).toBe(PAYLOAD.length);
@@ -79,9 +84,11 @@ describe('re-originated transfer framing', () => {
     // The control group. Identical bytes, identical headers; the only
     // difference is that the runtime can no longer see how many there are.
     const source = inbound(PAYLOAD);
+
     // Proven, not asserted: `inbound` was handed a body, so refusing here turns
     // a silently-skipped control group into a failure that names itself.
     if (source.body === null) throw new Error('the control group needs a body to lose the length of');
+
     // Same declared intersection the production builder uses, stated rather
     // than asserted past: `duplex` is required by the fetch specification for
     // a stream body and absent from the Workers `RequestInit` type.
@@ -90,6 +97,7 @@ describe('re-originated transfer framing', () => {
       body: source.body.pipeThrough(new TransformStream()),
       duplex: 'half',
     };
+
     const arrived = await send(new Request('https://upstream.test/upload', piped));
     expect(arrived.transferEncoding).toBe('chunked');
     expect(arrived.bytes).toBe(PAYLOAD.length);
@@ -101,15 +109,18 @@ describe('re-originated transfer framing', () => {
       'https://upstream.test/thing',
       { headers: new Headers(), redirect: 'follow' },
     ));
+
     expect(arrived.transferEncoding).toBeNull();
     expect(arrived.bytes).toBe(0);
   });
 
   test('the Kinu identity reaches the wire ahead of the caller its own', async () => {
     const headers = new Headers({ 'user-agent': kinuUserAgent('curl/8.5.0') });
+
     const arrived = await send(reoriginateRequest(
       inbound(PAYLOAD), 'https://upstream.test/upload', { headers, redirect: 'manual' },
     ));
+
     expect(arrived.userAgent).toBe('Kinu (+https://kinu.run) curl/8.5.0');
     // Still fixed-length: the identity policy and the framing policy share one
     // builder and neither may cost the other.

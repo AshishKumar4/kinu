@@ -108,6 +108,7 @@ export const VerdictSchema = v.object({
   scoreB: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
   rationale: v.pipe(v.string(), v.minLength(1)),
 });
+
 export type Verdict = v.InferOutput<typeof VerdictSchema>;
 
 export type JudgeFn = (
@@ -140,6 +141,7 @@ export function summarizeEval(results: EvalResult[]): EvalSummary {
     aWins: 0, bWins: 0, ties: 0,
     avgScoreA: 0, avgScoreB: 0,
   };
+
   for (const r of results) {
     if (r.verdict.winner === 'a') summary.aWins++;
     else if (r.verdict.winner === 'b') summary.bWins++;
@@ -147,9 +149,11 @@ export function summarizeEval(results: EvalResult[]): EvalSummary {
     summary.avgScoreA += r.verdict.scoreA;
     summary.avgScoreB += r.verdict.scoreB;
   }
+
   if (results.length > 0) {
     summary.avgScoreA /= results.length;
     summary.avgScoreB /= results.length;
   }
+
   return summary;
 }

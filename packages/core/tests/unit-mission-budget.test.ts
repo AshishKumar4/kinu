@@ -31,6 +31,7 @@ function makeGovernor(opts: {
   const storage = { sql: makeSql(db), execRaw: makeExecRaw(db) };
   const actor = createTestActors(storage.sql, storage.execRaw).main;
   const governor = new MissionGovernor({ storage, actor, ...opts, now: () => 1_000 });
+
   return { governor, storage, actor, db };
 }
 
@@ -43,7 +44,11 @@ function scriptedLLM(reply: string, calls: string[] = []): LLM {
   return {
     // eslint-disable-next-line require-yield
     async *stream() { throw new Error('not used'); },
-    async complete(prompt: string) { calls.push(prompt); return reply; },
+    async complete(prompt: string) {
+      calls.push(prompt);
+
+      return reply;
+    },
   };
 }
 
@@ -212,11 +217,13 @@ describe('mission budget — the governed model-call seam', () => {
     governor.debit(1);
     const llm = governor.govern(scriptedLLM('x'));
     let caught: MissionBudgetExhausted | null = null;
+
     try {
       await llm.complete('x');
     } catch (error) {
       if (error instanceof MissionBudgetExhausted) caught = error;
     }
+
     expect(caught).toBeInstanceOf(MissionBudgetExhausted);
     expect(caught?.refusal.seam).toBe('model_call');
   });

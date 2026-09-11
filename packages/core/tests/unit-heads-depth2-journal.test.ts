@@ -61,6 +61,7 @@ function report(id: string, stepCount: number): HeadReport {
 function freshStore() {
   const { db, sql } = createTestSql();
   initHeadsTables((ddl) => db.exec(ddl));
+
   // Each store is a SEPARATE database, so each gets its OWN actors — the
   // directory a handle validates against lives in the database that issued it,
   // and the last test here turns on the two stores being genuinely apart.
@@ -90,12 +91,14 @@ async function runSplitWithNestedSplit(opts: {
   const runHead = (id: string): HeadReport => {
     opts.stepSink(id, 0, { text: `${id} looked at the code`, toolCalls: [] });
     opts.stepSink(id, 1, { text: `${id} concluded something`, toolCalls: [] });
+
     return report(id, 2);
   };
 
   const nestedRuntime: HeadRuntime = {
     async spawnHead(input) {
       depth2Ids.push(input.id);
+
       return { id: input.id, async run() { return runHead(input.id); }, async abort() {} };
     },
     async mergeLLM() { return mergeOutput; },
@@ -105,6 +108,7 @@ async function runSplitWithNestedSplit(opts: {
     async spawnHead(input) {
       depth1Id ||= input.id;
       const isFirst = input.id === depth1Id;
+
       return {
         id: input.id,
         async run() {
@@ -122,6 +126,7 @@ async function runSplitWithNestedSplit(opts: {
             });
             opts.afterNested?.(input.id);
           }
+
           return runHead(input.id);
         },
         async abort() {},
@@ -206,6 +211,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
       nestedJournal: journal,
       stepSink: (id, seq, step) => journal.appendStep(id, seq, step),
     });
+
     // The denominator this whole file turns on: a run that never recursed would
     // satisfy every assertion below vacuously, and "STEPS 0" is exactly what a
     // vacuous pass looks like.
@@ -241,6 +247,7 @@ describe('C2 — a depth-2 head is readable from the root', () => {
       nestedJournal: new HeadJournal(intermediateFacet.sql, intermediateFacet.actor),
       stepSink: (id, seq, step) => rootJournal.appendStep(id, seq, step),
     });
+
     const depth2Id = depth2Ids[0]!;
 
     // Same denominator: the depth-2 head really was spawned and really did report.

@@ -95,6 +95,7 @@ describe('what a run REPORTED, read from bun\'s own output', () => {
       'packages/cf-backend/tests/unit-facet-reconciliation.test.ts',
       'packages/cf-backend/tests/unit-never-selected.test.ts',
     ];
+
     const measured = measuredFiles(REAL_OUTPUT);
     expect(governed.filter((file) => !measured.includes(file)))
       .toEqual(['packages/cf-backend/tests/unit-never-selected.test.ts']);
@@ -128,7 +129,9 @@ describe('contention is real, bounded, and released', () => {
     // the assertion is about the mechanism rather than about the box.
     const burners = spawnContention(2, 2_000);
     expect(burners.length).toBe(2);
+
     for (const burner of burners) burner.kill();
+
     // The spin is SELF-BOUNDED as well as killed, so a SIGKILLed gate cannot
     // leave a machine at 100% forever; killing twice is safe.
     for (const burner of burners) burner.kill();

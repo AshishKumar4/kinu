@@ -68,22 +68,26 @@ const ExecutorListSchema = v.array(v.object({
   name: v.string(),
   kind: v.string(),
 }));
+
 const ExecResultSchema = v.object({
   stdout: v.optional(v.string()),
   stderr: v.optional(v.string()),
   exitCode: v.optional(v.number()),
   error: v.optional(v.string()),
 });
+
 const FileReadSchema = v.object({
   content: v.optional(v.string()),
   truncated: v.optional(v.boolean()),
   error: v.optional(v.string()),
 });
+
 const DirListSchema = v.object({
   path: v.optional(v.string()),
   entries: v.optional(v.array(v.object({ name: v.string(), isDir: v.optional(v.boolean()) }))),
   error: v.optional(v.string()),
 });
+
 /** `listRuns` answers the cursored `Page` contract, so exhaustion is a state
  *  rather than something a caller may infer from a short array. */
 const RunPageSchema = v.variant('status', [
@@ -97,10 +101,15 @@ const RunPageSchema = v.variant('status', [
     items: v.array(v.object({ runId: v.string() })),
   }),
 ]);
+
 const RunEventsSchema = v.array(RunEventSchema);
+
 const CountedPageSchema = v.object({ items: v.array(v.unknown()) });
+
 const RosterSchema = v.array(v.object({ name: v.string() }));
+
 const SearchRunsSchema = v.array(v.object({ rootId: v.optional(v.string()) }));
+
 const JobsSchema = v.array(v.object({ id: v.string() }));
 
 export interface CloudTargetOptions {
@@ -125,16 +134,20 @@ export interface CloudTargetOptions {
  */
 export async function provisionCloudTarget(opts: CloudTargetOptions): Promise<AgentEvalTarget> {
   const verdict = evalTargetVerdict(opts.origin);
+
   if (verdict.kind === 'refused') {
     throw new Error(`cloud eval target REFUSED — ${verdict.reason}`);
   }
+
   const workspace = evalWorkspaceName(opts.subject);
+
   const created = await infraBoundary(`POST ${verdict.origin}/api/cli/workspaces`, () =>
     createCloudAgent(verdict.origin, opts.token, {
       name: workspace,
       purpose: opts.purpose,
       model: opts.llm.model,
     }));
+
   return new CloudEvalTarget(verdict.origin, opts, created.name, verdict.why);
 }
 
@@ -203,16 +216,21 @@ class CloudEvalTarget implements AgentEvalTarget {
   async runEvents(): Promise<readonly RunEvent[]> {
     const events: RunEvent[] = [];
     let cursor: { after: string } | null = null;
+
     for (;;) {
       const page: v.InferOutput<typeof RunPageSchema> =
         await this.rpc('listRuns', RunPageSchema, [cursor === null ? {} : { cursor }]);
+
       for (const run of page.items) {
         events.push(...await this.rpc('getRunEvents', RunEventsSchema, [run.runId]));
       }
+
       if (page.status === 'end') break;
       cursor = page.next;
     }
+
     events.sort(compareRunEventOrder);
+
     return events;
   }
 
@@ -255,6 +273,7 @@ class CloudEvalTarget implements AgentEvalTarget {
    */
   async probe(): Promise<EvalTargetProbe> {
     const executors: readonly EvalExecutor[] = await this.rpc('getExecutors', ExecutorListSchema);
+
     if (!executors.some((executor) => executor.name === WORKSPACE_EXECUTOR)) {
       return {
         executors,
@@ -266,6 +285,7 @@ class CloudEvalTarget implements AgentEvalTarget {
         },
       };
     }
+
     return { executors, verifier: await probeVerifier(this.workspaceFiles()) };
   }
 
@@ -281,42 +301,55 @@ class CloudEvalTarget implements AgentEvalTarget {
   workspaceFiles(): EvalTargetWorkspace {
     const exec = async (command: string): Promise<{ stdout: string; exitCode: number }> => {
       const result = await this.rpc('executeInExecutor', ExecResultSchema, [WORKSPACE_EXECUTOR, command]);
+
       if (result.error !== undefined) {
         return { stdout: result.error, exitCode: result.exitCode ?? 1 };
       }
+
       return { stdout: result.stdout ?? '', exitCode: result.exitCode ?? 0 };
     };
+
     const shellQuote = (path: string): string => `'${path.replaceAll("'", `'\\''`)}'`;
+
     return {
       exec,
       vfs: {
         readFile: async (path) => {
           const read = await this.rpc('readExecutorFile', FileReadSchema, [WORKSPACE_EXECUTOR, path]);
+
           if (read.error !== undefined) throw new Error(`cloud readFile ${path}: ${read.error}`);
+
           if (read.truncated === true) {
             throw new Error(`cloud readFile ${path}: the deployment truncated it, so the bytes a `
               + 'verifier would grade are not the bytes on disk');
           }
+
           return read.content ?? '';
         },
         writeFile: async (path, data) => {
           const bytes = data instanceof Uint8Array ? Buffer.from(data) : Buffer.from(data, 'utf8');
           const quoted = shellQuote(path);
+
           const run = await exec(
             `mkdir -p "$(dirname ${quoted})" && printf %s ${shellQuote(bytes.toString('base64'))}`
             + ` | base64 -d > ${quoted}`,
           );
+
           if (run.exitCode !== 0) throw new Error(`cloud writeFile ${path}: ${run.stdout}`);
         },
         readdir: async (path) => {
           const listing = await this.rpc('getExecutorFiles', DirListSchema, [WORKSPACE_EXECUTOR, path]);
+
           if (listing.error !== undefined) throw new Error(`cloud readdir ${path}: ${listing.error}`);
+
           return (listing.entries ?? []).map((entry) => entry.name);
         },
         stat: async (path) => {
           const run = await exec(`stat -c '%s %Y %F' ${shellQuote(path)}`);
+
           if (run.exitCode !== 0) return null;
           const [size, mtime, ...kind] = run.stdout.trim().split(' ');
+
           return {
             size: Number(size ?? 0),
             mtimeMs: Number(mtime ?? 0) * 1000,
@@ -325,10 +358,12 @@ class CloudEvalTarget implements AgentEvalTarget {
         },
         unlink: async (path) => {
           const run = await exec(`rm -f ${shellQuote(path)}`);
+
           if (run.exitCode !== 0) throw new Error(`cloud unlink ${path}: ${run.stdout}`);
         },
         mkdir: async (path) => {
           const run = await exec(`mkdir -p ${shellQuote(path)}`);
+
           if (run.exitCode !== 0) throw new Error(`cloud mkdir ${path}: ${run.stdout}`);
         },
         exists: async (path) => (await exec(`test -e ${shellQuote(path)}`)).exitCode === 0,
@@ -346,6 +381,7 @@ class CloudEvalTarget implements AgentEvalTarget {
       this.rpc('listRecordObjectives', CountedPageSchema, [{ limit: LEDGER_PAGE }]),
       this.rpc('listBackgroundJobs', JobsSchema, [LEDGER_PAGE]),
     ]);
+
     return {
       searchRuns: searchRuns.length,
       forkRuns: forkRuns.items.length,
@@ -357,6 +393,7 @@ class CloudEvalTarget implements AgentEvalTarget {
 
   async roster(): Promise<readonly string[]> {
     const entries = await this.rpc('listSubordinates', RosterSchema);
+
     return entries.map((entry) => entry.name).sort();
   }
 

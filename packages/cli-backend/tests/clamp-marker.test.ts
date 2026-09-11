@@ -13,6 +13,7 @@ import { scratchPath, toolExecute } from '@kinu.run/test-utils';
 
 function localRuntime() {
   const db = new Database(scratchPath('clamp-marker', 'agent.db'), { create: true });
+
   return createCLIRuntime(db, {
     dbPath: db.filename,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
@@ -32,6 +33,7 @@ describe('clamped run output on the local backend', () => {
       runtime: 'laptop',
       command: `awk 'BEGIN { for (i = 0; i < 9000; i++) print "padding log line", i; print "FINAL-ERROR-LINE" }'`,
     });
+
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS + 300);
     expect(clamped).toContain('chars omitted');
     expect(clamped).toContain('FINAL-ERROR-LINE');

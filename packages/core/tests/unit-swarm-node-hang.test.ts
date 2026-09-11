@@ -121,9 +121,12 @@ function resolved(): ResolvedSwarm {
     depth: 1,
     branches: BRANCHES,
   });
+
   if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
   const illegal = swarmValidity(call);
+
   if (illegal) throw new Error(`the suite's own composition is not legal: ${illegal.error}`);
+
   return call;
 }
 
@@ -143,9 +146,12 @@ function resolvedIdeate(): ResolvedSwarm {
     depth: 1,
     branches: BRANCHES,
   });
+
   if ('reason' in call) throw new Error(`the suite's own composition does not resolve: ${call.error}`);
   const illegal = swarmValidity(call);
+
   if (illegal) throw new Error(`the suite's own composition is not legal: ${illegal.error}`);
+
   return call;
 }
 
@@ -166,17 +172,22 @@ const RAISING_MODEL = scriptedTurnModel({
  */
 function oneAnsweringProvider(): MockLanguageModelV3 {
   let chosen: string | null = null;
+
   return scriptedTurnModel({
     provider: 'fake',
     modelId: 'fake-one-answers',
     doGenerate: ({ prompt }) => {
       let seed = '';
+
       for (const message of prompt) {
         if (message.role === 'user') seed = JSON.stringify(message.content);
       }
+
       chosen ??= seed;
+
       if (seed !== chosen) return Promise.reject(new Error(UPSTREAM));
       const reported = prompt.some((message) => message.role === 'tool');
+
       const content: LanguageModelV3Content[] = reported
         ? [{ type: 'text', text: 'Reported: a single linear scan.' }]
         : [{
@@ -188,6 +199,7 @@ function oneAnsweringProvider(): MockLanguageModelV3 {
             content: `A single scan is enough.\n\n\`\`\`javascript\n${OPTIMAL}\`\`\``,
           }),
         }];
+
       return Promise.resolve({
         content,
         finishReason: { unified: reported ? 'stop' as const : 'tool-calls' as const, raw: undefined },
@@ -215,6 +227,7 @@ function slowSteppingProvider(pauseMs: number): MockLanguageModelV3 {
       await Bun.sleep(pauseMs);
       const read = prompt.some((message) => message.role === 'tool');
       const reported = prompt.filter((message) => message.role === 'tool').length > 1;
+
       const content: LanguageModelV3Content[] = reported
         ? [{ type: 'text', text: 'Reported: a single linear scan.' }]
         : read
@@ -236,6 +249,7 @@ function slowSteppingProvider(pauseMs: number): MockLanguageModelV3 {
               input: JSON.stringify({ action: 'read', path: REFERENCE_PATH }),
             },
           ];
+
       return {
         content,
         finishReason: { unified: reported ? 'stop' as const : 'tool-calls' as const, raw: undefined },
@@ -260,6 +274,7 @@ interface NodeFixture {
 function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runtimeForWorkspace'] }): NodeFixture {
   const { rt, db } = createTestRuntime();
   const journal = new HeadJournal(rt.storage.sql, rt.actor);
+
   const input: NodeAgentInput = {
     nodeId: 'n1',
     rootId: 'r1',
@@ -275,6 +290,7 @@ function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runt
     settle: 'best',
     arbitrate: null,
   };
+
   const deps: NodeAgentDeps = {
     // The node's OWN actor, acquired per node id. `rt` is gone from these deps
     // for the reason the factory exists: one shared handle would give a whole
@@ -291,7 +307,9 @@ function nodeFixture(over?: { readonly runtimeForWorkspace?: NodeAgentDeps['runt
     maxWallClockMs: 60_000,
     logger: createRecordingLogger(),
   };
+
   if (over?.runtimeForWorkspace !== undefined) deps.runtimeForWorkspace = over.runtimeForWorkspace;
+
   return { input, deps, journal };
 }
 
@@ -307,6 +325,7 @@ describe('a node that failed is not a node still working', () => {
     });
 
     let failure: Error | null = null;
+
     try {
       await runNodeAgent(input, deps);
     } catch (cause) {
@@ -365,22 +384,26 @@ async function runWith(
   await rt.storage.vfs.mkdir('candidate', { recursive: true });
   await rt.storage.vfs.writeFile(REFERENCE_PATH, REFERENCE);
   const logger = createRecordingLogger();
+
   const result = await runSwarm(
     { rt, hostNode: hostedSeatsOver({ rt, db }).hostNode, model, mode: 'build', logger },
     call,
   );
+
   const rows = rt.storage.sql<HeadJournalRow>`
     SELECT id, parent_id, root_id, depth, task, rationale, status, spawned_at,
            completed_at, token_input, token_output, token_cache_read, token_cache_write,
            token_cache_write_1h, token_reasoning, neurons, wall_clock_ms, summary,
            error_message, merge_strategy
     FROM head_journal WHERE actor_id = ${rt.actor.actorId} ORDER BY spawned_at`;
+
   // Scoped like the journal read above: the run's search ledger is the CALLER's
   // (`initRunLedgers` binds `rt.actor`), and an unscoped `SELECT *` would fold
   // in every node actor's rows the moment one starts writing its own tree.
   const tree = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes WHERE actor_id = ${rt.actor.actorId}
     ORDER BY depth ASC, created_at ASC`;
+
   return { result, rows, tree };
 }
 
@@ -391,6 +414,7 @@ describe('a slow level has no default envelope', () => {
 
     expect('reason' in result).toBe(false);
     expect(rows).toHaveLength(BRANCHES);
+
     for (const row of rows) {
       expect(row.status).toBe('completed');
       expect(row.wall_clock_ms).toBeGreaterThan(pauseMs);
@@ -427,6 +451,7 @@ describe('a flat preset returns every node it ran', () => {
     const { result, rows, tree } = await runWith(
       oneAnsweringProvider(), resolvedIdeate(),
     );
+
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
     // THE DRILL'S OWN SHAPE, asserted first as the denominator: three nodes ran, one
@@ -436,6 +461,7 @@ describe('a flat preset returns every node it ran', () => {
     expect(rows.filter((row) => row.status === 'completed').length).toBe(1);
     const broken = rows.filter((row) => row.status === 'errored');
     expect(broken.length).toBe(BRANCHES - 1);
+
     for (const row of broken) expect(row.error_message).toContain('Authentication error');
 
     // THE CONTRACT: every node the search ran is in the result, and in the tree — where
@@ -453,6 +479,7 @@ describe('a flat preset returns every node it ran', () => {
     // caller could not read it — it went to the workspace for the answers instead.
     const cut = result.candidates.filter((candidate) => candidate.incomplete !== null);
     expect(cut).toHaveLength(BRANCHES - 1);
+
     for (const candidate of cut) {
       expect(candidate.incomplete).toStartWith('errored after');
       expect(candidate.incomplete).toContain('Authentication error');

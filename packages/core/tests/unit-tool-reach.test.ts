@@ -71,10 +71,12 @@ const releaseSource: ReleaseSource = {
   id: 'src-1', kind: 'github', label: 'app', repoUrl: null, defaultBranch: null,
   localDeviceId: null, localRoot: null, deployTarget: null, createdAt: 1, updatedAt: 1,
 };
+
 const releaseChange: ReleaseChange = {
   id: 'chg-1', agentName: 'a', bindingId: 'src-1', status: 'draft', userPrompt: 'p',
   plan: null, summary: null, patch: null, previewUrl: null, createdAt: 1, updatedAt: 1,
 };
+
 const releaseDeps: ReleaseToolDeps = {
   board: async () => ({ bindings: [], changes: [], checks: [], approvals: [], deployments: [] }),
   bindSource: async () => releaseSource,
@@ -100,6 +102,7 @@ describe('the reach declaration', () => {
     const declaredNative = Object.entries(TOOL_REACH)
       .filter(([, reach]) => reach.native)
       .map(([name]) => name);
+
     expect(declaredNative.sort()).toEqual([...BUILTIN_TOOLS].sort());
     // The count the owner set deliberately (10 → 8, 2026-08-13). Making reach
     // declarative must not become a quiet way to grow the standing surface, so
@@ -110,6 +113,7 @@ describe('the reach declaration', () => {
 
   test('every declared codemode namespace is produced by a real factory', () => {
     const { rt } = createTestRuntime();
+
     const factories = {
       agents: () => createAgentsCodemodeProvider(() => ({
         mode: 'build',
@@ -150,6 +154,7 @@ describe('the reach declaration', () => {
     const declared = Object.entries(TOOL_REACH)
       .filter(([name, reach]) => reach.codemode === name)
       .map(([name]) => name);
+
     // Set equality is the exhaustiveness half: a row added to TOOL_REACH with
     // nothing built for it fails here.
     expect(Object.keys(factories).sort()).toEqual(declared.sort());

@@ -42,6 +42,7 @@ const SpendLineSchema = v.object({
    *  measured zero, so it never counts against liveness. */
   episodesWithoutModel: v.number(),
 });
+
 export type SpendLine = v.InferOutput<typeof SpendLineSchema>;
 
 export interface SpendTotals {
@@ -79,6 +80,7 @@ export function totalSpend(lines: readonly SpendLine[]): SpendTotals {
  */
 export function renderSpend(lines: readonly SpendLine[]): string {
   const total = totalSpend(lines);
+
   const rows = lines.map((l) =>
     `  ${l.suite}: ${String(l.calls)} call(s), ${l.usage.input ?? 'unreported'} in / `
     + `${l.usage.output ?? 'unreported'} out`
@@ -95,10 +97,12 @@ export function renderSpend(lines: readonly SpendLine[]): string {
     return 'eval-tier cost: no suite reported spend — either nothing ran, or a suite '
       + 'did not call reportLiveModelSpend in its teardown';
   }
+
   const unreported = total.callsWithoutUsage > 0
     ? ` (${String(total.callsWithoutUsage)} call(s) the provider reported no usage for, so the `
       + 'token totals under-count those)'
     : '';
+
   // Named on its own line rather than folded into the parenthetical above: an
   // unaccounted episode is not an under-count of a known size, it is a piece of
   // the run whose cost this file cannot bound at all, and a reader has to be able
@@ -107,6 +111,7 @@ export function renderSpend(lines: readonly SpendLine[]): string {
     ? `\n  NOT A TOTAL: ${String(total.episodesUnmeasured)} episode(s) ran whose spend no suite `
       + 'could account for, so the figure above is a floor of unknown distance from the bill'
     : '';
+
   return [
     `eval-tier cost per run, measured over ${String(total.suites)} suite(s):`,
     ...rows,
@@ -166,6 +171,7 @@ export function livenessVerdict(
         + 'while exiting 0.',
     };
   }
+
   if (total.calls === 0) {
     return {
       kind: 'unproven',
@@ -174,6 +180,7 @@ export function livenessVerdict(
         + 'behavioural assertion it made was vacuous.',
     };
   }
+
   // Checked AFTER the call count, because a run with calls AND a hole did reach a
   // model — it just cannot bound what that cost. Different defect, so it is not
   // allowed to borrow the sentence above.
@@ -186,6 +193,7 @@ export function livenessVerdict(
         + '`0 model call(s)` over ~584,751 real neurons.',
     };
   }
+
   if (!usageReported(total.usage)) {
     return {
       kind: 'unproven',
@@ -194,6 +202,7 @@ export function livenessVerdict(
         + 'without a token count is half a measurement.',
     };
   }
+
   return {
     kind: 'proven',
     calls: total.calls,
@@ -224,15 +233,18 @@ if (import.meta.main) {
   const args = process.argv.slice(2);
   const expectLive = args.includes('--expect-live');
   const path = args.find((arg) => !arg.startsWith('--'));
+
   if (path === undefined) {
     console.error('usage: bun scripts/eval-spend.ts <spend.jsonl> [--expect-live]');
     process.exit(1);
   }
+
   const text = existsSync(path) ? readFileSync(path, 'utf8') : '';
   const lines = parseSpend(text);
   console.log(renderSpend(lines));
 
   const verdict = livenessVerdict(lines, expectLive);
   console.log(renderLiveness(verdict));
+
   if (verdict.kind === 'unproven') process.exit(1);
 }

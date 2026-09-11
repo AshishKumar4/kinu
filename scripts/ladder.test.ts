@@ -34,7 +34,9 @@ import {
 import { SKIP_RATCHET_VITEST_TARGETS } from './skip-ratchet';
 
 const root = resolve(import.meta.dir, '..');
+
 const tracked = trackedTestFiles();
+
 const deploy = deployGates();
 
 /**
@@ -130,13 +132,17 @@ describe('the ladder measures something', () => {
   test('every tier has gates, and every gate resolves to something runnable', () => {
     const scripts = new Set(Object.keys(packageScripts()));
     const unrunnable: string[] = [];
+
     for (const gate of gatesFor('deploy', deploy)) {
       const words = gate.run.split(/\s+/);
+
       if (words[0] === 'bun' && words[1] === 'run' && !scripts.has(words[2] ?? '')) {
         unrunnable.push(`${gate.run} — no package.json script named "${words[2] ?? ''}"`);
       }
     }
+
     expect(unrunnable).toEqual([]);
+
     for (const tier of TIERS) expect(gatesFor(tier, deploy).length).toBeGreaterThan(0);
   });
 
@@ -147,6 +153,7 @@ describe('the ladder measures something', () => {
     expect(claims('bun test scripts/deploy.test.ts', tracked)).toEqual(['scripts/deploy.test.ts']);
     expect(claims('bun run test:cli', tracked).filter((path) => path.startsWith('packages/cli/tests/')).length)
       .toBeGreaterThan(40);
+
     // Derived, not counted. This was `toBe(6)`, and it drifted to 8 the moment
     // two `tests/evals/*.eval.test.ts` suites landed — the same defect as the
     // bench glob below, one line apart, blocking every push twice in an hour. A
@@ -168,8 +175,10 @@ describe('the ladder measures something', () => {
     const bunSuitesUnderTests = tracked
       .filter((file) => file.startsWith('tests/') && isBunDiscoverableSuite(file))
       .sort();
+
     expect(bunSuitesUnderTests.length).toBeGreaterThan(0);
     expect(claims('bun test ./tests/', tracked).sort()).toEqual(bunSuitesUnderTests);
+
     // The other half of the SAME partition, and a denominator for it: the files
     // under `tests/` that are runnable and NOT bun-discoverable are exactly the
     // eval tier's vitest suites, and there is at least one — otherwise the line
@@ -177,6 +186,7 @@ describe('the ladder measures something', () => {
     const vitestUnderTests = tracked
       .filter((file) => file.startsWith('tests/') && isVitestEvalSuite(file))
       .sort();
+
     expect(vitestUnderTests.length).toBeGreaterThan(0);
     expect(claims('bun test ./tests/', tracked).filter((path) => vitestUnderTests.includes(path)))
       .toEqual([]);
@@ -204,8 +214,10 @@ describe('the ladder measures something', () => {
       'scripts/bench-restore-probe.test.ts',
       'scripts/bench.test.ts',
     ]);
+
     const durabilityProbeGate = LADDER.find(gate =>
       gate.run.includes('scripts/sandbox-durability-probe.test.ts'));
+
     expect(durabilityProbeGate?.tier).toBe('ci');
     // Spelled out, like the glob above and for the same reason: the seven rig
     // suites after the probe are named files, so an eighth is a deliberate edit
@@ -243,14 +255,19 @@ describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
       tier,
       files: new Set(gatesFor(tier, deploy).flatMap((gate) => claims(gate.run, tracked))),
     }));
+
     const regressions: string[] = [];
+
     for (const [index, lower] of claimedAt.entries()) {
       const higher = claimedAt[index + 1];
+
       if (higher === undefined) continue;
+
       for (const file of lower.files) {
         if (!higher.files.has(file)) regressions.push(`${file} runs at ${lower.tier} but not at ${higher.tier}`);
       }
     }
+
     expect(regressions).toEqual([]);
   });
 
@@ -263,23 +280,29 @@ describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
     const atDeploy = new Set(deploy);
     const filesAtDeploy = new Set(deploy.flatMap((run) => claims(run, tracked)));
     const orphans: string[] = [];
+
     for (const gate of LADDER) {
       // The `evals` tier is deliberately NOT a deploy gate: live-model
       // behavioural evidence a deploy must not wait on or pay for. Its
       // deliberate runner is `bun run evals:full`, and TIERS' own doc carries
       // the reason. Every other tier must still be covered at deploy.
       if (gate.tier === 'evals') continue;
+
       if (atDeploy.has(gate.run)) continue;
       const files = claims(gate.run, tracked);
+
       if (files.length === 0) {
         orphans.push(`${gate.run} (tier ${gate.tier}) runs no test file and is in no deploy.sh gate line`);
         continue;
       }
+
       const missing = files.filter((file) => !filesAtDeploy.has(file));
+
       if (missing.length > 0) {
         orphans.push(`${gate.run} (tier ${gate.tier}) claims ${String(missing.length)} file(s) no deploy gate runs, e.g. ${missing[0] ?? ''}`);
       }
     }
+
     expect(orphans).toEqual([]);
   });
 });
@@ -295,10 +318,12 @@ describe('CI is not a silent subset of deploy', () => {
     const atCi = new Set(ci.map((gate) => gate.run));
     const filesAtCi = new Set(ci.flatMap((gate) => claims(gate.run, tracked)));
     const undeclared: string[] = [];
+
     for (const run of deploy) {
       if (atCi.has(run) || Object.hasOwn(CI_EXEMPT, run)) continue;
       const files = claims(run, tracked);
       const missing = files.filter((file) => !filesAtCi.has(file));
+
       if (files.length === 0 || missing.length > 0) {
         undeclared.push(
           `${run} — runs at deploy only, with no reason recorded in CI_EXEMPT`
@@ -306,6 +331,7 @@ describe('CI is not a silent subset of deploy', () => {
         );
       }
     }
+
     expect(undeclared).toEqual([]);
   });
 
@@ -323,9 +349,11 @@ describe('CI is not a silent subset of deploy', () => {
     // independently, because that is how it came to skip five packages.
     const workflow = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8');
     expect(workflow).toContain('scripts/ladder.ts --tier=ci');
+
     const enumerated = workflow
       .split('\n')
       .filter((line) => /^\s*run:\s*bun (test|run (test|layergate|check|gate:))/.test(line));
+
     expect(enumerated).toEqual([]);
   });
 });
@@ -345,10 +373,12 @@ describe('every test file is claimed by some runner', () => {
     // four were credited to a bun gate that cannot select them. The ci delta is
     // the next test's subject, declared file by file.
     const covered = new Set(gatesFor('evals', deploy).flatMap((gate) => claims(gate.run, tracked)));
+
     const unclaimed = tracked
       .filter((path) => !covered.has(path)
         && !NON_BUN_RUNNERS.some((runner) => runner.holds(path)))
       .map((path) => `${path} — no tier runs this file`);
+
     expect(unclaimed).toEqual([]);
   });
 
@@ -358,20 +388,26 @@ describe('every test file is claimed by some runner', () => {
     // hole, and a file inside it that a ci gate DOES claim is a stale excuse.
     const atCi = new Set(gatesFor('ci', deploy).flatMap((gate) => claims(gate.run, tracked)));
     const declared = Object.keys(AFTER_CI_SUITES).sort();
+
     const missing = tracked
       .filter((path) => !atCi.has(path) && !NON_BUN_RUNNERS.some((runner) => runner.holds(path)))
       .sort();
+
     expect(missing).toEqual(declared);
     const wrong: string[] = [];
+
     for (const [path, gate] of Object.entries(AFTER_CI_SUITES)) {
       if (!claims(gate, tracked).includes(path)) {
         wrong.push(`${path} — declared as claimed by \`${gate}\`, which does not claim it`);
       }
+
       const tier = LADDER.find((entry) => entry.run === gate)?.tier;
+
       if (tier === undefined || TIERS.indexOf(tier) <= TIERS.indexOf('ci')) {
         wrong.push(`${path} — \`${gate}\` is at tier ${tier ?? 'none'}, which is ci or below`);
       }
     }
+
     expect(wrong).toEqual([]);
   });
 
@@ -390,6 +426,7 @@ describe('every test file is claimed by some runner', () => {
     const empty = NON_BUN_RUNNERS
       .filter((runner) => !tracked.some((path) => runner.holds(path)))
       .map((runner) => `${runner.what} — declared as non-bun but matches no tracked test file`);
+
     expect(empty).toEqual([]);
 
     const governed = tracked.filter(isAntiSlopSuite).sort();
@@ -415,11 +452,13 @@ describe('every test file is claimed by some runner', () => {
     const python = tracked.filter(isPythonSuite).sort();
     expect(python.length).toBeGreaterThan(0);
     expect(claims('bun run gate:python-suites', tracked).sort()).toEqual(python);
+
     // No bun gate may claim one: `bun test` cannot run Python, and a `.py` under
     // a directory target would be a claim over a file the runner skips.
     const elsewhere = gatesFor('evals', deploy)
       .filter((gate) => gate.run !== 'bun run gate:python-suites')
       .flatMap((gate) => claims(gate.run, tracked));
+
     expect(elsewhere.filter((path) => python.includes(path))).toEqual([]);
   });
 
@@ -468,14 +507,17 @@ describe('every test file is claimed by some runner', () => {
     const script = readFileSync(resolve(root, EVAL_TIER_SCRIPT), 'utf8');
     const arms = evalTierArms(script);
     const vitestTargets = [...SKIP_RATCHET_VITEST_TARGETS].sort();
+
     const behaviour = tracked
       .filter((path) => isVitestEvalSuite(path) && !arms.vitestSelected.includes(path));
+
     expect([...arms.vitestSelected, ...behaviour].map((path) => `./${path}`).sort())
       .toEqual(vitestTargets);
     // The script passes each arm's target to the ratchet from the same array it
     // builds the reports from — asserted on the text because bash cannot import
     // the declaration and this is the line that keeps the two in step.
     expect(script).toContain('for target in "${ARM_TARGETS[@]}"; do RATCHET_ARGS+=(--target "$target"); done');
+
     // Each arm's target must be spelled from the one variable that also names the
     // path vitest selects, so a rename moves both at once.
     for (const name of [
@@ -494,9 +536,11 @@ describe('every test file is claimed by some runner', () => {
     const cliGate = 'bun run test:cli';
     const cliFiles = claims(cliGate, tracked);
     expect(cliFiles.length).toBeGreaterThan(0);
+
     const elsewhere = new Set(gatesFor('ci', deploy)
       .filter((gate) => gate.run !== cliGate)
       .flatMap((gate) => claims(gate.run, tracked)));
+
     expect(cliFiles.filter((path) => elsewhere.has(path))).toEqual([]);
   });
 
@@ -529,6 +573,7 @@ describe('every test file is claimed by some runner', () => {
     const bunClaimed = gatesFor('ci', deploy)
       .filter((gate) => gate.run !== 'bun run test:workerd')
       .flatMap((gate) => claims(gate.run, tracked));
+
     expect(bunClaimed.filter((path) => workerd.includes(path))).toEqual([]);
     expect(bunClaimed.length).toBeGreaterThan(300);
 
@@ -552,32 +597,42 @@ describe('every test file is claimed by some runner', () => {
       tracked.flatMap((path) => path.split('/').slice(0, 2).join('/'))
         .filter((prefix) => prefix.startsWith('packages/')),
     );
+
     expect(packages.size).toBe(10);
 
     const byRootScript = new Set(claims('bun run test', tracked));
     const atCi = gatesFor('ci', deploy);
     const wrong: string[] = [];
+
     for (const directory of packages) {
       const files = tracked.filter((path) => path.startsWith(`${directory}/`) && !bunWouldSkip(path));
+
       if (files.every((path) => byRootScript.has(path))) {
         if (omittedGate(directory) !== undefined) {
           wrong.push(`${directory} — declared omitted but \`bun run test\` runs it`);
         }
+
         continue;
       }
+
       const gate = omittedGate(directory);
+
       if (gate === undefined) {
         wrong.push(`${directory} — not in \`bun run test\` and not declared in ROOT_TEST_OMISSIONS`);
         continue;
       }
+
       const covers = claims(gate, tracked);
+
       if (!files.every((path) => covers.includes(path))) {
         wrong.push(`${directory} — declared omitted, but \`${gate}\` does not claim all ${String(files.length)} of its files`);
       }
+
       if (!atCi.some((entry) => entry.run === gate)) {
         wrong.push(`${directory} — declared omitted, and \`${gate}\` is not a gate at ci or below`);
       }
     }
+
     expect(wrong).toEqual([]);
   });
 });
@@ -598,10 +653,12 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     const budget = readBudget();
     // A lock with no reason is a number that moved without a decision.
     expect(budget.reason.length).toBeGreaterThan(40);
+
     const declared = {
       commit: declaredTierCost('commit', deploy),
       push: declaredTierCost('push', deploy),
     };
+
     for (const tier of ['commit', 'push'] as const) {
       // The pin is per gate, so the lock cannot drift from the table it governs:
       // every locked step equals the LADDER declaration for that run, and the tier
@@ -610,6 +667,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
       expect(declared[tier].steps).toEqual(budget.tiers[tier].steps);
       expect(Math.abs(budget.tiers[tier].seconds - declared[tier].total)).toBeLessThan(0.01);
     }
+
     expect(judgeBudgets(declared, budget)).toEqual([]);
   });
 
@@ -625,6 +683,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
         push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
       },
     };
+
     expect(judgeBudgets(
       {
         commit: { total: 38, steps: { a: 10, b: 28 } },
@@ -663,6 +722,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
         push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
       },
     };
+
     expect(judgeBudgets(
       {
         commit: { total: 15, steps: { a: 10, b: 5 } },
@@ -688,6 +748,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
         push: { seconds: 150, measuredAt: '2026-09-05', machine: 'fixture', steps: { c: 150 } },
       },
     };
+
     expect(() => judgeBudgets(
       {
         commit: { total: 0, steps: {} },
@@ -711,11 +772,13 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     const vague = gatesFor('deploy', deploy)
       .filter((gate) => gate.seconds <= 0 || gate.blind.length < 20 || gate.catches.length < 20)
       .map((gate) => gate.run);
+
     expect(vague).toEqual([]);
   });
 
   test('heavy package gates use four isolated Bun workers', () => {
     const atCi = gatesFor('ci', deploy);
+
     for (const run of [
       'bun test --parallel=4 packages/cf-backend/',
       'bun test --parallel=4 packages/cli-backend/',
@@ -723,6 +786,7 @@ describe('cost, so a tier that stops being run is a decision and not a drift', (
     ]) {
       expect(atCi.some((gate) => gate.run === run), `${run} is not a gate at ci`).toBeTrue();
     }
+
     const packageJson = readFileSync(resolve(root, 'package.json'), 'utf8');
     expect(packageJson).toContain(
       '"test": "bun test --parallel=4 packages/agent-core/ packages/agent-utils/ packages/core/ packages/compaction/"',
@@ -761,6 +825,7 @@ describe('the hooks run the tiers they claim to', () => {
 
   test('the payload hook runs exactly the program its ladder gate runs', () => {
     const scripts = packageScripts();
+
     for (const [name, gate] of Object.entries(PAYLOAD_HOOKS)) {
       const path = resolve(root, HOOKS_DIR, name);
       expect(statSync(path).mode & 0o111).toBeGreaterThan(0);
@@ -819,6 +884,7 @@ describe('the hooks run the tiers they claim to', () => {
       const body = readFileSync(resolve(root, '.githooks', name), 'utf8')
         .split('\n')
         .filter((line) => !line.trimStart().startsWith('#'));
+
       const direct = body.filter((line) => /\b(bun (test|run)|tsc|oxlint)\b/.test(line));
       expect(direct).toEqual([]);
     }
@@ -837,9 +903,11 @@ describe('a gate the runner cannot spawn is a gate that does not exist', () => {
   test('every gate resolves to an argv the runner can spawn', () => {
     const globbed = LADDER.filter((gate) => gate.run.includes('*'));
     expect(globbed.length).toBeGreaterThan(0);
+
     const unspawnable = gatesFor('deploy', deploy)
       .filter((gate) => runnableArgv(gate.run, tracked).some((word) => word.includes('*')))
       .map((gate) => gate.run);
+
     expect(unspawnable).toEqual([]);
   });
 
@@ -867,6 +935,7 @@ describe('a gate the runner cannot spawn is a gate that does not exist', () => {
     const shellSyntax = gatesFor('deploy', deploy)
       .filter((gate) => /['"?$&|<>~`(){}[\]]/.test(gate.run))
       .map((gate) => gate.run);
+
     expect(shellSyntax).toEqual([]);
   });
 });

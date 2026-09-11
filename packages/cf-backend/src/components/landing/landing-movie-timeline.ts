@@ -78,8 +78,11 @@ interface CursorWaypoint {
 /** The cursor dwells on a target, then travels for `CURSOR_TRAVEL_MS` ending
  *  exactly at the next waypoint's `at`. Clicks land on arrival. */
 const CURSOR_TRAVEL_MS = 700;
+
 const CURSOR_PRESS_MS = 180;
+
 const CURSOR_RIPPLE_MS = 420;
+
 export const CURSOR_ENTER_AT = 4_700;
 
 const CURSOR_WAYPOINTS: readonly CursorWaypoint[] = [
@@ -108,21 +111,29 @@ function easeInOutCubic(x: number): number {
 export function cursorAt(t: number): MovieCursor {
   const first = CURSOR_WAYPOINTS[0];
   const last = CURSOR_WAYPOINTS[CURSOR_WAYPOINTS.length - 1];
+
   if (first === undefined || last === undefined) throw new Error('empty cursor waypoints');
+
   if (t < first.at || t >= MOVIE_END) {
     return { visible: false, from: first.target, to: first.target, progress: 1, pressed: null, ripple: null };
   }
+
   let from = first;
   let to = first;
+
   for (const waypoint of CURSOR_WAYPOINTS) {
     if (waypoint.at <= t) { from = waypoint; to = waypoint; continue; }
+
     to = waypoint;
     break;
   }
+
   const dwelling = to === from || t <= to.at - CURSOR_TRAVEL_MS;
+
   const progress = dwelling
     ? 1
     : easeInOutCubic(Math.min(1, (t - (to.at - CURSOR_TRAVEL_MS)) / CURSOR_TRAVEL_MS));
+
   return {
     visible: true,
     from: from.target,
@@ -162,6 +173,7 @@ export const MOVIE_PLAN: PlanReview = {
 export function composerTextAt(t: number): string {
   if (t <= MOVIE_CUES.typeStart || t >= MOVIE_CUES.sent) return '';
   const done = (t - MOVIE_CUES.typeStart) / (MOVIE_CUES.sent - MOVIE_CUES.typeStart);
+
   return MOVIE_ASK.slice(0, Math.floor(done * MOVIE_ASK.length));
 }
 
@@ -186,7 +198,9 @@ export interface MovieDiscrete {
  *  animation frame. */
 export function cueCountAt(t: number): number {
   let count = 0;
+
   for (const at of Object.values(MOVIE_CUES)) if (at <= t) count += 1;
+
   return count;
 }
 
@@ -203,14 +217,17 @@ interface ToolPartInit {
 
 function toolPart(t: number, init: ToolPartInit): MoviePart | null {
   if (t < init.startAt) return null;
+
   if (t < init.doneAt) {
     return { type: `tool-${init.tool}`, toolCallId: init.id, state: 'input-available', input: init.input };
   }
+
   return { type: `tool-${init.tool}`, toolCallId: init.id, state: 'output-available', input: init.input, output: init.output };
 }
 
 function messagesAt(t: number): UIMessage[] {
   const messages: UIMessage[] = [];
+
   if (t >= MOVIE_CUES.sent) {
     messages.push({
       id: 'movie-user',
@@ -218,22 +235,29 @@ function messagesAt(t: number): UIMessage[] {
       parts: [{ type: 'text', text: MOVIE_ASK }],
     });
   }
+
   const investigation: MoviePart[] = [];
+
   if (t >= MOVIE_CUES.reasoning) investigation.push({ type: 'reasoning', text: PLAN_REASONING });
+
   const read = toolPart(t, {
     tool: 'file', id: 'movie-read',
     startAt: MOVIE_CUES.readStart, doneAt: MOVIE_CUES.readDone,
     input: { action: 'read', path: 'packages/checkout/src/apply-coupon.ts' },
     output: '…',
   });
+
   if (read !== null) investigation.push(read);
+
   const search = toolPart(t, {
     tool: 'file', id: 'movie-search',
     startAt: MOVIE_CUES.searchStart, doneAt: MOVIE_CUES.searchDone,
     input: { action: 'search', path: 'packages/checkout', query: 'coupon_ineligible' },
     output: '3 matches',
   });
+
   if (search !== null) investigation.push(search);
+
   if (t >= MOVIE_CUES.submitted) {
     investigation.push({
       type: 'tool-submit_plan', toolCallId: 'movie-submit', state: 'output-available',
@@ -242,11 +266,15 @@ function messagesAt(t: number): UIMessage[] {
     });
     investigation.push({ type: 'text', text: PLAN_READY_TEXT });
   }
+
   if (investigation.length > 0) {
     messages.push({ id: 'movie-agent-plan', role: 'assistant', parts: investigation });
   }
+
   const build: MoviePart[] = [];
+
   if (t >= MOVIE_CUES.approvedText) build.push({ type: 'text', text: APPROVED_TEXT });
+
   for (const [id, path, startAt, doneAt] of [
     ['movie-manifest', '/home/user/slates/support-queue/package.json', MOVIE_CUES.manifestStart, MOVIE_CUES.manifestDone],
     ['movie-server', '/home/user/slates/support-queue/server.ts', MOVIE_CUES.serverStart, MOVIE_CUES.serverDone],
@@ -257,19 +285,25 @@ function messagesAt(t: number): UIMessage[] {
       input: { action: 'write', path },
       output: 'ok',
     });
+
     if (write !== null) build.push(write);
   }
+
   const preview = toolPart(t, {
     tool: 'execute_tools', id: 'movie-preview',
     startAt: MOVIE_CUES.previewStart, doneAt: MOVIE_CUES.previewDone,
     input: { code: "// Boot the preview and hand back its URL\nconst preview = await workspace.slate({ op: 'preview', id: 'support-queue' });\nreturn preview;" },
     output: JSON.stringify({ ok: true, value: { url: SLATE_PREVIEW_URL, port: 8789 } }),
   });
+
   if (preview !== null) build.push(preview);
+
   if (t >= MOVIE_CUES.finalText) build.push({ type: 'text', text: SLATE_DONE_TEXT });
+
   if (build.length > 0) {
     messages.push({ id: 'movie-agent-build', role: 'assistant', parts: build });
   }
+
   return messages;
 }
 
@@ -280,14 +314,19 @@ interface MoviePhaseLabel {
 
 function phaseAt(t: number): MoviePhaseLabel {
   if (t >= MOVIE_END) return { phase: 'done', label: 'Done' };
+
   if (t >= MOVIE_CUES.approve) return { phase: 'implementing', label: 'Implementing' };
+
   if (t >= MOVIE_CUES.planReady) return { phase: 'plan-review', label: 'Plan review' };
+
   if (t >= MOVIE_CUES.reasoning) return { phase: 'investigating', label: 'Investigating' };
+
   return { phase: 'asking', label: 'New task' };
 }
 
 export function discreteAt(t: number): MovieDiscrete {
   const { phase, label } = phaseAt(t);
+
   return {
     phase,
     phaseLabel: label,

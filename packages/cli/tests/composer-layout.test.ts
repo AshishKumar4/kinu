@@ -5,11 +5,14 @@ import { composerVisibleRows } from '@kinu.run/core';
 // The cap the module hands out for a draft no screen could show whole.
 function observedCap(): number {
   let prev = composerVisibleRows(1);
+
   for (let n = 2; n < 1000; n++) {
     const cur = composerVisibleRows(n);
+
     if (cur === prev) return prev;
     prev = cur;
   }
+
   throw new Error('the composer never caps');
 }
 

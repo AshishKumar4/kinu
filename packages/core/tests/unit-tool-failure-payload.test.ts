@@ -55,6 +55,7 @@ function runToolOver(shell: Shell): RunTool {
   const { rt } = createTestRuntime();
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime });
+
   return { execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run) };
 }
 
@@ -93,6 +94,7 @@ describe('a failed `run` tells the model what actually happened', () => {
     const run = runToolOver({
       exec: async () => ({ stdout: 'all good', stderr: 'a deprecation warning', exitCode: 0 }),
     });
+
     const out = await run.execute({ command: 'bun test' });
 
     expect(out).toContain('all good');
@@ -103,6 +105,7 @@ describe('a failed `run` tells the model what actually happened', () => {
 describe('the inline executor `exec` honours the same contract', () => {
   function inlineExec(shell: Shell) {
     const { rt } = createTestRuntime();
+
     return createInlineExecutor({
       vfs: rt.storage.vfs,
       memory: rt.memory,

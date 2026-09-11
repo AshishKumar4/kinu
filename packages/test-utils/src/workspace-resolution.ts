@@ -38,9 +38,11 @@ const SETUP_COMMAND = 'bash scripts/setup-worktree.sh';
  *  a symlinked path still compares equal to what module resolution reports. */
 function treeRoot(from: string): string {
   let dir = realpathSync(from);
+
   for (;;) {
     if (existsSync(join(dir, 'package.json')) && existsSync(join(dir, 'packages'))) return dir;
     const parent = dirname(dir);
+
     if (parent === dir) throw new Error(`workspace guard: no repo root above ${from}`);
     dir = parent;
   }
@@ -68,17 +70,21 @@ function treeRoot(from: string): string {
  */
 export function workspacePackages(root: string): Map<string, string> {
   const packages = new Map<string, string>();
+
   for (const entry of readdirSync(join(root, 'packages'), { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
     const dir = join(root, 'packages', entry.name);
     const manifestPath = join(dir, 'package.json');
+
     if (!existsSync(manifestPath)) continue;
     const manifest = parseJsonObject(readFileSync(manifestPath, 'utf8'));
     const name = v.safeParse(v.string(), manifest.name);
     const main = v.safeParse(v.string(), manifest.main);
+
     if (!name.success || (!main.success && manifest.exports === undefined)) continue;
     packages.set(name.output, dir);
   }
+
   return packages;
 }
 
@@ -90,23 +96,30 @@ export function workspacePackages(root: string): Map<string, string> {
 export function assertWorkspaceResolution(from: string): void {
   const root = treeRoot(from);
   const problems: string[] = [];
+
   for (const [name, dir] of workspacePackages(root)) {
     let resolved: string;
+
     try {
       resolved = realpathSync(Bun.resolveSync(name, from));
     } catch (error) {
       problems.push(`  ${name}\n    does not resolve at all from ${from} (${renderThrownChain({ cause: error })})`);
       continue;
     }
+
     const expected = realpathSync(dir) + sep;
+
     if (!resolved.startsWith(expected)) {
       problems.push(`  ${name}\n    resolves to ${resolved}\n    expected  ${expected}...`);
     }
   }
+
   if (problems.length === 0) return;
+
   const scopes = [...new Set([...workspacePackages(root).keys()]
     .filter((name) => name.startsWith('@'))
     .map((name) => name.slice(0, name.indexOf('/'))))].sort();
+
   const scope = scopes.length === 1 ? `${scopes[0]}/*` : 'a workspace package';
   throw new Error(
     `${scope} does not resolve inside this checkout (${root}):\n\n${problems.join('\n')}\n\n`

@@ -17,9 +17,12 @@ const entry = resolve(import.meta.dir, 'fixtures/pty-chat.tsx');
 describe('the chat surface on a real terminal, fresh install', () => {
   test('the default theme paints the canvas and writes assistant prose in ink', () => {
     const selection = DEFAULT_TUI_THEME_SELECTION;
+
     if (selection.mode !== 'theme') throw new Error('the default selection opens on light');
     const light = BUILTIN_TUI_THEMES.find((theme) => theme.id === selection.themeId);
+
     if (light === undefined) throw new Error(`missing default theme ${selection.themeId}`);
+
     const run = runTuiInPty(entry, {
       steps: [
         { wait: 'Connected to pty', timeout: 15 },
@@ -29,7 +32,9 @@ describe('the chat surface on a real terminal, fresh install', () => {
         { sleep: 3 },
       ],
     });
+
     const canvas = light.colors.background.canvas;
+
     if (canvas === undefined) throw new Error('the default theme must paint a canvas');
     const [red, green, blue] = [1, 3, 5].map((start) => Number.parseInt(canvas.slice(start, start + 2), 16));
     expect(run.raw).toContain(`48;2;${String(red)};${String(green)};${String(blue)}m`);

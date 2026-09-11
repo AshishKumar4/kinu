@@ -6,6 +6,7 @@ import { isFreshAuthTime } from '../src/auth/session';
 import { mockAgentsSdk } from './helpers/agents-sdk';
 
 mockAgentsSdk();
+
 const { handleHubRequest } = await import('../src/events/routes');
 
 interface WebhookOptions {
@@ -18,9 +19,11 @@ interface WebhookOptions {
 
 function hubEnv() {
   const calls: string[] = [];
+
   const agent = {
     async createDurableWebhook(opts: WebhookOptions) {
       calls.push(`webhook:${JSON.stringify(opts)}`);
+
       return {
         trigger_id: '01HZY6QK9N4T7M2P8V3XABCDEF',
         url: '/api/workspaces/jarvis/webhook/01HZY6QK9N4T7M2P8V3XABCDEF/v1-'
@@ -30,6 +33,7 @@ function hubEnv() {
       };
     },
   };
+
   const bindings = {
     OrchestratorAgent: {
       idFromName(name: string) { return name; },
@@ -41,17 +45,21 @@ function hubEnv() {
     // about is upstream of that refusal — see unit-webhook-route.test.ts.
     WEBHOOK_ROUTE_SECRET: 'test-webhook-route-secret-0123456789',
   };
+
   const partialEnv: Partial<Env> = {};
   Object.assign(partialEnv, bindings);
   // SAFETY: every member the hub route reads is constructed by the assign above
   // — the orchestrator namespace, the credential secret and the route secret.
   const env = partialEnv as Env;
+
   return { env, calls };
 }
 
 function createTriggerRequest(authTime: number | null) {
   const headers = new Headers({ 'content-type': 'application/json' });
+
   if (authTime !== null) headers.set('x-kinu-auth-time', String(authTime));
+
   return new Request('https://kinu.example.com/api/workspaces/jarvis/triggers', {
     method: 'POST',
     headers,

@@ -26,12 +26,14 @@ function fakeLedger(initial: string[] = [], dropped: string[] = []): CraftLedger
 } {
   const tools = [...initial];
   const observations: Observation[] = [];
+
   return {
     tools,
     observations,
     names: () => tools,
     observe(names, quality) {
       observations.push({ names: [...names], quality });
+
       return names.filter((n) => dropped.includes(n));
     },
   };
@@ -284,6 +286,7 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
     const cycle = new CraftCycle(ledger, acc);
     acc.reset(Date.now());
     cycle.reset(enabled);
+
     for (const call of calls) {
       cycle.onToolResult({
         toolName: call.toolName,
@@ -292,6 +295,7 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
         success: true,
       });
     }
+
     return acc.craftedToolsUsed();
   }
 

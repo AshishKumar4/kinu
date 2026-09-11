@@ -2,24 +2,35 @@
 // Kinu PC agent — reverse-WebSocket daemon.
 // Runs under the Kinu CLI's bundled Bun (global fetch + global WebSocket). No external deps.
 'use strict';
+
 const fs = require('node:fs');
+
 const path = require('node:path');
+
 const os = require('node:os');
+
 const crypto = require('node:crypto');
+
 const { spawn, spawnSync, execFileSync } = require('node:child_process');
+
 const sandbox = require('./sandbox.js');
+
 const pty = require('./pty.js');
 
 const DEVICE_HOME = path.resolve(process.env.KINU_HOME?.trim() || path.join(os.homedir(), '.kinu'));
+
 const CONFIG_PATH = path.join(DEVICE_HOME, 'device.json');
+
 /** The directory this daemon owns for agent homes. The HUB computes the home
  *  for one (device, workspace) beneath it and sends it on the exec frame; the
  *  daemon owns the PATH so an uninstall has one directory to remove. */
 const AGENT_ROOT = path.join(DEVICE_HOME, 'agents');
+
 /** One daemon owns a machine. This file names the process that owns it, and
  *  the daemon claims it in its own process — the CLI is not the only thing
  *  that can start this file. */
 const PID_PATH = path.join(DEVICE_HOME, 'pc-agent.pid');
+
 /** What this daemon exits with when another daemon already owns the machine.
  *  Not a failure: the machine has its daemon and this process is the extra
  *  one. `packages/cli/tests/device-connect.test.ts` pins the number. */
@@ -29,25 +40,33 @@ const ALREADY_RUNNING_EXIT = 3;
  *  DEVICE_TOKEN_ROTATION in cf-backend's device-hub test: this daemon ships as
  *  one dependency-free file and cannot import the constant. */
 const TOKEN_ROTATION = 'ROTATE';
+
 /** This daemon's answer once the rotated token is on disk. The hub keeps the
  *  superseded token valid until this frame arrives and drops it then, so the
  *  grace covers exactly the failure it exists for — a rotation lost with its
  *  socket — and not the indefinite window a copy of device.json could spend.
  *  Pinned against core's DEVICE_TOKEN_ROTATION_ACK in the device-hub test. */
 const TOKEN_ROTATION_ACK = 'ROTATE_ACK';
+
 /** The hub's close code for a token it will not accept again, and the message
  *  the ticket exchange raises for the same refusal over HTTP. Both mean the
  *  same thing: this machine's credential is dead and no amount of retrying
  *  brings it back, so the daemon stops LOUDLY instead of dialling forever. */
 const CREDENTIALS_REJECTED_CLOSE = 4401;
+
 const CREDENTIALS_REJECTED = 'device credentials were rejected; re-run: kinu connect';
+
 const REJECTED_EXIT = 4;
+
 /** The hub answers this text frame with `pong` (its socket auto-response), so
  *  a half-open socket — the case a TCP-level close never reports — is found in
  *  40 s rather than at the next command the owner is waiting for. */
 const PING_FRAME = 'ping';
+
 const PONG_FRAME = 'pong';
+
 const PING_INTERVAL_MS = 30_000;
+
 const PONG_DEADLINE_MS = 10_000;
 
 const { KINU_INFLIGHT_ROOT } = process.env;
@@ -69,13 +88,17 @@ const { KINU_INFLIGHT_ROOT } = process.env;
  */
 function commandEnvironment(source = process.env) {
   const env = {};
+
   for (const name of sandbox.ENV_ALLOWLIST) {
     const value = source[name];
+
     if (value !== undefined) env[name] = value;
   }
+
   for (const name of Object.keys(source)) {
     if (sandbox.ENV_ALLOWLIST_FAMILY.test(name) && source[name] !== undefined) env[name] = source[name];
   }
+
   return env;
 }
 
@@ -91,7 +114,9 @@ const COMMAND_ENV = commandEnvironment();
  *  cancellation the daemon misread would report a stopped command that is
  *  still running. */
 const CANCEL_METHOD = 'execCancel';
+
 const CANCEL_PROTOCOL = 1;
+
 /** Each exec stream stays far below the Worker WebSocket's documented 32 MiB
  * receive ceiling even after worst-case JSON escaping. The daemon drains bytes
  * past the cap without retaining them, so a noisy process cannot grow its heap. */
@@ -112,11 +137,17 @@ const EXEC_STREAM_MAX_BYTES = 512 * 1024;
  * and cannot import them.
  */
 const PTY_OPEN_METHOD = 'ptyOpen';
+
 const PTY_INPUT_FRAME = 'PTY_IN';
+
 const PTY_RESIZE_FRAME = 'PTY_RESIZE';
+
 const PTY_CLOSE_FRAME = 'PTY_CLOSE';
+
 const PTY_OUTPUT_FRAME = 'PTY_OUT';
+
 const PTY_EXIT_FRAME = 'PTY_EXIT';
+
 /** The frames the hub sends a live session. Each names a session this daemon
  *  already opened, so none of them is a way to start work. */
 const PTY_FRAMES = new Set([PTY_INPUT_FRAME, PTY_RESIZE_FRAME, PTY_CLOSE_FRAME]);
@@ -154,6 +185,7 @@ function runCommand(cmd, args) {
     // Anything else — EACCES, ETIMEDOUT, EMFILE — is this daemon's own
     // breakage and must surface instead of reading as "no such tool".
     if (!err || (err.code !== 'ENOENT' && !Number.isInteger(err.status))) throw err;
+
     return null;
   }
 }
@@ -178,10 +210,15 @@ function runCommand(cmd, args) {
 // anything.
 
 const CHECKPOINTS_UNAVAILABLE_NO_GIT = 'checkpoints unavailable: git not found';
+
 const REF_PREFIX = 'refs/kinu';
+
 const WORKDIR_MARKER = 'KINU_WORKDIR';
+
 const SHA_RE = /^[0-9a-f]{4,64}$/i;
+
 const PROJECT_MARKERS = ['.git', 'package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'Makefile', '.hg'];
+
 const CHECKPOINT_EXCLUDES = [
   '.git/', '.hg/', '.svn/',
   'node_modules/', '.venv/', 'venv/', '__pycache__/', '*.pyc',
@@ -205,24 +242,34 @@ const UNSNAPSHOTTABLE = new Set([os.tmpdir(), '/tmp', '/var/tmp'].map((dir) => p
 // silently missing. `LC_ALL=C` below is what makes these strings the ones git
 // emits.
 const UNREADABLE_DIR = /^warning: could not open directory '(.+?)\/?': Permission denied$/;
+
 const UNREADABLE_FILE = /^error: open\("(.+)"\): Permission denied$/;
+
 const UNINDEXED_FILE = /^error: unable to index file '(.+?)'$/;
+
 const ADD_FAILED = /^fatal: adding files failed$/;
+
 const REASON_UNREADABLE_LIMIT = 3;
 
 function diagnoseStaging(stderr) {
   const lines = String(stderr || '').split('\n').map((line) => line.trim()).filter(Boolean);
   const unreadable = new Set();
+
   for (const line of lines) {
     const denied = UNREADABLE_DIR.exec(line) || UNREADABLE_FILE.exec(line);
+
     if (denied) unreadable.add(denied[1]);
   }
+
   const explained = (line) => {
     if (UNREADABLE_DIR.test(line) || UNREADABLE_FILE.test(line)) return true;
     const unindexed = UNINDEXED_FILE.exec(line);
+
     if (unindexed) return unreadable.has(unindexed[1]);
+
     return ADD_FAILED.test(line) && unreadable.size > 0;
   };
+
   return {
     unreadable: [...unreadable].sort(),
     unexplained: lines.filter((line) => !explained(line)),
@@ -234,6 +281,7 @@ function reasonWithSkips(reason, unreadable) {
   const shown = unreadable.slice(0, REASON_UNREADABLE_LIMIT);
   const rest = unreadable.length - shown.length;
   const more = rest > 0 ? ` +${rest} more` : '';
+
   return `${reason} [skipped ${unreadable.length} unreadable: ${shown.join(' ')}${more}]`;
 }
 
@@ -248,9 +296,11 @@ function createCheckpoints(opts = {}) {
 
   const isolatedEnv = () => {
     const env = {};
+
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined && !k.startsWith('GIT_')) env[k] = v;
     }
+
     env.GIT_CONFIG_GLOBAL = os.devNull;
     env.GIT_CONFIG_SYSTEM = os.devNull;
     env.GIT_CONFIG_NOSYSTEM = '1';
@@ -261,8 +311,10 @@ function createCheckpoints(opts = {}) {
     // So `diagnoseStaging` parses git's own words rather than a translation of
     // them: a localized warning would read as an unexplained staging failure.
     env.LC_ALL = 'C';
+
     return env;
   };
+
   const storeEnv = (gitDir, workdir) => ({ ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir });
 
   /** Run git; returns stdout. Throws on non-zero exit or missing binary. */
@@ -270,18 +322,22 @@ function createCheckpoints(opts = {}) {
     // A missing cwd would fail spawn with the same ENOENT a missing binary
     // produces — never let a vanished workdir flip the degraded-mode probe.
     if (!fs.existsSync(cwd)) throw new Error(`working directory not found: ${cwd}`);
+
     try {
       const out = execFileSync(gitBin, args, {
         cwd, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
         timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
       });
+
       gitAvailable = true;
+
       return out;
     } catch (err) {
       if (err && err.code === 'ENOENT') {
         gitAvailable = false;
         throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: err });
       }
+
       gitAvailable = true;
       throw new Error((err.stderr ? String(err.stderr).trim() : '') || err.message, { cause: err });
     }
@@ -289,6 +345,7 @@ function createCheckpoints(opts = {}) {
 
   const probe = () => {
     if (gitAvailable !== null) return gitAvailable;
+
     try {
       git(['--version'], os.homedir(), isolatedEnv());
     } catch (err) {
@@ -298,6 +355,7 @@ function createCheckpoints(opts = {}) {
       // reported as "git not found".
       if (gitAvailable === null) throw err;
     }
+
     return gitAvailable;
   };
 
@@ -316,45 +374,61 @@ function createCheckpoints(opts = {}) {
   };
 
   const cleanField = (s) => String(s == null ? '-' : s).replace(/[\n|]/g, ' ').trim() || '-';
+
   const subjectFor = (turn, reason) =>
     `turn=${cleanField(turn && turn.turnId)} session=${cleanField(turn && turn.sessionId)} ${cleanField(reason)}`;
+
   const parseSubject = (subject) => {
     const m = /^turn=(\S+) session=(\S+) (.*)$/.exec(subject);
+
     if (!m) return { turnId: null, sessionId: null, reason: subject };
+
     return { turnId: m[1] === '-' ? null : m[1], sessionId: m[2] === '-' ? null : m[2], reason: m[3] };
   };
 
   const snapshotSkipped = (dir) => {
     const abs = path.resolve(dir);
+
     // Not a work tree, so a whole-tree snapshot of one is never what the caller
     // meant: the filesystem root, the user's home, and the SHARED temp roots —
     // `workdirForPath` resolves a bare `/tmp/x.js` to `/tmp`, which holds every
     // process's and user's scratch, none of it this agent's to copy.
     if (abs === path.parse(abs).root || abs === path.resolve(os.homedir())) return true;
+
     if (UNSNAPSHOTTABLE.has(abs)) return true;
+
     // Dependency-free spelling of the closed set: a vanished path is the one
     // expected statSync failure here; anything else must surface.
     try { return !fs.statSync(abs).isDirectory(); }
-    catch (err) { if (!err || err.code !== 'ENOENT') throw err; return true; }
+    catch (err) {
+      if (!err || err.code !== 'ENOENT') throw err;
+
+      return true;
+    }
   };
 
   const storeRefs = (gitDir, workdir) => {
     let out;
+
     try {
       out = git(['for-each-ref', '--sort=-refname', '--format=%(refname)|%(objectname)|%(subject)', REF_PREFIX],
         workdirOrBase(workdir), storeEnv(gitDir, workdir));
     } catch (err) {
       if (err.message === CHECKPOINTS_UNAVAILABLE_NO_GIT) throw err;
+
       return [];
     }
+
     return out.split('\n').filter(Boolean).map((line) => {
       const [ref, id, ...rest] = line.split('|');
+
       return { ref, id, subject: rest.join('|') };
     });
   };
 
   const refTimestampMs = (ref) => {
     const m = /(\d{13})-[0-9a-z]+$/.exec(ref);
+
     return m ? Number(m[1]) : 0;
   };
 
@@ -364,29 +438,36 @@ function createCheckpoints(opts = {}) {
    *  a warning). */
   const stageAll = (workdir, env) => {
     if (!fs.existsSync(workdir)) throw new Error(`working directory not found: ${workdir}`);
+
     const run = spawnSync(gitBin, ['add', '-A', '--ignore-errors'], {
       cwd: workdir, env, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'],
       timeout: 30_000, maxBuffer: 32 * 1024 * 1024,
     });
+
     if (run.error && run.error.code === 'ENOENT') {
       gitAvailable = false;
       throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT, { cause: run.error });
     }
+
     gitAvailable = true;
+
     if (run.error) throw new Error(`checkpoint staging failed: ${run.error.message}`, { cause: run.error });
     const stderr = String(run.stderr || '');
     const diagnosis = diagnoseStaging(stderr);
+
     // Non-zero explained entirely by paths it may not read is not a failure;
     // anything else is, and a truncated tree must not be called a checkpoint.
     if (diagnosis.unexplained.length > 0 || (run.status !== 0 && diagnosis.unreadable.length === 0)) {
       throw new Error(`checkpoint staging failed: ${stderr.trim()}`);
     }
+
     return diagnosis.unreadable;
   };
 
   const stageCurrent = (gitDir, workdir) => {
     const env = storeEnv(gitDir, workdir);
     const unreadable = stageAll(workdir, env);
+
     return { tree: git(['write-tree'], workdir, env).trim(), unreadable };
   };
 
@@ -401,6 +482,7 @@ function createCheckpoints(opts = {}) {
 
     const refs = storeRefs(gitDir, abs);
     const latest = refs[0];
+
     if (latest) {
       if (git(['rev-parse', `${latest.id}^{tree}`], abs, env).trim() === tree) return latest.id;
     }
@@ -414,8 +496,10 @@ function createCheckpoints(opts = {}) {
       for (const stale of storeRefs(gitDir, abs).slice(keep)) {
         git(['update-ref', '-d', stale.ref], abs, env);
       }
+
       git(['prune', '--expire=now'], abs, env);
     }
+
     return sha;
   };
 
@@ -423,13 +507,16 @@ function createCheckpoints(opts = {}) {
     if (!SHA_RE.test(String(id))) throw new Error(`invalid checkpoint id: ${id}`);
     const abs = path.resolve(dir);
     const gitDir = storeDirFor(agent, abs);
+
     if (!fs.existsSync(path.join(gitDir, 'HEAD'))) throw new Error(`no checkpoints exist for ${abs}`);
     const env = storeEnv(gitDir, abs);
+
     try { git(['rev-parse', '--verify', `${id}^{commit}`], workdirOrBase(abs), env); }
     catch (err) {
       if (err.message === CHECKPOINTS_UNAVAILABLE_NO_GIT) throw err;
       throw new Error(`checkpoint not found: ${id}`, { cause: err });
     }
+
     return { gitDir, abs, env };
   };
 
@@ -440,9 +527,11 @@ function createCheckpoints(opts = {}) {
     const current = stageCurrent(gitDir, abs);
     const out = git(['diff-tree', '-r', '--name-status', current.tree, `${id}^{tree}`], abs, env);
     const files = [];
+
     for (const line of out.split('\n')) {
       if (!line) continue;
       const tab = line.indexOf('\t');
+
       if (tab < 0) continue;
       const status = line.slice(0, tab);
       files.push({
@@ -450,6 +539,7 @@ function createCheckpoints(opts = {}) {
         kind: status === 'A' ? 'create' : status === 'D' ? 'delete' : 'modify',
       });
     }
+
     return files;
   };
 
@@ -464,15 +554,19 @@ function createCheckpoints(opts = {}) {
       try {
         if (!hint || !probe()) return null;
         const dir = hint.dir || fallbackDir;
+
         if (!dir) return null;
         const abs = path.resolve(dir);
         const dedupeKey = `${sanitizeAgent(hint.agent)}|${abs}`;
         const turnKey = hint.turnId || 'no-turn';
+
         if (turnDone.get(dedupeKey) === turnKey) return null;
         turnDone.set(dedupeKey, turnKey);
+
         return snapshot(hint.agent, abs, { turnId: hint.turnId, sessionId: hint.sessionId }, 'pre-mutation');
       } catch (err) {
         log('checkpoint snapshot failed (non-blocking):', err.message);
+
         return null;
       }
     },
@@ -485,38 +579,49 @@ function createCheckpoints(opts = {}) {
       if (!probe()) return [];
       const agentBase = path.join(base, sanitizeAgent(agent));
       let stores;
+
       try { stores = fs.readdirSync(agentBase); }
       catch (err) {
         // No store directory means this agent has taken no checkpoints; any
         // other readdir failure is a real fault and must not read as "none".
         if (!err || err.code !== 'ENOENT') throw err;
+
         return [];
       }
+
       const entries = [];
+
       for (const name of stores) {
         const gitDir = path.join(agentBase, name);
         const marker = path.join(gitDir, WORKDIR_MARKER);
+
         if (!fs.existsSync(path.join(gitDir, 'HEAD')) || !fs.existsSync(marker)) continue;
         const workdir = fs.readFileSync(marker, 'utf8').trim();
+
         for (const ref of storeRefs(gitDir, workdir)) {
           const meta = parseSubject(ref.subject);
+
           if (turnId !== undefined && turnId !== null && meta.turnId !== turnId) continue;
           entries.push({ id: ref.id, dir: workdir, at: refTimestampMs(ref.ref), ...meta });
         }
       }
+
       entries.sort((a, b) => b.at - a.at);
+
       return entries.slice(0, Math.max(1, limit || 50));
     },
 
     plan(agent, dir, id) {
       if (!probe()) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
       const { gitDir, abs } = requireCheckpoint(agent, dir, id);
+
       return { dir: abs, id, files: diffToCheckpoint(gitDir, abs, id) };
     },
 
     restore(agent, dir, id) {
       if (!probe()) throw new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT);
       const { gitDir, abs, env } = requireCheckpoint(agent, dir, id);
+
       if (!fs.existsSync(abs)) throw new Error(`working directory no longer exists: ${abs}`);
       const files = diffToCheckpoint(gitDir, abs, id);
 
@@ -528,26 +633,34 @@ function createCheckpoints(opts = {}) {
       for (const change of files) {
         if (change.kind !== 'delete') continue;
         const target = path.resolve(abs, change.path);
+
         if (!target.startsWith(abs)) continue;
+
         try { fs.unlinkSync(target); }
         catch (err) { if (!err || err.code !== 'ENOENT') throw err; }
       }
+
       git(['read-tree', id], abs, env);
       git(['checkout-index', '-a', '-f'], abs, env);
+
       return { dir: abs, id, files, preRestoreId };
     },
 
     workdirForPath(p) {
       const abs = path.resolve(p);
       let candidate = abs;
+
       try { if (!fs.statSync(abs).isDirectory()) candidate = path.dirname(abs); }
       catch (err) { if (!err || err.code !== 'ENOENT') throw err; candidate = path.dirname(abs); }
+
       const home = path.resolve(os.homedir());
       let probeDir = candidate;
+
       while (probeDir !== path.dirname(probeDir) && probeDir !== home) {
         if (PROJECT_MARKERS.some((m) => fs.existsSync(path.join(probeDir, m)))) return probeDir;
         probeDir = path.dirname(probeDir);
       }
+
       return candidate;
     },
   };
@@ -558,48 +671,60 @@ function createCheckpoints(opts = {}) {
 function listListeningPorts() {
   const rows = [];
   const seen = new Set();
+
   const add = (port, host, command, pid) => {
     const n = Number(port);
+
     if (!Number.isInteger(n) || n <= 0 || n > 65535) return;
     const key = `${host || ''}:${n}:${pid || ''}:${command || ''}`;
+
     if (seen.has(key)) return;
     seen.add(key);
     rows.push({ port: n, host: host || '0.0.0.0', protocol: 'tcp', command: command || null, pid: pid ? Number(pid) : null });
   };
 
   const lsof = runCommand('lsof', ['-nP', '-iTCP', '-sTCP:LISTEN']);
+
   if (lsof) {
     for (const line of lsof.split('\n').slice(1)) {
       const parts = line.trim().split(/\s+/);
       const name = parts.slice(8).join(' ');
       const m = name.match(/(.+):(\d+)\s+\(LISTEN\)$/);
+
       if (m) add(m[2], m[1].replace(/^\[|\]$/g, ''), parts[0], parts[1]);
     }
+
     if (rows.length) return rows;
   }
 
   const ss = runCommand('ss', ['-ltnp']);
+
   if (ss) {
     for (const line of ss.split('\n').slice(1)) {
       const parts = line.trim().split(/\s+/);
       const local = parts[3] || '';
       const m = local.match(/^(.*):(\d+)$/);
       const proc = line.match(/users:\(\("([^"]+)",pid=(\d+)/);
+
       if (m) add(m[2], m[1].replace(/^\[|\]$/g, ''), proc?.[1], proc?.[2]);
     }
+
     if (rows.length) return rows;
   }
 
   const netstat = runCommand('netstat', ['-anv']);
+
   if (netstat) {
     for (const line of netstat.split('\n')) {
       if (!/\bLISTEN\b/i.test(line) || !/^tcp/i.test(line.trim())) continue;
       const parts = line.trim().split(/\s+/);
       const local = parts[3] || parts[1] || '';
       const m = local.match(/^(.*)\.(\d+)$/) || local.match(/^(.*):(\d+)$/);
+
       if (m) add(m[2], m[1].replace(/^\[|\]$/g, ''), null, null);
     }
   }
+
   return rows;
 }
 
@@ -621,6 +746,7 @@ function listListeningPorts() {
 // this machine through `exec`, and a cached row that outlived its measurement is
 // the failure the probe exists to prevent.
 const BARE_BINARY_NAME = /^[A-Za-z0-9._+-]{1,64}$/;
+
 const WHICH_MAX_NAMES = 64;
 
 /**
@@ -639,11 +765,13 @@ const WHICH_MAX_NAMES = 64;
 function onPath(dirs, name) {
   for (const dir of dirs) {
     const candidate = path.join(dir, name);
+
     try {
       // stat, not lstat: a symlink to a real executable IS the normal shape of
       // a binary on PATH, and resolving it is what `which` does.
       if (!fs.statSync(candidate).isFile()) continue;
       fs.accessSync(candidate, fs.constants.X_OK);
+
       return true;
     } catch (err) {
       // Absent, not executable by this user, an entry that is not a directory
@@ -653,6 +781,7 @@ function onPath(dirs, name) {
       if (!['ENOENT', 'EACCES', 'ENOTDIR', 'ELOOP', 'ENAMETOOLONG'].includes(err.code)) throw err;
     }
   }
+
   return false;
 }
 
@@ -661,17 +790,21 @@ function onPath(dirs, name) {
 function probeNames(raw) {
   if (!Array.isArray(raw)) throw new Error('which expects an array of binary names');
   const names = [];
+
   for (const value of raw.slice(0, WHICH_MAX_NAMES)) {
     const name = String(value);
+
     // `name === value` rejects anything that merely stringifies into a name — a
     // number, a boxed object — because only a name is a name.
     if (name === value && BARE_BINARY_NAME.test(name)) names.push(name);
   }
+
   return names;
 }
 
 function whichAll(names) {
   const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
+
   return probeNames(names).filter((name) => onPath(dirs, name));
 }
 
@@ -684,9 +817,13 @@ function whichAll(names) {
 // from being selected accidentally; it cannot defend against a malicious
 // same-user command that already has equivalent local authority.
 const INFLIGHT_ROOT = path.resolve(KINU_INFLIGHT_ROOT || path.join(os.homedir(), '.kinu', 'inflight'));
+
 const REQUEST_ID = /^rpc-[A-Za-z0-9_-]{10}-[1-9]\d*$/;
+
 const EXEC_ACK_METHOD = 'execAck';
+
 const EXEC_STREAM_TRUNCATION_MARKER = `[output truncated at ${EXEC_STREAM_MAX_BYTES} bytes]\n`;
+
 const EXEC_CAPTURE_MAX_BYTES = EXEC_STREAM_MAX_BYTES + Buffer.byteLength(EXEC_STREAM_TRUNCATION_MARKER);
 
 function supervisionSupported(platform = process.platform) {
@@ -708,7 +845,9 @@ function assertSupervisionSupported() {
 function parseString(value, expectation) {
   try {
     const string = String.prototype.valueOf.call(value);
+
     if (string !== value) throw new Error(expectation);
+
     return string;
   } catch (err) {
     if (err instanceof TypeError) throw new Error(expectation, { cause: err });
@@ -719,18 +858,24 @@ function parseString(value, expectation) {
 function parseRecord(value, expectation) {
   if (value === null || Object(value) !== value || Array.isArray(value)) throw new Error(expectation);
   const prototype = Object.getPrototypeOf(value);
+
   if (prototype !== Object.prototype && prototype !== null) throw new Error(expectation);
+
   return value;
 }
 
 function requestDirectory(root, requestId) {
   const parsedRequestId = parseString(requestId, 'exec request id must match rpc-<epoch>-<sequence>');
+
   if (!REQUEST_ID.test(parsedRequestId)) {
     throw new Error('exec request id must match rpc-<epoch>-<sequence>');
   }
+
   const resolvedRoot = path.resolve(root);
   const dir = path.resolve(resolvedRoot, parsedRequestId);
+
   if (path.dirname(dir) !== resolvedRoot) throw new Error('exec request directory must be a direct child of the in-flight root');
+
   return dir;
 }
 
@@ -739,31 +884,42 @@ function processStartIdentity(pid) {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
     const tail = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
     const start = tail[19];
+
     if (!start) throw new Error(`cannot read start identity for supervisor ${pid}`);
+
     return start;
   }
+
   if (process.platform === 'darwin') {
     const start = execFileSync('ps', ['-p', String(pid), '-o', 'lstart='], { encoding: 'utf8' }).trim();
+
     if (!start) throw new Error(`cannot read start identity for supervisor ${pid}`);
+
     return start;
   }
+
   throw new Error('pc-agent command supervision requires POSIX Linux or macOS');
 }
 
 function readSupervisorState(dir) {
   const state = fs.readFileSync(path.join(dir, 'state'), 'utf8');
+
   const fields = new Map(state.trimEnd().split('\n').map((line) => {
     const separator = line.indexOf('=');
+
     return [line.slice(0, separator), line.slice(separator + 1)];
   }));
+
   const pid = Number(fields.get('pid'));
   const start = fields.get('start');
   const group = Number(fields.get('group'));
   const groupStart = fields.get('groupStart');
+
   if (!Number.isSafeInteger(pid) || pid <= 0 || !start ||
       !Number.isSafeInteger(group) || group <= 0 || !groupStart) {
     throw new Error(`invalid supervisor state in ${dir}`);
   }
+
   return { pid, start, group, groupStart };
 }
 
@@ -775,6 +931,7 @@ function supervisorStartMatches(entry) {
     if (err && (err.code === 'ENOENT' || (process.platform === 'darwin' && err.status === 1))) {
       return false;
     }
+
     throw err;
   }
 }
@@ -783,47 +940,61 @@ function processGroupHasLiveProcess(group) {
   if (process.platform === 'linux') {
     for (const entry of fs.readdirSync('/proc', { withFileTypes: true })) {
       if (!entry.isDirectory() || !/^\d+$/.test(entry.name)) continue;
+
       try {
         const stat = fs.readFileSync(`/proc/${entry.name}/stat`, 'utf8');
         const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+
         if (Number(fields[2]) === group && fields[0] !== 'Z') return true;
       } catch (err) {
         if (err && err.code === 'ENOENT') continue;
         throw err;
       }
     }
+
     return false;
   }
+
   const rows = execFileSync('ps', ['-ax', '-o', 'pid=,pgid=,stat='], { encoding: 'utf8' }).trim().split('\n');
+
   return rows.some((row) => {
     const [pid, pgid, stat] = row.trim().split(/\s+/, 3);
+
     return Number(pid) > 0 && Number(pgid) === group && stat && !stat.startsWith('Z');
   });
 }
 
 function readTerminalResult(dir) {
   const result = fs.readFileSync(path.join(dir, 'result'), 'utf8');
+
   const fields = new Map(result.trimEnd().split('\n').map((line) => {
     const separator = line.indexOf('=');
+
     return [line.slice(0, separator), line.slice(separator + 1)];
   }));
+
   const kind = fields.get('kind');
   const exitCode = Number(fields.get('exitCode'));
+
   if ((kind !== 'exited' && kind !== 'cancelled') || !Number.isSafeInteger(exitCode)) {
     throw new Error(`invalid terminal result in ${dir}`);
   }
+
   return { kind, exitCode };
 }
 
 function readCapturedOutput(file) {
   const descriptor = fs.openSync(file, 'r');
+
   try {
     const size = fs.fstatSync(descriptor).size;
     const retained = Math.min(size, size > EXEC_CAPTURE_MAX_BYTES ? EXEC_STREAM_MAX_BYTES : EXEC_CAPTURE_MAX_BYTES);
     const bytes = Buffer.allocUnsafe(retained);
     const read = fs.readSync(descriptor, bytes, 0, bytes.length, 0);
     const output = bytes.subarray(0, read).toString();
+
     if (size > EXEC_CAPTURE_MAX_BYTES) return output + EXEC_STREAM_TRUNCATION_MARKER;
+
     return fs.existsSync(file + '.after-exit') ? output + '\n[background output after command exit is not captured]\n' : output;
   } finally {
     fs.closeSync(descriptor);
@@ -832,6 +1003,7 @@ function readCapturedOutput(file) {
 
 function readExecResult(dir) {
   const terminal = readTerminalResult(dir);
+
   return {
     terminal,
     result: {
@@ -1074,32 +1246,42 @@ child.once('exit', (code, signal) => {
 
 function waitForPath(file, exists, signal) {
   if (fs.existsSync(file) === exists) return Promise.resolve();
+
   return new Promise((resolve, reject) => {
     const directory = path.dirname(file);
     const name = path.basename(file);
     let watcher;
     let settled = false;
+
     const finish = (error) => {
       if (settled) return;
       settled = true;
+
       if (watcher) watcher.close();
       signal?.removeEventListener('abort', onAbort);
+
       if (error) reject(error);
       else resolve();
     };
+
     const check = (_event, changed) => {
       if (changed !== null && String(changed) !== name) return;
+
       if (fs.existsSync(file) === exists) finish();
     };
+
     const onAbort = () => finish(signal.reason instanceof Error ? signal.reason : new Error('file watch aborted'));
+
     try {
       watcher = fs.watch(directory, check);
       watcher.once('error', finish);
       signal?.addEventListener('abort', onAbort, { once: true });
     } catch (err) {
       finish(err);
+
       return;
     }
+
     if (fs.existsSync(file) === exists) finish();
   });
 }
@@ -1114,6 +1296,7 @@ function waitForDirectoryRemoval(dir) {
 
 function writeAcknowledgement(dir) {
   const ack = path.join(dir, 'ack');
+
   return new Promise((resolve, reject) => {
     const writer = spawn('/bin/sh', ['-c', 'printf 1 > "$1"', 'kinu-ack', ack], { stdio: 'ignore' });
     writer.once('error', reject);
@@ -1133,38 +1316,48 @@ function createInFlight(root = INFLIGHT_ROOT) {
 
   function entryFor(requestId) {
     const existing = entries.get(requestId);
+
     if (existing) return existing;
     const dir = requestDirectory(root, requestId);
+
     if (!fs.existsSync(dir)) return undefined;
     const state = readSupervisorState(dir);
     const entry = { dir, ...state };
     entries.set(requestId, entry);
+
     return entry;
   }
 
   async function loadEntry(requestId) {
     const known = entries.get(requestId);
+
     if (known) return known;
     const dir = requestDirectory(root, requestId);
+
     if (!fs.existsSync(dir)) return undefined;
     await waitForFile(path.join(dir, 'state'));
+
     return entryFor(requestId);
   }
 
   function reconcile() {
     if (!fs.existsSync(root)) return [];
     const recovered = [];
+
     for (const directory of fs.readdirSync(root, { withFileTypes: true })) {
       if (!directory.isDirectory()) continue;
       const dir = path.join(root, directory.name);
+
       try {
         requestDirectory(root, directory.name);
         const state = readSupervisorState(dir);
         const terminal = fs.existsSync(path.join(dir, 'result'));
+
         if (!terminal && !supervisorStartMatches(state)) {
           removeRequestDirectory(dir);
           continue;
         }
+
         entries.set(directory.name, { dir, ...state });
         recovered.push({ requestId: directory.name, terminal });
       } catch (err) {
@@ -1172,6 +1365,7 @@ function createInFlight(root = INFLIGHT_ROOT) {
         removeRequestDirectory(dir);
       }
     }
+
     return recovered;
   }
 
@@ -1181,26 +1375,33 @@ function createInFlight(root = INFLIGHT_ROOT) {
 
   async function cancel(requestId) {
     let entry;
+
     try {
       entry = await loadEntry(requestId);
     } catch (err) {
       throw new Error(`cannot validate supervisor for ${requestId}: ${err.message || err}`, { cause: err });
     }
+
     if (!entry || fs.existsSync(path.join(entry.dir, 'result'))) {
       return { requestId, cancelled: 'unknown' };
     }
+
     if (!supervisorStartMatches(entry)) {
       throw new Error(`cannot terminate ${requestId}: supervisor identity no longer matches`);
     }
+
     process.kill(entry.pid, 'SIGUSR1');
     await waitForFile(path.join(entry.dir, 'result'));
     const terminal = readTerminalResult(entry.dir);
+
     if (terminal.kind !== 'cancelled') {
       throw new Error(`cannot terminate ${requestId}: supervisor exited without a confirmed group termination`);
     }
+
     if (processGroupHasLiveProcess(entry.group)) {
       throw new Error(`cannot terminate ${requestId}: owned process group death is unconfirmed`);
     }
+
     // This scope is the process group created for the command. A command that
     // calls setsid can leave it; the cancellation protocol does not claim that
     // such a descendant was terminated.
@@ -1209,18 +1410,22 @@ function createInFlight(root = INFLIGHT_ROOT) {
 
   async function result(requestId) {
     const entry = await loadEntry(requestId);
+
     if (!entry) return undefined;
     await waitForFile(path.join(entry.dir, 'result'));
+
     return { entry, ...readExecResult(entry.dir) };
   }
 
   async function acknowledge(requestId) {
     const entry = await loadEntry(requestId);
+
     // The ACK reply itself can be lost after this daemon already removed the
     // normal-result directory. Retrying must converge to accepted rather than
     // stranding UserDO's durable row on a now-unknown local request.
     if (!entry) return { requestId, acknowledged: true };
     const terminal = readTerminalResult(entry.dir);
+
     // The FIFO is a handshake with a LIVE supervisor: it is the only reader,
     // so writing to it when it has exited blocks that writer forever — the
     // same leak, moved into this daemon. A supervisor whose start identity no
@@ -1232,7 +1437,9 @@ function createInFlight(root = INFLIGHT_ROOT) {
     } else {
       removeRequestDirectory(entry.dir);
     }
+
     entries.delete(requestId);
+
     return { requestId, acknowledged: true };
   }
 
@@ -1257,12 +1464,15 @@ function createInFlight(root = INFLIGHT_ROOT) {
     // where the durable truth is, and is idempotent.
     reconcile();
     const terminations = [];
+
     for (const [requestId, entry] of entries) {
       if (fs.existsSync(path.join(entry.dir, 'result'))) continue;
+
       /** @param {unknown} error */
       function reportTerminationFailure(error) {
         log('Could not terminate abandoned command', requestId, error);
       }
+
       const terminated = cancel(requestId);
       // The daemon's own report, so an ignored return value still surfaces.
       terminated.catch(reportTerminationFailure);
@@ -1271,10 +1481,12 @@ function createInFlight(root = INFLIGHT_ROOT) {
       // position it took.
       terminations.push({ requestId, terminated });
     }
+
     return terminations;
   }
 
   reconcile();
+
   return {
     register,
     cancel,
@@ -1307,13 +1519,16 @@ function startSupervisor(requestId, command, plan) {
     JSON.stringify({ argv: plan.argv.slice(0, -1), env: plan.env, statusFd: plan.statusFd }),
     { encoding: 'utf8', mode: 0o600, flag: 'wx' },
   );
+
   const child = spawn(process.execPath, [
     '-e', SUPERVISOR_SCRIPT,
     commandFile, path.join(dir, 'state'), path.join(dir, 'result'),
     path.join(dir, 'stdout'), path.join(dir, 'stderr'), path.join(dir, 'ack'),
     String(EXEC_STREAM_MAX_BYTES), planFile,
   ], { detached: true, env: COMMAND_ENV, stdio: 'ignore' });
+
   child.unref();
+
   return { child, dir };
 }
 
@@ -1321,25 +1536,32 @@ function waitForSupervisorState(dir, child) {
   return new Promise((resolve, reject) => {
     const controller = new AbortController();
     let settled = false;
+
     const finish = (error) => {
       if (settled) return;
       settled = true;
       child.off('error', onError);
       child.off('exit', onExit);
       controller.abort(error);
+
       if (error) reject(error);
       else resolve();
     };
+
     const onError = (err) => finish(err);
+
     const onExit = (code, signal) => {
       finish(new Error(`supervisor exited before publishing state (${signal || code || 0})`));
     };
+
     child.once('error', onError);
     child.once('exit', onExit);
+
     /** @param {unknown} error */
     function finishWithError(error) {
       if (!settled) finish(error);
     }
+
     waitForFile(path.join(dir, 'state'), controller.signal).then(
       () => finish(),
       finishWithError,
@@ -1371,27 +1593,35 @@ function planFromFrame(msg, command, source = process.env) {
   // the switch yet, and a daemon that read that as "sandbox it" would refuse
   // every command on the machine for want of an agent home it was never sent.
   const tier = requested.tier === 'sandboxed' ? 'sandboxed' : 'raw';
+
   if (tier === 'sandboxed' && SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
     const error = new Error(`sandbox_unavailable (${SANDBOX_CAPABILITY.status}): ${SANDBOX_CAPABILITY.detail}`);
     error.code = 'sandbox_unavailable';
     error.reason = SANDBOX_CAPABILITY.status;
     throw error;
   }
+
   if (tier === 'raw') {
     return sandbox.plan({ tier: 'raw', deviceHome: DEVICE_HOME, command, cwd: process.cwd(), source });
   }
+
   const agentHome = path.resolve(parseString(requested.agentHome, 'exec sandbox options must name an agent home'));
+
   if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
     throw new Error(`exec sandbox agent home must sit under ${AGENT_ROOT}`);
   }
+
   const roots = Array.isArray(requested.roots)
     ? requested.roots.map((root) => path.resolve(parseString(root, 'exec sandbox roots must be paths')))
     : [];
+
   const agentTmp = path.join(path.dirname(agentHome), 'tmp');
+
   // Created on first use, 0700: the hub computes the path per (device,
   // workspace) and this machine is the only one that can make the directory.
   for (const dir of [agentHome, agentTmp]) fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   sandbox.ensureUvmNode();
+
   return sandbox.plan({
     tier: 'sandboxed',
     home: os.homedir(),
@@ -1417,17 +1647,21 @@ function planFromFrame(msg, command, source = process.env) {
  */
 function viewFromFrame(msg) {
   const requested = parseRecord(msg.sandbox ?? {}, 'device sandbox options must be an object');
+
   if (requested.tier !== 'sandboxed') {
     return sandbox.rawViewFor({ platform: os.platform(), deviceHome: DEVICE_HOME });
   }
+
   // NO capability check here, deliberately. A machine that cannot sandbox is
   // `files_only`, and that state exists so its file methods keep working: this
   // enforcer is JavaScript in the daemon and needs no kernel to be correct.
   // Only `exec` refuses, because only `exec` needs the kernel.
   const agentHome = path.resolve(parseString(requested.agentHome, 'device sandbox options must name an agent home'));
+
   if (!agentHome.startsWith(`${AGENT_ROOT}/`)) {
     throw new Error(`device sandbox agent home must sit under ${AGENT_ROOT}`);
   }
+
   return sandbox.viewFor({
     platform: os.platform(),
     home: os.homedir(),
@@ -1498,15 +1732,19 @@ function leaderEnvironment(plan) {
  */
 function sendPtyFrame(ws, frame) {
   const droppable = frame.type === PTY_OUTPUT_FRAME;
+
   if (droppable && Number.isFinite(ws.bufferedAmount) && ws.bufferedAmount > PTY_BACKLOG_MAX_BYTES) return false;
+
   try {
     ws.send(JSON.stringify(frame));
   } catch (err) {
     // The socket closed between this terminal's read and this write. Its own
     // close handler ends every session; this frame has nowhere left to go.
     log('device.terminal_frame_unsent', frame.type, frame.session, err.message || err);
+
     return false;
   }
+
   return true;
 }
 
@@ -1520,7 +1758,9 @@ function sendPtyFrame(ws, frame) {
  */
 function handlePtyFrame(msg, ctx) {
   const sessions = ctx && ctx.sessions;
+
   if (!sessions) return log('device.terminal_frame_dropped', msg.type, 'this daemon holds no terminals');
+
   try {
     if (msg.type === PTY_INPUT_FRAME) sessions.write(msg.session, msg.data);
     else if (msg.type === PTY_RESIZE_FRAME) sessions.resize(msg.session, msg.cols, msg.rows);
@@ -1538,8 +1778,10 @@ function handlePtyFrame(msg, ctx) {
 function openTerminalSession(msg, ws, id, params, ctx) {
   assertSupervisionSupported();
   assertCommandShellPresent();
+
   if (!ctx || !ctx.sessions) throw new Error('this daemon was started without terminal support');
   const plan = planFromFrame(msg, SESSION_COMMAND, sessionSource());
+
   const opened = ctx.sessions.open({
     session: params[0],
     cols: params[1],
@@ -1548,6 +1790,7 @@ function openTerminalSession(msg, ws, id, params, ctx) {
     env: leaderEnvironment(plan),
     send: (frame) => sendPtyFrame(ws, frame),
   });
+
   rpc(ws, id, { session: params[0], pid: opened.pid, cols: opened.cols, rows: opened.rows });
 }
 
@@ -1559,12 +1802,15 @@ function execCommand(msg, ws, id, params, ctx) {
   const checkpoints = ctx && ctx.checkpoints;
   assertSupervisionSupported();
   assertCommandShellPresent();
+
   if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
   const dir = requestDirectory(INFLIGHT_ROOT, id);
+
   /** @param {unknown} error */
   function reportExecReplyFailure(error) {
     log('Could not report exec command result', id, error);
   }
+
   (async () => {
     try {
       if (fs.existsSync(dir)) {
@@ -1574,7 +1820,9 @@ function execCommand(msg, ws, id, params, ctx) {
         await waitForSupervisorState(supervisor.dir, supervisor.child);
         inFlight.register(id, supervisor.dir);
       }
+
       const completed = await inFlight.result(id);
+
       if (!completed) throw new Error(`missing in-flight command ${id}`);
       rpc(ws, id, completed.result);
     } catch (err) {
@@ -1586,9 +1834,11 @@ function execCommand(msg, ws, id, params, ctx) {
 function handle(msg, ws, ctx) {
   const { id, method, params } = msg;
   const checkpoints = ctx && ctx.checkpoints;
+
   // A session frame first: it carries a terminal's name rather than a request
   // id, so the method dispatch below has nothing to match it on.
   if (PTY_FRAMES.has(msg.type)) return handlePtyFrame(msg, ctx);
+
   try {
     if (method === PTY_OPEN_METHOD) {
       openTerminalSession(msg, ws, id, params, ctx);
@@ -1598,15 +1848,19 @@ function handle(msg, ws, ctx) {
       const requested = params[0];
       const target = String(requested);
       const protocol = params[1];
+
       if (protocol !== CANCEL_PROTOCOL) return rpc(ws, id, null,
         `unsupported cancellation protocol ${JSON.stringify(protocol)}: this daemon speaks ${CANCEL_PROTOCOL}`);
+
       if (target !== requested) return rpc(ws, id, null, `${method} expects the request id to target`);
       requestDirectory(INFLIGHT_ROOT, target);
       const operation = method === CANCEL_METHOD ? inFlight.cancel(target) : inFlight.acknowledge(target);
+
       /** @param {unknown} error */
       function replyWithOperationFailure(error) {
         rpc(ws, id, null, error instanceof Error ? error.message : String(error));
       }
+
       operation.then(
         (result) => rpc(ws, id, result),
         replyWithOperationFailure,
@@ -1614,14 +1868,18 @@ function handle(msg, ws, ctx) {
     } else if (method === 'readFile') {
       const options = params[1] || {};
       const confined = confinedDeviceViewPath(msg, params[0], 'read');
+
       if (options.encoding === 'base64') rpc(ws, id, { content: fs.readFileSync(confined).toString('base64'), encoding: 'base64' });
       else rpc(ws, id, fs.readFileSync(confined, 'utf8'));
     } else if (method === 'readRange') {
       const offset = params[1], length = params[2];
+
       if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(length) || length <= 0) {
         return rpc(ws, id, null, 'readRange expects a positive safe offset and length');
       }
+
       const file = fs.openSync(confinedDeviceViewPath(msg, params[0], 'read'), 'r');
+
       try {
         const bytes = Buffer.allocUnsafe(length);
         const read = fs.readSync(file, bytes, 0, length, offset);
@@ -1630,10 +1888,12 @@ function handle(msg, ws, ctx) {
     } else if (method === 'writeFile') {
       const options = params[2] || {};
       const confined = confinedDeviceViewPath(msg, params[0], 'write');
+
       if (checkpoints && msg.checkpoint) {
         const hint = msg.checkpoint;
         checkpoints.ensure(hint, hint.dir || checkpoints.workdirForPath(confined));
       }
+
       fs.mkdirSync(path.dirname(confined), { recursive: true });
       fs.writeFileSync(confined, options.encoding === 'base64' ? Buffer.from(String(params[1]), 'base64') : params[1]);
       rpc(ws, id, { success: true });
@@ -1641,14 +1901,17 @@ function handle(msg, ws, ctx) {
       // The home DEFAULTS to the agent's when the frame carries one, which is
       // the directory the model is told `~` is, not the owner's.
       const frame = parseRecord(msg.sandbox ?? {}, 'device sandbox options must be an object');
+
       const requested = params[0] ?? (frame.tier === 'sandboxed'
         ? parseString(frame.agentHome, 'device sandbox options must name an agent home')
         : os.homedir());
+
       const confined = confinedDeviceViewPath(msg, requested, 'read');
       const entries = fs.readdirSync(confined, { withFileTypes: true });
       rpc(ws, id, entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' })));
     } else if (method === 'statPath') {
       const confined = confinedDeviceViewPath(msg, params[0], 'read');
+
       if (!fs.existsSync(confined)) return rpc(ws, id, null);
       const stat = fs.statSync(confined);
       rpc(ws, id, { size: stat.size, mtimeMs: stat.mtimeMs, isDir: stat.isDirectory() });
@@ -1695,27 +1958,33 @@ function handle(msg, ws, ctx) {
 
 function readDeviceConfig(configPath = CONFIG_PATH) {
   let text;
+
   try {
     text = fs.readFileSync(configPath, 'utf8');
   } catch (err) {
     if (err && err.code === 'ENOENT') {
       throw new Error(`device config not found at ${configPath}; run: kinu connect`, { cause: err });
     }
+
     if (err && (err.code === 'EACCES' || err.code === 'EPERM')) {
       throw new Error(`device config at ${configPath} is not readable by this user; check its owner and permissions`, { cause: err });
     }
+
     throw new Error(`could not read device config at ${configPath}`, { cause: err });
   }
 
   let parsed;
+
   try {
     parsed = JSON.parse(text);
   } catch (cause) {
     const safeCause = cause instanceof SyntaxError
       ? new Error('device config is not valid JSON')
       : new Error('device config could not be parsed');
+
     throw new Error(`device config at ${configPath} is corrupt; re-run: kinu connect`, { cause: safeCause });
   }
+
   const expectation = `device config at ${configPath} is missing its user or token; re-run: kinu connect`;
   const cfg = parseRecord(parsed, expectation);
   const user = parseString(cfg.user, expectation);
@@ -1726,18 +1995,24 @@ function readDeviceConfig(configPath = CONFIG_PATH) {
   // representation. Absent on a config written before it existed, and absent
   // is what the hub reads as "this device named no directory".
   const root = cfg.root === undefined ? undefined : parseString(cfg.root, expectation);
+
   if (user.length === 0 || token.length === 0) throw new Error(expectation);
   const config = { ...cfg, user, token };
+
   if (origin !== undefined) config.origin = origin;
+
   if (root !== undefined) config.root = root;
+
   return config;
 }
 
 function redactConnectSecrets(value, secrets) {
   let redacted = String(value);
+
   for (const secret of secrets) {
     if (secret) redacted = redacted.split(secret).join('[redacted]');
   }
+
   return redacted;
 }
 
@@ -1745,6 +2020,7 @@ function connectFailureMessage(err, secrets) {
   const raw = err instanceof Error ? err.message : String(err?.message ?? err);
   const status = /Unexpected server response:\s*(\d{3})/.exec(raw);
   let message = raw;
+
   if (status && (status[1] === '401' || status[1] === '403')) {
     message = 'refused by the server (invalid, used, or expired connect ticket); retrying with a fresh ticket';
   } else if (status && status[1] === '404') {
@@ -1752,11 +2028,13 @@ function connectFailureMessage(err, secrets) {
   } else if (status && status[1] === '426') {
     message = 'the server refused the WebSocket upgrade';
   }
+
   return redactConnectSecrets(message, secrets);
 }
 
 async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
   let res;
+
   try {
     res = await fetchFn(httpOrigin + '/pc/connect-ticket', {
       method: 'POST',
@@ -1768,7 +2046,9 @@ async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
       cause: new Error(redactConnectSecrets(err instanceof Error ? err.message : err, [cfg.token])),
     });
   }
+
   let body = {};
+
   try { body = await res.json(); }
   catch (cause) {
     // A gateway's non-JSON error page is diagnosed by the status check below;
@@ -1777,10 +2057,13 @@ async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
       const safeCause = cause instanceof SyntaxError
         ? new Error('ticket response is not valid JSON')
         : new Error('ticket response could not be read');
+
       throw new Error(`ticket exchange returned an unreadable body: HTTP ${res.status}`, { cause: safeCause });
     }
   }
+
   let record;
+
   try {
     record = parseRecord(body, 'ticket exchange returned an invalid body');
   } catch (cause) {
@@ -1789,12 +2072,15 @@ async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
       cause: new Error(redactConnectSecrets(detail, [cfg.token])),
     });
   }
+
   let ticket = '';
   let serviceError = '';
+
   try {
     if (record.ticket !== undefined) {
       ticket = parseString(record.ticket, 'ticket exchange returned an invalid connect ticket');
     }
+
     if (record.error !== undefined) {
       serviceError = redactConnectSecrets(
         parseString(record.error, 'ticket exchange returned an invalid body'),
@@ -1807,16 +2093,21 @@ async function getConnectTicket(cfg, httpOrigin, fetchFn = fetch) {
       cause: new Error(redactConnectSecrets(detail, [cfg.token])),
     });
   }
+
   if (!res.ok || ticket.length === 0) {
     const detail = serviceError || `HTTP ${res.status}`;
+
     if (res.status === 401 || res.status === 403) {
       throw new Error(CREDENTIALS_REJECTED, { cause: new Error(detail) });
     }
+
     throw new Error(`ticket exchange failed: HTTP ${res.status}`, { cause: new Error(detail) });
   }
+
   if (!/^pct_[A-Za-z0-9_-]{32,}$/.test(ticket)) {
     throw new Error('ticket exchange returned an invalid connect ticket', { cause: new Error('ticket format is invalid') });
   }
+
   return ticket;
 }
 
@@ -1825,6 +2116,7 @@ function startConnectLoop(opts) {
     getTicket, dial, logger = log, secret = () => '', schedule = setTimeout, onClose,
     onRejected = () => {}, cancel = clearTimeout,
   } = opts;
+
   let backoff = 1000;
   let stopped = false;
   let currentTicket = '';
@@ -1850,44 +2142,57 @@ function startConnectLoop(opts) {
   async function connect() {
     if (stopped) return;
     let ticket;
+
     try {
       ticket = await getTicket();
     } catch (err) {
       if (err instanceof Error && err.message === CREDENTIALS_REJECTED) {
         return stopRejected('the ticket exchange refused this device token');
       }
+
       logger('Ticket exchange failed:', connectFailureMessage(err, [secret()]));
       retry();
+
       return;
     }
+
     if (stopped) return;
     currentTicket = ticket;
     let ws;
+
     try {
       ws = dial(ticket);
     } catch (err) {
       logger('Connect attempt failed:', connectFailureMessage(err, [secret(), currentTicket]));
       retry();
+
       return;
     }
+
     // A half-open socket answers no close event, so the daemon asks. The hub
     // replies from its socket auto-response, which costs it no wake.
     let pingTimer;
     let pongTimer;
+
     const stopKeepalive = () => {
       if (pingTimer !== undefined) cancel(pingTimer);
+
       if (pongTimer !== undefined) cancel(pongTimer);
       pingTimer = undefined;
       pongTimer = undefined;
     };
+
     const beat = () => {
       if (stopped) return;
+
       try {
         ws.send(PING_FRAME);
       } catch (err) {
         logger('Keepalive could not be sent:', connectFailureMessage(err, [secret(), currentTicket]));
+
         return;
       }
+
       pongTimer = schedule(() => {
         logger('No keepalive answer within', PONG_DEADLINE_MS, 'ms; closing this socket and redialling');
         stopKeepalive();
@@ -1895,8 +2200,10 @@ function startConnectLoop(opts) {
       }, PONG_DEADLINE_MS);
       pingTimer = schedule(beat, PING_INTERVAL_MS);
     };
+
     ws.addEventListener('message', (ev) => {
       if (String(ev.data) !== PONG_FRAME) return;
+
       if (pongTimer !== undefined) cancel(pongTimer);
       pongTimer = undefined;
     });
@@ -1906,11 +2213,15 @@ function startConnectLoop(opts) {
     });
     ws.addEventListener('close', (event) => {
       stopKeepalive();
+
       if (stopped) return;
+
       if (event && event.code === CREDENTIALS_REJECTED_CLOSE) {
         if (onClose) onClose();
+
         return stopRejected(`the hub closed this socket with ${CREDENTIALS_REJECTED_CLOSE}`);
       }
+
       if (onClose) onClose();
       logger('Disconnected, reconnecting in', backoff, 'ms');
       retry();
@@ -1931,6 +2242,7 @@ function startConnectLoop(opts) {
   }
 
   startConnectAttempt();
+
   return {
     stop() {
       stopped = true;
@@ -1942,6 +2254,7 @@ function persistRotatedToken(cfg, token, configPath = CONFIG_PATH) {
   const temporary = `${configPath}.rotate-${process.pid}-${Date.now()}`;
   const next = { ...cfg, token };
   let fileDescriptor;
+
   try {
     fileDescriptor = fs.openSync(temporary, 'wx', 0o600);
     fs.writeFileSync(fileDescriptor, JSON.stringify(next, null, 2) + '\n');
@@ -1950,8 +2263,10 @@ function persistRotatedToken(cfg, token, configPath = CONFIG_PATH) {
     fileDescriptor = undefined;
     fs.renameSync(temporary, configPath);
     cfg.token = token;
+
     if (os.platform() !== 'win32') {
       const directoryDescriptor = fs.openSync(path.dirname(configPath), 'r');
+
       try { fs.fsyncSync(directoryDescriptor); }
       finally { fs.closeSync(directoryDescriptor); }
     }
@@ -1969,12 +2284,14 @@ function handleTokenRotation(
   logger = log,
 ) {
   if (!msg || msg.type !== TOKEN_ROTATION || msg.token == null || msg.token === '') return false;
+
   try {
     persistRotatedToken(cfg, msg.token, configPath);
     logger('Device token rotated');
   } catch (err) {
     logger('Device token rotation failed:', err);
   }
+
   return true;
 }
 
@@ -1988,13 +2305,16 @@ function handleTokenRotation(
 /** The pid the pidfile names, or null when it holds nothing usable. */
 function readPidfile(pidPath = PID_PATH) {
   let text;
+
   try {
     text = fs.readFileSync(pidPath, 'utf8');
   } catch (err) {
     if (err && err.code === 'ENOENT') return null;
     throw new Error(`read the device daemon pidfile at ${pidPath}`, { cause: err });
   }
+
   const pid = Number(text.trim());
+
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
@@ -2003,9 +2323,11 @@ function readPidfile(pidPath = PID_PATH) {
 function processAlive(pid) {
   try {
     process.kill(pid, 0);
+
     return true;
   } catch (err) {
     if (err && err.code === 'ESRCH') return false;
+
     if (err && err.code === 'EPERM') return true;
     throw new Error(`check whether pid ${pid} is running`, { cause: err });
   }
@@ -2023,16 +2345,20 @@ function processAlive(pid) {
  */
 function processRunsThisDaemon(pid) {
   const named = (args) => args.some((arg) => arg === __filename || path.basename(arg) === path.basename(__filename));
+
   try {
     if (process.platform === 'linux') {
       return named(fs.readFileSync(`/proc/${pid}/cmdline`, 'utf8').split('\0'));
     }
+
     if (process.platform === 'darwin') {
       return named(execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' }).trim().split(/\s+/));
     }
+
     return false;
   } catch (err) {
     if (err && (err.code === 'ENOENT' || err.code === 'EACCES' || err.code === 'EPERM')) return false;
+
     if (process.platform === 'darwin' && err && err.status === 1) return false;
     throw new Error(`check whether pid ${pid} runs this daemon`, { cause: err });
   }
@@ -2046,44 +2372,57 @@ function processRunsThisDaemon(pid) {
 function claimMachine(pidPath = PID_PATH) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     let descriptor;
+
     try {
       descriptor = fs.openSync(pidPath, 'wx', 0o600);
     } catch (err) {
       if (!err || err.code !== 'EEXIST') {
         throw new Error(`claim the device daemon pidfile at ${pidPath}`, { cause: err });
       }
+
       const holder = readPidfile(pidPath);
+
       if (holder === process.pid) return { held: true, holder: process.pid };
+
       if (holder !== null && processAlive(holder) && processRunsThisDaemon(holder)) {
         return { held: false, holder };
       }
+
       fs.rmSync(pidPath, { force: true });
       continue;
     }
+
     try {
       fs.writeFileSync(descriptor, `${process.pid}\n`);
       fs.fsyncSync(descriptor);
     } finally {
       fs.closeSync(descriptor);
     }
+
     fs.chmodSync(pidPath, 0o600);
+
     return { held: true, holder: process.pid };
   }
+
   return { held: false, holder: readPidfile(pidPath) };
 }
 
 /** Give the machine back, and only while this process still holds it. */
 function releaseMachine(pidPath = PID_PATH) {
   let holder;
+
   try {
     holder = readPidfile(pidPath);
   } catch (err) {
     // Shutdown path: an unreadable pidfile is left for the next daemon's stale
     // check, which is what recovers it, rather than thrown out of an exit hook.
     log('Could not read the device pidfile while exiting:', err.message || err);
+
     return;
   }
+
   if (holder !== process.pid) return;
+
   try {
     fs.rmSync(pidPath, { force: true });
   } catch (err) {
@@ -2093,16 +2432,20 @@ function releaseMachine(pidPath = PID_PATH) {
 
 function main() {
   const claim = claimMachine();
+
   if (!claim.held) {
     log(`Another Kinu device daemon is already running on this machine (pid ${claim.holder}); this one is exiting.`);
     process.exitCode = ALREADY_RUNNING_EXIT;
+
     return;
   }
+
   process.on('exit', () => { releaseMachine(); });
   // The terminals this daemon holds. Live state, never durable: a terminal
   // is something a person is watching, so one whose socket is gone has
   // nobody to draw for.
   const sessions = pty.createSessions({ log });
+
   // A signalled daemon terminates without running exit hooks, so the machine
   // would stay claimed by a dead pid until the next daemon reaped it. The
   // terminals go first: a signal never reaches the socket's close handler,
@@ -2113,6 +2456,7 @@ function main() {
   for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
     process.on(signal, () => {
       const ended = sessions.closeAll();
+
       if (ended.length > 0) log('device.terminals_closed_with_daemon', ended.join(' '));
       process.exit(0);
     });
@@ -2122,6 +2466,7 @@ function main() {
   const USER = cfg.user;
   const HTTP_ORIGIN = (cfg.origin || 'https://kinu.run').replace(/\/+$/, '');
   const WS_ORIGIN = HTTP_ORIGIN.replace(/^http/, 'ws');
+
   const ctx = {
     checkpoints: createCheckpoints({ keep: cfg.checkpointKeep }),
     sessions,
@@ -2136,6 +2481,7 @@ function main() {
   if (!(globalThis.WebSocket instanceof Function)) {
     throw new Error('this daemon requires a runtime with a global WebSocket; run it with the Kinu CLI (its bundled Bun)');
   }
+
   const mkWs = (url) => new globalThis.WebSocket(url);
 
   // Probed once, by RUNNING the real sandbox shape: a check that only looked
@@ -2152,6 +2498,7 @@ function main() {
       detail: `the sandbox probe could not run: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
+
   if (SANDBOX_CAPABILITY.status !== sandbox.SANDBOX_STATUS.OK) {
     log('Commands cannot be sandboxed on this machine:', SANDBOX_CAPABILITY.detail);
   }
@@ -2172,6 +2519,7 @@ function main() {
       // socket that carried its keystrokes, so the shell is hung up here
       // rather than left running with no way to reach it.
       const ended = ctx.sessions.closeAll();
+
       if (ended.length > 0) log('device.terminals_closed_with_socket', ended.join(' '));
     },
     dial(ticket) {
@@ -2211,16 +2559,20 @@ function main() {
         const payload = ev.data instanceof ArrayBuffer
           ? new TextDecoder().decode(ev.data)
           : String(ev.data);
+
         // Before the parse: the keepalive answer is a bare word, not JSON, so
         // reading it afterwards would log a parse failure every 30 seconds.
         if (payload === PONG_FRAME) return;
         let msg;
+
         try {
           msg = JSON.parse(payload);
         } catch (err) {
           log('Device message parse failed:', err);
+
           return;
         }
+
         // The hub rotates this machine's long-lived token on every accepted
         // connect. Rename a complete same-directory file before changing memory:
         // a crash leaves either the old valid JSON or the complete new JSON.
@@ -2232,14 +2584,17 @@ function main() {
           // the grace on the superseded token: a rotation this daemon failed
           // to persist must keep it, or the machine is locked out.
           if (cfg.token === msg.token) ws.send(JSON.stringify({ type: TOKEN_ROTATION_ACK }));
+
           return;
         }
+
         try {
           handle(msg, ws, ctx);
         } catch (err) {
           log('Device message failed:', err);
         }
       });
+
       return ws;
     },
   });

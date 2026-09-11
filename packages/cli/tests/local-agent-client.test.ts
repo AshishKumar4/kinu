@@ -30,11 +30,13 @@ afterEach(() => {
 function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) => void): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const [a, b] = [answer.slice(0, answer.length >> 1), answer.slice(answer.length >> 1)];
+
   return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
     doStream: async (options) => {
       onPrompt?.(options.prompt);
+
       return {
       stream: new ReadableStream({
         start(controller) {
@@ -108,10 +110,12 @@ function setup(model: LanguageModel) {
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
+
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
     craftedToolCount: 0, searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
   };
+
   const client = new LocalAgentClient({
     agentName: 'jarvis',
     rt,
@@ -128,8 +132,10 @@ function setup(model: LanguageModel) {
     naming: { generate: async () => JSON.stringify({ title: 'Named By Test' }) },
     surface: 'interactive',
   });
+
   return { client, home, rt };
 }
+
 function openPersistentClient(
   home: string,
   model: LanguageModel,
@@ -142,10 +148,12 @@ function openPersistentClient(
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
+
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
     craftedToolCount: 0, searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
   };
+
   return new LocalAgentClient({
     agentName: 'jarvis',
     rt,
@@ -200,17 +208,20 @@ describe('LocalAgentClient', () => {
       noTranscript: true,
       transcriptDir,
     });
+
     await unrecorded.connect();
     await unrecorded.send('first question');
     await unrecorded.close();
     expect(existsSync(transcriptDir)).toBe(false);
 
     let prompt: LanguageModelV2Prompt = [];
+
     const recorded = openPersistentClient(
       home,
       fakeModel('second answer', (next) => { prompt = next; }),
       { transcriptDir },
     );
+
     await recorded.connect();
     await recorded.send('second question');
     expect(JSON.stringify(prompt)).toContain('first question');
@@ -219,12 +230,15 @@ describe('LocalAgentClient', () => {
     await recorded.close();
 
     const db = new Database(join(home, 'agent.db'));
+
     const sessions = db.query<{ session_id: string }, []>(
       'SELECT DISTINCT session_id FROM messages ORDER BY session_id',
     ).all();
+
     const conversation = db.query<{ value: string }, []>(
       "SELECT value FROM actor_config WHERE key = 'conversation.id'",
     ).get();
+
     expect(sessions).toEqual([{ session_id: 'default' }]);
     expect(conversation?.value).toBe('default');
     db.close();
@@ -246,9 +260,11 @@ describe('LocalAgentClient', () => {
 
     const turn = client.send('long task');
     const deadline = Date.now() + 2_000;
+
     while (!events.some((event) => event.type === 'text-delta') && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
+
     expect(events.some((event) => event.type === 'text-delta')).toBe(true);
 
     client.stop();
@@ -268,6 +284,7 @@ describe('LocalAgentClient', () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+
     const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
@@ -296,14 +313,17 @@ describe('LocalAgentClient', () => {
 
     const turn = client.send('start');
     const deadline = Date.now() + 2_000;
+
     while (!events.some((event) => event.type === 'text-delta') && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
+
     expect(client.steer('actually, use yaml')).toBe(true);
     release();
     await turn;
     // The undrained steer cascades as the immediate next turn.
     const settled = Date.now() + 2_000;
+
     while (events.filter((event) => event.type === 'turn-end').length < 2 && Date.now() < settled) {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
@@ -369,6 +389,7 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
                    VALUES (${rt.actor.actorId}, 'editor', '"helix"', 1.0, NULL, ${Date.now() - 500})`;
 
     const listed = await executeSlashCommand(client, '/changelog');
+
     if (listed.kind !== 'changelog') throw new Error(`expected changelog outcome, got ${listed.kind}`);
     expect(listed.view.unseenCount).toBe(2);
     const tool = listed.view.entries.find((entry) => entry.kind === 'tool')!;
@@ -382,12 +403,14 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
 
     // Viewing IS the acknowledgement — the next fetch shows nothing unseen.
     const second = await executeSlashCommand(client, '/changelog');
+
     if (second.kind !== 'changelog') throw new Error('expected changelog outcome');
     expect(second.view.unseenCount).toBe(0);
 
     // The aggregate is one rendered row/index; reverting it forgets every child.
     const factIndex = second.view.entries.findIndex((entry) => entry.kind === 'fact') + 1;
     const reverted = await executeSlashCommand(client, `/changelog revert ${factIndex}`);
+
     if (reverted.kind !== 'text') throw new Error('expected text outcome');
     expect(reverted.text).toContain(`Reverted ${factIndex}`);
     expect(rt.storage.sql`SELECT * FROM agent_facts`).toHaveLength(0);
@@ -395,9 +418,11 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
 
     // Out-of-range and bad indices answer with usage, never throw.
     const missing = await executeSlashCommand(client, '/changelog revert 99');
+
     if (missing.kind !== 'text') throw new Error('expected text outcome');
     expect(missing.text).toContain('No changelog entry 99');
     const usage = await executeSlashCommand(client, '/changelog revert x');
+
     if (usage.kind !== 'text') throw new Error('expected text outcome');
     expect(usage.text).toContain('Usage');
     await client.close();
@@ -415,6 +440,7 @@ describe('/takes — Alternate Takes over a real local client', () => {
 
     // No takes yet — the command explains instead of opening a comparison.
     const empty = await executeSlashCommand(client, '/takes');
+
     if (empty.kind !== 'text') throw new Error(`expected text outcome, got ${empty.kind}`);
     expect(empty.text).toContain('No alternate takes yet');
 
@@ -435,29 +461,36 @@ describe('/takes — Alternate Takes over a real local client', () => {
     await client.send('solve it');
 
     const set = await client.latestTakes();
+
     if (set === null || set.turnId === null) throw new Error('expected alternate takes bound to the just-run turn');
     expect(set.turnId.length).toBeGreaterThan(0);
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['win', 'alt']);
 
     const listing = await executeSlashCommand(client, '/takes');
+
     if (listing.kind !== 'takes') throw new Error(`expected takes outcome, got ${listing.kind}`);
     expect(listing.set.id).toBe(set.id);
 
     // Pick by number through the shared command path (take 2 = the sibling).
     const picked = await executeSlashCommand(client, '/takes 2');
+
     if (picked.kind !== 'text') throw new Error(`expected text outcome, got ${picked.kind}`);
     expect(picked.text).toContain('Take 2 picked');
+
     const row = rt.storage.sql<{ outcome: string; source: string; turn_id: string }>`
       SELECT outcome, source, turn_id FROM turn_outcomes`[0];
+
     if (row === undefined) throw new Error('expected a take_pick outcome row');
     expect(row).toMatchObject({ outcome: 'corrected', source: 'take_pick', turn_id: set.turnId });
     const altNode = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'alt'`[0];
+
     if (altNode === undefined) throw new Error('expected the sibling take node');
     expect(altNode.status).toBe('terminal');
 
     // The pick queued a take_pick continuation turn — let it stream through
     // the same event seam before closing.
     const deadline = Date.now() + 2000;
+
     while (!events.some((e) => e.type === 'turn-start' && e.kind === 'programmatic' && e.event === 'take_pick')
         || events.filter((e) => e.type === 'turn-end').length < 2) {
       if (Date.now() > deadline) throw new Error('timed out waiting for the take_pick continuation turn');
@@ -466,6 +499,7 @@ describe('/takes — Alternate Takes over a real local client', () => {
 
     // Out-of-range picks answer with usage, never throw.
     const missing = await executeSlashCommand(client, '/takes 9');
+
     if (missing.kind !== 'text') throw new Error('expected text outcome');
     expect(missing.text).toContain('No take "9"');
     await client.close();

@@ -20,24 +20,30 @@ import { discoverAgentsMd } from '../src/agents-md';
 
 /** Wide enough that admission is never what a chain-order test measures. */
 const WIDE: ModelWindow = { contextWindow: 400_000, modelOutputLimit: 32_000 };
+
 /** A window whose answer reservation is its own declared maximum, so the
  *  instruction budget is the other half of it. */
 const NARROW: ModelWindow = { contextWindow: 800, modelOutputLimit: 400 };
+
 /** Derived, never a literal: the same two facts the allocator is built from. */
 const budgetOf = (limits: ModelWindow): number => stepContextLimit(limits) * CHARS_PER_TOKEN;
 
 /** The owner has approved everything — the resolver a test uses when trust is
  *  not the thing it measures, so admission and rendering keep their meaning. */
 const APPROVED: InstructionTrustResolver = () => 'approved';
+
 /** Nobody approved anything: the standing answer for a file with no decision. */
 const UNVERIFIED: InstructionTrustResolver = () => 'unverified';
 
 const roots: string[] = [];
+
 function makeTree(): string {
   const root = mkdtempSync(join(tmpdir(), 'kinu-agentsmd-'));
   roots.push(root);
+
   return root;
 }
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -233,8 +239,10 @@ describe('discoverAgentsMd — trust classification', () => {
     writeFileSync(path, content);
 
     const asked: Array<{ path: string; content: string }> = [];
+
     const sources = discoverAgentsMd(root, WIDE, (p, c) => {
       asked.push({ path: p, content: c });
+
       return 'approved';
     });
 
@@ -249,8 +257,10 @@ describe('discoverAgentsMd — trust classification', () => {
     const path = join(root, 'AGENTS.md');
     writeFileSync(path, 'first rules');
     const seen: string[] = [];
+
     const capture: InstructionTrustResolver = (_p, content) => {
       seen.push(content);
+
       return 'approved';
     };
 
@@ -267,8 +277,10 @@ describe('discoverAgentsMd — trust classification', () => {
     const root = makeTree();
     writeFileSync(join(root, 'AGENTS.md'), 'C'.repeat(budgetOf(NARROW) + 1));
     const asked: string[] = [];
+
     const sources = discoverAgentsMd(root, NARROW, (p) => {
       asked.push(p);
+
       return 'approved';
     });
 
@@ -328,7 +340,11 @@ describe('discoverAgentsMd — a bad symlink can never fail the turn', () => {
     symlinkSync(path, path);
     const asked: string[] = [];
 
-    discoverAgentsMd(root, WIDE, (p) => { asked.push(p); return 'approved'; });
+    discoverAgentsMd(root, WIDE, (p) => {
+      asked.push(p);
+
+      return 'approved';
+    });
     expect(asked).not.toContain(path);
   });
 

@@ -53,6 +53,7 @@ import { diagnostics, toKinuError } from '../obs/index';
 import { isVfsError, makeVfsError } from './errno';
 
 export { workspaceToolchainCapabilities } from './workspace-runtimes';
+
 export type { RuntimePackage } from '@nimbus-sh/core/runtime/runtime-package.js';
 
 export { WORKSPACE_ROOT, workspacePath } from './workspace-path';
@@ -76,14 +77,18 @@ const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.
  *  as `null` and answers `exists` with `false`. */
 function isEnoent({ error }: { error: unknown }): boolean {
   if (isVfsError(error)) return error.code === 'ENOENT';
+
   if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return true;
+
   return false;
 }
 
 function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefined {
   const stdin = v.safeParse(v.string(), input.value);
+
   if (stdin.success) return { stdin: stdin.output };
   const options = v.safeParse(ShellExecOptionsSchema, input.value);
+
   return options.success ? options.output : undefined;
 }
 
@@ -105,9 +110,11 @@ export interface WorkspaceVFS extends VFS {
 
 function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
   const fs = async (): Promise<NimbusWorkspace['fs']> => (await open()).fs;
+
   const self: WorkspaceVFS = {
     async readFile(path, opts) {
       const abs = workspacePath(path);
+
       return opts?.encoding === 'utf8' ? (await fs()).readFile(abs) : (await fs()).readFile(abs, null);
     },
     async writeFile(path, data) { await (await fs()).writeFile(workspacePath(path), data); },
@@ -115,6 +122,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
     async stat(path) {
       try {
         const st = await (await fs()).stat(workspacePath(path));
+
         return { size: st.size, mtimeMs: st.mtime, isDir: st.type === 'directory' };
       } catch (err) {
         if (isEnoent({ error: err })) return null;
@@ -137,14 +145,19 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
      */
     async removeRecursive(path) {
       const handle = await fs();
+
       const remove = async (target: string): Promise<void> => {
         const st = await self.stat(target);
+
         if (!st) throw makeVfsError('ENOENT', 'no such file or directory', target);
+
         if (st.isDir) {
           for (const name of await self.readdir(target)) await remove(`${target}/${name}`);
         }
+
         await handle.rm(workspacePath(target));
       };
+
       await remove(path);
     },
 
@@ -156,6 +169,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
       return (await open()).vfs.as(CRED_SESSION_USER).readRange(workspacePath(path), offset, length);
     },
   };
+
   return self;
 }
 
@@ -169,10 +183,12 @@ function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
   return {
     async exec(command, stdinOrOptions) {
       const options = shellExecOptions({ value: stdinOrOptions });
+
       const result = await (await open()).exec(command, {
         stdin: options?.stdin,
         signal: options?.signal,
       });
+
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     },
   };
@@ -214,6 +230,7 @@ function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
   const self: WorkspaceVFS = {
     async readFile(path, opts) {
       const absolute = workspacePath(path);
+
       return opts?.encoding === 'utf8' ? vfs.readFileString(absolute) : vfs.readFile(absolute);
     },
     async writeFile(path, data) { vfs.writeFile(workspacePath(path), data); },
@@ -221,6 +238,7 @@ function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
     async stat(path) {
       try {
         const stat = vfs.stat(workspacePath(path));
+
         return { size: stat.size, mtimeMs: stat.mtime, isDir: stat.type === 'directory' };
       } catch (error) {
         if (isEnoent({ error })) return null;
@@ -234,6 +252,7 @@ function agentVfs(vfs: CredentialedVfs): WorkspaceVFS {
     async rename(oldPath, newPath) { vfs.rename(workspacePath(oldPath), workspacePath(newPath)); },
     async readRange(path, offset, length) { return vfs.readRange(workspacePath(path), offset, length); },
   };
+
   return self;
 }
 
@@ -393,11 +412,13 @@ export interface WorkspaceOptions {
 export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const fileListeners = new Set<(paths: readonly string[]) => void>();
   let booting: Promise<NimbusWorkspace> | undefined;
+
   const open = async (): Promise<NimbusWorkspace> => {
     if (!booting) {
       booting = (async (): Promise<NimbusWorkspace> => {
         try {
           const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
+
           const workspace = await NimbusWorkspace.create({
             sql: opts.sql,
             transactions: opts.transactions,
@@ -415,6 +436,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             // per isolate, so passing it on every create is idempotent.
             fabric: opts.fabric,
           });
+
           // Before the first command, and after the substrate's own
           // registrations so a coreutil is never shadowed by a runtime bin of
           // the same name.
@@ -422,6 +444,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             workspace,
             runtimes: opts.runtimes ?? [],
           };
+
           if (opts.runtimeFacets !== undefined) provisioning.facets = opts.runtimeFacets;
           await provisionWorkspaceRuntimes(provisioning);
           const root = workspace.vfs.as(CRED_KERNEL);
@@ -433,8 +456,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           workspace.vfs.events.on((batch) => {
             if (fileListeners.size === 0) return;
             const paths = batch.map((event) => event.path);
+
             for (const listener of fileListeners) listener(paths);
           });
+
           return workspace;
         } catch (cause) {
           // Clear the cache BEFORE rethrowing: this bundle lives for the whole
@@ -453,8 +478,10 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
         }
       })();
     }
+
     return await booting;
   };
+
   // The workspace's process owner, here because a credentialed shell needs a
   // REAL pid: `ShellCommandIdentity` carries one, append capabilities are keyed
   // by it, and a number invented locally would collide with a live writer. One
@@ -468,20 +495,24 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
   const processes = new SessionProcessSupervisor();
   processes.setPidBase(opts.generation * PID_GEN_STRIDE);
   const planes = new Map<number, Promise<WorkspaceAgentPlane>>();
+
   return {
     vfs: workspaceVfs(open),
     shell: workspaceShell(open),
     onFilesChanged(listener) {
       fileListeners.add(listener);
+
       return () => { fileListeners.delete(listener); };
     },
     async stats() { return (await open()).stats(); },
     async privileged() {
       const workspace = await open();
+
       return { root: workspace.vfs.as(CRED_KERNEL), confiner: workspace.vfs };
     },
     async session() {
       const workspace = await open();
+
       return {
         shell: workspace.shell,
         vfs: workspace.vfs,
@@ -496,7 +527,9 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
     async destroy() { (await open()).destroy(); },
     async asAgent(agent) {
       const held = planes.get(agent.cred.uid);
+
       if (held) return await held;
+
       const opening = (async (): Promise<WorkspaceAgentPlane> => {
         try {
           const origin = await open();
@@ -508,6 +541,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           // or this shell loses the identity-transition path `sudo` and `su`
           // dispatch on.
           const { NimbusWorkspace } = await import('@nimbus-sh/core/workspace');
+
           const asAgent = await NimbusWorkspace.create({
             sql: opts.sql,
             transactions: opts.transactions,
@@ -523,6 +557,7 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
             // The origin create already stated it; this re-states nothing new.
             fabric: opts.fabric,
           });
+
           return {
             vfs: agentVfs(origin.vfs.as(agent.cred)),
             shell: workspaceShell(() => Promise.resolve(asAgent)),
@@ -534,7 +569,9 @@ export function createWorkspace(opts: WorkspaceOptions): WorkspaceBundle {
           throw cause;
         }
       })();
+
       planes.set(agent.cred.uid, opening);
+
       return await opening;
     },
   };
@@ -555,5 +592,6 @@ export function nextWorkspaceGeneration(sql: SqlDatabase): number {
      ON CONFLICT(id) DO UPDATE SET value = value + 1`,
   );
   const [row] = [...sql.exec(`SELECT value FROM ${GENERATION_TABLE} WHERE id = 1`)];
+
   return Number(row?.value ?? 1);
 }

@@ -52,7 +52,9 @@ const LLM: LLMProviderConfig = {
 };
 
 let dir: string;
+
 let ctx: VerifierContext;
+
 let db: Database;
 
 beforeAll(async () => {
@@ -64,6 +66,7 @@ beforeAll(async () => {
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const { rt } = await openWorkspaceCLI(db, dbPath, { llm: LLM });
   const shell = rt.shell;
+
   if (!shell) throw new Error('the opened runtime has no shell, so nothing here can be measured');
   ctx = { vfs: rt.storage.vfs, exec: (command) => shell.exec(command) };
 });
@@ -79,6 +82,7 @@ afterAll(() => {
 async function scoreWith(task: HardTask, source: string) {
   await seedHardTask(task, ctx.vfs);
   await ctx.vfs.writeFile(SOLUTION_FILE, source);
+
   return task.verify(ctx);
 }
 
@@ -86,7 +90,9 @@ async function scoreWith(task: HardTask, source: string) {
  *  definition, and the cheapest way to prove the whole pipeline ran. */
 const asReference = async (task: HardTask) => {
   const ref = task.seed.find((f) => f.path === REFERENCE_FILE);
+
   if (!ref) throw new Error(`${task.id} seeds no ${REFERENCE_FILE}`);
+
   return scoreWith(task, ref.content);
 };
 
@@ -553,6 +559,7 @@ const STANDARD = {
  *  a task shipped without a solution reads as `undefined` here instead of needing
  *  a cast at every call site. */
 const BEST_BY_ID = new Map<string, string>(Object.entries(BEST));
+
 const STANDARD_BY_ID = new Map<string, string>(Object.entries(STANDARD));
 
 describe('every task has a scoring range, measured on this substrate', () => {
@@ -677,6 +684,7 @@ describe('no task is saturated — the obvious algorithm lands strictly inside t
  */
 describe('the score is continuous, not a bit in disguise', () => {
   const task = HARD_TASKS.find((t) => t.id === 'hard-merge-two');
+
   if (!task) throw new Error('hard-merge-two is missing from the corpus');
 
   test('three merges of increasing quality receive strictly increasing scores', async () => {
@@ -690,6 +698,7 @@ describe('the score is continuous, not a bit in disguise', () => {
       expect(scored.detail, `a candidate did not produce a measurement: ${scored.detail}`)
         .not.toContain('no usable solution');
     }
+
     expect(linear.measured.candOps).toBeGreaterThan(binary.measured.candOps);
     expect(binary.measured.candOps).toBeGreaterThan(best.measured.candOps);
 
@@ -715,6 +724,7 @@ describe('every task can score zero by a real failure', () => {
   // are shared by construction (`trial` in the harness prologue). Running them
   // seven times would measure the same code seven times and cost a minute.
   const task = HARD_TASKS[0];
+
   if (!task) throw new Error('HARD_TASKS is empty');
 
   test('a solution that throws scores 0 and says so', async () => {
@@ -749,6 +759,7 @@ describe('every task can score zero by a real failure', () => {
   for (;;) oracle.compare(t[0], t[1]);
 }
 `);
+
     expect(scored.score).toBe(0);
     expect(scored.detail).toContain('oracle budget');
     // The budget is a multiple of the MEASURED reference, so the runaway is
@@ -759,7 +770,9 @@ describe('every task can score zero by a real failure', () => {
 
 describe('scoreRatio — the refusals that keep a bad number from being published', () => {
   const task = HARD_TASKS[0];
+
   if (!task) throw new Error('HARD_TASKS is empty');
+
   const measurement = (over: Partial<RatioMeasurement>): RatioMeasurement => ({
     refOps: 1_000_000, candOps: 200_000, refMs: 10, candMs: 2, correct: true, failure: null, ...over,
   });
@@ -768,6 +781,7 @@ describe('scoreRatio — the refusals that keep a bad number from being publishe
     const scored = scoreRatio(
       measurement({ candOps: task.problem.lowerBoundOps - 1 }), task.problem,
     );
+
     expect(scored.score).toBe(0);
     expect(scored.detail).toContain('information-theoretic');
     expect(scored.detail).toContain('measurement channel was bypassed');
@@ -821,6 +835,7 @@ describe('the corpus as eval cases', () => {
       expect(c.env).toBe(HARD_TASK_ENV);
       expect(hardTaskFor(c)?.id).toBe(c.id);
     }
+
     expect(hardTaskFor({ id: 'ws-fix-broken', env: undefined })).toBeUndefined();
     expect(hardTaskFor({ id: cases[0]?.id ?? '', env: 'something-else' })).toBeUndefined();
   });
@@ -845,6 +860,7 @@ describe('the corpus as eval cases', () => {
 describe('the outcome row this tier publishes', () => {
   test('it is the primary metric, carries the measured counts, and nothing else is', async () => {
     const task = HARD_TASKS[0];
+
     if (!task) throw new Error('HARD_TASKS is empty');
     await seedHardTask(task, ctx.vfs);
     await ctx.vfs.writeFile(SOLUTION_FILE, BEST_BY_ID.get(task.id) ?? '');

@@ -48,6 +48,7 @@ export function workspaceOwner(
   // WorkspaceOwnerNamespace declares, and orchestrator.ts declares both slate
   // methods with these signatures, delegating to SlateHost.
   const namespace = view as WorkspaceOwnerNamespace;
+
   return namespace.get(namespace.idFromName(workspaceName));
 }
 

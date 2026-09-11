@@ -200,12 +200,15 @@ export type StartupPollVerdict =
  * nothing about the container and stays `pending`. */
 export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
   const state = reply.state;
+
   if (state?.restoration === 'unattached') {
     return { kind: 'failed', reason: state.unready ?? 'the startup refused without a reason' };
   }
+
   if (state?.restoration === 'attached' && state.lastAttach !== undefined) {
     return { kind: 'attached', attach: state.lastAttach };
   }
+
   if (state?.restoration === 'repair' && state.lastAttach !== undefined) {
     return {
       kind: 'repair',
@@ -213,12 +216,14 @@ export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
       incomplete: state.unready ?? 'the box named no incompleteness',
     };
   }
+
   if (state?.running === false && state.restoration === 'unstarted') {
     return {
       kind: 'stopped',
       detail: state.unready ?? 'the container is stopped and no restoration has started for it',
     };
   }
+
   return { kind: 'pending' };
 }
 
@@ -236,8 +241,10 @@ export function startupPollVerdict(reply: StateReply): StartupPollVerdict {
  */
 export function describeStartupState(reply: StateReply): string {
   const state = reply.state;
+
   if (state === undefined) return `no state in the reply${reply.error === undefined ? '' : `: ${reply.error}`}`;
   const incidents = state.incidents;
+
   return `running=${state.running === undefined ? 'unreported' : String(state.running)} `
     + `restoration=${state.restoration ?? 'unreported'}`
     + `${incidents?.total === undefined || incidents.total === 0
@@ -249,6 +256,7 @@ export function describeStartupState(reply: StateReply): string {
 async function chainGeneration(fixture: Fixture, box: string): Promise<ChainGeneration> {
   const reply = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
   const chain = reply.state?.chain ?? null;
+
   return {
     baseId: chain?.base?.id ?? null,
     hasDelta: chain?.delta !== undefined && chain?.delta !== null,
@@ -277,6 +285,7 @@ const DecisiveRunSchema: v.GenericSchema<DecisiveRun> = v.looseObject({
 
 function parseDecisiveRun(text: string, source: string): DecisiveRun {
   const parsed = v.safeParse(DecisiveRunSchema, JSON.parse(text));
+
   if (!parsed.success) {
     throw new Error(
       `${source} printed a payload that is not a decisive run: `
@@ -284,20 +293,27 @@ function parseDecisiveRun(text: string, source: string): DecisiveRun {
       + ` — body: ${text.slice(0, 300)}`,
     );
   }
+
   return parsed.output;
 }
 
 const REPO_ROOT = dirname(dirname(new URL(import.meta.url).pathname));
+
 const BENCH_DIR = join(REPO_ROOT, 'packages/devbox/bench');
+
 /** The account every devbox fixture is raised on. Exported so the deployed
  *  lifecycle suite names the same account rather than declaring a second copy
  *  of it — `gate:policy-drift`'s subject exactly. */
 export const BENCH_ACCOUNT_ID = 'f44999d1ddda7012e9a87729eba250f1';
+
 const FIXTURE_BASE = 'kinu-devbox-bench';
+
 const FIXTURE_CLASS_BY_STRATEGY = {
   'snapshot-chain': 'SnapshotChainBox',
 } as const satisfies Record<Strategy, string>;
+
 const FIXTURE_COUNTER_CLASS = 'BenchOpCounter';
+
 export interface FixtureNames {
   readonly worker: string;
   readonly bucket: string;
@@ -376,6 +392,7 @@ function fixtureClasses(arms: readonly Strategy[]): readonly string[] {
  */
 export function resourceNames(runId: string, arm: Strategy): FixtureNames {
   const worker = `${FIXTURE_BASE}-${runId}-${arm}`;
+
   return {
     worker,
     bucket: worker,
@@ -407,9 +424,11 @@ export function fixtureConfigForArms(
   const config = parseJsonc(template, FixtureConfigSchema, 'benchmark config');
   const deployedClasses = [...fixtureClasses(arms), FIXTURE_COUNTER_CLASS];
   const matchingBuckets = config.r2_buckets.filter((bucket) => bucket.bucket_name === 'kinu-devbox-bench');
+
   if (matchingBuckets.length !== 1) {
     throw new Error('benchmark config must bind exactly one kinu-devbox-bench bucket');
   }
+
   return `${JSON.stringify({
     ...config,
     $schema: join(REPO_ROOT, 'node_modules/wrangler/config-schema.json'),
@@ -453,6 +472,7 @@ export function plannedTeardownManifest(
     ...arms.flatMap((strategy) => {
       const names = resourceNames(runId, strategy);
       const box = boxName(runId, strategy);
+
       return [
         { kind: 'worker' as const, name: names.worker, detail: `${strategy} fixture Worker` },
         ...names.containerApps.map((name) => ({
@@ -490,6 +510,7 @@ export function createFixtureResources(
   writeManifest(REPO_ROOT, manifest);
   mkdirSync(dir, { recursive: true });
   const template = readFileSync(join(BENCH_DIR, 'wrangler.jsonc'), 'utf8');
+
   // ONE CONFIG PER ARM, all in the one build directory: each names its own
   // Worker, binds its own bucket and deploys only its own class.
   const armFixtures = arms.map((strategy): ArmFixture => {
@@ -497,8 +518,10 @@ export function createFixtureResources(
     const configPath = join(dir, `wrangler-${strategy}.jsonc`);
     const config = fixtureConfigForArms(template, names, [strategy]);
     writeFileSync(configPath, config);
+
     return { ...names, strategy, configPath, config };
   });
+
   return {
     arms: armFixtures,
     manifest,
@@ -507,14 +530,19 @@ export function createFixtureResources(
     disposeConfig: () => { rmSync(dir, { recursive: true, force: true }); },
   };
 }
+
 const HARNESS = '/workspace/.devbox-bench';
+
 const PROBE_FILES = ['stats.ts', 'probe.ts', 'decisive.ts'] as const;
+
 /** The manifest digest the published sandbox tag resolved to on 2026-08-27. */
 export const SANDBOX_IMAGE_DIGEST = 'sha256:822501de5f0c52a012c125c4e5e4c0080421a8e93ca4ce0ba3d247148021989f';
+
 /** Every generated fixture config uses this immutable reference, so the image
  *  provenance row identifies the bytes that ran rather than a tag another
  *  publisher can repoint. */
 export const SANDBOX_IMAGE = `docker.io/cloudflare/sandbox@${SANDBOX_IMAGE_DIGEST}`;
+
 /**
  * The decisive experiment's arms, from the adopted research spec.
  *
@@ -558,18 +586,24 @@ const MIN_CHECKPOINT_INTERVAL_MS = 3_000;
 const PROCESS_PHASES = new Set<string>([
   'npmlike', 'gitlike', 'small1k', 'small10k', 'seq100', 'archive',
 ]);
+
 const PHASES = ['posix', 'seq1', 'seq10', 'rand', 'archive', 'small1k', 'npmlike'] as const;
+
 /** Change sizes for the checkpoint ladder, in KiB of freshly written bytes. */
 const CHANGE_SIZES_KIB = [64, 4_096, 65_536] as const;
+
 const POLL_MS = 10_000;
+
 const PROCESS_DEADLINE_MS = 1_500_000;
 
 export type Strategy = 'snapshot-chain';
+
 export const STRATEGIES: readonly Strategy[] = ['snapshot-chain'];
 
 /** The shipped default. Every run measures it and the report ranks it against
  *  nothing else: it is the only strategy this package holds. */
 export const SHIPPED_STRATEGY = 'snapshot-chain' as const satisfies Strategy;
+
 const NonEmptyString = v.pipe(v.string(), v.minLength(1));
 
 interface FrozenControlArtifact {
@@ -698,12 +732,15 @@ export function frozenControlStatus(
   admission: FrozenControlArtifact['admission'],
 ): FrozenControlJudgement {
   const missing: string[] = [];
+
   if (arm.verifyChecks === undefined || arm.verifyChecks.length === 0) {
     missing.push('per-check lifecycle rows');
   }
+
   if (arm.ops === undefined || arm.ops === null || arm.ops.total === undefined) {
     missing.push('a per-arm operation tally');
   }
+
   const cleanupComplete = cleanup !== undefined
     && cleanup.attempted !== undefined
     && cleanup.kept !== undefined
@@ -716,15 +753,20 @@ export function frozenControlStatus(
     && cleanup.replayIdempotent !== undefined
     && cleanup.multipartResidue !== undefined
     && cleanup.errors !== undefined;
+
   if (!cleanupComplete) missing.push('the complete C1–C7 cleanup evidence');
+
   if (admission === undefined) missing.push('a G0–G9 admission decision');
+
   if (missing.length > 0) {
     return {
       status: 'legacy-contract',
       statusDetail: `predates the current contract: it carries no ${missing.join(', no ')}`,
     };
   }
+
   const failed = (arm.verifyChecks ?? []).filter((check) => !check.pass).map((check) => check.name);
+
   if (!arm.verifyPassed || failed.length > 0) {
     return {
       status: 'refused',
@@ -733,6 +775,7 @@ export function frozenControlStatus(
         : 'its run recorded a failed lifecycle proof',
     };
   }
+
   if (
     cleanup?.attempted !== true
     || cleanup.kept !== false
@@ -748,9 +791,11 @@ export function frozenControlStatus(
   ) {
     return { status: 'refused', statusDetail: 'its C1–C7 cleanup contract did not complete cleanly' };
   }
+
   if (admission?.admitted !== true) {
     return { status: 'refused', statusDetail: 'its run was not admitted by its own G0–G9 gates' };
   }
+
   return {
     status: 'verified',
     statusDetail: 'lifecycle, accounting, cleanup and admission all present and passing',
@@ -767,6 +812,7 @@ export function parseFrozenControlArtifact(
   text: string,
 ): FrozenControl {
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(text);
   } catch (error) {
@@ -775,20 +821,26 @@ export function parseFrozenControlArtifact(
       { cause: error },
     );
   }
+
   const parsed = v.safeParse(FrozenControlArtifactSchema, decoded);
+
   if (!parsed.success) {
     throw new Error(
       `control artifact ${path} does not match the control contract: ${issueText(parsed.issues)}`,
     );
   }
+
   const arms = parsed.output.arms.filter((arm) => arm.strategy === strategy);
+
   if (arms.length !== 1) {
     throw new Error(
       `control artifact ${path} must contain exactly one requested ${strategy} arm; found ${arms.length}`,
     );
   }
+
   const arm = arms[0]!;
   const judged = frozenControlStatus(arm, parsed.output.cleanup, parsed.output.admission);
+
   return {
     strategy,
     artifact: path,
@@ -881,9 +933,11 @@ const armLogTails = new Map<Strategy, string[]>();
 const log = (message: string): void => {
   const arm = armLogContext.getStore();
   process.stderr.write(`[devbox-bench${arm === undefined ? '' : `:${arm}`}] ${message}\n`);
+
   if (arm === undefined) return;
   const tail = armLogTails.get(arm) ?? [];
   tail.push(message);
+
   if (tail.length > ARM_LOG_TAIL_LINES) tail.splice(0, tail.length - ARM_LOG_TAIL_LINES);
   armLogTails.set(arm, tail);
 };
@@ -940,56 +994,76 @@ export function r2ResiduePlane(deps: {
   const client = new AwsClient({
     accessKeyId: deps.accessKeyId, secretAccessKey: deps.secretAccessKey, service: 's3', region: 'auto',
   });
+
   const origin = `https://${deps.accountId}.r2.cloudflarestorage.com`;
+
   const ask = async (path: string, method = 'GET'): Promise<{ status: number; body: string }> => {
     const answer = await client.fetch(`${origin}${path}`, { method });
+
     return { status: answer.status, body: await answer.text() };
   };
+
   const missing = (status: number, body: string): boolean =>
     status === 404 && body.includes('NoSuchBucket');
+
   return {
     bucketExists: async (bucket) => {
       const { status, body } = await ask(`/${bucket}?list-type=2&max-keys=1`);
+
       if (missing(status, body)) return false;
+
       if (status !== 200) throw new Error(`ListObjectsV2 on ${bucket} answered ${String(status)}`);
+
       return true;
     },
     listObjects: async (bucket) => {
       const keys: string[] = [];
       let token: string | null = null;
+
       do {
         const cursor: string = token === null ? '' : `&continuation-token=${encodeURIComponent(token)}`;
         const { status, body } = await ask(`/${bucket}?list-type=2&max-keys=1000${cursor}`);
+
         if (status !== 200) throw new Error(`ListObjectsV2 on ${bucket} answered ${String(status)}`);
+
         for (const block of body.split('<Contents>').slice(1)) {
           const key = /<Key>([^<]*)<\/Key>/.exec(block)?.[1];
+
           if (key !== undefined) keys.push(key);
         }
+
         token = /<NextContinuationToken>([^<]*)<\/NextContinuationToken>/.exec(body)?.[1] ?? null;
       } while (token !== null);
+
       return keys;
     },
     deleteObject: async (bucket, key) => {
       const { status } = await ask(`/${bucket}/${encodeURIComponent(key)}`, 'DELETE');
+
       if (status !== 204 && status !== 404) {
         throw new Error(`DeleteObject ${bucket}/${key} answered ${String(status)}`);
       }
     },
     listUploads: async (bucket) => {
       const { status, body } = await ask(`/${bucket}?uploads=`);
+
       if (status !== 200) throw new Error(`ListMultipartUploads on ${bucket} answered ${String(status)}`);
       const uploads: { key: string; uploadId: string }[] = [];
+
       for (const block of body.split('<Upload>').slice(1)) {
         const key = /<Key>([^<]*)<\/Key>/.exec(block)?.[1];
         const uploadId = /<UploadId>([^<]*)<\/UploadId>/.exec(block)?.[1];
+
         if (key !== undefined && uploadId !== undefined) uploads.push({ key, uploadId });
       }
+
       return uploads;
     },
     abortUpload: async (bucket, key, uploadId) => {
       const { status } = await ask(
         `/${bucket}/${encodeURIComponent(key)}?uploadId=${encodeURIComponent(uploadId)}`, 'DELETE',
       );
+
       if (status !== 204 && status !== 404) {
         throw new Error(`AbortMultipartUpload ${bucket}/${key} answered ${String(status)}`);
       }
@@ -1003,12 +1077,16 @@ export async function drainBucketResidue(
   plane: R2ResiduePlane, bucket: string,
 ): Promise<{ objects: number; uploads: number }> {
   let objects = 0;
+
   for (const key of await plane.listObjects(bucket)) {
     await plane.deleteObject(bucket, key);
     objects += 1;
   }
+
   const uploads = await plane.listUploads(bucket);
+
   for (const upload of uploads) await plane.abortUpload(bucket, upload.key, upload.uploadId);
+
   return { objects, uploads: uploads.length };
 }
 
@@ -1026,27 +1104,33 @@ export function cleanupObservationProbes(deps: {
   return {
     workerAbsent: async (name) => {
       const listed = deps.wrangler(['deployments', 'list', '--name', name], { allowFailure: true });
+
       if (!listed.startsWith(WRANGLER_FAILED)) return false;
+
       if (/not found|does not exist|10007/i.test(listed)) return true;
       throw new Error(`deployments list on ${name} failed: ${listed.slice(0, 240)}`);
     },
     bucketState: async (name) => {
       if (deps.residue !== null) {
         if (!(await deps.residue.bucketExists(name))) return { absent: true, objects: 0, multipartResidue: 0 };
+
         return {
           absent: false,
           objects: (await deps.residue.listObjects(name)).length,
           multipartResidue: (await deps.residue.listUploads(name)).length,
         };
       }
+
       // Without S3 keys only ABSENCE is provable: R2 refuses to delete a
       // bucket holding objects or open uploads, so a bucket that is gone held
       // nothing. A bucket still present has an unmeasurable multipart count,
       // and an unmeasured count is not zero.
       const info = deps.wrangler(['r2', 'bucket', 'info', name], { allowFailure: true });
+
       if (info.startsWith(WRANGLER_FAILED) && /not found|does not exist|10006/i.test(info)) {
         return { absent: true, objects: 0, multipartResidue: 0 };
       }
+
       throw new Error(
         `${name} still exists and R2_ACCESS_KEY_ID/R2_SECRET_ACCESS_KEY are absent — `
         + 'multipart residue cannot be measured, and an unmeasured count is not zero',
@@ -1060,6 +1144,7 @@ export function cleanupObservationProbes(deps: {
  *  values travel from the environment straight into `r2ResiduePlane`, and
  *  nothing in this driver prints either one. */
 export const R2_CLEANUP_KEY_VARS = ['R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY'] as const;
+
 export const R2_CLEANUP_KEY_FILE = '.dev.vars';
 
 /**
@@ -1087,11 +1172,14 @@ export function r2CleanupKeyRefusal(input: {
   readonly secretAccessKeyPresent: boolean;
 }): string | null {
   if (!input.verifiesCleanup) return null;
+
   const absent = [
     ...(input.accessKeyIdPresent ? [] : [R2_CLEANUP_KEY_VARS[0]]),
     ...(input.secretAccessKeyPresent ? [] : [R2_CLEANUP_KEY_VARS[1]]),
   ];
+
   if (absent.length === 0) return null;
+
   return `${absent.join(' and ')} ${absent.length === 1 ? 'is' : 'are'} absent, and this run `
     + 'verifies its own cleanup: G8 reads every bucket through S3, so a bucket that still exists '
     + 'has an unmeasurable multipart count and C1-C7 would be written false over a check that '
@@ -1137,18 +1225,25 @@ export function addressArmRequest(
 ): AddressedArmRequest {
   const url = new URL(path, 'https://bench.invalid');
   const box = url.searchParams.get('box');
+
   const inferred = STRATEGIES.find((strategy) => {
     const base = `ab-${strategy}`;
+
     return box === base || box?.startsWith(`${base}-`) === true;
   });
+
   const strategy = body?.strategy ?? inferred;
+
   if (method === 'GET') {
     if (strategy !== undefined) url.searchParams.set('strategy', strategy);
+
     return { path: `${url.pathname}${url.search}` };
   }
+
   if (strategy === undefined) {
     return body === undefined ? { path } : { path, body };
   }
+
   return { path, body: { ...body, strategy } };
 }
 
@@ -1176,6 +1271,7 @@ const ThrownFailureSchema = v.object({
 
 function parseThrown({ cause }: { readonly cause: unknown }): v.InferOutput<typeof ThrownFailureSchema> {
   const parsed = v.safeParse(ThrownFailureSchema, cause);
+
   return parsed.success ? parsed.output : {};
 }
 
@@ -1197,6 +1293,7 @@ function isTransportLoss(thrown: v.InferOutput<typeof ThrownFailureSchema>): boo
  *  strings from a replaced container) stays where it was: `retryTransient`.
  */
 const CALL_DEADLINE_MS = 180_000;
+
 const CALL_ATTEMPTS = 3;
 
 async function call<TSchema extends v.GenericSchema>(
@@ -1209,13 +1306,17 @@ async function call<TSchema extends v.GenericSchema>(
 ): Promise<v.InferOutput<TSchema>> {
   const addressed = addressArmRequest(method, path, body);
   const headers = new Headers({ authorization: `Bearer ${fixture.token}` });
+
   if (addressed.body !== undefined) headers.set('content-type', 'application/json');
+
   for (let attempt = 1; ; attempt += 1) {
     const init: RequestInit = { method, headers };
+
     if (addressed.body !== undefined) init.body = JSON.stringify(addressed.body);
     init.signal = AbortSignal.timeout(timeoutMs ?? CALL_DEADLINE_MS);
     let response: Response;
     let text: string;
+
     try {
       response = await fetch(`${fixture.origin}${addressed.path}`, init);
       text = await response.text();
@@ -1224,7 +1325,9 @@ async function call<TSchema extends v.GenericSchema>(
       log(`${method} ${path}: transport loss on attempt ${attempt}; asking again`);
       continue;
     }
+
     let decoded: unknown;
+
     try {
       decoded = JSON.parse(text);
     } catch (error) {
@@ -1233,13 +1336,16 @@ async function call<TSchema extends v.GenericSchema>(
         { cause: error },
       );
     }
+
     const parsed = v.safeParse(schema, decoded);
+
     if (!parsed.success) {
       throw new Error(
         `${method} ${path} (${response.status}) does not match its reply contract: `
         + `${issueText(parsed.issues)}\n${text.slice(0, 300)}`,
       );
     }
+
     return parsed.output;
   }
 }
@@ -1308,14 +1414,17 @@ export async function retryTransient<T extends { error?: string }>(
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const reply = await run();
+
       if (!TRANSIENT_REPLACEMENT.test(reply.error ?? '') || attempt === 3) return reply;
       log(`${operation}: transient replacement on attempt ${attempt}; retrying that request`);
     } catch (error) {
       const detail = describeThrown({ cause: error });
+
       if (!TRANSIENT_REPLACEMENT.test(detail) || attempt === 3) throw error;
       log(`${operation}: transient replacement on attempt ${attempt}; retrying that request`);
     }
   }
+
   throw new Error(`${operation}: retry loop ended without a reply`);
 }
 
@@ -1329,13 +1438,16 @@ function deleteFixtureResources(fixture: ArmFixture): readonly string[] {
   let deleted = wrangler([
     'delete', '--config', fixture.configPath, '--force',
   ], { allowFailure: true });
+
   if (deleted.startsWith(WRANGLER_FAILED)) {
     deleted = wrangler(['delete', '--name', fixture.worker, '--force'], { allowFailure: true });
   }
+
   const workerResult = deleted.startsWith(WRANGLER_FAILED)
     && !/not found|does not exist/i.test(deleted)
     ? `worker: FAILED ${deleted.slice(0, 160)}`
     : 'worker: deleted or absent';
+
   return [
     workerResult,
     ...deleteContainerApps(REPO_ROOT, fixture.containerApps, log),
@@ -1351,30 +1463,38 @@ export async function deployFixture(
     'deploy', '--config', fixture.configPath, '--var', `BENCH_TOKEN:${token}`,
     '--var', `BENCH_PUBLICATION_CUT:${faultCuts ? '1' : '0'}`,
   ]);
+
   const origin = /https:\/\/[a-z0-9.-]+\.workers\.dev/.exec(output)?.[0];
+
   if (origin === undefined) throw new Error(`deploy printed no workers.dev origin:\n${output.slice(-2500)}`);
   // WHICH DEPLOYED CODE SERVED THE ARMS. Two runs from one commit can be served
   // by different Worker versions — a `--var` change alone publishes a new one —
   // and the version id is the only thing that distinguishes them.
   const workerVersion = /Current Version ID:\s*([0-9a-f-]{8,})/i.exec(output)?.[1];
+
   if (workerVersion === undefined) {
     throw new Error(`deploy printed no Worker version id:\n${output.slice(-2500)}`);
   }
+
   log(`deployed ${origin} at version ${workerVersion}`);
 
   let unauth = 0;
+
   try {
     unauth = (await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) })).status;
   } catch (cause) {
     log(`the unauthenticated probe did not answer: ${describeThrown({ cause })}`);
   }
+
   if (unauth === 200) {
     throw new Error('the bench app answered an unauthenticated request; refusing to run');
   }
 
   const deadline = Date.now() + 180_000;
+
   for (;;) {
     let authed = 0;
+
     try {
       authed = (await fetch(`${origin}/health`, {
         headers: { authorization: `Bearer ${token}` },
@@ -1383,12 +1503,15 @@ export async function deployFixture(
     } catch (cause) {
       log(`the readiness probe did not answer: ${describeThrown({ cause })}`);
     }
+
     if (authed === 200) break;
+
     if (Date.now() > deadline) {
       throw new Error(
         `the deployment never accepted this run's token at ${origin} (last status ${authed})`,
       );
     }
+
     await delay(3_000);
   }
 
@@ -1503,8 +1626,10 @@ function mountAt(mounts: string, mountpoint: string): { line: string; fstype: st
     const line = raw.trim();
     const fields = line.split(' ');
     const fstype = fields[2];
+
     if (fields[1] === mountpoint && fstype !== undefined) return { line, fstype };
   }
+
   return null;
 }
 
@@ -1521,15 +1646,19 @@ async function readIncidentReasons(
 ): Promise<IncidentReasonRow[] | undefined> {
   try {
     const reply = await call(fixture, 'GET', `/incidents?box=${box}`, IncidentReasonsReplySchema);
+
     if (reply.ok !== true || reply.incidents === undefined) {
       notes.push(
         `the incident reasons did not arrive: ${reply.error ?? 'the route answered without its ledger'}`,
       );
+
       return undefined;
     }
+
     return reply.incidents;
   } catch (error) {
     notes.push(`the incident reasons did not arrive: ${describeThrown({ cause: error }).slice(0, 160)}`);
+
     return undefined;
   }
 }
@@ -1560,6 +1689,7 @@ export type HttpsRequester = (
 ) => HttpsRequest;
 
 export type VerifyHttpsRequester = HttpsRequester;
+
 export type LiveTeardownHttpsRequester = HttpsRequester;
 
 const requestOverHttps: HttpsRequester = (url, options, respond) =>
@@ -1590,15 +1720,18 @@ async function postBoundedHttps(
   const addressed = addressArmRequest('POST', path, body);
   const endpoint = new URL(path, 'https://bench.invalid').pathname;
   const payload = JSON.stringify(addressed.body);
+
   return await new Promise<string>((resolve, reject) => {
     let settled = false;
     let elapsed: ReturnType<typeof setTimeout> | undefined;
+
     const fail = (error: Error): void => {
       if (settled) return;
       settled = true;
       clearTimeout(elapsed);
       reject(error);
     };
+
     const request = requester(
       new URL(`${fixture.origin}${addressed.path}`),
       {
@@ -1614,12 +1747,15 @@ async function postBoundedHttps(
         const chunks: Buffer[] = [];
         response.on('data', (chunk) => {
           const responseChunk = Buffer.from(chunk);
+
           if (bytes + responseChunk.byteLength > MAX_HTTPS_RESPONSE_BYTES) {
             const error = new Error(`${endpoint} response exceeds ${MAX_HTTPS_RESPONSE_BYTES} bytes`);
             response.destroy(error);
             fail(error);
+
             return;
           }
+
           bytes += responseChunk.byteLength;
           chunks.push(responseChunk);
         });
@@ -1633,7 +1769,9 @@ async function postBoundedHttps(
         });
       },
     );
+
     request.once('error', fail);
+
     if (timeoutMs !== undefined) {
       elapsed = setTimeout(() => {
         const expiry = new Error(`${endpoint} did not answer inside ${String(timeoutMs)} ms`);
@@ -1641,6 +1779,7 @@ async function postBoundedHttps(
         fail(expiry);
       }, timeoutMs);
     }
+
     request.end(payload);
   });
 }
@@ -1730,6 +1869,7 @@ async function driveReadiness(
   timeoutMs?: number,
 ): Promise<ReadinessDrive> {
   let driven: ExecReply;
+
   try {
     driven = await retryTransient(`${operation} readiness drive`, async () =>
       await execInBox(fixture, box, READINESS_DRIVE_COMMAND, timeoutMs),
@@ -1737,8 +1877,10 @@ async function driveReadiness(
   } catch (error) {
     return { kind: 'unanswered', detail: describeThrown({ cause: error }) };
   }
+
   if (driven.ok === true) return { kind: 'drove' };
   const detail = driven.error ?? `the readiness probe exited ${driven.exitCode ?? -1}`;
+
   return isTransientContainerCreateError(detail) || isRearmableStartupRefusal(detail)
     ? { kind: 'unanswered', detail }
     : { kind: 'refused', detail };
@@ -1782,11 +1924,13 @@ export async function pollForAttach(
    *  it owns it, and its rejection can never reach the process unhandled. */
   let driving: { readonly since: number; readonly settled: Promise<void> } | null = null;
   let refusal: string | null = null;
+
   for (;;) {
     // The boundary's refusal, collected from whichever drive carried it. It is
     // read here rather than thrown from the drive so that one lane's refusal
     // still travels through this loop's own accounting.
     if (refusal !== null) throw new Error(`${operation} refused: ${refusal}`);
+
     if (deadline !== null && Date.now() > deadline) {
       throw new Error(
         `${operation} did not attach within its ${String(bounds.deadlineMs)} ms ceiling `
@@ -1794,7 +1938,9 @@ export async function pollForAttach(
         + `${driving === null ? '' : `; a readiness drive posted ${String(Date.now() - driving.since)} ms ago has not answered`})`,
       );
     }
+
     let reply: StateReply;
+
     try {
       reply = await boxState(fixture, box);
     } catch (error) {
@@ -1802,16 +1948,21 @@ export async function pollForAttach(
       await delay(STARTUP_POLL_INTERVAL_MS);
       continue;
     }
+
     const verdict = startupPollVerdict(reply);
     lastReading = `${verdict.kind}${'detail' in verdict ? `: ${verdict.detail}` : ''}`
       + `${'reason' in verdict ? `: ${verdict.reason}` : ''} — ${describeStartupState(reply)}`;
+
     if (verdict.kind === 'attached') {
       if (allowedKinds.includes(verdict.attach.kind)) {
         return { attach: verdict.attach, state: reply, redrives };
       }
+
       throw new Error(`${operation} restored ${verdict.attach.kind}, expected ${allowedKinds.join(' or ')}`);
     }
+
     if (verdict.kind === 'failed') throw new Error(`${operation} refused: ${verdict.reason}`);
+
     if (verdict.kind === 'stopped' && driving === null) {
       redrives += 1;
       log(`${operation}: ${verdict.detail}; driving readiness through one no-op exec (drive ${redrives})`);
@@ -1826,6 +1977,7 @@ export async function pollForAttach(
         settled: (async (): Promise<void> => {
           try {
             const drive = await driveReadiness(fixture, box, operation, remaining);
+
             if (drive.kind === 'refused') refusal = drive.detail;
             else if (drive.kind === 'unanswered') {
               log(`${operation}: the readiness drive did not answer (${drive.detail}); the state poll keeps the verdict`);
@@ -1843,6 +1995,7 @@ export async function pollForAttach(
     } else if (reply.error !== undefined) {
       log(`${operation}: state poll retrying: ${reply.error}`);
     }
+
     // ONE cadence for every unsettled reading, a drive included: the next poll
     // is what accepts the attach, and only one drive is ever in flight, so
     // nothing here can spin or stack requests on a box that is already starting.
@@ -1874,29 +2027,39 @@ export async function startupOperation(
   // and then reported the ceiling with nothing named. `bounds` now ends that
   // loop with the last kick's own words.
   const deadline = bounds.deadlineMs === undefined ? null : started + bounds.deadlineMs;
+
   for (let attempt = 1; ; attempt += 1) {
     let transient: string;
+
     try {
       const kicked = await call(fixture, 'POST', `${path}?box=${box}`, KickReplySchema, {});
+
       if (kicked.ok === true) break;
       const detail = kicked.error ?? 'the startup kick did not confirm';
+
       if (!isTransientContainerCreateError(detail)) throw new Error(`${operation} failed: ${detail}`);
       transient = detail;
     } catch (error) {
       const detail = describeThrown({ cause: error });
+
       if (!isTransientContainerCreateError(detail)) throw error;
       transient = detail;
     }
+
     log(`${operation}: transient container capacity on attempt ${attempt}; retrying the same box`);
+
     if (deadline !== null && Date.now() + 15_000 > deadline) {
       throw new Error(
         `${operation} was still being admitted at its ${String(bounds.deadlineMs)} ms ceiling `
         + `after ${String(attempt)} kick(s) (last kick: ${transient})`,
       );
     }
+
     await delay(15_000);
   }
+
   const attached = await pollForAttach(fixture, box, operation, allowedKinds, bounds);
+
   return { ...attached, ms: Date.now() - started };
 }
 
@@ -1918,6 +2081,7 @@ export interface CheckpointReply {
 export function checkpointOutcomeWords(cp: CheckpointReply): string {
   const kind = cp.outcome?.kind ?? 'unknown';
   const reason = cp.outcome?.reason;
+
   return reason === undefined ? kind : `${kind} (${reason})`;
 }
 
@@ -2007,8 +2171,11 @@ const OperationPollReplySchema: v.GenericSchema<OperationPollReply> = v.looseObj
  * operation's own duration — but the run's own clock is real.
  */
 const OPERATION_DEADLINE_MS = PROCESS_DEADLINE_MS;
+
 const OPERATION_FIRST_POLL_MS = 250;
+
 const OPERATION_POLL_CEILING_MS = 5_000;
+
 const OPERATION_POLL_GROWTH = 1.5;
 
 /**
@@ -2032,6 +2199,7 @@ async function awaitArmedOperation(
   const pollCeilingMs = bounds.pollMs ?? OPERATION_POLL_CEILING_MS;
   const deadline = Date.now() + (bounds.deadlineMs ?? OPERATION_DEADLINE_MS);
   let armed: OperationArmedReply | null = null;
+
   for (let attempt = 1; armed === null; attempt += 1) {
     try {
       armed = await call(
@@ -2043,17 +2211,22 @@ async function awaitArmedOperation(
       await delay(firstPollMs);
     }
   }
+
   const token = armed.token;
+
   if (armed.ok !== true || token === undefined || token.length === 0) {
     // A refusal from the arming edge is the operation's own answer: it names a
     // route that will not run, so there is nothing to poll for.
     return { ok: false, error: armed.error ?? `${route} did not arm an operation` };
   }
+
   let pollMs = firstPollMs;
+
   for (;;) {
     await delay(pollMs);
     pollMs = Math.min(pollCeilingMs, pollMs * OPERATION_POLL_GROWTH);
     let poll: OperationPollReply;
+
     try {
       poll = await call(
         fixture,
@@ -2068,19 +2241,24 @@ async function awaitArmedOperation(
       // is re-asked until the deadline, exactly as the startup poll re-asks
       // `/state`, because the work continues whether or not this request landed.
       const detail = describeThrown({ cause: error });
+
       if (Date.now() > deadline) {
         throw new Error(
           `${route} outcome could not be read before its deadline: ${detail}`,
           { cause: error },
         );
       }
+
       log(`${route}: outcome poll retrying: ${detail}`);
       continue;
     }
+
     if (poll.state === 'done' || poll.state === 'failed') return poll;
+
     if (poll.state !== 'pending') {
       throw new Error(`${route} answered state "${poll.state ?? 'none'}": ${poll.error ?? 'no reason given'}`);
     }
+
     if (Date.now() > deadline) {
       // The EFFECTIVE bound, not the default one. This named the module
       // constant while honouring `bounds.deadlineMs`, so a caller that bounded
@@ -2152,12 +2330,15 @@ export async function armCheckpointOperation(
   route: '/checkpoint' | '/checkpoint-cut' = '/checkpoint',
 ): Promise<ArmedCheckpoint> {
   const op = `${what}-${crypto.randomUUID()}`;
+
   const armed = await retryTransient(what, async () =>
     await call(fixture, 'POST', `${route}?box=${box}`, OperationArmedReplySchema, { kind, op }, STATE_POLL_REQUEST_TIMEOUT_MS),
   );
+
   if (armed.ok !== true || armed.token === undefined || armed.token.length === 0) {
     throw new Error(`${what} did not arm: ${armed.error ?? 'the fixture answered without a token'}`);
   }
+
   return { op, token: armed.token };
 }
 
@@ -2173,6 +2354,7 @@ export async function stopOperation(
   const settled = await retryTransient(what, async () =>
     await awaitArmedOperation(fixture, box, '/stop', { op: `${what}-${crypto.randomUUID()}` }, bounds),
   );
+
   return {
     ok: settled.state === 'done' && settled.outcome?.kind !== 'failed',
     ms: settled.ms,
@@ -2237,18 +2419,23 @@ export async function postLiveTeardown(
     requester,
     timeoutMs,
   );
+
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(responseText);
   } catch (error) {
     throw new Error(`/teardown returned non-JSON: ${responseText.slice(0, 300)}`, { cause: error });
   }
+
   const parsed = v.safeParse(TeardownReplySchema, decoded);
+
   if (!parsed.success) {
     throw new Error(
       `/teardown does not match its reply contract: ${issueText(parsed.issues)}\n${responseText.slice(0, 300)}`,
     );
   }
+
   if (parsed.output.ok !== true) {
     throw new Error(parsed.output.error ?? 'teardown did not confirm');
   }
@@ -2274,6 +2461,7 @@ export async function teardownLiveArms(
 ): Promise<readonly string[]> {
   const errors: string[] = [];
   const uniqueBoxes = [...new Set(boxes)];
+
   for (const pass of [1, 2]) {
     for (const box of uniqueBoxes) {
       try {
@@ -2283,6 +2471,7 @@ export async function teardownLiveArms(
       }
     }
   }
+
   return errors;
 }
 
@@ -2321,6 +2510,7 @@ export interface ComplexityRow {
  *  rather than a missing line. */
 export const COMPLEXITY_TREE_BYTES: readonly number[] = (() => {
   let total = 0;
+
   return CHANGE_SIZES_KIB.map((kib) => (total += kib * 1024));
 })();
 
@@ -2345,10 +2535,13 @@ const ComplexityRowSchema: v.GenericSchema<ComplexityRow> = v.looseObject({
 export function decodeComplexityRows(value: ArmResult['complexity']): ComplexityRow[] {
   if (!Array.isArray(value)) return [];
   const rows: ComplexityRow[] = [];
+
   for (const entry of value) {
     const parsed = v.safeParse(ComplexityRowSchema, entry);
+
     if (parsed.success) rows.push(parsed.output);
   }
+
   return rows;
 }
 
@@ -2402,10 +2595,13 @@ const RestoreProbeRowSchema: v.GenericSchema<RestoreProbeRow> = v.looseObject({
 export function decodeRestoreProbeRows(value: ArmResult['restoreProbes']): RestoreProbeRow[] {
   if (!Array.isArray(value)) return [];
   const rows: RestoreProbeRow[] = [];
+
   for (const entry of value) {
     const parsed = v.safeParse(RestoreProbeRowSchema, entry);
+
     if (parsed.success) rows.push(parsed.output);
   }
+
   return rows;
 }
 
@@ -2429,11 +2625,15 @@ export function complexityRestoreBill(
   wakeOps: OpTally | null | undefined,
 ): ComplexityBill {
   const calls = wakeOps?.calls;
+
   if (calls === undefined) return { remoteOps: null, payloadBytes: null };
   const total = Object.values(calls).reduce((sum, count) => sum + count, 0);
+
   if (!Number.isSafeInteger(total)) return { remoteOps: null, payloadBytes: null };
   const bytes = wakeOps?.bytes;
+
   if (bytes === undefined) return { remoteOps: total, payloadBytes: null };
+
   return { remoteOps: total, payloadBytes: bytes['payload'] ?? 0 };
 }
 
@@ -2540,6 +2740,7 @@ export interface ArmResult {
 
 async function installHarness(fixture: Fixture, box: string): Promise<void> {
   await execInBox(fixture, box, `mkdir -p ${HARNESS}`);
+
   for (const file of PROBE_FILES) {
     await writeFileInBox(
       fixture, box, `${HARNESS}/${file}`,
@@ -2557,6 +2758,7 @@ async function runPhase(
   fixture: Fixture, box: string, root: string, phase: string, seed: number, budgetMs: number,
 ): Promise<ProbeRun> {
   const base = `bun ${HARNESS}/probe.ts --root ${root} --phase ${phase} --seed ${seed} --budget-ms ${budgetMs}`;
+
   if (!PROCESS_PHASES.has(phase)) {
     // Reinstall once on a missing harness. NOTHING in the container survives a
     // recycle — `/` and `/workspace` are the same ext4 on `/dev/vdc` — and the
@@ -2567,14 +2769,18 @@ async function runPhase(
     for (let attempt = 1; attempt <= 2; attempt++) {
       const reply = await execInBox(fixture, box, `cd ${HARNESS} && ${base}`);
       const start = (reply.stdout ?? '').indexOf('{');
+
       if (start !== -1) {
         return parseProbeRun((reply.stdout ?? '').slice(start), `${phase}: blocking exec stdout, attempt ${attempt}`);
       }
+
       const detail = (reply.error ?? reply.stderr ?? '').slice(0, 200);
       const lost = /No such file or directory/.test(detail);
+
       if (!lost || attempt === 2) {
         throw new Error(`${phase}: no JSON (exit ${reply.exitCode}) ${detail}`);
       }
+
       log(`${phase}: the harness was gone; reinstalling and retrying once`);
       await installHarness(fixture, box);
     }
@@ -2585,22 +2791,30 @@ async function runPhase(
   // sentinel that never appears: a detached process cannot report that its own
   // interpreter was missing.
   const present = await execInBox(fixture, box, `test -f ${HARNESS}/probe.ts && echo YES || echo NO`);
+
   if ((present.stdout ?? '').includes('NO')) {
     log(`${phase}: the harness was gone; reinstalling before spawning`);
     await installHarness(fixture, box);
   }
+
   await execInBox(fixture, box, `rm -f ${out} ${out}.done`);
   await execInBox(fixture, box, `cd ${HARNESS} && nohup ${base} --out ${out} >/dev/null 2>&1 & echo spawned`);
   const deadline = Date.now() + PROCESS_DEADLINE_MS;
+
   for (;;) {
     await delay(POLL_MS);
     const poll = await execInBox(fixture, box, `test -f ${out}.done && echo DONE || echo WAIT`);
+
     if ((poll.stdout ?? '').includes('DONE')) break;
+
     if (Date.now() > deadline) throw new Error(`${phase} did not finish within the process deadline`);
   }
+
   const read = await execInBox(fixture, box, `cat ${out}`);
   const start = (read.stdout ?? '').indexOf('{');
+
   if (start === -1) throw new Error(`${phase}: result file unreadable`);
+
   return parseProbeRun((read.stdout ?? '').slice(start), `${phase}: ${out} read back after the process run`);
 }
 
@@ -2651,22 +2865,29 @@ export async function runDecisive(
   // now resumable by segment index so a checkpoint falls BETWEEN segments, which
   // is what makes the second and later ticks the incremental cost.
   let treeBytes = -1;
+
   for (let segment = 0; segment <= SEGMENTS_PER_WORKLOAD; segment++) {
     const command = `bun ${HARNESS}/decisive.ts --root ${root} --workload ${spec.workload} `
       + `--seed ${seed} --segment ${segment} ${spec.args}`;
+
     const reply = await execInBox(fixture, box, command);
     const start = (reply.stdout ?? '').indexOf('{');
+
     if (start === -1) {
       notes.push(`${spec.id} segment ${segment}: no JSON: ${(reply.error ?? reply.stderr ?? '').slice(0, 200)}`);
       continue;
     }
+
     const run = parseDecisiveRun((reply.stdout ?? '').slice(start), `${arm}/${spec.id}#${segment}`);
+
     if (run.error !== undefined) {
       notes.push(`${spec.id} segment ${segment}: ${run.error}`);
       continue;
     }
+
     if (run.treeBytes !== undefined && run.treeBytes > treeBytes) treeBytes = run.treeBytes;
     const segmentName = run.segments?.[0]?.name;
+
     if (segmentName === undefined) continue;
 
     // RESPECT THE MINIMUM CHECKPOINT INTERVAL, rather than measuring it.
@@ -2680,6 +2901,7 @@ export async function runDecisive(
     await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
     const before = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
     const cp = await checkpointOperation(fixture, box, 'tick', `${spec.id} tick ${segmentName}`);
+
     // UNCOMMITTED TICKS PRICE NOTHING. A failed or skipped tick pushed as a
     // row would sum its wall time into the decision's numerator — a chain arm
     // erroring every tick summed a negative one — so the failure is a note and
@@ -2694,10 +2916,12 @@ export async function runDecisive(
       );
       continue;
     }
+
     if (cp.ms === undefined) {
       notes.push(`${spec.id} tick ${segmentName} committed without a measured duration; its wall time is unpriced`);
       continue;
     }
+
     await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
     const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
 
@@ -2726,6 +2950,7 @@ export async function runDecisive(
       outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
     });
   }
+
   return { ticks, treeBytes, notes };
 }
 
@@ -2868,7 +3093,9 @@ export function controlWitnessChecks(
     switch (name) {
       case 'delta-layer-collapse': {
         const cell = facts.deltaLayerCollapse;
+
         if (cell === undefined) return absentCell(name);
+
         // SERVED, NOT COPIED. The delta's bytes reach the merged view through a
         // layer of their own, so the marker committed into that delta is
         // readable at the work directory and absent from the writable layer the
@@ -2878,12 +3105,14 @@ export function controlWitnessChecks(
           && cell.deltaLayerMounted
           && cell.markerInMergedView
           && !cell.markerInUpper;
+
         // AND THE SERVE IS WHAT FORCES THE COLLAPSE: a fresh generation id, and
         // a record that names no delta. Same id, or a delta still named, is an
         // ordinary append — which is what a copied delta produces.
         const collapsed = cell.collapsedChainId.length > 0
           && cell.collapsedChainId !== cell.chainId
           && !cell.collapsedNamesDelta;
+
         return {
           name,
           observed: served && collapsed,
@@ -2898,12 +3127,16 @@ export function controlWitnessChecks(
                 + ` ${cell.collapsedNamesDelta ? 'and still names a delta' : 'and no delta'}`}`,
         };
       }
+
       case 'mutable-delta': {
         const cell = facts.mutableDelta;
+
         if (cell === undefined) return absentCell(name);
+
         const rewritten = cell.etagBefore.length > 0
           && cell.etagAfter.length > 0
           && cell.etagBefore !== cell.etagAfter;
+
         return {
           name,
           observed: cell.key.length > 0 && rewritten,
@@ -2912,6 +3145,7 @@ export function controlWitnessChecks(
             + `${rewritten ? 'rewritten in place' : 'NOT rewritten'}`,
         };
       }
+
       default:
         return absentCell(name);
     }
@@ -2979,6 +3213,7 @@ const ATTACH_KINDS_EXCLUDED = {
  *  than restating them, and the suite proves the derivation per step per kind. */
 export function admittedAttachKinds(step: StartupStep): readonly string[] {
   const excluded: Readonly<Record<string, string>> = ATTACH_KINDS_EXCLUDED[step];
+
   return PRODUCT_ATTACH_KINDS.filter((kind) => excluded[kind] === undefined);
 }
 
@@ -2990,7 +3225,9 @@ export function admittedAttachKinds(step: StartupStep): readonly string[] {
  *  reads a deployed container over HTTP and imports nothing from the box it
  *  measures. */
 const DEVBOX_WORK_DIR = '/workspace';
+
 const CHAIN_UPPER_DIR = '/var/tmp/devbox/upper';
+
 /**
  * The layer paths the LIFECYCLE PROOF reads, restated for the same reason and
  * kept true by `bench-devbox-decision.test.ts`, which compares every one of
@@ -3001,10 +3238,12 @@ const CHAIN_UPPER_DIR = '/var/tmp/devbox/upper';
  * had moved — and the test is what makes restating safe.
  */
 const CHAIN_LOWER_BASE_DIR = '/var/tmp/devbox/lower-base';
+
 /** One directory per served generation, named after it: `deltaLayerMountPoint`
  *  is `${lowerDeltaRoot}/<generation>`, and its presence in `/proc/mounts` is
  *  the same fact `deltaLayerServed` reads to decide the collapse. */
 const CHAIN_DELTA_LAYER_ROOT = '/var/tmp/devbox/lower-delta';
+
 /** The chain's store subtree mount, restated from `CHAIN_STORE_MOUNT` in
  *  `packages/devbox/src/snapshot-chain.ts`. The wake-count cell matches the
  *  restore's mount lines against it, and `bench-devbox-decision.test.ts`
@@ -3029,9 +3268,11 @@ async function runControlWitnessCells(
   box: string,
 ): Promise<{ facts: ControlWitnessFacts; notes: string[] }> {
   const notes: string[] = [];
+
   const facts: {
     -readonly [Key in keyof ControlWitnessFacts]: ControlWitnessFacts[Key];
   } = {};
+
   const cell = async (name: string, run: () => Promise<void>): Promise<void> => {
     try {
       await run();
@@ -3039,6 +3280,7 @@ async function runControlWitnessCells(
       notes.push(`the ${name} witness cell did not complete: ${describeThrown({ cause: error }).slice(0, 240)}`);
     }
   };
+
   const headKey = async (key: string): Promise<HeadReply> =>
     await call(fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema);
 
@@ -3049,12 +3291,14 @@ async function runControlWitnessCells(
   await cell('mutable-delta', async () => {
     const before = await deltaAfterOneChange(fixture, box, 'a');
     const after = await deltaAfterOneChange(fixture, box, 'b');
+
     if (before.chainId !== after.chainId) {
       throw new Error(
         `the chain rebased between the two heads (${before.chainId} then ${after.chainId}), so the `
         + 'cell compared two generations rather than one key',
       );
     }
+
     facts.mutableDelta = {
       key: after.key,
       etagBefore: before.etag,
@@ -3087,38 +3331,47 @@ async function runControlWitnessCells(
       + `&& printf %s ${marker} > ${DEVBOX_WORK_DIR}/${markerFile} && sync`,
     );
     await delay(MIN_CHECKPOINT_INTERVAL_MS);
+
     // A TICK, NOT A QUIESCE: a quiesce over the delta the decisive window
     // left would rebase, and the wake would then have a bare base to attach
     // and nothing to serve as a layer.
     const seeded = await checkpointOperation(
       fixture, box, 'tick', 'delta-layer-collapse marker commit',
     );
+
     if (seeded.outcome?.kind !== 'committed') {
       throw new Error(
         `the marker commit did not publish a delta to serve: `
         + `${seeded.outcome?.kind ?? 'unknown'}${seeded.outcome?.reason === undefined ? '' : ` (${seeded.outcome.reason})`}`,
       );
     }
+
     const stopped = await stopOperation(fixture, box, 'delta-layer-collapse stop');
     requireConfirmedStop(stopped, 'the box did not stop');
+
     const woke = await startupOperation(
       fixture, box, '/wake', 'delta-layer-collapse wake', ['attached'],
     );
+
     // THE SERVED GENERATION IS THE ONE THE RECORD NAMES AFTER THE WAKE, never
     // the one named before it: an attach that fell back to its retained
     // fallback serves a different generation, and reading the pre-stop id
     // would describe a generation nothing is mounted from.
     const served = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
     const chainId = served.state?.chain?.base?.id ?? '';
+
     if (chainId.length === 0) throw new Error('/state reported no chain generation after the wake');
     const delta = await headKey(`${served.storePrefix ?? ''}backups/${chainId}/delta.sqsh`);
     const mounts = await execInBox(fixture, box, 'cat /proc/mounts');
+
     const inMergedView = await execInBox(
       fixture, box, `test -f ${DEVBOX_WORK_DIR}/${markerFile} && echo yes || echo no`,
     );
+
     const inUpper = await execInBox(
       fixture, box, `test -f ${CHAIN_UPPER_DIR}/${markerFile} && echo yes || echo no`,
     );
+
     // THE NEXT CHECKPOINT, with something to say: a box that woke and wrote
     // nothing is skipped with `nothing has been written since the attach`, so
     // the collapse would never be reached.
@@ -3155,7 +3408,9 @@ const FAULT_CUT_VICTIM_MIB = 64;
  *  half nulls the arm rather than voting false. */
 function combineRollbackPhantom(rollback: boolean | null, phantom: boolean | null): boolean | null {
   if (rollback === true || phantom === true) return true;
+
   if (rollback === null || phantom === null) return null;
+
   return false;
 }
 
@@ -3167,7 +3422,9 @@ function combineRollbackPhantom(rollback: boolean | null, phantom: boolean | nul
 async function healBox(fixture: Fixture, box: string): Promise<string> {
   try {
     const healed = await checkpointOperation(fixture, box, 'quiesce', 'fault-cut heal');
+
     if (healed.ok === true && healed.outcome?.kind === 'committed') return '';
+
     return `healing quiesce answered ${healed.outcome?.kind ?? 'nothing'} (${healed.error ?? 'no reason'})`;
   } catch (error) {
     return `healing quiesce threw: ${describeThrown({ cause: error }).slice(0, 160)}`;
@@ -3184,6 +3441,7 @@ async function readBoxMarker(
   expected: string,
 ): Promise<boolean> {
   const read = await execInBox(fixture, box, `cat /workspace/${name} 2>/dev/null || echo MISSING`);
+
   return (read.stdout ?? '').trim() === expected;
 }
 
@@ -3203,9 +3461,11 @@ async function fireCutVictim(
   victim: CutVictim,
 ): Promise<{ victimEnd: string } | { missedReason: string }> {
   await execInBox(fixture, box, `printf %s ${victim.content} > /workspace/${victim.marker} && sync`);
+
   if ((await readBoxMarker(fixture, box, victim.marker, victim.content)) !== true) {
     throw new Error('the fault-cut marker did not land: the box is not serving its workspace');
   }
+
   await execInBox(
     fixture,
     box,
@@ -3213,9 +3473,11 @@ async function fireCutVictim(
   );
   const armed = await armCheckpointOperation(fixture, box, 'quiesce', 'fault-cut victim', '/checkpoint-cut');
   const query = `box=${box}&token=${encodeURIComponent(armed.op)}`;
+
   const pollOperation = async (): Promise<OperationPollReply> => await call(
     fixture, 'GET', `/operation?box=${box}&token=${encodeURIComponent(armed.token)}`, OperationPollReplySchema,
   );
+
   try {
     const receipt = await rendezvousPublicationCut({
       read: async () => await call(fixture, 'GET', `/fault-cut?${query}`, PublicationCutSchema),
@@ -3224,19 +3486,25 @@ async function fireCutVictim(
       cancel: async () => await call(fixture, 'POST', `/fault-cut/cancel?${query}`, PublicationCutSchema),
       wait: async () => await delay(500),
     });
+
     if (!publicationWasCut(receipt, armed.op)) {
       return { missedReason: `NOT-CUT: ${JSON.stringify(receipt)}` };
     }
+
     let outcome: OperationPollReply | null = null;
+
     for (let waited = 0; waited < 120 && outcome === null; waited += 1) {
       await delay(500);
       const poll = await pollOperation();
+
       if (poll.state === 'done' || poll.state === 'failed') outcome = poll;
       else if (poll.state !== 'pending') {
         throw new Error(`the victim answered state "${poll.state ?? 'none'}": ${poll.error ?? 'no reason given'}`);
       }
     }
+
     if (outcome === null) throw new Error('the victim never settled after the cut');
+
     return { victimEnd: `CUT: ${JSON.stringify(receipt)}; victim ${outcome.state ?? 'unmeasured'}` };
   } finally {
     await call(fixture, 'POST', `/fault-cut/clear?${query}`, AckReplySchema);
@@ -3267,32 +3535,42 @@ async function readChainCutCell(
     prefix, marker: cutMarker, content: cutContent, victimEnd,
     kind: cutKind, detail: cutDetail, pre: chainPre, preDeltaEtag: chainPreDeltaEtag,
   } = cut;
+
   const gen = await chainGeneration(fixture, box);
   const recordPresent = gen.baseId !== null && gen.baseId.length > 0;
+
   const rows = recordPresent && gen.baseId !== null
     ? chainArchiveExpectations(gen.baseId, gen.hasDelta, prefix)
     : [];
+
   const baseRow = rows[0];
   const deltaRow = rows[1];
   let baseExists = false;
   let deltaExists: boolean | null = null;
   let unexpectedDelta = false;
+
   if (baseRow !== undefined) {
     const head = await headObject(fixture, box, baseRow.key);
     baseExists = head.exists === true && (head.size ?? 0) > 0;
   }
+
   if (deltaRow !== undefined) {
     const head = await headObject(fixture, box, deltaRow.key);
     const exists = head.exists === true && (head.size ?? 0) > 0;
     deltaExists = exists;
+
     if (!deltaRow.present && exists) unexpectedDelta = true;
   }
+
   let postDeltaEtag: string | null = null;
+
   if (deltaRow !== undefined && deltaRow.present) {
     const head = await headObject(fixture, box, deltaRow.key);
     postDeltaEtag = head.etag === undefined || head.etag.length === 0 ? null : head.etag;
   }
+
   const markerPresent = await readBoxMarker(fixture, box, cutMarker, cutContent);
+
   const judgment = judgeChainCut({
     recordPresent,
     preBaseId: chainPre?.baseId ?? null,
@@ -3308,9 +3586,11 @@ async function readChainCutCell(
     baseExists,
     deltaExists,
   });
+
   const absentReferences = !recordPresent
     ? null
     : (!baseExists ? 1 : 0) + (deltaRow?.present === true && deltaExists === false ? 1 : 0);
+
   // THE READ-ONLY PROBE. The served layers are squashfs mounts, read-only by
   // filesystem design, so a write must fail EROFS. The probe writes nothing
   // on refusal and removes its file when a write unexpectedly succeeds —
@@ -3319,26 +3599,34 @@ async function readChainCutCell(
   let readOnlyRefusedWrites: boolean | null = null;
   const mountsNow = await execInBox(fixture, box, 'cat /proc/mounts');
   let layerPoint: string | null = null;
+
   for (const raw of (mountsNow.stdout ?? '').split('\n')) {
     const at = raw.trim().split(' ')[1] ?? '';
+
     if (at.startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)) {
       layerPoint = at;
       break;
     }
+
     if (at === CHAIN_LOWER_BASE_DIR) layerPoint = at;
   }
+
   if (layerPoint !== null) {
     readOnlySurface = layerPoint;
+
     const probe = await execInBox(
       fixture,
       box,
       `touch '${layerPoint}/.faultcut-ro-probe' 2>&1; code=$?; rm -f '${layerPoint}/.faultcut-ro-probe' 2>/dev/null; exit $code`,
     );
+
     readOnlyRefusedWrites = probe.exitCode === undefined
       ? null
       : judgeReadOnlyRefusal(probe.exitCode, probe.stderr ?? '');
   }
+
   const healNote = await healBox(fixture, box);
+
   return {
     completed: true,
     verdict: cutKind !== 'attached' && cutKind !== 'already-attached' ? 'mixed' : judgment.verdict,
@@ -3378,18 +3666,22 @@ async function runFaultCutCell(
   // PRE-CUT BASELINE.
   const chainPre = await chainGeneration(fixture, box);
   let chainPreDeltaEtag: string | null = null;
+
   if (chainPre.hasDelta && chainPre.baseId !== null) {
     const preRows = chainArchiveExpectations(chainPre.baseId, true, prefix);
     const preDelta = preRows[1];
+
     if (preDelta !== undefined) {
       const head = await headObject(fixture, box, preDelta.key);
       chainPreDeltaEtag = head.etag === undefined || head.etag.length === 0 ? null : head.etag;
     }
   }
+
   // THE VICTIM, FIRED AND CUT. Marker, file, arming, polls, kill and outcome
   // live in `fireCutVictim`; a cut that never met its publication comes back
   // as a miss, recorded here as an incomplete cell — never a fast pass.
   const fired = await fireCutVictim(fixture, box, { marker: cutMarker, content: cutContent, file: victim });
+
   if ('missedReason' in fired) {
     return {
       completed: false,
@@ -3402,11 +3694,13 @@ async function runFaultCutCell(
       detail: fired.missedReason,
     };
   }
+
   // THE WAKE AFTER THE CUT. Every kind is admitted: an empty wake is the
   // finding, not a step failure, and the judges below read it as one.
   const cut = await startupOperation(fixture, box, '/wake', 'fault-cut wake', ['attached', 'already-attached', 'empty']);
   const cutDetail = cut.attach.detail;
   const cutKind = cut.attach.kind;
+
   return await readChainCutCell(fixture, box, {
     prefix,
     marker: cutMarker,
@@ -3418,6 +3712,7 @@ async function runFaultCutCell(
     preDeltaEtag: chainPreDeltaEtag,
   });
 }
+
 /** One change, one tick, and the delta object's identity afterwards. Two of
  *  these either side of a change are what the `mutable-delta` cell compares. */
 async function deltaAfterOneChange(
@@ -3430,11 +3725,14 @@ async function deltaAfterOneChange(
   await checkpointOperation(fixture, box, 'tick', `mutable-delta cell ${label}`);
   const state = await call(fixture, 'GET', `/state?box=${box}`, StateReplySchema);
   const chainId = state.state?.chain?.base?.id ?? '';
+
   if (chainId.length === 0) throw new Error('/state reported no chain generation');
   const key = `${state.storePrefix ?? ''}backups/${chainId}/delta.sqsh`;
+
   const head = await call(
     fixture, 'GET', `/head?box=${box}&key=${encodeURIComponent(key)}`, HeadReplySchema,
   );
+
   return { chainId, key, etag: head.etag ?? '', bytes: head.size ?? 0 };
 }
 
@@ -3473,6 +3771,7 @@ export function chainArchiveExpectations(
 ): ChainArchiveExpectation[] {
   if (chainId === undefined || chainId.length === 0) return [];
   const root = `${storePrefix}backups/${chainId}`;
+
   return [
     {
       name: 'the base object the record names exists in the store with non-zero size',
@@ -3547,9 +3846,11 @@ async function closeWakeOpsWindow(
   await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
   const after = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
   const wakeOps = diffOpTallies(before, after);
+
   if (wakeOps === null) {
     notes.push('the wake-window /ops bracket did not difference: the restore goes uncounted on totalRemoteOps');
   }
+
   return wakeOps;
 }
 
@@ -3584,27 +3885,34 @@ export async function readRestoreProbe(
 ): Promise<RestoreProbeRow> {
   const absent = (outcome: string): RestoreProbeRow => ({ kind, treeBytes, wallMs: null, probeAt: null, outcome });
   let reply: v.InferOutput<typeof RestoreProbeReplySchema>;
+
   try {
     reply = await call(fixture, 'GET', `/restore-probe?box=${box}`, RestoreProbeReplySchema);
   } catch (error) {
     const words = describeThrown({ cause: error }).slice(0, 240);
     notes.push(`restore probe ${kind} did not answer: ${words}`);
+
     return absent(`error: ${words}`);
   }
+
   if (reply.probe === undefined || reply.probe === null) {
     return absent(reply.ok === false ? 'absent: the box wrote no probe row for its last start' : 'absent: no probe row in the reply');
   }
+
   const { wallMs, at, phases } = reply.probe;
   // An attempt that opened its row and never wrote a wall time: the platform
   // reset the object mid-restore, or the attempt is still running. The phases
   // say how far it got; the last one present is where it was.
   const reached = Object.keys(phases ?? {});
   const where = reached.length === 0 ? 'none' : reached.join(', ');
+
   if (wallMs === null) notes.push(`restore probe ${kind}: the start never settled; phases reached: ${where}`);
+
   const row: RestoreProbeRow = {
     kind, treeBytes, wallMs, probeAt: at,
     outcome: wallMs === null ? `unsettled: the start opened a row and never settled it (phases: ${where})` : 'ok',
   };
+
   return phases === undefined ? row : { ...row, phases };
 }
 
@@ -3648,8 +3956,10 @@ export async function runWorkloadPhases(
       'workload phases skipped: a verify-only probe measures the lifecycle (ladder, stop, wake), '
       + 'not performance workloads',
     );
+
     return;
   }
+
   /** One phase run, appended to the arm's rows whatever it answers. A phase
    *  that throws records its reason and leaves the row absent, which G9 then
    *  counts as one repetition fewer rather than as a silent success. */
@@ -3661,11 +3971,13 @@ export async function runWorkloadPhases(
       log(`phase ${what} failed: ${reason.slice(0, 160)}`);
       notes.push(`phase ${what} did not complete: ${reason.slice(0, 240)}`);
     }
+
     // FLUSH AT THE PHASE BOUNDARY, not a settle-and-hope.
     await call(fixture, 'POST', `/ops/flush?box=${box}`, AckReplySchema);
   };
 
   log('workload phases');
+
   for (const phase of PHASES) await measurePhase(phase, phase);
 
   // THE DECIDING PHASE, REPEATED. G9 scores the DISPERSION of the deciding
@@ -3675,18 +3987,21 @@ export async function runWorkloadPhases(
   // what the first pass MEASURED rather than named here, so the deciding metric
   // can move between phases without this loop repeating the wrong one.
   const decidingPhases = phasesMeasuring(result.phases, DECIDING_METRIC);
+
   if (decidingPhases.length === 0 && run.repetitions > 1) {
     notes.push(
       `no phase measured the deciding metric \`${DECIDING_METRIC}\`, so its `
       + `${run.repetitions} repetitions could not be run`,
     );
   }
+
   for (let repetition = 2; repetition <= run.repetitions; repetition += 1) {
     for (const phase of decidingPhases) {
       log(`deciding phase ${phase}, repetition ${repetition} of ${run.repetitions}`);
       await measurePhase(phase, `${phase} repetition ${repetition}`);
     }
   }
+
   log(
     `the deciding metric \`${DECIDING_METRIC}\` was measured `
     + `${metricRows(result, DECIDING_METRIC).length} time(s) over phase(s) `
@@ -3711,11 +4026,14 @@ async function runFaultCutPhase(
 ): Promise<{ cut: FaultCutObservation | null; notes: string[] }> {
   if (arm.verifyPassed && arm.wakeKind === 'attached') {
     log('fault-cut cell');
+
     try {
       const cut = await runFaultCutCell(fixture, box);
+
       return { cut, notes: [`fault-cut: ${cut.detail}`] };
     } catch (error) {
       const reason = describeThrown({ cause: error }).slice(0, 240);
+
       return {
         cut: {
           completed: false,
@@ -3731,6 +4049,7 @@ async function runFaultCutPhase(
       };
     }
   }
+
   return {
     cut: null,
     notes: [
@@ -3753,14 +4072,18 @@ async function runSecurityCellsPhase(
   strategy: Strategy,
 ): Promise<{ observation: SecurityCellsObservation | null; notes: string[] }> {
   log('security cells');
+
   try {
     const nonce = securityNonce();
+
     const outcome = await retryTransient('security fault cells', async (): Promise<{
       observation: SecurityCellsObservation; notes: string[]; error?: string;
     }> => await runSecurityFaultCells(fixture, box, strategy, nonce));
+
     return { observation: outcome.observation, notes: outcome.notes };
   } catch (error) {
     const reason = describeThrown({ cause: error }).slice(0, 240);
+
     return { observation: null, notes: [`security cells did not complete: ${reason}`] };
   }
 }
@@ -3791,8 +4114,10 @@ async function releaseArm(
         { purge: true, prefix: '', whole: true },
       );
     }
+
     return result;
   };
+
   const cleanupStep = async (what: string, step: () => Promise<void>): Promise<void> => {
     try {
       await step();
@@ -3818,6 +4143,7 @@ async function releaseArm(
   // its own create refusal — a localized, named failure instead of a dead run.
   await cleanupStep('box release', async () => {
     const released = await stopOperation(fixture, box, 'box release');
+
     if (released.ok !== true) {
       notes.push(`the box was not released after the arm: ${released.error ?? 'stop did not confirm'}`);
     }
@@ -3839,9 +4165,12 @@ async function recordServedEntries(
   notes: string[],
 ): Promise<void> {
   if (result.wakeKind !== 'attached') return;
+
   const served = await retryTransient('served entry count', async () =>
     await execInBox(fixture, box, 'find /workspace -mindepth 1 -printf x | wc -c'));
+
   const count = Number((served.stdout ?? '').trim());
+
   if (served.exitCode === 0 && Number.isSafeInteger(count) && count >= 0) result.wakeServedEntries = count;
   else notes.push(`the served entry count did not answer: ${(served.stderr ?? served.error ?? '').trim().slice(0, 120)}`);
 }
@@ -3869,6 +4198,7 @@ async function measureComplexityRung(
 ): Promise<number> {
   if (!complexityScope) return ladderBytes;
   const treeBytes = ladderBytes + kib * 1024;
+
   try {
     await retryTransient(`complexity 64KiB write at ${treeBytes}B`, async () =>
       await execInBox(fixture, box, 'dd if=/dev/urandom of=/workspace/ladder/backup-64k.bin bs=1024 count=64 2>/dev/null && sync'),
@@ -3886,6 +4216,7 @@ async function measureComplexityRung(
     notes.push(`complexity backup-64k at ${treeBytes}B did not answer: ${words}`);
     result.complexity?.push({ treeBytes, kind: 'backup-64k', ms: null, outcome: `error: ${words}` });
   }
+
   if (rung < CHANGE_SIZES_KIB.length - 1) {
     try {
       const restoreStop = await stopOperation(fixture, box, `complexity restore at ${treeBytes}B`);
@@ -3917,6 +4248,7 @@ async function measureComplexityRung(
       result.complexity?.push({ treeBytes, kind: 'restore', ms: null, outcome: `error: ${words}` });
     }
   }
+
   return treeBytes;
 }
 
@@ -3981,6 +4313,7 @@ async function measureArm(
       log(`the durable arm artifact could not be written after ${what}: ${describeThrown({ cause: error })}`);
     }
   };
+
   settle('the arm started');
 
   /** Every startup this arm measures, with the driver's own contribution to the
@@ -3993,17 +4326,20 @@ async function measureArm(
     allowedKinds: readonly string[],
   ): Promise<StartupCompletion> => {
     const completed = await startupOperation(fixture, box, path, operation, allowedKinds);
+
     if (completed.redrives > 0) {
       notes.push(
         `${operation}: the driver drove readiness ${completed.redrives}x through a no-op exec `
         + 'because /state reported the container stopped with no restoration started',
       );
     }
+
     return completed;
   };
 
   log('create (cold attach)');
   let cold: StartupCompletion;
+
   try {
     cold = await startup('/create', 'cold attach', admittedAttachKinds('cold attach'));
   } catch (error) {
@@ -4020,8 +4356,10 @@ async function measureArm(
     // 2026-09-10 refusal recorded nothing but the platform's sentence.
     await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes);
     settle('a refused create');
+
     return result;
   }
+
   result.attachColdMs = cold.ms;
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
@@ -4035,11 +4373,14 @@ async function measureArm(
   const verify = (name: string, pass: boolean, detail: string): void => {
     result.verifyChecks.push({ name, pass, detail });
   };
+
   const markerFile = '.devbox-verify-marker.txt';
   const marker = `devbox-verify-${crypto.randomUUID()}`;
+
   const markerWrite = await retryTransient('marker write', async () =>
     await execInBox(fixture, box, `printf %s ${marker} > ./${markerFile} && cat ./${markerFile}`),
   );
+
   verify(
     'default cwd is the durable work directory',
     markerWrite.exitCode === 0 && (markerWrite.stdout ?? '').includes(marker),
@@ -4059,10 +4400,12 @@ async function measureArm(
   // bytes written so far when the rung below measures.
   const complexityScope = !options.verifyOnly;
   let ladderBytes = 0;
+
   for (const [rung, kib] of CHANGE_SIZES_KIB.entries()) {
     await retryTransient(`ladder ${kib}KiB write`, async () =>
       await execInBox(fixture, box, `mkdir -p /workspace/ladder && dd if=/dev/urandom of=/workspace/ladder/c${kib}.bin bs=1024 count=${kib} 2>/dev/null && sync`),
     );
+
     for (const kind of ['quiesce', 'tick'] as const) {
       if (kind === 'quiesce') result.quiescesBeforeDecisive++;
       const cp = await checkpointOperation(fixture, box, kind, `ladder ${kib}KiB ${kind}`);
@@ -4073,6 +4416,7 @@ async function measureArm(
         bytes: cp.outcome?.bytes ?? -1,
         outcome: cp.error !== undefined ? `error: ${cp.error}` : checkpointOutcomeWords(cp),
       });
+
       if (kib === CHANGE_SIZES_KIB[0] && kind === 'quiesce') {
         verify(
           'the first checkpoint MOVED bytes into the store',
@@ -4082,8 +4426,10 @@ async function measureArm(
         );
       }
     }
+
     ladderBytes = await measureComplexityRung(fixture, box, kib, rung, ladderBytes, complexityScope, result, notes, startup);
   }
+
   // THE PUBLISH-TIME PROBE READ. The ladder just published, so the incident
   // ledger names this publication's own window. It is archived whole; the
   // probe quotes each incident adjacent to it.
@@ -4126,9 +4472,11 @@ async function measureArm(
 
   const afterWake = woke.state;
   const mode = afterWake.state?.chain?.mode;
+
   const mounts = await retryTransient('work-directory mount read', async () =>
     await execInBox(fixture, box, 'cat /proc/mounts'),
   );
+
   const mountText = mounts.stdout ?? '';
   // The row for the work directory itself, matched on the MOUNTPOINT field.
   // The previous `grep -F /workspace` also matched a device name or an option
@@ -4142,6 +4490,7 @@ async function measureArm(
   const survived = await retryTransient('marker read after wake', async () =>
     await execInBox(fixture, box, `cat ./${markerFile} 2>/dev/null || echo MISSING`),
   );
+
   verify(
     'the pre-stop write survived the recycle',
     (survived.stdout ?? '').includes(marker),
@@ -4151,11 +4500,14 @@ async function measureArm(
   const head = async (name: string, key: string | undefined): Promise<void> => {
     if (key === undefined) {
       verify(name, false, '(no durable object key recorded)');
+
       return;
     }
+
     const found = await retryTransient(`${name} head`, async () =>
       await headObject(fixture, box, key),
     );
+
     verify(
       name,
       found.exists === true && (found.size ?? 0) > 0,
@@ -4167,11 +4519,14 @@ async function measureArm(
   const archive = async (expectation: ChainArchiveExpectation): Promise<void> => {
     if (expectation.present) {
       await head(expectation.name, expectation.key);
+
       return;
     }
+
     const found = await retryTransient(`${expectation.name} head`, async () =>
       await headObject(fixture, box, expectation.key),
     );
+
     verify(
       expectation.name,
       found.exists !== true,
@@ -4186,8 +4541,10 @@ async function measureArm(
     const exists = await retryTransient('writable-layer read', async () =>
       await execInBox(fixture, box, `test -d ${path} && echo yes || echo no`),
     );
+
     verify('the writable layer exists', (exists.stdout ?? '').trim() === 'yes', `${path} -> ${(exists.stdout ?? '').trim()}`);
   };
+
   /**
    * A read-only lower layer: the directory is there, and the mount that serves
    * it is up on that same path.
@@ -4200,6 +4557,7 @@ async function measureArm(
         `test -d ${path} && grep -qs " ${path} " /proc/mounts && echo yes || echo no`,
       ),
     );
+
     verify(
       name,
       (lower.stdout ?? '').trim() === 'yes',
@@ -4222,14 +4580,17 @@ async function measureArm(
     // makes that the ORDINARY end of a ladder whose delta outgrows its base,
     // and it is what the last quiesce of run 20260831184750 published.
     const chain = afterWake.state?.chain;
+
     const expectations = chainArchiveExpectations(
       chain?.base?.id,
       chain?.delta !== undefined && chain?.delta !== null,
       afterWake.storePrefix ?? '',
     );
+
     if (expectations.length === 0) {
       verify('the record names a generation to check the store against', false, '(no chain generation recorded)');
     }
+
     for (const expectation of expectations) await archive(expectation);
   } else {
     // The chain in EXTRACTION mode, which is the only other shape this box
@@ -4254,6 +4615,7 @@ async function measureArm(
         : `${afterWake.storePrefix ?? ''}backups/${chainId}/${mode === 'extract' ? 'data.sqsh' : 'delta.sqsh'}`,
     );
   }
+
   // THE WAKE-TIME PROBE READ. The ledger now names the restore's own window,
   // beside the publish-time rows so the probe quotes each incident adjacent
   // to the dump whose window filed it.
@@ -4261,6 +4623,7 @@ async function measureArm(
 
   result.verifyPassed = result.verifyChecks.every((check) => check.pass);
   settle('the lifecycle proof');
+
   if (!result.verifyPassed) {
     notes.push('LIFECYCLE VERIFY FAILED: this arm measured a blank disk and is not ranked');
     notes.push(...result.verifyChecks.filter((check) => !check.pass).map((check) => `${check.name}: ${check.detail}`).slice(0, 6));
@@ -4285,6 +4648,7 @@ async function measureArm(
     settle('the probe evidence window');
     await releaseArm(fixture, box, result, notes);
     settle('the arm finished');
+
     return result;
   }
 
@@ -4301,6 +4665,7 @@ async function measureArm(
     for (let repetition = 1; repetition <= options.repetitions; repetition += 1) {
       for (const spec of DECISIVE_WORKLOADS) {
         log(`decisive ${spec.id}, repetition ${repetition} of ${options.repetitions}`);
+
         try {
           // A timed-out container operation can stop the spot container and lose
           // the harness with it. Reinstall through the box before each workload;
@@ -4353,6 +4718,7 @@ async function measureArm(
     result.witnessChecks = controlWitnessChecks(strategy, witnessed.facts);
     notes.push(...witnessed.notes);
     const unobserved = result.witnessChecks.filter((witness) => !witness.observed);
+
     if (unobserved.length > 0) {
       notes.push(
         `WITNESS DRIFT: ${unobserved.map((witness) => `${witness.name} (${witness.detail})`).join('; ')}`,
@@ -4383,6 +4749,7 @@ async function measureArm(
   // measurement failure, and the arm still returns what it measured.
   await releaseArm(fixture, box, result, notes);
   settle('the arm finished');
+
   return result;
 }
 
@@ -4446,6 +4813,7 @@ export function refuseFailedArm(arm: ArmResult, reason: string): ArmResult {
   arm.notes.push(reason);
   arm.verifyChecks.push({ name: 'the arm completed every measured step', pass: false, detail: reason });
   arm.verifyPassed = false;
+
   return arm;
 }
 
@@ -4533,11 +4901,13 @@ export function writeArmArtifact<Row>(
     logTail: armLogTail(arm),
     row,
   };
+
   const path = armArtifactPath(repoRoot, runId, arm);
   mkdirSync(dirname(path), { recursive: true });
   const temporary = `${path}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(artifact, null, 2)}\n`);
   renameSync(temporary, path);
+
   return artifact;
 }
 
@@ -4562,20 +4932,25 @@ export interface ReadArmArtifact {
  */
 export function readArmArtifact(repoRoot: string, runId: string, arm: Strategy): ReadArmArtifact {
   const path = armArtifactPath(repoRoot, runId, arm);
+
   if (!existsSync(path)) return { artifact: null, error: null };
   let decoded: unknown;
+
   try {
     decoded = JSON.parse(readFileSync(path, 'utf8'));
   } catch (cause) {
     return { artifact: null, error: `unreadable (${path}): ${describeThrown({ cause })}` };
   }
+
   const parsed = v.safeParse(ArmArtifactSchema, decoded);
+
   if (!parsed.success) {
     return {
       artifact: null,
       error: `not an arm artifact (${path}): ${issueText(parsed.issues)}`,
     };
   }
+
   // SAFETY: the envelope is parsed above; the row is whatever THIS run's own
   // lane wrote through `writeArmArtifact` minutes earlier, and the decisive
   // assembly is the only reader of the `ArmResult` shape it wrote itself. A
@@ -4596,6 +4971,7 @@ export function externallyAbortedArm(arm: Strategy, box: string, reason: string)
   // the closing note and as the failed lifecycle check, so writing it here too
   // would print it twice in a report whose whole job is to be read.
   const notes = armLogTail(arm).map((line) => `log: ${line}`);
+
   return refuseFailedArm(unmeasuredArm(arm, box, notes), `externally-aborted: ${reason}`);
 }
 
@@ -4617,16 +4993,19 @@ export async function runArm(
   noteLiveBox: (box: string) => void,
 ): Promise<ArmResult> {
   let partial: ArmResult | null = null;
+
   try {
     return await measureArm(fixture, strategy, options, noteLiveBox, (row) => { partial = row; });
   } catch (error) {
     const measured = partial ?? unmeasuredArm(strategy, `ab-${strategy}-${options.runId}`, []);
     const reason = `arm failed mid-measurement: ${describeThrown({ cause: error })}`;
     log(reason);
+
     try {
       const released = await stopOperation(fixture, measured.box, 'release after failure', {
         deadlineMs: FAILED_ARM_RELEASE_DEADLINE_MS,
       });
+
       if (released.ok !== true) {
         measured.notes.push(
           `the failed arm's box was not released: ${released.error ?? 'stop did not confirm'}`,
@@ -4637,15 +5016,18 @@ export async function runArm(
         `the failed arm's box could not be released: ${describeThrown({ cause: releaseError })}`,
       );
     }
+
     // The refusal is the arm's settled answer, and it goes to disk like every
     // other settled one — a killed run must not be able to lose the reason an
     // arm died, which is the one fact the next reader of that arm needs.
     const refused = refuseFailedArm(measured, reason);
+
     try {
       writeArmArtifact(REPO_ROOT, options.runId, strategy, refused);
     } catch (writeError) {
       log(`the durable arm artifact could not be written after the failure: ${describeThrown({ cause: writeError })}`);
     }
+
     return refused;
   }
 }
@@ -4697,6 +5079,7 @@ export async function runArmsInFlight(
       } catch (error) {
         const reason = `arm lane failed: ${describeThrown({ cause: error })}`;
         log(reason);
+
         // A lane that never reached `measureArm` owns no `settle` boundary, so
         // the refusal is written here — the artifact for this arm must exist
         // whatever shape the failure took, or the run-level assembly would read
@@ -4708,11 +5091,13 @@ export async function runArmsInFlight(
           `ab-${strategy}-${runId}`,
           armLogTail(strategy).map((line) => `log: ${line}`),
         ), reason);
+
         try {
           writeArmArtifact(REPO_ROOT, runId, strategy, refused);
         } catch (writeError) {
           log(`the durable arm artifact could not be written after the lane failure: ${describeThrown({ cause: writeError })}`);
         }
+
         return refused;
       }
     })));
@@ -4731,6 +5116,7 @@ export async function runArmsInFlight(
  */
 function metricRows(arm: ArmResult, name: string): { p50: number; wallMs: number }[] {
   const rows: { p50: number; wallMs: number }[] = [];
+
   for (const run of arm.phases) {
     for (const phase of run.phases) {
       for (const metric of phase.metrics) {
@@ -4738,6 +5124,7 @@ function metricRows(arm: ArmResult, name: string): { p50: number; wallMs: number
       }
     }
   }
+
   return rows;
 }
 
@@ -4753,22 +5140,27 @@ function metricRows(arm: ArmResult, name: string): { p50: number; wallMs: number
  */
 export function phasesMeasuring(runs: readonly ProbeRun[], metric: string): string[] {
   const names = new Set<string>();
+
   for (const run of runs) {
     for (const phase of run.phases) {
       if (phase.metrics.some((row) => row.name === metric)) names.add(phase.phase);
     }
   }
+
   return [...names];
 }
 
 function metricSummary(arm: ArmResult, name: string): Summary | null {
   const rows = metricRows(arm, name);
+
   return rows.length === 0 ? null : summarize(rows.map((row) => row.p50));
 }
 
 const num = (value: number | null, digits = 2): string => {
   if (value === null || !Number.isFinite(value) || value < 0) return '—';
+
   if (Math.abs(value) >= 1000) return Math.round(value).toLocaleString('en-US');
+
   return value.toFixed(digits);
 };
 
@@ -4807,12 +5199,16 @@ export function renderFrozenControls(controls: readonly FrozenControl[]): string
     'These schema-validated external rows provide context only. They come from a PREVIOUS run, so they '
     + 'never enter this run\'s ranking, which uses only arms this run measured.',
   ];
+
   if (controls.length === 0) {
     out.push('', 'Historical context is unavailable: no `--control <strategy>=<path>` was supplied.');
+
     return out.join('\n');
   }
+
   out.push('', '| control | status | why | provenance | date | worker | bucket | image | seed | loop budget ms |');
   out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+
   for (const control of controls) {
     out.push(
       `| \`${control.strategy}\` | ${FROZEN_CONTROL_LABEL[control.status]} | ${control.statusDetail} `
@@ -4821,6 +5217,7 @@ export function renderFrozenControls(controls: readonly FrozenControl[]): string
       + `| ${control.seed} | ${control.budgetMs} |`,
     );
   }
+
   return out.join('\n');
 }
 
@@ -4829,6 +5226,7 @@ export function renderFrozenControls(controls: readonly FrozenControl[]): string
 export function renderArmLifecycleRow(arm: ArmResult): string {
   const failing = arm.verifyChecks.filter((check) => !check.pass)
     .map((check) => `\`${check.name}\``).join(', ');
+
   return `| \`${arm.strategy}\` | ${arm.verifyPassed ? 'PASSED' : '**FAILED**'} | ${failing === '' ? '—' : failing} |`;
 }
 
@@ -4850,16 +5248,20 @@ function renderComplexitySection(arms: readonly ArmResult[], date: string): stri
   out.push('');
   out.push('| arm | tree bytes | 64 KiB backup (ms) | restore (ms) | restore remote ops | restore payload bytes | outcome |');
   out.push('| --- | --- | --- | --- | --- | --- | --- |');
+
   for (const arm of arms) {
     const complexity = decodeComplexityRows(arm.complexity);
+
     for (const treeBytes of COMPLEXITY_TREE_BYTES) {
       const backup = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'backup-64k');
       const restore = complexity.find((row) => row.treeBytes === treeBytes && row.kind === 'restore');
+
       if (backup === undefined && restore === undefined) {
         const reason = `the arm recorded no tree-size row at ${num(treeBytes, 0)} bytes`;
         out.push(`| \`${arm.strategy}\` | ${num(treeBytes, 0)} | NOT MEASURED: ${reason} | — | — | — | NOT MEASURED |`);
         continue;
       }
+
       const bill = complexityRestoreBill(restore?.wakeOps);
       const outcome = [backup?.outcome, restore?.outcome].filter((part) => part !== undefined).join('; ');
       out.push(
@@ -4868,6 +5270,7 @@ function renderComplexitySection(arms: readonly ArmResult[], date: string): stri
       );
     }
   }
+
   return out.join('\n');
 }
 
@@ -4882,17 +5285,21 @@ export function render(
   const compared = arms.map((arm) => `\`${arm.strategy}\``).join(', ');
   out.push(`### Devbox storage strategy: ${compared}`);
   out.push('');
+
   for (const [key, value] of Object.entries(meta)) out.push(`- ${key}: \`${value}\``);
   out.push('');
 
   out.push('#### Lifecycle proof, first, per arm');
+
   if (renderControlContext || frozenControls.length > 0) {
     out.push(renderFrozenControls(frozenControls));
     out.push('');
   }
+
   out.push('');
   out.push('| arm | lifecycle proof | failing checks |');
   out.push('| --- | --- | --- |');
+
   for (const arm of arms) out.push(renderArmLifecycleRow(arm));
   out.push('');
   out.push(
@@ -4903,6 +5310,7 @@ export function render(
   out.push('');
 
   const ticks = arms.flatMap((arm) => arm.decisiveTicks);
+
   if (ticks.length > 0) {
     out.push('#### The decisive experiment');
     out.push('');
@@ -4931,9 +5339,11 @@ export function render(
     out.push('');
     out.push('| arm | quiesces before the window | rebased in the ladder |');
     out.push('| --- | --- | --- |');
+
     for (const arm of arms) {
       const before = arm.generationBeforeLadder;
       const after = arm.generationAfterLadder;
+
       // OBSERVED, not weighed. A rebase writes a fresh base uuid and drops the
       // delta, so the pair answers it outright. A run whose ladder wrote no
       // base has no generation to compare, which is its own answer.
@@ -4944,10 +5354,12 @@ export function render(
           : before.baseId !== after.baseId
             ? `YES (${String(before.baseId).slice(0, 8)} -> ${String(after.baseId).slice(0, 8)})`
             : 'no';
+
       out.push(
         `| \`${arm.strategy}\` | ${arm.quiescesBeforeDecisive} | ${rebased} |`,
       );
     }
+
     out.push('');
     out.push(
       'The ladder\'s quiesces DO precede the window, so a rebase there changes the base the '
@@ -4960,18 +5372,22 @@ export function render(
     out.push('');
     out.push('| arm | workload | ticks | Σ tick ms | p50 | p95 | class A | class B | MiB moved |');
     out.push('| --- | --- | --- | --- | --- | --- | --- | --- | --- |');
+
     for (const arm of arms) {
       for (const spec of DECISIVE_WORKLOADS) {
         const totals = totalsFor(arm.decisiveTicks, spec.id);
+
         if (totals.ticks === 0) continue;
         const blind = opsAreBlind(arm.decisiveTicks, spec.id);
         const opsCell = blind ? 'unmeasured' : String(totals.classA);
         const bCell = blind ? 'unmeasured' : String(totals.classB);
+
         const movedCell = !totals.movedReported
           ? 'not measurable'
           : totals.unanswerable > 0
             ? `${(totals.bytesPut / 1024 / 1024).toFixed(1)} (${totals.unanswerable} tick(s) could not answer)`
             : (totals.bytesPut / 1024 / 1024).toFixed(1);
+
         out.push(
           `| \`${arm.strategy}\` | ${spec.id} | ${totals.ticks} | ${Math.round(totals.sumWallMs)} `
           + `| ${Math.round(totals.p50WallMs)} | ${Math.round(totals.p95WallMs)} | ${opsCell} `
@@ -4979,12 +5395,14 @@ export function render(
         );
       }
     }
+
     out.push('');
 
     // ONLY LIFECYCLE-PROVEN ARMS ARE RANKED: an arm that failed the proof
     // measured the container's own blank disk, so its ticks are recorded for
     // diagnosis and named here rather than ranked.
     const refused = arms.filter((arm) => !arm.verifyPassed).map((arm) => arm.strategy);
+
     if (refused.length > 0) {
       out.push(
         `REFUSED FROM RANKING: ${refused.map((id) => `\`${id}\``).join(', ')} failed the lifecycle proof, so `
@@ -4993,6 +5411,7 @@ export function render(
       );
       out.push('');
     }
+
     if (frozenControls.length > 0) {
       out.push(
         'Only the current arm\'s rows may be ranked. The frozen controls above remain visible '
@@ -5012,10 +5431,12 @@ export function render(
       + 'measurement, never treated as disqualifying.',
     );
     out.push('');
+
     for (const arm of arms) {
       const dbBytes = arm.treeBytes['sqlite'] ?? -1;
       out.push(`- \`${arm.strategy}\`: ${sqliteFinding(arm.decisiveTicks, dbBytes)}`);
     }
+
     out.push('');
   }
 
@@ -5023,6 +5444,7 @@ export function render(
   out.push('');
   out.push('| arm | attach cold (ms) | attach warm (ms) | stop (ms) | wake (ms) | wake attach.kind |');
   out.push('| --- | --- | --- | --- | --- | --- |');
+
   for (const arm of arms) {
     out.push(
       `| \`${arm.strategy}\` | ${num(arm.attachColdMs, 0)} | ${num(arm.attachWarmMs, 0)} `
@@ -5030,6 +5452,7 @@ export function render(
       + `| ${arm.wakeKind === 'attached' ? 'attached' : `**${arm.wakeKind || 'unknown'}**`} |`,
     );
   }
+
   out.push('');
   out.push(
     'A wake whose `attach.kind` is not `attached` did not restore anything: the container never '
@@ -5041,6 +5464,7 @@ export function render(
   out.push('');
   out.push('| arm | change | kind | ms | bytes committed | outcome |');
   out.push('| --- | --- | --- | --- | --- | --- |');
+
   for (const arm of arms) {
     for (const row of arm.checkpoints) {
       out.push(
@@ -5049,6 +5473,7 @@ export function render(
       );
     }
   }
+
   out.push('');
   out.push(renderComplexitySection(arms, meta.date));
   out.push('');
@@ -5058,14 +5483,18 @@ export function render(
   const header = ['metric', ...arms.map((a) => `\`${a.strategy}\``)];
   out.push(`| ${header.join(' | ')} |`);
   out.push(`| ${header.map(() => '---').join(' | ')} |`);
+
   for (const metric of HEADLINE) {
     const cells = arms.map((arm) => {
       const found = metricSummary(arm, metric);
+
       return found === null ? '—' : num(found.p50);
     });
+
     if (cells.every((c) => c === '—')) continue;
     out.push(`| \`${metric}\` | ${cells.join(' | ')} |`);
   }
+
   out.push('');
   // HOW MANY REPETITIONS ACTUALLY RAN, per arm, beside the count the run asked
   // for. G9 scores the dispersion of exactly these, so a reader who can see
@@ -5082,6 +5511,7 @@ export function render(
   out.push('');
   out.push('| arm | class A | class B | free | total | teardown |');
   out.push('| --- | --- | --- | --- | --- | --- |');
+
   for (const arm of arms) {
     out.push(
       `| \`${arm.strategy}\` | ${num(arm.ops?.classA ?? null, 0)} | ${num(arm.ops?.classB ?? null, 0)} `
@@ -5089,12 +5519,15 @@ export function render(
       + `| ${JSON.stringify(arm.teardown ?? {})} |`,
     );
   }
+
   out.push('');
 
   const notes = arms.flatMap((arm) => arm.notes.map((note) => `\`${arm.strategy}\`: ${note}`));
+
   if (notes.length > 0) {
     out.push('#### What did not hold');
     out.push('');
+
     for (const note of notes) out.push(`- ${note}`);
     out.push('');
   }
@@ -5103,6 +5536,7 @@ export function render(
   out.push('');
   out.push(admission.admitted ? recommend(arms, admission) : refusalText(admission));
   out.push('');
+
   return out.join('\n');
 }
 
@@ -5110,20 +5544,24 @@ export function render(
 export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdict): string {
   requireAdmitted(admission);
   const proven = arms.filter((arm) => arm.verifyPassed);
+
   if (proven.length === 0) {
     return 'NO DEFAULT IS DERIVABLE FROM THIS RUN. No arm completed the lifecycle proof, which means every arm '
       + 'measured the container\'s own blank disk rather than its strategy. The lifecycle rows above '
       + 'say which checks failed; fix those before reading any latency from this table.';
   }
+
   const wakeNote = (arm: ArmResult): string => arm.wakeKind === 'attached'
     ? ''
     : ` Its wake was NOT verified (attach.kind '${arm.wakeKind}'), so the restore half of this `
       + 'recommendation rests on the checkpoint ladder rather than on an observed cold start.';
+
   const witnessCell = (witnesses: readonly string[]): string =>
     witnesses.length === 0 ? 'none preregistered' : witnesses.map((name) => `\`${name}\``).join(', ');
 
   const scored = proven.map((arm) => {
     const totals = RULE_WORKLOADS.map((workload) => totalsFor(arm.decisiveTicks, workload));
+
     return {
       arm,
       unmeasured: RULE_WORKLOADS.filter((_, index) => totals[index]!.ticks === 0),
@@ -5132,6 +5570,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
       witnesses: arm.witnessChecks.filter((witness) => witness.observed).map((witness) => witness.name),
     };
   });
+
   const rankable = scored
     .filter((row) => row.unmeasured.length === 0)
     .sort((a, b) => a.decisiveMs - b.decisiveMs);
@@ -5143,6 +5582,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
     '| rank | arm | Σ decisive tick ms | `' + DECIDING_METRIC + '` p50 (ms) | observed defects |',
     '| --- | --- | --- | --- | --- |',
   ];
+
   rankable.forEach((row, index) => {
     const name = `\`${row.arm.strategy}\``;
     out.push(
@@ -5150,26 +5590,32 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
       + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${witnessCell(row.witnesses)} |`,
     );
   });
+
   for (const row of scored.filter((candidate) => candidate.unmeasured.length > 0)) {
     out.push(
       `| — | \`${row.arm.strategy}\` | unranked: no ticks on ${row.unmeasured.join(', ')} `
       + `| ${row.statMs === null ? '—' : row.statMs.toFixed(2)} | ${witnessCell(row.witnesses)} |`,
     );
   }
+
   out.push('');
 
   const best = rankable[0];
+
   if (best === undefined) {
     out.push(
       'NO DEFAULT IS DERIVABLE FROM THIS RUN. Every arm that completed the lifecycle proof is missing ticks '
       + `on at least one decisive workload, so none of them is comparable on the quantity the rule reads.`,
     );
+
     return out.join('\n');
   }
+
   out.push(
     `\`${best.arm.strategy}\` IS THE SHIPPED DEFAULT, and this run measured it end to end: the decisive `
     + `tick time above is the number a later change to it is judged against.${wakeNote(best.arm)}`,
   );
+
   if (best.witnesses.length > 0) {
     out.push('');
     out.push(
@@ -5178,6 +5624,7 @@ export function recommend(arms: readonly ArmResult[], admission: AdmissionVerdic
       + 'the ranking; the witness rows above say what each one did.',
     );
   }
+
   return out.join('\n');
 }
 
@@ -5292,16 +5739,21 @@ const RESTORE_CLAIMS = {
 export function diffOpTallies(before: OpTally | null, after: OpTally | null): OpTally | null {
   const start = before?.calls;
   const end = after?.calls;
+
   if (start === undefined || end === undefined) return null;
   const calls = diffCounts(start, end);
+
   if (calls === null) return null;
   const total = Object.values(calls).reduce((sum, count) => sum + count, 0);
+
   // The byte tally rides the same bracket. A fixture that predates it answers
   // no `bytes` on either side, and the window then carries none: the bytes
   // stay uncounted rather than zero.
   if (before?.bytes === undefined || after?.bytes === undefined) return { calls, total };
   const bytes = diffCounts(before.bytes, after.bytes);
+
   if (bytes === null) return null;
+
   return { calls, total, bytes };
 }
 
@@ -5312,14 +5764,18 @@ function diffCounts(start: Record<string, number>, end: Record<string, number>):
   // The union of both sides' names, without a Set: the names are dynamic
   // tally keys, deduplicated inline.
   const names = [...Object.keys(start), ...Object.keys(end)].filter((name, index, all) => all.indexOf(name) === index);
+
   for (const name of names) {
     const from = start[name] ?? 0;
     const to = end[name] ?? 0;
+
     if (!Number.isSafeInteger(from) || !Number.isSafeInteger(to) || from < 0 || to < 0 || to < from) {
       return null;
     }
+
     if (to > from) grown[name] = to - from;
   }
+
   return grown;
 }
 
@@ -5373,7 +5829,9 @@ function replayUnitsOf(
   if (mounts !== null) {
     return args.wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
   }
+
   missing.push('replayUnits: the chain counts its delta layers from the mount lines the wake read, and that read is refused above');
+
   return null;
 }
 
@@ -5385,8 +5843,10 @@ function replayUnitsOf(
  */
 function cpuStepsOf(args: WakeRestoreArgs, missing: string[]): number | null {
   if (args.wakeKind === 'already-attached') return 0;
+
   if (args.wakeServedEntries !== undefined && args.wakeServedEntries !== null) return args.wakeServedEntries;
   missing.push('cpuSteps: the served entry count after the chain wake did not answer');
+
   return null;
 }
 
@@ -5401,6 +5861,7 @@ function cpuStepsOf(args: WakeRestoreArgs, missing: string[]): number | null {
  */
 export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
   const { wakeKind, wakeDetail, wakeOps, wakeMountLines } = args;
+
   if (wakeKind !== 'attached' && wakeKind !== 'already-attached') {
     return {
       counts: UNCOUNTED,
@@ -5411,33 +5872,40 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
       detail: `wake kind "${wakeKind || 'none'}"`,
     };
   }
+
   const missing: string[] = [];
   const calls = wakeOps?.calls;
   let totalRemoteOps: number | null = null;
+
   if (calls === undefined) {
     missing.push(
       'totalRemoteOps: the wake-window /ops bracket never landed — the arm died before the window closed, or a reset raced it — so the restore has no operation bill',
     );
   } else {
     const total = Object.values(calls).reduce((sum, count) => sum + count, 0);
+
     if (Number.isSafeInteger(total)) totalRemoteOps = total;
     else {
       missing.push('totalRemoteOps: the wake-window tally holds a non-integer count, so its sum is not a bill');
     }
   }
+
   // SERIAL is the critical path. The chain probes and mounts one read after
   // another, so its whole window is serial.
   let serialRemoteOps: number | null = null;
+
   if (totalRemoteOps === null) {
     missing.push('serialRemoteOps: unobservable without the operation bill it is a path through');
   } else {
     serialRemoteOps = totalRemoteOps;
   }
+
   // MOUNTS are lines, not a number from the arm: an attached box always holds
   // at least one mount line at its own points, so an empty match on an
   // attached wake is a failed read rather than a zero, and refuses. A wake
   // that answered without redoing the work took none.
   let mounts: number | null = null;
+
   if (wakeKind === 'attached' && wakeMountLines.length > 0) mounts = wakeMountLines.length;
   else if (wakeKind === 'already-attached') mounts = 0;
   else {
@@ -5445,6 +5913,7 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
       'mounts: the post-wake mount read matched none of the arm’s points on an attached wake — either the restore took no mounts or the read failed, and the two are indistinguishable, so the count is refused',
     );
   }
+
   const replayUnits = replayUnitsOf(args, mounts, missing);
   // BYTES come from the fixture's byte tally over the same window as the
   // operations: what `get` served, split by whether the key holds a control
@@ -5452,6 +5921,7 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
   let metadataBytes: number | null = null;
   let payloadBytes: number | null = null;
   const bytes = wakeOps?.bytes;
+
   if (bytes !== undefined && calls !== undefined) {
     metadataBytes = bytes['metadata'] ?? 0;
     payloadBytes = bytes['payload'] ?? 0;
@@ -5460,11 +5930,13 @@ export function countedRestoreWork(args: WakeRestoreArgs): CountedRestore {
       'metadataBytes/payloadBytes: the wake-window /ops bracket carried no byte tally, so the bytes the restore moved are uncounted',
     );
   }
+
   const cpuSteps = cpuStepsOf(args, missing);
   const counts: WakeRestoreCounts = { serialRemoteOps, totalRemoteOps, metadataBytes, payloadBytes, cpuSteps, mounts, replayUnits };
   const work = restoreWorkFromCounts(counts);
   const window = totalRemoteOps === null ? 'no operation bill' : `${totalRemoteOps} windowed store call(s)`;
   const served = payloadBytes === null ? 'bytes uncounted' : `${payloadBytes + (metadataBytes ?? 0)} bytes served`;
+
   return {
     counts,
     work,
@@ -5482,12 +5954,14 @@ export function restoreWorkFromCounts(
   counts: { readonly [field in keyof RestoreWork]: number | null },
 ): RestoreWork | null {
   const { serialRemoteOps, totalRemoteOps, metadataBytes, payloadBytes, cpuSteps, mounts, replayUnits } = counts;
+
   if (
     serialRemoteOps === null || totalRemoteOps === null || metadataBytes === null || payloadBytes === null
     || cpuSteps === null || mounts === null || replayUnits === null
   ) {
     return null;
   }
+
   return { serialRemoteOps, totalRemoteOps, metadataBytes, payloadBytes, cpuSteps, mounts, replayUnits };
 }
 
@@ -5510,12 +5984,14 @@ export function verifyRestoreBound(
   // rather than behind a name, so the parse stays where it is used.
   const baseLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '') === CHAIN_LOWER_BASE_DIR).length;
   const deltaLayers = wakeMountLines.filter((line) => (line.split(' ')[1] ?? '').startsWith(`${CHAIN_DELTA_LAYER_ROOT}/`)).length;
+
   if (baseLayers <= 1 && deltaLayers <= 1) {
     return {
       verified: true,
       reason: `this wake served at most one base and one delta layer (the at-most-two-deep serve ${baseLayers}+${deltaLayers})`,
     };
   }
+
   return {
     verified: false,
     reason: `this wake served ${baseLayers} base and ${deltaLayers} delta layers, past the at-most-two-deep serve the bounded-k claim rests on`,
@@ -5542,11 +6018,15 @@ export function selectWakeMountLines(
 ): string[] {
   const points = [...WAKE_MOUNT_POINTS, ...extraPoints];
   const lines: string[] = [];
+
   for (const raw of mountsText.split('\n')) {
     const line = raw.trim();
+
     if (line.length === 0) continue;
     const point = line.split(' ')[1] ?? '';
+
     if (point.length === 0) continue;
+
     if (
       points.some((wanted) =>
         point === wanted || (wanted === CHAIN_DELTA_LAYER_ROOT && point.startsWith(`${wanted}/`))
@@ -5555,6 +6035,7 @@ export function selectWakeMountLines(
       lines.push(line);
     }
   }
+
   return lines;
 }
 
@@ -5614,6 +6095,7 @@ export interface CutJudgment {
  * against that source.
  */
 const CHAIN_SERVED_PATTERN = /^chain \S+ \d+B (.+)$/;
+
 const CHAIN_SERVED_WORDS = ['base', 'base+delta already in this upper', 'base+delta layered'] as const;
 
 /** The served word of a chain attach detail, or null when the detail speaks
@@ -5648,13 +6130,16 @@ export interface ChainCutFacts {
 export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
   const phantom = !facts.recordPresent;
   const rollback = facts.preRev !== null && facts.postRev !== null ? facts.postRev < facts.preRev : null;
+
   const changed = facts.preBaseId !== facts.postBaseId
     || facts.preHasDelta !== facts.postHasDelta
     || facts.preDeltaEtag !== facts.postDeltaEtag
     || (facts.preRev !== null && facts.postRev !== null && facts.preRev !== facts.postRev);
+
   const servedKnown = facts.servedWord !== null && CHAIN_SERVED_WORDS.some((word) => word === facts.servedWord);
   let verdict: CutVerdict;
   let note: string;
+
   if (!facts.recordPresent) {
     verdict = 'mixed';
     note = 'the cut wake serves a generation no record names';
@@ -5674,6 +6159,7 @@ export function judgeChainCut(facts: ChainCutFacts): CutJudgment {
     verdict = 'mixed';
     note = 'the record moved but the cut marker is missing or a named archive is absent';
   }
+
   return {
     verdict,
     rollback,
@@ -5707,52 +6193,70 @@ export function summarizePublication(
   const cuts = rows.map((row) => row.cut);
   const completed = cuts.length > 0 && cuts.every((cut) => cut !== null && cut.completed);
   let allOldOrAllNew: boolean | null = null;
+
   if (completed) {
     allOldOrAllNew = cuts.every((cut) => cut?.verdict === 'all-old' || cut?.verdict === 'all-new');
   }
+
   let absentReferences: number | null = null;
+
   if (completed) {
     absentReferences = 0;
+
     for (const cut of cuts) {
       if (cut === null || cut.absentReferences === null) {
         absentReferences = null;
         break;
       }
+
       absentReferences += cut.absentReferences;
     }
   }
+
   let rollbackOrPhantomRoot: boolean | null = null;
+
   if (completed) {
     if (cuts.some((cut) => cut?.rollbackOrPhantomRoot === true)) rollbackOrPhantomRoot = true;
     else if (cuts.length > 0 && cuts.every((cut) => cut?.rollbackOrPhantomRoot === false)) {
       rollbackOrPhantomRoot = false;
     }
   }
+
   let barrierAckLoss: number | null = null;
+
   if (completed) {
     let counted = false;
     let lost = 0;
+
     for (const cut of cuts) {
       const loss = cut?.barrierAckLoss;
+
       if (loss === null || loss === undefined) continue;
       counted = true;
       lost += loss;
     }
+
     barrierAckLoss = counted ? lost : null;
   }
+
   let readOnlyDeclared = false;
   let readOnlyRefusedWrites: boolean | null = null;
+
   if (completed) {
     const surfaces: FaultCutObservation[] = [];
+
     for (const cut of cuts) {
       if (cut !== null && cut.readOnlySurface !== null) surfaces.push(cut);
     }
+
     readOnlyDeclared = surfaces.length > 0;
+
     if (surfaces.length > 0) {
       if (surfaces.every((cut) => cut.readOnlyRefusedWrites === true)) readOnlyRefusedWrites = true;
       else if (surfaces.some((cut) => cut.readOnlyRefusedWrites === false)) readOnlyRefusedWrites = false;
     }
   }
+
   return {
     readOnlyDeclared,
     readOnlyRefusedWrites,
@@ -5809,6 +6313,7 @@ export function sourceRevision(): SourceRevision {
     ['rev-parse', 'HEAD'],
     { cwd: REPO_ROOT, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 },
   ).trim();
+
   // `git diff --binary HEAD` carries both staged and unstaged tracked changes,
   // including mode and rename metadata. Untracked paths are not in a diff, so
   // identify them from porcelain status, then enumerate their bytes through the
@@ -5819,23 +6324,28 @@ export function sourceRevision(): SourceRevision {
     cwd: REPO_ROOT,
     maxBuffer: 64 * 1024 * 1024,
   });
+
   const status = execFileSync('git', ['status', '--porcelain=v1', '--untracked-files=all', '-z'], {
     cwd: REPO_ROOT,
     maxBuffer: 64 * 1024 * 1024,
   }).toString('utf8');
+
   const untracked = new Set(
     status.split('\0')
       .filter((row) => row.startsWith('?? '))
       .map((row) => row.slice(3)),
   );
+
   if (diff.length === 0 && untracked.size === 0) return { commit, dirtyDigest: 'clean' };
 
   const hash = createHash('sha256').update(diff);
+
   for (const path of trackedFiles()) {
     if (!untracked.has(path)) continue;
     hash.update('\0untracked\0').update(path).update('\0');
     hash.update(readFileSync(join(REPO_ROOT, path))).update('\0');
   }
+
   return { commit, dirtyDigest: `sha256:${hash.digest('hex')}` };
 }
 
@@ -5868,24 +6378,31 @@ function devboxProvenance(identity: RunIdentity, meta: RunMeta): RunProvenance {
  *  required outright: a blank one is a refusal, never a default. */
 function identityProblems(identity: RunIdentity): string[] {
   const problems: string[] = [];
+
   for (const [name, value] of Object.entries(identityVersions(identity))) {
     if (value.trim() === '') problems.push(`the run recorded no ${name}`);
   }
+
   const digests = { 'container-image-digest': identity.imageSha256 };
+
   for (const [name, digest] of Object.entries(digests)) {
     if (digest !== '' && !/^sha256:[0-9a-f]{64}$/.test(digest)) {
       problems.push(`${name} "${digest}" is not a sha256 digest`);
     }
   }
+
   if (!identity.image.includes(`@${identity.imageSha256}`)) {
     problems.push(`container image "${identity.image}" is not pinned to ${identity.imageSha256 || 'its recorded digest'}`);
   }
+
   if (identity.dirtyDigest !== 'clean' && !/^sha256:[0-9a-f]{64}$/.test(identity.dirtyDigest)) {
     problems.push(`source-tree "${identity.dirtyDigest}" is neither \`clean\` nor a digest`);
   }
+
   if (identity.startedAt === identity.finishedAt) {
     problems.push('the run started and finished at the same instant, so no run was timed');
   }
+
   return problems;
 }
 
@@ -5961,24 +6478,30 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
   let classB = 0;
   let classFree = 0;
   let total = 0;
+
   for (const arm of input.arms) {
     if (arm.ops === null) continue;
     classA += arm.ops.classA ?? 0;
     classB += arm.ops.classB ?? 0;
     classFree += arm.ops.classFree ?? 0;
     total += arm.ops.total ?? 0;
+
     for (const [name, count] of Object.entries(arm.ops.calls ?? {})) calls[name] = (calls[name] ?? 0) + count;
   }
+
   const everyArmTallied = input.requested.length > 0
     && input.requested.every((strategy) => armOf(strategy)?.ops != null);
+
   const accounting: AccountingEvidence | null = everyArmTallied
     ? { source: 'fixture /ops tallies summed over every requested arm', calls, classA, classB, classFree, total }
     : null;
 
   const cells = expectedCells(DEVBOX_DECLARED_STAGES, null);
+
   const cellComplete = input.requested.length > 0
     && input.requested.every((strategy) => {
       const arm = armOf(strategy);
+
       return arm !== undefined && armCompletedTheCell(arm);
     });
 
@@ -5987,10 +6510,13 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
   // one row would make the CV measure the DIFFERENCE between the arms, which is
   // the effect this experiment exists to find rather than noise to censor for.
   const deciding: MeasuredCell[] = [];
+
   for (const strategy of input.requested) {
     const arm = armOf(strategy);
+
     if (arm === undefined) continue;
     const measured = metricRows(arm, DECIDING_METRIC);
+
     for (const cell of cells) {
       deciding.push({
         id: cell,
@@ -6027,6 +6553,7 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
     // source stays unobserved.
     restore: input.requested.map((strategy): RestoreEvidence => {
       const arm = armOf(strategy);
+
       const counted = arm === undefined
         ? null
         : countedRestoreWork({
@@ -6036,7 +6563,9 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
           wakeMountLines: arm.wakeMountLines ?? [],
           wakeServedEntries: arm.wakeServedEntries ?? null,
         });
+
       const work = counted?.work ?? null;
+
       return {
         arm: strategy,
         expected: true,
@@ -6064,31 +6593,38 @@ function devboxRunRecord(input: DevboxAdmissionInput): StorageRunRecord {
  */
 function armSetProblems(input: DevboxAdmissionInput): string[] {
   const armSet: string[] = [];
+
   if (input.requested.length === 0) {
     armSet.push('the run requested no arms, so there is no expected arm set to complete');
   }
+
   for (const strategy of STRATEGIES) {
     const requestedCount = input.requested.filter((arm) => arm === strategy).length;
     const measuredCount = input.arms.filter((arm) => arm.strategy === strategy).length;
+
     if (requestedCount > 1) {
       armSet.push(`arm \`${strategy}\` was requested ${requestedCount} times; an expected arm set has no duplicates`);
     }
+
     if (measuredCount > requestedCount) {
       armSet.push(
         `arm \`${strategy}\` produced ${measuredCount} result rows but was requested ${requestedCount} time(s)`,
       );
     }
   }
+
   for (const strategy of input.requested) {
     if (!input.arms.some((arm) => arm.strategy === strategy)) {
       armSet.push(`arm \`${strategy}\` was requested but contributed no result row`);
     }
   }
+
   for (const arm of input.arms) {
     if (!input.requested.includes(arm.strategy)) {
       armSet.push(`arm \`${arm.strategy}\` produced a result row without being requested`);
     }
   }
+
   return armSet;
 }
 
@@ -6116,6 +6652,7 @@ function devboxRequirements(input: DevboxAdmissionInput) {
 
   for (const strategy of input.requested) {
     const arm = input.arms.find((row) => row.strategy === strategy);
+
     if (arm === undefined) continue;
 
     // COLD AND UNCHANGED ATTACH EVIDENCE. A cell whose arm never cold-attached,
@@ -6129,9 +6666,11 @@ function devboxRequirements(input: DevboxAdmissionInput) {
         + `${COLD_ATTACH_CEILING_MS} ms admission ceiling`,
       );
     }
+
     if (!admittedAttachKinds('cold attach').includes(arm.attachColdKind)) {
       g6.push(`arm \`${strategy}\` cold attach reported kind "${arm.attachColdKind || 'none'}"`);
     }
+
     // THE SECOND ATTACH OBSERVED THE UNCHANGED GENERATION, which is what this
     // clause is about — and `already-attached` IS that observation: the box
     // answered without redoing the work. The step's own admission list is what
@@ -6143,6 +6682,7 @@ function devboxRequirements(input: DevboxAdmissionInput) {
         + `(kind "${arm.attachWarmKind || 'none'}")`,
       );
     }
+
     if (arm.wakeBootId === null || arm.attachWarmBootId === null) {
       g6.push(
         `arm \`${strategy}\` did not record both wake and warm-attach generation ids, `
@@ -6154,9 +6694,11 @@ function devboxRequirements(input: DevboxAdmissionInput) {
         + `to \`${arm.attachWarmBootId}\``,
       );
     }
+
     if (!admittedAttachKinds('wake').includes(arm.wakeKind)) {
       g6.push(`arm \`${strategy}\` wake did not attach durable bytes (kind "${arm.wakeKind || 'none'}")`);
     }
+
     if (arm.checkpoints.length !== EXPECTED_LADDER_ROWS) {
       g6.push(
         `arm \`${strategy}\` recorded ${arm.checkpoints.length} of ${EXPECTED_LADDER_ROWS} `
@@ -6173,12 +6715,14 @@ function devboxRequirements(input: DevboxAdmissionInput) {
     }
 
     const repetitions = metricRows(arm, DECIDING_METRIC).length;
+
     if (repetitions < MIN_DECIDING_REPETITIONS) {
       g9.push(
         `arm \`${strategy}\` measured the deciding metric \`${DECIDING_METRIC}\` ${repetitions} time(s); `
         + `${MIN_DECIDING_REPETITIONS} repetitions are the fewest a dispersion claim can rest on`,
       );
     }
+
     // AND WHAT THE RUN ASKED FOR, which is the other direction: a run that
     // requested more repetitions than an arm produced lost some, and a floor
     // check alone would report the survivors as the whole intent.
@@ -6194,13 +6738,16 @@ function devboxRequirements(input: DevboxAdmissionInput) {
   if (input.requested.length === 0) {
     g5.push('the run recorded no restore evidence at all');
   }
+
   // PER ARM, PER FIELD. The shared gate refuses the uncounted row; these
   // reasons say WHICH source is missing, so a reader can tell blindness from
   // breakage. A counted row that its claim cannot hold refuses here too, with
   // the cell that would verify it named.
   for (const strategy of input.requested) {
     const arm = input.arms.find((row) => row.strategy === strategy);
+
     if (arm === undefined) continue;
+
     const counted = countedRestoreWork({
       wakeKind: arm.wakeKind,
       wakeDetail: arm.wakeDetail ?? '',
@@ -6208,11 +6755,14 @@ function devboxRequirements(input: DevboxAdmissionInput) {
       wakeMountLines: arm.wakeMountLines ?? [],
       wakeServedEntries: arm.wakeServedEntries ?? null,
     });
+
     for (const missing of counted.missing) {
       g5.push(`arm \`${strategy}\` ${missing} (counted: ${counted.detail})`);
     }
+
     if (counted.work !== null) {
       const bound = verifyRestoreBound(counted.work, arm.wakeMountLines ?? []);
+
       if (!bound.verified) {
         g5.push(`arm \`${strategy}\` claims a \`${RESTORE_CLAIMS[strategy]}\` restore bound that was never mechanically verified: ${bound.reason}`);
       }
@@ -6235,8 +6785,10 @@ function withDevboxRequirements(
 ): AdmissionVerdict {
   const gates = verdict.gates.map((row) => {
     const added = extra[row.gate] ?? [];
+
     return added.length === 0 ? row : { ...row, ok: false, reasons: [...row.reasons, ...added] };
   });
+
   return { admitted: gates.every((row) => row.ok), gates };
 }
 
@@ -6246,6 +6798,7 @@ export function devboxAdmission(input: DevboxAdmissionInput): AdmissionVerdict {
     devboxRequirements(input),
   );
 }
+
 export function benchmarkExitCode(failure: string | null, admission: AdmissionVerdict): number {
   return failure === null && admission.admitted ? 0 : 1;
 }
@@ -6297,50 +6850,69 @@ export function orphanTeardownExecutor(
   // reachable through its Worker, so an entry claiming a box is empty is
   // worthless until the Worker serving it is gone.
   const workersDeleted = new Set<string>();
+
   return async (entry: TeardownEntry): Promise<DeleteOutcome> => {
     if (entry.kind === 'worker') {
       const deleted = wrangler(['delete', '--name', entry.name, '--force'], { allowFailure: true });
+
       if (!deleted.startsWith(WRANGLER_FAILED)) {
         workersDeleted.add(entry.name);
+
         return { ok: true };
       }
+
       if (/not found|does not exist/i.test(deleted)) {
         workersDeleted.add(entry.name);
+
         return { ok: true, absent: true };
       }
+
       return { ok: false, error: deleted.slice(0, 240) };
     }
+
     if (entry.kind === 'container-app') {
       if (containerAppIds(REPO_ROOT, [entry.name], log).length === 0) return { ok: true, absent: true };
       const failed = deleteContainerApps(REPO_ROOT, [entry.name], log).find((status) => /failed/i.test(status));
+
       return failed === undefined ? { ok: true } : { ok: false, error: failed };
     }
+
     if (entry.kind === 'r2-bucket') {
       let deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
+
       if (deleted.startsWith(WRANGLER_FAILED) && /not empty|10008/i.test(deleted) && residue !== null) {
         const drained = await drainBucketResidue(residue, entry.name);
         log(`${entry.name}: drained ${String(drained.objects)} object(s), aborted ${String(drained.uploads)} upload(s)`);
         deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
       }
+
       if (!deleted.startsWith(WRANGLER_FAILED)) return { ok: true };
+
       if (/not found|does not exist/i.test(deleted)) return { ok: true, absent: true };
+
       return { ok: false, error: deleted.slice(0, 240) };
     }
+
     if (entry.kind === 'do-state' || entry.kind === 'alarm' || entry.kind === 'mount') {
       // The owning Worker is DERIVED from the box, so this asks about the one
       // Worker that could still be serving this state rather than about the
       // recovery as a whole: one arm's failed delete must not report another
       // arm's durable state as surviving.
       const owner = workerServingBox(entry.name);
+
       if (owner === null) return { ok: false, error: `no Worker name derives from box ${entry.name}` };
+
       return workersDeleted.has(owner)
         ? { ok: true }
         : { ok: false, error: `Worker ${owner} must be deleted before its durable state` };
     }
+
     if (entry.kind === 'local-path') {
       rmSync(entry.name, { recursive: true, force: true });
+
       return { ok: true };
     }
+
     return { ok: false, error: `unsupported teardown resource ${entry.kind}` };
   };
 }
@@ -6358,11 +6930,15 @@ export function orphanTeardownExecutor(
 function workerServingBox(box: string): string | null {
   for (const strategy of STRATEGIES) {
     const prefix = `ab-${strategy}-`;
+
     if (!box.startsWith(prefix)) continue;
     const runId = box.slice(prefix.length);
+
     if (runId === '' || boxName(runId, strategy) !== box) continue;
+
     return resourceNames(runId, strategy).worker;
   }
+
   return null;
 }
 
@@ -6409,41 +6985,56 @@ export function parseOptions(argv: readonly string[]): Options {
       out: { type: 'string' },
     },
   });
+
   const controls: ControlOption[] = [];
   const knownStrategies = STRATEGIES.join(', ');
   const seenControls = new Set<Strategy>();
+
   for (const rawControl of values.control) {
     const separator = rawControl.indexOf('=');
+
     if (separator === -1) {
       throw new Error(`--control requires <strategy>=<path>; got "${rawControl}"`);
     }
+
     const rawStrategy = rawControl.slice(0, separator);
     const path = rawControl.slice(separator + 1);
     const strategy = STRATEGIES.find((known) => known === rawStrategy);
+
     if (separator < 1 || strategy === undefined) {
       throw new Error(
         `--control strategy "${rawStrategy}" is not a known strategy; known strategies: ${knownStrategies}`,
       );
     }
+
     if (path === '') throw new Error('--control requires <strategy>=<path>');
+
     if (seenControls.has(strategy)) {
       throw new Error(`--control must not repeat strategy "${strategy}"`);
     }
+
     seenControls.add(strategy);
     controls.push({ strategy, path });
   }
+
   const runId = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+
   const requestedArms = values.arms.split(',').map((raw): Strategy => {
     const arm = STRATEGIES.find((strategy) => strategy === raw.trim());
+
     if (arm === undefined) {
       throw new Error(`--arms names "${raw.trim()}"; known arms: ${STRATEGIES.join(', ')}`);
     }
+
     return arm;
   });
+
   const duplicate = requestedArms.find((arm, index) => requestedArms.indexOf(arm) !== index);
+
   if (duplicate !== undefined) {
     throw new Error(`--arms repeats "${duplicate}"; each requested arm must appear exactly once`);
   }
+
   // REPETITIONS ARE THE ONLY THING G9 CAN SCORE, so the default follows the
   // gate rather than the operator's memory: a decisive run asks for the fewest
   // a dispersion claim can rest on, and an ordinary run — a smoke check that
@@ -6454,6 +7045,7 @@ export function parseOptions(argv: readonly string[]): Options {
   // walk's decisive block reads this field, and a probe that ran it anyway
   // would be the failure mode its own suite refuses.
   const decisive = values.decisive && !values['verify-only'];
+
   // AN UNARMED DECISIVE RUN CANNOT BE ADMITTED, so it is refused HERE, before
   // anything is provisioned. G3 judges a publication the instrument holds at
   // the ack, and the instrument holds only when the Worker boots with the
@@ -6469,17 +7061,20 @@ export function parseOptions(argv: readonly string[]): Options {
       + '--fault-cuts. Add --fault-cuts, or drop --decisive for a smoke run.',
     );
   }
+
   const rawRepetitions = values.repetitions ?? String(decisive ? DECISIVE_REPETITIONS : 1);
   // THE WHOLE TEXT, not `parseInt`'s prefix of it: `parseInt('1.5')` is 1, so a
   // fractional count would silently become a single repetition and the run
   // would report a number nobody asked for.
   const repetitions = /^\d+$/.test(rawRepetitions.trim()) ? Number(rawRepetitions.trim()) : Number.NaN;
+
   if (!Number.isInteger(repetitions) || repetitions < 1) {
     throw new Error(
       `--repetitions must be a whole number of 1 or more; got "${rawRepetitions}". `
       + `G9 censors a deciding cell below ${MIN_DECIDING_REPETITIONS} repetitions.`,
     );
   }
+
   return {
     runId,
     seed: Number.parseInt(values.seed, 10),
@@ -6498,17 +7093,22 @@ export function parseOptions(argv: readonly string[]): Options {
 
 async function main(): Promise<number> {
   const argv = process.argv.slice(2);
+
   if (argv.includes('--help')) {
     process.stdout.write(HELP);
+
     return 0;
   }
+
   const options = parseOptions(argv);
   const frozenControls = frozenControlArtifacts(options.controls);
   const planned = options.arms.map((strategy) => resourceNames(options.runId, strategy));
+
   if (options.plan) {
     const controls = options.controls.length === 0
       ? 'none (optional)'
       : options.controls.map((control) => `${control.strategy}=${control.path}`).join(', ');
+
     process.stdout.write(
       `Devbox storage plan\n\narms          ${options.arms.join(', ')}\n`
       + `controls      ${controls}\n`
@@ -6521,13 +7121,17 @@ async function main(): Promise<number> {
       + `buckets       ${planned.map((names) => names.bucket).join(', ')}\n`
       + `artifact      ${options.out}\n\nNothing has run. Drop --plan to execute.\n`,
     );
+
     return 0;
   }
+
   if (!existsSync(join(BENCH_DIR, 'worker.ts'))) {
     throw new Error(`the devbox bench app is not present at ${BENCH_DIR}`);
   }
+
   const r2AccessKeyId = process.env['R2_ACCESS_KEY_ID'];
   const r2SecretAccessKey = process.env['R2_SECRET_ACCESS_KEY'];
+
   // PREFLIGHT, AHEAD OF EVERY OTHER CHECK IN THIS FUNCTION. The cleanup keys
   // are a LOCAL prerequisite: asking for them costs nothing, and asking after
   // the deploy is what run 20260902154130 did — thirteen minutes of
@@ -6537,13 +7141,18 @@ async function main(): Promise<number> {
     accessKeyIdPresent: r2AccessKeyId !== undefined && r2AccessKeyId !== '',
     secretAccessKeyPresent: r2SecretAccessKey !== undefined && r2SecretAccessKey !== '',
   });
+
   if (keyRefusal !== null) {
     log(keyRefusal);
+
     return 1;
   }
+
   process.env.CLOUDFLARE_ACCOUNT_ID = BENCH_ACCOUNT_ID;
+
   if (wrangler(['whoami'], { allowFailure: true }).startsWith(WRANGLER_FAILED)) {
     log('wrangler is not authenticated; nothing can be deployed');
+
     return 1;
   }
 
@@ -6576,7 +7185,9 @@ async function main(): Promise<number> {
     orphanTeardownExecutor(residue),
     log,
   );
+
   const unswept = recovered.filter((run) => run.failures.length > 0 || !run.replayed);
+
   if (recovered.length === 0) {
     log('no abandoned benchmark resources from earlier runs');
   } else if (unswept.length > 0) {
@@ -6588,6 +7199,7 @@ async function main(): Promise<number> {
 
   const fixtures = createFixtureResources(options.runId, options.arms);
   const teardownManifest = fixtures.manifest;
+
   const lanes = fixtures.arms.map((fixture): ArmLaneState => ({
     fixture,
     box: boxName(options.runId, fixture.strategy),
@@ -6598,6 +7210,7 @@ async function main(): Promise<number> {
     workerVersion: '',
     refusal: null,
   }));
+
   const token = `devbox-${crypto.randomUUID()}`;
   const arms: ArmResult[] = [];
   let cleanupReport: CleanupReport | null = null;
@@ -6608,8 +7221,10 @@ async function main(): Promise<number> {
       teardownManifest.kept = true;
       writeManifest(REPO_ROOT, teardownManifest);
       log('--keep left the Worker, container applications, bucket, and generated config in place');
+
       return;
     }
+
     // EVERY LIVE ARM'S BOXES, THROUGH THAT ARM'S OWN WORKER. There is no one
     // fixture that can sweep them all: an arm answers only on its own
     // deployment, and an arm that never deployed has nothing to sweep.
@@ -6617,15 +7232,19 @@ async function main(): Promise<number> {
       if (lane.live === null) continue;
       const liveTeardownErrors = await teardownLiveArms(lane.live, lane.boxes);
       cleanupErrors.push(...liveTeardownErrors);
+
       if (liveTeardownErrors.length > 0) {
         failure ??= `live teardown failed: ${liveTeardownErrors.join('; ')}`;
       }
     }
+
     const replay = await replayTeardown(REPO_ROOT, teardownManifest, async (entry): Promise<DeleteOutcome> => {
       if (entry.kind === 'worker') {
         const lane = lanes.find((candidate) => candidate.fixture.worker === entry.name);
+
         if (lane === undefined) return { ok: false, error: `no arm owns Worker ${entry.name}` };
         const statuses = (lane.stop ?? (() => deleteFixtureResources(lane.fixture)))();
+
         if (statuses.length > 0) log(`${lane.fixture.strategy} fixture resources: ${statuses.join(', ')}`);
         const failed = statuses.find((status) => /failed/i.test(status));
         // OBSERVED, never assumed. This was set unconditionally, one line above
@@ -6637,16 +7256,21 @@ async function main(): Promise<number> {
         // read the same flag, so the run also certified durable state absent
         // while the Worker serving it was still up.
         lane.workerStopped = failed === undefined;
+
         return failed === undefined ? { ok: true } : { ok: false, error: failed };
       }
+
       if (entry.kind === 'container-app') {
         if (containerAppIds(REPO_ROOT, [entry.name], log).length === 0) return { ok: true, absent: true };
         const statuses = deleteContainerApps(REPO_ROOT, [entry.name], log);
         const failed = statuses.find((status) => /failed/i.test(status));
+
         return failed === undefined ? { ok: true } : { ok: false, error: failed };
       }
+
       if (entry.kind === 'r2-bucket') {
         let deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
+
         if (deleted.startsWith(WRANGLER_FAILED) && /not empty|10008/i.test(deleted) && residue !== null) {
           // An interrupted run leaves objects its arm never drained and open
           // multipart uploads no listing shows; drain both, then ask once more.
@@ -6654,29 +7278,40 @@ async function main(): Promise<number> {
           log(`${entry.name}: drained ${String(drained.objects)} object(s), aborted ${String(drained.uploads)} upload(s)`);
           deleted = wrangler(['r2', 'bucket', 'delete', entry.name], { allowFailure: true });
         }
+
         if (!deleted.startsWith(WRANGLER_FAILED)) return { ok: true };
+
         if (/not found|does not exist/i.test(deleted)) return { ok: true, absent: true };
+
         return { ok: false, error: deleted.slice(0, 240) };
       }
+
       if (entry.kind === 'do-state' || entry.kind === 'alarm' || entry.kind === 'mount') {
         // Gated on THIS box's own Worker. An arm whose Worker is still up has
         // durable state nothing has proved gone, however many siblings are.
         const lane = lanes.find((candidate) => candidate.box === entry.name);
+
         return lane?.workerStopped === true
           ? { ok: true }
           : { ok: false, error: 'Worker must be deleted before its durable state' };
       }
+
       if (entry.kind === 'local-path') {
         fixtures.disposeConfig();
+
         return { ok: true };
       }
+
       return { ok: false, error: `unsupported teardown resource ${entry.kind}` };
     });
+
     if (replay.failures.length > 0) {
       cleanupErrors.push(...replay.failures);
       failure ??= `cleanup failed: ${replay.failures.join('; ')}`;
     }
+
     let cleanupCheck: CleanupReport | null = null;
+
     try {
       cleanupCheck = await checkCleanup(REPO_ROOT, teardownManifest, {
         ...cleanupObservationProbes({ wrangler, residue }),
@@ -6694,11 +7329,14 @@ async function main(): Promise<number> {
       cleanupErrors.push(`cleanup verification failed: ${describeThrown({ cause })}`);
       failure ??= 'cleanup verification failed';
     }
+
     cleanupReport = cleanupCheck;
+
     if (cleanupCheck !== null && !cleanupCheck.passed) {
       cleanupErrors.push(...cleanupCheck.checks.filter((row) => !row.ok).map((row) => `${row.gate}: ${row.detail}`));
       failure ??= 'cleanup admission checks failed';
     }
+
     if (!lanes.every((lane) => lane.workerStopped)) fixtures.disposeConfig();
   });
 
@@ -6739,13 +7377,18 @@ async function main(): Promise<number> {
     // the rows an arm did measure and hands its container instance back.
     arms.push(...await runArmsInFlight(options.arms, options.runId, async (strategy) => {
       const lane = lanes.find((candidate) => candidate.fixture.strategy === strategy);
+
       if (lane === undefined) throw new Error(`no deployment was prepared for ${strategy}`);
+
       if (lane.live === null) throw new Error(lane.refusal ?? 'this arm was never deployed');
       const arm = await runArm(lane.live, strategy, options, (box) => lane.boxes.add(box));
+
       for (const [name, count] of Object.entries(arm.ops?.calls ?? {})) {
         teardownManifest.counters[name] = (teardownManifest.counters[name] ?? 0) + count;
       }
+
       writeManifest(REPO_ROOT, teardownManifest);
+
       return arm;
     }));
   } catch (error) {
@@ -6755,7 +7398,9 @@ async function main(): Promise<number> {
     // nothing. A refused run must say which call refused it.
     log(`run failed: ${failure}`);
     const thrown = parseThrown({ cause: error });
+
     if (thrown.stack !== undefined && thrown.stack.length > 0) log(`run failure stack:\n${thrown.stack}`);
+
     if (thrown.cause !== undefined) log(`run failure cause: ${describeThrown({ cause: thrown.cause })}`);
   } finally {
     await runTeardownOnce();
@@ -6770,14 +7415,18 @@ async function main(): Promise<number> {
   // strategy that measured nothing.
   const settledArms = options.arms.map((strategy) => {
     const read = readArmArtifact(REPO_ROOT, options.runId, strategy);
+
     if (read.error !== null) {
       log(`the durable artifact for ${strategy} could not be read: ${read.error}`);
       failure ??= `the durable artifact for ${strategy} could not be read`;
     }
+
     if (read.artifact !== null) return read.artifact.row;
     const reason = read.error ?? failure ?? 'this arm never settled before the run ended';
+
     return externallyAbortedArm(strategy, `ab-${strategy}-${options.runId}`, reason);
   });
+
   arms.length = 0;
   arms.push(...settledArms);
 
@@ -6794,12 +7443,15 @@ async function main(): Promise<number> {
       ? 'armed at Worker boot; one added control RPC per successful object write'
       : 'unarmed; zero added control RPCs',
   };
+
   if (frozenControls.length > 0) {
     meta['frozen controls provenance'] = frozenControls
       .map((control) => `${control.artifact}#sha256:${control.sha256}`)
       .join(', ');
   }
+
   const multipartResidue = arms.some((arm) => arm.teardown?.emptyBucketGuaranteed === false) ? 1 : 0;
+
   const cleanup: CleanupEvidence = options.keep || cleanupReport === null
     ? {
         attempted: !options.keep,
@@ -6816,8 +7468,10 @@ async function main(): Promise<number> {
       }
     : (() => {
         const fromReport = cleanupEvidenceFromReport(cleanupReport);
+
         return { ...fromReport, errors: [...fromReport.errors, ...cleanupErrors] };
       })();
+
   const identity: RunIdentity = {
     commit: revision.commit,
     dirtyDigest: revision.dirtyDigest,
@@ -6834,6 +7488,7 @@ async function main(): Promise<number> {
     image: SANDBOX_IMAGE,
     ...fixtures.digests,
   };
+
   const admission = devboxAdmission({
     arms,
     requested: options.arms,
@@ -6843,6 +7498,7 @@ async function main(): Promise<number> {
     token,
     cleanup,
   });
+
   mkdirSync(dirname(join(REPO_ROOT, options.out)), { recursive: true });
   writeFileSync(
     join(REPO_ROOT, options.out),
@@ -6854,6 +7510,7 @@ async function main(): Promise<number> {
   const partial = options.arms.length < STRATEGIES.length;
   process.stdout.write(`${render(arms, meta, admission, frozenControls, partial)}\n`);
   log(`artifact written to ${options.out}`);
+
   return benchmarkExitCode(failure, admission);
 }
 

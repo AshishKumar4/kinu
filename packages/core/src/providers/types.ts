@@ -62,6 +62,7 @@ export interface ModelInfo {
  *  attachment sanitizer's capability policy; a runtime const so catalog
  *  responses can be narrowed without casts. */
 export const MODEL_INPUT_MODALITIES = ['text', 'image', 'pdf', 'audio', 'video'] as const;
+
 export type ModelInputModality = (typeof MODEL_INPUT_MODALITIES)[number];
 
 /** The one capability vocabulary — provider catalogs populate it, prompt
@@ -77,6 +78,7 @@ export const MODEL_CAPABILITIES = [
   'computer-use',
   'prompt-caching',
 ] as const;
+
 export type ModelCapability = (typeof MODEL_CAPABILITIES)[number];
 
 export interface ProviderInfo {
@@ -187,8 +189,11 @@ export interface ModelProvider {
 /** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive intact. */
 export function parseModelSpec(spec: string): ModelSpec {
   const s = (spec ?? '').trim();
+
   if (!s) throw new Error('Empty model spec');
   const i = s.indexOf('/');
+
   if (i < 1) throw new Error(`Invalid model spec ${JSON.stringify(spec)} — expected "<provider>/<modelId>".`);
+
   return { provider: s.slice(0, i), modelId: s.slice(i + 1) };
 }

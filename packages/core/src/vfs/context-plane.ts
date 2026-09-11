@@ -53,6 +53,7 @@ import type { VfsMount } from './mounts';
 
 /** The reserved root this plane is served under. */
 const CONTEXT_MOUNT_NAME = 'context';
+
 const CONTEXT_MOUNT = `/${CONTEXT_MOUNT_NAME}`;
 
 /** The one editable path, relative to the actor's context root. */
@@ -127,7 +128,9 @@ export interface ContextFileHeader {
 type MutableContextFileHeader = { -readonly [K in keyof ContextFileHeader]: ContextFileHeader[K] };
 
 const StatusSchema = v.picklist(['active', 'staged', 'empty']);
+
 const EffectSchema = v.picklist(['step', 'turn']);
+
 const HeaderSchema = v.object({
   $context: v.object({
     actor: v.pipe(v.string(), v.nonEmpty()),
@@ -154,6 +157,7 @@ const HeaderSchema = v.object({
 function encodeWorkingFile(header: ContextFileHeader, messages: readonly ModelMessage[]): string {
   const encoded = v.parse(v.array(v.unknown()), JSON.parse(encodeModelMessages(messages)));
   const lines = [JSON.stringify({ $context: header }), ...encoded.map((message) => JSON.stringify(message))];
+
   return `${lines.join('\n')}\n`;
 }
 
@@ -169,25 +173,32 @@ export interface ObservedWorkingFile {
 function decodeWorkingFile(text: string): ObservedWorkingFile {
   const lines = text.split('\n').filter((line) => line.trim().length > 0);
   const first = lines[0];
+
   if (first === undefined) {
     throw new KinuError('bad_input',
       `${WORKING_FILE} must begin with its {"$context":{…}} header line — the revision an edit is written against `
       + 'is in that line, and without it the write has nothing to compare against');
   }
+
   let parsedHeader: unknown;
+
   try {
     parsedHeader = JSON.parse(first);
   } catch (error) {
     throw new KinuError('bad_input',
       `line 1 of ${WORKING_FILE} is not JSON, so it cannot be the $context header`, { cause: error });
   }
+
   const header = v.safeParse(HeaderSchema, parsedHeader);
+
   if (!header.success) {
     throw new KinuError('bad_input',
       `line 1 of ${WORKING_FILE} is not the $context header: it needs {"$context":{"actor":"…","revision":N}}`);
   }
+
   const messages = decodeModelMessages(`[${lines.slice(1).join(',')}]`);
   const observed = header.output.$context;
+
   // Passed through, never filled in: what the writer sent back is what this
   // says it observed.
   const decoded: MutableContextFileHeader = {
@@ -195,10 +206,15 @@ function decodeWorkingFile(text: string): ObservedWorkingFile {
     revision: observed.revision,
     messages: observed.messages ?? messages.length,
   };
+
   if (observed.status !== undefined) decoded.status = observed.status;
+
   if (observed.effectiveAt !== undefined) decoded.effectiveAt = observed.effectiveAt;
+
   if (observed.turn !== undefined) decoded.turn = observed.turn;
+
   if (observed.blocked !== undefined) decoded.blocked = observed.blocked;
+
   return { header: decoded, messages };
 }
 
@@ -211,6 +227,7 @@ function headerOf(state: {
   readonly effectiveAt: 'step' | 'turn';
 }): ContextFileHeader {
   const head = state.head;
+
   const header: ContextFileHeader = {
     actor: state.actorId,
     revision: head?.revision ?? 0,
@@ -219,7 +236,9 @@ function headerOf(state: {
     effectiveAt: state.effectiveAt,
     turn: state.liveTurnId,
   };
+
   const blocked = state.staged?.deferredReason ?? null;
+
   return blocked === null ? header : { ...header, blocked };
 }
 
@@ -264,35 +283,52 @@ const NUMBERED = /^(\d+)\.json$/;
 
 function routeOf(path: string): ContextRoute | null {
   const segments = path.split('/').filter((segment) => segment.length > 0 && segment !== '.');
+
   if (segments.some((segment) => segment === '..')) return null;
   const [head, second, third] = segments;
+
   if (head === undefined) return { kind: 'root' };
+
   if (segments.length === 1) {
     if (head === WORKING_FILE) return { kind: 'working' };
+
     if (head === 'claim.json') return { kind: 'claim' };
+
     if (head === 'history.json') return { kind: 'history' };
+
     if (head === 'revisions') return { kind: 'revisions' };
+
     if (head === 'requests') return { kind: 'requests' };
+
     if (head === 'agents') return { kind: 'agents' };
+
     return null;
   }
+
   if (head === 'revisions' && segments.length === 2 && second !== undefined) {
     const matched = NUMBERED.exec(second);
+
     return matched?.[1] === undefined ? null : { kind: 'revision', revision: Number(matched[1]) };
   }
+
   if (head === 'requests' && second !== undefined) {
     if (segments.length === 2) return { kind: 'turn', turnId: second };
+
     if (segments.length === 3 && third !== undefined) {
       const matched = NUMBERED.exec(third);
+
       return matched?.[1] === undefined
         ? null
         : { kind: 'request', turnId: second, revision: Number(matched[1]) };
     }
+
     return null;
   }
+
   if (head === 'agents' && second !== undefined) {
     return { kind: 'child', storageKey: second, rest: segments.slice(2).join('/') };
   }
+
   return null;
 }
 
@@ -335,11 +371,14 @@ interface ContextTarget {
  */
 function createContextPlane(deps: ContextMountDeps): VFS {
   const planes = new Map<string, ActorContextPlane>();
+
   const planeFor = (stores: ActorContextStores): ActorContextPlane => {
     const existing = planes.get(stores.actorId);
+
     if (existing !== undefined) return existing;
     const created = createActorContextPlane({ claims: stores.claims, events: stores.events });
     planes.set(stores.actorId, created);
+
     return created;
   };
 
@@ -349,20 +388,27 @@ function createContextPlane(deps: ContextMountDeps): VFS {
   const target = (path: string): ContextTarget => {
     const own = deps.stores();
     const route = routeOf(path);
+
     if (route === null) throw absent(path);
     const resolver = deps.children ?? null;
+
     if (route.kind === 'agents' || route.kind === 'child') {
       // An actor with no managed children has no `agents` tree at all, rather
       // than an empty directory that would read as "no children right now".
       if (resolver === null) throw absent(path);
     }
+
     if (route.kind !== 'child') {
       return { stores: own, plane: planeFor(own), route, author: own.actorId };
     }
+
     const child = resolver?.resolve(route.storageKey) ?? null;
+
     if (child === null) throw absent(path);
     const inner = routeOf(route.rest);
+
     if (inner === null || inner.kind === 'child') throw absent(path);
+
     // The AUTHOR of a child edit is this actor, and the target is the child's
     // own store: authority came from the resolver, the recorded author is the
     // actor that actually wrote, and neither is taken from the path.
@@ -374,14 +420,18 @@ function createContextPlane(deps: ContextMountDeps): VFS {
 
   const readRoute = async (path: string): Promise<string> => {
     const { stores, plane, route } = target(path);
+
     switch (route.kind) {
       case 'working': {
         const state = plane.read();
+
         return encodeWorkingFile(headerOf(state), state.head?.messages ?? []);
       }
+
       case 'claim': {
         const state = plane.read();
         const latest = stores.claims.latestTurn();
+
         return `${JSON.stringify({
           actor: stores.actorId,
           turn: latest,
@@ -393,16 +443,22 @@ function createContextPlane(deps: ContextMountDeps): VFS {
           editsTakeEffect: state.effectiveAt,
         }, null, 2)}\n`;
       }
+
       case 'history':
         return `${JSON.stringify(stores.claims.working.history(), null, 2)}\n`;
       case 'revision': {
         const revision = stores.claims.working.revision(route.revision);
+
         if (revision === null) throw absent(path);
+
         return revisionDocument(revision);
       }
+
       case 'request': {
         const consumed = stores.claims.consumedContext(route.turnId, route.revision);
+
         if (consumed === null) throw absent(path);
+
         return `${JSON.stringify({
           turnId: route.turnId,
           revision: consumed.revision,
@@ -414,6 +470,7 @@ function createContextPlane(deps: ContextMountDeps): VFS {
           request: JSON.parse(encodeModelMessages(consumed.messages)),
         }, null, 2)}\n`;
       }
+
       default:
         throw makeVfsError('EISDIR', 'this context path is a directory', path);
     }
@@ -421,20 +478,26 @@ function createContextPlane(deps: ContextMountDeps): VFS {
 
   const listRoute = async (path: string): Promise<string[]> => {
     const { stores, route } = target(path);
+
     switch (route.kind) {
       case 'root': {
         const entries = [WORKING_FILE, 'claim.json', 'history.json', 'revisions', 'requests'];
+
         return (deps.children?.list().length ?? 0) > 0 ? [...entries, 'agents'] : entries;
       }
+
       case 'revisions':
         return stores.claims.working.history().map((revision) => `${revision.revision}.json`);
       case 'requests':
         return stores.claims.turns().map((claim) => claim.turnId);
       case 'turn': {
         const entries = requestNames(stores, route.turnId);
+
         if (entries.length === 0) throw absent(path);
+
         return [...entries];
       }
+
       case 'agents':
         return [...(deps.children?.list() ?? [])];
       default:
@@ -447,6 +510,7 @@ function createContextPlane(deps: ContextMountDeps): VFS {
    *  would make every reader's cached read look stale. */
   const modifiedAt = (resolved: ContextTarget): number => {
     const { stores, plane, route } = resolved;
+
     switch (route.kind) {
       case 'working':
         return plane.read().head?.recordedAt ?? 0;
@@ -462,6 +526,7 @@ function createContextPlane(deps: ContextMountDeps): VFS {
 
   const statRoute = async (path: string): Promise<VfsEntryStat | null> => {
     let resolved: ContextTarget;
+
     try {
       resolved = target(path);
     } catch (err) {
@@ -471,7 +536,9 @@ function createContextPlane(deps: ContextMountDeps): VFS {
       if (isVfsError(err) && err.code === 'ENOENT') return null;
       throw err;
     }
+
     const { stores, plane, route } = resolved;
+
     switch (route.kind) {
       case 'root': case 'revisions': case 'requests': case 'agents':
         return DIRECTORY;
@@ -480,6 +547,7 @@ function createContextPlane(deps: ContextMountDeps): VFS {
       case 'working': {
         const state = plane.read();
         const text = encodeWorkingFile(headerOf(state), state.head?.messages ?? []);
+
         return {
           size: text.length,
           mtimeMs: state.head?.recordedAt ?? 0,
@@ -490,11 +558,13 @@ function createContextPlane(deps: ContextMountDeps): VFS {
           revision: state.head?.revision ?? 0,
         };
       }
+
       default: {
         // Same rule as above: an absent revision or request is null, and every
         // other failure propagates rather than being flattened into absence.
         try {
           const text = await readRoute(path);
+
           return { size: text.length, mtimeMs: modifiedAt(resolved), isDir: false };
         } catch (err) {
           if (isVfsError(err) && err.code === 'ENOENT') return null;
@@ -516,11 +586,13 @@ function createContextPlane(deps: ContextMountDeps): VFS {
    */
   const write = async (path: string, data: string | Uint8Array, expected?: number): Promise<ContextEditReceipt> => {
     const { stores, plane, route, author } = target(path);
+
     if (route.kind !== 'working') throw readOnly(path);
     const asText = v.safeParse(v.string(), data);
     const text = asText.success ? asText.output : new TextDecoder().decode(v.parse(v.instance(Uint8Array), data));
     const decoded = decodeWorkingFile(text);
     const state = plane.read();
+
     if (decoded.header.actor !== stores.actorId) {
       // The header names a different actor. Refused rather than retargeted: a
       // caller-supplied id is not authority, and writing this array into
@@ -530,13 +602,16 @@ function createContextPlane(deps: ContextMountDeps): VFS {
         `this working history is addressed to actor ${decoded.header.actor}, and ${path} is actor `
         + `${stores.actorId}'s context`, path);
     }
+
     const observed = expected ?? decoded.header.revision;
     const current = state.head?.revision ?? 0;
+
     if (observed !== current) {
       throw new FileRefusalError('stale',
         `${path} moved on: you wrote against working revision ${observed}, and revision ${current} is current. `
         + 'Read it again and re-apply your change, so you can see the progress you would otherwise replace.');
     }
+
     return plane.edit({
       base: current,
       messages: decoded.messages,
@@ -548,6 +623,7 @@ function createContextPlane(deps: ContextMountDeps): VFS {
   return {
     async readFile(path, opts) {
       const text = await readRoute(path);
+
       return opts?.encoding === undefined ? new TextEncoder().encode(text) : text;
     },
     async writeFile(path, data) {
@@ -555,6 +631,7 @@ function createContextPlane(deps: ContextMountDeps): VFS {
     },
     async writeFileIfRevision(path, data, expectedRevision) {
       const receipt = await write(path, data, expectedRevision);
+
       return { ok: true, revision: receipt.revision };
     },
     readdir: listRoute,
@@ -573,6 +650,7 @@ function createContextPlane(deps: ContextMountDeps): VFS {
       // directory that does NOT exist stays refused: this plane's shape follows
       // the revision ledger and has no free-floating directories.
       const existing = await statRoute(path);
+
       if (existing?.isDir === true && opts?.recursive === true) return;
       throw makeVfsError('EACCES',
         'the context plane has no directories to create — its shape follows the revision ledger', path);
@@ -590,6 +668,7 @@ function createContextPlane(deps: ContextMountDeps): VFS {
  */
 export function contextMount(deps: ContextMountDeps): VfsMount {
   const files = createContextPlane(deps);
+
   return {
     name: CONTEXT_MOUNT_NAME,
     files: () => files,

@@ -60,6 +60,7 @@ const TeardownKindSchema = v.picklist([
   'worker', 'container-app', 'r2-bucket', 'object-prefix', 'do-state',
   'local-path', 'process-marker', 'alarm', 'mount',
 ]);
+
 const TeardownEntrySchema = v.object({
   kind: TeardownKindSchema,
   name: v.string(),
@@ -68,6 +69,7 @@ const TeardownEntrySchema = v.object({
   attempts: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
   lastError: v.nullable(v.string()),
 });
+
 const TeardownManifestSchema = v.object({
   schema: v.literal(TEARDOWN_MANIFEST_SCHEMA),
   runId: v.string(),
@@ -111,7 +113,9 @@ export function writeManifest(repoRoot: string, manifest: TeardownManifest): voi
 
 export function loadManifest(repoRoot: string, runId: string): TeardownManifest | null {
   const path = manifestPath(repoRoot, runId);
+
   if (!existsSync(path)) return null;
+
   return v.parse(TeardownManifestSchema, JSON.parse(readFileSync(path, 'utf8')));
 }
 
@@ -123,6 +127,7 @@ export interface ManifestEntryInput {
 
 export function createManifest(runId: string, entries: readonly ManifestEntryInput[]): TeardownManifest {
   const now = new Date().toISOString();
+
   return {
     schema: TEARDOWN_MANIFEST_SCHEMA,
     runId,
@@ -158,27 +163,34 @@ export async function replayTeardown(
   exec: (entry: TeardownEntry) => Promise<DeleteOutcome>,
 ): Promise<{ manifest: TeardownManifest; failures: readonly string[] }> {
   const failures: string[] = [];
+
   for (const entry of manifest.entries) {
     if (entry.done) continue;
     let outcome: DeleteOutcome;
+
     try {
       outcome = await exec(entry);
     } catch (error) {
       outcome = { ok: false, error: error instanceof Error ? error.message : String(error) };
     }
+
     entry.attempts += 1;
+
     if (outcome.ok) {
       entry.done = true;
       entry.lastError = null;
+
       if (outcome.absent === true) entry.detail = `${entry.detail} (already absent)`.trimStart();
     } else {
       entry.lastError = outcome.error;
       failures.push(`${entry.kind}:${entry.name}: ${outcome.error}`);
     }
+
     // Durable before the next external await: this write is what makes an
     // interrupted replay resume instead of redoing deletions.
     writeManifest(repoRoot, manifest);
   }
+
   return { manifest, failures };
 }
 
@@ -205,22 +217,28 @@ export interface ManifestScan {
  */
 export function scanUnfinishedManifests(repoRoot: string, exclude: string): ManifestScan {
   const directory = manifestDirectory(repoRoot);
+
   if (!existsSync(directory)) return { unfinished: [], unreadable: [] };
   const unfinished: TeardownManifest[] = [];
   const unreadable: string[] = [];
+
   for (const file of readdirSync(directory).sort()) {
     if (!file.endsWith('.json')) continue;
+
     if (basename(file, '.json') === exclude) continue;
     const path = join(directory, file);
     let manifest: TeardownManifest;
+
     try {
       manifest = v.parse(TeardownManifestSchema, JSON.parse(readFileSync(path, 'utf8')));
     } catch (error) {
       unreadable.push(`${path}: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
+
     if (manifest.entries.some((entry) => !entry.done)) unfinished.push(manifest);
   }
+
   return { unfinished, unreadable };
 }
 
@@ -250,22 +268,28 @@ export async function recoverAbandonedRuns(
   report: (line: string) => void,
 ): Promise<readonly RecoveredRun[]> {
   const scan = scanUnfinishedManifests(repoRoot, exclude);
+
   for (const problem of scan.unreadable) {
     report(`abandoned teardown manifest cannot be decoded, so its resources must be swept by hand — ${problem}`);
   }
+
   const recovered: RecoveredRun[] = [];
+
   for (const manifest of scan.unfinished) {
     const pending = manifest.entries.filter((entry) => !entry.done);
     report(
       `run ${manifest.runId} (last touched ${manifest.updatedAt}) left ${pending.length} resource(s) undeleted: `
       + pending.map((entry) => `${entry.kind}:${entry.name}`).join(', '),
     );
+
     if (manifest.kept) {
       report(`run ${manifest.runId} was retained on purpose (--keep); leaving its resources in place`);
       recovered.push({ runId: manifest.runId, unfinished: pending.length, replayed: false, failures: [] });
       continue;
     }
+
     const replay = await replayTeardown(repoRoot, manifest, exec);
+
     for (const failure of replay.failures) report(`run ${manifest.runId}: ${failure}`);
     report(
       replay.failures.length === 0
@@ -279,6 +303,7 @@ export async function recoverAbandonedRuns(
       failures: replay.failures,
     });
   }
+
   return recovered;
 }
 
@@ -301,15 +326,19 @@ export function reconcileCounters(
 ): CounterReconciliation {
   const problems: string[] = [];
   const known = new Set(vocabulary);
+
   for (const name of Object.keys(actual)) {
     if (!known.has(name)) problems.push(`unknown operation counter "${name}"`);
   }
+
   for (const name of new Set([...Object.keys(expected), ...Object.keys(actual)])) {
     if (!known.has(name)) continue;
     const want = expected[name] ?? 0;
     const got = actual[name] ?? 0;
+
     if (want !== got) problems.push(`counter "${name}": recorded ${want}, tallied ${got}`);
   }
+
   return { reconciled: problems.length === 0, problems };
 }
 
@@ -347,12 +376,15 @@ export interface CleanupReport {
   readonly multipartResidue: number;
   readonly checks: readonly CleanupCheck[];
 }
+
 /** Cleanup gate purposes come from the frozen manifest rows, not a restated table. */
 const check = (
   gate: CleanupGateId, ok: boolean, detail: string,
 ): CleanupCheck => {
   const row = STORAGE_CLEANUP_GATES.find((candidate) => candidate.id === gate);
+
   if (row === undefined) throw new Error(`frozen manifest names no purpose for cleanup gate ${gate}`);
+
   return { gate, purpose: row.purpose, ok, detail };
 };
 
@@ -382,6 +414,7 @@ export async function checkCleanup(
   const workerStates = await Promise.all(workers.map(async (entry) => ({
     entry, absent: await probes.workerAbsent(entry.name),
   })));
+
   checks.push(check(
     'C1',
     workerStates.every((state) => state.absent),
@@ -393,6 +426,7 @@ export async function checkCleanup(
   const containerStates = await Promise.all(containers.map(async (entry) => ({
     entry, absent: await probes.containerAppAbsent(entry.name),
   })));
+
   checks.push(check(
     'C2',
     containerStates.every((state) => state.absent),
@@ -404,10 +438,12 @@ export async function checkCleanup(
   let multipartResidue = 0;
   const bucketDetails: string[] = [];
   let bucketsOk = prefixes.every((entry) => entry.done);
+
   for (const entry of buckets) {
     const [name, prefix] = splitBucketKey(entry.name);
     const state = await probes.bucketState(name);
     multipartResidue += state.multipartResidue;
+
     if (state.absent) {
       bucketDetails.push(`${name}: deleted`);
     } else if (state.objects > 0 || state.multipartResidue > 0) {
@@ -422,25 +458,31 @@ export async function checkCleanup(
       bucketDetails.push(`${name}: empty`);
     }
   }
+
   checks.push(check('C3', bucketsOk, bucketDetails.length === 0 ? 'no bucket was used' : bucketDetails.join('; ')));
 
   const boxStates = await Promise.all(boxes.map(async (entry) => ({
     entry, empty: await probes.boxStateEmpty(entry.name),
   })));
+
   const alarmStates = await Promise.all(alarms.map(async (entry) => ({
     entry, absent: await probes.alarmAbsent(entry.name),
   })));
+
   const mountStates = await Promise.all(mounts.map(async (entry) => ({
     entry, absent: await probes.mountAbsent(entry.name),
   })));
+
   const durableStateOk = boxStates.every((state) => state.empty)
     && alarmStates.every((state) => state.absent)
     && mountStates.every((state) => state.absent);
+
   const durableStateDetails = [
     ...boxStates.map((state) => `${state.entry.name}: ${state.empty ? 'empty' : 'STATE REMAINS'}`),
     ...alarmStates.map((state) => `${state.entry.name}: ${state.absent ? 'absent' : 'ALARM REMAINS'}`),
     ...mountStates.map((state) => `${state.entry.name}: ${state.absent ? 'absent' : 'MOUNT REMAINS'}`),
   ];
+
   checks.push(check(
     'C4',
     durableStateOk,
@@ -450,15 +492,19 @@ export async function checkCleanup(
   const pathStates = await Promise.all(paths.map(async (entry) => ({
     entry, absent: await probes.localPathAbsent(entry.name),
   })));
+
   const processStates = await Promise.all(processes.map(async (entry) => ({
     entry, absent: await probes.processAbsent(entry.name),
   })));
+
   const localOk = pathStates.every((state) => state.absent)
     && processStates.every((state) => state.absent);
+
   const localDetail = [
     ...pathStates.map((s) => `${s.entry.name}: ${s.absent ? 'absent' : 'LEFT ON DISK'}`),
     ...processStates.map((s) => `${s.entry.name}: ${s.absent ? 'gone' : 'STILL RUNNING'}`),
   ].join('; ');
+
   checks.push(check('C5', localOk, localDetail === '' ? 'no local state was created' : localDetail));
 
   const recorded = await probes.counters();
@@ -493,5 +539,6 @@ export async function checkCleanup(
  *  bucket was this run's to delete. */
 function splitBucketKey(key: string): [string, string | undefined] {
   const hash = key.indexOf('#');
+
   return hash === -1 ? [key, undefined] : [key.slice(0, hash), key.slice(hash + 1)];
 }

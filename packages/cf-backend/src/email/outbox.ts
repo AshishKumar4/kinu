@@ -48,6 +48,7 @@ export type OutboundSendResult =
  *  own (an outbound provider, not the in-process peer hub, whose base is 5s);
  *  only the dead-letter discipline is shared. */
 const MAX_SEND_ATTEMPTS = 8;
+
 const RETRY_BASE_MS = 30_000;
 
 const MESSAGE_ID_HEADER = 'Message-ID';
@@ -70,6 +71,7 @@ export class EmailOutbox {
       async send(message, _info, binding) {
         try {
           await binding.send(message);
+
           return { status: 'sent' };
         } catch (err) {
           // A refused send is a value here: the disposition the outbox backs
@@ -87,6 +89,7 @@ export class EmailOutbox {
             cause: err,
             otherwise: 'unavailable',
           }));
+
           return { status: 'retry', reason: renderThrownChain({ cause: err }) };
         }
       },
@@ -103,15 +106,18 @@ export class EmailOutbox {
     now: number,
   ): Promise<OutboundSendResult> {
     const stableId = messageIdFor(key, message.from);
+
     const stamped: OutboundEmailMessage = {
       ...message,
       headers: { ...message.headers, [MESSAGE_ID_HEADER]: stableId },
     };
+
     // `retry-now` re-admits an unsent key: a caller asking again means new
     // intent, so the row's backoff is cleared and a dead letter returns to
     // pending with its attempt count kept. A sent key stays final.
     const { id } = await this.outbox.queue(stamped, { dedupeKey: key, now, onDuplicate: 'retry-now' });
     const queued = this.outbox.status(id);
+
     if (queued?.state === 'sent') {
       return { status: 'deduped', messageId: messageIdOf(queued.message) ?? stableId };
     }
@@ -119,7 +125,9 @@ export class EmailOutbox {
     await this.outbox.drain(now, { context: binding });
     const settled = this.outbox.status(id);
     const messageId = messageIdOf(settled?.message) ?? stableId;
+
     if (settled?.state === 'sent') return { status: 'sent', messageId };
+
     return { status: 'failed', messageId, error: settled?.lastError ?? 'the send did not complete' };
   }
 
@@ -128,6 +136,7 @@ export class EmailOutbox {
    *  downstream rather than delivered twice. Returns the count re-driven. */
   async reconcile(binding: SendEmail, now: number): Promise<number> {
     const { sent, retried, deadLettered } = await this.outbox.drain(now, { context: binding });
+
     return sent + retried + deadLettered;
   }
 
@@ -152,6 +161,7 @@ function messageIdOf(message: OutboundEmailMessage | null | undefined): string |
 function emailDomainOf(from: OutboundEmailMessage['from']): string {
   const address = emailAddressText(from);
   const at = address.lastIndexOf('@');
+
   return at >= 0 ? address.slice(at + 1) : 'kinu.local';
 }
 

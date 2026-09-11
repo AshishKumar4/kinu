@@ -38,6 +38,7 @@ const providerLabels = {
 } satisfies Record<OAuthProviderId, string>;
 
 const discoveryCache = new Map<string, { as: oauth.AuthorizationServer; expiresAt: number }>();
+
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
 
 export function listConfiguredOAuthProviders(env: OAuthProviderEnv): PublicOAuthProvider[] {
@@ -48,6 +49,7 @@ function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProviderConfig
   const out: OAuthProviderConfig[] = [];
 
   const google = providerFromEnv(env, 'google', 'GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET');
+
   if (google) {
     out.push({
       ...google,
@@ -59,6 +61,7 @@ function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProviderConfig
   }
 
   const github = providerFromEnv(env, 'github', 'GITHUB_OAUTH_CLIENT_ID', 'GITHUB_OAUTH_CLIENT_SECRET');
+
   if (github) {
     out.push({
       ...github,
@@ -76,6 +79,7 @@ function getConfiguredOAuthProviders(env: OAuthProviderEnv): OAuthProviderConfig
   }
 
   const cloudflare = providerFromEnv(env, 'cloudflare', 'CLOUDFLARE_OAUTH_CLIENT_ID', 'CLOUDFLARE_OAUTH_CLIENT_SECRET');
+
   if (cloudflare) {
     out.push({
       ...cloudflare,
@@ -97,14 +101,17 @@ export function getOAuthProvider(env: OAuthProviderEnv, id: string): OAuthProvid
 
 export async function getAuthorizationServer(provider: OAuthProviderConfig): Promise<oauth.AuthorizationServer> {
   if (provider.authorizationServer) return provider.authorizationServer;
+
   if (!provider.issuer) throw new Error(`Provider ${provider.id} has no issuer.`);
   const cached = discoveryCache.get(provider.issuer);
+
   if (cached && cached.expiresAt > Date.now()) return cached.as;
 
   const issuer = new URL(provider.issuer);
   const response = await oauth.discoveryRequest(issuer, { algorithm: 'oidc' });
   const as = await oauth.processDiscoveryResponse(issuer, response);
   discoveryCache.set(provider.issuer, { as, expiresAt: Date.now() + DISCOVERY_TTL_MS });
+
   return as;
 }
 
@@ -122,7 +129,9 @@ function providerFromEnv(
 ): Pick<OAuthProviderConfig, 'id' | 'label' | 'clientId' | 'clientSecret'> | null {
   const clientId = cleanEnv(env[clientIdKey]);
   const clientSecret = cleanEnv(env[clientSecretKey]);
+
   if (!clientId || !clientSecret) return null;
+
   return { id, label: providerLabels[id], clientId, clientSecret };
 }
 
@@ -132,5 +141,6 @@ function cleanEnv(value: string | undefined): string | null {
 
 function cleanScopes(value: string | undefined, fallback: string): string {
   const scopes = (value ?? fallback).trim().split(/\s+/).filter(Boolean);
+
   return scopes.length ? scopes.join(' ') : fallback;
 }

@@ -31,6 +31,7 @@ describe('isUlid', () => {
     expect(isUlid(minted.toLowerCase())).toBe(false);
     expect(isUlid(`${minted.slice(0, -1)}/`)).toBe(false);
     expect(isUlid(`${minted.slice(0, -1)}-`)).toBe(false);
+
     // The four letters Crockford base32 excludes, so a transcription error
     // cannot be mistaken for an id this process could have minted.
     for (const excluded of ['I', 'L', 'O', 'U']) {

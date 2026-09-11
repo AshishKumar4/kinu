@@ -63,6 +63,7 @@ describe('dedupeKeyFor — timer', () => {
       variant: 'timer',
       payload: { trigger_id: 't1', scheduled_fire_at: 1700000000000 },
     };
+
     expect(dedupeKeyFor(e)).toBe('timer:t1:1700000000000');
   });
 });
@@ -75,6 +76,7 @@ describe('dedupeKeyFor — process_done', () => {
       variant: 'process_done',
       payload: { process_id: 'pid-42', command: 'ls', exit_code: 0, stdout_excerpt: '', stderr_excerpt: '', duration_ms: 0 },
     };
+
     expect(dedupeKeyFor(e)).toBe('process_done:pid-42');
   });
 });
@@ -86,6 +88,7 @@ describe('dedupeKeyFor — peer_agent', () => {
     variant: 'peer_agent',
     payload: { from_agent_name: 'scout', from_user_id: 'u1', topic, body: 'hi', sender_event_id, kinu_mode: 'build' },
   });
+
   test('keyed by (sender, sender_event_id) — a crash redelivery is a no-op', () => {
     expect(dedupeKeyFor(peer('ox1', 'status'))).toBe('peer:scout:ox1');
   });
@@ -102,6 +105,7 @@ describe('dedupeKeyFor — non-deduped variants', () => {
       variant: 'chat',
       payload: { text: 'hello' },
     };
+
     expect(dedupeKeyFor(e)).toBeNull();
   });
   test('internal returns null', () => {
@@ -111,6 +115,7 @@ describe('dedupeKeyFor — non-deduped variants', () => {
       variant: 'internal',
       payload: { kind: 'reflect', data: {} },
     };
+
     expect(dedupeKeyFor(e)).toBeNull();
   });
 });

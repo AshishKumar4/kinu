@@ -117,6 +117,7 @@ describe('renderArchiveManifest', () => {
       range(),
       range({ rangeHash: 'h1', path: '/a/h1.md', startTurn: 5, endTurn: 5, userTurns: 1, assistantTurns: 0, firstUserAsk: '' }),
     ]);
+
     expect(rendered).toStartWith('## Compaction Archive\n');
     expect(rendered).toInclude('- turns 1-4 (2 user / 2 assistant) — "message 0" — .kinu/compaction/S/h0.md');
     expect(rendered).toInclude('- turn 5 (1 user / 0 assistant) — (no user ask) — /a/h1.md');
@@ -125,6 +126,7 @@ describe('renderArchiveManifest', () => {
   test('a long index keeps the newest ranges and says how many it elided', () => {
     const ranges = Array.from({ length: 30 }, (_, i) =>
       range({ rangeHash: `h${i}`, path: `/a/h${i}.md`, startTurn: i + 1, endTurn: i + 1 }));
+
     const rendered = renderArchiveManifest(ranges);
     expect(rendered).toInclude('(6 earlier ranges elided');
     expect(rendered).not.toInclude('/a/h5.md');

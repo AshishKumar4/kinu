@@ -53,10 +53,12 @@ import { RESERVED_LOG_FIELDS } from '@kinu.run/core/obs';
  */
 export function assertPublishableNames(where: string, names: readonly string[]): void {
   const seen: Record<string, true> = {};
+
   for (const name of names) {
     if (RESERVED_LOG_FIELDS.some((field) => field === name)) {
       throw new RangeError(`${where}: "${name}" is a reserved field name and may not be published`);
     }
+
     if (seen[name] === true) throw new RangeError(`${where}: "${name}" is declared twice`);
     seen[name] = true;
   }
@@ -82,9 +84,11 @@ export function analyticsDigest(value: string): string {
   const bytes = new TextEncoder().encode(value);
   let high = 0x811c9dc5;
   let low = 0x811c9dc5;
+
   for (let i = 0; i < bytes.length; i += 1) {
     low = Math.imul(low ^ bytes[i], 0x01000193) >>> 0;
     high = Math.imul(high ^ ((bytes[i] + i) & 0xff), 0x01000193) >>> 0;
   }
+
   return high.toString(16).padStart(8, '0') + low.toString(16).padStart(8, '0');
 }

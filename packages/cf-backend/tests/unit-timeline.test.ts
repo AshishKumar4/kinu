@@ -49,7 +49,9 @@ describe('runEventToSpan', () => {
   test('a finished turn prints only the token counts the provider reported', () => {
     const detail = (usage?: Usage) => {
       const turn: Extract<RunEventInput, { type: 'turn_end' }> = { type: 'turn_end', turnIndex: 0 };
+
       if (usage !== undefined) turn.usage = usage;
+
       return runEventToSpan(ev(turn)).detail;
     };
 

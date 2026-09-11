@@ -138,11 +138,13 @@ function ancestorCrumbs<Row extends Branchy>(
   const byId = new Map(rows.map((row) => [row.id, row]));
   const path: NodeTranscriptCrumb[] = [];
   const seen = new Set<string>();
+
   for (let cursor: Row | undefined = node; cursor && !seen.has(cursor.id);) {
     seen.add(cursor.id);
     path.unshift({ id: cursor.id, label: label(cursor), depth: cursor.depth, status: cursor.status });
     cursor = cursor.parent_id ? byId.get(cursor.parent_id) : undefined;
   }
+
   return path;
 }
 
@@ -160,8 +162,10 @@ function readHeadTranscript(
   // `HeadRunHeadView` carries none.
   const rows = journal.readTree(runId);
   const row = rows.find((candidate) => candidate.id === nodeId);
+
   if (!row) return null;
   const head = journal.readHeadView(nodeId);
+
   if (!head) return null;
 
   const path = ancestorCrumbs(row, rows, (head) => head.task);
@@ -197,6 +201,7 @@ function readRolloutTranscript(
 ): NodeTranscriptView | null {
   const nodes = readSearchTree(sql, actor, runId);
   const node = nodes.find((candidate) => candidate.id === nodeId);
+
   if (!node) return null;
 
   // The first crumb is the RUN, so it wears the run's name. Its raw `action` is

@@ -22,8 +22,10 @@ import { seededRandom } from '../utils/stats';
 
 /** Two-sided significance level used everywhere unless overridden. */
 export const DEFAULT_ALPHA = 0.05;
+
 /** Target power for detectable-effect statements. */
 export const DEFAULT_POWER = 0.8;
+
 /** Resamples for the paired bootstrap. Fixed so runs are reproducible. */
 export const DEFAULT_BOOTSTRAP_ITERATIONS = 10_000;
 
@@ -36,14 +38,18 @@ export function normalQuantile(p: number): number {
   const c = [-7.784894002430293e-3, -3.223964580411365e-1, -2.400758277161838, -2.549732539343734, 4.374664141464968, 2.938163982698783];
   const d = [7.784695709041462e-3, 3.224671290700398e-1, 2.445134137142996, 3.754408661907416];
   const pLow = 0.02425;
+
   if (p < pLow) {
     const q = Math.sqrt(-2 * Math.log(p));
+
     return (((((c[0] * q + c[1]) * q + c[2]) * q + c[3]) * q + c[4]) * q + c[5]) /
       ((((d[0] * q + d[1]) * q + d[2]) * q + d[3]) * q + 1);
   }
+
   if (p > 1 - pLow) return -normalQuantile(1 - p);
   const q = p - 0.5;
   const r = q * q;
+
   return (((((a[0] * r + a[1]) * r + a[2]) * r + a[3]) * r + a[4]) * r + a[5]) * q /
     (((((b[0] * r + b[1]) * r + b[2]) * r + b[3]) * r + b[4]) * r + 1);
 }
@@ -53,7 +59,9 @@ function logGamma(x: number): number {
   let y = x;
   const tmp = x + 5.5 - (x + 0.5) * Math.log(x + 5.5);
   let ser = 1.000000000190015;
+
   for (let j = 0; j < 6; j++) ser += g[j] / ++y;
+
   return -tmp + Math.log((2.5066282746310007 * ser) / x);
 }
 
@@ -67,7 +75,9 @@ export function binomialTwoSidedP(successes: number, trials: number): number {
   if (trials === 0) return 1;
   const k = Math.min(successes, trials - successes);
   let tail = 0;
+
   for (let i = 0; i <= k; i++) tail += Math.exp(logChoose(trials, i) - trials * Math.LN2);
+
   return Math.min(1, 2 * tail);
 }
 
@@ -84,6 +94,7 @@ export function unitHash(text: string): number {
   x = Math.imul(x ^ (x >>> 16), 0x7feb352d) >>> 0;
   x = Math.imul(x ^ (x >>> 15), 0x846ca68b) >>> 0;
   x = (x ^ (x >>> 16)) >>> 0;
+
   return x / 0x1_0000_0000;
 }
 
@@ -110,16 +121,21 @@ export function pairedBootstrapCI(diffs: readonly number[], opts: BootstrapOptio
   const iterations = opts.iterations ?? DEFAULT_BOOTSTRAP_ITERATIONS;
   const n = diffs.length;
   const mean = n === 0 ? 0 : diffs.reduce((s, d) => s + d, 0) / n;
+
   if (n === 0) return { mean: 0, ci: { lo: 0, hi: 0, level: 1 - alpha } };
   const rand = seededRandom(opts.seed ?? 1);
   const means = new Float64Array(iterations);
+
   for (let it = 0; it < iterations; it++) {
     let sum = 0;
+
     for (let i = 0; i < n; i++) sum += diffs[Math.floor(rand() * n)];
     means[it] = sum / n;
   }
+
   means.sort();
   const pick = (q: number) => means[Math.min(iterations - 1, Math.max(0, Math.round(q * (iterations - 1))))];
+
   return { mean, ci: { lo: pick(alpha / 2), hi: pick(1 - alpha / 2), level: 1 - alpha } };
 }
 
@@ -150,8 +166,10 @@ export function minimumDetectableEffect(params: PowerParams): number {
   const { pairs, dispersion } = params;
   const alpha = params.alpha ?? DEFAULT_ALPHA;
   const power = params.power ?? DEFAULT_POWER;
+
   if (pairs <= 0 || dispersion <= 0) return Number.POSITIVE_INFINITY;
   const z = normalQuantile(1 - alpha / 2) + normalQuantile(power);
+
   return z * Math.sqrt(dispersion / pairs);
 }
 
@@ -167,6 +185,7 @@ export function floorPValue(pairs: number): number {
  *  is 6: 2·0.5⁶ = 0.03125 ≤ 0.05, while 5 pairs bottom out at 0.0625. */
 export function minimumPairsForSignificance(alpha = DEFAULT_ALPHA): number {
   for (let n = 1; n <= 64; n++) if (floorPValue(n) <= alpha) return n;
+
   return Number.POSITIVE_INFINITY;
 }
 
@@ -174,8 +193,10 @@ export function minimumPairsForSignificance(alpha = DEFAULT_ALPHA): number {
 export function requiredPairs(effect: number, params: Omit<PowerParams, 'pairs'>): number {
   const alpha = params.alpha ?? DEFAULT_ALPHA;
   const power = params.power ?? DEFAULT_POWER;
+
   if (effect === 0 || params.dispersion <= 0) return Number.POSITIVE_INFINITY;
   const z = normalQuantile(1 - alpha / 2) + normalQuantile(power);
+
   return Math.ceil((params.dispersion * z * z) / (effect * effect));
 }
 
@@ -281,12 +302,16 @@ export interface TaskRepeatSummary {
  *  row per task, so nothing can accidentally treat k attempts as k pairs. */
 export function summarizeRepeats(outcome: PairedOutcome): TaskRepeatSummary {
   const repeats = outcome.a.length;
+
   if (repeats === 0) throw new Error(`task ${outcome.taskId} has no attempts`);
+
   if (outcome.b.length !== repeats) {
     throw new Error(`task ${outcome.taskId} ran ${repeats} baseline attempts but ${outcome.b.length} candidate attempts — a paired design cannot compare unequal repeats`);
   }
+
   const passesA = outcome.a.filter(Boolean).length;
   const passesB = outcome.b.filter(Boolean).length;
+
   return {
     taskId: outcome.taskId, repeats, passesA, passesB,
     rateA: passesA / repeats, rateB: passesB / repeats,
@@ -314,6 +339,7 @@ export function pairedBinaryComparison(
   const summaries = outcomes.map(summarizeRepeats);
   const pairs = summaries.length;
   const repeats = summaries[0]?.repeats ?? 1;
+
   for (const s of summaries) {
     if (s.repeats !== repeats) {
       throw new Error(`task ${s.taskId} ran ${s.repeats} repeats but the split ran ${repeats} — a split with ragged repeats has no single pass^k`);
@@ -323,21 +349,28 @@ export function pairedBinaryComparison(
   let bothPass = 0, bothFail = 0, tiedPartial = 0, onlyA = 0, onlyB = 0;
   let flakyA = 0, flakyB = 0, flakyEither = 0;
   let allA = 0, allB = 0, rateSumA = 0, rateSumB = 0, squaredDiff = 0;
+
   for (const s of summaries) {
     if (s.rateA > s.rateB) onlyA++;
     else if (s.rateB > s.rateA) onlyB++;
     else if (s.allA) bothPass++;
     else if (s.passesA === 0) bothFail++;
     else tiedPartial++;
+
     if (s.flakyA) flakyA++;
+
     if (s.flakyB) flakyB++;
+
     if (s.flakyA || s.flakyB) flakyEither++;
+
     if (s.allA) allA++;
+
     if (s.allB) allB++;
     rateSumA += s.rateA;
     rateSumB += s.rateB;
     squaredDiff += (s.rateB - s.rateA) ** 2;
   }
+
   const discordant = onlyA + onlyB;
   const discordanceRate = pairs === 0 ? 0 : discordant / pairs;
   const dispersion = pairs === 0 ? 0 : squaredDiff / pairs;
@@ -366,6 +399,7 @@ export function pairedBinaryComparison(
   const canReachSignificance = discordant > 0 && floor <= alpha;
 
   let verdict: string;
+
   if (pairs === 0) verdict = 'no pairs ran — nothing to conclude';
   else if (discordant === 0) verdict = `variants never disagreed on ${pairs} tasks — this corpus cannot separate them`;
   else if (!canReachSignificance) {
@@ -377,7 +411,9 @@ export function pairedBinaryComparison(
   else if (significant && resolvable) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) and above the design's resolution (${fmtPp(mde)})`;
   else if (significant) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) but below the design's 80%-power threshold of ${fmtPp(mde)} — suggestive, not established; ${pairsNeededForObserved} pairs would settle it`;
   else verdict = `no detectable difference (p=${pValue.toFixed(4)}); this design resolves ${fmtPp(mde)}, so effects below that are invisible`;
+
   if (smallSample) verdict += ` [only ${discordant} discordant pairs — the p-value is exact, the ${fmtPp(mde)} threshold is a normal approximation and loose here]`;
+
   if (repeats > 1) verdict += ` [${repeats} repeats × ${pairs} tasks = ${pairs * repeats} attempts per variant, but still ${pairs} independent pairs — repeats buy precision within a task, never more tasks]`;
 
   return {
@@ -393,6 +429,7 @@ export function pairedBinaryComparison(
 /** Percentage points, signed — the unit every effect in this harness is reported in. */
 export function fmtPp(x: number): string {
   if (!Number.isFinite(x)) return 'n/a';
+
   return `${x >= 0 ? '+' : ''}${(x * 100).toFixed(1)}pp`;
 }
 
@@ -439,15 +476,19 @@ export function computeGain(
 ): GainStats {
   const alpha = opts.alpha ?? DEFAULT_ALPHA;
   const tasks = paired.length;
+
   const mean = (pick: (p: { stateful: number; stateless: number }) => number) =>
     tasks === 0 ? 0 : paired.reduce((s, p) => s + pick(p), 0) / tasks;
+
   const statefulReward = mean((p) => p.stateful);
   const statelessReward = mean((p) => p.stateless);
   const diffs = paired.map((p) => p.stateful - p.stateless);
   const { mean: gain, ci } = pairedBootstrapCI(diffs, opts);
+
   const bounded = paired.every((p) => (
     p.stateful >= 0 && p.stateful <= 1 && p.stateless >= 0 && p.stateless <= 1
   ));
+
   const headroom = 1 - statelessReward;
   const normalizedGain = bounded && headroom > 1e-9 ? gain / headroom : null;
   // Binary-safe significance: the same exact paired test, on sign of the diff.
@@ -459,6 +500,7 @@ export function computeGain(
   const canReach = pairsWithDifference > 0 && floor <= alpha;
 
   let verdict: string;
+
   if (tasks === 0) verdict = 'no tasks ran — no gain measured';
   else if (!canReach) {
     verdict = `UNDECIDABLE: ${pairsWithDifference} of ${tasks} task(s) differed between the arms, and `

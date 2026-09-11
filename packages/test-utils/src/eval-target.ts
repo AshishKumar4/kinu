@@ -106,8 +106,11 @@ export function resolveEvalBackend(
   env: Record<string, string | undefined> = process.env,
 ): EvalBackendResolution {
   const raw = env[EVAL_BACKEND_ENV]?.trim();
+
   if (raw === undefined || raw === '') return { kind: 'ready', backend: 'local' };
+
   if (raw === 'local' || raw === 'cloud') return { kind: 'ready', backend: raw };
+
   return {
     kind: 'refused',
     reason: `${EVAL_BACKEND_ENV}=${raw} names no target. It is \`local\` (the in-process `
@@ -167,6 +170,7 @@ export interface EvalTargetWorkspace {
  * costs one command rather than a whole baseline measurement.
  */
 const PROBE_MODULE = '_verifier_probe.mjs';
+
 const PROBE_MARKER = 'KINU_VERIFIER_PROBE_OK';
 
 /**
@@ -188,9 +192,11 @@ export async function probeVerifier(workspace: EvalTargetWorkspace): Promise<Ver
   try {
     await workspace.vfs.writeFile(PROBE_MODULE, `console.log('${PROBE_MARKER}');\n`);
     const run = await workspace.exec(`node ${PROBE_MODULE}`);
+
     if (run.stdout.includes(PROBE_MARKER)) {
       return { kind: 'runs', evidence: run.stdout.trim() };
     }
+
     return {
       kind: 'unavailable',
       reason: `\`node ${PROBE_MODULE}\` exited ${String(run.exitCode)} without the probe's own `
@@ -332,6 +338,7 @@ export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotal
   let turns = 0, toolCalls = 0, tokensIn = 0, tokensOut = 0, reasoningOut = 0, steps = 0;
   const toolNames: string[] = [];
   const failures: string[] = [];
+
   for (const event of events) {
     if (event.type === 'turn_end') {
       turns += 1;
@@ -342,6 +349,7 @@ export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotal
       toolCalls += 1;
       toolNames.push(event.name);
       const failure = classifyToolFailure(event);
+
       if (failure) failures.push(`${event.name}: ${event.error ?? failure.reason}`);
     } else if (event.type === 'step_finish') {
       steps += 1;
@@ -351,6 +359,7 @@ export function ledgerTotalsFromEvents(events: readonly RunEvent[]): LedgerTotal
       failures.push(`${RUN_END_FAILURE_PREFIX}${event.error}`);
     }
   }
+
   return { turns, toolCalls, toolNames, tokensIn, tokensOut, reasoningOut, steps, failures };
 }
 
@@ -407,6 +416,7 @@ export function stepBoundEvidence(events: readonly RunEvent[]): StepBoundEvidenc
   let steps = 0;
   let lastStepReason: string | null = null;
   const runEndReasons: string[] = [];
+
   for (const event of events) {
     if (event.type === 'step_finish') {
       steps += 1;
@@ -415,6 +425,7 @@ export function stepBoundEvidence(events: readonly RunEvent[]): StepBoundEvidenc
       runEndReasons.push(event.reason ?? 'unstated');
     }
   }
+
   return { steps, lastStepReason, runEndReasons, truncated: lastStepReason === 'tool-calls' };
 }
 
@@ -437,12 +448,16 @@ export function stepBoundEvidence(events: readonly RunEvent[]): StepBoundEvidenc
 export function walkRunEvents(recorder: RunEventRecorder): RunEvent[] {
   const events: RunEvent[] = [];
   let cursor: SeekCursor | null = null;
+
   for (;;) {
     const page = listRuns(recorder, cursor);
+
     for (const run of page.items) events.push(...recorder.read(run.runId, { limit: 100_000 }));
+
     if (page.status === 'end') break;
     cursor = page.next;
   }
+
   return events;
 }
 
@@ -464,5 +479,6 @@ export function walkRunEvents(recorder: RunEventRecorder): RunEvent[] {
 export async function recordTargetEpisodeSpend(target: AgentEvalTarget): Promise<WorkspaceSpend> {
   const spend = await target.spend();
   recordWorkspaceSpend(spend);
+
   return spend;
 }

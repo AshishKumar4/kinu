@@ -28,6 +28,7 @@ describe('preview port refresh reconciliation', () => {
 
   test('a successful empty result removes only that executor\'s prior ports', () => {
     const previous = [port('workspace', 8080), port('sandbox', 4173)];
+
     const refreshes: ExecutorPortRefresh[] = [
       { executor: 'workspace', result: { ports: [] } },
       { executor: 'sandbox', result: { ports: [{ port: 4173, url: 'https://preview.example/sandbox/4173' }] } },

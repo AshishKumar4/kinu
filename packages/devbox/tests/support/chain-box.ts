@@ -46,7 +46,9 @@ function memoryBucket(objects: Map<string, Uint8Array>): R2Bucket {
   return Object.create({
     head: async (key: string) => {
       const bytes = objects.get(key);
+
       if (bytes === undefined) return null;
+
       return {
         key,
         size: bytes.byteLength,
@@ -103,5 +105,6 @@ export function chainBox(): ChainBox {
   const objects = new Map<string, Uint8Array>();
   container.chainStore = { objects, root: chainStoreRoot(`boxes/${TEST_BOX_ID}`) };
   box.useStore({ binding: 'BACKUP_BUCKET', bucket: memoryBucket(objects) });
+
   return { box, container, rows, objects };
 }

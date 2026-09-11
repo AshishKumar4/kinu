@@ -100,6 +100,7 @@ export interface BranchHandle {
 
 /** Factory for creating isolated branch agents — injected by the backend */
 export type SpawnBranch = (branchId: string) => Promise<BranchHandle>;
+
 /**
  * MID-FLIGHT eviction of a branch agent: stop it, but KEEP whatever it has
  * recorded. Used while the branch may still be read — the search prunes a node

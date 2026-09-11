@@ -21,7 +21,9 @@ describe('formatInheritedContext', () => {
       role: i % 2 === 0 ? 'user' : 'assistant',
       content: `message-${i}-${'word '.repeat(40).trim()}`,
     }));
+
     const out = formatInheritedContext(history);
+
     // Each original message content appears verbatim — none was cut.
     for (const m of history) {
       expect(out).toContain(m.content);
@@ -33,6 +35,7 @@ describe('formatInheritedContext', () => {
       role: 'user',
       content: `m${i}`,
     }));
+
     const out = formatInheritedContext(history);
     const lines = out.split('\n');
     expect(lines.length).toBe(DEFAULT_INHERITED_MESSAGES);
@@ -57,6 +60,7 @@ describe('formatInheritedContext', () => {
       { role: 'assistant', content: 'b' },
       { role: 'user', content: 'c' },
     ];
+
     expect(formatInheritedContext(history, 2)).toBe('assistant: b\nuser: c');
   });
 });
@@ -67,6 +71,7 @@ describe('formatInheritedContext total character budget', () => {
       role: 'user',
       content: `message-${i}-` + 'word '.repeat(2000).trim(),
     }));
+
     const unbounded = history.map((m) => `user: ${m.content}`).join('\n').length;
     const out = formatInheritedContext(history);
     expect(out.length).toBeLessThan(unbounded);
@@ -78,6 +83,7 @@ describe('formatInheritedContext total character budget', () => {
       { role: 'user', content: 'a'.repeat(500) },
       { role: 'assistant', content: 'b'.repeat(500) },
     ];
+
     const out = formatInheritedContext(history, 12, 100);
     expect(out.length).toBeLessThan(1100);
     expect(out).toContain('omitted');

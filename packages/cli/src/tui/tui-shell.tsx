@@ -33,14 +33,18 @@ import {
 } from './theme';
 
 const WORKSPACE_SIDEBAR_COLUMNS = 28;
+
 const MIN_CONVERSATION_COLUMNS = 68;
+
 const PINNED_SIDEBAR_MIN_COLUMNS = WORKSPACE_SIDEBAR_COLUMNS + MIN_CONVERSATION_COLUMNS + 2;
+
 const MEDIUM_LAYOUT_MIN_COLUMNS = 64;
 
 export type TuiLayout = 'wide' | 'medium' | 'narrow';
 
 export function tuiLayoutForWidth(width: number): TuiLayout {
   if (width >= PINNED_SIDEBAR_MIN_COLUMNS) return 'wide';
+
   return width >= MEDIUM_LAYOUT_MIN_COLUMNS ? 'medium' : 'narrow';
 }
 
@@ -50,7 +54,9 @@ export function sceneWidthFor(width: number, wideSidebarOpen: boolean): number {
     ? Math.max(1, width - WORKSPACE_SIDEBAR_COLUMNS)
     : width;
 }
+
 const SceneWidthContext = createContext<number | null>(null);
+
 /**
  * The columns the scene owns: the terminal minus the pinned sidebar. The
  * status bar, the transcript and every overlay size themselves to it, not to
@@ -60,6 +66,7 @@ const SceneWidthContext = createContext<number | null>(null);
  */
 export function useSceneWidth(): number {
   const { width } = useTerminalDimensions();
+
   return useContext(SceneWidthContext) ?? width;
 }
 
@@ -108,6 +115,7 @@ export function agentSourceFromList(list: () => readonly ListedAgent[]): TuiAgen
     load(cursor) {
       if (cursor !== null) throw new Error('The local agent list has no further page.');
       const items = list().map((agent) => Object.freeze({ ...agent }));
+
       return Object.freeze({ items: Object.freeze(items), total: items.length, nextCursor: null });
     },
   };
@@ -125,8 +133,10 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
   const reload = useCallback(async () => {
     const request = ++requestRef.current;
     setLoading(true);
+
     try {
       const next = validateAgentPage(await sourceRef.current.load(null));
+
       if (request !== requestRef.current) return;
       setPage(next);
       setError(null);
@@ -146,13 +156,17 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
 
   const loadMore = useCallback(async () => {
     const cursor = page.nextCursor;
+
     if (cursor === null || loading) return;
     const request = ++requestRef.current;
     setLoading(true);
+
     try {
       const next = validateAgentPage(await sourceRef.current.load(cursor));
+
       if (request !== requestRef.current) return;
       const byKey: Record<string, TuiAgentSummary> = {};
+
       for (const agent of [...page.items, ...next.items]) byKey[agentRowKey(agent)] = agent;
       setPage(Object.freeze({
         items: Object.freeze(Object.values(byKey)),
@@ -184,6 +198,7 @@ export function useAgentRoster(source: TuiAgentSource): TuiAgentRoster {
         );
       }
     });
+
     return () => { requestRef.current += 1; };
   }, [reload, source, startTransition]);
 
@@ -212,25 +227,31 @@ export function TuiProductProvider(props: {
 }) {
   const [store] = useState(() => props.runtime?.preferenceStore ?? createFileTuiPreferenceStore());
   const [preferences, setPreferences] = useState(() => store.read());
+
   const [themeRegistry] = useState(() => props.runtime?.themeRegistry ?? loadThemeRegistry(
     props.runtime?.customThemeDirectory ?? join(AGENT_HOME, 'themes'),
   ));
+
   const keybindings = useMemo(() => createKeybindingRegistry({
     presetId: preferences.keymapPreset,
     overrides: preferences.keyOverrides,
   }), [preferences.keyOverrides, preferences.keymapPreset]);
+
   const updatePreferences = useCallback((update: (current: TuiPreferences) => TuiPreferences) => {
     setPreferences((current) => {
       const next = update(current);
       store.write(next);
+
       return next;
     });
   }, [store]);
+
   const value = useMemo<TuiProductContextValue>(() => ({
     preferences,
     keybindings,
     updatePreferences,
   }), [keybindings, preferences, updatePreferences]);
+
   return (
     <TuiThemeProvider
       registry={themeRegistry}
@@ -247,7 +268,9 @@ export function TuiProductProvider(props: {
 
 export function useTuiProduct(): TuiProductContextValue {
   const context = useContext(TuiProductContext);
+
   if (context === null) throw new Error('TUI product context is not available.');
+
   return context;
 }
 
@@ -263,8 +286,10 @@ export function usePreservedScrollAnchor(
   const savedScrollTop = useRef<number | null>(null);
   useLayoutEffect(() => {
     const scroll = scrollRef.current;
+
     if (scroll !== null && savedScrollTop.current !== null) scroll.scrollTo(savedScrollTop.current);
   }, [renderer.height, renderer.width, scrollRef]);
+
   return useMemo(() => ({
     remember() {
       savedScrollTop.current = scrollRef.current?.scrollTop ?? null;
@@ -316,6 +341,7 @@ function buildSidebarRows(
 ): TuiSidebarRow[] {
   const grouped = groupAgentWorkspaces(page.items, projectRoot);
   const rows: TuiSidebarRow[] = [];
+
   const pushGroup = (key: string, label: string, agents: readonly TuiAgentSummary[]) => {
     const expanded = !expansion.collapsedWorkspaces.includes(key);
     rows.push({
@@ -326,22 +352,30 @@ function buildSidebarRows(
       agentCount: agents.length,
       runningCount: agents.filter((agent) => agent.status === 'running').length,
     });
+
     if (!expanded) return;
+
     for (const agent of agents) rows.push({ kind: 'agent', key: agentRowKey(agent), agent, nested: true });
   };
+
   for (const group of grouped.workspaces) {
     pushGroup(`ws:${group.cwd}\u0000${group.workspaceId}`, group.workspaceId, group.agents);
   }
+
   if (grouped.unplaced.length > 0) pushGroup('ws:unplaced', 'Unplaced', grouped.unplaced);
+
   if (grouped.remote.length > 0) {
     rows.push({ kind: 'remote', key: 'remote', expanded: expansion.remoteExpanded, loaded: grouped.remote.length });
+
     if (expansion.remoteExpanded) {
       for (const agent of grouped.remote) rows.push({ kind: 'agent', key: agentRowKey(agent), agent, nested: true });
     }
   }
+
   if (page.nextCursor !== null) {
     rows.push({ kind: 'load-more', key: 'load-more', loaded: page.items.length, total: page.total });
   }
+
   return rows;
 }
 
@@ -351,7 +385,9 @@ function rowLineCount(row: TuiSidebarRow): number {
 
 function rowLineOffset(rows: readonly TuiSidebarRow[], index: number): number {
   let offset = 0;
+
   for (let i = 0; i < index; i += 1) offset += rowLineCount(rows[i]!);
+
   return offset;
 }
 
@@ -384,12 +420,15 @@ export function TuiShell(props: TuiShellProps) {
   const sidebarPinned = layout === 'wide' && preferences.wideSidebarOpen;
   const overlayOpen = layout !== 'wide' && props.navigationOverlayOpen;
   const page = props.roster.page;
+
   const rows = useMemo(
     () => buildSidebarRows(page, projectRoot, { collapsedWorkspaces, remoteExpanded }),
     [collapsedWorkspaces, page, projectRoot, remoteExpanded],
   );
+
   const selectedIndex = selectedKey === null ? -1 : rows.findIndex((row) => row.key === selectedKey);
   const lastSelectedIndex = useRef(0);
+
   if (selectedIndex >= 0) lastSelectedIndex.current = selectedIndex;
   // Handler-side mirrors: keypresses arrive in bursts between renders, so
   // selection reads and writes go through refs and re-render follows.
@@ -397,17 +436,23 @@ export function TuiShell(props: TuiShellProps) {
   rowsRef.current = rows;
   const selectionRef = useRef<string | null>(null);
   selectionRef.current = selectedKey;
+
   const applySelection = useCallback((key: string | null) => {
     selectionRef.current = key;
     setSelectedKey(key);
   }, []);
+
   const selectedRowNow = useCallback((): { row: TuiSidebarRow; index: number } | null => {
     const rowsNow = rowsRef.current;
+
     if (rowsNow.length === 0) return null;
+
     const found = selectionRef.current === null
       ? -1
       : rowsNow.findIndex((row) => row.key === selectionRef.current);
+
     const index = found >= 0 ? found : Math.min(lastSelectedIndex.current, rowsNow.length - 1);
+
     return { row: rowsNow[index]!, index };
   }, []);
 
@@ -416,21 +461,27 @@ export function TuiShell(props: TuiShellProps) {
   // its place, never silently back at the top.
   useEffect(() => {
     if (rows.length === 0 || selectedIndex >= 0) return;
+
     const fallback = selectedKey === null
       ? rows.find((row) => row.kind === 'agent') ?? rows[0]!
       : rows[Math.min(lastSelectedIndex.current, rows.length - 1)]!;
+
     applySelection(fallback.key);
   }, [applySelection, rows, selectedIndex, selectedKey]);
 
   useEffect(() => {
     const current = props.currentAgent;
+
     if (current === undefined) return;
     const currentKey = agentRowKey(current);
+
     if (currentKey === syncedCurrentAgent.current) return;
     const item = page.items.find((agent) => agentRowKey(agent) === currentKey);
+
     if (item === undefined) return;
     syncedCurrentAgent.current = currentKey;
     const container = workspaceRowKey(item, projectRoot);
+
     if (container === 'remote') setRemoteExpanded(true);
     else setCollapsedWorkspaces((collapsed) => collapsed.filter((key) => key !== container));
     applySelection(currentKey);
@@ -439,18 +490,22 @@ export function TuiShell(props: TuiShellProps) {
   useLayoutEffect(() => {
     if (overlayOpen) {
       props.onNavigationFocusChange?.(true);
+
       return;
     }
+
     props.onNavigationFocusChange?.(false);
   }, [overlayOpen, props.onNavigationFocusChange]);
 
   // Keep the selected row visible inside whichever navigator is mounted.
   useLayoutEffect(() => {
     const scroll = navScrollRef.current;
+
     if (scroll === null || selectedIndex < 0) return;
     const top = rowLineOffset(rows, selectedIndex);
     const lines = rowLineCount(rows[selectedIndex]!);
     const viewport = scroll.viewport.height;
+
     if (top < scroll.scrollTop) scroll.scrollTo(top);
     else if (viewport > 0 && top + lines > scroll.scrollTop + viewport) scroll.scrollTo(top + lines - viewport);
   }, [rows, selectedIndex]);
@@ -464,24 +519,30 @@ export function TuiShell(props: TuiShellProps) {
 
   const activateRow = useCallback((row: TuiSidebarRow) => {
     applySelection(row.key);
+
     switch (row.kind) {
       case 'workspace':
         toggleWorkspace(row.key);
+
         return;
       case 'remote':
         setRemoteExpanded((expanded) => !expanded);
+
         return;
       case 'agent':
         props.onAgentSelect?.(row.agent);
+
         return;
       case 'load-more':
         props.roster.loadMore();
+
         return;
     }
   }, [applySelection, props.onAgentSelect, props.roster, toggleWorkspace]);
 
   const moveSelection = useCallback((delta: number) => {
     const selected = selectedRowNow();
+
     if (selected === null) return;
     const rowsNow = rowsRef.current;
     const next = Math.max(0, Math.min(rowsNow.length - 1, selected.index + delta));
@@ -491,12 +552,14 @@ export function TuiShell(props: TuiShellProps) {
   /** Page by the navigator's own viewport, in rows measured through row heights. */
   const pageRows = useCallback((direction: -1 | 1) => {
     const selected = selectedRowNow();
+
     if (selected === null) return;
     const rowsNow = rowsRef.current;
     const viewport = navScrollRef.current?.viewport.height ?? 8;
     const start = selected.index;
     const startOffset = rowLineOffset(rowsNow, start);
     let target = start;
+
     while (
       target + direction >= 0
       && target + direction < rowsNow.length
@@ -504,63 +567,83 @@ export function TuiShell(props: TuiShellProps) {
     ) {
       target += direction;
     }
+
     if (target === start) target = Math.max(0, Math.min(rowsNow.length - 1, start + direction));
     applySelection(rowsNow[target]?.key ?? null);
+
     if (direction === 1 && start === rowsNow.length - 1 && page.nextCursor !== null) props.roster.loadMore();
   }, [applySelection, page.nextCursor, props.roster, selectedRowNow]);
 
   useKeyboard((event) => {
     const pinnedFocused = sidebarPinned && props.navigationFocused === true;
+
     if (!overlayOpen && !pinnedFocused) return;
     const result = dispatcher.feed(event, ['modal']);
+
     if (result.pending) {
       event.preventDefault();
+
       return;
     }
+
     const selected = selectedRowNow()?.row;
+
     switch (result.actionId) {
       case 'modal.close':
         if (!overlayOpen) return;
         event.preventDefault();
         props.onNavigationOverlayChange(false);
+
         return;
       case 'modal.previous':
         event.preventDefault();
         moveSelection(-1);
+
         return;
       case 'modal.next':
         event.preventDefault();
         moveSelection(1);
+
         return;
       case 'modal.page-previous':
         event.preventDefault();
         pageRows(-1);
+
         return;
       case 'modal.page-next':
         event.preventDefault();
         pageRows(1);
+
         return;
       case 'modal.collapse': {
         if (selected === undefined) return;
         event.preventDefault();
+
         if (selected.kind === 'agent') applySelection(workspaceRowKey(selected.agent, projectRoot));
         else if (selected.kind === 'workspace' && selected.expanded) toggleWorkspace(selected.key);
         else if (selected.kind === 'remote' && selected.expanded) setRemoteExpanded(false);
+
         return;
       }
+
       case 'modal.expand': {
         if (selected === undefined) return;
         event.preventDefault();
+
         if (selected.kind === 'workspace' && !selected.expanded) toggleWorkspace(selected.key);
         else if (selected.kind === 'remote' && !selected.expanded) setRemoteExpanded(true);
+
         return;
       }
+
       case 'modal.activate': {
         if (selected === undefined) return;
         event.preventDefault();
         activateRow(selected);
+
         return;
       }
+
       default:
         return;
     }
@@ -582,6 +665,7 @@ export function TuiShell(props: TuiShellProps) {
   );
 
   const sceneWidth = sceneWidthFor(width, preferences.wideSidebarOpen);
+
   return (
     <box
       flexDirection="row"
@@ -657,6 +741,7 @@ function WorkspaceNavigator(props: {
   const { colors } = useTuiTheme();
   const currentKey = props.current === undefined ? null : agentRowKey(props.current);
   const ground = props.host === 'overlay' ? colors.background.overlay : colors.background.chrome;
+
   return (
     <box flexDirection="column" style={{ width: '100%', height: '100%', paddingLeft: 1, paddingRight: 1, backgroundColor: ground }}>
       <box flexDirection="column" style={{ height: 2, flexShrink: 0 }}>
@@ -710,10 +795,12 @@ function NavigatorRow(props: {
   const highlight = props.host === 'overlay' ? colors.background.selection : colors.background.elevated;
   const rowBackground = props.selected || props.active ? highlight : undefined;
   const marker = <span fg={props.selected ? colors.intent.accentStrong : colors.text.muted}>{props.selected ? '› ' : '  '}</span>;
+
   if (row.kind === 'workspace' || row.kind === 'remote') {
     const label = row.kind === 'remote' ? 'Cloud' : row.label;
     const count = row.kind === 'remote' ? row.loaded : row.agentCount;
     const running = row.kind === 'workspace' && row.runningCount > 0;
+
     return (
       <box style={{ backgroundColor: rowBackground }} onMouseDown={() => props.onActivate(row)}>
         <text>
@@ -726,6 +813,7 @@ function NavigatorRow(props: {
       </box>
     );
   }
+
   if (row.kind === 'load-more') {
     return (
       <box style={{ backgroundColor: rowBackground }} onMouseDown={() => props.onActivate(row)}>
@@ -737,7 +825,9 @@ function NavigatorRow(props: {
       </box>
     );
   }
+
   const { agent } = row;
+
   return (
     <box flexDirection="column">
       <box style={{ backgroundColor: rowBackground }} onMouseDown={() => props.onActivate(row)}>
@@ -762,10 +852,12 @@ function NavigatorRow(props: {
 
 function loadThemeRegistry(directory: string): ThemeRegistry {
   if (!existsSync(directory)) return createThemeRegistry(BUILTIN_TUI_THEMES);
+
   const custom = readdirSync(directory, { withFileTypes: true })
     .filter((entry) => entry.isFile() && entry.name.endsWith('.json'))
     .sort((left, right) => left.name.localeCompare(right.name))
     .map((entry) => parseCustomTheme(readFileSync(join(directory, entry.name), 'utf8'), entry.name));
+
   return createThemeRegistry([...BUILTIN_TUI_THEMES, ...custom]);
 }
 
@@ -773,14 +865,19 @@ function validateAgentPage(page: TuiAgentPage): TuiAgentPage {
   if (!Number.isInteger(page.total) || page.total < page.items.length) {
     throw new Error('Agent roster total must cover every returned row.');
   }
+
   const keys: Record<string, true> = {};
+
   for (const agent of page.items) {
     const key = agentRowKey(agent);
+
     if (agent.name.trim() === '' || keys[key] === true) {
       throw new Error(`Agent roster contains an invalid or duplicate entry: ${key}`);
     }
+
     keys[key] = true;
   }
+
   return Object.freeze({
     items: Object.freeze(page.items.map((agent) => agent.subordinates === undefined
       ? Object.freeze({ ...agent })

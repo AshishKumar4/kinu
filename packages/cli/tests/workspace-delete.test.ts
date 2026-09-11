@@ -10,13 +10,16 @@ const WorkspaceConfigSchema = v.object({
 });
 
 const repoRoot = resolve(__dirname, '../../..');
+
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
+
 const tempDirs: string[] = [];
 
 /** Fresh throwaway project directory per spawn: the CLI records its cwd as the agent file plane, so a spawn must never sit in the developer repo. */
 function newProjectDir(): string {
   const dir = mkdtempSync(join(tmpdir(), 'kinu-test-project-'));
   tempDirs.push(dir);
+
   return dir;
 }
 
@@ -27,6 +30,7 @@ afterEach(() => {
 describe('kinu workspace delete', () => {
   test('deletes with the stored session token and prunes the cloud config entry', async () => {
     const seen: Array<{ path: string; method: string; authorization: string | null }> = [];
+
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
@@ -37,9 +41,11 @@ describe('kinu workspace delete', () => {
           method: request.method,
           authorization: request.headers.get('authorization'),
         });
+
         return Response.json({ ok: true });
       },
     });
+
     const home = workspaceHome(`http://127.0.0.1:${server.port}`);
 
     try {
@@ -55,6 +61,7 @@ describe('kinu workspace delete', () => {
         stdout: 'pipe',
         stderr: 'pipe',
       });
+
       const exitCode = await proc.exited;
       const stdout = await new Response(proc.stdout).text();
       const stderr = await new Response(proc.stderr).text();
@@ -79,6 +86,7 @@ describe('kinu workspace delete', () => {
 
   test('requires explicit confirmation when no terminal is attached', async () => {
     const home = workspaceHome('https://kinu.invalid');
+
     const proc = Bun.spawn([process.execPath, cliBin, 'workspace', 'delete', 'web-agent'], {
       cwd: newProjectDir(),
       detached: true,
@@ -86,6 +94,7 @@ describe('kinu workspace delete', () => {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+
     const exitCode = await proc.exited;
     const stderr = await new Response(proc.stderr).text();
 
@@ -127,5 +136,6 @@ function workspaceHome(origin: string): string {
     },
     aliases: { web: 'web-agent', local: 'localbot' },
   }, null, 2));
+
   return home;
 }

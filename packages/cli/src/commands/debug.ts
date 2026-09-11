@@ -81,7 +81,9 @@ interface DebugRun extends JsonObject {
 function runEventRecord(event: DebugRunEvent): BundleRecord {
   const { usage, ...rest } = event;
   const record: BundleRecord = { t: 'run_event', ...rest };
+
   if (usage !== undefined) record.usage = projectJsonValue({ value: usage });
+
   return record;
 }
 
@@ -192,7 +194,9 @@ interface DebugChangelogView {
 }
 
 const JsonRowsSchema = v.array(JsonObjectSchema);
+
 const DebugRunSchema: v.GenericSchema<DebugRun> = v.objectWithRest({ runId: v.string() }, JsonValueSchema);
+
 const DebugRunEventSchema: v.GenericSchema<DebugRunEvent> = v.objectWithRest({
   eventIndex: v.number(), runId: v.string(), type: v.string(), timestamp: v.string(),
   caused_by: v.optional(v.string()), userMessage: v.optional(v.string()), name: v.optional(v.string()),
@@ -201,24 +205,31 @@ const DebugRunEventSchema: v.GenericSchema<DebugRunEvent> = v.objectWithRest({
   usage: v.optional(UsageSchema),
   reason: v.optional(v.string()),
 }, JsonValueSchema);
+
 const DebugHeadSchema: v.GenericSchema<DebugHead> = v.objectWithRest({ status: v.string() }, JsonValueSchema);
+
 const DebugHeadRunSchema: v.GenericSchema<DebugHeadRun> = v.objectWithRest({
   rootId: v.string(), task: v.string(), status: v.string(), spawnedAt: v.number(), heads: v.array(DebugHeadSchema),
 }, JsonValueSchema);
+
 const DebugMctsSearchRunSchema: v.GenericSchema<DebugMctsSearchRun> = v.objectWithRest({
   rootId: v.string(), task: v.string(), status: v.string(), iteration: v.number(), budget: v.number(), updatedAt: v.number(),
 }, JsonValueSchema);
+
 const RawMctsNodeSchema: v.GenericSchema<RawMctsNode> = v.objectWithRest({
   id: v.string(), parent_id: v.nullable(v.string()), root_id: v.string(), depth: v.number(),
   visits: v.number(), value: v.number(), status: v.string(), action: v.string(), created_at: v.number(),
 }, JsonValueSchema);
+
 const DebugBackgroundJobSchema: v.GenericSchema<DebugBackgroundJob> = v.objectWithRest({
   id: v.string(), kind: v.string(), label: v.nullable(v.string()), status: v.string(),
   error: v.nullable(v.string()), createdAt: v.number(), settledAt: v.nullable(v.number()),
 }, JsonValueSchema);
+
 const DebugChangelogViewSchema: v.GenericSchema<DebugChangelogView> = v.object({
   entries: JsonRowsSchema, unseenCount: v.number(), seenAt: v.optional(v.number()),
 });
+
 const WorkspaceSnapshotSchema = v.object({ status: JsonObjectSchema });
 
 /**
@@ -242,12 +253,14 @@ const ExplorationRecordSchema: v.GenericSchema<ExplorationRecord> = v.object({
   floorProof: v.nullable(v.string()), costUsd: v.nullable(v.number()),
   costTokens: v.nullable(v.number()), firstRecordedAt: v.number(), displacements: v.number(),
 });
+
 const RecordObjectiveSummarySchema: v.GenericSchema<RecordObjectiveSummary> = v.object({
   objectiveId: v.string(), floorDigest: v.nullable(v.string()), metric: v.string(),
   unit: v.string(), direction: v.picklist(['minimise', 'maximise']),
   scale: v.picklist(['linear', 'log']), cells: v.number(), rows: v.number(),
   best: v.nullable(ExplorationRecordSchema), lastRecordedAt: v.number(),
 });
+
 const RecordCellSummarySchema: v.GenericSchema<RecordCellSummary> = v.object({
   descriptor: v.nullable(v.string()), occupants: v.number(),
   elite: v.nullable(ExplorationRecordSchema),
@@ -301,6 +314,7 @@ interface DebugSource {
 function cloudDebugSource(cloudName: string, auth: { origin: string; token: string }): DebugSource {
   const rpc = <T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []) =>
     callAgentRpc(auth.origin, auth.token, cloudName, method, schema, args);
+
   return {
     identity: () => rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema).then((snapshot) => snapshot.status),
     messages: (limit) => rpc('getChatHistoryPage', v.object({ items: JsonRowsSchema }), [{ limit }])
@@ -340,9 +354,11 @@ function cloudDebugSource(cloudName: string, auth: { origin: string; token: stri
         objectiveId: handle.objectiveId, floorDigest: handle.floorDigest,
         descriptor: handle.descriptor, limit,
       };
+
       // ABSENT, not `undefined`: JSON has no undefined, and the request's optional
       // `cursor` means "start at the beginning" by not being there.
       if (cursor !== null) request.cursor = { after: cursor.after };
+
       return rpc('readRecordCell', pageSchema(ExplorationRecordSchema), [request]);
     },
     activitySnapshot: () => rpc('getActivitySnapshot', v.nullable(JsonObjectSchema), [{}]),
@@ -408,8 +424,11 @@ const SECRET_KEY_VALUE_PATTERNS: RegExp[] = [
 
 function redactSecrets(text: string): string {
   let out = text;
+
   for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, '[REDACTED]');
+
   for (const pattern of SECRET_KEY_VALUE_PATTERNS) out = out.replace(pattern, '$1[REDACTED]$2');
+
   return out;
 }
 
@@ -417,13 +436,18 @@ function redactSecrets(text: string): string {
  *  serialization boundary, so no fetch path can forget it. */
 function redactDeep(value: JsonValue): JsonValue {
   const string = v.safeParse(v.string(), value);
+
   if (string.success) return redactSecrets(string.output);
   const array = v.safeParse(v.array(JsonValueSchema), value);
+
   if (array.success) return array.output.map(redactDeep);
   const object = v.safeParse(JsonObjectSchema, value);
+
   if (!object.success) return value;
   const redacted: JsonObject = {};
+
   for (const [key, child] of Object.entries(object.output)) redacted[key] = redactDeep(child);
+
   return redacted;
 }
 
@@ -447,14 +471,17 @@ interface BundleWriter {
 function fileWriter(path: string): BundleWriter {
   writeSecretFile(path, '');
   let buffered: string[] = [];
+
   const flush = () => {
     if (buffered.length === 0) return;
     appendFileSync(path, buffered.join(''));
     buffered = [];
   };
+
   return {
     write(record) {
       buffered.push(`${JSON.stringify(redactDeep(record))}\n`);
+
       if (buffered.length >= 200) flush();
     },
     close: flush,
@@ -528,9 +555,12 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
     startedAt: null, endedAt: null, endReason: null, usage: {}, turnsWithoutUsage: 0,
     backgroundHandles: [], jobPollsAfterHandle: 0,
   };
+
   const handledJobIds = new Set<string>();
+
   for (const e of events) {
     const ts = Date.parse(e.timestamp) || null;
+
     if (e.type === 'run_start') {
       stats.causedBy = e.caused_by ?? 'chat';
       stats.userMessage = e.userMessage ?? null;
@@ -538,15 +568,19 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
     } else if (e.type === 'tool_call_end') {
       stats.toolCalls++;
       const args = v.safeParse(JsonObjectSchema, e.args);
+
       if (e.name === 'agent' && args.success && args.output.jobResult !== undefined) {
         if (handledJobIds.has(String(args.output.jobResult))) stats.jobPollsAfterHandle++;
       }
+
       const result = v.safeParse(JsonObjectSchema, e.result);
       const jobId = result.success ? v.safeParse(v.string(), result.output.jobId) : null;
+
       if (result.success && result.output.background === true && jobId?.success) {
         stats.backgroundHandles.push(jobId.output);
         handledJobIds.add(jobId.output);
       }
+
       if (e.error) stats.errors.push(`tool_call_end(${e.name ?? 'tool'}): ${e.error}`);
     } else if (e.type === 'error') {
       if (e.message) stats.errors.push(e.message);
@@ -556,9 +590,11 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
     } else if (e.type === 'run_end') {
       stats.endedAt = ts;
       stats.endReason = e.reason ?? null;
+
       if (e.error) stats.errors.push(`run_end: ${e.error}`);
     }
   }
+
   return stats;
 }
 
@@ -568,13 +604,17 @@ function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
  *  silently drops every node not reachable from it. */
 function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRun[]): MctsSearchSummary[] {
   const byRoot = new Map<string, RawMctsNode[]>();
+
   for (const n of nodes) {
     const key = n.root_id;
     const list = byRoot.get(key);
+
     if (list) list.push(n); else byRoot.set(key, [n]);
   }
+
   const bySearchMeta = new Map(searches.map((s) => [s.rootId, s]));
   const out: MctsSearchSummary[] = [];
+
   for (const [rootId, group] of byRoot) {
     const meta = bySearchMeta.get(rootId);
     out.push({
@@ -588,6 +628,7 @@ function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRu
       maxDepth: Math.max(...group.map((n) => n.depth)),
     });
   }
+
   // Search runs with a ledger row but zero nodes (a search that began and
   // never wrote a single node) must still appear — a write-side failure is
   // exactly what a debugging read has to be able to see.
@@ -599,14 +640,18 @@ function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRu
       });
     }
   }
+
   return out.sort((a, b) => b.updatedAt - a.updatedAt);
 }
 
 // ── The command ──────────────────────────────────────────────────
 
 const DEFAULT_RUNS = 20;
+
 const DEFAULT_EVENT_PAGE = 500;
+
 const DEFAULT_RECORD_PAGE = 200;
+
 /**
  * How many pages of ONE cell a bundle will walk.
  *
@@ -626,6 +671,7 @@ const RECORD_PAGE_CAP = 50;
 
 export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
+
   const source = target.mode === 'cloud'
     ? cloudDebugSource(target.cloudName, requireAuthConfig())
     : localDebugSource(target.localName);
@@ -635,6 +681,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
   const sectionLimit = opts.limit ? parsePositiveInt(opts.limit, 'limit') : 100;
 
   const writer = fileWriter(outPath);
+
   const summary: DebugSummary = {
     identity: {}, messageCount: 0, runs: [], headRuns: [], mctsSearches: [],
     backgroundJobs: [], changelogUnseen: 0, scaffoldVersionCount: 0, gepaRunCount: 0,
@@ -651,6 +698,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
       const message = renderThrownChain({ cause: caught });
       summary.sectionFailures.push({ section, message });
       writer.write({ t: 'section_error', section, error: message });
+
       return fallback;
     }
   };
@@ -662,37 +710,48 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
 
     const messages = await safe('messages', source.messages(sectionLimit), []);
     summary.messageCount = messages.length;
+
     for (const m of messages) writer.write({ t: 'message', ...m });
 
     // Runs + their full event ledger — paginated per run via `since`, so a
     // run with thousands of events never sits fully in memory at once.
     const runs = await safe('runs', source.runs(runLimit), []);
+
     for (const run of runs) {
       writer.write({ t: 'run', ...run });
       const events: DebugRunEvent[] = [];
       let since = 0;
+
       for (;;) {
         const page = await safe('run_events', source.runEvents(run.runId, since, DEFAULT_EVENT_PAGE), []);
+
         if (page.length === 0) break;
+
         for (const e of page) writer.write(runEventRecord(e));
         events.push(...page);
+
         if (page.length < DEFAULT_EVENT_PAGE) break;
         since = page[page.length - 1]!.eventIndex + 1;
       }
+
       const stats = summarizeRun(run.runId, events);
       summary.runs.push(stats);
+
       for (const message of stats.errors) summary.errors.push({ runId: run.runId, message });
     }
 
     const headRuns = await safe('head_runs', source.headRuns(runLimit), []);
     summary.headRuns = headRuns;
+
     for (const run of headRuns) writer.write({ t: 'head_run', ...run });
 
     const [mctsSearches, mctsNodes] = await Promise.all([
       safe('mcts_search_runs', source.mctsSearchRuns(runLimit), []),
       safe('mcts_nodes', source.mctsNodes(), []),
     ]);
+
     for (const s of mctsSearches) writer.write({ t: 'mcts_search_run', ...s });
+
     for (const n of mctsNodes) writer.write({ t: 'mcts_node', ...n });
     summary.mctsSearches = summarizeMctsSearches(mctsNodes, mctsSearches);
 
@@ -702,12 +761,16 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     // meaning of, which is the whole reason the store now records what it
     // measured. Occupants are PAGED — a cell's population has no bound.
     summary.recordObjectives = await safe('record_objectives', source.recordObjectives(sectionLimit), []);
+
     for (const objective of summary.recordObjectives) {
       writer.write(recordObjectiveRecord(objective));
+
       const objectiveHandle = {
         objectiveId: objective.objectiveId, floorDigest: objective.floorDigest,
       };
+
       const cells = await safe('record_cells', source.recordCells(objectiveHandle, sectionLimit), []);
+
       for (const cell of cells) {
         writer.write({
           t: 'record_cell', objectiveId: objective.objectiveId,
@@ -716,13 +779,16 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
         });
         const handle = { ...objectiveHandle, descriptor: cell.descriptor };
         let cursor: SeekCursor | null = null;
+
         for (let page = 0; page < RECORD_PAGE_CAP; page += 1) {
           const occupants: Page<ExplorationRecord> = await safe(
             'record_occupants',
             source.recordOccupants(handle, cursor, DEFAULT_RECORD_PAGE),
             { status: 'end', items: [] },
           );
+
           for (const row of occupants.items) writer.write(explorationRecordRecord(row));
+
           if (occupants.status === 'end') break;
           cursor = occupants.next;
         }
@@ -731,37 +797,47 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
 
     const jobs = await safe('background_jobs', source.backgroundJobs(sectionLimit), []);
     summary.backgroundJobs = jobs;
+
     for (const j of jobs) writer.write({ t: 'background_job', ...j });
 
     const changelog = await safe('changelog', source.changelog(sectionLimit), { entries: [], unseenCount: 0, seenAt: 0 });
     summary.changelogUnseen = changelog.unseenCount;
+
     for (const entry of changelog.entries) writer.write({ t: 'changelog_entry', ...entry });
 
     const scaffoldVersions = await safe('scaffold_versions', source.scaffoldVersions(sectionLimit), []);
     summary.scaffoldVersionCount = scaffoldVersions.length;
+
     for (const v of scaffoldVersions) writer.write({ t: 'scaffold_version', ...v });
 
     const gepaRuns = await safe('gepa_runs', source.gepaRuns(sectionLimit), []);
     summary.gepaRunCount = gepaRuns.length;
+
     for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...g });
 
     const releaseBoard = await safe('release_board', source.releaseBoard(sectionLimit), null);
+
     if (releaseBoard) writer.write({ t: 'release_board', ...asRecord({ value: releaseBoard }, 'value') });
 
     const triggers = await safe('triggers', source.triggers(), null);
+
     if (triggers) writer.write({ t: 'triggers', ...asRecord({ value: triggers }, 'value') });
 
     const tools = await safe('tools', source.toolDescriptions(), null);
+
     if (tools) writer.write({ t: 'tools', ...asRecord({ value: tools }, 'value') });
 
     const facts = await safe('facts', source.facts(sectionLimit), []);
     summary.factCount = facts.length;
+
     for (const f of facts) writer.write({ t: 'fact', ...f });
 
     const memory = await safe('memory', source.memoryContent(), '');
+
     if (memory) writer.write({ t: 'memory', content: memory });
 
     const activity = await safe('activity_snapshot', source.activitySnapshot(), null);
+
     if (activity) writer.write({ t: 'activity_snapshot', ...activity });
 
     writer.write({ t: 'end', workspace: target.name, mode: target.mode, generatedAt: Date.now() });
@@ -782,16 +858,21 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
  *  malformed row) render as "0s" rather than a confusing negative duration. */
 function formatElapsed(ms: number): string {
   const totalSec = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+
   if (totalSec < 60) return `${totalSec}s`;
   const totalMin = Math.floor(totalSec / 60);
+
   if (totalMin < 60) return `${totalMin}m`;
   const totalHours = Math.floor(totalMin / 60);
   const remMin = totalMin % 60;
+
   if (totalHours < 24) return remMin > 0 ? `${totalHours}h ${remMin}m` : `${totalHours}h`;
   const days = Math.floor(totalHours / 24);
   const remHours = totalHours % 24;
+
   return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
 }
+
 function printJsonSummary(summary: DebugSummary, outPath: string): void {
   printJson(redactDeep(decodeJsonValue({ value: { bundle: outPath, ...summary } })));
 }
@@ -803,13 +884,16 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
   const purpose = stringField(summary.identity, 'purpose');
   const scaffoldVersion = numberField(summary.identity, 'scaffoldVersion');
   const model = stringField(summary.identity, 'model');
+
   if (displayName || purpose) {
     console.log(`${DIM('identity')}  ${displayName ?? name} — ${DIM((purpose ?? '').slice(0, 80))}`);
     console.log(`${DIM('scaffold')}  v${scaffoldVersion ?? 0}  ${DIM(model ?? '')}`);
   }
+
   console.log(`${DIM('messages')} ${summary.messageCount}`);
 
   console.log(`\n${ACCENT('Runs')} (${summary.runs.length})`);
+
   for (const r of summary.runs.slice(0, 10)) {
     const when = r.startedAt ? new Date(r.startedAt).toLocaleString() : '?';
     const status = r.endReason ? OK(r.endReason) : r.endedAt ? OK('ended') : WARN('no run_end');
@@ -820,6 +904,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
 
   if (summary.headRuns.length > 0) {
     console.log(`\n${ACCENT('Head/fork runs')} (${summary.headRuns.length}, newest first)`);
+
     for (const h of summary.headRuns.slice(0, 5)) {
       const done = h.heads.filter((head) => head.status !== 'running').length;
       const progressTag = h.status === 'running' ? ` (${done}/${h.heads.length} settled)` : '';
@@ -829,6 +914,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
 
   if (summary.mctsSearches.length > 0) {
     console.log(`\n${ACCENT('MCTS searches')} (${summary.mctsSearches.length}, newest first)`);
+
     for (const s of summary.mctsSearches.slice(0, 5)) {
       const depthTag = s.nodeCount <= 1 ? WARN('single node, no depth') : `${s.nodeCount} nodes, depth ${s.maxDepth}`;
       // `s.budget` is REMAINING budget (mcts/search-store.ts checkpoints it down
@@ -844,6 +930,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
       const heartbeat = s.status === 'running' ? ` — checkpointed ${formatElapsed(Date.now() - s.updatedAt)} ago` : '';
       console.log(`  ${DIM(new Date(s.updatedAt).toLocaleString())} ${ACCENT(s.rootId.slice(0, 8))} ${s.status} iter=${s.iteration}/${total} (${s.budget} left) — ${depthTag}${heartbeat}`);
     }
+
     if (summary.mctsSearches.length > 1) {
       const [latest, previous] = summary.mctsSearches;
       console.log(DIM(`  latest vs previous: ${latest!.nodeCount} vs ${previous!.nodeCount} nodes, depth ${latest!.maxDepth} vs ${previous!.maxDepth}`));
@@ -852,14 +939,17 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
 
   if (summary.recordObjectives.length > 0) {
     console.log(`\n${ACCENT('Exploration records')} (${summary.recordObjectives.length} comparable set(s), newest first)`);
+
     for (const objective of summary.recordObjectives.slice(0, 5)) {
       // The unit and the arrow are the whole point: a raw value with neither is a
       // number a reader has to guess the meaning of, and guessing a delta for a
       // level is how 25.4% came to be read as a reward level.
       const arrow = objective.direction === 'minimise' ? '↓' : '↑';
+
       const best = objective.best === null
         ? WARN('no rows')
         : `best ${arrow}${String(objective.best.value)} ${objective.unit}`;
+
       const floorTag = objective.floorDigest === null ? DIM('no floor') : DIM(`floor ${objective.floorDigest.slice(0, 8)}`);
       console.log(`  ${DIM(new Date(objective.lastRecordedAt).toLocaleString())} ${ACCENT(objective.objectiveId.slice(0, 8))} ${objective.metric} — ${objective.rows} row(s) over ${objective.cells} cell(s), ${best}, ${floorTag}`);
     }
@@ -867,8 +957,10 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
 
   if (summary.backgroundJobs.length > 0) {
     console.log(`\n${ACCENT('Background jobs')} (${summary.backgroundJobs.length})`);
+
     for (const j of summary.backgroundJobs.slice(0, 10)) {
       const labelTag = j.label ? ` — ${DIM(j.label)}` : '';
+
       // Running jobs carry no heartbeat of their own (background_jobs has only
       // created_at/settled_at) — this is the honest answer to "how long has
       // this actually been running", computed rather than left for the
@@ -876,6 +968,7 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
       const durationTag = j.status === 'running'
         ? WARN(` — running ${formatElapsed(Date.now() - j.createdAt)}`)
         : j.settledAt ? ` — took ${formatElapsed(j.settledAt - j.createdAt)}` : '';
+
       console.log(`  ${DIM(new Date(j.createdAt ?? 0).toLocaleString())} ${ACCENT(j.id.slice(0, 8))} ${j.kind} ${j.status}${durationTag}${labelTag}${j.error ? ERR(` — ${j.error}`) : ''}`);
     }
   }
@@ -884,11 +977,15 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
 
   if (summary.errors.length > 0) {
     console.log(`\n${ERR('Errors')} (${summary.errors.length})`);
+
     for (const e of summary.errors.slice(0, 20)) console.log(`  ${DIM(e.runId.slice(0, 8))} ${e.message.slice(0, 140)}`);
   }
+
   if (summary.sectionFailures.length > 0) {
     console.log(`\n${ERR('Section failures')} (${summary.sectionFailures.length}). These sections are MISSING from the bundle, not empty`);
+
     for (const s of summary.sectionFailures.slice(0, 20)) console.log(`  ${ACCENT(s.section)} ${s.message.slice(0, 200)}`);
   }
+
   console.log('');
 }

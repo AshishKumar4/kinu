@@ -29,29 +29,38 @@ function harness(opts: {
 }) {
   const { rt } = createTestRuntime();
   const executed: string[] = [];
+
   const rawShell = {
     exec: async (command: string) => {
       executed.push(command);
+
       return { stdout: 'ran', stderr: '', exitCode: 0 };
     },
   };
+
   const asked: ShellApprovalRequest[] = [];
+
   const policy: ShellApprovalPolicy = {
     mode: () => opts.mode ?? 'strict',
   };
+
   if (opts.approve) {
     const approve = opts.approve;
     policy.requestApproval = async (req: ShellApprovalRequest) => {
         asked.push(req);
+
         return approve(req);
       };
   }
+
   const shell = withApprovalGatedShell(rawShell, policy);
   const runtime: AgentRuntime = { ...rt, shell };
   const tools = buildBuiltinTools({ rt: runtime });
+
   const run: RunTool = {
     execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
   };
+
   return { run, executed, asked };
 }
 

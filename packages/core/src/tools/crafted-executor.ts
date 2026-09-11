@@ -62,5 +62,6 @@ export type CraftedToolExecute = (tool: CraftedToolSource) => CraftedToolExecute
  */
 export function toCraftedToolSource(t: CraftedTool): CraftedToolSource | null {
   if (!t.code || t.code.startsWith('//')) return null;
+
   return { name: t.name, description: t.description ?? `Crafted tool: ${t.name}`, code: t.code };
 }

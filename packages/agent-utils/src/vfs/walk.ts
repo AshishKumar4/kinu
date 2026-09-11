@@ -43,29 +43,39 @@ export async function walkRecursive(
 	let depthPruned = false;
 
 	async function walk(dir: string, depth: number): Promise<void> {
-		if (entries.length >= maxEntries) { truncated = true; return; }
+		if (entries.length >= maxEntries) {
+			truncated = true;
+
+			return;
+		}
+
 		const names = await vfs.readdir(dir);
 
 		for (const name of names) {
 			const full = dir ? `${dir}/${name}` : name;
 			let caught: WalkStat | null;
+
 			try { caught = await vfs.stat(full); } catch (error) {
 				// ENOENT is an entry that vanished between readdir and stat.
 				// Anything else is a real walk failure.
 				if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
 				continue;
 			}
+
 			// A null stat is the same skip, for the same reason. The workspace
 			// plane stats a vanished entry as null instead of throwing ENOENT.
 			if (caught === null) continue;
 			entries.push({ path: full, stat: caught });
+
 			if (caught.isDir) {
 				if (depth + 1 > maxDepth) { depthPruned = true; continue; }
+
 				await walk(full, depth + 1);
 			}
 		}
 	}
 
 	await walk(base, 0);
+
 	return { entries, truncated, depthPruned };
 }

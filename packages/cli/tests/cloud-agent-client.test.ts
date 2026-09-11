@@ -49,44 +49,56 @@ function startMockAgentServer(options: {
     async fetch(req, srv) {
       const url = new URL(req.url);
       const ticketMatch = url.pathname.match(/^\/api\/cli\/workspaces\/([^/]+)\/connect-ticket$/);
+
       if (ticketMatch && req.method === 'POST') {
         ticketRequests.push({
           name: decodeURIComponent(ticketMatch[1]!),
           auth: req.headers.get('authorization'),
         });
+
         if ('holdTicketAt' in options && ticketRequests.length === options.holdTicketAt) {
           await options.ticketGate;
           options.onTicketReleased();
         }
+
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
       }
+
       if (/^\/api\/cli\/workspaces\/[^/]+\/rpc$/.test(url.pathname) && req.method === 'POST') {
         const request = v.parse(JsonObjectSchema, await req.json());
         const method = v.parse(v.string(), request.method);
         const parsedArgs = v.safeParse(JsonArraySchema, request.args);
         const args = parsedArgs.success ? parsedArgs.output : [];
         rpcRequests.push({ method, args });
+
         // Pages of two, so the client's walk is really exercised: a fixture of
         // four messages that came back whole would not have noticed the client
         // reading only the first page and calling it the whole conversation.
         if (method === 'getChatHistoryPage') {
           const cursor = v.parse(v.optional(v.object({ cursor: v.optional(v.object({ after: v.string() })) })), args[0]);
           const after = cursor?.cursor?.after;
+
           const end = after === undefined
             ? chatMessages.length
             : chatMessages.findIndex((m) => m.id === after);
+
           if (end < 0) return Response.json({ error: `Stale cursor: ${after}` }, { status: 409 });
           const start = Math.max(0, end - 2);
+
           return Response.json({
             result: start === 0
               ? { status: 'end', items: chatMessages.slice(start, end) }
               : { status: 'more', items: chatMessages.slice(start, end), next: { after: chatMessages[start]!.id } },
           });
         }
+
         if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
+
         if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] ?? null } });
+
         if (method === 'renameSubordinateAgent') {
           const [name, displayName] = v.parse(v.tuple([v.string(), v.string()]), args);
+
           return Response.json({
             result: {
               ok: true,
@@ -106,13 +118,18 @@ function startMockAgentServer(options: {
             },
           });
         }
+
         return Response.json({ error: `No such agent RPC method: ${method}` }, { status: 404 });
       }
+
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {
         connectUrls.push(url);
+
         if (srv.upgrade(req)) return;
+
         return new Response('upgrade failed', { status: 400 });
       }
+
       return new Response('not found', { status: 404 });
     },
     websocket: {
@@ -133,6 +150,7 @@ function startMockAgentServer(options: {
     chatMessages,
     socket() {
       if (!ws) throw new Error('no websocket connection yet');
+
       return ws;
     },
     reply(frame) {
@@ -142,17 +160,22 @@ function startMockAgentServer(options: {
       await server.stop(true);
     },
   };
+
   servers.push(mock);
+
   return mock;
 }
 
 async function waitFor<T>(probe: () => T | undefined, label: string, timeoutMs = 3_000): Promise<T> {
   const deadline = Date.now() + timeoutMs;
+
   while (Date.now() < deadline) {
     const value = probe();
+
     if (value !== undefined) return value;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+
   throw new Error(`timed out waiting for ${label}`);
 }
 
@@ -175,12 +198,15 @@ const ChatRequestEnvelopeSchema = v.object({
   id: v.string(),
   init: v.object({ body: v.string() }),
 });
+
 const ChatMessagesSchema = v.array(v.object({ role: v.string(), parts: v.array(JsonObjectSchema) }));
 
 function chatRequestFrame(mock: MockAgentServer): ChatRequestFrame {
   const frame = mock.frames.find((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
+
   if (!frame) throw new Error('no chat request frame received');
   const envelope = v.parse(ChatRequestEnvelopeSchema, frame);
+
   return { id: envelope.id, body: parseJsonObject(envelope.init.body) };
 }
 
@@ -202,10 +228,12 @@ describe('CloudAgentClient protocol', () => {
     const parent = newClient(mock);
 
     const creating = parent.createAdditionalAgent();
+
     const createRpc = await waitFor(
       () => mock.frames.find((frame) => frame.type === 'rpc' && frame.method === 'createSubordinateAgent'),
       'create additional-agent rpc',
     );
+
     mock.reply({
       type: 'rpc',
       id: createRpc.id,
@@ -229,6 +257,7 @@ describe('CloudAgentClient protocol', () => {
     });
     const created = await creating;
     const child = parent.openAdditionalAgent(created.name);
+
     if (!child.rename) throw new Error('cloud additional agent has no rename capability');
     await expect(child.rename('Research partner')).resolves.toEqual({
       name: 'researcher-a1b2c3',
@@ -240,12 +269,14 @@ describe('CloudAgentClient protocol', () => {
     });
 
     const turn = child.send('Review the release');
+
     const request = await waitFor(
       () => mock.frames.filter((frame) => frame.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST).length > 0
         ? chatRequestFrame(mock)
         : undefined,
       'additional-agent chat request',
     );
+
     expect(mock.connectUrls.at(-1)?.pathname).toBe(
       '/agents/orchestrator-agent/helios/sub/subordinate-agent/researcher-a1b2c3',
     );
@@ -264,6 +295,7 @@ describe('CloudAgentClient protocol', () => {
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('hello agent', { cwd: '/work/dir' });
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
@@ -306,7 +338,9 @@ describe('CloudAgentClient protocol', () => {
       { filename: 'shot.png', mediaType: 'image/png', url: 'data:image/png;base64,iVBORw0KGgo=' },
       { filename: 'spec.pdf', mediaType: 'application/pdf', url: 'data:application/pdf;base64,JVBERg==' },
     ];
+
     const turn = client.send({ text: 'describe these', files });
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
@@ -333,10 +367,12 @@ describe('CloudAgentClient protocol', () => {
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('boom');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
+
     mock.reply({ type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id: request.id, body: 'model exploded', done: true, error: true });
 
     const result = await turn;
@@ -351,10 +387,12 @@ describe('CloudAgentClient protocol', () => {
     const client = newClient(mock);
 
     const turn = client.send('run a tool');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
+
     mock.reply(responseChunk(request.id, { type: 'tool-input-available', toolCallId: 't1', toolName: 'shell', input: {} }));
     mock.reply(responseChunk(request.id, { type: 'tool-output-error', toolCallId: 't1', errorText: 'command not found' }));
     mock.reply(responseChunk(request.id, {}, true));
@@ -370,10 +408,12 @@ describe('CloudAgentClient protocol', () => {
     const events: AgentClientEvent[] = [];
     client.subscribe((event) => events.push(event));
     const turn = client.send('long task');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
+
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'partial ' }));
     await waitFor(
       () => events.find((event) => event.type === 'text-delta'),
@@ -381,15 +421,19 @@ describe('CloudAgentClient protocol', () => {
     );
 
     client.stop();
+
     const cancel = await waitFor(
       () => mock.frames.find((f) => f.type === CHAT_MESSAGE_TYPES.CHAT_REQUEST_CANCEL),
       'cancel frame',
     );
+
     expect(cancel.id).toBe(request.id);
+
     const durableCancel = await waitFor(
       () => mock.frames.find((f) => f.type === 'rpc' && f.method === 'cancelCurrentWork'),
       'durable cancellation rpc',
     );
+
     expect(durableCancel.args).toEqual([]);
     let turnSettled = false;
     // Probe rides the turn this test owns and awaits below; its rejection is
@@ -419,6 +463,7 @@ describe('CloudAgentClient protocol', () => {
     const client = newClient(mock);
 
     const turn = client.send('hello');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
@@ -426,10 +471,12 @@ describe('CloudAgentClient protocol', () => {
 
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: 'someone-elses-turn' });
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_RESUMING, id: request.id });
+
     const ack = await waitFor(
       () => mock.frames.find((f) => f.type === CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK),
       'resume ack',
     );
+
     expect(ack.id).toBe(request.id);
     expect(mock.frames.filter((f) => f.type === CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK)).toHaveLength(1);
 
@@ -445,16 +492,20 @@ describe('CloudAgentClient protocol', () => {
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('start the deploy');
+
     const first = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'first chat request',
     );
 
     expect(client.steer('use the staging cluster instead')).toBe(true);
+
     const second = await waitFor(() => {
       const requests = mock.frames.filter((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
+
       if (requests.length < 2) return undefined;
       const envelope = v.parse(ChatRequestEnvelopeSchema, requests[1]);
+
       return { id: envelope.id, body: parseJsonObject(envelope.init.body) };
     }, 'steered chat request');
 
@@ -495,18 +546,22 @@ describe('CloudAgentClient protocol', () => {
 
     // Open the socket via a quick completed turn, then fork while idle.
     const warmup = client.send('hello');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'warmup request',
     );
+
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hi' }, true));
     await warmup;
 
     const forkPromise = client.fork({ text: 'now run step two', occurrenceFromEnd: 1 });
+
     const rpc = await waitFor(
       () => mock.frames.find((f) => f.type === 'rpc'),
       'forkAgent rpc frame',
     );
+
     // The fork point is the message BEFORE the picked user message.
     expect(rpc.method).toBe('forkAgent');
     expect(rpc.args).toEqual(['m2']);
@@ -537,10 +592,12 @@ describe('CloudAgentClient protocol', () => {
 
     // Open the socket via a quick completed turn (rpc rides the same ws).
     const warmup = client.send('hello');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'warmup request',
     );
+
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'hi' }, true));
     await warmup;
 
@@ -553,6 +610,7 @@ describe('CloudAgentClient protocol', () => {
         { nodeId: 'alt', text: 'plan B', score: 0.85, visits: 2, depth: 1 },
       ],
     };
+
     const latest = client.latestTakes();
     const latestRpc = await waitFor(() => mock.frames.find((f) => f.type === 'rpc' && f.method === 'latestAlternateTakes'), 'latest rpc');
     expect(latestRpc.args).toEqual([]);
@@ -607,16 +665,19 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('start the deploy');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
 
     expect(client.branch('what if we used blue-green instead?')).toBe(true);
+
     const rpc = await waitFor(
       () => mock.frames.find((f) => f.type === 'rpc' && f.method === 'branchTurn'),
       'branchTurn rpc frame',
     );
+
     expect(rpc.args).toEqual(['what if we used blue-green instead?']);
     mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { accepted: true, branchId: 'branch-ab12cd34' } });
 
@@ -625,12 +686,14 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     mock.reply({ type: 'branch_status', status: 'settled', branchId: 'branch-ab12cd34', task: 'what if we used blue-green instead?', takeSetId: 'take-1', turnId: 'm2' });
     await waitFor(() => {
       const broadcasts = events.filter((e) => e.type === 'broadcast');
+
       return broadcasts.length >= 2 ? broadcasts : undefined;
     }, 'branch broadcasts');
 
     const statuses = events
       .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
       .map((e) => e.event);
+
     expect(statuses[0]).toMatchObject({ type: 'branch_status', status: 'running', branchId: 'branch-ab12cd34' });
     expect(statuses[1]).toMatchObject({ type: 'branch_status', status: 'settled', takeSetId: 'take-1', turnId: 'm2' });
 
@@ -647,21 +710,26 @@ describe('CloudAgentClient — Steer-as-Branch RPC contract', () => {
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('work');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
+
     expect(client.branch('redirect')).toBe(true);
+
     const rpc = await waitFor(
       () => mock.frames.find((f) => f.type === 'rpc' && f.method === 'branchTurn'),
       'branchTurn rpc frame',
     );
+
     mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { accepted: false, reason: 'Branching needs an agent owner.' } });
 
     const errorStatus = await waitFor(() => events
       .filter((e): e is Extract<AgentClientEvent, { type: 'broadcast' }> => e.type === 'broadcast')
       .map((e) => e.event)
       .find((e) => e.type === 'branch_status' && e.status === 'error'), 'error status');
+
     expect(errorStatus).toMatchObject({ status: 'error', message: 'Branching needs an agent owner.' });
 
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'done' }, true));
@@ -712,11 +780,13 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
   test('closing during a rebind ticket request never opens a replacement socket', async () => {
     const ticketGate = Promise.withResolvers<void>();
     const ticketReturned = Promise.withResolvers<void>();
+
     const mock = startMockAgentServer({
       holdTicketAt: 2,
       ticketGate: ticketGate.promise,
       onTicketReleased: ticketReturned.resolve,
     });
+
     const client = newClient(mock);
     const turn = client.send('keep this turn durable');
     await waitFor(
@@ -749,10 +819,12 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('summarize the incident');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
+
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'the cause was ' }));
     await waitFor(() => events.find((e) => e.type === 'text-delta'), 'first live delta');
 
@@ -787,10 +859,12 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('deploy the hotfix');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
+
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'starting' }));
     await waitFor(() => events.find((e) => e.type === 'text-delta'), 'first live delta');
 
@@ -818,10 +892,12 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('long migration');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
+
     await dropAndProbe(mock);
     mock.socket().close();
 
@@ -840,10 +916,12 @@ describe('CloudAgentClient — a dropped socket rebinds its turn, never drops or
     client.subscribe((event) => events.push(event));
 
     const turn = client.send('queued work');
+
     const request = await waitFor(
       () => mock.frames.some((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST) ? chatRequestFrame(mock) : undefined,
       'chat request frame',
     );
+
     await dropAndProbe(mock);
 
     mock.reply({ type: CHAT_MESSAGE_TYPES.STREAM_PENDING, id: request.id });

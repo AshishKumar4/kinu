@@ -140,6 +140,8 @@ export async function createWorkspace(
   const runtime = buildComponents(db, sql, execRaw, workspace, actor, {
     llm: config.llm,
   });
+
   await resetWorkspaceBaseline(runtime);
+
   return runtime;
 }

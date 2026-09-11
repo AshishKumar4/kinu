@@ -74,16 +74,19 @@ interface CallableSurface {
  */
 function callableSurface(cls: { readonly prototype: object }): CallableSurface {
   const functions = new Set<string>();
+
   for (let level: object | null = cls.prototype; level !== null; level = Object.getPrototypeOf(level)) {
     for (const [name, descriptor] of Object.entries(Object.getOwnPropertyDescriptors(level))) {
       if (descriptor.value instanceof Function) functions.add(name);
     }
   }
+
   // Checked here, so the assertion below rests on an observation rather than on
   // the class hierarchy being what this file expects.
   if (!functions.has('getCallableMethods')) {
     throw new Error('the class prototype chain exposes no getCallableMethods');
   }
+
   // SAFETY: constructed, then checked. `Object.create(cls.prototype)` returns an
   // object whose prototype IS `cls.prototype` by construction, and the guard on
   // the line above has just observed `getCallableMethods` as a function on that
@@ -93,6 +96,7 @@ function callableSurface(cls: { readonly prototype: object }): CallableSurface {
   // constructed on purpose, because an Agent constructor seals its RPC surface,
   // opens SQLite and installs diagnostics, none of which is the premise.
   const receiver = Object.create(cls.prototype) as Agent<never>;
+
   return {
     callable: [...receiver.getCallableMethods().keys()].sort(),
     resolvesToFunction: (name) => functions.has(name),
@@ -150,6 +154,7 @@ describe('KINU-065 — the real decorated classes load and keep their callable m
     const actor = callableSurface(ActorAgent).callable;
     expect(actor.length).toBeGreaterThan(0);
     const root = callableSurface(OrchestratorAgent);
+
     for (const inherited of actor) {
       expect(root.callable, `OrchestratorAgent lost inherited ${inherited}`).toContain(inherited);
     }
@@ -189,6 +194,7 @@ describe('KINU-065 — the privileged surface is absent from the runtime registr
 
     for (const { cls, names } of forbidden) {
       const surface = callableSurface(cls);
+
       for (const method of names) {
         // Preserved: a worker-side stub holder still calls it by name over
         // native Durable Object RPC, which needs no decorator.

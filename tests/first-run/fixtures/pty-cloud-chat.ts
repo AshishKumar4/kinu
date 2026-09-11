@@ -15,8 +15,11 @@ import { CloudAgentClient } from '../../../packages/cli/src/cloud-agent-client';
 import { runTuiChat } from '../../../packages/cli/src/tui/chat-app';
 
 const origin = process.env.KINU_FIRST_RUN_ORIGIN ?? '';
+
 const token = process.env.KINU_FIRST_RUN_TOKEN ?? '';
+
 const workspace = process.env.KINU_FIRST_RUN_WORKSPACE ?? '';
+
 if (!origin || !token || !workspace) {
   throw new Error('the pty chat fixture needs KINU_FIRST_RUN_ORIGIN, KINU_FIRST_RUN_TOKEN and '
     + 'KINU_FIRST_RUN_WORKSPACE; it drives a deployed workspace and will not invent one');

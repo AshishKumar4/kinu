@@ -58,6 +58,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
 
   function gate(): Gate {
     const { promise, resolve } = Promise.withResolvers<void>();
+
     return { reached: promise, open: resolve };
   }
 
@@ -72,6 +73,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
       .replace(/\+/gu, '-')
       .replace(/\//gu, '_')
       .replace(/=+$/u, '');
+
     return `${segment({ alg: 'none', typ: 'JWT' })}.${segment({ exp: expSeconds })}.`;
   }
 
@@ -113,6 +115,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
 
   async function settle(proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>): Promise<{ code: number; stdout: string; stderr: string }> {
     const code = await proc.exited;
+
     return {
       code,
       stdout: new TextDecoder().decode(await new Response(proc.stdout).arrayBuffer()),
@@ -143,18 +146,25 @@ describe('two kinu processes refreshing one Codex credential', () => {
       port: 0,
       fetch: async (request) => {
         const url = new URL(request.url);
+
         if (url.pathname === '/arrive') {
           const role = url.searchParams.get('role') ?? '';
+
           // The holder goes first; the waiter is released in the test body, once
           // the holder's refresh has provably reached this endpoint.
           if (role === 'waiter') await releaseWaiter.reached;
+
           return new Response(role);
         }
+
         if (url.pathname === '/armed') {
           armed.open();
+
           return new Response('armed');
         }
+
         submitted.push(String(new URLSearchParams(await request.text()).get('refresh_token')));
+
         if (submitted.length === 1) {
           refreshReached.open();
           // Answer only once the waiter is inside its own acquisition, so the
@@ -164,6 +174,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
           // assertion below.
           await armed.reached;
         }
+
         return Response.json({
           access_token: rotated,
           refresh_token: `refresh-new-${String(submitted.length)}`,
@@ -175,6 +186,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
     const base = `http://127.0.0.1:${String(server.port)}`;
     const holder = spawnChild('holder', base, configPath);
     const waiter = spawnChild('waiter', base, configPath);
+
     try {
       await refreshReached.reached;
       // Step 3: the holder holds the lock and is blocked inside its refresh.
@@ -194,6 +206,7 @@ describe('two kinu processes refreshing one Codex credential', () => {
 
       const results = [first, second].map((outcome) =>
         v.parse(childResultSchema, JSON.parse(outcome.stdout)));
+
       expect(results.map((result) => result.role).sort()).toEqual(['holder', 'waiter']);
       // Both processes carry the credential that one rotation produced.
       expect(results[0]?.authorization).toBe(`Bearer ${rotated}`);
@@ -225,16 +238,19 @@ describe('two kinu processes refreshing one Codex credential', () => {
     writeFileSync(configPath, `${JSON.stringify({ origin: 'https://kinu.example' }, null, 2)}\n`);
 
     const holding = gate();
+
     const server = Bun.serve({
       port: 0,
       fetch: (request) => {
         holding.open();
+
         return new Response(new URL(request.url).pathname);
       },
     });
 
     try {
       const base = `http://127.0.0.1:${String(server.port)}`;
+
       // A process that takes the lock, says so, and then never lets go.
       const victim = Bun.spawn({
         cmd: [process.execPath, '-e', `

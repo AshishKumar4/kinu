@@ -10,6 +10,7 @@ const seg = (plane: ContextSegment["plane"], label: string, chars: number, items
 
 const compose = (segments: ContextSegment[]): ContextComposition => {
   const measuredChars = segments.reduce((s, x) => s + x.chars, 0);
+
   return { segments, measuredChars, charsPerToken: 4, estimatedTokens: Math.ceil(measuredChars / 4) };
 };
 
@@ -19,6 +20,7 @@ describe("breakdownView", () => {
       seg("messages", "user", 400),
       seg("system", "Soul", 800),
     ]));
+
     expect(view.planes.map((p) => p.plane)).toEqual(["system", "messages"]);
   });
 
@@ -28,6 +30,7 @@ describe("breakdownView", () => {
       seg("tools", "file", 1600),
       seg("tools", "run", 800),
     ]));
+
     expect(view.planes[0]?.rows.map((r) => r.label)).toEqual(["file", "run", "web"]);
     expect(view.planes[0]?.chars).toBe(2800);
   });
@@ -37,6 +40,7 @@ describe("breakdownView", () => {
       seg("system", "Soul", 1001),
       seg("messages", "user", 502),
     ]));
+
     expect(view.measuredChars).toBe(1503);
     expect(view.planes[0]?.rows[0]).toEqual({ label: "Soul", chars: 1001, items: 1 });
     expect(view.planes[1]?.rows[0]).toEqual({ label: "user", chars: 502, items: 1 });

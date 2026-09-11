@@ -48,6 +48,7 @@ export type {
   AuditOutcome, AuditSettlement, ControlAuditRow, ControlFeedbackRow, ControlOverview,
   ControlUserRow, ControlWorkspaceRow, RosterWorkspace, UserObservation, WorkspaceObservation,
 };
+
 export { AUDIT_OUTCOMES, CONTROL_PAGE_DEFAULT, CONTROL_PAGE_MAX } from './store';
 
 export class ControlPlaneDO extends DurableObject<Env> {
@@ -77,6 +78,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
     // evidence until eviction. Reopened here, which is the one line every RPC
     // on this class passes through.
     openAnalyticsWindow(this.env);
+
     return requireControl(this.env, caller, capability);
   }
 
@@ -112,6 +114,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
    */
   async recordFeedback(caller: PresentedCaller, row: FeedbackRecord): Promise<{ id: string }> {
     await this.gate(caller, 'feedback.write');
+
     return store.recordFeedback(this.store, row);
   }
 
@@ -124,6 +127,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
     caller: PresentedCaller, userId: string, live: readonly RosterWorkspace[],
   ): Promise<{ present: number; tombstoned: number }> {
     await this.gate(caller, 'index.reconcile');
+
     return store.replaceUserWorkspaces(this.store, userId, live);
   }
 
@@ -131,16 +135,19 @@ export class ControlPlaneDO extends DurableObject<Env> {
 
   async overview(caller: PresentedCaller): Promise<ControlOverview> {
     await this.gate(caller, 'overview.read');
+
     return store.overview(this.store);
   }
 
   async listUsers(caller: PresentedCaller, request: PageRequest = {}): Promise<Page<ControlUserRow>> {
     await this.gate(caller, 'users.read');
+
     return store.listUsers(this.store, request);
   }
 
   async getUser(caller: PresentedCaller, userId: string): Promise<ControlUserRow | null> {
     await this.gate(caller, 'users.read');
+
     return store.getUser(this.store, userId);
   }
 
@@ -150,6 +157,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
     filter: store.WorkspaceFilter = {},
   ): Promise<Page<ControlWorkspaceRow>> {
     await this.gate(caller, 'workspaces.read');
+
     return store.listWorkspaces(this.store, request, filter);
   }
 
@@ -157,11 +165,13 @@ export class ControlPlaneDO extends DurableObject<Env> {
     caller: PresentedCaller, request: PageRequest = {},
   ): Promise<Page<ControlFeedbackRow>> {
     await this.gate(caller, 'feedback.read');
+
     return store.listFeedback(this.store, request);
   }
 
   async listAudit(caller: PresentedCaller, request: PageRequest = {}): Promise<Page<ControlAuditRow>> {
     await this.gate(caller, 'audit.read');
+
     return store.listAudit(this.store, request);
   }
 
@@ -170,6 +180,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
    *  the actions that ran while the log could not be finished. */
   async listPendingAudit(caller: PresentedCaller, limit?: number): Promise<ControlAuditRow[]> {
     await this.gate(caller, 'audit.read');
+
     return store.listPendingAudit(this.store, limit);
   }
 
@@ -196,6 +207,7 @@ export class ControlPlaneDO extends DurableObject<Env> {
     await this.gate(caller, 'audit.write');
     const row = store.appendAudit(this.store, entry);
     this.publish(row, entry);
+
     return row;
   }
 
@@ -213,10 +225,13 @@ export class ControlPlaneDO extends DurableObject<Env> {
   ): Promise<ControlAuditRow> {
     await this.gate(caller, 'audit.write');
     const row = store.settleAudit(this.store, settlement);
+
     if (row === null) {
       throw new Error(`no pending audit row ${settlement.id} to settle as ${settlement.outcome}`);
     }
+
     this.publish(row, settlement);
+
     return row;
   }
 

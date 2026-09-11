@@ -79,11 +79,14 @@ describe('the budget is the only thing that moves the budget', () => {
     // are created later — the engine expands them when selection reaches the node — so
     // the commitment has to be at the grant.
     const budget = new SwarmBudget(6);
+
     const decision = budget.arbitrate({
       config: config(), caps: caps(5, 3), atDepth: 1, proposal: proposal(3),
     });
+
     expect(decision.kind).toBe('granted');
     expect(budget.remaining).toBe(3);
+
     if (decision.kind !== 'granted') return;
     // The ids are minted with the debit, so the ids a node is told about are the ids the
     // engine writes rows for.
@@ -96,10 +99,12 @@ describe('the budget is the only thing that moves the budget', () => {
 
   test('a refusal debits NOTHING — the five policies are free', () => {
     const budget = new SwarmBudget(4);
+
     const refused = budget.arbitrate({
       // At the cap: the children would be depth 2 against a cap of 1.
       config: config(), caps: caps(1, 3), atDepth: 1, proposal: proposal(2),
     });
+
     expect(refused).toMatchObject({ kind: 'refused', policy: 'depth-exhausted' });
     expect(budget.remaining).toBe(4);
   });
@@ -124,9 +129,11 @@ describe('the budget is the only thing that moves the budget', () => {
         config: config({ context: 'fresh' }), caps: caps(5, 3), atDepth: 1, proposal: proposal(2),
       }),
     ];
+
     const reached = decisions.flatMap(
       (decision) => (decision.kind === 'refused' ? [decision.policy] : []),
     );
+
     expect(reached).toEqual([...BRANCH_REFUSAL_POLICIES]);
   });
 });
@@ -137,14 +144,17 @@ describe('THE RACE: two nodes proposing at once cannot both be paid from one bud
     // Read the number, await something, subtract, and several are granted — each
     // grant legal on its own because each saw 3 >= 2.
     const budget = new SwarmBudget(3);
+
     const ask = async (atDepth: number) => {
       // The await is the point: it puts a real suspension between the callers, which is
       // what a tool loop does. Conservation has to survive it.
       await Promise.resolve();
+
       return budget.arbitrate({
         config: config(), caps: caps(5, 3), atDepth, proposal: proposal(2),
       });
     };
+
     const decisions = await Promise.all([ask(1), ask(1), ask(1), ask(1)]);
 
     const granted = decisions.flatMap((decision) => (decision.kind === 'granted' ? [decision] : []));
@@ -155,6 +165,7 @@ describe('THE RACE: two nodes proposing at once cannot both be paid from one bud
     // Sharpness: exactly one of four was paid, so this is not passing because the
     // arbiter refused everything.
     expect(granted).toHaveLength(1);
+
     // And every refusal names the budget rather than something else, so a node learns
     // why it was not paid.
     for (const decision of decisions) {
@@ -170,17 +181,21 @@ describe('THE RACE: two nodes proposing at once cannot both be paid from one bud
     // total.
     const total = 40;
     const budget = new SwarmBudget(total);
+
     const decisions = await Promise.all(
       Array.from({ length: 100 }, async (_unused, i) => {
         await Promise.resolve();
+
         return budget.arbitrate({
           config: config(), caps: caps(9, 3), atDepth: 1 + (i % 4), proposal: proposal(2 + (i % 3)),
         });
       }),
     );
+
     const spent = decisions.reduce(
       (sum, decision) => sum + (decision.kind === 'granted' ? decision.width : 0), 0,
     );
+
     expect(spent).toBeLessThanOrEqual(total);
     expect(budget.remaining).toBe(total - spent);
     expect(budget.remaining).toBeGreaterThanOrEqual(0);
@@ -193,10 +208,12 @@ describe('THE RACE: two nodes proposing at once cannot both be paid from one bud
     // tool call. A search whose only depth gate was selection would let an agent node
     // mint a level past the cap between waves.
     const budget = new SwarmBudget(100);
+
     for (let atDepth = 0; atDepth <= 6; atDepth += 1) {
       const decision = budget.arbitrate({
         config: config(), caps: caps(3, 3), atDepth, proposal: proposal(2),
       });
+
       if (atDepth < 3) {
         expect(decision.kind).toBe('granted');
       } else {

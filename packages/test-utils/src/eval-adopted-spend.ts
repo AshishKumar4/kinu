@@ -57,15 +57,20 @@ function adoptedCaseSpend(
   observation: EvalObservation, activity: CaseActivity | undefined,
 ): AdoptedCaseSpend {
   const calls = activity?.modelSteps ?? 0;
+
   if (observation.outcome !== 'scored') return { calls, usage: {} };
   // Built field by field, in `addUsage`'s own mutable-mapped shape, because an
   // absent field and a zero one are different claims and only assignment can
   // keep them apart.
   const usage: { -readonly [K in keyof Usage]: number } = {};
+
   if (observation.tokensIn > 0) usage.input = observation.tokensIn;
+
   if (observation.tokensOut > 0) usage.output = observation.tokensOut;
   const reasoning = observation.reasoningOut ?? 0;
+
   if (reasoning > 0) usage.reasoning = reasoning;
+
   return { calls, usage };
 }
 
@@ -90,12 +95,16 @@ export class AdoptedSpendMeter {
    *  that episode's own events landed. */
   adopt(observation: EvalObservation, activity: CaseActivity | undefined): void {
     const key = observationKey(observation);
+
     if (this.seen.has(key)) return;
     this.seen.add(key);
+
     if (recordAdoptedLiveModelSpend(adoptedCaseSpend(observation, activity)) === 'accounted') {
       this.accountedCases += 1;
+
       return;
     }
+
     this.unaccountedCases += 1;
   }
 
@@ -114,14 +123,18 @@ export class AdoptedSpendMeter {
  */
 export function formatAdoptedSpend(summary: AdoptedSpendSummary): string | null {
   if (summary.accounted === 0 && summary.unaccounted === 0) return null;
+
   const covers = summary.accounted === 0
     ? 'THIS PROCESS ONLY'
     : `this process plus ${String(summary.accounted)} adopted case(s)`;
+
   const lines = [`adopted: resumed run — the spend below covers ${covers}`];
+
   if (summary.unaccounted > 0) {
     lines.push(`  PARTIAL SPEND — ${String(summary.unaccounted)} case(s) from the interrupted `
       + 'run recorded no usable call evidence, so what they cost is absent from the figure '
       + 'below and it is not the run\'s total');
   }
+
   return lines.join('\n');
 }

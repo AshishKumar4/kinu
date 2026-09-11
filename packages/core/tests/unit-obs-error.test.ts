@@ -46,6 +46,7 @@ function raisedBy(operation: () => void): Error {
     if (caught instanceof Error) return caught;
     throw new Error('the runtime raised a non-Error', { cause: caught });
   }
+
   throw new Error('the operation did not fail, so there is nothing to classify');
 }
 
@@ -53,6 +54,7 @@ function raisedBy(operation: () => void): Error {
 function provokeAbort(): Error {
   const controller = new AbortController();
   controller.abort();
+
   return raisedBy(() => { controller.signal.throwIfAborted(); });
 }
 
@@ -63,6 +65,7 @@ async function provokeTimeout(): Promise<Error> {
   const { promise, resolve } = Promise.withResolvers<void>();
   signal.addEventListener('abort', () => { resolve(); }, { once: true });
   await promise;
+
   return raisedBy(() => { signal.throwIfAborted(); });
 }
 
@@ -101,6 +104,7 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
       ['ECONNREFUSED', 'unavailable'],
       ['ENOTSUP', 'unsupported'],
     ];
+
     for (const [code, expected] of cases) {
       const error = Object.assign(new Error(`failed: ${code}`), { code });
       expect(classifyErrorCode({ cause: error })).toBe(expected);
@@ -114,6 +118,7 @@ describe('a cancelled wait and an expired deadline are not the same failure', ()
     const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
     const code = classifyErrorCode({ cause: reset });
     expect(code).toBe('io');
+
     if (code !== null) expect(CODE_WORK_DID_NOT_START[code]).toBe(false);
   });
 
@@ -146,17 +151,21 @@ describe('the memory wall is classified from the catalogue, not from memory', ()
    */
   const isMemoryKey = (key: string): boolean => /oom|memory/u.test(key);
   const wordings = new Map<string, { memory: boolean; other: boolean }>();
+
   for (const [key, fact] of Object.entries(PLATFORM_CATALOG)) {
     for (const seen of fact.observable) {
       const entry = wordings.get(seen.message) ?? { memory: false, other: false };
+
       if (isMemoryKey(key)) entry.memory = true;
       else entry.other = true;
       wordings.set(seen.message, entry);
     }
   }
+
   const only = (want: 'memory' | 'other'): readonly string[] => [...wordings]
     .filter(([, seen]) => seen[want] && !seen[want === 'memory' ? 'other' : 'memory'])
     .map(([message]) => message);
+
   const shared = [...wordings].filter(([, seen]) => seen.memory && seen.other).map(([m]) => m);
 
   test('a wording only the memory entries produce classifies as oom', () => {
@@ -164,6 +173,7 @@ describe('the memory wall is classified from the catalogue, not from memory', ()
     // A non-zero length is part of the assertion: an empty scan is the shape of a
     // gate that stopped reaching its corpus.
     expect(memoryOnly.length).toBeGreaterThan(0);
+
     for (const message of memoryOnly) {
       expect(classifyErrorCode({ cause: new Error(message) })).toBe('oom');
       // And through a wrap, because the owner observed it as
@@ -181,6 +191,7 @@ describe('the memory wall is classified from the catalogue, not from memory', ()
     // a memory kill. The classifier answers null and the call site's `otherwise`
     // decides — which is the whole reason `otherwise` is required.
     expect(shared).toEqual(['Worker exceeded resource limits']);
+
     for (const message of shared) {
       expect(classifyErrorCode({ cause: new Error(message) })).toBeNull();
     }
@@ -189,6 +200,7 @@ describe('the memory wall is classified from the catalogue, not from memory', ()
   test('no other catalogued wording is read as a memory kill', () => {
     const otherOnly = only('other');
     expect(otherOnly.length).toBeGreaterThan(0);
+
     for (const message of otherOnly) {
       expect(classifyErrorCode({ cause: new Error(message) })).not.toBe('oom');
     }
@@ -251,10 +263,13 @@ describe('toKinuError', () => {
     const unrecognised = toKinuError({
       doing: 'running a command', cause: new Error('mystery'), otherwise: 'io',
     });
+
     expect(unrecognised.code).toBe('io');
+
     const recognised = toKinuError({
       doing: 'running a command', cause: provokeAbort(), otherwise: 'io',
     });
+
     expect(recognised.code).toBe('cancelled');
   });
 
@@ -292,6 +307,7 @@ describe('the refusal payload', () => {
       cause: new Error('exec channel closed'),
       otherwise: 'io',
     });
+
     expect(refusalOf(failure)).toEqual({
       reason: 'io',
       error: 'run `pytest` on sandbox: exec channel closed',
@@ -305,6 +321,7 @@ describe('refusing and breaking are opposite facts', () => {
     // pooling a correct refusal with a defect is worse than reporting no rate.
     const refusals = ERROR_CODES.filter((code) => CODE_IS_REFUSAL[code]);
     expect([...refusals]).toEqual(['bad_input', 'denied', 'unsupported']);
+
     for (const code of ['unavailable', 'missing', 'timeout', 'cancelled', 'oom', 'io'] as const) {
       expect(CODE_IS_REFUSAL[code]).toBe(false);
     }

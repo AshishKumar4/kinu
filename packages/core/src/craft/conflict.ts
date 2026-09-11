@@ -26,12 +26,15 @@ export function checkConflictsBeforeAdding(
 ) {
   // Name conflict: exact match
   const exact = rt.craftStore.get(candidate.name);
+
   if (exact) return { conflicting: [candidate.name] };
 
   // Semantic conflict: FTS5 search for very similar descriptions
   const similar = rt.craftStore.search(candidate.description, 5);
+
   const highSimilarity = similar.filter(t => {
     const overlap = wordOverlap(t.description, candidate.description);
+
     return overlap > DEFAULT_CONFIG.craftStore.conflictSimilarityThreshold;
   });
 
@@ -67,7 +70,9 @@ async function compilesToCallable(rt: AgentRuntime, code: string): Promise<strin
     `async () => { const candidate = (${code});` +
     ` if (typeof candidate !== 'function') throw new Error('crafted tool code is not a function');` +
     ' return true; }';
+
   const { error } = await rt.executor.execute(probe, []);
+
   return error ?? null;
 }
 
@@ -80,14 +85,17 @@ export async function upsertCraftedTool(
   candidate: CraftCandidate,
 ): Promise<{ accepted: boolean; vetoReason?: string }> {
   const misevolution = checkMisevolution(candidate.code);
+
   if (!misevolution.ok) {
     recordMisevolutionVeto(rt.storage.sql, rt.actor, {
       surface: 'craft', violation: misevolution, detail: `extracted tool "${candidate.name}" rejected`,
     });
+
     return { accepted: false, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
   }
 
   const compileError = await compilesToCallable(rt, candidate.code);
+
   if (compileError) {
     return { accepted: false, vetoReason: `Unusable tool code for "${candidate.name}": ${compileError}` };
   }
@@ -101,6 +109,7 @@ export async function upsertCraftedTool(
     const existingScore = rt.storage.sql<{ score: number }>`
       SELECT score FROM crafted_tools WHERE name = ${conflicting[0]!}
     `[0]?.score ?? 0;
+
     if (candidate.score > existingScore + 0.1) {
       void rt.storage.sql`
         UPDATE crafted_tools
@@ -110,6 +119,7 @@ export async function upsertCraftedTool(
         WHERE name = ${conflicting[0]!}
       `;
     }
+
     return { accepted: true };
   }
 
@@ -123,6 +133,7 @@ export async function upsertCraftedTool(
     code: candidate.code,
     scope: 'local',
   });
+
   return { accepted: true };
 }
 
@@ -132,5 +143,6 @@ function wordOverlap(a: string, b: string): number {
   const wb = new Set(b.toLowerCase().split(/\s+/));
   const intersection = [...wa].filter(w => wb.has(w)).length;
   const union = new Set([...wa, ...wb]).size;
+
   return union === 0 ? 0 : intersection / union;
 }

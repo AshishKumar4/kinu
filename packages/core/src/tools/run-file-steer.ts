@@ -72,15 +72,19 @@ const RULES: readonly Rule[] = [
 export function handRolledFileWrite(command: string): string | null {
   for (const rule of RULES) {
     if (!rule.pattern.test(command)) continue;
+
     if (rule.writes && !rule.writes.test(command)) continue;
+
     return rule.name;
   }
+
   return null;
 }
 
 /** The note for one writeMethod, prepended to the command's own output. */
 export function fileToolSteer(command: string): string | null {
   const writeMethod = handRolledFileWrite(command);
+
   return writeMethod === null ? null : `[Kinu note: that command used ${writeMethod}. `
     + 'The `file` tool changes files by exact text match and refuses when its anchor is missing or occurs more than once, '
     + 'where a shell rewrite lands either way and reports success. This command ran as written; reach for `file` for the next edit.]';
@@ -105,10 +109,13 @@ export function fileToolSteer(command: string): string | null {
  */
 export function createFileToolSteer(): (command: string) => string | null {
   const noted = new Set<string>();
+
   return (command) => {
     const writeMethod = handRolledFileWrite(command);
+
     if (writeMethod === null || noted.has(writeMethod)) return null;
     noted.add(writeMethod);
+
     return fileToolSteer(command);
   };
 }
