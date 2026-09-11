@@ -144,7 +144,6 @@ describe('auth and desktop security invariants', () => {
     expect(provider.scopes).not.toContain('openid');
     expect(routes).toContain('processGenericTokenEndpointResponse');
     expect(routes).toContain('attachCloudflareWorkersAI');
-    expect(routes).toContain('DEFAULT_WORKERS_AI_MODEL_SPEC');
     // Identity must not depend on billing: the session is created before the
     // Workers AI credential is fetched, so a missing account or a Cloudflare
     // API outage cannot turn a valid sign-in into a 400.

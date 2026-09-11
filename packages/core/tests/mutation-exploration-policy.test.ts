@@ -173,7 +173,7 @@ const SEAL_CLEARED = "if (state.clearedBy !== null) return { kind: 'admitted' };
 
 const POLICY_BEST = "case 'best': return 'apply-winner';";
 
-const CYCLE_SCAN = 'if (placed.has(member.nodeId)) continue;\n    const stuck = new Map(';
+const CYCLE_SCAN = 'if (placed.has(member.nodeId)) continue;\n\n    const stuck = new Map(';
 
 const BUDGET_ROOM = 'if (remainingChildren < width) {';
 
@@ -825,7 +825,7 @@ describe("the cycle scan's all-or-nothing is load-bearing", () => {
   // downstream can tell.
   test(`RED: skipping the cycle scan turns "${CYCLE_WHATEVER_THE_ORDER.name}" red`, async () => {
     const mutant = await mutantMergeBack('no-cycle-scan', [
-      [CYCLE_SCAN, 'if (true) continue;\n    const stuck = new Map('],
+      [CYCLE_SCAN, 'if (true) continue;\n\n    const stuck = new Map('],
     ]);
 
     await expect(cycleWhateverTheOrder(mutant)).rejects.toThrow(ASSERTION_FAILED);

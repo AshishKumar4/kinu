@@ -54,7 +54,7 @@ kinu <command> [options]
 | Command | What it does |
 | --- | --- |
 | [`kinu model <name> [spec]`](#kinu-model-name-spec) | Show or change a workspace model |
-| [`kinu effort <name> [level]`](#kinu-effort-name-level) | Show or change workspace reasoning effort (low, medium, high) |
+| [`kinu effort <name> [level]`](#kinu-effort-name-level) | Show or change workspace reasoning effort |
 | [`kinu tools <name>`](#kinu-tools-name) | List the tools a workspace can use |
 | [`kinu triggers <name> [action] [value]`](#kinu-triggers-name-action-value) | List, schedule, cancel, or create workspace triggers |
 | [`kinu webhook <name> <label>`](#kinu-webhook-name-label) | Create a durable webhook trigger for a cloud workspace |
@@ -317,7 +317,7 @@ Show or change a workspace model.
 
 ### kinu effort <name> [level]
 
-Show or change workspace reasoning effort (low, medium, high).
+Show or change workspace reasoning effort.
 
 ### kinu tools <name>
 
