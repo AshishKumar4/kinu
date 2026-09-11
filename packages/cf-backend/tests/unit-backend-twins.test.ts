@@ -585,6 +585,19 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
     ],
   },
   {
+    // Where an actor sits in its subordinate tree. cf walked the directory rows;
+    // the CLI read a number it had written on the child's own config at birth,
+    // so the two answered "how deep is this child" from two stores nothing kept
+    // in step. One walk, off the row that IS the roster.
+    seam: 'delegation depth',
+    coreSymbol: 'delegationBudgetOf',
+    fixture: ['delegationBudgetOf'],
+    suites: [
+      'packages/cf-backend/src/subordinate-hosting.ts',
+      'packages/cli-backend/src/agent-host/host.ts',
+    ],
+  },
+  {
     // Whether an automatic title may replace the current one. The cloud
     // registry refused it over any origin but `auto`; the CLI refused it only
     // over `user`, so a workspace whose origin nobody recorded was renamed by
