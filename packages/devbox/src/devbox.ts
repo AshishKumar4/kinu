@@ -782,28 +782,25 @@ export class Devbox<Env = unknown> extends Sandbox<Env> {
    * rows in that window used to turn over a generation that was settling
    * correctly, superseding the attempt that had just restored the box.
    *
-   * TIMED LIKE A RESTORE when it asks: the witness sees `opened`, `bootId` on
-   * a match, and `settled`, so a wake that adopted reports what the adoption
-   * cost rather than the last restore's row. An attempt in flight keeps its
-   * clock: an adoption asked mid-attempt — a re-entered hook marking pending
-   * while the row still names a refusal — is not timed over it.
+   * NOT TIMED. Only a restore opens the witness's clock (`#restoreNow`): an
+   * adoption is one `cat`, and it runs on every delivered frame that follows
+   * a hook's mark — a `/state` poll included — so a clock opened here would
+   * overwrite the restore's settled row with an unsettled one at exactly the
+   * moment a reader asks for it (measured on run `kinu-devbox-bench-
+   * 20260911001505`: both probe rows read as unsettled adoptions over restores
+   * that had settled). A witness that wants to know whether a wake adopted
+   * compares the row's open time against the wake's own.
    */
   async #adoptOrTurnOver(): Promise<void> {
     this.#adoptionPending = false;
     const claim = await this.#durableClaim();
 
     if (claim === undefined) return;
-    const clock = this.#phaseClock === undefined ? this.#openClock() : undefined;
 
-    try {
-      if ((await this.#readBootId()) === claim.expected) {
-        this.#stampPhase('bootId');
-        this.#restoration = claim.settled;
+    if ((await this.#readBootId()) === claim.expected) {
+      this.#restoration = claim.settled;
 
-        return;
-      }
-    } finally {
-      if (clock !== undefined) this.#settleClock(clock);
+      return;
     }
 
     const held = this.#restoration;
