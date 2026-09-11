@@ -3900,9 +3900,6 @@ export class OrchestratorAgent extends ActorAgent {
       // like the consolidation path.
       this._cachedTools = null;
       this._cachedToolsKey = '';
-      void this.sql`INSERT INTO evolution_events (actor_id, type, message, created_at)
-        VALUES (${this.actorHandle().actorId}, 'reflection',
-                ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
     }
 
     return result;
