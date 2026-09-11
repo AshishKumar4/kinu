@@ -64,7 +64,9 @@ import {
   type CellCompletion, type CleanupEvidence, type GateId, type PublicationEvidence,
   type RestoreClaim, type RestoreEvidence, type RunProvenance, type StorageRunRecord,
 } from './fixtures/storage-matrix/admission';
-import type { RestoreWork } from '@kinu.run/devbox/durability/contracts';
+import {
+  RestorePhaseStampsSchema, type RestorePhaseStamps, type RestoreWork,
+} from '@kinu.run/devbox/durability/contracts';
 import {
   PublicationCutSchema, publicationWasCut, rendezvousPublicationCut,
 } from '../packages/devbox/bench/publication-cut';
@@ -1806,6 +1808,11 @@ export interface StartupPoll {
 
 export interface StartupCompletion extends StartupPoll {
   readonly ms: number;
+  /** When the driver kicked this startup, on the driver's clock. The restore
+   *  probe is judged against it: a row opened before this instant belongs to
+   *  an earlier restore, and a startup that adopted the instance it held ran
+   *  no restore of its own. */
+  readonly startedAt: number;
 }
 
 /**
@@ -2058,7 +2065,7 @@ export async function startupOperation(
 
   const attached = await pollForAttach(fixture, box, operation, allowedKinds, bounds);
 
-  return { ...attached, ms: Date.now() - started };
+  return { ...attached, ms: Date.now() - started, startedAt: started };
 }
 
 /** What one settled checkpoint reports. Its wire form is the poll reply below:
@@ -2544,25 +2551,36 @@ export function decodeComplexityRows(value: ArmResult['complexity']): Complexity
 }
 
 /**
- * One in-gate restore wall-clock reading, polled from GET /restore-probe
- * after a wake settles. The number is the gate occupancy the
- * `do.block_concurrency.cancel_ms` cap judges (hook entry to settle), not
- * the driver's own round trip. `wallMs` null is ABSENT — the box wrote no
- * probe row — never zero: a restore that did not report and a restore that
- * took 0 ms are different facts. Added 2026-09-10: the 2026-09-09 onStart
- * probe run reported its table from a lane report and retained no rows.
+ * One restore attempt's wall-clock reading, polled from GET /restore-probe
+ * after a cold attach or a wake settles. The number is what the box's
+ * readiness gate held the first operation for (the attempt opening on its
+ * delivered frame to its settle), not the driver's own round trip. `wallMs`
+ * null is ABSENT — the box wrote no probe row — never zero: a restore that
+ * did not report and a restore that took 0 ms are different facts. Added
+ * 2026-09-10: the 2026-09-09 onStart probe run reported its table from a
+ * lane report and retained no rows.
+ *
+ * `phases` are the landmarks the restore reached, each as ms after the
+ * attempt opened, written by the box as they land. A row with `probeAt` and
+ * phases but no `wallMs` is an attempt that never settled: the platform
+ * reset the object mid-restore, and the last phase present is where it was.
+ * Absent phases are absent, never zero; rows written before the stamps
+ * existed carry none.
  */
 export interface RestoreProbeRow {
   readonly kind: 'cold-attach' | 'complexity-restore' | 'post-ladder-wake' | 'destroy-cold-restore';
   /** Served-tree bytes at the rung, or null when the size is not known
    *  (the cold attach lands on an empty tree the driver never measured). */
   readonly treeBytes: number | null;
-  /** In-gate wall ms, null when the box wrote no probe row. */
+  /** The attempt's wall ms, null when the box wrote no probe row or the
+   *  attempt never settled. */
   readonly wallMs: number | null;
-  /** The probe's own entry timestamp, null with an absent row. */
+  /** When the attempt opened, null with an absent row. */
   readonly probeAt: number | null;
-  /** 'ok', or why the row is absent. */
+  /** 'ok', or why the row is absent or unsettled. */
   readonly outcome: string;
+  /** The phases the restore reached, ms after entry. */
+  readonly phases?: RestorePhaseStamps;
 }
 
 const RestoreProbeRowSchema: v.GenericSchema<RestoreProbeRow> = v.looseObject({
@@ -2571,6 +2589,7 @@ const RestoreProbeRowSchema: v.GenericSchema<RestoreProbeRow> = v.looseObject({
   wallMs: v.nullable(v.number()),
   probeAt: v.nullable(v.number()),
   outcome: v.string(),
+  phases: v.optional(RestorePhaseStampsSchema),
 });
 
 /**
@@ -3842,14 +3861,22 @@ async function closeWakeOpsWindow(
 
 const RestoreProbeReplySchema: v.GenericSchema<{
   readonly ok?: boolean;
-  readonly probe?: { readonly wallMs: number; readonly at: number } | null;
+  readonly probe?: {
+    readonly wallMs: number | null;
+    readonly at: number;
+    readonly phases?: RestorePhaseStamps;
+  } | null;
 }> = v.looseObject({
   ok: v.optional(v.boolean()),
-  probe: v.optional(v.nullable(v.looseObject({ wallMs: v.number(), at: v.number() }))),
+  probe: v.optional(v.nullable(v.looseObject({
+    wallMs: v.nullable(v.number()),
+    at: v.number(),
+    phases: v.optional(RestorePhaseStampsSchema),
+  }))),
 });
 
 /**
- * Poll one in-gate restore wall time after a wake settles. NEVER throws: a
+ * Poll one restore attempt's wall time after it settles. NEVER throws: a
  * poll that failed the arm would trade the arm's measured cells for one
  * diagnostic read, so every failure is an absent row with its reason, and
  * the arm keeps whatever it measured. Added 2026-09-10.
@@ -3860,6 +3887,7 @@ export async function readRestoreProbe(
   kind: RestoreProbeRow['kind'],
   treeBytes: number | null,
   notes: string[],
+  notBefore: number,
 ): Promise<RestoreProbeRow> {
   const absent = (outcome: string): RestoreProbeRow => ({ kind, treeBytes, wallMs: null, probeAt: null, outcome });
   let reply: v.InferOutput<typeof RestoreProbeReplySchema>;
@@ -3877,7 +3905,32 @@ export async function readRestoreProbe(
     return absent(reply.ok === false ? 'absent: the box wrote no probe row for its last start' : 'absent: no probe row in the reply');
   }
 
-  return { kind, treeBytes, wallMs: reply.probe.wallMs, probeAt: reply.probe.at, outcome: 'ok' };
+  const { wallMs, at, phases } = reply.probe;
+
+  // THE ROW IS THE LAST RESTORE, NOT THE LAST START. A start that adopted the
+  // instance it held ran no restore, and the box's row still names the one
+  // before it; a row opened before this startup was kicked is that earlier
+  // restore's, and reporting it under this kind would time the wrong thing.
+  if (at < notBefore) {
+    notes.push(`restore probe ${kind}: the last restore predates this startup, so it adopted the instance it held`);
+
+    return absent(`absent: the last restore opened at ${String(at)}, before this startup at ${String(notBefore)}; the box adopted the instance it held`);
+  }
+
+  // An attempt that opened its row and never wrote a wall time: the platform
+  // reset the object mid-restore, or the attempt is still running. The phases
+  // say how far it got; the last one present is where it was.
+  const reached = Object.keys(phases ?? {});
+  const where = reached.length === 0 ? 'none' : reached.join(', ');
+
+  if (wallMs === null) notes.push(`restore probe ${kind}: the start never settled; phases reached: ${where}`);
+
+  const row: RestoreProbeRow = {
+    kind, treeBytes, wallMs, probeAt: at,
+    outcome: wallMs === null ? `unsettled: the start opened a row and never settled it (phases: ${where})` : 'ok',
+  };
+
+  return phases === undefined ? row : { ...row, phases };
 }
 
 /** Poll the probe and append its row to the arm, in one place: every restore
@@ -3890,8 +3943,12 @@ async function recordRestoreProbe(
   kind: RestoreProbeRow['kind'],
   treeBytes: number | null,
   notes: string[],
+  notBefore: number,
 ): Promise<void> {
-  (result.restoreProbes ??= []).push(await readRestoreProbe(fixture, box, kind, treeBytes, notes));
+  const row = await readRestoreProbe(fixture, box, kind, treeBytes, notes, notBefore);
+  (result.restoreProbes ??= []).push(row);
+  const phases = Object.entries(row.phases ?? {}).map(([phase, atMs]) => `${phase}=${String(atMs)}`).join(' ');
+  log(`restore probe ${kind}: wallMs=${String(row.wallMs)} ${phases.length === 0 ? 'no phases' : phases} (${row.outcome})`);
 }
 
 /**
@@ -4191,10 +4248,10 @@ async function measureComplexityRung(
       const opsBeforeRestore = await call(fixture, 'GET', `/ops?box=${box}`, OpTallySchema);
       const rewoke = await startup('/wake', `complexity restore at ${treeBytes}B`, admittedAttachKinds('wake'));
       const restoreOps = await closeWakeOpsWindow(fixture, box, opsBeforeRestore, notes);
-      // The gate occupancy of this rung's restore, at the rung's own tree
+      // The restore wall time of this rung's wake, at the rung's own tree
       // size. Polled inside the try so a silent probe is an absent row, and
       // the helper never throws past it.
-      await recordRestoreProbe(fixture, box, result, 'complexity-restore', treeBytes, notes);
+      await recordRestoreProbe(fixture, box, result, 'complexity-restore', treeBytes, notes, rewoke.startedAt);
       result.complexity?.push({
         treeBytes,
         kind: 'restore',
@@ -4300,6 +4357,7 @@ async function measureArm(
 
   log('create (cold attach)');
   let cold: StartupCompletion;
+  const createKickedAt = Date.now();
 
   try {
     cold = await startup('/create', 'cold attach', admittedAttachKinds('cold attach'));
@@ -4312,6 +4370,10 @@ async function measureArm(
     const note = `create failed: ${describeThrown({ cause: error })}`;
     log(note);
     notes.push(note);
+    // The refusal's own evidence: a start the platform reset left its row
+    // with the phases it reached and no wall time. Polled here because the
+    // 2026-09-10 refusal recorded nothing but the platform's sentence.
+    await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes, createKickedAt);
     settle('a refused create');
 
     return result;
@@ -4320,9 +4382,9 @@ async function measureArm(
   result.attachColdMs = cold.ms;
   result.attachColdKind = cold.attach.kind;
   result.attachColdBootId = cold.state.state?.bootId ?? null;
-  // The gate occupancy of the cold start itself, beside the driver's own
+  // The restore wall time of the cold start itself, beside the driver's own
   // round trip. The tree is empty here; the sized restores come per rung.
-  await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes);
+  await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes, cold.startedAt);
   settle('the cold attach');
   log('install harness');
   await installHarness(fixture, box);
@@ -4417,8 +4479,8 @@ async function measureArm(
   result.wakeDetail = woke.attach.detail;
   result.wakeBootId = woke.state.state?.bootId ?? null;
   result.wakeOps = await closeWakeOpsWindow(fixture, box, opsBeforeWake, notes);
-  // The gate occupancy of the post-ladder wake at the full ladder size.
-  await recordRestoreProbe(fixture, box, result, 'post-ladder-wake', ladderBytes, notes);
+  // The restore wall time of the post-ladder wake at the full ladder size.
+  await recordRestoreProbe(fixture, box, result, 'post-ladder-wake', ladderBytes, notes, woke.startedAt);
   recordFinalComplexityRestore(result, ladderBytes, complexityScope);
   settle('the wake');
   verify(
@@ -4736,7 +4798,7 @@ async function runDestroyColdPhase(
     const rewokeCold = await startup('/wake', 'destroy-cold restore', admittedAttachKinds('wake'));
     const knownSizes = Object.values(result.treeBytes).filter((n) => Number.isSafeInteger(n));
     const coldTreeBytes = knownSizes.length > 0 ? Math.max(...knownSizes) : null;
-    await recordRestoreProbe(fixture, box, result, 'destroy-cold-restore', coldTreeBytes, notes);
+    await recordRestoreProbe(fixture, box, result, 'destroy-cold-restore', coldTreeBytes, notes, rewokeCold.startedAt);
     notes.push(
       `destroy-cold restore woke ${rewokeCold.attach.kind}; treeBytes is the largest size the run recorded, `
       + 'a lower bound past the witness and cut cells that wrote outside the measured window',

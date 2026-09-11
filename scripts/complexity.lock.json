@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-10",
-  "files": 2077,
-  "functions": 52616,
+  "measuredAt": "2026-09-11",
+  "files": 2091,
+  "functions": 52758,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -74,10 +74,6 @@
       "complexity": 51
     },
     {
-      "key": "scripts/do-init-gate.ts#auditFile>walk",
-      "complexity": 51
-    },
-    {
       "key": "packages/cli/src/commands/setup.ts#setupCommand",
       "complexity": 48
     },
@@ -115,6 +111,10 @@
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/PlanReviewView.tsx#PlanReviewView",
+      "complexity": 45
+    },
+    {
+      "key": "scripts/do-init-gate.ts#auditFile>walk",
       "complexity": 45
     },
     {

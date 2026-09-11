@@ -59,6 +59,36 @@ export const PublishWorkSchema = v.strictObject({
 
 export type PublishWork = v.InferOutput<typeof PublishWorkSchema>;
 
+/**
+ * The landmarks one restoration passes, in the order a cold start meets them.
+ *
+ * `containerStart` is the first container command that ANSWERED: the platform
+ * admits the instance before the hook, but the RPC server inside it comes up
+ * on its own clock, and the first command waits on that. `storeMount` and
+ * `baseAttach` belong to the storage strategy, which alone knows which of its
+ * commands was the mount; a fresh box with no chain never reaches either.
+ * `attached` is the storage attach settled, `bootId` the identity settled —
+ * stamped, or adopted from a matching read.
+ */
+export type RestorePhase = 'containerStart' | StoragePhase | 'attached' | 'bootId';
+
+/** The phases a storage strategy stamps, see {@link RestorePhase}. */
+export type StoragePhase = 'storeMount' | 'baseAttach';
+
+/** Where a restoration was when each phase landed, in milliseconds after it
+ *  opened. A phase the walk never reached is ABSENT, never zero: the bench
+ *  fixture writes these as they land and the driver decodes them, so a start
+ *  the platform reset still names its last phase. */
+export type RestorePhaseStamps = { readonly [P in RestorePhase]?: number };
+
+export const RestorePhaseStampsSchema: v.GenericSchema<RestorePhaseStamps> = v.object({
+  containerStart: v.optional(CountSchema),
+  storeMount: v.optional(CountSchema),
+  baseAttach: v.optional(CountSchema),
+  attached: v.optional(CountSchema),
+  bootId: v.optional(CountSchema),
+});
+
 export const UploadIntentSchema = v.strictObject({
   operationId: IdSchema,
   attemptId: IdSchema,
