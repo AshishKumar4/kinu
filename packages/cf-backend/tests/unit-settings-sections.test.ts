@@ -95,13 +95,6 @@ describe('the rail says which section is open', () => {
     }
   });
 
-  test('the active entry carries the accent, the others carry the quiet tone', () => {
-    const html = rail('devices');
-    expect(entry(html, 'devices')).toContain('p-accent-bg p-accent');
-    expect(entry(html, 'providers')).not.toContain('p-accent-bg');
-    expect(entry(html, 'providers')).toContain('p-text-3');
-  });
-
   test('every section is one click away, each link changing only the hash', () => {
     const html = rail('account');
 

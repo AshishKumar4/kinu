@@ -4,8 +4,26 @@ import { useRef, useState, type ReactElement, type ReactNode } from 'react';
 
 import { useCopy } from '@/hooks/use-copy';
 
-export function RuleLabel({ children }: { children: ReactNode }): ReactElement {
-  return <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-accent"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{children}</div>;
+/**
+ * The one way a section opens: a rule label, the heading, and the one lead
+ * paragraph under it. Every section on the page reads through this, so the
+ * distance from label to heading to lead is the same distance everywhere.
+ * `tight` is for a head that shares its row with something else and needs
+ * the lead's margin, not the section's.
+ */
+export function SectionHead({ label, lead, tight = false, children }: {
+  label?: string;
+  lead: ReactNode;
+  tight?: boolean;
+  children: ReactNode;
+}): ReactElement {
+  return (
+    <div className={tight ? 'mb-9' : 'mb-10 lg:mb-12'}>
+      {label && <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-accent"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{label}</div>}
+      <h2 className="max-w-[900px] text-[clamp(30px,3.4vw,44px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">{children}</h2>
+      <p className="mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">{lead}</p>
+    </div>
+  );
 }
 
 function TuiPreview(): ReactElement {
@@ -224,18 +242,16 @@ function CliPreview(): ReactElement {
 export function LandingShowcases(): ReactElement {
   return (
     <div className="landing-shell">
-      <section data-showcase="tui" className="pb-20">
-        <div className="mb-7 flex flex-wrap items-end justify-between gap-4">
-          <h2 className="text-[clamp(26px,3vw,36px)] font-semibold leading-[1.1] tracking-[-.03em]">Or have them <span className="p-accent">run locally.</span></h2>
-          <p className="text-sm p-text-3">Interactive TUI demo · select an agent to see its work.</p>
-        </div>
+      <section data-showcase="tui" className="border-t p-border py-20 lg:py-24">
+        <SectionHead lead="Interactive TUI demo. Select an agent to see its work.">
+          Or have them <span className="p-accent">run locally.</span>
+        </SectionHead>
         <TuiPreview />
       </section>
       <section id="local" data-showcase="cli" className="border-t p-border py-20 lg:py-24">
-        <div className="mb-9 grid items-end gap-6 md:grid-cols-2 md:gap-[52px]">
-          <div><RuleLabel>02 · Smart CI</RuleLabel><h2 className="text-[clamp(28px,3.2vw,40px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">Give CI an agent.</h2></div>
-          <p className="max-w-[580px] text-base leading-[1.65] p-text-3">Run the agent as a step in your CI pipeline with kinu exec. Your existing tests and pipeline rules still decide what merges.</p>
-        </div>
+        <SectionHead label="02 · Smart CI" lead="Run the agent as a step in your CI pipeline with kinu exec. Your existing tests and pipeline rules still decide what merges.">
+          Give CI an agent.
+        </SectionHead>
         <CliPreview />
       </section>
     </div>

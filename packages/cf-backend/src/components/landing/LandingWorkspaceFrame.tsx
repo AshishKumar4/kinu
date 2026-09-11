@@ -478,7 +478,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
           ? { 'data-movie-phase': discrete.phase, 'data-movie-settled': discrete.settled ? 'true' : 'false' }
           : {})}
         aria-label={kind === 'checkout' ? 'Kinu workspace interface preview' : `Kinu ${kind} interface preview`}
-        className="relative flex flex-col overflow-hidden rounded-2xl border p-border p-bg p-text text-left shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)] md:flex-row"
+        className="relative flex flex-col overflow-hidden rounded-b-2xl border p-border p-bg p-text text-left shadow-[0_40px_110px_-50px_rgba(0,0,0,.95)] md:flex-row"
       >
         {/* The app's own rail, as the harness rule requires: gallery.tsx:2370
             photographs this same surface for the same reason, and layout.tsx
