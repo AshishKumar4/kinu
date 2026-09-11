@@ -269,6 +269,20 @@ describe('evalWorkspaceName — every row an eval leaves behind is attributable'
     );
   });
 
+  test('a long subject still fits the product address grammar', () => {
+    // The creation gate refuses anything over 31 chars or outside
+    // lowercase-alphanumerics-and-hyphens; this tier failed exactly there.
+    for (const name of [
+      evalWorkspaceName('first-run-two-machines-fleet'),
+      evalWorkspaceName('first-run-approve-clears-approve'),
+      evalWorkspaceName('first-run-codemode-craft-craft'),
+    ]) {
+      expect(name.length).toBeLessThanOrEqual(31);
+      expect(name).toMatch(/^[a-z0-9](?:[a-z0-9-]{0,29}[a-z0-9])?$/);
+      expect(name.startsWith(EVAL_WORKSPACE_PREFIX)).toBe(true);
+    }
+  });
+
   test('two calls do not collide, so a suite can run twice', () => {
     const first = evalWorkspaceName('smoke');
     const second = evalWorkspaceName('smoke');
