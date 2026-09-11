@@ -409,7 +409,7 @@ export function branchesTerminalEffect(deps: {
       const report = branchOutcomeFromJournal(head);
 
       if (report === null) {
-        return { status: 'owed', detail: `branch head is ${head.status}` };
+        return { status: 'owed', held: true, detail: `branch head is ${head.status}` };
       }
 
       const outcome = settleBranchIntoTakes(deps.sql, deps.actor, {
