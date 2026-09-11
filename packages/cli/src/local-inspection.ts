@@ -269,17 +269,11 @@ export function getLocalProfileCoordinates(name: string): LocalProfileCoordinate
 export function readLocalMemory(name: string): string {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'memory_chunks')) return '';
-    const cols = columnSet(db, 'memory_chunks');
-    const column = cols.has('text') ? 'text' : cols.has('content') ? 'content' : null;
 
-    if (!column) return '';
-    const order = cols.has('start_line') ? 'start_line' : 'rowid';
-
-    return all<{ body: string }>(
+    return all<{ text: string }>(
       db,
-      `SELECT ${safeIdentifier(column)} AS body FROM memory_chunks
-       WHERE path = 'memory/MEMORY.md' ORDER BY ${safeIdentifier(order)} ASC`,
-    ).map((row) => row.body).join('\n');
+      `SELECT text FROM memory_chunks WHERE path = 'memory/MEMORY.md' ORDER BY start_line ASC`,
+    ).map((row) => row.text).join('\n');
   });
 }
 
@@ -298,27 +292,13 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
 
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'memory_chunks')) return [];
-    const cols = columnSet(db, 'memory_chunks');
 
-    if (cols.has('text')) {
-      return all<{ path: string; text: string; score?: number; start_line?: number; end_line?: number }>(
-        db,
-        `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY updated_at DESC LIMIT ?`,
-        `%${q}%`,
-        window,
-      ).map((row) => ({ path: row.path, text: row.text, score: row.score, startLine: row.start_line, endLine: row.end_line }));
-    }
-
-    if (cols.has('content')) {
-      return all<{ path: string; content: string }>(
-        db,
-        `SELECT path, content FROM memory_chunks WHERE content LIKE ? LIMIT ?`,
-        `%${q}%`,
-        window,
-      ).map((row) => ({ path: row.path, text: row.content }));
-    }
-
-    return [];
+    return all<{ path: string; text: string; start_line: number; end_line: number }>(
+      db,
+      `SELECT path, text, start_line, end_line FROM memory_chunks WHERE text LIKE ? ORDER BY updated_at DESC LIMIT ?`,
+      `%${q}%`,
+      window,
+    ).map((row) => ({ path: row.path, text: row.text, startLine: row.start_line, endLine: row.end_line }));
   });
 }
 
@@ -1116,16 +1096,6 @@ export function getLocalActorInfo(name: string, actorId: string): LocalAgentInfo
       reasoningEffort: config?.getReasoningEffort() ?? null,
     };
   });
-}
-
-function columnSet(db: SqliteDb, table: string): Set<string> {
-  return new Set(all<{ name: string }>(db, `PRAGMA table_info(${safeIdentifier(table)})`).map((row) => row.name));
-}
-
-function safeIdentifier(value: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) throw new Error(`Unsafe SQL identifier: ${value}`);
-
-  return value;
 }
 
 function getLocalStatus(db: SqliteDb): LocalStatus {

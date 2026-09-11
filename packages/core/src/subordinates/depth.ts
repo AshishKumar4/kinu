@@ -23,6 +23,7 @@
  */
 
 import type { ErrorCode } from '../obs/error';
+import type { WorkspaceActor } from '../identity/workspace-actors';
 
 /**
  * The global cap on subordinate-tree depth: the workspace orchestrator is depth
@@ -59,6 +60,33 @@ export function delegationBudgetAtDepth(depth: number): DelegationBudget {
   const safeDepth = Math.max(0, depth);
 
   return { depth: safeDepth, maxDepth: Math.max(0, DELEGATION_MAX_DEPTH - safeDepth) };
+}
+
+/**
+ * An actor's budget from the ONE row that states where it sits: its directory
+ * record, walked up to the root.
+ *
+ * Durable by construction rather than by a private copy. A depth an actor
+ * carried in its own config was written once at birth by whichever host
+ * seeded it and read back by that host alone, so the two backends answered
+ * "how deep is this child" from two different stores that nothing kept in
+ * step. The directory row cannot disagree with the roster because it IS the
+ * roster. A parent the directory no longer describes ends the walk where it
+ * stands: the depth counted so far is a floor, and a floor only narrows.
+ */
+export function delegationBudgetOf(
+  describe: (actorId: string) => Pick<WorkspaceActor, 'parentActorId'> | null,
+  record: Pick<WorkspaceActor, 'parentActorId'>,
+): DelegationBudget {
+  let depth = 0;
+  let current: Pick<WorkspaceActor, 'parentActorId'> | null = record;
+
+  while (current !== null && current.parentActorId !== null) {
+    depth += 1;
+    current = describe(current.parentActorId);
+  }
+
+  return delegationBudgetAtDepth(depth);
 }
 
 /**

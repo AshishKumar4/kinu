@@ -505,6 +505,23 @@ describe('reverts — real paths only', () => {
     expect(facts.all()).toEqual([]);
   });
 
+  test('an applied revert is announced on the audit stream, whichever backend asked', async () => {
+    // One backend wrote this row and the other did not, so the changelog that
+    // showed a change showed its reversal only in the cloud. A refused revert
+    // announces nothing: there is no act to audit.
+    const { rt, facts } = setup();
+    facts.upsert('editor', 'helix');
+    const entry = buildChangelog(rt.storage.sql, rt.actor).find((e) => e.kind === 'fact')!;
+
+    const audit = () => rt.storage.sql<{ message: string }>`
+      SELECT message FROM evolution_events WHERE type = 'reflection' AND message LIKE 'Operator reverted%'`;
+
+    expect(await revertChangelogEntryById({ rt, facts }, 'no-such-entry')).toMatchObject({ ok: false });
+    expect(audit()).toEqual([]);
+    expect((await revertChangelogEntryById({ rt, facts }, entry.id)).ok).toBe(true);
+    expect(audit()).toEqual([{ message: `Operator reverted changelog entry ${entry.id}: forgot 1 fact` }]);
+  });
+
   test('batch fact revert continues and reports partial failures', async () => {
     const { rt, facts } = setup();
     facts.upsert('present', true);

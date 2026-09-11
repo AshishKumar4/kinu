@@ -23,10 +23,12 @@ export {
 export {
   TerminalEffectLedger, initTerminalEffectTable, terminalEffect, overflowRetryTerminalEffect,
   outputLimitContinuationTerminalEffect,
+  takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
+  eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
   TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
-  RunEndReasonSchema, ModelMessagesSchema, TurnContinuitySchema,
+  RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,
   type TerminalEffectOutcome, type TerminalEffectStatus, type TerminalEffectPhase,
   type TerminalEffectFault, type OwedEffect, type OwedTerminalEffect,
@@ -127,7 +129,7 @@ export {
   fallbackWorkspaceIdentity,
   mintSubordinateName,
   parseWorkspaceTitle,
-  planWorkspaceTitle,
+  planWorkspaceTitle, autoTitleMayReplace, persistAutoTitle,
   resolveWorkspaceTitle,
   suggestWorkspaceTitle,
   workspaceSlug, workspaceAddressRefusal,
@@ -691,7 +693,7 @@ export {
 export {
   DELEGATION_MAX_DEPTH,
   ROOT_DELEGATION_BUDGET,
-  delegationBudgetAtDepth,
+  delegationBudgetAtDepth, delegationBudgetOf,
   delegationDepthRefusal,
   delegationExhausted,
   deriveChildDelegationBudget,
@@ -1489,7 +1491,7 @@ export {
   reviewCommand,
   formatApproval,
   gatedGrants,
-  formatApprovalGrant,
+  formatApprovalGrant, holdsGrant,
   parseApprovalGrant,
   approvalGrants,
   gateExec,
@@ -1743,11 +1745,11 @@ export {
   renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface';
 
-export { ModelCatalogSession } from './orchestrator/model-catalog';
+export { ModelCatalogSession, resolveEffectiveModelSpec } from './orchestrator/model-catalog';
 
 export {
   serializeContentForHeads, narrowInheritedRole,
-  inheritedContextFromHistory, inheritedContextFromRows,
+  inheritedContextFromHistory, inheritedContextFromRows, inheritedContextFromConversation,
   INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
 } from './orchestrator/heads-support';
 
@@ -2076,7 +2078,8 @@ export {
   ADVISOR_DEDUPE_WINDOW,
   ADVISOR_HEADER,
   advisorSignalText,
-  runAdvisorLane,
+  ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted,
+  reviewRecordedTurn,
   AdvisorRecoverySnapshotSchema,
   buildAdvisorPrompt,
   isAdvisorSeverity,
@@ -2088,7 +2091,6 @@ export {
   reviewCompletedTurn,
   type AdvisorDisposition,
   type AdvisorRecoverySnapshot,
-  type AdvisorLaneDeps,
   type AdvisorNote,
   type AdvisorSeverity,
   type AdvisorNoteClass,

@@ -41,7 +41,7 @@ import {
   type WorkspaceVFS,
   DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withMountTable, standardMounts, contextMount,
-  withApprovalGatedShell, createInheritedApprovalPolicy,
+  withApprovalGatedShell, createInheritedApprovalPolicy, holdsGrant,
   type ShellApprovalPolicy, type ShellApprovalMode, type ApprovalGrant,
   type EgressSecretBinding,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
@@ -576,8 +576,7 @@ export function createCFRuntime(
       mode: () => memoryConfig.getShellApprovalMode(),
       // Standing grants, same live read as the mode: an 'always' the owner gave
       // in the needs-you queue takes effect on the very next command.
-      granted: (grant) => memoryConfig.getShellApprovalGrants()
-        .some((g) => g.rule === grant.rule && g.executor === grant.executor),
+      granted: (grant) => holdsGrant(memoryConfig.getShellApprovalGrants(), grant),
       get deferrals() { return hooks.deferrals?.(); },
     }
     : createInheritedApprovalPolicy({

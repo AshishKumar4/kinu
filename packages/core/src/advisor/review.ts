@@ -23,14 +23,16 @@
  */
 
 import * as v from 'valibot';
-import type { LLM } from '../types/primitives';
+import type { LLM, SqlExecutor } from '../types/primitives';
+import type { ActorHandle } from '../identity/actor-handle';
+import { effectAlreadyDone, recordEffectDone } from '../identity/effect-tombstones';
 import type { AgentSignal, SignalOutcome } from '../types/signals';
 import type { CompletedTurn, ToolCallRecord } from '../evolution/types';
 import { CompletedTurnSchema } from '../evolution/session-window';
 import { codemodeProgramOf, codemodeReaches } from '../tools/codemode-reach';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { tolerate } from '../obs/index';
+import { diagnostics, tolerate, toKinuError } from '../obs/index';
 import { stableStringify } from '../safety/argument-digest';
 
 /** How strongly a note asks to be weighed. ORDERED: a floor is a comparison of
@@ -474,14 +476,11 @@ export function advisorSignalText(note: AdvisorNote): string {
   return `${ADVISOR_HEADER}\n\n${ADVISOR_SEVERITY_LABEL[note.severity]}: ${note.note}`;
 }
 
-export interface AdvisorLaneDeps {
+interface AdvisorLaneDeps {
   /** The turn that just ended. */
   readonly turn: CompletedTurn;
-  /** The reviewer's client: routed, metered, and governed by the caller.
-   *  Undefined when this backend wires no reviewer, which ends the lane. */
-  readonly llm: LLM | undefined;
-  /** Whether the owner switched the advisor on. */
-  readonly enabled: boolean;
+  /** The reviewer's client: routed, metered, and governed by the caller. */
+  readonly llm: LLM;
   readonly minSeverity: AdvisorSeverity;
   /** Normalised text of the notes already on the audit stream. */
   readonly recent: readonly string[];
@@ -489,7 +488,7 @@ export interface AdvisorLaneDeps {
   readonly gateOpen: boolean;
   /** Capability names the turn ran with, so the missed-capability class is
    *  checkable rather than speculative. Empty when the caller cannot say. */
-  readonly reachable?: readonly string[];
+  readonly reachable: readonly string[];
   /** Speak the note. The caller supplies its own SignalDelivery. */
   readonly deliver: (signal: AgentSignal) => Promise<SignalOutcome>;
   /** Record the note on the audit stream (EvolutionEngine.recordAdvisorNote).
@@ -512,8 +511,8 @@ export interface AdvisorLaneDeps {
  * snapshot carrying anything less would re-run the review against different
  * inputs and produce advice about a turn that never happened. `llm`, `deliver`
  * and `record` are the three deps NOT here, because each is a live seam the
- * recovering host re-resolves for itself; `enabled` and `gateOpen` are absent
- * for the same reason they are constants at the call site.
+ * recovering host re-resolves for itself; `gateOpen` is absent because the one
+ * backend that has a gate records it beside the snapshot, and the other has none.
  *
  * `recent` is snapshotted rather than re-read, so the dedupe window the verdict
  * is judged against is the one the TURN saw. Re-reading it on recovery would
@@ -534,23 +533,19 @@ export const AdvisorRecoverySnapshotSchema = v.object({
 export type AdvisorRecoverySnapshot = v.InferOutput<typeof AdvisorRecoverySnapshotSchema>;
 
 /**
- * One turn's review, end to end: the ONE turn-end policy, called by every
- * backend that has a turn to review.
+ * One turn's review, end to end: the ONE turn-end policy, reached by every
+ * backend through {@link reviewRecordedTurn}.
  *
  * Shared rather than written per backend because the branch count is what
  * drifts. A cloud actor and a local session that each decided independently
  * whether a `nit` reaches the chat would disagree within a month, and the
  * disagreement would be invisible — both would look like they were working.
  *
- * Never throws and never blocks a turn: the caller fires it detached, and a
- * reviewer that failed is a turn with no advice rather than a failed turn.
  * Answers the disposition it took, or null when there was nothing to say.
  */
-export async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition | null> {
-  if (!deps.enabled || deps.llm === undefined) return null;
-
+async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisposition | null> {
   const note = await reviewCompletedTurn({
-    llm: deps.llm, turn: deps.turn, reachable: deps.reachable ?? [],
+    llm: deps.llm, turn: deps.turn, reachable: deps.reachable,
   });
 
   if (note === null) return null;
@@ -588,4 +583,101 @@ export async function runAdvisorLane(deps: AdvisorLaneDeps): Promise<AdvisorDisp
   await deps.deliver(keyed);
 
   return 'deliver';
+}
+
+/**
+ * The advisor lane's durable fiber name — ONE name, because it is one lane.
+ *
+ * Both backends dispatch their fiber recovery on it, and each declared it for
+ * itself: the Durable Object as `advisor:review`, the CLI as `advisor.review`
+ * with a comment claiming it was the same string the Durable Object used. The
+ * shared spelling follows core's own lane names (`bg:`, `mcts`).
+ */
+export const ADVISOR_LANE_FIBER = 'advisor:review';
+
+/** The tombstone scope one turn's advisor lane is recorded under. It marks the
+ *  lane RECOVERABLE, not finished: from the checkpoint on, a second lane
+ *  beside it would be a duplicate review. */
+const ADVISOR_LANE_SCOPE = 'advisor_lane';
+
+/**
+ * The key one turn's advisor lane is tombstoned under, or null for a turn with
+ * no durable id. An unkeyed turn has no replay to guard against and is not
+ * given a fabricated key: every such turn would share it, and the second would
+ * read the first's checkpoint as its own review already started.
+ */
+function advisorLaneKey(turn: Pick<CompletedTurn, 'turnId'>): string | null {
+  return turn.turnId === undefined || turn.turnId === '' ? null : turn.turnId;
+}
+
+/**
+ * Whether a lane for this turn has already been STARTED — checkpointed, and
+ * therefore recoverable on its own. A terminal replay arriving after the
+ * checkpoint but before its row recorded `completed` would otherwise open a
+ * second lane beside the first, and two advisors would review one turn, each
+ * spending a model call and appending its own note.
+ */
+export function advisorLaneStarted(
+  sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
+): boolean {
+  const key = advisorLaneKey(turn);
+
+  return key !== null && effectAlreadyDone(sql, actor, ADVISOR_LANE_SCOPE, key);
+}
+
+/** Record that this turn's lane is checkpointed. Written ADJACENT to the
+ *  stash, which is exactly the instant a second lane becomes a duplicate. */
+export function markAdvisorLaneStarted(
+  sql: SqlExecutor, actor: ActorHandle, turn: Pick<CompletedTurn, 'turnId'>,
+): void {
+  const key = advisorLaneKey(turn);
+
+  if (key !== null) recordEffectDone(sql, actor, ADVISOR_LANE_SCOPE, key);
+}
+
+/**
+ * The ONE review body a live lane and its recovery both run, from a recorded
+ * snapshot.
+ *
+ * Governed off the TURN's labels rather than the active mission: this runs
+ * after the turn ended, and debiting whatever mission happens to be active
+ * later would charge work it did not cause. An unlabelled turn is reviewed on
+ * the ungoverned client. `gateOpen` is the one input a backend with a
+ * completion gate records beside the snapshot; a backend without one passes
+ * false by construction.
+ *
+ * Never throws: a reviewer that failed is a turn with no advice, stated as
+ * `advisor.review_failed` and answered as null.
+ */
+export async function reviewRecordedTurn(deps: {
+  readonly snapshot: AdvisorRecoverySnapshot;
+  readonly llm: LLM | undefined;
+  readonly govern: (llm: LLM, labels: readonly string[]) => LLM;
+  readonly gateOpen: boolean;
+  readonly deliver: AdvisorLaneDeps['deliver'];
+  readonly record: AdvisorLaneDeps['record'];
+}): Promise<AdvisorDisposition | null> {
+  const { snapshot, llm } = deps;
+
+  if (llm === undefined) return null;
+  const labels = snapshot.turn.missionLabels ?? [];
+
+  try {
+    return await runAdvisorLane({
+      turn: snapshot.turn,
+      llm: labels.length === 0 ? llm : deps.govern(llm, labels),
+      minSeverity: snapshot.minSeverity,
+      recent: snapshot.recent,
+      gateOpen: deps.gateOpen,
+      reachable: snapshot.reachable,
+      deliver: deps.deliver,
+      record: deps.record,
+    });
+  } catch (cause) {
+    diagnostics.failure('advisor.review_failed', toKinuError({
+      doing: 'reviewing the completed turn', cause, otherwise: 'unavailable',
+    }));
+
+    return null;
+  }
 }
