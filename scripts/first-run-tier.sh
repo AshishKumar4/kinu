@@ -62,6 +62,12 @@ export KINU_EVAL_SPEND_FILE="$SPEND"
 # fatal — it means the credential is aimed at a deployment the allowlist refuses,
 # and continuing would run the whole tier against whatever the environment
 # happened to say.
+# The tier runs inside the deploy, against the build it just shipped, so the
+# eval-service bearer for THIS deployment may not exist yet. The web identity
+# can approve the device flow that mints one; a persisted session is reused.
+if [[ -n "${KINU_EVAL_WEB_IDENTITY:-}" && -z "${KINU_EVAL_TOKEN:-}" ]]; then
+  bun scripts/eval-session-mint.ts || exit 1
+fi
 RESOLVED_OUT="$(bun scripts/eval-credentials.ts)"
 mapfile -t RESOLVED <<< "$RESOLVED_OUT"
 if [[ ${#RESOLVED[@]} -eq 2 ]]; then
