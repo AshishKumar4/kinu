@@ -7,15 +7,17 @@
  * These pin the mapping at the one body both now construct.
  */
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { Database } from 'bun:sqlite';
 
 import {
-  shadowTrialTerminalEffect, takesTerminalEffect, turnRecordTerminalEffect,
+  TERMINAL_EFFECT_RETRY_BASE_MS, TerminalEffectLedger, initTerminalEffectTable, shadowTrialTerminalEffect,
+  takesTerminalEffect, terminalEffect, turnRecordTerminalEffect,
 } from '../src/orchestrator/terminal-effects';
 import { initAlternateTakesTable, latestAlternateTakeSet, unclaimedAlternateTakeIds } from '../src/mcts/takes';
 import { projectJsonValue, type CompletedTurn } from '../src/index';
 import { makeSql, makeExecRaw } from './helpers';
-import { createTestActors } from '@kinu.run/test-utils';
+import { createTestActors, testActorHandle } from '@kinu.run/test-utils';
 
 const TURN: CompletedTurn = {
   userMessage: 'name the parser', assistantResponse: 'the parser is sound',
@@ -124,5 +126,65 @@ describe('takesTerminalEffect', () => {
     // Purged, never claimed: the earlier claimed set is what the surfaces read.
     expect(unclaimedAlternateTakeIds(sql, actor)).toEqual([]);
     expect(latestAlternateTakeSet(sql, actor)?.id).toBe('take-first');
+  });
+});
+
+describe('a held owed outcome', () => {
+  // An effect that finds a live carrier already owning the work (a queued
+  // confirming turn, a running branch head) reports `held`. That run was a look,
+  // not a failed attempt: the ledger keeps the attempt count and re-arms at the
+  // base delay instead of doubling the row's backoff for every sweep that lands
+  // while the carrier runs — which, before this, inflated recovery after a crash
+  // toward the ten-minute ceiling for no failure at all.
+  test('keeps the attempt count and the base delay across repeated looks', async () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    initTerminalEffectTable(makeExecRaw(db));
+    let now = 1_000;
+    const looks = { held: 0, failing: 0 };
+
+    // Two real names, stub bodies: `branches` stands in for the held case and
+    // `takes` for an ordinary undelivered one.
+    const effects = {
+      branches: terminalEffect({ input: v.object({}), run: () => {
+        looks.held += 1;
+
+        return { status: 'owed', held: true, detail: 'carrier live' };
+      } }),
+      takes: terminalEffect({ input: v.object({}), run: () => {
+        looks.failing += 1;
+
+        return { status: 'owed', detail: 'undelivered' };
+      } }),
+    };
+
+    const ledger = new TerminalEffectLedger({
+      sql, actor: testActorHandle(sql, { actorId: 'actor-a' }), effects, now: () => now,
+      scheduleRetry: async () => {},
+    });
+
+    const row = (key: string) => sql<{ attempts: number; next_attempt_at: number }>`
+      SELECT attempts, next_attempt_at FROM terminal_effects WHERE effect_name = ${key}`[0];
+
+    const run = await ledger.run('seq', [
+      { name: 'branches', scope: '', input: {}, lane: 'detached' },
+      { name: 'takes', scope: '', input: {}, lane: 'detached' },
+    ]);
+
+    await run.reported;
+
+    for (const step of [1, 2, 3]) {
+      now = row('takes')?.next_attempt_at ?? now;
+      await ledger.replayOwed('seq');
+      expect(looks).toEqual({ held: step + 1, failing: step + 1 });
+      // Held: no attempt on the books (a look is not one), the next look one
+      // base delay out.
+      expect(row('branches')).toEqual({ attempts: 0, next_attempt_at: now + TERMINAL_EFFECT_RETRY_BASE_MS });
+      // Failing: the ordinary schedule, doubling per attempt.
+      expect(row('takes')?.attempts).toBe(step + 1);
+    }
+
+    expect(row('takes')?.next_attempt_at).toBeGreaterThan(now + TERMINAL_EFFECT_RETRY_BASE_MS);
+    db.close();
   });
 });
