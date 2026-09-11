@@ -11,19 +11,19 @@
 // mutation). Callers can override.
 
 import type { streamText } from 'ai';
+import type { ReasoningEffort } from '../providers/reasoning-effort';
 
-export const REASONING_EFFORTS = ['low', 'medium', 'high'] as const;
-
-export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+// The vocabulary itself is a provider fact and lives at the platform layer;
+// this module owns the per-stage POLICY over it.
+export {
+  REASONING_EFFORTS, CHAT_COMPLETIONS_REASONING_EFFORTS, isReasoningEffort, knownReasoningEfforts,
+  type ReasoningEffort,
+} from '../providers/reasoning-effort';
 
 /** Provider-namespaced request options, as the AI SDK declares them. Named here
  *  because this file is where an effort BECOMES one, and every caller that
  *  carries a derived set across a seam needs to say so in a type. */
 export type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
-
-export function isReasoningEffort<Value>(value: Value): value is Value & ReasoningEffort {
-  return value === 'low' || value === 'medium' || value === 'high';
-}
 
 export type InferenceStage =
   | 'chat'              // User-facing chat turn
@@ -57,11 +57,11 @@ export function workersAIEffortOption(
   return { providerOptions: { 'workers-ai': { reasoningEffort: effort } } };
 }
 
-const ANTHROPIC_THINKING_BUDGET = {
-  low: 4_000,
-  medium: 16_000,
-  high: 32_000,
-} satisfies Record<ReasoningEffort, number>;
+/** The levels Anthropic's `effort` parameter takes, as @ai-sdk/anthropic
+ *  declares them. `none` and `minimal` are not among them, so an assignment
+ *  carrying one leaves the model on its own default rather than sending a
+ *  value the API refuses. https://platform.claude.com/docs/en/build-with-claude/effort */
+const ANTHROPIC_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 /** Provider-native reasoning options for a resolved model-spec prefix. */
 export function reasoningEffortOptions(
@@ -82,11 +82,7 @@ export function reasoningEffortOptions(
     case 'openrouter':
       return { openrouter: { reasoningEffort: effort } };
     case 'anthropic':
-      return {
-        anthropic: {
-          thinking: { type: 'enabled', budgetTokens: ANTHROPIC_THINKING_BUDGET[effort] },
-        },
-      };
+      return ANTHROPIC_EFFORTS.includes(effort) ? { anthropic: { effort } } : undefined;
     default:
       return undefined;
   }

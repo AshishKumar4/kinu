@@ -1,5 +1,5 @@
 import { requireAuthConfig } from '../config';
-import { isReasoningEffort, projectJsonValue, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
+import { isReasoningEffort, projectJsonValue, REASONING_EFFORTS, type JsonValue, type ModelMenu, type ReasoningEffort, type TimerTrigger, type TimerTriggerOpts } from '@kinu.run/core';
 import { resolveAgentTarget } from '../agent-target';
 import {
   cancelLocalJob,
@@ -100,7 +100,7 @@ export async function effortCommand(name: string, level: string | undefined): Pr
   const target = resolveAgentTarget(name);
 
   if (level !== undefined && !isReasoningEffort(level)) {
-    throw new Error('Reasoning effort must be low, medium, or high.');
+    throw new Error(`Reasoning effort must be one of ${REASONING_EFFORTS.join(', ')}.`);
   }
 
   let result: EffortResult;

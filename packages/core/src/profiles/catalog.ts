@@ -20,8 +20,11 @@ import { JsonValueSchema } from '../utils/json';
 // ── Vocabulary ───────────────────────────────────────────────────
 
 /** Named inference tiers in their stable UI order. Only `default` must be
- *  configured; every other tier aliases it when absent. */
-export const TIER_IDS = ['tiny', 'fast', 'default', 'slow', 'deep'] as const;
+ *  configured: it is the model the account runs on, the one a new workspace
+ *  starts with, and the one `fast` and `deep` alias when absent. `tiny` and
+ *  `slow` were removed (#7): they overlapped `fast` and `deep`, and a catalog
+ *  or role still naming them is refused at read rather than aliased. */
+export const TIER_IDS = ['fast', 'default', 'deep'] as const;
 
 export type TierId = (typeof TIER_IDS)[number];
 
@@ -61,7 +64,7 @@ export function isValidRoleId(value: string): value is RoleId {
  *  value off a durable row can be tested without a cast. */
 const TIER_ID_MEMBERS: ReadonlySet<string> = new Set(TIER_IDS);
 
-/** Whether a stored string names one of the five tiers. A GUARD rather than an
+/** Whether a stored string names one of the three tiers. A GUARD rather than an
  *  assertion at the read sites: a durable row can hold a value written by
  *  another build, and narrowing it here is what keeps those readers free of
  *  casts. */
@@ -83,17 +86,13 @@ const TierAssignmentSchema = v.strictObject({
 
 export interface TierAssignments {
   default: TierAssignment;
-  tiny?: TierAssignment | undefined;
   fast?: TierAssignment | undefined;
-  slow?: TierAssignment | undefined;
   deep?: TierAssignment | undefined;
 }
 
 const TierAssignmentsSchema = v.strictObject({
   default: TierAssignmentSchema,
-  tiny: v.optional(TierAssignmentSchema),
   fast: v.optional(TierAssignmentSchema),
-  slow: v.optional(TierAssignmentSchema),
   deep: v.optional(TierAssignmentSchema),
 });
 
@@ -341,7 +340,7 @@ export const BUILTIN_ROLE_DEFINITIONS = {
 ### When blocked
 - Blocked means a fact the plan depends on is not in the workspace, or a decision only the user can make.
 - Write the plan up to that point, name the fork, and ask the question. Do not choose for the user silently, and do not stop on a question the code can answer.`,
-    tier: 'slow',
+    tier: 'deep',
     preset: 'ideate',
     plan: true,
   },
@@ -394,7 +393,7 @@ export const BUILTIN_ROLE_DEFINITIONS = {
 ### When blocked
 - Blocked means you cannot see the change, or the code it touches is not in this workspace.
 - Say what is missing. Review what you can reach and mark the rest as not covered. Never pass a change you could not read.`,
-    tier: 'slow',
+    tier: 'deep',
     preset: 'audit',
   },
   designer: {

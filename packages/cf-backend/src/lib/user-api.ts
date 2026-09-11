@@ -5,12 +5,13 @@
  */
 import {
   DEVICE_SANDBOX_CAPABILITIES, DEVICE_SANDBOX_REASONS, DEVICE_TIERS,
-  ProfileCatalogEnvelopeSchema,
+  ProfileCatalogEnvelopeSchema, REASONING_EFFORTS,
   type Credential,
   type DeviceSandboxStatus,
   type DeviceTier,
   type ProfileCatalog,
   type ProfileCatalogEnvelope,
+  type ReasoningEffort,
 } from '@kinu.run/core';
 import { tolerateAsync } from '@kinu.run/core/obs';
 import { DEFAULT_CALL_TIMEOUT_MS } from 'agents/client';
@@ -56,6 +57,9 @@ export interface ModelMenuEntry {
   provider: string;
   capabilities?: string[];
   contextWindow?: number;
+  /** The effort levels the model accepts, in the provider's order. Absent
+   *  when the catalog could not say; empty when the model takes none. */
+  reasoningEfforts?: ReasoningEffort[];
 }
 
 /** A provider the server could not reach while building the menu (revoked
@@ -101,6 +105,7 @@ const CredentialSummarySchema = v.object({
 const ModelMenuEntrySchema = v.object({
   spec: v.string(), label: v.string(), provider: v.string(),
   capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
+  reasoningEfforts: v.optional(v.array(v.picklist(REASONING_EFFORTS))),
 });
 
 const ProviderFailureSchema = v.object({
@@ -110,8 +115,6 @@ const ProviderFailureSchema = v.object({
 const ModelMenuSchema = v.object({
   models: v.array(ModelMenuEntrySchema), failures: v.array(ProviderFailureSchema),
 });
-
-const ConfigEntrySchema = v.object({ key: v.string(), value: v.nullable(v.string()) });
 
 export interface DeviceFlowStart {
   userCode: string;
@@ -283,19 +286,15 @@ export const listCredentials  = () => api(v.array(CredentialSummarySchema), 'GET
 
 export const setCredential    = (key: string, value: Credential) =>
   api(OkSchema, 'POST', `/credentials/${encodeURIComponent(key)}`, value)
-    .then((r) => {
-      invalidateModelsCache();
+    .then((r) => { invalidateModelsCache();
 
-      return r;
-    });
+ return r; });
 
 export const deleteCredential = (key: string) =>
   api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`)
-    .then((r) => {
-      invalidateModelsCache();
+    .then((r) => { invalidateModelsCache();
 
-      return r;
-    });
+ return r; });
 
 // ── Codex device flow ──────────────────────────────────────────────
 const DeviceFlowStartSchema = v.object({
@@ -316,24 +315,14 @@ export const codexStatus      = () => api(CodexStatusSchema, 'GET', '/codex');
 export const startCodexFlow   = () => api(DeviceFlowStartSchema, 'POST', '/codex/start');
 
 export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll')
-  .then((r) => {
-    if (r.connected) invalidateModelsCache();
+  .then((r) => { if (r.connected) invalidateModelsCache();
 
-    return r;
-  });
+ return r; });
 
 export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
-  .then((r) => {
-    invalidateModelsCache();
+  .then((r) => { invalidateModelsCache();
 
-    return r;
-  });
-
-// ── Config / defaults ──────────────────────────────────────────────
-export const getConfig        = (key: string) => api(ConfigEntrySchema, 'GET', `/config/${encodeURIComponent(key)}`);
-
-export const setConfig        = (key: string, value: string) =>
-  api(OkSchema, 'PUT', `/config/${encodeURIComponent(key)}`, { value });
+ return r; });
 
 // ── Account roles and model tiers ─────────────────────────────────
 export const getProfileCatalog = (): Promise<ProfileCatalogEnvelope> =>
@@ -396,11 +385,9 @@ export const listCloudflareAccounts = () =>
 
 export const selectCloudflareAccount = (id: string) =>
   api(OkSchema, 'PUT', '/cloudflare/account', { id })
-    .then((r) => {
-      invalidateModelsCache();
+    .then((r) => { invalidateModelsCache();
 
-      return r;
-    });
+ return r; });
 
 // ── Cloudflare AI Gateway (the user's own gateway) ─────────────────
 export interface CloudflareGatewaySummary {
@@ -425,11 +412,9 @@ export const listCloudflareGateways = () =>
 
 export const selectCloudflareGateway = (id: string | null) =>
   api(OkSchema, 'PUT', '/cloudflare/gateway', { id })
-    .then((r) => {
-      invalidateModelsCache();
+    .then((r) => { invalidateModelsCache();
 
-      return r;
-    });
+ return r; });
 
 export function cloudflareReconnectPath(returnTo: string): string {
   const params = new URLSearchParams({

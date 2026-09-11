@@ -269,10 +269,6 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
     }]);
   }
 
-  if (path === "/api/user/config/default_model") {
-    return fixtureJson({ key: "default_model", value: "workers-ai/llama-4" });
-  }
-
   if (path === "/api/user/cloudflare/accounts") {
     return fixtureJson({
       connected: true, selectedId: "acct-1", accounts: [{ id: "acct-1", name: "Primary" }],
@@ -537,11 +533,9 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
   const rnd = mulberry32(0x5EA4C4);
   const rows: MctsRow[] = [];
 
-  const push = (row: MctsRow): MctsRow => {
-    rows.push(row);
+  const push = (row: MctsRow): MctsRow => { rows.push(row);
 
-    return row;
-  };
+ return row; };
 
   const root = push({
     id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028,
