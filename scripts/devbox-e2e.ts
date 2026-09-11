@@ -648,13 +648,12 @@ export async function runLifecycle(
     });
     // ── the wake ──────────────────────────────────────────────────────────
     //
-    // THE LIVE PROOF OF THE GATE-TIME RESTORE IS NOT WIRED HERE, deliberately,
+    // THE LIVE PROOF OF THE RESTORE'S VISIBILITY IS NOT WIRED HERE, deliberately,
     // and the reason is worth stating rather than leaving as an omission. The
-    // restore now runs inside the container-start hook, which the SDK awaits in
-    // `blockConcurrencyWhile`, so while it is held the runtime delivers no event
-    // to the box: an `/exec` posted the moment a wake starts is not queued
-    // behind a promise this code holds, it is not delivered at all until the
-    // restore has settled. Proving that needs a racing operation whose REPLY
+    // restore runs on the first delivered frame after the container starts, and
+    // every operation waits on the readiness gate: an `/exec` posted the moment
+    // a wake starts joins the one attempt and is admitted after it settles, or
+    // is told to ask again. Proving that needs a racing operation whose REPLY
     // carries container bytes, and the only channel this suite has for that is
     // the workload harness — which is installed after the wake, so a racing
     // call cannot use it. The property is held instead by

@@ -51,10 +51,10 @@ interface DevboxStorage {
 }
 ```
 
-`attach()` takes no deadline. The container-start hook owns the budget: the
-restoration runs inside the gate under a polled budget, and a failure parks
-to the `devboxStartup` schedule row, whose delivered frame continues it where
-timers fire. No strategy would use a deadline argument.
+`attach()` takes no deadline. The one restore attempt owns the budget: it
+runs on a delivered frame — the first readiness request after a container
+start, or the `devboxStartup` schedule row — under a raced budget whose
+deadline is delivered there. No strategy would use a deadline argument.
 
 `lifecycle.ts` holds pure decisions. It touches no container, bucket, or clock,
 so tests can pin the reasoning without the platform.
@@ -150,15 +150,26 @@ shipped image, and against a FUSE fixture that refuses it to prove the case can
 go red.
 
 ## Platform constraints
-`onStart` runs inside `blockConcurrencyWhile`. I measured a deployed Worker
-where its first operation after a stop answered 500:
+`onStart` runs inside `blockConcurrencyWhile`, and a Durable Object timer set
+inside that block is not delivered until the block releases. I measured a
+deployed Worker where its first operation after a stop answered 500:
 `A call to blockConcurrencyWhile() in a Durable Object waited for too long.
-The call was canceled and the Durable Object was reset.` A timer inside that
-block cannot fire until the block releases, so the in-gate budget is polled,
-not raced. The box is admitted through `start()` on the instance, which the
-patched SDK marks healthy before the hook — so a command the restore issues
-routes straight to the container instead of opening a nested start. Admission
-waits for the instance, never for an app port the restore has not started yet.
+The call was canceled and the Durable Object was reset.` I then measured six
+fresh container starts of a restore placed inside that hook (2026-09-10,
+`bench/measure-first/DECISIVE-2026-09-05.md`): one admitted at 3,270 ms,
+five reset by the platform at 30.0 s with no phase stamped. The first command
+on a fresh container opens the SDK's control connection, whose connect abort
+(`@cloudflare/sandbox` `dist/sandbox-CPj2jsbz.js:3563`, 30 s) and retry
+backoff (`:812`, 3 s) are both `setTimeout` on the Durable Object; a
+container whose server is not yet accepting at the first attempt cannot be
+reached from inside the gate at all. So the hook reaches no container: it
+arms the schedule rows and marks the restore pending, and the first delivered
+frame restores under a raced budget whose deadline fires. `scripts/do-init-
+gate.ts` holds the hook to that shape by name. The box is admitted through
+`start()` on the instance, which the patched SDK marks healthy before the
+hook, so the restore's first command routes straight to the container rather
+than opening a nested start. Admission waits for the instance, never for an
+app port the restore has not started yet.
 
 Every operation awaits `ensureReady()`, which resolves once the work directory is
 attached. A failed attach records an incident, refuses with its reason, and

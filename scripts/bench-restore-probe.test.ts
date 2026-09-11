@@ -11,7 +11,7 @@ import {
 } from './bench-devbox-strategies';
 import type { Fixture, RestoreProbeRow } from './bench-devbox-strategies';
 
-// ── the in-gate restore poll ────────────────────────────────────────────────
+// ── the restore poll ────────────────────────────────────────────────
 //
 // The 2026-09-09 onStart probe run reported its timing table from a lane
 // report and retained no rows, so the table cannot be re-read. The driver
@@ -35,7 +35,7 @@ function stubFetch(answer: (url: string) => Response | Promise<Response>): () =>
   };
 }
 
-describe('the in-gate restore poll', () => {
+describe('the restore poll', () => {
   test('a present probe parses to its wall time', async () => {
     const restore = stubFetch(() => new Response(JSON.stringify({
       ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
@@ -70,7 +70,7 @@ describe('the in-gate restore poll', () => {
     }
   });
 
-  test('a start the platform reset is an unsettled row naming its last phase', async () => {
+  test('an attempt the platform reset is an unsettled row naming its last phase', async () => {
     const restore = stubFetch(() => new Response(JSON.stringify({
       ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
       probe: { wallMs: null, at: 1_786_000_000_000, phases: { containerStart: 28_400 } }, ms: 4,

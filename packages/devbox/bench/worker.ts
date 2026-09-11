@@ -56,8 +56,9 @@ import {
   type DevboxPolicy,
   type DevboxStore,
   type DevboxStrategyName,
+  type RestoreClockPhase,
 } from '../src/index';
-import type { RestorePhase, RestorePhaseStamps } from '../src/durability/contracts';
+import type { RestorePhaseStamps } from '../src/durability/contracts';
 import type { LateStartFailure } from '../src/lifecycle';
 import {
   R2_CLASS_A_OPERATIONS as CLASS_A,
@@ -436,16 +437,17 @@ const OPERATION_ID_PREFIX = 'bench:operation-id:';
  *  return, not to defer the work. */
 const OPERATION_DELAY_SECONDS = 1;
 
-/** The in-gate restore's latest probe, written by `onStart` and by every
- *  phase stamp under it. */
+/** The latest restore attempt's probe, written as the box's clock reports
+ *  it: opened, every phase, settled. */
 const RESTORE_PROBE_KEY = 'bench:restore-probe';
 
 /**
- * What one container start left behind. `at` is the hook's entry; `phases`
- * are the stamps the restore reached, each as ms after entry, written
- * durably AS THEY LAND so a start the platform reset still names its last
- * phase; `wallMs` is entry to settle, null while the hook has not returned —
- * which after a reset is for ever, and is the row's whole message.
+ * What one restore attempt left behind. `at` is when the attempt opened on
+ * its delivered frame; `phases` are the stamps the restore reached, each as
+ * ms after that, written durably AS THEY LAND so an attempt the platform
+ * reset still names its last phase; `wallMs` is opened to settled, null while
+ * the attempt has not settled — which after a reset is for ever, and is the
+ * row's whole message.
  */
 interface RestoreProbe {
   readonly at: number;
@@ -488,55 +490,39 @@ class BenchBox extends Devbox<BenchEnv> {
     // platform type that can drift.
     flushEnv = args[1];
   }
-  /**
-   * Time the container-start restore from inside the gate, for the in-gate
-   * timing proof. Entry to settle, as the platform holds it: every request
-   * waits behind this hook, so its wall time is the number the
-   * `do.block_concurrency.cancel_ms` cap judges. Stored durably because the
-   * object may reset between the restore and the driver's read; overwritten
-   * by every start, so a read names the latest wake, never an old one.
-   *
-   * THE ROW IS WRITTEN THREE TIMES PER START, not once at the end: at entry
-   * with no wall time, at every phase the restore reaches, and at settle
-   * with the wall time. The 2026-09-10 decisive run reset inside this hook
-   * and left no row at all, so the one number that mattered — which phase
-   * held the gate — was never recorded. A reset now leaves the row with the
-   * phases it reached and `wallMs: null`.
-   */
-  override async onStart(): Promise<void> {
-    if (this.#probe !== undefined && this.#probe.wallMs === null) {
-      // Re-entered on a restoring box: the base joins the running restore, and
-      // the start that opened the row keeps it.
-      await super.onStart();
-      return;
-    }
-    const enteredAt = Date.now();
-    const opened: RestoreProbe = { at: enteredAt, wallMs: null, phases: {} };
-    this.#probe = opened;
-    await this.ctx.storage.put(RESTORE_PROBE_KEY, opened);
-    await super.onStart();
-    const settled: RestoreProbe = { ...(this.#probe ?? opened), wallMs: Date.now() - enteredAt };
-    this.#probe = settled;
-    await this.ctx.storage.put(RESTORE_PROBE_KEY, settled);
-  }
-
-  /** The probe of the start in flight on this activation. */
+  /** The probe of the attempt in flight on this activation. */
   #probe: RestoreProbe | undefined;
 
-  /** Each phase lands in the durable row as it happens — written AND synced,
-   *  because the platform cancels the gate by resetting the object, and a
-   *  write still in the cache at that moment is the row this probe exists to
-   *  keep. Not awaited: the hook is synchronous, so the write rides beside the
-   *  restore. */
-  protected override onRestorePhase(phase: RestorePhase, atMs: number): void {
-    const probe = this.#probe;
+  /**
+   * Time the restore attempt, opened to settled, for the restore-timing
+   * table. The attempt runs on a delivered frame — the readiness request or
+   * the startup row — and the readiness gate admits nobody until it settles,
+   * so its wall time is what a cold attach or a wake costs before the first
+   * operation runs. Stored durably because the object may reset between the
+   * restore and the driver's read; overwritten by every attempt, so a read
+   * names the latest, never an old one.
+   *
+   * THE ROW IS WRITTEN AT EVERY TICK OF THE CLOCK, not once at the end: at
+   * `opened` with no wall time, at every phase the restore reaches, and at
+   * `settled` with the wall time — each written AND synced, because a
+   * platform reset drops what is still in the cache, and the row this probe
+   * exists to keep is the one that names the last phase before a reset. Not
+   * awaited: the witness is synchronous, so the write rides beside the
+   * restore.
+   */
+  protected override onRestorePhase(phase: RestoreClockPhase, atMs: number): void {
+    const probe = phase === 'opened'
+      ? { at: Date.now(), wallMs: null, phases: {} }
+      : this.#probe;
     if (probe === undefined) return;
-    const stamped: RestoreProbe = { ...probe, phases: { ...probe.phases, [phase]: atMs } };
-    this.#probe = stamped;
-    void this.ctx.storage.put(RESTORE_PROBE_KEY, stamped)
+    const row: RestoreProbe = phase === 'opened' ? probe
+      : phase === 'settled' ? { ...probe, wallMs: atMs }
+      : { ...probe, phases: { ...probe.phases, [phase]: atMs } };
+    this.#probe = row;
+    void this.ctx.storage.put(RESTORE_PROBE_KEY, row)
       .then(async () => await this.ctx.storage.sync())
       .catch((cause: LateStartFailure['cause']) => {
-        console.error(`[bench] restore phase ${phase} was not persisted: ${describeThrown({ cause })}`);
+        console.error(`[bench] restore ${phase} was not persisted: ${describeThrown({ cause })}`);
       });
   }
 
@@ -935,9 +921,10 @@ async function serveInstrumentRoutes(
     }
 
     case 'GET /restore-probe': {
-      // The last in-gate restore's wall time, written by the start hook itself.
-      // The driver polls this after a wake settles: the number is the gate
-      // occupancy the platform cap judges, not the driver's own round trip.
+      // The last restore attempt's wall time and phases, written by the box's
+      // own clock. The driver polls this after a cold attach or a wake
+      // settles: the number is what the readiness gate held the first
+      // operation for, not the driver's own round trip.
       const probe = await box.readRestoreProbe();
       return json({ ok: probe !== undefined, strategy, box: name, probe, ms: Date.now() - started });
     }
