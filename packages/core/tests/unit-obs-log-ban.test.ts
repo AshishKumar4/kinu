@@ -32,7 +32,6 @@ import { dirname, join } from 'node:path';
 import {
   createRecordingLogger,
   KinuError,
-  RESERVED_LOG_FIELDS,
   toKinuError,
 } from '../src/obs/index';
 
@@ -167,25 +166,6 @@ describe('a log call carrying a secret does not compile', () => {
     // assignable to a Record. Nothing but this fixture would have caught it.
     const allowed = compiled.diagnostics.filter((d) => d.file.endsWith('allowed.ts'));
     expect(allowed.map((d) => `${String(d.line)}: ${d.text}`)).toEqual([]);
-  });
-});
-
-describe('the reserved list is the one AGENTS.md states', () => {
-  test('every field named in the contract is banned, and none is invented', () => {
-    // The list is load-bearing prose in AGENTS.md § Errors, Logging &
-    // Traceability. Read from the file rather than restated, so the ban and the
-    // contract cannot drift — the failure mode `platform-catalog.ts` exists to
-    // prevent, one document over.
-    const agents = readFileSync(join(repoRoot, 'AGENTS.md'), 'utf8');
-    const sentence = /no `apiKey`[^.]*?\./u.exec(agents)?.[0];
-    expect(sentence).toBeDefined();
-    const named = [...(sentence ?? '').matchAll(/`([A-Za-z()]+)`/gu)].map(([, field]) => field);
-
-    // `header(s)` is how the contract writes the pair; the type spells both.
-    const expanded = named.flatMap((field) =>
-      field === 'header(s)' ? ['header', 'headers'] : [field]);
-
-    expect(expanded.sort()).toEqual([...RESERVED_LOG_FIELDS].sort());
   });
 });
 

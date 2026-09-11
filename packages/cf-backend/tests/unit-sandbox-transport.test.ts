@@ -82,13 +82,13 @@ describe('one transport, named once', () => {
 describe('the constant and the deployed configuration agree', () => {
   const wrangler = read('wrangler.jsonc');
 
-  test('both environments declare the same value the code passes', () => {
+  test('the deployment declares the same value the code passes', () => {
     const declared = [...wrangler.matchAll(/"SANDBOX_TRANSPORT"\s*:\s*"([^"]+)"/g)]
       .map((match) => match[1]);
 
-    // Production and staging. A third would be a new environment that has to be
-    // read, not silently averaged into a pass.
-    expect(declared).toEqual([SANDBOX_TRANSPORT, SANDBOX_TRANSPORT]);
+    // Exactly one: a second would be a new environment that has to be read,
+    // not silently averaged into a pass.
+    expect(declared).toEqual([SANDBOX_TRANSPORT]);
   });
 
   test('the var is still set, because a dropped option must inherit rpc', () => {
