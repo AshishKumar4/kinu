@@ -130,6 +130,16 @@ export function formatApprovalGrant(grant: ApprovalGrant): string {
   return `${grant.rule}@${grant.executor}`;
 }
 
+/**
+ * Whether a standing grant covers this rule on this executor. The one equality
+ * every `granted()` reads: a policy that compared one field and not the other
+ * would honour a `sudo` grant on the laptop for the sandbox too, and three
+ * hand-written comparisons are three places that can.
+ */
+export function holdsGrant(grants: readonly ApprovalGrant[], grant: ApprovalGrant): boolean {
+  return grants.some((held) => held.rule === grant.rule && held.executor === grant.executor);
+}
+
 /** Read a stored grant back. Anything malformed is not a grant — a config
  *  value that cannot be parsed must never widen what runs. */
 export function parseApprovalGrant(raw: string): ApprovalGrant | null {
@@ -945,8 +955,6 @@ export function createInheritedApprovalPolicy(
       grants = resolveInheritedGrants({ root: root.grants, own: source.ownGrants() });
     },
     mode: () => mode,
-    granted: (grant) => grants.some(
-      (g) => g.rule === grant.rule && g.executor === grant.executor,
-    ),
+    granted: (grant) => holdsGrant(grants, grant),
   };
 }

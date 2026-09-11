@@ -3,7 +3,8 @@
 // assembly is locked behind ONE test both backends rely on, rather than sitting
 // inside one backend's host where only that backend could prove it.
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { createTestActors, createTestRuntime, scriptedTurnModel, toolExecute } from '@kinu.run/test-utils';
+import { createTestWorkspace } from './helpers';
 import type { LanguageModel } from 'ai';
 import { hostedSeatsOver } from './helpers-actor-host';
 import {
@@ -13,6 +14,7 @@ import {
 import type { Decision, Evidence, HeadInput, SerializedMessage } from '../src/heads/types';
 import {
   inheritedContextFromHistory, inheritedContextFromRows, inheritedContextOmissionNote,
+  inheritedContextFromConversation, INHERITED_CONTEXT_CAP,
 } from '../src/orchestrator/heads-support';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../src/prompts/evidence-window';
 import { defaultLoopOrigin } from '../src/scaffold/bootstrap';
@@ -301,5 +303,42 @@ describe('inherited context is windowed at READ time, exactly once (C4)', () => 
 
     const msgs = buildHeadMessages(headInput({ inheritedContext }));
     expect(msgs[0]).toEqual({ role: 'assistant', content: windowed });
+  });
+});
+
+describe('inheritedContextFromConversation — the plain store, read once for both hosts', () => {
+  test('the newest rows up to the cap, in order, with the omission note core owes a hire', () => {
+    const { sql, execRaw } = createTestWorkspace();
+    const actor = createTestActors(sql, execRaw).main;
+
+    for (let i = 0; i < INHERITED_CONTEXT_CAP + 5; i++) {
+      void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+        VALUES (${actor.actorId}, ${`m${i}`}, ${'default'}, ${i % 2 === 0 ? 'user' : 'assistant'}, ${`body ${i}`}, ${1_000 + i})`;
+    }
+
+    // A row of another session, and a system row of this one: neither is a
+    // turn the hire inherits, and neither counts against what it was not told.
+    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${'other'}, ${'side'}, ${'user'}, ${'elsewhere'}, ${5_000})`;
+    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${'sys'}, ${'default'}, ${'system'}, ${'runtime note'}, ${5_001})`;
+
+    const ctx = inheritedContextFromConversation(sql, actor, 'default');
+    expect(ctx[0]).toMatchObject({ id: 'ctx-omitted', role: 'system' });
+    expect(ctx[0]!.content).toContain('5 earlier messages omitted');
+    expect(ctx).toHaveLength(INHERITED_CONTEXT_CAP + 1);
+    expect(ctx[1]).toMatchObject({ id: 'm5', role: 'assistant', content: 'body 5', createdAt: 1_005 });
+    expect(ctx.at(-1)).toMatchObject({ id: `m${INHERITED_CONTEXT_CAP + 4}` });
+    expect(ctx.some((entry) => entry.content === 'elsewhere' || entry.content === 'runtime note')).toBe(false);
+  });
+
+  test('a conversation inside the cap carries no note', () => {
+    const { sql, execRaw } = createTestWorkspace();
+    const actor = createTestActors(sql, execRaw).main;
+    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+      VALUES (${actor.actorId}, ${'m0'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
+    expect(inheritedContextFromConversation(sql, actor, 'default')).toEqual([
+      { id: 'm0', role: 'user', content: 'hello', createdAt: 1 },
+    ]);
   });
 });

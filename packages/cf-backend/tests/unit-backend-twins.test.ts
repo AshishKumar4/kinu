@@ -99,12 +99,6 @@ const KNOWN_TWINS: readonly string[] = [
   'listFileCheckpoints',
   'planFileRestore',
   'restoreFileCheckpoint',
-  // Genuinely different resolutions: cf normalizes the stored spec through its
-  // provider registry (an unset model resolving to "" was the 41%-of-Kimi
-  // context-window bug); the CLI's resolver has already normalized by the time
-  // the spec is cached. Same answer, two legitimate routes to it — the two
-  // backends cache at different points of the same normalization pipeline.
-  'effectiveModelSpec',
   // Both build core's default key-less provider, but from different platform
   // material: cf's owned model services (env + the owner's auth) vs node fetch
   // + the local auth store. Only the memoisation is common, and memoisation is
@@ -181,6 +175,12 @@ const SHARED_TRANSPORTS = {
   // alone. What stays per backend is only where a FRESH resolution comes from:
   // the actor's own profile inputs, the CLI's local profile authority.
   routingProfile: 'resolveRoutingProfile',
+  // The claimed tier, else the stored spec, through the backend's own
+  // normalizer — ONE spelling, because every model_call row is priced against
+  // it and every analytics row grouped by it. The CLI's copy read its cached
+  // spec and fell to a fabricated static spec in the window between a config
+  // change and the next turn; cf's normalization was the stricter side.
+  effectiveModelSpec: 'resolveEffectiveModelSpec',
   getAlwaysActiveSkills: 'getAlwaysActiveSkills',
   getEvolutionChangelog: 'getEvolutionChangelog',
   getReasoningEffort: 'getReasoningEffort',
@@ -229,17 +229,16 @@ const SHARED_TRANSPORTS = {
   resumeBackgroundJob: 'resumeBackgroundJob',
   revertChangelogEntry: 'revertChangelogEntryById',
   revokeShellApprovalGrants: 'revokeShellApprovalGrants',
-  // The whole turn-end policy — enabled, review, the four suppression rules,
-  // deliver-or-record — is core's `runAdvisorLane`. What each body states is
-  // only what its own backend knows: where the governor lives, and whether a
-  // completion gate exists at all (it is the one-shot CLI surface's mechanism,
-  // so cf passes `gateOpen: false` by construction).
-  reviewTurnInBackground: 'runAdvisorLane',
-  // One review, from a snapshot: the single body each backend's live lane and its
-  // recovery both run. The verdict policy is the same `runAdvisorLane`; each body
-  // states only which model answers, where the governor lives, and whether a
-  // completion gate exists at all.
-  runAdvisorReview: 'runAdvisorLane',
+  // ONE lane per turn, ever started: the tombstone key, its scope and the
+  // fiber's name are core's, so a replay on either backend refuses a second
+  // review by the same rule. Each body keeps only its own carrier — a durable
+  // fiber on the DO, a tracked process fiber on the CLI.
+  reviewTurnInBackground: 'advisorLaneStarted',
+  // One review, from a snapshot: the body the live lane and its recovery both
+  // run, governed off the TURN's labels. Each backend states only which client
+  // answers, where the governor lives, and whether a completion gate exists at
+  // all (it is the one-shot CLI surface's mechanism, so cf passes `false`).
+  runAdvisorReview: 'reviewRecordedTurn',
   // The prompt pair and the parse are core's; each body states only which
   // model answers (its routed 'fast' lane) and its own spend/operation framing.
   suggestTitle: 'suggestWorkspaceTitle',
@@ -519,8 +518,10 @@ interface DifferentialSeam {
   readonly coreSymbol: string;
   /** The shared fixture both suites must pin, as exported from test-utils. */
   readonly fixture: readonly string[];
-  /** The suite on each side that pins it. */
-  readonly suites: readonly [cf: string, cli: string];
+  /** The suite on each side that pins it: at least one under `cf-backend`
+   *  and one under `cli-backend` or `cli`, and a seam a third surface
+   *  implements names that surface too. */
+  readonly suites: readonly string[];
 }
 
 const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
@@ -565,6 +566,55 @@ const DIFFERENTIAL_SEAMS: readonly DifferentialSeam[] = [
       'packages/cli-backend/src/agent-host/host.ts',
     ],
   },
+  {
+    // The five effect bodies every actor on both backends owes identically:
+    // the takes claim, the branch settlement, the evolution recording, the
+    // reactor drain and the shadow trial. Each was two near-copies whose
+    // disposition mapping — what is a refusal, what stays owed — drifted a
+    // detail at a time. The fixture is the factories themselves, executed in
+    // core's own suite; both tables must construct through them.
+    seam: 'terminal effect bodies',
+    coreSymbol: 'takesTerminalEffect',
+    fixture: [
+      'takesTerminalEffect', 'branchesTerminalEffect', 'turnRecordTerminalEffect',
+      'eventDrainTerminalEffect', 'shadowTrialTerminalEffect',
+    ],
+    suites: [
+      'packages/cf-backend/src/orchestrator.ts',
+      'packages/cli-backend/src/local-session.ts',
+    ],
+  },
+  {
+    // Where an actor sits in its subordinate tree. cf walked the directory rows;
+    // the CLI read a number it had written on the child's own config at birth,
+    // so the two answered "how deep is this child" from two stores nothing kept
+    // in step. One walk, off the row that IS the roster.
+    seam: 'delegation depth',
+    coreSymbol: 'delegationBudgetOf',
+    fixture: ['delegationBudgetOf'],
+    suites: [
+      'packages/cf-backend/src/subordinate-hosting.ts',
+      'packages/cli-backend/src/agent-host/host.ts',
+    ],
+  },
+  {
+    // Whether an automatic title may replace the current one. The cloud
+    // registry refused it over any origin but `auto`; the CLI refused it only
+    // over `user`, so a workspace whose origin nobody recorded was renamed by
+    // one backend and left alone by the other. One predicate now, read by the
+    // plan and by every persist.
+    seam: 'auto-title replacement',
+    // Both spellings of one rule: the registry-backed root asks the predicate
+    // with the row it read; a config-backed session persists through the
+    // helper that asks it. Each surface names one of the two.
+    coreSymbol: 'AutoTitle',
+    fixture: ['autoTitleMayReplace', 'persistAutoTitle'],
+    suites: [
+      'packages/cf-backend/src/user/user-do.ts',
+      'packages/cli-backend/src/local-session.ts',
+      'packages/cli/src/local-agent-client.ts',
+    ],
+  },
 ] as const;
 
 describe('the twin differential — one seam, one fixture, both backends', () => {
@@ -578,10 +628,18 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     const unreached: string[] = [];
 
     for (const entry of DIFFERENTIAL_SEAMS) {
-      const cf = [...CF_CLASSES.map(([file]) => read(file)), read('packages/cf-backend/src/head-runtime.ts')];
+      // The composition surfaces, plus whichever source files the seam itself
+      // names: a seam a user-plane file implements is reached there.
+      const cf = [
+        ...CF_CLASSES.map(([file]) => read(file)), read('packages/cf-backend/src/head-runtime.ts'),
+        ...entry.suites.filter((file) => file.startsWith('packages/cf-backend/src/')).map(read),
+      ];
 
-      const cli = [read(CLI_CLASS[0]), read('packages/cli-backend/src/head-runtime.ts'),
-        read('packages/cli-backend/src/agent-host/host.ts')];
+      const cli = [
+        read(CLI_CLASS[0]), read('packages/cli-backend/src/head-runtime.ts'),
+        read('packages/cli-backend/src/agent-host/host.ts'),
+        ...entry.suites.filter((file) => file.startsWith('packages/cli')).map(read),
+      ];
 
       if (!cf.some((body) => body.includes(entry.coreSymbol))) {
         unreached.push(`${entry.seam} — no cf surface names \`${entry.coreSymbol}\``);
@@ -615,6 +673,25 @@ describe('the twin differential — one seam, one fixture, both backends', () =>
     }
 
     expect(drifted).toEqual([]);
+  });
+
+  test('every shared effect body is constructed through its core factory on BOTH backends', () => {
+    // Stricter than the fixture check above, which is satisfied by any one
+    // name: a backend that re-spelled `shadow_trial` inline while still
+    // constructing `takes` through core would pass it. Each of the five is
+    // its own drift site, so each is held separately.
+    const seam = DIFFERENTIAL_SEAMS.find((entry) => entry.seam === 'terminal effect bodies');
+
+    if (!seam) throw new Error('the terminal effect bodies seam is not declared');
+    const cf = [read('packages/cf-backend/src/actor-agent.ts'), read('packages/cf-backend/src/orchestrator.ts')].join('\n');
+    const cli = read(CLI_CLASS[0]);
+
+    const missing = seam.fixture.flatMap((factory) => [
+      ...(delegatesTo(cf, factory) ? [] : [`cf does not construct ${factory}`]),
+      ...(delegatesTo(cli, factory) ? [] : [`cli does not construct ${factory}`]),
+    ]);
+
+    expect(missing).toEqual([]);
   });
 
   test('the shared merge fixture still resolves to the policy core produces', async () => {

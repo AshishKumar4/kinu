@@ -13,7 +13,7 @@ import {
   formatApproval,
   gateExec,
   gatedGrants,
-  formatApprovalGrant,
+  formatApprovalGrant, holdsGrant,
   parseApprovalGrant,
   type ApprovalGrant,
   type ShellApprovalPolicy,
@@ -482,5 +482,15 @@ describe('the grant vocabulary', () => {
     ]);
     // Warn-tier hits are not questions, so they buy nothing.
     expect(gatedGrants(reviewCommand('printenv', 'laptop'), 'laptop')).toEqual([]);
+  });
+
+  test('a grant covers its rule on its executor and nothing wider, on every policy that asks', () => {
+    // Three `granted()` bodies spelled this comparison for themselves; one
+    // that compared the rule alone would honour a laptop `sudo` in the sandbox.
+    const held: ApprovalGrant[] = [{ rule: 'sudo', executor: 'laptop' }];
+    expect(holdsGrant(held, { rule: 'sudo', executor: 'laptop' })).toBe(true);
+    expect(holdsGrant(held, { rule: 'sudo', executor: 'sandbox' })).toBe(false);
+    expect(holdsGrant(held, { rule: 'rm-recursive', executor: 'laptop' })).toBe(false);
+    expect(holdsGrant([], { rule: 'sudo', executor: 'laptop' })).toBe(false);
   });
 });

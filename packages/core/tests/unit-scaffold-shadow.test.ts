@@ -12,6 +12,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   initShadowTables,
   getPendingScaffold,
@@ -24,6 +25,7 @@ import {
   initScaffoldTables,
   type PendingScaffold,
   type ShadowConfig,
+  type AgentRuntime,
 } from '../src/index';
 import { testActorHandle } from '@kinu.run/test-utils';
 import { makeSql, makeExecRaw } from './helpers';
@@ -288,7 +290,25 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(promo.action).toBe('promote');
     expect(promo.newCurrentVersion).toBe(pending.version);
     expect(await rt.identity.scaffold.read()).toBe(pendingCode);
+    // The decision is DATED on the run-event log, whichever path moved the
+    // pointer: the changelog reads this row, and one backend wrote it only from
+    // its manual RPC while the other never did.
+    expect(decisionRows(rt)).toEqual([
+      { type: 'scaffold_promotion', payload: { fromVersion: 0, toVersion: 1 } },
+    ]);
   });
+
+  /** The scaffold decisions the run-event log holds, in order. */
+  function decisionRows(rt: AgentRuntime) {
+    return rt.storage.sql<{ type: string; payload: string }>`
+      SELECT type, payload FROM run_events
+      WHERE actor_id = ${rt.actor.actorId} AND type IN ('scaffold_promotion', 'scaffold_rollback')
+      ORDER BY event_index`
+      .map((row) => ({
+        type: row.type,
+        payload: v.parse(v.object({ fromVersion: v.number(), toVersion: v.number() }), JSON.parse(row.payload)),
+      }));
+  }
 
   test('rollback marks pending rolled_back and re-confirms previous version', async () => {
     const { rt } = createTestRuntime();
@@ -321,6 +341,9 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
 
     expect(statuses.find(s => s.version === 0)?.status).toBe('current');
     expect(statuses.find(s => s.version === 1)?.status).toBe('rolled_back');
+    expect(decisionRows(rt)).toEqual([
+      { type: 'scaffold_rollback', payload: { fromVersion: 1, toVersion: 0 } },
+    ]);
   });
 
   test('modifyScaffold refuses a second pending while one is in flight', async () => {

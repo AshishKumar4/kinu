@@ -28,7 +28,41 @@
 import { contextWindowForModel } from '../context-window';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer';
 import type { ModelInfo, ModelPricing } from '../providers/types';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+
+/**
+ * The one spelling of the model the next turn actually runs on.
+ *
+ * The claimed turn's tier wins, then the stored config spec, and whichever it
+ * is goes through the backend's normalization — the same one `setModel`
+ * validates with — so a bare id, an alias and the canonical form all read back
+ * as ONE string. This is the value every `model_call` row is priced against
+ * and every analytics row is grouped by: a dataset whose `model` column holds
+ * three spellings of one model cannot be grouped by it, and a rate compared
+ * against a spelling the report did not use prices nothing.
+ *
+ * A spec the backend cannot normalize yet (no provider registry before the
+ * first claim) falls back to the raw stored value rather than throwing: the
+ * caller is a catalog read or a ledger row, and neither may cost a turn.
+ */
+export function resolveEffectiveModelSpec(deps: {
+  /** The tier model of the turn in flight, or undefined between turns. */
+  readonly live: () => string | undefined;
+  /** The stored config spec, or null when unset. */
+  readonly stored: () => string | null;
+  /** The backend's canonical spelling of a spec; throws when it names nothing. */
+  readonly normalize: (spec: string | null) => string;
+}): string {
+  const stored = deps.live() ?? deps.stored();
+
+  try {
+    return deps.normalize(stored);
+  } catch (error) {
+    diagnostics.event('actor.model_spec_unresolvable', { error: renderThrownChain({ cause: error }) });
+
+    return stored ?? '';
+  }
+}
 
 export class ModelCatalogSession {
   private cached: { spec: string; info: ModelInfo | null; lookup?: Promise<void> } | null = null;

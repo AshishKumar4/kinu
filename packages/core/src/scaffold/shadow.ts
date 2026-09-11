@@ -52,9 +52,12 @@ import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
 import { nowMs } from '../utils/date';
+import { diagnostics, toKinuError } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
+import { RunEventRecorder } from '../events/recorder';
+import { WORKSPACE_RUN_ID } from '../events/model-call';
 
 /** One turn's contribution of trial evidence. Kept after the queue row is
  *  consumed: `dropQueuedShadowTrial` deletes that row the moment the trial is
@@ -812,6 +815,7 @@ export async function applyPromotionDecision(
     // Pointer committed. The live file is the rebuildable view, refreshed
     // after; execution reads the pointer's version file either way.
     await rt.identity.scaffold.write(pendingCode);
+    recordScaffoldDecision(rt, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
 
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
@@ -827,5 +831,33 @@ export async function applyPromotionDecision(
     await rt.identity.scaffold.write(currentCode);
   }
 
+  recordScaffoldDecision(rt, { type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion });
+
   return { newCurrentVersion: currentVersion, action: 'rollback' };
+}
+
+/**
+ * The decision, on the durable run-event log — the row the changelog dates a
+ * promotion or rollback by, since the status flip itself leaves `written_at`
+ * untouched. Recorded HERE, beside the pointer write, so every path that moves
+ * the pointer records it: the owner's manual decision, the shadow gate's
+ * automatic one, and the veto that turns a promote into a rollback. One backend
+ * recorded only its manual RPC and the other recorded nothing, so the same
+ * promotion was dated in the cloud and undated on a laptop.
+ *
+ * Filed under the reserved workspace run: a decision is not a turn's event.
+ */
+function recordScaffoldDecision(
+  rt: AgentRuntime,
+  event: { type: 'scaffold_promotion' | 'scaffold_rollback'; fromVersion: number; toVersion: number },
+): void {
+  try {
+    new RunEventRecorder(rt.storage.sql, rt.actor).emit(WORKSPACE_RUN_ID, event);
+  } catch (err) {
+    diagnostics.failure('event.scaffold_decision_emit_failed', toKinuError({
+      doing: 'recording a scaffold promotion/rollback run event',
+      cause: err,
+      otherwise: 'io',
+    }), { action: event.type });
+  }
 }

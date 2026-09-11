@@ -43,6 +43,12 @@ export function openTerminalWorkspace(dbPath: string) {
   initScaffoldTables(rt.storage.execRaw);
   initAgentConfigTable(rt.storage.execRaw);
 
+  // What `kinu create` writes for a workspace added without a name: no title,
+  // and an origin that says the system may supply one. An origin nobody
+  // recorded is the owner's, and a title is never owed for it. Written once:
+  // a suite that reopens the file after a kill must find the title it left.
+  if (rt.actor.config.getNameOrigin() === null) rt.actor.config.setDisplayNameOrigin('', 'auto');
+
   return { db, rt };
 }
 

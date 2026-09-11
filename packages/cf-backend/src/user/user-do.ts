@@ -87,6 +87,7 @@ import {
   type EgressSecretBinding,
   JsonObjectSchema,
   decodeJsonValue,
+  autoTitleMayReplace,
 } from '@kinu.run/core';
 import {
   diagnostics,
@@ -1491,7 +1492,7 @@ export class UserDO extends Agent<Env> {
 
     if (!current) return { applied: false };
 
-    if (origin === 'auto' && current.name_origin !== 'auto') return { applied: false };
+    if (origin === 'auto' && !autoTitleMayReplace(current.name_origin)) return { applied: false };
     this.sqlx(
       `UPDATE user_workspaces SET display_name = ?, name_origin = ? WHERE name = ?`,
       displayName, origin, name,

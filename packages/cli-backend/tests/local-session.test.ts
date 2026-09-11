@@ -1418,6 +1418,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         reasoningEffort: 'high',
       },
     });
+    // The read model answers the STORED setting, as cf's does — the tier's own
+    // effort drove the request above, and is not what the owner can set.
+    expect(session.getReasoningEffort()).toEqual({ effort: null });
+    expect(session.setReasoningEffort('low')).toEqual({ ok: true, effort: 'low' });
+    expect(session.getReasoningEffort()).toEqual({ effort: 'low' });
   });
 
   test('an explicit tier applies to one turn and is consumed', async () => {
@@ -2501,8 +2506,12 @@ describe('LocalAgentSession — mission-derived auto-titling', () => {
       },
     });
 
-    const { db, session } = setup('unused', model);
-    expect(naming(db)).toEqual({ displayName: null, origin: null });
+    const { db, rt, session } = setup('unused', model);
+    // What `kinu create` writes for an agent added without a name: no title,
+    // and an origin that says the system may supply one. An origin nobody
+    // recorded is the owner's on both backends, and is never titled.
+    rt.actor.config.setDisplayNameOrigin('', 'auto');
+    expect(naming(db)).toEqual({ displayName: '', origin: 'auto' });
 
     await session.send('Audit the OAuth callback flow');
     // end() joins the titling fiber — the lane is tracked precisely so a
@@ -4264,6 +4273,65 @@ describe('LocalAgentSession — the durable run-event log', () => {
       .toMatchObject([{ source: 'reflection', usage: { input: 3 } }]);
     expect(session.getRunEvents(WORKSPACE_RUN_ID)).toEqual([]);
 
+    await session.end();
+  });
+
+  test("a mid-turn row is priced against the ONE spelling of the turn's model, whatever the tier catalog wrote", async () => {
+    // The account catalog names the tier by its bare alias; the resolver spells
+    // it in full. Both name one model, and the ledger must price a report that
+    // uses the full spelling — reading the tier's alias as "the model" left the
+    // row unpriced on this backend while cf, which normalizes, priced it.
+    const { db, rt } = workspaceRuntime();
+    const captured: SinkSlot = { sink: null };
+
+    const model = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'fake-model',
+      doStream: async (options) => {
+        captured.sink?.({
+          source: 'fast', usage: { input: 1_000_000, output: 0 }, spec: 'openai-compatible/house-model',
+        });
+
+        return fakeModel('answered').doStream(options);
+      },
+    });
+
+    const resolver: LocalModelResolver = {
+      normalizeSpecSync: (spec) => {
+        const trimmed = spec?.trim() ?? '';
+
+        return trimmed === '' || trimmed === 'house-model' ? 'openai-compatible/house-model' : trimmed;
+      },
+      resolveModel: () => model,
+      listProviders: async () => [],
+      // A listing that could not be verified admits the tier's alias as
+      // configured, which is how an account catalog's own spelling reaches a turn.
+      listModels: async () => ({ models: [], failures: [{ provider: 'openai-compatible', reason: 'offline' }] }),
+      modelInfo: async () => ({
+        id: 'house-model', label: 'house', capabilities: ['tools', 'streaming'],
+        cost: { input: 2, output: 8 },
+      }),
+      ...resolverRest,
+    };
+
+    const catalog = { roles: {}, tiers: { default: { model: 'house-model' } } };
+
+    const envelope: ProfileCatalogEnvelope = {
+      authority: { kind: 'local' }, version: 1, digest: profileCatalogDigest(catalog), catalog,
+    };
+
+    const session = new LocalAgentSession({
+      rt: { ...rt, setModelCallSink: (sink) => { captured.sink = sink; } },
+      db, model: fakeModel('fallback'), modelResolver: resolver, profileAuthority: () => envelope,
+      onEvent: () => {}, noAutoEvolve: true,
+    });
+
+    await waitFor(() => session.modelPricing() !== null);
+    await session.send('hi');
+
+    const runId = session.listRuns().items[0]!.runId;
+    const rows = session.getRunEvents(runId).filter((e) => e.type === 'model_call');
+    expect(rows).toMatchObject([{ source: 'fast', spec: 'openai-compatible/house-model', usd: 2 }]);
+    expect(session.getEffectiveModelSpec()).toBe('openai-compatible/house-model');
     await session.end();
   });
 });

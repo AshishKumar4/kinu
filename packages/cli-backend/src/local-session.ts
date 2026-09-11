@@ -68,18 +68,20 @@ import {
   jobRedriveResumeGate, resumableForkRoots,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   inheritedContextFromHistory,
-  ModelCatalogSession,
+  ModelCatalogSession, resolveEffectiveModelSpec,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   // The terminal transition — core owns the vocabulary, the roster, the state
   // machine and the replay; this backend supplies only the effect bodies and
   // the wake. The same class the Durable Object drives.
   TerminalTransitions, initTerminalEffectTable, declareTerminalRoster,
+  takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
+  eventDrainTerminalEffect, shadowTrialTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportStatus, type TaskTurnEnding,
   TERMINAL_EFFECT_NAMES,
   terminalEffect, keyedScope,
-  RunEndReasonSchema, TurnContinuitySchema, WorkModeSchema, CompletedTurnSchema,
-  ModelMessagesSchema, shadowTrialPlan, trimTrialContext,
+  RunEndReasonSchema, WorkModeSchema,
+  shadowTrialPlan, trimTrialContext,
   type TerminalTransition, type TerminalEffectTable, type TerminalEffectFault,
   type TerminalTurnParts, type OwedEffect,
   buildActorTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
@@ -94,8 +96,8 @@ import {
   normalizeUsage,
   persistMeasuredPromptTokens, applyOverflowRecovery, measureCompactionTrigger,
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
-  runAdvisorLane, AdvisorRecoverySnapshotSchema, type AdvisorRecoverySnapshot,
-  effectAlreadyDone, recordEffectDone,
+  AdvisorRecoverySnapshotSchema, type AdvisorRecoverySnapshot,
+  ADVISOR_LANE_FIBER, advisorLaneStarted, markAdvisorLaneStarted, reviewRecordedTurn,
   PROGRAMMATIC_MESSAGE_ID_PREFIX, stampTurnAuthor,
   type JsonObject,
   STEER_METADATA_KEY, STEER_STEP_METADATA_KEY,
@@ -133,14 +135,13 @@ import {
   type RefinementDeps, type RefinementRequestView, type RefinementScope,
   type RequestRefinementInput,
   revertChangelogEntryById, type ChangelogRevertResult,
-  claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, unclaimedAlternateTakeIds,
+  unclaimedAlternateTakeIds,
   latestAlternateTakeSet,
   type ScaffoldRunOptions,
   bootstrapScaffold,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   type AlternateTakeSet, type TakePickOutcome,
-  startBranchHead, settlePendingBranch, settleBranchIntoTakes, newBranchId,
-  branchHeadId, branchOutcomeFromJournal,
+  startBranchHead, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type BackgroundJob, type RawSqlExec,
   type TimerTrigger, type TimerTriggerOpts,
@@ -150,7 +151,7 @@ import {
   changeActiveRole, agentsProfileContext, canonicalConversationId,
   resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile,
   buildModelCallEvent,
-  applyWorkspaceTitle, planWorkspaceTitle, suggestWorkspaceTitle,
+  applyWorkspaceTitle, persistAutoTitle, planWorkspaceTitle, suggestWorkspaceTitle,
   isPlaceholderMission, type WorkspaceTitleState,
   type PromptIdentity,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
@@ -421,15 +422,6 @@ const RecordedRosterSchema: v.GenericSchema<OwedEffect[]> = v.array(v.object({
   input: JsonValueSchema,
   lane: v.union([v.literal('inline'), v.literal('detached')]),
 }));
-
-/** The advisor lane's durable fiber name — the same name the Durable Object's
- *  fiber recovery dispatches on, because it is the same lane. */
-const ADVISOR_LANE_FIBER = 'advisor.review';
-
-/** The tombstone scope one turn's advisor lane is recorded under. It marks the
- *  lane RECOVERABLE, not finished: from the checkpoint on, a second lane beside
- *  it would be a duplicate review. */
-const ADVISOR_LANE_SCOPE = 'advisor_lane';
 
 /**
  * The advisor's recorded input on THIS backend: core's whole recovery snapshot,
@@ -1335,7 +1327,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Effective normalized model spec used for new turns. */
   getEffectiveModelSpec(): string {
-    return this.actorSession.profile?.tier.model ?? this.profiles().normalizeSpec(this.config.getModel());
+    return this.effectiveModelSpec();
   }
 
   /** The catalog role id this agent resolves under. */
@@ -1388,8 +1380,11 @@ export class LocalAgentSession implements BackendHost {
     }, spec);
   }
 
-  getReasoningEffort() {
-    return { effort: this.actorSession.profile?.tier.reasoningEffort ?? getReasoningEffort(this.config).effort };
+  /** The stored setting, as on cf — what `setReasoningEffort` writes, never the
+   *  claimed tier's own effort: a reading that changed with the turn in flight
+   *  showed an owner a value their own setting could not move. */
+  getReasoningEffort(): ReturnType<typeof getReasoningEffort> {
+    return getReasoningEffort(this.config);
   }
 
   setReasoningEffort(
@@ -2982,9 +2977,12 @@ export class LocalAgentSession implements BackendHost {
 
     const cache = this.cacheIdentity();
 
+    // The NORMALIZED spelling, as cf parses it: a tier the account catalog
+    // names by a bare id has no slash, and `parseModelSpec` refuses it before
+    // the request leaves — a turn failed for a spelling, not a model.
     const providerOptions = reasoningEffortOptions(
       profile.tier.reasoningEffort,
-      parseModelSpec(profile.tier.model).provider,
+      parseModelSpec(this.effectiveModelSpec()).provider,
     );
 
     // The measured compaction trigger, read from the durable state by core in
@@ -3555,92 +3553,14 @@ export class LocalAgentSession implements BackendHost {
     const relay = this.parentRelay;
 
     const base = {
-      takes: terminalEffect({
-        input: v.object({
-          credited: v.nullable(v.string()), startedAt: v.number(),
-          takeIds: v.array(v.string()),
-        }),
-        run: ({ credited, startedAt, takeIds }) => {
-          if (credited === null) {
-            // A turn the captures cannot be attributed to: they competed for an
-            // answer that is not there, so the next turn must not claim them.
-            purgeUnclaimedAlternateTakes(this.rt.storage.sql, this.rt.actor, takeIds);
-          } else {
-            claimAlternateTakesForTurn(this.rt.storage.sql, this.rt.actor, {
-              turnId: credited, sessionId: this.sessionId, startedAt, takeIds,
-            });
-          }
-
-          return { status: 'completed' };
-        },
-      }),
-
-      branches: terminalEffect({
-        input: v.object({
-          id: v.string(), task: v.string(),
-          turnId: v.nullable(v.string()), liveText: v.string(),
-        }),
-        // ONE branch, AWAITED. With no live handle — the branch head is a child
-        // process that died with the previous one — the HEAD JOURNAL is the only
-        // record of it, and the check is not "is the head still running": a head
-        // reaches `completed` when its report lands, which is before any take set
-        // exists. The row's own disposition is the settlement marker instead.
-        //
-        // ASKED FOR BY THE HEAD'S ID, which is `branchHeadId(id)` and not `id`:
-        // the row this effect carries is the branch RUN, and a branch run's one
-        // head is journalled under a DERIVED id (steer-branch.ts). Read by the run
-        // id it found no row at all and reported that as `completed`, so every
-        // restart between the report and the settle dropped the comparison.
-        run: async ({ id, task, turnId, liveText }) => {
-          const live = this.pendingBranches.findIndex((entry) => entry.id === id);
-
-          if (live >= 0) {
-            const [entry] = this.pendingBranches.splice(live, 1);
-
-            if (entry !== undefined) {
-              await settlePendingBranch(
-                {
-                  sql: this.rt.storage.sql,
-                  actor: this.rt.actor, sessionId: this.sessionId,
-                  broadcast: (event: BranchStatusEvent) => this.broadcast(event),
-                },
-                // The branch id, on the LIVE path too. Keyed only on replay, the
-                // live write and the recovery write would be two take sets.
-                entry, turnId, liveText, id,
-              );
-
-              return { status: 'completed' };
-            }
-          }
-
-          const head = this.headJournal.readHeadView(branchHeadId(id));
-
-          if (head === null) {
-            return { status: 'completed', detail: 'the journal holds no such branch head' };
-          }
-
-          const report = branchOutcomeFromJournal(head);
-
-          if (report === null) {
-            return { status: 'owed', detail: `branch head is ${head.status}` };
-          }
-
-          const outcome = settleBranchIntoTakes(this.rt.storage.sql, this.rt.actor, {
-            task,
-            report,
-            turnId, sessionId: this.sessionId, liveText,
-            settlementKey: id,
-          });
-
-          this.broadcast(outcome.ok
-            ? {
-              type: 'branch_status', status: 'settled', branchId: id, task,
-              takeSetId: outcome.set.id, turnId: turnId ?? '',
-            }
-            : { type: 'branch_status', status: 'error', branchId: id, task, message: outcome.reason });
-
-          return { status: 'completed', detail: outcome.ok ? undefined : outcome.reason };
-        },
+      takes: takesTerminalEffect({ sql: this.rt.storage.sql, actor: this.rt.actor, sessionId: this.sessionId }),
+      branches: branchesTerminalEffect({
+        sql: this.rt.storage.sql,
+        actor: this.rt.actor,
+        sessionId: this.sessionId,
+        broadcast: (event) => this.broadcast(event),
+        pending: this.pendingBranches,
+        journal: this.headJournal,
       }),
 
       completion_gate: terminalEffect({
@@ -3758,61 +3678,8 @@ export class LocalAgentSession implements BackendHost {
       }),
 
 
-      turn_record: terminalEffect({
-        input: v.object({
-          messageId: v.string(), status: RunEndReasonSchema, turn: JsonValueSchema,
-          continuity: TurnContinuitySchema, workMode: WorkModeSchema, recordedAt: v.number(),
-          autoEvolve: v.boolean(),
-        }),
-        // The window append is idempotent on the id this passes, which is the
-        // assistant message's own durable identity. A replay therefore leaves ONE
-        // window row and counts the session cadence once. The continuity comes
-        // off the ROW, never off session state a fresh process would default.
-        //
-        // So does the EVOLUTION GATE. `recordTurn` otherwise reads the recovering
-        // session's own gate, so a turn produced with auto-evolution on and
-        // recovered under `--no-auto-evolve` (or after a Plan turn moved the
-        // ambient gate) was marked completed with no window row, and a turn
-        // produced under the flag was recorded by whichever later host had
-        // evolution on.
-        run: ({ messageId, status, turn, continuity, workMode, recordedAt, autoEvolve }) => {
-          if (workMode === 'plan') {
-            return { status: 'completed', detail: 'a plan turn records no evolution state' };
-          }
-
-          const recordedId = keyedScope(messageId);
-
-          const recordOptions = recordedId === undefined
-            ? { recordedAt, enabled: autoEvolve }
-            : { recordedAt, enabled: autoEvolve, id: `turn-${recordedId}` };
-
-          this.actorSession.orchestrator.recordTurn(
-            this.actorSession.orchestrator.recordedTurn(status, v.parse(CompletedTurnSchema, turn)),
-            continuity,
-            recordOptions,
-          );
-
-          return autoEvolve
-            ? { status: 'completed' }
-            : { status: 'completed', detail: 'the turn was produced with auto-evolution off' };
-        },
-      }),
-
-      event_drain: terminalEffect({
-        input: v.object({}),
-        // Idempotent by construction: the drain selects only PENDING, unbound
-        // rows, so a replay picks up whatever is still pending and re-delivers
-        // nothing already bound to a turn.
-        run: async () => {
-          // RETHROWING. The drain absorbs its own selection and binding failures
-          // for its ambient callers, which have nothing owed to retry them. This
-          // row does, and reporting `completed` over a half-bound batch strands
-          // the assignment behind it.
-          await this.actorSession.orchestrator.drainPendingEvents({ rethrow: true });
-
-          return { status: 'completed' };
-        },
-      }),
+      turn_record: turnRecordTerminalEffect(this.actorSession.orchestrator),
+      event_drain: eventDrainTerminalEffect(this.actorSession.orchestrator),
 
       improvement_lanes: terminalEffect({
         input: v.object({
@@ -3842,39 +3709,7 @@ export class LocalAgentSession implements BackendHost {
         },
       }),
 
-      shadow_trial: terminalEffect({
-        input: v.object({
-          turn: JsonValueSchema, trialContext: JsonValueSchema, pendingVersion: v.number(),
-        }),
-        // Its OWN row, because its disposition is genuinely different from the
-        // improvement lanes beside it: a full queue is a refusal a later drain
-        // clears, so the trial stays owed while nothing else waits on it.
-        run: ({ turn, trialContext, pendingVersion }, scope) => {
-          const trialScope = keyedScope(scope);
-
-          const trialOptions = trialScope === undefined
-            ? { pendingVersion }
-            : { pendingVersion, id: `trial-${trialScope}` };
-
-          const queued = this.engine.queueShadowTrial(
-            v.parse(CompletedTurnSchema, turn), v.parse(ModelMessagesSchema, trialContext),
-            trialOptions,
-          );
-
-          // A REFUSAL is not a deferral. `not_sampled` means there is nothing
-          // to queue and never will be for this turn, so the obligation is
-          // discharged; only a full queue or a failed insert is worth coming
-          // back for, and both clear on their own. The same mapping the Durable
-          // Object makes, because it is the same question.
-          if (queued === 'queue_full' || queued === 'failed') {
-            return { status: 'owed', detail: `the shadow trial for this turn is ${queued}` };
-          }
-
-          return queued === 'queued'
-            ? { status: 'completed' }
-            : { status: 'completed', detail: `no trial to queue: ${queued}` };
-        },
-      }),
+      shadow_trial: shadowTrialTerminalEffect(this.engine),
 
       auto_title: terminalEffect({
         input: v.object({ subject: v.string() }),
@@ -4137,10 +3972,7 @@ export class LocalAgentSession implements BackendHost {
     if (planWorkspaceTitle(state) === null) return;
     await applyWorkspaceTitle(state, {
       persist: (name) => {
-        // A manual rename claimed the title while the model was thinking.
-        // The owner's choice wins the race, and `false` says so to core.
-        if (this.config.getNameOrigin() === 'user') return false;
-        this.config.setDisplayNameOrigin(name, 'auto');
+        if (!persistAutoTitle(this.config, name)) return false;
         this.broadcast({ type: 'workspace_renamed', displayName: name });
 
         return true;
@@ -4208,11 +4040,7 @@ export class LocalAgentSession implements BackendHost {
   private async reviewTurnInBackground(recorded: RecordedAdvisor): Promise<void> {
     if (this.rt.advisorLlm === undefined || !this.config.getAdvisorEnabled()) return;
 
-    const laneKey = recorded.turn.turnId === undefined || recorded.turn.turnId === ''
-      ? null
-      : recorded.turn.turnId;
-
-    if (laneKey !== null && effectAlreadyDone(this.rt.storage.sql, this.rt.actor, ADVISOR_LANE_SCOPE, laneKey)) return;
+    if (advisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn)) return;
     const checkpointed = Promise.withResolvers<void>();
 
     const review = this.trackFiber(ADVISOR_LANE_FIBER, async (ctx) => {
@@ -4235,7 +4063,7 @@ export class LocalAgentSession implements BackendHost {
         throw failure;
       }
 
-      if (laneKey !== null) recordEffectDone(this.rt.storage.sql, this.rt.actor, ADVISOR_LANE_SCOPE, laneKey);
+      markAdvisorLaneStarted(this.rt.storage.sql, this.rt.actor, recorded.turn);
       checkpointed.resolve();
       await this.runAdvisorReview(recorded);
     });
@@ -4278,28 +4106,14 @@ export class LocalAgentSession implements BackendHost {
    * Never throws: a reviewer that failed is a turn with no advice.
    */
   private async runAdvisorReview(recorded: RecordedAdvisor): Promise<void> {
-    const llm = this.rt.advisorLlm;
-
-    if (llm === undefined) return;
-    const labels = recorded.turn.missionLabels ?? [];
-
-    try {
-      await runAdvisorLane({
-        turn: recorded.turn,
-        llm: labels.length === 0 ? llm : this.budget.govern(llm, labels),
-        enabled: true,
-        minSeverity: recorded.minSeverity,
-        recent: recorded.recent,
-        gateOpen: recorded.gateOpen,
-        reachable: recorded.reachable,
-        deliver: (signal) => this.actorSession.orchestrator.signals.deliver(signal),
-        record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
-      });
-    } catch (cause) {
-      diagnostics.failure('advisor.review_failed', toKinuError({
-        doing: 'reviewing the completed turn', cause, otherwise: 'unavailable',
-      }));
-    }
+    await reviewRecordedTurn({
+      snapshot: recorded,
+      llm: this.rt.advisorLlm,
+      govern: (llm, labels) => this.budget.govern(llm, labels),
+      gateOpen: recorded.gateOpen,
+      deliver: (signal) => this.actorSession.orchestrator.signals.deliver(signal),
+      record: (note, turnId) => { this.engine.recordAdvisorNote(note, turnId); },
+    });
   }
 
   /** Passthrough SkillsVfs adapter over rt.storage.vfs (core turn-surface). */
@@ -5081,7 +4895,7 @@ export class LocalAgentSession implements BackendHost {
 
     const providerOptions = reasoningEffortOptions(
       resolution.reasoningEffort,
-      parseModelSpec(resolution.model).provider,
+      parseModelSpec(this.profiles().normalizeSpec(resolution.model)).provider,
     );
 
     return providerOptions ? { model, providerOptions } : { model };
@@ -5202,8 +5016,16 @@ export class LocalAgentSession implements BackendHost {
     );
   }
 
+  /** Core's one resolution over this session's profile authority: the claimed
+   *  tier, else the stored spec, spelled the way the plane spells it. Never the
+   *  cached spec — that is null between a config change and the next turn, and
+   *  a row priced in that window compared the rate against a fabricated spec. */
   private effectiveModelSpec(): string {
-    return this.actorSession.profile?.tier.model ?? this.cachedModelSpec ?? STATIC_MODEL_SPEC;
+    return resolveEffectiveModelSpec({
+      live: () => this.actorSession.profile?.tier.model,
+      stored: () => this.config.getModel(),
+      normalize: (spec) => this.profiles().normalizeSpec(spec),
+    });
   }
   /** The session's model before any per-turn claim: the static model, or
    *  null on resolver sessions until a spec resolves. `what` names the use so
