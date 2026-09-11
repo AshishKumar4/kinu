@@ -46,7 +46,7 @@ describe('the restore poll', () => {
     })));
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'post-ladder-wake', 4_259_840, []);
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'post-ladder-wake', 4_259_840, [], 0);
       expect(row).toEqual({
         kind: 'post-ladder-wake', treeBytes: 4_259_840,
         wallMs: 2347, probeAt: 1_786_000_000_000, outcome: 'ok',
@@ -63,7 +63,7 @@ describe('the restore poll', () => {
     })));
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, []);
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, [], 0);
       expect(row.outcome).toBe('ok');
       expect(row.phases).toEqual({ containerStart: 1210, attached: 3980, bootId: 4530 });
       // A fresh box mounts no store and no base: those phases are not there,
@@ -84,13 +84,35 @@ describe('the restore poll', () => {
     const notes: string[] = [];
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes);
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes, 0);
       expect(row.wallMs).toBeNull();
       expect(row.probeAt).toBe(1_786_000_000_000);
       expect(row.phases).toEqual({ containerStart: 28_400 });
       expect(row.outcome).toContain('unsettled');
       expect(row.outcome).toContain('containerStart');
       expect(notes).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  test('a row opened before the startup was kicked is absent, not that startup\'s timing', async () => {
+    // A start that adopted the instance it held ran no restore, and the box's
+    // row still names the one before it. Reported under this kind it would
+    // time the wrong restore.
+    const restore = stubFetch(() => new Response(JSON.stringify({
+      ok: true, strategy: 'snapshot-chain', box: 'ab-snapshot-chain-probe',
+      probe: { wallMs: 4542, at: 1_786_000_000_000, phases: { containerStart: 1210 } }, ms: 4,
+    })));
+
+    const notes: string[] = [];
+
+    try {
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'post-ladder-wake', 0, notes, 1_786_000_000_001);
+      expect(row.wallMs).toBeNull();
+      expect(row.probeAt).toBeNull();
+      expect(row.outcome).toContain('adopted the instance it held');
+      expect(notes).toEqual([expect.stringContaining('predates this startup')]);
     } finally {
       restore();
     }
@@ -104,7 +126,7 @@ describe('the restore poll', () => {
     const notes: string[] = [];
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes);
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'cold-attach', 0, notes, 0);
       expect(row.wallMs).toBeNull();
       expect(row.probeAt).toBeNull();
       expect(row.outcome).toContain('absent');
@@ -122,7 +144,7 @@ describe('the restore poll', () => {
     const notes: string[] = [];
 
     try {
-      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'complexity-restore', 65_536, notes);
+      const row = await readRestoreProbe(PROBE_FIXTURE, 'ab-snapshot-chain-probe', 'complexity-restore', 65_536, notes, 0);
       expect(row.wallMs).toBeNull();
       expect(row.outcome).toContain('error:');
       expect(notes).toHaveLength(1);

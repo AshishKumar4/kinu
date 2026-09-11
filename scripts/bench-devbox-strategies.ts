@@ -1808,6 +1808,11 @@ export interface StartupPoll {
 
 export interface StartupCompletion extends StartupPoll {
   readonly ms: number;
+  /** When the driver kicked this startup, on the driver's clock. The restore
+   *  probe is judged against it: a row opened before this instant belongs to
+   *  an earlier restore, and a startup that adopted the instance it held ran
+   *  no restore of its own. */
+  readonly startedAt: number;
 }
 
 /**
@@ -2060,7 +2065,7 @@ export async function startupOperation(
 
   const attached = await pollForAttach(fixture, box, operation, allowedKinds, bounds);
 
-  return { ...attached, ms: Date.now() - started };
+  return { ...attached, ms: Date.now() - started, startedAt: started };
 }
 
 /** What one settled checkpoint reports. Its wire form is the poll reply below:
@@ -3882,6 +3887,7 @@ export async function readRestoreProbe(
   kind: RestoreProbeRow['kind'],
   treeBytes: number | null,
   notes: string[],
+  notBefore: number,
 ): Promise<RestoreProbeRow> {
   const absent = (outcome: string): RestoreProbeRow => ({ kind, treeBytes, wallMs: null, probeAt: null, outcome });
   let reply: v.InferOutput<typeof RestoreProbeReplySchema>;
@@ -3900,6 +3906,17 @@ export async function readRestoreProbe(
   }
 
   const { wallMs, at, phases } = reply.probe;
+
+  // THE ROW IS THE LAST RESTORE, NOT THE LAST START. A start that adopted the
+  // instance it held ran no restore, and the box's row still names the one
+  // before it; a row opened before this startup was kicked is that earlier
+  // restore's, and reporting it under this kind would time the wrong thing.
+  if (at < notBefore) {
+    notes.push(`restore probe ${kind}: the last restore predates this startup, so it adopted the instance it held`);
+
+    return absent(`absent: the last restore opened at ${String(at)}, before this startup at ${String(notBefore)}; the box adopted the instance it held`);
+  }
+
   // An attempt that opened its row and never wrote a wall time: the platform
   // reset the object mid-restore, or the attempt is still running. The phases
   // say how far it got; the last one present is where it was.
@@ -3926,8 +3943,9 @@ async function recordRestoreProbe(
   kind: RestoreProbeRow['kind'],
   treeBytes: number | null,
   notes: string[],
+  notBefore: number,
 ): Promise<void> {
-  const row = await readRestoreProbe(fixture, box, kind, treeBytes, notes);
+  const row = await readRestoreProbe(fixture, box, kind, treeBytes, notes, notBefore);
   (result.restoreProbes ??= []).push(row);
   const phases = Object.entries(row.phases ?? {}).map(([phase, atMs]) => `${phase}=${String(atMs)}`).join(' ');
   log(`restore probe ${kind}: wallMs=${String(row.wallMs)} ${phases.length === 0 ? 'no phases' : phases} (${row.outcome})`);
@@ -4233,7 +4251,7 @@ async function measureComplexityRung(
       // The restore wall time of this rung's wake, at the rung's own tree
       // size. Polled inside the try so a silent probe is an absent row, and
       // the helper never throws past it.
-      await recordRestoreProbe(fixture, box, result, 'complexity-restore', treeBytes, notes);
+      await recordRestoreProbe(fixture, box, result, 'complexity-restore', treeBytes, notes, rewoke.startedAt);
       result.complexity?.push({
         treeBytes,
         kind: 'restore',
@@ -4339,6 +4357,7 @@ async function measureArm(
 
   log('create (cold attach)');
   let cold: StartupCompletion;
+  const createKickedAt = Date.now();
 
   try {
     cold = await startup('/create', 'cold attach', admittedAttachKinds('cold attach'));
@@ -4354,7 +4373,7 @@ async function measureArm(
     // The refusal's own evidence: a start the platform reset left its row
     // with the phases it reached and no wall time. Polled here because the
     // 2026-09-10 refusal recorded nothing but the platform's sentence.
-    await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes);
+    await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes, createKickedAt);
     settle('a refused create');
 
     return result;
@@ -4365,7 +4384,7 @@ async function measureArm(
   result.attachColdBootId = cold.state.state?.bootId ?? null;
   // The restore wall time of the cold start itself, beside the driver's own
   // round trip. The tree is empty here; the sized restores come per rung.
-  await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes);
+  await recordRestoreProbe(fixture, box, result, 'cold-attach', 0, notes, cold.startedAt);
   settle('the cold attach');
   log('install harness');
   await installHarness(fixture, box);
@@ -4461,7 +4480,7 @@ async function measureArm(
   result.wakeBootId = woke.state.state?.bootId ?? null;
   result.wakeOps = await closeWakeOpsWindow(fixture, box, opsBeforeWake, notes);
   // The restore wall time of the post-ladder wake at the full ladder size.
-  await recordRestoreProbe(fixture, box, result, 'post-ladder-wake', ladderBytes, notes);
+  await recordRestoreProbe(fixture, box, result, 'post-ladder-wake', ladderBytes, notes, woke.startedAt);
   recordFinalComplexityRestore(result, ladderBytes, complexityScope);
   settle('the wake');
   verify(
@@ -4779,7 +4798,7 @@ async function runDestroyColdPhase(
     const rewokeCold = await startup('/wake', 'destroy-cold restore', admittedAttachKinds('wake'));
     const knownSizes = Object.values(result.treeBytes).filter((n) => Number.isSafeInteger(n));
     const coldTreeBytes = knownSizes.length > 0 ? Math.max(...knownSizes) : null;
-    await recordRestoreProbe(fixture, box, result, 'destroy-cold-restore', coldTreeBytes, notes);
+    await recordRestoreProbe(fixture, box, result, 'destroy-cold-restore', coldTreeBytes, notes, rewokeCold.startedAt);
     notes.push(
       `destroy-cold restore woke ${rewokeCold.attach.kind}; treeBytes is the largest size the run recorded, `
       + 'a lower bound past the witness and cut cells that wrote outside the measured window',

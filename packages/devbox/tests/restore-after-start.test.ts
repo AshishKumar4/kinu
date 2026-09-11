@@ -418,12 +418,13 @@ describe('the restore runs on the first delivered frame after a container start'
     expect(clock[0]).toBe(0);
     expect([...clock].sort((a, b) => a - b)).toEqual(clock);
 
-    // A second start on the same instance adopts, on a clock of its own: the
-    // identity is settled by the read, and nothing else lands.
+    // A second start on the same instance adopts, and an adoption opens no
+    // clock: the witness's row stays the restore's, so a reader polling after
+    // a start that adopted sees the restore that settled, not one `cat`.
     seen.length = 0;
     await harnessed.box.start();
     await harnessed.box.ensureReady();
-    expect(seen.map(([phase]) => phase)).toEqual(['opened', 'containerStart', 'bootId', 'settled']);
+    expect(seen).toEqual([]);
   });
 
   test('a schedule row naming a callback this class cannot call is dropped at activation', async () => {
