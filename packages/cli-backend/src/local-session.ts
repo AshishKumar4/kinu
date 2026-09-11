@@ -3598,7 +3598,7 @@ export class LocalAgentSession implements BackendHost {
           // appends a second turn under the same key and the model and tool work
           // is done twice.
           if (this.announcementInFlight(identity)) {
-            return { status: 'owed', detail: 'the confirming turn is queued and not yet on disk' };
+            return { status: 'owed', held: true, detail: 'the confirming turn is queued and not yet on disk' };
           }
 
           const shell = this.rt.shell;

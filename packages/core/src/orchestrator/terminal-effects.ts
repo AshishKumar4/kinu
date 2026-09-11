@@ -211,7 +211,11 @@ export type TerminalEffectStatus = 'pending' | 'completed' | 'blocked';
  *  its row owed so a later activation carries it. */
 export type TerminalEffectOutcome =
   | { readonly status: 'completed'; readonly detail?: string }
-  | { readonly status: 'owed'; readonly detail: string };
+  /** `held`: a live carrier in this process already owns the work (a queued
+   *  or running confirming turn), so this run was a look, not an attempt. The
+   *  ledger keeps the attempt count and the base delay instead of doubling the
+   *  row's backoff for every sweep that lands while that carrier runs. */
+  | { readonly status: 'owed'; readonly detail: string; readonly held?: boolean };
 
 /**
  * One effect, with its own input type erased behind a parse.
@@ -1086,6 +1090,13 @@ export class TerminalEffectLedger {
     fault?.('after', name, row.scope);
 
     if (outcome.status === 'owed') {
+      if (outcome.held === true) {
+        void this.deps.sql`UPDATE terminal_effects
+          SET attempts = ${row.attempts}, next_attempt_at = ${this.deps.now() + TERMINAL_EFFECT_RETRY_BASE_MS}
+          WHERE actor_id = ${this.actorId} AND sequence_id = ${sequenceId}
+            AND effect_key = ${row.key} AND status != 'completed'`;
+      }
+
       this.record(sequenceId, row.key, 'pending', `owed: ${outcome.detail}`);
 
       return;

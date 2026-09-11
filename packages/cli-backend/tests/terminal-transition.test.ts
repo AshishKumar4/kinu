@@ -646,13 +646,12 @@ describe('a recovery reads the record, not the session that finds it', () => {
     // generation further on — the same thing five real seconds do to a process
     // that stayed open.
     //
-    // DECLINED, not attempted, and that is the mechanism: this process is
-    // inside the sequence (the confirming turn parked in its model call holds
-    // it), so `resumeAll` joins rather than re-entering. A second attempt here
-    // would be two carriers running one sequence's effects, which is the whole
-    // reason the in-flight join exists. The decline writes NOTHING durable —
-    // the row is untouched and `nextRetryAt` filters the held sequence in
-    // memory — so the row's own state is what says the work is still owed.
+    // The replay released the sequence the moment its effect reported `owed`
+    // (the effect queues the turn and does not await it), so this retry
+    // re-enters and replays the row. The effect finds the confirming turn queued
+    // or running and reports the row HELD: no second turn, and the ledger keeps
+    // the attempt count and the base delay rather than doubling the backoff for
+    // a sweep that only looked. The row's own state says the work is owed.
     const attemptsBefore = gateAttempts(gated);
     next.skipBackoff(2);
     await next.recoverTerminalTransitions();
