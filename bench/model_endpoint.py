@@ -12,10 +12,9 @@ TypeScript is not importable:
    workspaces and a ``settle-probe`` on the owner's PRODUCTION account among
    his own twenty-eight, with nothing on the account able to say which harness
    made them.
-2. TARGET. A run reaches the staging deployment or a loopback dev server.
-   Production is refused unless ``KINU_EVAL_ALLOW_PROD=1`` names the
-   exception. A default target of production means a benchmark that names no
-   origin measures the live system.
+2. TARGET. A run reaches the deployment or a loopback dev server.
+   Single environment since 2026-09-10: there is no staging, and no
+   override flag. A benchmark that names no origin measures the deployment.
 
 The target rule is an allowlist. A denylist of production hostnames permits
 every origin nobody has thought of yet.
@@ -39,9 +38,13 @@ DEFAULT_WORKERS_AI_MODEL_ID = "@cf/zai-org/glm-5.3"
 #: credential — and never as a denylist entry. Mirrors the top-level
 #: CLI_PUBLIC_ORIGIN in wrangler.jsonc, pinned by bench/tests/test_model_endpoint.py.
 PRODUCTION_ORIGIN = "https://kinu.run"
-#: The eval target. Mirrors EVAL_STAGING_ORIGIN in eval-identity.ts and
-#: env.staging's CLI_PUBLIC_ORIGIN, pinned by the same test.
-EVAL_STAGING_ORIGIN = "https://staging.kinu.run"
+#: The eval target. Mirrors EVAL_DEPLOYMENT_ORIGIN in eval-identity.ts and
+#: the deployment's CLI_PUBLIC_ORIGIN, pinned by the same test.
+#: Single environment since 2026-09-10: staging is gone, the deployment is
+#: the target.
+EVAL_DEPLOYMENT_ORIGIN = "https://kinu.run"
+#: Backwards-compat alias; new code names the deployment.
+EVAL_STAGING_ORIGIN = EVAL_DEPLOYMENT_ORIGIN
 #: The account every scored run acts as. Mirrors EVAL_SERVICE_ACCOUNT.
 EVAL_SERVICE_ACCOUNT = "eval-service"
 #: The credential variable. Mirrors EVAL_IDENTITY_ENV.token.
@@ -49,7 +52,7 @@ EVAL_TOKEN_ENV = "KINU_EVAL_TOKEN"
 #: The one exception, named explicitly. Mirrors EVAL_IDENTITY_ENV.allowProd.
 EVAL_ALLOW_PROD_ENV = "KINU_EVAL_ALLOW_PROD"
 
-DEFAULT_KINU_AI_BASE_URL = f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1"
+DEFAULT_KINU_AI_BASE_URL = f"{EVAL_DEPLOYMENT_ORIGIN}/api/user/ai/v1"
 
 #: Hosts that can only be the operator's own machine. ``urlsplit`` strips IPv6
 #: brackets from ``hostname``, unlike the WHATWG parser the TypeScript uses.
@@ -63,7 +66,7 @@ _LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
 #: credential sink, and `https://attacker.example/api/user/ai/v1` would receive
 #: the token. Policy is ``eval_target_allowed``; trust is this set, and no
 #: environment variable widens it.
-_KINU_ORIGINS = frozenset({PRODUCTION_ORIGIN, EVAL_STAGING_ORIGIN})
+_KINU_ORIGINS = frozenset({PRODUCTION_ORIGIN, EVAL_DEPLOYMENT_ORIGIN})
 
 _PROVIDER_KEY_ENVS = {
     "anthropic": "ANTHROPIC_API_KEY",
@@ -76,16 +79,14 @@ _CLOUDFLARE_AI_PATH = re.compile(r"^/client/v4/accounts/[^/]+/ai/v1/?$")
 def eval_target_allowed(origin: str, environ: Mapping[str, str] | None = None) -> bool:
     """Whether a scored run may point at *origin*.
 
-    The override is checked first and is exact: a variable set to ``0``, to the
-    empty string, or to ``false`` is not somebody choosing production.
+    Single environment since 2026-09-10: the deployment or a loopback dev
+    server. ``environ`` is accepted for call-compat and ignored; there is no
+    override flag, matching eval-identity.ts.
     """
-    env = os.environ if environ is None else environ
-    if env.get(EVAL_ALLOW_PROD_ENV, "").strip() == "1":
-        return True
     parsed = urlsplit(origin.strip().rstrip("/"))
     if parsed.hostname in _LOOPBACK_HOSTS:
         return True
-    return f"{parsed.scheme}://{parsed.netloc}" == EVAL_STAGING_ORIGIN
+    return f"{parsed.scheme}://{parsed.netloc}" == EVAL_DEPLOYMENT_ORIGIN
 
 
 def assert_eval_target(base_url: str, environ: Mapping[str, str] | None = None) -> str:
@@ -103,9 +104,8 @@ def assert_eval_target(base_url: str, environ: Mapping[str, str] | None = None) 
     parsed = urlsplit(raw)
     raise ValueError(
         f"{parsed.scheme}://{parsed.netloc} is not an eval target. Benchmarks run "
-        f"against {EVAL_STAGING_ORIGIN}, or a loopback dev server, so they can "
-        f"never write into a deployment that serves real users. To make this run "
-        f"anyway, set {EVAL_ALLOW_PROD_ENV}=1 — which records that somebody chose it."
+        f"against {EVAL_DEPLOYMENT_ORIGIN}, or a loopback dev server, so they can "
+        f"never write outside the allowlist."
     )
 
 
@@ -196,7 +196,7 @@ def resolve_bearer_token(
             return token
         raise ValueError(
             f"No {EVAL_SERVICE_ACCOUNT} credential for {base_url}. Mint one against "
-            f"{EVAL_STAGING_ORIGIN} (`kinu auth --origin {EVAL_STAGING_ORIGIN}` then "
+            f"{EVAL_DEPLOYMENT_ORIGIN} (`kinu auth --origin {EVAL_DEPLOYMENT_ORIGIN}` then "
             f"`kinu tokens create --name bench --scopes ai.proxy`) and export it as "
             f"${EVAL_TOKEN_ENV}. A signed-in session is deliberately never borrowed."
         )

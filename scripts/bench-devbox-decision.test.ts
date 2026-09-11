@@ -1147,8 +1147,8 @@ describe('the instruments restate nothing unchecked', () => {
 
   test('the chain served words are the product ternary’s', () => {
     const chain = repo('packages', 'devbox', 'src', 'snapshot-chain.ts');
-    const product = /\? '([^']+)'\s*:\s*held \? '([^']+)' : '([^']+)'/.exec(chain);
-    expect(product?.slice(1)).toEqual(['base', 'base+delta already in this upper', 'base+delta layered']);
+    const product = /\? '([^']+)'\s*:\s*held \? '([^']+)' : sidecar !== null \? '([^']+)' : '([^']+)'/.exec(chain);
+    expect(product?.slice(1)).toEqual(['base', 'base+delta already in this upper', 'base+delta absorbed into the upper', 'base+delta layered']);
     const restated = /CHAIN_SERVED_WORDS = \[([^\]]+)\]/.exec(driver)?.[1] ?? '';
     const words = [...restated.matchAll(/'([^']+)'/g)].map((match) => match[1]).sort();
     expect(words).toEqual([...(product?.slice(1) ?? [])].sort());

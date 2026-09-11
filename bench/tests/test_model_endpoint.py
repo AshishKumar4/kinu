@@ -18,6 +18,7 @@ from bench.model_endpoint import (
     DEFAULT_KINU_AI_BASE_URL,
     DEFAULT_WORKERS_AI_MODEL_ID,
     EVAL_ALLOW_PROD_ENV,
+    EVAL_DEPLOYMENT_ORIGIN,
     EVAL_STAGING_ORIGIN,
     PRODUCTION_ORIGIN,
     assert_eval_target,
@@ -31,17 +32,17 @@ WRANGLER = (REPO_ROOT / "packages/cf-backend/wrangler.jsonc").read_text(encoding
 
 
 class ModelEndpointTest(unittest.TestCase):
-    def test_the_default_endpoint_is_staging_not_production(self) -> None:
-        """The default is staging, so a run that names no origin cannot hit production."""
+    def test_the_default_endpoint_is_the_deployment(self) -> None:
+        """Single environment: the default names the deployment itself."""
         self.assertEqual(
             DEFAULT_WORKERS_AI_MODEL_ID,
             "@cf/zai-org/glm-5.3",
         )
         self.assertEqual(
             DEFAULT_KINU_AI_BASE_URL,
-            f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1",
+            f"{EVAL_DEPLOYMENT_ORIGIN}/api/user/ai/v1",
         )
-        self.assertNotEqual(EVAL_STAGING_ORIGIN, PRODUCTION_ORIGIN)
+        self.assertEqual(EVAL_DEPLOYMENT_ORIGIN, PRODUCTION_ORIGIN)
 
     def test_default_model_matches_the_product_source_of_truth(self) -> None:
         source = (
@@ -147,16 +148,16 @@ class ModelEndpointTest(unittest.TestCase):
                 environ={"KINU_EVAL_TOKEN": "must-not-leak"},
             )
 
-    def test_the_prod_override_does_not_widen_who_may_receive_the_credential(self) -> None:
+    def test_no_override_widens_who_may_receive_the_credential(self) -> None:
         """Policy and trust are separate questions, and this is why.
 
-        ``KINU_EVAL_ALLOW_PROD=1`` says an operator accepts running against
-        production. If that also decided which origins are Kinu deployments,
+        There is no override flag anymore. If any flag decided which origins are Kinu deployments,
         it would declare every host on earth a trusted credential sink — so
-        setting it must not turn a hostile proxy path into one.
+        no flag value turns a hostile proxy path into one.
         """
         hostile = "https://attacker.example/api/user/ai/v1"
-        self.assertTrue(eval_target_allowed(hostile, {EVAL_ALLOW_PROD_ENV: "1"}))
+        self.assertFalse(eval_target_allowed(hostile, {EVAL_ALLOW_PROD_ENV: "1"}))
+        self.assertFalse(eval_target_allowed(hostile, {}))
         self.assertEqual(provider_for_base_url(hostile), "custom")
         with self.assertRaisesRegex(ValueError, "api_key_env"):
             resolve_bearer_token(
@@ -183,21 +184,20 @@ class ModelEndpointTest(unittest.TestCase):
 class EvalTargetTest(unittest.TestCase):
     """Where a scored run is allowed to go."""
 
-    def test_production_is_refused_and_the_refusal_names_the_override(self) -> None:
-        with self.assertRaisesRegex(ValueError, EVAL_ALLOW_PROD_ENV):
-            assert_eval_target(f"{PRODUCTION_ORIGIN}/api/user/ai/v1", {})
-
-    def test_the_override_permits_it_and_nothing_else_does(self) -> None:
+    def test_the_deployment_is_allowed(self) -> None:
         url = f"{PRODUCTION_ORIGIN}/api/user/ai/v1"
-        self.assertEqual(assert_eval_target(url, {EVAL_ALLOW_PROD_ENV: "1"}), url)
-        for value in ("", "0", "false", "yes", " "):
-            with self.subTest(value=value):
-                with self.assertRaises(ValueError):
-                    assert_eval_target(url, {EVAL_ALLOW_PROD_ENV: value})
+        self.assertEqual(assert_eval_target(url, {}), url)
 
-    def test_staging_and_loopback_are_the_allowlist(self) -> None:
+    def test_an_unknown_origin_is_refused_whatever_the_environment_carries(self) -> None:
+        url = "https://attacker.example/api/user/ai/v1"
+        for env in ({}, {EVAL_ALLOW_PROD_ENV: "1"}, {EVAL_ALLOW_PROD_ENV: ""}):
+            with self.subTest(env=env):
+                with self.assertRaises(ValueError):
+                    assert_eval_target(url, env)
+
+    def test_deployment_and_loopback_are_the_allowlist(self) -> None:
         for url in (
-            f"{EVAL_STAGING_ORIGIN}/api/user/ai/v1",
+            f"{EVAL_DEPLOYMENT_ORIGIN}/api/user/ai/v1",
             "http://localhost:5173/api/user/ai/v1",
             "http://127.0.0.1:8787/api/user/ai/v1",
         ):
@@ -215,11 +215,12 @@ class EvalTargetTest(unittest.TestCase):
             with self.subTest(url=refused), self.assertRaises(ValueError):
                 assert_eval_target(refused, {})
 
-    def test_a_near_miss_of_the_staging_host_is_not_staging(self) -> None:
+    def test_a_near_miss_of_the_deployment_host_is_not_the_deployment(self) -> None:
         for url in (
-            "https://staging.kinu.run.evil.example/api/user/ai/v1",
-            "https://evil.staging.kinu.run/api/user/ai/v1",
-            f"http://{EVAL_STAGING_ORIGIN.removeprefix('https://')}/api/user/ai/v1",
+            "https://kinu.run.evil.example/api/user/ai/v1",
+            "https://evil.kinu.run/api/user/ai/v1",
+            "https://staging.kinu.run/api/user/ai/v1",
+            f"http://{EVAL_DEPLOYMENT_ORIGIN.removeprefix('https://')}/api/user/ai/v1",
         ):
             with self.subTest(url=url):
                 with self.assertRaises(ValueError):
@@ -234,30 +235,20 @@ class SourceOfTruthTest(unittest.TestCase):
     """These origins are copies of facts in ``wrangler.jsonc``.
 
     Read out of the deployment rather than restated, so a rename there fails here
-    instead of silently pointing every benchmark at a host that is gone. The
-    staging slice is taken from ``"staging": {`` onwards, so production's own vars
-    cannot satisfy a staging assertion.
+    instead of silently pointing every benchmark at a host that is gone. Single
+    environment since 2026-09-10: there is no staging block, and the one
+    deployment origin is the eval target.
     """
 
-    def _staging_at(self) -> int:
-        index = WRANGLER.index('"staging": {')
-        self.assertGreater(index, 0)
-        return index
-
     def test_production_origin_is_the_one_wrangler_serves_users_from(self) -> None:
-        production = WRANGLER[: self._staging_at()]
-        self.assertIn(f'"CLI_PUBLIC_ORIGIN": "{PRODUCTION_ORIGIN}"', production)
+        self.assertNotIn('"staging": {', WRANGLER)
+        self.assertIn(f'"CLI_PUBLIC_ORIGIN": "{PRODUCTION_ORIGIN}"', WRANGLER)
 
-    def test_staging_origin_is_the_one_env_staging_hands_its_clis(self) -> None:
-        staging = WRANGLER[self._staging_at() :]
-        self.assertIn(f'"CLI_PUBLIC_ORIGIN": "{EVAL_STAGING_ORIGIN}"', staging)
-
-    def test_the_two_languages_agree_on_the_staging_origin(self) -> None:
+    def test_the_two_languages_agree_on_the_deployment_origin(self) -> None:
         source = (
             REPO_ROOT / "packages/test-utils/src/eval-identity.ts"
         ).read_text(encoding="utf-8")
-        self.assertIn(f"EVAL_STAGING_ORIGIN = '{EVAL_STAGING_ORIGIN}'", source)
-        self.assertIn(f"'{EVAL_ALLOW_PROD_ENV}'", source)
+        self.assertIn(f"EVAL_DEPLOYMENT_ORIGIN = '{EVAL_DEPLOYMENT_ORIGIN}'", source)
 
 
 if __name__ == "__main__":
