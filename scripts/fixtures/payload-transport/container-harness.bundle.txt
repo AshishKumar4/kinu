@@ -29,11 +29,13 @@ import { statSync } from 'node:fs';
  *  into the container, so it cannot import it. */
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
+
   return () => {
     a = (a + 0x6d2b79f5) >>> 0;
     let t = a;
     t = Math.imul(t ^ (t >>> 15), t | 1);
     t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
@@ -46,17 +48,20 @@ export async function seed(path: string, sizeMiB: number, seedValue: number): Pr
   const digest = createHash('sha256');
   // A plain chunked file writer: deterministic bytes, no streaming pitfalls.
   const writer = Bun.file(path).writer();
+
   for (let written = 0; written < sizeMiB * MIB; written += chunk.length) {
     for (let i = 0; i < chunk.length; i += 1) chunk[i] = Math.floor(next() * 256);
     digest.update(chunk);
     await writer.write(chunk);
   }
+
   await writer.end();
   process.stdout.write(`${JSON.stringify({ sha256: digest.digest('hex'), bytes: sizeMiB * MIB })}\n`);
 }
 
 function sha256Hex(data: ArrayBuffer | Uint8Array): string {
   const view = data instanceof Uint8Array ? data : new Uint8Array(data);
+
   return createHash('sha256').update(view).digest('hex');
 }
 
@@ -90,16 +95,19 @@ export function sigv4Headers(
   const canonicalHeaders = names.map((name) => `${name}:${headers.get(name)!}\n`).join('');
   const canonicalRequest = [method, url.pathname, '', canonicalHeaders, signedHeaders, payloadHash].join('\n');
   const scope = `${dateStamp}/auto/s3/aws4_request`;
+
   const stringToSign = [
     'AWS4-HMAC-SHA256',
     amzDate,
     scope,
     createHash('sha256').update(canonicalRequest).digest('hex'),
   ].join('\n');
+
   const hmac = (key: Buffer | string, data: string): Buffer => createHmac('sha256', key).update(data).digest();
   const signingKey = hmac(hmac(hmac(hmac(`AWS4${secretAccessKey}`, dateStamp), 'auto'), 's3'), 'aws4_request');
   const signature = createHmac('sha256', signingKey).update(stringToSign).digest('hex');
   headers.set('authorization', `AWS4-HMAC-SHA256 Credential=${accessKeyId}/${scope}, SignedHeaders=${signedHeaders}, Signature=${signature}`);
+
   return headers;
 }
 
@@ -109,20 +117,25 @@ export async function transfer(args: TransferArgs): Promise<void> {
 
   let targetUrl: string;
   let init: RequestInit;
+
   if (args.mode === 'sigv4') {
     const accessKeyId = process.env['BENCH_R2_ACCESS_KEY_ID'];
     const secretAccessKey = process.env['BENCH_R2_SECRET_ACCESS_KEY'];
     const sessionToken = process.env['BENCH_R2_SESSION_TOKEN'];
+
     if (args.endpoint === undefined || args.key === undefined || accessKeyId === undefined || secretAccessKey === undefined || sessionToken === undefined) {
       throw new Error('sigv4 mode needs endpoint/key arguments plus BENCH_R2_* credential environment variables');
     }
+
     const url = new URL(`${args.endpoint.replace(/\/$/, '')}/${args.key}`);
+
     if (args.op === 'put') {
       const body = await Bun.file(args.path).arrayBuffer();
       init = { method: 'PUT', body, headers: sigv4Headers('PUT', url, sha256Hex(body), accessKeyId, secretAccessKey, sessionToken) };
     } else {
       init = { method: 'GET', headers: sigv4Headers('GET', url, sha256Hex(new Uint8Array(0)), accessKeyId, secretAccessKey, sessionToken) };
     }
+
     targetUrl = url.toString();
   } else {
     if (args.url === undefined) throw new Error(`${args.mode} mode needs --url`);
@@ -132,6 +145,7 @@ export async function transfer(args: TransferArgs): Promise<void> {
 
   const started = performance.now();
   const response = await fetch(targetUrl, init);
+
   if (!response.ok) throw new Error(`${args.mode} ${args.op} → ${response.status}: ${(await response.text()).slice(0, 200)}`);
   const received = args.op === 'get' ? new Uint8Array(await response.arrayBuffer()) : null;
   const ms = performance.now() - started;
@@ -139,20 +153,25 @@ export async function transfer(args: TransferArgs): Promise<void> {
   // Digest AND length verified inside the container, against the seeded source.
   const receivedSha256 = received === null ? expectedSha256 : sha256Hex(received);
   const receivedBytes = received === null ? expectedBytes : received.byteLength;
+
   if (receivedSha256 !== expectedSha256 || receivedBytes !== expectedBytes) {
     process.stdout.write(`${JSON.stringify({ corrupt: true, expectedSha256, receivedSha256, expectedBytes, receivedBytes })}\n`);
+
     return;
   }
+
   process.stdout.write(`${JSON.stringify({ ms, sha256: receivedSha256, bytes: receivedBytes })}\n`);
 }
 
 function flag(name: string): string | undefined {
   const index = process.argv.indexOf(name);
+
   return index < 0 ? undefined : process.argv[index + 1];
 }
 
 if (import.meta.main) {
   const command = process.argv[2];
+
   if (command === 'seed') {
     await seed(flag('--path')!, Number(flag('--size-mib')), Number(flag('--seed')));
   } else if (command === 'transfer') {
