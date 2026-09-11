@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import {
   EXCLUSION_GROUPS, GATE_DEADLINES, SERIAL_GATES, deployDeadlines, deployExclusions,
-  deployGates, deployWaves,
+  deployWaves,
 } from "./ladder";
 import { CONTROL_PLANE_ACCESS_PATHS, deriveInfrastructure } from "./infra-manifest";
 import { isControlPlaneSurface } from "../packages/cf-backend/src/control-plane/access-gate";
@@ -57,7 +57,7 @@ const REQUIRED_GATES = [
   "bun run test:workerd",
   "bun test --parallel=4 packages/cli-backend/",
   "bun run test:cli",
-  "bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts",
+  "bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts",
   `bun test ${BENCH_GATE_FILES.join(" ")}`,
   "bun test scripts/secret-scan.test.ts scripts/sources.test.ts scripts/preflight.test.ts scripts/gallery-harness.test.ts scripts/workspace-name-ux.test.ts",
   "bun scripts/secret-scan.ts",
@@ -216,7 +216,6 @@ function runDeploy({
   failingGate = "",
   killGate = "",
   dirty = false,
-  environment = "production",
   tmpdir: temporaryRoot,
   option,
   ambientPhase = "",
@@ -265,7 +264,7 @@ printf 'MUTATE npx %s\\n' "$*" >> "$KINU_DEPLOY_GATE_LOG"
 exit 87
 `);
 
-  const argv = ["/usr/bin/bash", "scripts/deploy.sh", environment];
+  const argv = ["/usr/bin/bash", "scripts/deploy.sh"];
 
   if (option !== undefined) argv.push(option);
 
@@ -542,67 +541,6 @@ describe("deploy gate", () => {
     // 4 s is declared, because a loaded box must not read as a broken deploy.
   }, REQUIRED_GATES.length * 4_000);
 
-  // ── After the upload ──────────────────────────────────────────
-  //
-  // The first-run tier is the only gate whose subject is the DEPLOYED build, so
-  // it is the only one this fixture cannot execute: the build stub fails on
-  // purpose and the pipeline never reaches step 4. What is checkable here is
-  // the wiring, and it is checked at the same three sites the census demands —
-  // deploy.sh runs it, `scripts/ladder.ts` declares it, and this list names it.
-  test("the first-run tier runs after the smoke test, alone, on staging only", () => {
-    const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
-
-    for (const gate of POST_DEPLOY_GATES) {
-      expect(deployGates(source)).toContain(gate);
-      // STAGING ONLY. The tier acts as the eval identity, which is a staging
-      // construct by design: the DEV_IDENTITY_SECRET that lets a test act as a
-      // signed-in user without signing in is the whole authority for that
-      // identity, and production deliberately carries neither it nor
-      // DEV_USER_EMAIL (wrangler.jsonc:441-445). A first-run against production
-      // would need a service identity production is built to refuse, and the
-      // same bits reach production minutes after staging passed them.
-      // The three lines together, and the enqueue at COLUMN 0 inside the
-      // guard: `deployGates` parses `^run_required_gate`, so an indented line
-      // would run on staging while the ladder, this contract and the
-      // CI-coverage assertion all reported a tier that does not exist.
-      expect(source).toContain(`if [ "$KINU_ENV" = "staging" ]; then
-run_required_gate "First-run tier" ${gate}
-fi`);
-      // AFTER the smoke test: a tier that judged the product before the smoke
-      // gate had said the deploy landed would report five product failures for
-      // one deployment failure.
-      const smokeAt = source.indexOf("Step 4: Post-deploy smoke test");
-      const gateAt = source.indexOf(`run_required_gate "First-run tier" ${gate}`);
-      expect(smokeAt).toBeGreaterThan(0);
-      expect(gateAt).toBeGreaterThan(smokeAt);
-      // And after the upload itself, which is what makes it a statement about
-      // the build that just shipped rather than about the previous one.
-      expect(gateAt).toBeGreaterThan(source.indexOf("Step 3: Deploying Kinu"));
-      // Alone, and declared alone: the wave assertion above proves the first,
-      // and SERIAL_GATES is where the reason lives.
-      expect(Object.keys(SERIAL_GATES)).toContain(gate);
-    }
-
-    // The pre- and post-deploy lists together are exactly what deploy.sh runs.
-    // Neither list may grow without the other being read, which is the property
-    // a single list stopped being able to state once a gate ran after the
-    // upload.
-    // By COUNT and by TAIL rather than by set equality: deploy.sh spells one
-    // pre-deploy gate with a glob and `REQUIRED_GATES` carries what bash
-    // expands it to, so the two lists are equal as gates and unequal as text —
-    // which the set-equality test above already establishes for the pre-deploy
-    // half. What is this test's own to say is that the post-deploy half is
-    // exactly these gates, and that nothing else joined the file unnoticed.
-    const parsed = deployGates(source);
-    expect(parsed).toHaveLength(REQUIRED_GATES.length + POST_DEPLOY_GATES.length);
-    expect(parsed.slice(-POST_DEPLOY_GATES.length)).toEqual([...POST_DEPLOY_GATES]);
-    // AND NOT ON PRODUCTION. The `if` guard is the enforcement, and this is its
-    // other direction: the same command, run as `deploy.sh production`, must
-    // hold the gate behind the staging branch — which the staging-only test
-    // above proves by holding the exact three lines together. A production run
-    // that reached this tier without the secret would fail on a credential
-    // nobody can mint there, which is the design refusing it, not a gap.
-  });
 
   test("a dirty checkout is rejected before verification or mutation", () => {
     const run = runDeploy({ dirty: true });
@@ -611,29 +549,7 @@ fi`);
     expect(run.events).toEqual([]);
   });
 
-  // ── The environment argument ───────────────────────────────────
-  //
-  // staging.kinu.run served for days with nothing deploying it, and the reason a
-  // second script was not written is asserted here: one script means the gate
-  // set, the asset check and the smoke gate cannot be present for production and
-  // absent for staging. The two environments differ in four values, and these
-  // tests are about the two an operator can see.
-  test("staging runs the same gates as production, against the staging route", () => {
-    const run = runDeploy({ environment: "staging" });
 
-    expect([...run.events].sort()).toEqual([...REQUIRED_GATES, "MUTATE bunx vite build"].sort());
-    expect(run.stdout).toContain("Environment:  staging");
-    expect(run.stdout).toContain("Target:       https://staging.kinu.run/");
-    expect(run.buildEnvironment).toBe("staging");
-  });
-
-  test("an unknown environment deploys nothing", () => {
-    const run = runDeploy({ environment: "preprod" });
-
-    expect(run.status).toBe(2);
-    expect(run.events).toEqual([]);
-    expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging>");
-  });
 
   // ── The bootstrap option and the phase it selects ──────────────
   //
@@ -649,7 +565,7 @@ fi`);
   // (no gate is added, dropped or softened), and it cannot be reached by
   // accident, ambient environment, or a typo.
   test("bootstrap changes the phase and not one gate", () => {
-    const bootstrap = runDeploy({ environment: "staging", option: "--bootstrap" });
+    const bootstrap = runDeploy({ option: "--bootstrap" });
 
     // Same gates, same set, same failure semantics as any other deploy. This is
     // the assertion that would catch a future `--bootstrap` that skipped a check
@@ -661,7 +577,7 @@ fi`);
     expect(bootstrap.stdout).toContain("BOOTSTRAP");
     expect(bootstrap.stdout).toContain("Still refused before the upload");
 
-    const normal = runDeploy({ environment: "staging" });
+    const normal = runDeploy();
     expect(normal.infraPhase).toBe("full");
     expect([...normal.events].sort()).toEqual([...bootstrap.events].sort());
     expect(normal.stdout).not.toContain("BOOTSTRAP");
@@ -676,14 +592,14 @@ fi`);
     // script assigns it in BOTH arms rather than reading whatever was exported —
     // otherwise `export KINU_INFRA_PHASE=bootstrap` in a shell would quietly
     // weaken every deploy launched from it.
-    const inherited = runDeploy({ environment: "staging", ambientPhase: "bootstrap" });
+    const inherited = runDeploy({ ambientPhase: "bootstrap" });
 
     expect(inherited.infraPhase).toBe("full");
     expect(inherited.stdout).not.toContain("BOOTSTRAP");
 
     // And the flag still wins when it is actually passed, ambient value or not.
     const asked = runDeploy({
-      environment: "staging", option: "--bootstrap", ambientPhase: "post-deploy",
+      option: "--bootstrap", ambientPhase: "post-deploy",
     });
 
     expect(asked.infraPhase).toBe("bootstrap");
@@ -696,12 +612,12 @@ fi`);
     // Refused rather than ignored. A silently-dropped `--bootstrp` would fail the
     // deploy at the infrastructure gate with a diagnostic about a Durable Object
     // namespace, which is the wrong thing to debug.
-    const run = runDeploy({ environment: "staging", option: "--bootstrp" });
+    const run = runDeploy({ option: "--bootstrp" });
 
     expect(run.status).toBe(2);
     expect(run.events).toEqual([]);
     expect(run.infraPhase).toBeNull();
-    expect(run.stdout).toContain("Usage: scripts/deploy.sh <production|staging> [--bootstrap]");
+    expect(run.stdout).toContain("Usage: scripts/deploy.sh [--bootstrap]");
   });
 
   // ── The post-deploy phase ──────────────────────────────────────
@@ -907,8 +823,8 @@ describe("one deploy path", () => {
   test("the root scripts are the deploy script, one per environment", () => {
     const scripts = scriptsOf("package.json");
 
-    expect(scripts.deploy).toBe("bash scripts/deploy.sh production");
-    expect(scripts["deploy:staging"]).toBe("bash scripts/deploy.sh staging");
+    expect(scripts.deploy).toBe("bash scripts/deploy.sh");
+    expect(scripts["deploy:staging"]).toBeUndefined();
   });
 
   test("no package script publishes anything itself", () => {
@@ -1019,21 +935,19 @@ describe("one deploy path", () => {
   // Blind spot: what a body then executes — `bun scripts/<name>.ts` is one word here
   // whatever `x.ts` publishes.
   test("every automation file GitHub executes is in the denominator", () => {
-    expect(automationFiles, "the enumerator stopped listing the deploy workflow")
-      .toContain(".github/workflows/deploy-staging.yml");
+    expect(automationFiles, "the enumerator stopped listing the workflows")
+      .toContain(".github/workflows/ci.yml");
     expect(automationFiles, "the enumerator stopped listing the composite actions")
       .toContain(".github/actions/setup-lean/action.yml");
-    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(4);
+    expect(automationFiles.length, "the automation corpus collapsed").toBeGreaterThan(3);
     expect(automationSteps.length, "the parse read no run body").toBeGreaterThan(10);
 
-    // Non-vacuity: the corpus really contains a deploy, and that deploy really
-    // does go through the root script. Without this the rule below is satisfied
-    // by a repository that deploys nothing.
+    // Deploys are run by a person through `bun run deploy`; no workflow deploys.
+    // Named so a workflow that starts deploying is a deliberate change here.
     const deploying = automationSteps.filter(({ body }) =>
       DEPLOY_ENTRYPOINTS.some((entrypoint) => body.includes(entrypoint)));
 
-    expect(deploying.map(({ label }) => label), "no workflow deploys through the deploy script")
-      .toContain(".github/workflows/deploy-staging.yml#deploy");
+    expect(deploying.map(({ label }) => label)).toEqual([]);
   });
 
   // Harness boundary: string containment over a step body, the same authority
@@ -1044,7 +958,7 @@ describe("one deploy path", () => {
     // Positive control, as a literal: a matcher that stops matching is
     // indistinguishable from a clean tree.
     expect(PUBLISH_COMMANDS.some((command) =>
-      "bunx wrangler deploy --env staging".includes(command))).toBe(true);
+      "bunx wrangler deploy".includes(command))).toBe(true);
 
     for (const { label, body } of automationSteps) {
       for (const command of PUBLISH_COMMANDS) {

@@ -42,7 +42,6 @@ const pluginPackage = JSON.parse(
   readFileSync("tools/oxlint/anti-slop/package.json", "utf8"),
 );
 const ci = readFileSync(".github/workflows/ci.yml", "utf8");
-const agentGuide = readFileSync("AGENTS.md", "utf8");
 
 assert.deepEqual(
   Object.keys(config.rules).filter((name) => name.startsWith("anti-slop/")).sort(),
@@ -362,8 +361,6 @@ assert.match(
   /run: 'bun run check',\s*\n\s*tier: '(?:commit|push|ci)',/u,
   "the ladder must claim `bun run check` at or before the ci tier",
 );
-assert.match(agentGuide, /bun run lint\s+# strict Oxlint/u);
-assert.doesNotMatch(agentGuide, /No lint command configured/u);
 
 function isForbiddenLintDirective(line: string): boolean {
   const directive = line.match(

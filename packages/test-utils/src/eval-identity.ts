@@ -18,16 +18,19 @@
  *      never a session belonging to a person. There is no fallback to a stored
  *      session: a harness with no eval credential skips, which is a result, and
  *      the skip-ratchet holds it accountable.
- *   2. TARGET. An eval may reach the staging deployment or a loopback dev
- *      server. Anything else is refused unless
- *      {@link EVAL_IDENTITY_ENV.allowProd} names the exception.
+ *   2. TARGET. An eval may reach the one deployment or a loopback dev server.
+ *      Anything else is refused. There is no staging (2026-09-10: the owner
+ *      collapsed the two environments; the product has no external users, so
+ *      the deployed worker is the test target), and no override flag: with one
+ *      origin an exception would only name a mistake.
  *
- * RULE 2 IS AN ALLOWLIST, and that is the whole of its value. A denylist of
- * production hostnames permits every origin nobody has thought of yet — a new
- * prod, a colleague's deployment, a typo that resolves — which is the class of
- * mistake that put those 23 rows on the owner's account. This fails closed: an
- * origin nobody has declared safe is refused, and the refusal says which
- * variable makes it run.
+ * RULE 2 IS AN ALLOWLIST, and that is the whole of its value. A denylist
+ * permits every origin nobody has thought of yet — a colleague's deployment, a
+ * typo that resolves — which is the class of mistake that put those 23 rows on
+ * the owner's account. What keeps the deployment clean is rule 1 plus the
+ * workspace prefix: an eval never drives a person's session, and every row it
+ * mints is attributable and torn down. This fails closed: an origin nobody has
+ * declared is refused, and the refusal says which variable names the target.
  *
  * Pure over its environment, so the guard is testable without a credential and
  * without a network.
@@ -41,26 +44,25 @@ import { LIVE_MODEL_ENV } from './ambient-env';
 export const EVAL_IDENTITY_ENV = {
   token: 'KINU_EVAL_TOKEN',
   origin: 'KINU_EVAL_ORIGIN',
-  allowProd: 'KINU_EVAL_ALLOW_PROD',
 } as const;
 
 /** The account every eval run acts as. Server-side this is the identity
- *  `env.DEV_USER_EMAIL` synthesizes on the staging deployment, so the browser
- *  half and the CLI-bearer half of a run agree on one user. */
+ *  `env.DEV_USER_EMAIL` synthesizes on the deployment, so the browser half and
+ *  the CLI-bearer half of a run agree on one user. */
 export const EVAL_SERVICE_ACCOUNT = 'eval-service';
 
-/** The staging deployment's synthesized identity, and so the mailbox the
- *  eval-service account is keyed by. Pinned to `env.staging`'s DEV_USER_EMAIL
- *  by this module's tests. */
+/** The deployment's synthesized identity, and so the mailbox the eval-service
+ *  account is keyed by. Pinned to wrangler.jsonc's DEV_USER_EMAIL by this
+ *  module's tests. */
 export const EVAL_SERVICE_EMAIL = 'eval-service@kinu.run';
 
-/** The default eval target: the staging deployment, whose ONE origin this is.
- *  Pinned to `env.staging`'s CLI_PUBLIC_ORIGIN by this module's tests.
+/** The default eval target: the deployment, whose ONE origin this is. Pinned
+ *  to wrangler.jsonc's CLI_PUBLIC_ORIGIN by this module's tests.
  *
- *  Both deployments set `workers_dev: false`, so there is no second host to
- *  allow: a `workers.dev` origin fronting a DEV_USER_EMAIL identity would be an
- *  auth bypass on a second name nobody watches. */
-export const EVAL_STAGING_ORIGIN = 'https://staging.kinu.run';
+ *  `workers_dev` is off, so there is no second host to allow: a `workers.dev`
+ *  origin fronting a DEV_USER_EMAIL identity would be an auth bypass on a
+ *  second name nobody watches. */
+export const EVAL_DEPLOYMENT_ORIGIN = 'https://kinu.run';
 
 /** Hosts that can only be a developer's own machine. `[::1]` keeps its brackets
  *  because `URL.hostname` does — and the parser normalizes any longhand IPv6
@@ -103,23 +105,16 @@ export function evalWorkspaceName(subject: string): string {
 }
 
 /** Why an origin was allowed. Reported rather than inferred, because "this ran
- *  against staging" and "this ran against production because someone said so"
- *  are different facts about a measurement. */
-export type EvalTargetReason = 'staging' | 'local' | 'override';
+ *  against the deployment" and "this ran against a dev server" are different
+ *  facts about a measurement. */
+export type EvalTargetReason = 'deployment' | 'local';
 
 export type EvalTargetVerdict =
   | { readonly kind: 'allowed'; readonly origin: string; readonly why: EvalTargetReason }
   | { readonly kind: 'refused'; readonly origin: string; readonly reason: string };
 
-/**
- * Whether an eval may point at `origin`.
- *
- * The override is tested FIRST and reported as itself. An operator who sets
- * {@link EVAL_IDENTITY_ENV.allowProd} has named an exception, and a run that
- * took it must say so in the same line that says where it went — otherwise the
- * override is indistinguishable from the origin having been safe all along.
- */
-export function evalTargetVerdict(origin: string, env: EnvSource = process.env): EvalTargetVerdict {
+/** Whether an eval may point at `origin`: the deployment, or a loopback. */
+export function evalTargetVerdict(origin: string): EvalTargetVerdict {
   const normalized = origin.trim().replace(/\/+$/, '');
 
   if (!normalized) {
@@ -127,7 +122,7 @@ export function evalTargetVerdict(origin: string, env: EnvSource = process.env):
       kind: 'refused',
       origin: normalized,
       reason: `${EVAL_IDENTITY_ENV.origin} is set to an empty value, so nothing names where this `
-        + 'run would go. Unset it to take the staging default, or name an origin.',
+        + 'run would go. Unset it to take the deployment default, or name an origin.',
     };
   }
 
@@ -146,25 +141,20 @@ export function evalTargetVerdict(origin: string, env: EnvSource = process.env):
     };
   }
 
-  if (env[EVAL_IDENTITY_ENV.allowProd]?.trim() === '1') {
-    return { kind: 'allowed', origin: normalized, why: 'override' };
-  }
-
   if (LOOPBACK_HOSTS.includes(hostname)) {
     return { kind: 'allowed', origin: normalized, why: 'local' };
   }
 
-  if (normalized === EVAL_STAGING_ORIGIN) {
-    return { kind: 'allowed', origin: normalized, why: 'staging' };
+  if (normalized === EVAL_DEPLOYMENT_ORIGIN) {
+    return { kind: 'allowed', origin: normalized, why: 'deployment' };
   }
 
   return {
     kind: 'refused',
     origin: normalized,
     reason: `${normalized} is not an eval target. Tests and evals run against `
-      + `${EVAL_STAGING_ORIGIN}, or a loopback dev server, so they can never write into a `
-      + `deployment that serves real users. To make this run anyway, set `
-      + `${EVAL_IDENTITY_ENV.allowProd}=1 — which records that somebody chose it.`,
+      + `${EVAL_DEPLOYMENT_ORIGIN} or a loopback dev server. Set ${EVAL_IDENTITY_ENV.origin} `
+      + `to one of those.`,
   };
 }
 
@@ -200,10 +190,7 @@ export type EvalModelEndpointVerdict =
  * as a gateway and pass. This way an undeclared origin bearing the inference
  * route is refused, including one belonging to nobody here.
  */
-export function evalModelEndpointVerdict(
-  baseUrl: string,
-  env: EnvSource = process.env,
-): EvalModelEndpointVerdict {
+export function evalModelEndpointVerdict(baseUrl: string): EvalModelEndpointVerdict {
   let url: URL;
 
   try {
@@ -216,7 +203,7 @@ export function evalModelEndpointVerdict(
     return { kind: 'gateway' };
   }
 
-  const target = evalTargetVerdict(url.origin, env);
+  const target = evalTargetVerdict(url.origin);
 
   if (target.kind === 'allowed') return { kind: 'checked', target };
 
@@ -243,7 +230,7 @@ export function refusedEvalEndpoint(env: EnvSource = process.env): RefusedEvalEn
     const value = env[variable]?.trim();
 
     if (!value) continue;
-    const verdict = evalModelEndpointVerdict(value, env);
+    const verdict = evalModelEndpointVerdict(value);
 
     if (verdict.kind === 'checked' && verdict.target.kind === 'refused') {
       return { variable, reason: verdict.target.reason };
@@ -283,7 +270,7 @@ export type EvalIdentityResolution =
 export function resolveEvalIdentity(env: EnvSource = process.env): EvalIdentityResolution {
   const token = env[EVAL_IDENTITY_ENV.token]?.trim();
   // `evalTargetVerdict` normalizes, so this only has to choose the default.
-  const origin = env[EVAL_IDENTITY_ENV.origin]?.trim() ?? EVAL_STAGING_ORIGIN;
+  const origin = env[EVAL_IDENTITY_ENV.origin]?.trim() ?? EVAL_DEPLOYMENT_ORIGIN;
 
   if (!token) {
     return {
@@ -294,7 +281,7 @@ export function resolveEvalIdentity(env: EnvSource = process.env): EvalIdentityR
     };
   }
 
-  const verdict = evalTargetVerdict(origin, env);
+  const verdict = evalTargetVerdict(origin);
 
   if (verdict.kind === 'refused') {
     return { kind: 'refused', reason: verdict.reason };

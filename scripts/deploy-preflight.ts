@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Does the staging deployment run THIS branch?
+ * Does the deployment run THIS branch?
  *
  * The cloud eval arm's whole claim is that it measures the product, so the one
  * question it must answer before it spends is which build it is measuring. A
@@ -16,7 +16,7 @@
  * an absent stamp also means the CLI download assets never published — a partial
  * deploy, not merely an unknown version.
  *
- * WHAT IT DOES ABOUT A MISMATCH. Refuses, and names `bun run deploy:staging`.
+ * WHAT IT DOES ABOUT A MISMATCH. Refuses, and names `bun run deploy`.
  * `--allow-stale` downgrades the refusal to a warning, for the one legitimate
  * case: measuring a deployment on purpose (a bisect, or reproducing a production
  * report) rather than measuring this branch. The flag is required so that choice
@@ -29,7 +29,7 @@
 import { spawnSync } from 'node:child_process';
 import * as v from 'valibot';
 
-import { EVAL_STAGING_ORIGIN, evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
+import { EVAL_DEPLOYMENT_ORIGIN, evalTargetVerdict } from '../packages/test-utils/src/eval-identity';
 
 /** `/api/health`'s build stamp, as this reads it off the wire. Only the fields
  *  the comparison uses — the feature counts and endpoint map are the health
@@ -60,7 +60,7 @@ export type StagingVerdict =
  * The verdict, over values rather than over the network, so the decision is
  * testable without a deployment. `health` is null when the GET itself failed.
  */
-export function stagingDeploymentVerdict(input: {
+export function deploymentVerdict(input: {
   readonly localSha: string;
   readonly health: DeployedHealth | null;
   readonly failure?: string;
@@ -89,19 +89,19 @@ export function stagingDeploymentVerdict(input: {
 export function describeStagingVerdict(verdict: StagingVerdict, origin: string): string {
   switch (verdict.kind) {
     case 'current':
-      return `staging runs this checkout (${verdict.sha}, built ${verdict.builtAt})`;
+      return `the deployment runs this checkout (${verdict.sha}, built ${verdict.builtAt})`;
     case 'stale':
-      return `staging runs ${verdict.deployed} (built ${verdict.builtAt}) and this checkout is `
+      return `the deployment runs ${verdict.deployed} (built ${verdict.builtAt}) and this checkout is `
         + `${verdict.local}. A cloud eval arm would grade the deployed build under this branch's `
-        + 'name. Deploy this branch with `bun run deploy:staging`, or measure the deployed build '
+        + 'name. Deploy this branch with `bun run deploy`, or measure the deployed build '
         + 'on purpose with --allow-stale.';
     case 'unstamped':
       return `${origin}/api/health answered with no build stamp, so its asset bundle is `
-        + 'incomplete and no version can be established. Re-run `bun run deploy:staging` — a '
+        + 'incomplete and no version can be established. Re-run `bun run deploy` — a '
         + 'deploy that skipped the CLI archive step leaves the download endpoints broken too.';
     case 'unreachable':
       return `${origin}/api/health did not answer (${verdict.reason}). The cloud arm cannot run `
-        + 'without a reachable deployment: check the deploy, then `bun run deploy:staging`.';
+        + 'without a reachable deployment: check the deploy, then `bun run deploy`.';
   }
 }
 
@@ -136,12 +136,12 @@ function treeIsDirty(): boolean {
   return status.status === 0 && status.stdout.trim().length > 0;
 }
 
-/** Run as a script: `bun scripts/staging-preflight.ts [--allow-stale] [origin]`. */
+/** Run as a script: `bun scripts/deploy-preflight.ts [--allow-stale] [origin]`. */
 if (import.meta.main) {
   const args = process.argv.slice(2);
   const allowStale = args.includes('--allow-stale');
 
-  const origin = (args.find((arg) => !arg.startsWith('--')) ?? EVAL_STAGING_ORIGIN)
+  const origin = (args.find((arg) => !arg.startsWith('--')) ?? EVAL_DEPLOYMENT_ORIGIN)
     .trim().replace(/\/+$/, '');
 
   // The same allowlist every other eval entry point is held to. A preflight that
@@ -150,20 +150,20 @@ if (import.meta.main) {
   const allowed = evalTargetVerdict(origin);
 
   if (allowed.kind === 'refused') {
-    console.error(`staging-preflight: REFUSED — ${allowed.reason}`);
+    console.error(`deploy-preflight: REFUSED — ${allowed.reason}`);
     process.exit(1);
   }
 
   const { health, failure } = await readDeployedHealth(allowed.origin);
   const localSha = localHeadSha();
-  const verdict = stagingDeploymentVerdict({ localSha, health, failure });
+  const verdict = deploymentVerdict({ localSha, health, failure });
   const line = describeStagingVerdict(verdict, allowed.origin);
 
   if (verdict.kind === 'current') {
-    console.error(`staging-preflight: ${line}`);
+    console.error(`deploy-preflight: ${line}`);
 
     if (treeIsDirty()) {
-      console.error('staging-preflight: WARNING — this tree has uncommitted changes, which are '
+      console.error('deploy-preflight: WARNING — this tree has uncommitted changes, which are '
         + 'not in the deployment and so are not being measured.');
     }
 
@@ -171,10 +171,10 @@ if (import.meta.main) {
   }
 
   if (allowStale) {
-    console.error(`staging-preflight: WARNING (--allow-stale) — ${line}`);
+    console.error(`deploy-preflight: WARNING (--allow-stale) — ${line}`);
     process.exit(0);
   }
 
-  console.error(`staging-preflight: REFUSED — ${line}`);
+  console.error(`deploy-preflight: REFUSED — ${line}`);
   process.exit(1);
 }

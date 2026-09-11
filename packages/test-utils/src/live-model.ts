@@ -46,7 +46,7 @@ import {
 import type { LanguageModel, LanguageModelUsage } from 'ai';
 import { appendFileSync } from 'node:fs';
 import { LIVE_MODEL_ENV } from './ambient-env';
-import { EVAL_STAGING_ORIGIN, evalTargetVerdict } from './eval-identity';
+import { EVAL_DEPLOYMENT_ORIGIN, evalTargetVerdict } from './eval-identity';
 
 /** Which of the two resolution paths produced a target. */
 export type LiveModelPath = 'worker-proxy' | 'ai-gateway';
@@ -99,7 +99,7 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
     return {
       kind: 'misconfigured',
       reason: `${LIVE_MODEL_ENV.token} is set but ${LIVE_MODEL_ENV.origin} is not. `
-        + `A CLI bearer names no target: set the deployment origin (${EVAL_STAGING_ORIGIN}).`,
+        + `A CLI bearer names no target: set the deployment origin (${EVAL_DEPLOYMENT_ORIGIN}).`,
     };
   }
 
@@ -109,7 +109,7 @@ export function resolveLiveModel(env: EnvSource = process.env): LiveModelResolut
   // how 23 of the 28 rows on the owner's account got made. One funnel for every
   // live suite, so no suite has to remember the rule.
   if (origin) {
-    const verdict = evalTargetVerdict(origin, env);
+    const verdict = evalTargetVerdict(origin);
 
     if (verdict.kind === 'refused') {
       return { kind: 'misconfigured', reason: verdict.reason };

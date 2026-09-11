@@ -103,10 +103,10 @@ function deployments(): readonly Deployment[] {
 const DEPLOYMENTS = deployments();
 
 describe('every deployment reads the datasets it writes', () => {
-  test('production and staging both bind analytics, and are both measured', () => {
-    // Named rather than counted: the assertions below iterate, so an environment
+  test('the deployment binds analytics and is measured', () => {
+    // Named rather than counted: the assertions below iterate, so a deployment
     // silently dropped from the config would make them all vacuously pass.
-    expect(DEPLOYMENTS.map((deployment) => deployment.name)).toEqual(['production', 'staging']);
+    expect(DEPLOYMENTS.map((deployment) => deployment.name)).toEqual(['production']);
   });
 
   test.each(DEPLOYMENTS.map((deployment) => [deployment.name, deployment] as const))(
@@ -118,23 +118,13 @@ describe('every deployment reads the datasets it writes', () => {
     },
   );
 
-  test("staging names its own datasets, not production's", () => {
-    // The suffix could be set to '' and every equality above would still hold,
-    // while staging went back to reading production. This is the assertion that
-    // says the separation exists at all.
-    const [production, staging] = DEPLOYMENTS;
-
-    for (const [binding, dataset] of Object.entries(staging.bound)) {
-      expect(dataset).not.toBe(production.bound[binding]);
-    }
-  });
 });
 
 describe('the derivation itself', () => {
   test('production is the unsuffixed name, and a suffix appends', () => {
     const [agent] = ANALYTICS_SCHEMAS;
     expect(analyticsDataset(agent, '')).toBe(agent.dataset);
-    expect(analyticsDataset(agent, '_staging')).toBe(`${agent.dataset}_staging`);
+    expect(analyticsDataset(agent, '_other')).toBe(`${agent.dataset}_other`);
   });
 
   test('a value that is not a dataset suffix is refused, not appended', () => {
@@ -149,9 +139,9 @@ describe('the derivation itself', () => {
   });
 
   test('the equality has a red direction', () => {
-    // Staging's bindings against production's suffix is exactly the shipped
-    // defect this file was written for. If this passed, the test above would be
-    // measuring nothing.
-    expect(DEPLOYMENTS[1].bound).not.toEqual(derivedBindings(''));
+    // A deployment's bindings against a suffix it does not use is exactly the
+    // shipped defect this file was written for. If this passed, the test above
+    // would be measuring nothing.
+    expect(DEPLOYMENTS[0].bound).not.toEqual(derivedBindings('_other'));
   });
 });

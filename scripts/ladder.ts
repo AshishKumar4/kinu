@@ -1138,7 +1138,7 @@ export const LADDER: readonly Gate[] = [
       + '`detached_work_failed / Request Timeout` signature as an outage.',
   },
   {
-    run: 'bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/staging-preflight.test.ts',
+    run: 'bun test scripts/eval.test.ts scripts/eval-triage.test.ts scripts/deploy-preflight.test.ts',
     tier: 'ci',
     seconds: 1,
     catches: 'the eval gate\'s own logic, credential-free, plus how the triage instrument '

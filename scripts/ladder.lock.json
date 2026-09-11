@@ -1,9 +1,9 @@
 {
-  "reason": "the gate self-test row gains the linked-install refusal test",
+  "reason": "one environment: staging removed from the deploy path and every gate",
   "tiers": {
     "commit": {
       "seconds": 81.24,
-      "measuredAt": "2026-09-10",
+      "measuredAt": "2026-09-11",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
@@ -33,7 +33,7 @@
     },
     "push": {
       "seconds": 399.81,
-      "measuredAt": "2026-09-10",
+      "measuredAt": "2026-09-11",
       "machine": "linux x64, 12th Gen Intel(R) Core(TM) i9-12900K (24 threads)",
       "steps": {
         "bun scripts/preflight.ts": 0.12,
