@@ -1,5 +1,5 @@
 {
-  "measured": "368bce9b2: 931 test files, 842 runnable suites, 11593 tests, 36 runners, 64 non-public product members",
+  "measured": "ced2f88d7: 953 test files, 860 runnable suites, 11719 tests, 36 runners, 64 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -90,6 +90,10 @@
       "count": 1
     },
     {
+      "key": "mirror :: packages/core/tests/unit-memory-tail.test.ts :: (file scope) :: mirrored constant",
+      "count": 1
+    },
+    {
       "key": "mirror :: packages/core/tests/unit-mission-budget-seams.test.ts :: a TOOLLESS node charges its one call too, so removing the lump under-charges nothing :: declared mirror",
       "count": 1
     },
@@ -115,6 +119,10 @@
     },
     {
       "key": "mirror :: packages/devbox/tests/lifecycle-generation.test.ts :: a caller does not JOIN a superseded attempt, it starts the new generation's :: declared mirror",
+      "count": 1
+    },
+    {
+      "key": "mirror :: packages/devbox/tests/restore-after-start.test.ts :: T8: the settled phase is durable — a fresh activation over the running container adopts it :: declared mirror",
       "count": 1
     },
     {
@@ -330,7 +338,7 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-ensemble-operations.test.ts :: the title call runs the TINY tier and files a start/end pair under fast :: harness bridge to a non-public member",
+      "key": "private_reach :: packages/cf-backend/tests/unit-ensemble-operations.test.ts :: the title call runs the FAST tier and files a start/end pair under fast :: harness bridge to a non-public member",
       "count": 1
     },
     {
@@ -431,6 +439,14 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-reconnect-snapshot.test.ts :: a redial mid-turn is told the queued steer and the running branch :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: a fresh workspace whose first wake has the table and no rows yet wakes :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-session-store-guard.test.ts :: an activation with no Think session is the harness shape, not a moved store, and wakes :: harness bridge to a non-public member",
       "count": 1
     },
     {
