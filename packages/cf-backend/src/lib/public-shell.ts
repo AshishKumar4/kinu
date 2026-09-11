@@ -43,7 +43,8 @@ export type PublicToken =
   | '--c-text' | '--c-text-2' | '--c-text-3'
   | '--c-accent' | '--c-accent-fg' | '--c-accent-on' | '--c-accent-subtle'
   | '--c-success' | '--c-warning' | '--c-danger'
-  | '--c-code';
+  | '--c-code'
+  | '--shadow-overlay';
 
 export type TokenSet = Readonly<Record<PublicToken, string>>;
 
@@ -71,6 +72,7 @@ const DARK = {
   '--c-warning': '#E8B97A',
   '--c-danger': '#C97B6B',
   '--c-code': '#E3D2AE',
+  '--shadow-overlay': '0 18px 44px -12px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35)',
 } satisfies TokenSet;
 
 const LIGHT = {
@@ -94,6 +96,7 @@ const LIGHT = {
   '--c-warning': '#7E5205',
   '--c-danger': '#96412C',
   '--c-code': '#7A5514',
+  '--shadow-overlay': '0 16px 40px -14px rgba(43, 26, 4, 0.20), 0 2px 8px rgba(43, 26, 4, 0.07)',
 } satisfies TokenSet;
 
 /**
