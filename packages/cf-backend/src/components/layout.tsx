@@ -49,7 +49,7 @@ export default function Layout() {
       </header>
 
       {/* Desktop rail */}
-      <aside className="hidden w-60 shrink-0 h-full p-sidebar border-r p-border md:block">
+      <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block">
         <Sidebar />
       </aside>
 

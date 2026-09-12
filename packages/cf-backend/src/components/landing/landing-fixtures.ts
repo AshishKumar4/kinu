@@ -107,11 +107,15 @@ const CHECKOUT_CHANGELOG = {
 
 const CHECKOUT_JOBS: BackgroundJob[] = [
   { id: 'bgjob-7c1e4a92', kind: 'execute_tools', label: 'bun test packages/checkout', workMode: 'build', status: 'running', result: null, error: null, createdAt: NOW - 9e5, settledAt: null },
-  { id: 'bgjob-9d3c6e11', kind: 'run', label: 'wrangler deploy --env staging --dry-run', workMode: 'build', status: 'failed', result: null, error: 'exit 1: binding VECTORIZE not found in wrangler.jsonc', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
+  { id: 'bgjob-9d3c6e11', kind: 'run', label: 'bun test packages/checkout --filter coupon', workMode: 'build', status: 'failed', result: null, error: 'exit 1: 2 failed — percentage coupons still read kind:null', createdAt: NOW - 61e5, settledAt: NOW - 58e5 },
 ];
 
+// The queue holds what only the owner can decide: the mission said "deploy
+// when green", and the fix is green. The failed run above stays in the jobs
+// journal with its Retry, where the product keeps one; the queue never files
+// it, exactly as the product's own queue never does.
 const CHECKOUT_PENDING: PendingAction[] = [
-  { id: 'bgjob-9d3c6e11', kind: 'failed_job', at: NOW - 58e5, title: 'run failed', detail: 'exit 1: binding VECTORIZE not found in wrangler.jsonc' },
+  { id: 'rel-coupon-kind', kind: 'release_approval', at: NOW - 3e5, title: 'Approve: deploy to production', detail: 'Fix the SAVE20 coupon 500 — migration 0042 patched, 14 tests green' },
 ];
 
 /** The Work tab's state, held in memory so its controls do what they do in the

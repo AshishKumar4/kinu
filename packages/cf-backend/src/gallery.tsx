@@ -2534,7 +2534,7 @@ function Shell(
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx — a harness that photographs a
           different surface than the app renders is worse than no harness. */}
-      <aside className="hidden w-60 shrink-0 h-full p-sidebar border-r p-border md:block"><Sidebar /></aside>
+      <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
           <GalleryWorkspaceBar />
