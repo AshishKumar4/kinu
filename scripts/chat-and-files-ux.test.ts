@@ -2358,13 +2358,14 @@ describe('the workbench type scale, as the browser computes it', () => {
 });
 
 /**
- * K-05. The inspector opens at 340px with a 280px floor, collapses to
- * nothing behind a visible handle, and remembers both across reloads. A
- * preview arriving on its own raises a "Preview ready" chip where the reader
- * already is; only an explicit click navigates.
+ * K-05. A workspace the user has never touched opens its inspector COLLAPSED;
+ * the first thing worth seeing opens it on the workspace's behalf. From then
+ * on the user's own choice rules: a resize persists across reloads, a collapse
+ * persists, and a passive arrival raises a "Preview ready" chip where the
+ * reader already is — only an explicit click navigates.
  */
 describe('the workspace inspector at the actual WorkspacePage boundary', () => {
-  test('resize persists across reload; collapse persists; passive arrival chips, explicit click navigates', async () => {
+  test('collapsed until something arrives, then resize persists across reload; collapse persists; passive arrival chips, explicit click navigates', async () => {
     await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
       const page = await browser.newPage();
       await page.setViewport({ width: 1440, height: 900 });
@@ -2374,9 +2375,26 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
 
       const inspectorWidth = () => page.$$eval('[data-panel]', (panels) => Math.round(panels[1]?.getBoundingClientRect().width ?? -1));
 
-      // Opens at 340px inside the 320-360px band.
-      expect(await inspectorWidth()).toBeGreaterThanOrEqual(300);
-      expect(await inspectorWidth()).toBeLessThanOrEqual(380);
+      // A first visit with nothing to show collapses the column behind its
+      // expand handle. The signal has not arrived yet, so nothing reopens it.
+      await page.waitForSelector('[data-inspector-expand]', { timeout: 20_000 });
+      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
+
+      // The passive arrival is the something worth seeing: the column opens
+      // on the workspace's behalf AND raises the chip where the reader is —
+      // Work stays current, only the explicit click navigates.
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[data-preview-ready]', { timeout: 30_000 });
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
+      }, { timeout: 10_000 });
+      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
+
+      await page.click('[data-preview-ready]');
+      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]', { timeout: 10_000 });
+      expect(await page.$('[data-preview-ready]')).toBeNull();
 
       // A keyboard resize is an explicit size: it survives a reload. One
       // ArrowRight step is five percentage points, which lands the 340px
@@ -2413,15 +2431,6 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
         return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
       }, { timeout: 10_000 });
 
-      // A passive arrival chips instead of switching: Work stays current.
-      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
-      await page.waitForSelector('[data-preview-ready]', { timeout: 30_000 });
-      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
-
-      // The explicit click navigates onto the arrived preview.
-      await page.click('[data-preview-ready]');
-      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]', { timeout: 10_000 });
-      expect(await page.$('[data-preview-ready]')).toBeNull();
       await page.close();
     });
   }, 240_000);

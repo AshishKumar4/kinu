@@ -731,6 +731,21 @@ export default function WorkspacePage() {
   const inspector = useInspectorLayout({
     desktopPanels,
     mobileDefault: mobilePane === "workspace" ? "100%" : "0%",
+    // The open/closed choice is this workspace's: opening the inspector in one
+    // workspace never opens it in the next.
+    workspace: agentId,
+    // The collapsed-by-default inspector opens itself once the workspace holds
+    // something it exists to show: a decision or consent waiting on the owner,
+    // a slate or preview, a produced output, an active plan.
+    worthShowing: [
+      state.pendingActions.length > 0,
+      state.pendingConsents.length > 0,
+      state.slates.length > 0,
+      state.previewFocus !== null,
+      state.pinnedPorts.length > 0,
+      state.executorOutputs.size > 0,
+      Boolean(state.activePlan),
+    ].some(Boolean),
   });
 
   // Plan decisions use the selected actor; previews remain workspace-scoped.

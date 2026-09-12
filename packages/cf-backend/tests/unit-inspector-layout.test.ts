@@ -59,6 +59,9 @@ Object.assign(globalThis, {
  * re-render, cleaned up across a deps change, as a commit would. */
 interface LayoutEffect {
   readonly generation: number;
+  /** The hook-call index within its render: two renders register the same
+   *  logical effect under the same ordinal, so the harness can dedupe it. */
+  readonly ordinal: number;
   readonly cb: () => void | (() => void);
   readonly deps: readonly unknown[] | undefined;
 }
@@ -67,10 +70,14 @@ const layoutEffects: LayoutEffect[] = [];
 
 let generation = 0;
 
+/* Reset by the mounted component at the top of every render, so each
+ * registration carries its hook-call index. */
+let effectOrdinal = 0;
+
 await mock.module('react', () => ({
   ...realReact,
   useLayoutEffect: (cb: LayoutEffect['cb'], deps?: readonly unknown[]) => {
-    layoutEffects.push({ generation, cb, deps });
+    layoutEffects.push({ generation, ordinal: effectOrdinal++, cb, deps });
   },
 }));
 
@@ -137,19 +144,35 @@ interface Mounted {
  *  The hook's return rides the column element as data-* attributes. */
 function mount(input: {
   account: string | null;
-  stored?: string;
+  /** The workspace the column belongs to — what the per-workspace open/close
+   *  choice keys on. Defaults to `ws-1` so a row that never names one still
+   *  exercises the workspace-scoped key. */
+  workspace?: string;
+  /** Raw value seeded at `kinu.inspector.<account>` — the account's width. */
+  storedWidth?: string;
+  /** Raw value seeded at `kinu.inspector.open.<account>.<workspace>` — this
+   *  workspace's stored open/close choice. */
+  storedChoice?: string;
+  /** What the page computes for the hook: the workspace holds something the
+   *  inspector exists to show. Only consulted while no choice is stored. */
+  worthShowing?: boolean;
   steps?: readonly ((layout: InspectorLayout, controls: Controls) => void)[];
 }): Mounted {
   const passes: Pass[] = [];
   const gen = ++generation;
-  let ranDeps: readonly unknown[] | undefined;
-  let ran = false;
-  let cancel: (() => void) | undefined;
+  // Effects are tracked by REGISTRATION SLOT: the hook mounts more than one
+  // layout effect, and a commit cancels and re-runs each only when ITS OWN
+  // deps change — one shared slot would have the second registration cancel
+  // the first effect's pending frame on every flush.
+  const slots: { deps: readonly unknown[] | undefined; cancel: (() => void) | undefined }[] = [];
+  const ws = input.workspace ?? 'ws-1';
 
   if (input.account !== null) {
     localStorage.setItem('kinu.inspector.account', input.account);
 
-    if (input.stored !== undefined) localStorage.setItem(`kinu.inspector.${input.account}`, input.stored);
+    if (input.storedWidth !== undefined) localStorage.setItem(`kinu.inspector.${input.account}`, input.storedWidth);
+
+    if (input.storedChoice !== undefined) localStorage.setItem(`kinu.inspector.open.${input.account}.${ws}`, input.storedChoice);
   }
 
   const controls: Controls = {
@@ -157,19 +180,22 @@ function mount(input: {
       for (const effect of layoutEffects.splice(0)) {
         if (effect.generation !== gen) { layoutEffects.push(effect); continue; }
 
-        if (ran && depsEqual(effect.deps, ranDeps)) continue;
-        cancel?.();
-        cancel = undefined;
-        ran = true;
-        ranDeps = effect.deps;
+        const state = slots[effect.ordinal] ??= { deps: undefined, cancel: undefined };
+
+        if (depsEqual(effect.deps, state.deps)) continue;
+        state.cancel?.();
+        state.cancel = undefined;
+        state.deps = effect.deps;
         const cleanup = effect.cb();
 
-        if (cleanup !== undefined) cancel = cleanup;
+        if (cleanup !== undefined) state.cancel = cleanup;
       }
     },
     cancelEffects() {
-      cancel?.();
-      cancel = undefined;
+      for (const state of slots) {
+        state.cancel?.();
+        state.cancel = undefined;
+      }
     },
     frames(max = 60) {
       let played = 0;
@@ -185,7 +211,8 @@ function mount(input: {
   };
 
   function Column() {
-    const layout = useInspectorLayout({ desktopPanels: true, mobileDefault: '0%' });
+    effectOrdinal = 0;
+    const layout = useInspectorLayout({ desktopPanels: true, mobileDefault: '0%', workspace: ws, worthShowing: input.worthShowing ?? false });
 
     const attrs = `data-width="${String(layout.widthPx)}" `
       + `data-collapsed="${String(layout.collapsed)}" `
@@ -238,15 +265,25 @@ describe('the persisted layout, through the page hook', () => {
     expect(store).toEqual({});
 
     // A stored value in no shape the reader accepts is absent, not a width —
-    // the column still settles at the default and writes nothing back.
+    // the column falls under the first-visit policy: it settles collapsed
+    // and writes nothing back.
+    const malformedStub = panelStub(340);
+
     const malformed = mount({
       account: 'a@b',
-      stored: 'not-a-width',
-      steps: [(_layout, controls) => { controls.flush(); controls.frames(); }],
+      storedWidth: 'not-a-width',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = malformedStub.handle;
+        controls.flush();
+        layout.onResize(px(340), 'inspector', undefined);
+        controls.frames();
+      }],
     });
 
     expect(malformed.html).toContain('data-default-size="340px"');
+    expect(malformed.html).toContain('data-collapsed="true"');
     expect(malformed.html).toContain('data-ready="true"');
+    expect(malformedStub.state.collapsed).toBe(true);
     expect(store).toEqual({
       'kinu.inspector.account': 'a@b',
       'kinu.inspector.a@b': 'not-a-width',
@@ -259,10 +296,10 @@ describe('the persisted layout, through the page hook', () => {
 
     first.layout.panelRef.current = stub.handle;
     first.layout.toggleCollapsed();
-    expect(store['kinu.inspector.a@b']).toBe('340:1');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
 
-    // A fresh mount reads `340:1` back: the collapse restores through the
-    // panel and into the hook's own state.
+    // A fresh mount reads the workspace's choice back: the collapse restores
+    // through the panel and into the hook's own state.
     const second = mount({
       account: 'a@b',
       steps: [(layout, controls) => {
@@ -278,22 +315,34 @@ describe('the persisted layout, through the page hook', () => {
     expect(second.html).toContain('data-ready="true"');
     expect(stub.state.collapsed).toBe(true);
 
-    // The account key is real isolation, not a suffix nobody reads.
+    // The account key is real isolation, not a suffix nobody reads. The other
+    // account has nothing stored, so it lands under the first-visit policy:
+    // collapsed, with nothing written for it either.
+    const otherStub = panelStub(340);
+
     const other = mount({
       account: 'other@b',
-      steps: [(_layout, controls) => { controls.flush(); controls.frames(); }],
+      steps: [(layout, controls) => {
+        layout.panelRef.current = otherStub.handle;
+        controls.flush();
+        layout.onResize(px(340), 'inspector', undefined);
+        controls.frames();
+      }],
     });
 
-    expect(other.html).toContain('data-collapsed="false"');
+    expect(other.html).toContain('data-collapsed="true"');
     expect(other.html).toContain('data-default-size="340px"');
     expect(other.html).toContain('data-ready="true"');
+    expect(store['kinu.inspector.other@b']).toBeUndefined();
   });
+
   test('the pixel floor clamps what a stored width reads back as', () => {
     const stub = panelStub(340);
 
     const mounted = mount({
       account: 'a@b',
-      stored: '120:0',
+      storedWidth: '120',
+      storedChoice: '1',
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
@@ -321,7 +370,8 @@ describe('the resize decision, through the page hook', () => {
 
     const mounted = mount({
       account: 'a@b',
-      stored: '300:0',
+      storedWidth: '300',
+      storedChoice: '1',
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
@@ -332,14 +382,14 @@ describe('the resize decision, through the page hook', () => {
 
         layout.onResize(px(340), 'inspector', undefined);
         // The announcement carries no intent: the stored size is untouched.
-        expect(store['kinu.inspector.a@b']).toBe('300:0');
+        expect(store['kinu.inspector.a@b']).toBe('300');
         controls.frames();
       }],
     });
 
     // And it vetoed nothing — the pending restore still applied.
     expect(stub.resizes).toEqual([300]);
-    expect(store['kinu.inspector.a@b']).toBe('300:0');
+    expect(store['kinu.inspector.a@b']).toBe('300');
     expect(mounted.html).toContain('data-ready="true"');
   });
 
@@ -348,9 +398,15 @@ describe('the resize decision, through the page hook', () => {
 
     const mounted = mount({
       account: 'a@b',
+      // Stored prefs keep this row out of the first-visit policy: the column
+      // restores open at 300 and the scripted reports decide from there.
+      storedWidth: '300',
+      storedChoice: '1',
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
+        layout.onResize(px(340), 'inspector', undefined);
+        controls.frames();
       }],
     });
 
@@ -359,11 +415,11 @@ describe('the resize decision, through the page hook', () => {
     // Each report arrives after the group's own pass settled on that size.
     stub.state.sizePx = 412;
     layout.onResize(px(412), 'inspector', px(340));
-    expect(store['kinu.inspector.a@b']).toBe('412:0');
+    expect(store['kinu.inspector.a@b']).toBe('412');
 
     stub.state.sizePx = 120;
     layout.onResize(px(120), 'inspector', px(412));
-    expect(store['kinu.inspector.a@b']).toBe('280:0');
+    expect(store['kinu.inspector.a@b']).toBe('280');
 
     stub.state.sizePx = 0.4;
     stub.state.collapsed = true;
@@ -373,7 +429,8 @@ describe('the resize decision, through the page hook', () => {
     stub.state.sizePx = 300;
     stub.state.collapsed = true;
     layout.onResize(px(300), 'inspector', px(280));
-    expect(store['kinu.inspector.a@b']).toBe('300:1');
+    expect(store['kinu.inspector.a@b']).toBe('300');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
   });
 });
 
@@ -383,7 +440,8 @@ describe('the apply loop, through the page hook', () => {
 
     const mounted = mount({
       account: 'a@b',
-      stored: '300:0',
+      storedWidth: '300',
+      storedChoice: '1',
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
@@ -407,7 +465,8 @@ describe('the apply loop, through the page hook', () => {
 
     const mounted = mount({
       account: 'a@b',
-      stored: '300:0',
+      storedWidth: '300',
+      storedChoice: '1',
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
@@ -418,7 +477,7 @@ describe('the apply loop, through the page hook', () => {
     });
 
     expect(stub.resizes).toEqual([]);
-    expect(store['kinu.inspector.a@b']).toBe('412:0');
+    expect(store['kinu.inspector.a@b']).toBe('412');
     expect(mounted.html).toContain('data-ready="true"');
   });
 
@@ -429,7 +488,8 @@ describe('the apply loop, through the page hook', () => {
 
     const mounted = mount({
       account: 'a@b',
-      stored: '300:0',
+      storedWidth: '300',
+      storedChoice: '1',
       steps: [(layout, controls) => {
         layout.panelRef.current = deaf;
         controls.flush();
@@ -446,7 +506,8 @@ describe('the apply loop, through the page hook', () => {
     const stub = panelStub(340);
     mount({
       account: 'a@b',
-      stored: '300:0',
+      storedWidth: '300',
+      storedChoice: '1',
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
@@ -464,7 +525,8 @@ describe('the apply loop, through the page hook', () => {
 
     const mounted = mount({
       account: 'a@b',
-      stored: '300:1',
+      storedWidth: '300',
+      storedChoice: '0',
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
@@ -481,7 +543,7 @@ describe('the apply loop, through the page hook', () => {
   });
 
   test('cancellation stops the pending frame', () => {
-    const mounted = mount({ account: 'a@b', stored: '300:0' });
+    const mounted = mount({ account: 'a@b', storedWidth: '300', storedChoice: '1' });
 
     // The effect ran, found no panel yet, and is parked on one frame.
     mounted.controls.flush();
@@ -492,3 +554,149 @@ describe('the apply loop, through the page hook', () => {
     expect(mounted.html).toContain('data-ready="false"');
   });
 });
+
+  test('a panel that never registers still settles — and cancel stops it mid-wait', () => {
+    // panelRef stays null the whole run: no element ever hands the loop a
+    // handle. The wait for one shares the same 30-frame bound as the measured
+    // report wait, so the column reports ready instead of spinning.
+    const mounted = mount({
+      account: 'a@b',
+      storedWidth: '300',
+      storedChoice: '1',
+      steps: [(_layout, controls) => {
+        controls.flush();
+        controls.frames(40);
+      }],
+    });
+
+    expect(mounted.html).toContain('data-ready="true"');
+
+    // Cancellation mid-wait is the other termination: the pending frame goes
+    // away and stays away.
+    const pending = mount({
+      account: 'a@b',
+      storedWidth: '300',
+      storedChoice: '1',
+    });
+
+    pending.controls.flush();
+    expect(pending.controls.pendingFrames()).toBe(1);
+    pending.controls.cancelEffects();
+    expect(pending.controls.pendingFrames()).toBe(0);
+    expect(pending.controls.frames(10)).toBe(0);
+    expect(pending.html).toContain('data-ready="false"');
+  });
+
+describe('the first-visit policy, through the page hook', () => {
+  test('nothing stored collapses the column — and the collapse writes nothing', () => {
+    const stub = panelStub(340);
+
+    const mounted = mount({
+      account: 'a@b',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        layout.onResize(px(340), 'inspector', undefined);
+        controls.frames();
+        // The policy collapse's own report arrives next and is consumed:
+        // a size the hook chose is not the user's choice, so nothing stores.
+        layout.onResize(px(0), 'inspector', px(340));
+        controls.frames();
+      }],
+    });
+
+    expect(stub.state.collapsed).toBe(true);
+    expect(mounted.html).toContain('data-collapsed="true"');
+    expect(mounted.html).toContain('data-expand-visible="true"');
+    expect(mounted.html).toContain('data-ready="true"');
+    expect(store).toEqual({ 'kinu.inspector.account': 'a@b' });
+  });
+
+  test('a workspace already holding something worth seeing stays open — and writes nothing', () => {
+    const stub = panelStub(340);
+
+    const mounted = mount({
+      account: 'a@b',
+      worthShowing: true,
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        layout.onResize(px(340), 'inspector', undefined);
+        controls.frames();
+      }],
+    });
+
+    expect(stub.state.collapsed).toBe(false);
+    expect(mounted.html).toContain('data-collapsed="false"');
+    expect(mounted.html).toContain('data-ready="true"');
+    expect(store).toEqual({ 'kinu.inspector.account': 'a@b' });
+  });
+
+  test('a stored collapse is the user\'s: a signal does not reopen it', () => {
+    const stub = panelStub(340);
+
+    const mounted = mount({
+      account: 'a@b',
+      storedWidth: '280',
+      storedChoice: '0',
+      worthShowing: true,
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        layout.onResize(px(340), 'inspector', undefined);
+        controls.frames();
+      }],
+    });
+
+    expect(stub.state.collapsed).toBe(true);
+    expect(mounted.html).toContain('data-collapsed="true"');
+    expect(mounted.html).toContain('data-ready="true"');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
+  });
+
+  test('a stored width opens the column even with a signal present', () => {
+    const stub = panelStub(340);
+
+    const mounted = mount({
+      account: 'a@b',
+      storedWidth: '340',
+      storedChoice: '1',
+      worthShowing: true,
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        layout.onResize(px(340), 'inspector', undefined);
+        controls.frames();
+      }],
+    });
+
+    // The stored width already holds at mount size, so the loop issues nothing.
+    expect(stub.resizes).toEqual([]);
+    expect(mounted.html).toContain('data-collapsed="false"');
+    expect(mounted.html).toContain('data-ready="true"');
+  });
+
+  test('a gesture that drags the policy-collapsed column open is the user\'s, and persists', () => {
+    const stub = panelStub(340);
+
+    const mounted = mount({
+      account: 'a@b',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        layout.onResize(px(340), 'inspector', undefined);
+        controls.frames();
+        layout.onResize(px(0), 'inspector', px(340));
+        // The drag open reports a real width: the column is the user's now.
+        stub.state.collapsed = false;
+        stub.state.sizePx = 320;
+        layout.onResize(px(320), 'inspector', px(0));
+        controls.frames();
+      }],
+    });
+
+    expect(store['kinu.inspector.a@b']).toBe('320');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
+    expect(mounted.html).toContain('data-collapsed="false"');
+  });
+ });
