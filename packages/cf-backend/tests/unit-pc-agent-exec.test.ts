@@ -13,7 +13,7 @@
  * so these assert what the cloud agent receives, not how the daemon is built.
  */
 
-import { afterAll, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { EventEmitter } from 'node:events';
 import { createRequire } from 'node:module';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -26,10 +26,6 @@ import {
   DeviceCancelResultSchema, DeviceTunnel, JsonValueSchema, createDeviceTunnelExecutor,
   type DeviceStatus, type DeviceTransport, type TunnelSocket,
 } from '@kinu.run/core';
-
-const TEST_INFLIGHT_ROOT = mkdtempSync(join(tmpdir(), 'pc-agent-inflight-'));
-
-process.env.KINU_INFLIGHT_ROOT = TEST_INFLIGHT_ROOT;
 
 const require_ = createRequire(import.meta.url);
 
@@ -101,8 +97,6 @@ const SupervisorRegistrySchema = v.object({
 });
 
 const pcAgent = v.parse(PcAgentModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/index.js')));
-
-afterAll(() => rmSync(TEST_INFLIGHT_ROOT, { recursive: true, force: true }));
 
 function handle(message: DaemonMessage, socket: ReplySocket): void {
   pcAgent.handle(message, socket);
