@@ -1,14 +1,8 @@
-// Folding a turn's parts into render blocks, and the annotation each tool row
-// derives from its own arguments.
-//
-// A run of finished calls groups into one bordered block; a call still running
-// remains its own live row. Nothing renders a grouped tally headline, so this
-// file tests only what the blocks and rows actually put on screen.
 import { describe, test, expect } from 'bun:test';
 import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
-import type { JsonValue } from '@kinu.run/core';
-import { groupMessageParts } from '../src/components/tool-call-grouping';
-import { describeCommand, describeToolCall } from '@kinu.run/core';
+import type { JsonObject, JsonValue } from '@kinu.run/core';
+import { groupMessageParts, partEffect } from '../src/components/tool-call-grouping';
+import { describeCommand, describeToolCall, toolCallEffect } from '@kinu.run/core';
 
 type Part = UIMessage['parts'][number];
 
@@ -18,7 +12,7 @@ function tool(
   id: string,
   name: string,
   state: TestToolState,
-  input: JsonValue = {},
+  input: JsonValue = { action: 'read' },
 ): ToolUIPart {
   const type: `tool-${string}` = `tool-${name}`;
 
@@ -38,16 +32,73 @@ const text = (content: string): TextUIPart => ({ type: 'text', text: content });
 const kinds = (parts: readonly Part[]) =>
   groupMessageParts(parts).map((b) => (b.kind === 'tool-run' ? `run(${b.parts.length})` : b.part.type));
 
+describe('tool effects follow the operation', () => {
+  const cases: Array<{ name: string; input: JsonObject; effect: 'read' | 'mutate' | 'unknown' }> = [
+    { name: 'file', input: { action: 'write' }, effect: 'mutate' },
+    { name: 'file', input: { action: 'edit' }, effect: 'mutate' },
+    { name: 'file', input: { action: 'read' }, effect: 'read' },
+    { name: 'memory', input: { action: 'save' }, effect: 'mutate' },
+    { name: 'memory', input: { action: 'forget' }, effect: 'mutate' },
+    { name: 'memory', input: { action: 'search' }, effect: 'read' },
+    { name: 'memory', input: { action: 'recall' }, effect: 'read' },
+    { name: 'tasks', input: { action: 'add' }, effect: 'mutate' },
+    { name: 'tasks', input: { action: 'update' }, effect: 'mutate' },
+    { name: 'tasks', input: { action: 'list' }, effect: 'read' },
+    { name: 'web', input: { action: 'fetch' }, effect: 'mutate' },
+    { name: 'web', input: { action: 'search' }, effect: 'read' },
+    { name: 'agents', input: { action: 'hire' }, effect: 'mutate' },
+    { name: 'agents', input: { action: 'list' }, effect: 'read' },
+    { name: 'agents', input: { action: 'status' }, effect: 'read' },
+    { name: 'run', input: { command: 'touch notes.txt' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'bun test' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'curl https://example.com' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'ls -la' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'LC_ALL=C /usr/bin/rg needle src' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'git status --short' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'git commit -m fix' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'cat source > copy' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'ls; touch changed' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'rg --pre ./rewrite needle' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'git diff --output=changes.patch' }, effect: 'unknown' },
+    { name: 'execute_tools', input: { code: 'await workspace.writeFile("a", "b")' }, effect: 'unknown' },
+    { name: 'execute_tools', input: { code: 'return await workspace.readFile("a")' }, effect: 'unknown' },
+  ];
+
+  test.each(cases)('$name $input is $effect', ({ name, input, effect }) => {
+    expect(toolCallEffect(name, input)).toBe(effect);
+    expect(partEffect(tool('call', name, 'output-available', input))).toBe(effect);
+  });
+
+  test.each(['read', 'mutate'])('arbitrary program output cannot establish a %s effect', (effect) => {
+    for (const output of [{ effect }, { result: { effect } }]) {
+      const part: ToolUIPart = {
+        type: 'tool-execute_tools', toolCallId: 'program', state: 'output-available',
+        input: { code: 'await workspace.writeFile("a", "b"); return { effect: "read" }' }, output,
+      };
+
+      expect(partEffect(part)).toBe('unknown');
+    }
+  });
+
+  test('unclassified contracts and source hints stay unknown', () => {
+    expect(toolCallEffect('execute_tools', { effect: 'read' })).toBe('unknown');
+    expect(toolCallEffect('run', undefined)).toBe('unknown');
+    expect(toolCallEffect('crafted_unknown', { action: 'read' })).toBe('unknown');
+    expect(toolCallEffect('file', 'read a')).toBe('unknown');
+    expect(toolCallEffect('web_search', { query: 'docs' })).toBe('read');
+  });
+});
+
 describe('grouping a turn into blocks', () => {
-  test('a run of finished calls collapses to one block', () => {
+  test('finished reads group while delegation keeps its own card', () => {
     expect(kinds([
       text('found it'),
       tool('1', 'file', 'output-available'),
       tool('2', 'file', 'output-available'),
       tool('3', 'file', 'output-available'),
-      tool('4', 'agents', 'output-available'),
+      tool('4', 'agents', 'output-available', { action: 'hire' }),
       text('done'),
-    ])).toEqual(['text', 'run(4)', 'text']);
+    ])).toEqual(['text', 'run(3)', 'tool-agents', 'text']);
   });
 
   test('step markers do not split a sequential tool run', () => {
@@ -56,7 +107,7 @@ describe('grouping a turn into blocks', () => {
       step,
       tool('1', 'file', 'output-available'),
       step,
-      tool('2', 'run', 'output-available'),
+      tool('2', 'run', 'output-available', { command: 'ls' }),
       step,
       tool('3', 'file', 'output-available'),
     ])).toEqual(['run(3)']);
@@ -71,7 +122,7 @@ describe('grouping a turn into blocks', () => {
     ])).toEqual(['run(3)', 'tool-run']);
   });
 
-  test('a failed call still groups — the group carries the error, and hiding\n     the row would hide the failure', () => {
+  test('a failed read groups in its original position', () => {
     expect(kinds([
       tool('1', 'file', 'output-available'),
       tool('2', 'file', 'output-error'),
@@ -88,7 +139,9 @@ describe('grouping a turn into blocks', () => {
     expect(kinds([
       tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available'), tool('3', 'file', 'output-available'),
       text('now the tests'),
-      tool('4', 'run', 'output-available'), tool('5', 'run', 'output-available'), tool('6', 'run', 'output-available'),
+      tool('4', 'run', 'output-available', { command: 'ls' }),
+      tool('5', 'run', 'output-available', { command: 'cat notes.txt' }),
+      tool('6', 'run', 'output-available', { command: 'git status' }),
     ])).toEqual(['run(3)', 'text', 'run(3)']);
   });
 
@@ -96,6 +149,38 @@ describe('grouping a turn into blocks', () => {
     const reasoning: ReasoningUIPart = { type: 'reasoning', text: 'hm' };
     expect(kinds([reasoning, text('a')]))
       .toEqual(['reasoning', 'text']);
+  });
+
+  test('a mutation splits adjacent runs of reads and keeps its own card', () => {
+    expect(kinds([
+      tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available'),
+      tool('3', 'file', 'output-available', { action: 'edit', path: 'a' }),
+      tool('4', 'file', 'output-available'), tool('5', 'file', 'output-available'),
+    ])).toEqual(['run(2)', 'tool-file', 'run(2)']);
+  });
+
+  test('a read that returned a preview never folds into activity', () => {
+    const preview: ToolUIPart = {
+      type: 'tool-file', toolCallId: 'preview', state: 'output-available',
+      input: { action: 'read' }, output: { url: 'https://8789-kinu-app-p8789_ab12cd34.preview.example.test', port: 8789 },
+    };
+
+    const previous = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    Object.defineProperty(globalThis, 'document', {
+      configurable: true,
+      value: { querySelector: () => ({ content: 'preview.example.test' }) },
+    });
+
+    try {
+      expect(kinds([
+        tool('1', 'file', 'output-available'), tool('2', 'file', 'output-available'),
+        preview,
+        tool('4', 'file', 'output-available'), tool('5', 'file', 'output-available'),
+      ])).toEqual(['run(2)', 'tool-file', 'run(2)']);
+    } finally {
+      if (previous) Object.defineProperty(globalThis, 'document', previous);
+      else Reflect.deleteProperty(globalThis, 'document');
+    }
   });
 
   test('an empty message yields no blocks', () => {

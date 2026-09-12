@@ -1,25 +1,16 @@
 /**
  * Folding a message's parts into render blocks.
  *
- * A turn that repairs something is a run of calls — read, read, edit, write,
- * delegate, run — and one row each buries the prose on either side of it.
- * This walks the parts once and hands the view either a single part or a run
- * of consecutive tool calls to draw as one.
- *
- * The rule that matters: a call that is still running is never folded into a
- * group. Its row stays where it is, so a headline that says "5 calls" does
- * not tick to 6 and back while the reader is looking at it, and the live
- * indicator is never hidden behind a collapsed chevron.
+ * Only adjacent settled quiet calls fold together. Mutations, running calls and
+ * calls that put a preview on screen stay visible at their transcript position.
  */
 import { isToolUIPart, getToolName } from "ai";
 import type { DynamicToolUIPart, ToolUIPart, UIMessage } from "ai";
 import * as v from "valibot";
-import {
-  BUILTIN_TOOL_NAMES, JsonObjectSchema, JsonValueSchema,
-  isMcpToolKey, toolCallEffect,
-} from "@kinu.run/core";
+import { JsonObjectSchema, JsonValueSchema, toolCallEffect } from "@kinu.run/core";
 import { tolerate } from "@kinu.run/core/obs";
 import type { JsonObject, JsonValue } from "@kinu.run/core";
+import { extractPreviewUrl } from "@/lib/preview-origin";
 
 type Part = UIMessage["parts"][number];
 
@@ -36,7 +27,7 @@ function isFinished(part: AnyToolPart): boolean {
   return part.state === "output-available" || part.state === "output-error";
 }
 
-/** Two adjacent settled calls already form the tool card drawn by the mock. */
+/** A single read needs no group header. */
 const MIN_GROUP = 2;
 
 export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
@@ -55,7 +46,7 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
     // stream split one long sequential tool run into dozens of singleton rows.
     if (part.type === 'step-start') continue;
 
-    if (isToolUIPart(part) && isFinished(part)) {
+    if (isToolUIPart(part) && isFinished(part) && partEffect(part) !== 'mutate' && extractPreviewUrl(partOutput(part)) === null) {
       run.push(part);
       continue;
     }
@@ -70,9 +61,6 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
 }
 
 /**
- * The parts-model reads the chat already does inline, in one place so the
- * result line and the rows can never disagree about the same call.
- *
  * `partFailed` is the protocol fact (the transport reports the invocation
  * failed); `callFailed` is what the reader is shown as failed — the protocol
  * fact plus the refusal payload a provisioned runtime returns as an ordinary
@@ -133,91 +121,7 @@ function partFailed(part: AnyToolPart): boolean {
   return part.state === 'output-error';
 }
 
-/** What the result line and the Failed badge both count. */
+/** What the activity tally and the Failed badge both count. */
 export function callFailed(part: AnyToolPart): boolean {
   return partFailed(part) || parseProvisionError(partOutput(part)) !== null;
-}
-
-/**
- * Whether a tool name is a workspace-crafted tool rather than something the
- * platform ships. Builtins are named by the registry; MCP tools arrive under
- * `mcp_<server>_<tool>` (mcp-naming.ts). Anything else on a part is a tool
- * the workspace taught itself — the only names on the wire the workspace
- * could have minted.
- */
-function isCraftedToolName(name: string): boolean {
-  return name !== '' && !BUILTIN_TOOL_NAMES.has(name) && !isMcpToolKey(name);
-}
-
-/** A completed turn's result as its parts carry it: how many settled calls,
- *  how many failed, and which crafted tools it used, in first-use order. */
-export interface TurnResultFacts {
-  calls: number;
-  failed: number;
-  crafted: string[];
-}
-
-export function turnResultFacts(parts: readonly Part[]): TurnResultFacts {
-  let calls = 0;
-  let failed = 0;
-  const crafted: string[] = [];
-
-  for (const part of parts) {
-    if (!isToolUIPart(part)) continue;
-
-    if (part.state !== "output-available" && part.state !== "output-error") continue;
-    calls += 1;
-
-    if (callFailed(part)) failed += 1;
-    const name = getToolName(part);
-
-    if (isCraftedToolName(name) && !crafted.includes(name)) crafted.push(name);
-  }
-
-  return { calls, failed, crafted };
-}
-
-/**
- * The compact result line for a completed turn, or null when the turn made
- * no calls and has nothing to summarize. Counts only — a tool output that
- * reads like a pass is not a check, and there is no check line because no
- * row the chat can read records a named passed check (see the report).
- */
-export function formatTurnResult(facts: TurnResultFacts): string | null {
-  if (facts.calls === 0) return null;
-
-  const calls = `${facts.calls} tool call${facts.calls === 1 ? "" : "s"}`;
-
-  return facts.failed > 0 ? `${calls}, ${facts.failed} failed` : calls;
-}
-
-/** A completed turn's parts cut for result-first rendering: the prose and
- *  files in place, the settled calls for the one activity group, and any
- *  call still open for its own live row. */
-export interface CompletedTurnSplit {
-  content: Part[];
-  settled: AnyToolPart[];
-  open: AnyToolPart[];
-}
-
-export function splitCompletedTurn(parts: readonly Part[]): CompletedTurnSplit {
-  const content: Part[] = [];
-  const settled: AnyToolPart[] = [];
-  const open: AnyToolPart[] = [];
-
-  for (const part of parts) {
-    // AI SDK step markers carry no visible content (see groupMessageParts).
-    if (part.type === 'step-start') continue;
-
-    if (isToolUIPart(part)) {
-      if (part.state === "output-available" || part.state === "output-error") settled.push(part);
-      else open.push(part);
-
-      continue;
-    }
-
-    content.push(part);
-  }
-
-  return { content, settled, open };
 }
