@@ -20,9 +20,8 @@ export const CallRecordSchema = v.object({
    *  completion lanes the same binding serves. */
   stream: v.boolean(),
   /** The lane the fake served, keyed on request shape (stream flag, leading
-   *  system role) or the model-routed arm below — the test asserts every
-   *  recorded call is a known lane. */
-  lane: v.picklist(['turn', 'sleep', 'title', 'pending']),
+  *  system role) — the test asserts every recorded call is a known lane. */
+  lane: v.picklist(['turn', 'sleep', 'title']),
   users: v.array(v.string()),
   /** What `options.signal` arrived as — the spike's answer. */
   signalKind: v.string(),
@@ -95,6 +94,23 @@ export const HistorySchema = v.object({
 
 export type HistoryResult = v.InferOutput<typeof HistorySchema>;
 
+export const HttpCallSchema = v.object({
+  url: v.string(),
+  method: v.string(),
+  host: v.string(),
+  path: v.string(),
+  model: v.string(),
+  stream: v.boolean(),
+  users: v.array(v.string()),
+  authHeader: v.nullable(v.string()),
+  offeredTools: v.array(v.string()),
+  toolCalls: v.array(v.object({ id: v.string(), name: v.string() })),
+  toolResults: v.array(v.string()),
+  aborted: v.boolean(),
+});
+
+export type HttpCall = v.InferOutput<typeof HttpCallSchema>;
+
 export const ExerciseResultSchema = v.object({
   register: RegisterSchema,
   claim: ClaimSchema,
@@ -104,6 +120,7 @@ export const ExerciseResultSchema = v.object({
   snapshot: SnapshotSchema,
   history: HistorySchema,
   calls: v.array(CallRecordSchema),
+  http: v.array(HttpCallSchema),
   failures: v.array(DiagnosticFailureSchema),
   /** Owed-effect keys any finished close left behind — empty is clean. */
   owedEffects: v.array(v.string()),
@@ -112,15 +129,15 @@ export const ExerciseResultSchema = v.object({
 
 export type ExerciseResult = v.InferOutput<typeof ExerciseResultSchema>;
 
-/** The caller-cancellation repro verdict: the pending arm saw the abort, no
- *  abort listener is left behind, and the run promise rejected with a reason. */
-export const CancelProbeResultSchema = v.object({
+/** The HTTP pending-cancel verdict: the parked handler observed the abort
+ *  (read back from its own log entry, not its word), and the parked fetch
+ *  rejected with a reason. */
+export const PendingCancelResultSchema = v.object({
   observedAbort: v.boolean(),
-  activeListeners: v.number(),
   rejection: v.string(),
 });
 
-export type CancelProbeResult = v.InferOutput<typeof CancelProbeResultSchema>;
+export type PendingCancelResult = v.InferOutput<typeof PendingCancelResultSchema>;
 
 /** One parameterized drive (the early-[DONE] variant): its own workspace so
  *  its turns never share Think state with the main drive. */
@@ -130,6 +147,7 @@ export const DriveOnceInputSchema = v.object({
   displayName: v.string(),
   model: v.string(),
   text: v.string(),
+  seedFile: v.optional(v.object({ path: v.string(), content: v.string() })),
 });
 
 export type DriveOnceInput = v.InferOutput<typeof DriveOnceInputSchema>;
@@ -139,6 +157,7 @@ export const DriveOnceResultSchema = v.object({
   snapshot: SnapshotSchema,
   history: HistorySchema,
   calls: v.array(CallRecordSchema),
+  http: v.array(HttpCallSchema),
   failures: v.array(DiagnosticFailureSchema),
   owedEffects: v.array(v.string()),
   factsCompressed: v.number(),
