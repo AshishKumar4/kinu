@@ -36,12 +36,12 @@ import {
   BEHAVIOUR_SCORERS, EPISODE_TRANSCRIPT_FILES, ledgerTotalsFromEvents, projectRunEventProvenance,
   retainEpisodeTranscript, scratchDir, TASK_OUTCOME, withEpisodeEvidence, liveModelSpend, resetLiveModelSpend,
 } from '@kinu.run/test-utils';
-import { RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
+import { renderSoulMarkdown, RunEventSchema, type RunEvent, type WorkspaceSpend, type JsonValue } from '../../packages/core/src/index';
 import {
   PUBLIC_IDENTITY_ENV, decodeFrame, encodeChatRequest, encodeRpcRequest,
   recordPublicTurn, resolvePublicSessionPlan, resolveWebIdentity, scorePublicLedger,
   type PublicTurnRecorder,
-  KinuPublicSession,
+  KinuPublicSession, openPublicSession,
 } from './public-session';
 import {
   BROADCAST_FRAME, DEGENERATE_EVENTS, FILE_TURN_CHUNKS, FIXTURE_REQUEST_ID, LEDGER_EVENTS,
@@ -578,4 +578,123 @@ test('an explicitly missing file is an oracle miss; authorization and server fai
   } finally {
     await server.stop(true);
   }
+});
+
+/**
+ * The `genesis: false` open, end to end against a fake deployment.
+ *
+ * The product's own surfaces do the work and the fake only records them: the
+ * create POST's body, and the order RPCs arrive over the socket. What a green
+ * states: a `genesis: false` create carries NO `purpose` — so the deployed
+ * `beginGenesisTurn` finds the placeholder mission and queues nothing — and the
+ * real mission is on SOUL.md before any prompt can run, because `setSoul` has
+ * already answered before `openPublicSession` returns. The default arm proves
+ * the mission still rides the create, so mission-first coverage stays covered.
+ */
+describe('the genesis flag on a public session', () => {
+  const PROBE_PURPOSE = 'A deterministic probe mission that must reach the soul.';
+  const PROBE_MODEL = '@cf/zai-org/glm-5.3';
+
+  /** One workspace worth of fake deployment: the create REST, the chat socket
+   *  and the DELETE teardown, recording what it was asked rather than parsing
+   *  what the harness meant to send. */
+  function fakeDeployment() {
+    const creates: unknown[] = [];
+    const wire: { method: string; args: readonly unknown[] }[] = [];
+
+    const server = Bun.serve({ port: 0, hostname: '127.0.0.1',
+      async fetch(request, server) {
+        const url = new URL(request.url);
+
+        if (url.pathname === '/api/user/workspaces' && request.method === 'POST') {
+          const body = v.parse(v.object({
+            name: v.string(), displayName: v.optional(v.string()), purpose: v.optional(v.string()),
+          }), await request.json());
+
+          creates.push(body);
+
+          return Response.json({ name: body.name, displayName: body.displayName });
+        }
+
+        if (url.pathname.startsWith('/api/user/workspaces/') && request.method === 'DELETE') {
+          return Response.json({ ok: true });
+        }
+
+        if (server.upgrade(request)) return;
+
+        return new Response('not found', { status: 404 });
+      },
+      websocket: { message(socket, message) {
+        const frame = JSON.parse(message.toString());
+
+        if (v.is(RpcRequestFrameSchema, frame)) {
+          wire.push({ method: frame.method, args: frame.args });
+          socket.send(rpcReplyFrame({
+            requestId: frame.id,
+            result: frame.method === 'setModel' ? { spec: frame.args[0] } : { ok: true },
+          }));
+
+          return;
+        }
+
+        if (v.is(ChatRequestFrameSchema, frame)) {
+          wire.push({ method: 'prompt', args: [] });
+          socket.send(chatTerminalFrame({ requestId: frame.id }));
+        }
+      } },
+    });
+
+    return { server, creates, wire };
+  }
+
+  function probeInput(server: Bun.Server<undefined>, genesis?: boolean) {
+    return {
+      origin: server.url.origin, identity: { kind: 'loopback' as const },
+      workspace: 'probe', purpose: PROBE_PURPOSE, genesis,
+      llm: { name: 'workers-ai', model: PROBE_MODEL, baseURL: server.url.origin, headers: {} },
+    };
+  }
+
+  test('genesis: false creates without a mission and writes the soul before the first prompt', async () => {
+    const { server, creates, wire } = fakeDeployment();
+    const session = await openPublicSession(probeInput(server, false));
+
+    try {
+      // The create carries name and display name ONLY: with no `purpose` key
+      // the deployment seeds the placeholder mission, which
+      // `workspaceGenesisSignal` declines a turn on.
+      expect(creates).toEqual([{ name: 'probe', displayName: 'Trajectory Evals' }]);
+
+      // `open` has already resolved, so the soul write is behind the caller —
+      // and it is the exact markdown a mission-first create would have seeded.
+      expect(wire.map((entry) => entry.method)).toEqual(['setSoul', 'setModel']);
+      expect(wire[0]?.args[0]).toBe(renderSoulMarkdown({
+        name: 'Trajectory Evals', mission: PROBE_PURPOSE,
+      }));
+      expect(wire[0]?.args[0]).toContain(PROBE_PURPOSE);
+
+      await session.prompt('hello');
+      expect(wire.map((entry) => entry.method)).toEqual(['setSoul', 'setModel', 'prompt']);
+    } finally {
+      await session.teardown();
+      await server.stop(true);
+    }
+  });
+
+  test.each([undefined, true])('genesis=%s keeps the product path: purpose on the create, no setSoul', async (genesis) => {
+    const { server, creates, wire } = fakeDeployment();
+    const session = await openPublicSession(probeInput(server, genesis));
+
+    try {
+      expect(creates).toEqual([
+        { name: 'probe', displayName: 'Trajectory Evals', purpose: PROBE_PURPOSE },
+      ]);
+
+      await session.prompt('hello');
+      expect(wire.map((entry) => entry.method)).toEqual(['setModel', 'prompt']);
+    } finally {
+      await session.teardown();
+      await server.stop(true);
+    }
+  });
 });
