@@ -1714,6 +1714,35 @@ export const LADDER: readonly Gate[] = [
       + 'model choosing to use the capability it was asked for, so a refusal is red and reads '
       + 'identically to a broken one until somebody reads the transcript the record keeps.',
   },
+  {
+    run: 'bun run gate:trajectory',
+    tier: 'deploy',
+    // Measured 2026-09-12 on the deployed 234ed5d7d: one credentialed run of
+    // the five cases on the product model, 1661s wall as the script prints
+    // it, with every case red on the turn-boundary defect (`fix(cf): the
+    // second turn sees the message that started it`) — a red run is the
+    // longer one, since each case runs every prompt to completion.
+    seconds: 1661,
+    catches: 'an agent that stopped ACTING on the model users have, before the next build goes '
+      + 'up. It runs the trajectory family — five two-turn episodes through the public REST '
+      + 'and socket: write a file then read it back, a correction steered mid-turn, a failed '
+      + 'command repaired in turn two — under `KINU_EVAL_TIER=product`, which pins '
+      + '`EVAL_MODELS.product`, the id core seeds every new workspace with. Every score is off '
+      + 'durable state (file bytes over the files route, `tool_call_end` rows, transcript '
+      + 'rows), so an agent that answers an explicit instruction with a survey and a question '
+      + 'reds on `task_outcome` rather than on a judge\'s opinion. It sits LAST in Step 1 on '
+      + 'purpose: the same failure found by `gate:first-run` after the upload is a defect '
+      + 'users already have; found here it holds the publish. And it measures the CURRENT '
+      + 'production build, which is the only build a pre-deploy live gate can measure, so a '
+      + 'red is a red on what users have now.',
+    blind: 'the build about to ship — its subject is production as it stands, so a regression '
+      + 'in THIS tree reaches users and is caught by `gate:first-run` after the upload, not '
+      + 'here; the two are one claim only together. Five trajectories, not the product: a '
+      + 'defect on a surface no case names is unmeasured, and every case depends on the '
+      + 'model choosing to use the tool it was asked for, so a refusal reads as a broken '
+      + 'tool until the retained transcript is opened. One model only, by design: the flash '
+      + 'and pro arms are the eval tier\'s and a green here says nothing about them.',
+  },
 ];
 
 /**
@@ -1755,6 +1784,14 @@ export const SERIAL_GATES = {
     + 'authenticates with, so anything beside it would be inside the fleet one of its cases '
     + 'is measuring: the two-machines case asserts that exactly two machines are live and a '
     + "sibling's daemon would make that three.",
+  'bun run gate:trajectory':
+    'runs alone, LAST before the build. Its subject is the DEPLOYED product on its default '
+    + 'model, so it spends minutes of live turns on the shared account as the identity '
+    + '`gate:infra` authenticates with; a gate beside it would be inside the workspaces it '
+    + 'creates and tears down, and its wall time — the one figure `LADDER` declares for it — '
+    + 'would be measured under someone else\'s load. After `gate:infra` because that is the '
+    + 'cheapest proof the account answers at all, and a tree that has not been shown to '
+    + 'compile should not spend model calls.',
 } satisfies Record<string, string>;
 
 /**
@@ -1844,6 +1881,12 @@ export const GATE_DEADLINES = {
       + 'Two attach real daemons; one drives Chrome against the deployed app. '
       + 'The six-case deployed wall is unmeasured. This configured bound stays unchanged '
       + 'until a deployed run measures it and the cost in LADDER.',
+  },
+  'bun run gate:trajectory': {
+    seconds: 3_600,
+    why: 'covers five two-turn episodes on the product model over the public API, each '
+      + 'run to completion. Measured 1661s on 2026-09-12 with every case red; the bound is '
+      + 'roughly twice that so a slow model answers rather than being killed as a hang.',
   },
 } satisfies Readonly<Record<string, { readonly seconds: number; readonly why: string }>>;
 
@@ -2028,6 +2071,11 @@ export const CI_EXEMPT = {
     + 'build, and pointing it at the previous one would report the last deploy\'s product under '
     + "this pull request's name. It also creates workspaces, links real machines and spends "
     + 'model calls on a shared account, none of which belongs on a pull request.',
+  'bun run gate:trajectory':
+    'needs the deployment\'s eval identity and spends live turns on the shared account, '
+    + 'neither of which belongs on a pull request. Its subject is production as it stands, '
+    + 'which a pull request has not changed; it runs at deploy, alone, as the last gate '
+    + 'before the build.',
 } satisfies Record<string, string>;
 
 /** Every gate at or below `tier`. At `deploy`, anything deploy.sh runs that no

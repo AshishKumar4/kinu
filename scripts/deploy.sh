@@ -216,6 +216,7 @@ GATE_DEADLINE_SECONDS=480
 # deploy.test.ts holds this value equal to GATE_DEADLINES in scripts/ladder.ts.
 declare -A GATE_DEADLINES=(
   ['bun run gate:first-run']=1800
+  ['bun run gate:trajectory']=3600
 )
 
 # Run everything enqueued, then clear the queue. Each gate's output goes to its
@@ -569,6 +570,20 @@ flush_gates
 # why what varies per run travels in the environment beside it — exactly as
 # KINU_DEPLOY_ENV already does.
 run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra
+
+# BARRIER.
+flush_gates
+
+# Alone, and LAST before the build. Everything above proves the source and the
+# account; this proves the AGENT, and it does so before the publish rather than
+# after it: an agent that stopped acting correctly — surveys, asks a question,
+# writes nothing when told exactly what to write — blocks the upload here
+# instead of being discovered by `gate:first-run` on a build users already
+# have. It runs the trajectory family on the product's DEFAULT model against
+# the CURRENT production build, so a red is a red on what users have now, not
+# on a statistics model or a build that does not exist yet. See SERIAL_GATES in
+# scripts/ladder.ts for why nothing runs beside it.
+run_required_gate "Trajectory tier" bun run gate:trajectory
 
 # BARRIER.
 flush_gates

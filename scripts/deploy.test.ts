@@ -111,6 +111,7 @@ const REQUIRED_GATES = [
   "bun run verify:lean",
   "bun run gate:hammer",
   "bun run gate:infra",
+  "bun run gate:trajectory",
 ] as const;
 
 /**
@@ -340,27 +341,31 @@ describe("deploy gate", () => {
     const alone = waves.filter((wave) => wave.length === 1).flat();
 
     expect(alone.sort()).toEqual(Object.keys(SERIAL_GATES).sort());
-    // FIVE waves: preflight, one concurrent source block, the hammer,
-    // infrastructure, and — after the upload and the smoke test, on staging
-    // only — the first-run tier. The hammer earned its own barrier by being the
-    // one gate whose subject is contention — it starves nproc/2 threads on
-    // purpose, so anything beside it would be measured on a machine this gate
-    // is deliberately loading. Barriers around every source gate would satisfy
-    // `alone` and make the pipeline serial, so the middle size is pinned.
+    // SIX waves: preflight, one concurrent source block, the hammer,
+    // infrastructure, the trajectory tier on the production build, and — after
+    // the upload and the smoke test — the first-run tier. The hammer earned its
+    // own barrier by being the one gate whose subject is contention — it
+    // starves nproc/2 threads on purpose, so anything beside it would be
+    // measured on a machine this gate is deliberately loading. Barriers around
+    // every source gate would satisfy `alone` and make the pipeline serial, so
+    // the middle size is pinned.
     // DERIVED from the two lists above rather than written as a number: a
     // literal here has to be edited every time a gate is added, and a number
     // nobody can derive gets edited without being read. The property is the
     // same either way, because a gate that leaves the middle wave has to appear
     // in `SERIAL_GATES` to satisfy the assertion above it.
-    // The last wave is the only one that runs against the DEPLOYED build, and
-    // it is alone for the reason SERIAL_GATES states: it links real machines to
-    // the account a sibling gate authenticates against.
-    expect(waves.length).toBe(5);
+    // The last two waves are the only ones that run against a DEPLOYED build —
+    // the trajectory tier against the one serving now, before the publish, and
+    // the first-run tier against the one just published — and each is alone
+    // for the reason SERIAL_GATES states: both create workspaces on the account
+    // a sibling gate authenticates against, and one links real machines to it.
+    expect(waves.length).toBe(6);
     expect(waves[0]).toEqual(["bun scripts/preflight.ts"]);
     expect(waves[1]?.length).toBe(REQUIRED_GATES.length - Object.keys(SERIAL_GATES).length + 1);
     expect(waves[2]).toEqual(["bun run gate:hammer"]);
     expect(waves[3]).toEqual(["bun run gate:infra"]);
-    expect(waves[4]).toEqual([...POST_DEPLOY_GATES]);
+    expect(waves[4]).toEqual(["bun run gate:trajectory"]);
+    expect(waves[5]).toEqual([...POST_DEPLOY_GATES]);
   });
 
   // The Worker version is what a persisted error names, so it has to name the
@@ -477,7 +482,7 @@ describe("deploy gate", () => {
     const gates = run.events.filter((event) => !event.startsWith("MUTATE "));
 
     expect(gates[0]).toBe("bun scripts/preflight.ts");
-    expect(gates.at(-1)).toBe("bun run gate:infra");
+    expect(gates.at(-1)).toBe("bun run gate:trajectory");
   });
 
   // The budget is EXPLICIT because the work is quadratic and bun's 5000ms
@@ -699,18 +704,19 @@ describe("deploy gate", () => {
     // optional gate is a warning.
     expect(REQUIRED_GATES).toContain('bun run gate:infra');
     const waves = deployWaves(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8"));
-    // ITS OWN WAVE, AFTER EVERY SOURCE GATE. It is the final required gate,
-    // so an account that cannot be proved never reaches Wrangler deployment.
+    // ITS OWN WAVE, AFTER EVERY SOURCE GATE, so an account that cannot be
+    // proved never reaches Wrangler deployment.
     const infraWave = waves.findIndex((wave) => wave.includes('bun run gate:infra'));
     expect(waves[infraWave]).toEqual(['bun run gate:infra']);
-    // THE LAST WAVE BEFORE THE UPLOAD, which is what the property has always
-    // meant: an account that cannot be proved never reaches Wrangler
-    // deployment. Not the last wave outright — the first-run tier runs after
-    // the deploy — so everything after this wave is post-deploy by
-    // construction.
+    // THE LAST SOURCE-AND-ACCOUNT WAVE BEFORE THE UPLOAD, which is what the
+    // property has always meant. One wave follows it before the build — the
+    // trajectory tier, which spends live turns on the account this gate has
+    // just proved — and the first-run tier runs after the deploy, so everything
+    // past the trajectory wave is post-deploy by construction.
     const source = readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8");
     const preDeployWaves = deployWaves(source.slice(0, source.indexOf('Step 2: Building Kinu')));
-    expect(infraWave).toBe(preDeployWaves.length - 1);
+    expect(infraWave).toBe(preDeployWaves.length - 2);
+    expect(preDeployWaves.at(-1)).toEqual(['bun run gate:trajectory']);
     expect(readFileSync(join(REPO_ROOT, "scripts", "deploy.sh"), "utf8")).toContain(
       'run_required_gate "Declared infrastructure exists and is bound" bun run gate:infra',
     );
