@@ -38,6 +38,7 @@ import { initHeadsTables } from '../heads/schema';
 import { initBackgroundJobsTable } from '../jobs/store';
 import { initToolEffectClaimTable } from '../tools/effect-claim';
 import { initDeferredApprovalsTable } from '../safety/deferred-approval';
+import { initDeviceConsentRequestsTable } from '../safety/device-consent';
 import { initInstructionApprovalsTable } from '../safety/instruction-trust';
 import { initPlanReviewTable } from '../plans/review';
 import { initAlternateTakesTable } from '../mcts/takes';
@@ -228,6 +229,10 @@ export function initActorStateSchema(db: WorkspaceSchemaSql): void {
   // their standing decisions. Durable because the wait is a night, not a
   // prompt window.
   initDeferredApprovalsTable(execRaw);
+  // Prompt cards parked on the owner inside one consent window. Unlike the
+  // parked commands above, a card's whole lifetime CAN end mid-activation —
+  // the ask outlives it here rather than dying unanswered with the process.
+  initDeviceConsentRequestsTable(execRaw);
   // Plan revisions and reviewer state outlive both the submitting turn and DO
   // eviction; the Work surface reads this one authoritative stream.
   initPlanReviewTable(execRaw);

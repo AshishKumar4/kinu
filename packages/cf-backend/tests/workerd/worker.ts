@@ -347,8 +347,9 @@ type DeviceAttachment = v.InferOutput<typeof DeviceAttachmentSchema>;
  */
 export class SocketDO extends DurableObject<Cloudflare.Env> {
   /** In-memory per-instance state, the shape production still keeps in fields:
-   *  `DeviceConsentRegistry.waiting` (`safety/device-consent.ts:135`) holds
-   *  `settle` closures that no attachment could carry. */
+   *  `DeviceConsentRegistry.inflight` (`safety/device-consent.ts`) holds
+   *  `settle` closures that no attachment could carry. The card itself is a
+   *  row there, so what a reset takes is exactly these subscribers. */
   private readonly waiting = new Map<string, string>();
 
   /** The upgrade path, reduced to `DeviceSocketHub.accept`

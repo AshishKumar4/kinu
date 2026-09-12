@@ -96,12 +96,11 @@ describe('hibernatable socket attachments', () => {
     await abortAllDurableObjects();
     await scheduler.wait(150);
 
-    // The platform condition behind a limitation production already admits in
-    // writing: `DeviceConsentRegistry.resolve` answers false for an id "from a
-    // previous instance of this host" (`safety/device-consent.ts:162-163`),
-    // because `waiting` is a field (`:135`) holding `settle` closures. The owner
-    // answering a prompt raised before this line is silently dropped. Nothing
-    // measured that this is what a reset does until this test.
+    // The platform shape behind what production stores where:
+    // `DeviceConsentRegistry` keeps the request as a SQL row and its resolvers
+    // in a field (`safety/device-consent.ts` — `inflight`), so a reset drops
+    // exactly the subscribers and keeps the card. This probe's `waiting` map
+    // is that field's stand-in: storage survives the abort, the map does not.
     expect(await open('reset').settled('consent-1')).toEqual({
       inMemory: false,
       inStorage: true,
