@@ -358,8 +358,8 @@ export class ActorSession {
             while (index >= 0 && pending[index]?.toolCallId !== event.toolCallId) index--;
             const call = index < 0 ? undefined : pending.splice(index, 1)[0];
             this.orchestrator.acc.recordToolCall(event.success
-              ? { toolName: event.toolName, input: call?.args ?? {}, success: true, output: event.result }
-              : { toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason,
+              ? { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: true, output: event.result }
+              : { toolCallId: event.toolCallId, toolName: event.toolName, input: call?.args ?? {}, success: false, reason: event.reason,
                   execution: event.execution, error: event.error ?? event.result });
             break;
           }

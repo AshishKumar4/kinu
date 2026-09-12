@@ -9,15 +9,16 @@ import { makeSql, makeExecRaw } from './helpers';
 import { createTestActors } from '@kinu.run/test-utils';
 import { FAILURE_WITHOUT_ERROR } from '../src/events/types';
 import { classifyToolFailure } from '../src/read-models/tool-failures';
+import { createCompletedTurnStore, initCompletedTurnTable } from '../src/evolution/session-window';
 
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
     const a = new TurnAccumulator();
     a.recordStep({ usage: { input: 5, output: 3 } });
-    a.recordToolCall({ toolName: 'run', success: true, output: 'ok' });
+    a.recordToolCall({ toolCallId: 'fixture-1', toolName: 'run', success: true, output: 'ok' });
     // A failed call first, so the hadError assertion below is not vacuous —
     // a reset that forgot the flag would leak the previous turn's failure.
-    a.recordToolCall({ toolName: 'run', success: false, reason: null, error: 'boom' });
+    a.recordToolCall({ toolCallId: 'fixture-2', toolName: 'run', success: false, reason: null, error: 'boom' });
     a.onFirstChunk();
     expect(a.hadError).toBe(true);
     a.reset(1000);
@@ -41,10 +42,10 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — success records the output as the core ToolCallRecord', () => {
     const toolEvents: Array<{ name: string; toolCallId: string; args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolName: 'execute_tools', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
-    expect(a.toolCalls).toEqual([{ name: 'execute_tools', args: { code: '1+1' }, result: { result: 2 }, outcome: { success: true } }]);
+    a.recordToolCall({ toolCallId: 'fixture-3', toolName: 'execute_tools', input: { code: '1+1' }, success: true, output: { result: 2 }, durationMs: 12 });
+    expect(a.toolCalls).toEqual([{ toolCallId: 'fixture-3', name: 'execute_tools', args: { code: '1+1' }, result: { result: 2 }, outcome: { success: true } }]);
     expect(a.hadError).toBe(false);
-    expect(toolEvents[0]).toMatchObject({ name: 'execute_tools', toolCallId: 'tc-1' });
+    expect(toolEvents[0]).toMatchObject({ name: 'execute_tools', toolCallId: 'fixture-3' });
   });
 
   test('recordToolCall — the durable event carries WHAT the call was asked to do', () => {
@@ -54,7 +55,7 @@ describe('TurnAccumulator', () => {
     // refusal it was right to make and a defect.
     const toolEvents: Array<{ args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolName: 'file', input: { action: 'edit', path: 'src/a.ts' }, success: true, output: { ok: true } });
+    a.recordToolCall({ toolCallId: 'fixture-4', toolName: 'file', input: { action: 'edit', path: 'src/a.ts' }, success: true, output: { ok: true } });
     expect(toolEvents[0].args).toEqual({ action: 'edit', path: 'src/a.ts' });
   });
 
@@ -64,7 +65,7 @@ describe('TurnAccumulator', () => {
     // here and once in the step transcript.
     const toolEvents: Array<{ args?: unknown }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolName: 'file', input: { action: 'write', content: 'x'.repeat(5000) }, success: true, output: { ok: true } });
+    a.recordToolCall({ toolCallId: 'fixture-5', toolName: 'file', input: { action: 'write', content: 'x'.repeat(5000) }, success: true, output: { ok: true } });
     const args = toolEvents[0].args;
     expect(args).toBeTypeOf('string');
     expect(String(args).length).toBeLessThan(1000);
@@ -76,11 +77,11 @@ describe('TurnAccumulator', () => {
   test('recordToolCall — failure records {error}, flips hadError, passes error to the sink', () => {
     const toolEvents: Array<{ error?: string }> = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-    a.recordToolCall({ toolName: 'run', success: false, reason: null, error: new Error('boom') });
+    a.recordToolCall({ toolCallId: 'fixture-6', toolName: 'run', success: false, reason: null, error: new Error('boom') });
     // ONE description of the failure in both ledgers. `.message` in the core record
     // against `String(error)` at the sink makes them disagree — the same call reads
     // as `boom` in the evolution signal and `Error: boom` in the run-event log.
-    expect(a.toolCalls[0]).toEqual({ name: 'run', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
+    expect(a.toolCalls[0]).toEqual({ toolCallId: 'fixture-6', name: 'run', args: {}, result: { error: 'boom' }, outcome: { success: false, reason: null } });
     expect(a.hadError).toBe(true);
     expect(toolEvents[0].error).toBe('boom');
   });
@@ -95,10 +96,11 @@ describe('TurnAccumulator', () => {
     for (const error of [undefined, null, '']) {
       const toolEvents: Array<{ error?: string }> = [];
       const a = new TurnAccumulator({ onToolCallEvent: (e) => toolEvents.push(e) });
-      a.recordToolCall({ toolName: 'execute_tools', success: false, reason: null, error });
+      a.recordToolCall({ toolCallId: 'fixture-7', toolName: 'execute_tools', success: false, reason: null, error });
       expect(a.hadError).toBe(true);
       expect(toolEvents[0].error).toBe(FAILURE_WITHOUT_ERROR);
       expect(a.toolCalls[0]).toEqual({
+        toolCallId: 'fixture-7',
         name: 'execute_tools', args: {}, result: { error: FAILURE_WITHOUT_ERROR }, outcome: { success: false, reason: null },
       });
       // And the census reads it back as its own reason rather than as `threw`.
@@ -151,14 +153,30 @@ describe('TurnAccumulator', () => {
     expect(a.lastPromptTokens).toBeUndefined();
   });
 
-  test('each tool call gets its own id — the run-event log must not collapse them', () => {
+  test('each completed tool call retains its supplied invocation identity', () => {
     const ids: string[] = [];
     const a = new TurnAccumulator({ onToolCallEvent: (e) => ids.push(e.toolCallId) });
-    a.recordToolCall({ toolName: 'read', success: true, output: 1 });
-    a.recordToolCall({ toolName: 'read', success: true, output: 2 });
-    a.recordToolCall({ toolName: 'write', success: true, output: 3 });
-    expect(ids).toEqual(['tc-1', 'tc-2', 'tc-3']);
+    a.recordToolCall({ toolCallId: 'provider-B', toolName: 'read', success: true, output: 1 });
+    a.recordToolCall({ toolCallId: 'provider-A', toolName: 'read', success: true, output: 2 });
+    a.recordToolCall({ toolCallId: 'provider-C', toolName: 'write', success: true, output: 3 });
+    expect(ids).toEqual(['provider-B', 'provider-A', 'provider-C']);
+    expect(a.toolCalls.map((call) => call.toolCallId)).toEqual(ids);
     expect(new Set(ids).size).toBe(3);
+  });
+
+  test('the completed-turn store retains invocation identity across serialization', () => {
+    const db = new Database(':memory:');
+    const sql = makeSql(db);
+    const execRaw = makeExecRaw(db);
+    const actor = createTestActors(sql, execRaw).main;
+    initCompletedTurnTable(execRaw);
+    const turns = createCompletedTurnStore(sql, actor);
+    turns.append({
+      userMessage: 'read', assistantResponse: 'done', steps: 1, durationMs: 1, feedback: null, hadError: false,
+      toolCalls: [{ toolCallId: 'sdk-call', name: 'file', args: { path: 'same.txt' }, result: 'same result', outcome: { success: true } }],
+    }, { awaitsFollowup: true });
+    expect(turns.claim()?.turns[0]?.toolCalls[0]?.toolCallId).toBe('sdk-call');
+    db.close();
   });
 
   test('a 0ms duration is a real measurement, not an absent one', () => {
@@ -172,8 +190,8 @@ describe('TurnAccumulator', () => {
       onToolCallEvent: (e) => durations.push(e.durationMs),
     });
 
-    a.recordToolCall({ toolName: 'fast', success: true, output: 1, durationMs: 0 });
-    a.recordToolCall({ toolName: 'untimed', success: true, output: 1 });
+    a.recordToolCall({ toolCallId: 'fixture-8', toolName: 'fast', success: true, output: 1, durationMs: 0 });
+    a.recordToolCall({ toolCallId: 'fixture-9', toolName: 'untimed', success: true, output: 1 });
     expect(details).toEqual(['fast (0ms)', 'untimed']);
     expect(durations).toEqual([0, undefined]);
   });
@@ -250,7 +268,7 @@ describe('TurnAccumulator', () => {
   test('works with no sinks (pure consumer)', () => {
     const a = new TurnAccumulator();
     a.onFirstChunk();
-    a.recordToolCall({ toolName: 'x', success: true, output: 1 });
+    a.recordToolCall({ toolCallId: 'fixture-10', toolName: 'x', success: true, output: 1 });
     a.recordStep({ usage: { input: 1, output: 1 } });
     expect(a.toolCalls).toHaveLength(1);
     expect(a.stepCount).toBe(1);

@@ -67,8 +67,8 @@ describe("live head trace", () => {
     });
 
     expect(step?.toolCalls).toEqual([
-      { name: "file", input: { path: "/a.ts" }, output: "A" },
-      { name: "file", input: { path: "/b.ts" }, output: "B" },
+      { name: "file", toolCallId: "a", input: { path: "/a.ts" }, output: "A" },
+      { name: "file", toolCallId: "b", input: { path: "/b.ts" }, output: "B" },
     ]);
   });
 

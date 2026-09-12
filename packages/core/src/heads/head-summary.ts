@@ -68,6 +68,7 @@ export function toHeadStep(step: TraceStepLike): HeadStep | null {
     const output = match?.output ?? match?.result;
 
     return {
+      toolCallId: c.toolCallId,
       name: String(c.toolName ?? c.name ?? "?"),
       input: digestJsonValue({ value: c.input }),
       output: output === undefined ? undefined : digestJsonValue({ value: output }),

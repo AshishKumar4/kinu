@@ -206,6 +206,62 @@ function workspaceRuntime() {
   return { db, rt };
 }
 
+test('parallel native calls retain their SDK identities after reverse completion', async () => {
+  const { db, rt } = workspaceRuntime();
+  const files = rt.storage.vfs;
+  await files.writeFile('identical.txt', 'same result');
+  rt.actor.config.setDisplayNameOrigin('Identity pin', 'user');
+  const first = Promise.withResolvers<void>();
+  const readFile = files.readFile.bind(files);
+  let reads = 0;
+  files.readFile = async (...args) => {
+    if (args[0] === 'identical.txt' && reads++ === 0) await first.promise;
+
+    return await readFile(...args);
+  };
+
+  let step = 0;
+
+  const model = scriptedTurnModel({ doGenerate: () => {
+    const calls = step++ === 0;
+
+    return {
+      content: calls ? ['call-A', 'call-B'].map((toolCallId) => ({
+        type: 'tool-call' as const, toolCallId, toolName: 'file', input: JSON.stringify({ action: 'read', path: 'identical.txt' }),
+      })) : [{ type: 'text', text: 'done' }],
+      finishReason: { unified: calls ? 'tool-calls' : 'stop', raw: undefined },
+      usage: { inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: 1, text: 1, reasoning: undefined } }, warnings: [],
+    };
+  } });
+
+  const events: SessionEvent[] = [];
+
+  const session = new LocalAgentSession({ rt, db, model, noAutoEvolve: true, onEvent: (event) => {
+    events.push(event);
+
+    if (event.type === 'tool-result' && event.toolCallId === 'call-B') first.resolve();
+  } });
+
+  try {
+    await session.send('Read the file twice in parallel.');
+    const run = session.listRuns().items[0];
+
+    if (run === undefined) throw new Error('the chat did not retain a run');
+    const recorded = session.getRunEvents(run.runId).filter((event) => event.type === 'tool_call_end');
+    const completed = events.find((event) => event.type === 'turn-end');
+
+    expect(events.flatMap((event) => event.type === 'tool-result' ? [event.toolCallId] : [])).toEqual(['call-B', 'call-A']);
+    expect(recorded.map((event) => event.toolCallId)).toEqual(['call-B', 'call-A']);
+    expect(completed?.turn.toolCalls.map((call) => call.toolCallId)).toEqual(['call-B', 'call-A']);
+  } finally {
+    first.resolve();
+    files.readFile = readFile;
+    await session.end();
+    db.close();
+  }
+});
+
 /** The workspace's SQL executor with ONE statement-level failure armed — the
  *  storage fault (full disk, corrupt page) that a durability test needs to
  *  observe, injected where the real one lands: at a single write, with every
