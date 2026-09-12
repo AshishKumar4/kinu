@@ -31,6 +31,7 @@ import {
 } from "@phosphor-icons/react";
 import type { FileUIPart } from "ai";
 import { AttachmentChip } from "@/components/AttachmentChip";
+import type { WorkspaceNotice } from "@/hooks/use-kinu";
 
 const CHAT_MODES = ["build", "plan"] as const;
 
@@ -49,7 +50,11 @@ export type NoticeTone = "danger" | "warning" | "info" | "success" | "neutral" |
 export interface ComposerNotice {
   id: string;
   tone: NoticeTone;
-  text: string;
+  /** The emphasized lead line; the notice may carry a title with no body. */
+  title?: string;
+  text?: string;
+  /** Raw technical string, shown only inside the "Technical details" disclosure. */
+  detail?: string;
   /** The way out. A notice reporting a failure should almost always have one. */
   action?: { label: string; icon?: ReactNode; onClick: () => void };
   onDismiss?: () => void;
@@ -67,7 +72,7 @@ const NOTICE_TONE = {
 
 /** A status row: what happened, and the way out of it. */
 function Notice({ notice }: { notice: ComposerNotice }) {
-  const { tone, text, action, onDismiss } = notice;
+  const { tone, title, text, detail, action, onDismiss } = notice;
   const { cls, icon } = NOTICE_TONE[tone];
 
   return (
@@ -77,7 +82,16 @@ function Notice({ notice }: { notice: ComposerNotice }) {
       {/* Wraps to two lines rather than truncating: in a narrow chat column a
           single-line clamp cut "Couldn't refresh live data for MCTS." down to
           "Co…", which is a silence wearing the costume of a status. */}
-      <span className="min-w-0 flex-1 line-clamp-2" title={text}>{text}</span>
+      <span className="min-w-0 flex-1">
+        {title && <span className="block font-medium">{title}</span>}
+        {text && <span className="block line-clamp-2" title={text}>{text}</span>}
+        {detail && (
+          <details className="mt-0.5">
+            <summary className="cursor-pointer underline decoration-dotted underline-offset-2">Technical details</summary>
+            <pre className="mt-1 max-h-32 overflow-auto font-mono whitespace-pre-wrap break-all">{detail}</pre>
+          </details>
+        )}
+      </span>
       {action && (
         <button type="button" onClick={action.onClick}
           className="p-btn-quiet inline-flex shrink-0 cursor-pointer items-center gap-1 px-2 py-0.5">
@@ -92,6 +106,30 @@ function Notice({ notice }: { notice: ComposerNotice }) {
       )}
     </div>
   );
+}
+
+/**
+ * The workspace load failure as the composer's status row.
+ *
+ * A blocking notice (the essential read failed) renders `danger`; a partial
+ * one (an optional read failed) renders `warning`. Neither disables the
+ * composer — that decision belongs to the socket, not to a stale tool list —
+ * so this mapping carries no `disabled` of its own.
+ */
+export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void): ComposerNotice {
+  const mapped: ComposerNotice = {
+    id: "load",
+    tone: notice.severity === "blocking" ? "danger" : "warning",
+    title: notice.title,
+  };
+
+  if (notice.scope !== "") mapped.text = notice.scope;
+
+  if (notice.detail !== "") mapped.detail = notice.detail;
+
+  if (notice.retry !== null) mapped.action = { label: notice.retry, onClick: onRetry };
+
+  return mapped;
 }
 
 /**
