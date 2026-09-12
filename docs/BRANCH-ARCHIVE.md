@@ -257,38 +257,36 @@ Production deployment and browser receipts are retained in the machine-local rel
 
 ### The 2026-09-12 reconciliation
 
-Fifteen branches were reconciled against the integration tip `f594a4f1d` by
-content, not by patch id. Seven carried work the tree already holds by a
-different landing (the fork-receiver authority at `fork.ts:386-390`, the
-vendor-schema gate `c00f8ff73`, the pane-store docs, the PostCSS scroll test,
-the Work-tab click, both `fix/capability-required-shape` commits by patch id,
-and `integrate/2026-09-12-v2`). Two carried work a later decision rejected:
-the chain cost doc repeats the amplification figures the tree retracted, and
-the two-browser-rows commit is the frame loop the inspector rewrite deletes.
-Six are snapshots of the 2026-09-08 native lineage the decisive report keeps
-on `feat/devbox-durability-next` at `f3a0fcf7f`; that branch stays. One
-commit was live and was cherry-picked: `e611638b4` as `f594a4f1d`.
+Fifteen branches were reconciled against the integration tip by content, not
+by patch id, and none needed a tag. `main` at `d49410f01`; the doc's own
+blob test (below) was run on every candidate before its branch went.
 
-Twelve tags were written at the tips and verified equal before deletion.
-`bench/mmap-contract-cost` shared its tip with the kept branch and needed
-none. Seven worktrees went; three held residue, saved as
+Landed by a different commit, so the tree already held the behaviour: the
+fork-receiver authority (`fork.ts:386-390`), the vendor-schema gate
+(`c00f8ff73`), the pane-store docs, the PostCSS scroll test, the Work-tab
+click, both `fix/capability-required-shape` commits by patch id,
+`integrate/2026-09-12-v2`, and the whole of
+`eval/trajectory-and-agent-benchmarks` (its pi comparator is byte-identical
+on the tip, its reasoning-effort and session-affinity fixes are present in
+evolved form, and its audit report was deleted on the branch itself). Their
+remaining novel blobs were intermediate revisions of files whose landed
+versions are on `main`.
+
+Rejected by a later decision: the two-browser-rows frame loop, which the
+inspector rewrite deletes.
+
+Merged now: `e611638b4` (address-length schema) as `f594a4f1d`, and
+`f429f7b0c` (the 2026-09-09 whole-delta publication cost) as `9d081df3c`,
+which also re-sources the amplification figures the report had withdrawn as
+unsourced.
+
+Kept: `feat/devbox-durability-next` at `f3a0fcf7f`, the home the decisive
+report names for the 2026-09-08 native lineage. Its six sibling branches held
+zero blobs that branch lacks. `bench/mmap-contract-cost` shared its tip.
+
+Seven worktrees went. Three held residue, saved as
 `~/kinu-wip/<worktree>-2026-09-12.patch` with untracked and ignored files
-beside it. Novel and sole-copy blob counts were not measured.
-
-| Removed branch | Retained tag | Commit |
-|---|---|---|
-| `chore/sdk-launch-map` | `archive/sdk-launch-map-20260912` | `fad094723c` |
-| `eval/trajectory-and-agent-benchmarks` | `archive/eval-trajectory-benchmarks-20260912` | `2de73f63b3` |
-| `feat/native-ordinary-lifecycle-task` | `archive/native-ordinary-lifecycle-task-20260912` | `9f9b5fbdf9` |
-| `feat/native-ordinary-lifecycle` | `archive/native-ordinary-lifecycle-20260912` | `13d1b8d251` |
-| `fix/chain-measured-rebase` | `archive/chain-measured-rebase-20260912` | `f429f7b0c3` |
-| `fix/native-byte-budget` | `archive/native-byte-budget-20260912` | `612db50261` |
-| `fix/native-dirty-mmap` | `archive/native-dirty-mmap-20260912` | `06035a11aa` |
-| `fix/native-integration-final` | `archive/native-integration-final-20260912` | `347a662baa` |
-| `fix/native-live-inventory` | `archive/native-live-inventory-20260912` | `052c1b9ef5` |
-| `gate/vendor-schema` | `archive/gate-vendor-schema-20260912` | `19e3baed6e` |
-| `integrate/2026-09-12` | `archive/integrate-2026-09-12-20260912` | `d5992026bf` |
-| `integration/final-fixes` | `archive/integration-final-fixes-20260912` | `e611638b44` |
+beside it.
 
 ## Reproduce the test
 
