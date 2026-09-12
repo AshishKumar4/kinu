@@ -2,7 +2,8 @@
   Kinu.Exploration.Objective — the objective's direction, what a verifier may
   return, and the floor's two declaration-time checks. 0 sorry.
 
-  Models `packages/core/src/strategy/objective.ts`. Specified by
+  Models `packages/core/src/types/objective.ts` (and the predicates in
+  `strategy/objective.ts`). Specified by
   docs/EXPLORATION.md — "The objective", "The closed verifier registry" and
   "The floor".
 

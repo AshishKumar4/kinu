@@ -2,7 +2,7 @@
   Kinu.Exploration.Publication — S7, S6, S4 and S1. 0 sorry.
 
   Models `PublicationState`, `FloorRederivation` and `ExplorationRecord`
-  (`packages/core/src/strategy/objective.ts`), plus `PUBLICATION_SURFACES` /
+  (`packages/core/src/types/objective.ts`), plus `PUBLICATION_SURFACES` /
   `admitsPublication` / `CarrySuppression`. Specified by docs/EXPLORATION.md —
   "The objective", "The closed verifier registry", "The publication seal",
   "Comparability" and "The Lean invariants".
@@ -340,7 +340,7 @@ theorem unmeasurable_does_not_discriminate :
   while the leaderboard was sealed.
 
   So PUBLICATION is an enumerated set of surfaces (`PUBLICATION_SURFACES`,
-  `strategy/objective.ts`). The three theorems that carry the contested clause each
+  `types/objective.ts`). The three theorems that carry the contested clause each
   take a surface index: `publish_requires_open`, `retroPublish_requires_open`,
   `sealed_publishes_nothing`. They go through essentially unchanged, and that is the
   tell that this is the right statement rather than a weakening — the theorem is true

@@ -322,11 +322,11 @@ requirements:
       - Kinu.Exploration.measurement_cannot_report_fault
       - Kinu.Exploration.adversary_is_declarable_and_refused
     tsRefs:
-      - packages/core/src/strategy/objective.ts#ObjectiveDirection
+      - packages/core/src/types/objective.ts#ObjectiveDirection
       - packages/core/src/strategy/objective.ts#isBetter
-      - packages/core/src/strategy/objective.ts#Unmeasurable
-      - packages/core/src/strategy/objective.ts#VerifierSpec
-      - packages/core/src/strategy/objective.ts#Floor.kind
+      - packages/core/src/types/objective.ts#Unmeasurable
+      - packages/core/src/types/objective.ts#VerifierSpec
+      - packages/core/src/types/objective.ts#Floor.kind
     remainingEvidence:
       - The model uses exact Int values while TypeScript and a SQLite REAL column compare IEEE-754 doubles
       - No differential fixture connects isBetter's three intended call sites to these constructor-shape witnesses
@@ -343,8 +343,8 @@ requirements:
       - Kinu.Exploration.c1_refuses_a_refuted_floor
     tsRefs:
       - packages/core/src/strategy/objective.ts#floorMargin
-      - packages/core/src/strategy/objective.ts#Floor
-      - packages/core/src/strategy/objective.ts#FloorBreach
+      - packages/core/src/types/objective.ts#Floor
+      - packages/core/src/types/objective.ts#FloorBreach
     remainingEvidence:
       - The model reasons on floorMargin's numerator only, so the division and its IEEE-754 behaviour are outside the proof
       - No runtime precondition yet implements C2 against the measured baseline
@@ -370,8 +370,8 @@ requirements:
       - Kinu.Exploration.Publication.every_surface_is_writable
       - Kinu.Exploration.Publication.every_surface_is_retro_writable
     tsRefs:
-      - packages/core/src/strategy/objective.ts#PUBLICATION_SURFACES
-      - packages/core/src/strategy/objective.ts#PublicationState
+      - packages/core/src/types/objective.ts#PUBLICATION_SURFACES
+      - packages/core/src/types/objective.ts#PublicationState
       - packages/core/src/strategy/objective.ts#admitsPublication
     remainingEvidence:
       - The step function is a single sequential fold, so two runs racing on one objective's seal are not modelled and this is the model's largest gap
@@ -391,9 +391,9 @@ requirements:
       - Kinu.Exploration.Publication.retroPublish_requires_same_verifier
       - Kinu.Exploration.Publication.admissible_rederivation_admits
     tsRefs:
-      - packages/core/src/strategy/objective.ts#PublicationState
-      - packages/core/src/strategy/objective.ts#Floor
-      - packages/core/src/strategy/objective.ts#FloorRederivation
+      - packages/core/src/types/objective.ts#PublicationState
+      - packages/core/src/types/objective.ts#Floor
+      - packages/core/src/types/objective.ts#FloorRederivation
       - packages/core/src/strategy/objective.ts#admitsPublication
     remainingEvidence:
       - Digest injectivity is a hypothesis on the theorems rather than a proved property of SHA-256
@@ -435,8 +435,8 @@ requirements:
       - Kinu.Exploration.Publication.halted_does_nothing
       - Kinu.Exploration.Publication.fault_freezes_the_run
     tsRefs:
-      - packages/core/src/strategy/objective.ts#VerifierFault
-      - packages/core/src/strategy/objective.ts#Unmeasurable
+      - packages/core/src/types/objective.ts#VerifierFault
+      - packages/core/src/types/objective.ts#Unmeasurable
     remainingEvidence:
       - Lean cannot see a catch that converts a thrown fault into an unmeasurable, which is where the production hazard lives
       - The harness path that must not absorb a throw is unwritten for the exploration surface
@@ -467,7 +467,7 @@ requirements:
       - Kinu.Exploration.Publication.non_discriminating_run_publishes_nothing
       - Kinu.Exploration.Publication.discrimination_is_not_relevance
     tsRefs:
-      - packages/core/src/strategy/objective.ts#MeasuredValue
+      - packages/core/src/types/objective.ts#MeasuredValue
       - packages/core/src/strategy/records.ts#recordExploration
     remainingEvidence:
       - S1's literal second conjunct, that the verifier COULD have failed, is counterfactual and remains unmodelled under PR-DISCRIM-003
@@ -483,8 +483,8 @@ requirements:
       - Kinu.Exploration.Publication.baseline_supplies_the_second_value
       - Kinu.Exploration.Publication.unmeasurable_does_not_discriminate
     tsRefs:
-      - packages/core/src/strategy/objective.ts#MeasuredValue
-      - packages/core/src/strategy/objective.ts#Measurement
+      - packages/core/src/types/objective.ts#MeasuredValue
+      - packages/core/src/types/objective.ts#Measurement
     remainingEvidence:
       - These are findings against an unimplemented check, so nothing in the tree yet exhibits or fixes the defects
       - Whether the measured baseline is counted among the distinct candidates is a decision the spec has not taken explicitly
@@ -522,8 +522,8 @@ requirements:
       - Kinu.Exploration.Settle.every_settle_kind_is_reachable
     tsRefs:
       - packages/core/src/strategy/swarm.ts#settleOf
-      - packages/core/src/strategy/swarm.ts#SwarmSettle
-      - packages/core/src/strategy/swarm.ts#SwarmAdvanceSetting
+      - packages/core/src/types/swarm.ts#SwarmSettle
+      - packages/core/src/types/swarm.ts#SwarmAdvanceSetting
     remainingEvidence:
       - Totality is definitional for a function on inductive types, so the fibre equivalences rather than totality carry the content
       - Nothing connects these fibres to the section 6.6 coverage fixture, which does not exist yet
@@ -649,7 +649,7 @@ requirements:
       - Kinu.Exploration.Isolation.agent_node_step_is_representable
     tsRefs:
       - packages/cf-backend/src/actor-hosting.ts#createWorkspaceActorHost
-      - packages/core/src/strategy/swarm.ts#SWARM_UNITS
+      - packages/core/src/types/swarm.ts#SWARM_UNITS
     remainingEvidence:
       - This requirement deliberately proves NO agent-node isolation property; unit:'trajectory' is blocked on per-node workspace isolation which does not exist
       - An agent-node region needs a new action with a fresh provably-disjoint storage id per node and its own preservation proof
@@ -659,8 +659,8 @@ requirements:
     status: specified-not-modeled
     theorems: []
     tsRefs:
-      - packages/core/src/strategy/objective.ts#Unmeasurable
-      - packages/core/src/strategy/objective.ts#Verifier
+      - packages/core/src/types/objective.ts#Unmeasurable
+      - packages/core/src/types/objective.ts#Verifier
     remainingEvidence:
       - A counterfactual about a verifier's behaviour on unseen inputs needs a semantics for the verifier, which the abstract model does not have
       - Section 3.8 B1 supplies an observable surrogate, modelled under PR-DISCRIM-001, and the two claims are not the same claim
@@ -669,7 +669,7 @@ requirements:
     status: specified-not-modeled
     theorems: []
     tsRefs:
-      - packages/core/src/strategy/objective.ts#PublicationState
+      - packages/core/src/types/objective.ts#PublicationState
       - packages/core/src/strategy/records.ts#recordExploration
     remainingEvidence:
       - A concurrent model, or a store-level conditional write on the seal, is required and neither exists
@@ -679,7 +679,7 @@ requirements:
     status: specified-not-modeled
     theorems: []
     tsRefs:
-      - packages/core/src/strategy/objective.ts#Floor.bestKnownHonest
+      - packages/core/src/types/objective.ts#Floor.bestKnownHonest
       - packages/core/src/strategy/swarm.ts#SwarmSettleReport
     remainingEvidence:
       - The claim needs a distribution over candidate quality and a discrimination parameter, neither of which the abstract model has
@@ -714,7 +714,7 @@ requirements:
       - packages/core/src/strategy/records.ts#recordExploration
       - packages/core/src/strategy/records.ts#bestInCell
       - packages/core/src/strategy/records.ts#NO_LIMIT
-      - packages/core/src/strategy/objective.ts#InstancedObjective
+      - packages/core/src/types/objective.ts#InstancedObjective
     remainingEvidence:
       - The store is a read-modify-write surface and this model is a single sequential fold, so two runs racing on one cell are unmodelled and no strengthening of these theorems reaches it
       - The strictness of the comparison is proved NOT to be what makes the store monotone, so relaxing it needs a mutation test rather than a theorem here

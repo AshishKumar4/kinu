@@ -31,7 +31,7 @@ results persist in `exploration_records` for later runs of the same objective.
 
 ## The six axes
 
-`strategy/swarm.ts` declares closed value sets. Those sets, not this prose, are
+`types/swarm.ts` declares closed value sets. Those sets, not this prose, are
 the enumeration.
 
 | axis | governs | values |
@@ -193,7 +193,7 @@ raw-value path.
 A witness hunt optimises its `proxy`. Without a scalar proxy it is refused; see
 *What the engine refuses outright*.
 
-Implemented by `WitnessObjective` in `strategy/objective.ts`.
+Implemented by `WitnessObjective` in `types/objective.ts`.
 
 ## The closed verifier registry
 
