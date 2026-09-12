@@ -30,7 +30,7 @@
 
 namespace Kinu.Exploration.Settle
 
-/-! ## The axis values, mirrored from `strategy/swarm.ts`
+/-! ## The axis values, mirrored from `types/swarm.ts`
 
   Every inductive below is checked constructor-for-constructor against the TS
   constant it mirrors by `lean/check-traceability.mjs` (`AXIS_MIRRORS`), so the

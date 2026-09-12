@@ -22,7 +22,7 @@
   selection rather than a spawn.
 
   -- THE FIFTH ARM'S AXIS. The trigger is `Context.fresh`, and that spelling is
-  the contract's: `SWARM_CONTEXTS` is `inherit | fresh` (`strategy/swarm.ts`), and
+  the contract's: `SWARM_CONTEXTS` is `inherit | fresh` (`types/swarm.ts`), and
   `check-traceability.mjs` mirrors this inductive against it. `fresh` names one
   thing only — what a child STARTS FROM — and this arm reads it. Nothing decides
   separately what a sibling is SHOWN: a second axis over that would put two
