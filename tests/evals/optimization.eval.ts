@@ -58,7 +58,8 @@ import {
 } from './harness';
 import {
   EVAL_MODELS, FULL_TOOL_SURFACE, hardTaskCases, hardTaskFor,
-  liveModelTarget, outputCapRow, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend,
+  liveModelTarget, modelObservedFromEvents, outputCapRow, publishRunRecord, recordLiveModelEpisode,
+  reportLiveModelSpend,
   seedHardTask, stepBoundEvidence,
   TASK_OUTCOME, UNCONFIGURED_LLM, verifyHardTask,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier, type HardTask,
@@ -189,6 +190,8 @@ afterAll(() => {
   publishRunRecord({
     family: 'optimization', tier: TIER, modelId: LLM.model, repeats: 1, seed: 1,
     arm: ARM, declaredTasks: [TASK_ID], observations, spend,
+    // The child's own store, still open: the serving models its steps reported.
+    modelObserved: modelObservedFromEvents(opened.flatMap((db) => readRunEvents(db))),
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
 

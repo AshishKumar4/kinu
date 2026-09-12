@@ -51,7 +51,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import {
-  EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow, projectRunEventProvenance, publishRunRecord,
+  createObservedModelAccumulator, EVAL_MODELS, ledgerTotalsFromEvents, outcomeRow,
+  projectRunEventProvenance, publishRunRecord,
   reportLiveModelSpend, retainEpisodeTranscript, subgoalsOutcome, withEpisodeEvidence,
   type EpisodeEvidenceReader, type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalSubgoal, type EvalTier,
 } from '@kinu.run/test-utils';
@@ -64,6 +65,10 @@ import {
 /** The family every case's record is published under, so one tier's evidence is
  *  one family rather than six. */
 export const FIRST_RUN_FAMILY = 'first-run';
+
+/** Serving models the cases reported, noted before each workspace is torn down
+ *  (teardown DELETES it). One suite per process, so module scope is suite scope. */
+const observedModels = createObservedModelAccumulator();
 
 /** Every case this tier declares, in the order the defects were found. The list
  *  is DATA and lives here rather than in the six files, because "the set this
@@ -403,6 +408,7 @@ export async function runFirstRunCase<Session extends FirstRunSession, Plan>(
     const subgoals = await spec.run({ session, plan });
 
     const { events, history } = await collect();
+    observedModels.note(events);
     const totals = ledgerTotalsFromEvents(events);
     const retained = retainEpisodeTranscript(TRANSCRIPTS, spec.id, { events, history, subgoals });
 
@@ -477,6 +483,7 @@ export function publishFirstRunRecord(
   const spend = reportLiveModelSpend(suite);
   publishRunRecord({
     family: FIRST_RUN_FAMILY, tier: FIRST_RUN_TIER, modelId: modelId ?? 'no-model',
+    modelObserved: observedModels.observed,
     repeats: 1, seed: 1, arm: FIRST_RUN_ARM, declaredTasks: [...declared], observations, spend,
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
