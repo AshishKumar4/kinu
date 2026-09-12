@@ -1,7 +1,7 @@
 {
-  "measuredAt": "2026-09-11",
-  "files": 2091,
-  "functions": 52758,
+  "measuredAt": "2026-09-12",
+  "files": 2145,
+  "functions": 53475,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -184,10 +184,6 @@
     {
       "key": "packages/core/src/strategy/swarm-resume.ts#harvestSwarm",
       "complexity": 38
-    },
-    {
-      "key": "packages/cf-backend/src/components/MessageView.tsx#ToolCallBlock",
-      "complexity": 37
     },
     {
       "key": "packages/cf-backend/src/components/surfaces/FileViewer.tsx#FileViewer",
