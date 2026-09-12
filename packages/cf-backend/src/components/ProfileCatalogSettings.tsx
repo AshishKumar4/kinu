@@ -445,22 +445,22 @@ function MemberSet(props: {
   };
 
   return (
-    <fieldset className={`space-y-1 text-xs p-text-2 ${props.wide ? 'md:col-span-2' : ''}`}>
-      <legend className="flex items-baseline gap-2">
+    <fieldset className={`min-w-0 space-y-1 text-xs p-text-2 ${props.wide ? 'md:col-span-2' : ''}`}>
+      <legend className="min-w-0">
         <span>{props.label}</span>
-        <span className="text-[10px] p-text-3">{props.about}</span>
+        <span className="block text-[10px] p-text-3">{props.about}</span>
       </legend>
       <div className={`grid gap-x-3 gap-y-1 ${props.wide ? 'md:grid-cols-3' : ''}`}>
         {props.options.map((option) => (
-          <label key={option.id} className="flex items-start gap-2 py-0.5" title={option.about ?? undefined}>
+          <label key={option.id} className="flex min-w-0 items-start gap-2 py-0.5" title={option.about ?? undefined}>
             <input
               type="checkbox"
-              className="mt-0.5 accent-[var(--c-accent)]"
+              className="mt-0.5 shrink-0 accent-[var(--c-accent)]"
               checked={current.includes(option.id)}
               onChange={(event) => toggle(option.id, event.target.checked)}
               aria-label={`${props.label}: ${option.id}`}
             />
-            <span className="min-w-0">
+            <span className="min-w-0 flex-1">
               <span className="p-text">{option.id}</span>
               {option.about && <span className="block truncate text-[10px] p-text-3">{option.about}</span>}
             </span>
