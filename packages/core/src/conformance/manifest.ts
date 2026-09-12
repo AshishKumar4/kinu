@@ -448,6 +448,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // needs-you queue that decides them lives. A local session keeps its
     // interactive channel (the human is at the terminal), so nothing parks.
     deferred_approvals: EVERYWHERE,
+    // Consent cards waiting on the owner. Same shared-schema discipline as the
+    // parked commands above: the table exists on every root, while the card
+    // rail (await/resolve over RPC) is what only the cf orchestrator wires.
+    device_consent_requests: EVERYWHERE,
     slates: EVERYWHERE,
     slate_versions: EVERYWHERE,
     slate_publications: EVERYWHERE,

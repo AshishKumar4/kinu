@@ -18,12 +18,15 @@
  *
  * The registry below is the waiting half: raise a prompt, park the caller on a
  * promise, and settle it when the owner answers or when the prompt expires.
- * Nothing about it is Durable Object state: the only platform-shaped piece is
- * telling whoever can answer that a decision is waiting, which arrives as one
- * `announce` callback.
+ * The pending ask is a ROW, not process state — a Durable Object evicted or
+ * redeployed between the ask and the answer loses its callers, never the card,
+ * so the answer that arrives afterwards still lands on the question it was
+ * meant for. What stays in memory is only who is waiting and when the prompt
+ * lapses: resolvers and timers are per-activation and cannot outlive it.
  */
 
 import type { DynamicApproval } from '../prompting/volatile-context';
+import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
 
 /** How a consent prompt settled. `timeout` is NOT a decision — nobody made
@@ -127,6 +130,10 @@ export interface DeviceConsentRegistryDeps {
   /** Mint a consent id. Injected so a host can keep its own id vocabulary and
    *  so tests are deterministic. */
   newId(): string;
+  /** Where a raised card lives until it settles. The registry keeps only who
+   *  is waiting on it; the request itself is this row, durable across the
+   *  host's own evictions. */
+  store: DeviceConsentStore;
   /** How long an unanswered prompt waits before it expires. */
   timeoutMs?: number;
   now?(): number;
@@ -137,8 +144,114 @@ export interface DeviceConsentRegistryDeps {
  *  never parked forever. */
 export const DEVICE_CONSENT_TIMEOUT_MS = 5 * 60_000;
 
-interface Waiting {
-  readonly view: PendingDeviceConsent;
+/** One pending prompt, durable. The request's own words plus the id the
+ *  owner's answer addresses and the instant the ask stops counting — the row
+ *  IS the card, so an activation that never saw the raise still owes the
+ *  owner exactly this. */
+export interface PendingConsentRow extends PendingDeviceConsent {
+  readonly expiresAt: number;
+}
+
+/** The table the cards live in. One row per unanswered ask, keyed by the id
+ *  the owner's click names. */
+export function initDeviceConsentRequestsTable(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS device_consent_requests (
+    consent_id      TEXT PRIMARY KEY,
+    device_id       TEXT NOT NULL,
+    device_label    TEXT NOT NULL,
+    method          TEXT NOT NULL,
+    command         TEXT NOT NULL,
+    workspace_name  TEXT,
+    created_at      INTEGER NOT NULL,
+    expires_at      INTEGER NOT NULL
+  )`);
+}
+
+interface ConsentRow {
+  consent_id: string;
+  device_id: string;
+  device_label: string;
+  method: string;
+  command: string;
+  workspace_name: string | null;
+  created_at: number;
+  expires_at: number;
+}
+
+function toPending(r: ConsentRow): PendingConsentRow {
+  const pending: PendingConsentRow = {
+    consentId: r.consent_id,
+    deviceId: r.device_id,
+    deviceLabel: r.device_label,
+    method: r.method,
+    command: r.command,
+    createdAt: r.created_at,
+    expiresAt: r.expires_at,
+  };
+
+  if (r.workspace_name !== null) return { ...pending, workspaceName: r.workspace_name };
+
+  return pending;
+}
+
+/**
+ * The durable half of a pending prompt: rows in `device_consent_requests`,
+ * written when the card is raised and deleted when it settles — by answer or
+ * by expiry. Every read sweeps lapsed rows first, so a prompt whose activation
+ * died before its timer fired still reads expired, never as still waiting.
+ */
+export class DeviceConsentStore {
+  constructor(private readonly sql: SqlExecutor) {}
+  /** Every card still open, oldest first — raise order, so two asks stamped
+   *  inside one clock tick still list in the order they went up. */
+  live(now: number): PendingConsentRow[] {
+    void this.sql`DELETE FROM device_consent_requests WHERE expires_at <= ${now}`;
+
+    return this.sql<ConsentRow>`
+      SELECT consent_id, device_id, device_label, method, command,
+             workspace_name, created_at, expires_at
+      FROM device_consent_requests ORDER BY created_at ASC, rowid ASC`.map(toPending);
+  }
+
+  /** The lapse half of a settle: the row goes, whatever the clock says. The
+   *  only caller is the card's own timer, armed from this row's deadline, so
+   *  its firing IS the lapse — and a same-tick answer already won the row
+   *  through `take` first, leaving nothing here to delete. */
+  remove(consentId: string): void {
+    void this.sql`DELETE FROM device_consent_requests WHERE consent_id = ${consentId}`;
+  }
+
+  /** Write the card. Callers mint the id first, so the row exists under the
+   *  exact key the announce about to go out tells surfaces to answer. */
+  insert(row: PendingConsentRow): void {
+    void this.sql`INSERT INTO device_consent_requests
+      (consent_id, device_id, device_label, method, command, workspace_name, created_at, expires_at)
+      VALUES (${row.consentId}, ${row.deviceId}, ${row.deviceLabel}, ${row.method},
+        ${row.command}, ${row.workspaceName ?? null}, ${row.createdAt}, ${row.expiresAt})`;
+  }
+
+  /** Remove the card and hand back what it said — null when nothing by that
+   *  id is still waiting (already settled, expired, or never raised on this
+   *  object's storage). One row means one settle: a duplicate or late answer
+   *  takes nothing and reports nothing. */
+  take(consentId: string, now: number): PendingConsentRow | null {
+    const rows = this.sql<ConsentRow>`
+      DELETE FROM device_consent_requests
+      WHERE consent_id = ${consentId} AND expires_at > ${now}
+      RETURNING consent_id, device_id, device_label, method, command,
+                workspace_name, created_at, expires_at`;
+
+    return rows[0] ? toPending(rows[0]) : null;
+  }
+}
+
+/**
+ * The per-activation half of a waiting card: who is parked on it and when it
+ * lapses. Both are property of THIS instance — a resolver is a closure and a
+ * timer is a handle, and neither survives an eviction, so nothing here is the
+ * request itself. The row is.
+ */
+interface Inflight {
   /** Every caller waiting on this one prompt. An identical re-ask joins the
    *  list rather than raising a second card. */
   readonly awaiting: ((decision: DeviceConsentDecision) => void)[];
@@ -168,7 +281,11 @@ function sameRequest(pending: DeviceConsentRequest, request: DeviceConsentReques
  * it simply was not seen.
  */
 export class DeviceConsentRegistry {
-  private readonly waiting = new Map<string, Waiting>();
+  /** Who THIS activation has parked on each card, and the lapse timer armed
+   *  for it. Subscribers only: an eviction empties the map and loses nobody's
+   *  question, because the question is the store's row — a fresh instance
+   *  re-parks callers onto rows it never raised. */
+  private readonly inflight = new Map<string, Inflight>();
   private readonly timeoutMs: number;
   private readonly now: () => number;
 
@@ -179,65 +296,88 @@ export class DeviceConsentRegistry {
 
   /** Raise a prompt and wait for it to settle. An identical prompt already
    *  waiting is JOINED, not raised again: one card, one answer, and every
-   *  caller that asked settled by it. */
+   *  caller that asked settled by it — including the card a previous
+   *  activation left waiting, which reads as already up off its row. */
   request(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
     const { promise, resolve } = Promise.withResolvers<DeviceConsentDecision>();
-    const already = this.pendingLike(req);
+    const already = this.deps.store.live(this.now()).find((pending) => sameRequest(pending, req));
 
     if (already) {
-      already.awaiting.push(resolve);
+      this.parked(already).awaiting.push(resolve);
 
       return promise;
     }
 
     const consentId = this.deps.newId();
-    const view: PendingDeviceConsent = { ...req, consentId, createdAt: this.now() };
-    const awaiting = [resolve];
-
-    const timer = setTimeout(() => {
-      if (!this.waiting.delete(consentId)) return;
-      this.deps.announce({ kind: 'settled', consentId });
-
-      for (const settle of awaiting) settle('timeout');
-    }, this.timeoutMs);
-
-    this.waiting.set(consentId, {
-      view,
-      awaiting,
-      settle: (decision) => {
-        clearTimeout(timer);
-
-        for (const settle of awaiting) settle(decision);
-      },
-    });
-    // Announced only once the id can be answered: a surface that resolves
-    // synchronously on the notice was otherwise told the id is unknown.
+    const createdAt = this.now();
+    const view: PendingDeviceConsent = { ...req, consentId, createdAt };
+    // The row before the announce and the parking: the id a surface is told
+    // about must be answerable from the moment the notice lands. The notice
+    // itself stays the surface view — the deadline lives in the row, not the
+    // card.
+    const row: PendingConsentRow = { ...view, expiresAt: createdAt + this.timeoutMs };
+    this.deps.store.insert(row);
+    this.parked(row).awaiting.push(resolve);
     this.deps.announce({ kind: 'raised', consent: view });
 
     return promise;
   }
 
-  private pendingLike(req: DeviceConsentRequest): Waiting | undefined {
-    for (const pending of this.waiting.values()) {
-      if (sameRequest(pending.view, req)) return pending;
-    }
+  /** The parked-callers entry for one card, minting one for a row this
+   *  activation did not raise. The lapse timer arms off the ROW's deadline,
+   *  not a fresh window from now: a prompt restored after an eviction keeps
+   *  the expiry it was raised with rather than silently outliving it. */
+  private parked(pending: PendingConsentRow): Inflight {
+    const parked = this.inflight.get(pending.consentId);
 
-    return undefined;
+    if (parked) return parked;
+
+    const awaiting: Inflight['awaiting'] = [];
+
+    const timer = setTimeout(
+      () => this.expire(pending.consentId),
+      Math.max(0, pending.expiresAt - this.now()),
+    );
+
+    const entry: Inflight = {
+      awaiting,
+      settle: (decision) => {
+        clearTimeout(timer);
+
+        for (const resolve of awaiting) resolve(decision);
+      },
+    };
+
+    this.inflight.set(pending.consentId, entry);
+
+    return entry;
+  }
+
+  /** The card lapsed with no answer. Reachable only through a parked entry's
+   *  own timer, armed from the row's deadline — so the row goes with the
+   *  timer, and surfaces hear `settled` exactly as an answered card does. */
+  private expire(consentId: string): void {
+    const entry = this.inflight.get(consentId);
+    this.inflight.delete(consentId);
+    this.deps.store.remove(consentId);
+    this.deps.announce({ kind: 'settled', consentId });
+    entry?.settle('timeout');
   }
 
   /** The owner answered. False when the id is unknown — already settled, or
-   *  from a previous instance of this host. */
+   *  never raised on this object's storage. */
   resolve(consentId: string, decision: DeviceConsentAnswer): boolean {
-    const pending = this.waiting.get(consentId);
+    const pending = this.deps.store.take(consentId, this.now());
 
     if (!pending) return false;
-    this.waiting.delete(consentId);
     this.deps.announce({ kind: 'settled', consentId });
     // Anything unrecognised is the weakest grant, never a stronger one.
     const effective = decision === 'always' || decision === 'deny' ? decision : 'once';
-    pending.settle(effective);
+    const entry = this.inflight.get(consentId);
+    this.inflight.delete(consentId);
+    entry?.settle(effective);
 
-    if (effective === 'always') this.settleBoundByGrant(pending.view);
+    if (effective === 'always') this.settleBoundByGrant(pending);
 
     return true;
   }
@@ -259,22 +399,23 @@ export class DeviceConsentRegistry {
     // The provisioning card names no machine and binds nothing.
     if (!granted.deviceId) return;
 
-    // Iterated directly: deleting the CURRENT key mid-iteration is defined
-    // behaviour for a Map, and this loop deletes nothing else, so a snapshot
-    // copy would buy nothing.
-    for (const [consentId, pending] of this.waiting) {
-      if (pending.view.deviceId !== granted.deviceId) continue;
+    for (const pending of this.deps.store.live(this.now())) {
+      if (pending.deviceId !== granted.deviceId) continue;
 
-      if (pending.view.workspaceName !== granted.workspaceName) continue;
-      this.waiting.delete(consentId);
-      this.deps.announce({ kind: 'settled', consentId });
-      pending.settle('once');
+      if (pending.workspaceName !== granted.workspaceName) continue;
+
+      if (this.deps.store.take(pending.consentId, this.now()) === null) continue;
+      const entry = this.inflight.get(pending.consentId);
+      this.inflight.delete(pending.consentId);
+      this.deps.announce({ kind: 'settled', consentId: pending.consentId });
+      entry?.settle('once');
     }
   }
 
-  /** Everything still waiting — so a client that reloaded re-renders its cards. */
+  /** Everything still waiting — so a client that reloaded, or an activation
+   *  that never saw the raise, re-renders its cards. */
   list(): PendingDeviceConsent[] {
-    return [...this.waiting.values()].map((p) => p.view);
+    return this.deps.store.live(this.now()).map(({ expiresAt: _expiresAt, ...view }) => view);
   }
 
   /** The waiting prompts as the per-step dynamic context block names them, so

@@ -1018,6 +1018,71 @@ describe('asking for a machine when there is none', () => {
     harness.close();
   });
 
+  test('a card up across an activation still takes its answer', async () => {
+    // The prompt a deploy or eviction cannot take down: the pending ask is a
+    // row on the workspace object's storage, so the activation that answers
+    // it need not be the one that raised it. A fresh UserDO over the same
+    // storage is that next activation; the registry it hands the RPC is the
+    // real one, over the same per-workspace store.
+    const harness = createTestUserDO();
+    const workspace = await provisionTestWorkspace(harness, WORKSPACE, 'Workspace A');
+    harness.consentDecision = 'hold';
+
+    // Parked past the test's end: the caller's own promise dies with its
+    // activation and is not the thing under test. Raced against an already-
+    // resolved null so the test moves on, while the call stays subscribed —
+    // a late settlement still has its handler and can never surface as an
+    // unhandled rejection.
+    await Promise.race([
+      harness.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+        agentName: WORKSPACE,
+      }),
+      Promise.resolve(null),
+    ]);
+
+    for (let turn = 0; turn < 100 && harness.raisedConsentIds.length === 0; turn += 1) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+
+    expect(harness.raisedConsentIds).toEqual(['cons-1']);
+
+    const revived = createTestUserDO({ storage: harness.db });
+    revived.consentDecision = 'hold';
+    const pending = revived.pendingConsents(WORKSPACE);
+    expect(pending.map((card) => card.consentId)).toEqual(['cons-1']);
+    expect(revived.resolveConsent(WORKSPACE, 'cons-1', 'once')).toEqual({ ok: true });
+    expect(revived.pendingConsents(WORKSPACE)).toEqual([]);
+
+    // The identical ask now JOINS nothing: the row is settled, so the next
+    // call mints its own card rather than inheriting a settled one.
+    const retry = revived.userDO.deviceRpc({ workspaceToken: workspace }, 'exec', ['make build'], {
+      agentName: WORKSPACE,
+    });
+
+    // Settled from the start, as the sibling hold test does: the denial below
+    // rejects the call while this test is still yielding, and a rejection
+    // nobody has handled yet is noise the suite must not make.
+    const settled = Promise.allSettled([retry]);
+
+    for (let turn = 0; turn < 100 && revived.raisedConsentIds.length === 0; turn += 1) {
+      await new Promise<void>((resolve) => { setImmediate(resolve); });
+    }
+
+    expect(revived.raisedConsentIds).toEqual(['cons-1']);
+    expect(revived.pendingConsents(WORKSPACE).map((card) => card.consentId)).toEqual(['cons-1']);
+    expect(revived.resolveConsent(WORKSPACE, 'cons-1', 'deny')).toEqual({ ok: true });
+
+    const [outcome] = await settled;
+    expect(outcome?.status).toBe('rejected');
+
+    if (outcome?.status === 'rejected') expect(String(outcome.reason)).toContain(NO_DEVICE_CONNECTED);
+
+    await revived.joinFibers();
+    revived.close();
+    await harness.joinFibers();
+    harness.close();
+  });
+
   test('the round trip completes: request, approve, connect, grant, execute', async () => {
     // ONE hub throughout, because that is the shape of the real flow: the
     // workspace, the device registry and the socket are all the same user's.
