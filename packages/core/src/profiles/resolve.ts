@@ -73,7 +73,7 @@ const ProviderCatalogSnapshotSchema = v.looseObject({
  *  form, where the default has already filled it in. */
 export type ProviderCatalogSnapshot = v.InferInput<typeof ProviderCatalogSnapshotSchema>;
 
-export type TierSource = 'explicit' | 'role' | 'default';
+export type TierSource = 'explicit' | 'role' | 'default' | 'workspace';
 
 export interface ProfileAuthorityInputs {
   envelope: ProfileCatalogEnvelope;
@@ -147,6 +147,9 @@ export interface ResolveTurnProfileInput {
   provider: ProviderCatalogSnapshot;
   roleId: string;
   explicitTier?: string | undefined;
+  /** The workspace's stored model spec (normalized) or null. When non-null it
+   *  overrides the role's tier model and the tier source reports `workspace`. */
+  workspaceModel?: string | null | undefined;
   workMode: string;
   availableTools: readonly string[];
   activeSkills: readonly string[];
@@ -166,8 +169,9 @@ export interface ResolvedTurnProfile {
   readonly tier: {
     /** The tier whose assignment supplied the model — after any fallback. */
     readonly id: TierId;
-    /** Why: the caller asked (`explicit`), the role declares it (`role`), or
-     *  the asked-for tier had no row and aliased to `default`. */
+    /** Why: the caller asked (`explicit`), the role declares it (`role`), the
+     *  asked-for tier had no row and aliased to `default`, or the workspace's
+     *  stored model overrode the tier's (`workspace`). */
     readonly source: TierSource;
     readonly model: string;
     readonly reasoningEffort: ReasoningEffort;
@@ -332,6 +336,19 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
 
   requireAvailable(assignment.model, tierId);
 
+  // The workspace's pinned model overrides the role's tier model. The
+  // composer's picker writes a per-workspace spec and a turn that resolved
+  // without it ran every pinned workspace on the account default. Validated
+  // like any configured model: an override nothing lists is refused at the
+  // turn boundary, never quietly swapped.
+  let model = assignment.model;
+
+  if (input.workspaceModel !== undefined && input.workspaceModel !== null) {
+    requireAvailable(input.workspaceModel, tierId);
+    model = input.workspaceModel;
+    source = 'workspace';
+  }
+
   const availableTools = role.allowedTools === undefined
     ? uniqueTools(input.availableTools)
     : intersectTools(input.availableTools, role.allowedTools);
@@ -375,7 +392,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     tier: Object.freeze({
       id: tierId,
       source,
-      model: assignment.model,
+      model,
       reasoningEffort: assignment.reasoningEffort ?? DEFAULT_TURN_REASONING_EFFORT,
     }),
     workMode,

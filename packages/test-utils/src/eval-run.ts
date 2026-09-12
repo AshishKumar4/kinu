@@ -482,6 +482,18 @@ export interface EvalRunRecord {
   readonly gitDirty: boolean;
   readonly tier: EvalTier;
   readonly modelId: string;
+  /** The model the run's ledger observed serving its turns — the distinct
+   *  `modelId` across the episode `step_finish` rows, via
+   *  {@link modelObservedFromEvents}. Null when the ledger names none (the
+   *  provider reported no serving id) or names more than one (no single model
+   *  to claim). `assessAdmissibility` refuses a record whose observed model is
+   *  non-null and differs from `modelId`: the turns ran on something other
+   *  than the record claims.
+   *
+   *  Optional for exactly one reason: records written before it existed stay
+   *  readable. Every record written from now on sets it; absence reads as
+   *  pre-observed, never as agreement. */
+  readonly modelObserved?: string | null;
   readonly repeats: number;
   readonly seed: number;
   readonly arm: EvalArmState;
@@ -592,6 +604,83 @@ export function scoreTrajectory(
 }
 
 /**
+ * The model a run's ledger observed serving its turns, or null when the
+ * ledger does not identify one.
+ *
+ * Read off `step_finish` rows only: they are the turn loop's own steps, so
+ * their `modelId` — the provider's report of what served the request — is the
+ * model the turns ran on. `model_call` rows are deliberately excluded: judges,
+ * classifiers and other auxiliary lanes run on other models BY DESIGN, and
+ * folding them in would refuse every run with a judge in it.
+ *
+ * Exactly one distinct serving id answers it; zero (no provider reported one)
+ * or more than one (a mid-run model change, or two spellings of one route)
+ * answers null rather than a guess. A resumed run's prior-process episodes
+ * are gone with their scratch stores, so this covers the ledgers handed to
+ * it — which is what makes null "unobserved" rather than "agreed".
+ */
+export function modelObservedFromEvents(events: readonly RunEvent[]): string | null {
+  const seen = new Set<string>();
+  collectServingIds(events, seen);
+
+  return seen.size === 1 ? [...seen][0] ?? null : null;
+}
+
+/** The serving ids a batch of run events votes, for both readers below. */
+function collectServingIds(events: readonly RunEvent[], seen: Set<string>): void {
+  for (const event of events) {
+    if (event.type !== 'step_finish') continue;
+
+    if (event.modelId !== undefined && event.modelId.length > 0) seen.add(event.modelId);
+  }
+}
+
+/**
+ * The incremental form of {@link modelObservedFromEvents}, for suites that
+ * observe episodes one at a time — a live event forward, or per-episode
+ * ledgers read before a shared teardown deletes them. One accumulator per
+ * run; `observed` answers the same single-or-null rule over everything noted.
+ */
+export interface ObservedModelAccumulator {
+  note(events: readonly RunEvent[]): void;
+  readonly observed: string | null;
+}
+
+export function createObservedModelAccumulator(): ObservedModelAccumulator {
+  const seen = new Set<string>();
+
+  return {
+    note(events: readonly RunEvent[]): void {
+      collectServingIds(events, seen);
+    },
+    get observed(): string | null {
+      return seen.size === 1 ? [...seen][0] ?? null : null;
+    },
+  };
+}
+
+/** The claimed model beside the observed one, for the admissibility refusal. */
+export interface AdmissibilityModelClaim {
+  readonly modelId: string;
+  readonly modelObserved: string | null;
+}
+
+/**
+ * Whether an observed serving id disproves a claimed model.
+ *
+ * Spelling-tolerant by containment, the way the pin check is: normalisation
+ * legitimately respells a spec between the config that claimed it and the
+ * provider that served it, while the account default standing in for the
+ * run's model contains it in neither direction.
+ */
+export function modelClaimRefuted(modelId: string, modelObserved: string | null): boolean {
+  return modelObserved !== null
+    && modelObserved !== modelId
+    && !modelObserved.includes(modelId)
+    && !modelId.includes(modelObserved);
+}
+
+/**
  * Is this run evidence?
  *
  * Deliberately strict on the things that have already produced a
@@ -606,6 +695,7 @@ export function scoreTrajectory(
 export function assessAdmissibility(
   declaredTasks: readonly string[],
   observations: readonly EvalObservation[],
+  model?: AdmissibilityModelClaim,
 ): EvalAdmissibility {
   const scored = observations.filter((o) => o.outcome === 'scored');
   const inert = observations.filter((o) => o.outcome === 'inert').length;
@@ -656,6 +746,16 @@ export function assessAdmissibility(
       + 'mid-flight; this record is partial evidence, not a verdict');
   }
 
+  // The record's model claim must survive the ledger: a run that named one
+  // model and turned on another measured the other's behaviour under the
+  // first's name. Omitted (a direct two-argument call) means the caller never
+  // looked — old callers predate the claim, and only the record assembly
+  // passes it, so nothing that never observed can fail here.
+  if (model !== undefined && modelClaimRefuted(model.modelId, model.modelObserved)) {
+    failures.push(`run claimed model ${model.modelId} but the ledger observed `
+      + `${model.modelObserved} serving its turns — the turns ran on a model the record does not name`);
+  }
+
   return {
     admissible: failures.length === 0,
     scored: scored.length, inert, incomplete, gradedTurns, toolCalls, outcomesScored,
@@ -692,6 +792,11 @@ export interface RunRecordInputs {
    *  than re-derived from the tier. A record's model id has to be a fact about
    *  the run, not a second computation that can disagree with it. */
   readonly modelId: string;
+  /** The model the run's LEDGER observed serving its turns, via
+   *  {@link modelObservedFromEvents} over the episodes' `step_finish` rows.
+   *  Null when the suite's ledger names none — the record then carries no
+   *  ledger check, stated rather than hidden. */
+  readonly modelObserved: string | null;
   readonly repeats: number;
   readonly seed: number;
   readonly arm: EvalArmState;
@@ -712,13 +817,16 @@ function assembleRunRecord(inputs: RunRecordInputs): EvalRunRecord {
     family: inputs.family,
     tier: inputs.tier,
     modelId: inputs.modelId,
+    modelObserved: inputs.modelObserved,
     repeats: inputs.repeats,
     seed: inputs.seed,
     arm: inputs.arm,
     declaredTasks: inputs.declaredTasks,
     executedTasks: [...new Set(inputs.observations.map((o) => o.taskId))],
     observations: inputs.observations,
-    admissibility: assessAdmissibility(inputs.declaredTasks, inputs.observations),
+    admissibility: assessAdmissibility(inputs.declaredTasks, inputs.observations, {
+      modelId: inputs.modelId, modelObserved: inputs.modelObserved,
+    }),
     // FIELD RENAME ONLY: LiveModelSpend carries `usage: Usage` instead of flat
     // inputTokens/outputTokens. The `?? 0` and the tokensIn/tokensOut spelling
     // are EvalsInfra's agreed follow-up (spend becomes
@@ -841,6 +949,7 @@ export function formatRunRecord(record: EvalRunRecord): string {
   const lines = [
     `run ${record.runId} — ${record.family ?? '(pre-family record)'}, `
       + `${record.tier} (${record.modelId})`,
+    `  ledger observed: ${record.modelObserved ?? 'no serving model — the record carries no ledger check'}`,
     `  commit ${record.gitSha.slice(0, 9)}${record.gitDirty ? ' [DIRTY — unreproducible]' : ''}`,
     `  arm: evolution ${record.arm.evolution ? 'ON' : 'OFF'}, settle ${record.arm.settle}, `
       + `${String(record.arm.tools.length)} tools`,

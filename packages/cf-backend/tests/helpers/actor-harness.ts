@@ -28,7 +28,7 @@ import {
   BUILTIN_PROFILE_CATALOG, DEFAULT_WORKERS_AI_MODEL_SPEC, profileCatalogDigest,
   type AgentOrchestrator, type AgentRuntime, type CompletedTurn, type DynamicContext,
   type IngressDescriptor, type ProfileCatalog, type ProfileCatalogEnvelope, type ProviderCatalogSnapshot,
-  type RoleCatalog, type RunEndReason, type SqlValue, type SubordinateRosterStore,
+  type RoleCatalog, type ResolvedTurnProfile, type RunEndReason, type SqlValue, type SubordinateRosterStore,
   type TierAssignments,
   projectJsonValue,
   type BackgroundJobStore, type JsonValue,
@@ -100,6 +100,10 @@ export class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeOrch(): AgentOrchestrator { return this.orch; }
   /** The assembled runtime, for the conformance observer's `producer` plane. */
   observeRuntime(): AgentRuntime { return this.rt; }
+  /** The profile the last `beforeTurn` resolved, for suites asserting what the
+   *  turn runs under. The accessor is `protected` because only the actor's own
+   *  lanes read it — a suite reaches it through this observer. */
+  observeResolvedTurnProfile(): ResolvedTurnProfile | null { return this.resolvedTurnProfile(); }
   /** The turn-start device-status refresh, AWAITED — the same entry point
    *  `beforeTurn` calls, so a connected device becomes visible to the mount
    *  table for a suite that has no turn to run. Production detaches the one at

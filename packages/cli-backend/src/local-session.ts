@@ -2848,6 +2848,9 @@ export class LocalAgentSession implements BackendHost {
       // "the workspace default"; the role's tier is what an unpinned hire asked
       // for.
       explicitTier: tierFromMetadata(item.metadata) ?? this.config.getAssignedTier() ?? undefined,
+      // The workspace's pinned model overrides the role's tier model inside
+      // the resolver. Without it a setModel pin is accepted and never run on.
+      workspaceModel: this.config.getModel(),
     });
 
     this.actorSession.bindProfile(lease, profile, profileInputs);

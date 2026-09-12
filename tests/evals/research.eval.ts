@@ -66,7 +66,8 @@ import { cliWorkspaceDbPath, createCliWorkspace, execCliTask } from './cli-drive
 import { readLedgerTotals, readRunEvents } from './harness';
 import {
   EVAL_MODELS, FULL_TOOL_SURFACE,
-  liveModelTarget, outputCapRow, publishRunRecord, recordLiveModelEpisode, reportLiveModelSpend,
+  liveModelTarget, modelObservedFromEvents, outputCapRow, publishRunRecord, recordLiveModelEpisode,
+  reportLiveModelSpend,
   stepBoundEvidence, subgoalOutcome, outcomeRow, UNCONFIGURED_LLM,
   type EvalArmState, type EvalObservation, type EvalScoreRow, type EvalTier,
 } from '@kinu.run/test-utils';
@@ -219,6 +220,8 @@ afterAll(() => {
   publishRunRecord({
     family: 'research', tier: TIER, modelId: LLM.model, repeats: 1, seed: 1,
     arm: ARM, declaredTasks: [RESEARCH_TASK_ID], observations, spend,
+    // The child's own store, still open: the serving models its steps reported.
+    modelObserved: modelObservedFromEvents(opened.flatMap((db) => readRunEvents(db))),
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
 
