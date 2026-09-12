@@ -1,50 +1,49 @@
 /**
- * Supervise altitude — the agent over time (automation + research operations),
- * distinct from the per-run RUN altitude. One scrollable canvas of blocks, each
- * bound to wired RPCs. Timers and webhooks are active; speculative trigger
- * kinds stay represented in durable state until their operator flows are added.
+ * Supervise altitude — the agent over time (automation + run history), distinct
+ * from the per-run RUN altitude. One column of blocks, each bound to wired
+ * RPCs. Timers and webhooks are active; speculative trigger kinds stay
+ * represented in durable state until their operator flows are added.
  *
- * Blocks: Curriculum (Voyager self-proposed tasks — fully actionable),
- * Run history (cross-run list), Automations (the ONE trigger surface:
- * list + create webhooks + revoke), Fork lineage.
+ * Blocks, in reading order: Automations (the ONE trigger surface: list +
+ * create webhooks + revoke, plus the background jobs those and the operator
+ * leave running), Run history, and Evolution — which renders only when the
+ * changelog records a self-change: a scaffold edit, a kept lesson, a promoted
+ * proposal. A window that closed with nothing to show renders nothing.
  */
 import { useState, useCallback, type ReactNode } from "react";
 import { useParams } from "react-router-dom";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { FilledButton } from "@/components/ui/FilledButton";
 import {
-  GraduationCapIcon, ClockIcon, LightningIcon, PlayIcon, CheckIcon, XIcon,
+  ClockIcon, LightningIcon, CheckIcon,
   PlusIcon, TrashIcon, WarningIcon, PlugIcon,
 } from "@phosphor-icons/react";
-import { EmptyState } from "@/components/surfaces/shared";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { ScrollBoundary } from "@/components/ui/ScrollBoundary";
-import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
-import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
+import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
+import { EvolutionEntrySchema, EvolutionSection, evolutionChanges } from "@/components/surfaces/supervise-evolution";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@/lib/protocol";
-import { fmtTokens, fmtPct } from "@/lib/format";
+import { fmtPct, fmtTokens } from "@/lib/format";
 import { addUsage, cacheHitRate, pageSchema, UsageSchema, usageTotal, type SeekCursor, type Usage } from "@kinu.run/core";
 import * as v from "valibot";
 import { renderThrownChain } from '@kinu.run/core/obs';
-
-const ProposedTaskSchema = v.object({
-  id: v.string(), task: v.string(), rationale: v.string(), predictedSuccess: v.number(),
-  targetsSkills: v.array(v.string()), proposedAt: v.number(),
-  status: v.picklist(["pending", "accepted", "rejected", "completed"]),
-});
-
-type ProposedTask = v.InferOutput<typeof ProposedTaskSchema>;
 
 const RunSummarySchema = v.object({
   runId: v.string(), startedAt: v.number(), causedBy: v.nullable(v.string()),
   userMessage: v.nullable(v.string()), status: v.nullable(v.string()),
   usage: UsageSchema, turnsWithoutUsage: v.number(), eventCount: v.number(),
+});
+
+const JobRowSchema = v.object({
+  id: v.string(), kind: v.string(), label: v.nullable(v.string()),
+  status: v.string(), createdAt: v.number(), settledAt: v.nullable(v.number()),
 });
 
 const TriggerRowSchema = v.object({
@@ -69,32 +68,28 @@ const AuthModeSchema = v.picklist(["hmac", "bearer", "mtls"]);
 
 export interface SupervisePageProps {
   rpc: Rpc;
-  onRunTask: (task: string) => void;
 }
 
 /**
- * No background-jobs digest on this page: jobs are one glance in the RUN
- * altitude's Work tab, running beside the plan and settled in the journal. A
- * digest here would be a third rendering of one list — six rows and a "Manage
- * in Jobs →" cross-link, handy data propping up a tab that is not hard to find.
+ * Automations first — what wakes this agent and what it has running — with the
+ * run history directly under it. Evolution follows, and only when it exists:
+ * the card mounts nothing until the changelog says there is a change to show.
  */
-export function SupervisePage({ rpc, onRunTask }: SupervisePageProps) {
+export function SupervisePage({ rpc }: SupervisePageProps) {
   return (
-    // The mock's 2x2: Curriculum · Run history & budget / Evolution · Automations.
     <div className="h-full overflow-y-auto px-6 py-6 lg:px-8">
-      <div className="mx-auto grid max-w-[1380px] grid-cols-1 gap-[18px] md:grid-cols-2">
-        <SuperviseCard><CurriculumBlock rpc={rpc} onRunTask={onRunTask} /></SuperviseCard>
-        <SuperviseCard><RunHistoryBlock rpc={rpc} /></SuperviseCard>
-        <SuperviseCard><EvolutionCard rpc={rpc} /></SuperviseCard>
+      <div className="mx-auto flex max-w-[1380px] flex-col gap-[18px]">
         <SuperviseCard><AutomationsBlock rpc={rpc} /></SuperviseCard>
+        <SuperviseCard><RunHistoryBlock rpc={rpc} /></SuperviseCard>
+        <EvolutionCard rpc={rpc} />
       </div>
     </div>
   );
 }
 
-interface GepaRunRow { runId: string; target: string; startedAt: number; status: string; winnerId: string | null; iterations: number; metricCalls: number }
 
-/** One cell of the supervise grid: the mock's outer card. */
+
+/** One cell of the supervise layout: the outer card. */
 function SuperviseCard({ children }: { children: ReactNode }) {
   return (
     <div className="min-w-0 overflow-hidden rounded-[14px] border p-border p-surface p-5">
@@ -103,137 +98,36 @@ function SuperviseCard({ children }: { children: ReactNode }) {
   );
 }
 
-/** Evolution — the self-improvement loop at a glance, from real reads only:
- *  the GEPA passes that propose scaffold candidates, newest first. */
+/* ── Evolution — only when the changelog records a change ──────── */
+
+/** Reads the changelog and mounts the section only when it carries a change.
+ *  A failed read still gets the card — a broken digest must never pose as
+ *  "no evolution". */
 function EvolutionCard({ rpc }: { rpc: Rpc }) {
-  const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [5]), [rpc]);
-  const { resource, reload } = useAsyncResource(load);
-  const runs = lastValue(resource);
-
-  return (
-    <section>
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <h2 className="text-sm font-semibold p-text">Evolution</h2>
-        {runs && <Badge variant="secondary">{runs.length}</Badge>}
-        <span className="ml-auto p-meta p-text-4">GEPA passes</span>
-      </div>
-      {runs === null ? (
-        resource.status === "error"
-          ? <LoadFailure what="evolution passes" message={resource.message} onRetry={reload} />
-          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
-      ) : runs.length === 0 ? (
-        <p className="text-xs leading-relaxed p-text-3">
-          No optimisation passes yet. GEPA proposals and measured verdicts appear here.
-        </p>
-      ) : (
-        <div className="p-group">
-          {runs.map((run) => (
-            <div key={run.runId} className="flex items-center gap-2.5 px-4 py-2.5">
-              <span className="shrink-0 p-annotation p-accent">{run.runId}</span>
-              <span className="min-w-0 flex-1 truncate p-row-text p-text-2">{run.target}</span>
-              <span className={`shrink-0 p-t-status ${run.status === "complete" ? "p-success" : "p-text-4"}`}>{run.status}</span>
-              <span className="shrink-0 p-annotation p-text-4">{run.iterations} it</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
+  const load = useCallback(
+    async () => v.parse(
+      v.object({ entries: v.array(EvolutionEntrySchema) }),
+      await rpc("getEvolutionChangelog", [{ limit: 8 }]),
+    ).entries,
+    [rpc],
   );
-}
-
-/* ── Curriculum (Voyager self-proposed tasks) ──────────────────── */
-
-function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) => void }) {
-  const [busy, setBusy] = useState(false);
-  const [actionErr, setActionErr] = useState<string | null>(null);
-
-  const load = useCallback(async () => {
-    const result = await rpc("listCurriculumTasks", []);
-
-    return v.parse(v.object({ tasks: v.array(ProposedTaskSchema) }), result).tasks;
-  }, [rpc]);
 
   const { resource, reload } = useAsyncResource(load);
-  const tasks = lastValue(resource);
+  const entries = lastValue(resource);
 
-  const propose = useCallback(async () => {
-    setBusy(true);
-    setActionErr(null);
+  if (resource.status === "error") {
+    return (
+      <SuperviseCard>
+        <LoadFailure what="the evolution digest" message={resource.message} onRetry={reload} />
+      </SuperviseCard>
+    );
+  }
 
-    try { await rpc("proposeCurriculumTasks", [5]); reload(); }
-    catch (e) { setActionErr(`Could not propose tasks: ${describeError(e)}`); }
-    finally { setBusy(false); }
-  }, [rpc, reload]);
+  const changes = entries === null ? [] : evolutionChanges(entries);
 
-  /** Resolves true only when the status write landed — "Run" starts a chat turn
-   *  on the back of this, and must not do so for a task that stayed pending.
-   *  The failure is reported here, so a caller that has nothing to add is not
-   *  forced to silence a rejection. */
-  const setStatus = useCallback(async (id: string, status: ProposedTask["status"]): Promise<boolean> => {
-    setActionErr(null);
+  if (changes.length === 0) return null;
 
-    try {
-      await rpc("setCurriculumTaskStatus", [id, status]);
-      reload();
-
-      return true;
-    } catch (e) {
-      setActionErr(`Could not mark the task ${status}: ${describeError(e)}`);
-
-      return false;
-    }
-  }, [rpc, reload]);
-
-  return (
-    <section>
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <GraduationCapIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Curriculum</h2>
-        {tasks && <Badge variant="secondary">{tasks.length}</Badge>}
-        <Button size="sm" variant="secondary" className="ml-auto" disabled={busy} onClick={propose}
-          icon={busy ? <Loader size="sm" /> : undefined}>Propose tasks</Button>
-      </div>
-      <p className="text-xs p-text-3 mb-3">Tasks your agent proposes. A 50% prediction marks the target difficulty.</p>
-      {actionErr && <div className="p-meta p-danger mb-2">{actionErr}</div>}
-      {tasks === null ? (
-        resource.status === "error"
-          ? <LoadFailure what="the curriculum" message={resource.message} onRetry={reload} />
-          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
-        )
-        : tasks.length === 0 ? <EmptyState icon={<GraduationCapIcon size={28} />} title="No proposed tasks" hint="Choose “Propose tasks” to get a new set." />
-        : (
-          <div className="space-y-2">
-            {tasks.map((t) => (
-              <div key={t.id} className="p-card p-3">
-                <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-sm p-text mb-0.5">{t.task}</div>
-                    <div className="p-meta p-text-3 line-clamp-2">{t.rationale}</div>
-                    {t.targetsSkills.length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-1.5">
-                        {t.targetsSkills.map((s) => <span key={s} className="p-meta px-1.5 py-0.5 rounded-full p-fill p-text-3">{s}</span>)}
-                      </div>
-                    )}
-                  </div>
-                  <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className="p-meta p-text-3">p≈{(t.predictedSuccess * 100).toFixed(0)}%</span>
-                    {t.status !== "pending" && <Badge variant="secondary">{t.status}</Badge>}
-                  </div>
-                </div>
-                {t.status === "pending" && (
-                  <div className="flex items-center gap-2 mt-2">
-                    <FilledButton
-                      onClick={() => void setStatus(t.id, "accepted").then((landed) => { if (landed) onRunTask(t.task); })}><PlayIcon size={12} />Run</FilledButton>
-                    <Button size="sm" variant="ghost" icon={<CheckIcon size={12} />} onClick={() => void setStatus(t.id, "accepted")}>Accept</Button>
-                    <Button size="sm" variant="ghost" icon={<XIcon size={12} />} onClick={() => void setStatus(t.id, "rejected")}>Reject</Button>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-    </section>
-  );
+  return <SuperviseCard><EvolutionSection entries={changes} /></SuperviseCard>;
 }
 
 /* ── Run history ───────────────────────────────────────────────── */
@@ -244,16 +138,8 @@ const RUN_HISTORY_PAGE = 30;
 
 const RunPageSchema = pageSchema(RunSummarySchema);
 
-/**
- * The cross-run history, and the budget folded over it.
- *
- * The totals here are the reason this read had to become cursored rather than
- * merely scroll further. They are summed over the runs ON SCREEN, and under a
- * bare `LIMIT 30` that made a thirty-run window read as the workspace's whole
- * spend. So the figures now say which runs they cover: bare when the walk has
- * reached the end, "so far" while there is more behind them. A number the owner
- * decides on must state its own denominator.
- */
+/** The cross-run history, newest first. Totals that a spend decision needs
+ *  live on the Activity surface; this header names the list and its size. */
 function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const load = useCallback(
     async () => v.parse(RunPageSchema, await rpc("getRunSummaries", [{ limit: RUN_HISTORY_PAGE }])),
@@ -288,30 +174,19 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
     grows: "down", content: runs, fetched: tail.fetched, onReachEdge: tail.loadMore,
   });
 
+  // Cache warmth over the loaded rows — the one qualifier the header keeps:
+  // it answers "did the agent read or remember", not what anything cost.
   const totalUsage = (runs ?? []).reduce<Usage>((acc, r) => addUsage(acc, r.usage), {});
-  const totalTokens = usageTotal(totalUsage);
-  // One definition of a cache hit, shared with the Activity surface. Null
-  // unless input AND cache-read were both reported — an absent rate is not 0%.
   const hitRate = cacheHitRate(totalUsage);
-  // The denominator for the totals above: runs the provider went quiet on.
-  const silentRuns = (runs ?? []).filter((r) => r.turnsWithoutUsage > 0).length;
   const covers = exhausted ? "" : " so far";
 
   return (
     <section className="min-w-0">
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Run history and budget</h2>
+        <h2 className="text-sm font-semibold p-text">Run history</h2>
         {runs && <Badge variant="secondary">{exhausted ? `${runs.length}` : `${runs.length}+`}</Badge>}
-        <span className="ml-auto flex flex-wrap items-center gap-2">
-          {hitRate !== null && <span className="p-meta p-success" title={`Cache-read input divided by total input across ${runs?.length ?? 0} loaded runs`}>{fmtPct(hitRate)} cached{covers}</span>}
-          {totalTokens !== undefined && <span className="p-meta p-text-3" title={exhausted ? "input and output tokens across all recorded runs" : "input and output tokens across loaded runs; scroll for more"}>{fmtTokens(totalTokens)} tokens{covers}</span>}
-          {silentRuns > 0 && (
-            <span className="p-meta p-text-3" title="The provider reported no usage, so these runs are not in the totals.">
-              {silentRuns} unreported
-            </span>
-          )}
-        </span>
+        {hitRate !== null && <span className="ml-auto p-meta p-success" title={`Cache-read input divided by total input across ${runs?.length ?? 0} loaded runs`}>{fmtPct(hitRate)} cached{covers}</span>}
       </div>
       {runs === null ? (
         resource.status === "error"
@@ -345,7 +220,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   );
 }
 
-/* ── Automations — THE trigger surface: list + create + revoke ─── */
+/* ── Automations — triggers that wake the agent + what it has running ── */
 
 function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const { agentId } = useParams();
@@ -361,6 +236,14 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
 
   const { resource, reload } = useAsyncResource(load);
   const triggers = lastValue(resource);
+
+  const loadJobs = useCallback(
+    async () => v.parse(v.array(JobRowSchema), await rpc("listBackgroundJobs", [10])),
+    [rpc],
+  );
+
+  const jobsResource = useAsyncResource(loadJobs).resource;
+  const jobs = lastValue(jobsResource);
 
   const revoke = useCallback(async (triggerId: string) => {
     if (!agentId) return;
@@ -390,7 +273,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">Webhooks and timers let external systems wake this agent.</p>
+      <p className="text-xs p-text-3 mb-3">Webhooks, timers and background jobs — what wakes this agent and what it has running.</p>
       {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null ? (
@@ -406,6 +289,23 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
             ))}
           </div>
         )}
+      {jobs !== null && jobs.length > 0 && (
+        <div className="mt-3">
+          <div className="p-eyebrow p-text-4 mb-1.5">Background jobs</div>
+          <div className="rounded-md border p-border overflow-hidden text-xs">
+            {jobs.map((job) => (
+              <div key={job.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
+                <span className={`size-1.5 rounded-full shrink-0 ${job.status === "running" ? "p-dot-warning" : job.status === "completed" ? "p-dot-success" : job.status === "failed" ? "p-dot-danger" : "p-dot-neutral"}`} />
+                <span className="font-medium p-text-2 truncate" title={job.label ?? job.id}>{job.label ?? job.id}</span>
+                <span className="font-mono p-text-3 shrink-0">{job.kind}</span>
+                <span className="flex-1" />
+                <span className="p-text-3 shrink-0">{job.status}</span>
+                <span className="p-text-3 shrink-0 tabular-nums">{new Date(job.settledAt ?? job.createdAt).toLocaleDateString()}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {showCreate && agentId && (
         <CreateWebhookModal
           agentName={agentId}
