@@ -33,7 +33,7 @@ const kinds = (parts: readonly Part[]) =>
   groupMessageParts(parts).map((b) => (b.kind === 'tool-run' ? `run(${b.parts.length})` : b.part.type));
 
 describe('tool effects follow the operation', () => {
-  const cases: Array<{ name: string; input: JsonObject; effect: 'read' | 'mutate' }> = [
+  const cases: Array<{ name: string; input: JsonObject; effect: 'read' | 'mutate' | 'unknown' }> = [
     { name: 'file', input: { action: 'write' }, effect: 'mutate' },
     { name: 'file', input: { action: 'edit' }, effect: 'mutate' },
     { name: 'file', input: { action: 'read' }, effect: 'read' },
@@ -47,20 +47,21 @@ describe('tool effects follow the operation', () => {
     { name: 'web', input: { action: 'fetch' }, effect: 'mutate' },
     { name: 'web', input: { action: 'search' }, effect: 'read' },
     { name: 'agents', input: { action: 'hire' }, effect: 'mutate' },
-    { name: 'agents', input: { action: 'list' }, effect: 'mutate' },
-    { name: 'run', input: { command: 'touch notes.txt' }, effect: 'mutate' },
-    { name: 'run', input: { command: 'bun test' }, effect: 'mutate' },
-    { name: 'run', input: { command: 'curl https://example.com' }, effect: 'mutate' },
-    { name: 'run', input: { command: 'ls -la' }, effect: 'read' },
-    { name: 'run', input: { command: 'LC_ALL=C /usr/bin/rg needle src' }, effect: 'read' },
-    { name: 'run', input: { command: 'git status --short' }, effect: 'read' },
-    { name: 'run', input: { command: 'git commit -m fix' }, effect: 'mutate' },
-    { name: 'run', input: { command: 'cat source > copy' }, effect: 'mutate' },
-    { name: 'run', input: { command: 'ls; touch changed' }, effect: 'mutate' },
-    { name: 'run', input: { command: 'rg --pre ./rewrite needle' }, effect: 'mutate' },
-    { name: 'run', input: { command: 'git diff --output=changes.patch' }, effect: 'mutate' },
-    { name: 'execute_tools', input: { code: 'await workspace.writeFile("a", "b")' }, effect: 'mutate' },
-    { name: 'execute_tools', input: { code: 'return await workspace.readFile("a")' }, effect: 'mutate' },
+    { name: 'agents', input: { action: 'list' }, effect: 'read' },
+    { name: 'agents', input: { action: 'status' }, effect: 'read' },
+    { name: 'run', input: { command: 'touch notes.txt' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'bun test' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'curl https://example.com' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'ls -la' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'LC_ALL=C /usr/bin/rg needle src' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'git status --short' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'git commit -m fix' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'cat source > copy' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'ls; touch changed' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'rg --pre ./rewrite needle' }, effect: 'unknown' },
+    { name: 'run', input: { command: 'git diff --output=changes.patch' }, effect: 'unknown' },
+    { name: 'execute_tools', input: { code: 'await workspace.writeFile("a", "b")' }, effect: 'unknown' },
+    { name: 'execute_tools', input: { code: 'return await workspace.readFile("a")' }, effect: 'unknown' },
   ];
 
   test.each(cases)('$name $input is $effect', ({ name, input, effect }) => {
@@ -68,20 +69,22 @@ describe('tool effects follow the operation', () => {
     expect(partEffect(tool('call', name, 'output-available', input))).toBe(effect);
   });
 
-  test.each(['read', 'mutate'])('execute_tools uses its reported %s effect', (effect) => {
-    const part: ToolUIPart = {
-      type: 'tool-execute_tools', toolCallId: 'program', state: 'output-available',
-      input: { code: 'return await workspace.readFile("a")' }, output: { result: { effect } },
-    };
+  test.each(['read', 'mutate'])('arbitrary program output cannot establish a %s effect', (effect) => {
+    for (const output of [{ effect }, { result: { effect } }]) {
+      const part: ToolUIPart = {
+        type: 'tool-execute_tools', toolCallId: 'program', state: 'output-available',
+        input: { code: 'await workspace.writeFile("a", "b"); return { effect: "read" }' }, output,
+      };
 
-    expect(partEffect(part)).toBe(effect);
+      expect(partEffect(part)).toBe('unknown');
+    }
   });
 
-  test('a top-level program effect is honored; source hints and invalid reports are not', () => {
-    expect(toolCallEffect('execute_tools', {}, { effect: 'read' })).toBe('read');
-    expect(toolCallEffect('execute_tools', {}, { effect: 'mutate' })).toBe('mutate');
-    expect(toolCallEffect('execute_tools', { effect: 'read' }, { effect: 'unknown' })).toBe('mutate');
-    expect(toolCallEffect('run', undefined)).toBe('mutate');
+  test('unclassified contracts and source hints stay unknown', () => {
+    expect(toolCallEffect('execute_tools', { effect: 'read' })).toBe('unknown');
+    expect(toolCallEffect('run', undefined)).toBe('unknown');
+    expect(toolCallEffect('crafted_unknown', { action: 'read' })).toBe('unknown');
+    expect(toolCallEffect('file', 'read a')).toBe('unknown');
     expect(toolCallEffect('web_search', { query: 'docs' })).toBe('read');
   });
 });
@@ -93,7 +96,7 @@ describe('grouping a turn into blocks', () => {
       tool('1', 'file', 'output-available'),
       tool('2', 'file', 'output-available'),
       tool('3', 'file', 'output-available'),
-      tool('4', 'agents', 'output-available'),
+      tool('4', 'agents', 'output-available', { action: 'hire' }),
       text('done'),
     ])).toEqual(['text', 'run(3)', 'tool-agents', 'text']);
   });

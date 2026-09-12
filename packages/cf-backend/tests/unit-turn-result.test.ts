@@ -148,7 +148,7 @@ describe('MessageView tool prominence', () => {
   const operations: Array<{ name: string; mutation: JsonObject; read: JsonObject }> = [
     { name: 'file', mutation: { action: 'write' }, read: { action: 'read' } },
     { name: 'memory', mutation: { action: 'save' }, read: { action: 'search' } },
-    { name: 'run', mutation: { command: 'touch changed' }, read: { command: 'cat notes.txt' } },
+    { name: 'agents', mutation: { action: 'hire' }, read: { action: 'list' } },
   ];
 
   test.each(operations)('$name mutations are cards and reads are compact', ({ name, mutation, read }) => {
@@ -161,17 +161,28 @@ describe('MessageView tool prominence', () => {
     expect(inspected).toContain('grid-cols-[20px_minmax(0,1fr)_auto_auto]');
   });
 
-  test('reported codemode effects drive the same row prominence as native calls', () => {
+  test('arbitrary codemode result fields remain unknown, rendered quietly', () => {
     for (const effect of ['read', 'mutate']) {
       const html = render([
         tool('program', 'execute_tools', { code: 'return await inspect()' }, 'output-available', { result: { effect } }),
       ]);
 
-      expect(html).toContain(`data-tool-effect="${effect}"`);
-      expect(html).toContain(effect === 'mutate'
-        ? 'grid-cols-[34px_minmax(0,1fr)_auto_auto]'
-        : 'grid-cols-[20px_minmax(0,1fr)_auto_auto]');
+      expect(html).toContain('data-tool-effect="unknown"');
+      expect(html).toContain('grid-cols-[20px_minmax(0,1fr)_auto_auto]');
     }
+  });
+
+  test('a shell program is not labelled as a measured read or mutation', () => {
+    const html = render([
+      tool('read', 'run', { command: 'cat notes.txt' }),
+      tool('write', 'run', { command: 'touch changed' }),
+    ]);
+
+    expect(html).toContain('data-tool-count="2"');
+    expect(html).toContain('data-tool-effect="unknown"');
+    expect(html).not.toContain('data-tool-effect="read"');
+    expect(html).not.toContain('data-tool-effect="mutate"');
+    expect(html).not.toContain('grid-cols-[34px_minmax(0,1fr)_auto_auto]');
   });
 
   test('an in-flight read keeps its own prominent running row', () => {

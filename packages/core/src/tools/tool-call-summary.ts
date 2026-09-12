@@ -35,12 +35,13 @@ function nested(input: JsonObject, key: string): JsonObject {
   return v.is(JsonObjectSchema, value) ? value : {};
 }
 
-export type ToolCallEffect = 'read' | 'mutate';
+export type ToolCallEffect = 'read' | 'mutate' | 'unknown';
 
 const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['file', new Set(['write', 'edit', 'append', 'delete', 'move', 'copy'])],
   ['tasks', new Set(['add', 'update'])],
   ['memory', new Set(['save', 'set', 'delete', 'remember', 'forget'])],
+  ['agents', new Set(['swarm', 'fork', 'hire', 'msg', 'ask', 'send', 'reply', 'dismiss'])],
   ['web', new Set(['fetch'])],
   ['release', new Set([
     'create', 'bind_source', 'transition', 'record_check', 'run_checks',
@@ -55,46 +56,26 @@ const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['peers', new Set(['send', 'reply', 'spawn_workspace'])],
 ]);
 
-function commandEffect(command: string): ToolCallEffect {
-  // A read binary does not make a compound shell program read-only. Output
-  // redirection, substitution and subprocess options can all change state.
-  if (/[;&|<>$`\n\r]/.test(command)) return 'mutate';
-  const words = argv(command);
-
-  if (words.some((word) => /^--(?:pre|output|ext-diff|textconv)(?:=|$)/.test(word))) return 'mutate';
-
-  if (/^(?:cat|head|tail|ls|pwd|wc|stat|rg|grep)$/.test(words[0] ?? '')) return 'read';
-
-  if (words[0] === 'git' && /^(?:status|diff|log|show|ls-files|rev-parse|rev-list)$/.test(words[1] ?? '')) return 'read';
-
-  return 'mutate';
-}
+const READING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+  ['file', new Set(['read', 'list', 'search'])],
+  ['tasks', new Set(['list'])],
+  ['memory', new Set(['search', 'get', 'list', 'recall', 'conversations'])],
+  ['agents', new Set(['list', 'status'])],
+  ['web', new Set(['search'])],
+  ['fact', new Set(['get', 'list'])],
+  ['release', new Set(['list', 'status', 'preview'])],
+  ['product_change', new Set(['list', 'status', 'preview'])],
+]);
 
 /**
- * The transcript's prominence policy, not an execution permission. Programs
- * stay consequential unless a shell command is recognizably a read or the
- * codemode result reports one; arbitrary JS is never guessed from its source.
+ * Declared native operations can classify a call's consequence. Shell and
+ * codemode programs have no authenticated per-call effect receipt on this
+ * interface; their source and arbitrary output cannot establish one.
  */
-export function toolCallEffect<Input, Output = undefined>(toolName: string, input: Input, output?: Output): ToolCallEffect {
-  if (toolName === 'agents' || toolName === 'web_fetch') return 'mutate';
-
-  if (toolName === 'execute_tools') {
-    const reported = v.safeParse(JsonObjectSchema, output);
-
-    if (reported.success) {
-      const effect = str(reported.output, 'effect') || str(nested(reported.output, 'result'), 'effect');
-
-      if (effect === 'read') return 'read';
-    }
-
-    return 'mutate';
-  }
-
+export function toolCallEffect<Input>(toolName: string, input: Input): ToolCallEffect {
   const parsed = v.safeParse(JsonObjectSchema, input);
 
-  if (!parsed.success) return toolName === 'run' ? 'mutate' : 'read';
-
-  if (toolName === 'run') return commandEffect(str(parsed.output, 'command'));
+  if (!parsed.success) return 'unknown';
   const action = str(parsed.output, 'action');
 
   if (toolName === 'tasks' && action === 'mode') {
@@ -103,7 +84,13 @@ export function toolCallEffect<Input, Output = undefined>(toolName: string, inpu
 
   if (MUTATING_ACTIONS.get(toolName)?.has(action) === true) return 'mutate';
 
-  return 'read';
+  if (READING_ACTIONS.get(toolName)?.has(action) === true) return 'read';
+
+  if (toolName === 'web_fetch') return 'mutate';
+
+  if (toolName === 'web_search') return 'read';
+
+  return 'unknown';
 }
 
 /** Collapse whitespace and clip, marking the clip so nothing reads as complete
