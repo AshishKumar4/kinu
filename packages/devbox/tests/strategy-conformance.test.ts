@@ -593,6 +593,18 @@ interface ComplexitySample {
  *  shows what it measured before the assertion fired. */
 const complexitySamples = new Map<string, ComplexitySample[]>();
 
+const publicationSamples = new Map<string, { bytesPut: number; objectsPut: number }>();
+
+interface IndexSample {
+  files: number;
+  publicationBytes: number;
+  publicationObjects: number;
+  attachBytes: number;
+  attachObjects: number;
+}
+
+const indexSamples = new Map<string, IndexSample[]>();
+
 const CELLS: readonly Cell[] = [
   {
     id: '6.9',
@@ -1019,15 +1031,14 @@ const CELLS: readonly Cell[] = [
   },
   {
     id: '6.22',
-    title: 'C3 overwrite: a 64 KiB edit publishes within 196,608 bytes in at most 3 objects',
+    title: 'C3 overwrite: a 64 KiB edit publishes below 196,608 bytes in exactly one object',
     async run(arm) {
       // The C3 cell from scripts/bench-c3-overwrite-cell.ts, driven through
       // this battery instead of the matched-chain harness: a 64 KiB overwrite
       // inside a 64 MiB file must publish at most three times the edit size
       // (64 KiB touches at most two 64 KiB blocks, plus manifest and image
       // skeleton: 196,608 bytes), and it must not buy those bytes with
-      // objects — three is the ceiling the repaired v2 reached, one the
-      // floor snapshot-chain already holds.
+      // objects: the bytes and the one-object bound must hold together.
       const C3_BOUND = 196_608;
       const seed = new Seeded(61);
       const bytes = seed.fill(new Uint8Array(64 * 1024 * 1024));
@@ -1044,16 +1055,17 @@ const CELLS: readonly Cell[] = [
       const publish = arm.work().publish;
       const problems: string[] = [];
 
-      if (publish.bytesPut > C3_BOUND) problems.push(`the 64 KiB overwrite put ${publish.bytesPut} bytes against the ${C3_BOUND} bound`);
+      if (publish.bytesPut >= C3_BOUND) problems.push(`the 64 KiB overwrite put ${publish.bytesPut} bytes against the strict ${C3_BOUND} bound`);
 
-      if (publish.objectsPut > 3) problems.push(`the 64 KiB overwrite put ${publish.objectsPut} objects against the ceiling of 3`);
+      if (publish.objectsPut !== 1) problems.push(`the 64 KiB overwrite put ${publish.objectsPut} objects, exactly 1 required`);
       const expected = await arm.workspace.snapshot();
       const woken = await wake(arm);
 
       if (woken.kind !== 'attached') problems.push(`wake answered ${woken.kind}`);
       await expectTreeExact(arm, expected, 'after the wake');
 
-      if (problems.length > 0) throw new Error(problems.join('; '));
+      if (problems.length > 0) throw new Error(`bytesPut=${publish.bytesPut} objectsPut=${publish.objectsPut}; ${problems.join('; ')}`);
+      publicationSamples.set(`${arm.name} 6.22`, publish);
     },
   },
   {
@@ -1061,7 +1073,7 @@ const CELLS: readonly Cell[] = [
     title: 'many small changed files: one object per checkpoint, bytes near the change',
     async run(arm) {
       // The REGIME-1 guard: a chunked design must not buy fewer bytes with
-      // more objects. Sixty changed small files still publish as ONE object,
+      // more objects. Fifty changed small files still publish as ONE object,
       // the floor snapshot-chain already holds, with bytes near the change
       // rather than near the tree.
       await attach(arm);
@@ -1077,7 +1089,7 @@ const CELLS: readonly Cell[] = [
 
       if (publish.objectsPut !== 1) problems.push(`50 changed files put ${publish.objectsPut} objects, the floor is 1`);
 
-      if (publish.bytesPut > 512 * 1024) problems.push(`50 changed files put ${publish.bytesPut} bytes against the 524,288 bound`);
+      if (publish.bytesPut >= 512 * 1024) problems.push(`50 changed files put ${publish.bytesPut} bytes against the strict 524,288 bound`);
       const expected = await arm.workspace.snapshot();
       const woken = await wake(arm);
 
@@ -1085,6 +1097,7 @@ const CELLS: readonly Cell[] = [
       await expectTreeExact(arm, expected, 'after the wake');
 
       if (problems.length > 0) throw new Error(problems.join('; '));
+      publicationSamples.set(`${arm.name} 6.23`, publish);
     },
   },
   {
@@ -1094,12 +1107,10 @@ const CELLS: readonly Cell[] = [
       // The merkle-pack failure mode, mechanically refused: no read path may
       // fetch an index whose size grows with the tree. Both halves at two tree
       // sizes: one changed small file PUBLISHES the same bytes, and the wake
-      // that serves it READS the same bytes out of the delta object. The base
-      // grows with the tree by definition and is not the question; a
-      // tree-wide index — merkle-pack's 563 B per file, read whole on open —
-      // would separate either number.
-      const published = new Map<number, number>();
-      const read = new Map<number, number>();
+      // that serves it READS the same index bytes and objects. Only the base
+      // image's body is excluded: an index fetched under any other key must
+      // count, whether or not the record declares it as part of the delta.
+      const samples: IndexSample[] = [];
 
       for (const files of [1_000, 5_000]) {
         const fresh = CONFORMANCE_ARMS[arm.name]();
@@ -1107,35 +1118,42 @@ const CELLS: readonly Cell[] = [
         await commitTree(fresh, generatedTree({ seed: 67, files, bytesPerFile: 16 }), `the ${files}-file base commit`);
         await fresh.workspace.write('probe.txt', 'one small changed file');
         expectCommitted(await fresh.storage().checkpoint('quiesce'), `the one-file commit at ${files} files`);
-        published.set(files, fresh.work().publish.bytesPut);
+        const publish = fresh.work().publish;
         const expected = await fresh.workspace.snapshot();
-        const deltaKeys = new Set((await fresh.declaredPayload()).filter((object) => object.names.includes('delta')).map((object) => object.key));
+        const baseKeys = new Set((await fresh.declaredPayload()).filter((object) => object.names.includes('base')).map((object) => object.key));
         const window = fresh.durable.ops.length;
         const woken = await wake(fresh);
 
         if (woken.kind !== 'attached') throw new Error(`${files} files: wake answered ${woken.kind}`);
+        expect(await fresh.workspace.read('probe.txt')).toBe('one small changed file');
+        const reads = fresh.durable.ops.slice(window).filter((op) => op.op === 'get' && !baseKeys.has(op.key));
+        samples.push({
+          files, publicationBytes: publish.bytesPut, publicationObjects: publish.objectsPut,
+          attachBytes: reads.reduce((sum, op) => sum + op.bytes, 0), attachObjects: reads.length,
+        });
         await expectTreeExact(fresh, expected, `${files} files after the wake`);
-        read.set(files, fresh.durable.ops.slice(window)
-          .filter((op) => op.op === 'get' && deltaKeys.has(op.key))
-          .reduce((sum, op) => sum + op.bytes, 0));
       }
 
       const problems: string[] = [];
+      const small = samples[0]!;
+      const large = samples[1]!;
 
-      for (const [name, rows] of [['one-file delta', published], ['wake read of the delta', read]] as const) {
-        const small = rows.get(1_000);
-        const large = rows.get(5_000);
+      for (const [name, field, tolerance] of [
+        ['publication bytes', 'publicationBytes', 0.1],
+        ['publication objects', 'publicationObjects', 0],
+        ['attach bytes', 'attachBytes', 0.1],
+        ['attach objects', 'attachObjects', 0],
+      ] as const) {
+        const a = small[field];
+        const b = large[field];
 
-        if (small === undefined || large === undefined) throw new Error(`a tree size left no ${name} measurement`);
-
-        if (small === 0 || large === 0) problems.push(`${name} is ${small} bytes at 1,000 files and ${large} at 5,000: a wake that reads no delta served nothing`);
-
-        if (small !== large && Math.abs(large - small) / Math.max(large, small, 1) > 0.1) {
-          problems.push(`${name} is ${small} bytes at 1,000 files and ${large} at 5,000: it grows with the tree`);
+        if (a <= 0 || b <= 0 || Math.abs(b - a) / Math.max(a, b, 1) > tolerance) {
+          problems.push(`${name} is ${a} at 1,000 files and ${b} at 5,000: missing or grows with the tree`);
         }
       }
 
       if (problems.length > 0) throw new Error(problems.join('; '));
+      indexSamples.set(arm.name, samples);
     },
   },
 ];
@@ -1247,11 +1265,11 @@ function blankWakeArm(): ConformanceArm {
   return broken;
 }
 
-/** Run a cell that opens fresh arms by name against ONE broken arm: every
- *  open answers the broken arm for the cell's duration. */
-async function runCellOn(cell: Cell, broken: ConformanceArm): Promise<Outcome> {
+/** Replace every arm the cell opens, not just the first argument it receives. */
+async function runCellOn(cell: Cell, makeBroken: () => ConformanceArm): Promise<Outcome> {
+  const broken = makeBroken();
   const open = CONFORMANCE_ARMS[broken.name];
-  Object.defineProperty(CONFORMANCE_ARMS, broken.name, { value: () => broken, configurable: true });
+  Object.defineProperty(CONFORMANCE_ARMS, broken.name, { value: makeBroken, configurable: true });
 
   try {
     return await runCell(cell, broken);
@@ -1273,7 +1291,8 @@ describe('red direction — every new cell fails against a deliberately broken a
     // it, so only overriding the factory (what runCellOn does) puts the
     // blank-wake wrapper in the loop the cell actually drives.
     const cell = CELLS.find((row) => row.id === '6.13')!;
-    const outcome = await runCellOn(cell, blankWakeArm());
+    const broken = blankWakeArm();
+    const outcome = await runCellOn(cell, () => broken);
     expect(outcome.kind).toBe('fail');
   }, 120_000);
 
@@ -1333,9 +1352,77 @@ describe('red direction — every new cell fails against a deliberately broken a
         return freed;
       },
     });
-    const outcome = await runCellOn(cell, broken);
+    const outcome = await runCellOn(cell, () => broken);
     expect(outcome.kind).toBe('fail');
   }, 120_000);
+
+  test.each([
+    { label: 'bytes at the strict bound', mutation: { bytesPut: 196_608 }, reason: '196608 bytes' },
+    { label: 'two objects', mutation: { objectsPut: 2 }, reason: '2 objects' },
+    { label: 'no object', mutation: { objectsPut: 0 }, reason: '0 objects' },
+  ])('6.22 fails with $label', async ({ mutation, reason }) => {
+    const arm = CONFORMANCE_ARMS['snapshot-chain']();
+    const broken: ConformanceArm = Object.create(arm);
+    Object.defineProperty(broken, 'work', {
+      value: () => ({ ...arm.work(), publish: { ...arm.work().publish, ...mutation } }),
+    });
+    const outcome = await runCell(CELLS.find((row) => row.id === '6.22')!, broken);
+    expect(outcome.kind).toBe('fail');
+    expect(outcome.kind === 'fail' ? outcome.reason : '').toContain(reason);
+  });
+
+  test.each(['publication bytes', 'publication objects', 'attach bytes', 'attach objects'])(
+    '6.24 fails when %s grow with the tree', async (direction) => {
+      const open = CONFORMANCE_ARMS['snapshot-chain'];
+
+      const outcome = await runCellOn(CELLS.find((row) => row.id === '6.24')!, () => {
+        const arm = open();
+        const broken: ConformanceArm = Object.create(arm);
+        const largeTree = () => arm.disk().snapshot('/workspace').length > 5_000;
+        Object.defineProperty(broken, 'work', {
+          value: () => {
+            const work = arm.work();
+
+            if (!largeTree()) return work;
+
+            return {
+              ...work,
+              publish: {
+                ...work.publish,
+                bytesPut: direction === 'publication bytes' ? work.publish.bytesPut + 1_000_000 : work.publish.bytesPut,
+                objectsPut: direction === 'publication objects' ? work.publish.objectsPut + 1 : work.publish.objectsPut,
+              },
+            };
+          },
+        });
+        Object.defineProperty(broken, 'storage', {
+          value: () => {
+            const storage = arm.storage();
+
+            return {
+              ...storage,
+              attach: async () => {
+                const result = await storage.attach();
+
+                if (largeTree() && direction.startsWith('attach ')) {
+                  arm.durable.ops.push({
+                    op: 'get', key: 'tree-wide-index', bytes: direction === 'attach bytes' ? 1_000_000 : 0,
+                  });
+                }
+
+                return result;
+              },
+            };
+          },
+        });
+
+        return broken;
+      });
+
+      expect(outcome.kind).toBe('fail');
+      expect(outcome.kind === 'fail' ? outcome.reason : '').toContain(direction);
+    },
+  );
 });
 
 afterAll(() => {
@@ -1374,6 +1461,17 @@ afterAll(() => {
 
   lines.push(`${'6.19'.padEnd(8)}${arms.map(() => 'harness'.padEnd(width)).join('')}  stop then wake on the same instance: the devbox-harness suites`);
   lines.push('', ...legend, '');
+
+  for (const [cell, row] of publicationSamples) {
+    lines.push(`${cell}: bytesPut=${row.bytesPut} objectsPut=${row.objectsPut}`);
+  }
+
+  for (const [arm, samples] of indexSamples) {
+    for (const row of samples) {
+      lines.push(`${arm} 6.24: files=${row.files} bytesPut=${row.publicationBytes} objectsPut=${row.publicationObjects} attachBytes=${row.attachBytes} attachObjects=${row.attachObjects}`);
+    }
+  }
+
   // Cell 6.21 leaves numbers, not just a verdict: one table per arm beside
   // the matrix, with the measured sizes in the header. Measured 2026-09-05.
   lines.push('6.21 restore and backup time versus tree size — 100, 1,000 and 10,000 files of 4 KiB', '');
