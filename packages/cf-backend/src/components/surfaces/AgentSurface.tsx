@@ -27,7 +27,7 @@ import {
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-kinu";
 import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
-import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
+import { MarkdownContent, EmptyState, EMPTY_HINTS, Section, timeAgo } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -143,7 +143,8 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
           ? <span className="p-meta p-text-2 whitespace-pre-line leading-[18px]">{tool.description}</span>
           : <span className="p-row-text p-text-2">{tool.summary}</span>}
       </button>
-      {tool.learned && <div className="px-3 pb-2.5"><ScoreBar value={tool.qualityScore} /></div>}
+      {tool.learned && <div className="px-3 pb-1"><ScoreBar value={tool.qualityScore} /></div>}
+      {tool.learned && <div className="px-3 pb-2.5 p-meta p-text-3">EMA {tool.qualityScore.toFixed(2)} over {tool.usageCount} use{tool.usageCount === 1 ? "" : "s"}</div>}
     </div>
   );
 }
@@ -258,6 +259,8 @@ export function AgentSurface(
                 <span className="font-mono p-accent shrink-0">{f.key}</span>
                 <span className="p-text-2 truncate flex-1 text-right">{v.is(v.string(), f.value) ? f.value : JSON.stringify(f.value)}</span>
                 {f.confidence < 1 && <span className="text-[10px] p-text-3 shrink-0">{(f.confidence * 100).toFixed(0)}%</span>}
+                {f.source !== '' && <span className="text-[10px] p-text-3 shrink-0">via {f.source}</span>}
+                <span className="text-[10px] p-text-3 shrink-0">{timeAgo(f.lastObservedAt)}</span>
               </div>
             ))}
           </div>
