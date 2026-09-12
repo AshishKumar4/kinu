@@ -21,25 +21,26 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { CompletedTurn, ToolCallRecord } from './types';
 import type { EvalInstance } from './gepa/types';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { sqlCheckList } from '../identity/schema';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive';
 import { nanoid } from '../utils/nanoid';
+import {
+  NEGATIVE_TURN_OUTCOMES, OUTCOME_LABELS, TURN_OUTCOMES,
+  TURN_OUTCOME_SOURCES, TURN_OUTCOME_SOURCE_PRECEDENCE,
+  type OutcomeLabel, type TurnOutcome, type TurnOutcomeRow, type TurnOutcomeSource,
+} from '../types/evolution';
+
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { tolerate } from '../obs/index';
 
-/** Every outcome kind, in the ledger's canonical order. The one list — the
- *  table's CHECK constraint, the query filter and the changelog tally all
- *  derive from it. */
-export const TURN_OUTCOMES = ['accepted', 'corrected', 'frustrated', 'abandoned'] as const;
-
-export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
-
-/** The outcomes that carry a complaint — what "a turn that landed badly"
- *  means everywhere it is drawn as a set (GEPA's optimization targets, the
- *  pathology clustering). `abandoned` is an absence of signal, not a verdict. */
-export const NEGATIVE_TURN_OUTCOMES = ['corrected', 'frustrated'] as const;
+export {
+  NEGATIVE_TURN_OUTCOMES, OUTCOME_LABELS, TURN_OUTCOMES,
+  TURN_OUTCOME_SOURCES, TURN_OUTCOME_SOURCE_PRECEDENCE,
+  type OutcomeLabel, type TurnOutcome, type TurnOutcomeRow, type TurnOutcomeSource,
+} from '../types/evolution';
 
 const NEGATIVE_TURN_OUTCOME_SET: ReadonlySet<TurnOutcome> = new Set(NEGATIVE_TURN_OUTCOMES);
 
@@ -49,41 +50,6 @@ const NEGATIVE_TURN_OUTCOME_SET: ReadonlySet<TurnOutcome> = new Set(NEGATIVE_TUR
 export function isNegativeOutcome(outcome: TurnOutcome | null): boolean {
   return outcome !== null && NEGATIVE_TURN_OUTCOME_SET.has(outcome);
 }
-
-/** What a HUMAN may say about a turn when hand-labeling it (calibration.ts):
- *  any real outcome, or an admission that the follow-up does not settle it.
- *  `unclear` is a verdict, not a skip — it is recorded, then excluded from
- *  every estimate. */
-export const OUTCOME_LABELS = [...TURN_OUTCOMES, 'unclear'] as const;
-
-export type OutcomeLabel = (typeof OUTCOME_LABELS)[number];
-
-/** Where an outcome row came from, in the ledger's canonical order — the one
- *  list the table's CHECK constraint derives from:
- *    explicit    — the user's thumbs.
- *    classifier  — the LLM verdict on a real conversational follow-up.
- *    session_end — the session-end (abandoned) rule.
- *    take_pick   — an Alternate Takes pick (mcts/takes.ts): an explicit
- *                  preference between explored takes.
- *    execution   — the ENVIRONMENT's verdict on a turn no user will grade
- *                  (see `executionVerdict`). Machine evidence, not a person's
- *                  judgment; every reader that speaks about user opinion must
- *                  say so and exclude it (alignment.ts does).
- */
-export const TURN_OUTCOME_SOURCES = [
-  'explicit', 'classifier', 'session_end', 'take_pick', 'execution',
-] as const;
-
-export type TurnOutcomeSource = (typeof TURN_OUTCOME_SOURCES)[number];
-
-/** Which observation of one turn is its EFFECTIVE verdict, strongest first:
- *  a thumb outranks a take pick, which outranks the classifier, which outranks
- *  the environment. `session_end` is absent and ranks last. Both ledger reads
- *  that resolve a verdict bind this list into their ORDER BY, so the rule
- *  lives here once. */
-export const TURN_OUTCOME_SOURCE_PRECEDENCE = [
-  'explicit', 'take_pick', 'classifier', 'execution',
-] as const satisfies readonly TurnOutcomeSource[];
 
 /** Sources that carry a HUMAN's opinion of the turn. The complement is
  *  `execution` — real evidence about what happened, silent about whether the
@@ -550,23 +516,6 @@ export function ensembleLabels(sql: SqlExecutor, actor: ActorHandle): EnsembleLa
   }
 
   return [...latest.values()];
-}
-
-export interface TurnOutcomeRow {
-  id: string;
-  turnId: string | null;
-  sessionId: string;
-  outcome: TurnOutcome;
-  confidence: number;
-  source: TurnOutcomeSource;
-  userMessage: string;
-  assistantResponse: string;
-  followup: string | null;
-  scaffoldVersion: number | null;
-  createdAt: number;
-  /** WHY this verdict: the classifier's one-sentence reason, or the execution
-   *  verdict's observation. Null where the source is its own evidence (a thumb). */
-  evidence: string | null;
 }
 
 export interface RecordTurnOutcomeInput {

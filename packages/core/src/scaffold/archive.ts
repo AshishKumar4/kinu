@@ -15,27 +15,9 @@ import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { parseJsonValue } from '../utils/json';
-import type { ScaffoldStatus } from './shadow';
+import type { ScaffoldArchiveEntry, ScaffoldStatus } from './shadow';
 
-export interface ScaffoldArchiveEntry {
-  version: number;
-  /** The version this one branched from (null for v0 / pre-lineage rows). */
-  parentVersion: number | null;
-  status: ScaffoldStatus;
-  rationale: string;
-  /** The failure cell this version was written to fix (`<complaint>/<shape>`,
-   *  evolution/pathology.ts), or null when the proposal named none. Read as a
-   *  plain string here: the archive keys on it, it never interprets it. */
-  pathology: string | null;
-  writtenAt: number;
-  /** Shadow-eval record while this version was the pending under trial. */
-  trials: number;
-  wins: number;
-  losses: number;
-  ties: number;
-  /** Win-rate over decisive (non-tie) trials; null when never decisively tried. */
-  winRate: number | null;
-}
+export type { ScaffoldArchiveEntry, ScaffoldStatus } from './shadow';
 
 const VetoDataSchema = v.object({
   detail: v.optional(v.string()),

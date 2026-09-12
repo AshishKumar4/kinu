@@ -4,7 +4,7 @@ import * as v from 'valibot';
 import type { WorkMode } from '../types/turn';
 import { KinuError, refusalOf, type Refusal } from '../obs/error';
 
-import type { CodemodeProvider } from '../tools/sandbox-contract';
+import type { CodemodeProvider } from '../types/codemode';
 
 const invocationMode = new AsyncLocalStorage<WorkMode>();
 

@@ -61,6 +61,9 @@ import {
 import { deviceMountSegment } from '../execution/device-tunnel-executor';
 import { EXECUTOR_MOUNTS } from '../vfs/mounts';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types';
+import type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
+
+export type { DynamicApproval, MissingCapability } from '../types/dynamic-context';
 
 /** Detached work the agent started and has not collected yet — one row of the
  *  background-job registry (jobs/store.ts), never a second copy of it. */
@@ -90,15 +93,6 @@ export interface DynamicDelegate {
   readonly phase: string;
   /** What it is working on, when its store knows. */
   readonly task?: string | null;
-}
-
-/** A decision parked on the user. Live so the agent stops guessing whether a
- *  gated action is stuck on it or on the human. */
-export interface DynamicApproval {
-  readonly id: string;
-  /** What kind of decision is waiting — 'device consent', … */
-  readonly kind: string;
-  readonly detail: string;
 }
 
 /**
@@ -155,14 +149,6 @@ export interface DynamicContext {
    *  Without this the tools are simply absent: the model plans as if a
    *  capability it was promised does not exist and cannot explain why. */
   missingCapabilities?: readonly MissingCapability[];
-}
-
-/** One promised capability that is not reachable this turn, and why. */
-export interface MissingCapability {
-  /** What is missing, in the words the user configured it under. */
-  readonly source: string;
-  /** Why it is not here — a timeout, a crash, an auth failure. */
-  readonly reason: string;
 }
 
 /** The live search roster as delegates — the ONE mapping both backends apply to
@@ -723,7 +709,6 @@ export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | n
 
   return text ? { role: 'user', content: text } : null;
 }
-
 
 interface LedgerBlock {
   /** Message count of the un-woven array when the block was born — it renders

@@ -30,15 +30,17 @@ import { clampGepaEvalBudget } from '../config/store';
 import { beginModelOperation, type ModelCallSink, type ModelOperationSink } from '../events/model-call';
 import { normalizeUsage } from '../usage';
 import { effortFor } from '../strategy/effort';
-import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
+import { evidenceWindow } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { extractJsonObject, generateJson, jsonObjectOnlyInstruction } from '../prompts/structured';
 import {
   runScaffold, scaffoldEventText,
   type ScaffoldRunOptions, type ScaffoldRunResult,
 } from '../scaffold/executor';
 import { modifyScaffold } from '../scaffold/modify';
+import type { ScaffoldVersionView } from '../types/scaffold';
 import type { ActorHandle } from '../identity/actor-handle';
-import { listScaffoldArchive, type ScaffoldArchiveEntry } from '../scaffold/archive';
+import { listScaffoldArchive } from '../scaffold/archive';
 import {
   DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
   decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
@@ -72,6 +74,8 @@ import { MetricScoreSchema, type EvalInstance, type MetricOutcome, type Reflecti
 import { scoreInterval, type ScoreInterval } from '../utils/stats';
 import { nanoid } from '../utils/nanoid';
 import { diagnostics, renderThrownChain, toKinuError } from '../obs/index';
+
+export type { ScaffoldVersionView } from '../types/scaffold';
 
 /**
  * The inference surface a candidate scaffold runs against.
@@ -459,22 +463,6 @@ export async function proposeScaffold(
   }
 
   return result;
-}
-
-/** The scaffold variant archive: recent versions with status, DGM lineage and
- *  aggregated shadow-eval record. snake_case keys are the wire shape the web
- *  surface has always read (ScaffoldLineage.tsx reads `written_at`). */
-export interface ScaffoldVersionView {
-  version: number;
-  written_at: number;
-  rationale: string;
-  status: ScaffoldArchiveEntry['status'];
-  parent_version: number | null;
-  trials: number;
-  wins: number;
-  losses: number;
-  ties: number;
-  win_rate: number | null;
 }
 
 export function listScaffoldVersions(

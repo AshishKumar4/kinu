@@ -32,53 +32,9 @@ import type { ActorHandle } from '../identity/actor-handle';
 import type { WorkMode } from '../types/turn';
 import { renderThrownChain } from '../obs/index';
 import type { ActiveRoster } from '../prompting/volatile-context';
+import type { BackgroundJob, BackgroundJobStatus } from '../types/jobs';
 
-export type BackgroundJobStatus = 'running' | 'completed' | 'failed' | 'cancelled';
-
-export interface BackgroundJob {
-  id: string;
-  kind: string;
-  label: string | null;
-  workMode: WorkMode;
-  status: BackgroundJobStatus;
-  result: string | null;
-  error: string | null;
-  createdAt: number;
-  settledAt: number | null;
-  /** Monotonic lease epoch — bumped by `reclaim` on evict-recovery (§5.3). */
-  epoch: number;
-  /** How many times evict-recovery has re-driven this job (bounds resume loops). */
-  resumeAttempts: number;
-  /** Replacement job created by an operator retry; null until handled. */
-  retriedBy: string | null;
-  /**
-   * When the attempt CURRENTLY driving this job began — `createdAt` for a first
-   * drive, bumped by every {@link BackgroundJobStore.reclaim}.
-   *
-   * The only column that reads the CURRENT generation's lifetime: `createdAt` says
-   * when the work was first asked for and `settledAt` is null while it runs, so
-   * neither can answer "how long has this generation been going" and neither bounds
-   * it. A live job was measured `running` 28 minutes into its third generation with
-   * two completed candidates its caller could not see.
-   */
-  attemptStartedAt: number;
-  /**
-   * The instant before which this job's NEXT attempt must not start, or null
-   * when nothing is owed.
-   *
-   * Written FORWARD, at claim time, for the attempt after the one being
-   * claimed — because the event it paces is unobservable by the process it
-   * kills. An isolate evicted mid-attempt writes nothing, so a pause recorded
-   * after a failure would never be recorded at all; the claim is the last
-   * moment anything can still speak for the attempt it is starting.
-   *
-   * So a live attempt carries one too, and that is not a contradiction: it says
-   * "if I am still `running` after this instant, whoever finds me may drive me
-   * again". A settle clears the question by ending the job, and the next
-   * {@link BackgroundJobStore.reclaim} clears the column.
-   */
-  resumeAfter: number | null;
-}
+export type { BackgroundJob, BackgroundJobStatus } from '../types/jobs';
 
 /** The result of claiming a job for an evict-recovery re-drive. */
 export interface JobClaim {

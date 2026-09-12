@@ -34,18 +34,9 @@
 
 import { diffLines, type FileStatus } from '../vfs/diff';
 import { textPayload, type WriteEvent, type WriteObserver } from '../vfs/observe';
+import type { HeadFileChange } from '../types/heads';
 
-/** One file a head changed, as a review would state it. */
-export interface HeadFileChange {
-  /** The parent workspace's own path — what the parent addresses the file by. */
-  readonly path: string;
-  readonly status: FileStatus;
-  readonly added: number;
-  readonly removed: number;
-  /** Set when the content is not text, so lines are not a unit for it and the
-   *  counts are omitted rather than fabricated from decoded bytes. */
-  readonly binary?: boolean;
-}
+export type { HeadFileChange } from '../types/heads';
 
 interface Touched {
   baseline: string | null;

@@ -11,11 +11,13 @@
  */
 
 import type { CostBasis, CostEstimate } from '../types/evaluation';
-import type { ModelPricing } from '../providers/types';
+import type { CostModel } from '../types/mcts';
 import type { Usage } from '../usage';
 import { DEFAULT_CONFIG } from '../config';
 import { BLENDED_USD_PER_1K_TOKENS, estimateUsdCost } from '../llm';
 import { priceCall } from '../mission-budget';
+
+export type { CostModel } from '../types/mcts';
 
 /**
  * The projected shape of ONE average search call, across the explore /
@@ -37,17 +39,6 @@ const AVG_CALL_USAGE = { input: 1_500, output: 500 } as const satisfies Usage;
  *  literal, so the fallback path prices exactly the token count the catalog
  *  path does and the two answers stay comparable. */
 const AVG_TOKENS_PER_CALL = AVG_CALL_USAGE.input + AVG_CALL_USAGE.output;
-
-/** The model a search will run on, as the pre-run gate needs to see it. */
-export interface CostModel {
-  /** Resolved `<provider>/<modelId>`. Named in the refusal so an operator can
-   *  tell a real cap from a mispriced one. */
-  readonly spec: string;
-  /** The catalog's rates, or null when the lookup has not landed or the
-   *  catalog publishes no price. Null is UNKNOWN — never free. A model the
-   *  catalog prices at nothing arrives as `{ input: 0, output: 0 }`. */
-  readonly pricing: ModelPricing | null;
-}
 
 /**
  * Estimate total LLM calls and approximate USD cost for an MCTS search.
