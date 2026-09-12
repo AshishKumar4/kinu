@@ -1735,12 +1735,13 @@ export const LADDER: readonly Gate[] = [
   {
     run: 'bun run gate:trajectory',
     tier: 'deploy',
-    // Measured 2026-09-12 on the deployed 234ed5d7d: one credentialed run of
-    // the five cases on the product model, 1661s wall as the script prints
-    // it, with every case red on the turn-boundary defect (`fix(cf): the
-    // second turn sees the message that started it`) — a red run is the
-    // longer one, since each case runs every prompt to completion.
-    seconds: 1661,
+    // Measured 2026-09-12 on the deployed 4f4c0af36: one credentialed run of
+    // the five cases on the product model, 541s wall as the script prints it,
+    // after two changes at once — the cases run concurrently and no longer
+    // queue the workspace genesis turn — so the figure is the overall change,
+    // not a per-change attribution. One case red on the deployed sandbox's
+    // `bun` boundary, a product finding rather than a harness defect.
+    seconds: 541,
     catches: 'an agent that stopped ACTING on the model users have, measured on the build '
       + 'this deploy just shipped. It runs the trajectory family — five two-turn episodes through the public REST '
       + 'and socket: write a file then read it back, a correction steered mid-turn, a failed '

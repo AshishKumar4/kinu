@@ -880,8 +880,21 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
     expect(activityOnly.failures.join(' ')).toContain(TASK_OUTCOME);
   });
 
+  /**
+   * LIVE: the five cases run CONCURRENTLY, each on its own workspace. The
+   * `fileParallelism: false` comment guards FILES racing the account's rate
+   * limits; within this file each case spends most of its wall inside remote
+   * turns, so serial order stacked those waits and concurrent order takes
+   * them at once. They DO share one account — the burst is real and bounded
+   * by `maxConcurrency` (5) — while everything a case's record reads is its
+   * own: the workspace, the transcript dir keyed on taskId, and an
+   * append-only observations array. Every case also opens with
+   * `genesis: false`: the purpose rides `setSoul` instead of the create
+   * body, so the workspace's own unrequested first turn never runs — in the
+   * run this replaced, five such turns were 385s of the 1487s.
+   */
   for (const entry of CASES) {
-    liveTest(`MEASURED: ${entry.id}`, async () => {
+    liveTest.concurrent(`MEASURED: ${entry.id}`, async () => {
       if (PLAN === null) throw new Error('unreachable: this arm is gated on a resolved plan');
       const startedAt = Date.now();
       const plan = PLAN;
@@ -889,7 +902,7 @@ describe('Trajectory evals — multi-turn episodes through the public API', () =
 
       try {
         await withEpisodeEvidence(async () => {
-          opened = await plan.open({ subject: entry.id, purpose: entry.purpose });
+          opened = await plan.open({ subject: entry.id, purpose: entry.purpose, genesis: false });
 
           return opened;
         }, { transcripts: TRANSCRIPTS, taskId: entry.id, modelCalls: 'expected' }, async (session, collect) => {
