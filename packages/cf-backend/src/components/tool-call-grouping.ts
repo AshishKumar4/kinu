@@ -1,7 +1,7 @@
 /**
  * Folding a message's parts into render blocks.
  *
- * Only adjacent settled reads fold together. Mutations, running calls and
+ * Only adjacent settled quiet calls fold together. Mutations, running calls and
  * calls that put a preview on screen stay visible at their transcript position.
  */
 import { isToolUIPart, getToolName } from "ai";
@@ -46,7 +46,7 @@ export function groupMessageParts(parts: readonly Part[]): PartBlock[] {
     // stream split one long sequential tool run into dozens of singleton rows.
     if (part.type === 'step-start') continue;
 
-    if (isToolUIPart(part) && isFinished(part) && partEffect(part) === 'read' && extractPreviewUrl(partOutput(part)) === null) {
+    if (isToolUIPart(part) && isFinished(part) && partEffect(part) !== 'mutate' && extractPreviewUrl(partOutput(part)) === null) {
       run.push(part);
       continue;
     }
@@ -113,7 +113,7 @@ export function partInput(part: AnyToolPart): JsonObject | undefined {
 }
 
 export function partEffect(part: AnyToolPart) {
-  return toolCallEffect(getToolName(part), partInput(part), partOutput(part));
+  return toolCallEffect(getToolName(part), partInput(part));
 }
 
 /** The UI protocol records whether the tool invocation failed. Output is data. */

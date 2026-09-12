@@ -206,14 +206,15 @@ describe('toolCallEffect — consequence controls activity density', () => {
   test('network fetches and delegation remain consequential', () => {
     expect(toolCallEffect('web', { action: 'fetch', url: 'https://example.com' })).toBe('mutate');
     expect(toolCallEffect('web_fetch', { url: 'https://example.com' })).toBe('mutate');
-    expect(toolCallEffect('agents', { action: 'list' })).toBe('mutate');
+    expect(toolCallEffect('agents', { action: 'hire' })).toBe('mutate');
+    expect(toolCallEffect('agents', { action: 'list' })).toBe('read');
   });
 
-  test('programs default to consequential and unclassified contracts stay quiet', () => {
-    expect(toolCallEffect('run', { command: 'node inspect.js' })).toBe('mutate');
-    expect(toolCallEffect('execute_tools', { code: 'return await workspace.files.read("a")' })).toBe('mutate');
-    expect(toolCallEffect('crafted_unknown', { action: 'write' })).toBe('read');
-    expect(toolCallEffect('file', 'read a')).toBe('read');
+  test('programs and unclassified contracts remain explicitly unknown', () => {
+    expect(toolCallEffect('run', { command: 'node inspect.js' })).toBe('unknown');
+    expect(toolCallEffect('execute_tools', { code: 'return await workspace.files.read("a")' })).toBe('unknown');
+    expect(toolCallEffect('crafted_unknown', { action: 'write' })).toBe('unknown');
+    expect(toolCallEffect('file', 'read a')).toBe('unknown');
   });
 });
 
