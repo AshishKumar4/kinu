@@ -86,7 +86,6 @@ import {
   type WorkMode,
   type WorkspaceActor,
   type WorkspaceActorDirectory,
-  recoverActorTurns,
 } from '@kinu.run/core';
 import { KinuError, diagnostics, refusalOf, toKinuError } from '@kinu.run/core/obs';
 import {
@@ -925,7 +924,6 @@ export class LocalAgentHost {
         await session.connectMcp(input.ws.mcpServers);
       }
 
-      await session.recoverBackgroundJobs();
       // A previous process could die after publishing but before its debounce
       // timer fired, or AFTER a drain bound its rows to a turn it never ran.
       // EventLog rows are the queue: reclaim what the dead process left leased,
@@ -949,32 +947,7 @@ export class LocalAgentHost {
       // sequence is claimed per turn, not re-run), which is why the `recovered`
       // ending is emitted there and not here.
       await this.drive(entry, async () => {
-        // CLAIMS BEFORE ROWS, and the order is the same one the cf sweep runs:
-        // the reclaim below hands a dead process's assignment back to the
-        // pending pool and the drain RE-RUNS it, but a turn that process had
-        // already admitted still holds an unsettled claim — and per-actor
-        // serialization would refuse the re-run rather than start it. So the
-        // claims are reconciled first: verified ones resume under the exact
-        // bytes they were admitted with, and the rest are settled
-        // `indeterminate`, which is what is known about them.
-        //
-        // This is the caller the recovery read was written for and never had.
-        // `resumable` says "no timer arms it: the caller that just opened the
-        // workspace IS the trigger" — this is that caller, on both backends now
-        // through the one core implementation.
-        const recovered = await recoverActorTurns(input.tree.host);
-
-        if (recovered.resumed.length + recovered.refused.length + recovered.unreadable.length > 0) {
-          // `unreadable` is reported apart from `refused` because the two mean
-          // different things to whoever reads this line: a refused turn was
-          // SETTLED indeterminate, an unreadable one is still owed.
-          diagnostics.event('actor.turns_recovered', {
-            resumed: recovered.resumed.length,
-            refused: recovered.refused.length,
-            unreadable: recovered.unreadable.length,
-          });
-        }
-
+        await session.recoverBackgroundJobs();
         session.reclaimStrandedEventDeliveries();
         await session.flushPendingDrains();
       });

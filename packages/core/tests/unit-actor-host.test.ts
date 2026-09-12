@@ -14,7 +14,7 @@ import { makeSqlExec } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import {
-  createActorHost, childContextResolver,
+  createActorHost, childContextResolver, recoverActorTurns,
   type ActorHost, type BoundActor,
 } from '../src/state/actor-host';
 import { initEventsHubTables, EventLog } from '../src/events/hub/index';
@@ -24,6 +24,7 @@ import type { AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrat
 import type { Identity, VFS, SqlExecutor } from '../src/index';
 import type { ActorReference } from '../src/identity/actor-handle';
 import type { ActorProgramIdentity, ActorTurnClaim } from '../src/orchestrator/actor-claims';
+import { sha256Hex } from '../src/safety/argument-digest';
 
 const BUILTIN: ActorProgramIdentity = { kind: 'builtin', version: 0, digest: null, build: 'test-build' };
 
@@ -63,7 +64,7 @@ function scaffoldIdentity(name: string, vfs: VFS, sql: SqlExecutor, actorId: str
   };
 }
 
-function build(donor?: Database): Fixture {
+function build(donor?: Database, unreadableActor?: string): Fixture {
   const db = donor ?? new Database(':memory:');
   const sql = sqlOver(db);
   const execRaw = (ddl: string): void => { db.exec(ddl); };
@@ -116,6 +117,7 @@ function build(donor?: Database): Fixture {
     directory,
     installedBuild: 'test-build',
     runtimeFor: (bound) => {
+      if (bound.record.name === unreadableActor) throw new Error('actor file plane is unreadable');
       const plane = planes.get(bound.record.actorId) ?? createMemoryVfs().vfs;
       planes.set(bound.record.actorId, plane);
 
@@ -335,6 +337,59 @@ describe('one workspace database, many logical actors', () => {
     expect(pending[0]?.claim.program).toEqual(program);
     expect(pending[0]?.reference.actorId).toBe(a.actorId);
     expect(pending[0]?.record.name).toBe('alpha');
+  });
+
+  test('recovery retains a verified claim as owed without claiming execution resumed', async () => {
+    const fx = build();
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
+    const source = 'export default async function main() { return "retained"; }';
+    await actor.runtime.storage.vfs.writeFile(`${actor.runtime.identity.scaffold.path}.v1`, source);
+
+    const admitted = actor.stores.claims.admit({
+      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: [], workingRevision: 0,
+      program: { kind: 'scaffold', version: 1, digest: sha256Hex(source), build: null },
+    });
+
+    const recovered = await recoverActorTurns(fx.host);
+    expect(recovered).toEqual({ verified: ['turn-a'], refused: [], unreadable: [], active: [] });
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', outcome: null, epoch: admitted.epoch });
+    expect(await recoverActorTurns(fx.host)).toEqual(recovered);
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  test('recovery leaves an unreadable actor claim owed across repeated opens', async () => {
+    const fx = build();
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
+    actor.stores.claims.admit({ runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: [], workingRevision: 0, program: BUILTIN });
+    const cold = build(fx.db, 'alpha');
+
+    const first = await recoverActorTurns(cold.host);
+    expect(first).toEqual({ verified: [], refused: [], unreadable: ['turn-a'], active: [] });
+    expect(await recoverActorTurns(cold.host)).toEqual(first);
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'admitted', outcome: null, epoch: 1 });
+    cold.host.releaseAll();
+    fx.host.releaseAll();
+    fx.db.close();
+  });
+
+  test('recovery refuses changed program bytes once but does not settle a live actor', async () => {
+    const fx = build();
+    const actor = await fx.host.acquire(fx.child('alpha', 'c-alpha', 'subordinate'));
+    actor.stores.claims.admit({
+      runId: 'run-a', turnId: 'turn-a', workMode: 'build', context: [], workingRevision: 0,
+      program: { kind: 'scaffold', version: 1, digest: sha256Hex('missing'), build: null },
+    });
+    const lease = actor.session.beginTurn({ runId: 'run-a', turnId: 'turn-a' }, 'build', 0);
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], unreadable: [], active: ['turn-a'] });
+    expect(actor.stores.claims.read('turn-a')?.status).toBe('admitted');
+    actor.session.finishTurn(lease);
+
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: ['turn-a'], unreadable: [], active: [] });
+    expect(actor.stores.claims.read('turn-a')).toMatchObject({ status: 'settled', outcome: 'indeterminate', epoch: 1 });
+    expect(await recoverActorTurns(fx.host)).toEqual({ verified: [], refused: [], unreadable: [], active: [] });
+    fx.host.releaseAll();
+    fx.db.close();
   });
 
   test('a retirement purge sweeps a table the schema grew, and nothing that carries no actor', async () => {
