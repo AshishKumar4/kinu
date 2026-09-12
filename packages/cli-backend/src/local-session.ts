@@ -155,7 +155,7 @@ import { TierIdSchema,
   isPlaceholderMission, type WorkspaceTitleState,
   type PromptIdentity,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
-  readSoul,
+  readSoul, operatorMessageAdmitted,
   type ResolvedTurnProfile, type TierId,
   decodeJsonValue, projectJsonValue, parseJsonValue, JsonValueSchema,
   createAgentSelfProvider,
@@ -622,6 +622,11 @@ interface QueueItem {
    *  the row the first one wrote (see `persist`). */
   idempotencyKey?: string;
   kind: 'user' | 'programmatic';
+  /** A programmatic turn that is a move OFFERED, not an event that must be
+   *  heard: if an operator message is admitted ahead of it — queued behind it
+   *  here, or already durable — the pump yields the slot and settles it
+   *  'yielded' without running a turn. See ProgrammaticTurn.yieldsToUserMessage. */
+  yieldsToUserMessage?: boolean;
   /**
    * Settle whoever queued this item — exactly once, and told whether the turn
    * RAN.
@@ -634,7 +639,7 @@ interface QueueItem {
    * which a success-only `resolve()` cannot help doing — loses the event and
    * discards the message in silence.
    */
-  settle: (refusal: Refusal | null) => void;
+  settle: (refusal: Refusal | null, yielded?: boolean) => void;
 }
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
@@ -1616,10 +1621,16 @@ export class LocalAgentSession implements BackendHost {
       // 'skipped' is what a producer with a durable retry plane acts on: the
       // signal seam compensates on anything but 'queued', which is how an event
       // drain gets its rows back when another process holds the driver lease.
-      settle: (refusal) => resolve({ status: refusal ? 'skipped' : 'queued' }),
+      // 'yielded' is neither: the offer was consumed at its slot, so nothing
+      // comes back and nothing is retried.
+      settle: (refusal, yielded) => resolve({
+        status: yielded === true ? 'yielded' : refusal ? 'skipped' : 'queued',
+      }),
     };
 
     if (input.idempotencyKey !== undefined) item.idempotencyKey = input.idempotencyKey;
+
+    if (input.yieldsToUserMessage === true) item.yieldsToUserMessage = true;
     this.queue.push(item);
 
     if (this.settlingDepth > 0) {
@@ -2549,6 +2560,21 @@ export class LocalAgentSession implements BackendHost {
         if (refusal) {
           diagnostics.event('driver.turn_deferred', { kind: item.kind, reason: refusal.reason });
           item.settle(refusal);
+          continue;
+        }
+
+        // A turn that was OFFERED yields inside its slot: the check is here,
+        // at dequeue, never at admission — a user item queued after the offer
+        // was taken, or an operator row already durable, means somebody spoke
+        // first and that message is the turn now. Nothing runs, nothing is
+        // persisted; the offer is consumed.
+        if (item.yieldsToUserMessage === true
+          && (this.queue.some((queued) => queued.kind === 'user')
+            || operatorMessageAdmitted(this.rt.storage.sql, this.rt.actor, this.sessionId))) {
+          diagnostics.event('genesis.yielded_to_message', {
+            signal: v.is(v.string(), item.metadata?.kinuEvent) ? item.metadata.kinuEvent : 'unknown',
+          });
+          item.settle(null, true);
           continue;
         }
 

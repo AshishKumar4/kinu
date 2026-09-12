@@ -35,7 +35,9 @@ import { seekPage, mapPage, StaleCursorError, type Page, type PageRequest } from
 import type { SqlExecutor } from '../types/primitives';
 import type { ActorHandle, ActorReference } from './actor-handle';
 import { tableExists } from './schema';
-import { uiMessageRow, uiMessageText } from '../utils/ui-message';
+import { uiMessageRow, uiMessageText, turnAuthor } from '../utils/ui-message';
+import { parseJsonValue, JsonObjectSchema, type JsonObject } from '../utils/json';
+import { tolerate } from '../obs/index';
 
 /**
  * Bound on an ancestry walk, and the cycle guard. Matches the bound `agents`'
@@ -615,6 +617,49 @@ export function conversationTurnPair(
     startedAtMs: row.startedAt === null ? null : Number(row.startedAt),
     endedAtMs: Number(row.endedAt),
   };
+}
+
+/**
+ * Whether an operator-authored user row exists in this actor's default chat —
+ * the durable proof that somebody has already spoken to this agent.
+ *
+ * Read inside a `yieldsToUserMessage` turn's slot by the host that dequeues it
+ * (cf `enqueueTurn` → `saveMessages`' `shouldApplyMessages`; the CLI's pump),
+ * never before it: the race the flag closes is a message landing between the
+ * enqueue and the start, and only a read at the start can see it. Both stores
+ * are read through {@link turnAuthor}'s own provenance rules — the pane keeps
+ * the author stamp inside the serialized message, the plain store keeps it in
+ * the `metadata` column, and a row with neither resolves by its id prefix.
+ *
+ * `sessionId` scopes the plain store, where several conversations share one
+ * `messages` table; the pane holds the default chat only, so it needs none.
+ */
+export function operatorMessageAdmitted(
+  sql: SqlExecutor,
+  actor: ActorReference,
+  sessionId: string = CHAT_SESSION_ID,
+): boolean {
+  if (usesPaneStore(sql, actor)) {
+    return sql<{ id: string; content: string }>`
+      SELECT id, content FROM assistant_messages WHERE role = 'user'`
+      .some((row) => turnAuthor({ id: row.id, metadata: uiMessageRow(row.content).metadata }) === 'operator');
+  }
+
+  return sql<{ id: string; metadata: string | null }>`
+    SELECT id, metadata FROM messages
+    WHERE actor_id = ${actor.actorId} AND session_id = ${sessionId} AND role = 'user'`
+    .some((row) => turnAuthor({ id: row.id, metadata: storedStamp(row.metadata) }) === 'operator');
+}
+
+/** The plain store's `metadata` column as `turnAuthor` reads it — a parsed
+ *  object, or undefined where the column holds nothing parseable (a row that
+ *  predates the stamp falls to the id-prefix rule instead of failing here). */
+function storedStamp(metadata: string | null): JsonObject | undefined {
+  if (!metadata) return undefined;
+  const decoded = tolerate(() => parseJsonValue(metadata), 'malformed-input');
+  const parsed = decoded === undefined ? undefined : v.safeParse(JsonObjectSchema, decoded);
+
+  return parsed?.success === true ? parsed.output : undefined;
 }
 
 /**

@@ -63,7 +63,7 @@ import type {
   ToolCallContext as ThinkToolCallContext,
   ChatResponseResult,
   ChatRecoveryConfig,
-  StreamableResult,
+  StreamableResult, SaveMessagesOptions,
 } from "@cloudflare/think";
 import {
   EvolutionEngine, recoverSubordinateLifecycles, actorReferenceOf, createDbCodemodeProvider,
@@ -221,7 +221,7 @@ import {
   stepContextLimit,
   mergeProviderOptions, reasoningEffortOptions,
   uiMessageText, tableExists, PROGRAMMATIC_MESSAGE_ID_PREFIX,
-  TURN_AUTHOR_METADATA_KEY, stampTurnAuthor,
+  TURN_AUTHOR_METADATA_KEY, stampTurnAuthor, operatorMessageAdmitted,
   // memory.* / tasks.* — codemode projections of the same-named native tools
   JsonObjectSchema, JsonValueSchema, projectJsonValue, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
@@ -3541,7 +3541,7 @@ export abstract class ActorAgent extends Think<Env> {
       const armWake = this.durableWakeOwner();
       this._host = {
         broadcast: (event) => this.broadcast(JSON.stringify(event)),
-        enqueueTurn: async ({ text, metadata, idempotencyKey }) => {
+        enqueueTurn: async ({ text, metadata, idempotencyKey, yieldsToUserMessage }) => {
           const drainTurnId = v.is(v.string(), metadata?.drainTurnId)
             ? metadata.drainTurnId
             : null;
@@ -3577,13 +3577,49 @@ export abstract class ActorAgent extends Think<Env> {
             };
           }
 
+          // A `yieldsToUserMessage` turn is a move OFFERED to an agent nobody
+          // has spoken to (today: genesis, which carries no idempotency key and
+          // so never takes the durable submission path). The offer is decided
+          // INSIDE the turn's slot — `saveMessages`' `shouldApplyMessages`
+          // gate, the check Think runs after dequeuing the turn and before its
+          // messages are appended or the model is called — against the durable
+          // transcript. An operator row there is somebody already speaking:
+          // the offer is withdrawn unanswered, and that message's own queued
+          // turn is the first turn. Reading earlier would close nothing: the
+          // race is a message landing between the enqueue and the start.
+          //
+          // `shouldApplyMessages` rides under `SaveMessagesOptions` because the
+          // vendored runner honors it and the declared option type does not
+          // name it (the submission drain passes it the same way, think.js
+          // `_executeSubmission`).
+          let yielded = false;
+
+          const turnOptions: SaveMessagesOptions & { shouldApplyMessages?: () => boolean } | undefined
+            = yieldsToUserMessage === true ? {
+              shouldApplyMessages: () => {
+                if (yielded) return false;
+
+                if (!operatorMessageAdmitted(this.boundSql, this.actorHandle())) return true;
+
+                yielded = true;
+                diagnostics.event('genesis.yielded_to_message', {
+                  signal: v.is(v.string(), metadata?.kinuEvent) ? metadata.kinuEvent : 'unknown',
+                });
+                this.logActivity('genesis.yielded_to_message');
+
+                return false;
+              },
+            } : undefined;
+
           try {
             const result = await this.saveMessages(() => {
               this._activeDrainTurnId = drainTurnId;
               this._activeProgrammaticUserMessage = message;
 
               return [message];
-            });
+            }, turnOptions);
+
+            if (yielded) return { status: 'yielded' };
 
             return { status: result.status === 'completed' ? 'queued' : 'skipped' };
           } finally {
