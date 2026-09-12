@@ -1,16 +1,23 @@
 /**
  * The inspector column's layout policy: a per-account persisted WIDTH and a
- * per-WORKSPACE persisted open/close choice, applied over the panel library's
- * own layout, with a drag-mount race that the apply loop is bounded against.
+ * per-WORKSPACE persisted open/close choice, decided against the panel
+ * library's own layout lifecycle.
  *
- * The hook below is the whole surface: WorkspacePage mounts it, and the unit
- * test drives it through React's static renderer — the one thing that
- * renderer skips is the layout effect the apply loop lives in, which the
- * test flushes by hand against a frame queue.
+ * The group owns layout: mount state arrives through `defaultLayout` /
+ * `Panel.defaultSize`, and every committed change reports once through
+ * `onLayoutChanged` — after the group's measured pass, never mid-drag. That
+ * emission is the lifecycle signal the previous rAF apply loop re-created by
+ * hand: a write issued before the first pass is clobbered, so decisions that
+ * arrive before it wait in `pendingDecision` for the first emission instead
+ * of polling.
+ *
+ * The hook is the whole surface: WorkspacePage mounts it, and the unit test
+ * drives it through React's static renderer, feeding the `onLayoutChanged`
+ * callback the way the group's own emissions would arrive.
  */
 
 import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
-import { usePanelRef, type PanelImperativeHandle, type PanelProps, type PanelSize } from "react-resizable-panels";
+import { usePanelRef, type PanelImperativeHandle, type PanelProps, type Layout } from "react-resizable-panels";
 import { getProfile } from "@/lib/user-api";
 
 /** Inspector defaults: a 340px opening inside the 320-360px design band, with
@@ -22,10 +29,16 @@ const INSPECTOR_MIN_PX = 280;
 /** Persisted widths apply only where the desktop inspector exists. */
 const INSPECTOR_WIDE_QUERY = "(min-width: 900px)";
 
-/** The apply loop's target: a resting width and whether the column ends up
- *  collapsed. This is a LAYOUT decision, not a storage shape — the two facts
- *  persist under different scopes. */
-interface InspectorPrefs { readonly widthPx: number; readonly collapsed: boolean }
+/** Panel ids the group layout is keyed by: the page's chat column and the
+ *  inspector. The page names its own Panel `chat`; `panelProps` carries
+ *  `inspector`. */
+const CHAT_PANEL_ID = "chat";
+
+const INSPECTOR_PANEL_ID = "inspector";
+
+/** What a decided layout looks like, in the units the column itself reports:
+ *  collapsed is boolean truth, width is measured pixels. */
+interface InspectorTarget { readonly collapsed: boolean; readonly widthPx: number }
 
 /** The WIDTH is the account's: a preference about this person's display,
  *  stored as a plain pixel number beside the theme choice. A legacy
@@ -80,152 +93,66 @@ function readAccountKey(): Promise<AccountKey> {
   ));
 }
 
-/**
- * What a resize report persists, or null when the report carries no intent.
- * The mount report (`prevSize === undefined`) announces the DEFAULT layout,
- * not a user choice: it must not veto a pending restore or write the default
- * over the stored size. A real report clamps at the pixel floor, and a
- * sub-pixel one counts as collapsed.
- */
-function resizePrefsOf(
-  size: PanelSize, prevSize: PanelSize | undefined, currentlyCollapsed: boolean,
-): InspectorPrefs | null {
-  if (prevSize === undefined) return null;
-
-  return {
-    widthPx: Math.max(INSPECTOR_MIN_PX, Math.round(size.inPixels)),
-    collapsed: currentlyCollapsed || size.inPixels < 1,
-  };
-}
-
-/**
- * One layout restoration, bounded at 30 scheduled frames total — the
- * wait for the panel's first measured report and the post-apply re-asserts
- * share the one counter, so a panel that never reports still settles.
- *
- * The panel registers with its group after commit; an apply that runs too
- * early is silently dropped and the default layout then reports itself.
- * Re-assert (bounded, and never over a live drag) until a read-back shows the
- * target size actually holding. Every flag here is the caller's own mutable
- * cell so a drag landing mid-loop wins immediately rather than on the next
- * render.
- *
- * `policy` marks the target as the hook's own decision rather than a stored
- * user pref: the report each issued size produces is consumed instead of
- * persisted, the loop aborts to `abortWhen` (the arrived-signal ref: a
- * workspace that turned out to hold something worth seeing never collapses),
- * and a user gesture remains the stronger abort through `userSettled`.
- */
-interface InspectorRestoreCtx {
-  /** Set once the user has touched the column; the apply loop never crosses it. */
-  readonly touched: { current: boolean };
-  /** Set once the USER (never a policy write) has decided the column. */
-  readonly userSettled: { current: boolean };
-  /** Set by the panel's first measured `onResize` report. */
-  readonly measured: { current: boolean };
-  /** The imperative handle, once the panel registers with its group. */
-  readonly panel: { current: PanelImperativeHandle | null };
-  /** Runs the next frame of the apply loop; returns its cancellation. */
-  readonly schedule: (step: () => void) => () => void;
-  /** Reflects a restored collapse into React state and the shared flag. */
-  readonly applyCollapsed: () => void;
-  /** The pixel size the policy last issued, or null: the report matching it
-   *  is consumed; a report at any other size is intent and falls through. */
-  readonly policyReport: { current: number | null };
-  /** Policy runs only: when set, the loop yields instead of applying. */
-  readonly abortWhen?: { current: boolean };
-  /** Flips `settled`; the hook also mirrors it into the `ready` state. */
-  readonly markSettled: () => void;
-}
-
-function restoreInspectorLayout(
-  stored: InspectorPrefs, ctx: InspectorRestoreCtx, policy = false,
-): () => void {
-  let attempts = 0;
-  let cancelFrame: () => void = () => {};
-
-  const apply = () => {
-    // A stored layout aborts on ANY report of intent — `touched` covers user
-    // and policy writes alike. A policy run aborts only on the USER's own
-    // settle or the arrived signal: its own reports also set `touched`, and
-    // an open loop that read it would die on the report it just caused.
-    if ((policy ? ctx.userSettled.current : ctx.touched.current)
-      || ctx.abortWhen?.current === true) {
-      ctx.markSettled();
-
-      return;
-    }
-
-    const panel = ctx.panel.current;
-
-    // A panel that never registers must not spin the loop forever: the same
-    // 30-frame bound that caps the measured-report wait caps this one too.
-    if (panel === null) {
-      attempts += 1;
-
-      if (attempts >= 30) ctx.markSettled();
-      else cancelFrame = ctx.schedule(apply);
-
-      return;
-    }
-
-    // Wait for the library's first measured report: a group that registered
-    // before it could measure applies its DEFAULT layout on that pass, which
-    // would overwrite a resize issued blind. The report's arrival means the
-    // pass has run. Bounded: a panel registered without its onResize prop
-    // reports nothing, and it must not spin forever.
-    if (!ctx.measured.current && attempts < 30) {
-      attempts += 1;
-      cancelFrame = ctx.schedule(apply);
-
-      return;
-    }
-
-    const holding = stored.collapsed
-      ? panel.isCollapsed()
-      : Math.abs(panel.getSize().inPixels - stored.widthPx) <= 3;
-
-    if (!holding) {
-      if (policy) ctx.policyReport.current = stored.collapsed ? 0 : stored.widthPx;
-
-      if (stored.collapsed) panel.collapse();
-      else panel.resize(stored.widthPx);
-    }
-
-    if (stored.collapsed) ctx.applyCollapsed();
-
-    attempts += 1;
-
-    if (holding || attempts >= 30) ctx.markSettled();
-    else cancelFrame = ctx.schedule(apply);
-  };
-
-  apply();
-
-  return () => cancelFrame();
-}
-
-
 /** The props the inspector Panel gets: the desktop column carries the pixel
  *  floor, the resting width, the collapse affordance and the resize handler;
  *  the mobile column is a zero-or-full pane driven by the page's pane state. */
 export type InspectorPanelProps = Pick<
   PanelProps,
-  "minSize" | "defaultSize" | "collapsible" | "collapsedSize" | "panelRef" | "onResize" | "className"
+  "id" | "minSize" | "defaultSize" | "collapsible" | "collapsedSize" | "panelRef" | "className"
 >;
 
+/** The props the PanelGroup gets: the mount layout when the decided column is
+ *  collapsed (the group's own first pass applies it — no imperative write, so
+ *  nothing is clobbered), the committed-layout callback every gesture and
+ *  every programmatic write reports through, and the element ref the handler
+ *  measures against. */
+export interface InspectorGroupProps {
+  readonly defaultLayout: Layout | undefined;
+  readonly onLayoutChanged: (layout: Layout) => void;
+  readonly elementRef: (element: HTMLDivElement | null) => void;
+}
+
+/** A committed inspector width in pixels. The panel's own `getSize()` reads
+ *  the DOM one commit early inside `onLayoutChanged` — a report can arrive
+ *  before the element reflects it — so the committed flex map and the group
+ *  element's own box answer instead: collapsed reads as flex 0, open as the
+ *  inspector's share of the measured group width. */
+function committedWidthPx(
+  layout: Layout, groupElement: HTMLDivElement | null, fallback: () => number,
+): number {
+  const share = layout[INSPECTOR_PANEL_ID];
+
+  if (share === undefined || share <= 0) return 0;
+
+  if (groupElement === null) return fallback();
+
+  const total = Object.values(layout).reduce((sum, flex) => sum + Math.max(0, flex), 0);
+
+  if (total <= 0) return 0;
+
+  // The group element's content box includes its separators; each one is a
+  // fixed chrome strip the panels do not share.
+  let separators = 0;
+
+  for (const el of groupElement.querySelectorAll('[data-separator]')) {
+    separators += el.getBoundingClientRect().width;
+  }
+
+  const available = Math.max(0, groupElement.clientWidth - separators);
+
+  return Math.round((share / total) * available);
+}
+
 /** What the page reads back. `widthPx` is the resting width — updated where
- *  the layout transitions (apply, collapse, expand, reset), not per drag
- *  tick: a drag reports through `onResize` continuously and the page above
- *  this hook is too large to re-render per pointer move. */
+ *  the layout transitions (decision, collapse, expand, reset, drag commit),
+ *  not per drag tick: the page above this hook is too large to re-render per
+ *  pointer move. */
 export interface InspectorLayout {
   readonly widthPx: number;
   readonly collapsed: boolean;
-  readonly onResize: (
-    size: PanelSize,
-    id: string | number | undefined,
-    prevSize: PanelSize | undefined,
-  ) => void;
+  /** The committed-layout callback: the group's emissions land here, and the
+   *  test harness reports through the same seam. */
+  readonly onLayoutChanged: (layout: Layout) => void;
   readonly toggleCollapsed: () => void;
   /** The column's own collapse affordance — WorkSurface's `onCollapse` prop,
    *  present only where the column is on screen and expanded. */
@@ -235,10 +162,11 @@ export interface InspectorLayout {
   readonly expandVisible: boolean;
   /** The double-click reset on the separator: back to the default width. */
   readonly resetToDefault: () => void;
-  /** True once the stored layout has landed or had its chance to. */
+  /** True once the workspace's layout decision has been applied. */
   readonly ready: boolean;
   readonly panelRef: RefObject<PanelImperativeHandle | null>;
   readonly panelProps: InspectorPanelProps;
+  readonly groupProps: InspectorGroupProps;
 }
 
 export function useInspectorLayout(input: {
@@ -273,53 +201,102 @@ export function useInspectorLayout(input: {
     return () => media.removeEventListener("change", sync);
   }, []);
 
-  // The inspector's explicit width and collapsed state, keyed by account. The
-  // account arrives after first paint; the stored layout applies once it does.
+  // The account key resolves after first paint for a fresh session; a seeded
+  // `kinu.inspector.account` means the whole decision can be read at mount.
   const [accountKey, setAccountKey] = useState<string | null>(
     () => localStorage.getItem("kinu.inspector.account"),
   );
 
-  const [collapsed, setCollapsed] = useState(false);
+  // The mount-time decision: what this workspace's stored choice (or the
+  // first-visit policy, when none exists) says the column starts as. Null
+  // means the library defaults stand — the narrow band and the mobile pane
+  // keep their existing behavior. An account that has not resolved yet can
+  // only be a fresh session — no choice exists for one — so the policy
+  // default decides it: collapsed.
+  const mountDecision = ((): InspectorTarget | null => {
+    if (!desktopPanels || !widePanels) return null;
+
+    const width = (accountKey === null ? null : readInspectorWidth(accountKey)) ?? INSPECTOR_DEFAULT_PX;
+    const choice = accountKey === null ? null : readInspectorChoice(accountKey, workspace);
+
+    if (choice !== null) return { collapsed: !choice, widthPx: width };
+
+    return worthShowing
+      ? { collapsed: false, widthPx: width }
+      : { collapsed: true, widthPx: width };
+  })();
+
+  const [collapsed, setCollapsed] = useState(() => widePanels && (mountDecision?.collapsed ?? false));
   const [ready, setReady] = useState(false);
-  const [widthPx, setWidthPx] = useState(INSPECTOR_DEFAULT_PX);
+  const [widthPx, setWidthPx] = useState(mountDecision?.widthPx ?? INSPECTOR_DEFAULT_PX);
   const panelRef = usePanelRef();
-  const touchedRef = useRef(false);
-  // Mount-time size reports are the default layout announcing itself, not the
-  // user choosing anything — nothing persists until the stored layout has had
-  // its chance (or a live drag proves intent first).
-  const settledRef = useRef(false);
-  // The library's first onResize report is its mount announcement — the group
-  // has completed a measured layout pass. Until it lands, an imperative
-  // resize can be overwritten by the group's own first-pass default layout.
-  const measuredRef = useRef(false);
-  // The flags the per-workspace policy owns: the report the next imperative
-  // size produces is consumed rather than persisted; the collapse this hook
-  // itself decided on is what a later signal may open; and that signal opens
-  // the column exactly once, never over a user's own choice.
-  const policyReportRef = useRef<number | null>(null);
-  const autoCollapsedRef = useRef(false);
+
+  // ── The decision and gesture flags, each earning its place ─────────────
+  // What the hook itself last caused the layout to be — the mount default or
+  // an issued write. An emission that matches it is the echo of our own act:
+  // sync state, persist nothing. One that does not is a user gesture.
+  const expectedLayoutRef = useRef<InspectorTarget | null>(
+    mountDecision === null ? null : { ...mountDecision },
+  );
+  // The user has decided this workspace's column (any persisted gesture).
+  // Policy transitions never cross it; a workspace switch resets it.
+
+  const userDecidedRef = useRef(false);
+  // Which of the no-choice outcomes the hook itself produced: 'closed' when
+  // the policy collapsed it, 'open' when the signal opened it, null when a
+  // stored choice (or the narrow band) owns the column. The mount decision
+  // answers this for the layout the group starts from.
+
+  const policyOwnsRef = useRef<"closed" | "open" | null>(
+    mountDecision === null
+      ? null
+      : accountKey !== null && readInspectorChoice(accountKey, workspace) !== null
+        ? null
+        : mountDecision.collapsed ? "closed" : "open",
+  );
+
+  // The group's element: committed px are read as the inspector's flex share
+  // of its measured box — `panel.getSize()` inside a commit report reads the
+  // DOM a commit early.
+  const groupElementRef = useRef<HTMLDivElement | null>(null);
+
+  const groupElement = useCallback((element: HTMLDivElement | null) => {
+    groupElementRef.current = element;
+  }, []);
+  // The one automatic open has fired; a signal can never steal focus twice.
+
   const autoOpenedRef = useRef(false);
-  // The USER's own decision — drag reports and the affordances — as distinct
-  // from `touched`, which the policy's own reports also set. A user choice
-  // vetoes both policy transitions; a policy report never counts as one.
-  const userSettledRef = useRef(false);
-  // The resting width `expand` restores: the collapse affordance cannot read
-  // it off a collapsed panel (the element measures 0), so every real width
-  // keeps a copy here.
-  const restingWidthRef = useRef(INSPECTOR_DEFAULT_PX);
+  // A decided layout waiting for the group's first committed pass — writes
+  // issued before it are recomputed against a zero-size group and dropped.
+  const pendingDecisionRef = useRef<InspectorTarget | null>(null);
+  // The group has committed a layout at least once (an emission proves a
+  // measured pass ran), so imperative writes land.
+  const groupMeasuredRef = useRef(false);
   const accountKeyRef = useRef(accountKey);
   accountKeyRef.current = accountKey;
   const workspaceRef = useRef(workspace);
   workspaceRef.current = workspace;
-  // Which workspace the policy refs below belong to; a workspace switch
-  // re-decides from the new workspace's stored choice.
+  const desktopPanelsRef = useRef(desktopPanels);
+  desktopPanelsRef.current = desktopPanels;
   const prevWorkspaceRef = useRef(workspace);
   const widePanelsRef = useRef(widePanels);
+
+  // A desktop↔mobile swap remounts the group: its fresh first pass has not
+  // run yet, so a parked write stays parked until the emission proves it.
+  const prevDesktopRef = useRef(desktopPanels);
+
+  if (prevDesktopRef.current !== desktopPanels) {
+    prevDesktopRef.current = desktopPanels;
+    groupMeasuredRef.current = false;
+  }
+
   widePanelsRef.current = widePanels;
   const collapsedRef = useRef(collapsed);
   collapsedRef.current = collapsed;
   const worthShowingRef = useRef(worthShowing);
   worthShowingRef.current = worthShowing;
+  const widthPxRef = useRef(widthPx);
+  widthPxRef.current = widthPx;
 
   useEffect(() => {
     let live = true;
@@ -342,15 +319,12 @@ export function useInspectorLayout(input: {
     return () => { live = false; };
   }, []);
 
-  const markSettled = useCallback(() => {
-    settledRef.current = true;
-    setReady(true);
-  }, []);
+  const markReady = useCallback(() => setReady(true), []);
 
   const persistWidth = useCallback((nextWidth: number) => {
     const account = accountKeyRef.current;
 
-    if (account === null || !widePanelsRef.current || !settledRef.current) return;
+    if (account === null || !widePanelsRef.current) return;
     writeInspectorWidth(account, nextWidth);
   }, []);
 
@@ -358,125 +332,117 @@ export function useInspectorLayout(input: {
     const account = accountKeyRef.current;
     const ws = workspaceRef.current;
 
-    if (account === null || ws === undefined || !widePanelsRef.current || !settledRef.current) return;
+    if (account === null || ws === undefined || !widePanelsRef.current) return;
     writeInspectorChoice(account, ws, open);
   }, []);
 
-  // One ctx for every apply-loop run: the schedule, the panel, the flags.
-  const restoreCtx = useCallback((): InspectorRestoreCtx => ({
-    touched: touchedRef,
-    userSettled: userSettledRef,
-    measured: measuredRef,
-    panel: panelRef,
-    schedule: (step) => {
-      const frame = requestAnimationFrame(step);
+  // Issue the one imperative write a decided layout needs, or park it until
+  // the group's first committed pass. No-op targets are skipped by read-back:
+  // a write that changes nothing would leave a marker no emission consumes.
+  const applyDecision = useCallback((target: InspectorTarget) => {
+    const panel = panelRef.current;
 
-      return () => cancelAnimationFrame(frame);
-    },
-    applyCollapsed: () => {
-      collapsedRef.current = true;
-      setCollapsed(true);
-    },
-    policyReport: policyReportRef,
-    markSettled,
-  }), [panelRef, markSettled]);
+    if (!groupMeasuredRef.current || panel === null) {
+      pendingDecisionRef.current = target;
 
-  // The workspace decided something is worth showing: open the column to the
-  // resting width, once, without storing anything — no policy transition ever
-  // writes a choice.
-  const openForSignal = useCallback(() => {
-    autoOpenedRef.current = true;
-    autoCollapsedRef.current = false;
-    collapsedRef.current = false;
-    setCollapsed(false);
-
-    return restoreInspectorLayout({ widthPx: restingWidthRef.current, collapsed: false }, restoreCtx(), true);
-  }, [restoreCtx]);
-
-  // The stored layout lands once the account is known, and never over a live
-  // drag. A layout effect, not a passive one: the panel ref attaches at
-  // commit, so this is the first effect that can see it — a passive effect
-  // ran before the ref existed, returned early, and never re-ran.
-  //
-  // Two scopes meet here: the WIDTH is the account's, the OPEN/CLOSED choice
-  // is this workspace's. With no choice stored the policy decides — collapsed
-  // unless the workspace already holds something worth showing — through the
-  // same measured-apply loop, marked as policy so its own size report
-  // persists nothing. A workspace switch re-runs this against the new
-  // workspace's choice with the flags reset: another workspace's gestures
-  // belong to it.
-  useLayoutEffect(() => {
-    if (prevWorkspaceRef.current !== workspace) {
-      prevWorkspaceRef.current = workspace;
-      touchedRef.current = false;
-      userSettledRef.current = false;
-      autoCollapsedRef.current = false;
-      autoOpenedRef.current = false;
-      settledRef.current = false;
-      setReady(false);
-      collapsedRef.current = false;
-      setCollapsed(false);
-    }
-
-    if (!desktopPanels || !widePanels || accountKey === null || touchedRef.current) return;
-
-    const width = readInspectorWidth(accountKey);
-    const choice = readInspectorChoice(accountKey, workspace);
-
-    if (choice === null) {
-      if (width !== null) {
-        restingWidthRef.current = width;
-        setWidthPx(width);
-      }
-
-      if (worthShowing) return openForSignal();
-
-      autoCollapsedRef.current = true;
-
-      return restoreInspectorLayout(
-        { widthPx: restingWidthRef.current, collapsed: true },
-        { ...restoreCtx(), abortWhen: worthShowingRef },
-        true,
-      );
-    }
-
-    const target: InspectorPrefs = { widthPx: width ?? INSPECTOR_DEFAULT_PX, collapsed: !choice };
-    restingWidthRef.current = target.widthPx;
-    setWidthPx(target.widthPx);
-    collapsedRef.current = target.collapsed;
-    setCollapsed(target.collapsed);
-
-    return restoreInspectorLayout(target, restoreCtx());
-  }, [desktopPanels, widePanels, accountKey, workspace, worthShowing, panelRef, restoreCtx, openForSignal]);
-
-  // The one automatic open: the workspace produced something worth seeing
-  // after the column had already settled closed. Only the policy-collapsed
-  // column is eligible — a user's own close, or any stored choice, is never
-  // reopened by an arrival. Opens through the apply loop so it cannot be
-  // overwritten by the group's first pass, and writes nothing to the store.
-  useLayoutEffect(() => {
-    if (!worthShowing || autoOpenedRef.current || !autoCollapsedRef.current
-      || userSettledRef.current) {
       return;
     }
 
-    return openForSignal();
-  }, [worthShowing, openForSignal]);
+    const holding = target.collapsed
+      ? panel.isCollapsed()
+      : !panel.isCollapsed() && Math.abs(panel.getSize().inPixels - target.widthPx) <= 3;
+
+    if (holding) {
+      markReady();
+
+      return;
+    }
+
+    expectedLayoutRef.current = { ...target };
+
+    if (target.collapsed) panel.collapse();
+    else panel.resize(target.widthPx);
+
+    markReady();
+  }, [panelRef, markReady]);
+
+  // The workspace's decision, re-decided when the account arrives or the
+  // workspace under the column changes. A user's own gesture while the
+  // account was still resolving wins outright — the decision is skipped, the
+  // stored choice (if any) is left for the next visit to read.
+  useLayoutEffect(() => {
+    if (prevWorkspaceRef.current !== workspace) {
+      prevWorkspaceRef.current = workspace;
+      userDecidedRef.current = false;
+      autoOpenedRef.current = false;
+      policyOwnsRef.current = null;
+      pendingDecisionRef.current = null;
+      setReady(false);
+    }
+
+    if (!desktopPanels || !widePanels || accountKey === null || userDecidedRef.current) return;
+
+    const width = readInspectorWidth(accountKey) ?? INSPECTOR_DEFAULT_PX;
+    const choice = readInspectorChoice(accountKey, workspace);
+
+    if (choice !== null) {
+      const target: InspectorTarget = { collapsed: !choice, widthPx: width };
+      widthPxRef.current = target.widthPx;
+      setWidthPx(target.widthPx);
+      collapsedRef.current = target.collapsed;
+      setCollapsed(target.collapsed);
+      applyDecision(target);
+
+      return;
+    }
+
+    if (worthShowingRef.current) {
+      policyOwnsRef.current = "open";
+      autoOpenedRef.current = true;
+      collapsedRef.current = false;
+      setCollapsed(false);
+      applyDecision({ collapsed: false, widthPx: width });
+
+      return;
+    }
+
+    policyOwnsRef.current = "closed";
+    collapsedRef.current = true;
+    setCollapsed(true);
+    applyDecision({ collapsed: true, widthPx: width });
+  }, [desktopPanels, widePanels, accountKey, workspace, applyDecision]);
+
+  // The one automatic open: the workspace produced something worth seeing
+  // after the column had already settled closed under the policy. Only a
+  // policy-closed column is eligible — a stored choice or a user's own
+  // gesture is never reopened by an arrival.
+  useLayoutEffect(() => {
+    if (!worthShowing || autoOpenedRef.current || policyOwnsRef.current !== "closed"
+      || userDecidedRef.current) {
+      return;
+    }
+
+    policyOwnsRef.current = "open";
+    autoOpenedRef.current = true;
+    collapsedRef.current = false;
+    setCollapsed(false);
+    applyDecision({ collapsed: false, widthPx: widthPxRef.current });
+  }, [worthShowing, applyDecision]);
 
   const collapse = useCallback(() => {
-    touchedRef.current = true;
-    settledRef.current = true;
-    userSettledRef.current = true;
+    userDecidedRef.current = true;
+    policyOwnsRef.current = null;
     const panel = panelRef.current;
     const width = panel?.getSize().inPixels ?? 0;
 
     if (width >= 1) {
       const rounded = Math.max(INSPECTOR_MIN_PX, Math.round(width));
-      restingWidthRef.current = rounded;
+      widthPxRef.current = rounded;
       setWidthPx(rounded);
       persistWidth(rounded);
     }
 
+    expectedLayoutRef.current = { collapsed: true, widthPx: widthPxRef.current };
     collapsedRef.current = true;
     setCollapsed(true);
     persistChoice(false);
@@ -484,14 +450,12 @@ export function useInspectorLayout(input: {
   }, [panelRef, persistWidth, persistChoice]);
 
   const expand = useCallback(() => {
-    touchedRef.current = true;
-    settledRef.current = true;
-    userSettledRef.current = true;
-    autoCollapsedRef.current = false;
-    const width = restingWidthRef.current;
+    userDecidedRef.current = true;
+    policyOwnsRef.current = null;
+    const width = widthPxRef.current;
+    expectedLayoutRef.current = { collapsed: false, widthPx: width };
     collapsedRef.current = false;
     setCollapsed(false);
-    setWidthPx(width);
     persistWidth(width);
     persistChoice(true);
     panelRef.current?.resize(width);
@@ -503,11 +467,10 @@ export function useInspectorLayout(input: {
   }, [collapse, expand]);
 
   const resetToDefault = useCallback(() => {
-    touchedRef.current = true;
-    settledRef.current = true;
-    userSettledRef.current = true;
-    autoCollapsedRef.current = false;
-    restingWidthRef.current = INSPECTOR_DEFAULT_PX;
+    userDecidedRef.current = true;
+    policyOwnsRef.current = null;
+    widthPxRef.current = INSPECTOR_DEFAULT_PX;
+    expectedLayoutRef.current = { collapsed: false, widthPx: INSPECTOR_DEFAULT_PX };
     persistWidth(INSPECTOR_DEFAULT_PX);
     persistChoice(true);
     collapsedRef.current = false;
@@ -516,70 +479,95 @@ export function useInspectorLayout(input: {
     panelRef.current?.resize(INSPECTOR_DEFAULT_PX);
   }, [panelRef, persistWidth, persistChoice]);
 
-  const onResize = useCallback((size: PanelSize, _id: string | number | undefined, prevSize: PanelSize | undefined) => {
-    // Every report means the group completed a measured pass; the apply loop
-    // above waits for exactly that before issuing its imperative size.
-    measuredRef.current = true;
-    let prefs = resizePrefsOf(size, prevSize, collapsedRef.current);
+  // Every committed layout reports here exactly once — the mount pass, a
+  // pointer release, a keyboard step, or a write the hook itself issued.
+  // Matching `expectedLayout` marks it an echo: the column's React state
+  // catches up and nothing persists. Anything else is a user gesture, and a
+  // gesture while the policy still owns a COLLAPSED column is the manual
+  // launch — the workspace's choice is written and the policy hands over.
+  const onLayoutChanged = useCallback((layout: Layout) => {
+    // The mobile group's pane emissions are not column decisions: nothing
+    // they report is persisted or reflected.
+    if (!desktopPanelsRef.current) return;
 
-    if (prefs === null) return;
+    const share = layout[INSPECTOR_PANEL_ID];
+    const collapsedNow = share !== undefined && share <= 0;
 
-    if (!widePanelsRef.current || accountKeyRef.current === null) return;
-    touchedRef.current = true;
-    settledRef.current = true;
+    const now: InspectorTarget = {
+      collapsed: collapsedNow,
+      widthPx: collapsedNow ? 0 : Math.max(INSPECTOR_MIN_PX, committedWidthPx(layout, groupElementRef.current,
+        () => Math.round(panelRef.current?.getSize().inPixels ?? 0))),
+    };
 
-    // A report at the size the policy just issued carries no intent: consume
-    // it, never persist it. A report at any OTHER size is a gesture landing
-    // inside the policy's own re-assert window — leave the flag; a collapsed
-    // report while the policy is still applying is noise, not a close.
-    if (policyReportRef.current !== null) {
-      const issued = policyReportRef.current;
+    groupMeasuredRef.current = true;
 
-      if (issued < 1 ? size.inPixels < 1 : Math.abs(size.inPixels - issued) <= 3) {
-        policyReportRef.current = null;
+    const expected = expectedLayoutRef.current;
 
-        return;
+    if (expected !== null && expected.collapsed === now.collapsed
+      && (now.collapsed || Math.abs(now.widthPx - expected.widthPx) <= 3)) {
+      collapsedRef.current = now.collapsed;
+      setCollapsed(now.collapsed);
+
+      if (!now.collapsed) {
+        widthPxRef.current = now.widthPx;
+        setWidthPx(now.widthPx);
       }
 
-      if (size.inPixels < 1) return;
+      const pending = pendingDecisionRef.current;
+      pendingDecisionRef.current = null;
+
+      if (pending !== null) applyDecision(pending);
+
+      return;
     }
 
-    // While the policy still owns the column, a report at the collapsed size
-    // is layout noise — a group re-layout, not intent — and persists nothing.
-    // A report that leaves the column OPEN is a gesture: hand the column over
-    // and record the choice, collapsed bit included.
-    if (autoCollapsedRef.current && !userSettledRef.current) {
-      if (size.inPixels < 1) return;
+    // A gesture: the column is the user's from here on — a decision still
+    // parked for the first pass dies with it, never written over the hand.
+    userDecidedRef.current = true;
+    policyOwnsRef.current = null;
+    pendingDecisionRef.current = null;
+    collapsedRef.current = now.collapsed;
+    setCollapsed(now.collapsed);
+    expectedLayoutRef.current = { ...now };
 
-      autoCollapsedRef.current = false;
-      collapsedRef.current = false;
-      setCollapsed(false);
-      prefs = { ...prefs, collapsed: false };
+    if (!now.collapsed) {
+      widthPxRef.current = now.widthPx;
+      setWidthPx(now.widthPx);
+      persistWidth(now.widthPx);
     }
 
-    if (size.inPixels >= 1) restingWidthRef.current = prefs.widthPx;
-
-    userSettledRef.current = true;
-    persistWidth(prefs.widthPx);
-    persistChoice(!prefs.collapsed);
-  }, [persistWidth, persistChoice]);
+    persistChoice(!now.collapsed);
+    markReady();
+  }, [panelRef, applyDecision, persistWidth, persistChoice, markReady]);
 
   const panelProps: InspectorPanelProps = desktopPanels
     ? {
+      id: INSPECTOR_PANEL_ID,
       minSize: `${String(INSPECTOR_MIN_PX)}px`,
       defaultSize: `${String(widthPx)}px`,
       collapsible: true,
       collapsedSize: "0px",
       panelRef,
-      onResize,
       className: collapsed ? "overflow-hidden" : undefined,
     }
-    : { minSize: "0%", defaultSize: mobileDefault };
+    : { id: INSPECTOR_PANEL_ID, minSize: "0%", defaultSize: mobileDefault };
+
+  const groupProps: InspectorGroupProps = desktopPanels
+    ? {
+      // The group applies the decided mount layout in its own first pass —
+      // an imperative collapse could be clobbered by that pass, this cannot.
+      defaultLayout: mountDecision !== null && mountDecision.collapsed
+        ? { [CHAT_PANEL_ID]: 1, [INSPECTOR_PANEL_ID]: 0 }
+        : undefined,
+      onLayoutChanged,
+      elementRef: groupElement,
+    }
+    : { defaultLayout: undefined, onLayoutChanged, elementRef: groupElement };
 
   return {
     widthPx,
     collapsed,
-    onResize,
+    onLayoutChanged,
     toggleCollapsed,
     collapseControl: desktopPanels && !collapsed ? collapse : undefined,
     expandVisible: desktopPanels && collapsed,
@@ -587,5 +575,6 @@ export function useInspectorLayout(input: {
     ready,
     panelRef,
     panelProps,
+    groupProps,
   };
 }

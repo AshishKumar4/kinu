@@ -1200,9 +1200,10 @@ export default function WorkspacePage() {
         <button type="button" onClick={() => setMobilePane('workspace')} aria-pressed={mobilePane === 'workspace'}
           className={`rounded-full px-3 py-1.5 text-xs ${mobilePane === 'workspace' ? 'p-accent-subtle p-accent' : 'p-text-3'}`}>Workspace{state.pendingActions.length > 0 ? ` · ${String(state.pendingActions.length)}` : ''}</button>
       </div>
-      <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="relative flex-1" resizeTargetMinimumSize={{ coarse: 20, fine: 10 }}>
+      <PanelGroup key={desktopPanels ? "desktop" : mobilePane} className="relative flex-1" resizeTargetMinimumSize={{ coarse: 20, fine: 10 }} {...inspector.groupProps}>
         {/* ── Column A — Chat / Steer ─────────────────────────── */}
         <Panel
+          id="chat"
           {...(desktopPanels
             ? { minSize: "24%" }
             : { minSize: "0%", defaultSize: mobilePane === 'chat' ? "100%" : "0%" })}

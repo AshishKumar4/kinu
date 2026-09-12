@@ -1,57 +1,68 @@
 /**
  * The inspector layout policy, exercised through the hook the page mounts:
- * stored prefs round-trip through the account key, a mount report persists
- * nothing and vetoes nothing, and the apply loop's 30-frame bound holds in
- * both phases.
+ * stored prefs round-trip through the account and workspace keys, the group's
+ * committed-layout emission is what persists a gesture, and a decided layout
+ * parked behind the first measured pass applies when it lands — never twice,
+ * never on its own.
  *
  * React's static renderer runs the hook for real — `useState`,
- * `useCallback`, every ref — and skips effects. The one decision that lives
- * inside an effect is the apply loop, so `useLayoutEffect` is collected and
- * the harness flushes it against a frame queue, exactly where a browser's
- * commit would run it. The browser rows in scripts/chat-and-files-ux.test.ts
- * cover the pixels.
+ * `useCallback`, every ref — and skips effects. The decision lives inside a
+ * layout effect, so `useLayoutEffect` is collected and the harness flushes
+ * it, then reports a committed layout through `onLayoutChanged` exactly the
+ * way the group's own emission arrives. The browser rows in
+ * scripts/chat-and-files-ux.test.ts cover the pixels.
  */
-import { afterAll, beforeEach, describe, expect, mock, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, mock, test } from 'bun:test';
 import * as realReact from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { useInspectorLayout, type InspectorLayout } from '../src/hooks/use-inspector-layout';
-import type { PanelImperativeHandle, PanelSize } from 'react-resizable-panels';
+import type { Layout, PanelImperativeHandle } from 'react-resizable-panels';
 
 let store: Record<string, string> = {};
 
-Object.assign(globalThis, {
-  localStorage: {
-    getItem: (key: string) => store[key] ?? null,
-    setItem: (key: string, value: string) => { store[key] = value; },
-    removeItem: (key: string) => { delete store[key]; },
-  },
+/* `window` and `localStorage` arrive as REAL globals: another cf-backend unit
+ * file installs a read-only `localStorage`, so a bare assignment would throw
+ * whenever this file runs after it. Define them configurable per test and
+ * hand the previous descriptor back afterward. */
+
+let previousLocalStorage: PropertyDescriptor | undefined;
+
+let previousWindow: PropertyDescriptor | undefined;
+
+beforeEach(() => {
+  store = {};
+  layoutEffects.length = 0;
+  previousLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
+  previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+  Object.defineProperty(globalThis, 'localStorage', {
+    configurable: true,
+    writable: true,
+    value: {
+      getItem: (key: string) => store[key] ?? null,
+      setItem: (key: string, value: string) => { store[key] = value; },
+      removeItem: (key: string) => { delete store[key]; },
+    },
+  });
+  // A wide display: the media query the hook reads answers "desktop".
+  Object.defineProperty(globalThis, 'window', {
+    configurable: true,
+    writable: true,
+    value: { matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }) },
+  });
 });
 
-/* A wide display: the media query the hook reads answers "desktop". */
-Object.assign(globalThis, {
-  window: {
-    matchMedia: () => ({ matches: true, addEventListener() {}, removeEventListener() {} }),
-  },
-});
+afterEach(() => {
+  if (previousLocalStorage === undefined) {
+    Reflect.deleteProperty(globalThis, 'localStorage');
+  } else {
+    Object.defineProperty(globalThis, 'localStorage', previousLocalStorage);
+  }
 
-/* The apply loop's frame stream: a manual queue, drained by the harness, so a
- * test sees exactly the frames a rAF stream would have run. */
-const frameQueue: { id: number; cb: () => void }[] = [];
-
-let nextFrameId = 0;
-
-Object.assign(globalThis, {
-  requestAnimationFrame: (cb: () => void) => {
-    const id = ++nextFrameId;
-    frameQueue.push({ id, cb });
-
-    return id;
-  },
-  cancelAnimationFrame: (id: number) => {
-    const at = frameQueue.findIndex((frame) => frame.id === id);
-
-    if (at >= 0) frameQueue.splice(at, 1);
-  },
+  if (previousWindow === undefined) {
+    Reflect.deleteProperty(globalThis, 'window');
+  } else {
+    Object.defineProperty(globalThis, 'window', previousWindow);
+  }
 });
 
 /* `useLayoutEffect` is a no-op under the static renderer, so the registrations
@@ -83,34 +94,49 @@ await mock.module('react', () => ({
 
 afterAll(() => { mock.restore(); });
 
-const px = (inPixels: number): PanelSize => ({ asPercentage: 0, inPixels });
-
 const depsEqual = (a: readonly unknown[] | undefined, b: readonly unknown[] | undefined): boolean =>
   a !== undefined && b !== undefined && a.length === b.length && a.every((dep, i) => Object.is(dep, b[i]));
 
 interface PanelStub {
   readonly handle: PanelImperativeHandle;
-  /** Every imperative resize the loop issued. */
+  /** Every imperative resize the hook issued. */
   readonly resizes: number[];
-  /** What `isCollapsed`/`getSize` read back. */
+  /** Every imperative collapse the hook issued. */
+  collapses: number;
+  /** What `isCollapsed`/`getSize` read back — set it to the layout the group
+   *  committed before reporting it through `onLayoutChanged`. */
   readonly state: { collapsed: boolean; sizePx: number };
 }
+
 
 function panelStub(sizePx: number): PanelStub {
   const state = { collapsed: false, sizePx };
   const resizes: number[] = [];
 
-  return {
+  const stub: PanelStub = {
     resizes,
+    collapses: 0,
     state,
     handle: {
-      collapse: () => { state.collapsed = true; },
+      collapse: () => { state.collapsed = true; stub.collapses += 1; },
       expand: () => { state.collapsed = false; },
       getSize: () => ({ asPercentage: 0, inPixels: state.collapsed ? 0 : state.sizePx }),
       isCollapsed: () => state.collapsed,
-      resize: (size: number | string) => { resizes.push(Number(size)); state.sizePx = Number(size); },
+      resize: (size: number | string) => { resizes.push(Number(size)); state.sizePx = Number(size); state.collapsed = false; },
     },
   };
+
+  return stub;
+}
+
+/* A committed layout report, as the group's `onLayoutChanged` emits one: the
+ * stub's state is already the committed size, and the flex map carries the
+ * same answer for the panel that is absent. */
+function emit(layout: InspectorLayout, stub: PanelStub, inPixels: number): void {
+  stub.state.collapsed = inPixels < 1;
+  stub.state.sizePx = Math.max(0, inPixels);
+  const map: Layout = { chat: 1, inspector: inPixels < 1 ? 0 : 1 };
+  layout.onLayoutChanged(map);
 }
 
 interface Pass {
@@ -121,12 +147,8 @@ interface Pass {
 interface Controls {
   /** Runs this mount's collected layout effects, once per deps change. */
   flush(): void;
-  /** The effect's own cancellation, as an unmount/cleanup would run it. */
+  /** The effects' own cancellation, as an unmount would run it. */
   cancelEffects(): void;
-  /** Plays back queued animation frames, in order, up to `max`. */
-  frames(max?: number): number;
-  /** Frames the loop has scheduled and not yet run. */
-  pendingFrames(): number;
 }
 
 interface Mounted {
@@ -137,16 +159,16 @@ interface Mounted {
 }
 
 /** The inspector column as the page's hook hands it over. `account` seeds the
- *  account key the way a returning session's profile write did; `stored`
- *  seeds that account's persisted prefs. Steps run inside the render pass —
- *  a same-component state update re-renders immediately, so frames drained
- *  and handlers called there see the same ordering a commit stream would.
+ *  account key the way a returning session's profile write did; `storedWidth`
+ *  and `storedChoice` seed the split persisted keys. Steps run inside the
+ *  render pass — a same-component state update re-renders immediately, so
+ *  emissions reported there see the same ordering a commit stream would.
  *  The hook's return rides the column element as data-* attributes. */
 function mount(input: {
   account: string | null;
   /** The workspace the column belongs to — what the per-workspace open/close
    *  choice keys on. Defaults to `ws-1` so a row that never names one still
-   *  exercises the workspace-scoped key. */
+   *   exercises the workspace-scoped key. */
   workspace?: string;
   /** Raw value seeded at `kinu.inspector.<account>` — the account's width. */
   storedWidth?: string;
@@ -162,8 +184,7 @@ function mount(input: {
   const gen = ++generation;
   // Effects are tracked by REGISTRATION SLOT: the hook mounts more than one
   // layout effect, and a commit cancels and re-runs each only when ITS OWN
-  // deps change — one shared slot would have the second registration cancel
-  // the first effect's pending frame on every flush.
+  // deps change.
   const slots: { deps: readonly unknown[] | undefined; cancel: (() => void) | undefined }[] = [];
   const ws = input.workspace ?? 'ws-1';
 
@@ -197,17 +218,6 @@ function mount(input: {
         state.cancel = undefined;
       }
     },
-    frames(max = 60) {
-      let played = 0;
-
-      while (frameQueue.length > 0 && played < max) {
-        frameQueue.shift()?.cb();
-        played += 1;
-      }
-
-      return played;
-    },
-    pendingFrames: () => frameQueue.length,
   };
 
   function Column() {
@@ -247,26 +257,35 @@ function mount(input: {
 
 beforeEach(() => {
   store = {};
-  frameQueue.length = 0;
   layoutEffects.length = 0;
 });
 
 describe('the persisted layout, through the page hook', () => {
   test('an account with nothing stored reads as absent, never a default', () => {
-    // No account key at all: the restore never gets an account to read for,
-    // so it never settles and never writes.
+    // No account key at all: the decision effect never gets an account to
+    // read for, so nothing persists — while the policy default still stands
+    // the column up collapsed.
+
+    const anonymousStub = panelStub(340);
+
     const anonymous = mount({
       account: null,
-      steps: [(_layout, controls) => { controls.flush(); controls.frames(); }],
+      steps: [(layout, controls) => {
+        layout.panelRef.current = anonymousStub.handle;
+        controls.flush();
+        emit(layout, anonymousStub, 0);
+      }],
     });
 
     expect(anonymous.html).toContain('data-default-size="340px"');
+    expect(anonymous.html).toContain('data-collapsed="true"');
     expect(anonymous.html).toContain('data-ready="false"');
     expect(store).toEqual({});
 
     // A stored value in no shape the reader accepts is absent, not a width —
     // the column falls under the first-visit policy: it settles collapsed
     // and writes nothing back.
+
     const malformedStub = panelStub(340);
 
     const malformed = mount({
@@ -275,8 +294,7 @@ describe('the persisted layout, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = malformedStub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, malformedStub, 0);
       }],
     });
 
@@ -291,22 +309,25 @@ describe('the persisted layout, through the page hook', () => {
   });
 
   test('a write reads back: width and collapsed survive the string form', () => {
+    // The mount is policy-collapsed, so the first toggle opens it and the
+    // second is the user's own close — the write under test.
     const first = mount({ account: 'a@b' });
     const stub = panelStub(340);
 
     first.layout.panelRef.current = stub.handle;
     first.layout.toggleCollapsed();
+    first.layout.toggleCollapsed();
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
+    expect(store['kinu.inspector.a@b']).toBe('340');
 
-    // A fresh mount reads the workspace's choice back: the collapse restores
-    // through the panel and into the hook's own state.
+    // A fresh mount reads the workspace's choice back: the group lays it out
+    // collapsed and the hook's own state agrees.
     const second = mount({
       account: 'a@b',
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, stub, 0);
       }],
     });
 
@@ -318,6 +339,7 @@ describe('the persisted layout, through the page hook', () => {
     // The account key is real isolation, not a suffix nobody reads. The other
     // account has nothing stored, so it lands under the first-visit policy:
     // collapsed, with nothing written for it either.
+
     const otherStub = panelStub(340);
 
     const other = mount({
@@ -325,8 +347,7 @@ describe('the persisted layout, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = otherStub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, otherStub, 0);
       }],
     });
 
@@ -346,12 +367,10 @@ describe('the persisted layout, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, stub, 280);
       }],
     });
 
-    expect(stub.resizes).toEqual([280]);
     expect(mounted.html).toContain('data-width="280"');
     expect(mounted.html).toContain('data-ready="true"');
   });
@@ -364,9 +383,9 @@ describe('the persisted layout, through the page hook', () => {
   });
 });
 
-describe('the resize decision, through the page hook', () => {
-  test('the mount report is the default layout announcing itself: it persists nothing and vetoes nothing', () => {
-    const stub = panelStub(340);
+describe('the committed-layout report, through the page hook', () => {
+  test('the mount emission is the group announcing the decided layout: it persists nothing', () => {
+    const stub = panelStub(300);
 
     const mounted = mount({
       account: 'a@b',
@@ -375,26 +394,20 @@ describe('the resize decision, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        controls.frames(3);
-        // The loop is still waiting on the first measured pass: rescheduling,
-        // not resizing blind into a layout the group's first pass owns.
-        expect(stub.resizes).toEqual([]);
-
-        layout.onResize(px(340), 'inspector', undefined);
-        // The announcement carries no intent: the stored size is untouched.
+        // The group's first committed pass lands at the decided layout. The
+        // announcement carries no intent: the stored size is untouched.
+        emit(layout, stub, 300);
         expect(store['kinu.inspector.a@b']).toBe('300');
-        controls.frames();
       }],
     });
 
-    // And it vetoed nothing — the pending restore still applied.
-    expect(stub.resizes).toEqual([300]);
+    expect(stub.resizes).toEqual([]);
     expect(store['kinu.inspector.a@b']).toBe('300');
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a real report clamps at the floor and reads sub-pixel as collapsed', () => {
-    const stub = panelStub(340);
+  test('a real report clamps at the floor and a collapse keeps the resting width', () => {
+    const stub = panelStub(300);
 
     const mounted = mount({
       account: 'a@b',
@@ -405,38 +418,35 @@ describe('the resize decision, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, stub, 300);
       }],
     });
 
     const layout = mounted.layout;
 
     // Each report arrives after the group's own pass settled on that size.
-    stub.state.sizePx = 412;
-    layout.onResize(px(412), 'inspector', px(340));
+    emit(layout, stub, 412);
     expect(store['kinu.inspector.a@b']).toBe('412');
 
-    stub.state.sizePx = 120;
-    layout.onResize(px(120), 'inspector', px(412));
+    emit(layout, stub, 120);
     expect(store['kinu.inspector.a@b']).toBe('280');
 
-    stub.state.sizePx = 0.4;
-    stub.state.collapsed = true;
-    // The column's own collapse affordance flipped it: the next report keeps
-    // the collapsed flag instead of reviving the column at 300px.
-    layout.collapseControl?.();
+    // The column's own collapse affordance captures the live width, then the
+    // collapsed report keeps it — the resting width survives the collapse
+    // instead of reading back the collapsed pass's own size.
     stub.state.sizePx = 300;
-    stub.state.collapsed = true;
-    layout.onResize(px(300), 'inspector', px(280));
+    layout.collapseControl?.();
+    expect(store['kinu.inspector.a@b']).toBe('300');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
+    emit(layout, stub, 0);
     expect(store['kinu.inspector.a@b']).toBe('300');
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
   });
 });
 
-describe('the apply loop, through the page hook', () => {
-  test('a stored width applies only once the first measured report has landed', () => {
-    const stub = panelStub(340);
+describe('the decided layout, through the page hook', () => {
+  test('the decided layout is the mount layout: nothing issues blind, ready waits on the pass', () => {
+    const stub = panelStub(300);
 
     const mounted = mount({
       account: 'a@b',
@@ -445,22 +455,24 @@ describe('the apply loop, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        controls.frames(3);
+        // Before the group's first committed pass the hook issues no write
+        // and the column is not yet ready — the mount layout IS the decided
+        // layout, carried by the group's own defaultLayout/defaultSize.
         expect(stub.resizes).toEqual([]);
-        expect(controls.pendingFrames()).toBe(1);
+        expect(stub.collapses).toBe(0);
+        expect(layout.ready).toBe(false);
 
-        // The library's first measured report: the first-pass default layout
-        // has run, so an imperative resize now holds.
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        // The group's first emission lands the decision and marks it ready.
+        emit(layout, stub, 300);
       }],
     });
 
-    expect(stub.resizes).toEqual([300]);
+    expect(stub.resizes).toEqual([]);
+    expect(stub.collapses).toBe(0);
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a live drag wins mid-loop: the pending restore never applies', () => {
+  test('a live gesture wins over a parked decision: the stored layout never applies', () => {
     const stub = panelStub(340);
 
     const mounted = mount({
@@ -470,57 +482,76 @@ describe('the apply loop, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        controls.frames(2);
-        layout.onResize(px(412), 'inspector', px(340));
-        controls.frames(5);
+        // The user's drag commits before the decided layout gets its pass:
+        // the gesture is the workspace's choice and the parked decision dies.
+        emit(layout, stub, 412);
+        emit(layout, stub, 412);
       }],
     });
 
     expect(stub.resizes).toEqual([]);
     expect(store['kinu.inspector.a@b']).toBe('412');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a read-back that misses re-asserts, and the 30-frame bound still settles', () => {
+  test('a no-op decision leaves no marker: the next gesture still persists', () => {
+    // The group dedupes a write whose layout already stands, so a decision
+    // that changes nothing must not park a pending write the next user
+    // gesture gets mistaken for.
     const stub = panelStub(340);
-    // The panel ignores the imperative resize: every read-back misses.
-    const deaf: PanelImperativeHandle = { ...stub.handle, resize: () => { stub.resizes.push(-1); } };
 
+    const mounted = mount({
+      account: 'a@b',
+      storedChoice: '0',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        // The committed layout already IS the decided collapse: the parked
+        // decision drains as a hold, issues nothing, and leaves no marker.
+        emit(layout, stub, 0);
+      }],
+    });
+
+    expect(stub.resizes).toEqual([]);
+    expect(stub.collapses).toBe(0);
+
+    // A gesture arriving next is the user's, not an echo: it persists.
+    const layout = mounted.layout;
+    emit(layout, stub, 320);
+    expect(store['kinu.inspector.a@b']).toBe('320');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
+  });
+
+  test('a panel that never registers parks the decision without a loop', () => {
+    // panelRef stays null and no emission ever arrives: the decided layout
+    // simply waits. There is nothing scheduled to cancel and nothing spins.
     const mounted = mount({
       account: 'a@b',
       storedWidth: '300',
       storedChoice: '1',
-      steps: [(layout, controls) => {
-        layout.panelRef.current = deaf;
+      steps: [(_layout, controls) => {
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames(40);
+        controls.flush();
       }],
     });
 
-    expect(mounted.html).toContain('data-ready="true"');
-    expect(stub.resizes.length).toBeLessThanOrEqual(30);
-  });
+    expect(mounted.html).toContain('data-ready="false"');
 
-  test('a panel that never reports still settles inside the same bound', () => {
-    const stub = panelStub(340);
-    mount({
+    // Cancellation mid-wait is the other termination: cleanup runs, nothing
+    // is left armed.
+    const pending = mount({
       account: 'a@b',
       storedWidth: '300',
       storedChoice: '1',
-      steps: [(layout, controls) => {
-        layout.panelRef.current = stub.handle;
-        controls.flush();
-        // Thirty frames spent waiting, then the bound lets one apply through
-        // rather than spin forever on a panel that reports nothing.
-        controls.frames(40);
-      }],
     });
 
-    expect(stub.resizes).toEqual([300]);
+    pending.controls.flush();
+    pending.controls.cancelEffects();
+    expect(pending.html).toContain('data-ready="false"');
   });
 
-  test('a stored collapse restores through the panel and reflects into state', () => {
+  test('a stored collapse restores through the mount layout and reflects into state', () => {
     const stub = panelStub(340);
 
     const mounted = mount({
@@ -530,8 +561,7 @@ describe('the apply loop, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, stub, 0);
       }],
     });
 
@@ -541,51 +571,7 @@ describe('the apply loop, through the page hook', () => {
     expect(stub.state.collapsed).toBe(true);
     expect(mounted.html).toContain('data-ready="true"');
   });
-
-  test('cancellation stops the pending frame', () => {
-    const mounted = mount({ account: 'a@b', storedWidth: '300', storedChoice: '1' });
-
-    // The effect ran, found no panel yet, and is parked on one frame.
-    mounted.controls.flush();
-    expect(mounted.controls.pendingFrames()).toBe(1);
-    mounted.controls.cancelEffects();
-    expect(mounted.controls.pendingFrames()).toBe(0);
-    expect(mounted.controls.frames(10)).toBe(0);
-    expect(mounted.html).toContain('data-ready="false"');
-  });
 });
-
-  test('a panel that never registers still settles — and cancel stops it mid-wait', () => {
-    // panelRef stays null the whole run: no element ever hands the loop a
-    // handle. The wait for one shares the same 30-frame bound as the measured
-    // report wait, so the column reports ready instead of spinning.
-    const mounted = mount({
-      account: 'a@b',
-      storedWidth: '300',
-      storedChoice: '1',
-      steps: [(_layout, controls) => {
-        controls.flush();
-        controls.frames(40);
-      }],
-    });
-
-    expect(mounted.html).toContain('data-ready="true"');
-
-    // Cancellation mid-wait is the other termination: the pending frame goes
-    // away and stays away.
-    const pending = mount({
-      account: 'a@b',
-      storedWidth: '300',
-      storedChoice: '1',
-    });
-
-    pending.controls.flush();
-    expect(pending.controls.pendingFrames()).toBe(1);
-    pending.controls.cancelEffects();
-    expect(pending.controls.pendingFrames()).toBe(0);
-    expect(pending.controls.frames(10)).toBe(0);
-    expect(pending.html).toContain('data-ready="false"');
-  });
 
 describe('the first-visit policy, through the page hook', () => {
   test('nothing stored collapses the column — and the collapse writes nothing', () => {
@@ -596,12 +582,9 @@ describe('the first-visit policy, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
-        // The policy collapse's own report arrives next and is consumed:
-        // a size the hook chose is not the user's choice, so nothing stores.
-        layout.onResize(px(0), 'inspector', px(340));
-        controls.frames();
+        // The group's first pass commits the policy collapse; the emission
+        // matches what the hook decided, so nothing stores.
+        emit(layout, stub, 0);
       }],
     });
 
@@ -621,8 +604,7 @@ describe('the first-visit policy, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, stub, 340);
       }],
     });
 
@@ -643,8 +625,7 @@ describe('the first-visit policy, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, stub, 0);
       }],
     });
 
@@ -665,12 +646,11 @@ describe('the first-visit policy, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
+        emit(layout, stub, 340);
       }],
     });
 
-    // The stored width already holds at mount size, so the loop issues nothing.
+    // The stored width already holds at mount size: nothing is issued.
     expect(stub.resizes).toEqual([]);
     expect(mounted.html).toContain('data-collapsed="false"');
     expect(mounted.html).toContain('data-ready="true"');
@@ -684,14 +664,10 @@ describe('the first-visit policy, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        layout.onResize(px(340), 'inspector', undefined);
-        controls.frames();
-        layout.onResize(px(0), 'inspector', px(340));
-        // The drag open reports a real width: the column is the user's now.
-        stub.state.collapsed = false;
-        stub.state.sizePx = 320;
-        layout.onResize(px(320), 'inspector', px(0));
-        controls.frames();
+        // The policy collapse commits, then the drag open reports a real
+        // width: the column is the user's now.
+        emit(layout, stub, 0);
+        emit(layout, stub, 320);
       }],
     });
 
@@ -699,4 +675,4 @@ describe('the first-visit policy, through the page hook', () => {
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
     expect(mounted.html).toContain('data-collapsed="false"');
   });
- });
+});
