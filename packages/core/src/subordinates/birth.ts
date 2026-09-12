@@ -1,5 +1,5 @@
 import * as v from 'valibot';
-import { isValidRoleId, TIER_IDS } from '../profiles/catalog';
+import { TierIdSchema, isValidRoleId } from '../profiles/catalog';
 import { isWorkMode, type WorkMode } from '../types/turn';
 import { KinuError, toKinuError } from '../obs/error';
 import { diagnostics } from '../obs/index';
@@ -12,7 +12,7 @@ const SubordinateSeedSchema = v.strictObject({
   displayName: v.string(),
   nameOrigin: v.picklist(['user', 'auto']),
   role: v.pipe(v.string(), v.check(isValidRoleId)),
-  tier: v.optional(v.picklist(TIER_IDS)),
+  tier: v.optional(TierIdSchema),
   mission: v.pipe(v.string(), v.nonEmpty()),
   lifetime: v.picklist(['durable', 'task']),
 });

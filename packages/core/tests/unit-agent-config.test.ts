@@ -472,18 +472,22 @@ describe('the hired assignment a child reads at its turn boundary', () => {
     expect(c.get(AGENT_CONFIG_KEYS.assignedTier)).toBeNull();
   });
 
-  test('a tier this build does not know reads as unpinned, never as a throw', () => {
+  test('a malformed stored tier reads as unpinned, never as a throw', () => {
     // A working turn beats a dead agent: the role's own tier is a correct
-    // answer for a value nothing here can interpret.
+    // answer for a value nothing here can interpret. Whether a WELL-FORMED
+    // tier exists is the catalog's question, asked at the turn boundary
+    // (`resolveTurnProfile`), because an owner can add one.
     const c = setup();
-    c.set(AGENT_CONFIG_KEYS.assignedTier, 'gargantuan');
+    c.set(AGENT_CONFIG_KEYS.assignedTier, 'Not A Tier!');
     expect(c.getAssignedTier()).toBeNull();
+    c.set(AGENT_CONFIG_KEYS.assignedTier, 'gargantuan');
+    expect(c.getAssignedTier()).toBe('gargantuan');
   });
 
-  test('setAssignedTier refuses a tier no build knows instead of storing a hidden row', () => {
+  test('setAssignedTier refuses a malformed id instead of storing a hidden row', () => {
     const c = setup();
     c.setAssignedTier('deep');
-    const tier = JSON.parse('"gargantuan"');
+    const tier = JSON.parse('"Gargantuan Tier"');
     expect(() => c.setAssignedTier(tier)).toThrow(/Invalid assigned tier/);
     expect(c.getAssignedTier()).toBe('deep');
     expect(c.get(AGENT_CONFIG_KEYS.assignedTier)).toBe('deep');

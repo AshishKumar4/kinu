@@ -190,9 +190,14 @@ describe('profile catalog compare-and-swap writes', () => {
         tiers: { default: { model: MODEL } },
       }, 'roles.general.description'],
       [
-        'unknown tier id',
-        { roles: {}, tiers: { default: { model: MODEL }, giant: { model: MODEL } } },
-        'tiers.giant',
+        'malformed tier id',
+        { roles: {}, tiers: { default: { model: MODEL }, 'Not Valid': { model: MODEL } } },
+        'tiers',
+      ],
+      [
+        'role naming a tier the catalog does not hold',
+        { roles: { general: { description: 'Everyday work.', instructions: 'Do the task directly.', tier: 'giant', preset: 'ideate' } }, tiers: { default: { model: MODEL } } },
+        'every role tier must name a built-in tier or a tier in this catalog',
       ],
       ['definition repeating its record key', {
         roles: {

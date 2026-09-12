@@ -2259,3 +2259,72 @@ test('workspace tabs keep scrolling horizontal and suppress the scrollbar', asyn
     await page.close();
   });
 }, 240_000);
+
+/**
+ * Model tiers are an open vocabulary (#7, #9, #11). The owner adds a tier by
+ * name, it renders beside the builtins with the reasoning levels ITS model
+ * documents, and a role can be pointed at it. The row border is the page's
+ * border token: the earlier `--c-border-subtle` was never defined, so every
+ * tier row drew its border in the text colour.
+ */
+describe('model tiers are the owner\'s to add, and each offers its model\'s own levels', () => {
+  test('an added tier renders, takes its model\'s levels, and is offered to roles', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1000, height: 1400 });
+      await page.goto(`${origin}/gallery.html?frame=usersettingsstate&section=models`, { waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="New tier id"]');
+
+      const rowBorder = await page.$eval('[aria-label="default reasoning effort"]', (select) => {
+        const row = select.closest('div.grid');
+        const border = row === null ? '' : getComputedStyle(row).borderTopColor;
+        const text = row === null ? '' : getComputedStyle(row).color;
+        const token = getComputedStyle(document.documentElement).getPropertyValue('--c-border').trim();
+
+        return { border, text, token };
+      });
+
+      expect(rowBorder.border).not.toBe(rowBorder.text);
+      expect(rowBorder.token.length).toBeGreaterThan(0);
+
+      await page.type('[aria-label="New tier id"]', 'review');
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('[aria-label="review reasoning effort"]');
+      // A new tier starts as a copy of default (a Workers AI model, no levels).
+      expect(await page.$$eval('[aria-label="review reasoning effort"] option', (options) => options.map((option) => option.textContent)))
+        .toEqual(['Model default']);
+
+      // Point it at a model that documents five levels: the select offers
+      // exactly those, in the model's order. The picker is the same combobox
+      // every tier row carries; the new row's is the last one on the page.
+      const pickers = await page.$$('[aria-label$=" reasoning effort"]');
+      const reviewRow = await pickers[pickers.length - 1]?.evaluateHandle((select) => select.closest('div.grid'));
+      const reviewPicker = await reviewRow?.asElement()?.$('input');
+      expect(reviewPicker).toBeDefined();
+      await reviewPicker?.click();
+      await reviewPicker?.type('Opus');
+      await page.waitForSelector('[role="option"]');
+      await page.click('[role="option"]');
+      await page.waitForFunction(() => {
+        const select = document.querySelector('[aria-label="review reasoning effort"]');
+
+        return select !== null && select.querySelectorAll('option').length > 1;
+      });
+      expect(await page.$$eval('[aria-label="review reasoning effort"] option', (options) => options.map((option) => option.textContent)))
+        .toEqual(['Model default', 'low', 'medium', 'high', 'xhigh', 'max']);
+
+      // The role editor lists the new tier.
+      const roleTiers = await page.$$eval('select', (selects) => selects
+        .map((select) => [...select.options].map((option) => option.value))
+        .find((values) => values.includes('fast') && values.includes('deep')) ?? []);
+
+      expect(roleTiers).toContain('review');
+
+      // Removing it is one click, and only a non-builtin offers it.
+      expect(await page.$('[aria-label="Remove tier default"]')).toBeNull();
+      await page.click('[aria-label="Remove tier review"]');
+      expect(await page.$('[aria-label="review reasoning effort"]')).toBeNull();
+      await page.close();
+    });
+  }, 120_000);
+});

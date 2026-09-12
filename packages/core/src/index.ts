@@ -2108,15 +2108,15 @@ export type { EvolutionChangelogView, TakePickDeps } from './read-models/evoluti
 // Profile catalogs — tier/role configuration from an authority, resolved once
 // per turn into the frozen profile the turn runs under.
 export {
-  TIER_IDS, ROLE_ID_RE,
+  TIER_IDS, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
-  profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
+  profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
   ProfileCatalogEnvelopeSchema,
 } from './profiles';
 
 export type {
-  TierId, BuiltinRoleId, RoleId,
+  TierId, BuiltinTierId, BuiltinRoleId, RoleId,
   TierAssignment, TierAssignments, RoleDefinition, RoleCatalog, ProfileCatalog,
   ProfileAuthority, ProfileCatalogEnvelope,
 } from './profiles';

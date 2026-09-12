@@ -1,5 +1,4 @@
-import {
-  TIER_IDS,
+import { tierIdsOf,
   deriveRoleLabel,
   effectiveRoleCatalog,
   type ProfileCatalogEnvelope,
@@ -247,7 +246,7 @@ function TierHubRows({ data }: { readonly data: TuiProfileHubData }) {
 
   return (
     <box flexDirection="column" style={{ marginTop: 1 }}>
-      {TIER_IDS.map((tierId) => {
+      {tierIdsOf(data.envelope.catalog).map((tierId) => {
         const configured = data.envelope.catalog.tiers[tierId];
         const assignment = configured ?? defaultAssignment;
         const active = data.resolved?.tier.id === tierId;

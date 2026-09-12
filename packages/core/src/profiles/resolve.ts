@@ -22,9 +22,8 @@ import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
 import { REASONING_EFFORT_FOR_STAGE, type ReasoningEffort } from '../strategy/effort';
 import type { NamedSwarmPreset } from '../strategy/swarm-presets';
-import {
-  ROLE_ID_RE, TIER_IDS,
-  deriveRoleLabel, effectiveRoleCatalog, isValidRoleId,
+import { TierIdSchema, tierIdsOf,
+  ROLE_ID_RE, deriveRoleLabel, effectiveRoleCatalog, isValidRoleId,
   profileCatalogDigest, validateProfileCatalogEnvelope,
   type ProfileAuthority, type ProfileCatalogEnvelope, type RoleId, type TierId,
 } from './catalog';
@@ -254,7 +253,7 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   let explicitTier: TierId | undefined;
 
   if (input.explicitTier !== undefined) {
-    const parsedTier = v.safeParse(v.picklist(TIER_IDS), input.explicitTier);
+    const parsedTier = v.safeParse(TierIdSchema, input.explicitTier);
 
     if (!parsedTier.success) {
       throw new Error(`invalid explicit tier: ${JSON.stringify(input.explicitTier)}`);
@@ -314,6 +313,11 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
   // Tier selection. One fallback exists: an unconfigured non-default tier
   // aliases `default`, which validation guarantees present.
   const requested: TierId = explicitTier ?? role.tier;
+
+  if (!tierIdsOf(envelope.catalog).includes(requested)) {
+    throw new Error(`unknown tier ${JSON.stringify(requested)}: known tiers are ${tierIdsOf(envelope.catalog).join(', ')}`);
+  }
+
   let tierId: TierId = requested;
   let source: TierSource;
   let assignment = envelope.catalog.tiers[requested];
@@ -353,11 +357,13 @@ export function resolveTurnProfile(input: ResolveTurnProfileInput): ResolvedTurn
     });
   };
 
-  const tiers = Object.freeze({
-    fast: tierSlot('fast'),
-    default: tierSlot('default'),
-    deep: tierSlot('deep'),
-  });
+  // Every tier the catalog holds, the builtins first so an unconfigured
+  // builtin still appears (aliasing default), then the owner's own.
+  const tierIds = tierIdsOf(envelope.catalog);
+  const tiers: Record<TierId, { model: string; reasoningEffort: ReasoningEffort }> = {};
+
+  for (const id of tierIds) tiers[id] = tierSlot(id);
+  Object.freeze(tiers);
 
   const resolved = {
     role: Object.freeze({

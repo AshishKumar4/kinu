@@ -19,7 +19,7 @@ import {
 import { createRoot, useKeyboard, useRenderer, useTerminalDimensions } from '@opentui/react';
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 
-import {
+import { tierIdsOf,
   DEFAULT_ROLE_ID, TIER_IDS, TUI_COMPOSER_PLACEHOLDER, TUI_COMPOSER_STEERING_PLACEHOLDER, nextReasoningEffort, offeredReasoningEfforts,
   composerVisibleRows, effectiveRoleCatalog,
   type AlternateTakeCandidate, type AlternateTakeSet, type ChangelogEntry, type ReasoningEffort, type TierId,
@@ -172,6 +172,14 @@ export function ChatApp(props: ChatAppOpts) {
       <ChatScene {...props} />
     </TuiProductProvider>
   );
+}
+
+/** The tier `delta` steps from `current` in the catalog's order, wrapping; an
+ *  unknown or absent current starts from the first. */
+function cycledTier(tiers: readonly TierId[], current: TierId | undefined, delta: 1 | -1): TierId {
+  const index = (Math.max(0, current === undefined ? -1 : tiers.indexOf(current)) + delta + tiers.length) % tiers.length;
+
+  return tiers[index] ?? 'default';
 }
 
 function ChatScene({
@@ -1577,10 +1585,11 @@ function ChatScene({
 
     if (actionId === 'tier.cycle' || actionId === 'tier.cycle-reverse') {
       key.preventDefault();
-      const current = nextTier ?? TIER_IDS.find((id) => id === status?.tierId) ?? 'default';
-      const delta = actionId === 'tier.cycle' ? 1 : -1;
-      const index = (TIER_IDS.indexOf(current) + delta + TIER_IDS.length) % TIER_IDS.length;
-      setNextTier(TIER_IDS[index] ?? 'default');
+      setNextTier(cycledTier(
+        hub ? tierIdsOf(hub.data.profile.envelope.catalog) : TIER_IDS,
+        nextTier ?? status?.tierId,
+        actionId === 'tier.cycle' ? 1 : -1,
+      ));
 
       return;
     }
@@ -1955,7 +1964,7 @@ async function loadHubData(client: AgentClient): Promise<TuiHubData> {
   const [envelope, status] = await Promise.all([loadActiveProfile(), client.status()]);
   const roles = effectiveRoleCatalog(envelope.catalog);
   const activeRoleId = status.roleId && roles[status.roleId] ? status.roleId : DEFAULT_ROLE_ID;
-  const tierId = TIER_IDS.find((id) => id === status.tierId) ?? roles[activeRoleId]?.tier ?? 'default';
+  const tierId = status.tierId && tierIdsOf(envelope.catalog).includes(status.tierId) ? status.tierId : roles[activeRoleId]?.tier ?? 'default';
 
   return {
     agents: [{

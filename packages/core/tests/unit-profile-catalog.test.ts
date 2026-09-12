@@ -81,19 +81,28 @@ describe('catalog validation', () => {
       .toThrow(/model/);
   });
 
-  test('a stored assignment or role tier naming a removed tier is refused by name, not aliased', () => {
-    // `tiny` and `slow` overlapped `fast` and `deep` and were removed (#7). A
-    // catalog written by an earlier build that still carries one must fail at
-    // read naming the key, because aliasing it would silently move the model
-    // an assignment was pinned to.
-    for (const removed of ['tiny', 'slow']) {
-      expect(() => validateProfileCatalog({
-        ...VALID_CATALOG, tiers: { ...VALID_CATALOG.tiers, [removed]: { model: 'm-old' } },
-      })).toThrow(new RegExp(removed));
-      expect(() => validateProfileCatalog({
-        ...VALID_CATALOG, roles: { x: { ...SCOUT, tier: removed } },
-      })).toThrow(/tier/);
+  test('an owner-added tier is a tier: roles may name it, and a role naming one the catalog lacks is refused', () => {
+    // Tiers are an open vocabulary like roles: the builtins plus whatever the
+    // owner configured. `review` here is such a tier. A role naming a tier
+    // nobody configured is refused at write, not aliased to default at the
+    // first turn, because aliasing silently moves the model the role was
+    // pinned to.
+    const withReview = { ...VALID_CATALOG, tiers: { ...VALID_CATALOG.tiers, review: { model: 'm-review' } } };
+    expect(validateProfileCatalog(withReview).tiers.review).toEqual({ model: 'm-review' });
+    expect(validateProfileCatalog({ ...withReview, roles: { x: { ...SCOUT, tier: 'review' } } }).roles.x?.tier).toBe('review');
+    expect(() => validateProfileCatalog({ ...VALID_CATALOG, roles: { x: { ...SCOUT, tier: 'review' } } }))
+      .toThrow(/every role tier must name a built-in tier or a tier in this catalog/);
+    // An unconfigured BUILTIN is fine: it aliases default at resolve.
+    expect(validateProfileCatalog({ ...VALID_CATALOG, tiers: { default: VALID_CATALOG.tiers.default }, roles: { x: { ...SCOUT, tier: 'deep' } } }).roles.x?.tier).toBe('deep');
+  });
+
+  test('tier keys must be kebab-case ids within the length cap, and default must be present', () => {
+    for (const bad of ['Bad', '-x', 'x-', 'has_underscore', 'a'.repeat(33)]) {
+      expect(() => validateProfileCatalog({ ...VALID_CATALOG, tiers: { ...VALID_CATALOG.tiers, [bad]: { model: 'm' } } }))
+        .toThrow(/invalid profile catalog/);
     }
+
+    expect(() => validateProfileCatalog({ ...VALID_CATALOG, tiers: { fast: { model: 'm' } } })).toThrow(/default/);
   });
 
   test('role keys must be kebab-case ids within the length cap', () => {

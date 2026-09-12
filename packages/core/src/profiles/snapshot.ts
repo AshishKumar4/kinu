@@ -17,8 +17,8 @@ import * as v from 'valibot';
 import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
 import { REASONING_EFFORTS } from '../strategy/effort';
 import type { WorkMode } from '../types/turn';
-import {
-  TIER_IDS, ProfileAuthoritySchema, formatProfileValidationIssues,
+import { TierIdSchema,
+  ProfileAuthoritySchema, formatProfileValidationIssues,
   type RoleId, type TierId,
 } from './catalog';
 import { type TierSource, type ResolvedTurnProfile } from './resolve';
@@ -58,7 +58,7 @@ const ResolvedTurnProfileSchema = v.strictObject({
     instructions: v.string(),
   }),
   tier: v.strictObject({
-    id: v.picklist(TIER_IDS),
+    id: TierIdSchema,
     source: v.picklist(['explicit', 'role', 'default']),
     model: v.string(),
     reasoningEffort: v.picklist(REASONING_EFFORTS),

@@ -61,7 +61,7 @@ import {
   type SwarmPreset,
 } from '../strategy/swarm';
 import {
-  TIER_IDS,
+  TIER_IDS, TierIdSchema, tierIdsOf,
   deriveRoleLabel, effectiveRoleCatalog,
   resolveTurnProfile,
   type ProfileAuthorityInputs, type ProfileProvenance,
@@ -797,7 +797,7 @@ const AgentsInputEntries = {
   // The one routing input. A picklist, not a string: an unknown tier name is a
   // caller error worth naming the five slots over, not a freeform value to
   // guess at.
-  tier: v.optional(v.picklist(TIER_IDS)),
+  tier: v.optional(TierIdSchema),
   scope: v.optional(v.picklist(['subordinate', 'workspace'])),
   message: v.optional(v.string()),
   topic: v.optional(v.string()),
@@ -835,7 +835,7 @@ export const AGENTS_FIELD_TS_TYPES = {
   nodes: '{ prompt: string; task: string }[]',
   models: 'string[]',
   role: 'string',
-  tier: `"${TIER_IDS.join('" | "')}"`,
+  tier: 'string',
   agent: 'string',
   mission: 'string',
   scope: '"subordinate" | "workspace"',
@@ -1794,6 +1794,15 @@ function roleSummaries(deps: AgentsToolDeps): string {
     .join('; ');
 }
 
+/** The tiers a caller may name: the catalog's own when one is wired, the
+ *  builtins otherwise. Rendered into the schema enum so a tier the owner
+ *  added is offered and one nobody configured is refused before the resolver. */
+function tierIds(deps: AgentsToolDeps): TierId[] {
+  const ctx = deps.profile?.();
+
+  return ctx ? tierIdsOf(ctx.envelope.catalog) : [...TIER_IDS];
+}
+
 function roleSummaryText(deps: AgentsToolDeps): string {
   const summaries = roleSummaries(deps);
 
@@ -1874,7 +1883,7 @@ function swarmProperties(deps: AgentsToolDeps): SwarmSchemaProperties {
     },
     depth: { type: 'integer', minimum: 1, description: 'For action=swarm: how deep the search may go. Omit to take the preset\'s own depth. depth:1 is one measured expansion; deeper selects down a tree with `advance`, scoring each node against your own `objective`. The literature runs 3-7 (ToT <=3, LATS 7, Koh 5). advance:"none" has no selection step, so it fixes depth at 1 and a deeper cap is refused rather than silently flattened.' },
     role: { type: 'string', description: `For action=swarm: the role every node runs under. Omit and the nodes ride your own active role. One swarm is role-homogeneous — there is no per-node role.${roleSummaryText(deps)}` },
-    tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=swarm: the inference tier the nodes run at — fast|default|deep. Omit to take the role\'s default tier.' },
+    tier: { type: 'string', enum: tierIds(deps), description: `For action=swarm: the inference tier the nodes run at, one of ${tierIds(deps).join('|')}. Omit to take the role's default tier.` },
     budget_usd: { type: 'number', minimum: 0, description: 'For action=swarm: cumulative USD cap for the whole search, including its measurements. Omit for no cap.' },
     budget_tokens: { type: 'integer', minimum: 1, description: 'For action=swarm: cumulative token cap, same scope as budget_usd.' },
     budget_label: { type: 'string', maxLength: 120, description: 'For action=swarm: name the sub-ledger so several calls share one cumulative budget.' },
@@ -1927,7 +1936,7 @@ function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
         description: 'For action=hire: the catalog role to create the helper under. `role` is what makes a hire CREATE; `agent` beside it is the optional name to create the durable helper under, and `agent` WITHOUT `role` hands the workstream to one that already exists. One of the ids listed below.'
           + roleSummaryText(deps),
       },
-      tier: { type: 'string', enum: [...TIER_IDS], description: 'For action=hire with `role` at the default durable lifetime: optional inference tier override — fast|default|deep. Omit to take the role\'s default tier. A lifetime:"task" hire runs at its role\'s tier and refuses this field.' },
+      tier: { type: 'string', enum: tierIds(deps), description: `For action=hire with \`role\` at the default durable lifetime: optional inference tier override, one of ${tierIds(deps).join('|')}. Omit to take the role's default tier. A lifetime:"task" hire runs at its role's tier and refuses this field.` },
       deliverable: { type: 'string', maxLength: 2000, description: 'For a hire handing work to a subordinate that already exists: what the finished result should be (optional).' },
       keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
     });

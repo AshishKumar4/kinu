@@ -255,11 +255,29 @@ describe('role validation', () => {
 
   test('malformed ids, tiers and work modes refuse before any lookup', () => {
     expect(() => resolve({ roleId: 'Not_Valid' })).toThrow(/role id/);
-    expect(() => resolve({ explicitTier: 'mega' })).toThrow(/explicit tier/);
-    // The removed tiers are unknown now, not aliases of the ones that replaced them.
-    expect(() => resolve({ explicitTier: 'tiny' })).toThrow(/explicit tier/);
-    expect(() => resolve({ explicitTier: 'slow' })).toThrow(/explicit tier/);
+    // A malformed id is refused as an id; a well-formed id the catalog does
+    // not hold is refused as unknown, naming what it does hold. The removed
+    // tiers (#7) are unknown now, not aliases of the ones that replaced them.
+    expect(() => resolve({ explicitTier: 'Mega!' })).toThrow(/explicit tier/);
+    expect(() => resolve({ explicitTier: 'tiny' })).toThrow(/unknown tier "tiny": known tiers are fast, default, deep/);
+    expect(() => resolve({ explicitTier: 'slow' })).toThrow(/unknown tier/);
     expect(() => resolve({ workMode: 'auto' })).toThrow(/work mode/);
+  });
+
+  test('an owner-added tier resolves by name, explicitly and through a role, and appears in the tier table', () => {
+    const withReview = catalog({
+      tiers: { default: { model: 'm-default' }, review: { model: 'm-review', reasoningEffort: 'high' } },
+      roles: { critic: { ...SCOUT, tier: 'review' } },
+    });
+
+    const run = (extra: Partial<ResolveTurnProfileInput>) => resolveTurnProfile({
+      envelope: envelope(withReview), provider: provider(['m-default', 'm-review']), roleId: 'general',
+      workMode: 'build', availableTools: [], activeSkills: [], ...extra,
+    });
+
+    expect(run({ explicitTier: 'review' }).tier).toEqual({ id: 'review', source: 'explicit', model: 'm-review', reasoningEffort: 'high' });
+    expect(run({ roleId: 'critic' }).tier).toEqual({ id: 'review', source: 'role', model: 'm-review', reasoningEffort: 'high' });
+    expect(Object.keys(run({}).tiers)).toEqual(['fast', 'default', 'deep', 'review']);
   });
 
   test('a tampered catalog fails digest verification at the turn boundary', () => {
