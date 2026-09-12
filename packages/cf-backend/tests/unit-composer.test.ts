@@ -109,3 +109,20 @@ describe('the composer under a partial failure', () => {
     expect(html).toContain('Retry');
   });
 });
+
+describe('the mode caption', () => {
+  test('Auto and Plan say what each mode does until the mode has been switched once', () => {
+    const html = renderToStaticMarkup(createElement(Composer, {
+      value: '',
+      onValueChange: () => {},
+      onSend: () => {},
+      placeholder: 'Send a message...',
+      disabled: false,
+      streaming: false,
+      onStop: () => {},
+      mode: { value: 'build', onChange: () => {}, locked: false },
+    }));
+
+    expect(html).toContain('Auto acts within the permissions you granted. Plan submits a plan for your review before anything is written.');
+  });
+});

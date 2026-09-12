@@ -1148,6 +1148,7 @@ export default function WorkspacePage() {
         onRename={state.setDisplayName}
         connectionStatus={state.connectionStatus}
         working={state.isStreaming}
+        waitingOnYou={state.pendingActions.length > 0 || state.pendingConsents.length > 0}
         model={as?.model}
         {...(as?.forkLineage ? { forkParent: { workspace: as.forkLineage.sourceWorkspaceName, forkedAt: as.forkLineage.forkedAt } } : {})}
         altitude={altitude}

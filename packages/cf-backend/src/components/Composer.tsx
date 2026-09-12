@@ -23,7 +23,7 @@
  * that early-returns while streaming leaves someone typing at a working agent
  * with nothing happening and nothing said about it.
  */
-import { useRef, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { InputArea, Loader } from "@cloudflare/kumo";
 import {
   StopIcon, GitBranchIcon, ArrowBendUpRightIcon,
@@ -145,10 +145,28 @@ export function workspaceLoadNotice(notice: WorkspaceNotice, onRetry: () => void
  * (`WorkMode = 'plan' | 'build'` in core): the label is what the system calls
  * this to a person, and it must not disagree with the rest of the product.
  */
+const MODE_CAPTION = "Auto acts within the permissions you granted. Plan submits a plan for your review before anything is written.";
+
+const MODE_CAPTION_KEY = "kinu.modeCaptionSeen";
+
 function ModeSegment({ value, onChange, locked, disabled }: {
   value: ChatMode; onChange: (mode: ChatMode) => void; locked: boolean; disabled: boolean;
 }) {
+  // Seen once the mode has been switched once; kept beside the theme choice,
+  // not in agent state, because it is one person's UI, not the workspace's.
+  const [captionSeen, setCaptionSeen] = useState(() => localStorage.getItem(MODE_CAPTION_KEY) !== null);
+
+  const handleChange = (next: ChatMode) => {
+    if (!captionSeen) {
+      localStorage.setItem(MODE_CAPTION_KEY, "1");
+      setCaptionSeen(true);
+    }
+
+    onChange(next);
+  };
+
   return (
+    <div className="flex min-w-0 shrink-0 flex-col gap-1">
     <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Turn mode">
       {CHAT_MODES.map((mode) => {
         const build = mode === "build";
@@ -164,7 +182,7 @@ function ModeSegment({ value, onChange, locked, disabled }: {
           <button
             key={mode}
             type="button"
-            onClick={() => onChange(mode)}
+            onClick={() => handleChange(mode)}
             disabled={disabled || (locked && mode === "build")}
             aria-pressed={selected}
             title={title}
@@ -178,6 +196,10 @@ function ModeSegment({ value, onChange, locked, disabled }: {
           </button>
         );
       })}
+    </div>
+    {/* Plan refuses writes, edits and shell runs but permits reads, memory,
+        tasks and web — a boundary, not read-only, so the caption says neither. */}
+    {!captionSeen && <p className="max-w-64 p-meta p-text-3">{MODE_CAPTION}</p>}
     </div>
   );
 }
