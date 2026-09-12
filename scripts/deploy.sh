@@ -371,7 +371,11 @@ flush_gates() {
       fi
     done
     echo ""
-    echo -e "${RED}❌ $failures gate(s) failed. The build and publish steps did not start.${NC}"
+    if [ "${DEPLOY_PUBLISHED:-0}" -eq 1 ]; then
+      echo -e "${RED}❌ $failures gate(s) failed AFTER publish: the build is live and this tier is red against it.${NC}"
+    else
+      echo -e "${RED}❌ $failures gate(s) failed. The build and publish steps did not start.${NC}"
+    fi
     rm -rf "$dir"
     exit 1
   fi
@@ -613,6 +617,7 @@ echo ""
 echo "Running: npx wrangler deploy ${KINU_WRANGLER_ARGS[*]} (log → $KINU_DEPLOY_LOG)"
 echo ""
 if npx wrangler deploy "${KINU_WRANGLER_ARGS[@]}" 2>&1 | tee "$KINU_DEPLOY_LOG"; then
+  DEPLOY_PUBLISHED=1
   echo ""
   echo -e "${GREEN}Kinu deploy succeeded.${NC}"
 else
