@@ -425,7 +425,7 @@ describe('what db cannot reach', () => {
       // credentials, approvals, claims, audit, effect claims, config, and the
       // `db` catalogue itself.
       for (const name of [
-        'workspace_identity', 'workspace_actors', 'messages', 'workspace_capability',
+        'workspace_identity', 'workspace_actors', 'actor_messages', 'workspace_capability',
         'webhook_secrets', 'deferred_approvals', 'actor_turn_claims', 'run_events',
         'tool_effect_claims', 'effect_tombstones', 'actor_config', 'actor_program_state',
         catalogueTable(), 'sqlite_master', 'sqlite_sequence',
@@ -458,8 +458,8 @@ describe('what db cannot reach', () => {
       const before = w.tables();
 
       for (const name of [
-        'notes; DROP TABLE messages',
-        'notes" ; DROP TABLE messages --',
+        'notes; DROP TABLE actor_messages',
+        'notes" ; DROP TABLE actor_messages --',
         'Notes',
         'app notes',
         '../notes',
@@ -810,10 +810,10 @@ describe('role and Plan authority', () => {
     try {
       const store = w.store(w.a);
       const db = createDbCodemodeProvider(store).tools;
-      expect(await db.select.execute('messages')).toMatchObject({ reason: 'missing' });
+      expect(await db.select.execute('actor_messages')).toMatchObject({ reason: 'missing' });
       expect(await db.createTable.execute({ name: 'x', scope: 'actor', columns: [] }))
         .toMatchObject({ reason: 'bad_input' });
-      expect(await db.select.execute('notes; DROP TABLE messages')).toMatchObject({ reason: 'bad_input' });
+      expect(await db.select.execute('notes; DROP TABLE actor_messages')).toMatchObject({ reason: 'bad_input' });
       await db.createTable.execute(NOTES);
 
       const batch = await db.batch.execute([

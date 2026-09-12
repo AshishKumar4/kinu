@@ -1,5 +1,5 @@
 /**
- * The MCTS SessionWriter over the durable `messages` table (session_id='mcts').
+ * The MCTS SessionWriter over the durable `actor_messages` table (session_id='mcts').
  *
  * Source of truth is the TABLE, not an in-memory array: after a DO eviction or
  * a CLI process exit, a resumed search re-enters with a fresh session, and
@@ -20,7 +20,7 @@ export function createDurableMctsSession(sql: SqlExecutor, actor: ActorHandle): 
     async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
       actor.assertCurrent();
       const content = msg.parts.map((p) => p.text).join('');
-      void sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+      void sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
         VALUES (${actorId}, ${msg.id}, ${'mcts'}, ${parentId ?? null}, ${msg.role}, ${content})`;
     },
     getHistory(leafId?: string | null): Array<{ role: string; content: string }> {
@@ -28,7 +28,7 @@ export function createDurableMctsSession(sql: SqlExecutor, actor: ActorHandle): 
 
       if (!leafId) {
         return sql<{ role: string; content: string }>`
-          SELECT role, content FROM messages
+          SELECT role, content FROM actor_messages
           WHERE actor_id = ${actorId} AND session_id='mcts' ORDER BY created_at ASC`
           .map((r) => ({ role: r.role, content: r.content }));
       }
@@ -46,7 +46,7 @@ export function createDurableMctsSession(sql: SqlExecutor, actor: ActorHandle): 
         seen.add(currentId);
 
         const row: MsgRow | undefined = sql<MsgRow>`
-          SELECT parent_id, role, content FROM messages
+          SELECT parent_id, role, content FROM actor_messages
           WHERE actor_id = ${actorId} AND id=${currentId} LIMIT 1`[0];
 
         if (!row) break;

@@ -1290,7 +1290,7 @@ export { memoryBytes } from './memory/note';
 
 export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note';
 
-// Zero-LLM transcript search over the canonical `messages` table.
+// Zero-LLM transcript search over the actor's conversation authority.
 // Backs the `memory` tool's `conversations` action on both backends.
 export {
   ConversationSearchStore, invalidateConversationSearchIndex,

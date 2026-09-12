@@ -24,6 +24,9 @@ describe('actor schema', () => {
     const tables = tableNames(db);
 
     expect(tables).toContain('crafted_tools');
+    expect(tables).toContain('actor_messages');
+    expect(tables).not.toContain('messages');
+    expect(tables).not.toContain('assistant_messages');
     expect(tables).not.toContain('workspace_identity');
     expect(tables).not.toContain('fork_lineage');
   });

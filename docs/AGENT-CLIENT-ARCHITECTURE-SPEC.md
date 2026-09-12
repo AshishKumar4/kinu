@@ -31,7 +31,7 @@ is the canonical cloud client via `useAgent`/`useAgentChat`
 | User identity | KV session store plus `UserDO` | local config, local prefs only | Cloud identity never comes from local config. |
 | Workspace roster | `UserDO.user_workspaces` | local config plus local DB discovery | The CLI caches aliases, not the roster. |
 | Identity and soul | `SOUL.md` in the workspace VFS | local VFS and SQLite | One `SOUL.md` per backend. |
-| Chat history | SDK `messages` projection via `getChatHistoryPage` | `messages` SQLite rows for inspection; `AgentClient.history()` reads the active CLI JSONL for rendering | Cloud clients read the SDK projection; local render history remains a diagnostic view. |
+| Chat history | SDK `assistant_messages` projection via `getChatHistoryPage` | `actor_messages` SQLite rows for inspection; `AgentClient.history()` reads the active CLI JSONL for rendering | Cloud clients read the SDK projection; local render history remains a diagnostic view. |
 | Model selection | `agent_config` in the Durable Object | local `agent_config` | A cloud model change goes to the Durable Object. |
 | Memory, VFS, craft, scaffold | Durable Object SQLite and VFS | local SQLite and VFS | The client fetches. It never mirrors. |
 | Exploration, heads, GEPA | Durable Object tables | local tables | The adapter projects the same surfaces. |
@@ -210,7 +210,7 @@ name generates once the workspace exists. The CLI runs
 (`tui/home-app.tsx:265`). The workspace noun replaced the agent noun on this
 path; see [WORKSPACES.md](WORKSPACES.md).
 
-## History and the `messages` projection
+## History projections
 
 Canonical read: `getChatHistoryPage`
 (`packages/core/src/read-models/status.ts:147`), exposed by `ActorAgent`
@@ -222,8 +222,9 @@ Consumers: the web chat pane via `useChatThread`
 (`packages/cli/src/commands/debug.ts:356`), and local peer
 (`packages/cli/src/local-inspection.ts:501`).
 
-`messages` is a plain tree table (`parent_id`, `core/src/identity/schema.ts:60`).
-`getChatHistoryPage` projects those stored rows for display. A row the
+`actor_messages` is Kinu's plain actor tree (`parent_id`, `core/src/identity/schema.ts`).
+The hosted root's chat lives in the vendor-owned `assistant_messages` table.
+`getChatHistoryPage` projects the actor's authoritative rows for display. A row the
 projection drops still counts against the page and can still anchor the cursor,
 so paging never re-delivers a dropped row.
 
@@ -298,7 +299,7 @@ These reasons still hold; proposing one proposes a known regression.
 | Local prepare, tool and commit calls for cloud workspaces | Breaks the Durable Object turn invariant. |
 | Commit a locally computed answer back to the Durable Object | Synchronization is not a source of truth. |
 | Read cloud history from local JSONL | Hides Durable Object bugs and lets web and TUI diverge. |
-| Permanent fallback from the session store to `messages` | Preserves pre-release data instead of fixing the source. |
+| Permanent fallback from the session store to `actor_messages` | Preserves pre-release data instead of fixing the source. |
 | Auto-register an unknown workspace on first touch | Creates accidental registry rows and bypasses explicit creation. |
 | Trust `userId` in a request body | An auth hole. |
 | Put a CLI bearer token in a websocket URL | Leaks the secret through logs and shell history. |

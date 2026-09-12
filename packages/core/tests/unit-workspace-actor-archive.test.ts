@@ -60,7 +60,7 @@ function workspace(): Workspace {
  *  a snapshot has to carry FOR EVERY actor, not for one. */
 function seedActorState(ws: Workspace, actor: ActorHandle, text: string, runId: string, version: number): void {
   const now = Date.now();
-  void ws.sql`INSERT INTO messages (actor_id, id, role, content, created_at)
+  void ws.sql`INSERT INTO actor_messages (actor_id, id, role, content, created_at)
     VALUES (${actor.actorId}, ${`m-${actor.actorId}`}, 'user', ${text}, ${now})`;
   void ws.sql`INSERT INTO actor_turn_claims (
       actor_id, turn_id, run_id, epoch, work_mode, program_kind, program_version,
@@ -98,7 +98,7 @@ describe('a workspace snapshot covers every actor', () => {
       [head, 'the head said this', 'run-head', 7],
     ] as const) {
       expect(there<{ content: string }>`
-        SELECT content FROM messages WHERE actor_id = ${actor.actorId}`[0]?.content).toBe(text);
+        SELECT content FROM actor_messages WHERE actor_id = ${actor.actorId}`[0]?.content).toBe(text);
       expect(there<{ run_id: string; program_version: number }>`
         SELECT run_id, program_version FROM actor_turn_claims WHERE actor_id = ${actor.actorId}`[0])
         .toEqual({ run_id: runId, program_version: version });
@@ -109,7 +109,7 @@ describe('a workspace snapshot covers every actor', () => {
 
     // No child database and no second object was needed to produce any of it.
     expect(there<{ n: number }>`
-      SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'messages'`[0]?.n).toBe(1);
+      SELECT COUNT(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'actor_messages'`[0]?.n).toBe(1);
   });
 
   test('a retained dismissal is still in the snapshot', async () => {
@@ -130,7 +130,7 @@ describe('a workspace snapshot covers every actor', () => {
     // Its history retained means its rows are workspace state, so losing them
     // in a backup is data loss and not tidiness.
     expect(sqlOver(target)<{ content: string }>`
-      SELECT content FROM messages WHERE actor_id = ${gone.actorId}`[0]?.content)
+      SELECT content FROM actor_messages WHERE actor_id = ${gone.actorId}`[0]?.content)
       .toBe('beta said this before it was dismissed');
   });
 
@@ -158,7 +158,7 @@ describe('a workspace snapshot covers every actor', () => {
       .rejects.toThrow(/declares 2 actors but restored 1/);
   });
 
-  // The restore half of the same claim: the pane is normalized into `messages`
+  // The restore half of the same claim: the pane is normalized into `actor_messages`
   // on the way in, and the pane is the vendor's shape — no owner column, every
   // row the root actor's — so the directory the restore landed is the only
   // place the attribution lives and the main actor is the honest one.
@@ -175,7 +175,7 @@ describe('a workspace snapshot covers every actor', () => {
     const there = sqlOver(target);
 
     expect(there<{ actor_id: string }>`
-      SELECT actor_id FROM messages WHERE id = 'unowned-1'`[0]?.actor_id).toBe(ws.main.actorId);
+      SELECT actor_id FROM actor_messages WHERE id = 'unowned-1'`[0]?.actor_id).toBe(ws.main.actorId);
     // Normalized once: the pane schema does not survive alongside the plain store.
     expect(there<{ n: number }>`
       SELECT COUNT(*) AS n FROM sqlite_master

@@ -29,7 +29,7 @@ function setup() {
   const ws = createTestWorkspace();
 
   // A REAL workspace main actor, not a stand-in: the split's evidence reader
-  // goes through `conversationTurnPair`, so the `messages` rows seeded below
+  // goes through `conversationTurnPair`, so the `actor_messages` rows seeded below
   // have to carry the same `actor_id` the reader scopes by.
   return { ...ws, actor: createTestActor(ws.sql, ws.execRaw, 'ws-outcomes', 'outcomes') };
 }
@@ -481,9 +481,9 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
   test('instances carry process evidence reconstructed from the existing run ledger', () => {
     const { sql, actor } = setup();
     const now = Date.now();
-    void sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
         VALUES (${actor.actorId}, ${'u0'}, ${null}, ${'user'}, ${'fix task 0'}, ${now - 1_000})`;
-    void sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
         VALUES (${actor.actorId}, ${'n0'}, ${'u0'}, ${'assistant'}, ${'bad answer 0'}, ${now + 1_000})`;
     const recorder = new RunEventRecorder(sql, actor);
     recorder.emit('run-1', { type: 'run_start', agentId: 'agent', caused_by: 'chat', userMessage: 'fix task 0' });

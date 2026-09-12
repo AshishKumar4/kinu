@@ -60,7 +60,7 @@ const ACTOR_DDL = [
   // `id`, and an id that resolved in the wrong actor's rows would splice two
   // conversations into one chain. Both indexes lead with the actor for the same
   // reason — a session listing and a parent walk are per-actor questions.
-  `CREATE TABLE IF NOT EXISTS messages (
+  `CREATE TABLE IF NOT EXISTS actor_messages (
     actor_id   TEXT NOT NULL,
     id         TEXT NOT NULL,
     session_id TEXT NOT NULL DEFAULT 'default',
@@ -71,8 +71,8 @@ const ACTOR_DDL = [
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
     PRIMARY KEY (actor_id, id)
   )`,
-  `CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(actor_id, session_id, created_at, id)`,
-  `CREATE INDEX IF NOT EXISTS idx_msg_parent ON messages(actor_id, parent_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_actor_messages_session ON actor_messages(actor_id, session_id, created_at, id)`,
+  `CREATE INDEX IF NOT EXISTS idx_actor_messages_parent ON actor_messages(actor_id, parent_id)`,
 
   // ── Memory chunks — schema owned by MemoryStore (agent-utils) ──
   // NOT created here. MemoryStore.ensureSchema() creates the table

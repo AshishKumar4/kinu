@@ -108,7 +108,7 @@ export const ForkMessageRowSchema = v.object({
 });
 
 /** The same chain in the SDK's own store — the table the chat pane hydrates
- *  from, whose serialized UI messages `messages.content` cannot rebuild.
+ *  from, whose serialized UI messages `actor_messages.content` cannot rebuild.
  *  `created_at` is a datetime string, carried verbatim. */
 export const ForkPaneRowSchema = v.object({
   id: v.string(),
@@ -183,7 +183,7 @@ export type ForkConfigRow = v.InferOutput<typeof ForkConfigRowSchema>;
 export type ForkFile = v.InferOutput<typeof ForkFileSchema>;
 
 export interface ForkOpts {
-  /** Message id from source's `messages` table; the fork includes messages
+  /** Message id from source's `actor_messages` table; the fork includes messages
    *  with created_at <= this message's created_at. Throws if not found. */
   untilMessageId: string;
   /** New target workspace's id (usually `ctx.id.toString()` on the fork DO). */
@@ -191,7 +191,7 @@ export interface ForkOpts {
   /** New target workspace's human name. */
   targetWorkspaceName: string;
   /** Which store the target's default chat lives in. A local process answers
-   *  to `messages` — the default here; a hosted caller may declare `'pane'`.
+   *  to `actor_messages` — the default here; a hosted caller may declare `'pane'`.
    *  See {@link writeForkSnapshot}'s option of the same name. */
   targetAuthority?: 'pane' | 'plain';
   /** Optional clock override for tests. Defaults to Date.now(). */
@@ -220,7 +220,7 @@ export async function snapshotWorkspaceForFork(
   // Both halves of the chain in one walk, with the plain text elided wherever
   // the pane rows already carry it. The chat pane hydrates from the SDK's store,
   // so a fork without those rows shows an empty pane despite a populated
-  // `messages` table.
+  // `actor_messages` table.
   const actor = openWorkspaceMainActor(source);
   const { chain: messages, pane: assistantMessages } = forkAncestry(source, actor, untilMessageId);
   const lastMessage = messages[messages.length - 1];
@@ -367,7 +367,7 @@ export class ForkTargetWriter {
    * Resolved on demand rather than captured in the constructor: {@link begin}
    * is what CREATES this actor on a target that had no identity yet, so a field
    * read at construction would name an actor that does not exist. Every
-   * `messages` statement below asks for it after `begin` has run.
+   * `actor_messages` statement below asks for it after `begin` has run.
    */
   private get actorId(): string {
     return openWorkspaceMainActor(this.target).actorId;
@@ -415,7 +415,7 @@ export class ForkTargetWriter {
    */
   clearStagedRows(): void {
     const actorId = this.actorId;
-    void this.target`DELETE FROM messages WHERE actor_id = ${actorId}`;
+    void this.target`DELETE FROM actor_messages WHERE actor_id = ${actorId}`;
     void this.target`DELETE FROM crafted_tools`;
     void this.target`DELETE FROM memory_chunks`;
     void this.target`DELETE FROM actor_config WHERE actor_id = ${actorId}`;
@@ -483,7 +483,7 @@ export class ForkTargetWriter {
    *
    * The transcript lands ONCE, in ONE store. Every workspace carries its default
    * chat in exactly one place — the SDK pane store where the source had one,
-   * plain `messages` otherwise. Writing both would recreate the mirror the
+   * plain `actor_messages` otherwise. Writing both would recreate the mirror the
    * canonical conversation store exists to delete, so a pane-authority target
    * whose rich chain already arrived DROPS these rows rather than writing a
    * second copy of the same conversation.
@@ -512,13 +512,13 @@ export class ForkTargetWriter {
 
     // Plain destination: PKs and parent edges preserved — the chain IS the
     // tree, carried verbatim, under THIS target's actor. The parent edges are
-    // re-keyed by that actor too: `messages` keys on (actor_id, id), so the
+    // re-keyed by that actor too: `actor_messages` keys on (actor_id, id), so the
     // inherited chain is a tree of this actor's rows and nothing else.
     const actorId = this.actorId;
 
     for (const m of rows) {
       void this.target`
-        INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
         VALUES (${actorId}, ${m.id}, ${CHAT_SESSION_ID}, ${m.parent_id}, ${m.role},
                 ${this.carriedText(m)}, ${m.created_at})
       `;
@@ -686,7 +686,7 @@ export class ForkTargetWriter {
       `;
     } else {
       void this.target`
-        INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+        INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
         VALUES (${this.actorId}, ${markerId}, ${CHAT_SESSION_ID}, ${head.cut.messageId}, ${'system'},
                 ${syntheticText}, ${forkPointMs + 1})
       `;

@@ -159,16 +159,21 @@ erDiagram
         TEXT snapshot "JSON checkpoint"
         INTEGER created_at "Epoch ms"
     }
-    messages {
-        TEXT id PK "Message ID from the SDK, so the UI can point at it"
+    actor_messages {
+        TEXT actor_id PK "Actor whose conversation this is"
+        TEXT id PK "Message ID"
         TEXT session_id "Session ('default' chat, 'mcts' search)"
         TEXT parent_id "Parent message. These edges ARE the session tree"
         TEXT role "user/assistant/system"
         TEXT content "Plain text (flattened for FTS and the outcome joins)"
         INTEGER created_at "Epoch ms"
     }
-    messages_fts {
-        TEXT content "FTS5 virtual table over messages.content"
+    conversation_fts {
+        TEXT content "Derived FTS5 transcript index"
+        TEXT msg_id "Message ID"
+        TEXT session_id "Session ID"
+        TEXT role "Message role"
+        INTEGER created_at "Epoch ms"
     }
     executor_output {
         TEXT id PK "Random hex ID"
@@ -212,7 +217,7 @@ erDiagram
 
     memory_chunks ||--|| memory_chunks_fts : "FTS5 external content"
     crafted_tools ||--|| crafted_tools_fts : "FTS5 sync triggers"
-    messages ||--|| messages_fts : "FTS5 sync triggers"
+    actor_messages ||--o{ conversation_fts : "local transcript index"
     crafted_tools ||--o| craft_scores : "tool_name"
     search_nodes ||--o{ search_nodes : "parent_id"
     scaffold_versions ||--o{ task_history : "scaffold_version"
@@ -305,12 +310,12 @@ agents 0.20.1) creates, on the first session read — which is Think's own boot
 Kinu does not write these through the SDK, and on a hosted workspace
 `assistant_messages` is the pane store — the ONE authority for the default
 chat — and every conversational reader answers from it in raw SQL when it
-exists and from plain `messages` when it does not
+exists and from plain `actor_messages` when it does not
 (`packages/core/src/identity/conversation-store.ts` `hasPaneStore`). The pane
 is the vendor's shape with no owner column: it is the ROOT actor's transcript
 by construction, since Think's session belongs to the workspace object and no
 child actor runs Think — `usesPaneStore` is the one place that says whose it
-is, and a child's default chat is the plain store. Plain `messages` is the
+is, and a child's default chat is the plain store. Plain `actor_messages` is the
 local backend's only store, never a projection of the pane (the header of
 that module records why the projection was retired). The
 census in `packages/core/src/conformance/manifest.ts` declares the four
@@ -391,7 +396,7 @@ The cf backend implements it over Think (`getHistory(leafId)`, `getMessage`,
 `appendMessage(message, parentId)` all keep their positional arguments per the
 changeset; one `Session.forSession(actorId)` per hosted actor answers the
 scoping the vendor column never did); the CLI implements it over plain
-`messages`, which is the fall-through arm of every reader today, moved behind
+`actor_messages`, which is the fall-through arm of every reader today, moved behind
 the port unchanged. Cost: the port is asynchronous, so it propagates through
 the call chains that reach a reader — `read-models/status.ts:159`
 (`conversationPageRows`), `evolution/engine.ts:850`, `eval-split.ts:95` and
@@ -444,7 +449,7 @@ since owns its own DDL. All of it is `IF NOT EXISTS`. All of it runs from the sa
 | Swarm node content | `swarm_node_records` (what a swarm re-entry reads) | `core/src/strategy/swarm-resume.ts` |
 | Scaffold shadow mode | `scaffold_evaluations`, `scaffold_trial_queue` | `core/src/scaffold/shadow.ts` |
 | Facts | `agent_facts` | `core/src/memory/facts.ts` |
-| Conversation search | `messages_fts` (FTS5 + sync triggers) | `core/src/memory/conversation-search.ts` |
+| Conversation search | `conversation_fts` (derived FTS5 index) | `core/src/memory/conversation-search.ts` |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Task list | `agent_tasks` (one plan per actor) | `core/src/tasks/store.ts` |
 | Deferred approvals | `deferred_approvals` | `core/src/safety/deferred-approval.ts` |

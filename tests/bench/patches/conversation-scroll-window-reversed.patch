@@ -4,7 +4,7 @@ index 1ac923970..1fad06291 100644
 +++ b/packages/core/src/memory/conversation-search.ts
 @@ -217,7 +217,7 @@ export class ConversationSearchStore {
        : this.sql<PlainRaw>`
-           SELECT id, role, content, created_at, rowid AS rid FROM messages
+           SELECT id, role, content, created_at, rowid AS rid FROM actor_messages
            WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}
 -          ORDER BY rowid DESC LIMIT ${w}`.map(withPlainStamp)).reverse();
 +          ORDER BY rowid DESC LIMIT ${w}`.map(withPlainStamp));

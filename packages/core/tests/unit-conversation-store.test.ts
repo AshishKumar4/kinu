@@ -3,7 +3,7 @@
  * and every reader served from it without any reconciliation write.
  *
  * The defect class this pins: two copies of the default chat — a rich
- * `assistant_messages` tree and a `messages` projection kept level by a
+ * `assistant_messages` tree and an `actor_messages` projection kept level by a
  * post-turn reconciler — with every reader except the fork cut served from the
  * projection. An interrupted turn, or a sibling branch that never became an
  * ancestor of the newest leaf, exists in the tree and is invisible to status
@@ -30,7 +30,7 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 /**
  * A workspace fixture and the actor its transcript belongs to.
  *
- * Handed back together because the `messages` store keys on (actor_id, id): a
+ * Handed back together because the `actor_messages` store keys on (actor_id, id): a
  * seeded transcript is only readable through the handle that owns it, so a
  * fixture returning the database alone would be a workspace no reader can
  * answer for. The pane store is vendor-shaped AND vendor-owned — the table
@@ -51,7 +51,7 @@ function fresh(): SeededWorkspace {
 }
 
 /** A local-shaped workspace — no SDK pane store — and the actor that owns its
- *  rows. The CLI backend writes its own edges into `messages`, so this is the
+ *  rows. The CLI backend writes its own edges into `actor_messages`, so this is the
  *  shape every plain-authority reader below is asked about. */
 function local(workspaceId: string, name: string): SeededWorkspace {
   const base = createTestWorkspace();
@@ -103,7 +103,7 @@ function seedCloudTranscript(ws: SeededWorkspace): void {
 const ALL_IDS = ['u1', 'a1', 'u2', 'a2', 'u3', 'leaf', 'sib1', 'sib2'];
 
 describe('the default chat is complete through every reader, with no mirror', () => {
-  test('no reader ever wrote a projection row into `messages`', () => {
+  test('no reader ever wrote a projection row into `actor_messages`', () => {
     const ws = fresh();
     seedCloudTranscript(ws);
 
@@ -111,7 +111,7 @@ describe('the default chat is complete through every reader, with no mirror', ()
     expect(conversationCount(ws.sql, ws.actor)).toBe(8);
 
     const mirrored = ws.sql<{ c: number }>`
-      SELECT COUNT(*) AS c FROM messages
+      SELECT COUNT(*) AS c FROM actor_messages
       WHERE actor_id = ${ws.actor.actorId} AND session_id = 'default'`;
 
     expect(mirrored[0]!.c).toBe(0);
@@ -213,7 +213,7 @@ describe('resetting the former projection cannot hide rows', () => {
     seedCloudTranscript(ws);
     // Simulate the surviving-workspace shape at its worst: stale projection
     // rows exist, then go away. Nothing readable may depend on either state.
-    void ws.sql`DELETE FROM messages
+    void ws.sql`DELETE FROM actor_messages
       WHERE actor_id = ${ws.actor.actorId} AND session_id = 'default'`;
 
     expect(conversationCount(ws.sql, ws.actor)).toBe(8);
@@ -226,18 +226,18 @@ describe('resetting the former projection cannot hide rows', () => {
   });
 });
 
-describe('the CLI transcript answers the same questions from `messages`', () => {
+describe('the CLI transcript answers the same questions from `actor_messages`', () => {
   /** A local-shaped workspace: no SDK store, rows written the way the CLI
    *  backend writes them (plain text, ms stamps, metadata column). */
   function cliWorkspace(): SeededWorkspace {
     const ws = local('L', 'local');
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'cu1'}, ${'default'}, ${null}, ${'user'}, ${'first ask'}, ${1_000})`;
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'ca1'}, ${'default'}, ${'cu1'}, ${'assistant'}, ${'first answer'}, ${2_000})`;
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'cu2'}, ${'default'}, ${'ca1'}, ${'user'}, ${'second ask'}, ${3_000})`;
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
       VALUES (${ws.actor.actorId}, ${'csys'}, ${'default'}, ${'cu2'}, ${'user'}, ${'wake notice'})`;
 
     return ws;
@@ -271,7 +271,7 @@ describe('the CLI transcript answers the same questions from `messages`', () => 
 
   test('a harness-stamped row renders as system through written markers only', () => {
     const ws = cliWorkspace();
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, metadata)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, metadata)
       VALUES (${ws.actor.actorId}, ${`prog-${1}`}, ${'default'}, ${'csys'}, ${'user'}, ${'background job done'},
               ${JSON.stringify({ kinuAuthor: 'harness' })})`;
 
@@ -281,9 +281,9 @@ describe('the CLI transcript answers the same questions from `messages`', () => 
 
   test('non-default sessions stay isolated from every default-chat reader', () => {
     const ws = cliWorkspace();
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'n1'}, ${'mcts'}, ${null}, ${'assistant'}, ${'a search node thought'}, ${500})`;
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'p1'}, ${'peer:atlas'}, ${null}, ${'user'}, ${'a peer exchange'}, ${600})`;
 
     expect(conversationCount(ws.sql, ws.actor)).toBe(4);
@@ -312,7 +312,7 @@ describe('the tree walks stay sound', () => {
 
   test('a walk terminates on a cycle instead of hanging', () => {
     const ws = local('W', 'w');
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'loop'}, ${'default'}, ${'loop'}, ${'user'}, ${'self-parented'}, ${1_000})`;
 
     expect(sessionTreeAncestry(ws.sql, ws.actor, 'loop').length).toBeGreaterThan(0);
@@ -330,7 +330,7 @@ describe('the tree walks stay sound', () => {
 
   test('chatPaneAncestry answers empty where the pane store does not exist', () => {
     const ws = local('W', 'w');
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'cu1'}, ${'default'}, ${null}, ${'user'}, ${'cli message'}, ${1_000})`;
 
     expect(chatPaneAncestry(ws.sql, ws.actor, 'cu1')).toEqual([]);
@@ -346,7 +346,7 @@ describe('bare schema', () => {
     const execRaw = makeExecRaw(db);
     initAllTables(execRaw, sql);
     const actor = createTestActor(sql, execRaw, 'BARE', 'bare');
-    void sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${actor.actorId}, ${'m1'}, ${'default'}, ${null}, ${'user'}, ${'cli message'}, ${1_000})`;
 
     expect(conversationCount(sql, actor)).toBe(1);
@@ -356,7 +356,7 @@ describe('bare schema', () => {
 
 describe('a cloud export imported into a LOCAL workspace', () => {
   /** The import shape: pane rows present (as a cloud archive carries them),
-   *  nothing in `messages` yet. */
+   *  nothing in `actor_messages` yet. */
   function imported(): SeededWorkspace {
     const ws = local('IMP', 'imported');
     ws.execRaw(SDK_SESSION_DDL);
@@ -366,7 +366,7 @@ describe('a cloud export imported into a LOCAL workspace', () => {
     return ws;
   }
 
-  test('normalize-once projects the pane into `messages` and drops it', () => {
+  test('normalize-once projects the pane into `actor_messages` and drops it', () => {
     const ws = imported();
     expect(normalizeImportedConversation(ws.sql, ws.actor)).toBe(2);
     // Second run is a no-op — the pane is gone.
@@ -375,7 +375,7 @@ describe('a cloud export imported into a LOCAL workspace', () => {
     expect(hasPaneStore(ws.sql)).toBe(false);
 
     const rows = ws.sql<{ id: string; content: string; created_at: number }>`
-      SELECT id, content, created_at FROM messages
+      SELECT id, content, created_at FROM actor_messages
       WHERE actor_id = ${ws.actor.actorId} AND session_id = 'default' ORDER BY rowid`;
 
     expect(rows.map((r) => r.id)).toEqual(['cu1', 'ca1']);
@@ -387,7 +387,7 @@ describe('a cloud export imported into a LOCAL workspace', () => {
     const ws = imported();
     normalizeImportedConversation(ws.sql, ws.actor);
     // The way the CLI backend writes a turn: plain rows on the local authority.
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'lu1'}, ${'default'}, ${'ca1'}, ${'user'}, ${'next ask'}, ${1_500_000})`;
 
     expect(conversationCount(ws.sql, ws.actor)).toBe(3);
@@ -405,13 +405,13 @@ describe('a cloud export imported into a LOCAL workspace', () => {
 describe('the derived search index rebuilds on every invisible mutation', () => {
   test('session reassignment leaves no ghost under the old conversation', () => {
     const ws = local('W', 'w');
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'m1'}, ${'default'}, ${null}, ${'user'}, ${'kubernetes ingress config'}, ${1000})`;
     let store = new ConversationSearchStore(ws.sql, ws.actor);
     expect(store.search('kubernetes')[0]!.conversationId).toBe('default');
 
     // What the CLI fork does: move the tail into an archive session.
-    void ws.sql`UPDATE messages SET session_id = ${'archive-x'}
+    void ws.sql`UPDATE actor_messages SET session_id = ${'archive-x'}
       WHERE actor_id = ${ws.actor.actorId} AND id = ${'m1'}`;
     // Source-table trigger bumps the revision; the same store rebuilds on read.
     expect(store.search('kubernetes').map((h) => h.conversationId)).toEqual(['archive-x']);
@@ -419,26 +419,26 @@ describe('the derived search index rebuilds on every invisible mutation', () => 
 
   test('same-length update, delete, clear and equal-count reseed rebuild without a callsite hint', () => {
     const ws = local('W', 'w');
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'d1'}, ${'default'}, ${null}, ${'assistant'}, ${'wrangler staging deploy'}, ${1000})`;
     let store = new ConversationSearchStore(ws.sql, ws.actor);
     expect(store.search('wrangler').length).toBe(1);
 
     // UPDATE is same-rowid and same-count; the source trigger still invalidates.
-    void ws.sql`UPDATE messages SET content = ${'docker staging deploy'}
+    void ws.sql`UPDATE actor_messages SET content = ${'docker staging deploy'}
       WHERE actor_id = ${ws.actor.actorId} AND id = ${'d1'}`;
     expect(store.search('wrangler')).toEqual([]);
     expect(store.search('docker').length).toBe(1);
 
     // DELETE is the clear-path primitive.
-    void ws.sql`DELETE FROM messages WHERE actor_id = ${ws.actor.actorId} AND id = ${'d1'}`;
+    void ws.sql`DELETE FROM actor_messages WHERE actor_id = ${ws.actor.actorId} AND id = ${'d1'}`;
     expect(store.search('docker')).toEqual([]);
 
     // Reseed at the SAME count and a direct SDK-style INSERT both rebuild.
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'d2'}, ${'default'}, ${null}, ${'assistant'}, ${'fresh replacement'}, ${1000})`;
     expect(store.search('fresh').length).toBe(1);
-    void ws.sql`DELETE FROM messages WHERE actor_id = ${ws.actor.actorId}`;
+    void ws.sql`DELETE FROM actor_messages WHERE actor_id = ${ws.actor.actorId}`;
     expect(store.search('fresh')).toEqual([]);
   });
 
@@ -447,7 +447,7 @@ describe('the derived search index rebuilds on every invisible mutation', () => 
     seedCloudTranscript(ws);
     // A surviving-workspace leftover: the old projection's copy of a turn,
     // under an id the pane store does not know.
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'ghost'}, ${'default'}, ${'u3'}, ${'assistant'}, ${'STALE projection text'}, ${1_000})`;
 
     const scroll = store(ws).scroll('ghost', 2);
@@ -459,13 +459,13 @@ describe('the derived search index rebuilds on every invisible mutation', () => 
     const ws = fresh();
     seedCloudTranscript(ws);
     void ws.sql`
-      INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'mcts-u'}, ${'mcts'}, ${null}, ${'user'}, ${'score this candidate'}, ${2_000})`;
     void ws.sql`
-      INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'mcts-a'}, ${'mcts'}, ${'mcts-u'}, ${'assistant'}, ${'candidate score'}, ${2_001})`;
     void ws.sql`
-      INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'stale'}, ${'default'}, ${null}, ${'assistant'}, ${'retired mirror'}, ${2_002})`;
 
     expect(conversationTurnPair(ws.sql, ws.actor, 'mcts-a')).toMatchObject({
@@ -478,7 +478,7 @@ describe('the derived search index rebuilds on every invisible mutation', () => 
 
   test('a pane clear refuses a stale mirror fork point', async () => {
     const ws = fresh();
-    void ws.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
       VALUES (${ws.actor.actorId}, ${'old'}, ${'default'}, ${null}, ${'user'}, ${'retired mirror'}, ${1000})`;
     await writeSoul(ws.vfs, ws.sql, 'p');
     // The authoritative pane exists but was cleared. `old` must not fall back

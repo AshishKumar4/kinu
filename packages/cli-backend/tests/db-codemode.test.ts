@@ -199,12 +199,12 @@ describe('db.* in the local codemode sandbox', () => {
       const out = await s.run(`
         // Try the host's own tables, then do the work that is actually allowed
         const attempts = {};
-        for (const target of ['messages', 'workspace_actors', 'agent_data_tables']) {
+        for (const target of ['actor_messages', 'workspace_actors', 'agent_data_tables']) {
           const answer = await db.select(target);
           attempts[target] = answer.reason;
         }
-        attempts.injection = (await db.select('notes; DROP TABLE messages')).reason;
-        attempts.drop = (await db.dropTable('messages')).reason;
+        attempts.injection = (await db.select('notes; DROP TABLE actor_messages')).reason;
+        attempts.drop = (await db.dropTable('actor_messages')).reason;
         await db.createTable({ name: 'mine', scope: 'actor', columns: [{ name: 'k', type: 'text' }] });
         await db.insert('mine', [{ k: 'ok' }]);
         return { attempts, mine: await db.count('mine') };
@@ -213,7 +213,7 @@ describe('db.* in the local codemode sandbox', () => {
       expect(out.error).toBeUndefined();
       expect(out.result).toEqual({
         attempts: {
-          messages: 'missing',
+          actor_messages: 'missing',
           workspace_actors: 'missing',
           agent_data_tables: 'missing',
           injection: 'bad_input',
@@ -224,9 +224,9 @@ describe('db.* in the local codemode sandbox', () => {
       // The host tables the program reached for are all still there, with the
       // rows they had.
       expect(s.sql<{ name: string }>`
-        SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('messages', 'workspace_actors', 'agent_data_tables')
+        SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('actor_messages', 'workspace_actors', 'agent_data_tables')
         ORDER BY name`.map((row) => row.name))
-        .toEqual(['agent_data_tables', 'messages', 'workspace_actors']);
+        .toEqual(['actor_messages', 'agent_data_tables', 'workspace_actors']);
     }
     finally { s.close(); }
   });

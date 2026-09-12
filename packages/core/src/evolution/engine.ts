@@ -446,7 +446,7 @@ export class EvolutionEngine {
    * what turns it from prose into evidence: `advisorNegatives` joins on that id
    * to reach the conversation the note is about, and `buildOutcomeEvalSplit`
    * draws the result as a scoring instance. Neither the message nor the response
-   * is copied here — the `messages` rows already hold them, and a second copy is
+   * is copied here — the `actor_messages` rows already hold them, and a second copy is
    * a second thing to keep true.
    */
   recordAdvisorNote(note: AdvisorNote, turnId?: string): void {

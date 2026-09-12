@@ -481,7 +481,7 @@ export class LocalAgentClient implements AgentClient {
 
     const rows = this.deps.rt.storage.sql<{ id: string; parent_id: string | null; role: string; content: string; created_at: number }>`
       SELECT id, parent_id, role, content, created_at
-      FROM messages
+      FROM actor_messages
       WHERE actor_id = ${actorId} AND session_id = ${this.canonicalConversation}
         AND role IN ('user', 'assistant')
       ORDER BY created_at ASC, rowid ASC`;
@@ -496,7 +496,7 @@ export class LocalAgentClient implements AgentClient {
 
     for (const row of rows.slice(pivot)) {
       void this.deps.rt.storage.sql`
-        UPDATE messages SET session_id = ${archivedConversation}
+        UPDATE actor_messages SET session_id = ${archivedConversation}
         WHERE actor_id = ${actorId} AND id = ${row.id}`;
     }
 
