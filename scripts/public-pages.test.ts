@@ -304,7 +304,7 @@ beforeAll(async () => {
       });
       await page.waitForFunction(
         () => document.querySelector('[data-landing-frame="checkout"]')?.getAttribute('data-workspace-mode') === 'supervise'
-          && document.querySelector('[data-workspace-panel="supervise"]')?.textContent?.includes('Curriculum') === true,
+          && document.querySelector('[data-workspace-panel="supervise"]')?.textContent?.includes('Automations') === true,
       );
       await page.evaluate(() => {
         const root = document.querySelector('[data-landing-frame="checkout"]');

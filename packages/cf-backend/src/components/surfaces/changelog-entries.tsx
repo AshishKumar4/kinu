@@ -75,8 +75,9 @@ export const CHANGELOG_REVALIDATE_MS = LIVE_DATA_REFRESH_MS;
 
 /** Never stand down: unlike a plan or a fork run, a digest has no settled
  *  state to infer from what loaded — a scaffold promotion, a crafted tool or a
- *  graded turn can land on an idle workspace at any time. */
-const changelogRevalidate = (): number => CHANGELOG_REVALIDATE_MS;
+ *  graded turn can land on an idle workspace at any time. Exported for the
+ *  other surfaces reading the same ledgers at the same cadence. */
+export const changelogRevalidate = (): number => CHANGELOG_REVALIDATE_MS;
 
 /**
  * The changelog for the surface that shows it, marked seen by the act of

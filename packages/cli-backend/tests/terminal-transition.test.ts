@@ -683,7 +683,7 @@ describe('a recovery reads the record, not the session that finds it', () => {
 });
 
 const assistantRows = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM messages WHERE role = 'assistant'`[0]?.n ?? 0;
+  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM actor_messages WHERE role = 'assistant'`[0]?.n ?? 0;
 
 const recordedIntents = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM terminal_intents`[0]?.n ?? 0;

@@ -101,7 +101,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
     id INTEGER PRIMARY KEY AUTOINCREMENT, type TEXT NOT NULL, message TEXT NOT NULL,
     data TEXT, created_at INTEGER NOT NULL)`);
   // Shaped exactly as `cf-backend/src/orchestrator.ts` creates it: `actor_id`
-  // leads the key because `messages` is keyed `(actor_id, id)`, so two actors'
+  // leads the key because `actor_messages` is keyed `(actor_id, id)`, so two actors'
   // turns really do present the same message id — and a bare `message_id`
   // primary key lets one actor's thumbs overwrite a sibling's through the
   // writer's ON CONFLICT. A fixture without the column would take the reader's

@@ -611,7 +611,7 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
         SELECT COUNT(*) AS count FROM assistant_messages WHERE role <> ${'system'}`),
       markers: !pane ? 0 : tally(this.sql<{ count: number }>`
         SELECT COUNT(*) AS count FROM assistant_messages WHERE role = ${'system'}`),
-      plainRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM messages`),
+      plainRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_messages`),
       configRows: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM actor_config`),
       craftedTools: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM crafted_tools`),
       memoryChunks: tally(this.sql<{ count: number }>`SELECT COUNT(*) AS count FROM memory_chunks`),

@@ -498,7 +498,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
         />
         {altitude === 'supervise' ? (
           <div data-workspace-panel="supervise" className="h-[760px] min-h-0 overflow-hidden">
-            <SupervisePage rpc={superviseRpc} onRunTask={() => {}} />
+            <SupervisePage rpc={superviseRpc} />
           </div>
         ) : (
           <div data-workspace-panel="run" className="grid md:h-[760px] md:grid-cols-[minmax(0,1fr)_430px] md:grid-rows-[minmax(0,1fr)]">

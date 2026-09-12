@@ -5881,7 +5881,7 @@ export abstract class ActorAgent extends Think<Env> {
    * subclass hook), and that session read is what creates `assistant_messages`
    * — so on every activation whose Think booted, the table exists by the time
    * this runs. Every conversational reader in core answers from that table
-   * where it exists and falls to plain `messages` where it does not
+   * where it exists and falls to plain `actor_messages` where it does not
    * (`identity/conversation-store.ts` `hasPaneStore`): right for a local
    * workspace and for a harness that boots the actor half alone (no Think, no
    * `session`), and silently WRONG for a hosted workspace whose SDK has moved

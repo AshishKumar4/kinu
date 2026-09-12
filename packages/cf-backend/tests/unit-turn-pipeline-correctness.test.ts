@@ -562,10 +562,10 @@ describe('turn-pipeline correctness wiring', () => {
   test('an INTERRUPTED turn is complete through every reader, with no mirror write', async () => {
     // The bug the operator hit: he forked from a message the chat pane was
     // showing and got `fork point not found`, because every reader but the
-    // fork cut read the `messages` projection, and the projection skipped
+    // fork cut read the `actor_messages` projection, and the projection skipped
     // anything that had not been reconciled. Every reader goes through the
     // canonical conversation store — the SDK's own transcript — so nothing
-    // may be written into `messages` for the default chat, and the
+    // may be written into `actor_messages` for the default chat, and the
     // interrupted turn must still be served by the paged history read.
     const harness = orchestratorHarness();
     // The SDK's own transcript table, as Think's session creates it — no owner
@@ -597,7 +597,7 @@ describe('turn-pipeline correctness wiring', () => {
 
     // No projection row anywhere.
     const mirrored = harness.db.prepare<{ c: number }, []>(
-      `SELECT COUNT(*) AS c FROM messages WHERE session_id = 'default'`,
+      `SELECT COUNT(*) AS c FROM actor_messages WHERE session_id = 'default'`,
     ).get();
 
     expect(mirrored?.c).toBe(0);
