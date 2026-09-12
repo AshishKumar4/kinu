@@ -53,6 +53,8 @@
  *                                  command, the wait, and the close when the
  *                                  machine reports in
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
+ *   /gallery.html?frame=supervisefresh → the same view before any evolution has
+ *                                  happened: the Evolution block is absent
  *   /gallery.html?frame=settings → the per-agent Settings page
  *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
  *                                  competition, in Column C's actual width
@@ -4311,33 +4313,17 @@ function DriveFrame({ initialSurface, offlineLaptop, width, deferPreview = false
 /* ── Supervise ──────────────────────────────────────────────────── */
 
 // The SUPERVISE altitude — the agent over time. Every block is fed so the type
-// roles that carry it (`.p-meta` on the timestamps, the skill pills, the token
-// counts) are actually on screen; an empty board photographs its empty states
-// and tells you nothing about the scale it renders real rows at.
-const SUPERVISE_TASKS = [
-  {
-    id: "cur_1", task: "Learn the checkout coupon schema well enough to fix the kind:null regression",
-    rationale: "Three of the last five failures traced back to the same migration.",
-    predictedSuccess: 0.72, targetsSkills: ["sql", "regression-triage"],
-    proposedAt: NOW - 2 * 36e5, status: "pending",
-  },
-  {
-    id: "cur_2", task: "Write a smoke check for the email-triage webhook",
-    rationale: "The trigger has fired 41 times and nothing asserts its shape.",
-    predictedSuccess: 0.44, targetsSkills: ["testing"],
-    proposedAt: NOW - 9 * 36e5, status: "accepted",
-  },
-];
+// roles that carry it (`.p-meta` on the timestamps, the token counts) are
+// actually on screen; an empty board photographs its empty states and tells
+// you nothing about the scale it renders real rows at.
 
 /** Typed, so the fixtures move with `RunSummary` instead of only failing at the
  *  browser-side valibot parse. The second run is deliberately a SILENT one — the
  *  provider reported nothing for any of its turns — because that is the case the
  *  history block has to render as unreported rather than as free.
  *
- *  Longer than one page on purpose: this block sums the usage of the rows it
- *  received and prints the total as the workspace's spend, so a frame that never
- *  crosses a page boundary cannot show whether that total is honest about what
- *  it covers. */
+ *  Longer than one page on purpose: the block pages the history, so a frame
+ *  that never crosses a page boundary cannot show whether the pager works. */
 const SUPERVISE_RUNS: RunSummary[] = [
   {
     runId: "run_9c1", startedAt: NOW - 45 * 60e3, causedBy: "chat",
@@ -4414,34 +4400,57 @@ const SUPERVISE_JOBS: BackgroundJob[] = [
   },
 ];
 
-const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listCurriculumTasks") return rpcResult({ tasks: SUPERVISE_TASKS }).json<T>();
-
-  if (method === "getRunSummaries") {
-    const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
-    const limit = request.limit ?? 30;
-    const after = request.cursor?.after;
-    const start = after === undefined ? 0 : SUPERVISE_RUNS.findIndex((run) => run.runId === after) + 1;
-
-    return rpcResult(seekPage(
-      SUPERVISE_RUNS.slice(start, start + limit + 1), limit, (run) => run.runId,
-    )).json<T>();
-  }
-
-  if (method === "listTriggers") return rpcResult({ triggers: SUPERVISE_TRIGGERS }).json<T>();
-
-  if (method === "listBackgroundJobs") return rpcResult(SUPERVISE_JOBS).json<T>();
-
-  return stubRpc<T>(method, args);
+/** What the Evolution block gates on: one entry per kind the changelog can
+ *  carry here, so the section only exists because a change already happened.
+ *  `supervisefresh` answers the empty digest instead and the block is absent. */
+const SUPERVISE_CHANGELOG = {
+  seenAt: NOW - 30e5, unseenCount: 2,
+  entries: [
+    { id: "cl_s1", kind: "scaffold", at: NOW - 10e5, scaffoldVersion: 8,
+      summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
+      evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie" },
+    { id: "cl_s2", kind: "outcomes", at: NOW - 20e5,
+      summary: "Graded 6 turns · 4 accepted · 2 corrected",
+      evidence: "window closed after the deploy-failed run" },
+    { id: "cl_s3", kind: "fact", at: NOW - 50e5,
+      summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration",
+      evidence: null },
+  ],
 };
 
-function SuperviseFrame() {
+const superviseRpc =
+  (changelog: typeof SUPERVISE_CHANGELOG): Rpc =>
+  async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method === "getEvolutionChangelog") return rpcResult(changelog).json<T>();
+
+    if (method === "getRunSummaries") {
+      const request = v.parse(GalleryPageRequestSchema, args?.[0] ?? {});
+      const limit = request.limit ?? 30;
+      const after = request.cursor?.after;
+      const start = after === undefined ? 0 : SUPERVISE_RUNS.findIndex((run) => run.runId === after) + 1;
+
+      return rpcResult(seekPage(
+        SUPERVISE_RUNS.slice(start, start + limit + 1), limit, (run) => run.runId,
+      )).json<T>();
+    }
+
+    if (method === "listTriggers") return rpcResult({ triggers: SUPERVISE_TRIGGERS }).json<T>();
+
+    if (method === "listBackgroundJobs") return rpcResult(SUPERVISE_JOBS).json<T>();
+
+    return stubRpc<T>(method, args);
+  };
+
+function SuperviseFrame({ evolved = true }: { evolved?: boolean }) {
   return (
     <div className="p-bg p-text min-h-screen">
-      <SupervisePage rpc={superviseRpc} onRunTask={() => {}} />
+      <SupervisePage rpc={superviseRpc(
+        evolved ? SUPERVISE_CHANGELOG : { seenAt: NOW, unseenCount: 0, entries: [] },
+      )} />
     </div>
   );
 }
+
 
 /* ── Activity ───────────────────────────────────────────────────── */
 
@@ -5725,6 +5734,7 @@ async function mount() {
     );
   }
   else if (frame === "supervise") node = <SuperviseFrame />;
+  else if (frame === "supervisefresh") node = <SuperviseFrame evolved={false} />;
   // Three states of one block: every qualifier live, nothing left to qualify,
   // and a workspace that has spent nothing at all.
   else if (frame === "activity") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />;
