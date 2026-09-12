@@ -26,6 +26,7 @@ import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { SlateFrame } from "@/components/slates/SlateFrame";
 import { SLATE_PREFIX, resolveGatedSurface, surfaceHasContent } from "./presence";
+import { useSurfaceFocus } from "./use-surface-focus";
 import { ConnectDeviceDialog } from "@/components/ConnectDevicePanel";
 
 const SURFACES = ["Work", "Diffs", "Files", "Releases", "Exploration", "Agent", "Environment"] as const;
@@ -122,39 +123,20 @@ export interface WorkSurfaceProps {
 }
 
 export function WorkSurface(props: WorkSurfaceProps) {
-  const { surface, onSurface } = props;
+  const { surface } = props;
   const strip = useRef<HTMLDivElement>(null);
-  // A preview arriving on its own never steals the surface: it raises a
-  // "Preview ready" chip on the surface already open, and only an explicit
-  // click navigates. `previewFocus` arrives as `slate:<id>` / `preview:<…>`
-  // while the strip speaks `slate:<id>` / `preview:<executor>:<port>`.
-  const [dismissedPreview, setDismissedPreview] = useState<string | null>(null);
 
-  // SAFETY: use-kinu constructs previewFocus as `slate:${added.id}` in applySlates and
-  // `preview:${added}` (an `${executor}:${port}` pair) in refreshExposedPorts, and the strip
-  // below maps those same shapes back to surfaces via slateSurface and `preview:${executor}:${port}`.
-  // Re-adding the stripped prefix reconstructs the strip's own surface id, not a guessed string.
-  const focusSurface = props.previewFocus?.startsWith("slate:")
-    ? (`${SLATE_PREFIX}${props.previewFocus.slice(6)}` as SurfaceKind)
-    : props.previewFocus?.startsWith("preview:")
-      ? (`preview:${props.previewFocus.slice(8)}` as SurfaceKind)
-      : null;
+  const focus = useSurfaceFocus({
+    surface,
+    previewFocus: props.previewFocus,
+    slates: props.slates,
+    pinnedPorts: props.pinnedPorts,
+    onSurface: props.onSurface,
+  });
 
-  const previewReady = focusSurface !== null && focusSurface !== surface && props.previewFocus !== dismissedPreview;
+  const chip = focus.readyChip;
 
-  const readyPreviewTitle = focusSurface === null ? null
-    : focusSurface.startsWith(SLATE_PREFIX)
-      ? (props.slates?.find((slate) => slateSurface(slate.id) === focusSurface)?.title ?? focusSurface.slice(SLATE_PREFIX.length))
-      : (props.pinnedPorts.find((port) => `preview:${port.executor}:${port.port}` === focusSurface)?.name
-        ?? focusSurface.slice("preview:".length).replace(":", " :"));
-
-  const openReadyPreview = useCallback(() => {
-    if (focusSurface === null) return;
-    setDismissedPreview(props.previewFocus ?? null);
-    onSurface(focusSurface);
-  }, [focusSurface, onSurface, props.previewFocus]);
-
-  useEffect(() => { if (props.planFocus) onSurface("Work"); }, [props.planFocus, onSurface]);
+  useEffect(() => { if (props.planFocus) focus.navigate("Work"); }, [props.planFocus, focus.navigate]);
   const [hasDiffs, setHasDiffs] = useState(false);
 
   const ports = props.pinnedPorts.filter(port => !props.slates?.some(slate => port.executor === "workspace" && slate.port === port.port));
@@ -169,16 +151,16 @@ export function WorkSurface(props: WorkSurfaceProps) {
       : surface.startsWith("preview:") && !openPort ? "Work"
       : resolveGatedSurface(surface, props.tabPresence, props.mctsTrees, props.slates);
 
-    if (resolved !== surface) onSurface(resolved);
-  }, [surface, onSurface, props.tabPresence, props.mctsTrees, props.slates, hasDiffs, openPort]);
+    if (resolved !== surface) focus.navigate(resolved);
+  }, [surface, focus.navigate, props.tabPresence, props.mctsTrees, props.slates, hasDiffs, openPort]);
   // A one-shot cross-surface intent: an Environment card's Files action lands
   // the Files tab at that environment's own root on the composite plane.
   const [filesJump, setFilesJump] = useState<{ path: string; nonce: number } | null>(null);
 
   const openFiles = useCallback((path: string) => {
     setFilesJump((prev) => ({ path, nonce: (prev?.nonce ?? 0) + 1 }));
-    onSurface("Files");
-  }, [onSurface]);
+    focus.navigate("Files");
+  }, [focus.navigate]);
 
   // The frame uses the summary for its header and the counter for preview reloads.
   const openSlate = slateId(surface);
@@ -227,7 +209,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {props.slates?.map(slate => {
             const kind = slateSurface(slate.id);
 
-            return <button key={kind} onClick={() => onSurface(kind)} title={slate.title} aria-label={slate.title}
+            return <button key={kind} onClick={() => focus.navigate(kind)} title={slate.title} aria-label={slate.title}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>
               <SparkleIcon size={14} /><span>{slate.title}</span>
@@ -237,12 +219,12 @@ export function WorkSurface(props: WorkSurfaceProps) {
             const kind: SurfaceKind = `preview:${port.executor}:${port.port}`;
             const title = port.name || `${port.executor} :${port.port}`;
 
-            return <button key={kind} onClick={() => onSurface(kind)} title={title} aria-label={title}
+            return <button key={kind} onClick={() => focus.navigate(kind)} title={title} aria-label={title}
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} text-left shrink-0 ${surface === kind ? "p-tab-active" : ""}`}>{title}</button>;
           })}
           {SURFACES.filter(s => (s !== "Diffs" || hasDiffs) && surfaceHasContent(s, props.tabPresence, props.mctsTrees, props.slates)).map(s => (
-            <button key={s} onClick={() => onSurface(s)} title={s} aria-label={s}
+            <button key={s} onClick={() => focus.navigate(s)} title={s} aria-label={s}
               aria-current={surface === s ? "true" : undefined}
               className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>
               <span>{SURFACE_LABEL[s]}</span>
@@ -250,13 +232,13 @@ export function WorkSurface(props: WorkSurfaceProps) {
             </button>
           ))}
         </div>
-        {previewReady && (
+        {chip !== null && (
           <button
             type="button"
-            onClick={openReadyPreview}
+            onClick={() => focus.navigate(chip.surface)}
             data-preview-ready
-            title={readyPreviewTitle ?? "A preview is ready"}
-            aria-label={readyPreviewTitle ? `Preview ready: ${readyPreviewTitle}` : "Preview ready"}
+            title={chip.title}
+            aria-label={`Preview ready: ${chip.title}`}
             className="my-auto mr-1 inline-flex shrink-0 items-center gap-1.5 rounded-full border p-border p-accent-subtle px-2.5 py-1 text-[11px] font-medium p-accent transition-colors hover:p-elevated"
           >
             <span className="size-1.5 rounded-full p-dot-accent p-dot-pulse" aria-hidden="true" />
@@ -264,7 +246,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           </button>
         )}
         <button
-          onClick={() => onSurface(ACTIVITY_SURFACE)}
+          onClick={() => focus.navigate(ACTIVITY_SURFACE)}
           aria-label="Activity"
           title="Context, cost, and cache"
           className={`${tabCls} mr-2 px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
@@ -298,7 +280,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               onRefreshQueue={props.onRefreshQueue}
               backgroundJobs={props.backgroundJobs}
               onRefreshJobs={props.onRefreshJobs}
-              onOpenSurface={onSurface}
+              onOpenSurface={focus.navigate}
               onChangelogSeen={props.onChangelogSeen}
               isStreaming={props.isStreaming}
               rpc={props.rpc}
