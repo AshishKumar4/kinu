@@ -36,6 +36,10 @@ const SignalCardEventSchema: v.GenericSchema<SignalCardEvent> = v.variant('state
 function setup(opts: {
   turnInFlight?: boolean;
   enqueue?: 'queued' | 'skipped' | 'throw';
+  /** Emulate the host's inside-the-slot read: an operator message was admitted
+   *  before this turn took its slot, so a turn that was OFFERED
+   *  (`yieldsToUserMessage`) answers 'yielded' and runs nothing. */
+  messageAdmitted?: boolean;
   activeMode?: 'plan' | 'build';
 } = {}) {
   const queued: ProgrammaticTurn[] = [];
@@ -49,7 +53,15 @@ function setup(opts: {
 
       if (opts.enqueue === 'throw') throw new Error('queue unavailable');
 
-      return { status: opts.enqueue === 'skipped' ? 'skipped' : 'queued' };
+      if (opts.enqueue === 'skipped') return { status: 'skipped' };
+
+      // The host's slot-time contract, emulated: an offered turn yields to an
+      // admitted operator message; every other turn queues as before.
+      if (opts.messageAdmitted === true && turn.yieldsToUserMessage === true) {
+        return { status: 'yielded' };
+      }
+
+      return { status: 'queued' };
     },
     turnInFlight: () => opts.turnInFlight === true,
     setTimer: () => {},
@@ -445,6 +457,35 @@ describe('the workspace genesis signal', () => {
     expect(await signals.deliver(genesis!)).toBe('queued');
     expect(queued).toHaveLength(1);
     expect(signals.prepareStep({ stepNumber: 0, messages: [user('the racing turn')] })).toBeUndefined();
+  });
+
+  test('the genesis offer yields to an operator message admitted before its slot', async () => {
+    const { signals, queued, cards } = setup({ turnInFlight: false, messageAdmitted: true });
+    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+
+    // The host found the person's message already admitted when the offered
+    // turn reached its slot: the seam reports the yield, consumes the offer
+    // (no compensate, no redelivery) and withdraws the card it opened.
+    expect(await signals.deliver(genesis!)).toBe('yielded');
+    expect(queued).toHaveLength(1);
+    expect(queued[0]!.yieldsToUserMessage).toBe(true);
+    expect(queued[0]!.metadata?.kinuEvent).toBe(WORKSPACE_CREATED_EVENT);
+    expect(lifecycle(cards)).toEqual(['pending', 'undelivered']);
+  });
+
+  test('an admitted message does not consume a turn that was never offered', async () => {
+    const { signals, queued } = setup({ turnInFlight: false, messageAdmitted: true });
+
+    expect(await signals.deliver(wake('mail from bob', { requiresOwnTurn: true }))).toBe('queued');
+    expect(queued[0]!.yieldsToUserMessage).toBeUndefined();
+  });
+
+  test('the genesis offer with nobody speaking still takes its own turn', async () => {
+    const { signals, queued } = setup({ turnInFlight: false });
+    const genesis = workspaceGenesisSignal('Audit the OAuth callback flow.');
+
+    expect(await signals.deliver(genesis!)).toBe('queued');
+    expect(queued[0]!.yieldsToUserMessage).toBe(true);
   });
 
   test('a workspace created with no mission has no first turn to take', () => {

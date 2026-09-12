@@ -100,7 +100,7 @@ export {
 export {
   sessionTreeAncestry, chatPaneAncestry, hasPaneStore, usesPaneStore, forkPointExists, normalizeImportedConversation,
   answersForDrainTurns,
-  conversationCount, conversationTurnPair, conversationPageRows,
+  conversationCount, conversationTurnPair, conversationPageRows, operatorMessageAdmitted,
   SESSION_TREE_MAX_DEPTH, CHAT_SESSION_ID,
   type SessionTreeNode, type ChatPaneRow,
   type ConversationTurnPair, type ConversationPageRow,
