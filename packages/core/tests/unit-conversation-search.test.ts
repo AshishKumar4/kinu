@@ -259,8 +259,8 @@ describe('ConversationSearchStore.browse', () => {
     // fixture's own invention would answer a question no workspace is asked.
     execRaw(SDK_SESSION_DDL);
     void sql`INSERT INTO assistant_messages
-      (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${ACTOR_ID}, 'pane-user', '', NULL, 'user',
+      (id, session_id, parent_id, role, content, created_at)
+      VALUES ('pane-user', '', NULL, 'user',
         '{"id":"pane-user","role":"user","parts":[{"type":"text","text":"pane kickoff"}]}',
         '1970-01-01 00:00:01.000')`;
     insert(sql, 'peer-session', 'user', 'peer kickoff', 2_000);

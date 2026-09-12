@@ -33,6 +33,12 @@ export interface RawSqlExec {
   (ddl: string): void;
 }
 
+/** A DDL string as the tagged executor takes it — one part, no bindings — for
+ *  a caller that holds a {@link SqlExecutor} and not a {@link RawSqlExec}. */
+export function ddlStatement(ddl: string): TemplateStringsArray {
+  return Object.assign([ddl], { raw: [ddl] });
+}
+
 /**
  * Positional-binding SQL. Durable Object `ctx.storage.sql` implements it
  * natively; bun:sqlite is one `db.query(q).all(...)` wrapper away.

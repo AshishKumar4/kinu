@@ -655,6 +655,12 @@ const DeferredApprovalSchema = v.object({
   status: v.string(),
 });
 
+const WorkspaceSnapshotSchema = v.object({
+  status: v.object({ messageCount: v.number(), model: v.string() }),
+});
+
+export type PublicWorkspaceSnapshot = v.InferOutput<typeof WorkspaceSnapshotSchema>['status'];
+
 const DeferredApprovalsSchema = v.array(DeferredApprovalSchema);
 
 const DecideApprovalsSchema = v.object({ decided: v.array(v.string()) });
@@ -1036,6 +1042,18 @@ export class KinuPublicSession {
   }
 
   /** The durable transcript the web pane is seeded from. */
+  /** The one read the web app makes on open, `getWorkspaceSnapshot`, reduced to
+   *  what a first-run case asserts: that it answered, that it counts the turns
+   *  the transcript holds, and that it names the model the next turn runs. */
+  async snapshot(): Promise<PublicWorkspaceSnapshot> {
+    const answer = await infraBoundary(
+      `getWorkspaceSnapshot on ${this.input.origin}/${this.workspace}`,
+      () => this.rpc('getWorkspaceSnapshot', []),
+    );
+
+    return v.parse(WorkspaceSnapshotSchema, answer).status;
+  }
+
   async history(): Promise<readonly PublicMessage[]> {
     const rows = await infraBoundary(
       `GET ${this.input.origin}/agents/.../get-messages`,

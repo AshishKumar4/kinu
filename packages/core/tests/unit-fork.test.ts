@@ -411,7 +411,6 @@ describe('forkWorkspaceStorage', () => {
       ],
     });
     src.execRaw(SDK_SESSION_DDL);
-    const srcActor = openWorkspaceMainActor(src.sql).actorId;
 
     // Both messages land in the SAME second, which is all the SDK's
     // `DATETIME DEFAULT CURRENT_TIMESTAMP` can record. A cut comparing
@@ -420,8 +419,8 @@ describe('forkWorkspaceStorage', () => {
     for (const [id, parent, role, text] of [
       ['m1', null, 'user', 'hello'], ['m2', 'm1', 'assistant', 'hi'], ['m3', 'm2', 'user', 'after'],
     ] as const) {
-      void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-        VALUES (${srcActor}, ${id}, ${''}, ${parent}, ${role},
+      void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${id}, ${''}, ${parent}, ${role},
                 ${JSON.stringify({ id, role, parts: [{ type: 'text', text }] })},
                 ${'1970-01-01 00:00:01'})`;
     }
@@ -477,9 +476,8 @@ describe('forkWorkspaceStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
     src.execRaw(SDK_SESSION_DDL);
-    const srcActor = openWorkspaceMainActor(src.sql).actorId;
-    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${srcActor}, ${'m1'}, ${''}, ${null}, ${'user'},
+    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'m1'}, ${''}, ${null}, ${'user'},
               ${JSON.stringify({ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hi' }] })},
               ${'1970-01-01 00:00:01'})`;
 
@@ -521,8 +519,8 @@ describe('forkWorkspaceStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
     src.execRaw(SDK_SESSION_DDL);
-    void src.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${openWorkspaceMainActor(src.sql).actorId}, 'm1', '', NULL, 'user',
+    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES ('m1', '', NULL, 'user',
               ${JSON.stringify({ id: 'm1', role: 'user', parts: [] })}, '1970-01-01 00:00:01.000')`;
     tgt.execRaw(`CREATE TABLE assistant_messages (
       id TEXT PRIMARY KEY, role TEXT NOT NULL, content TEXT NOT NULL, created_at DATETIME

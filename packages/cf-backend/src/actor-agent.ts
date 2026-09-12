@@ -22,7 +22,7 @@ import {
   type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
 } from "agents";
-import { inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
+import { usesPaneStore, inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type {
   SubordinateActivityEvent,
@@ -5889,7 +5889,7 @@ export abstract class ActorAgent extends Think<Env> {
     // catching instead made "no conversation yet" indistinguishable from a read
     // that blew up, and a head handed [] reports "I found nothing" rather than
     // "I could not see the parent" — the defect owners actually hit.
-    if (!tableExists(this.boundSql, 'assistant_messages')) return [];
+    if (!usesPaneStore(this.boundSql, actor)) return [];
 
     type Row = { id: string; role: string; content: string; created_at: string };
 
@@ -5898,7 +5898,6 @@ export abstract class ActorAgent extends Think<Env> {
       FROM (
         SELECT id, role, content, created_at
         FROM assistant_messages
-        WHERE actor_id = ${actor.actorId}
         ORDER BY created_at DESC
         LIMIT ${INHERITED_CONTEXT_CAP}
       ) sub
@@ -5907,8 +5906,7 @@ export abstract class ActorAgent extends Think<Env> {
     // The SAME predicate on the total: a count over every actor's transcript
     // beside a page from one actor's would report a fork inheriting context it
     // was never given, which is the reading this cap exists to bound.
-    const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages
-      WHERE actor_id = ${actor.actorId}`[0]?.n ?? rows.length;
+    const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
 
     return inheritedContextFromRows(
       rows.map((r) => ({

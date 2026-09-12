@@ -79,6 +79,7 @@ export const FIRST_RUN_CASES = [
   'command-refusal',
   'preview-address',
   'workspace-title',
+  'snapshot-after-turn',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -116,6 +117,20 @@ export const FIRST_RUN_DEFECTS = {
     redDirection: 'RED against the deployed build at the time of writing, and it stays red until '
       + "the CraftValidation lane's rebuild on codemode's modules+prelude lands. It is written "
       + 'first and deliberately: this is the tier\'s own rule applied to itself.',
+  },
+  'snapshot-after-turn': {
+    id: 'snapshot-after-turn',
+    found: 'After the first answer, the workspace would not open: "Couldn\'t open this workspace. '
+      + 'SQL query failed: no such column: actor_id", and the composer showed no model beside a '
+      + 'turn that had just run.',
+    missedBecause: 'the transcript table is the Agents SDK\'s, created and written by Think with no '
+      + 'actor column, and Kinu read it with one. Every suite built the table from Kinu\'s own '
+      + 'copy of the DDL, so the reads were never run over the shape the deployment has; nothing '
+      + 'sent a turn through the product and then made the read the web app makes on open.',
+    provedRedAt: '3d6edb212',
+    redDirection: 'one real turn over the public socket, then `getWorkspaceSnapshot` as the web app '
+      + 'calls it: it must answer, count both messages, and name a model. RED at 3d6edb212 on the '
+      + 'first of the three.',
   },
   'approve-clears': {
     id: 'approve-clears',
@@ -290,6 +305,7 @@ const SHORT_SUBJECT = {
   'command-refusal': 'command',
   'preview-address': 'address',
   'workspace-title': 'title',
+  'snapshot-after-turn': 'snapshot',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */

@@ -334,13 +334,13 @@ describe('workspace archive', () => {
     const cloudActor = createTestActor(source.sql, source.execRaw, 'cloud', 'cloud');
     source.execRaw(SDK_SESSION_DDL);
     void source.sql`
-      INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${cloudActor.actorId}, ${'u1'}, ${''}, ${null}, ${'user'},
+      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'u1'}, ${''}, ${null}, ${'user'},
               ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud question' }] })},
               ${'2026-08-26 12:00:00'})`;
     void source.sql`
-      INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${cloudActor.actorId}, ${'a1'}, ${''}, ${'u1'}, ${'assistant'},
+      INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'a1'}, ${''}, ${'u1'}, ${'assistant'},
               ${JSON.stringify({ parts: [{ type: 'text', text: 'cloud answer' }] })},
               ${'2026-08-26 12:00:01'})`;
     new ConversationSearchStore(source.sql, openWorkspaceMainActor(source.sql)).search('cloud');

@@ -49,7 +49,8 @@ import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { SOUL_PATH, summarizeSoul } from './soul';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
-import { CHAT_SESSION_ID, forkAncestry, hasPaneStore } from './conversation-store';
+import { CHAT_SESSION_ID, PANE_STORE_DDL, forkAncestry, hasPaneStore } from './conversation-store';
+import { ddlStatement } from '../types/primitives';
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
 import { uiMessageText } from '../utils/ui-message';
@@ -417,7 +418,7 @@ export class ForkTargetWriter {
     void this.target`DELETE FROM fork_lineage`;
 
     if (hasPaneStore(this.target)) {
-      void this.target`DELETE FROM assistant_messages WHERE actor_id = ${actorId}`;
+      void this.target`DELETE FROM assistant_messages`;
     }
   }
 
@@ -463,10 +464,8 @@ export class ForkTargetWriter {
 
     for (const m of rows) {
       void this.target`
-        INSERT OR IGNORE INTO assistant_messages
-          (actor_id, id, session_id, parent_id, role, content, created_at)
-        VALUES (${this.actorId}, ${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role},
-                ${m.content}, ${m.created_at})
+        INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
       `;
     }
 
@@ -497,9 +496,8 @@ export class ForkTargetWriter {
       for (const m of rows) {
         const text = this.carriedText(m);
         void this.target`
-          INSERT OR IGNORE INTO assistant_messages
-            (actor_id, id, session_id, parent_id, role, content, created_at)
-          VALUES (${this.actorId}, ${m.id}, ${''}, ${m.parent_id}, ${m.role},
+          INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+          VALUES (${m.id}, ${''}, ${m.parent_id}, ${m.role},
                   ${encodeUiMessage(m.id, m.role, text)}, ${paneStampOf(m.created_at)})
         `;
       }
@@ -677,9 +675,8 @@ export class ForkTargetWriter {
 
     if (this.authority === 'pane') {
       void this.target`
-        INSERT OR IGNORE INTO assistant_messages
-          (actor_id, id, session_id, parent_id, role, content, created_at)
-        VALUES (${this.actorId}, ${markerId}, ${''}, ${head.cut.messageId}, ${'system'},
+        INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${markerId}, ${''}, ${head.cut.messageId}, ${'system'},
                 ${encodeUiMessage(markerId, 'system', syntheticText)}, ${paneStampOf(forkPointMs + 1)})
       `;
     } else {
@@ -724,22 +721,9 @@ export class ForkTargetWriter {
    */
   private ensurePaneTable(): void {
     if (!hasPaneStore(this.target)) this.staging.paneTableCreated();
-    void this.target`
-      CREATE TABLE IF NOT EXISTS assistant_messages (
-        actor_id TEXT NOT NULL,
-        id TEXT NOT NULL,
-        session_id TEXT NOT NULL DEFAULT '',
-        parent_id TEXT,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-        PRIMARY KEY (actor_id, id)
-      )
-    `;
-    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent
-      ON assistant_messages(actor_id, parent_id)`;
-    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session
-      ON assistant_messages(actor_id, session_id)`;
+    void this.target(ddlStatement(PANE_STORE_DDL));
+    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent ON assistant_messages(parent_id)`;
+    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
   }
 
   /** The text a plain row carries: verbatim, or flattened from the rich twin
@@ -749,8 +733,7 @@ export class ForkTargetWriter {
 
     const twin = hasPaneStore(this.target)
       ? this.target<{ content: string }>`
-          SELECT content FROM assistant_messages
-          WHERE actor_id = ${this.actorId} AND id = ${row.id} LIMIT 1`[0]
+          SELECT content FROM assistant_messages WHERE id = ${row.id} LIMIT 1`[0]
       : undefined;
 
     if (!twin) {

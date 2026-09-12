@@ -33,7 +33,7 @@
 import * as v from 'valibot';
 import { seekPage, mapPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
 import type { SqlExecutor } from '../types/primitives';
-import type { ActorHandle } from './actor-handle';
+import type { ActorHandle, ActorReference } from './actor-handle';
 import { tableExists } from './schema';
 import { uiMessageRow, uiMessageText } from '../utils/ui-message';
 
@@ -93,17 +93,38 @@ export interface ChatPaneRow {
  *     callers pass `'pane'`, local ones fall to `'plain'` — never "whatever
  *     table happens to exist".
  *
- * The pane store is VENDOR-SHAPED, not vendor-owned. Its columns mirror what
- * `agents`' `AgentSessionProvider` reads, but the table this tree creates is
- * {@link ForkTargetWriter.ensurePaneTable}'s: `actor_id TEXT NOT NULL` with
- * `PRIMARY KEY (actor_id, id)`. So BOTH stores are actor-scoped and every
- * function below predicates both halves. It cannot be otherwise — one host
- * holds several issued actors in one database and a pane message id is minted
- * per actor, so an unscoped pane read is one actor reading another's transcript,
- * and an unscoped pane write collides on the primary key.
+ * The pane store is VENDOR-OWNED. `agents`' `AgentSessionProvider.ensureTable`
+ * creates it on Think's boot and Think's session is the only writer, so its
+ * shape is the vendor's and Kinu adds nothing to it: a column Kinu added would
+ * survive the vendor's `CREATE TABLE IF NOT EXISTS` and then be named by no
+ * vendor INSERT, while a column Kinu read that the vendor never creates throws
+ * `no such column` on every hosted workspace — which is how every hosted
+ * snapshot failed on 2026-09-11. {@link PANE_STORE_DDL} is that shape, verbatim,
+ * and `unit-pane-store-shape.test.ts` holds it to the installed SDK.
+ *
+ * It is the ROOT actor's transcript by construction: Think's session belongs
+ * to the workspace object, and no child actor runs Think. So the pane carries
+ * no actor column and needs none; {@link usesPaneStore} is the one place that
+ * says whose it is, and a child's default chat is the plain store.
  */
+export const PANE_STORE_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
+        id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL DEFAULT '',
+        parent_id TEXT,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )`;
+
 export function hasPaneStore(sql: SqlExecutor): boolean {
   return tableExists(sql, 'assistant_messages');
+}
+
+/** Whether THIS actor's default chat is the pane store: the workspace's root on
+ *  a hosted workspace. The directory's CHECK makes `parentActorId === null` the
+ *  root's own definition. */
+export function usesPaneStore(sql: SqlExecutor, actor: ActorReference): boolean {
+  return actor.parentActorId === null && hasPaneStore(sql);
 }
 
 /** Cheap fork-cut preflight. It reads only the authority table primary key, so
@@ -112,9 +133,9 @@ export function hasPaneStore(sql: SqlExecutor): boolean {
 export function forkPointExists(sql: SqlExecutor, actor: ActorHandle, messageId: string): boolean {
   actor.assertCurrent();
 
-  if (hasPaneStore(sql)) {
+  if (usesPaneStore(sql, actor)) {
     return sql<{ name: string }>`SELECT id AS name FROM assistant_messages
-      WHERE actor_id = ${actor.actorId} AND id = ${messageId} LIMIT 1`.length > 0;
+      WHERE id = ${messageId} LIMIT 1`.length > 0;
   }
 
   return sql<{ name: string }>`
@@ -183,17 +204,16 @@ export function ancestryIds(sql: SqlExecutor, actor: ActorHandle, messageId: str
 
   // Pane authority is absolute: a stale default-session mirror must never make
   // a deleted pane id look forkable again.
-  if (hasPaneStore(sql)) {
+  if (usesPaneStore(sql, actor)) {
     return {
       authority: 'pane',
       ids: sql<{ id: string }>`
         WITH RECURSIVE ancestry(id, parent_id, depth) AS (
-          SELECT id, parent_id, 0 FROM assistant_messages
-            WHERE actor_id = ${actor.actorId} AND id = ${messageId}
+          SELECT id, parent_id, 0 FROM assistant_messages WHERE id = ${messageId}
           UNION ALL
           SELECT am.id, am.parent_id, a.depth + 1
           FROM assistant_messages am JOIN ancestry a ON am.id = a.parent_id
-          WHERE am.actor_id = ${actor.actorId} AND a.depth < ${SESSION_TREE_MAX_DEPTH}
+          WHERE a.depth < ${SESSION_TREE_MAX_DEPTH}
         )
         SELECT id FROM ancestry ORDER BY depth DESC
       `.map((row) => row.id),
@@ -225,10 +245,10 @@ export function ancestryIds(sql: SqlExecutor, actor: ActorHandle, messageId: str
 
 /** One row of the SDK's store by id — the read half of {@link ancestryIds} for
  *  the pane, and the unit a bounded sender reads one row at a time. */
-export function paneRowById(sql: SqlExecutor, actor: ActorHandle, id: string): ChatPaneRow | undefined {
+export function paneRowById(sql: SqlExecutor, id: string): ChatPaneRow | undefined {
   return sql<ChatPaneRow>`
     SELECT id, session_id, parent_id, role, content, created_at
-    FROM assistant_messages WHERE actor_id = ${actor.actorId} AND id = ${id} LIMIT 1
+    FROM assistant_messages WHERE id = ${id} LIMIT 1
   `[0];
 }
 
@@ -272,7 +292,7 @@ export function sessionTreeAncestry(sql: SqlExecutor, actor: ActorHandle, messag
   const { authority, ids } = ancestryIds(sql, actor, messageId);
 
   return authority === 'pane'
-    ? rowsForIds(ids, (id) => paneRowById(sql, actor, id)).map(paneRowToNode)
+    ? rowsForIds(ids, (id) => paneRowById(sql, id)).map(paneRowToNode)
     : rowsForIds(ids, (id) => messageRowById(sql, actor, id));
 }
 
@@ -328,7 +348,7 @@ export function forkAncestry(sql: SqlExecutor, actor: ActorHandle, messageId: st
     return { chain: rowsForIds(ids, (id) => messageRowById(sql, actor, id)), pane: [] };
   }
 
-  const pane = rowsForIds(ids, (id) => paneRowById(sql, actor, id));
+  const pane = rowsForIds(ids, (id) => paneRowById(sql, id));
 
   return { pane, chain: pane.map(paneRowToForkChainRow) };
 }
@@ -343,7 +363,7 @@ export function chatPaneAncestry(sql: SqlExecutor, actor: ActorHandle, messageId
 
   if (authority !== 'pane') return [];
 
-  return rowsForIds(ids, (id) => paneRowById(sql, actor, id));
+  return rowsForIds(ids, (id) => paneRowById(sql, id));
 }
 
 // ── The flat reads: count, page, turn pair ──────────────────────────────────
@@ -352,10 +372,7 @@ export function chatPaneAncestry(sql: SqlExecutor, actor: ActorHandle, messageId
 export function conversationCount(sql: SqlExecutor, actor: ActorHandle): number {
   actor.assertCurrent();
 
-  if (hasPaneStore(sql)) {
-    return sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages
-      WHERE actor_id = ${actor.actorId}`[0]?.c ?? 0;
-  }
+  if (usesPaneStore(sql, actor)) return sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`[0]?.c ?? 0;
 
   return sql<{ c: number }>`
     SELECT COUNT(*) AS c FROM messages
@@ -423,20 +440,19 @@ export function conversationPageRows(
     return seek;
   };
 
-  if (hasPaneStore(sql)) {
+  if (usesPaneStore(sql, actor)) {
     const from = after === null
       ? null
-      : anchorRowid(sql`SELECT rowid AS seek FROM assistant_messages
-        WHERE actor_id = ${actor.actorId} AND id = ${after}`);
+      : anchorRowid(sql`SELECT rowid AS seek FROM assistant_messages WHERE id = ${after}`);
 
     return mapPage(seekPage(from === null
       ? sql<StoredTranscriptRow>`
         SELECT id, role, content, created_at FROM assistant_messages
-        WHERE actor_id = ${actor.actorId} AND role IN ('user', 'assistant', 'system')
+        WHERE role IN ('user', 'assistant', 'system')
         ORDER BY rowid DESC LIMIT ${over}`
       : sql<StoredTranscriptRow>`
         SELECT id, role, content, created_at FROM assistant_messages
-        WHERE actor_id = ${actor.actorId} AND role IN ('user', 'assistant', 'system') AND rowid < ${from}
+        WHERE role IN ('user', 'assistant', 'system') AND rowid < ${from}
         ORDER BY rowid DESC LIMIT ${over}`,
       limit, rowIdOf), (rows) => rows.map((row) => ({
         id: row.id, role: row.role, content: row.content, createdAt: row.created_at,
@@ -519,14 +535,13 @@ export function answersForDrainTurns(
   actor.assertCurrent();
   const answers = new Map<string, string>();
 
-  if (drainTurnIds.length === 0 || !hasPaneStore(sql)) return answers;
+  if (drainTurnIds.length === 0 || !usesPaneStore(sql, actor)) return answers;
   const wanted = new Set(drainTurnIds);
 
   const rows = sql<{ ask: string; answer: string }>`
     SELECT u.content AS ask, a.content AS answer
-    FROM assistant_messages u
-      JOIN assistant_messages a ON a.actor_id = u.actor_id AND a.parent_id = u.id
-    WHERE u.actor_id = ${actor.actorId} AND u.role = 'user' AND a.role = 'assistant'
+    FROM assistant_messages u JOIN assistant_messages a ON a.parent_id = u.id
+    WHERE u.role = 'user' AND a.role = 'assistant'
     ORDER BY a.rowid ASC`;
 
   for (const row of rows) {
@@ -548,17 +563,17 @@ export function conversationTurnPair(
   messageId: string,
 ): ConversationTurnPair | undefined {
   actor.assertCurrent();
+  const pane = usesPaneStore(sql, actor);
 
-  if (hasPaneStore(sql)) {
+  if (pane) {
     const row = sql<{
       sessionId: string; responseRaw: string;
       requestRaw: string | null; startedAt: string | null; endedAt: string;
     }>`
       SELECT a.session_id AS sessionId, a.content AS responseRaw,
              u.content AS requestRaw, u.created_at AS startedAt, a.created_at AS endedAt
-      FROM assistant_messages a
-        LEFT JOIN assistant_messages u ON u.actor_id = a.actor_id AND u.id = a.parent_id
-      WHERE a.actor_id = ${actor.actorId} AND a.id = ${messageId} LIMIT 1`[0];
+      FROM assistant_messages a LEFT JOIN assistant_messages u ON u.id = a.parent_id
+      WHERE a.id = ${messageId} LIMIT 1`[0];
 
     if (row) {
       return {
@@ -578,7 +593,7 @@ export function conversationTurnPair(
   // alone would pair this actor's answer with a stranger's ask.
   const actorId = actor.actorId;
 
-  const row = (hasPaneStore(sql)
+  const row = (pane
     ? sql<{
         sessionId: string; responseRaw: string;
         requestRaw: string | null; startedAt: number | null; endedAt: number;
@@ -626,7 +641,7 @@ export function normalizeImportedConversation(sql: SqlExecutor, actor: ActorHand
 
   const rows = sql<ChatPaneRow>`
     SELECT id, session_id, parent_id, role, content, created_at
-    FROM assistant_messages WHERE actor_id = ${actor.actorId} ORDER BY rowid ASC`;
+    FROM assistant_messages ORDER BY rowid ASC`;
 
   for (const row of rows) {
     void sql`

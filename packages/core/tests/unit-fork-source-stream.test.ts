@@ -38,8 +38,8 @@ async function seedSource(ws: TestWorkspace, pane = false): Promise<void> {
 
     for (const message of messages) {
       const content = JSON.stringify({ id: message.id, role: message.role, parts: [{ type: 'text', text: message.text }] });
-      void ws.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-        VALUES (${actor.actorId}, ${message.id}, ${''}, ${message.parent}, ${message.role}, ${content}, ${'1970-01-01 00:00:01'})`;
+      void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${message.id}, ${''}, ${message.parent}, ${message.role}, ${content}, ${'1970-01-01 00:00:01'})`;
     }
   }
 
