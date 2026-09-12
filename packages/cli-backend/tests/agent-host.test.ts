@@ -1,6 +1,7 @@
+import { scratchDir } from '../../test-utils/src/scratch';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { existsSync, mkdirSync, readFileSync } from 'node:fs';
+
 import { dirname, join } from 'node:path';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
@@ -42,12 +43,6 @@ const DUMMY_LLM: LLMProviderConfig = {
   headers: {},
   model: 'fake-model',
 };
-
-const tempRoots: string[] = [];
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
-});
 
 function streamingModel(answer: string, onCall?: (options: LanguageModelV2CallOptions) => void): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
@@ -324,9 +319,8 @@ async function seedAgent(state: string, name: string): Promise<string> {
  *  `project/`. Separate because that is the shape the product has — state is
  *  never inside the directory the agent works in. */
 function makeRoots() {
-  const state = mkdtempSync(join(tmpdir(), 'kinu-host-state-'));
-  const project = mkdtempSync(join(tmpdir(), 'kinu-host-project-'));
-  tempRoots.push(state, project);
+  const state = scratchDir('host-state');
+  const project = scratchDir('host-project');
 
   return { state, project };
 }
@@ -371,7 +365,6 @@ function makeHost(
 
   return { host: new LocalAgentHost(options), runtimes };
 }
-
 
 function peerEventCount(dbPath: string): number {
   const db = new Database(dbPath, { readonly: true });
@@ -497,7 +490,6 @@ function askedEventId(prompt: LanguageModelV2CallOptions['prompt']): string | nu
 
   return matches[matches.length - 1]?.[1] ?? null;
 }
-
 
 describe('LocalAgentHost', () => {
   test('the daemon-owned conversation continues after its client disconnects', async () => {
@@ -717,7 +709,6 @@ describe('LocalAgentHost', () => {
     expect(actorRowCount(dbPath, reference.actorId)).toBeGreaterThan(0);
     await host.close();
   });
-
 
   /**
    * THE TEMPORARY RUNG, END TO END ON THE REAL LOCAL SUBSTRATE.
@@ -1074,7 +1065,6 @@ describe('LocalAgentHost', () => {
     expect(capped.temporary).toBeUndefined();
     await reopened.close();
   });
-
 
   /**
    * EXACTLY ONE RESULT, AND ONLY ONE.

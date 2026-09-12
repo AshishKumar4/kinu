@@ -13,7 +13,7 @@
 // fails on any disagreement between it and what is observed here.
 import { describe, test, expect, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { rmSync } from 'node:fs';
+
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { LanguageModel } from 'ai';
@@ -28,9 +28,7 @@ import {
   type CLIRuntime, type LocalModelResolver,
 } from '@kinu.run/cli-backend';
 import { createCliAgent } from '../src/agent-create';
-import {
-  resolveLLMConfig, agentDbPath, agentDir, AGENT_HOME, listLocalRefsAllProjects, updateConfigFile,
-} from '../src/config';
+import { resolveLLMConfig, agentDbPath, AGENT_HOME, listLocalRefsAllProjects, updateConfigFile } from '../src/config';
 import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model';
 
 // Dummy provider config so resolveLLMConfig succeeds offline — the capturing
@@ -67,7 +65,6 @@ if (resolve(AGENT_HOME) === resolve(join(homedir(), '.kinu'))
 const AGENT_NAME = `conformance-${Date.now()}`;
 
 afterAll(() => {
-  rmSync(agentDir(AGENT_NAME), { recursive: true, force: true });
   // The directory was never the whole footprint. `kinu create` also writes an
   // `agents` entry, and `workspace delete` REFUSES local workspaces
   // ("deletes cloud workspaces only"), so nothing in the product removes one —

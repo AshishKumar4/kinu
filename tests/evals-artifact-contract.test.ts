@@ -36,10 +36,11 @@
  * unconditional with `if (thresholdFailed) assert(...)` firing afterwards — the
  * number is published first and the failure raised second.
  */
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { beforeAll, describe, expect, test } from 'bun:test';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { scratchDir } from '../packages/test-utils/src/scratch';
 
 import * as v from 'valibot';
 
@@ -125,10 +126,12 @@ beforeAll(() => {
   // INSIDE THE REPO, deliberately. A `mkdtemp` under /tmp has no `node_modules`
   // above it, so the child's own config fails to load with "Cannot find module
   // 'vitest/config'" and emits no report at all — measured, not assumed. A
-  // directory under the repo root resolves by walking up. It is dot-prefixed and
+  // directory under the repo root resolves by walking up. The artifact parent is
   // gitignored so a crashed run cannot leave a tracked file, and it sits outside
   // `tests/evals/` so the real tier's include glob can never collect it.
-  dir = mkdtempSync(join(REPO_ROOT, '.eval-artifact-contract-'));
+  const parent = join(REPO_ROOT, 'bench-artifacts');
+  mkdirSync(parent, { recursive: true });
+  dir = scratchDir('eval-artifact-contract', parent);
   writeFileSync(join(dir, 'contract.eval.ts'), FIXTURE);
   writeFileSync(join(dir, 'vitest.config.ts'), CONFIG);
 
@@ -164,10 +167,6 @@ beforeAll(() => {
 
   const report: Report = JSON.parse(readFileSync(out, 'utf8'));
   tasks = (report.testResults ?? []).flatMap((file) => file.assertionResults ?? []);
-});
-
-afterAll(() => {
-  rmSync(dir, { recursive: true, force: true });
 });
 
 function taskNamed(fragment: string): ReportTask {

@@ -11,43 +11,20 @@
 // rest of the container's life. So every test below asserts an OUTCOME rather
 // than that a function was reachable.
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
+
 import { spawnSync } from 'node:child_process';
-import { basename, join } from 'node:path';
+import { join } from 'node:path';
 import { DEVBOX_SCRATCH_PREFIX } from './support/scratch';
 
-// Minted and released HERE, not in a shared helper: `gate:scratch-ownership`
-// reads the file that mints, and a module-scope `afterAll` in an imported file
-// registers with no suite and never fires. Only the prefix is shared.
-const mintedScratch = new Set<string>();
+const suiteRoot = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}decisions-`));
+
+afterAll(() => rmSync(suiteRoot, { recursive: true, force: true }));
 
 function devboxScratchDir(label: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `${DEVBOX_SCRATCH_PREFIX}${label}-`));
-  mintedScratch.add(dir);
-
-  return dir;
+  return mkdtempSync(join(suiteRoot, `${label}-`));
 }
-
-afterAll(() => {
-  // The directory AND the siblings written beside it. Several cases use the
-  // minted path as a STEM — `<dir>.sqsh`, `<dir>.excludes` — so removing only
-  // the directory leaves those behind: measured 2026-09-10, ten such files
-  // survived one run. They leaked the same way under the shared prefix and
-  // were invisible there, which is `gate:scratch-ownership`'s own stated blind
-  // spot ("a leak inside a helper that takes the path as an argument").
-  for (const dir of mintedScratch) {
-    rmSync(dir, { recursive: true, force: true });
-    const stem = basename(dir);
-
-    for (const entry of readdirSync(tmpdir())) {
-      if (entry.startsWith(`${stem}.`)) rmSync(join(tmpdir(), entry), { recursive: true, force: true });
-    }
-  }
-
-  mintedScratch.clear();
-});
-
 
 // Imported from the modules that hold them, NOT from the barrel. The barrel
 // pulls in the Devbox class, which imports the Sandbox runtime and therefore

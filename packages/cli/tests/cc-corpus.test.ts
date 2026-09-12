@@ -13,24 +13,18 @@
  * Also asserts the one thing the corpus's privacy actually rests on: that the
  * report paths are ignored by git.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync } from 'node:fs';
+
 import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'bun:test';
 import { weakLabel, type JsonObject, type JsonValue } from '@kinu.run/core';
-import { gitEnv } from '@kinu.run/test-utils';
+import { scratchDir, gitEnv } from '@kinu.run/test-utils';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/cc-transcript';
 import * as v from 'valibot';
-
-const tempDirs: string[] = [];
 
 const repoRoot = resolve(__dirname, '../../..');
 
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 // ── Fixture builders ─────────────────────────────────────────────
 
@@ -106,8 +100,7 @@ class Session {
 }
 
 function newRoot(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'cc-corpus-'));
-  tempDirs.push(dir);
+  const dir = scratchDir('cc-corpus');
 
   return dir;
 }

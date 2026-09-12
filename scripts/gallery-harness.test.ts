@@ -7,9 +7,8 @@
 
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { existsSync } from 'node:fs';
+import { scratchDir } from '../packages/test-utils/src/scratch';
 
 import { reclaimLeakedBuilds } from './gallery-harness';
 
@@ -18,16 +17,12 @@ describe('gallery builds under the temp directory', () => {
     // A pid that was a process and is not one now: a child that has exited.
     const exited = spawnSync('true');
     expect(exited.status).toBe(0);
-    const deadBuild = mkdtempSync(join(tmpdir(), `kinu-gallery-dist-${String(exited.pid)}-`));
-    const liveBuild = mkdtempSync(join(tmpdir(), `kinu-gallery-dist-${String(process.pid)}-`));
+    const directory = scratchDir('gallery-reclaim');
+    const deadBuild = scratchDir(`gallery-dist-${String(exited.pid)}`, directory);
+    const liveBuild = scratchDir(`gallery-dist-${String(process.pid)}`, directory);
 
-    try {
-      expect(reclaimLeakedBuilds()).toBeGreaterThanOrEqual(1);
-      expect(existsSync(deadBuild)).toBe(false);
-      expect(existsSync(liveBuild)).toBe(true);
-    } finally {
-      rmSync(deadBuild, { recursive: true, force: true });
-      rmSync(liveBuild, { recursive: true, force: true });
-    }
+    expect(reclaimLeakedBuilds(directory)).toBeGreaterThanOrEqual(1);
+    expect(existsSync(deadBuild)).toBe(false);
+    expect(existsSync(liveBuild)).toBe(true);
   });
 });

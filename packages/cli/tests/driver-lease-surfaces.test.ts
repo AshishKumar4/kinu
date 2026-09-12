@@ -15,23 +15,16 @@
  * `sleep` child is genuinely another driver and the surface under test runs
  * against the real `OS_LEASE_PROCESS` with nothing substituted.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { afterEach, describe, expect, test } from 'bun:test';
+import { scratchDir } from '../../test-utils/src/scratch';
+
+import { resolve } from 'node:path';
+import { describe, expect, test } from 'bun:test';
 import { parseJsonObject, type JsonObject } from '@kinu.run/core';
 
 const repoRoot = resolve(__dirname, '../../..');
 
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
-
 function freshDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  tempDirs.push(dir);
+  const dir = scratchDir(prefix);
 
   return dir;
 }

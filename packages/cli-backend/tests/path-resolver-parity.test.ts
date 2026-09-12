@@ -14,10 +14,11 @@
  * to it: a directory named `bun` claimed `javascript` and `typescript` for a
  * machine that could run neither.
  */
+import { scratchDir } from '../../test-utils/src/scratch';
 import { describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, writeFileSync, symlinkSync } from 'node:fs';
+
 import { join } from 'node:path';
 import * as v from 'valibot';
 import { TOOLCHAIN_PROBE_BINARIES, toolchainCapabilities } from '@kinu.run/core';
@@ -81,15 +82,11 @@ function bunResolves(PATH: string, names: readonly string[]): string[] {
 
 /** A PATH directory laid out by `build`, cleaned up after `fn`. */
 function withPathDir<T>(build: (dir: string) => void, fn: (dir: string) => T): T {
-  const dir = mkdtempSync(join(tmpdir(), 'kinu-scratch-path-parity-'));
+  const dir = scratchDir('scratch-path-parity');
 
-  try {
-    build(dir);
+  build(dir);
 
-    return fn(dir);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  return fn(dir);
 }
 
 /** Both resolvers, on one PATH, asked about the whole shared probe list. */

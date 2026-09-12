@@ -6,9 +6,10 @@
 // a relabel moves nothing. These assertions exist because the two ways to get
 // this wrong are both silent: attributing every unplaced workspace to whichever
 // directory the CLI started in, and inferring a backend from a file's existence.
+import { scratchDir } from '../../test-utils/src/scratch';
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
+import { mkdirSync, readdirSync, realpathSync, renameSync, rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createCliAgent, renameLocalAgent, type CreatedCliAgent } from '../src/agent-create';
@@ -49,8 +50,6 @@ const OFFLINE_PROVIDER = {
   model: 'openai-compatible/project-refs-model',
 };
 
-const projects: string[] = [];
-
 const workspaces: string[] = [];
 
 let configBefore: KinuConfig = {};
@@ -69,7 +68,6 @@ afterEach(() => {
 });
 
 afterAll(() => {
-  for (const dir of projects.splice(0)) rmSync(dir, { recursive: true, force: true });
   updateConfigFile(() => configBefore);
 
   if (daemonBefore === undefined) delete process.env.KINU_SKIP_DAEMON;
@@ -87,10 +85,10 @@ function workspaceLabels(cwd: string): string[] {
 
 /** A throwaway physical project directory, canonical so comparisons hold. */
 function project(): string {
-  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'kinu-project-')));
-  projects.push(dir);
+  const dir = join(scratchDir('project'), 'work');
+  mkdirSync(dir);
 
-  return dir;
+  return realpathSync(dir);
 }
 
 async function create(name: string, cwd: string, workspaceId?: string): Promise<CreatedCliAgent> {
@@ -260,7 +258,6 @@ describe('renaming changes no identity and moves no database', () => {
 
     const to = `${from}-moved`;
     renameSync(from, to);
-    projects.push(to);
 
     // The recorded directory is gone, so the ref places nothing and the agent
     // reads as unplaced — visible, rather than missing from every roster.

@@ -4,21 +4,16 @@
 // the CLI bearer and the per-agent affinity pin (signed-in-equals-working).
 // Runs in a subprocess because config.ts binds KINU_HOME at import; the
 // fake worker lives in this process and records what reaches the wire.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { scratchDir } from '../../test-utils/src/scratch';
+import { writeFileSync } from "node:fs";
+
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC } from "@kinu.run/core";
 import { JsonObjectSchema } from '@kinu.run/core';
 import * as v from 'valibot';
 
 const CLOUD_TOKEN = ["ptc_", "0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz"].join("");
-
-const tempDirs: string[] = [];
-
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
-});
 
 describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => {
   test("lists the worker menu and runs a turn through the AI proxy with bearer + affinity", async () => {
@@ -69,8 +64,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
 
     try {
       const origin = `http://127.0.0.1:${server.port}`;
-      const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-resolver-"));
-      tempDirs.push(kinuHome);
+      const kinuHome = scratchDir("cli-resolver");
       writeFileSync(join(kinuHome, "config.json"), JSON.stringify({ origin, accessToken: CLOUD_TOKEN }), { mode: 0o600 });
 
       const script = `
@@ -141,8 +135,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
 
 describe("createConfiguredLocalModelResolver — registry-only providers", () => {
   test("a claude-subscription spec resolves and turns with no other provider configured", async () => {
-    const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-resolver-claude-"));
-    tempDirs.push(kinuHome);
+    const kinuHome = scratchDir("cli-resolver-claude");
     writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
 
     const script = `
@@ -211,8 +204,7 @@ describe("createConfiguredLocalModelResolver — registry-only providers", () =>
     });
   });
   test("the production composition carries the claude spawn seam without injection", async () => {
-    const kinuHome = mkdtempSync(join(tmpdir(), "kinu-cli-resolver-claude-wire-"));
-    tempDirs.push(kinuHome);
+    const kinuHome = scratchDir("cli-resolver-claude-wire");
     writeFileSync(join(kinuHome, "config.json"), JSON.stringify({}), { mode: 0o600 });
 
     const script = `

@@ -9,20 +9,19 @@
  * process runs in its own session with a PTY as controlling terminal and
  * stdin on a pipe, so prompts must reach the terminal through /dev/tty.
  */
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { scratchDir } from '../../test-utils/src/scratch';
+import { writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { tmpdir } from "node:os";
+
 import { join, resolve } from "node:path";
-import { afterAll, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import * as v from 'valibot';
 
 const python = Bun.which("python3");
 
 const promptModule = resolve(__dirname, "../src/prompt.ts");
 
-const fixtures = mkdtempSync(join(tmpdir(), "kinu-pty-test-"));
-
-afterAll(() => rmSync(fixtures, { recursive: true, force: true }));
+const fixtures = scratchDir("pty-test");
 
 const HARNESS = `
 import json, os, pty, sys, time, fcntl, termios, signal, select
