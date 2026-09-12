@@ -32,7 +32,7 @@
  * Specified by docs/EXPLORATION.md — "A node is an agent", "Arbitration",
  * "Inherited context", "Isolation" and "The six axes".
  */
-import { describe, expect, test } from 'bun:test';
+import { beforeAll, describe, expect, test } from 'bun:test';
 import type { MockLanguageModelV3 } from 'ai/test';
 import { scriptedTurnModel } from '@kinu.run/test-utils';
 import type { LanguageModelV3Content } from '@ai-sdk/provider';
@@ -348,11 +348,18 @@ async function run(input: {
   return { rt, logger, nodes, result, script, journal: new HeadJournal(rt.storage.sql, rt.actor), wallClockMs };
 }
 
+let depthTwoRun: Awaited<ReturnType<typeof run>>;
+
+let depthOneRun: Awaited<ReturnType<typeof run>>;
+
+beforeAll(async () => {
+  depthTwoRun = await run({ depth: 2, branches: 2, proposeAtDepth1: true });
+  depthOneRun = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
+}, 180_000);
+
 describe('a depth-2 swarm of tool-using agents, end to end', () => {
-  test('every node runs a tool loop, the tree reaches depth 2, and the objective is met', async () => {
-    const { nodes, result, script, logger } = await run({
-      depth: 2, branches: 2, proposeAtDepth1: true,
-    });
+  test('every node runs a tool loop, the tree reaches depth 2, and the objective is met', () => {
+    const { nodes, result, script, logger } = depthTwoRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
@@ -401,10 +408,8 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(result.publication.state.kind).toBe('open');
   }, 180_000);
 
-  test('every node has a transcript that can be read back, with its tool calls in it', async () => {
-    const { nodes, result, journal, logger } = await run({
-      depth: 2, branches: 2, proposeAtDepth1: true,
-    });
+  test('every node has a transcript that can be read back, with its tool calls in it', () => {
+    const { nodes, result, journal, logger } = depthTwoRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
@@ -476,15 +481,13 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     }
   }, 180_000);
 
-  test('an inheriting child inherits its parents conversation and a fresh child does not', async () => {
+  test('an inheriting child inherits its parents conversation and a fresh child does not', () => {
     // The two shapes *Inherited context* names, observed where they DIFFER. Every node's
     // first step is recorded with the number of assistant turns already in front of it: a
     // `inherit` child opens on its parent's own turns, a `fresh` child opens on the seed
     // alone. Both carry the parent's report and their own focus, which is what makes them
     // two values of one axis rather than two mechanisms.
-    const { result, journal, nodes, script } = await run({
-      depth: 2, branches: 2, proposeAtDepth1: true,
-    });
+    const { result, journal, nodes, script } = depthTwoRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
@@ -505,12 +508,10 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(script.inheritedTurns.filter((turns) => turns === 0)).toHaveLength(3);
   }, 180_000);
 
-  test('the run states what it spent: model calls, per-node steps, and wall clock', async () => {
+  test('the run states what it spent: model calls, per-node steps, and wall clock', () => {
     // Not a threshold — a DISCLOSURE. A search that cannot say what it cost cannot be
     // compared to yesterday's, and the numbers below are the ones the report carries.
-    const { result, script, wallClockMs, logger } = await run({
-      depth: 2, branches: 2, proposeAtDepth1: true,
-    });
+    const { result, script, wallClockMs, logger } = depthTwoRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
@@ -529,11 +530,11 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
     expect(result.report.durationMs).toBeLessThanOrEqual(wallClockMs);
   }, 180_000);
 
-  test('a refused proposal reaches the node as its next instruction, and it still finishes', async () => {
+  test('a refused proposal reaches the node as its next instruction, and it still finishes', () => {
     // depth 1 with a tree advance: `propose_branch` is absent at build time, because a
     // request that can only ever be refused must not be offered. The node then finishes
     // without it — which is the check that the build-time gate does not strand a node.
-    const { result, script } = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
+    const { result, script } = depthOneRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
     expect(script.offered.has(PROPOSE_BRANCH_TOOL)).toBe(false);
@@ -554,8 +555,8 @@ describe('a depth-2 swarm of tool-using agents, end to end', () => {
  * caller's dedup kept the row with `tree: []`.
  */
 describe('the run a reader gets back', () => {
-  test('is ONE run carrying its tree, its transcripts, its params and its task', async () => {
-    const { rt, result, nodes } = await run({ depth: 2, branches: 2, proposeAtDepth1: true });
+  test('is ONE run carrying its tree, its transcripts, its params and its task', () => {
+    const { rt, result, nodes } = depthTwoRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
@@ -594,8 +595,8 @@ describe('the run a reader gets back', () => {
     expect(readExplorationRun(rt.storage.sql, rt.actor, entry.run.id)).toEqual(entry);
   }, 180_000);
 
-  test('the ledger row says the run settled, with what it actually spent', async () => {
-    const { rt, result } = await run({ depth: 1, branches: 2, proposeAtDepth1: true });
+  test('the ledger row says the run settled, with what it actually spent', () => {
+    const { rt, result } = depthOneRun;
 
     if ('reason' in result) throw new Error(`the run must not refuse: ${result.error}`);
 
