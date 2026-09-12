@@ -168,10 +168,10 @@ describe('one SQLite for every logical actor', () => {
     // one satisfies a total and fails this.
     for (const actor of roster) {
       const before = fixture.sql<{ n: number }>`
-        SELECT COUNT(*) AS n FROM messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
+        SELECT COUNT(*) AS n FROM actor_messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
 
       const after = harnessSql(restored)<{ n: number }>`
-        SELECT COUNT(*) AS n FROM messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
+        SELECT COUNT(*) AS n FROM actor_messages WHERE actor_id = ${actor.handle.actorId}`[0]?.n ?? 0;
 
       expect(after).toBe(before);
 

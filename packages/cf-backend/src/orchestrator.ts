@@ -76,6 +76,7 @@ import {
   // fraction — `summarizeSteps` above is this agent's own turns only.
   workspaceSpend,
   initWorkspaceSchema,
+  tableExists,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   // The declared reach axis — getToolDescriptions reports it rather than
@@ -3186,7 +3187,7 @@ export class OrchestratorAgent extends ActorAgent {
     // turn completes), so it can't be read at turn time.
     //
     // KEYED (actor_id, message_id), never message_id alone. A message id is
-    // minted PER ACTOR — `messages` is `PRIMARY KEY (actor_id, id)` for exactly
+    // minted PER ACTOR — `actor_messages` is `PRIMARY KEY (actor_id, id)` for exactly
     // this reason — so ids are not unique across the actors sharing this one
     // database. Under a bare `message_id` primary key two actors' turns that
     // collide do not error, they silently OVERWRITE each other's thumbs, and
@@ -3890,10 +3891,10 @@ export class OrchestratorAgent extends ActorAgent {
   /** The "what I changed about myself" digest, assembled on demand from the
    *  durable ledgers (core buildChangelog — no second event system). */
   @callable()
-  async getEvolutionChangelog(opts?: { limit?: number }): Promise<{
+  async getEvolutionChangelog(opts?: { limit?: number; changesOnly?: boolean }): Promise<{
     entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
   }> {
-    return getEvolutionChangelog(this.boundSql, this.actorHandle(), opts?.limit);
+    return getEvolutionChangelog(this.boundSql, this.actorHandle(), opts?.limit, opts?.changesOnly === true);
   }
 
   /** The operator viewed the changelog — zero the unseen badge. */
@@ -4708,9 +4709,20 @@ export class OrchestratorAgent extends ActorAgent {
    *  check, never the raw websocket. */
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
-    const ownerUserId = this.getOwnerUserId();
 
-    if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
+    // Asked, never caught: a workspace whose creation died between naming and
+    // `ensureSchema` has no `workspace_identity` table, so the owner read below
+    // throws on the object rather than answering — and with no row to compare,
+    // the check that gates the healthy path has nothing to decide. There is no
+    // second authorization to make: the caller is the owner's own
+    // `removeWorkspace`, which already matched this workspace's name to a row in
+    // the calling user's roster (`user/routes.ts` DELETE), so the route carries
+    // the ownership evidence the missing table cannot.
+    if (tableExists(this.boundSql, 'workspace_identity')) {
+      const ownerUserId = this.getOwnerUserId();
+
+      if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
+    }
 
     // FIRST, and before the container object's own token store is deleted with
     // it: every preview URL this workspace published stops resolving at the

@@ -257,7 +257,7 @@ spawned-surface arms cover those paths.
 It once sent `messages: [user]`: five one-turn conversations. Turn 5 asked
 "Summarize what we discussed", received "nothing", and passed on `length > 0`.
 Threading alone is insufficient. Measured 2026-08-20, the `memory` builtin
-searches the same `messages` table (`core/src/tools/memory-tool.ts:92-101`,
+searches the same `actor_messages` table (`core/src/tools/memory-tool.ts:92-101`,
 `core/src/memory/conversation-search.ts`). An unthreaded turn 5 reproduced turn
 1 code and said "Here's a summary of our previous discussion" from 118
 characters holding only turn 3's note. Two runs scored 6/0 and 5/1.

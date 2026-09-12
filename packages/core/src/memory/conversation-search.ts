@@ -1,8 +1,8 @@
 /**
  * Zero-LLM transcript search over the canonical conversation store. FTS5 covers
  * the workspace's default-chat authority (the SDK pane store where a backend
- * keeps one, `messages` on the CLI) plus the independent non-default sessions
- * (`messages` rows that are neither the default chat nor MCTS trees).
+ * keeps one, `actor_messages` on the CLI) plus the independent non-default sessions
+ * (`actor_messages` rows that are neither the default chat nor MCTS trees).
  *
  * Three operations:
  *   - search(query)        — ranked FTS5 snippets with conversation/message refs
@@ -166,7 +166,7 @@ export class ConversationSearchStore {
     this.ensure();
     this.refreshIndex();
     // The anchor resolves in whichever store owns it: the pane for default-chat
-    // ids, `messages` for non-default trees.
+    // ids, `actor_messages` for non-default trees.
     const pane = usesPaneStore(this.sql, this.actor);
 
     const paneAnchor = pane
@@ -180,7 +180,7 @@ export class ConversationSearchStore {
     if (paneAnchor !== undefined) {
       anchor = withPaneStamp(paneAnchor);
     } else {
-      // A miss in the pane store falls to `messages` — the non-default trees
+      // A miss in the pane store falls to `actor_messages` — the non-default trees
       // (mcts, local peers) live only there.
       // Where the pane owns the backend, plain `default` rows are the retired
       // mirror — a non-pane id must not resolve against them. Without the pane
@@ -188,12 +188,12 @@ export class ConversationSearchStore {
       const plainAnchor = (pane
         ? this.sql<PlainRaw>`
             SELECT id, session_id, role, content, created_at, rowid AS rid
-            FROM messages
+            FROM actor_messages
             WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}
               AND session_id <> ${CHAT_SESSION_ID}`[0]
         : this.sql<PlainRaw>`
             SELECT id, session_id, role, content, created_at, rowid AS rid
-            FROM messages WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}`[0]);
+            FROM actor_messages WHERE actor_id = ${this.actorId} AND id = ${aroundMessageId}`[0]);
 
       if (plainAnchor === undefined) return null;
       anchor = withPlainStamp(plainAnchor);
@@ -215,7 +215,7 @@ export class ConversationSearchStore {
           WHERE session_id = ${row.session_id} AND rowid < ${row.rid}
           ORDER BY rowid DESC LIMIT ${w}`.map(withPaneStamp)
       : this.sql<PlainRaw>`
-          SELECT id, role, content, created_at, rowid AS rid FROM messages
+          SELECT id, role, content, created_at, rowid AS rid FROM actor_messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}
           ORDER BY rowid DESC LIMIT ${w}`.map(withPlainStamp)).reverse();
 
@@ -225,7 +225,7 @@ export class ConversationSearchStore {
           WHERE session_id = ${row.session_id} AND rowid > ${row.rid}
           ORDER BY rowid ASC LIMIT ${w}`.map(withPaneStamp)
       : this.sql<PlainRaw>`
-          SELECT id, role, content, created_at, rowid AS rid FROM messages
+          SELECT id, role, content, created_at, rowid AS rid FROM actor_messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}
           ORDER BY rowid ASC LIMIT ${w}`.map(withPlainStamp);
 
@@ -234,7 +234,7 @@ export class ConversationSearchStore {
           SELECT COUNT(*) AS c FROM assistant_messages
           WHERE session_id = ${row.session_id} AND rowid < ${row.rid}`
       : this.sql<{ c: number }>`
-          SELECT COUNT(*) AS c FROM messages
+          SELECT COUNT(*) AS c FROM actor_messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid < ${row.rid}`)[0]!.c;
 
     const totalAfter = (paneSide
@@ -242,7 +242,7 @@ export class ConversationSearchStore {
           SELECT COUNT(*) AS c FROM assistant_messages
           WHERE session_id = ${row.session_id} AND rowid > ${row.rid}`
       : this.sql<{ c: number }>`
-          SELECT COUNT(*) AS c FROM messages
+          SELECT COUNT(*) AS c FROM actor_messages
           WHERE actor_id = ${this.actorId} AND session_id = ${row.session_id} AND rowid > ${row.rid}`)[0]!.c;
 
     const parsedMaxChars = v.safeParse(MaxCharsSchema, maxChars);
@@ -305,14 +305,14 @@ export class ConversationSearchStore {
           FROM assistant_messages GROUP BY session_id`.map(withPaneStamps),
         ...this.sql<PlainGroup>`
           SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
-          FROM messages
+          FROM actor_messages
           WHERE actor_id = ${this.actorId} AND session_id NOT IN (${CHAT_SESSION_ID}, 'mcts')
           GROUP BY session_id`.map(withPlainStamps),
       ];
     } else {
       groups = this.sql<PlainGroup>`
         SELECT session_id, COUNT(*) AS n, MIN(created_at) AS started_at, MAX(created_at) AS last_active
-        FROM messages
+        FROM actor_messages
         WHERE actor_id = ${this.actorId} AND session_id NOT IN ('mcts')
         GROUP BY session_id`.map(withPlainStamps);
     }
@@ -327,7 +327,7 @@ export class ConversationSearchStore {
               ORDER BY rowid ASC LIMIT 1`.map(withPaneStamp)[0]
           : this.sql<PlainRaw>`
               SELECT id, session_id, role, content, created_at, rowid AS rid
-              FROM messages
+              FROM actor_messages
               WHERE actor_id = ${this.actorId} AND session_id = ${conversation.session_id}
                 AND role = 'user'
               ORDER BY rowid ASC LIMIT 1`.map(withPlainStamp)[0];
@@ -346,22 +346,9 @@ export class ConversationSearchStore {
 
   // ── Derived index maintenance ─────────────────────────────────────────────
 
-  /**
-   * Idempotent: drop any `messages_fts` index and its triggers, create the
-   * derived `conversation_fts`, then sync.
-   *
-   * `messages_fts` and its triggers are disposable derived state and are dropped
-   * here because `messages` is not the default-chat authority on a pane-store
-   * backend. `conversation_fts` owns its content and reference columns and is
-   * populated from the conversation authority by watermark sync.
-   */
+  /** Create the derived index and sync it from the conversation authority. */
   private ensure(): void {
     if (this.ensured) return;
-    void this.sql`DROP TRIGGER IF EXISTS messages_fts_ai`;
-    void this.sql`DROP TRIGGER IF EXISTS messages_fts_ad`;
-    void this.sql`DROP TRIGGER IF EXISTS messages_fts_au`;
-    void this.sql`DROP TABLE IF EXISTS messages_fts`;
-    dropPreActorFtsState(this.sql);
     void this.sql`
       CREATE VIRTUAL TABLE IF NOT EXISTS conversation_fts USING fts5(
         content, msg_id UNINDEXED, session_id UNINDEXED, role UNINDEXED, created_at UNINDEXED
@@ -393,11 +380,11 @@ export class ConversationSearchStore {
    * cannot carry a bound actor, and a bump from a sibling actor only costs a
    * rebuild of disposable state — over-invalidating is the safe direction. */
   private ensureRevisionTriggers(pane: boolean): void {
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_messages_ai AFTER INSERT ON messages BEGIN
+    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_actor_messages_ai AFTER INSERT ON actor_messages BEGIN
       UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_messages_au AFTER UPDATE ON messages BEGIN
+    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_actor_messages_au AFTER UPDATE ON actor_messages BEGIN
       UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
-    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_messages_ad AFTER DELETE ON messages BEGIN
+    void this.sql`CREATE TRIGGER IF NOT EXISTS conversation_rev_actor_messages_ad AFTER DELETE ON actor_messages BEGIN
       UPDATE conversation_fts_state SET rev = rev + 1 WHERE id = 1; END`;
 
     if (!pane) return;
@@ -433,11 +420,11 @@ export class ConversationSearchStore {
 
     const plainRows = pane
       ? this.sql<PlainRaw>`
-          SELECT id, session_id, role, content, created_at, rowid AS rid FROM messages
+          SELECT id, session_id, role, content, created_at, rowid AS rid FROM actor_messages
           WHERE actor_id = ${this.actorId}
             AND session_id <> ${CHAT_SESSION_ID} AND session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp)
       : this.sql<PlainRaw>`
-          SELECT id, session_id, role, content, created_at, rowid AS rid FROM messages
+          SELECT id, session_id, role, content, created_at, rowid AS rid FROM actor_messages
           WHERE actor_id = ${this.actorId} AND session_id <> 'mcts' ORDER BY rowid ASC`.map(withPlainStamp);
 
     this.indexRows(paneRows, true);
@@ -485,32 +472,14 @@ function sessionIdOf(sessionId: string): string {
 }
 
 /**
- * Drop a `conversation_fts_state` that predates its `actor_id` column.
- *
- * The column joined on 2026-09-08 (0f6899cff); `CREATE TABLE IF NOT EXISTS`
- * never alters a table that exists, so every workspace created before that
- * day still carries the old shape and `SELECT actor_id …` throws `no such
- * column` on its first search or snapshot. The table is disposable derived
- * state, and a dropped one is one rebuild away, the same answer a regime flip
- * gets. The DDL text is the probe: this runs on both SQLite backends.
- */
-function dropPreActorFtsState(sql: SqlExecutor): void {
-  const ddl = sql<{ sql: string | null }>`
-    SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'conversation_fts_state'`[0]?.sql ?? null;
-
-  if (ddl !== null && !/\bactor_id\b/.test(ddl)) void sql`DROP TABLE conversation_fts_state`;
-}
-
-/**
  * Deterministic invalidation of the derived transcript-search index, called by
  * EVERY chat-row mutation that a rowid watermark cannot see: a fork restore's
- * purge-and-reseed, a session reassignment (`UPDATE messages SET session_id`),
+ * purge-and-reseed, a session reassignment (`UPDATE actor_messages SET session_id`),
  * any delete. The next `ensure()`/refresh observes the poisoned regime marker,
  * discards the index, and rebuilds it from the canonical store — disposable
  * state, so correctness here is one rebuild away, never a dual-read.
  */
 export function invalidateConversationSearchIndex(sql: SqlExecutor): void {
-  dropPreActorFtsState(sql);
   void sql`
     CREATE TABLE IF NOT EXISTS conversation_fts_state (
       id INTEGER PRIMARY KEY CHECK (id = 1),

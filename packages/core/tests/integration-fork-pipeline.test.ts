@@ -42,7 +42,7 @@ async function seedSource(src: TestWorkspace) {
   ] as const;
 
   for (const m of chain) {
-    void src.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+    void src.sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
       VALUES (${actor.actorId}, ${m.id}, ${m.parent}, ${m.role}, ${m.text},
               ${Date.parse(`${m.at.replace(' ', 'T')}Z`)})`;
     void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
@@ -95,7 +95,7 @@ describe('fork pipeline (end-to-end)', () => {
       SELECT id FROM assistant_messages WHERE role != 'system' ORDER BY rowid ASC`;
 
     expect(msgs.map(m => m.id)).toEqual(['m1', 'm2']);  // m3 is not an ancestor of m2
-    const mirrorRows = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`[0]!.c;
+    const mirrorRows = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages`[0]!.c;
     expect(mirrorRows).toBe(0);
 
     const tools = tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`;
@@ -135,7 +135,7 @@ describe('fork pipeline (end-to-end)', () => {
     void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
     const actor = new WorkspaceActorDirectory(src.sql, { workspaceId: 'S', ownerUserId: '' }).createMain({ name: 's' });
     await writeSoul(src.vfs, src.sql, 'p');
-    void src.sql`INSERT INTO messages (actor_id, id, role, content, created_at)
+    void src.sql`INSERT INTO actor_messages (actor_id, id, role, content, created_at)
       VALUES (${actor.actorId}, ${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
 
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1'));
@@ -218,7 +218,7 @@ describe('fork pipeline (end-to-end)', () => {
     expect(l!.forkedAt).toBe(99999);
 
     // The transcript landed once, in the pane store; the plain mirror is gone.
-    const messages = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`;
+    const messages = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM actor_messages`;
     const assistant = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`;
     expect(messages[0]!.c).toBe(0);
     expect(assistant[0]!.c).toBe(snapshot.assistantMessages.length + 1);

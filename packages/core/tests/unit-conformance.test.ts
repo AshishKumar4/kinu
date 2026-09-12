@@ -162,12 +162,12 @@ describe('manifest hygiene', () => {
 describe('normalizeObservedTables', () => {
   test('drops sqlite bookkeeping and FTS5 shadows, keeps the virtual table', () => {
     const observed = normalizeObservedTables([
-      'messages', 'sqlite_sequence',
+      'actor_messages', 'sqlite_sequence',
       'memory_chunks_fts', 'memory_chunks_fts_data', 'memory_chunks_fts_idx',
       'memory_chunks_fts_content', 'memory_chunks_fts_docsize', 'memory_chunks_fts_config',
     ]);
 
-    expect([...observed].sort()).toEqual(['memory_chunks_fts', 'messages']);
+    expect([...observed].sort()).toEqual(['actor_messages', 'memory_chunks_fts']);
   });
 
   test('keeps a _data-suffixed real table when no virtual parent exists', () => {

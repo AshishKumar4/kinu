@@ -64,7 +64,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   // setup gets its own directory. Same convention as local-session.test.ts.
   const db = new Database(scratchPath('scaffold-turn', 'agent.db'), { create: true });
   // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath: db.filename, llm: DUMMY_LLM });
@@ -133,7 +133,7 @@ describe('a promoted scaffold drives a local turn', () => {
 
     // The reply the user saw is what the durable history keeps.
     const rows = db.query<{ role: string; content: string }, []>(
-      `SELECT role, content FROM messages ORDER BY created_at`,
+      `SELECT role, content FROM actor_messages ORDER BY created_at`,
     ).all();
 
     expect(rows.map((r) => r.content)).toEqual(['who answers?', 'the scaffold answered: who answers?']);

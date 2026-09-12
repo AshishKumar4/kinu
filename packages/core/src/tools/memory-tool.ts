@@ -98,7 +98,7 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   };
 
   // `conversations` action: zero-LLM FTS5 transcript recall over the canonical
-  // messages table. Mode is inferred from the input:
+  // conversation store. Mode is inferred from the input:
   // around_message_id -> scroll, query -> search, neither -> browse.
   const conversationSearch = new ConversationSearchStore(deps.sql, deps.actor);
 

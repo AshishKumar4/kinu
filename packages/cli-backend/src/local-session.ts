@@ -1668,7 +1668,7 @@ export class LocalAgentSession implements BackendHost {
     const id = `${PROGRAMMATIC_MESSAGE_ID_PREFIX}${identity}`;
 
     return this.rt.storage.sql<{ id: string }>`
-      SELECT id FROM messages
+      SELECT id FROM actor_messages
       WHERE actor_id = ${this.rt.actor.actorId} AND id = ${id} AND session_id = ${this.sessionId}
     `.length > 0;
   }
@@ -4849,7 +4849,7 @@ export class LocalAgentSession implements BackendHost {
   ): void {
     const stamp = metadata === undefined ? null : JSON.stringify(stampTurnAuthor(metadata));
     const actorId = this.rt.actor.actorId;
-    void this.rt.storage.sql`INSERT OR IGNORE INTO messages (actor_id, id, session_id, role, content, metadata)
+    void this.rt.storage.sql`INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, role, content, metadata)
       VALUES (${actorId}, ${turnId}, ${this.sessionId}, ${'user'}, ${userText}, ${stamp})`;
     let parentId = turnId;
 
@@ -4859,12 +4859,12 @@ export class LocalAgentSession implements BackendHost {
         [STEER_STEP_METADATA_KEY]: steer.atStep,
       });
 
-      void this.rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content, metadata)
+      void this.rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content, metadata)
         VALUES (${actorId}, ${steer.id}, ${this.sessionId}, ${parentId}, ${'user'}, ${steer.text}, ${steerStamp})`;
       parentId = steer.id;
     }
 
-    void this.rt.storage.sql`INSERT INTO messages (actor_id, id, session_id, parent_id, role, content)
+    void this.rt.storage.sql`INSERT INTO actor_messages (actor_id, id, session_id, parent_id, role, content)
       VALUES (${actorId}, ${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
   }
   /** One routed non-turn lane as an {@link LLM}: the tier's model, its effort,
@@ -4963,7 +4963,7 @@ export class LocalAgentSession implements BackendHost {
   private restoreHistory(): void {
     const rows = this.rt.storage.sql<{ role: string; content: string }>`
       SELECT role, content
-      FROM messages
+      FROM actor_messages
       WHERE actor_id = ${this.rt.actor.actorId}
         AND session_id = ${this.sessionId} AND role IN ('user', 'assistant')
       ORDER BY created_at DESC, rowid DESC`;

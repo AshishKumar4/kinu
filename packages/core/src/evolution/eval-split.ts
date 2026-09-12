@@ -190,7 +190,7 @@ function flattenAdvisorTexts(row: RawAdvisorRow): RawAdvisorRow {
  *
  * Two joins and one exclusion carry the whole rule:
  *
- *   - The `messages` join is where the conversation comes from. The row stores
+ *   - The `actor_messages` join is where the conversation comes from. The row stores
  *     the note and a turn id, never a copy of the text, so there is exactly one
  *     place the words the agent read live. It also silently excludes a note with
  *     no turn id, which is correct: a note about a turn with no durable id has
@@ -213,7 +213,7 @@ function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): 
   actor.assertCurrent();
 
   // The conversation comes from the canonical store: the pane's serialized UI
-  // rows where the backend keeps one, plain `messages` otherwise — the same
+  // rows where the backend keeps one, plain `actor_messages` otherwise — the same
   // authority every other conversational reader answers from.
   // The pane's rows all belong to the workspace's root actor — the table is
   // the vendor's shape with no owner column, and `usesPaneStore` answers for
@@ -235,9 +235,9 @@ function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): 
         SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
                turn.id AS turnId, turn.content AS assistantResponse, ask.content AS userMessage
         FROM evolution_events e
-        JOIN messages turn ON turn.actor_id = ${actor.actorId}
+        JOIN actor_messages turn ON turn.actor_id = ${actor.actorId}
           AND turn.id = json_extract(e.data, '$.turnId')
-        JOIN messages ask ON ask.actor_id = turn.actor_id AND ask.id = turn.parent_id
+        JOIN actor_messages ask ON ask.actor_id = turn.actor_id AND ask.id = turn.parent_id
         WHERE e.actor_id = ${actor.actorId} AND e.type = ${ADVISOR_EVENT_TYPE}
           AND NOT EXISTS (
             SELECT 1 FROM turn_outcomes o

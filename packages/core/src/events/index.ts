@@ -40,7 +40,6 @@ export {
 } from './recorder';
 
 export {
-  cacheHitRate,
   summarizeSteps,
   CACHE_HIT_EMA_ALPHA,
   type CacheHitStats,

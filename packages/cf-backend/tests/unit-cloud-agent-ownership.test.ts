@@ -1,4 +1,4 @@
-import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
+import { createTestUserDO, TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { asFetchFunction, BUILTIN_PROFILE_CATALOG, profileCatalogDigest, type ProfileCatalogEnvelope } from '@kinu.run/core';
 import { createRecordingLogger, setDiagnosticsSink } from '@kinu.run/core/obs';
@@ -6,7 +6,7 @@ import { testOwner } from './helpers/user-do';
 import { handleUserRequest } from '../src/user/routes';
 import { createCloudWorkspaceForUser } from '../src/user/workspace-create';
 import { claimOwnedWorkspace } from '../src/user/workspace-ownership';
-import { HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
+import { halfBornOrchestratorHarness, HarnessOrchestratorAgent, orchestratorHarness } from './helpers/actor-harness';
 import type { UserCaller } from '../src/user/workspace-capability';
 import type { PresentedCaller } from '../src/control-plane/capability';
 import type { AuthIdentity } from '../src/auth/session';
@@ -815,5 +815,83 @@ describe('cloud agent ownership safety', () => {
     const harness = orchestratorHarness();
     await expect(harness.agent.destroyAgent('b'.repeat(32)))
       .rejects.toThrow('Agent owner mismatch; refusing to destroy.');
+  });
+
+  test('a workspace whose schema never initialized is deleted: roster row and object storage go together', async () => {
+    // The half-born shape: a create that died between the DO name being minted
+    // and `ensureSchema` leaves a named object with NO `workspace_identity`
+    // table — so the owner read inside `destroyAgent` throws on the object,
+    // and the roster row a healthy workspace would have released stays.
+    const halfBorn = halfBornOrchestratorHarness({ workspace: 'jarvis' });
+    expect(halfBorn.tableNames()).not.toContain('workspace_identity');
+    // Its constructor ran, so the storage the delete owes is real.
+    expect(halfBorn.tableNames()).toContain('workspace_capability');
+
+    const userDO = createTestUserDO({
+      durableObjectId: USER_ID,
+      // The real workspace object behind the namespace stub: the destroy the
+      // UserDO orders reaches the production `destroyAgent`, owner id intact.
+      destroyWorkspaceGate: async (_name, ownerUserId) => {
+        await halfBorn.agent.destroyAgent(ownerUserId);
+      },
+    });
+
+    const env = testEnv({
+      UserDO: { idFromName: (name: string) => name, get: () => userDO.userDO },
+      OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({}) },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
+
+    const owner = await testOwner();
+    await userDO.userDO.registerWorkspace(owner, 'jarvis');
+
+    const identity: AuthIdentity = {
+      userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
+    };
+
+    const response = await handleUserRequest(new Request(
+      'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
+    ), env, identity);
+
+    expect(response?.status).toBe(200);
+    expect(userDO.destroyedWorkspaces).toEqual(['jarvis']);
+    // Storage gone — every table the object held, dropped by `deleteAll`.
+    expect(halfBorn.tableNames().filter((name) => name !== 'sqlite_sequence')).toEqual([]);
+    // And the row is out of the owner's registry, not parked delete_pending.
+    expect(userDO.sql.exec(`SELECT name FROM user_workspaces`).toArray()).toEqual([]);
+  });
+
+  test('a healthy workspace whose owner does not match is still refused, row and storage intact', async () => {
+    // The guard the half-born skip must not widen: a workspace that DID
+    // initialize keeps its owner row, and a roster entry pointing at somebody
+    // else's object cannot destroy it.
+    const OTHER = 'b'.repeat(32);
+    const healthy = orchestratorHarness(undefined, { workspace: 'jarvis', ownerUserId: OTHER });
+
+    const userDO = createTestUserDO({
+      durableObjectId: USER_ID,
+      destroyWorkspaceGate: async (_name, ownerUserId) => {
+        await healthy.agent.destroyAgent(ownerUserId);
+      },
+    });
+
+    const env = testEnv({
+      UserDO: { idFromName: (name: string) => name, get: () => userDO.userDO },
+      OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({}) },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
+
+    const owner = await testOwner();
+    await userDO.userDO.registerWorkspace(owner, 'jarvis');
+
+    const response = await handleUserRequest(new Request(
+      'https://kinu.example.com/api/user/workspaces/jarvis', { method: 'DELETE' },
+    ), env, {
+      userId: USER_ID, email: 'owner@example.com', sub: 'sub', provider: 'test', authTime: Date.now(),
+    });
+
+    expect(response?.status).toBe(400);
+    // Fail-closed: the row stays, and the workspace's storage is untouched.
+    expect(healthy.tableNames()).toContain('workspace_identity');
   });
 });

@@ -201,7 +201,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // subordinate is not a workspace root, but it has no database of its own to
     // hold an identity in, and the roster it reads is the root's.
     workspace_actors: EVERYWHERE,
-    messages: EVERYWHERE,
+    actor_messages: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     search_nodes: EVERYWHERE,
     fibers: EVERYWHERE,
@@ -414,7 +414,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     assistant_messages: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': WIRED,
-      cli: { absent: 'a local session has no Think base; its default chat is the core `messages` table, the store `hasPaneStore` falls to' },
+      cli: { absent: 'a local session has no Think base; its default chat is the core `actor_messages` table, the store `hasPaneStore` falls to' },
     },
     assistant_compactions: {
       'cf-orchestrator': WIRED,
