@@ -1163,7 +1163,13 @@ const workspacePageRpc: Rpc = async <T,>(method: string, args?: unknown[]): Prom
     return rpcResult({ ok: true, plan: galleryAgentPlan, queued: true }).json<T>();
   }
 
-  if (method === "getChatHistoryPage") return rpcResult({ status: "end", items: [] }).json<T>();
+  // A preview that arrives after first paint: the gate sets the dataset flag
+  // once the page has settled, and the next live refresh lists a port the
+  // earlier reads never named — the passive arrival the inspector chip covers.
+  if (method === "getExposedPorts" && document.documentElement.dataset.previewArrived === "1" && args?.[0] === "sandbox") {
+    return rpcResult({ ports: [{ port: 8130, url: "https://8130-sandbox-aaaaaaaaaaaaaaaa.preview.example.test/", name: "Arrived app" }] }).json<T>();
+  }
+
 
   return AGENT_RPC.has(method)
     ? rpcResult(AGENT_RPC.get(method)).json<T>()

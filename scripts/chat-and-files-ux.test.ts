@@ -2356,3 +2356,73 @@ describe('the workbench type scale, as the browser computes it', () => {
     expect(sizes.toolLabel).toBe('13px');
   }, 120_000);
 });
+
+/**
+ * K-05. The inspector opens at 340px with a 280px floor, collapses to
+ * nothing behind a visible handle, and remembers both across reloads. A
+ * preview arriving on its own raises a "Preview ready" chip where the reader
+ * already is; only an explicit click navigates.
+ */
+describe('the workspace inspector at the actual WorkspacePage boundary', () => {
+  test('resize persists across reload; collapse persists; passive arrival chips, explicit click navigates', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+
+      const inspectorWidth = () => page.$$eval('[data-panel]', (panels) => Math.round(panels[1]?.getBoundingClientRect().width ?? -1));
+
+      // Opens at 340px inside the 320-360px band.
+      expect(await inspectorWidth()).toBeGreaterThanOrEqual(300);
+      expect(await inspectorWidth()).toBeLessThanOrEqual(380);
+
+      // A keyboard resize is an explicit size: it survives a reload. One
+      // ArrowRight step is five percentage points, which lands the 340px
+      // inspector on its 280px floor; further steps would collapse it, which
+      // the collapse leg below covers through the button instead.
+      await page.click('[data-separator]');
+      await page.keyboard.press('ArrowRight');
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+        const width = Math.round(panels[1]?.getBoundingClientRect().width ?? -1);
+
+        return width >= 270 && width <= 290;
+      }, { timeout: 10_000 });
+      const resized = await inspectorWidth();
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+      await page.waitForFunction((expected: number) => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.abs(Math.round(panels[1]?.getBoundingClientRect().width ?? -1) - expected) <= 3;
+      }, { timeout: 10_000 }, resized);
+
+      // Collapse hides the column behind a visible handle; that stands a reload.
+      await page.click('[data-inspector-collapse]');
+      await page.waitForSelector('[data-inspector-expand]', { timeout: 10_000 });
+      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[data-inspector-expand]', { timeout: 20_000 });
+      expect(await inspectorWidth()).toBeLessThanOrEqual(2);
+      await page.click('[data-inspector-expand]');
+      await page.waitForFunction(() => {
+        const panels = [...document.querySelectorAll('[data-panel]')];
+
+        return Math.round(panels[1]?.getBoundingClientRect().width ?? 0) > 200;
+      }, { timeout: 10_000 });
+
+      // A passive arrival chips instead of switching: Work stays current.
+      await page.evaluate(() => { document.documentElement.dataset.previewArrived = '1'; });
+      await page.waitForSelector('[data-preview-ready]', { timeout: 30_000 });
+      expect(await page.$eval('[aria-label="Work"]', (el) => el.getAttribute('aria-current'))).toBe('true');
+
+      // The explicit click navigates onto the arrived preview.
+      await page.click('[data-preview-ready]');
+      await page.waitForSelector('[aria-label="Arrived app"][aria-current="true"]', { timeout: 10_000 });
+      expect(await page.$('[data-preview-ready]')).toBeNull();
+      await page.close();
+    });
+  }, 240_000);
+});
