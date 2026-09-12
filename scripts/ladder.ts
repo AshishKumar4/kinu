@@ -565,6 +565,24 @@ export const LADDER: readonly Gate[] = [
       + 'It prints all three on the GREEN path.',
   },
   {
+    run: 'bun run gate:vendor-schema',
+    // COMMIT, beside schema-drift, for its reason: every statement that names a
+    // vendor-owned table is PREPARED against the vendor's own DDL, and a column
+    // that does not exist refuses at prepare — the `actor_id` read against the
+    // vendor's `assistant_messages` failed every hosted workspace at once on
+    // 2026-09-11, on the same tree every unit test had seeded from Kinu's own
+    // copy of the DDL. Measured 2026-09-12: 0.80/0.80/0.82s; 1s declared.
+    tier: 'commit',
+    seconds: 1,
+    catches: 'a Kinu statement over a vendor table whose columns the vendor '
+      + 'does not declare — read, write or JOIN — and a Kinu CREATE TABLE that '
+      + 'names a table the vendor creates, which is two owners for one schema.',
+    blind: 'statements built at runtime from strings, a vendor DDL whose text '
+      + 'the gate cannot parse, and a column that exists with a different TYPE '
+      + 'or DEFAULT — prepare checks names, not semantics. It prints all three '
+      + 'on the GREEN path.',
+  },
+  {
     run: 'bun scripts/test-census.ts --ratchet',
     // PUSH, beside `gate:wired` and `gate:dead-code`, for their reason: it is a
     // WHOLE-TREE census — 835 test files parsed, plus every product module a
@@ -697,7 +715,7 @@ export const LADDER: readonly Gate[] = [
       + 'six of its blind spots on its own green path.',
   },
   {
-    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
+    run: 'bun test scripts/gates.test.ts scripts/schema-drift.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts scripts/scratch-ownership.test.ts scripts/literature-citations.test.ts scripts/commit-hygiene.test.ts scripts/lean-citations.test.ts scripts/infra.test.ts scripts/patch-parity.test.ts scripts/silent-drop.test.ts scripts/analytics-datasets.test.ts scripts/release-config.test.ts scripts/complexity.test.ts scripts/dead-code.test.ts scripts/undeclared-imports.test.ts scripts/core-layering.test.ts scripts/vendor-schema.test.ts scripts/refuse-linked-install.test.ts scripts/eval-session-mint.test.ts scripts/scanner-bundle-gate.test.ts scripts/coverage-merge.test.ts scripts/test-census.test.ts scripts/capability-parity.test.ts',
     tier: 'push',
     // Measured 2026-08-24 after analytics dataset parity joined: 11.08s; release
     // config adds 1.44s (2026-08-27). The census's own suite joins it here and

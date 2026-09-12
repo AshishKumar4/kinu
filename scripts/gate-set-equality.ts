@@ -171,6 +171,13 @@ export const NON_REPOSITORY_SCANS = new Map<string, string>([
     'reads the OS temp directory for gallery builds left by processes that are gone. Not a '
     + 'repository path, and the whole point is to see what git never will.',
   ],
+  [
+    'scripts/vendor-schema.ts',
+    'reads the installed `agents`, `@cloudflare/think` and `@cloudflare/containers` dist for '
+    + 'their CREATE TABLE DDL — the vendor\'s own shape is the corpus, `git ls-files` has never '
+    + 'listed `node_modules`, and preparing against Kinu\'s copy of the DDL is the defect class '
+    + 'this gate exists to catch.',
+  ],
 ]);
 
 export type Kind = 'private-enumeration' | 'private-pattern' | 'unmeasured-publication'
