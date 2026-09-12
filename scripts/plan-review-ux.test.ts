@@ -55,7 +55,7 @@ interface WorkspacePlan {
   readonly documentWidthWithRail: number;
   readonly overflow: number;
   readonly scrimDisplay: string;
-  readonly railClosedByScrim: boolean;
+  readonly railDismissed: boolean;
 }
 
 /** What the header promoted, and what the document kept. */
@@ -273,28 +273,24 @@ async function observeWorkspace(browser: Browser, origin: string): Promise<Works
   });
 
   // The rail covers the document here and the panel's own backdrop is gated on
-  // a mobile VIEWPORT, so the scrim is the only in-place way back to the plan.
-  // Whether clicking it CLOSES the rail is the assertion, so a scrim that only
-  // dims is reported as a lost dismissal rather than as a timed-out suite.
-  //
-  // A real hit-tested mouse click at the scrim's top-left rather than
-  // `page.click`, which aims at an element's CENTRE: the rail is inset to the
-  // end edge and covers the middle of this narrow column, so a centre click
-  // lands on the rail and proves nothing about the scrim.
-  const scrim = await page.$('[data-plan-scrim]');
-  const scrimBox = await scrim?.boundingBox();
+  // a mobile VIEWPORT, so the scrim is the only in-place way back to the plan —
+  // when a strip of it is left. Under the inspector's decided 340px the Work
+  // column (298px here) is NARROWER than the rail's `min(20rem, 100%)` floor,
+  // the rail covers the column whole, and the scrim it sits on is unreachable.
+  // The dismissal a reader can actually use is the control that opened the
+  // rail — the header's annotations toggle. Whether it CLOSES the rail is the
+  // assertion, so a rail that cannot be left is reported as a lost dismissal
+  // rather than as a timed-out suite.
+  await page.click('[data-plan-annotations-toggle]');
 
-  if (!scrimBox) throw new Error('the open rail left no scrim box to click');
-  await page.mouse.click(scrimBox.x + 8, scrimBox.y + 8);
-
-  const railClosedByScrim = await settledWithin(page.waitForFunction(
+  const railDismissed = await settledWithin(page.waitForFunction(
     () => document.querySelector('[data-annotation-panel="true"]') === null,
     { timeout: 15_000 },
   ));
 
   await page.close();
 
-  return { ...before, ...opened, railClosedByScrim };
+  return { ...before, ...opened, railDismissed };
 }
 
 async function observePromotion(
@@ -423,10 +419,10 @@ describe('the plan review document, as a browser lays it out', () => {
     expect(observed.workspace.railWidth).toBeLessThanOrEqual(observed.workspace.rootWidth);
     expect(observed.workspace.documentWidthWithRail).toBe(observed.workspace.documentWidthBefore);
     expect(observed.workspace.overflow).toBe(0);
-    // Painted, and therefore obliged to close the rail: a scrim that only dims
-    // leaves a reader looking at a greyed document with no way back to it.
+    // Painted over the whole column — the rail's own close control is the
+    // reachable way out here, and it must actually close the rail.
     expect(observed.workspace.scrimDisplay).toBe('block');
-    expect(observed.workspace.railClosedByScrim).toBe(true);
+    expect(observed.workspace.railDismissed).toBe(true);
   });
 
   test('an h1 the agent did not lead with stays where the agent put it', () => {
