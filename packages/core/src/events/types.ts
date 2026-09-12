@@ -13,13 +13,13 @@ import type { ModelMessage } from 'ai';
 import type { ContextBudgetSnapshot } from '../context-budget';
 import type { JsonValue } from '../utils/json';
 import type { ContextComposition } from '../context-meter';
-import type { FileEditSnapshot } from '../tools/file-ledger';
-import type { DbOpRecord } from '../tools/db-codemode';
+import type { FileEditSnapshot } from '../types/file-edits';
+import type { DbOpRecord } from '../types/app-store';
 import type { EscalationSnapshot } from '../execution/escalation';
 import type { MissionBudgetRefusal } from '../mission-budget';
-import type { HeadFileChangeSet } from '../heads/types';
+import type { HeadFileChangeSet } from '../types/heads';
 import type { Usage } from '../usage';
-import type { ToolOutcome } from '../tools/outcome';
+import type { ToolOutcome } from '../types/tool-outcome';
 import type { WorkMode } from '../types/turn';
 import type {
   SpendSource, ModelOperationKind, ModelOperationOutcome, ModelOperationPhase,

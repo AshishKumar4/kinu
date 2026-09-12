@@ -33,40 +33,10 @@
  */
 
 import { fnv1a64 } from '../prompting/volatile-context';
-import type { FileEditFailure } from './file-edit';
+import type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 import { countSharedWrite, newWriteAuthor } from './msg-counters';
 
-/** Why an edit attempt did not land. The text-surgery failures plus the two the
- *  ledger itself raises and the I/O ones the VFS raises. */
-export type FileEditOutcomeReason =
-  | FileEditFailure
-  /** The file was never read this turn. */
-  | 'unread'
-  /** The file changed after the read this turn. */
-  | 'stale'
-  /** The path does not exist, or is not a file. */
-  | 'missing'
-  /** The caller's own credential may not read or write the path. */
-  | 'denied'
-  /** The filesystem refused the read or the write for another reason. */
-  | 'io';
-
-
-/** What one turn's edits did. Absent counters never happened.
- *  `attempts`/`applied` count CALLS; `recoveredPaths`/`abandonedPaths` count
- *  PATHS, because recovery is a property of a file, not of a call. */
-export interface FileEditSnapshot {
-  /** Edit calls attempted. */
-  attempts: number;
-  /** Edit calls that changed a file. */
-  applied: number;
-  /** Failed attempts by reason. */
-  failures: Partial<Record<FileEditOutcomeReason, number>>;
-  /** Paths that failed an edit and then landed one in the same turn. */
-  recoveredPaths: number;
-  /** Paths that failed an edit and never landed one. */
-  abandonedPaths: number;
-}
+export type { FileEditOutcomeReason, FileEditSnapshot } from '../types/file-edits';
 
 /** How much of a file the caller must have seen. `part` is enough to anchor an
  *  edit; `whole` is what discarding the file's current contents requires. */

@@ -23,14 +23,14 @@ import { JsonValueSchema } from '../utils/json';
 import { boundedInt, boundPageQuery } from '../utils/bounds';
 import { USAGE_FIELDS, UsageSchema, type Usage } from '../usage';
 import { ESCALATION_OUTCOMES } from '../execution/escalation';
-import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../tools/db-codemode';
+import { APP_MUTATIONS, APP_TABLE_SCOPES } from '../types/app-store';
 import {
   SPEND_SOURCES, WORKSPACE_RUN_ID,
   MODEL_OPERATION_KINDS, MODEL_OPERATION_PHASES, MODEL_OPERATION_OUTCOMES,
   type ModelOperationSink, type SpendSource, type SpendTally,
 } from './model-call';
 import { diagnostics, toKinuError } from '../obs/index';
-import { ToolOutcomeSchema } from '../tools/outcome';
+import { ToolOutcomeSchema } from '../types/tool-outcome';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction

@@ -3,7 +3,7 @@
 import * as v from 'valibot';
 import { ERROR_CODES, refusalOf, KinuError, type Refusal } from '../obs/index';
 import type { JsonValue } from '../utils/json';
-import { FILE_REFUSAL_REASONS } from '../tools/file-edit';
+import { FILE_REFUSAL_REASONS } from '../types/file-edits';
 
 const RefusalSchema = v.object({ reason: v.picklist(ERROR_CODES), error: v.string() });
 

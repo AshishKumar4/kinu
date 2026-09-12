@@ -24,6 +24,13 @@
  * ending with its BOM restored.
  */
 import { KinuError } from '../obs/error';
+import {
+  FILE_REFUSAL_REASONS, type FileEditFailure,
+} from '../types/file-edits';
+
+export {
+  FILE_REFUSAL_REASONS, type FileEditFailure,
+} from '../types/file-edits';
 
 /** One replacement. Every edit in a call matches the file as it was READ, never
  *  the result of a sibling edit. */
@@ -31,33 +38,6 @@ export interface FileEdit {
   oldText: string;
   newText: string;
 }
-
-/** Why an edit did not land. Durable counter keys in the `file_edit` run event,
- *  so a benchmark can report exact-match failures by kind. */
-export type FileEditFailure =
-  /** old_text was empty — an empty anchor matches everywhere. */
-  | 'empty_anchor'
-  /** old_text is not in the file. */
-  | 'not_found'
-  /** old_text appears more than once, so the target is a guess. */
-  | 'ambiguous'
-  /** Two edits in the call cover overlapping text. */
-  | 'overlap'
-  /** Every replacement produced the text it replaced. */
-  | 'no_change';
-
-/**
- * The file plane's own refusal reasons — verdicts the tool reached, not error
- * classes: the anchor failures above plus the two the turn ledger raises, a write
- * over contents the caller has not read (`unread`) or read before they changed
- * (`stale`). `missing`, `denied` and `io` are NOT here; they are `ErrorCode`s
- * shared with every other tool. Declared on this leaf so the reader in
- * `execution/exec-result.ts` and the census in `read-models/tool-failures.ts`
- * take one list without either importing the ledger.
- */
-export const FILE_REFUSAL_REASONS = [
-  'empty_anchor', 'not_found', 'ambiguous', 'overlap', 'no_change', 'unread', 'stale',
-] as const satisfies readonly (FileEditFailure | 'unread' | 'stale')[];
 
 /** A native file invocation refused with the file plane's exact verdict. */
 export class FileRefusalError extends KinuError {
