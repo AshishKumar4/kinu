@@ -559,7 +559,6 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
       new ForkTargetWriter(this.sql, this.plane, {
         workspaceId: this.ctx.id.toString(),
         workspaceName: 'fork-target',
-        targetAuthority: 'pane',
         transaction: (rows) => this.ctx.storage.transactionSync(rows),
       }),
       new NativeSinkPlan(this.plane.native, frame.transferId, {

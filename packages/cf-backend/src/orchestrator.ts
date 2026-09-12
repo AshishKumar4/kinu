@@ -5915,9 +5915,12 @@ export class OrchestratorAgent extends ActorAgent {
   #forkReceiverFor(forkName: string, transferId: string, ownerUserId: string): ForkTransferReceiver {
     if (this.forkReceiver?.transferId === transferId) return this.forkReceiver.receiver;
 
+    // No targetAuthority here: the begin frame declares it, and the writer's
+    // own inference — the pane table every booted Think leaves behind — is the
+    // right answer for an activation that resumes mid-transfer and never sees
+    // its transfer's begin.
     const writer = new ForkTargetWriter(this.boundSql, this.rt.storage.vfs, {
       workspaceId: this.ctx.id.toString(), workspaceName: forkName, ownerUserId,
-      targetAuthority: 'pane',
       writeSoulFile: (content) => writeWorkspaceSoul(this.hostedWorkspace().bundle, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
