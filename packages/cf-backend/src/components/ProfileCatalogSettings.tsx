@@ -3,9 +3,14 @@ import { Button } from '@cloudflare/kumo';
 import { IdentificationCardIcon } from '@phosphor-icons/react';
 import {
   BUILTIN_ROLE_DEFINITIONS,
+  BUILTIN_SKILL_HEADERS,
+  BUILTIN_TOOLS,
+  BUILTIN_TOOL_SPECS,
   NAMED_SWARM_PRESETS,
   TIER_IDS,
   deriveRoleLabel,
+  isTierId,
+  tierIdsOf,
   effectiveRoleCatalog,
   isReasoningEffort,
   isValidRoleId,
@@ -36,6 +41,7 @@ export function ProfileCatalogSettings() {
   const [menu, setMenu] = useState<ModelMenu>(EMPTY_MENU);
   const [selectedRole, setSelectedRole] = useState<RoleId>('general');
   const [newRoleId, setNewRoleId] = useState('');
+  const [newTierId, setNewTierId] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -159,6 +165,34 @@ export function ProfileCatalogSettings() {
     setDraft({ ...draft, tiers });
   };
 
+  const addTier = () => {
+    if (!draft) return;
+    const id = newTierId.trim();
+
+    if (!isTierId(id)) {
+      setError('Tier IDs use lowercase letters, digits, and hyphens.');
+
+      return;
+    }
+
+    if (tierIdsOf(draft).includes(id)) {
+      setError(`Tier "${id}" already exists.`);
+
+      return;
+    }
+
+    setDraft({ ...draft, tiers: { ...draft.tiers, [id]: { ...draft.tiers.default } } });
+    setNewTierId('');
+    setError(null);
+  };
+
+  const removeTier = (id: TierId) => {
+    if (!draft) return;
+    const tiers = { ...draft.tiers };
+    delete tiers[id];
+    setDraft({ ...draft, tiers });
+  };
+
   const setTierEffort = (id: TierId, effort: ReasoningEffort | '') => {
     if (!draft) return;
     const tiers = { ...draft.tiers };
@@ -188,9 +222,10 @@ export function ProfileCatalogSettings() {
         <>
           <div className="space-y-2">
             <div className="text-xs font-semibold p-text">Model tiers</div>
-            {TIER_IDS.map((tierId) => {
+            {tierIdsOf(draft).map((tierId) => {
               const assignment = tierId === 'default' ? draft.tiers.default : draft.tiers[tierId];
               const resolved = assignment ?? draft.tiers.default;
+              const builtin = TIER_IDS.some((id) => id === tierId);
 
               // The levels are the MODEL's, read off its menu entry: a model
               // that declares xhigh offers it, one that declares only low and
@@ -201,11 +236,18 @@ export function ProfileCatalogSettings() {
               );
 
               return (
-                <div key={tierId} className="grid gap-2 rounded-md border border-[var(--c-border-subtle)] p-2 md:grid-cols-[5rem_1fr_8rem] md:items-center">
-                  <div>
-                    <div className="text-xs font-medium p-text">{tierId}</div>
-                    {assignment === undefined && <div className="text-[10px] p-text-3">uses default</div>}
-                    {tierId === 'default' && <div className="text-[10px] p-text-3">account default</div>}
+                <div key={tierId} className="grid gap-2 rounded-md border border-[var(--c-border)] p-2 md:grid-cols-[7rem_1fr_8rem] md:items-center">
+                  <div className="flex items-center gap-2">
+                    <div>
+                      <div className="text-xs font-medium p-text">{tierId}</div>
+                      {assignment === undefined && <div className="text-[10px] p-text-3">uses default</div>}
+                      {tierId === 'default' && <div className="text-[10px] p-text-3">account default</div>}
+                    </div>
+                    {!builtin && (
+                      <button type="button" className="text-[10px] p-text-3 hover:p-danger" aria-label={`Remove tier ${tierId}`} onClick={() => removeTier(tierId)}>
+                        remove
+                      </button>
+                    )}
                   </div>
                   <ModelPicker
                     models={menu.models}
@@ -232,9 +274,20 @@ export function ProfileCatalogSettings() {
                 </div>
               );
             })}
+            <div className="flex items-center gap-2">
+              <input
+                className={`${inputCls} max-w-[14rem]`}
+                placeholder="new tier id, e.g. review"
+                value={newTierId}
+                aria-label="New tier id"
+                onChange={(event) => setNewTierId(event.target.value)}
+                onKeyDown={(event) => { if (event.key === 'Enter') addTier(); }}
+              />
+              <Button size="xs" variant="secondary" disabled={!newTierId.trim()} onClick={addTier}>Add tier</Button>
+            </div>
           </div>
 
-          <div className="space-y-3 border-t border-[var(--c-border-subtle)] pt-4">
+          <div className="space-y-3 border-t border-[var(--c-border)] pt-4">
             <div className="flex flex-wrap gap-1.5">
               {Object.keys(roles).sort().map((roleId) => (
                 <button
@@ -256,6 +309,8 @@ export function ProfileCatalogSettings() {
               <RoleEditor
                 id={selectedRole}
                 role={role}
+                tiers={tierIdsOf(draft)}
+                roleIds={Object.keys(roles).sort()}
                 customized={selectedRole in draft.roles}
                 onChange={(next) => replaceRole(selectedRole, next)}
                 onReset={removeRoleOverride}
@@ -263,7 +318,7 @@ export function ProfileCatalogSettings() {
             )}
           </div>
 
-          <div className="flex items-center justify-between border-t border-[var(--c-border-subtle)] pt-4">
+          <div className="flex items-center justify-between border-t border-[var(--c-border)] pt-4">
             <span className="text-[11px] p-text-3">Catalog version {envelope.version}</span>
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
@@ -279,6 +334,10 @@ export function ProfileCatalogSettings() {
 function RoleEditor(props: {
   id: RoleId;
   role: RoleDefinition;
+  /** Every tier the catalog offers, so a role can name one the owner added. */
+  tiers: readonly TierId[];
+  /** Every role the catalog holds, for the hire list. */
+  roleIds: readonly RoleId[];
   customized: boolean;
   onChange(role: RoleDefinition): void;
   onReset(): void;
@@ -286,14 +345,8 @@ function RoleEditor(props: {
   const set = <Key extends keyof RoleDefinition>(key: Key, value: RoleDefinition[Key]) =>
     props.onChange({ ...props.role, [key]: value });
 
-  const strings = (value: string): readonly string[] | undefined => {
-    const entries = value.split(',').map((entry) => entry.trim()).filter(Boolean);
-
-    return entries.length > 0 ? entries : undefined;
-  };
-
   return (
-    <div className="grid gap-3 rounded-md border border-[var(--c-border-subtle)] p-3 md:grid-cols-2">
+    <div className="grid gap-3 rounded-md border border-[var(--c-border)] p-3 md:grid-cols-2">
       <label className="space-y-1 text-xs p-text-2">
         <span>Label</span>
         <input className={inputCls} value={props.role.label ?? deriveRoleLabel(props.id)} onChange={(event) => set('label', event.target.value)} />
@@ -301,11 +354,11 @@ function RoleEditor(props: {
       <label className="space-y-1 text-xs p-text-2">
         <span>Default tier</span>
         <select className={inputCls} value={props.role.tier} onChange={(event) => {
-          const tier = TIER_IDS.find((value) => value === event.target.value);
+          const tier = props.tiers.find((value) => value === event.target.value);
 
           if (tier) set('tier', tier);
         }}>
-          {TIER_IDS.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
+          {props.tiers.map((tier) => <option key={tier} value={tier}>{tier}</option>)}
         </select>
       </label>
       <label className="space-y-1 text-xs p-text-2 md:col-span-2">
@@ -330,28 +383,91 @@ function RoleEditor(props: {
         <input type="checkbox" checked={props.role.plan === true} onChange={(event) => set('plan', event.target.checked ? true : undefined)} />
         Start in Plan mode
       </label>
-      <label className="space-y-1 text-xs p-text-2">
-        <span>Allowed tools</span>
-        <input className={inputCls} value={props.role.allowedTools?.join(', ') ?? ''} onChange={(event) => set('allowedTools', strings(event.target.value))} placeholder="file, run, agents" />
-      </label>
-      <label className="space-y-1 text-xs p-text-2">
-        <span>Skills</span>
-        <input className={inputCls} value={props.role.skills?.join(', ') ?? ''} onChange={(event) => set('skills', strings(event.target.value))} placeholder="repository-review" />
-      </label>
-      <label className="space-y-1 text-xs p-text-2 md:col-span-2">
-        <span>Roles this role can hire</span>
-        <input
-          className={inputCls}
-          value={props.role.spawns === '*' ? '*' : props.role.spawns?.join(', ') ?? ''}
-          onChange={(event) => set('spawns', event.target.value.trim() === '*' ? '*' : strings(event.target.value))}
-          placeholder="* or researcher, auditor"
-        />
-      </label>
+      <MemberSet
+        label="Tools"
+        about="Every tool unless narrowed. Unchecking one takes it away from this role."
+        options={BUILTIN_TOOLS.map((name) => ({ id: name, about: BUILTIN_TOOL_SPECS[name].summary }))}
+        selected={props.role.allowedTools}
+        onChange={(next) => set('allowedTools', next)}
+      />
+      <MemberSet
+        label="Skills"
+        about="Shipped skills this role loads. A workspace's own skills are enabled in that workspace."
+        options={BUILTIN_SKILL_HEADERS.map((skill) => ({ id: skill.name, about: skill.description }))}
+        selected={props.role.skills ?? []}
+        onChange={(next) => set('skills', next !== undefined && next.length > 0 ? next : undefined)}
+        emptyMeansNone
+      />
+      <MemberSet
+        label="Roles this role can hire"
+        about="Every role unless narrowed."
+        options={props.roleIds.map((id) => ({ id, about: null }))}
+        selected={props.role.spawns === '*' ? undefined : props.role.spawns}
+        onChange={(next) => set('spawns', next)}
+        wide
+      />
       <div className="md:col-span-2">
         <Button size="xs" variant="secondary" disabled={!props.customized} onClick={props.onReset}>
           {props.id in BUILTIN_ROLE_DEFINITIONS ? 'Reset built-in role' : 'Delete custom role'}
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * A set over a known list, as checkboxes: what a role may use, drawn from
+ * what exists, so the owner never types a name the runtime will not know.
+ *
+ * `selected` absent means the whole list (the catalog's own convention for
+ * `allowedTools` and `spawns`), so every box reads checked and the stored
+ * value stays absent until one is cleared; checking the last one back
+ * restores absent rather than storing the full list by hand. With
+ * `emptyMeansNone` (skills) absent is the empty set instead.
+ */
+function MemberSet(props: {
+  label: string;
+  about: string;
+  options: ReadonlyArray<{ id: string; about: string | null }>;
+  selected: readonly string[] | undefined;
+  onChange(next: readonly string[] | undefined): void;
+  emptyMeansNone?: boolean;
+  wide?: boolean;
+}) {
+  const all = props.options.map((option) => option.id);
+  const current = props.selected ?? (props.emptyMeansNone ? [] : all);
+
+  const toggle = (id: string, on: boolean) => {
+    const next = on ? [...new Set([...current, id])] : current.filter((member) => member !== id);
+    const whole = all.every((member) => next.includes(member));
+
+    props.onChange(!props.emptyMeansNone && whole ? undefined : next);
+  };
+
+  return (
+    <fieldset className={`space-y-1 text-xs p-text-2 ${props.wide ? 'md:col-span-2' : ''}`}>
+      <legend className="flex items-baseline gap-2">
+        <span>{props.label}</span>
+        <span className="text-[10px] p-text-3">{props.about}</span>
+      </legend>
+      <div className={`grid gap-x-3 gap-y-1 ${props.wide ? 'md:grid-cols-3' : ''}`}>
+        {props.options.map((option) => (
+          <label key={option.id} className="flex items-start gap-2 py-0.5" title={option.about ?? undefined}>
+            <input
+              type="checkbox"
+              className="mt-0.5 accent-[var(--c-accent)]"
+              checked={current.includes(option.id)}
+              onChange={(event) => toggle(option.id, event.target.checked)}
+              aria-label={`${props.label}: ${option.id}`}
+            />
+            <span className="min-w-0">
+              <span className="p-text">{option.id}</span>
+              {option.about && <span className="block truncate text-[10px] p-text-3">{option.about}</span>}
+            </span>
+          </label>
+        ))}
+        {props.options.length === 0 && <span className="text-[10px] p-text-3">none shipped</span>}
+      </div>
+    </fieldset>
   );
 }

@@ -3711,6 +3711,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   async getAgentStatus() {
     const profile = this.resolvedTurnProfile();
+
     const status = await getAgentStatus({
       sql: this.boundSql,
       actor: this.rt.actor,

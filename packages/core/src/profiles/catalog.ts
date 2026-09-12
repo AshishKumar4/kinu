@@ -19,14 +19,26 @@ import { JsonValueSchema } from '../utils/json';
 
 // ── Vocabulary ───────────────────────────────────────────────────
 
-/** Named inference tiers in their stable UI order. Only `default` must be
- *  configured: it is the model the account runs on, the one a new workspace
- *  starts with, and the one `fast` and `deep` alias when absent. `tiny` and
- *  `slow` were removed (#7): they overlapped `fast` and `deep`, and a catalog
- *  or role still naming them is refused at read rather than aliased. */
+/** The inference tiers every authority ships, in their stable UI order. Only
+ *  `default` must be configured: it is the model the account runs on, the one
+ *  a new workspace starts with, and the one any other tier aliases when it has
+ *  no row. `tiny` and `slow` were removed (#7): they overlapped `fast` and
+ *  `deep`. A catalog may add tiers of its own by key (`TIER_ID_RE`), exactly
+ *  as it adds roles; a role naming a tier the catalog lacks is refused at
+ *  read rather than aliased. */
 export const TIER_IDS = ['fast', 'default', 'deep'] as const;
 
-export type TierId = (typeof TIER_IDS)[number];
+export type BuiltinTierId = (typeof TIER_IDS)[number];
+
+/** A tier the catalog holds: one of the builtins or one the owner added. */
+export type TierId = string;
+
+/** Kebab-case, lowercase-first: the same discipline role and skill names follow. */
+const TIER_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+
+const TIER_ID_MAX_LEN = 32;
+
+export const TierIdSchema = v.pipe(v.string(), v.regex(TIER_ID_RE), v.maxLength(TIER_ID_MAX_LEN));
 
 /** The roles every authority implicitly ships. A catalog may override any of
  *  them by key; it cannot remove them. */
@@ -60,16 +72,12 @@ export function isValidRoleId(value: string): value is RoleId {
   return value.length <= ROLE_ID_MAX_LEN && ROLE_ID_RE.test(value);
 }
 
-/** Membership set over the tier ids, widened to `string` at the binding so a
- *  value off a durable row can be tested without a cast. */
-const TIER_ID_MEMBERS: ReadonlySet<string> = new Set(TIER_IDS);
-
-/** Whether a stored string names one of the three tiers. A GUARD rather than an
+/** Whether a stored string is a well-formed tier id. A GUARD rather than an
  *  assertion at the read sites: a durable row can hold a value written by
- *  another build, and narrowing it here is what keeps those readers free of
- *  casts. */
+ *  another build. Whether the tier EXISTS is the catalog's question, answered
+ *  at resolve time against the tiers it holds. */
 export function isTierId(value: string): value is TierId {
-  return TIER_ID_MEMBERS.has(value);
+  return v.safeParse(TierIdSchema, value).success;
 }
 
 // ── Wire shapes ──────────────────────────────────────────────────
@@ -84,17 +92,29 @@ const TierAssignmentSchema = v.strictObject({
   reasoningEffort: v.optional(v.picklist(REASONING_EFFORTS)),
 });
 
+/** Every tier the catalog holds, keyed by id: `default`, which every catalog
+ *  must carry, the builtins the owner configured, and the tiers the owner
+ *  added. */
 export interface TierAssignments {
-  default: TierAssignment;
-  fast?: TierAssignment | undefined;
-  deep?: TierAssignment | undefined;
+  readonly default: TierAssignment;
+  readonly [tier: TierId]: TierAssignment | undefined;
 }
 
-const TierAssignmentsSchema = v.strictObject({
-  default: TierAssignmentSchema,
-  fast: v.optional(TierAssignmentSchema),
-  deep: v.optional(TierAssignmentSchema),
-});
+const TierAssignmentsSchema = v.pipe(
+  v.objectWithRest({ default: TierAssignmentSchema }, TierAssignmentSchema),
+  v.check(
+    (tiers) => Object.keys(tiers).every((id) => v.safeParse(TierIdSchema, id).success),
+    'a tier id is lowercase kebab-case, at most 32 characters',
+  ),
+);
+
+/** Every tier a catalog offers, the builtins first in their stable order, then
+ *  the owner's own in the order the catalog holds them. The one list a settings
+ *  control, a TUI cycler and a resolver all read, so a tier added in one place
+ *  is offered everywhere. */
+export function tierIdsOf(catalog: { readonly tiers: TierAssignments }): TierId[] {
+  return [...new Set([...TIER_IDS, ...Object.keys(catalog.tiers)])];
+}
 
 export interface RoleDefinition {
   /** Absent derives from the id at resolve time (`deriveRoleLabel`). */
@@ -119,7 +139,7 @@ const RoleDefinitionSchema = v.strictObject({
   label: v.optional(v.pipe(v.string(), v.minLength(1))),
   description: v.pipe(v.string(), v.minLength(1)),
   instructions: v.pipe(v.string(), v.minLength(1)),
-  tier: v.picklist(TIER_IDS),
+  tier: TierIdSchema,
   preset: v.picklist(NAMED_SWARM_PRESETS),
   allowedTools: v.optional(v.array(v.pipe(v.string(), v.minLength(1)))),
   skills: v.optional(v.array(v.pipe(v.string(), v.minLength(1)))),
@@ -155,12 +175,23 @@ function allSpawnReferencesExist(
   return true;
 }
 
+/** A role's tier is one the catalog offers: a builtin (which aliases default
+ *  when unconfigured) or a tier this catalog holds. Checked at write, so a
+ *  catalog naming a tier nobody configured is refused before it is stored
+ *  rather than at the first turn that resolves through it. */
+function allRoleTiersExist(catalog: v.InferOutput<typeof ProfileCatalogObjectSchema>): boolean {
+  const known = new Set<string>(tierIdsOf(catalog));
+
+  return Object.values(catalog.roles).every((role) => known.has(role.tier));
+}
+
 const ProfileCatalogSchema = v.pipe(
   ProfileCatalogObjectSchema,
   v.check(
     allSpawnReferencesExist,
     'every spawns entry must name a built-in role or a role in this catalog',
   ),
+  v.check(allRoleTiersExist, 'every role tier must name a built-in tier or a tier in this catalog'),
 );
 
 export type ProfileAuthority =
@@ -231,8 +262,15 @@ export function validateProfileCatalogEnvelope<Input>(input: Input): ProfileCata
  *  serialization, so equal catalogs hash equally regardless of key insertion
  *  order. Covers the catalog only — never version or authority, which are
  *  envelope metadata and change for reasons a content digest must not see. */
+/** The bytes the digest is over: the catalog as canonical JSON. Exposed so a
+ *  surface without `node:crypto` (the browser gallery) hashes the same thing
+ *  with WebCrypto rather than carrying a precomputed digest that goes stale. */
+export function profileCatalogCanonical(catalog: ProfileCatalog): string {
+  return stableStringify(v.parse(JsonValueSchema, catalog));
+}
+
 export function profileCatalogDigest(catalog: ProfileCatalog): string {
-  return sha256Hex(stableStringify(v.parse(JsonValueSchema, catalog)));
+  return sha256Hex(profileCatalogCanonical(catalog));
 }
 
 // ── Built-in roles ───────────────────────────────────────────────

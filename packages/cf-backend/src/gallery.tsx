@@ -127,7 +127,7 @@ import { CHUNK_FIXED_KEY, lazyRoute } from "@/lazy-route";
 import type { SubordinateSnapshot } from "@/hooks/use-kinu";
 import { primePageDeployedBuildSha } from "@/hooks/session-recovery";
 import { MessageView, SteerBubble } from "@/components/MessageView";
-import { buildTranscript } from "@kinu.run/core";
+import { buildTranscript, profileCatalogCanonical } from "@kinu.run/core";
 import WorkspacePage, { ConversationSkeleton, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
@@ -143,7 +143,7 @@ import {
   BUILTIN_PROFILE_CATALOG, BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   CHARS_PER_TOKEN, DEVICE_TIERS, TOOL_REACH, JsonObjectSchema, JsonValueSchema, mergeTranscript,
   missingSubordinateHistory,
-  parseDeviceTier, profileCatalogDigest, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
+  parseDeviceTier, seekPage, sortDirEntries, SubordinateInspectionRequestSchema,
   type AdvisorSeverity, type JsonValue, type PlanReview, type PlanReviewAnnotation,
   type ProfileCatalogEnvelope,
 } from "@kinu.run/core";
@@ -257,8 +257,14 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
   }
 
   if (path === "/api/user/models") {
+    // Two models with different documented effort lists, so the tier
+    // selector's per-model behaviour is observable: the levels are the
+    // MODEL's, never a fixed three.
     return fixtureJson({
-      models: [{ spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai" }],
+      models: [
+        { spec: "workers-ai/llama-4", label: "Llama 4", provider: "workers-ai", reasoningEfforts: [] },
+        { spec: "anthropic/claude-opus-4-7", label: "Claude Opus 4.7", provider: "anthropic", reasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
+      ],
       failures: [],
     });
   }
@@ -338,10 +344,17 @@ async function userSettingsFixture(path: string, method: string, body: BodyInit 
   if (path === "/api/user/devices/consents") return fixtureJson([]);
 
   if (path === "/api/user/profile-catalog") {
+    // The real digest over the real canonical bytes, hashed here with
+    // WebCrypto because the gallery has no `node:crypto`.
+    const bytes = new TextEncoder().encode(profileCatalogCanonical(BUILTIN_PROFILE_CATALOG));
+
+    const digest = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))]
+      .map((byte) => byte.toString(16).padStart(2, "0")).join("");
+
     return fixtureJson({
       authority: { kind: "account", accountId: "gallery" },
       version: 0,
-      digest: profileCatalogDigest(BUILTIN_PROFILE_CATALOG),
+      digest,
       catalog: BUILTIN_PROFILE_CATALOG,
     });
   }

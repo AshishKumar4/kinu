@@ -1,13 +1,13 @@
 export {
-  TIER_IDS, ROLE_ID_RE, DEFAULT_ROLE_ID,
+  TIER_IDS, TierIdSchema, tierIdsOf, isTierId, ROLE_ID_RE, DEFAULT_ROLE_ID,
   isValidRoleId, validateProfileCatalog, validateProfileCatalogEnvelope,
-  profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
+  profileCatalogCanonical, profileCatalogDigest, deriveRoleLabel, effectiveRoleCatalog,
   BUILTIN_ROLE_DEFINITIONS, BUILTIN_PROFILE_CATALOG,
   ProfileCatalogEnvelopeSchema,
 } from './catalog';
 
 export type {
-  TierId, BuiltinRoleId, RoleId,
+  TierId, BuiltinTierId, BuiltinRoleId, RoleId,
   TierAssignment, TierAssignments, RoleDefinition, RoleCatalog, ProfileCatalog,
   ProfileAuthority, ProfileCatalogEnvelope,
 } from './catalog';

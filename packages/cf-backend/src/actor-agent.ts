@@ -22,7 +22,7 @@ import {
   type WSMessage,
   type FiberRecoveryContext, type FiberRecoveryResult,
 } from "agents";
-import { usesPaneStore, inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
+import { TierIdSchema, usesPaneStore, inspectSubordinateStorage, type SubordinateInspectionAuthority } from '@kinu.run/core';
 import type { SubordinateInspectionRequest, SubordinateInspectionResult } from '@kinu.run/core';
 import type {
   SubordinateActivityEvent,
@@ -223,7 +223,7 @@ import {
   uiMessageText, tableExists, PROGRAMMATIC_MESSAGE_ID_PREFIX,
   TURN_AUTHOR_METADATA_KEY, stampTurnAuthor,
   // memory.* / tasks.* — codemode projections of the same-named native tools
-  JsonObjectSchema, JsonValueSchema, TIER_IDS, projectJsonValue, changeActiveRole,
+  JsonObjectSchema, JsonValueSchema, projectJsonValue, changeActiveRole,
   agentsProfileContext, effectiveRoleCatalog, loadProfileAuthorityInputs,
   resolveAgentTurnProfile, resolveRoutingProfile,
   createMemoryCodemodeProvider, createTasksCodemodeProvider, createWebCodemodeProvider, createAgentsCodemodeProvider,
@@ -481,7 +481,7 @@ function readTurnContinuity(body?: JsonObject): TurnContinuity {
 }
 
 function readTurnTier(body?: JsonObject): TierId | undefined {
-  const parsed = v.safeParse(v.picklist(TIER_IDS), body?.tier);
+  const parsed = v.safeParse(TierIdSchema, body?.tier);
 
   return parsed.success ? parsed.output : undefined;
 }

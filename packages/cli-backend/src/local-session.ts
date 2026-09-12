@@ -41,7 +41,7 @@ import type {
   CheckpointAvailability,
   WorkMode, JsonValue,
 } from '@kinu.run/core';
-import {
+import { TierIdSchema,
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
   verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
   type TurnSteering,
@@ -147,7 +147,7 @@ import {
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
   reasoningEffortOptions,
-  BUILTIN_PROFILE_CATALOG, TIER_IDS, effectiveRoleCatalog,
+  BUILTIN_PROFILE_CATALOG, effectiveRoleCatalog,
   changeActiveRole, agentsProfileContext, canonicalConversationId,
   resolveAgentTurnProfile, resolveModelRoute, resolveRoutingProfile,
   buildModelCallEvent,
@@ -602,7 +602,7 @@ export interface LocalAgentSessionOpts {
 }
 
 const TurnTierMetadataSchema = v.object({
-  profile_tier: v.optional(v.picklist(TIER_IDS)),
+  profile_tier: v.optional(TierIdSchema),
 });
 
 function tierFromMetadata(metadata: ProgrammaticTurn['metadata']): TierId | undefined {

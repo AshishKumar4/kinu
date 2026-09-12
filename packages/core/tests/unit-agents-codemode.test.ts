@@ -32,7 +32,6 @@ import {
   profileCatalogDigest,
   BUILTIN_PROFILE_CATALOG,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
-  TIER_IDS,
   type CodemodeProvider,
   type JsonValue,
   type ProfileCatalog,
@@ -799,9 +798,10 @@ describe('agents surface — one action-field source', () => {
     const swarm = types.slice(types.indexOf('swarm(input:'), types.indexOf('hire(input:'));
     expect(swarm).toContain('name?: string;');
     expect(swarm).toContain('role?: string;');
-    // Derived, like the preset union above: a tier the catalog gains must reach
-    // the sandbox declaration, or scripts cannot name it.
-    expect(swarm).toContain(`tier?: ${TIER_IDS.map((tier) => `"${tier}"`).join(' | ')};`);
+    // A tier is any id the catalog holds, so the declaration is open: an owner's
+    // added tier is nameable from a script, and the tool's schema enum carries
+    // the catalog's list per call.
+    expect(swarm).toContain('tier?: string;');
   });
 
   test('the native tool schema advertises the same per-action fields it parses', () => {
