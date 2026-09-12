@@ -381,12 +381,12 @@ describe('advisor negatives use the canonical pane conversation', () => {
     // answer and the ask it climbs to all have to name one owner, or the join
     // answers an empty set instead of the turn.
     ws.execRaw(SDK_SESSION_DDL);
-    void ws.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${ws.actor.actorId}, ${'u-pane'}, ${''}, ${null}, ${'user'},
+    void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'u-pane'}, ${''}, ${null}, ${'user'},
               ${JSON.stringify({ id: 'u-pane', role: 'user', parts: [{ type: 'text', text: 'inspect the deploy' }] })},
               ${'2026-08-16 22:00:00'})`;
-    void ws.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-      VALUES (${ws.actor.actorId}, ${'a-pane'}, ${''}, ${'u-pane'}, ${'assistant'},
+    void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${'a-pane'}, ${''}, ${'u-pane'}, ${'assistant'},
               ${JSON.stringify({ id: 'a-pane', role: 'assistant', parts: [{ type: 'text', text: 'I only guessed' }] })},
               ${'2026-08-16 22:00:01'})`;
     void ws.sql`INSERT INTO evolution_events (actor_id, id, type, message, data, created_at)

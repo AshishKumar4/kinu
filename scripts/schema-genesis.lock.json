@@ -132,8 +132,7 @@
     "created_at",
     "picked_at"
   ],
-  "assistant_messages@packages/core/src/identity/fork.ts": [
-    "actor_id",
+  "assistant_messages@packages/core/src/identity/conversation-store.ts": [
     "id",
     "session_id",
     "parent_id",

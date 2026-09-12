@@ -18,6 +18,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
+import { PANE_STORE_DDL } from '@kinu.run/core';
 import {
   orchestratorHarness,
   type ActorHarness,
@@ -119,20 +120,14 @@ function persistedDrainTurn(
   // `ForkTargetWriter.ensurePaneTable` runs), and the answer read this fixture
   // arms — `answersForDrainTurns` — joins user row to assistant row ON that
   // column, so a table without it does not read empty, it fails to compile.
-  const actorId = harness.agent.observeRuntime().actor.actorId;
-  harness.db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
-    actor_id TEXT NOT NULL, id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    PRIMARY KEY (actor_id, id))`);
+  harness.db.exec(PANE_STORE_DDL);
 
   const append = harness.db.prepare(
-    `INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-     VALUES (?, ?, 'default', ?, ?, ?, '2026-08-16 22:05:00')`,
+    `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+     VALUES (?, 'default', ?, ?, ?, '2026-08-16 22:05:00')`,
   );
 
-  append.run(actorId, `u-${drainTurnId}`, null, 'user', JSON.stringify({
+  append.run(`u-${drainTurnId}`, null, 'user', JSON.stringify({
     id: `u-${drainTurnId}`,
     role: 'user',
     parts: [{ type: 'text', text: '1 event arrived while you were idle.' }],
@@ -140,7 +135,7 @@ function persistedDrainTurn(
   }));
 
   if (answer === null) return;
-  append.run(actorId, `a-${drainTurnId}`, `u-${drainTurnId}`, 'assistant', JSON.stringify({
+  append.run(`a-${drainTurnId}`, `u-${drainTurnId}`, 'assistant', JSON.stringify({
     id: `a-${drainTurnId}`,
     role: 'assistant',
     parts: [{ type: 'text', text: answer }],

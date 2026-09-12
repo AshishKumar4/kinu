@@ -8,6 +8,7 @@ import {
 import {
   MergeOutputSchema, WORKSPACE_RUN_ID,
   type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
+  PANE_STORE_DDL,
 } from '@kinu.run/core';
 import {
   hostedExplorationHarness, hostedMainActor, orchestratorHarness, reactivateOrchestratorHarness,
@@ -499,23 +500,17 @@ describe('turn-pipeline correctness wiring', () => {
     // every read the canonical store performs is scoped by it. A table without
     // the column does not read empty here — `conversationPageRows` fails to
     // compile its SELECT.
-    const actorId = harness.agent.observeRuntime().actor.actorId;
-    harness.db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
-      actor_id TEXT NOT NULL, id TEXT NOT NULL,
-      session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
-      role TEXT NOT NULL, content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (actor_id, id))`);
+    harness.db.exec(PANE_STORE_DDL);
 
     const append = harness.db.prepare(
-      `INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-       VALUES (?, ?, '', ?, ?, ?, '2026-08-16 22:05:00')`,
+      `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+       VALUES (?, '', ?, ?, ?, '2026-08-16 22:05:00')`,
     );
 
-    append.run(actorId, 'u-live', null, 'user', JSON.stringify({
+    append.run('u-live', null, 'user', JSON.stringify({
       id: 'u-live', role: 'user', parts: [{ type: 'text', text: 'do the thing' }],
     }));
-    append.run(actorId, 'a-live', 'u-live', 'assistant', JSON.stringify({
+    append.run('a-live', 'u-live', 'assistant', JSON.stringify({
       id: 'a-live', role: 'assistant', parts: [{ type: 'text', text: 'partial answer' }],
     }));
 

@@ -3710,16 +3710,16 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   async getAgentStatus() {
+    const profile = this.resolvedTurnProfile();
     const status = await getAgentStatus({
       sql: this.boundSql,
       actor: this.rt.actor,
       vfs: this.rt.storage.vfs,
-      config: this.config,
+      model: this.effectiveModelSpec(),
+      reasoningEffort: profile?.tier.reasoningEffort ?? this.config.getReasoningEffort(),
       name: this.name,
       displayName: await this.workspaceTitle() ?? '',
     });
-
-    const profile = this.resolvedTurnProfile();
 
     return {
       ...status,

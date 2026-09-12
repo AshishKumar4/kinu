@@ -9,7 +9,6 @@
  * it runs.
  */
 
-import type { AgentConfigStore } from '../config/store';
 import type { ActorHandle } from '../identity/actor-handle';
 import { conversationCount, conversationPageRows, type ConversationPageRow } from '../identity/conversation-store';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork';
@@ -43,7 +42,7 @@ export interface AgentStatus {
   searchNodeCount: number;
   craftedToolCount: number;
   messageCount: number;
-  model: string | null;
+  model: string;
   reasoningEffort: ReasoningEffort | null;
   forkLineage: ForkLineageRow | null;
 }
@@ -88,7 +87,12 @@ export interface AgentStatusDeps {
   readonly actor: ActorHandle;
   /** The workspace filesystem — SOUL.md is a file in it. */
   readonly vfs: VFS;
-  readonly config: AgentConfigStore;
+  /** The spec the NEXT turn runs, as the caller's one resolution spells it — a
+   *  claimed tier's model, else the stored spec. Never the stored override
+   *  alone: that is null on a workspace running its tier's model, and a status
+   *  that reported it painted "no model" beside a turn that just answered. */
+  readonly model: string;
+  readonly reasoningEffort: ReasoningEffort | null;
   readonly name: string;
   readonly displayName: string;
 }
@@ -103,7 +107,7 @@ function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
  *  workspace and says so — answering with a fabricated identity and zeroed
  *  counts would make it indistinguishable from a brand-new agent. */
 export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
-  const { sql, actor, config, vfs } = deps;
+  const { sql, actor, vfs } = deps;
   actor.assertCurrent();
   const soul = (await readSoul(vfs)) ?? '';
   const purpose = summarizeSoul(soul);
@@ -134,8 +138,8 @@ export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus
     searchNodeCount: searchNodes[0]?.c ?? 0,
     messageCount,
     craftedToolCount: craftedTools[0]?.c ?? 0,
-    model: config.getModel(),
-    reasoningEffort: config.getReasoningEffort(),
+    model: deps.model,
+    reasoningEffort: deps.reasoningEffort,
     forkLineage: readForkLineage(sql),
   };
 }

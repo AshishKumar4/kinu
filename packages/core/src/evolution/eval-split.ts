@@ -15,7 +15,7 @@ import {
   type AdvisorNoteClass, type AdvisorSeverity,
 } from '../advisor/review';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features';
-import { conversationTurnPair, hasPaneStore } from '../identity/conversation-store';
+import { conversationTurnPair, usesPaneStore } from '../identity/conversation-store';
 import { RunEventRecorder } from '../events/recorder';
 import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json';
 import { uiMessageText } from '../utils/ui-message';
@@ -221,14 +221,13 @@ function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): 
   // `(actor_id, id)` for the same reason `messages` is keyed that way — a pane
   // message id is minted per actor and the ancestry walk climbs `parent_id` to
   // `id`.
-  const rows = hasPaneStore(sql)
+  const rows = usesPaneStore(sql, actor)
     ? sql<RawAdvisorRow>`
         SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,
                turn.id AS turnId, turn.content AS assistantResponse, ask.content AS userMessage
         FROM evolution_events e
-        JOIN assistant_messages turn ON turn.actor_id = ${actor.actorId}
-          AND turn.id = json_extract(e.data, '$.turnId')
-        JOIN assistant_messages ask ON ask.actor_id = turn.actor_id AND ask.id = turn.parent_id
+        JOIN assistant_messages turn ON turn.id = json_extract(e.data, '$.turnId')
+        JOIN assistant_messages ask ON ask.id = turn.parent_id
         WHERE e.actor_id = ${actor.actorId} AND e.type = ${ADVISOR_EVENT_TYPE}
           AND NOT EXISTS (
             SELECT 1 FROM turn_outcomes o

@@ -23,6 +23,7 @@ import type {
 } from '../src/types/primitives';
 import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime';
 import type { ActorHandle } from '../src/identity/actor-handle';
+import { PANE_STORE_DDL } from '../src/identity/conversation-store';
 import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
@@ -94,16 +95,7 @@ export function createTestWorkspace(): TestWorkspace {
  * it, and the code under test has to keep answering that absence correctly.
  * A test that needs the table seeds it explicitly, from this one definition.
  */
-export const SDK_SESSION_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
-  actor_id TEXT NOT NULL,
-  id TEXT NOT NULL,
-  session_id TEXT NOT NULL DEFAULT '',
-  parent_id TEXT,
-  role TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (actor_id, id)
-)`;
+export const SDK_SESSION_DDL = PANE_STORE_DDL;
 
 // ── SqlExecutor from bun:sqlite ──────────────────────────────────
 

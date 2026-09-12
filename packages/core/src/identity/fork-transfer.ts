@@ -360,11 +360,9 @@ async function* memoryChunkRows(sql: SqlExecutor): AsyncGenerator<ForkMemoryChun
   }
 }
 
-async function* paneRows(
-  sql: SqlExecutor, actor: ActorHandle, ids: string[],
-): AsyncGenerator<ForkPaneRow> {
+async function* paneRows(sql: SqlExecutor, ids: string[]): AsyncGenerator<ForkPaneRow> {
   for (const id of ids) {
-    const row = paneRowById(sql, actor, id);
+    const row = paneRowById(sql, id);
 
     if (row !== undefined) yield row;
   }
@@ -427,7 +425,7 @@ export async function* forkTransferFrames(
   let createdAtMs: number;
 
   if (ancestry.authority === 'pane') {
-    const row = paneRowById(source.sql, source.actor, lastId);
+    const row = paneRowById(source.sql, lastId);
 
     if (row === undefined) {
       throw new Error(`fork point not found: message id "${source.untilMessageId}" does not exist in source`);
@@ -513,7 +511,7 @@ export async function* forkTransferFrames(
         break;
       case 'assistantMessages':
         if (ancestry.authority === 'pane') yield* yieldRows(
-          paneRows(source.sql, source.actor, ancestry.ids), panePayloadBytes, (rows) => seal({
+          paneRows(source.sql, ancestry.ids), panePayloadBytes, (rows) => seal({
             version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
             kind: 'assistantMessages', rows,
           }),
@@ -522,7 +520,7 @@ export async function* forkTransferFrames(
       case 'messages':
         if (ancestry.authority === 'pane') {
           yield* yieldRows((async function* (): AsyncGenerator<ForkMessageRow> {
-            for await (const row of paneRows(source.sql, source.actor, ancestry.ids)) yield paneRowToForkChainRow(row);
+            for await (const row of paneRows(source.sql, ancestry.ids)) yield paneRowToForkChainRow(row);
           })(), messagePayloadBytes, (rows) => seal({
             version: FORK_TRANSFER_VERSION, transferId: source.transferId, seq: seq++,
             kind: 'messages', rows,

@@ -61,11 +61,10 @@ function local(workspaceId: string, name: string): SeededWorkspace {
 
 /** Append to the pane store the way the SDK's session provider does: the
  *  serialized UI message, parented on the caller's choice or the latest leaf.
- *  Both halves of the pane key are written, and the latest-leaf lookup carries
- *  the same actor predicate every production pane read does — unscoped, it
- *  would parent this actor's message on a stranger's row. */
+ *  The vendor's shape, unscoped: the pane is the root's transcript and the
+ *  latest leaf is simply the newest row. */
 function paneAppend(
-  { sql, actor }: SeededWorkspace,
+  { sql }: SeededWorkspace,
   msg: { id: string; role: string; text: string; parentId?: string | null; at: string },
 ): void {
   const content = JSON.stringify({
@@ -74,12 +73,11 @@ function paneAppend(
 
   const parent = msg.parentId !== undefined
     ? msg.parentId
-    : sql<{ id: string }>`SELECT id FROM assistant_messages
-        WHERE actor_id = ${actor.actorId} ORDER BY rowid DESC LIMIT 1`[0]?.id ?? null;
+    : sql<{ id: string }>`SELECT id FROM assistant_messages ORDER BY rowid DESC LIMIT 1`[0]?.id ?? null;
 
   void sql`
-    INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-    VALUES (${actor.actorId}, ${msg.id}, ${''}, ${parent}, ${msg.role}, ${content}, ${msg.at})
+    INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+    VALUES (${msg.id}, ${''}, ${parent}, ${msg.role}, ${content}, ${msg.at})
   `;
 }
 

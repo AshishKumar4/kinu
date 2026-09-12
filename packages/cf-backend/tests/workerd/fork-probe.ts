@@ -35,6 +35,7 @@ import {
   summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
   type ForkStaging, type SqlExecutor, type VFS, type VfsEntryStat,
+  PANE_STORE_DDL,
 } from '@kinu.run/core';
 
 /**
@@ -64,16 +65,7 @@ export const PROBE_SOUL_MISSION = summarizeSoulBytes(new TextEncoder().encode(SO
 /** The SDK session provider's own DDL — the same statement
  *  `ForkTargetWriter.ensurePaneTable` runs, because a source workspace that has
  *  served a hosted turn has this table and its ancestry is read from it. */
-const PANE_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
-  actor_id TEXT NOT NULL,
-  id TEXT NOT NULL,
-  session_id TEXT NOT NULL DEFAULT '',
-  parent_id TEXT,
-  role TEXT NOT NULL,
-  content TEXT NOT NULL,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (actor_id, id)
-)`;
+const PANE_DDL = PANE_STORE_DDL;
 
 /** workerd's streaming digest, which is how an object hashes bytes it must not
  *  hold. It lives on the runtime's `crypto`, and the ambient `Crypto` type this
@@ -391,8 +383,8 @@ export class ForkSourceProbeDO extends DurableObject<Cloudflare.Env> {
     ];
 
     pane.forEach((row, index) => {
-      void this.sql`INSERT INTO assistant_messages (actor_id, id, session_id, parent_id, role, content, created_at)
-        VALUES (${actor.actorId}, ${row.id}, ${'default'}, ${row.parent}, ${row.role},
+      void this.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+        VALUES (${row.id}, ${'default'}, ${row.parent}, ${row.role},
                 ${JSON.stringify({ id: row.id, role: row.role, parts: [{ type: 'text', text: row.text }] })},
                 ${`2026-01-01 00:00:0${index + 1}.000`})`;
     });
