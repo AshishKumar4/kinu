@@ -668,55 +668,33 @@ export function childContextResolver(deps: {
   };
 }
 
-/**
- * Rebuild what an eviction interrupted, from the durable claims alone.
- *
- * THE ONLY RECOVERY PATH, and it lives here rather than in a backend because
- * nothing in it is platform-shaped: it reads {@link ActorHost.resumable},
- * acquires each actor through the same host every other caller uses, and
- * verifies the claim with core's own verifier. One implementation, two callers,
- * is the whole point: a per-backend copy is a per-backend chance to go
- * unreached, which is how a backend promises resumable hosted work and never
- * delivers it.
- *
- * There is no timer holding a run alive and no `waitUntil` finishing it in the
- * background. A hosted actor's unsettled claim IS the record that work is owed,
- * and this reads it on the normal activation and alarm path.
- *
- * {@link verifyClaimedProgram} is what makes the resumption honest: a claim
- * names the program version and its digest, so a turn resumes only under the
- * exact bytes it was admitted with, and a promotion that landed meanwhile does
- * not silently take over a turn in flight. A claim whose program no longer
- * verifies is settled `indeterminate` — which is precisely what is known: it
- * was admitted, its bytes are gone, and nothing states how it ended.
- *
- * CALL THIS BEFORE ADMITTING NEW WORK for the same actor. A claimed-but-
- * unfinished turn has to be reconciled first, or the caller issues a second
- * turn against an actor whose first still holds a claim and per-actor
- * serialization refuses it — an honest refusal, of the wrong turn.
- */
+/** Reconcile interrupted claims only after the adapter has acquired recovery
+ * authority. Verified claims remain owed: retained program bytes alone do not
+ * provide a resumable execution or prove that the turn finished. */
 export async function recoverActorTurns(
-  host: ActorHost,
+  host: Pick<ActorHost, 'resumable'> & {
+    acquire(reference: ActorReference): Promise<Pick<HostedActor, 'runtime' | 'stores' | 'session'>>;
+  },
   limit?: number,
 ): Promise<{
-  readonly resumed: readonly string[];
+  readonly verified: readonly string[];
   readonly refused: readonly string[];
   readonly unreadable: readonly string[];
+  readonly active: readonly string[];
 }> {
-  const resumed: string[] = [];
+  const verified: string[] = [];
   const refused: string[] = [];
-  // THREE OUTCOMES, NOT TWO. A turn whose program no longer verifies is a
-  // DECIDED one: it is settled `indeterminate`, which is a durable statement
-  // about how it ended. A turn whose actor could not be read at all is not
-  // decided by anything — the row is still owed and the next activation will
-  // read it again. Folding both into `refused` leaves a caller unable to tell a
-  // settlement from a failure to look, and an operator unable to tell a
-  // workspace that answered from one that could not be opened.
   const unreadable: string[] = [];
+  const active: string[] = [];
 
   for (const turn of host.resumable(limit)) {
     try {
       const actor = await host.acquire(turn.reference);
+
+      if (actor.session.inFlight) {
+        active.push(turn.claim.turnId);
+        continue;
+      }
 
       const verdict = await verifyClaimedProgram(
         turn.claim,
@@ -725,18 +703,13 @@ export async function recoverActorTurns(
         () => actor.stores.claims.consumedContext(turn.claim.turnId),
       );
 
-      // `verified` is the only arm a turn may be resumed under. `source_changed`
-      // means the version's retained bytes no longer digest to what the claim
-      // named, and `build_unknown` means this host publishes no identity for the
-      // builtin loop that was claimed — in both cases what ran cannot be
-      // established, so the turn is settled `indeterminate`.
       if (verdict.kind === 'verified') {
-        resumed.push(turn.claim.turnId);
+        verified.push(turn.claim.turnId);
         continue;
       }
 
-      refused.push(turn.claim.turnId);
       actor.stores.claims.settleRecovered(turn.claim.turnId, turn.claim.epoch, 'indeterminate');
+      refused.push(turn.claim.turnId);
     }
     catch (cause) {
       // One actor's unreadable state must not end the sweep: the rest of the
@@ -749,5 +722,5 @@ export async function recoverActorTurns(
     }
   }
 
-  return { resumed, refused, unreadable };
+  return { verified, refused, unreadable, active };
 }

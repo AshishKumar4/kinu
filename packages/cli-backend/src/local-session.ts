@@ -43,7 +43,7 @@ import type {
 } from '@kinu.run/core';
 import { TierIdSchema,
   ActorSession, type ActorTurnLease, type ActorExecutionInput,
-  verifyClaimedProgram, readVersionedScaffoldSource, sha256Hex,
+  recoverActorTurns,
   type TurnSteering,
   type AgentStores, collectDynamicContext, subordinateDelegatesOf,
   type BackgroundJobStore, BackgroundJobRunner, type TaskListStore,
@@ -2161,6 +2161,25 @@ export class LocalAgentSession implements BackendHost {
    * exit printed promised the operator these jobs would resume.
    */
   async recoverBackgroundJobs(): Promise<void> {
+    const refusal = this.driverGate?.();
+
+    if (refusal) {
+      diagnostics.event('driver.startup_recovery_deferred', { reason: refusal.reason });
+
+      return;
+    }
+
+    const recovered = await recoverActorTurns({
+      resumable: (limit) => this.actorHost.resumable(limit),
+      acquire: async (reference) => reference.actorId === this.rt.actor.actorId
+        ? { runtime: this.rt, stores: this.stores, session: this.actorSession }
+        : await this.actorHost.acquire(reference),
+    });
+
+    diagnostics.event('actor.turns_recovered', {
+      verified: recovered.verified.length, refused: recovered.refused.length,
+      unreadable: recovered.unreadable.length, active: recovered.active.length,
+    });
     const advisorOrphans: OrphanedFiber[] = [];
 
     for (const orphan of detectOrphanedFibers(this.rt.storage.sql, this.rt.actor)) {
@@ -2203,58 +2222,7 @@ export class LocalAgentSession implements BackendHost {
       });
     }
 
-    await this.recoverActorClaims();
     await this.recoverTerminalTransitions(advisorOrphans);
-  }
-
-  /**
-   * Dispose of the turn claims a dead activation left behind.
-   *
-   * A start-of-life read, for the reason `unterminatedRuns` gives: this process
-   * is running none of these, so every one it finds was admitted by an earlier
-   * one. Each is loaded, its PROGRAM re-verified against the source its version
-   * still retains — the immutable `.vN` bytes, never the live alias a promotion
-   * moves — and then settled `indeterminate`.
-   *
-   * Indeterminate and not resumed, deliberately. The claim proves the turn was
-   * admitted; the effect ledgers (`tool_effect_claims`, `terminal_effects`)
-   * prove what it managed to do, and those are recovered by their own paths
-   * below and above. Re-running the turn under its own identity would repeat
-   * whatever the dead activation had already issued, and naming it `completed`
-   * would report an answer nobody has. So the honest disposition is the one
-   * word that says the work was claimed and its fate is unknown, and the
-   * verification result is stated on the claim's own run in the durable log.
-   */
-  private async recoverActorClaims(): Promise<void> {
-    for (const claim of this.stores.claims.unsettled()) {
-      const recovery = await verifyClaimedProgram(
-        claim,
-        (version) => readVersionedScaffoldSource(this.rt, version),
-        sha256Hex,
-        () => this.stores.claims.consumedContext(claim.turnId),
-      );
-
-      const note = recovery.kind === 'source_changed'
-        ? `the source of program v${claim.program.version} no longer digests to what this turn was admitted on`
-        + ` (claimed ${claim.program.digest ?? 'nothing'}, found ${recovery.found ?? 'no source'})`
-        : recovery.kind === 'build_unknown'
-          ? 'this turn ran the builtin loop under a build identity the host never published'
-          : `program v${claim.program.version} still retains the source this turn was admitted on`;
-
-      this.recordRunEvent({
-        type: 'error',
-        message: `recovered an unsettled turn claim (epoch ${claim.epoch}): ${note}`,
-        details: {
-          turnId: claim.turnId, epoch: claim.epoch, verification: recovery.kind,
-          consumedRevision: claim.consumedRevision,
-        },
-      }, claim.runId);
-      this.stores.claims.settleRecovered(claim.turnId, claim.epoch, 'indeterminate');
-      this.emit({
-        type: 'background', event: 'turn_claim_recovered',
-        message: `turn ${claim.turnId} was admitted and never settled — ${note}`,
-      });
-    }
   }
 
   /**

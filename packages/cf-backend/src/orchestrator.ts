@@ -3410,22 +3410,8 @@ export class OrchestratorAgent extends ActorAgent {
       await this.runActorDirectory(pending.caller, pending.parentPath, { action: 'retire', name: pending.name, reference: pending.reference });
     }
 
-    // ARM 1 OF THE ACTOR SWEEP, and it runs BEFORE anything admits new work
-    // for these actors. A claim admitted and never settled is the only record
-    // that a hosted turn is owed, and reconciling it first is load-bearing:
-    // issue a second turn for an actor whose first still holds a claim and the
-    // per-actor serialization refuses it — an honest refusal, of the wrong
-    // turn. Core's ONE implementation, shared with the CLI, because a second
-    // copy is a second chance for one of them to be the unreached one, which
-    // is what had happened on both backends at once.
-    //
-    // HERE rather than in `maintenanceSweeps()`: this resumes TURNS, and
-    // `maintenanceSweeps` is synchronous and runs inside `onStart`'s
-    // `blockConcurrencyWhile`, where awaiting a whole agent turn trips
-    // `do.block_concurrency.cancel_ms` — the gate is cancelled and the Durable
-    // Object is RESET. The number is the catalog's, not retyped here.
-    // Turn-capable recovery belongs on the durable wake's alarm frame, which
-    // `owedWorkExists()` arms.
+    // The alarm owns recovery authority. Core retains verified claims as owed,
+    // settles unverified ones indeterminate, and leaves live actors untouched.
     try {
       await recoverActorTurns(this.actorHost());
     } catch (cause) {
@@ -3434,11 +3420,7 @@ export class OrchestratorAgent extends ActorAgent {
       }), { workspace: this.name });
     }
 
-    // ARM 2, STRICTLY AFTER ARM 1. A claim reconciled above is an actor free to
-    // take new work; drained first, this would issue a second turn for an actor
-    // whose previous one still holds a claim, and the per-actor serialization
-    // would refuse — honestly, but the wrong turn. Truncation is owed work, so
-    // it is reported to the caller the way every other budgeted pass reports it.
+    // Retained claims still fence new work; verification alone is not execution.
     const delegationsTruncated = await this.drainAdmittedDelegations();
 
     if (!this.activationRecoveryPending) return delegationsTruncated || await super.maintenanceWork();

@@ -1777,6 +1777,34 @@ describe('LocalAgentHost — the driver lease', () => {
     }
   });
 
+  test('a refused opener preserves the live driver claim and starts no model work', async () => {
+    const { state, project } = makeRoots();
+    const dbPath = await seedAgent(state, 'root');
+    const db = new Database(dbPath);
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM, cwd: project });
+
+    const claim = rt.stores.claims.admit({
+      runId: 'live-run', turnId: 'live-turn', workMode: 'build', context: [], workingRevision: 0,
+      program: { kind: 'builtin', version: 0, digest: null, build: null },
+    });
+
+    rivalHolds(dbPath, 'interactive');
+    let calls = 0;
+
+    const { host } = makeHost(state, streamingModel('must not run', () => { calls++; }), [
+      { name: 'root', cwd: project, workspaceId: 'proj' },
+    ], { driverKind: 'daemon' });
+
+    try {
+      await host.acquire('root');
+      expect(rt.stores.claims.read(claim.turnId)).toMatchObject({ epoch: claim.epoch, status: 'admitted', outcome: null });
+      expect(calls).toBe(0);
+    } finally {
+      await host.close();
+      db.close();
+    }
+  });
+
   test('a daemon hands the lease back at the end of every pass, so nothing has to preempt it', async () => {
     const { state, project } = makeRoots();
     const dbPath = await seedAgent(state, 'root');
