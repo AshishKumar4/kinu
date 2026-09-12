@@ -74,6 +74,20 @@ interface GenesisAgent {
   session?: { getHistory(): Promise<readonly QueuedMessage[]> };
 }
 
+/** What the stubbed boundary exposes: the turns it recorded plus the two
+ *  public moments of its lifecycle as deferreds — deterministic without any
+ *  reach into the agent's private task bookkeeping. */
+interface CapturedTurns {
+  readonly turns: RecordedTurn[];
+  /** The slot opened: the admission gate ran and the rows it would append are
+   *  observed — recorded for a turn that ran, and resolved on the early
+   *  `aborted` return so a withdrawn turn is observable too. */
+  readonly opened: Promise<void>;
+  /** The boundary answered: after `hold` for a running turn, at the aborted
+   *  return for a withdrawn one. */
+  readonly completed: Promise<void>;
+}
+
 /**
  * Take over Think's turn-start boundary and record what a turn would run on.
  *
@@ -88,15 +102,26 @@ interface GenesisAgent {
  * withdraws. `hold` keeps the recorded slot open for the turn's duration, the
  * window a late message lands in.
  */
-function captureTurns(agent: GenesisAgent, hold?: Promise<void>): RecordedTurn[] {
+function captureTurns(agent: GenesisAgent, hold?: Promise<void>): CapturedTurns {
   const turns: RecordedTurn[] = [];
+  const { promise: opened, resolve: openedResolve } = Promise.withResolvers<void>();
+  const { promise: completed, resolve: completedResolve } = Promise.withResolvers<void>();
+
   Object.defineProperty(agent, 'saveMessages', {
     configurable: true,
     value: async (
       messages: (current: readonly QueuedMessage[]) => readonly QueuedMessage[],
       options?: { shouldApplyMessages?: () => boolean },
     ) => {
+      // The vendored runner's slot is emulated: `shouldApplyMessages` runs on
+      // entry and again after the messages resolve. `opened` resolves only
+      // after that check has executed — on the aborted path the gate has
+      // already observed the durable rows it read (and written the activity
+      // row) by the time it returns false, so ordering is meaningful.
       if (options?.shouldApplyMessages && !(await options.shouldApplyMessages())) {
+        openedResolve();
+        completedResolve();
+
         return { status: 'aborted' };
       }
 
@@ -109,6 +134,9 @@ function captureTurns(agent: GenesisAgent, hold?: Promise<void>): RecordedTurn[]
       const appended = messages(current);
 
       if (options?.shouldApplyMessages && !(await options.shouldApplyMessages())) {
+        openedResolve();
+        completedResolve();
+
         return { status: 'aborted' };
       }
 
@@ -121,13 +149,16 @@ function captureTurns(agent: GenesisAgent, hold?: Promise<void>): RecordedTurn[]
         });
       }
 
+      openedResolve();
+
       if (hold) await hold;
+      completedResolve();
 
       return { status: 'completed' };
     },
   });
 
-  return turns;
+  return { turns, opened, completed };
 }
 
 /** What Think's `startThink` does before the actor's `onStart`: create the
@@ -171,12 +202,12 @@ describe('the workspace takes its own first turn', () => {
   test('a mission becomes a queued agent turn with no user input', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
-    const turns = captureTurns(harness.agent);
+    const { turns, completed } = captureTurns(harness.agent);
 
-    // The recorded turn is pushed inside the detached delivery fiber: settle
-    // it before asserting, the same await the yield tests need.
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    await harness.agent.harnessSettleBackgroundTasks();
+    // The delivery fiber is detached: the boundary's own answer is the
+    // completion to await, not the agent's private task list.
+    await completed;
 
     expect(turns).toHaveLength(1);
     const turn = turns[0]!;
@@ -192,10 +223,10 @@ describe('the workspace takes its own first turn', () => {
   test('the mission is not quoted into the turn — it is already the system prompt', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
-    const turns = captureTurns(harness.agent);
+    const { turns, completed } = captureTurns(harness.agent);
 
     await harness.agent.beginGenesisTurn();
-    await harness.agent.harnessSettleBackgroundTasks();
+    await completed;
 
     // SOUL.md is the opening bytes of the system prompt (prompt.ts
     // readSoulForPrompt ← soulOverride ← getSoulText). Repeating the mission in
@@ -209,7 +240,7 @@ describe('the workspace takes its own first turn', () => {
   test('a workspace created without a mission gets no turn to take', async () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, PLACEHOLDER_MISSION);
-    const turns = captureTurns(harness.agent);
+    const { turns } = captureTurns(harness.agent);
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: false });
 
@@ -254,15 +285,30 @@ describe('the workspace takes its own first turn', () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
     await bootThinkSession(harness.agent);
-    const turns = captureTurns(harness.agent);
+    const { turns, completed } = captureTurns(harness.agent);
+
+    // The card's withdrawal is the PUBLIC terminal event of a yielded offer —
+    // the same `signal_card` broadcast the chat consumes, and it is emitted
+    // after the ledger row, so awaiting it settles the whole yield before the
+    // database closes.
+    const { promise: cardWithdrawn, resolve: cardGone } = Promise.withResolvers<void>();
+    Reflect.set(harness.agent, 'broadcast', (payload: string) => {
+      const parsed = v.safeParse(
+        v.object({ type: v.literal('signal_card'), state: v.string() }),
+        JSON.parse(payload),
+      );
+
+      if (parsed.success && parsed.output.state === 'undelivered') cardGone();
+    });
 
     // Durable before the offer was even taken — the order the ws-chat path
     // leaves admission in (persist first, queue second).
     await admitOperatorMessage(harness.agent, 'Summarize the incident timeline first.');
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    await harness.agent.harnessSettleBackgroundTasks();
 
     // The offer was withdrawn inside its slot: nothing appended, no model call.
+    await completed;
+    await cardWithdrawn;
     expect(turns).toEqual([]);
     expect(activityEvents(harness.db)).toContain('genesis.yielded_to_message');
 
@@ -283,10 +329,10 @@ describe('the workspace takes its own first turn', () => {
     const harness = orchestratorHarness();
     seedMission(harness.db, MISSION);
     await bootThinkSession(harness.agent);
-    const turns = captureTurns(harness.agent);
+    const { turns, completed } = captureTurns(harness.agent);
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
-    await harness.agent.harnessSettleBackgroundTasks();
+    await completed;
 
     expect(turns).toHaveLength(1);
     expect(turns[0]!.text).toContain('first turn');
@@ -303,24 +349,21 @@ describe('the workspace takes its own first turn', () => {
     await bootThinkSession(harness.agent);
 
     const { promise: genesisRunning, resolve: releaseGenesis } = Promise.withResolvers<void>();
-    const turns = captureTurns(harness.agent, genesisRunning);
+    const { turns, opened, completed } = captureTurns(harness.agent, genesisRunning);
 
     expect(await harness.agent.beginGenesisTurn()).toEqual({ started: true });
 
-    // Wait for the slot to open — the record of the turn is proof the offer
-    // was taken, and only then is "admitted after the start" true.
-    for (let i = 0; i < 100 && turns.length === 0; i++) {
-      const { promise: tick, resolve: ticked } = Promise.withResolvers<void>();
-      setImmediate(ticked);
-      await tick;
-    }
+    // `opened` resolves once the admission check has run and the turn's rows
+    // are recorded — proof the offer took its slot, so "admitted after the
+    // start" is true rather than a guess at microtask depth.
+    await opened;
 
     expect(turns).toHaveLength(1);
     expect(turns[0]!.text).toContain('first turn');
 
     await admitOperatorMessage(harness.agent, 'Late but admitted.');
     releaseGenesis();
-    await harness.agent.harnessSettleBackgroundTasks();
+    await completed;
 
     expect(activityEvents(harness.db)).not.toContain('genesis.yielded_to_message');
 
