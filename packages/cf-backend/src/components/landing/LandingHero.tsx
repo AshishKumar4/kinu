@@ -459,7 +459,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
               <span className="size-[5px] rounded-full p-dot-accent" />
               The self-evolving agent platform
             </div>
-            <h1 aria-label={HERO_LABEL} className="max-w-[1020px] text-[clamp(40px,5vw,64px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
+            <h1 aria-label={HERO_LABEL} className="max-w-[900px] text-[clamp(40px,5vw,64px)] font-semibold leading-[.99] tracking-[-.04em] text-pretty p-text">
               Agents that{' '}
               <Typewriter />
             </h1>

@@ -211,7 +211,7 @@ function SwarmSection(): ReactElement {
         Explore several approaches in parallel <Accent>with swarms.</Accent>
       </SectionHead>
       <SwarmSearch />
-      <p className="mt-6 max-w-[780px] text-sm leading-[1.7] p-text-3">With an objective and an executable verifier, measurements guide the search. Without an objective, the verification presets fall back to a judged sweep, which ranks candidates but measures nothing. Ideation returns unranked ideas. <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/EXPLORATION.md'} target="_blank" rel="noreferrer">How exploration works</a></p>
+      <p className="mt-6 max-w-[660px] text-sm leading-[1.7] p-text-3">With an objective and an executable verifier, measurements guide the search. Without an objective, the verification presets fall back to a judged sweep, which ranks candidates but measures nothing. Ideation returns unranked ideas. <a className="p-accent underline underline-offset-4" href={REPOSITORY + '/blob/main/docs/EXPLORATION.md'} target="_blank" rel="noreferrer">How exploration works</a></p>
     </section>
   );
 }

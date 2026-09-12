@@ -764,7 +764,7 @@ describe('the landing frames reuse the app rail', () => {
     expect(rail.frames).toBe(3);
 
     for (const classes of rail.classes) {
-      expect(classes).toBe('hidden w-60 shrink-0 h-full p-sidebar border-r p-border md:block');
+      expect(classes).toBe('hidden w-60 shrink-0 p-sidebar border-r p-border md:block');
     }
 
     expect(rail.visible).toBeTrue();
@@ -891,11 +891,10 @@ describe('public pages are responsive', () => {
   });
 
   test('the wide landing keeps its intended measure', () => {
-    // The shell is `clamp(82.5rem, 68vw, 120rem)`: the editorial 1320px column
-    // (1240 inside its 40px gutters) holds through 1920, then 2K/4K screens
-    // spend their real estate — 68vw at 2560, capped at 120rem for 4K — while
-    // copy blocks keep their own max-width.
-    const expected = { '1568': 1240, '1920': 1240, '2560': 1661, '3840': 1840 };
+    // The shell is one measure, 80rem: 1200 inside its 40px gutters on every
+    // screen from a laptop to 4K, so the page reads as one page rather than
+    // growing with the viewport. Copy blocks keep their own max-width.
+    const expected = { '1568': 1200, '1920': 1200, '2560': 1200, '3840': 1200 };
 
     for (const [where, target] of Object.entries(expected)) {
       const width = required(facts.wideColumns[where], `measured width @${where}`);

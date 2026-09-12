@@ -485,7 +485,7 @@ export default function LandingWorkspaceFrame({ kind }: { kind: LandingFrameKind
             :51-54 renders it in the app. Below md the app shows a drawer
             summoned from its header (layout.tsx:57-63), not a rail — the frame
             has no app header, so it shows no rail there either. */}
-        <aside className="hidden w-60 shrink-0 h-full p-sidebar border-r p-border md:block"><Sidebar /></aside>
+        <aside className="hidden w-60 shrink-0 p-sidebar border-r p-border md:block"><Sidebar /></aside>
         <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         <WorkspaceBar
           title={frame.title}

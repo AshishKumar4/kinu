@@ -20,8 +20,8 @@ export function SectionHead({ label, lead, tight = false, children }: {
   return (
     <div className={tight ? 'mb-9' : 'mb-10 lg:mb-12'}>
       {label && <div className="mb-4 flex items-center gap-3 text-[13px] font-semibold p-accent"><span className="h-px w-[22px] shrink-0 bg-[color-mix(in_srgb,var(--c-accent)_55%,transparent)]" />{label}</div>}
-      <h2 className="max-w-[900px] text-[clamp(30px,3.4vw,44px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">{children}</h2>
-      <p className="mt-4 max-w-[720px] text-[17px] leading-[1.65] p-text-3">{lead}</p>
+      <h2 className="max-w-[780px] text-[clamp(30px,3.4vw,44px)] font-semibold leading-[1.06] tracking-[-.03em] text-pretty">{children}</h2>
+      <p className="mt-4 max-w-[620px] text-[17px] leading-[1.65] p-text-3">{lead}</p>
     </div>
   );
 }
@@ -244,7 +244,7 @@ export function LandingShowcases(): ReactElement {
     <div className="landing-shell">
       <section data-showcase="tui" className="border-t p-border py-20 lg:py-24">
         <SectionHead lead="Interactive TUI demo. Select an agent to see its work.">
-          Or have them <span className="p-accent">run locally.</span>
+          Control everything <span className="p-accent">from your terminal.</span>
         </SectionHead>
         <TuiPreview />
       </section>
