@@ -3845,7 +3845,6 @@ export class OrchestratorAgent extends ActorAgent {
       approvals: board?.approvals ?? [],
       changes: board?.changes ?? [],
       scaffoldVersions: listScaffoldVersions(this.boundSql, this.rt.actor, 20),
-      jobs: listBackgroundJobs(this.jobs, 50),
       deferredActions: this.deferrals.list(),
       unseenChanges: {
         count: unseen.length,

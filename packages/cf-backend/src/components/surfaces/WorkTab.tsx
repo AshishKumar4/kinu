@@ -71,7 +71,6 @@ const FILTERS: Array<{ id: JournalFilter; label: string }> = [
 const PENDING_HOME = {
   release_approval: { surface: "Releases", cta: "decide in Releases" },
   scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
-  failed_job: { surface: null, cta: "retry or dismiss it in the journal below" },
   unseen_changes: { surface: null, cta: null },
   curriculum_task: { surface: null, cta: "decide in Supervise" },
 } satisfies Record<Exclude<PendingActionKind, "deferred_action">, { surface: SurfaceKind | null; cta: string | null }>;
@@ -79,7 +78,6 @@ const PENDING_HOME = {
 const PENDING_ICON = {
   release_approval: RocketLaunchIcon,
   scaffold_version: GitBranchIcon,
-  failed_job: WarningCircleIcon,
   unseen_changes: SparkleIcon,
   curriculum_task: PackageIcon,
 } satisfies Record<Exclude<PendingActionKind, "deferred_action">, typeof ClockIcon>;

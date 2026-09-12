@@ -744,14 +744,19 @@ export class BackgroundJobRunner {
         ? `Background ${job.kind} job ${jobId} was CANCELLED by the operator and is no longer ` +
           `running. There is no result to collect. Re-run that work if you still need it, or ` +
           `continue without it and say what is missing.`
-        // NOT "decide whether to retry". That sentence is how the duplicate-root defect
-        // happened: the model retried by calling the tool again, over a search that was
-        // still running, and got a second tree. The engine refuses that now, so advising
-        // it would be advising a refusal.
-        : `Background ${job.kind} job ${jobId} failed${generation}` +
-          `${job.error ? ` (${job.error})` : ''}. Report the failure and what it cost. Do not ` +
-          `re-spawn the same work: a search keeps its tree, so a genuine retry continues that ` +
-          `one rather than starting another, and an identical spawn is refused.`;
+        // A failed COMMAND is the agent's to fix: read the error, change what it
+        // names, run it again. A failed SEARCH is different, and "decide whether to
+        // retry" is how the duplicate-root defect happened: the model retried by
+        // calling the tool again over a search still running and got a second tree.
+        // The engine refuses that now, so a search is continued, never re-spawned.
+        : job.kind === 'agents'
+          ? `Background ${job.kind} job ${jobId} failed${generation}` +
+            `${job.error ? ` (${job.error})` : ''}. Report the failure and what it cost. Do not ` +
+            `re-spawn the same work: a search keeps its tree, so a genuine retry continues that ` +
+            `one rather than starting another, and an identical spawn is refused.`
+          : `Background ${job.kind} job ${jobId} failed${generation}` +
+            `${job.error ? ` (${job.error})` : ''}. This is yours to fix: read the error, change ` +
+            `what it names, and run the command again. Report what was wrong and what you changed.`;
 
     const base = {
       kind: 'background_job',
