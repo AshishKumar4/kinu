@@ -15,6 +15,7 @@
 // phase) because a claim about exactly-once is a claim about WHERE the process
 // died, and the only way to test that is to choose the instant.
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import type { Database } from 'bun:sqlite';
 import { scratchPath } from '@kinu.run/test-utils';
 import type { SqlExecutor, SqlValue } from '@kinu.run/core';
@@ -22,6 +23,7 @@ import {
   TerminalEffectInterrupt, ADVISOR_LANE_FIBER,
   COMPLETION_GATE_EVENT, TERMINAL_EFFECT_RETRY_CEILING_MS,
   TERMINAL_TRANSITION_CALL_ID,
+  listQueuedShadowTrials,
   type Shell, type TerminalEffectFault,
   type TerminalEffectName, type TerminalEffectPhase,
 } from '@kinu.run/core';
@@ -311,6 +313,40 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
  * process with SIGKILL at instants production code reaches, over a workspace on
  * disk, and then open that file here.
  */
+test('a managed context edit reaches the local request and retained trial together', async () => {
+  const { db, rt } = workspace();
+  await armShadowTrials(rt);
+  const requests: string[] = [];
+
+  const { model } = scriptedModel('answer', { onStream: async (prompt) => { requests.push(JSON.stringify(prompt)); } });
+  const session = new LocalAgentSession({ rt, db, model, onEvent: () => {} });
+
+  try {
+    await session.send('use the OLD premise');
+    await session.settleBackgroundWork();
+    const document = v.parse(v.string(), await rt.storage.vfs.readFile('/context/working.jsonl', { encoding: 'utf8' }));
+    await rt.storage.vfs.writeFile('/context/working.jsonl', document.replace('OLD premise', 'NEW premise'));
+    await expect(rt.storage.vfs.writeFile('/context/working.jsonl', document)).rejects.toThrow(/revision|stale|changed/i);
+    await session.send('follow-up input');
+    await session.settleBackgroundWork();
+    const trial = listQueuedShadowTrials(rt.storage.sql, rt.actor, 1).find((row) => row.task === 'follow-up input');
+    const claim = rt.stores.claims.latestTurn();
+
+    if (trial === undefined || claim === null) throw new Error('the turn did not retain its claim and trial');
+    const admitted = rt.stores.claims.admittedContext(claim.turnId);
+
+    if (admitted === null) throw new Error('the claim has no admitted context');
+    expect(requests.at(-1)).toContain('NEW premise');
+    expect(requests.at(-1)).not.toContain('OLD premise');
+    expect(trial.context[0]).toEqual({ role: 'user', content: 'use the NEW premise' });
+    expect(trial.context.filter((message) => message.content === 'follow-up input')).toHaveLength(1);
+    expect(trial.context).toEqual(admitted.messages);
+  } finally {
+    await session.end();
+    db.close();
+  }
+});
+
 describe('a killed CLI process is recovered by the next start', () => {
   /** Run the child to its kill point, and answer the marker it printed. */
   async function killAt(

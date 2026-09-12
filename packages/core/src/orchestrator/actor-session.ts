@@ -12,7 +12,7 @@ import { describeLandedSteers, UserSteerDrain, type LandedSteerRow, type UserSte
 import { startActorTurn } from './actor-turn';
 import { prepareActorProgram, type ActorTurnProgram } from './actor-program';
 import {
-  programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome,
+  programIdentityOf, type ActorClaimStore, type ActorTurnClaim, type ClaimOutcome, type ContextRevision,
 } from './actor-claims';
 import { createActorContextPlane, type ActorContextPlane, type ContextEventRecorder } from './context-plane';
 import type { ScaffoldBridgeOpts } from './scaffold-host';
@@ -80,6 +80,8 @@ export interface ActorExecutionResult {
    *  effect, and the identity every revision of the turn is keyed to. Null
    *  only when preparation failed before the claim was admitted. */
   readonly claim: ActorTurnClaim | null;
+  /** Admission evidence, read from the claim ledger rather than post-turn history. */
+  readonly admittedContext: ContextRevision | null;
 }
 
 interface ActiveTurn {
@@ -341,7 +343,7 @@ export class ActorSession {
         scaffoldStreamOptions: input.scaffoldStreamOptions,
         chat: { ...input.chat, history: this.messages, signal: active.abort.signal, extensions,
           meter: this.orchestrator.acc.composition, dynamicContext: { ledger: this.dynamic, snapshot: input.dynamic },
-          stepContext: this.context.steps(claim) },
+          stepContext: this.context.steps(claim) } satisfies ChatOptions,
       });
 
       for await (const event of events) {
@@ -422,6 +424,7 @@ export class ActorSession {
 
     return {
       text, failure, program, claim: active.claim,
+      admittedContext: active.claim === null ? null : this.options.claims.admittedFor(active.claim),
       interrupted: active.abort.signal.aborted || failure?.message === INTERRUPTED_TURN,
     };
   }

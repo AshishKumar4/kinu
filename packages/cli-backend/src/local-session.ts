@@ -324,11 +324,6 @@ function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
   };
 }
 
-/** A turn's inference, replayable outside the turn that ran it: everything
- *  runChat needs except the two things that belong to one live turn only —
- *  its abort signal and its extension host. */
-type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>;
-
 type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
 
 type PromptCacheIdentity = NonNullable<ChatOptions['cache']>;
@@ -2823,10 +2818,6 @@ export class LocalAgentSession implements BackendHost {
     // Turn-local state (activation reasons) rides one trailing message for THIS
     // turn only. Neither is ever pushed into the durable history, so the stable
     // prefix stays cacheable.
-    const dynamicContext = {
-      ledger: this.actorSession.dynamic,
-      snapshot: () => this.dynamicContextSnapshot(memoryTail),
-    };
 
     // Provenance rides here, not in the system prompt: it flips whenever a
     // background job lands mid-session, and at system placement that flip
@@ -2871,13 +2862,7 @@ export class LocalAgentSession implements BackendHost {
     // and overflow recovery all budget against the same number.
     const contextWindow = this.sessionContextWindow();
 
-    // The turn's inference exactly as it ran, minus the two things that belong
-    // to THIS turn and nothing else (its abort signal and its extension host).
-    // Kept as a value so the shadow evaluation of a delegating pending scaffold
-    // replays the live turn rather than a reconstruction of it — the local peer
-    // of the DO's `_lastTurnOpts` stash. `this.history` is snapshotted because
-    // the assistant's answer is appended to it before the eval runs.
-    const liveTurnOpts: LiveTurnOpts = {
+    const liveTurn: ActorExecutionInput['chat'] = {
       model,
       // The window pair, both halves of it: `contextWindow` is the whole
       // window and `modelOutputLimit` the answer's share, and the input
@@ -2891,7 +2876,6 @@ export class LocalAgentSession implements BackendHost {
         modelOutputLimit: this.modelCatalog.modelOutputLimit(),
       },
       system: systemPrompt,
-      history: [...this.actorSession.history],
       // Model-capability attachment sanitization — runChat applies it to
       // the whole history BEFORE the transform seam and the ledger weave
       // (same ordering as the DO's beforeTurn); this.history itself is
@@ -2899,7 +2883,6 @@ export class LocalAgentSession implements BackendHost {
       attachments: {
         accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.actorSession.orchestrator.acc.context,
       },
-      dynamicContext,
       turnLocal: turnLocalMsgs.length > 0 ? turnLocalMsgs : undefined,
       tools: turnTools,
       transformTrigger: measured.trigger,
@@ -2908,21 +2891,15 @@ export class LocalAgentSession implements BackendHost {
     };
 
     if (measured.providerReportedTokens !== undefined) {
-      liveTurnOpts.providerReportedTokens = measured.providerReportedTokens;
+      liveTurn.providerReportedTokens = measured.providerReportedTokens;
     }
 
-    if (providerOptions) liveTurnOpts.providerOptions = providerOptions;
-    // `meter` rides the LIVE turn only, never liveTurnOpts: a shadow-eval
-    // replay re-runs those opts off the priced path, and its composition would
-    // otherwise overwrite the measurement the next real step reports.
+    if (providerOptions) liveTurn.providerOptions = providerOptions;
     // Exact pre-submission admission — the resolved provider's own count of the
     // assembled request (core `assembleTurnMessages` owns what is done with the
-    // number). On the LIVE turn only, for the same reason `meter` is: a
-    // shadow-eval replay re-runs these opts off the priced path, and the request
-    // it replays was already admitted here. A static-model session has no
+    // number). A static-model session has no
     // registry to ask, and is assembled ungated exactly as before.
     const resolver = this.modelResolver;
-    const liveTurn: ActorExecutionInput['chat'] = { ...liveTurnOpts };
 
     if (resolver) {
       liveTurn.countInputTokens = (request: CountableRequest) =>
@@ -2934,7 +2911,7 @@ export class LocalAgentSession implements BackendHost {
       loopVersion: await this.rt.identity.scaffold.version(),
       chat: liveTurn,
       extensions: [this.compactionExtension],
-      dynamic: dynamicContext.snapshot,
+      dynamic: () => this.dynamicContextSnapshot(memoryTail),
       scaffoldSpend: { source: 'scaffold', report: this.modelCallSink, operations: this.modelOperations },
     }, (event) => {
       if (event.type === 'text-delta' || event.type === 'tool-call' || event.type === 'tool-result' || event.type === 'error') this.emit(event);
@@ -2966,8 +2943,8 @@ export class LocalAgentSession implements BackendHost {
       assistantText: fullText,
       runError,
       interrupted,
-      trialContext: liveTurnOpts.history,
-      reachableTools: Object.keys(liveTurnOpts.tools ?? {}),
+      trialContext: execution.admittedContext?.messages ?? [],
+      reachableTools: Object.keys(liveTurn.tools ?? {}),
       overflowRetry,
     });
 
