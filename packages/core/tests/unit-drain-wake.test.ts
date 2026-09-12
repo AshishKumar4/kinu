@@ -92,6 +92,8 @@ function inertEngine(): AgentOrchestratorDeps['engine'] {
 
   return {
     enabled: false,
+    recordsTurns: false,
+    recoverInterruptedWork: () => {},
     sessionWindow: store,
     craftLedger: { names: () => [], observe: () => [] },
     reviewTurn: async () => {},

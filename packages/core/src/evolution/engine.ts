@@ -81,7 +81,7 @@ import {
   MAX_TURN_REVIEWS_PER_OPEN,
   type DeferredReviewDrain, type RefusedTurnReview, type EnqueueOutcome,
 } from './session-window';
-import { createRefinementStore, initRefinementTables } from './refinement';
+import { initRefinementTables } from './refinement';
 import { MissionBudgetExhausted } from '../mission-budget';
 import { formatScoreInterval, lossInterval } from '../utils/stats';
 import { buildChangelog } from './changelog';
@@ -112,7 +112,8 @@ const GeneralizedToolSchema = v.object({
 import { runMCTS } from '../mcts/engine';
 import { createDurableMctsSession } from '../orchestrator/mcts-session';
 import type { AgentConfigStore } from '../config/store';
-import { diagnostics, toKinuError } from '../obs/index';
+import type { WorkspaceActor } from '../identity/workspace-actors';
+import { diagnostics, toKinuError, KinuError } from '../obs/index';
 
 /** The archive context handed to the proposal prompt: which version the
  *  proposal branches from + the variants it may cite as stepping stones. */
@@ -297,10 +298,20 @@ export class EvolutionEngine {
    *  engine owns the ledger it lands in — so both timescales score crafted
    *  tools through one table and one policy. */
   readonly craftLedger: CraftLedger;
+  /** Hosted actors keep the step clock without joining the turn window. */
+  readonly recordsTurns: boolean;
+  private recoveryPending = true;
 
   constructor(rt: AgentRuntime, config?: Partial<EvolutionConfig>) {
     this.rt = rt;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
+    rt.actor.assertCurrent();
+
+    const actor = rt.storage.sql<Pick<WorkspaceActor, 'kind'>>`
+      SELECT kind FROM workspace_actors WHERE actor_id = ${rt.actor.actorId}`[0];
+
+    if (actor === undefined) throw new KinuError('missing', 'the evolution actor has no membership record');
+    this.recordsTurns = this.config.enabled && actor.kind === 'main';
     this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
 
     // The engine owns the outcome + lessons + replay + completed-turn +
@@ -312,12 +323,13 @@ export class EvolutionEngine {
     initCompletedTurnTable(rt.storage.execRaw);
     this.sessionWindow = createCompletedTurnStore(rt.storage.sql, rt.actor);
     initRefinementTables(rt.storage.execRaw);
-    // A review some earlier host claimed and died inside is owed again, not
-    // lost — the claim was never the work, only its lease. A refinement claim
-    // is the same fact about a different ledger: the refiner is read-only, so
-    // re-driving one can cost a child agent and can never double-apply.
+  }
+
+  /** Called only by a driver starting work, never by acquisition or inspection. */
+  recoverInterruptedWork(): void {
+    if (!this.recoveryPending) return;
     this.sessionWindow.resetStaleClaims();
-    createRefinementStore(rt.storage.sql, rt.actor).resetStalePlanning();
+    this.recoveryPending = false;
   }
 
   /**
@@ -371,9 +383,7 @@ export class EvolutionEngine {
     (this.config.transaction ?? ((run: () => void) => { run(); }))(body);
   }
 
-  /** Whether auto-evolution is on for this workspace session. Read by
-   *  AgentOrchestrator so a `--no-auto-evolve` run records no evolution state
-   *  at all, rather than buffering turns for a later host to evolve. */
+  /** The operator's automatic-learning switch; recordsTurns also requires a root. */
   get enabled(): boolean {
     return this.config.enabled;
   }
@@ -834,6 +844,7 @@ export class EvolutionEngine {
    */
   async runDeferredTurnReviews(): Promise<DeferredReviewDrain> {
     if (!this.config.enabled) return { reviewed: 0, refused: [] };
+    this.recoverInterruptedWork();
     const taken = this.sessionWindow.takeQueuedReviews(MAX_TURN_REVIEWS_PER_OPEN);
     const refused: RefusedTurnReview[] = [...taken.refused];
     let reviewed = 0;

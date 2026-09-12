@@ -662,7 +662,6 @@ export class LocalAgentHost {
           // the session that answers these ports is built from that session.
           session: () => this.requireActorEntry(bound.reference.actorId).session,
           oneShot: false,
-          autoEvolve: true,
         });
 
         // Retained only for the kinds that go on to get a HostEntry, and
@@ -826,11 +825,6 @@ export class LocalAgentHost {
     if (input.parentKey !== null) {
       sessionOpts.workspaceTitle = () => this.rootEntry(input.key).config.getDisplayName();
     }
-
-    // A hosted child records no turn into the evolution window, on either
-    // backend: cf runs every subordinate on `runHeadInference`, which never
-    // reaches `recordTurn`. The step clock still ticks for it.
-    if (input.parentKey !== null) sessionOpts.noAutoEvolve = true;
 
     if (input.ws.modelResolver) sessionOpts.modelResolver = input.ws.modelResolver;
 

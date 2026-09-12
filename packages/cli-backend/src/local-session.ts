@@ -237,8 +237,8 @@ export interface LocalOrchestrationInput {
   readonly session: () => LocalAgentSession;
   /** This host runs ONE task turn and exits; it never starts the cadence. */
   readonly oneShot: boolean;
-  /** Whether turn and session reflection record anything at all. */
-  readonly autoEvolve: boolean;
+  /** The operator's explicit opt-out of automatic learning. */
+  readonly noAutoEvolve?: boolean;
 }
 
 export function createLocalOrchestration(input: LocalOrchestrationInput): LocalOrchestration {
@@ -255,7 +255,7 @@ export function createLocalOrchestration(input: LocalOrchestrationInput): LocalO
   });
 
   const engine = new EvolutionEngine(input.runtime, {
-    enabled: input.autoEvolve,
+    enabled: input.noAutoEvolve !== true,
     // The turn review's own model calls debit the mission the reviewed turn
     // ran under — the same ledger, through the same seam, as the work it
     // reviews. Unbudgeted turns never reach it.
@@ -505,10 +505,7 @@ export interface LocalAgentSessionOpts {
    */
   providerRevision?: () => number;
   onEvent: (event: SessionEvent) => void;
-  /** Disable auto-evolution (turn + session reflection). Default: enabled.
-   *  Set by the operator's `--no-auto-evolve`, and by the host for a
-   *  task-lifetime child, whose turn no later actor reads a lesson from
-   *  (`agent-host/host.ts`). */
+  /** The operator's opt-out of automatic step, turn and session learning. */
   noAutoEvolve?: boolean;
   /** This process runs ONE task turn and exits (`kinu exec`/`kinu run`).
    *  Two consequences, both about honesty rather than throttling:
@@ -757,11 +754,6 @@ export class LocalAgentSession implements BackendHost {
   /** True when this process runs one task turn and exits — see the `oneShot`
    *  option. Decides turn continuity and whether the cadence lane may start. */
   private readonly oneShot: boolean;
-  /** Whether this session runs the evolution lanes at all (`--no-auto-evolve`
-   *  turns them off). Held rather than only handed to the engine: a lane this
-   *  session will refuse must not be DECLARED as owed, or the refusal becomes a
-   *  row nothing can ever complete. */
-  private readonly autoEvolve: boolean;
   /** The mechanical completion gate (core completion-gate.ts). Armed only by a
    *  one-shot task turn: on the interactive surface the human reading the
    *  answer is the check, so it never arms and costs nothing. */
@@ -836,7 +828,6 @@ export class LocalAgentSession implements BackendHost {
     this.rt = opts.rt;
     this.onEvent = opts.onEvent;
     this.oneShot = opts.oneShot === true;
-    this.autoEvolve = opts.noAutoEvolve !== true;
     this.cwd = opts.cwd ?? this.rt.cwd ?? process.cwd();
     this.workspaceTitleSource = opts.workspaceTitle ?? null;
     this.fallbackModel = opts.model ?? null;
@@ -869,7 +860,7 @@ export class LocalAgentSession implements BackendHost {
       eventLog: new EventLog(hubSql, this.rt.actor),
       session: () => this,
       oneShot: this.oneShot,
-      autoEvolve: this.autoEvolve,
+      noAutoEvolve: opts.noAutoEvolve === true,
     });
 
     const orchestration = opts.hosted ?? own;
@@ -975,7 +966,7 @@ export class LocalAgentSession implements BackendHost {
     // built it from the orchestration above — the same object `HostedActor`
     // carries, so a head or a node this session spawns claims its turns on the
     // very session the host holds. Standalone, this session is that host.
-    this.actorSession = opts.hosted?.actor.session ?? new ActorSession({
+    this.actorSession = 'actor' in orchestration ? orchestration.actor.session : new ActorSession({
       runtime: this.rt,
       claims: this.stores.claims,
       // The local host publishes NO installed build identity for its builtin
@@ -983,13 +974,7 @@ export class LocalAgentSession implements BackendHost {
       // version in this repo is a placeholder, so a claim for a builtin turn
       // records the build as unknown rather than naming one nobody can verify.
       installedBuild: null,
-      orchestration: (own ?? createLocalOrchestration({
-        runtime: this.rt,
-        eventLog: this.eventLog,
-        session: () => this,
-        oneShot: this.oneShot,
-        autoEvolve: this.autoEvolve,
-      })).deps,
+      orchestration: orchestration.deps,
     });
     this.compactionState = createCompactionStateStore(this.rt.storage.sql, this.rt.actor);
     this.compactionExtension = createCompactionExtension({
@@ -3231,7 +3216,7 @@ export class LocalAgentSession implements BackendHost {
     // session genuinely does not have the lane — and an effect a backend does
     // not have is an absent part, not a claimed row that completes on the
     // engine's refusal a moment later.
-    const sampled = this.autoEvolve ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
+    const sampled = this.engine.recordsTurns ? shadowTrialPlan(this.scaffoldControl, input.messageId) : null;
 
     // The gate's decision belongs to the LIVE turn: `shouldGate` reads RAM the
     // gate keeps (armed, already fired) that a restart does not have, so the
@@ -3290,7 +3275,7 @@ export class LocalAgentSession implements BackendHost {
       // constructor field, so the roster and the turn cannot disagree — and a
       // replay records what the producing run had rather than what the
       // recovering one happens to be started with.
-      evolutionEnabled: this.autoEvolve,
+      evolutionEnabled: this.engine.recordsTurns,
     };
 
     const parts: Writable<TerminalTurnParts> = {};
@@ -4443,7 +4428,7 @@ export class LocalAgentSession implements BackendHost {
         // client fan-out and their turn queue — which is what a local fork is.
         session: () => this,
         oneShot: this.oneShot,
-        autoEvolve: this.autoEvolve,
+        noAutoEvolve: !this.engine.enabled,
       }).deps,
       // The origin the creation site NAMED, or the default for its kind. A
       // head inherits the parent's promoted program, which is what
