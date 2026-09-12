@@ -17,7 +17,7 @@ export const inputCls = "w-full rounded-md px-3 py-2 text-sm p-text focus:outlin
  * the app uses the pair, so a tab reads the same above the chat as it does
  * above the work surfaces.
  */
-export const tabCls = "p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] text-[12.5px] leading-[18px] font-medium";
+export const tabCls = "p-tab -mb-px flex shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap px-2.5 py-[13px] p-t-control";
 
 /**
  * A settings group: one titled card whose header names the group and, when
@@ -64,7 +64,7 @@ export function Field({ label, hint, inline = false, children }: {
   const text = (
     <div className="min-w-0">
       <div className="p-row-text font-medium p-text">{label}</div>
-      {hint && <p className="mt-0.5 p-meta leading-relaxed p-text-3">{hint}</p>}
+      {hint && <p className="mt-0.5 p-meta p-text-3">{hint}</p>}
     </div>
   );
 

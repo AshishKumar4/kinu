@@ -38,7 +38,7 @@ export function TakesChip({ set, onPick }: {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="inline-flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
+        className="inline-flex items-center gap-1 p-t-control p-text-3 hover:p-text px-1.5 py-0.5 rounded-sm border p-border p-card-hover transition-colors"
         title="The agent explored near-tied approaches. Compare and pick one."
       >
         <GitBranchIcon size={11} />
@@ -132,7 +132,7 @@ function TakesComparison({ set, onPick, onClose }: {
         <div className="flex items-center gap-2 text-xs p-text-2">
           <span className="font-medium p-text">Take {index + 1} of {count}</span>
           {isCurrent && (
-            <span className="inline-flex items-center gap-1 text-[10px] p-success">
+            <span className="inline-flex items-center gap-1 p-t-status p-success">
               <CheckCircleIcon size={11} weight="fill" />current answer
             </span>
           )}
@@ -150,11 +150,11 @@ function TakesComparison({ set, onPick, onClose }: {
       </div>
 
       {candidate.origin ? (
-        <div className="text-[10px] p-text-3">{takeEvidence(candidate)}</div>
+        <div className="p-meta p-text-3">{takeEvidence(candidate)}</div>
       ) : (
         <div className="space-y-1">
           <ScoreBar value={candidate.score} />
-          <div className="text-[10px] p-text-3">{takeEvidence(candidate)} · execution-grounded branch value</div>
+          <div className="p-meta p-text-3">{takeEvidence(candidate)} · execution-grounded branch value</div>
         </div>
       )}
 
@@ -217,7 +217,7 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
 
   return (
     <div className="flex flex-col items-start gap-1 animate-fade-in py-0.5">
-      <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
+      <div className="inline-flex items-center gap-2 max-w-full px-3 py-1.5 rounded-full p-elevated border p-border p-row-text p-text-2">
         {run.status === "running" && (
           <>
             <Loader size="sm" />
@@ -260,14 +260,14 @@ export function BranchRunChip({ run, takes, rpc, headActivity, headDeltas = NO_H
               no ancestor to leave for. */}
           {view ? <TranscriptBody view={view} pending={pending} />
             : resource.status === "loading" ? (
-              <div className="flex items-center justify-center gap-2 py-6 text-[12px] p-text-2">
+              <div className="flex items-center justify-center gap-2 py-6 p-t-status p-text-2">
                 <Loader size="sm" />Reading the branch…
               </div>
             ) : (
               // The run id IS the journal's root id and the head id is derived
               // from it, so "nothing recorded" here means the branch died before
               // its first write — not that the chip looked in the wrong place.
-              <div className="px-4 py-6 text-center text-[11px] p-text-3">
+              <div className="px-4 py-6 text-center p-meta p-text-3">
                 Nothing is recorded for this branch yet.
               </div>
             )}

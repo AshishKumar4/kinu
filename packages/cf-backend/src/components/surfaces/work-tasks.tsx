@@ -48,9 +48,9 @@ function TaskRow({ task, depth }: { task: AgentTask; depth: number }) {
         weight={task.status === "active" ? "fill" : task.status === "done" ? "fill" : "regular"}
         className={`${meta.tone} shrink-0 mt-0.5`}
       />
-      <code className="text-[10px] p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
+      <code className="p-annotation p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
       <span
-        className={`text-[13px] leading-[18px] min-w-0 break-words ${
+        className={`p-row-text min-w-0 break-words ${
           isSettled(task.status) ? "p-text-3 line-through" : task.status === "active" ? "p-text font-medium" : "p-text-2"
         }`}
       >

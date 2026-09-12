@@ -113,9 +113,9 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
         <div className="flex items-center gap-1 mb-3">
           {options.map((name) => (
             <button key={name} onClick={() => { userSelected.current = true; setExec(name); }}
-              className={`px-2 py-0.5 text-[11px] rounded-md transition-colors ${
+              className={`px-2 py-0.5 p-t-control rounded-md transition-colors ${
                 exec === name
-                  ? "p-fill p-text font-medium"
+                  ? "p-fill p-text"
                   : name === "workspace"
                     ? "p-text-3 hover:p-text-2 opacity-80"
                     : "p-text-3 hover:p-text-2"
@@ -126,7 +126,7 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
         </div>
       )}
 
-      {actionErr && <div className="text-[11px] p-danger mb-2">{actionErr}</div>}
+      {actionErr && <div className="p-t-status p-danger mb-2">{actionErr}</div>}
       {result !== null && resource.status === "error" && (
         <LoadFailure what="the latest change-set" message={resource.message} onRetry={reload} className="mb-3" />
       )}
@@ -154,10 +154,10 @@ export function DiffsSurface({ executors, lastActiveExecutor, rpc, onPresence }:
               <div key={f.path} className="rounded-md border p-border overflow-hidden">
                 <button onClick={() => toggle(f.path)} className="w-full flex items-center gap-2 px-3 py-1.5 text-left p-card-hover transition-colors">
                   {open ? <CaretDownIcon size={11} /> : <CaretRightIcon size={11} />}
-                  <span className={`text-[10px] uppercase font-mono shrink-0 ${STATUS_TONE[f.status]}`}>{f.status[0]}</span>
+                  <span className={`p-annotation uppercase shrink-0 ${STATUS_TONE[f.status]}`}>{f.status[0]}</span>
                   <span className="text-xs font-mono p-text truncate flex-1">{f.path}</span>
-                  {f.added > 0 && <span className="text-[10px] p-success shrink-0">+{f.added}</span>}
-                  {f.removed > 0 && <span className="text-[10px] p-danger shrink-0">−{f.removed}</span>}
+                  {f.added > 0 && <span className="p-meta p-success shrink-0">+{f.added}</span>}
+                  {f.removed > 0 && <span className="p-meta p-danger shrink-0">−{f.removed}</span>}
                 </button>
                 {open && <div className="border-t p-border"><DiffLines lines={f.lines} truncated={f.truncated} /></div>}
               </div>

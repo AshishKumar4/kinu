@@ -134,6 +134,7 @@ function PageHeader() {
         <ArrowLeftIcon size={12} /> Workspaces
       </Link>
       <p className="p-eyebrow">Account</p>
+      {/* Page title in the display face at 26px: above the workbench scale by design. */}
       <h1 className="p-display mt-1 text-[26px] leading-8">Account settings</h1>
       <p className="mt-1.5 p-row-text p-text-3">
         What you set here applies to every workspace you own.
@@ -677,7 +678,7 @@ export function DeviceRow({
 function CommandCopy({ command }: { command: string }) {
   return (
     <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
-      <code className="font-mono p-meta p-text flex-1 break-all select-all leading-relaxed">{command}</code>
+      <code className="p-t-code p-text flex-1 break-all select-all">{command}</code>
       <CopyButton value={command} what="the install command" size={13} className="p-text-3 hover:p-text shrink-0" />
     </div>
   );

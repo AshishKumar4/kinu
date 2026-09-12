@@ -506,7 +506,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
                 title={m.reason ?? "not available"}>
                 <PlugIcon size={12} className="shrink-0" />
                 <span>{mountName}</span>
-                <span data-mount-badge className="text-[10px] px-1.5 py-px rounded-full border p-border border-dashed">
+                <span data-mount-badge className="p-t-status px-1.5 py-px rounded-full border p-border border-dashed">
                   {m.name === "laptop" ? laptopLabel ?? executorLabel("laptop") : executorLabel(m.name)}
                 </span>
                 <span className="p-text-4 truncate">— {m.reason ?? "not available"}</span>
@@ -524,7 +524,7 @@ export function FilesSurface({ rpc, executors, jump, onConnectDevice }: FilesSur
             <div className="p-text-3 italic px-3 py-1.5">This folder is empty. Drop files here to upload.</div>
           )}
           {!loading && filtered.length > 0 && (
-            <div className="px-3 pt-1.5 pb-1 p-text-3 text-[10px] tabular-nums border-t p-border mt-1">
+            <div className="px-3 pt-1.5 pb-1 p-text-3 p-meta tabular-nums border-t p-border mt-1">
               {dirCount > 0 && `${dirCount} ${dirCount === 1 ? "folder" : "folders"}, `}
               {filtered.length - dirCount} {filtered.length - dirCount === 1 ? "file" : "files"}
               {filter && ` matching of ${entries.length}`}
@@ -607,13 +607,13 @@ function TreeNode({ dir, label, depth, path, previewPath, expanded, cache, badge
           : <FolderIcon size={13} className="p-info shrink-0" weight="fill" />}
         <span className="truncate">{label}</span>
         {depth === 1 && badgeFor(label) && (
-          <span data-mount-badge className="text-[9px] px-1 py-px rounded-full p-fill p-text-3 shrink-0">
+          <span data-mount-badge className="p-t-status px-1 py-px rounded-full p-fill p-text-3 shrink-0">
             {badgeFor(label)}
           </span>
         )}
       </div>
       {isOpen && children === undefined && (
-        <div className="p-text-4 text-[10px]" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
+        <div className="p-text-4 p-meta" style={{ paddingLeft: `${28 + depth * 12}px` }}>loading…</div>
       )}
       {isOpen && children?.map((child) => {
         const full = joinDir(dir, child.name);
@@ -705,19 +705,19 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
             if (e.key === "Escape") onRenameCancel();
           }}
           onBlur={onRenameCancel}
-          className="w-full min-w-0 bg-transparent border p-border rounded-xs px-1 py-0 text-center text-[11px] font-mono p-text outline-hidden focus:border-[var(--c-accent)]"
+          className="w-full min-w-0 bg-transparent border p-border rounded-xs px-1 py-0 text-center p-annotation p-text outline-hidden focus:border-[var(--c-accent)]"
         />
       ) : (
-        <span className="w-full text-center text-[11px] font-mono leading-tight line-clamp-2 break-all">
+        <span className="w-full text-center p-annotation line-clamp-2 break-all">
           {entry.name}
         </span>
       )}
       {badge && (
-        <span data-mount-badge className="text-[10px] px-1.5 py-px rounded-full p-fill p-text-3 shrink-0">{badge}</span>
+        <span data-mount-badge className="p-t-status px-1.5 py-px rounded-full p-fill p-text-3 shrink-0">{badge}</span>
       )}
       {confirming ? (
         <span className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-          <span className="p-danger text-[10px]">delete?</span>
+          <span className="p-danger p-t-status">delete?</span>
           <button data-files-delete-confirm onClick={onDelete} className="p-danger hover:opacity-80 p-0.5" aria-label={`Delete ${entry.name}`}>
             <CheckIcon size={12} />
           </button>
@@ -726,7 +726,7 @@ function EntryTile({ entry, badge, selected, previewing, renaming, confirming, d
           </button>
         </span>
       ) : (
-        <span className="text-[10px] p-text-4 tabular-nums truncate max-w-full">{meta}</span>
+        <span className="p-meta p-text-4 tabular-nums truncate max-w-full">{meta}</span>
       )}
       <span
         className="absolute top-1 right-1 items-center gap-0.5 hidden group-hover:flex p-bg rounded-xs"

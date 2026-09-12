@@ -144,7 +144,7 @@ export function ConnectedModelPicker({
 
   if (menu === null) {
     return (
-      <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 text-[11px] p-text-3" aria-label="Loading models">
+      <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 p-t-status p-text-3" aria-label="Loading models">
         …
       </span>
     );
@@ -155,7 +155,7 @@ export function ConnectedModelPicker({
       <button
         type="button"
         onClick={fetchModels}
-        className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-1 text-[11px] p-text-3 hover:p-text-2"
+        className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-1 p-t-control p-text-3 hover:p-text-2"
         title="Could not load the model list. Click to retry."
       >
         <ArrowsClockwiseIcon size={11} />
@@ -172,7 +172,7 @@ export function ConnectedModelPicker({
         <button
           type="button"
           onClick={fetchModels}
-          className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] hover:opacity-80"
+          className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 p-t-status hover:opacity-80"
           title={failureTitle(menu.failures)}
         >
           <WarningCircleIcon size={12} />
@@ -186,7 +186,7 @@ export function ConnectedModelPicker({
     return (
       <a
         href={cloudflareReconnectPath(window.location.pathname)}
-        className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] hover:opacity-80"
+        className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 p-t-status hover:opacity-80"
         title="Reconnect Cloudflare with Workers AI permissions"
       >
         <WarningCircleIcon size={12} />
@@ -217,7 +217,7 @@ function ProviderFailureNotice({ failures }: { failures?: ProviderFailure[] }) {
   return (
     <div className="border-t p-border px-2 py-1.5">
       {failures.map((failure) => (
-        <p key={failure.provider} className="p-warning flex items-start gap-1.5 text-[11px] leading-snug">
+        <p key={failure.provider} className="p-warning flex items-start gap-1.5 p-t-status">
           <WarningCircleIcon size={12} className="mt-0.5 shrink-0" />
           <span className="min-w-0">
             <span className="font-medium">{failure.label ?? failure.provider}</span> unavailable: {failure.reason}

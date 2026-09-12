@@ -240,11 +240,11 @@ export function ProfileCatalogSettings() {
                   <div className="flex items-center gap-2">
                     <div>
                       <div className="text-xs font-medium p-text">{tierId}</div>
-                      {assignment === undefined && <div className="text-[10px] p-text-3">uses default</div>}
-                      {tierId === 'default' && <div className="text-[10px] p-text-3">account default</div>}
+                      {assignment === undefined && <div className="p-meta p-text-3">uses default</div>}
+                      {tierId === 'default' && <div className="p-meta p-text-3">account default</div>}
                     </div>
                     {!builtin && (
-                      <button type="button" className="text-[10px] p-text-3 hover:p-danger" aria-label={`Remove tier ${tierId}`} onClick={() => removeTier(tierId)}>
+                      <button type="button" className="p-t-status p-text-3 hover:p-danger" aria-label={`Remove tier ${tierId}`} onClick={() => removeTier(tierId)}>
                         remove
                       </button>
                     )}
@@ -319,7 +319,7 @@ export function ProfileCatalogSettings() {
           </div>
 
           <div className="flex items-center justify-between border-t border-[var(--c-border)] pt-4">
-            <span className="text-[11px] p-text-3">Catalog version {envelope.version}</span>
+            <span className="p-meta p-text-3">Catalog version {envelope.version}</span>
             <div className="flex gap-2">
               <Button size="sm" variant="secondary" disabled={!dirty || busy} onClick={() => setDraft(envelope.catalog)}>Discard</Button>
               <FilledButton disabled={!dirty || busy} onClick={save}>{busy ? 'Saving…' : 'Save roles and tiers'}</FilledButton>
@@ -448,7 +448,7 @@ function MemberSet(props: {
     <fieldset className={`min-w-0 space-y-1 text-xs p-text-2 ${props.wide ? 'md:col-span-2' : ''}`}>
       <legend className="min-w-0">
         <span>{props.label}</span>
-        <span className="block text-[10px] p-text-3">{props.about}</span>
+        <span className="block p-meta p-text-3">{props.about}</span>
       </legend>
       <div className={`grid gap-x-3 gap-y-1 ${props.wide ? 'md:grid-cols-3' : ''}`}>
         {props.options.map((option) => (
@@ -462,11 +462,11 @@ function MemberSet(props: {
             />
             <span className="min-w-0 flex-1">
               <span className="p-text">{option.id}</span>
-              {option.about && <span className="block truncate text-[10px] p-text-3">{option.about}</span>}
+              {option.about && <span className="block truncate p-meta p-text-3">{option.about}</span>}
             </span>
           </label>
         ))}
-        {props.options.length === 0 && <span className="text-[10px] p-text-3">none shipped</span>}
+        {props.options.length === 0 && <span className="p-meta p-text-3">none shipped</span>}
       </div>
     </fieldset>
   );

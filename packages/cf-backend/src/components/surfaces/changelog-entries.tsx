@@ -186,10 +186,10 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
   const headline = (
     <div className="min-w-0 flex-1">
       <div className="flex items-center gap-2">
-        <span className="text-[13px] leading-[18px] p-text flex-1" title={entry.summary}>{entry.summary}</span>
+        <span className="p-row-text p-text flex-1" title={entry.summary}>{entry.summary}</span>
         {fresh && !kept && <span className="shrink-0 size-1.5 rounded-full bg-[var(--c-accent)]" />}
       </div>
-      <div className="mt-1 text-[10.5px] leading-[15px] p-text-3">{timeAgo(entry.at)}</div>
+      <div className="mt-1 p-meta p-text-3">{timeAgo(entry.at)}</div>
     </div>
   );
 
@@ -230,14 +230,14 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       </div>
 
       {notice && (
-        <div className={`mt-1.5 text-[11px] ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+        <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
       )}
 
       {hasDetails && (
         <div id={detailsId} role="region" aria-label={`Details for ${entry.summary}`} hidden={!expanded}
           className="mt-2 ml-6 border-t p-border pt-2">
           {entry.evidence && (
-            <div className="text-[10px] p-text-3 font-mono leading-relaxed whitespace-pre-wrap break-words">
+            <div className="p-annotation p-text-3 whitespace-pre-wrap break-words">
               {entry.evidence}
             </div>
           )}
@@ -254,7 +254,7 @@ export function ChangelogEntryCard({ entry, grouped = false, seenAt, rpc, onReve
       {diff !== null && (
         diff.status === "ready" ? (
           <div className="mt-2 rounded-md border p-border overflow-hidden">
-            <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border text-[11px] p-text-3">
+            <div className="flex items-center gap-3 px-3 py-1.5 border-b p-border p-annotation p-text-3">
               <span>v{diff.value.previousVersion ?? "∅"} → v{diff.value.version}</span>
               <span className="p-success">+{diff.value.added}</span>
               <span className="p-danger">−{diff.value.removed}</span>
@@ -347,18 +347,18 @@ function StagedSkillDecision(
         {staged === null ? "Read the proposed skill" : "Hide"}
       </Button>
       {staged?.status === "error" && (
-        <div className="mt-1.5 text-[11px] p-danger">{staged.message}</div>
+        <div className="mt-1.5 p-t-status p-danger">{staged.message}</div>
       )}
       {staged?.status === "loading" && (
         <div className="flex justify-center py-3"><Loader size="sm" /></div>
       )}
       {staged?.status === "ready" && (
         <div className="mt-1.5 rounded-md border p-border overflow-hidden">
-          <div className="px-3 py-1.5 border-b p-border text-[10.5px] p-text-3 font-mono break-all">
+          <div className="px-3 py-1.5 border-b p-border p-annotation p-text-3 break-all">
             {staged.value.target} · {staged.value.digest}
           </div>
           {!staged.value.intact && (
-            <div className="px-3 py-1.5 border-b p-border text-[11px] p-danger">
+            <div className="px-3 py-1.5 border-b p-border p-t-status p-danger">
               These bytes differ from the refinement's record. Re-run the refinement before approving.
             </div>
           )}
@@ -378,7 +378,7 @@ function StagedSkillDecision(
         </div>
       )}
       {notice && (
-        <div className={`mt-1.5 text-[11px] ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+        <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
       )}
     </div>
   );
@@ -412,12 +412,12 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc;
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text-2 leading-relaxed">{entry.summary}</div>
           {entry.evidence && (
-            <div className="mt-1 text-[10px] p-text-3 font-mono leading-relaxed whitespace-pre-wrap break-words">
+            <div className="mt-1 p-annotation p-text-3 whitespace-pre-wrap break-words">
               {entry.evidence}
             </div>
           )}
           {notice && (
-            <div className={`mt-1.5 text-[11px] ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
+            <div className={`mt-1.5 p-t-status ${notice.ok ? "p-success" : "p-danger"}`}>{notice.text}</div>
           )}
           {entry.decision && (
             <StagedSkillDecision decision={entry.decision} rpc={rpc} onDecided={onReverted} />

@@ -37,7 +37,7 @@ function PanelBlock(
 ): ReactNode {
   return (
     <section className="p-card p-4 space-y-2">
-      <div className="text-[11px] uppercase tracking-wide p-text-3">{title}</div>
+      <div className="p-eyebrow">{title}</div>
       {panel.status === 'ok'
         ? children ?? <Rows value={panel.value} />
         : (
@@ -68,7 +68,7 @@ function Rows({ value }: { value: JsonValue }): ReactNode {
       <div className="text-lg p-display tabular-nums">
         {count === null ? '—' : count}
       </div>
-      <pre className="text-[10.5px] p-text-3 font-mono overflow-x-auto max-h-40 whitespace-pre-wrap">
+      <pre className="p-annotation p-text-3 overflow-x-auto max-h-40 whitespace-pre-wrap">
         {JSON.stringify(value, null, 2)}
       </pre>
     </>
@@ -253,7 +253,7 @@ export function WorkspaceDrilldown(
         >
           <div className="space-y-3">
             <p className="text-xs p-text-2 leading-relaxed">{pending.body}</p>
-            <p className="text-[11px] p-text-3">
+            <p className="p-meta p-text-3">
               Account <span className="font-mono p-text">{pending.action.userId}</span>
             </p>
             {retypeRequired && (
@@ -306,17 +306,17 @@ function JobRows(
       {rows.map((job) => (
         <li key={job.id} className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="font-mono text-[11px] p-text-2">{job.kind}</span>
-            <span className={job.status === 'running' ? 'p-accent text-[11px]'
-              : job.status === 'completed' ? 'p-success text-[11px]' : 'p-danger text-[11px]'}>
+            <span className="p-annotation p-text-2">{job.kind}</span>
+            <span className={job.status === 'running' ? 'p-accent p-t-status'
+              : job.status === 'completed' ? 'p-success p-t-status' : 'p-danger p-t-status'}>
               {job.status}
             </span>
-            <span className="text-[11px] p-text-3">{when(job.createdAt)}</span>
+            <span className="p-meta p-text-3">{when(job.createdAt)}</span>
             {(job.resumeAttempts ?? 0) > 0 && (
               // An operator looking at a job that has been running a long time
               // needs the one fact the row could never show: whether it is stuck
               // or whether the platform keeps interrupting it.
-              <span className="text-[11px] p-warning">
+              <span className="p-t-status p-warning">
                 interrupted {job.resumeAttempts}x
                 {job.resumeAfter != null && job.resumeAfter > Date.now()
                   ? `, next attempt ${when(job.resumeAfter)}` : ''}
@@ -324,7 +324,7 @@ function JobRows(
             )}
           </div>
           {job.label !== null && <div className="text-xs p-text-2">{job.label}</div>}
-          {job.error !== null && <div className="text-[11px] p-danger">{job.error}</div>}
+          {job.error !== null && <div className="p-row-text p-danger">{job.error}</div>}
           <div className="flex gap-1.5">
             <Button
               size="sm" variant="ghost" disabled={busy}
@@ -389,12 +389,12 @@ function ApprovalRows(
       {rows.map((approval) => (
         <li key={approval.id} className="space-y-1 border-b p-border last:border-b-0 pb-2 last:pb-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-[11px] p-text-3">{approval.status}</span>
-            <span className="font-mono text-[11px] p-text-2">{approval.executor}</span>
-            <span className="text-[11px] p-text-3">{when(approval.requestedAt)}</span>
+            <span className="p-t-status p-text-3">{approval.status}</span>
+            <span className="p-annotation p-text-2">{approval.executor}</span>
+            <span className="p-meta p-text-3">{when(approval.requestedAt)}</span>
           </div>
           <div className="font-mono text-xs p-text whitespace-pre-wrap break-all">{approval.command}</div>
-          <div className="text-[11px] p-text-3">{approval.reason}</div>
+          <div className="p-row-text p-text-3">{approval.reason}</div>
           <div className="flex gap-1.5">
             {APPROVAL_ANSWERS.map(({ decision, label, body }) => (
               <Button
