@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactElement } from 'react';
 import { useCopy } from '@/hooks/use-copy';
 import { LandingActionLink } from './LandingActionLink';
 import { LandingFrame } from './LandingFrame';
+import { CHECKOUT_FRAME_CAPTION, CHECKOUT_RETAINED_TOOL, LANDING_ROSTER } from './landing-fixtures';
 
 interface TreeNode {
   readonly id: number;
@@ -441,6 +442,21 @@ function Typewriter(): ReactElement {
   );
 }
 
+function PersistsCard(): ReactElement {
+  const reuseName = LANDING_ROSTER.entries.find((entry) => entry.name === 'perf-audit')?.displayName;
+
+  return (
+    <div data-landing-persists className="mt-4 rounded-[14px] border p-border p-surface p-4 sm:p-5">
+      <p className="text-[11px] leading-relaxed p-text-4">{CHECKOUT_FRAME_CAPTION}</p>
+      <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <code className="font-mono text-[13px] font-semibold p-text">{CHECKOUT_RETAINED_TOOL.name}</code>
+        <span className="text-[13px] leading-[1.65] p-text-3">{CHECKOUT_RETAINED_TOOL.purpose}</span>
+      </div>
+      <p className="mt-2 text-[13px] leading-[1.65] p-text-3">Used again in: {reuseName}</p>
+    </div>
+  );
+}
+
 export function LandingHero({ install }: { install: string }): ReactElement {
   const { status, copy } = useCopy();
 
@@ -454,6 +470,7 @@ export function LandingHero({ install }: { install: string }): ReactElement {
             and nothing under it moves. */}
         <div className="relative pt-16 lg:pt-20">
           <SearchCanvas />
+          <p className="sr-only">Kinu tries several approaches to a task, checks each, and keeps the one that passes, along with any tool it built along the way.</p>
           <div className="relative">
             <div className="mb-7 inline-flex items-center gap-2 rounded-full border p-border p-surface px-3.5 py-1.5 text-xs p-text-2">
               <span className="size-[5px] rounded-full p-dot-accent" />
@@ -489,8 +506,9 @@ export function LandingHero({ install }: { install: string }): ReactElement {
         {/* The product itself, first: the workspace the rest of the page
             keeps returning to, in the state a real job leaves it in. */}
         <figure className="mt-14 lg:mt-16">
-          <LandingFrame kind="checkout" caption="Example UI and sample data, not a live workspace." />
+          <LandingFrame kind="checkout" caption={CHECKOUT_FRAME_CAPTION} />
           <figcaption className="px-1 pt-3 text-[11px] leading-relaxed p-text-4">Run and Supervise, the Work tab, and Retry act on this page only.</figcaption>
+          <PersistsCard />
         </figure>
       </div>
     </section>

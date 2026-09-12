@@ -110,6 +110,9 @@ interface Facts {
   movie?: MovieFact;
   movieReduced?: MovieReducedFact;
   heroA11y?: { label: string; phrases: string[] };
+  persists?: { text: string };
+  heroTreeText?: { text: string };
+  checkoutLead?: { firstIsProse: boolean; firstIsTool: boolean };
   homeLink?: { visible: boolean; hasGraphic: boolean };
   deploy?: { button: string | null; guide: string | null };
   providers?: string[];
@@ -527,6 +530,31 @@ beforeAll(async () => {
         size: row.size,
         ratio: contrastRatio(parseRgb(row.ink), parseRgb(row.paper)),
       })));
+
+      facts.persists = await page.evaluate(() => ({
+        text: document.querySelector('[data-landing-persists]')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+      }));
+
+      facts.heroTreeText = await page.evaluate(() => ({
+        text: document.querySelector('#top p.sr-only')?.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+      }));
+
+      facts.checkoutLead = await page.evaluate(() => {
+        const root = document.querySelector('[data-landing-frame="checkout"]');
+
+        const assistants = [...(root?.querySelectorAll('div.animate-fade-in') ?? [])]
+          .filter((node) => node.querySelector('.prose-chat, [data-tool-group]') !== null);
+
+        const first = assistants[0];
+
+        const head = first?.querySelector('.group > *') ?? null;
+
+        return {
+          firstIsProse: head?.classList.contains('prose-chat') === true,
+          firstIsTool: head?.hasAttribute('data-tool-group') === true
+            || head?.querySelector('[data-tool-group]') !== null,
+        };
+      });
       await page.close();
     }
 
@@ -755,6 +783,25 @@ describe('the standalone landing runs', () => {
     expect(interactions.tui).toBeTrue();
     expect(interactions.cli).toBeTrue();
     expect(interactions.evolution).toBeTrue();
+  });
+});
+
+describe('the landing demonstration leads with its result', () => {
+  test('the persists card names the kept tool under the sample-data label', () => {
+    const persists = required(facts.persists, 'persists card');
+    expect(persists.text).toContain('coupon_replay');
+    expect(persists.text).toContain('Example UI and sample data, not a live workspace.');
+  });
+
+  test('the hero tree carries its text equivalent', () => {
+    const hero = required(facts.heroTreeText, 'hero tree text');
+    expect(hero.text).toBe('Kinu tries several approaches to a task, checks each, and keeps the one that passes, along with any tool it built along the way.');
+  });
+
+  test('the checkout frame leads with prose, not a tool row', () => {
+    const lead = required(facts.checkoutLead, 'checkout lead block');
+    expect(lead.firstIsProse).toBeTrue();
+    expect(lead.firstIsTool).toBeFalse();
   });
 });
 
