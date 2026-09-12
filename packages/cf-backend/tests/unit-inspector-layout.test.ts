@@ -279,7 +279,8 @@ describe('the persisted layout, through the page hook', () => {
 
     expect(anonymous.html).toContain('data-default-size="340px"');
     expect(anonymous.html).toContain('data-collapsed="true"');
-    expect(anonymous.html).toContain('data-ready="false"');
+    // The policy decision landed; nothing persists because there is no
+    // account key to write under.
     expect(store).toEqual({});
 
     // A stored value in no shape the reader accepts is absent, not a width —
@@ -307,16 +308,16 @@ describe('the persisted layout, through the page hook', () => {
       'kinu.inspector.a@b': 'not-a-width',
     });
   });
-
   test('a write reads back: width and collapsed survive the string form', () => {
-    // The mount is policy-collapsed, so the first toggle opens it and the
-    // second is the user's own close — the write under test.
-    const first = mount({ account: 'a@b' });
+    // Seeded open so the column's own affordance is on screen: the collapse
+    // control is the user's own close — the write under test.
+    const first = mount({ account: 'a@b', storedChoice: '1' });
     const stub = panelStub(340);
 
     first.layout.panelRef.current = stub.handle;
-    first.layout.toggleCollapsed();
-    first.layout.toggleCollapsed();
+    stub.state.collapsed = false;
+    stub.state.sizePx = 340;
+    first.layout.collapseControl?.();
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
     expect(store['kinu.inspector.a@b']).toBe('340');
 
@@ -523,9 +524,10 @@ describe('the decided layout, through the page hook', () => {
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
   });
 
-  test('a panel that never registers parks the decision without a loop', () => {
-    // panelRef stays null and no emission ever arrives: the decided layout
-    // simply waits. There is nothing scheduled to cancel and nothing spins.
+  test('a panel that never registers still applies its decision — no loop, nothing armed', () => {
+    // panelRef stays null: the mount layout carries the decision, so the
+    // effect's read-back simply finds nothing to write to — the decision is
+    // applied, marked ready, and nothing is scheduled.
     const mounted = mount({
       account: 'a@b',
       storedWidth: '300',
@@ -536,10 +538,10 @@ describe('the decided layout, through the page hook', () => {
       }],
     });
 
-    expect(mounted.html).toContain('data-ready="false"');
+    expect(mounted.html).toContain('data-ready="true"');
+    expect(mounted.html).toContain('data-collapsed="false"');
 
-    // Cancellation mid-wait is the other termination: cleanup runs, nothing
-    // is left armed.
+    // Cancellation is the other termination: cleanup runs, nothing is armed.
     const pending = mount({
       account: 'a@b',
       storedWidth: '300',
@@ -548,6 +550,7 @@ describe('the decided layout, through the page hook', () => {
 
     pending.controls.flush();
     pending.controls.cancelEffects();
+    // The rendered markup predates the effect run: ready was still false.
     expect(pending.html).toContain('data-ready="false"');
   });
 
