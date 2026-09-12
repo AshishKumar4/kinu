@@ -1,7 +1,7 @@
 {
   "measuredAt": "2026-09-12",
-  "files": 2145,
-  "functions": 53475,
+  "files": 2149,
+  "functions": 53579,
   "ceiling": 125,
   "line": 37,
   "inventory": [
@@ -30,10 +30,6 @@
       "complexity": 77
     },
     {
-      "key": "packages/cf-backend/src/gallery.tsx#mount",
-      "complexity": 72
-    },
-    {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene",
       "complexity": 72
     },
@@ -44,6 +40,10 @@
     {
       "key": "packages/cli/src/tui/chat-app.tsx#ChatScene>useKeyboard",
       "complexity": 71
+    },
+    {
+      "key": "packages/cf-backend/src/gallery.tsx#mount",
+      "complexity": 69
     },
     {
       "key": "packages/cf-backend/src/pages/WorkspacePage.tsx#WorkspacePage",
