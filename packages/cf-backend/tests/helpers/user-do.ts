@@ -185,8 +185,9 @@ export interface TestUserDOOptions {
   /** Hold the workspace teardown open at the real UserDO → Orchestrator seam.
    *  The only way to observe what a workspace marked for deletion can still do
    *  while its destroy is in flight, which is exactly the window the fence
-   *  around that await exists to close. */
-  destroyWorkspaceGate?: (name: string) => Promise<void>;
+   *  around that await exists to close — or to route the call at a REAL
+   *  workspace object a test built, with the caller-supplied owner id intact. */
+  destroyWorkspaceGate?: (name: string, ownerUserId: string) => Promise<void>;
   /** Bring a new Durable Object up over storage a retired one wrote, which is
    *  what an eviction and the next request really are. Ownership of the handle
    *  stays with the caller: this harness's `close` leaves it open. */
@@ -242,7 +243,7 @@ interface TestUserEnvironment {
   OrchestratorAgent: {
     idFromName(name: string): string;
     get(name: string): {
-      destroyAgent(): Promise<void>;
+      destroyAgent(ownerUserId: string): Promise<void>;
       installWorkspaceCapability(token: string): Promise<{ readonly ok: true; missed: number }>;
       repushWorkspaceCapability(): Promise<{ missed: number }>;
       getWorkspaceCapabilityHash(): Promise<string | null>;
@@ -496,8 +497,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
-        async destroyAgent() {
-          if (options.destroyWorkspaceGate) await options.destroyWorkspaceGate(name);
+        async destroyAgent(ownerUserId: string) {
+          if (options.destroyWorkspaceGate) await options.destroyWorkspaceGate(name, ownerUserId);
 
           if (options.destroyWorkspaceError) throw new Error(options.destroyWorkspaceError);
           destroyedWorkspaces.push(name);
