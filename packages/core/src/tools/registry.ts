@@ -600,7 +600,7 @@ export const DELEGATION_CONVERSE =
 // the same gate, so it never advertises an action the runtime cannot perform.
 
 /** Always present: the memory plane is `rt.memory` plus the canonical
- *  messages table, which every runtime has. */
+ *  actor_messages table, which every runtime has. */
 export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'conversations'] as const;
 
 /** Present only where a FactsStore is wired. */

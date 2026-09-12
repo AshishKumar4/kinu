@@ -162,7 +162,7 @@ function seedLedger(rt: AgentRuntime, counts: { failures: number; guards: number
  * one-shot invocation, and the case the owner asked about — the agent grinding
  * serially through work a search capability was sitting right there for — all
  * leave it silent. Each note goes through the REAL writer and needs a real
- * `messages` pair, because the row stores a turn id and never a copy of the
+ * `actor_messages` pair, because the row stores a turn id and never a copy of the
  * text: a fixture that INSERTed the row by hand would certify a shape the
  * writer does not produce.
  */
@@ -171,9 +171,9 @@ function seedAdvisorNotes(rt: AgentRuntime, count: number): void {
 
   for (let i = 0; i < count; i++) {
     const turnId = `adv-${String(i)}`;
-    void rt.storage.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+    void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
       VALUES (${rt.actor.actorId}, ${`ask-${String(i)}`}, ${null}, ${'user'}, ${failureTask(i)}, ${3_000 + i})`;
-    void rt.storage.sql`INSERT INTO messages (actor_id, id, parent_id, role, content, created_at)
+    void rt.storage.sql`INSERT INTO actor_messages (actor_id, id, parent_id, role, content, created_at)
       VALUES (${rt.actor.actorId}, ${turnId}, ${`ask-${String(i)}`}, ${'assistant'}, ${'{"files":["a.txt"]}'}, ${3_100 + i})`;
     engine.recordAdvisorNote({
       note: `you answered this alone; agents was reachable and the work had ${String(i + 2)} angles`,

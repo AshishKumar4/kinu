@@ -921,7 +921,7 @@ function importedConversationActorId(sql: SqlExec): string {
 
 /**
  * An export may carry the pane store (`assistant_messages`); the
- * workspace this archive was restored into may be LOCAL, where `messages` is
+ * workspace this archive was restored into may be LOCAL, where `actor_messages` is
  * the only default-chat store. Normalize once, here — project every pane row
  * into the plain store and drop the pane schema — so "does assistant_messages
  * exist" keeps meaning exactly one thing to every reader downstream
@@ -959,7 +959,7 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
 
     if (!Number.isFinite(ms)) throw new Error(`imported pane row ${row.id} has an unreadable stamp`);
     sql.exec(
-      `INSERT OR IGNORE INTO messages (actor_id, id, session_id, parent_id, role, content, created_at)
+      `INSERT OR IGNORE INTO actor_messages (actor_id, id, session_id, parent_id, role, content, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
       owner, row.id, 'default', row.parent_id, row.role, text, ms,
     );

@@ -60,7 +60,7 @@ function sessionWithModel(model: LanguageModel) {
   // does not match it (`requireLocalDatabasePath`).
   const db = new Database(scratchPath('mcp', 'agent.db'), { create: true });
   // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 

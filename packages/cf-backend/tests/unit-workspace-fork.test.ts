@@ -12,7 +12,7 @@ async function source() {
   // seeded under the actor the fork reads it as — its workspace's main.
   const actor = createTestActor(ws.sql, ws.execRaw, 'SRC', 'source');
   await writeSoul(ws.vfs, ws.sql, 'p');
-  void ws.sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+  void ws.sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
     VALUES (${actor.actorId}, ${'m1'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
 
   return { ...ws, actor };

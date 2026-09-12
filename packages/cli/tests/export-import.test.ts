@@ -43,12 +43,12 @@ function scratch(prefix: string): string {
 function seedWorkspace(path: string): void {
   const db = new Database(path, { create: true });
   db.exec(`CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)`);
-  db.exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT NOT NULL)`);
+  db.exec(`CREATE TABLE actor_messages (id TEXT PRIMARY KEY, content TEXT NOT NULL)`);
   db.exec(`CREATE TABLE vfs_files (path TEXT PRIMARY KEY, data BLOB)`);
   db.query(`INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)`).run('w1', 'scout', 100);
 
   for (let i = 0; i < 300; i++) {
-    db.query(`INSERT INTO messages (id, content) VALUES (?, ?)`).run(`m${i}`, `note ${i} with "quotes"`);
+    db.query(`INSERT INTO actor_messages (id, content) VALUES (?, ?)`).run(`m${i}`, `note ${i} with "quotes"`);
   }
 
   const bytes = new Uint8Array(256);
@@ -57,7 +57,7 @@ function seedWorkspace(path: string): void {
   db.query(`INSERT INTO vfs_files (path, data) VALUES (?, ?)`).run('logo.bin', bytes);
   // Multi-byte text long enough that the reader's 64 KiB chunks land mid-
   // character: a decoder that does not stream corrupts a real transcript here.
-  db.query(`INSERT INTO messages (id, content) VALUES (?, ?)`).run('unicode', '→ café 🌍 '.repeat(9000));
+  db.query(`INSERT INTO actor_messages (id, content) VALUES (?, ?)`).run('unicode', '→ café 🌍 '.repeat(9000));
   db.close();
 }
 
@@ -104,9 +104,9 @@ describe('kinu export / import', () => {
     expect(imported.stdout).toContain('Imported workspace scout-restored');
 
     const db = restoredDb(home, 'scout-restored');
-    expect(db.query(`SELECT COUNT(*) AS n FROM messages`).get()).toEqual({ n: 301 });
+    expect(db.query(`SELECT COUNT(*) AS n FROM actor_messages`).get()).toEqual({ n: 301 });
     expect(db.query(`SELECT name FROM workspace_identity`).get()).toEqual({ name: 'scout' });
-    expect(db.query(`SELECT content FROM messages WHERE id = 'unicode'`).get())
+    expect(db.query(`SELECT content FROM actor_messages WHERE id = 'unicode'`).get())
       .toEqual({ content: '→ café 🌍 '.repeat(9000) });
     const blob = db.query<{ data: Uint8Array }, []>(`SELECT data FROM vfs_files WHERE path = 'logo.bin'`).get();
 
@@ -186,8 +186,8 @@ describe('kinu export / import', () => {
       expect(imported.stdout).toContain('Imported workspace skywriter');
 
       const db = restoredDb(home, 'skywriter');
-      expect(db.query(`SELECT COUNT(*) AS n FROM messages`).get()).toEqual({ n: 301 });
-      expect(db.query(`SELECT content FROM messages WHERE id = 'm7'`).get())
+      expect(db.query(`SELECT COUNT(*) AS n FROM actor_messages`).get()).toEqual({ n: 301 });
+      expect(db.query(`SELECT content FROM actor_messages WHERE id = 'm7'`).get())
         .toEqual({ content: 'note 7 with "quotes"' });
       db.close();
     } finally {
@@ -210,7 +210,7 @@ describe('kinu export / import', () => {
     expect(imported.exitCode).toBe(0);
 
     const db = restoredDb(home, 'oldbot');
-    expect(db.query(`SELECT COUNT(*) AS n FROM messages`).get()).toEqual({ n: 301 });
+    expect(db.query(`SELECT COUNT(*) AS n FROM actor_messages`).get()).toEqual({ n: 301 });
     db.close();
   });
 

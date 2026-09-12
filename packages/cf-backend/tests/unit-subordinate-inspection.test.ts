@@ -170,7 +170,7 @@ describe('owner reads of retained subordinate paths', () => {
 
     for (const id of ['one', 'two', 'three']) {
       events.emit(id, { type: 'run_start', agentId: 'child', userMessage: id });
-      void fixture.sql`INSERT INTO messages (actor_id,id,role,content,created_at)
+      void fixture.sql`INSERT INTO actor_messages (actor_id,id,role,content,created_at)
         VALUES (${child.actorId}, ${id}, 'user', ${id}, ${id})`;
     }
 
@@ -196,7 +196,7 @@ describe('owner reads of retained subordinate paths', () => {
     const name = `reader-${'r'.repeat(52)}`;
     const fixture = workspaceFixture();
     const child = fixture.child(fixture.main, name);
-    void fixture.sql`INSERT INTO messages (actor_id,id,role,content,created_at)
+    void fixture.sql`INSERT INTO actor_messages (actor_id,id,role,content,created_at)
       VALUES (${child.actorId}, 'message', 'user', 'retained answer', 1)`;
     expect(read(fixture, { path: [name], view: 'history', page: {} })).toMatchObject({
       view: 'history', path: [name], page: { status: 'end', items: [{ content: 'retained answer' }] },
