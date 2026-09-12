@@ -16,6 +16,9 @@ import { REASONING_EFFORTS, type ReasoningEffort } from '../strategy/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
+import type { RoleId } from '../types/profile';
+
+export type { RoleId } from '../types/profile';
 
 // ── Vocabulary ───────────────────────────────────────────────────
 
@@ -63,8 +66,6 @@ export const DEFAULT_ROLE_ID = 'general' as const satisfies BuiltinRoleId;
 export const ROLE_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
 const ROLE_ID_MAX_LEN = 64;
-
-export type RoleId = string;
 
 const RoleIdSchema = v.pipe(v.string(), v.regex(ROLE_ID_RE), v.maxLength(ROLE_ID_MAX_LEN));
 

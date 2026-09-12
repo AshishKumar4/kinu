@@ -48,6 +48,11 @@ import {
   type AgentsToolAction,
 } from '../tools/registry';
 import { SwarmConfigSchema, SwarmModelsSchema, SwarmNodeAssignmentsSchema, SwarmObjectiveSchema } from '../tools/swarm-input';
+import {
+  PEER_REPLY_TOPIC,
+  type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
+  type PeersToolDeps,
+} from '../types/peers';
 import { runSwarm, type SwarmRunDeps } from '../strategy/swarm-run';
 import type { ActorReference } from '../identity/actor-handle';
 import type { SubordinateBirth } from '../subordinates/birth';
@@ -95,12 +100,17 @@ import {
 import {
   parseJsonObject,
   type JsonObject,
-  type JsonValue,
 } from '../utils/json';
 import {
   countedMsgSend,
   type MsgSendResult,
 } from '../tools/msg-counters';
+
+export {
+  PEER_REPLY_TOPIC,
+  type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
+  type PeerSpawnOutcome, type PeersToolDeps,
+} from '../types/peers';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace's ONE actor host: spawn =
@@ -299,36 +309,6 @@ export interface TeamToolDeps {
 // EventLog → turn, with replies routed back through the receiver's peer-back
 // reply channel.
 
-export type PeerSendOutcome =
-  | { status: 'delivered' | 'queued'; message_id: string }
-  | { status: 'rejected'; reason: string };
-
-export type PeerAskOutcome =
-  | { status: 'replied'; from: string; reply: JsonValue | undefined }
-  | { status: 'rejected'; reason: string };
-
-export type PeerReplyOutcome = { ok: true } | { ok: false; error: string };
-
-export type PeerSpawnOutcome = { agent: string; created: boolean } & PeerAskOutcome;
-
-export interface PeersToolDeps {
-  /** The owner's other workspaces' agents this one may address (self excluded). */
-  listPeers(): Promise<Array<{ name: string; displayName?: string }>>;
-  /** Send-and-await: deliver a message and wait for the reply. There is no
-   *  elapsed limit on the wait — it ends when the reply arrives, and a reply
-   *  that outlives this activation arrives as a peer event instead. */
-  ask(input: { agent: string; topic: string; message: string; mode: WorkMode; signal?: AbortSignal }): Promise<PeerAskOutcome>;
-  /** Fire-and-forget: deliver a message without waiting for a reply. */
-  send(input: { agent: string; topic: string; message: string; mode: WorkMode }): Promise<PeerSendOutcome>;
-  /** Answer a peer message event received this (or an earlier) turn. */
-  reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome>;
-  /** Create (or reuse by name) a specialist workspace, message its agent, await
-   *  the result — under the same no-elapsed-limit wait as {@link ask}. */
-  spawnWorkspace(input: { name?: string; purpose: string; message: string; mode: WorkMode; signal?: AbortSignal }): Promise<PeerSpawnOutcome>;
-}
-
-/** Reserved topic for transport-generated reply envelopes; user sends must not claim it. */
-export const PEER_REPLY_TOPIC = 'peer_reply';
 
 /** What the sender is told about a handoff, in the tool's snake_case shape. */
 function renderHandoff(handoff: SubordinateHandoff) {
@@ -1390,7 +1370,6 @@ function badInput(error: string): never {
   throw new KinuError('bad_input', error);
 }
 
-
 /**
  * The mission scope this call runs under: the caller's, narrowed to a fresh child
  * label when the call declared its own cap. Returns null when there is no governor
@@ -1421,7 +1400,6 @@ function missionScope(
 
   return scope ? { governor: budget, scope } : null;
 }
-
 
 /**
  * One `agents.swarm` call: resolve it, check it, run it — in that order, because each
@@ -1488,7 +1466,6 @@ function resolveDelegatedProfile(
     return { error: `role ${JSON.stringify(role)} is not one your role may delegate to — `
       + `allowed: ${spawns.length > 0 ? spawns.join(', ') : '(none)'}.` };
   }
-
 
   try {
     const resolved = resolveTurnProfile({
@@ -2000,7 +1977,6 @@ function actionAdmission(actions: readonly AgentsToolInput['action'][], mode: Wo
 
   return action === 'hire' ? null : workModeRefusal(mode, action !== 'dismiss', 'agents.' + action);
 }
-
 
 /**
  * Fields this hire cannot act on, refused naming the field that does the job.

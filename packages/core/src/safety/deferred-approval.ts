@@ -45,7 +45,7 @@
  * minutes, in memory, with the caller blocked).
  */
 
-import type { DynamicApproval } from '../prompting/volatile-context';
+import type { DynamicApproval } from '../types/dynamic-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import type { SignalDeliverer } from '../types/signals';
