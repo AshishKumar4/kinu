@@ -1,5 +1,5 @@
 {
-  "measured": "ced2f88d7: 953 test files, 860 runnable suites, 11719 tests, 36 runners, 64 non-public product members",
+  "measured": "341e54401: 965 test files, 869 runnable suites, 11828 tests, 36 runners, 64 non-public product members",
   "entries": [
     {
       "key": "mirror :: packages/cf-backend/tests/unit-control-plane-access.test.ts :: (file scope) :: mirrored constant",
@@ -483,6 +483,26 @@
     },
     {
       "key": "private_reach :: packages/cf-backend/tests/unit-turn-pipeline-correctness.test.ts :: the scope is the claim identity, not whatever turn is ambient :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a message admitted after the genesis slot opened is the next turn :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a message admitted before the genesis slot opens IS the first turn :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a mission becomes a queued agent turn with no user input :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a workspace with nobody speaking runs the offer as its first turn :: harness bridge to a non-public member",
+      "count": 1
+    },
+    {
+      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: the mission is not quoted into the turn — it is already the system prompt :: harness bridge to a non-public member",
       "count": 1
     },
     {
