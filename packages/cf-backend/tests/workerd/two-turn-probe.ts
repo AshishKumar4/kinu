@@ -78,9 +78,17 @@ import type { OrchestratorAgent as ProductionOrchestrator } from '../../src/orch
 import type { UserDO } from '../../src/user/user-do';
 import type {
   CallRecord,
+  CancelProbeResult,
+  DriveOnceInput,
+  DriveOnceResult,
   ExerciseResult,
 } from './two-turn-shapes';
-import { ExerciseResultSchema } from './two-turn-shapes';
+import {
+  CancelProbeResultSchema,
+  DriveOnceInputSchema,
+  DriveOnceResultSchema,
+  ExerciseResultSchema,
+} from './two-turn-shapes';
 import { ownerCaller } from '../../src/user/workspace-capability';
 
 // Re-exported under their production names so the auxiliary worker's
@@ -131,6 +139,12 @@ interface AIRunner {
 /** The whole call log for this isolate; the test reads it through the root. */
 const recordedCalls: CallRecord[] = [];
 
+/** Whether the pending arm has observed its abort (reset on every arm). */
+let pendingAbortObserved = false;
+
+/** Abort listeners currently held by pending arms — zero is clean. */
+let activeAbortListeners = 0;
+
 /** The model's side of `messages[].content`, schema-narrowed at the boundary. */
 function messageText(content: MessageContent): string {
   return v.is(v.string(), content)
@@ -163,6 +177,47 @@ function titleAnswer(): string {
 }
 
 export class FakeAI extends WorkerEntrypoint {
+  /** The pending arm for the caller-cancellation repro: parks forever on the
+   *  caller's own signal and rejects with its reason on abort — the reference
+   *  pattern (abort observed, listener removed in `finally`). A signal that is
+   *  not a live AbortSignal is a product finding, thrown loudly. */
+  static async pending(options?: RunOptions): Promise<Response> {
+    pendingAbortObserved = false;
+
+    const signal = options?.signal;
+
+    if (!(signal instanceof AbortSignal)) {
+      throw new Error('FakeAI: pending arm requires a live AbortSignal in options');
+    }
+
+    recordedCalls.push({
+      model: 'probe/pending',
+      users: [],
+      signalKind: 'AbortSignal',
+      stream: false,
+      lane: 'pending',
+    });
+
+    const gate = Promise.withResolvers<Response>();
+
+    const onAbort = (): void => {
+      pendingAbortObserved = true;
+      gate.reject(signal.reason instanceof Error ? signal.reason : new Error('Model request aborted'));
+    };
+
+    if (signal.aborted) onAbort();
+    else signal.addEventListener('abort', onAbort, { once: true });
+
+    activeAbortListeners += 1;
+
+    try {
+      return await gate.promise;
+    } finally {
+      signal.removeEventListener('abort', onAbort);
+      activeAbortListeners -= 1;
+    }
+  }
+
   /** The one method `createDirectWorkersAIFetch` calls on the binding. */
   async run(model: string, inputs: RunInputs, options?: RunOptions): Promise<Response> {
     const signal = options?.signal;
@@ -176,6 +231,42 @@ export class FakeAI extends WorkerEntrypoint {
     const parsed = v.parse(RunInputsSchema, inputs);
     const stream = parsed.stream ?? false;
     const messages = parsed.messages ?? [];
+
+    // Model-routed arms for the lifecycle repros, keyed on the model id the
+    // product itself sends — never on prompt text. Both live beside the lane
+    // key, never inside it: the lanes answer product traffic, these answer
+    // experiments the probe drives.
+    if (model.includes('pending')) {
+      return FakeAI.pending(options);
+    }
+
+    if (model.includes('early-done') || (stream && model.includes('glm-5.3'))) {
+      // Producer-open: the content frame and [DONE] go out, then the body
+      // stays open forever. The consumer stops at [DONE]; whatever the
+      // runtime does with the un-closed pipe is the discriminating datum
+      // against the normal-EOF turn, which closes its own body. Keyed on the
+      // model id because the turn model must resolve in the real catalog — a
+      // fake id is refused at enqueue (`signal.enqueue_failed`) — and the
+      // fast-tier slot's real glm id doubles as the variant pin while the
+      // sleep lane on the same id stays non-streaming.
+      const text = 'early';
+
+      const encoder = new TextEncoder();
+
+      const frames = [
+        `data: ${JSON.stringify({ response: `echo:${text}` })}\n\n`,
+        'data: [DONE]\n\n',
+      ];
+
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const frame of frames) controller.enqueue(encoder.encode(frame));
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } },
+      );
+    }
 
     const users = messages
       .filter((m) => m.role === 'user')
@@ -388,6 +479,123 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       // RPC declaration (InferOutput below) can never drift from them.
       return v.parse(ExerciseResultSchema, {
         register, claim, model, turnA, turnB, snapshot, history,
+        calls: recordedCalls,
+        failures: recording.emitted
+          .filter((e) => e.code !== null)
+          .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
+        owedEffects: recording.emitted
+          .filter((e) => e.event === 'turn.terminal_effects_owed')
+          .flatMap((e) => {
+            const owed = e.fields['owed'];
+
+            return v.is(v.string(), owed) ? owed.split(',').filter((k) => k.length > 0) : [];
+          }),
+        factsCompressed: recording.emitted
+          .filter((e) => e.event === 'memory.facts_compressed').length,
+      });
+    } finally {
+      restore();
+    }
+  }
+
+  /** Caller cancellation through the actual service binding: parks a call on
+   *  the pending arm, aborts it, and reports what the fake observed. The
+   *  pending arm rejects with the abort reason and removes its listener in
+   *  `finally`; `activeListeners` proves the cleanup rather than asserting it.
+   *  Awaited joins only: the arm's entry is polled (bounded) so the abort can
+   *  never precede the park it means to end. */
+  async cancelProbe(): Promise<CancelProbeResult> {
+    // SAFETY: the vitest config declares `env.AI` as this worker's service
+    // binding to `FakeAI`, whose entrypoint contract provides `run` — the
+    // member AIRunner names and the only member the adapter calls.
+    const binding: AIRunner | undefined = this.env.AI as AIRunner | undefined;
+    const controller = new AbortController();
+
+    const started = Date.now();
+
+    const flight = binding?.run(
+      'probe/pending',
+      { messages: [], stream: false },
+      { signal: controller.signal, returnRawResponse: true },
+    );
+
+    for (;;) {
+      const entered = recordedCalls.some((c) => c.lane === 'pending' && c.model === 'probe/pending');
+
+      if (entered) break;
+
+      if (Date.now() - started > 5000) {
+        throw new Error('two-turn probe: pending arm never entered; nothing to cancel');
+      }
+
+      const tick = Promise.withResolvers<void>();
+
+      setTimeout(tick.resolve, 20);
+      await tick.promise;
+    }
+
+    controller.abort(new Error('probe cancels the pending request'));
+
+    let rejection = '';
+
+    try {
+      await flight;
+    } catch (cause) {
+      rejection = cause instanceof Error ? cause.message : String(cause);
+    }
+
+    return v.parse(CancelProbeResultSchema, {
+      observedAbort: pendingAbortObserved,
+      activeListeners: activeAbortListeners,
+      rejection,
+    });
+  }
+
+  /** One parameterized drive for the lifecycle variants: its own workspace so
+   *  Think state never crosses between experiments. The early-[DONE] variant
+   *  pins a model whose stream the fake leaves open after [DONE]; the turn
+   *  still completes, and whatever the runtime does with the un-closed pipe
+   *  is the discriminating datum against the normal-EOF drive. */
+  async driveOnce(input: DriveOnceInput): Promise<DriveOnceResult> {
+    const drive = v.parse(DriveOnceInputSchema, input);
+    const recording = createRecordingLogger();
+    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+
+    try {
+      const raw: Pick<Fetcher, 'fetch'> = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
+        this.env.OrchestratorAgent, drive.workspace,
+      );
+
+      // SAFETY: `getAgentByName` constructed the stub over the `OrchestratorAgent`
+      // binding, and every picked name is a method the production class declares
+      // and `ORCHESTRATOR_RPC_SURFACE` lists, so the narrowed calls resolve.
+      const target = raw as Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
+        'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'getChatHistoryPage'>;
+
+      const caller = await ownerCaller(this.env);
+
+      // SAFETY: `env.UserDO` declares the real `UserDO` class in this worker's
+      // durableObjects, so the stub carries the registry methods the owner
+      // caller tier admits.
+      const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(drive.owner)) as
+        DurableObjectStub & Pick<UserDO, 'registerWorkspace' | 'ensureWorkspaceCapability'>;
+
+      await userDO.registerWorkspace(caller, drive.workspace, drive.displayName);
+      const claim = await target.claimOwner(drive.owner);
+
+      await userDO.ensureWorkspaceCapability(drive.workspace, claim.capabilityHash);
+      await target.setModel(drive.model);
+
+      const turn = await target.runTaskFromMcp(drive.text);
+
+      await awaitFactsCompressed(recording, 1);
+      await awaitQuiet(recording);
+
+      const snapshot = await target.getWorkspaceSnapshot();
+      const history = await target.getChatHistoryPage({});
+
+      return v.parse(DriveOnceResultSchema, {
+        turn, snapshot, history,
         calls: recordedCalls,
         failures: recording.emitted
           .filter((e) => e.code !== null)
