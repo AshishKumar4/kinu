@@ -11,7 +11,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import * as v from 'valibot';
 import {
   AMBIENT_CREDENTIAL_ENV, LIVE_MODEL_ENV, stripAmbientCredentials,
@@ -26,8 +26,8 @@ function envAfterPreload(env: Record<string, string>) {
   const proc = Bun.spawnSync({
     cmd: [
       process.execPath, '-e',
-      "import './scripts/test-scratch-home.ts';"
-      + 'console.log(JSON.stringify(process.env));',
+      "import { release } from './scripts/test-scratch-home.ts';"
+      + 'console.log(JSON.stringify(process.env)); release();',
     ],
     cwd: repoRoot,
     env: { ...process.env, ...env },
@@ -92,6 +92,12 @@ describe('the rule', () => {
 });
 
 describe('the wiring', () => {
+  test.each(['', '/outside-test-home'])('the daemon inflight root ignores the inherited value %j', (inherited) => {
+    const env = envAfterPreload({ KINU_INFLIGHT_ROOT: inherited });
+    expect(env.KINU_INFLIGHT_ROOT).toBe(join(env.KINU_HOME, 'inflight'));
+    expect(env.KINU_INFLIGHT_ROOT).not.toBe(inherited);
+  });
+
   test('a test process started from a signed-in shell sees no credential', () => {
     // The whole point, proven by running the preload rather than by reading it.
     // Without the strip this returns the two values it was given.

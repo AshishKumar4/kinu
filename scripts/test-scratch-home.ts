@@ -35,6 +35,9 @@ const home = mkdtempSync(join(tmpdir(), 'kinu-test-home-'));
 
 process.env.KINU_HOME = home;
 
+// The daemon captures this path on its first require, before a later suite can set it.
+process.env.KINU_INFLIGHT_ROOT = join(home, 'inflight');
+
 // The throwaway home isolates a suite from the developer's CONFIG FILE. This is
 // the same property for the ENVIRONMENT, which was the half nobody had done:
 // `resolveCloudSession()` prefers `KINU_TOKEN` over that config file, so a
