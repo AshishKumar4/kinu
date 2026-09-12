@@ -12,7 +12,6 @@
 import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
 import { usePanelRef, type PanelImperativeHandle, type PanelProps, type PanelSize } from "react-resizable-panels";
 import { getProfile } from "@/lib/user-api";
-import { diagnostics } from "@kinu.run/core/obs";
 
 /** Inspector defaults: a 340px opening inside the 320-360px design band, with
  *  a 280px pixel floor so a wide display can keep it compact. */
@@ -45,19 +44,20 @@ function writeInspectorPrefs(account: string, prefs: InspectorPrefs): void {
   localStorage.setItem(`kinu.inspector.${account}`, `${String(prefs.widthPx)}:${prefs.collapsed ? "1" : "0"}`);
 }
 
-let profileEmailCache: Promise<string | null> | null = null;
+/** The account that keys a persisted layout, or why there is none: a signed-in
+ *  profile with no email keys nothing, and a profile that could not be read is
+ *  a session-only layout. Both are values the effect branches on, not a throw
+ *  to classify: the Sidebar's own profile read reports the reason a person
+ *  sees. */
+type AccountKey = { kind: "known"; email: string } | { kind: "none" } | { kind: "unreadable" };
 
-function profileEmail(): Promise<string | null> {
-  const cached = (profileEmailCache ??= getProfile().then(
-    (profile) => profile?.email ?? null,
-    () => {
-      diagnostics.event("inspector.profile_unreadable");
+let readAccountKeyCache: Promise<AccountKey> | null = null;
 
-      return null;
-    },
+function readAccountKey(): Promise<AccountKey> {
+  return (readAccountKeyCache ??= getProfile().then(
+    (profile) => (profile?.email ? { kind: "known", email: profile.email } : { kind: "none" }),
+    () => ({ kind: "unreadable" }),
   ));
-
-  return cached;
 }
 
 /**
@@ -247,9 +247,10 @@ export function useInspectorLayout(input: {
     let live = true;
 
     startTransition(async () => {
-      const email = await profileEmail();
+      const account = await readAccountKey();
 
-      if (!live || email === null) return;
+      if (!live || account.kind !== "known") return;
+      const { email } = account;
 
       setAccountKey((prev) => {
         if (prev === email) return prev;
