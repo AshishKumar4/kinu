@@ -3888,7 +3888,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  digest so a shifted list can never revert the wrong row. */
   @callable()
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.facts }, id);
+    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.facts, events: this.eventRecorder }, id);
 
     if (result.ok) {
       // Crafted-tool retirement must drop the cached tool surface, exactly

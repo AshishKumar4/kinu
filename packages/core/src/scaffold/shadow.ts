@@ -52,14 +52,16 @@ import {
   initEffectTombstoneTable, effectAlreadyDone, recordEffectDone,
 } from '../identity/effect-tombstones';
 import { nowMs } from '../utils/date';
-import { diagnostics, toKinuError } from '../obs/index';
+import { diagnostics, toKinuError, KinuError } from '../obs/index';
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 import { checkMisevolution, recordMisevolutionVeto } from './misevolution';
-import { RunEventRecorder } from '../events/recorder';
+import type { RunEventRecorder } from '../events/recorder';
 import { WORKSPACE_RUN_ID } from '../events/model-call';
 
 export type { ScaffoldArchiveEntry, ScaffoldStatus } from '../types/scaffold';
+
+export type ScaffoldDecisionEvents = Pick<RunEventRecorder, 'actorId' | 'emit'>;
 
 /** One turn's contribution of trial evidence. Kept after the queue row is
  *  consumed: `dropQueuedShadowTrial` deletes that row the moment the trial is
@@ -773,8 +775,11 @@ export async function applyPromotionDecision(
   rt: AgentRuntime,
   pending: PendingScaffold,
   decision: 'promote' | 'rollback',
+  events: ScaffoldDecisionEvents,
 ): Promise<{ newCurrentVersion: number; action: 'promote' | 'rollback'; vetoReason?: string }> {
   rt.actor.assertCurrent();
+
+  if (events.actorId !== rt.actor.actorId) throw new KinuError('denied', 'a scaffold decision requires its actor event recorder');
   const sql = rt.storage.sql;
 
   if (decision === 'promote') {
@@ -795,7 +800,7 @@ export async function applyPromotionDecision(
         surface: 'scaffold', violation: misevolution,
         detail: `promotion of v${pending.version} vetoed; rolled back instead`,
       });
-      const result = await applyPromotionDecision(rt, pending, 'rollback');
+      const result = await applyPromotionDecision(rt, pending, 'rollback', events);
 
       return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
     }
@@ -814,7 +819,7 @@ export async function applyPromotionDecision(
     // Pointer committed. The live file is the rebuildable view, refreshed
     // after; execution reads the pointer's version file either way.
     await rt.identity.scaffold.write(pendingCode);
-    recordScaffoldDecision(rt, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
+    recordScaffoldDecision(events, { type: 'scaffold_promotion', fromVersion: pending.version - 1, toVersion: pending.version });
 
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
@@ -830,7 +835,7 @@ export async function applyPromotionDecision(
     await rt.identity.scaffold.write(currentCode);
   }
 
-  recordScaffoldDecision(rt, { type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion });
+  recordScaffoldDecision(events, { type: 'scaffold_rollback', fromVersion: pending.version, toVersion: currentVersion });
 
   return { newCurrentVersion: currentVersion, action: 'rollback' };
 }
@@ -847,11 +852,11 @@ export async function applyPromotionDecision(
  * Filed under the reserved workspace run: a decision is not a turn's event.
  */
 function recordScaffoldDecision(
-  rt: AgentRuntime,
+  events: ScaffoldDecisionEvents,
   event: { type: 'scaffold_promotion' | 'scaffold_rollback'; fromVersion: number; toVersion: number },
 ): void {
   try {
-    new RunEventRecorder(rt.storage.sql, rt.actor).emit(WORKSPACE_RUN_ID, event);
+    events.emit(WORKSPACE_RUN_ID, event);
   } catch (err) {
     diagnostics.failure('event.scaffold_decision_emit_failed', toKinuError({
       doing: 'recording a scaffold promotion/rollback run event',

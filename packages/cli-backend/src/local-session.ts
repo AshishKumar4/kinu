@@ -1403,7 +1403,7 @@ export class LocalAgentSession implements BackendHost {
    *  rollback / craft retire / fact forget). Invalidates the model-bound
    *  state so a retired crafted tool disappears from the next turn. */
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore }, id);
+    const result = await revertChangelogEntryById({ rt: this.rt, facts: this.factsStore, events: this.eventRecorder }, id);
 
     if (result.ok) this.invalidateModelState();
 
@@ -4039,6 +4039,7 @@ export class LocalAgentSession implements BackendHost {
   private get scaffoldControl(): ScaffoldControl {
     return {
       rt: this.rt,
+      events: this.eventRecorder,
       sql: this.rt.storage.sql,
       config: this.config,
       surface: (task, context, callScope) => {

@@ -23,6 +23,7 @@ import {
 } from '../src/index';
 import type { AgentRuntime } from '../src/types/agent-runtime';
 import { createTestRuntime } from './helpers';
+import { RunEventRecorder } from '../src/events/recorder';
 
 const RATIONALE = 'A rationale comfortably longer than the fifty-character gate-1 minimum length.';
 
@@ -124,7 +125,7 @@ describe('scaffold surface — promotion-time recheck (VFS tamper)', () => {
     );
 
     const pending = getPendingScaffold(rt.storage.sql, rt.actor)!;
-    const outcome = await applyPromotionDecision(rt, pending, 'promote');
+    const outcome = await applyPromotionDecision(rt, pending, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(outcome.action).toBe('rollback');
     expect(outcome.vetoReason).toContain('network-egress');
     expect(outcome.newCurrentVersion).toBe(0);
