@@ -445,6 +445,7 @@ export class ContainerDisk {
   readonly mounts = new Map<string, MountRow>();
   readonly overlays = new Map<string, OverlayRow>();
   readonly trees = new Map<string, LiveTree>();
+  readonly execCalls: string[] = [];
   /** Plain files a mount serves on demand: present, readable, never charged. */
   readonly mountServed = new Set<string>();
   /** Paths an overlay's upper has deleted from a lower: the whiteouts. */
@@ -1519,6 +1520,7 @@ function chainExec(
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
   return async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> => {
+    disk.execCalls.push(command);
     // The session shell first: a command it would refuse never reaches a
     // strategy's answer, on a deployment or here. See `session-shell.ts`.
     const refused = sessionShellRefusal(command);
@@ -2023,13 +2025,6 @@ function snapshotChainArm(): ConformanceArm {
     },
     refusedCells: {
       ...HARNESS_OWNED_CELLS,
-      // Until 2026-09-10 this and 6.15 were refused as a property of the
-      // format: the overlay copies the whole inode up and the delta archived
-      // the whole upper. The chunked delta publishes changed 16 KiB blocks
-      // (6.14's in-place seal measured 66,135 bytes chunked and 89,724 put
-      // for a 64 KiB write, trees exact), so 6.15 runs. What remains of 6.14
-      // is the wake's constant, which predates the format and is not O(1)=3.
-      '6.14': { reason: 'a snapshot-chain wake makes 4 remote ops against the O(1) bound of 3: the base integrity head, the head that adopts an unreferenced delta, the store mount\'s list and the base layer\'s get (a base+delta wake makes 5; measured 2026-09-10 in the conformance harness)' },
     },
   };
 }

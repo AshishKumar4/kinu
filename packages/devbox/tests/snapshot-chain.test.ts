@@ -290,6 +290,17 @@ function excludePatternsOf(command: string): readonly string[] {
  * an unrecognised command falls through to its first word — so a NEW command
  * shows up in the recorded calls instead of silently resolving as nothing.
  */
+const DELTA_SHELL_REPLIES: ReadonlyMap<string, ShellOutcome> = new Map([
+  ['# devbox-probe-v1', { call: 'deltaProbe', stdout: '0 ' }],
+  ['# devbox-whiteout-v1', { call: 'deltaWhiteoutStat', stdout: '0,0' }],
+  ['# devbox-basestat-v1', { call: 'deltaBaseStat', stdout: 'ABSENT' }],
+  ['# devbox-blockhash-v1', { call: 'deltaBlockHash', stdout: '' }],
+  ['# devbox-stage-v1', { call: 'deltaStage', stdout: '' }],
+  ['# devbox-materialize-v1', { call: 'deltaMaterialize', stdout: '' }],
+  ['# devbox-materialize-v1-post', { call: 'deltaMaterializePost', stdout: '' }],
+  ['# devbox-manifest-v1', { call: 'deltaManifest', stdout: '' }],
+]);
+
 function shellLabel(
   command: string,
   mounts: string,
@@ -301,6 +312,10 @@ function shellLabel(
   const unquote = (value: string): string => value.replace(/^'|'$/g, '');
 
   if (command === 'cat /proc/mounts') return { call: 'readMounts', stdout: mounts };
+
+  const delta = DELTA_SHELL_REPLIES.get(command.split('\n')[0]!);
+
+  if (delta !== undefined) return delta;
 
   // The staging-space probe: one command reporting `<need> <free>`.
   if (command.includes('df -Pk')) {
@@ -1109,6 +1124,22 @@ describe('attach — the mount must be observed to have landed', () => {
     expect((await attachOf(record)).kind).toBe('attached');
     expect(record.calls.filter(call => call.startsWith('mountLayer'))).toHaveLength(2);
     expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
+  });
+
+  test('a base-only mount does not HEAD an absent unrecorded delta', async () => {
+    const calls: string[] = [];
+
+    const record = harness({
+      state: chainState({ delta: undefined }),
+      mounts: mountsAfterAttach(calls),
+      calls,
+      absent: (path) => path.endsWith('/delta.sqsh'),
+    });
+
+    expect((await attachOf(record)).kind).toBe('attached');
+    expect(record.calls).toContain(`objectFacts:${baseObjectKey(STORE_ROOT, CHAIN_ID)}`);
+    expect(record.calls).not.toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+    expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
   });
 
   test('a complete but unreferenced delta adopts itself; the mount is its validator',
