@@ -33,8 +33,8 @@ const landed = (id: string, atStep = 3): InlineSteer =>
  *  every dependency the composer passes — and hands back what a reader would
  *  see. No effects run, and none are needed: the queued line is derived, which
  *  is the property under test. */
-function noticeFor(steerRuns: readonly InlineSteer[], hasAttachments = false): string | null {
-  let seen: string | null = null;
+function noticeFor(steerRuns: readonly InlineSteer[], hasAttachments = false): string | null | undefined {
+  let seen: string | null | undefined = null;
 
   function Probe() {
     const deps: SteerActionsDeps = {
