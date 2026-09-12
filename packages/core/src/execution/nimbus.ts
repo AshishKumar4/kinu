@@ -16,6 +16,7 @@ import { createInlineExecutor, type InlineExecutorDeps } from './inline';
 import { agentSessionFiles } from './nimbus-agent-files';
 import { makeVfsError } from '../vfs/errno';
 import { workspacePath } from '../vfs/workspace-path';
+import { sessionRuntimeBins, workspaceCommandNotFound } from '../vfs/workspace-runtimes';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes } from '../utils/base64';
 import type { ExecutorCapability, ExecutorProvider, PortAnsweringExecutor } from './types';
@@ -1055,7 +1056,16 @@ export function nimbusSessionShell(box: NimbusSandboxHandle, cred?: VfsCred): Sh
       const outcome = { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
       const refusal = nimbusTransportRefusal(result);
 
-      return refusal === null ? outcome : { ...outcome, refusal };
+      if (refusal !== null) return { ...outcome, refusal };
+
+      // A 127 the session answered with means the command is not in the box's
+      // catalog — the refusal helper names it and the two exits, deriving the
+      // install remedy from the box's own runtime list rather than a second
+      // table. No runtimes handle on this box → nothing is installable here.
+      const runtimes = box.runtimes?.list?.bind(box.runtimes);
+
+      return workspaceCommandNotFound(outcome, async (bin) =>
+        runtimes === undefined ? false : (await sessionRuntimeBins(runtimes)).has(bin));
     },
   };
 }
