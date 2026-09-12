@@ -486,26 +486,6 @@
       "count": 1
     },
     {
-      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a message admitted after the genesis slot opened is the next turn :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a message admitted before the genesis slot opens IS the first turn :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a mission becomes a queued agent turn with no user input :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: a workspace with nobody speaking runs the offer as its first turn :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
-      "key": "private_reach :: packages/cf-backend/tests/unit-workspace-genesis.test.ts :: the mission is not quoted into the turn — it is already the system prompt :: harness bridge to a non-public member",
-      "count": 1
-    },
-    {
       "key": "source_text :: packages/cf-backend/tests/unit-chat-error-surface.test.ts :: clears the error on the next send and on workspace switch; exposes retry + clear + state :: between() over source text",
       "count": 2
     },
