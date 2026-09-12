@@ -22,6 +22,7 @@ import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { SlateBinding } from '../../src/slates/bindings';
+import type { CallRecord, ExerciseResult } from './two-turn-shapes';
 import type { JsonValue } from '@kinu.run/core';
 import type { ExecutorInfo } from '@kinu.run/core';
 
@@ -49,12 +50,8 @@ interface SlateEgressRpc extends Rpc.DurableObjectBranded {
 
 interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   signalProbe(): Promise<{ signalKind: string } | { threw: string }>;
-  calls(): Promise<Array<{ model: string; users: string[]; signalKind: string }>>;
-  exercise(): Promise<{
-    claim: object; model: object; turnA: object; turnB: object;
-    snapshot: object; history: object;
-    calls: Array<{ model: string; users: string[]; signalKind: string }>;
-  }>;
+  calls(): Promise<CallRecord[]>;
+  exercise(): Promise<ExerciseResult>;
 }
 
 
