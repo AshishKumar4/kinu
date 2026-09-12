@@ -1886,7 +1886,6 @@ export class OrchestratorAgent extends ActorAgent {
   protected get engine(): EvolutionEngine {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
-        enabled: true,
         // The grading pass's verdict row, craft scores, tombstone and
         // announcement as ONE unit. A synchronous run inside a Durable Object is
         // already atomic, so this is the honest identity — but answering through

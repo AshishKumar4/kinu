@@ -56,6 +56,8 @@ function fakeEngine(opts?: { enabled?: boolean }) {
 
   const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
+    get recordsTurns() { return this.enabled; },
+    recoverInterruptedWork: () => {},
     sessionWindow: store,
     craftLedger: {
       names: () => crafted,

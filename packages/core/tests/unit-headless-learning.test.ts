@@ -11,7 +11,7 @@
  * it, starts recording a headless turn.
  *
  * The negative half is checked against a POSITIVE CONTROL on the very same
- * turn: handed to the actor's own `recordTurn` — what a full actor's
+ * turn: handed to the workspace root's `recordTurn` — what its
  * `turn_record` effect does — that turn is graded `corrected` by the execution
  * verdict and reflected into a lesson. So the assertion is not "the engine was
  * off" or "the turn carried nothing to learn from"; it is that the headless
@@ -31,6 +31,7 @@ import { snapshotCompletedTurn } from '../src/orchestrator/turn-lifecycle';
 import { CONSECUTIVE_FAILURES_BEFORE_STEER } from '../src/orchestrator/turn-steering';
 import type { LLM } from '../src/types/primitives';
 import type { SqlExecutor } from '../src/types/primitives';
+import { actorReferenceOf } from '../src/identity/actor-handle';
 
 const REFLECTION_PROMPT = 'should be done differently';
 
@@ -95,7 +96,7 @@ function windowRows(sql: SqlExecutor, actorId: string): number {
 }
 
 describe('a headless actor runs the step clock only', () => {
-  test('a head turn ending in a failed acting call enters no conversational timescale; the same turn recorded by a full actor does', async () => {
+  test('a head turn enters no conversational timescale; the same evidence recorded by the root does', async () => {
     const { llm, reflections } = reflectingLlm();
     const { rt, testSql } = createTestRuntime({ llm });
     const seats = hostedSeatsOver({ rt, db: testSql.db, autoEvolve: true });
@@ -132,12 +133,14 @@ describe('a headless actor runs the step clock only', () => {
       turnId: 'h1', sessionId: 'default', origin: 'programmatic',
     });
 
-    seat.actor.session.orchestrator.recordTurn(turn, 'conversation');
-    await seat.actor.session.orchestrator.settleEvolution();
-    expect(windowRows(rt.storage.sql, actor.actorId)).toBe(1);
-    expect(listTurnOutcomes(rt.storage.sql, actor).map((row) => [row.outcome, row.source]))
+    const root = await seats.host.acquire(actorReferenceOf(rt.actor));
+    root.session.orchestrator.recordTurn(turn, 'conversation');
+    await root.session.orchestrator.settleEvolution();
+    expect(windowRows(rt.storage.sql, actor.actorId)).toBe(0);
+    expect(windowRows(rt.storage.sql, root.handle.actorId)).toBe(1);
+    expect(listTurnOutcomes(rt.storage.sql, root.handle).map((row) => [row.outcome, row.source]))
       .toEqual([['corrected', 'execution']]);
-    expect(listLessons(rt.storage.sql, actor).map((lesson) => [lesson.source, lesson.status]))
+    expect(listLessons(rt.storage.sql, root.handle).map((lesson) => [lesson.source, lesson.status]))
       .toEqual([['turn_reflection', 'provisional']]);
     expect(reflections()).toBe(1);
   });
