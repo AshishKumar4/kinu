@@ -25,7 +25,7 @@
  * lapses: resolvers and timers are per-activation and cannot outlive it.
  */
 
-import type { DynamicApproval } from '../prompting/volatile-context';
+import type { DynamicApproval } from '../types/dynamic-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import * as v from 'valibot';
 

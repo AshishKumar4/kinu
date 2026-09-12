@@ -12,7 +12,7 @@ import * as v from 'valibot';
 import { TASK_STATUSES, type TaskListStore } from '../tasks/store';
 import type { AgentConfigStore } from '../config/store';
 import { TOOL_REACH } from './registry';
-import type { ProfileCatalogEnvelope } from '../profiles/catalog';
+import type { ProfileCatalogEnvelope } from '../types/profile';
 import { decodeJsonValue } from '../utils/json';
 import { createTasksDispatcher } from './tasks-tool';
 import { branchableToolCall } from './outcome';

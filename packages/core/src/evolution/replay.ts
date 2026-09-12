@@ -25,10 +25,12 @@ import {
   listTurnOutcomes,
   renderOutcomeCriterion,
   FRESH_RESPONSE_RULE,
-  NEGATIVE_TURN_OUTCOMES,
-  TURN_OUTCOMES,
-  type TurnOutcomeRow,
 } from './outcomes';
+import {
+  NEGATIVE_TURN_OUTCOMES, TURN_OUTCOMES,
+  type ReplayEvalSummary, type ReplayInstanceResult, type TurnOutcomeRow,
+} from '../types/evolution';
+
 import { renderThrownChain, tolerate } from '../obs/index';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
@@ -36,6 +38,11 @@ import { nanoid } from '../utils/nanoid';
 import { nowMs } from '../utils/date';
 import { parseJsonValue } from '../utils/json';
 import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats';
+
+export {
+  NEGATIVE_TURN_OUTCOMES, TURN_OUTCOMES,
+  type ReplayEvalSummary, type ReplayInstanceResult, type TurnOutcomeRow,
+} from '../types/evolution';
 
 /**
  * Instances per replay pass. Each one costs a full re-run of a past task
@@ -69,28 +76,6 @@ export function initReplayTables(execRaw: RawSqlExec): void {
              ON replay_evals(actor_id, ran_at DESC, id DESC)`);
 }
 
-export interface ReplayInstanceResult {
-  outcomeId: string;
-  outcome: TurnOutcomeRow['outcome'];
-  score: number;
-  note: string;
-}
-
-export interface ReplayEvalSummary {
-  id: string;
-  ranAt: number;
-  sampleSize: number;
-  acceptedCount: number;
-  negativeCount: number;
-  meanScore: number;
-  loss: number;
-  /** 95% interval around `meanScore` (loss bounds are its complement — see
-   *  `lossInterval`). Never read the mean without it. */
-  interval: ScoreInterval;
-  scaffoldVersion: number | null;
-  results: ReplayInstanceResult[];
-}
-
 export interface RunReplayEvalOpts {
   sql: SqlExecutor;
   /** The actor whose ledger this pass samples and whose curve it extends. */
@@ -115,7 +100,6 @@ const ReplayInstanceResultSchema: v.GenericSchema<ReplayInstanceResult> = v.obje
   score: v.number(),
   note: v.string(),
 });
-
 
 function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
   return (

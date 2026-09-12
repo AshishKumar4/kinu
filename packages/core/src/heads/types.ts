@@ -27,7 +27,7 @@
  */
 
 import type { ToolCallRecord } from '../evolution/types';
-import type { HeadFileChange } from './file-changes';
+import type { HeadFileChange, HeadFileChangeSet, HeadId } from '../types/heads';
 import type { EvaluationGrounding } from '../types/evaluation';
 import type { Usage } from '../usage';
 import type { ToolSet } from 'ai';
@@ -35,10 +35,7 @@ import type { BuiltinToolName } from '../tools/registry';
 import type { LoopOrigin } from '../scaffold/loop-origin';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
-export type { HeadFileChange };
-
-/** Opaque head identifier — kebab-case string, globally unique within a turn. */
-export type HeadId = string;
+export type { HeadFileChange, HeadFileChangeSet, HeadId };
 
 /** What kind of merging the parent wants — drives the merge prompt. */
 export type MergeStrategy =
@@ -142,14 +139,6 @@ export interface Decision {
   readonly rationale: string;
   /** Which evidence ids back this decision. */
   readonly supportingEvidence?: readonly string[];
-}
-
-/** One head's change set as the merge payload carries it. Heads that changed
- *  nothing are absent rather than present-and-empty: a fork that touched no
- *  files has nothing to report, and an empty row would still print a heading. */
-export interface HeadFileChangeSet {
-  readonly id: HeadId;
-  readonly changes: readonly HeadFileChange[];
 }
 
 /** Pointer to a tangible side-effect the head produced. */
@@ -410,7 +399,6 @@ export interface HeadScore {
   readonly score: number;
   readonly grounding: EvaluationGrounding;
 }
-
 
 /** Default merge strategy. */
 export const DEFAULT_MERGE_STRATEGY: MergeStrategy = 'synthesize';

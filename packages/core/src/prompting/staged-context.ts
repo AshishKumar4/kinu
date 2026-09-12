@@ -39,10 +39,11 @@
 
 import type { ModelMessage } from 'ai';
 
-/** Why a boundary could not take a pending revision. */
-export const STAGED_CONTEXT_DEFERRALS = ['unpaired_tool_call', 'history_rewritten'] as const;
+import type { StagedContextDeferral } from '../types/context-plane';
 
-export type StagedContextDeferral = (typeof STAGED_CONTEXT_DEFERRALS)[number];
+export {
+  STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral,
+} from '../types/context-plane';
 
 /** The working base a step renders from: the array, and where the material it
  *  does not own begins in the live array. */

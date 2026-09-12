@@ -16,7 +16,7 @@ import {
   type SubordinateReportOrigin,
 } from '../../subordinates/support';
 import type { SubordinateRosterStore } from '../../subordinates/roster';
-import type { TemporaryAgentPort } from '../../subordinates/temporary';
+import type { TemporaryAgentPort } from '../../types/subordinates';
 
 export interface SubordinateEventInput {
   fromSubordinate: string;

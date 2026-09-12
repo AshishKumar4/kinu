@@ -8,7 +8,7 @@ import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime';
 import { upsertCraftedTool } from './conflict';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured';
-import { EVIDENCE_BUDGETS } from '../prompts/evidence-window';
+import { EVIDENCE_BUDGETS } from '../types/evidence';
 import { tolerate } from '../obs/index';
 
 /** Head-only cut with a named omission — code must stay contiguous for a

@@ -1,18 +1,9 @@
-import * as v from 'valibot';
-import { ERROR_CODES, KinuError, renderThrownChain } from '../obs/index';
-import { FileRefusalError, FILE_REFUSAL_REASONS } from './file-edit';
+import { KinuError, renderThrownChain } from '../obs/index';
+import { FileRefusalError } from './file-edit';
+import type { ToolOutcome } from '../types/tool-outcome';
 import { McpToolError } from './mcp-error';
 
-export const ToolOutcomeSchema = v.variant('success', [
-  v.object({ success: v.literal(true) }),
-  v.object({
-    success: v.literal(false),
-    reason: v.nullable(v.picklist([...ERROR_CODES, ...FILE_REFUSAL_REASONS])),
-    execution: v.optional(v.object({ exitCode: v.number() })),
-  }),
-]);
-
-export type ToolOutcome = v.InferOutput<typeof ToolOutcomeSchema>;
+export { ToolOutcomeSchema, type ToolOutcome } from '../types/tool-outcome';
 
 /** Read only producer-owned error metadata; output and diagnostic wording are not status. */
 export function failedToolOutcome(input: Parameters<typeof renderThrownChain>[0]): Extract<ToolOutcome, { success: false }> {

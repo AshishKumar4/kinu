@@ -7,6 +7,17 @@ import { renderThrownChain } from '../obs/index';
 import { PLATFORM_CATALOG } from '../platform-catalog';
 import { seekPage, StaleCursorError, type Page, type PageRequest } from '../read-models/page';
 import { boundedInt } from '../utils/bounds';
+import type {
+  PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanEdit,
+  PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult,
+  PlanReviewStatus,
+} from '../types/plans';
+
+export type {
+  PlanAnnotationMathTarget, PlanAnnotationTextPosition, PlanEdit,
+  PlanReview, PlanReviewAnnotation, PlanReviewDecision, PlanReviewResult,
+  PlanReviewStatus, SubmitPlanToolDeps,
+} from '../types/plans';
 
 // One plan_reviews row holds content plus annotations_json. The platform
 // caps that row at do.sqlite.row_bytes. Both caps below fit inside it
@@ -16,43 +27,6 @@ export const MAX_PLAN_CONTENT_BYTES = 1536 * 1024;
 export const MAX_PLAN_ANNOTATIONS_BYTES = 256 * 1024;
 
 const MAX_PLAN_REVIEW_ROW_BYTES = PLATFORM_CATALOG['do.sqlite.row_bytes'].limit.value;
-
-export interface PlanEdit {
-  readonly start: number;
-  readonly end?: number | null;
-  readonly content: string;
-}
-
-export type PlanReviewStatus = 'pending' | 'changes_requested' | 'approved' | 'superseded';
-
-export type PlanReviewDecision = 'request_changes' | 'approve';
-
-export interface PlanAnnotationTextPosition {
-  readonly parentTagName: string;
-  readonly parentIndex: number;
-  readonly textOffset: number;
-}
-
-export interface PlanAnnotationMathTarget {
-  readonly blockId: string;
-  readonly tex: string;
-  readonly displayMode: boolean;
-}
-
-export interface PlanReviewAnnotation {
-  readonly id: string;
-  readonly blockId: string;
-  readonly startOffset: number;
-  readonly endOffset: number;
-  readonly type: 'DELETION' | 'COMMENT' | 'GLOBAL_COMMENT';
-  readonly text?: string;
-  readonly originalText: string;
-  readonly createdA: number;
-  readonly author?: string;
-  readonly startMeta?: PlanAnnotationTextPosition;
-  readonly endMeta?: PlanAnnotationTextPosition;
-  readonly mathTargets?: readonly PlanAnnotationMathTarget[];
-}
 
 const PlanReviewStatusSchema = v.picklist([
   'pending', 'changes_requested', 'approved', 'superseded',
@@ -76,20 +50,6 @@ export const PlanReviewSchema = v.object({
   createdAt: v.number(), updatedAt: v.number(), decidedAt: v.nullable(v.number()),
 });
 
-export interface PlanReview {
-  readonly id: string;
-  readonly sessionId: string;
-  readonly revision: number;
-  readonly content: string;
-  readonly status: PlanReviewStatus;
-  readonly annotations: readonly PlanReviewAnnotation[];
-  readonly feedback: string | null;
-  readonly handoffAccepted: boolean;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-  readonly decidedAt: number | null;
-}
-
 export function planReviewAwaitingDecision(
   review: Pick<PlanReview, 'status' | 'handoffAccepted'> | null | undefined,
 ): boolean {
@@ -97,10 +57,6 @@ export function planReviewAwaitingDecision(
     || review?.status === 'changes_requested'
     || (review?.status === 'approved' && !review.handoffAccepted);
 }
-
-export type PlanReviewResult =
-  | { readonly ok: true; readonly plan: PlanReview }
-  | { readonly ok: false; readonly error: string; readonly plan: PlanReview | null };
 
 interface PlanReviewRow {
   id: string;
@@ -635,6 +591,3 @@ export class PlanReviewStore {
   }
 }
 
-export interface SubmitPlanToolDeps {
-  readonly submit: (edits: readonly PlanEdit[]) => PlanReviewResult | Promise<PlanReviewResult>;
-}
