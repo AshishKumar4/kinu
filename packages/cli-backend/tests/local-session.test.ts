@@ -1373,9 +1373,10 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('a pinned model is the model the next turn runs on, not the account default', async () => {
-    // The mirror of the cf turn-pipeline pin: the same setModel setter the
-    // picker path uses, then one turn. Without the resolver override the turn
-    // runs on the account default tier's model and answers 'from a'.
+    // The CLI half of the pin the cf turn pipeline also proves: the same
+    // setModel setter the picker path uses, then one turn. Without the resolver
+    // override the turn runs on the account default tier's model and answers
+    // 'from a'.
     const resolver: LocalModelResolver = {
       normalizeSpecSync: (spec) => spec?.trim() || 'local/a',
       resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
