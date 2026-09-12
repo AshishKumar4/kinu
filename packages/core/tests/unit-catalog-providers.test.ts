@@ -14,6 +14,8 @@ import {
   type ProviderDeps, type AuthResolution, type ModelProvider,
 } from '../src/index';
 import { describeProviderError } from '../src/providers/util';
+import { reasoningEffortsFor } from '../src/providers/reasoning-effort';
+import { OPENAI_REASONING_EFFORTS } from '../src/providers/openai';
 import { createMockFetch, CHAT_COMPLETION_BODY } from '@kinu.run/test-utils';
 
 const CATALOG = {
@@ -279,5 +281,28 @@ describe('registry with dynamic catalog source', () => {
     }
 
     expect(detail).toContain('models.dev');
+  });
+});
+
+describe('reasoning efforts resolve per model, through a dated snapshot id', () => {
+  // The settings selector showed low|medium|high for every model: the tables
+  // were keyed by bare name while models.dev lists dated snapshots, so every
+  // `claude-opus-4-5-20251101` and `gpt-5.5-2026-04-23` fell to the default.
+  const documented = { 'claude-opus-4-7': ['low', 'medium', 'high', 'xhigh', 'max'], 'claude-haiku-4-5': [] } as const;
+
+  test('a dated snapshot takes its family row, in either date spelling', () => {
+    expect(reasoningEffortsFor('claude-opus-4-7-20260301', true, documented)).toEqual([...documented['claude-opus-4-7']]);
+    expect(reasoningEffortsFor('claude-opus-4-7-2026-03-01', true, documented)).toEqual([...documented['claude-opus-4-7']]);
+    expect(reasoningEffortsFor('claude-opus-4-7', true, documented)).toEqual([...documented['claude-opus-4-7']]);
+  });
+
+  test('a documented non-reasoning model offers nothing; an undocumented reasoner gets the reference three', () => {
+    expect(reasoningEffortsFor('claude-haiku-4-5-20251001', true, documented)).toEqual([]);
+    expect(reasoningEffortsFor('o3', true, documented)).toEqual(['low', 'medium', 'high']);
+    expect(reasoningEffortsFor('o3', false, documented)).toEqual([]);
+  });
+
+  test('the OpenAI table is keyed by model name, never by a dated snapshot', () => {
+    for (const id of Object.keys(OPENAI_REASONING_EFFORTS)) expect(/-\d{4}-?\d{2}-?\d{2}$/.test(id)).toBe(false);
   });
 });

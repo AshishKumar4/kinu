@@ -21,16 +21,37 @@ export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
 /** The small tier the evolution engine's mechanical calls run on. */
 export const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
-/** `reasoning.effort` per model, as each model page lists it (read 2026-09-10):
- *  https://developers.openai.com/api/docs/models/<id>. Shared with the Codex
- *  provider, which serves the same models over the ChatGPT login. */
+/** `reasoning.effort` per model, as each model page's "supports" sentence
+ *  lists it (read 2026-09-11): https://developers.openai.com/api/docs/models/<id>.
+ *  Keyed by model name; a dated snapshot resolves through `modelFamilyId`.
+ *  A reasoning model whose page states no list (the o-series, gpt-5-mini,
+ *  gpt-5-nano) takes the API reference's low|medium|high, which is the
+ *  resolver's default. Shared with the Codex provider, which serves the same
+ *  models over the ChatGPT login. */
+const GPT56: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+const GPT54: readonly ReasoningEffort[] = ['none', 'low', 'medium', 'high', 'xhigh'];
+
+const PRO: readonly ReasoningEffort[] = ['medium', 'high', 'xhigh'];
+
 export const OPENAI_REASONING_EFFORTS = {
-  'gpt-5.5':      ['none', 'low', 'medium', 'high', 'xhigh'],
-  'gpt-5.5-pro':  ['medium', 'high', 'xhigh'],
-  'gpt-5.4':      ['none', 'low', 'medium', 'high', 'xhigh'],
-  'gpt-5.4-mini': ['none', 'low', 'medium', 'high', 'xhigh'],
-  'gpt-5':        ['minimal', 'low', 'medium', 'high'],
-  'gpt-5.3-codex': ['low', 'medium', 'high', 'xhigh'],
+  'gpt-6-astra':    ['low', 'medium', 'high', 'xhigh', 'max'],
+  'gpt-5.6':        GPT56,
+  'gpt-5.6-sol':    GPT56,
+  'gpt-5.6-luna':   GPT56,
+  'gpt-5.6-terra':  GPT56,
+  'gpt-5.5':        GPT54,
+  'gpt-5.5-pro':    PRO,
+  'gpt-5.4':        GPT54,
+  'gpt-5.4-mini':   GPT54,
+  'gpt-5.4-nano':   GPT54,
+  'gpt-5.4-pro':    PRO,
+  'gpt-5.3-codex':  ['low', 'medium', 'high', 'xhigh'],
+  'gpt-5.2':        GPT54,
+  'gpt-5.2-pro':    PRO,
+  'gpt-5.1':        ['none', 'low', 'medium', 'high'],
+  'gpt-5':          ['minimal', 'low', 'medium', 'high'],
+  'gpt-5-pro':      ['high'],
 } satisfies Record<string, readonly ReasoningEffort[]>;
 
 const FALLBACK_MODELS: ModelInfo[] = [

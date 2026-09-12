@@ -25,12 +25,40 @@ export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
  *  in `reasoning_effort` — what a reasoning model gets when its catalog says
  *  it reasons but nothing names its levels.
  *  https://platform.openai.com/docs/api-reference/chat/create#chat_create-reasoning_effort */
-export const CHAT_COMPLETIONS_REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
+const CHAT_COMPLETIONS_REASONING_EFFORTS: readonly ReasoningEffort[] = ['low', 'medium', 'high'];
 
 const ReasoningEffortSchema = v.picklist(REASONING_EFFORTS);
 
 export function isReasoningEffort<Value>(value: Value): value is Value & ReasoningEffort {
   return v.safeParse(ReasoningEffortSchema, value).success;
+}
+
+/**
+ * A vendor's dated snapshot id reduced to the model it is a snapshot of:
+ * `claude-opus-4-5-20251101` → `claude-opus-4-5`, `gpt-5.5-2026-04-23` →
+ * `gpt-5.5`. Effort support is a fact about the model, and both vendors
+ * document it per model while their catalogs list snapshots, so a table keyed
+ * by model name has to be read through this or every dated id falls to the
+ * generic default.
+ */
+function modelFamilyId(modelId: string): string {
+  return modelId.replace(/-\d{4}-?\d{2}-?\d{2}$/, '');
+}
+
+/**
+ * The levels one model accepts: the documented row for its family, else the
+ * Chat Completions three for a model that reasons, else none. The single
+ * reader of every provider's per-model table, so a vendor that lists dated
+ * snapshots gets its documented levels and an undocumented model gets the
+ * default its API reference states.
+ */
+export function reasoningEffortsFor(
+  modelId: string,
+  reasons: boolean,
+  documented: Readonly<Record<string, readonly ReasoningEffort[]>> | undefined,
+): readonly ReasoningEffort[] {
+  return documented?.[modelId] ?? documented?.[modelFamilyId(modelId)]
+    ?? (reasons ? CHAT_COMPLETIONS_REASONING_EFFORTS : []);
 }
 
 /** Narrow an untrusted list (a provider's `supported_efforts`, a catalog row)
