@@ -255,6 +255,41 @@ Production deployment and browser receipts are retained in the machine-local rel
 | `feat/landing-liveapps` | `archive/landing-liveapps-20260908` | `9b12fdf4ee` |
 | `fix/landing-composition` | `archive/landing-composition-20260908` | `1bec158c5` |
 
+### The 2026-09-12 reconciliation
+
+Fifteen branches were reconciled against the integration tip `f594a4f1d` by
+content, not by patch id. Seven carried work the tree already holds by a
+different landing (the fork-receiver authority at `fork.ts:386-390`, the
+vendor-schema gate `c00f8ff73`, the pane-store docs, the PostCSS scroll test,
+the Work-tab click, both `fix/capability-required-shape` commits by patch id,
+and `integrate/2026-09-12-v2`). Two carried work a later decision rejected:
+the chain cost doc repeats the amplification figures the tree retracted, and
+the two-browser-rows commit is the frame loop the inspector rewrite deletes.
+Six are snapshots of the 2026-09-08 native lineage the decisive report keeps
+on `feat/devbox-durability-next` at `f3a0fcf7f`; that branch stays. One
+commit was live and was cherry-picked: `e611638b4` as `f594a4f1d`.
+
+Twelve tags were written at the tips and verified equal before deletion.
+`bench/mmap-contract-cost` shared its tip with the kept branch and needed
+none. Seven worktrees went; three held residue, saved as
+`~/kinu-wip/<worktree>-2026-09-12.patch` with untracked and ignored files
+beside it. Novel and sole-copy blob counts were not measured.
+
+| Removed branch | Retained tag | Commit |
+|---|---|---|
+| `chore/sdk-launch-map` | `archive/sdk-launch-map-20260912` | `fad094723c` |
+| `eval/trajectory-and-agent-benchmarks` | `archive/eval-trajectory-benchmarks-20260912` | `2de73f63b3` |
+| `feat/native-ordinary-lifecycle-task` | `archive/native-ordinary-lifecycle-task-20260912` | `9f9b5fbdf9` |
+| `feat/native-ordinary-lifecycle` | `archive/native-ordinary-lifecycle-20260912` | `13d1b8d251` |
+| `fix/chain-measured-rebase` | `archive/chain-measured-rebase-20260912` | `f429f7b0c3` |
+| `fix/native-byte-budget` | `archive/native-byte-budget-20260912` | `612db50261` |
+| `fix/native-dirty-mmap` | `archive/native-dirty-mmap-20260912` | `06035a11aa` |
+| `fix/native-integration-final` | `archive/native-integration-final-20260912` | `347a662baa` |
+| `fix/native-live-inventory` | `archive/native-live-inventory-20260912` | `052c1b9ef5` |
+| `gate/vendor-schema` | `archive/gate-vendor-schema-20260912` | `19e3baed6e` |
+| `integrate/2026-09-12` | `archive/integrate-2026-09-12-20260912` | `d5992026bf` |
+| `integration/final-fixes` | `archive/integration-final-fixes-20260912` | `e611638b44` |
+
 ## Reproduce the test
 
 `git filter-repo --mailmap` rewrote 2,242 commits. Measured 2026-08-21, none
