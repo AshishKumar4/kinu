@@ -2928,7 +2928,7 @@ export class LocalAgentSession implements BackendHost {
       assistantText: fullText,
       runError,
       interrupted,
-      trialContext: execution.admittedContext?.messages ?? [],
+      trialContext: execution.admittedMessages,
       reachableTools: Object.keys(liveTurn.tools ?? {}),
       overflowRetry,
     });
