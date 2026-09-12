@@ -694,17 +694,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // body (so both Durable Object roots) and `cli-backend/src/local-session.ts`
     // in the session constructor — which is still before any read on all three.
     terminal_effects: EVERYWHERE,
-    // The CLI's alone, and the asymmetry is the platform's. A Durable Object is
-    // told about its own answer by the runtime that persisted it, so a claim
-    // written after that hook still covers the whole suffix. A local process can
-    // die between persisting the answer and claiming it, so the roster is frozen
-    // into this row in the SAME transaction as the messages and swept at the
-    // next start.
-    terminal_intents: {
-      'cf-orchestrator': { absent: 'the response hook runs inside the activation that persisted the answer, so the claim cannot be separated from it' },
-      'cf-subordinate': { absent: 'the response hook runs inside the activation that persisted the answer, so the claim cannot be separated from it' },
-      cli: WIRED,
-    },
 
     // ── the cf outbound intent logs (write-ahead + idempotency) ──
     // The WORKSPACE's logs, and both cf roots observe them: one database holds

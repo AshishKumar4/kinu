@@ -26,7 +26,7 @@ export {
   takesTerminalEffect, branchesTerminalEffect, turnRecordTerminalEffect,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   terminalEffectKey, terminalEffectBackoffMs, keyedScope, TerminalEffectInterrupt,
-  TERMINAL_EFFECT_NAMES, TERMINAL_EFFECT_KEY_VERSION,
+  TERMINAL_EFFECT_KEY_VERSION,
   TERMINAL_EFFECT_RETRY_BASE_MS, TERMINAL_EFFECT_RETRY_CEILING_MS,
   RunEndReasonSchema,
   type TerminalEffect, type TerminalEffectTable, type TerminalEffectName,

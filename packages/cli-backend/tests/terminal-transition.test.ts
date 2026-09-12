@@ -314,7 +314,7 @@ describe('an interrupted terminal sequence is finished by the next start', () =>
 describe('a killed CLI process is recovered by the next start', () => {
   /** Run the child to its kill point, and answer the marker it printed. */
   async function killAt(
-    dbPath: string, mode: 'before-claim' | 'inside-claim' | 'inside-title',
+    dbPath: string, mode: 'before-settle' | 'inside-claim' | 'inside-title',
   ): Promise<string> {
     const child = Bun.spawn(
       ['bun', new URL('./terminal-death-probe.ts', import.meta.url).pathname, dbPath, mode],
@@ -327,17 +327,16 @@ describe('a killed CLI process is recovered by the next start', () => {
     return out.trim().split('\n').at(-1) ?? '';
   }
 
-  test('an answer whose transition was never claimed is replayed from its recorded roster', async () => {
-    const dbPath = scratchPath('terminal-death-before-claim', 'agent.db');
-    expect(await killAt(dbPath, 'before-claim')).toBe('KILLED before-claim');
+  test('answer and terminal roster survive a crash before settlement', async () => {
+    const dbPath = scratchPath('terminal-death-before-settle', 'agent.db');
+    expect(await killAt(dbPath, 'before-settle')).toBe('KILLED before-settle');
 
-    // The file, opened by a new process. The answer is on disk and NOTHING has
-    // claimed the transition, so the intent row beside the answer is the only
-    // carrier there is.
+    // The answer and the core ledger committed together, before any effect ran.
     const { db, rt } = openTerminalWorkspace(dbPath);
     expect(assistantRows(rt)).toBe(1);
     expect(completedTurns(rt)).toBe(0);
-    expect(recordedIntents(rt)).toBe(1);
+    expect(terminalClaims(rt)).toBe(1);
+    expect(rosterRows(rt)).toBeGreaterThan(0);
 
     const { model, state } = scriptedModel('recovered');
     const events: SessionEvent[] = [];
@@ -347,9 +346,6 @@ describe('a killed CLI process is recovered by the next start', () => {
     expect(queuedTrials(rt)).toBe(1);
     expect(claimedTakes(rt)).toBe(1);
     expect(state.titleCalls).toBe(1);
-    // Consumed: the claim carries the sequence from here, and an intent nothing
-    // deletes is a turn every later start re-enters.
-    expect(recordedIntents(rt)).toBe(0);
     expect(stillOwed(rt)).toEqual([]);
     // ONE answer. A replay that re-persisted would leave two assistant rows and
     // read back as the agent having answered twice.
@@ -358,18 +354,13 @@ describe('a killed CLI process is recovered by the next start', () => {
     db.close();
   });
 
-  test('a death INSIDE the roster commit leaves nothing claimed, and the intent replays it', async () => {
+  test('a death inside the roster commit rolls back the answer and its terminal claim', async () => {
     const dbPath = scratchPath('terminal-death-inside-claim', 'agent.db');
     expect(await killAt(dbPath, 'inside-claim')).toBe('KILLED inside-claim');
 
     const { db, rt } = openTerminalWorkspace(dbPath);
-    // The cut landed between the outer claim and the first roster row. Both are
-    // in ONE commit, so neither survives: a claim that had committed alone would
-    // be read below as a sequence already under way, and the `resumed` branch
-    // does not re-declare — it would replay an EMPTY roster, settle the claim
-    // and drop every effect this response owed with nothing on disk saying so.
-    expect(assistantRows(rt)).toBe(1);
-    expect(recordedIntents(rt)).toBe(1);
+    // No published answer may survive without the effects it owes.
+    expect(assistantRows(rt)).toBe(0);
     expect(terminalClaims(rt)).toBe(0);
     expect(rosterRows(rt)).toBe(0);
 
@@ -377,14 +368,12 @@ describe('a killed CLI process is recovered by the next start', () => {
     const events: SessionEvent[] = [];
     const next = await restart(rt, db, model, events);
 
-    // Claimed fresh from the recorded roster, and every effect runs once.
-    expect(completedTurns(rt)).toBe(1);
-    expect(queuedTrials(rt)).toBe(1);
-    expect(claimedTakes(rt)).toBe(1);
-    expect(state.titleCalls).toBe(1);
-    expect(recordedIntents(rt)).toBe(0);
+    expect(completedTurns(rt)).toBe(0);
+    expect(queuedTrials(rt)).toBe(0);
+    expect(claimedTakes(rt)).toBe(0);
+    expect(state.titleCalls).toBe(0);
     expect(stillOwed(rt)).toEqual([]);
-    expect(assistantRows(rt)).toBe(1);
+    expect(assistantRows(rt)).toBe(0);
     await next.end();
     db.close();
   });
@@ -684,9 +673,6 @@ describe('a recovery reads the record, not the session that finds it', () => {
 
 const assistantRows = (rt: CLIRuntime) =>
   rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM actor_messages WHERE role = 'assistant'`[0]?.n ?? 0;
-
-const recordedIntents = (rt: CLIRuntime) =>
-  rt.storage.sql<{ n: number }>`SELECT count(*) AS n FROM terminal_intents`[0]?.n ?? 0;
 
 const displayName = (rt: CLIRuntime) =>
   rt.storage.sql<{ value: string }>`SELECT value FROM actor_config WHERE key = 'display_name'`[0]?.value ?? null;
