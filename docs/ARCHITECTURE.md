@@ -435,7 +435,7 @@ only the two `owner_only` entries refuse a workspace token.
 Neither kind attests who is calling. A sibling DO sharing `env` can derive the
 owner capability too. What the boundary buys: the tool surface (what an injected
 prompt can steer) reaches the UserDO only through code presenting a workspace
-token, attenuated whichever tool gate someone forgets. Facets (subordinates,
+token, attenuated whichever tool gate someone forgets. Logical actors (subordinates,
 heads, MCTS branches) present their parent's token, so they attenuate with it
 and have no identity of their own to forget. Enforcement lives where the
 secrets are, so no forgotten tool gate can route around it.
@@ -458,8 +458,8 @@ ticks inside one long turn. The other three belong to the `EvolutionEngine`
   and full `runMCTS()`.
 
 MCTS branch rewards are execution-grounded on both backends. One scorer
-(`core/src/mcts/evaluation.ts`) lets execution outcome dominate the judge for CF
-Facets, the CF inline fallback, and CLI child-process branches alike. Gates run
+(`core/src/mcts/evaluation.ts`) lets execution outcome dominate the judge for hosted
+actors, the CF inline fallback, and CLI child-process branches alike. Gates run
 before a scaffold mutation takes effect: the misevolution gate
 (`scaffold/misevolution.ts`) rejects harmful edits by fixed criteria, the
 shadow-veto (`shadow.ts`, `maxRegressions: 1`, `minDecisiveTrials: 5`,

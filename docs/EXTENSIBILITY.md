@@ -399,7 +399,7 @@ One `model_call` builder gives a spend census one row shape. One
 ## Worked example: a lifetime per question
 
 `agents({action:'hire', lifetime:'task', role, mission})` adds a lifetime to the
-delegation ladder. It adds no action, no table, no loop, and no facet builder:
+delegation ladder. It adds no action, no table, no loop, and no actor builder:
 
 1. Declare the rung once. `DELEGATION_RUNGS.hire`
    (`core/src/tools/registry.ts`) is the selection doctrine every surface

@@ -190,7 +190,7 @@ call time. `event_id` is gated the same way on `peers`.
 
 `hire`, `msg`, and `list` use a target name:
 
-- `SubordinateAgent` is a same-workspace Durable Object facet with a full turn
+- A hired subordinate is a logical actor of the workspace object with a full turn
   loop and shared Nimbus session. `hire` with `role` takes role and mission;
   `hire` naming an `agent` that exists adds work, with `deliverable` optional.
   `msg` adds a note. `dismiss` archives unless `keep_history: false`.

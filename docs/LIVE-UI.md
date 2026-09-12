@@ -125,12 +125,12 @@ Contract: `packages/core/src/slates/rpc.ts`; hosted dispatch:
 The server receives introduced capabilities as `env.NAME.member(...args)`.
 Each binding passes one of the CALLING ACTOR's own capabilities, with that
 actor's existing gates: the workspace root acts as the session user with the
-root's providers; a facet (a subordinate, a head, a node) acts as its own
+root's providers; a hosted actor (a subordinate, a head, a node) acts as its own
 provisioned uid with its own role-narrowed providers. Reach is the open turn's
 profile only while that turn is in flight; between turns the role is resolved
 afresh on every call, so a role revoked after a turn completes is seen at once.
 Source capture and compilation use that actor's credentialed reads; fork and
-restore use its credentialed writes. A facet cannot restore a tree it cannot
+restore use its credentialed writes. A non-root actor cannot restore a tree it cannot
 write directly. Source, compiler and process caches distinguish the full
 credential: uid, gid, supplementary groups and umask.
 Each caller boots its own resident process, and an app hop keeps the caller's
@@ -142,7 +142,7 @@ removed reach.
 | Kind and fields | Reach and gate |
 |---|---|
 | `namespace`: `namespace`, `members?` | A member of an available codemode provider. Optional `members` narrows reach; executor approvals and device consent remain the provider's own gates. An absent namespace refuses as unavailable. |
-| `rpc`: `methods` | Declared, zero-argument workspace read models from `SLATE_READ_MODELS`, not arbitrary host RPC. The parser rejects methods outside that closed list, and the list is the workspace ROOT's own `@callable` reads: a facet holds none of them natively, so a facet-held `rpc` binding is `denied`. |
+| `rpc`: `methods` | Declared, zero-argument workspace read models from `SLATE_READ_MODELS`, not arbitrary host RPC. The parser rejects methods outside that closed list, and the list is the workspace ROOT's own `@callable` reads: a non-root actor holds none of them natively, so a non-root `rpc` binding is `denied`. |
 | `mcp`: `server`, `tools?` | One owner-configured MCP connection, named by connection id rather than display name. Optional `tools` narrows reach; the owner's allowed-tool policy shapes the actor's descriptor surface, and the caller's ROLE must admit the tool's key (`mcp_<server>_<tool>`) exactly as the native turn admits it. Calls take one JSON object, or no arguments for `{}`. |
 | `app`: `id` | A JSON POST route on another slate's authored server. The callee runs for the caller: its declared bindings resolve with the originating actor's authority. Calls carry the id of the app invocation the host issued for that request; the host holds the chain of slate ids already running and looks it up. A hop into a slate already on that chain refuses as a cycle and names it. A preview visit is named the same way and released when it settles. A retired or foreign invocation id is refused by reason, so retained bindings cannot replay an older lineage. No hop count bounds the chain: each hop must name a slate that is not on it, and a workspace holds a finite number of slates. |
 

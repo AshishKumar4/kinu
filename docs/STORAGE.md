@@ -302,13 +302,17 @@ agents 0.20.1) creates, on the first session read — which is Think's own boot
 - `assistant_config`: session-scoped settings
 - `assistant_fts`: the provider's FTS5 index over message content
 
-Kinu does not write these, and it does not read them through the SDK. On a
-hosted workspace `assistant_messages` is the pane store — the ONE authority for
-the default chat — and every conversational reader answers from it in raw SQL
-when it exists and from plain `messages` when it does not
-(`packages/core/src/identity/conversation-store.ts` `hasPaneStore`). Plain
-`messages` is the local backend's only store, never a projection of the pane
-(the header of that module records why the projection was retired). The
+Kinu does not write these through the SDK, and on a hosted workspace
+`assistant_messages` is the pane store — the ONE authority for the default
+chat — and every conversational reader answers from it in raw SQL when it
+exists and from plain `messages` when it does not
+(`packages/core/src/identity/conversation-store.ts` `hasPaneStore`). The pane
+is the vendor's shape with no owner column: it is the ROOT actor's transcript
+by construction, since Think's session belongs to the workspace object and no
+child actor runs Think — `usesPaneStore` is the one place that says whose it
+is, and a child's default chat is the plain store. Plain `messages` is the
+local backend's only store, never a projection of the pane (the header of
+that module records why the projection was retired). The
 census in `packages/core/src/conformance/manifest.ts` declares the four
 tables on both cf roots, and `ActorAgent.assertSessionStore`
 (`packages/cf-backend/src/actor-agent.ts`) refuses an activation whose Think
@@ -342,25 +346,23 @@ new tables and their columns (the changeset names neither):
 
 | Reader | Today | Will read | Unknown until release |
 |---|---|---|---|
-| `identity/conversation-store.ts` — `hasPaneStore`, `forkPointExists`, `ancestryIds` (pane arm), `paneRowById`, `conversationCount`, `conversationPageRows`, `answersForDrainTurns`, `conversationTurnPair`, `normalizeImportedConversation` | `assistant_messages` by `actor_id`, `id`, `parent_id`, `rowid`, whole-second `created_at` | the `cf_agents_session_*` message table; the ancestry walk and the rowid page cursor must survive the "message larger than one SQLite row is split across continuation rows" model, so a logical message is reassembled from its continuation rows before `content` is flattened | table and column names; whether continuation rows share the parent's id; whether `created_at` stays a whole-second `DATETIME`; whether a `rowid` order still equals insertion order per logical message |
+| `identity/conversation-store.ts` — `hasPaneStore`, `usesPaneStore`, `forkPointExists`, `ancestryIds` (pane arm), `paneRowById`, `conversationCount`, `conversationPageRows`, `answersForDrainTurns`, `conversationTurnPair`, `normalizeImportedConversation` | `assistant_messages` by `id`, `parent_id`, `rowid`, whole-second `created_at` — no `actor_id`, the vendor declares none and the pane is the root actor's by construction | the `cf_agents_session_*` message table; the ancestry walk and the rowid page cursor must survive the "message larger than one SQLite row is split across continuation rows" model, so a logical message is reassembled from its continuation rows before `content` is flattened | table and column names; whether continuation rows share the parent's id; whether `created_at` stays a whole-second `DATETIME`; whether a `rowid` order still equa… |
 | `memory/conversation-search.ts` — `scroll`, `listConversations`, `refreshIndex`, and the `conversation_rev_pane_*` revision triggers (`AFTER INSERT/UPDATE/DELETE ON assistant_messages`) | same table, grouped by `session_id`; Kinu's own `conversation_fts` is rebuilt from it | the same message table; the three triggers are Kinu DDL ON the vendor table and go away with the `DROP`, so the revision counter must be re-pointed or the index rebuilt on a regime change | whether media leaving the row into the "content-addressed attachment store" changes what `content` holds for a text part |
-| `identity/fork.ts` — the pane WRITE (`ensurePaneTable`, the three `INSERT OR IGNORE INTO assistant_messages`) and `carriedText` | writes rows in Kinu's own DDL: `actor_id TEXT NOT NULL`, `PRIMARY KEY (actor_id, id)` | rows the SDK's new provider reads back as a conversation — a write that must produce continuation rows and attachment references the provider understands, which raw DDL cannot do before the release documents it | the entire write shape; whether the SDK exposes a bulk import that keeps message ids and parent edges (the fork cut depends on both) |
-| `identity/archive.ts` — `projectPaneIntoPlain` (export normalization) | reads `assistant_messages` by `rowid`, detects an owner column from the table's own DDL | the message table, with continuation rows reassembled | same as the store row |
+| `identity/fork.ts` — the pane WRITE (`requirePaneStore`, the three `INSERT OR IGNORE INTO assistant_messages`) and `carriedText` | writes vendor-shaped rows into the vendor's table — which must already exist, since Kinu never creates it and the write refuses a target without it | rows the SDK's new provider reads back as a conversation — a write that must produce continuation rows and attachment references the provider understands, which raw DDL cannot do before the release documents it | the entire write shape; whether the SDK exposes a bulk import that keeps message ids and parent edges (the fork cut depends on both) |
+| `identity/archive.ts` — `normalizeImportedPaneRows` (export normalization) | reads `assistant_messages` by `rowid` and attributes every row to the workspace's root actor, the directory the restore landed | the message table, with continuation rows reassembled | same as the store row |
 | `evolution/eval-split.ts` — `advisorNegatives` join | joins `assistant_messages` twice on `id` / `parent_id` | the message table, on the same two columns | column names |
-| `cf-backend/src/actor-agent.ts` — `readInheritedContext` | last `INHERITED_CONTEXT_CAP` rows by `created_at DESC`, and a `COUNT(*)`, both by `actor_id` | the message table; on the agent itself `this.session.getHistory()` is reachable, but it answers the path, not the actor's rows, and asynchronously — the port contracts that call this reader (`inheritedContext: () => …`, `orchestrator.ts`) are synchronous | whether the release keeps a synchronous in-memory view (`this.messages`) that can stand in for the window |
+| `cf-backend/src/actor-agent.ts` — `readInheritedContext` | last `INHERITED_CONTEXT_CAP` rows by `created_at DESC`, and a `COUNT(*)` over the whole table — the pane holds the root's transcript only, so no actor column is named | the message table; on the agent itself `this.session.getHistory()` is reachable, but it answers the path, not the actor's rows, and asynchronously — the port contracts that call this reader (`inheritedContext: () => …`, `orchestrator.ts`) are synchronous | whether the release keeps a synchronous in-memory view (`this.messages`) that can stand in for the window |
 | `subordinates/inspection.ts` — the `history` view's existence check | `tableExists(sql, 'assistant_messages')` | the new table name | the name |
 | `utils/ui-message.ts`, `orchestrator/heads-support.ts` | comments naming the table | the same, renamed | nothing |
 
-One fact the migration cannot carry: Kinu's pane queries predicate on
-`actor_id`, a column the vendor DDL does not declare
-(`agents/dist/experimental/memory/session/index.js:750-757` against
-`packages/core/src/identity/fork.ts:685-694`, which is the only DDL in this
-repository that declares it). The SDK's lift copies the columns the SDK wrote,
-so the `cf_agents_session_*` message table will not carry an actor either.
-Whether hosted actors keep sharing one session table by owner column, or each
-hosted actor gets its own SDK session (`Session.forSession(sessionId)` exists
-at 0.20.1, `index.d.ts:104`), is the design decision the readers wait on, and
-it must be made before any of the rows above is rewritten.
+One fact the migration once threatened, settled since: Kinu's pane queries no
+longer predicate on `actor_id` — the vendor DDL never declared it
+(`agents/dist/experimental/memory/session/index.js:750-757`), the reads
+naming it are what broke every hosted snapshot on 2026-09-11, and the pane is
+now defined as the root actor's transcript with no owner column. The SDK's
+lift copies the columns the SDK wrote, so the `cf_agents_session_*` message
+table will not carry an actor either — which matches, rather than breaks, the
+model the readers now keep: root pane, child plain store.
 
 Two ways the pane branch can move. Land neither until the release publishes
 the `cf_agents_session_*` DDL and the `this.session.history()` signature.
@@ -374,10 +376,9 @@ row reassembly in every reader that returns `content`, plus a fork write that
 fabricates continuation rows and attachment references the SDK documents for
 nobody — the changeset's own words are "Think no longer reads Sessions tables
 with raw SQL. If you queried `assistant_messages` yourself, use
-`this.session.history()` or `getHistory()`". It leaves the `actor_id`
-question exactly where it is: the new table will not carry the column, so
-either every hosted actor's rows collapse into one session or a Kinu-only
-column is added to a vendor table the vendor rewrites on its own schedule.
+`this.session.history()` or `getHistory()`". Whose transcript the new table
+holds is already answered on the Kinu side — the pane is the root actor's by
+construction — so the lift changes names and row shapes, not ownership.
 This is the coupling that put the census on watch in the first place, re-made
 against a shape declared private.
 
@@ -398,7 +399,7 @@ the call chains that reach a reader — `read-models/status.ts:159`
 (`ancestryIds`, the bounded frame stream), `orchestrator.ts:1158`
 (`answersForDrainTurns`), `memory/conversation-search.ts` (`scroll`,
 `listConversations`, `refreshIndex`), `identity/archive.ts`
-(`projectPaneIntoPlain`), `subordinates/inspection.ts:101` and
+(`normalizeImportedPaneRows`), `subordinates/inspection.ts:101` and
 `actor-agent.ts` `readInheritedContext` with its synchronous
 `inheritedContext: () => …` port contracts — about a dozen signatures, each
 mechanical. What the port cannot answer identically is the rowid page cursor

@@ -169,7 +169,7 @@ actors that work inside it.
     leaves the old bytes untouched. It costs one session call per chunk plus
     one to commit.
 
-    A hosted facet's bare `/tmp` resolves to its own tmp. The provisioner
+    A hosted node's bare `/tmp` resolves to its own tmp. The provisioner
     runs on the object that owns the workspace, so it registers the rewrite
     on that object's own principal registry — no RPC carries the call
     because none needs to. `TMPDIR` points at the same directory. Shell
@@ -177,11 +177,11 @@ actors that work inside it.
     credential on both planes.
 
     A runtime bound to a physical directory builds no uid provisioner: a
-    directory has no principal registry. Each facet still gets its own
+    directory has no principal registry. Each node still gets its own
     mapped scratch — a home and a tmp under the workspace's own `.kinu`
-    state, for `HOME` and `TMPDIR` (`facetCwdScratch` in
+    state, for `HOME` and `TMPDIR` (`facetScratchRoot` in
     `cli-backend/src/runtime.ts`). The tree stays honestly shared, and a
-    facet reports `shared-origin-plane` for it. `docs/EXPLORATION.md` is
+    node reports `shared-origin-plane` for it. `docs/EXPLORATION.md` is
     the spec for the six axes, presets, report contract and isolation
     states.
 
@@ -192,7 +192,8 @@ actors that work inside it.
     there, and each hides the other's root writes.
 
   - Subordinates (`agents`, `action: 'hire'`) are durable: a
-    `SubordinateAgent` facet with its own SQL history and full turn loop,
+    logical actor with its own `actor_id`-scoped history in `messages` and a
+    full turn loop,
     using the canonical workspace files and the parent's sandbox/laptop
     planes. Locally it opens over its root's stored directory, keeping the
     parent's plane while memory, craft store and conversation stay its own.
@@ -257,11 +258,10 @@ actors that work inside it.
 
 ## What deliberately keeps the agent noun
 
-Actor-sense names stay. The `OrchestratorAgent` and `SubordinateAgent`
-DO classes still exist and are exported from
-`cf-backend/src/server.ts:86-91`, though only `OrchestratorAgent` has a
-namespace binding: the other is a facet class, reached through it rather
-than by name (`cf-backend/wrangler.jsonc:106-113`).
+Actor-sense names stay. `OrchestratorAgent` is the ONE exported agent
+class (`cf-backend/src/server.ts`), bound once in
+`cf-backend/wrangler.jsonc`: a subordinate reached it as a facet until
+the one-store cutover, and is a logical actor of the same object now.
 
 The other actor-sense names that stay: the wire paths
 `/agents/orchestrator-agent/<name>` and `…/sub/subordinate-agent/<sub>` that the

@@ -27,9 +27,10 @@ counts are not current acceptance evidence, and no Lean build was performed here
 
 ## Similar names are not equivalence
 
-**Facet.** A Kinu `SubordinateAgent` is a Cloudflare Agents SDK Durable Object facet:
-its identity, routing, lifecycle and storage are provided by `agents` and
-`ctx.facets`. An agent-core `Facet` has a manifest, operation descriptors,
+**Facet.** A Kinu `SubordinateAgent` WAS a Cloudflare Agents SDK Durable Object facet —
+identity, routing, lifecycle and storage provided by `agents` and
+`ctx.facets` — until the one-store cutover replaced it with a logical actor of
+the workspace object (`actor-hosting.ts` header). An agent-core `Facet` has a manifest, operation descriptors,
 contributions, protection domains and lifecycle interfaces
 (`dist/facets-public.d.ts`). The former is a hosting mechanism; it does not thereby
 implement the latter. Nimbus process facets are another hosting mechanism, not
@@ -67,10 +68,10 @@ restoration uses the caller's writes. Cache identity includes uid, gid,
 supplementary groups and umask as well as the actor path where appropriate.
 
 Introduced namespace/MCP/read-model calls return through native-only actor
-routing. A facet's capabilities are dispatched on that facet, not reconstructed
+routing. A non-root actor's capabilities are dispatched on that actor, not reconstructed
 from the root's providers. Role narrowing uses the current actor role and the
 existing native-tool/codemode policy. App calls retain the originating actor.
-The host-owned read models remain a separate capability from the facet's own
+The host-owned read models remain a separate capability from the actor's own
 files or tools. Successful MCP/read-model data is not a refusal because it happens
 to contain `reason` and `error` fields.
 
