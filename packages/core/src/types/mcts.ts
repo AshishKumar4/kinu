@@ -8,7 +8,18 @@
  */
 
 import type { ModelCallSink } from '../events/model-call';
-import type { CostModel } from '../mcts/cost';
+import type { ModelPricing } from '../providers/types';
+
+/** The model a search will run on, as the pre-run gate needs to see it. */
+export interface CostModel {
+  /** Resolved `<provider>/<modelId>`. Named in the refusal so an operator can
+   *  tell a real cap from a mispriced one. */
+  readonly spec: string;
+  /** The catalog's rates, or null when the lookup has not landed or the
+   *  catalog publishes no price. Null is UNKNOWN — never free. A model the
+   *  catalog prices at nothing arrives as `{ input: 0, output: 0 }`. */
+  readonly pricing: ModelPricing | null;
+}
 
 export type NodeStatus = 'open' | 'terminal' | 'failed' | 'pruned';
 

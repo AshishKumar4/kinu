@@ -41,12 +41,17 @@ import { applyStagedContext, unpairedToolCallIds } from '../prompting/staged-con
 import type { StepContextPlane } from '../prompting/prepare-step';
 import { modelMessagesDigest, encodeModelMessages } from '../prompting/message-codec';
 import type { ActorClaimStore, ActorTurnClaim } from './actor-claims';
+import type { ActorWorkingContextStore } from './working-context';
 import type {
-  ActorWorkingContextStore, WorkingRevision, WorkingRevisionContent, WorkingVia,
-} from './working-context';
+  ContextEditEffect, ContextEventRecorder, WorkingRevision, WorkingRevisionContent, WorkingVia,
+} from '../types/context-plane';
 
-/** When an authored edit becomes the request. */
-export type ContextEditEffect = 'step' | 'turn';
+export type {
+  ContextEditEffect, ContextEditEvent, ContextEventRecorder,
+  WorkingRevision, WorkingRevisionContent, WorkingVia,
+} from '../types/context-plane';
+
+export type { ActorWorkingContextStore } from './working-context';
 
 /** What an authored edit did. Returned to whichever surface authored it, so a
  *  writer can say "staged as revision N, effective at the next step" instead of
@@ -133,40 +138,6 @@ export interface ContextPlaneState {
   readonly liveTurnId: string | null;
   /** Where an edit written now would take effect. */
   readonly effectiveAt: ContextEditEffect;
-}
-
-/**
- * The `context_edit` run event, as `events/recorder.ts` declares it.
- *
- * Two emissions per edit and no more: one when it is AUTHORED (`staged`, with
- * where it will take effect) and one when a boundary actually takes it
- * (`activated`, with the turn and step that did). A refused edit emits nothing
- * — there is no activation to report, and reporting one would be a record of
- * something that did not happen.
- */
-export interface ContextEditEvent {
-  readonly type: 'context_edit';
-  readonly revision: number;
-  readonly baseRevision: number;
-  readonly messageCount: number;
-  readonly author: string;
-  readonly via: 'file' | 'session' | 'owner';
-  readonly status: 'staged' | 'activated';
-  readonly effectiveAt: ContextEditEffect;
-  readonly turnId: string | null;
-  readonly stepIndex: number | null;
-}
-
-/**
- * The recorder port this plane needs — one method, one variant.
- *
- * Structural rather than the whole `RunEventRecorder`, so this module states
- * exactly what it emits and a test can observe it without a database. The real
- * recorder satisfies it, and the assignment is checked HERE, where a mismatch
- * between the emitted shape and the declared variant belongs.
- */
-export interface ContextEventRecorder {
-  emit(runId: string, event: ContextEditEvent): void;
 }
 
 export interface ActorContextPlaneDeps {

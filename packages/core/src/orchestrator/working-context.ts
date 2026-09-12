@@ -45,78 +45,23 @@
  */
 
 import type { ModelMessage } from 'ai';
-import { STAGED_CONTEXT_DEFERRALS, type StagedContextDeferral } from '../prompting/staged-context';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives';
 import type { ActorHandle } from '../identity/actor-handle';
 import { KinuError } from '../obs/error';
 import { nowMs } from '../utils/date';
 import { decodeModelMessages, encodeModelMessages, modelMessagesDigest } from '../prompting/message-codec';
 import { sqlCheckList } from '../identity/schema';
+import {
+  STAGED_CONTEXT_DEFERRALS, WORKING_CLOSED_REASONS, WORKING_SOURCES, WORKING_STATUSES, WORKING_VIAS,
+  type StagedContextDeferral, type WorkingClosedReason, type WorkingRevision,
+  type WorkingRevisionContent, type WorkingSource, type WorkingStatus, type WorkingVia,
+} from '../types/context-plane';
 
-/** How a revision came to exist. */
-const WORKING_SOURCES = ['hydrate', 'turn', 'edit'] as const;
-
-export type WorkingSource = (typeof WORKING_SOURCES)[number];
-
-/**
- * Where a revision stands.
- *
- * `active` is the one the runtime builds requests from — at most one per actor.
- * `staged` is an authored edit waiting for a safe boundary. `superseded` is
- * every revision that is neither, whether it was effective once (its
- * `activatedAt` says so) or never became effective (`closedReason` says why).
- */
-const WORKING_STATUSES = ['staged', 'active', 'superseded'] as const;
-
-export type WorkingStatus = (typeof WORKING_STATUSES)[number];
-
-/** Which surface authored a revision. `runtime` is the host recording what the
- *  actor's own history now is; the other three are edits. */
-const WORKING_VIAS = ['runtime', 'file', 'session', 'owner'] as const;
-
-export type WorkingVia = (typeof WORKING_VIAS)[number];
-
-/** Why a staged edit was closed without ever becoming effective. */
-const WORKING_CLOSED_REASONS = ['history_rewritten', 'superseded_by_edit'] as const;
-
-export type WorkingClosedReason = (typeof WORKING_CLOSED_REASONS)[number];
-
-/** One revision's metadata — everything except the messages themselves, which
- *  a listing must not pay for. */
-export interface WorkingRevision {
-  readonly revision: number;
-  /** The revision this content was derived from, or null for the first one. */
-  readonly baseRevision: number | null;
-  /** Where the material this revision does not own begins in the live array. */
-  readonly baseMessageCount: number;
-  readonly source: WorkingSource;
-  readonly status: WorkingStatus;
-  readonly via: WorkingVia;
-  /** The ISSUED actor id that authored it: the actor itself, or the parent/owner
-   *  that edited it through an authorized surface. */
-  readonly author: string;
-  readonly digest: string;
-  readonly messageCount: number;
-  /** The turn that was live when it was authored, or null between turns. */
-  readonly turnId: string | null;
-  /** The turn whose boundary made it effective, null while it never was. */
-  readonly activatedTurnId: string | null;
-  /** The step index it landed at, null for a turn-boundary activation. */
-  readonly activatedStep: number | null;
-  readonly activatedAt: number | null;
-  /** Why the last boundary that saw this staged revision could not take it.
-   *  Null once it activates, and null while nothing has blocked it — a pending
-   *  edit that reads as blocked says so instead of looking ignored. */
-  readonly deferredReason: StagedContextDeferral | null;
-  readonly deferredAt: number | null;
-  readonly closedReason: WorkingClosedReason | null;
-  readonly recordedAt: number;
-}
-
-/** A revision with its array decoded. */
-export interface WorkingRevisionContent extends WorkingRevision {
-  readonly messages: ModelMessage[];
-}
+export {
+  STAGED_CONTEXT_DEFERRALS, WORKING_CLOSED_REASONS, WORKING_SOURCES, WORKING_STATUSES, WORKING_VIAS,
+  type StagedContextDeferral, type WorkingClosedReason, type WorkingRevision,
+  type WorkingRevisionContent, type WorkingSource, type WorkingStatus, type WorkingVia,
+} from '../types/context-plane';
 
 export function initActorWorkingContextTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS actor_working_revisions (

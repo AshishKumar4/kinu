@@ -34,7 +34,7 @@ import type { UIMessage } from 'ai';
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { JsonObjectSchema, parseJsonValue, type JsonObject } from './json';
-import type { ChatHistoryEntry } from '../read-models/status';
+import type { ChatHistoryEntry } from '../types/chat';
 
 const UiMessageSchema = v.object({
   parts: v.optional(v.array(v.object({

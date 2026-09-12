@@ -36,9 +36,9 @@
  */
 import * as v from 'valibot';
 import { JsonValueSchema } from '../utils/json';
-import { SWARM_CONTEXTS, SWARM_EXPANDS } from '../strategy/swarm';
-import type { Objective } from '../strategy/objective';
-import type { SwarmConfig, SwarmNodeAssignment } from '../strategy/swarm';
+import { SWARM_CONTEXTS, SWARM_EXPANDS } from '../types/swarm';
+import type { Objective } from '../types/objective';
+import type { SwarmConfig, SwarmNodeAssignment } from '../types/swarm';
 
 const DirectionSchema = v.picklist(['minimise', 'maximise'] as const);
 

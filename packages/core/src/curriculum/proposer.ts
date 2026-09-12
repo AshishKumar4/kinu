@@ -18,30 +18,13 @@ import { extractJsonArray, jsonArrayOnlyInstruction } from '../prompts/structure
 import { parseJsonValue } from '../utils/json';
 import { nanoid } from '../utils/nanoid';
 
-/** The one list of proposed-task statuses — the table default, the picklist
- *  below and the `agent.*` tools' status picklist all derive from it. */
-export const PROPOSED_TASK_STATUSES = [
-  'pending',
-  'accepted',
-  'rejected',
-  'completed',
-] as const;
+import { PROPOSED_TASK_STATUSES, type ProposedTask } from '../types/proposals';
+
+export {
+  PROPOSED_TASK_STATUSES, type ProposedTask, type ProposedTaskStatus,
+} from '../types/proposals';
 
 const ProposedTaskStatusSchema = v.picklist(PROPOSED_TASK_STATUSES);
-
-export type ProposedTaskStatus = (typeof PROPOSED_TASK_STATUSES)[number];
-
-export interface ProposedTask {
-  id: string;
-  task: string;
-  rationale: string;
-  /** Predicted success rate ∈ [0..1] — 0.5 is ideal "barely succeeds." */
-  predictedSuccess: number;
-  /** Skills this task would exercise or extend. */
-  targetsSkills: string[];
-  proposedAt: number;
-  status: ProposedTaskStatus;
-}
 
 export interface CurriculumProposerOpts {
   rt: AgentRuntime;

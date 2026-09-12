@@ -39,12 +39,12 @@
 import type { ModelMessage } from 'ai';
 import * as v from 'valibot';
 import type { VFS, VfsEntryStat } from '../types/primitives';
-import type { ContextEventRecorder } from '../orchestrator/context-plane';
+import type { ContextEventRecorder } from '../types/context-plane';
 import type { ActorClaimStore } from '../orchestrator/actor-claims';
 import {
   createActorContextPlane, type ActorContextPlane, type ContextEditReceipt,
 } from '../orchestrator/context-plane';
-import type { WorkingRevisionContent } from '../orchestrator/working-context';
+import type { WorkingRevisionContent } from '../types/context-plane';
 import { decodeModelMessages, encodeModelMessages } from '../prompting/message-codec';
 import { KinuError } from '../obs/error';
 import { FileRefusalError } from '../tools/file-edit';

@@ -72,7 +72,7 @@ import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
   memoryActionsFor, TASKS_TOOL_ACTIONS, WEB_TOOL_ACTIONS, unknownActionError, type WebToolAction,
 } from './registry';
-import type { ProfileCatalogEnvelope } from '../profiles/catalog';
+import type { ProfileCatalogEnvelope } from '../types/profile';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store';
 import { clampToolResult, withClampedToolResult } from './clamp';
 import { dispatchReport, reportHandoffProperties, type ReportToolInput } from '../delegation/report-tool';

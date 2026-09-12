@@ -22,9 +22,11 @@ import type { ReasoningEffort } from '../strategy/effort';
 import * as v from 'valibot';
 import { tolerate } from '../obs/index';
 import { transcriptRole, uiMessageRow, type StoredRowProjection } from '../utils/ui-message';
-import { JsonObjectSchema, parseJsonValue, type JsonObject } from '../utils/json';
+import type { ChatHistoryEntry } from '../types/chat';
+import { JsonObjectSchema, parseJsonValue } from '../utils/json';
 import { mapPage, type Page, type PageRequest } from './page';
 
+export type { ChatHistoryEntry } from '../types/chat';
 
 /** One workspace identifier reaches a surface: `name`, the permanent slug it is
  *  addressed by. `workspace_identity.id` is deliberately NOT here — on the cloud
@@ -45,29 +47,6 @@ export interface AgentStatus {
   model: string;
   reasoningEffort: ReasoningEffort | null;
   forkLineage: ForkLineageRow | null;
-}
-
-export interface ChatHistoryEntry {
-  id: string;
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-  createdAt: string | number;
-  /**
-   * The stored row's own metadata, where the row carried any.
-   *
-   * The chat classifies a programmatic turn from written markers — the author
-   * stamp, the `kinuEvent` name — and for a row that arrived by this walk
-   * rather than over the socket, this is the only place those markers can come
-   * from. Dropping them is why a fork-interrupted notice kept its card while it
-   * was live and lost it the moment the operator scrolled back to it.
-   *
-   * The field's one reader is the served transcript: `getChatHistoryPage`
-   * feeds `mergeTranscript`, and the pane classifies the restored half from
-   * it. The CLI reads stored rows only to rebuild the model's context, and
-   * there the markers ride the row's own text, so it has no reader for this
-   * field. That asymmetry is declared here on purpose, not omitted.
-   */
-  metadata?: JsonObject;
 }
 
 export interface ToolListEntry {
@@ -96,7 +75,6 @@ export interface AgentStatusDeps {
   readonly name: string;
   readonly displayName: string;
 }
-
 
 function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;

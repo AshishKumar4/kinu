@@ -62,7 +62,7 @@ import { makeVfsError, type VfsErrorCode } from '../vfs/errno';
 import { workspacePath } from '../vfs/workspace-path';
 import { shellQuote } from '../utils/shell';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64';
-import { FILE_CHUNK_BYTES } from '../read-models/files';
+import { FILE_CHUNK_BYTES } from '../types/read-models';
 import { diagnostics, toKinuError } from '../obs/index';
 import type { NimbusSandboxHandle } from './nimbus';
 

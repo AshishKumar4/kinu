@@ -11,30 +11,27 @@
 // and hashing.
 import * as v from 'valibot';
 
-import { NAMED_SWARM_PRESETS, type NamedSwarmPreset } from '../strategy/swarm-presets';
-import { REASONING_EFFORTS, type ReasoningEffort } from '../strategy/effort';
+import { NAMED_SWARM_PRESETS } from '../strategy/swarm-presets';
+import { REASONING_EFFORTS } from '../strategy/effort';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '../providers/workers-ai';
 import { sha256Hex, stableStringify } from '../safety/argument-digest';
 import { JsonValueSchema } from '../utils/json';
-import type { RoleId } from '../types/profile';
+import {
+  TIER_IDS,
+  type ProfileCatalog, type RoleCatalog, type RoleId,
+  type TierAssignments, type TierId, type RoleDefinition, type ProfileCatalogEnvelope,
+} from '../types/profile';
 
-export type { RoleId } from '../types/profile';
+export type {
+  BuiltinTierId, ProfileAuthority, ProfileCatalog, RoleCatalog, RoleId,
+  TierAssignment, TierAssignments, TierId, RoleDefinition, ProfileCatalogEnvelope,
+} from '../types/profile';
+
+export { TIER_IDS } from '../types/profile';
+
+
 
 // ── Vocabulary ───────────────────────────────────────────────────
-
-/** The inference tiers every authority ships, in their stable UI order. Only
- *  `default` must be configured: it is the model the account runs on, the one
- *  a new workspace starts with, and the one any other tier aliases when it has
- *  no row. `tiny` and `slow` were removed (#7): they overlapped `fast` and
- *  `deep`. A catalog may add tiers of its own by key (`TIER_ID_RE`), exactly
- *  as it adds roles; a role naming a tier the catalog lacks is refused at
- *  read rather than aliased. */
-export const TIER_IDS = ['fast', 'default', 'deep'] as const;
-
-export type BuiltinTierId = (typeof TIER_IDS)[number];
-
-/** A tier the catalog holds: one of the builtins or one the owner added. */
-export type TierId = string;
 
 /** Kebab-case, lowercase-first: the same discipline role and skill names follow. */
 const TIER_ID_RE = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
@@ -83,23 +80,10 @@ export function isTierId(value: string): value is TierId {
 
 // ── Wire shapes ──────────────────────────────────────────────────
 
-export interface TierAssignment {
-  model: string;
-  reasoningEffort?: ReasoningEffort | undefined;
-}
-
 const TierAssignmentSchema = v.strictObject({
   model: v.pipe(v.string(), v.minLength(1)),
   reasoningEffort: v.optional(v.picklist(REASONING_EFFORTS)),
 });
-
-/** Every tier the catalog holds, keyed by id: `default`, which every catalog
- *  must carry, the builtins the owner configured, and the tiers the owner
- *  added. */
-export interface TierAssignments {
-  readonly default: TierAssignment;
-  readonly [tier: TierId]: TierAssignment | undefined;
-}
 
 const TierAssignmentsSchema = v.pipe(
   v.objectWithRest({ default: TierAssignmentSchema }, TierAssignmentSchema),
@@ -117,25 +101,6 @@ export function tierIdsOf(catalog: { readonly tiers: TierAssignments }): TierId[
   return [...new Set([...TIER_IDS, ...Object.keys(catalog.tiers)])];
 }
 
-export interface RoleDefinition {
-  /** Absent derives from the id at resolve time (`deriveRoleLabel`). */
-  label?: string | undefined;
-  /** What the role is FOR — catalog and schema discovery. */
-  description: string;
-  /** The role's one system-prompt section. */
-  instructions: string;
-  tier: TierId;
-  preset: NamedSwarmPreset;
-  /** Absent inherits the full merged tool set. Never widens it. */
-  allowedTools?: readonly string[] | undefined;
-  skills?: readonly string[] | undefined;
-  /** Which roles this role may hire: everything, a narrowing list, or inherited
-   *  structural reach when absent. */
-  spawns?: '*' | readonly RoleId[] | undefined;
-  /** Absent inherits the turn's permission mode; `true` can only narrow. */
-  plan?: true | undefined;
-}
-
 const RoleDefinitionSchema = v.strictObject({
   label: v.optional(v.pipe(v.string(), v.minLength(1))),
   description: v.pipe(v.string(), v.minLength(1)),
@@ -147,13 +112,6 @@ const RoleDefinitionSchema = v.strictObject({
   spawns: v.optional(v.union([v.literal('*'), v.array(RoleIdSchema)])),
   plan: v.optional(v.literal(true)),
 });
-
-export type RoleCatalog = Readonly<Record<RoleId, RoleDefinition>>;
-
-export interface ProfileCatalog {
-  roles: RoleCatalog;
-  tiers: TierAssignments;
-}
 
 const ProfileCatalogObjectSchema = v.strictObject({
   roles: v.record(RoleIdSchema, RoleDefinitionSchema),
@@ -195,21 +153,10 @@ const ProfileCatalogSchema = v.pipe(
   v.check(allRoleTiersExist, 'every role tier must name a built-in tier or a tier in this catalog'),
 );
 
-export type ProfileAuthority =
-  | { readonly kind: 'account'; readonly accountId: string }
-  | { readonly kind: 'local' };
-
 export const ProfileAuthoritySchema = v.variant('kind', [
   v.strictObject({ kind: v.literal('account'), accountId: v.pipe(v.string(), v.minLength(1)) }),
   v.strictObject({ kind: v.literal('local') }),
 ]);
-
-export interface ProfileCatalogEnvelope {
-  authority: ProfileAuthority;
-  version: number;
-  digest: string;
-  catalog: ProfileCatalog;
-}
 
 const DigestSchema = v.pipe(v.string(), v.hexadecimal(), v.length(64));
 
