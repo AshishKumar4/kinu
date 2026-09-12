@@ -106,7 +106,7 @@ function setup(model: LanguageModel) {
   // in-memory handle can satisfy. `create: true` is what puts the file there.
   const db = new Database(dbPath, { create: true });
   // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
@@ -144,7 +144,7 @@ function openPersistentClient(
   const dbPath = join(home, 'agent.db');
   const db = new Database(dbPath);
   // THE PRODUCTION INITIALIZER, not a copy of its DDL. A fixture that
-  // re-declared `messages` won the CREATE TABLE IF NOT EXISTS race and
+  // re-declared `actor_messages` won the CREATE TABLE IF NOT EXISTS race and
   // silently pinned a schema nothing else maintains.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
   const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
@@ -232,7 +232,7 @@ describe('LocalAgentClient', () => {
     const db = new Database(join(home, 'agent.db'));
 
     const sessions = db.query<{ session_id: string }, []>(
-      'SELECT DISTINCT session_id FROM messages ORDER BY session_id',
+      'SELECT DISTINCT session_id FROM actor_messages ORDER BY session_id',
     ).all();
 
     const conversation = db.query<{ value: string }, []>(

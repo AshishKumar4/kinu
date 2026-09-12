@@ -28,14 +28,14 @@ interface WorkspaceFixture {
 /** A workspace whose storage is reached exactly as the DO reaches its own. */
 function workspace(): WorkspaceFixture {
   const db = new Database(':memory:');
-  db.exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT NOT NULL)`);
+  db.exec(`CREATE TABLE actor_messages (id TEXT PRIMARY KEY, content TEXT NOT NULL)`);
   db.exec(`CREATE TABLE workspace_capability (id INTEGER PRIMARY KEY, token TEXT NOT NULL)`);
   db.exec(`INSERT INTO workspace_capability (id, token) VALUES (1, 'pwc_secret')`);
   // The DO's own bookkeeping tables, which belong to the platform, not the user.
   db.exec(`CREATE TABLE _cf_KV (key TEXT PRIMARY KEY, value BLOB)`);
 
   for (let i = 0; i < 450; i++) {
-    db.query(`INSERT INTO messages (id, content) VALUES (?, ?)`).run(`m${i}`, `message ${i}`);
+    db.query(`INSERT INTO actor_messages (id, content) VALUES (?, ?)`).run(`m${i}`, `message ${i}`);
   }
 
   return { sql: archiveSqlFromDatabase(db), db };
@@ -66,7 +66,7 @@ describe('cloud workspace export', () => {
     const target = new Database(':memory:');
     const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(target), lines);
     expect(result.source).toBe('cloud');
-    expect(target.query(`SELECT COUNT(*) AS n FROM messages`).get()).toEqual({ n: 450 });
+    expect(target.query(`SELECT COUNT(*) AS n FROM actor_messages`).get()).toEqual({ n: 450 });
   });
 
   test('neither the capability secret nor Durable Object internals are exported', async () => {

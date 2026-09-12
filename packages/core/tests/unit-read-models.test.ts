@@ -280,7 +280,7 @@ describe('agent status', () => {
   test('identity, counts and the model the next turn runs, in one shape', async () => {
     const { db, sql, actor, vfs } = workspace();
     void sql`UPDATE workspace_identity SET name = 'jarvis', created_at = 42`;
-    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${actor.actorId}, 'm1', 'default', 'user', 'hi', 1)`;
 
     // The caller resolves the model; the read model reports it as given, so a
@@ -323,7 +323,7 @@ describe('agent status', () => {
 
   test('chat history falls back to the plain mirror when there is no rich table', () => {
     const { db, sql, actor } = workspace();
-    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${actor.actorId}, 'm1', 'default', 'assistant', 'plain', 5)`;
     expect(getChatHistoryPage(sql, actor, { limit: 1 })).toEqual({
       status: 'end',

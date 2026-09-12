@@ -10,6 +10,8 @@ import {
   type GenesisLock,
   type TableDdl,
 } from './schema-drift';
+import { readSources } from './sources';
+import { statementsOf } from './vendor-schema';
 
 const USER_DEVICES_GENESIS = [
   'id', 'token_hash', 'label', 'os', 'hostname', 'created_at', 'connected_at', 'last_seen_at',
@@ -188,6 +190,21 @@ describe('schema-drift genesis lock', () => {
 });
 
 describe('schema-drift over this tree', () => {
+  test('the product SQL corpus never names the retired actor table or indexes', () => {
+    const sources = readSources();
+    const retired = /\b(?:FROM|JOIN|INTO|UPDATE|REFERENCES|TABLE(?:\s+IF\s+(?:NOT\s+)?EXISTS)?|ON)\s+["`[]?messages\b|\b(?:conversation_rev_messages_\w+|idx_msg_\w+)\b/i;
+
+    const violations = [...sources].flatMap(([file, source]) =>
+      statementsOf(file, source)
+        .filter(({ sql }) => retired.test(sql))
+        .map(({ line }) => `${file}:${line}`));
+
+    expect(sources.size).toBeGreaterThan(0);
+    expect(violations).toEqual([]);
+
+    console.log(`actor schema: scanned SQL templates in ${sources.size} product files; blind: runtime-built SQL and test-only fixtures`);
+  });
+
   test('every table is locked, censused and equal to its genesis', () => {
     const state = survey();
 

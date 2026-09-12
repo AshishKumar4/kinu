@@ -312,15 +312,15 @@ describe('inheritedContextFromConversation — the plain store, read once for bo
     const actor = createTestActors(sql, execRaw).main;
 
     for (let i = 0; i < INHERITED_CONTEXT_CAP + 5; i++) {
-      void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+      void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
         VALUES (${actor.actorId}, ${`m${i}`}, ${'default'}, ${i % 2 === 0 ? 'user' : 'assistant'}, ${`body ${i}`}, ${1_000 + i})`;
     }
 
     // A row of another session, and a system row of this one: neither is a
     // turn the hire inherits, and neither counts against what it was not told.
-    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${actor.actorId}, ${'other'}, ${'side'}, ${'user'}, ${'elsewhere'}, ${5_000})`;
-    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${actor.actorId}, ${'sys'}, ${'default'}, ${'system'}, ${'runtime note'}, ${5_001})`;
 
     const ctx = inheritedContextFromConversation(sql, actor, 'default');
@@ -335,7 +335,7 @@ describe('inheritedContextFromConversation — the plain store, read once for bo
   test('a conversation inside the cap carries no note', () => {
     const { sql, execRaw } = createTestWorkspace();
     const actor = createTestActors(sql, execRaw).main;
-    void sql`INSERT INTO messages (actor_id, id, session_id, role, content, created_at)
+    void sql`INSERT INTO actor_messages (actor_id, id, session_id, role, content, created_at)
       VALUES (${actor.actorId}, ${'m0'}, ${'default'}, ${'user'}, ${'hello'}, ${1})`;
     expect(inheritedContextFromConversation(sql, actor, 'default')).toEqual([
       { id: 'm0', role: 'user', content: 'hello', createdAt: 1 },

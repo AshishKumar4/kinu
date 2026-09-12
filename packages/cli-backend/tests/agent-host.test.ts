@@ -530,11 +530,11 @@ describe('LocalAgentHost', () => {
     const db = new Database(dbPath);
 
     const sessions = db.query<{ session_id: string }, []>(
-      'SELECT DISTINCT session_id FROM messages ORDER BY session_id',
+      'SELECT DISTINCT session_id FROM actor_messages ORDER BY session_id',
     ).all();
 
     const rows = db.query<{ n: number }, []>(
-      "SELECT COUNT(*) AS n FROM messages WHERE role IN ('user','assistant')",
+      "SELECT COUNT(*) AS n FROM actor_messages WHERE role IN ('user','assistant')",
     ).get();
 
     const config = openWorkspaceMainActor(makeSql(db)).config;
@@ -588,11 +588,11 @@ describe('LocalAgentHost', () => {
     const wakeId = `programmatic:${backgroundJobWakeTrigger(jobId)}`;
 
     const wakeRows = check.query<{ n: number }, [string]>(
-      'SELECT COUNT(*) AS n FROM messages WHERE id = ?',
+      'SELECT COUNT(*) AS n FROM actor_messages WHERE id = ?',
     ).get(wakeId);
 
     const assistantRows = check.query<{ n: number }, [string]>(
-      "SELECT COUNT(*) AS n FROM messages WHERE parent_id = ? AND role = 'assistant'",
+      "SELECT COUNT(*) AS n FROM actor_messages WHERE parent_id = ? AND role = 'assistant'",
     ).get(wakeId);
 
     const orphanRows = check.query<{ n: number }, []>(
@@ -1638,12 +1638,12 @@ function userMessages(dbPath: string, actorId?: string): string[] {
     // "what did THIS agent hear" is a predicate now rather than a file choice.
     if (actorId !== undefined) {
       return db.query<{ content: string }, [string]>(
-        "SELECT content FROM messages WHERE role = 'user' AND actor_id = ?",
+        "SELECT content FROM actor_messages WHERE role = 'user' AND actor_id = ?",
       ).all(actorId).map((row) => row.content);
     }
 
     return db.query<{ content: string }, []>(
-      "SELECT content FROM messages WHERE role = 'user'",
+      "SELECT content FROM actor_messages WHERE role = 'user'",
     ).all().map((row) => row.content);
   } finally {
     db.close();

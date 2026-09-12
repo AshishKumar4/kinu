@@ -967,7 +967,7 @@ describe('CLI TUI layout', () => {
       const db = new Database(resolve(run.home, created[0]!, 'agent.db'), { readonly: true });
 
       try {
-        expect(db.query('SELECT COUNT(*) AS messages FROM messages').get()).toEqual({ messages: 0 });
+        expect(db.query('SELECT COUNT(*) AS messages FROM actor_messages').get()).toEqual({ messages: 0 });
         expect(db.query('SELECT mission FROM workspace_identity').all()).toEqual([{ mission }]);
       } finally {
         db.close();
