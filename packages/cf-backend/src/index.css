@@ -473,6 +473,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 @utility p-text-3 { color: var(--c-text-3); }
 @utility p-text-4 { color: var(--c-text-4); }
 @utility p-accent { color: var(--c-accent-fg); }
+@utility p-accent-subtle { background: var(--c-accent-subtle); }
 
 @utility p-success { color: var(--c-success); }
 @utility p-warning { color: var(--c-warning); }
@@ -543,7 +544,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-border   { border-color: var(--c-border); }
 
 .p-accent-bg      { background: var(--c-accent-subtle); }
-.p-accent-subtle  { background: var(--c-accent-subtle); }
 
 /* ── Status ────────────────────────────────────────────────────────── */
 
