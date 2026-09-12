@@ -78,7 +78,6 @@ import { TierIdSchema,
   eventDrainTerminalEffect, shadowTrialTerminalEffect,
   SUBORDINATE_REPORT_STATUSES,
   type SubordinateReportStatus, type TaskTurnEnding,
-  TERMINAL_EFFECT_NAMES,
   terminalEffect, keyedScope,
   RunEndReasonSchema, WorkModeSchema,
   shadowTrialPlan, trimTrialContext,
@@ -143,7 +142,7 @@ import { TierIdSchema,
   type AlternateTakeSet, type TakePickOutcome,
   startBranchHead, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type AlarmScheduler, type BackgroundJob, type RawSqlExec,
+  type AlarmScheduler, type BackgroundJob,
   type TimerTrigger, type TimerTriggerOpts,
   type CancelTriggerResult, type TrustLevel,
   reasoningEffortOptions,
@@ -157,7 +156,7 @@ import { TierIdSchema,
   roleChangeOutcomeText, narrowToolSurface, codemodeCapabilitiesFor,
   readSoul, operatorMessageAdmitted,
   type ResolvedTurnProfile, type TierId,
-  decodeJsonValue, projectJsonValue, parseJsonValue, JsonValueSchema,
+  decodeJsonValue, projectJsonValue, JsonValueSchema,
   createAgentSelfProvider,
   // ── Read models: the same implementations the cloud backend's RPCs call ──
   cancelBackgroundJob, jobResult, listBackgroundJobs,
@@ -375,53 +374,6 @@ const NO_STRANDED_DELIVERY_GRACE = 0;
  *  turn's answer-plus-roster commit. A torn write that reports success is what
  *  an identity-function stand-in would buy. */
 export type LocalSessionDb = Pick<Database, 'prepare' | 'transaction'>;
-
-/**
- * The frozen roster of a response whose answer is on disk and whose terminal
- * transition was never claimed.
- *
- * The assistant row is committed before core can claim anything — the roster is
- * a value this session reads, and reading it is not a durable act — so a process
- * killed in between would leave a durable answer that `resumeAll()` could not
- * see: `incomplete()` finds CLAIMS, and there would be none. Every take,
- * branch, recording, drain, trial and title of that turn would be lost with
- * nothing on disk to say so.
- *
- * This row closes that window because it is written in the SAME transaction as
- * the answer. It carries the roster core's own `declareTerminalRoster` produced
- * — never a re-derivation, which would score the turn against a world it did
- * not run in — and the next start hands it straight back to `settle()`, which
- * claims and replays it exactly as a first attempt.
- *
- * Deleted as soon as the transition has a claim behind it. A row that survives
- * a claim is harmless (`settle()` reads `resumed` or `done` and replays from the
- * ledger instead), but a row that is never deleted is a turn every later start
- * re-enters.
- */
-function initTerminalIntentTable(execRaw: RawSqlExec): void {
-  execRaw(`CREATE TABLE IF NOT EXISTS terminal_intents (
-    message_id  TEXT PRIMARY KEY,
-    turn_id     TEXT NOT NULL,
-    roster_json TEXT NOT NULL,
-    recorded_at INTEGER NOT NULL
-  )`);
-}
-
-/**
- * A recorded roster, read back.
- *
- * Narrowed on the way IN, not trusted: a row written by a build that named a
- * fourth lane or an effect this one does not have would otherwise be handed to
- * core as a roster and claimed. The per-effect ledger already blocks a row whose
- * NAME it cannot run; this is the same refusal one step earlier, where the whole
- * array is still a single unreadable value.
- */
-const RecordedRosterSchema: v.GenericSchema<OwedEffect[]> = v.array(v.object({
-  name: v.picklist(TERMINAL_EFFECT_NAMES),
-  scope: v.string(),
-  input: JsonValueSchema,
-  lane: v.union([v.literal('inline'), v.literal('detached')]),
-}));
 
 /**
  * The advisor's recorded input on THIS backend: core's whole recovery snapshot,
@@ -933,12 +885,8 @@ export class LocalAgentSession implements BackendHost {
     this.eventLog = orchestration.eventLog;
 
     initWorkspaceBaselineTable(this.rt.storage.execRaw);
-    // The per-effect ledger a settled turn's suffix is claimed in, and the
-    // intent row that carries a roster whose claim never landed. Idempotent
-    // DDL, and here beside the rest of the schema for the same reason: a session
-    // may be the first thing to touch this database.
+    // The core terminal ledger is committed beside each local answer.
     initTerminalEffectTable(this.rt.storage.execRaw);
-    initTerminalIntentTable(this.rt.storage.execRaw);
 
     // Instruction approvals are keyed by the directory on THIS disk, because on
     // a local CLI that directory IS the authority — there is no owner/workspace
@@ -2240,12 +2188,10 @@ export class LocalAgentSession implements BackendHost {
    * installed is a session nobody else can be driving (a fixture, a benchmark
    * harness), and it recovers unguarded.
    *
-   * Three sources, in order. First the advisor orphans the startup scan set
+   * First the advisor orphans the startup scan set
    * aside: a review is a model call, and two processes that both read the same
    * orphan and both see no note yet would each spend one and append their own.
-   * Then the intents: a response whose answer reached disk and whose transition
-   * was never claimed, replayed from the roster frozen beside the answer. Then
-   * the claims: a transition that was claimed and whose suffix is still owed.
+   * Then the terminal ledger: the roster committed beside each answer.
    */
   async recoverTerminalTransitions(
     advisorOrphans: readonly OrphanedFiber[] = [],
@@ -2264,7 +2210,6 @@ export class LocalAgentSession implements BackendHost {
         WHERE actor_id = ${this.rt.actor.actorId} AND id = ${orphan.id}`;
     }
 
-    await this.settleRecordedIntents();
     await this.terminal.resumeAll();
     // A replayed sequence can enqueue a turn (the completion gate does), and on
     // this path no turn owns the pump. What it must NOT do is decide the advisor's
@@ -2272,72 +2217,6 @@ export class LocalAgentSession implements BackendHost {
     // review is judged against travels in the improvement-lanes row rather than
     // being re-read from a RAM gate this process never armed.
     this.pump();
-  }
-
-  /**
-   * Claim and replay every response whose answer is on disk under a roster
-   * nothing ever claimed.
-   *
-   * The recorded roster is handed straight back to `settle()`, which needs no
-   * other input: an unclaimed intent takes the first-attempt path and claims
-   * exactly these rows, and one whose claim did land reads `resumed` or `done`
-   * and replays from the ledger instead. All three dispositions are correct, so
-   * this asks no question about which one applies.
-   *
-   * The intent is dropped once `settle()` has returned, because from that
-   * instant the ledger's rows carry the sequence. It is KEPT when `settle()`
-   * throws: the claim may never have landed, and this row is the only thing that
-   * could bring the roster back.
-   */
-  private async settleRecordedIntents(): Promise<void> {
-    const rows = this.rt.storage.sql<{ message_id: string; turn_id: string; roster_json: string }>`
-      SELECT message_id, turn_id, roster_json FROM terminal_intents ORDER BY recorded_at, message_id`;
-
-    for (const row of rows) {
-      const transition: TerminalTransition = { turnId: row.turn_id, messageId: row.message_id };
-
-      const parsed = v.safeParse(
-        RecordedRosterSchema,
-        tolerate(() => parseJsonValue(row.roster_json), 'malformed-input'),
-      );
-
-      if (!parsed.success) {
-        // A roster this build cannot read is not a roster it may guess at, and
-        // keeping the row would re-offer the same unreadable bytes on every
-        // start. The failure is named with the sequence it belonged to.
-        diagnostics.failure('turn.terminal_intent_unreadable', toKinuError({
-          doing: 'reading the roster a settled turn recorded beside its answer',
-          cause: new Error(parsed.issues.map((issue) => issue.message).join('; ')),
-          otherwise: 'unsupported',
-        }), { turnId: row.turn_id, messageId: row.message_id });
-        this.clearTerminalIntent(row.message_id);
-        continue;
-      }
-
-      const owed = parsed.output;
-
-      try {
-        this.settlingDepth += 1;
-
-        try {
-          await this.terminal.settle({
-            transition,
-            declare: () => owed,
-            hold: (claimed, close) => { this.holdTerminalClose(claimed, close); },
-          });
-        }
-        finally { this.settlingDepth -= 1; }
-      } catch (err) {
-        diagnostics.failure('turn.terminal_intent_replay_failed', toKinuError({
-          doing: 'claiming the roster a settled turn recorded beside its answer',
-          cause: err,
-          otherwise: 'unavailable',
-        }), { turnId: row.turn_id, messageId: row.message_id });
-        continue;
-      }
-
-      this.clearTerminalIntent(row.message_id);
-    }
   }
 
   /**
@@ -3126,7 +3005,7 @@ export class LocalAgentSession implements BackendHost {
       return;
     }
 
-    const { messageId, facts, turn, owed, transition } = commit.committed;
+    const { facts, turn, owed, transition } = commit.committed;
 
     try {
       // The NEXT turn's measured compaction trigger (core turn-lifecycle).
@@ -3157,10 +3036,7 @@ export class LocalAgentSession implements BackendHost {
       // moment the transcript was persisted and had no recovery at all, so a
       // laptop killed here lost the whole suffix.
       //
-      // The roster is HANDED BACK, not rebuilt. It was frozen inside the commit
-      // above and is the same array the intent row carries, so the rows core
-      // claims are the rows a recovery would have replayed — a second
-      // declaration would read live state that has moved on.
+      // The core ledger already holds the roster committed with the answer.
       this.settlingDepth += 1;
 
       try {
@@ -3172,9 +3048,6 @@ export class LocalAgentSession implements BackendHost {
       }
       finally { this.settlingDepth -= 1; }
 
-      // The claim is behind the roster now, so the intent has nothing left to
-      // carry: from here the ledger's own rows are what a recovery reads.
-      this.clearTerminalIntent(messageId);
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
       const message = renderThrownChain({ cause: err });
@@ -3290,10 +3163,7 @@ export class LocalAgentSession implements BackendHost {
         overflowRetry: input.overflowRetry,
       });
 
-      // A response whose turn has no durable identity has nothing to claim
-      // against, so it also has nothing to record an intent under: it runs
-      // unledgered, and an intent keyed on an id no claim can use would be a
-      // recovery that re-ran the sequence on every later start.
+      // A response with no durable identity runs without a ledger key.
       const transition: TerminalTransition | null = this.currentTurnId === null
         ? null
         : { turnId, messageId };
@@ -3312,7 +3182,7 @@ export class LocalAgentSession implements BackendHost {
           item.kind === 'programmatic' ? item.metadata : undefined,
         );
 
-        if (transition !== null) this.recordTerminalIntent(transition, owed);
+        this.terminal.record(transition, owed);
       })();
 
       return { committed: { messageId, facts, turn, owed, transition } };
@@ -3327,20 +3197,6 @@ export class LocalAgentSession implements BackendHost {
         }),
       };
     }
-  }
-
-  /** Freeze what this response owes beside the answer itself. */
-  private recordTerminalIntent(
-    transition: TerminalTransition, owed: readonly OwedEffect[],
-  ): void {
-    void this.rt.storage.sql`INSERT OR REPLACE INTO terminal_intents
-      (message_id, turn_id, roster_json, recorded_at)
-      VALUES (${transition.messageId}, ${transition.turnId},
-              ${JSON.stringify(owed)}, ${Date.now()})`;
-  }
-
-  private clearTerminalIntent(messageId: string): void {
-    void this.rt.storage.sql`DELETE FROM terminal_intents WHERE message_id = ${messageId}`;
   }
 
   // ── The terminal transition ───────────────────────────────────────────
