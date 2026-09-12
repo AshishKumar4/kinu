@@ -3314,6 +3314,7 @@ export abstract class ActorAgent extends Think<Env> {
   protected get scaffoldControl(): ScaffoldControl {
     return {
       rt: this.rt,
+      events: this.eventRecorder,
       sql: this.boundSql,
       config: this.config,
       surface: (task, context, callScope) => ({

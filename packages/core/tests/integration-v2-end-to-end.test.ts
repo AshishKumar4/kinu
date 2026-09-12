@@ -270,7 +270,7 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     expect(decision.decision).toBe('promote');
     expect(decision.winRate).toBeCloseTo(1, 2);
 
-    const applied = await applyPromotionDecision(rt, pending!, 'promote');
+    const applied = await applyPromotionDecision(rt, pending!, 'promote', new RunEventRecorder(rt.storage.sql, rt.actor));
     expect(applied.action).toBe('promote');
     expect(applied.newCurrentVersion).toBe(1);
 

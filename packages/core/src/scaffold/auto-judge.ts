@@ -25,7 +25,7 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window';
 import * as v from 'valibot';
 import {
-  type PendingScaffold, type ShadowConfig, type ShadowTrialVerdict,
+  type PendingScaffold, type ShadowConfig, type ShadowTrialVerdict, type ScaffoldDecisionEvents,
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
   recordShadowEvaluation, scoredShadowTrial, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow';
@@ -86,6 +86,7 @@ export const DEFAULT_AUTO_JUDGE_CONFIG: AutoJudgeConfig = {
 
 export interface RunAutoShadowEvalOpts {
   rt: AgentRuntime;
+  events: ScaffoldDecisionEvents;
   /** The queued trial being scored, when this eval drains one. It keys the
    * evaluation row, which is what makes a re-run after an interruption write the
    * same score instead of a second one. */
@@ -293,7 +294,7 @@ async function settlePromotion(
   try {
     // Report the action ACTUALLY applied — the promotion-time misevolution
     // recheck can convert a 'promote' into a 'rollback'.
-    const outcome = await applyPromotionDecision(opts.rt, fresh, decision);
+    const outcome = await applyPromotionDecision(opts.rt, fresh, decision, opts.events);
 
     if (outcome.vetoReason) {
       diagnostics.failure(
