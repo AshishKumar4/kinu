@@ -20,8 +20,9 @@ export const CallRecordSchema = v.object({
    *  completion lanes the same binding serves. */
   stream: v.boolean(),
   /** The lane the fake served, keyed on request shape (stream flag, leading
-   *  system role) — the test asserts every recorded call is a known lane. */
-  lane: v.picklist(['turn', 'sleep', 'title']),
+   *  system role) or the model-routed arm below — the test asserts every
+   *  recorded call is a known lane. */
+  lane: v.picklist(['turn', 'sleep', 'title', 'pending']),
   users: v.array(v.string()),
   /** What `options.signal` arrived as — the spike's answer. */
   signalKind: v.string(),
@@ -110,3 +111,37 @@ export const ExerciseResultSchema = v.object({
 });
 
 export type ExerciseResult = v.InferOutput<typeof ExerciseResultSchema>;
+
+/** The caller-cancellation repro verdict: the pending arm saw the abort, no
+ *  abort listener is left behind, and the run promise rejected with a reason. */
+export const CancelProbeResultSchema = v.object({
+  observedAbort: v.boolean(),
+  activeListeners: v.number(),
+  rejection: v.string(),
+});
+
+export type CancelProbeResult = v.InferOutput<typeof CancelProbeResultSchema>;
+
+/** One parameterized drive (the early-[DONE] variant): its own workspace so
+ *  its turns never share Think state with the main drive. */
+export const DriveOnceInputSchema = v.object({
+  workspace: v.string(),
+  owner: v.string(),
+  displayName: v.string(),
+  model: v.string(),
+  text: v.string(),
+});
+
+export type DriveOnceInput = v.InferOutput<typeof DriveOnceInputSchema>;
+
+export const DriveOnceResultSchema = v.object({
+  turn: TurnSchema,
+  snapshot: SnapshotSchema,
+  history: HistorySchema,
+  calls: v.array(CallRecordSchema),
+  failures: v.array(DiagnosticFailureSchema),
+  owedEffects: v.array(v.string()),
+  factsCompressed: v.number(),
+});
+
+export type DriveOnceResult = v.InferOutput<typeof DriveOnceResultSchema>;

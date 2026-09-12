@@ -104,4 +104,50 @@ describe('two real turns over the direct Workers AI seam', () => {
     expect(out.owedEffects).toEqual([]);
     expect(out.factsCompressed).toBe(2);
   });
+
+  // Lifecycle repros for the per-turn workerd "hung" kills (run logs under
+  // kinu-logs/two-turn): the main drive above hangs twice per run with a
+  // clean log. These discriminate WHERE: a producer-open pipe versus a clean
+  // EOF, and caller cancellation through the binding.
+  it('completes a turn on a producer-open stream', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('early-done-driver'));
+
+    const out = await root.driveOnce({
+      workspace: 'early-done-workspace',
+      owner: 'early-done-owner',
+      displayName: 'Early Done',
+      model: 'workers-ai/@cf/zai-org/glm-5.3',
+      text: 'E1',
+    });
+
+    const calls = v.parse(v.array(CallRecordSchema), out.calls)
+      .filter((c) => c.model.includes('glm-5.3'));
+
+    const history = v.parse(HistorySchema, out.history);
+    const assistant = history.items.filter((m) => m.role === 'assistant').map((m) => m.content);
+
+    // The turn still completes: the consumer stops at [DONE] whether or not
+    // the producer closes behind it. The hang comparison happens in the run
+    // log, not here — this test proves the variant drives a real turn.
+    expect(calls.filter((c) => c.stream)).toHaveLength(1);
+    expect(assistant.at(-1)).toBe('echo:early');
+    expect(v.parse(FailuresSchema, out.failures)).toEqual([]);
+    expect(out.owedEffects).toEqual([]);
+    expect(out.factsCompressed).toBe(1);
+  });
+
+  it('cancels a pending request through the binding with listener cleanup', async () => {
+    const root = env.TWO_TURN_PROBE.get(env.TWO_TURN_PROBE.idFromName('cancel-driver'));
+
+    const out = await root.cancelProbe();
+
+    // One assertion so a failure prints the whole verdict: whether the abort
+    // reached the callee, whether the listener was removed, and what the
+    // parked call settled with.
+    expect({
+      observedAbort: out.observedAbort,
+      activeListeners: out.activeListeners,
+      rejected: out.rejection.length > 0,
+    }).toEqual({ observedAbort: true, activeListeners: 0, rejected: true });
+  });
 });
