@@ -80,6 +80,7 @@ export const FIRST_RUN_CASES = [
   'preview-address',
   'workspace-title',
   'snapshot-after-turn',
+  'every-tool',
 ] as const;
 
 export type FirstRunCase = (typeof FIRST_RUN_CASES)[number];
@@ -207,6 +208,27 @@ export const FIRST_RUN_DEFECTS = {
     provedRedAt: 'b48b9bba4',
     redDirection: 'Read-only production mismatch retained by the title owner in workspace-title-production-before.json. This case selects an explicitly owned workspace with a distinct registry title, reads its loaded snapshot first, and compares without writes, eviction or model/spend claims.',
   },
+  'every-tool': {
+    id: 'every-tool',
+    found: 'The owner asked for one fast row proving every native tool answers on the deployed '
+      + 'product: the agent says which tools it sees, uses each one, and what each left behind '
+      + 'is read back.',
+    missedBecause: 'every tool has unit coverage over inputs its author wrote, and no row ever '
+      + 'asked the deployed agent to use each one and then read what it left behind, so a tool '
+      + 'that fails only when the MODEL calls it on the deployment was invisible to every gate.',
+    provedRedAt: '234ed5d7d',
+    redDirection: 'RED against the deployed 234ed5d7d on 2026-09-12: the retained transcript '
+      + '(bench-artifacts/first-run-flash-1789196459812/every-tool) shows the model\'s request '
+      + 'for the listing turn carrying ONE user message, the genesis signal, and none of the '
+      + 'text the turn was started with, so every check but `no-agents-call` missed. '
+      + 'One check per tool, each off durable state: `sees-every-tool` reds when the '
+      + 'prompt hides a root tool; `file-wrote` when `file` writes nothing or the wrong bytes; '
+      + '`run-ran` when `run` errors or drops stdout; `execute-tools-ran` when codemode cannot '
+      + 'return a string; `memory-saved-and-found` when a save or the search that should find it '
+      + 'errors or comes back empty; `tasks-written` when `tasks` refuses an add; `web-fetched` '
+      + 'when `web` cannot reach the health route; `every-tool-answered` names any call that '
+      + 'closed with an error or a refusal; `reported` when the agent never says DONE.',
+  },
 } satisfies Record<FirstRunCase, FirstRunDefect>;
 
 /** Which arm this process is — the same split every sibling eval arm declares. */
@@ -306,6 +328,7 @@ const SHORT_SUBJECT = {
   'preview-address': 'address',
   'workspace-title': 'title',
   'snapshot-after-turn': 'snapshot',
+  'every-tool': 'tools',
 } satisfies Record<FirstRunCase, string>;
 
 /** What a case's body is handed, and what it hands back. */
