@@ -95,27 +95,20 @@ export interface ChatPaneRow {
  *
  * The pane store is VENDOR-OWNED. `agents`' `AgentSessionProvider.ensureTable`
  * creates it on Think's boot and Think's session is the only writer, so its
- * shape is the vendor's and Kinu adds nothing to it: a column Kinu added would
- * survive the vendor's `CREATE TABLE IF NOT EXISTS` and then be named by no
- * vendor INSERT, while a column Kinu read that the vendor never creates throws
- * `no such column` on every hosted workspace — which is how every hosted
- * snapshot failed on 2026-09-11. {@link PANE_STORE_DDL} is that shape, verbatim,
- * and `unit-pane-store-shape.test.ts` holds it to the installed SDK.
+ * shape is the vendor's and Kinu adds nothing to it and creates none of it: a
+ * column Kinu added would survive the vendor's `CREATE TABLE IF NOT EXISTS`
+ * and then be named by no vendor INSERT, while a column Kinu read that the
+ * vendor never creates throws `no such column` on every hosted workspace —
+ * which is how every hosted snapshot failed on 2026-09-11. The one test
+ * fixture of that shape lives in `packages/core/tests/helpers`
+ * (`SDK_SESSION_DDL`), and `unit-pane-store-shape.test.ts` holds it to the
+ * installed SDK.
  *
  * It is the ROOT actor's transcript by construction: Think's session belongs
  * to the workspace object, and no child actor runs Think. So the pane carries
  * no actor column and needs none; {@link usesPaneStore} is the one place that
  * says whose it is, and a child's default chat is the plain store.
  */
-export const PANE_STORE_DDL = `CREATE TABLE IF NOT EXISTS assistant_messages (
-        id TEXT PRIMARY KEY,
-        session_id TEXT NOT NULL DEFAULT '',
-        parent_id TEXT,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )`;
-
 export function hasPaneStore(sql: SqlExecutor): boolean {
   return tableExists(sql, 'assistant_messages');
 }

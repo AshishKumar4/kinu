@@ -49,11 +49,9 @@ import { walkRecursive } from '@kinu.run/agent-utils/vfs';
 import type { SqlExecutor, VFS } from '../types/primitives';
 import { SOUL_PATH, summarizeSoul } from './soul';
 import { SHELL_APPROVAL_AUTHORITY_KEYS } from '../config/store';
-import { CHAT_SESSION_ID, PANE_STORE_DDL, forkAncestry, hasPaneStore } from './conversation-store';
-import { ddlStatement } from '../types/primitives';
+import { CHAT_SESSION_ID, forkAncestry, hasPaneStore } from './conversation-store';
 import { ForkStagingState } from './fork-staging';
 import { invalidateConversationSearchIndex } from '../memory/conversation-search';
-import { uiMessageText } from '../utils/ui-message';
 import { openWorkspaceMainActor, WorkspaceActorDirectory } from './workspace-actors';
 import { KinuError } from '../obs/error';
 
@@ -456,11 +454,12 @@ export class ForkTargetWriter {
   }
 
   /** The rich chain, into the store the chat pane hydrates from. Staged before
-   *  the plain rows because a plain row whose text was elided for the wire is
-   *  reconstructed from its twin here — a SQL read, not a buffered map. */
+   *  the plain rows because a pane-authority write decides whether to keep or
+   *  drop the plain chain on the staged COUNT of this section, and a target
+   *  that has not booted Think is refused before a row is attempted. */
   stagePaneMessages(rows: readonly ForkPaneRow[]): void {
     if (rows.length === 0) return;
-    this.ensurePaneTable();
+    this.requirePaneStore();
 
     for (const m of rows) {
       void this.target`
@@ -491,7 +490,7 @@ export class ForkTargetWriter {
       if (richChainStaged) return;
       // A pane-shaped target fed by a plain-sourced snapshot: each flattened
       // row is encoded as the serialized UI message the pane renders.
-      this.ensurePaneTable();
+      this.requirePaneStore();
 
       for (const m of rows) {
         const text = this.carriedText(m);
@@ -622,7 +621,7 @@ export class ForkTargetWriter {
 
     const forkPointMs = head.cut.createdAtMs;
 
-    if (this.authority === 'pane') this.ensurePaneTable();
+    if (this.authority === 'pane') this.requirePaneStore();
 
     // 1. Identity: new id, new name, fresh created_at. The owner carries through
     //    so the row and the file namespace cannot diverge.
@@ -685,10 +684,6 @@ export class ForkTargetWriter {
         VALUES (${this.actorId}, ${markerId}, ${CHAT_SESSION_ID}, ${head.cut.messageId}, ${'system'},
                 ${syntheticText}, ${forkPointMs + 1})
       `;
-
-      // The pane table existed only to resolve elided text on a plain target.
-      // Keeping it would leave an imported workspace with a store it never had.
-      if (staged.paneTableCreated) void this.target`DROP TABLE assistant_messages`;
     }
 
     // The staged files are the fork's files now, so the cleanup list is spent.
@@ -701,49 +696,36 @@ export class ForkTargetWriter {
   }
 
   /**
-   * The pane store of a hosted target, created here so a target that has not run
-   * a hosted turn cannot come up with an empty pane beside a full `messages`.
-   *
-   * ACTOR-SCOPED, like every other per-actor table: one physical database holds
-   * every logical actor, a pane message id is minted per actor, and the pane
-   * ancestry walk climbs `parent_id` to `id` — so without the owner in the key
-   * one actor's transcript is another's ancestry. That makes this definition
-   * DIVERGE from the agents SDK's own (agents,
-   * src/experimental/memory/session/providers/agent.ts), which knows nothing
-   * about actors; the host owns this table now and creates it before any SDK
-   * append can.
-   *
-   * The DDL runs even when the table already exists, because a target carrying
-   * the SDK table need not carry these indexes and the pane ancestry walk is
-   * what reads them. The staged `paneTableCreated` flag records only whether the
-   * TABLE was absent, which is the one fact {@link ForkTargetWriter.publishRows}
-   * needs to decide whether a plain target may keep it.
+   * The pane store of a hosted target must already exist — Think's wake
+   * creates it (`AgentSessionProvider.ensureTable` on the session's first
+   * read, asserted by `assertSessionStore` before any fork frame can arrive).
+   * Kinu does not create the vendor's table here: a create under an actor
+   * column the vendor never writes was the shape drift that failed every
+   * hosted snapshot on 2026-09-11, and a fork that lands one masks the boot
+   * failure it should surface.
    */
-  private ensurePaneTable(): void {
-    if (!hasPaneStore(this.target)) this.staging.paneTableCreated();
-    this.target(ddlStatement(PANE_STORE_DDL));
-    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent ON assistant_messages(parent_id)`;
-    void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
+  private requirePaneStore(): void {
+    if (!hasPaneStore(this.target)) {
+      throw new Error(
+        'a pane-authority fork target has no assistant_messages table: Think has not booted '
+        + 'on this workspace, and Kinu does not create the vendor\'s store',
+      );
+    }
   }
 
-  /** The text a plain row carries: verbatim, or flattened from the rich twin
-   *  already staged under the same id. */
+  /** The text a plain row carries: verbatim, or a refusal. `content` is null
+   *  only where a pane row under the same id was meant to carry the text, and
+   *  on the target that row exists only when a pane-authority write staged it —
+   *  so an elided row reaching this point on a plain target was elided against
+   *  a twin this fork cannot have, and the transcript cannot be
+   *  reconstructed. */
   private carriedText(row: ForkMessageRow): string {
     if (row.content !== null) return row.content;
 
-    const twin = hasPaneStore(this.target)
-      ? this.target<{ content: string }>`
-          SELECT content FROM assistant_messages WHERE id = ${row.id} LIMIT 1`[0]
-      : undefined;
-
-    if (!twin) {
-      throw new Error(
-        `fork snapshot elided the text of message "${row.id}" but carries no assistant_messages row `
-        + `under that id, so the transcript cannot be reconstructed`,
-      );
-    }
-
-    return uiMessageText(twin.content);
+    throw new Error(
+      `fork snapshot elided the text of message "${row.id}" but carries no assistant_messages row `
+      + `under that id, so the transcript cannot be reconstructed`,
+    );
   }
 }
 

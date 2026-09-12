@@ -30,13 +30,13 @@ import type { ActorHandle } from '../src/identity/actor-handle';
 /**
  * A workspace fixture and the actor its transcript belongs to.
  *
- * Handed back together because BOTH stores key on (actor_id, id): a seeded
- * transcript is only readable through the handle that owns it, so a fixture
- * returning the database alone would be a workspace no reader can answer for.
- * The pane store is vendor-SHAPED, not vendor-owned — the table this tree
- * creates is `ForkTargetWriter.ensurePaneTable`'s, carrying `actor_id` and
- * keyed `(actor_id, id)` — so this one handle scopes both halves of every
- * dual-store read below.
+ * Handed back together because the `messages` store keys on (actor_id, id): a
+ * seeded transcript is only readable through the handle that owns it, so a
+ * fixture returning the database alone would be a workspace no reader can
+ * answer for. The pane store is vendor-shaped AND vendor-owned — the table
+ * has no actor column and `usesPaneStore` answers true for the workspace's
+ * root alone — so this one handle scopes both halves of every dual-store
+ * read below.
  */
 interface SeededWorkspace extends TestWorkspace {
   readonly actor: ActorHandle;

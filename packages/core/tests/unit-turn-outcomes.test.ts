@@ -376,10 +376,9 @@ describe('real-outcome scaffold rates (route into R2 archive priors)', () => {
 describe('advisor negatives use the canonical pane conversation', () => {
   test('a pane-only cloud turn supplies advisor input and answer', () => {
     const ws = setup();
-    // The pane store as production creates it (`ForkTargetWriter.ensurePaneTable`),
-    // seeded under the same actor the advisor read predicates: the note, the
-    // answer and the ask it climbs to all have to name one owner, or the join
-    // answers an empty set instead of the turn.
+    // The pane store as Think's boot creates it (`SDK_SESSION_DDL`, the
+    // vendor's shape): the note, the answer and the ask it climbs to are the
+    // root actor's rows, the only actor `usesPaneStore` answers for.
     ws.execRaw(SDK_SESSION_DDL);
     void ws.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
       VALUES (${'u-pane'}, ${''}, ${null}, ${'user'},

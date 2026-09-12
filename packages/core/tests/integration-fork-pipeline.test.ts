@@ -61,9 +61,11 @@ describe('fork pipeline (end-to-end)', () => {
   test('payload round-trips across the RPC boundary (structured clone) and replays into the fork DB', async () => {
     const src = fresh();
     const tgt = fresh();
-    // Simulate the fork DO's onStart bootstrap
+    // Simulate the fork DO's onStart bootstrap — including the pane table
+    // Think's wake created and the write now requires rather than creates.
     void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'FORK-DO-ID'}, ${'fork-bootstrap'}, ${999})`;
     new WorkspaceActorDirectory(tgt.sql, { workspaceId: 'FORK-DO-ID', ownerUserId: '' }).createMain({ name: 'fork-bootstrap' });
+    tgt.execRaw(SDK_SESSION_DDL);
     await writeSoul(tgt.vfs, tgt.sql, 'default');
 
     await seedSource(src);
@@ -149,6 +151,8 @@ describe('fork pipeline (end-to-end)', () => {
   test('hosted fork identity preserves the owner established before file copy', async () => {
     const src = fresh();
     const tgt = fresh();
+    // A hosted target carries the vendor's pane table: Think's wake made it.
+    tgt.execRaw(SDK_SESSION_DDL);
     await seedSource(src);
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
 
@@ -164,6 +168,7 @@ describe('fork pipeline (end-to-end)', () => {
   test('hosted forks route SOUL.md through the owner-only writer on every delivery', async () => {
     const src = fresh();
     const tgt = fresh();
+    tgt.execRaw(SDK_SESSION_DDL);
     await seedSource(src);
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
     const soul = snapshot.files.find((file) => file.path === SOUL_PATH);
@@ -193,6 +198,8 @@ describe('fork pipeline (end-to-end)', () => {
     const tgt = fresh();
     await seedSource(src);
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
+    // A pane-authority target carries the vendor's table before frames arrive.
+    tgt.execRaw(SDK_SESSION_DDL);
 
     const options = {
       workspaceId: 'FINAL', workspaceName: 'recovered-fork', now: 99999,

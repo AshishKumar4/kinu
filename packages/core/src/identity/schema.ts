@@ -156,7 +156,6 @@ const FORK_TRANSFER_DDL = `CREATE TABLE IF NOT EXISTS fork_transfer (
     head_cut_message_id      TEXT    NOT NULL DEFAULT '',
     head_cut_created_at      INTEGER NOT NULL DEFAULT 0,
     mission                  TEXT    NOT NULL DEFAULT '',
-    pane_table_created       INTEGER NOT NULL DEFAULT 0,
     staged_agent_config      INTEGER NOT NULL DEFAULT 0,
     staged_crafted_tools     INTEGER NOT NULL DEFAULT 0,
     staged_memory_chunks     INTEGER NOT NULL DEFAULT 0,

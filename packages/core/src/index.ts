@@ -98,7 +98,7 @@ export {
 } from './identity/fork-sink';
 
 export {
-  sessionTreeAncestry, chatPaneAncestry, hasPaneStore, usesPaneStore, PANE_STORE_DDL, forkPointExists, normalizeImportedConversation,
+  sessionTreeAncestry, chatPaneAncestry, hasPaneStore, usesPaneStore, forkPointExists, normalizeImportedConversation,
   answersForDrainTurns,
   conversationCount, conversationTurnPair, conversationPageRows,
   SESSION_TREE_MAX_DEPTH, CHAT_SESSION_ID,

@@ -398,7 +398,6 @@
     "head_cut_message_id",
     "head_cut_created_at",
     "mission",
-    "pane_table_created",
     "staged_agent_config",
     "staged_crafted_tools",
     "staged_memory_chunks",

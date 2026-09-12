@@ -30,9 +30,6 @@ export interface ForkStaging {
    *  a publication without a head impossible rather than merely wrong. */
   head: ForkSnapshotHead | null;
   mission: string;
-  /** The pane table did not exist and staging created it. A plain target must
-   *  not KEEP one: it exists only to resolve elided text. */
-  paneTableCreated: boolean;
   staged: ForkStagedCounts;
   transferId: string | null;
   expectedSeq: number;
@@ -55,7 +52,6 @@ interface ForkStagingRow {
   head_cut_message_id: string;
   head_cut_created_at: number;
   mission: string;
-  pane_table_created: number;
   staged_agent_config: number;
   staged_crafted_tools: number;
   staged_memory_chunks: number;
@@ -81,9 +77,9 @@ interface ForkStagingRow {
  * One transfer's staged state, read and written a column at a time.
  *
  * THE COLUMNS ARE OWNED. `ForkTargetWriter` writes the head, the mission, the
- * pane-table flag, the `staged_*` tally and the staged file paths;
- * `ForkTransferReceiver` writes the transfer id, the cursor, the rolling digest,
- * the file in flight, the declared `want_*` counts and the publication flag. No
+ * `staged_*` tally and the staged file paths; `ForkTransferReceiver` writes
+ * the transfer id, the cursor, the rolling digest, the file in flight, the
+ * declared `want_*` counts and the publication flag. No
  * update here rewrites the whole row, so the two halves cannot clobber each
  * other across an await.
  */
@@ -94,7 +90,7 @@ export class ForkStagingState {
   read(): ForkStaging | null {
     const row = this.sql<ForkStagingRow>`
       SELECT head_declared, head_source_id, head_source_name,
-             head_cut_message_id, head_cut_created_at, mission, pane_table_created,
+             head_cut_message_id, head_cut_created_at, mission,
              staged_agent_config, staged_crafted_tools, staged_memory_chunks,
              staged_pane_messages, staged_messages, staged_files,
              transfer_id, expected_seq, section_cursor, stream, file_path, file_bytes,
@@ -111,7 +107,6 @@ export class ForkStagingState {
         cut: { messageId: row.head_cut_message_id, createdAtMs: row.head_cut_created_at },
       },
       mission: row.mission,
-      paneTableCreated: row.pane_table_created === 1,
       staged: {
         agentConfig: row.staged_agent_config,
         craftedTools: row.staged_crafted_tools,
@@ -192,10 +187,6 @@ export class ForkStagingState {
   /** The mission SOUL carried, taken while its bytes were in hand. */
   mission(mission: string): void {
     void this.sql`UPDATE fork_transfer SET mission = ${mission} WHERE id = 1`;
-  }
-
-  paneTableCreated(): void {
-    void this.sql`UPDATE fork_transfer SET pane_table_created = 1 WHERE id = 1`;
   }
 
   /** The transfer landed. The row OUTLIVES the publication on purpose: it is

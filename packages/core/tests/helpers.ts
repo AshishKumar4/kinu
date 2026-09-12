@@ -23,7 +23,6 @@ import type {
 } from '../src/types/primitives';
 import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime';
 import type { ActorHandle } from '../src/identity/actor-handle';
-import { PANE_STORE_DDL } from '../src/identity/conversation-store';
 import type { CraftedTool } from '../src/types/craft';
 import { JsonValueSchema, type JsonValue } from '../src/utils/json';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives';
@@ -78,24 +77,15 @@ export function createTestWorkspace(): TestWorkspace {
 }
 
 /**
- * The pane session store, shaped exactly as `ForkTargetWriter.ensurePaneTable`
- * creates it (src/identity/fork.ts). `created_at` is a whole-second DATETIME —
- * the reason a fork cut cannot be a timestamp comparison.
- *
- * VENDOR-SHAPED, NOT VENDOR-OWNED. The columns mirror what the agents SDK's
- * `AgentSessionProvider` reads, but the table this tree creates carries
- * `actor_id` and is keyed `(actor_id, id)`: one host holds several issued
- * actors in one database and a pane message id is minted per actor, so an
- * unscoped read is one actor reading another's transcript and an unscoped
- * write collides on the primary key. A fixture missing the column tests a
- * shape no workspace has, and every pane read fails on it.
- *
+ * Re-exported so every suite keeps one import path; the constant's doc and
+ * definition live in `helpers/pane-session-ddl.ts`, reachable by runtimes that
+ * cannot import this module's `bun:sqlite` (cf-backend's workerd probes).
  * Deliberately NOT part of `createTestWorkspace`: the pane store appears on
- * first append, so a real workspace that has never run a turn does not have
- * it, and the code under test has to keep answering that absence correctly.
- * A test that needs the table seeds it explicitly, from this one definition.
+ * Think's first session read, so a real workspace that has never run a turn
+ * does not have it, and the code under test has to keep answering that
+ * absence correctly.
  */
-export const SDK_SESSION_DDL = PANE_STORE_DDL;
+export { SDK_SESSION_DDL } from './helpers/pane-session-ddl';
 
 // ── SqlExecutor from bun:sqlite ──────────────────────────────────
 
