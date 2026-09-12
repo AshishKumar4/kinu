@@ -185,7 +185,7 @@ function ModeSegment({ value, onChange, locked, disabled }: {
   };
 
   return (
-    <div className="flex min-w-0 shrink-0 flex-col gap-1">
+    <div className="flex min-w-0 flex-col gap-1">
     <div className="flex shrink-0 items-center gap-0.5" role="group" aria-label="Turn mode">
       {CHAT_MODES.map((mode) => {
         const build = mode === "build";

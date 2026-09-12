@@ -309,10 +309,10 @@ beforeAll(async () => {
       await page.evaluate(() => {
         const root = document.querySelector('[data-landing-frame="checkout"]');
 
-        const run = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
-          .find((button) => button.textContent?.trim() === 'Run');
+        const work = [...(root?.querySelectorAll<HTMLButtonElement>('[role="tab"]') ?? [])]
+          .find((button) => button.textContent?.trim() === 'Work');
 
-        run?.click();
+        work?.click();
       });
       await page.waitForSelector('[data-landing-frame="checkout"] button[aria-label="Retry"]');
       await page.click('[data-landing-frame="checkout"] button[aria-label="Retry"]');
