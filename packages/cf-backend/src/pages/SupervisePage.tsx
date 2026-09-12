@@ -25,13 +25,14 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { usePagedScroll } from "@/hooks/use-paged-scroll";
 import { useGrowingScroll } from "@/hooks/use-growing-scroll";
 import { SECRET_REGION, SecretValue } from "@/components/ui/SecretValue";
-import { EvolutionEntrySchema, EvolutionSection, evolutionChanges } from "@/components/surfaces/supervise-evolution";
+import { changelogRevalidate } from "@/components/surfaces/changelog-entries";
+import { EvolutionEntrySchema, EvolutionSection } from "@/components/surfaces/supervise-evolution";
 import { Modal } from "@/components/ui/Modal";
 import { inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc } from "@/lib/protocol";
-import { fmtPct, fmtTokens } from "@/lib/format";
-import { addUsage, cacheHitRate, pageSchema, UsageSchema, usageTotal, type SeekCursor, type Usage } from "@kinu.run/core";
+import { fmtTokens } from "@/lib/format";
+import { pageSchema, UsageSchema, usageTotal, type SeekCursor } from "@kinu.run/core";
 import * as v from "valibot";
 import { renderThrownChain } from '@kinu.run/core/obs';
 
@@ -101,33 +102,38 @@ function SuperviseCard({ children }: { children: ReactNode }) {
 /* ── Evolution — only when the changelog records a change ──────── */
 
 /** Reads the changelog and mounts the section only when it carries a change.
- *  A failed read still gets the card — a broken digest must never pose as
- *  "no evolution". */
+ *  `changesOnly` is decided inside the digest read — selection before limit —
+ *  so a page of fresh bookkeeping cannot hide an older change. The changelog's
+ *  own revalidation keeps the card live: a workspace that evolves after this
+ *  view opened still earns the section. A failed read still gets the card — a
+ *  broken digest must never pose as "no evolution". */
 function EvolutionCard({ rpc }: { rpc: Rpc }) {
   const load = useCallback(
     async () => v.parse(
       v.object({ entries: v.array(EvolutionEntrySchema) }),
-      await rpc("getEvolutionChangelog", [{ limit: 8 }]),
+      await rpc("getEvolutionChangelog", [{ limit: 8, changesOnly: true }]),
     ).entries,
     [rpc],
   );
 
-  const { resource, reload } = useAsyncResource(load);
+  const { resource, reload } = useAsyncResource(load, changelogRevalidate);
   const entries = lastValue(resource);
 
+  // One failure policy for both reads on this page: a failed refresh is
+  // reported above whatever last-good rows remain, and a failed first read
+  // still gets the card — a broken digest must never pose as "no evolution".
   if (resource.status === "error") {
     return (
       <SuperviseCard>
         <LoadFailure what="the evolution digest" message={resource.message} onRetry={reload} />
+        {entries !== null && entries.length > 0 && <EvolutionSection entries={entries} />}
       </SuperviseCard>
     );
   }
 
-  const changes = entries === null ? [] : evolutionChanges(entries);
+  if (entries === null || entries.length === 0) return null;
 
-  if (changes.length === 0) return null;
-
-  return <SuperviseCard><EvolutionSection entries={changes} /></SuperviseCard>;
+  return <SuperviseCard><EvolutionSection entries={entries} /></SuperviseCard>;
 }
 
 /* ── Run history ───────────────────────────────────────────────── */
@@ -174,19 +180,12 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
     grows: "down", content: runs, fetched: tail.fetched, onReachEdge: tail.loadMore,
   });
 
-  // Cache warmth over the loaded rows — the one qualifier the header keeps:
-  // it answers "did the agent read or remember", not what anything cost.
-  const totalUsage = (runs ?? []).reduce<Usage>((acc, r) => addUsage(acc, r.usage), {});
-  const hitRate = cacheHitRate(totalUsage);
-  const covers = exhausted ? "" : " so far";
-
   return (
     <section className="min-w-0">
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Run history</h2>
         {runs && <Badge variant="secondary">{exhausted ? `${runs.length}` : `${runs.length}+`}</Badge>}
-        {hitRate !== null && <span className="ml-auto p-meta p-success" title={`Cache-read input divided by total input across ${runs?.length ?? 0} loaded runs`}>{fmtPct(hitRate)} cached{covers}</span>}
       </div>
       {runs === null ? (
         resource.status === "error"
@@ -242,7 +241,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
     [rpc],
   );
 
-  const jobsResource = useAsyncResource(loadJobs).resource;
+  const { resource: jobsResource, reload: reloadJobs } = useAsyncResource(loadJobs, changelogRevalidate);
   const jobs = lastValue(jobsResource);
 
   const revoke = useCallback(async (triggerId: string) => {
@@ -289,6 +288,17 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
             ))}
           </div>
         )}
+
+      {/* A failed jobs read is reported, never dropped into the trigger list's
+          silence — and last-good rows stay up behind the failure notice. */}
+      {jobsResource.status === "error" && (
+        <LoadFailure what="the background jobs" message={jobsResource.message} onRetry={reloadJobs} />
+      )}
+
+      {jobsResource.status === "loading" && (
+        <div className="flex justify-center py-4"><Loader size="sm" /></div>
+      )}
+
       {jobs !== null && jobs.length > 0 && (
         <div className="mt-3">
           <div className="p-eyebrow p-text-4 mb-1.5">Background jobs</div>

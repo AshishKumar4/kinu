@@ -7,10 +7,12 @@
  * with run history, remove the 'budget' from that header."
  *
  * What is here: section order and the header's text off the page itself, and
- * the evolution gate — a window that produced a self-change shows the section,
- * bookkeeping and silence do not. The gate lives in
- * `components/surfaces/supervise-evolution.tsx` so the loaded branch renders
- * straight off fixture rows.
+ * the evolution section's only remaining gate — an already-filtered digest
+ * renders, an empty one does not. The KINDS filter moved into the changelog
+ * read itself (`changesOnly`, covered by unit-evolution-changelog): by the
+ * time rows reach `EvolutionSection` every one of them is a change, so this
+ * surface's contract is only that loaded rows render and nothing mounts
+ * behind an empty list.
  *
  * What is NOT here: the fetch — `useAsyncResource` loads inside `useEffect`,
  * which the static renderer discards. The gate's "no data yet" branch is the
@@ -92,39 +94,21 @@ describe('the supervise view, as markup', () => {
   });
 });
 
-describe('the evolution gate', () => {
-  test('a closed-window digest with self-changes keeps the section', () => {
+describe('the evolution section', () => {
+  test('a filtered digest renders its changes', () => {
     const entries = [
-      entry('outcomes', 'Graded 6 turns · 4 accepted', 'o1'),
       entry('scaffold', 'Rewrote the tool preamble', 's1'),
       entry('fact', 'Remembered: percentage coupons carry kind:null', 'f1'),
     ];
 
-    const changes = evolution.evolutionChanges(entries);
-    const html = sectionMarkup(changes);
+    const html = sectionMarkup(entries);
 
-    expect(changes.map((change) => change.id)).toEqual(['s1', 'f1']);
     expect(html).toContain('Evolution');
     expect(html).toContain('Rewrote the tool preamble');
     expect(html).toContain('percentage coupons carry kind:null');
-    // Measurement rows never appear as evidence the agent changed.
-    expect(html).not.toContain('Graded 6 turns');
-  });
-
-  test('a digest of only closed-window bookkeeping shows nothing', () => {
-    const entries = [
-      entry('outcomes', 'Graded 6 turns · 4 accepted', 'o1'),
-      entry('replay', 'Re-scored against 40 graded turns', 'r1'),
-    ];
-
-    const changes = evolution.evolutionChanges(entries);
-
-    expect(changes).toEqual([]);
-    expect(sectionMarkup(changes)).toBe('');
   });
 
   test('an empty digest shows nothing', () => {
-    expect(evolution.evolutionChanges([])).toEqual([]);
     expect(sectionMarkup([])).toBe('');
   });
 });

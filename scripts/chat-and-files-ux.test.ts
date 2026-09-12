@@ -1598,6 +1598,107 @@ describe('independent settings and quality reads publish independently', () => {
   }, 240_000);
 });
 
+describe('the supervise view, live', () => {
+  const headingTexts = (page: Page) => page.$$eval('h2', (els) => els.map((el) => el.textContent));
+
+  test('a change landing after the page opened earns the Evolution section on the next revalidation', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1000, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=supervisefresh`, { waitUntil: 'networkidle0' });
+
+      // The settled fresh view: Automations and Run history mount, and the
+      // empty changes-only digest mounts no Evolution heading at all.
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('h2')].some((h) => h.textContent === 'Run history'),
+        { timeout: 20_000 },
+      );
+      expect(await headingTexts(page)).toEqual(['Automations', 'Run history']);
+
+      // A change lands. The page polls the changelog on the live-data cadence
+      // (5s), so the heading must appear with no reload and no click.
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:supervise-evolve')));
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('h2')].some((h) => h.textContent === 'Evolution'),
+        { timeout: 20_000 },
+      );
+      expect(await page.$eval('body', (body) => body.textContent ?? ''))
+        .toContain('I improved how I work');
+
+      // The next digest read throws once: the card must report the failure
+      // WITHOUT surrendering the entries it already showed — same policy the
+      // jobs read follows.
+      await page.evaluate(() => window.dispatchEvent(new Event('gallery:supervise-evolution-fail')));
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Could not load the evolution digest') === true,
+        { timeout: 20_000 },
+      );
+      expect(await page.$eval('body', (body) => body.textContent ?? ''))
+        .toContain('I improved how I work');
+
+      // That failure's own Retry — not the jobs one above it — recovers the
+      // read, and the notice leaves.
+      const retriedEvolution = await page.evaluate(() => {
+        const failure = [...document.querySelectorAll('div')]
+          .find((el) => el.querySelector('button') !== null
+            && el.textContent?.includes('Could not load the evolution digest') === true);
+
+        const retry = failure?.querySelector('button');
+
+        retry?.click();
+
+        return retry !== undefined && retry !== null;
+      });
+
+      expect(retriedEvolution).toBe(true);
+
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Could not load the evolution digest') === false,
+        { timeout: 20_000 },
+      );
+      await page.close();
+    });
+  }, 240_000);
+
+  test('a failed background-jobs read reports itself and its retry republishes the rows', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1000, height: 1200 });
+      await page.goto(`${origin}/gallery.html?frame=supervisefresh`, { waitUntil: 'networkidle0' });
+
+      // The scoped failure renders in the Automations section — never as
+      // silence and never as an empty jobs list.
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Could not load the background jobs') === true,
+        { timeout: 20_000 },
+      );
+
+      // Heal and click the failure's own Retry in one turn of the page, so the
+      // cadence poll cannot claim the retry's recovery first.
+      const retried = await page.evaluate(() => {
+        window.dispatchEvent(new Event('gallery:supervise-jobs-heal'));
+
+        const retry = [...document.querySelectorAll('button')]
+          .find((button) => button.textContent?.includes('Retry'));
+
+        retry?.click();
+
+        return retry !== undefined;
+      });
+
+      expect(retried).toBe(true);
+
+      await page.waitForFunction(
+        () => document.body.textContent?.includes('Pick a migration-backfill approach') === true,
+        { timeout: 20_000 },
+      );
+      expect(await page.$eval('body', (body) => body.textContent ?? ''))
+        .not.toContain('Could not load the background jobs');
+      await page.close();
+    });
+  }, 240_000);
+});
+
 /**
  * N021. This drives the real DevicesCard revoke response, durable-list refresh
  * and acknowledgement endpoint. Reload is the non-vacuity arm: the immediate

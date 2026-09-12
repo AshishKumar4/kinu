@@ -91,6 +91,11 @@ export interface BuildChangelogOptions {
   since?: number;
   /** Cap on returned entries (default 50). */
   limit?: number;
+  /** When true, the digest keeps only entries that ARE a self-change: the
+   *  'outcomes' and 'replay' rows are measurements a closed window leaves
+   *  behind. The exclusion runs BEFORE the limit is taken, so a page of fresh
+   *  bookkeeping cannot push an older real change off the end. */
+  changesOnly?: boolean;
   now?: number;
 }
 
@@ -587,7 +592,11 @@ export function buildChangelog(
   if (outcomes) entries.push(outcomes);
   entries.sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1));
 
-  return entries.slice(0, limit);
+  const kept = opts.changesOnly === true
+    ? entries.filter((e) => e.kind !== 'outcomes' && e.kind !== 'replay')
+    : entries;
+
+  return kept.slice(0, limit);
 }
 
 /** How deep the unseen window is read. Past this the badge stops counting, so
