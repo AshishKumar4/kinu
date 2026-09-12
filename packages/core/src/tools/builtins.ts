@@ -96,7 +96,7 @@ import { TurnEscalationLedger } from '../execution/escalation';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool';
 import { type WebSearchProvider, type WebSearchResponse } from '../web/index';
-import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review';
+import type { PlanEdit, SubmitPlanToolDeps } from '../types/plans';
 import type { JsonValue } from '../utils/json';
 import { diagnostics, KinuError, renderThrownChain, toKinuError, type Logger } from '../obs/index';
 // The admitted-set filter beside the sets it narrows (heads/types.ts). That

@@ -31,36 +31,11 @@ import { JsonObjectSchema, JsonValueSchema, decodeJsonValue, type JsonValue } fr
 import { nanoid } from '../utils/nanoid';
 import { hasPlanPermission } from '../execution/work-mode';
 import { branchableToolCall } from './outcome';
+import { CRAFTED_TOOL_NAMESPACE, type CodemodeProvider } from '../types/codemode';
 
-/** A provider's host-side result before the executor validates the VM boundary
- *  as JSON. Domain objects are allowed here; functions and symbols are not. */
-export type CodemodeResult = object | string | number | boolean | null | undefined;
-
-/**
- * A codemode sandbox provider: a named namespace of callable tools plus the
- * TypeScript declaration the model reads for it.
- *
- * `positionalArgs` states how the sandbox spreads a call: `ns.fn(a, b)` reaches
- * `execute(a, b)` when true, `execute({…})` when false. `prelude` is optional
- * sandbox-side JavaScript run after the namespace proxy exists, for members
- * that must be real in-sandbox functions (crafted tools are defined this way,
- * because their source closes over the other namespaces).
- */
-export interface CodemodeProvider {
-  readonly name: string;
-  readonly tools: Record<string, {
-    readonly description: string;
-    readonly planAllowed?: boolean;
-    readonly execute: (...args: unknown[]) => Promise<CodemodeResult>;
-  }>;
-  readonly types?: string;
-  readonly positionalArgs?: boolean;
-  readonly prelude?: string;
-}
-
-/** The ONE namespace every tool is callable in — native builtins and crafted
- *  tools alike — on every backend. */
-export const CRAFTED_TOOL_NAMESPACE = 'tools';
+export {
+  CRAFTED_TOOL_NAMESPACE, type CodemodeProvider, type CodemodeResult,
+} from '../types/codemode';
 
 /** The sandbox's own entry. A program cannot call `execute_tools` from inside
  *  itself, so the declaration and the bindings below both skip it: callers

@@ -24,7 +24,7 @@ import type { TriggerRegistry } from '../hub/triggers';
 import type { EmailAttachmentMeta, EmailPayload, EventId } from '../hub/types';
 import { spillEventContent } from '../hub/content-spill';
 import type { SqlExec, VFS } from '../../types/primitives';
-import type { MissingCapability } from '../../prompting/volatile-context';
+import type { MissingCapability } from '../../types/dynamic-context';
 import { argumentDigest } from '../../safety/argument-digest';
 import { tryConsumeWebhookRateLimit } from './rate-limit';
 import { diagnostics, toKinuError } from '../../obs/index';

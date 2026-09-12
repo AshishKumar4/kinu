@@ -18,7 +18,7 @@
  */
 
 import { isBuiltinToolName, TOOL_REACH } from '../tools/registry';
-import { CRAFTED_TOOL_NAMESPACE } from '../tools/sandbox-contract';
+import { CRAFTED_TOOL_NAMESPACE } from '../types/codemode';
 
 /** V8's ReferenceError message for a bare undefined identifier — the exact,
  *  stable shape Node/workerd/browsers all emit, so matching it precisely

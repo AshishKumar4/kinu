@@ -23,7 +23,7 @@
  * `announce` callback.
  */
 
-import type { DynamicApproval } from '../prompting/volatile-context';
+import type { DynamicApproval } from '../types/dynamic-context';
 import * as v from 'valibot';
 
 /** How a consent prompt settled. `timeout` is NOT a decision — nobody made
