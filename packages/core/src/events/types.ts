@@ -118,10 +118,8 @@ export type RunEvent =
    *  There is no matching `tool_call_start`. One existed, declared in this
    *  union and read by three readers, and no producer ever wrote it: the
    *  backends' sinks emit this row and `step_finish`, so a `tool_call_start`
-   *  reader reported zero forever and was believed. It is deleted rather than
-   *  implemented because a start row cannot answer the question a failure
-   *  ledger is asked — which call FAILED and what it was doing — without a
-   *  join, and the join key here is a per-turn ordinal, not the provider's id.
+   *  reader reported zero forever and was believed. The completed row carries
+   *  the execution identity directly, together with the input and outcome.
    *
    *  `args` is therefore on the row that carries the failure. It is a digest
    *  (`digestJsonValue`), so a `write` of a large body is described rather than

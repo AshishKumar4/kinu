@@ -6853,6 +6853,7 @@ export abstract class ActorAgent extends Think<Env> {
     // allow with the original input — the seam observes, it does not gate).
     await this.extensions.emitToolCall({
       toolName: ctx.toolName,
+      toolCallId: ctx.toolCallId,
       args: jsonObject(ctx.input),
     });
   }
@@ -6865,6 +6866,7 @@ export abstract class ActorAgent extends Think<Env> {
 
     const recorded: Parameters<TurnAccumulator['recordToolCall']>[0] = {
       toolName: ctx.toolName,
+      toolCallId: ctx.toolCallId,
       input,
       durationMs: ctx.durationMs,
       ...outcome,
@@ -6876,6 +6878,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.acc.recordToolCall(recorded);
     await this.extensions.emitToolResult({
       toolName: ctx.toolName,
+      toolCallId: ctx.toolCallId,
       args: input,
       result: ctx.success ? renderToolResult(ctx.output) : renderThrownChain({ cause: ctx.error }),
       ...outcome,
