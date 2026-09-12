@@ -1206,17 +1206,9 @@ export function snapshotChainStorage(ports: SnapshotChainPorts): DevboxStorage {
     // The delta as the STORE describes it, because the layer is mounted from
     // the stored object. A delta the record names was probed and adopted by
     // `serve` a moment ago, so it is not asked for twice; an unreferenced but
-    // complete delta is adopted here (header, "Ordering under crash"). The
-    // mounted view discovers candidates; a base-only chain need not HEAD a
-    // missing delta. A present candidate still gets the store's identity.
-    let storedDelta = generation.delta;
-    const deltaKey = deltaObjectKey(root, generation.base.id);
-
-    if (storedDelta === undefined
-      && await shell.pathExists(mountedLayerPath(CHAIN_STORE_MOUNT, root, deltaKey))) {
-      storedDelta = await ports.objectFacts(deltaKey);
-    }
-
+    // complete delta is adopted here (header, "Ordering under crash"). A
+    // mounted negative may be cached or a stat error, never proof of absence.
+    const storedDelta = generation.delta ?? await ports.objectFacts(deltaObjectKey(root, generation.base.id));
     const haveDelta = storedDelta !== undefined;
 
     // IS THIS UPPER ALREADY THIS DELTA? The stamp is written only by the

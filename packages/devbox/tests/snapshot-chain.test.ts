@@ -1126,7 +1126,7 @@ describe('attach — the mount must be observed to have landed', () => {
     expect(record.calls.filter(call => call.startsWith('publishArchive'))).toEqual([]);
   });
 
-  test('a base-only mount does not HEAD an absent unrecorded delta', async () => {
+  test('a base-only attach verifies an unrecorded delta is absent in the store', async () => {
     const calls: string[] = [];
 
     const record = harness({
@@ -1138,11 +1138,11 @@ describe('attach — the mount must be observed to have landed', () => {
 
     expect((await attachOf(record)).kind).toBe('attached');
     expect(record.calls).toContain(`objectFacts:${baseObjectKey(STORE_ROOT, CHAIN_ID)}`);
-    expect(record.calls).not.toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
+    expect(record.calls).toContain(`objectFacts:${deltaObjectKey(STORE_ROOT, CHAIN_ID)}`);
     expect(record.calls).toContain(`overlayAttach:${DEVBOX_WORKDIR}:1`);
   });
 
-  test('a complete but unreferenced delta adopts itself; the mount is its validator',
+  test('a complete unreferenced delta is adopted despite a negative mounted stat',
     async () => {
       // A previous run crashed between the atomic PUT and the state write. The
       // PUT was all-or-nothing and squashfs verifies its own superblock, so the
@@ -1153,6 +1153,7 @@ describe('attach — the mount must be observed to have landed', () => {
         state: chainState({ delta: undefined }),
         mounts: mountsAfterAttach(calls),
         calls,
+        absent: (path) => path.endsWith('/delta.sqsh'),
       });
 
       record.objects.set(deltaObjectKey(STORE_ROOT, CHAIN_ID), DELTA_BYTES);

@@ -2025,6 +2025,7 @@ function snapshotChainArm(): ConformanceArm {
     },
     refusedCells: {
       ...HARNESS_OWNED_CELLS,
+      '6.14': { reason: 'a snapshot-chain wake makes 4 remote ops against the O(1) bound of 3: the base integrity head, the head that adopts an unreferenced delta, the store mount\'s list and the base layer\'s get (a base+delta wake makes 5; measured 2026-09-10 in the conformance harness)' },
     },
   };
 }
