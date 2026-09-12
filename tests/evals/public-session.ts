@@ -97,7 +97,7 @@ import { CHAT_MESSAGE_TYPES } from 'agents/chat';
 
 import {
   JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, RunEventSchema, initRunEventTables,
-  parseJsonValue, CommandResultSchema,
+  parseJsonValue, renderSoulMarkdown, CommandResultSchema,
   type JsonValue, type LLMProviderConfig, type RunEvent, type WorkspaceSpend,
 } from '../../packages/core/src/index';
 import { tolerate } from '../../packages/core/src/obs/index';
@@ -220,6 +220,15 @@ export interface PublicSessionRequest {
    *  `eval-` prefixed name so a survivor on the account is attributable. */
   readonly subject: string;
   readonly purpose: string;
+  /** `false` means the workspace is created WITHOUT a genesis turn: the create
+   *  carries no mission, so creation writes the placeholder soul that
+   *  `isPlaceholderMission` (core/src/identity/soul.ts:45) declines a first
+   *  turn on, and the purpose is written into SOUL.md over `setSoul` — the same
+   *  callable the soul surface drives — before the session is handed back. The
+   *  workspace a case gets still runs its first prompt under the real mission;
+   *  it has simply never run the agent's own unrequested turn. Omitted or true
+   *  is the product's own path: mission on the create, genesis turn queued. */
+  readonly genesis?: boolean;
 }
 
 export interface PublicSessionPlan {
@@ -324,6 +333,7 @@ export function resolvePublicSessionPlan(
         identity,
         workspace: evalWorkspaceName(`${suiteSlug}-${request.subject}`),
         purpose: request.purpose,
+        genesis: request.genesis,
         llm: plan.llm,
       }),
     },
@@ -601,13 +611,22 @@ export function scorePublicLedger(events: readonly RunEvent[]): EvalScoreRow[] {
 }
 
 // ── The session ────────────────────────────────────────────────────
-
 interface PublicSessionInput {
   readonly origin: string;
   readonly identity: PublicWebIdentity;
   readonly workspace: string;
   readonly purpose: string;
+  readonly genesis?: boolean;
   readonly llm: LLMProviderConfig;
+}
+
+/** The POST /api/user/workspaces body, exactly the optional fields
+ *  `handleCreateWorkspaceRequest` parses (user/workspace-access.ts): `purpose`
+ *  may legitimately be absent, which is what a `genesis: false` open sends. */
+interface CreateWorkspaceBody {
+  name: string;
+  displayName: string;
+  purpose?: string;
 }
 
 const WorkspaceEntrySchema = v.object({
@@ -746,20 +765,35 @@ export interface PublicSubmission {
   readonly settled: Promise<PublicTurn>;
 }
 
-async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
+/** The display name every eval workspace is created under, used twice when a
+ *  `genesis: false` open rewrites the soul itself: the document's heading must
+ *  read what a mission-first create would have written, so the constant is
+ *  shared rather than re-typed. */
+const SESSION_DISPLAY_NAME = 'Trajectory Evals';
+
+export async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicSession> {
   const headers = webHeaders(input.identity);
 
   const created = await infraBoundary(
     `POST ${input.origin}/api/user/workspaces`,
     async () => {
+      const body: CreateWorkspaceBody = {
+        name: input.workspace,
+        displayName: SESSION_DISPLAY_NAME,
+      };
+
+      // A mission on the create queues the workspace's own genesis turn —
+      // creation fires it on any non-placeholder mission (orchestrator.ts's
+      // beginGenesisTurn over soul.ts:77). A case that asked for
+      // `genesis: false` sends NO purpose, so the workspace is born on the
+      // placeholder mission `workspaceGenesisSignal` returns null for, and
+      // the real mission is written over the socket below.
+      if (input.genesis !== false) body.purpose = input.purpose;
+
       const response = await fetch(`${input.origin}/api/user/workspaces`, {
         method: 'POST',
         headers: { ...headers, 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: input.workspace,
-          displayName: 'Trajectory Evals',
-          purpose: input.purpose,
-        }),
+        body: JSON.stringify(body),
       });
 
       return v.parse(WorkspaceEntrySchema, await readJson(response, 'create a workspace'));
@@ -770,6 +804,18 @@ async function openPublicSession(input: PublicSessionInput): Promise<KinuPublicS
 
   try {
     await session.connect();
+
+    if (input.genesis === false) {
+      // `setSoul` is the soul surface's own callable, writing exactly the
+      // markdown `initializeOrchestrator` seeds when it DOES carry a mission
+      // (workspace-create.ts's renderSoulMarkdown over the same display name),
+      // and it lands before the first prompt — so every turn still runs under
+      // the case's real mission and only the unrequested first turn is gone.
+      await session.setSoul(renderSoulMarkdown({
+        name: SESSION_DISPLAY_NAME, mission: input.purpose,
+      }));
+    }
+
     await session.pinModel(input.llm.model);
   } catch (error) {
     // A half-opened session must not leave a workspace on the account: this is
@@ -901,6 +947,18 @@ export class KinuPublicSession {
     }
 
     return accepted;
+  }
+
+  /**
+   * Write SOUL.md, the call the soul surface itself makes.
+   *
+   * Reachable here for one job: a `genesis: false` open created the workspace
+   * on the placeholder mission so no genesis turn was ever queued, and this
+   * write lands the case's real mission before its first prompt.
+   */
+  async setSoul(markdown: string): Promise<void> {
+    await infraBoundary(`setSoul on ${this.input.origin}/${this.workspace}`, () =>
+      this.rpc('setSoul', [markdown]));
   }
 
   /** Start a turn and hand back its id and its promise. */
