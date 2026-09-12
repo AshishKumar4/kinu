@@ -20,23 +20,28 @@ import {
 import { isToolUIPart, getToolName } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
 import {
-  ADVISOR_SEVERITY_LABEL, JsonObjectSchema, JsonValueSchema,
+  ADVISOR_SEVERITY_LABEL,
   describeToolCall, summarizeToolCall, toolCallEffect,
 } from "@kinu.run/core";
 import type { AdvisorSeverity, InlineSteer, JsonObject, JsonValue, PlacedSteer } from "@kinu.run/core";
 import * as v from "valibot";
-import { diagnostics, renderThrownChain, tolerate } from "@kinu.run/core/obs";
+import { diagnostics, renderThrownChain } from "@kinu.run/core/obs";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { AttachmentChip } from "@/components/AttachmentChip";
 import { extractPreviewUrl } from "@/lib/preview-origin";
-import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
+import {
+  groupMessageParts, turnResultFacts, formatTurnResult, splitCompletedTurn,
+  partOutput, partInput, partEffect, callFailed, parseProvisionError,
+  type AnyToolPart,
+} from "@/components/tool-call-grouping";
 import { liveTail } from "@/components/message-live-tail";
 import { redactPayload, segmentBySteers } from "@kinu.run/core";
 import {
   classifyProgrammaticTurn, eventSourceLabel, eventVariantLabel, isSteeredMessage, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
 } from "@/components/background-event";
+import { useToggledSet } from "@/hooks/use-toggled-set";
 
 function getMessageText(msg: UIMessage): string {
   return msg.parts.filter(p => p.type === "text").map(p => p.text).join("");
@@ -46,11 +51,6 @@ const MessageCreatedAtSchema = v.looseObject({
   createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
 });
 
-const ProvisionErrorSchema = v.object({
-  error: v.literal("runtime_not_provisioned"),
-  runtime: v.string(),
-  message: v.optional(v.string()),
-});
 
 function messageCreatedAt<Message>(message: Message): string | number | Date | undefined {
   const parsed = v.safeParse(MessageCreatedAtSchema, message);
@@ -119,25 +119,6 @@ function ReasoningBlock({ text, live = false }: { text: string; live?: boolean }
   );
 }
 
-/** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
- *  string-ified tool output. Returns null if the output doesn't match. */
-function parseProvisionError<Output>(output: Output):
-  { runtime: string; message: string } | null {
-  const text = v.safeParse(v.string(), output);
-
-  if (!text.success || !text.output.includes('runtime_not_provisioned')) return null;
-
-  // Output that names the runtime but isn't JSON is not this error shape; any
-  // other failure here is real and must not read as "not a provision error".
-  const parsed = v.safeParse(
-    ProvisionErrorSchema,
-    tolerate<unknown>(() => JSON.parse(text.output), 'malformed-input'),
-  );
-
-  return parsed.success
-    ? { runtime: parsed.output.runtime, message: parsed.output.message ?? 'Runtime not available.' }
-    : null;
-}
 
 function jsonString(input: JsonObject | undefined, key: string): string | null {
   const value = input?.[key];
@@ -184,14 +165,17 @@ function toolIcon(toolName: string): ReactNode {
   return <DotsThreeCircleIcon size={15} />;
 }
 
-function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText }: {
+function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText, expanded, onToggleExpand }: {
   toolName: string; input?: JsonObject; output?: JsonValue; isRunning: boolean; isError: boolean;
   /** The transport's own reason for a protocol-level failure (a crashed
    *  executor, a timeout) — distinct from `output`, which a tool that caught
    *  its own failure returns as an ordinary result. Never present together. */
   errorText?: string;
+  /** Expansion lives on the message, keyed by toolCallId: a row that folds
+   *  into a group mid-stream remounts, and local state would not survive it. */
+  expanded: boolean;
+  onToggleExpand: () => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const startTime = useRef<number | null>(null);
   const [elapsed, setElapsed] = useState<number | null>(null);
   const wasRunning = useRef(false);
@@ -234,7 +218,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
     <div className={prominent ? "m-2 overflow-hidden rounded-lg border border-[color-mix(in_srgb,var(--c-accent)_24%,var(--c-border))] bg-[color-mix(in_srgb,var(--c-accent)_4%,var(--c-recessed))]" : ""}>
       <button
         type="button"
-        onClick={() => setExpanded(!expanded)}
+        onClick={onToggleExpand}
         aria-expanded={expanded}
         data-tool-state={isRunning ? "running" : failed ? "failed" : "done"}
         data-tool-effect={effect}
@@ -335,55 +319,43 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
  * Only FINISHED calls are folded in; a call still running keeps its own row
  * so the count never changes under the reader's eye while the agent works.
  */
-/** The live output value of a finished part — undefined while it's still
- *  running or never finished, which is exactly when there is nothing to read
- *  a failure out of yet. Shared by the group's failure tally and the part's
- *  own card so the two can never disagree about the same call. */
-function partOutput(part: AnyToolPart): JsonValue | undefined {
-  if (part.state !== "output-available") return undefined;
-  const parsed = v.safeParse(JsonValueSchema, part.output);
 
-  return parsed.success ? parsed.output : undefined;
-}
-
-function partInput(part: AnyToolPart): JsonObject | undefined {
-  const parsed = v.safeParse(JsonObjectSchema, part.input);
-
-  return parsed.success ? parsed.output : undefined;
-}
-
-function partEffect(part: AnyToolPart) {
-  return toolCallEffect(getToolName(part), partInput(part));
-}
-
-/** The UI protocol records whether the tool invocation failed. Output is data. */
-function partFailed(part: AnyToolPart): boolean {
-  return part.state === 'output-error';
-}
-
-function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
+function ToolCallGroup({ parts, expandedCalls, onToggleCall, foldAll = false }: {
+  parts: readonly AnyToolPart[];
+  /** toolCallIds the reader opened. A failed call reads open until the
+   *  reader closes it: the toggle removes the default, never the row. */
+  expandedCalls: ReadonlySet<string>;
+  onToggleCall: (toolCallId: string) => void;
+  /** A completed turn starts folded; a live one keeps showing short runs. */
+  foldAll?: boolean;
+}) {
   const [showAll, setShowAll] = useState(false);
-  const failedCount = parts.filter(partFailed).length;
+  const failedCount = parts.filter(callFailed).length;
   const mutationCount = parts.filter((part) => partEffect(part) === 'mutate').length;
+  // A failing call is never buried in a collapsed success group and never
+  // moves when the group opens: failed rows lead in both states.
+  const ordered = [...parts].sort((a, b) => Number(callFailed(b)) - Number(callFailed(a)));
   const collapsedIds = new Set<string>();
 
-  if (parts.length <= 8) {
-    for (const part of parts) collapsedIds.add(part.toolCallId);
+  if (!foldAll && parts.length <= 8) {
+    for (const part of ordered) collapsedIds.add(part.toolCallId);
   } else {
     // A call that put a running app on screen is the artifact of the turn —
     // the reader scrolls back for that frame, not for the row above it. It is
     // therefore never folded, and it does not spend the consequential budget:
     // a preview is not a change, and a run that exposes two ports must not
     // lose a failure to make room for them.
-    for (const part of parts) if (extractPreviewUrl(partOutput(part)) !== null) collapsedIds.add(part.toolCallId);
+    for (const part of ordered) if (callFailed(part)) collapsedIds.add(part.toolCallId);
+
+    for (const part of ordered) if (extractPreviewUrl(partOutput(part)) !== null) collapsedIds.add(part.toolCallId);
     let budget = 6;
 
-    for (const part of parts) {
+    for (const part of ordered) {
       if (budget === 0) break;
 
       if (collapsedIds.has(part.toolCallId)) continue;
 
-      if (partFailed(part) || partEffect(part) === 'mutate') { collapsedIds.add(part.toolCallId); budget -= 1; }
+      if (partEffect(part) === 'mutate') { collapsedIds.add(part.toolCallId); budget -= 1; }
     }
 
     const first = parts[0];
@@ -394,8 +366,8 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
     if (last !== undefined) collapsedIds.add(last.toolCallId);
   }
 
-  const collapsed = parts.filter((part) => collapsedIds.has(part.toolCallId));
-  const shown = showAll ? parts : collapsed;
+  const collapsed = ordered.filter((part) => collapsedIds.has(part.toolCallId));
+  const shown = showAll ? ordered : collapsed;
   const hiddenCount = parts.length - collapsed.length;
 
   return (
@@ -408,7 +380,7 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
         {failedCount > 0 && <span className="ml-auto p-badge-danger px-2 py-0.5">{failedCount} failed</span>}
       </div>
       <div className="divide-y divide-dashed divide-[var(--c-dash)]">
-        {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} />)}
+        {shown.map((part) => <ToolCallPart key={part.toolCallId} part={part} expanded={expandedCalls.has(part.toolCallId) !== callFailed(part)} onToggleExpand={() => onToggleCall(part.toolCallId)} />)}
       </div>
       {hiddenCount > 0 && (
         <button
@@ -426,7 +398,7 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
 }
 
 /** One tool part: its row, plus the live preview a tool can return. */
-function ToolCallPart({ part }: { part: AnyToolPart }) {
+function ToolCallPart({ part, expanded, onToggleExpand }: { part: AnyToolPart; expanded: boolean; onToggleExpand: () => void }) {
   const output = partOutput(part);
   const input = partInput(part);
   const previewUrl = extractPreviewUrl(output);
@@ -438,14 +410,39 @@ function ToolCallPart({ part }: { part: AnyToolPart }) {
         input={input}
         output={output}
         isRunning={part.state === "input-available" || part.state === "input-streaming"}
-        isError={partFailed(part)}
+        isError={callFailed(part)}
         errorText={part.state === "output-error" ? part.errorText : undefined}
+        expanded={expanded}
+        onToggleExpand={onToggleExpand}
       />
       {previewUrl && (
         <div className="mt-2 h-64 overflow-hidden rounded-md border p-border">
           <PreviewFrame url={previewUrl} />
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * The compact result line that leads a completed turn: what RAN, from the
+ * turn's own settled calls. Never a verdict on the work — "3 tool calls, 1
+ * failed" says the invocations failed, not that the task did — and never a
+ * check: no row the chat can read records a named passed check, so none is
+ * shown rather than one inferred.
+ */
+function TurnResultLine({ facts }: { facts: { calls: number; failed: number; crafted: string[] } }) {
+  const line = formatTurnResult(facts);
+
+  if (line === null) return null;
+
+  return (
+    <div data-turn-result className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border p-border bg-[var(--c-recessed)] px-3 py-2">
+      <CheckCircleIcon size={12} weight="fill" className={facts.failed > 0 ? "p-danger shrink-0" : "p-success shrink-0"} />
+      <span className="text-[12px] font-semibold p-text-2">{line}</span>
+      {facts.crafted.map((name) => (
+        <span key={name} data-crafted-use={name} className="text-[11px] p-accent">Used the {name} tool</span>
+      ))}
     </div>
   );
 }
@@ -776,6 +773,13 @@ export const MessageView = memo(function MessageView({
   // Fork button disabled on the mid-stream last assistant — that message
   // isn't durably persisted yet.
   const canFork = !isLive && !!onFork && !!message.id;
+  // Expansion keyed by toolCallId on the message: a row that folds into a
+  // group on the next stream update remounts, and row-local state would reset
+  // with it. A failed call reads open until the reader closes it — the toggle
+  // removes the default, never the row.
+  const { set: callToggles, toggle: toggleCall } = useToggledSet();
+
+  const callExpanded = (part: AnyToolPart) => callToggles.has(part.toolCallId) !== callFailed(part);
 
   // Turns the backend enqueued on the agent's behalf are stored as `user`
   // messages so the model reads them as its input — but the operator did not
@@ -849,9 +853,63 @@ export const MessageView = memo(function MessageView({
   // anything: a steer at step 0 leaves the first segment empty, and hanging the
   // button off a segment that renders nothing takes it off the message.
   const forkSegment = segments.findIndex((segment) => segment.parts.length > 0);
+  // One prose-ish part as the chat draws it, shared by the live layout and
+  // the completed result-first layout so the two cannot drift apart.
+
+  const renderContentPart = (part: UIMessage["parts"][number], key: string | number) => {
+
+    const isTailPart = (tail?.kind === "text" || tail?.kind === "reasoning") && tail.part === part;
+
+    if (part.type === "reasoning") {
+      const t = part.text;
+
+      return t ? <ReasoningBlock key={key} text={t} live={isTailPart} /> : null;
+    }
+
+    if (part.type === "file") {
+      return <div key={key} className="my-1.5"><FilePartView part={part} /></div>;
+    }
+
+    if (part.type === "text") {
+      const t = part.text;
+
+      if (!t) return null;
+
+      // `p-streaming` draws the caret inside the last block the markdown
+      // emitted. As a sibling element it landed on a line of its own below
+      // the paragraph, which is the misplacement that was reported.
+      return (
+        <div key={key} className={`prose-chat p-text${isTailPart ? " p-streaming" : ""}`}>
+          <MarkdownContent content={t} />
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const renderToolRow = (part: AnyToolPart) => (
+    <ToolCallPart key={part.toolCallId} part={part}
+      expanded={callExpanded(part)} onToggleExpand={() => toggleCall(part.toolCallId)} />
+  );
+
+  // A completed segment's settled calls as the one activity group the result
+  // line summarizes. A lone call stays a row — one call is not a group.
+  const renderSettledActivity = (settled: AnyToolPart[]) => {
+    if (settled.length === 0) return null;
+    const first = settled[0];
+
+    if (settled.length >= 2 && first) {
+      return <ToolCallGroup key={first.toolCallId} parts={settled}
+        expandedCalls={callToggles} onToggleCall={toggleCall} foldAll />;
+    }
+
+    return settled.map(renderToolRow);
+  };
 
   return (
     <div className="space-y-1 animate-fade-in">
+      {!isLive && <TurnResultLine facts={turnResultFacts(message.parts)} />}
       {segments.map((segment, s) => (
         <Fragment key={s}>
           {segment.steer && <SteerBubble steer={segment.steer} onFork={onFork} />}
@@ -866,11 +924,24 @@ export const MessageView = memo(function MessageView({
                   <GitBranchIcon size={12} />
                 </button>
               )}
-              {groupMessageParts(segment.parts).map((block, i) => {
+              {!isLive ? (() => {
+                // A completed turn reads result first, then prose, then the
+                // one collapsed activity group — the ledger before the words.
+                const split = splitCompletedTurn(segment.parts);
+
+                return (
+                  <>
+                    {split.content.map((part, i) => renderContentPart(part, `c${i}`))}
+                    {split.open.map(renderToolRow)}
+                    {renderSettledActivity(split.settled)}
+                  </>
+                );
+              })() : groupMessageParts(segment.parts).map((block, i) => {
                 if (block.kind === "tool-run") {
                   const first = block.parts[0];
 
-                  return first ? <ToolCallGroup key={first.toolCallId} parts={block.parts} /> : null;
+                  return first ? <ToolCallGroup key={first.toolCallId} parts={block.parts}
+                    expandedCalls={callToggles} onToggleCall={toggleCall} /> : null;
                 }
 
                 const part = block.part;
@@ -902,7 +973,7 @@ export const MessageView = memo(function MessageView({
                 }
 
                 if (isToolUIPart(part)) {
-                  return <ToolCallPart key={part.toolCallId} part={part} />;
+                  return renderToolRow(part);
                 }
 
                 return null;
