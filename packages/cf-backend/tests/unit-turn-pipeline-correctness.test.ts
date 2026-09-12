@@ -169,6 +169,44 @@ describe('turn-pipeline correctness wiring', () => {
     expect(config?.system ?? '').toContain('You are Atlas. Preserve the owner\'s exact requirements.');
   });
 
+  test('the second turn\'s request carries the message that started it, after the first', async () => {
+    // Two turns through the real pipeline: `beforeTurn` admits each against
+    // the context plane, `onChatResponse` closes the boundary. Measured on the
+    // deployed 234ed5d7d (bench-artifacts/first-run-flash-1789196459812/
+    // every-tool): the second turn's request held ONE user message, the first
+    // turn's, and the model answered the genesis signal twice. The boundary
+    // adopted the first turn's INPUT as the next turn's whole history, so the
+    // user message the second turn was started with never reached the model.
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    const first: ModelMessage = { role: 'user', content: 'first: list your tools' };
+    const reply: ModelMessage = { role: 'assistant', content: 'execute_tools, run, file' };
+    const second: ModelMessage = { role: 'user', content: 'second: now use each one' };
+
+    const turn = (messages: ModelMessage[]) => ({
+      system: 'sys', messages, tools: {} satisfies ToolSet, model: 'harness-model',
+      continuation: false, body: {},
+    });
+
+    const opening = await agent.beforeTurn(turn([first]));
+
+    expect(opening?.messages?.filter((message) => message.role === 'user')).toEqual([first]);
+
+    await agent.onChatResponse({
+      message: { id: 'a-1', role: 'assistant', parts: [{ type: 'text', text: 'execute_tools, run, file' }] },
+      requestId: 'req-1', continuation: false, status: 'completed',
+    });
+
+    const following = await agent.beforeTurn(turn([first, reply, second]));
+    const request = following?.messages ?? [];
+
+    // Both halves: the message that started this turn is in the request, and
+    // the first turn is still there ahead of it — a request that carried only
+    // the second message would pass a bare `toContain`.
+    expect(request.filter((message) => message.role === 'user')).toEqual([first, second]);
+    expect(request.filter((message) => message.role === 'assistant')).toEqual([reply]);
+  });
+
   test('a catalog the turn cannot reach runs on builtins; any other failure is the turn\'s own', async () => {
     // The MCP descriptor read is one owner-plane hop. A hop that fails, times
     // out or breaks mid-read is tolerated: the turn runs on builtins and the

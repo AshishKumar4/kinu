@@ -1574,20 +1574,24 @@ export abstract class ActorAgent extends Think<Env> {
     // deleted row could not say, and which is what recovery has to know.
     // THE CONTEXT BOUNDARY, on EVERY ending — completed, aborted and errored
     // alike, which is why it sits here in the actor-generic front half rather
-    // than in a concrete actor's success path. An edit that landed mid-turn
-    // produced a later revision, and the array Think is still carrying begins
-    // with the pre-edit prefix, because a `prepareStep` override shapes ONE
-    // request and never becomes the next step's input. Adopting the plane's
-    // settled array is what stops that edit being discarded at the boundary;
-    // dropping it on the failure path would discard it for exactly the turns an
-    // owner is most likely to have edited.
+    // than in a concrete actor's success path. The plane records the durable
+    // half of what this turn ran on as the revision the NEXT turn composes
+    // from: its `startTurn` lays that revision over the array Think assembles
+    // then, and everything past the revision's own length — this turn's
+    // answer, and the message that starts the next turn — rides after it.
+    //
+    // The durable half, not the whole request: the turn-local tail is never
+    // persisted, so a snapshot that carried it would not be a prefix of the
+    // next turn's array and the plane would splice the next turn's input at
+    // the wrong offset. And the SNAPSHOT is the hand-off, never a copy held on
+    // this instance: the one held here was handed to the next `startTurn` as
+    // its whole history, which dropped the message that turn was started with
+    // — measured on the deployed 234ed5d7d, where every second turn answered
+    // the genesis signal again.
     const claimedTurn = this._turnClaim;
 
     if (claimedTurn !== null) {
-      this._adoptedContext = this.contextPlane.endTurn({
-        turnId: claimedTurn.turnId,
-        history: this._lastTurnOpts?.messages ?? [],
-      }).messages;
+      this.contextPlane.endTurn({ turnId: claimedTurn.turnId, history: this._turnDurableInput });
     }
 
     this.settleTurnClaim(result.status === 'completed'
@@ -2368,16 +2372,13 @@ export abstract class ActorAgent extends Think<Env> {
   private _turnClaim: ActorTurnClaim | null = null;
 
   /**
-   * The context this actor's NEXT turn starts from, once a turn has settled one.
-   *
-   * Held rather than written back into Think's message store, because the two
-   * are answers to different questions: the store is the transcript, and this is
-   * the model-visible CONTEXT — which compaction already rewrites per turn
-   * through `transformContext` without touching stored messages. The durable
-   * copy is the plane's own revision in the claim ledger, so an eviction that
-   * loses this field re-reads it there rather than losing the edit.
+   * The durable half of the in-flight turn's assembled request: the history
+   * `assembleTurnMessages` produced, without the turn-local tail it appends.
+   * Set in `beforeTurn`, handed to the context plane at the boundary. The
+   * plane's revision ledger is the durable hand-off between turns; this field
+   * only names what to record there.
    */
-  private _adoptedContext: readonly ModelMessage[] | null = null;
+  private _turnDurableInput: readonly ModelMessage[] = [];
 
   /**
    * THE actor's context plane, ONE per activation.
@@ -6484,6 +6485,7 @@ export abstract class ActorAgent extends Think<Env> {
       limits: { contextWindow: this._turnContextWindow, modelOutputLimit: this.modelCatalog.modelOutputLimit() },
     };
     cfg.messages = await assembleTurnMessages(assembly);
+    this._turnDurableInput = cfg.messages.slice(0, cfg.messages.length - turnLocal.length);
 
     const taskPlan: TaskPlanContext = Object.freeze({ sql: Object.freeze([this.boundSql, this.rt.storage.sql]), plan: this.approvedTaskPlan(this.durableTurnId()) });
     this._turnTaskPlan = taskPlan;
@@ -6577,10 +6579,12 @@ export abstract class ActorAgent extends Think<Env> {
     // applied, and with input delivered since preserved after it exactly once.
     // The claim records THAT array, so the context a turn was admitted against
     // and the context its first request carries are one value.
-    const admitted = this.contextPlane.startTurn({
-      turnId,
-      history: this._adoptedContext ?? cfg.messages ?? ctx.messages,
-    });
+    //
+    // The LIVE array, always. The plane lays its active revision over the
+    // prefix this array shares with it and keeps the rest — the previous
+    // answer and the message that started this turn — after it. Handing it a
+    // copy of the previous boundary instead made that copy the whole history.
+    const admitted = this.contextPlane.startTurn({ turnId, history: cfg.messages });
 
     this._turnClaim = this.stores.claims.admit({
       runId: this._currentRunId,
