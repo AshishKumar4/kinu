@@ -102,6 +102,38 @@ describe('tier resolution', () => {
     });
   });
 
+  test("a workspace model overrides the role's tier model and reports source 'workspace'", () => {
+    // The composer's picker writes a per-workspace spec; the turn runs on it
+    // rather than on the account default the role's tier names.
+    const profile = resolve({
+      roleId: 'scout', availableTools: [], workspaceModel: 'm-pinned',
+      provider: provider(['m-default', 'm-fast', 'm-pinned']),
+    });
+
+    expect(profile.tier).toEqual({
+      id: 'fast', source: 'workspace', model: 'm-pinned', reasoningEffort: 'low',
+    });
+    // The catalog slots stay the account's: fixed-tier lanes route through
+    // them, never through the pin.
+    expect(profile.tiers.fast.model).toBe('m-fast');
+  });
+
+  test("a null workspace model leaves the tier's model", () => {
+    expect(resolve({ roleId: 'scout', availableTools: [] }).tier).toEqual({
+      id: 'fast', source: 'role', model: 'm-fast', reasoningEffort: 'low',
+    });
+    expect(resolve({ roleId: 'scout', availableTools: [], workspaceModel: null }).tier).toEqual({
+      id: 'fast', source: 'role', model: 'm-fast', reasoningEffort: 'low',
+    });
+  });
+
+  test('a workspace model nothing lists is refused, never silently swapped', () => {
+    expect(() => resolve({
+      roleId: 'scout', availableTools: [], workspaceModel: 'm-gone',
+      provider: provider(['m-default', 'm-fast']),
+    })).toThrow(/m-gone/);
+  });
+
   test('every unconfigured non-default tier aliases default, marked as fallback', () => {
     const defaultOnly = catalog({ tiers: { default: { model: 'm-default' } } });
 
