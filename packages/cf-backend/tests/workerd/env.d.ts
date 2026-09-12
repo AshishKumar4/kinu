@@ -22,7 +22,7 @@ import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { SlateBinding } from '../../src/slates/bindings';
-import type { CallRecord, CancelProbeResult, DriveOnceInput, DriveOnceResult, ExerciseResult } from './two-turn-shapes';
+import type { CallRecord, DriveOnceInput, DriveOnceResult, ExerciseResult, HttpCall, PendingCancelResult } from './two-turn-shapes';
 import type { JsonValue } from '@kinu.run/core';
 import type { ExecutorInfo } from '@kinu.run/core';
 
@@ -52,7 +52,9 @@ interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
   signalProbe(): Promise<{ signalKind: string } | { threw: string }>;
   calls(): Promise<CallRecord[]>;
   exercise(): Promise<ExerciseResult>;
-  cancelProbe(): Promise<CancelProbeResult>;
+  httpCalls(): Promise<HttpCall[]>;
+  httpReset(): Promise<void>;
+  cancelHttpPark(): Promise<PendingCancelResult>;
   driveOnce(input: DriveOnceInput): Promise<DriveOnceResult>;
 }
 
