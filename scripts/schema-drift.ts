@@ -536,6 +536,10 @@ export function blindSpots(state: Survey): string[] {
       + 'never re-locked: storage created under that DDL may still exist',
     'a table created outside the product corpus — a test fixture, a statement typed into a shell — '
       + 'is not enumerated here',
+    'a table a VENDOR creates and Kinu only reads (the Agents SDK\'s `assistant_messages`) has no '
+      + 'DDL in the corpus, so a column Kinu names that the vendor never creates is invisible here; '
+      + '`unit-pane-store-shape.test.ts` holds that one to the installed package, and the first-run '
+      + 'row `snapshot-after-turn` reads it through the deployed product',
     'the checking path reads the lock and never git, so it runs under a shallow clone and in 2s. '
       + 'A lock entry edited BY HAND is a diff a reviewer sees, and nothing here disputes it '
       + 'until the DDL disagrees with it',
