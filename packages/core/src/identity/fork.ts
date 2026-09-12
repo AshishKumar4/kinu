@@ -721,7 +721,7 @@ export class ForkTargetWriter {
    */
   private ensurePaneTable(): void {
     if (!hasPaneStore(this.target)) this.staging.paneTableCreated();
-    void this.target(ddlStatement(PANE_STORE_DDL));
+    this.target(ddlStatement(PANE_STORE_DDL));
     void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent ON assistant_messages(parent_id)`;
     void this.target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
   }
