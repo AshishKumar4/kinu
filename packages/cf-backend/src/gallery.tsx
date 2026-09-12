@@ -5657,6 +5657,16 @@ async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
 
+  const fixtureFrames = new Map<string, React.ReactNode>([
+    ["supervise", <SuperviseFrame />],
+    ["supervisefresh", <SuperviseFrame evolved={false} />],
+    ["activity", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />],
+    ["activityclean", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />],
+    ["activityempty", <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />],
+  ]);
+
+  const fixtureNode = fixtureFrames.get(frame);
+
   if (frame === "shell") node = <Shell />;
   else if (frame === "forks") node = <Shell surface="Exploration" mctsTrees={MCTS_TREES} rpc={forkRpc} />;
   // The same surface with its config disclosure OPEN. The card is shut by the
@@ -5819,13 +5829,7 @@ async function mount() {
       </Routes>
     );
   }
-  else if (frame === "supervise") node = <SuperviseFrame />;
-  else if (frame === "supervisefresh") node = <SuperviseFrame evolved={false} />;
-  // Three states of one block: every qualifier live, nothing left to qualify,
-  // and a workspace that has spent nothing at all.
-  else if (frame === "activity") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_SNAPSHOT)} />;
-  else if (frame === "activityclean") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_CLEAN)} />;
-  else if (frame === "activityempty") node = <Shell surface={ACTIVITY_SURFACE} rpc={activityRpc(ACTIVITY_FRESH)} />;
+  else if (fixtureNode !== undefined) node = fixtureNode;
   // The log pane alone, at fixture scale — the close-up the composed activity
   // frames render too small to read.
   else if (frame === "activitylog") node = <div className="p-6 max-w-2xl"><LogBlock log={ACTIVITY_LOG} /></div>;
