@@ -194,10 +194,18 @@ export function archiveExcludeFile(patterns: readonly string[]): string {
   return lines.map(line => `${line}\n`).join('');
 }
 
-/** Rebase when the delta has outgrown the base by this factor. DERIVED, NOT
- *  MEASURED: a checkpoint uploads the WHOLE cumulative delta, so once it
- *  exceeds the base every checkpoint moves more bytes than a fresh base would
- *  cost. If a production measurement of delta growth disagrees, move this. */
+/** Rebase when the delta has outgrown the base by this factor. Once the
+ *  delta exceeds the base, every checkpoint moves more bytes than a fresh
+ *  base would cost.
+ *
+ *  MEASURED on the whole-delta publisher, cohort `C0-growth-7e4a7d9a-9ce15c72`
+ *  (2026-09-09, module at `7f27576ca`): one new 32 KiB file per generation
+ *  over 4/8/16/32/64 publications on a 2-file and a 1000-file tree fired this
+ *  ratio 22 times in 64, every third publication, identically in both trees,
+ *  holding per-publication upload to about one base and stored bytes to the
+ *  live tree size (`bench/measure-first/COST-2026-09-09-chain-publication.md`).
+ *  Under the chunked delta a checkpoint uploads changed blocks, not the whole
+ *  delta, and the ratio's firing rate there is unmeasured. */
 export const REBASE_DELTA_RATIO = 1;
 
 /** Should this checkpoint collapse the chain onto a fresh base? ONLY AT A
