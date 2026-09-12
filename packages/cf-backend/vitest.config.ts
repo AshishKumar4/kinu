@@ -45,6 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { buildSync, transform } from 'esbuild';
 import { defineConfig, type Plugin } from 'vitest/config';
+import { probeOutbound } from './tests/workerd/http-model-fake';
 import { kCurrentWorker } from 'miniflare';
 import { builtinModules } from 'node:module';
 
@@ -257,6 +258,13 @@ export default defineConfig({
           // root caller from it, exactly as the Worker routes do.
           bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
           serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' } },
+          // The turn's HTTP model plane: compat requests fall back to the
+          // global fetch (owned-model-services passes no deps.fetch), which
+          // this worker's outboundService routes to the Node-side fake above.
+          // Same fail-and-record pattern as slate-egress-probe — unknown
+          // hosts throw, so the first genuinely required harness call is
+          // identified, not silently swallowed.
+          outboundService: probeOutbound,
           durableObjects: {
             TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', useSQLite: true },
             OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },

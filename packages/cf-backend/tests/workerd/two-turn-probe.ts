@@ -75,20 +75,22 @@ import {
   type RecordingLogger,
 } from '@kinu.run/core/obs';
 import type { OrchestratorAgent as ProductionOrchestrator } from '../../src/orchestrator';
-import type { UserDO } from '../../src/user/user-do';
 import type {
   CallRecord,
-  CancelProbeResult,
   DriveOnceInput,
   DriveOnceResult,
   ExerciseResult,
+  HttpCall,
+  PendingCancelResult,
 } from './two-turn-shapes';
 import {
-  CancelProbeResultSchema,
   DriveOnceInputSchema,
   DriveOnceResultSchema,
   ExerciseResultSchema,
+  HttpCallSchema,
+  PendingCancelResultSchema,
 } from './two-turn-shapes';
+import type { UserDO } from '../../src/user/user-do';
 import { ownerCaller } from '../../src/user/workspace-capability';
 
 // Re-exported under their production names so the auxiliary worker's
@@ -139,12 +141,6 @@ interface AIRunner {
 /** The whole call log for this isolate; the test reads it through the root. */
 const recordedCalls: CallRecord[] = [];
 
-/** Whether the pending arm has observed its abort (reset on every arm). */
-let pendingAbortObserved = false;
-
-/** Abort listeners currently held by pending arms — zero is clean. */
-let activeAbortListeners = 0;
-
 /** The model's side of `messages[].content`, schema-narrowed at the boundary. */
 function messageText(content: MessageContent): string {
   return v.is(v.string(), content)
@@ -177,47 +173,6 @@ function titleAnswer(): string {
 }
 
 export class FakeAI extends WorkerEntrypoint {
-  /** The pending arm for the caller-cancellation repro: parks forever on the
-   *  caller's own signal and rejects with its reason on abort — the reference
-   *  pattern (abort observed, listener removed in `finally`). A signal that is
-   *  not a live AbortSignal is a product finding, thrown loudly. */
-  static async pending(options?: RunOptions): Promise<Response> {
-    pendingAbortObserved = false;
-
-    const signal = options?.signal;
-
-    if (!(signal instanceof AbortSignal)) {
-      throw new Error('FakeAI: pending arm requires a live AbortSignal in options');
-    }
-
-    recordedCalls.push({
-      model: 'probe/pending',
-      users: [],
-      signalKind: 'AbortSignal',
-      stream: false,
-      lane: 'pending',
-    });
-
-    const gate = Promise.withResolvers<Response>();
-
-    const onAbort = (): void => {
-      pendingAbortObserved = true;
-      gate.reject(signal.reason instanceof Error ? signal.reason : new Error('Model request aborted'));
-    };
-
-    if (signal.aborted) onAbort();
-    else signal.addEventListener('abort', onAbort, { once: true });
-
-    activeAbortListeners += 1;
-
-    try {
-      return await gate.promise;
-    } finally {
-      signal.removeEventListener('abort', onAbort);
-      activeAbortListeners -= 1;
-    }
-  }
-
   /** The one method `createDirectWorkersAIFetch` calls on the binding. */
   async run(model: string, inputs: RunInputs, options?: RunOptions): Promise<Response> {
     const signal = options?.signal;
@@ -232,42 +187,12 @@ export class FakeAI extends WorkerEntrypoint {
     const stream = parsed.stream ?? false;
     const messages = parsed.messages ?? [];
 
-    // Model-routed arms for the lifecycle repros, keyed on the model id the
-    // product itself sends — never on prompt text. Both live beside the lane
-    // key, never inside it: the lanes answer product traffic, these answer
-    // experiments the probe drives.
-    if (model.includes('pending')) {
-      return FakeAI.pending(options);
-    }
-
-    if (model.includes('early-done') || (stream && model.includes('glm-5.3'))) {
-      // Producer-open: the content frame and [DONE] go out, then the body
-      // stays open forever. The consumer stops at [DONE]; whatever the
-      // runtime does with the un-closed pipe is the discriminating datum
-      // against the normal-EOF turn, which closes its own body. Keyed on the
-      // model id because the turn model must resolve in the real catalog — a
-      // fake id is refused at enqueue (`signal.enqueue_failed`) — and the
-      // fast-tier slot's real glm id doubles as the variant pin while the
-      // sleep lane on the same id stays non-streaming.
-      const text = 'early';
-
-      const encoder = new TextEncoder();
-
-      const frames = [
-        `data: ${JSON.stringify({ response: `echo:${text}` })}\n\n`,
-        'data: [DONE]\n\n',
-      ];
-
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            for (const frame of frames) controller.enqueue(encoder.encode(frame));
-          },
-        }),
-        { headers: { 'content-type': 'text/event-stream' } },
-      );
-    }
-
+    // The turn now travels the HTTP seam (pinned `openai-compat/probe`), so
+    // the only streamed calls that still reach this binding are the probe's
+    // own `signalProbe` — answered by the turn lane below. The lifecycle
+    // variants (early-DONE, pending) moved to the HTTP fake with the turns
+    // that drive them; their RPC arms and red tests are evidence in the run
+    // logs, not permanent residents here.
     const users = messages
       .filter((m) => m.role === 'user')
       .map((m) => messageText(v.parse(MessageContentSchema, m.content ?? '')));
@@ -452,22 +377,41 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       // durableObjects, so the stub carries the registry methods the owner
       // caller tier admits.
       const userDO = this.env.UserDO.get(this.env.UserDO.idFromName('probe-owner')) as
-        DurableObjectStub & Pick<UserDO, 'registerWorkspace' | 'ensureWorkspaceCapability'>;
+        DurableObjectStub & Pick<UserDO, 'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential'>;
 
       const register = await userDO.registerWorkspace(caller, 'two-turn-workspace', 'Two-Turn Probe');
       const claim = await target.claimOwner('probe-owner');
 
       await userDO.ensureWorkspaceCapability('two-turn-workspace', claim.capabilityHash);
 
-      const model = await target.setModel('workers-ai/@cf/qwen/qwen3-30b-a3b-fp8');
+      // The HTTP seam's credential: the static openai-compat provider resolves
+      // its baseURL from this stored key (never models.dev), and the global
+      // fetch the agent falls back to reaches the Node-side fake through this
+      // worker's outboundService. Fixture values only — the wire assertions
+      // below prove they arrive.
+      await userDO.setCredential(caller, 'openai-compat.default', {
+        kind: 'openai-compat',
+        baseURL: 'http://fake-models.invalid/v1',
+        apiKey: 'probe-fixture-key',
+      });
+      await this.httpReset();
 
+      const model = await target.setModel('openai-compat/probe');
       restore = capture();
       const turnA = await target.runTaskFromMcp('A');
+
+      if (turnA.status !== 'queued') {
+        throw new Error(`two-turn probe: turn A skipped at enqueue: ${JSON.stringify(turnA)}`);
+      }
 
       await awaitFactsCompressed(recording, 1);
 
       restore = capture();
       const turnB = await target.runTaskFromMcp('B');
+
+      if (turnB.status !== 'queued') {
+        throw new Error(`two-turn probe: turn B skipped at enqueue: ${JSON.stringify(turnB)}`);
+      }
 
       await awaitFactsCompressed(recording, 2);
       await awaitQuiet(recording);
@@ -480,6 +424,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       return v.parse(ExerciseResultSchema, {
         register, claim, model, turnA, turnB, snapshot, history,
         calls: recordedCalls,
+        http: await this.httpCalls(),
         failures: recording.emitted
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
@@ -498,34 +443,52 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
     }
   }
 
-  /** Caller cancellation through the actual service binding: parks a call on
-   *  the pending arm, aborts it, and reports what the fake observed. The
-   *  pending arm rejects with the abort reason and removes its listener in
-   *  `finally`; `activeListeners` proves the cleanup rather than asserting it.
-   *  Awaited joins only: the arm's entry is polled (bounded) so the abort can
-   *  never precede the park it means to end. */
-  async cancelProbe(): Promise<CancelProbeResult> {
-    // SAFETY: the vitest config declares `env.AI` as this worker's service
-    // binding to `FakeAI`, whose entrypoint contract provides `run` — the
-    // member AIRunner names and the only member the adapter calls.
-    const binding: AIRunner | undefined = this.env.AI as AIRunner | undefined;
+  /** The HTTP seam's readback: the Node-side handler's captured request log
+   *  over the test-only control host. Only this worker's outbound handler
+   *  routes there, so this fetch is the established "pull the pool's log over
+   *  the existing RPC" pattern — no new Worker, no cross-worker binding. */
+  async httpCalls(): Promise<HttpCall[]> {
+    const response = await fetch('http://probe-control.invalid/log');
+
+    // SAFETY: the `/log` branch constructs its answer as `{ calls: [...log] }`,
+    // so this object shape is owner-guaranteed by the handler in this tree;
+    // v.parse against the shared array schema names any drift.
+    return v.parse(v.array(HttpCallSchema), (await response.json() as { calls: unknown }).calls);
+  }
+
+  /** Clear the HTTP log before a drive, so each test's wire proof is its own. */
+  async httpReset(): Promise<void> {
+    await fetch('http://probe-control.invalid/reset', { method: 'POST' });
+  }
+
+  /** Pending-cancel through the real HTTP path: parks a request on the fake's
+   *  `probe-park` arm, aborts it once the handler logs the entry, and reports
+   *  what the handler observed. The arm rejects with the abort reason and
+   *  removes its listener in `finally`; the observation is read back from the
+   *  log entry, not trusted from the handler. Awaited joins only: the entry
+   *  is polled (bounded) so the abort can never precede the park it ends. */
+  async cancelHttpPark(): Promise<PendingCancelResult> {
+    await this.httpReset();
+
     const controller = new AbortController();
 
     const started = Date.now();
 
-    const flight = binding?.run(
-      'probe/pending',
-      { messages: [], stream: false },
-      { signal: controller.signal, returnRawResponse: true },
-    );
+    const flight = fetch('http://fake-models.invalid/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'probe-park', stream: false, messages: [] }),
+      signal: controller.signal,
+    });
 
     for (;;) {
-      const entered = recordedCalls.some((c) => c.lane === 'pending' && c.model === 'probe/pending');
+      const calls = await this.httpCalls();
+      const entered = calls.some((c) => c.model === 'probe-park' && !c.aborted);
 
       if (entered) break;
 
       if (Date.now() - started > 5000) {
-        throw new Error('two-turn probe: pending arm never entered; nothing to cancel');
+        throw new Error('two-turn probe: park arm never entered; nothing to cancel');
       }
 
       const tick = Promise.withResolvers<void>();
@@ -534,7 +497,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       await tick.promise;
     }
 
-    controller.abort(new Error('probe cancels the pending request'));
+    controller.abort(new Error('probe cancels the parked request'));
 
     let rejection = '';
 
@@ -544,9 +507,10 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       rejection = cause instanceof Error ? cause.message : String(cause);
     }
 
-    return v.parse(CancelProbeResultSchema, {
-      observedAbort: pendingAbortObserved,
-      activeListeners: activeAbortListeners,
+    const calls = await this.httpCalls();
+
+    return v.parse(PendingCancelResultSchema, {
+      observedAbort: calls.some((c) => c.model === 'probe-park' && c.aborted),
       rejection,
     });
   }
@@ -558,8 +522,16 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
    *  is the discriminating datum against the normal-EOF drive. */
   async driveOnce(input: DriveOnceInput): Promise<DriveOnceResult> {
     const drive = v.parse(DriveOnceInputSchema, input);
+    // Capture AFTER warmup, like `exercise`: each DO constructor installs the
+    // analytics sink on first stub use, replacing whatever exists — an install
+    // up front would be clobbered by the register/claim below.
     const recording = createRecordingLogger();
-    const restore = setDiagnosticsSink(createCompositeLogger([createConsoleLogger(), recording]));
+
+    const capture = (): (() => void) => setDiagnosticsSink(
+      createCompositeLogger([createConsoleLogger(), recording]),
+    );
+
+    let restore: () => void = () => {};
 
     try {
       const raw: Pick<Fetcher, 'fetch'> = await getAgentByName<ProbeEnv, ProductionOrchestrator>(
@@ -570,7 +542,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       // binding, and every picked name is a method the production class declares
       // and `ORCHESTRATOR_RPC_SURFACE` lists, so the narrowed calls resolve.
       const target = raw as Pick<Fetcher, 'fetch'> & Pick<ProductionOrchestrator,
-        'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'getChatHistoryPage'>;
+        'claimOwner' | 'setModel' | 'runTaskFromMcp' | 'getWorkspaceSnapshot' | 'getChatHistoryPage' | 'writeWorkspaceFile'>;
 
       const caller = await ownerCaller(this.env);
 
@@ -578,15 +550,47 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       // durableObjects, so the stub carries the registry methods the owner
       // caller tier admits.
       const userDO = this.env.UserDO.get(this.env.UserDO.idFromName(drive.owner)) as
-        DurableObjectStub & Pick<UserDO, 'registerWorkspace' | 'ensureWorkspaceCapability'>;
+        DurableObjectStub & Pick<UserDO, 'registerWorkspace' | 'ensureWorkspaceCapability' | 'setCredential'>;
 
       await userDO.registerWorkspace(caller, drive.workspace, drive.displayName);
       const claim = await target.claimOwner(drive.owner);
 
       await userDO.ensureWorkspaceCapability(drive.workspace, claim.capabilityHash);
+      await userDO.setCredential(caller, 'openai-compat.default', {
+        kind: 'openai-compat',
+        baseURL: 'http://fake-models.invalid/v1',
+        apiKey: 'probe-fixture-key',
+      });
+      await this.httpReset();
       await target.setModel(drive.model);
 
+      // The tool roundtrip's fixture: a harmless file in the workspace the
+      // `file` tool reads for real when the fake answers the tool call.
+      // Seeded through the existing workspace-file RPC, never the VFS.
+      if (drive.seedFile !== undefined) {
+        const seeded = await target.writeWorkspaceFile({
+          kind: 'file',
+          path: drive.seedFile.path,
+          data: drive.seedFile.content,
+        });
+
+        if (!seeded.ok) throw new Error(`two-turn probe: fixture seed failed for ${drive.seedFile.path}`);
+      }
+
+      restore = capture();
       const turn = await target.runTaskFromMcp(drive.text);
+
+      if (turn.status !== 'queued') {
+        const http = await this.httpCalls();
+
+        const history = await target.getChatHistoryPage({});
+
+        const failures = recording.emitted
+          .filter((e) => e.code !== null)
+          .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' }));
+
+        throw new Error(`two-turn probe: turn skipped at enqueue: ${JSON.stringify({ turn, http, history, failures })}`);
+      }
 
       await awaitFactsCompressed(recording, 1);
       await awaitQuiet(recording);
@@ -597,6 +601,7 @@ export class TwoTurnProbeRoot extends Agent<ProbeEnv> {
       return v.parse(DriveOnceResultSchema, {
         turn, snapshot, history,
         calls: recordedCalls,
+        http: await this.httpCalls(),
         failures: recording.emitted
           .filter((e) => e.code !== null)
           .map((e) => ({ event: e.event, code: e.code ?? 'unclassified', cause: e.cause ?? '' })),
