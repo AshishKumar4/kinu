@@ -220,6 +220,12 @@ test('preview tabs deduplicate live slates, fill the surface and keep plans in W
         await page.select('[aria-label="Plan history"]', earlier);
         await page.waitForFunction(() => document.querySelector('[data-plan-title]')?.textContent?.includes('Earlier'));
         await page.click('[data-new-preview]');
+        // A preview arriving on its own never moves the reader: the surface
+        // stays where it was and the strip raises the "Preview ready" chip —
+        // only the reader's click on it navigates.
+        await page.waitForSelector('[data-preview-ready]');
+        expect(await page.$eval('[aria-label="Report"]', el => el.getAttribute('aria-current'))).not.toBe('true');
+        await page.click('[data-preview-ready]');
         await page.waitForSelector('[aria-label="Report"][aria-current="true"]');
         await page.click('[aria-label="Work"]');
         await page.click('[data-refresh-preview]');
