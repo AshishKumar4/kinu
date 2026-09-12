@@ -3,8 +3,11 @@
  * owner, in one list.
  *
  * "Needs the owner" is not a place, it is a state other objects enter: a
- * release approval, a scaffold version under trial, a job that failed, a
- * curriculum proposal. Each already has a home, so this is a queue that
+ * release approval, a scaffold version under trial, a command parked on
+ * consent, a curriculum proposal. A background job that FAILED is not one of
+ * them: the runner wakes the agent with the error (`jobs/runner.ts#wake`),
+ * and fixing a red build is the agent's work. The job list shows it, with
+ * Retry, for an owner who wants to look. Each already has a home, so this is a queue that
  * points at those homes — never a second place to decide, which is how a
  * duplicate rendering goes stale the moment its home evolves.
  *
@@ -19,7 +22,6 @@
  * testable decision rather than five call sites.
  */
 
-import type { BackgroundJob } from '../jobs/store';
 import type { DeferredApproval } from '../safety/deferred-approval';
 
 export type PendingActionKind =
@@ -30,7 +32,6 @@ export type PendingActionKind =
    *  point. */
   | 'deferred_action'
   | 'scaffold_version'
-  | 'failed_job'
   | 'unseen_changes'
   | 'curriculum_task';
 
@@ -59,7 +60,6 @@ export interface PendingActionInputs {
    *  the still-queued ones ever reach here — a decided action has stopped
    *  needing anyone. */
   readonly deferredActions: readonly DeferredApproval[];
-  readonly jobs: readonly BackgroundJob[];
   /** Evolution Changelog entries the owner has not seen, and the newest one's
    *  timestamp — one queue row, because the digest is one thing to go read.
    *
@@ -123,17 +123,6 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       title: `Scaffold v${version.version} is waiting to be promoted or rolled back`,
       detail: version.rationale || null,
       at: version.written_at,
-    });
-  }
-
-  for (const job of input.jobs) {
-    if (job.status !== 'failed' || job.retriedBy !== null) continue;
-    actions.push({
-      id: job.id,
-      kind: 'failed_job',
-      title: `${job.kind} failed`,
-      detail: job.error ?? job.label,
-      at: job.settledAt ?? job.createdAt,
     });
   }
 

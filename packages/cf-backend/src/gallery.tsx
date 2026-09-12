@@ -3844,11 +3844,6 @@ const PENDING_ACTIONS: PendingAction[] = [
     detail: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
   },
   {
-    id: "bgjob-9d3c6e11", kind: "failed_job", at: NOW - 58e5,
-    title: "run failed",
-    detail: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
-  },
-  {
     id: "unseen-changes", kind: "unseen_changes", at: NOW - 10e5,
     title: "2 self-changes you have not seen",
     detail: "Keep or revert them in the journal below.",
@@ -3856,7 +3851,7 @@ const PENDING_ACTIONS: PendingAction[] = [
 ];
 
 /** The shell oracle carries one owner decision, as the app mock does. */
-const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "failed_job");
+const SHELL_PENDING_ACTIONS = PENDING_ACTIONS.filter((action) => action.kind === "release_approval");
 
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
   if (method === "listAgentTasks") return rpcResult(AGENT_TASKS).json<T>();

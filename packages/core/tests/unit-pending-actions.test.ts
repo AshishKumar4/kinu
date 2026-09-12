@@ -13,21 +13,10 @@
 import { describe, test, expect } from 'bun:test';
 import { buildPendingActions, type PendingActionInputs } from '../src/read-models/pending-actions';
 import { SLATE_READ_MODELS } from '../src/slates/read-models';
-import type { BackgroundJob } from '../src/jobs/store';
 import type { DeferredApproval } from '../src/safety/deferred-approval';
 
-function job(over: Partial<BackgroundJob>): BackgroundJob {
-  return {
-    id: 'bgjob-1', kind: 'run', label: 'bun test', workMode: 'build', status: 'completed',
-    result: null, error: null, createdAt: 1000, settledAt: 1100, epoch: 0, resumeAttempts: 0,
-    retriedBy: null,
-    attemptStartedAt: 1000, resumeAfter: null,
-    ...over,
-  };
-}
-
 const EMPTY: PendingActionInputs = {
-  approvals: [], changes: [], scaffoldVersions: [], jobs: [], deferredActions: [],
+  approvals: [], changes: [], scaffoldVersions: [], deferredActions: [],
   unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, curriculum: [],
 };
 
@@ -85,20 +74,13 @@ describe('buildPendingActions', () => {
     expect(action!.title).toContain('v8');
   });
 
-  test('a failed job queues with its reason; a running one does not queue at all', () => {
-    const actions = buildPendingActions({
-      ...EMPTY,
-      jobs: [
-        job({ id: 'bgjob-run', status: 'running', settledAt: null }),
-        job({ id: 'bgjob-ok', status: 'completed' }),
-        job({ id: 'bgjob-bad', status: 'failed', error: 'exit 1 — binding VECTORIZE not found', settledAt: 7000 }),
-      ],
-    });
-
-    expect(actions).toHaveLength(1);
-    expect(actions[0]).toMatchObject({
-      id: 'bgjob-bad', kind: 'failed_job', detail: 'exit 1 — binding VECTORIZE not found', at: 7000,
-    });
+  test('a failed background job is the agent\'s to fix and never reaches the owner queue', () => {
+    // The runner wakes the agent with the error (`jobs/runner.ts#wake`); the
+    // owner sees the job in the journal with Retry. Filing it here was the
+    // product asking its owner to fix its own red build, which is the
+    // opposite of what the queue is for. The inputs carry no jobs at all, so
+    // no later change can quietly file one.
+    expect('jobs' in EMPTY).toBe(false);
   });
 
   test('unseen self-changes are ONE row that points at the digest, not N rows', () => {
@@ -180,7 +162,6 @@ describe('buildPendingActions', () => {
       approvals: [{ id: 'apr', changeId: 'c', approvalType: 'apply', decision: 'pending', createdAt: 3000 }],
       changes: [{ id: 'c', userPrompt: 'a change' }],
       scaffoldVersions: [{ version: 8, status: 'pending', rationale: 'r', written_at: 5000 }],
-      jobs: [job({ id: 'bgjob-bad', status: 'failed', error: 'boom', settledAt: 1000 })],
       deferredActions: [parked({ requestedAt: 6000 })],
       unseenChanges: { count: 2, revertable: 2, latestAt: 4000 },
       curriculum: [{ id: 'cur', task: 't', status: 'pending', proposedAt: 2000 }],
@@ -188,19 +169,8 @@ describe('buildPendingActions', () => {
 
     expect(actions.map((a) => a.kind)).toEqual([
       'deferred_action', 'scaffold_version', 'unseen_changes', 'release_approval',
-      'curriculum_task', 'failed_job',
+      'curriculum_task',
     ]);
-  });
-
-  test('a successfully retried failure stays in the journal but leaves Needs you', () => {
-    expect(buildPendingActions({
-      ...EMPTY,
-      jobs: [job({
-        status: 'failed',
-        error: 'old failure',
-        retriedBy: 'bgjob-replacement',
-      })],
-    })).toEqual([]);
   });
 });
 
