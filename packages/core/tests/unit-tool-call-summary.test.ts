@@ -194,21 +194,26 @@ describe('toolCallEffect — consequence controls activity density', () => {
     expect(toolCallEffect('agents', { action: 'swarm', task: 'audit it' })).toBe('mutate');
     // `mode` with a role durably mutates actor_config via changeActiveRole.
     expect(toolCallEffect('tasks', { action: 'mode', role: 'researcher' })).toBe('mutate');
-    expect(toolCallEffect('tasks', { action: 'mode' })).toBe('observe');
+    expect(toolCallEffect('tasks', { action: 'mode' })).toBe('read');
 
   });
   test('known observations collapse into the compact timeline', () => {
-    expect(toolCallEffect('file', { action: 'read', path: '/workspace/report.md' })).toBe('observe');
-    expect(toolCallEffect('web', { action: 'fetch', url: 'https://example.com' })).toBe('observe');
-    expect(toolCallEffect('memory', { action: 'search', query: 'deploy' })).toBe('observe');
-    expect(toolCallEffect('agents', { action: 'list' })).toBe('observe');
+    expect(toolCallEffect('file', { action: 'read', path: '/workspace/report.md' })).toBe('read');
+    expect(toolCallEffect('web', { action: 'search', query: 'deploy' })).toBe('read');
+    expect(toolCallEffect('memory', { action: 'search', query: 'deploy' })).toBe('read');
   });
 
-  test('programs and unknown contracts do not invent an effect', () => {
-    expect(toolCallEffect('run', { command: 'node inspect.js' })).toBe('unknown');
-    expect(toolCallEffect('execute_tools', { code: 'return await workspace.files.read("a")' })).toBe('unknown');
-    expect(toolCallEffect('crafted_unknown', { action: 'write' })).toBe('unknown');
-    expect(toolCallEffect('file', 'read a')).toBe('unknown');
+  test('network fetches and delegation remain consequential', () => {
+    expect(toolCallEffect('web', { action: 'fetch', url: 'https://example.com' })).toBe('mutate');
+    expect(toolCallEffect('web_fetch', { url: 'https://example.com' })).toBe('mutate');
+    expect(toolCallEffect('agents', { action: 'list' })).toBe('mutate');
+  });
+
+  test('programs default to consequential and unclassified contracts stay quiet', () => {
+    expect(toolCallEffect('run', { command: 'node inspect.js' })).toBe('mutate');
+    expect(toolCallEffect('execute_tools', { code: 'return await workspace.files.read("a")' })).toBe('mutate');
+    expect(toolCallEffect('crafted_unknown', { action: 'write' })).toBe('read');
+    expect(toolCallEffect('file', 'read a')).toBe('read');
   });
 });
 
