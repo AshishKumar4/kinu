@@ -3,10 +3,10 @@
  * collapsed flag, applied over the panel library's own layout, with a
  * drag-mount race that the apply loop is bounded against.
  *
- * Everything decision-shaped here is exported as a pure seam —
- * `readInspectorPrefs`, `writeInspectorPrefs` and `restoreInspectorLayout` —
- * so the policy is exercised under `bun test` without a DOM; the hook below
- * is only the React wiring over those seams.
+ * The hook below is the whole surface: WorkspacePage mounts it, and the unit
+ * test drives it through React's static renderer — the one thing that
+ * renderer skips is the layout effect the apply loop lives in, which the
+ * test flushes by hand against a frame queue.
  */
 
 import { startTransition, useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react";
@@ -16,17 +16,17 @@ import { diagnostics } from "@kinu.run/core/obs";
 
 /** Inspector defaults: a 340px opening inside the 320-360px design band, with
  *  a 280px pixel floor so a wide display can keep it compact. */
-export const INSPECTOR_DEFAULT_PX = 340;
+const INSPECTOR_DEFAULT_PX = 340;
 
-export const INSPECTOR_MIN_PX = 280;
+const INSPECTOR_MIN_PX = 280;
 
 /** Persisted widths apply only where the desktop inspector exists. */
-export const INSPECTOR_WIDE_QUERY = "(min-width: 900px)";
+const INSPECTOR_WIDE_QUERY = "(min-width: 900px)";
 
-export interface InspectorPrefs { readonly widthPx: number; readonly collapsed: boolean }
+interface InspectorPrefs { readonly widthPx: number; readonly collapsed: boolean }
 
 /** Stored as `<widthPx>:<0|1>` beside the theme choice, keyed by account. */
-export function readInspectorPrefs(account: string | null): InspectorPrefs | null {
+function readInspectorPrefs(account: string | null): InspectorPrefs | null {
   if (account === null) return null;
 
   const raw = localStorage.getItem(`kinu.inspector.${account}`);
@@ -41,7 +41,7 @@ export function readInspectorPrefs(account: string | null): InspectorPrefs | nul
   return { widthPx: Math.max(INSPECTOR_MIN_PX, Math.round(width)), collapsed: collapsedText === "1" };
 }
 
-export function writeInspectorPrefs(account: string, prefs: InspectorPrefs): void {
+function writeInspectorPrefs(account: string, prefs: InspectorPrefs): void {
   localStorage.setItem(`kinu.inspector.${account}`, `${String(prefs.widthPx)}:${prefs.collapsed ? "1" : "0"}`);
 }
 
@@ -67,7 +67,7 @@ function profileEmail(): Promise<string | null> {
  * over the stored size. A real report clamps at the pixel floor, and a
  * sub-pixel one counts as collapsed.
  */
-export function resizePrefsOf(
+function resizePrefsOf(
   size: PanelSize, prevSize: PanelSize | undefined, currentlyCollapsed: boolean,
 ): InspectorPrefs | null {
   if (prevSize === undefined) return null;
@@ -90,7 +90,7 @@ export function resizePrefsOf(
  * cell so a drag landing mid-loop wins immediately rather than on the next
  * render.
  */
-export interface InspectorRestoreCtx {
+interface InspectorRestoreCtx {
   /** Set once the user has touched the column; the apply loop never crosses it. */
   readonly touched: { current: boolean };
   /** Set by the panel's first measured `onResize` report. */
@@ -105,7 +105,7 @@ export interface InspectorRestoreCtx {
   readonly markSettled: () => void;
 }
 
-export function restoreInspectorLayout(
+function restoreInspectorLayout(
   stored: InspectorPrefs, ctx: InspectorRestoreCtx,
 ): () => void {
   let attempts = 0;
