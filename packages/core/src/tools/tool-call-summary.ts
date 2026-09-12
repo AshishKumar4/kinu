@@ -35,15 +35,14 @@ function nested(input: JsonObject, key: string): JsonObject {
   return v.is(JsonObjectSchema, value) ? value : {};
 }
 
-export type ToolCallEffect = 'observe' | 'mutate' | 'unknown';
+export type ToolCallEffect = 'read' | 'mutate' | 'unknown';
 
 const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['file', new Set(['write', 'edit', 'append', 'delete', 'move', 'copy'])],
   ['tasks', new Set(['add', 'update'])],
   ['memory', new Set(['save', 'set', 'delete', 'remember', 'forget'])],
-  // `fork`, `ask`, `send` and `reply` are stored history: rows recorded before
-  // those verbs left the picklist still have to classify.
   ['agents', new Set(['swarm', 'fork', 'hire', 'msg', 'ask', 'send', 'reply', 'dismiss'])],
+  ['web', new Set(['fetch'])],
   ['release', new Set([
     'create', 'bind_source', 'transition', 'record_check', 'run_checks',
     'deploy', 'rollback', 'record_deployment', 'request_approval',
@@ -57,21 +56,21 @@ const MUTATING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['peers', new Set(['send', 'reply', 'spawn_workspace'])],
 ]);
 
-const OBSERVING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+const READING_ACTIONS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
   ['file', new Set(['read', 'list', 'search'])],
   ['tasks', new Set(['list'])],
   ['memory', new Set(['search', 'get', 'list', 'recall', 'conversations'])],
   ['agents', new Set(['list', 'status'])],
-  ['web', new Set(['search', 'fetch'])],
+  ['web', new Set(['search'])],
   ['fact', new Set(['get', 'list'])],
   ['release', new Set(['list', 'status', 'preview'])],
   ['product_change', new Set(['list', 'status', 'preview'])],
 ]);
 
 /**
- * The visible consequence class for a tool call. Only typed action contracts
- * can answer; shell and codemode programs remain unknown because reading their
- * source here would duplicate the execution layer's own mutation analysis.
+ * Declared native operations can classify a call's consequence. Shell and
+ * codemode programs have no authenticated per-call effect receipt on this
+ * interface; their source and arbitrary output cannot establish one.
  */
 export function toolCallEffect<Input>(toolName: string, input: Input): ToolCallEffect {
   const parsed = v.safeParse(JsonObjectSchema, input);
@@ -80,14 +79,16 @@ export function toolCallEffect<Input>(toolName: string, input: Input): ToolCallE
   const action = str(parsed.output, 'action');
 
   if (toolName === 'tasks' && action === 'mode') {
-    return str(parsed.output, 'role') ? 'mutate' : 'observe';
+    return str(parsed.output, 'role') ? 'mutate' : 'read';
   }
 
   if (MUTATING_ACTIONS.get(toolName)?.has(action) === true) return 'mutate';
 
-  if (OBSERVING_ACTIONS.get(toolName)?.has(action) === true) return 'observe';
+  if (READING_ACTIONS.get(toolName)?.has(action) === true) return 'read';
 
-  if (toolName === 'web_search' || toolName === 'web_fetch') return 'observe';
+  if (toolName === 'web_fetch') return 'mutate';
+
+  if (toolName === 'web_search') return 'read';
 
   return 'unknown';
 }
