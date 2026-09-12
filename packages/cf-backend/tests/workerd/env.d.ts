@@ -22,6 +22,7 @@ import type { PreviewPortProbeDO } from './preview-port-probe';
 import type { SlateProcessProbeDO, SlateChainProbe } from './slate-process-probe';
 import type { CodemodeEgress } from '../../src/codemode-egress';
 import type { SlateBinding } from '../../src/slates/bindings';
+import type { JsonValue } from '@kinu.run/core';
 import type { ExecutorInfo } from '@kinu.run/core';
 
 interface SlateActorRootRpc extends Rpc.DurableObjectBranded {
@@ -45,6 +46,17 @@ interface SlateEgressRpc extends Rpc.DurableObjectBranded {
   publicPlanCall(): Promise<{ ok: boolean; reason?: string }>;
   unmediatedThenMediated(): Promise<{ unmediated: string; mediated: string; reused: string }>;
 }
+
+interface TwoTurnProbeRpc extends Rpc.DurableObjectBranded {
+  signalProbe(): Promise<{ signalKind: string } | { threw: string }>;
+  calls(): Promise<Array<{ model: string; users: string[]; signalKind: string }>>;
+  exercise(): Promise<{
+    claim: object; model: object; turnA: object; turnB: object;
+    snapshot: object; history: object;
+    calls: Array<{ model: string; users: string[]; signalKind: string }>;
+  }>;
+}
+
 
 declare global {
   namespace Cloudflare {
@@ -75,6 +87,7 @@ declare global {
       SLATE_PROCESS_PROBE: DurableObjectNamespace<SlateProcessProbeDO>;
       SLATE_ACTOR_ROOT: DurableObjectNamespace<SlateActorRootRpc>;
       PLAN_ANNOUNCE_ROOT: DurableObjectNamespace<PlanAnnounceRpc>;
+      TWO_TURN_PROBE: DurableObjectNamespace<TwoTurnProbeRpc>;
       USER_SOCKET_PROBE: DurableObjectNamespace<UserSocketProbeRpc>;
       /** The dynamic-Worker loader the execute_tools sandbox runs in. */
       LOADER: WorkerLoader;
