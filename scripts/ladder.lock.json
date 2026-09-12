@@ -1,5 +1,5 @@
 {
-  "reason": "gate:trajectory measures the build it shipped, after publish",
+  "reason": "gate:trajectory runs its cases concurrently without a genesis turn",
   "tiers": {
     "commit": {
       "seconds": 82.24,
