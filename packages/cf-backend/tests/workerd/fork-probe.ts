@@ -35,8 +35,8 @@ import {
   summarizeSoulBytes, WorkspaceActorDirectory, openWorkspaceMainActor,
   type ForkFrame, type ForkLineageRow, type ForkNativeFilePort, type ForkResult,
   type ForkStaging, type SqlExecutor, type VFS, type VfsEntryStat,
-  PANE_STORE_DDL,
 } from '@kinu.run/core';
+import { SDK_SESSION_DDL } from '../../../core/tests/helpers/pane-session-ddl';
 
 /**
  * Bytes of payload per frame.
@@ -62,10 +62,13 @@ const SOUL_CONTENT = '# Mission\nProve a fork survives an eviction.\n';
  *  same summarizer the protected publisher uses. */
 export const PROBE_SOUL_MISSION = summarizeSoulBytes(new TextEncoder().encode(SOUL_CONTENT));
 
-/** The SDK session provider's own DDL — the same statement
- *  `ForkTargetWriter.ensurePaneTable` runs, because a source workspace that has
- *  served a hosted turn has this table and its ancestry is read from it. */
-const PANE_DDL = PANE_STORE_DDL;
+/** The SDK session provider's own DDL — the statement Think's boot runs, which
+ *  is why a source workspace that has served a hosted turn has this table and
+ *  its ancestry is read from it. The ONE fixture definition, pinned to the
+ *  installed SDK by `unit-pane-store-shape.test.ts`; imported from its leaf
+ *  rather than `tests/helpers` because this file runs under workerd, where
+ *  `bun:sqlite` does not exist. */
+const PANE_DDL = SDK_SESSION_DDL;
 
 /** workerd's streaming digest, which is how an object hashes bytes it must not
  *  hold. It lives on the runtime's `crypto`, and the ambient `Crypto` type this
@@ -624,6 +627,10 @@ export class ForkTargetProbeDO extends DurableObject<Cloudflare.Env> {
       sql: this.sql,
       exec: this.ctx.storage.sql,
     });
+    // A pane-authority target carries the vendor's table because Think's wake
+    // creates it before a frame can arrive; the writer refuses one that is
+    // missing rather than creating the vendor's store itself.
+    this.ctx.storage.sql.exec(PANE_DDL);
     this.ctx.storage.sql.exec(ProbeFilePlane.DDL);
     this.schemaReady = true;
   }

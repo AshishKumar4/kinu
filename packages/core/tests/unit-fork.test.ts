@@ -425,19 +425,18 @@ describe('forkWorkspaceStorage', () => {
                 ${'1970-01-01 00:00:01'})`;
     }
 
-    // A LOCAL fork lands in `messages`, flattened from the rich rows it
-    // carried — one destination, declared by this call shape.
-    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
-      untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
-    });
+    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2');
 
-    const carried = tgt.sql<{ id: string; role: string; parent_id: string | null; content: string }>`
-      SELECT id, role, parent_id, content FROM messages WHERE role != 'system' ORDER BY rowid
-    `;
+    // The carried pane rows ARE the cut point's ancestry, root first.
+    expect(snapshot.assistantMessages.map((r) => r.id)).toEqual(['m1', 'm2']);
 
-    expect(carried.map((r) => r.id)).toEqual(['m1', 'm2']);
-    expect(carried[1]!.parent_id).toBe('m1');
-    expect(carried[1]!.content).toBe('hi');
+    // A LOCAL fork cannot land them: the vendor's table is not Kinu's to
+    // create, and the plain rows' text was elided against it. The refusal is
+    // loud rather than a fork that opens with a blank transcript.
+    await expect(writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
+      workspaceId: 'T', workspaceName: 'forked',
+    })).rejects.toThrow(/Think has not booted/);
+
     expect(tgt.sql<{ c: number }>`
       SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'assistant_messages'`[0]!.c).toBe(0);
   });
@@ -471,6 +470,9 @@ describe('forkWorkspaceStorage', () => {
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
+    // A pane-authority target has the vendor's table already: Think's boot
+    // created it, and the write refuses to.
+    tgt.execRaw(SDK_SESSION_DDL);
     await seedSource(src, {
       identity: { id: 'SRC', name: 'alpha' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
@@ -502,15 +504,10 @@ describe('forkWorkspaceStorage', () => {
   });
 
   test('17. a fork that cannot copy assistant_messages FAILS instead of losing them', async () => {
-    // A target carrying an older Session schema — no `actor_id`, no
-    // `session_id` — cannot take the fork's pane write. Swallowing that failure
-    // together with the CREATE that precedes it makes the fork report success
-    // with an empty chat pane — the owner's messages silently gone. The copy
-    // must be all-or-nothing and loud.
-    //
-    // The SOURCE is production-shaped, deliberately: with a pre-actor table
-    // here the source's own ancestry read raised `no such column` first, and
-    // this test passed without the target write ever being attempted.
+    // A target carrying an older Session schema — no `session_id` — cannot
+    // take the fork's pane write. Swallowing that failure makes the fork
+    // report success with an empty chat pane — the owner's messages silently
+    // gone. The copy must be all-or-nothing and loud.
     const src = fresh();
     const tgt = fresh();
     await seedTargetBootstrap(tgt);
@@ -529,7 +526,29 @@ describe('forkWorkspaceStorage', () => {
     await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
       targetAuthority: 'pane',
-    })).rejects.toThrow(/no such column/);
+    })).rejects.toThrow(/no column named/);
+  });
+
+  test('17b. a pane-authority target with no assistant_messages is refused, not created', async () => {
+    // The vendor's table is Think's to make: it exists because the target's
+    // wake ran `assertSessionStore`. A 'pane' target without it has not booted
+    // Think, and the write must say so rather than grow a Kinu copy of the
+    // vendor's schema — the drift that failed every hosted snapshot.
+    const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
+    });
+
+    await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
+      untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
+      targetAuthority: 'pane',
+    })).rejects.toThrow(/Think has not booted/);
+
+    expect(tgt.sql<{ c: number }>`
+      SELECT COUNT(*) AS c FROM sqlite_master WHERE name = 'assistant_messages'`[0]!.c).toBe(0);
   });
 
   test('18. a fork that cannot copy memory_chunks FAILS instead of dropping the memory index', async () => {
@@ -591,6 +610,7 @@ async function paneSourceWorkspace(
   const plain = fresh();
   const pane = fresh();
   await seedTargetBootstrap(pane, 'PANE-ID');
+  pane.execRaw(SDK_SESSION_DDL);
   await seedSource(plain, { identity: { id: 'PLAIN-ID', name: 'plain-src' }, purpose: 'p', messages: rows });
   const lastId = rows[rows.length - 1]!.id;
   await writeForkSnapshot(
@@ -635,7 +655,9 @@ describe('fork snapshot payload', () => {
     expect(snapshot.messages.map((m) => m.parent_id)).toEqual(rows.map((r) => r.parent_id));
 
     // ...and the transcript lands ONCE, in the pane store the caller declared
-    // (the hosted shape this rich-carrying snapshot is for).
+    // (the hosted shape this rich-carrying snapshot is for). The target carries
+    // the vendor's table already, the way a booted Think leaves it.
+    tgt.execRaw(SDK_SESSION_DDL);
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
       workspaceId: 'T', workspaceName: 'forked', targetAuthority: 'pane',
     });

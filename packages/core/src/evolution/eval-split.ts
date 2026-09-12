@@ -215,12 +215,10 @@ function advisorNegatives(sql: SqlExecutor, actor: ActorHandle, limit: number): 
   // The conversation comes from the canonical store: the pane's serialized UI
   // rows where the backend keeps one, plain `messages` otherwise — the same
   // authority every other conversational reader answers from.
-  //
-  // BOTH arms carry the actor predicate. The host owns the pane table's
-  // definition (identity/fork.ts `ensurePaneTable`) and keys it
-  // `(actor_id, id)` for the same reason `messages` is keyed that way — a pane
-  // message id is minted per actor and the ancestry walk climbs `parent_id` to
-  // `id`.
+  // The pane's rows all belong to the workspace's root actor — the table is
+  // the vendor's shape with no owner column, and `usesPaneStore` answers for
+  // the root alone — so the pane-side join keys on `id`/`parent_id` alone
+  // while `evolution_events` still carries the actor predicate.
   const rows = usesPaneStore(sql, actor)
     ? sql<RawAdvisorRow>`
         SELECT e.id AS id, e.message AS note, e.data AS data, e.created_at AS createdAt,

@@ -9,17 +9,17 @@
  *
  * WHAT IS COMPARED. Not text: two in-memory databases, one built from the
  * installed provider's own `ensureTable` statement and one from
- * {@link PANE_STORE_DDL}, compared column by column as SQLite sees them. A
+ * `SDK_SESSION_DDL`, compared column by column as SQLite sees them. A
  * column Kinu adds, or a column a future SDK adds, fails here before any
  * reader names it — and every Kinu suite that seeds the table does so from
- * `PANE_STORE_DDL`, so the reads are exercised over the vendor's shape.
+ * `SDK_SESSION_DDL`, so the reads are exercised over the vendor's shape.
  */
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import * as v from 'valibot';
-import { PANE_STORE_DDL } from '@kinu.run/core';
+import { SDK_SESSION_DDL } from '../../core/tests/helpers';
 
 const ColumnSchema = v.object({
   name: v.string(), type: v.string(), notnull: v.number(), dflt_value: v.nullable(v.string()), pk: v.number(),
@@ -54,8 +54,8 @@ function installedProviderDdl(): string {
 }
 
 describe('the pane store is the vendor\'s shape', () => {
-  test('PANE_STORE_DDL builds the same columns as the installed AgentSessionProvider', () => {
-    expect(columnsOf(PANE_STORE_DDL)).toEqual(columnsOf(installedProviderDdl()));
+  test('SDK_SESSION_DDL builds the same columns as the installed AgentSessionProvider', () => {
+    expect(columnsOf(SDK_SESSION_DDL)).toEqual(columnsOf(installedProviderDdl()));
   });
 
   test('the vendor keeps no actor column, so no Kinu read may name one', () => {

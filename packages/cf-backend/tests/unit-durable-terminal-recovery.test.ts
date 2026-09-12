@@ -18,7 +18,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import * as v from 'valibot';
-import { PANE_STORE_DDL } from '@kinu.run/core';
+import { SDK_SESSION_DDL } from '../../core/tests/helpers';
 import {
   orchestratorHarness,
   type ActorHarness,
@@ -115,12 +115,10 @@ function persistedDrainTurn(
   answer: string | null,
 ): void {
   // The SDK's own transcript table, created the way every other suite over it
-  // does: the agents base class creates it lazily on first write, and no turn
-  // has run here. Its key leads with `actor_id` (the same statement
-  // `ForkTargetWriter.ensurePaneTable` runs), and the answer read this fixture
-  // arms — `answersForDrainTurns` — joins user row to assistant row ON that
-  // column, so a table without it does not read empty, it fails to compile.
-  harness.db.exec(PANE_STORE_DDL);
+  // does: the agents base class creates it lazily on Think's boot, and no turn
+  // has run here. It is the vendor's shape — no owner column; `usesPaneStore`
+  // scopes the read to the workspace's root actor instead.
+  harness.db.exec(SDK_SESSION_DDL);
 
   const append = harness.db.prepare(
     `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)

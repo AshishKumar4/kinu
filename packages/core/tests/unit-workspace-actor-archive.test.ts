@@ -14,7 +14,7 @@
 // no hosting in the way.
 import { describe, test, expect } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { makeSqlExec } from './helpers';
+import { makeSqlExec, SDK_SESSION_DDL } from './helpers';
 import { initWorkspaceSchema } from '../src/state/workspace-schema';
 import { WorkspaceActorDirectory } from '../src/identity/workspace-actors';
 import { restoreWorkspaceArchive, writeWorkspaceArchive } from '../src/identity/archive';
@@ -158,63 +158,16 @@ describe('a workspace snapshot covers every actor', () => {
       .rejects.toThrow(/declares 2 actors but restored 1/);
   });
 
-  // The restore half of the same claim. An export covering every actor is worth
-  // nothing if the import folds them together, and the chat pane is where that
-  // happens: it is normalized into `messages` on the way in, and `messages` is
-  // actor-scoped.
-  test('a restored pane keeps every row under the actor that wrote it', async () => {
-    const ws = workspace();
-    const hire = ws.directory.create({ parent: ws.main, name: 'gamma', creationId: 'c5', kind: 'subordinate', lifetime: 'durable' });
-    // The pane exactly as `ForkTargetWriter.ensurePaneTable` writes it.
-    ws.db.exec(`CREATE TABLE assistant_messages (
-      actor_id TEXT NOT NULL,
-      id TEXT NOT NULL,
-      session_id TEXT NOT NULL DEFAULT '',
-      parent_id TEXT,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      PRIMARY KEY (actor_id, id)
-    )`);
-
-    for (const [actor, text] of [[ws.main, 'main pane line'], [hire, 'gamma pane line']] as const) {
-      void ws.sql`INSERT INTO assistant_messages (actor_id, id, role, content, created_at)
-        VALUES (${actor.actorId}, ${`p-${actor.actorId}`}, 'user', ${text}, '2026-01-02 03:04:05')`;
-    }
-
-    const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'cloud' });
-    const target = new Database(':memory:');
-    await restoreWorkspaceArchive(makeSqlExec(target), lines);
-    const there = sqlOver(target);
-
-    expect(there<{ content: string }>`
-      SELECT content FROM messages WHERE actor_id = ${hire.actorId}`.map((r) => r.content))
-      .toEqual(['gamma pane line']);
-    expect(there<{ content: string }>`
-      SELECT content FROM messages WHERE actor_id = ${ws.main.actorId}`.map((r) => r.content))
-      .toEqual(['main pane line']);
-    // Normalized once: the pane schema does not survive alongside the plain store.
-    expect(there<{ n: number }>`
-      SELECT COUNT(*) AS n FROM sqlite_master
-      WHERE type = 'table' AND name = 'assistant_messages'`[0]?.n).toBe(0);
-  });
-
-  // The other vintage, and the reason the branch exists: a pane exported before
-  // the column names no owner, so the directory is the only place an answer
-  // lives and the main actor is the honest one.
+  // The restore half of the same claim: the pane is normalized into `messages`
+  // on the way in, and the pane is the vendor's shape — no owner column, every
+  // row the root actor's — so the directory the restore landed is the only
+  // place the attribution lives and the main actor is the honest one.
   test('a pane with no owner column is attributed to the main actor', async () => {
     const ws = workspace();
     ws.directory.create({ parent: ws.main, name: 'delta', creationId: 'c6', kind: 'subordinate', lifetime: 'durable' });
-    ws.db.exec(`CREATE TABLE assistant_messages (
-      id TEXT PRIMARY KEY,
-      session_id TEXT NOT NULL DEFAULT '',
-      parent_id TEXT,
-      role TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-    )`);
+    ws.db.exec(SDK_SESSION_DDL);
     void ws.sql`INSERT INTO assistant_messages (id, role, content, created_at)
-      VALUES ('unowned-1', 'user', 'exported before the column existed', '2026-01-02 03:04:05')`;
+      VALUES ('unowned-1', 'user', 'the root actor wrote this', '2026-01-02 03:04:05')`;
 
     const lines = await writeWorkspaceArchive(makeSqlExec(ws.db), { workspace: 'hosted', source: 'cloud' });
     const target = new Database(':memory:');
@@ -223,5 +176,9 @@ describe('a workspace snapshot covers every actor', () => {
 
     expect(there<{ actor_id: string }>`
       SELECT actor_id FROM messages WHERE id = 'unowned-1'`[0]?.actor_id).toBe(ws.main.actorId);
+    // Normalized once: the pane schema does not survive alongside the plain store.
+    expect(there<{ n: number }>`
+      SELECT COUNT(*) AS n FROM sqlite_master
+      WHERE type = 'table' AND name = 'assistant_messages'`[0]?.n).toBe(0);
   });
 });

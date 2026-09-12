@@ -934,51 +934,25 @@ function normalizeImportedPaneRows(sql: SqlExec): void {
 
   if (pane.length === 0) return;
 
-  // WHOSE rows these are is read from the archive when the archive can say, and
-  // only attributed when it cannot. Two archive vintages reach this line:
-  //
-  //   - Produced by THIS tree: `ForkTargetWriter.ensurePaneTable` creates the
-  //     pane with `actor_id NOT NULL, PRIMARY KEY (actor_id, id)`, so every row
-  //     names its owner. Attributing those to the main actor would collapse a
-  //     hired subordinate's whole transcript onto its parent — the restore half
-  //     of "one snapshot carries every actor".
-  //   - An older cloud export whose pane predates the column: there is no owner
-  //     in the row, so the directory this restore just landed is the only place
-  //     the answer exists, and a workspace with no single main actor is refused
-  //     rather than guessed at.
-  //
-  // The DDL text is the probe, not `PRAGMA table_info`: this runs on both
-  // SQLite backends and the rest of this file already reads `sqlite_master`.
-  const paneDdl = v.parse(
-    v.object({ sql: v.nullable(v.string()) }),
-    sql.exec(
-      `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'assistant_messages'`,
-    ).toArray()[0],
-  ).sql;
-
-  const paneCarriesOwner = paneDdl !== null && /\bactor_id\b/.test(paneDdl);
-  const attributedTo = paneCarriesOwner ? null : importedConversationActorId(sql);
+  // WHOSE rows these are: the pane is the vendor's shape and carries no owner
+  // column (`identity/conversation-store.ts` says why, and
+  // `unit-pane-store-shape.test.ts` holds it to the installed SDK), and the
+  // vendor's session belongs to the workspace object, so every pane row is the
+  // root actor's. The directory this restore just landed is where that actor
+  // is, and a workspace with no single main actor is refused rather than
+  // guessed at.
+  const owner = importedConversationActorId(sql);
 
   const rows = sql.exec(
-    paneCarriesOwner
-      ? `SELECT actor_id, id, parent_id, role, content, created_at FROM assistant_messages
-         ORDER BY rowid ASC`
-      : `SELECT id, parent_id, role, content, created_at FROM assistant_messages
-         ORDER BY rowid ASC`,
+    `SELECT id, parent_id, role, content, created_at FROM assistant_messages
+     ORDER BY rowid ASC`,
   ).toArray();
 
   for (const raw of rows) {
     const row = v.parse(v.object({
-      actor_id: v.optional(v.pipe(v.string(), v.nonEmpty())),
       id: v.string(), parent_id: v.nullable(v.string()), role: v.string(),
       content: v.string(), created_at: v.string(),
     }), raw);
-
-    const owner = row.actor_id ?? attributedTo;
-
-    if (owner === null || owner === undefined) {
-      throw new Error(`imported pane row ${row.id} has no owner and none could be attributed`);
-    }
 
     const text = uiMessageText(row.content);
     const ms = Date.parse(`${row.created_at.replace(' ', 'T')}Z`);

@@ -8,8 +8,8 @@ import {
 import {
   MergeOutputSchema, WORKSPACE_RUN_ID,
   type CompletedTurn, type ReasoningEffort, type ResolvedTurnProfile,
-  PANE_STORE_DDL,
 } from '@kinu.run/core';
+import { SDK_SESSION_DDL } from '../../core/tests/helpers';
 import {
   hostedExplorationHarness, hostedMainActor, orchestratorHarness, reactivateOrchestratorHarness,
   type ActorHarness, type HarnessOrchestratorAgent,
@@ -495,12 +495,12 @@ describe('turn-pipeline correctness wiring', () => {
     // may be written into `messages` for the default chat, and the
     // interrupted turn must still be served by the paged history read.
     const harness = orchestratorHarness();
-    // The SDK's own transcript table, keyed the way `ensurePaneTable` writes it:
-    // one database holds every actor's rows, so `actor_id` leads the key and
-    // every read the canonical store performs is scoped by it. A table without
-    // the column does not read empty here — `conversationPageRows` fails to
-    // compile its SELECT.
-    harness.db.exec(PANE_STORE_DDL);
+    // The SDK's own transcript table, as Think's session creates it — no owner
+    // column; `usesPaneStore` is what scopes the canonical store's reads to the
+    // workspace's root actor. A table carrying `actor_id` would be a shape no
+    // workspace has, and every pane read would pass against it while failing
+    // on the real one.
+    harness.db.exec(SDK_SESSION_DDL);
 
     const append = harness.db.prepare(
       `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
