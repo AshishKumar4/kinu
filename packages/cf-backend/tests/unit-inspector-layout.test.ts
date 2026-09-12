@@ -443,6 +443,129 @@ describe('the committed-layout report, through the page hook', () => {
     expect(store['kinu.inspector.a@b']).toBe('300');
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
   });
+
+  test('a divider collapse without the affordance keeps the resting width, and expand reopens at it', () => {
+    const stub = panelStub(300);
+
+    const first = mount({
+      account: 'a@b',
+      storedWidth: '300',
+      storedChoice: '1',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        emit(layout, stub, 300);
+      }],
+    });
+
+    // Post-mount reports run on the static tree: only side effects assert —
+    // the divider (or keyboard) takes the column to zero with no affordance
+    // capturing a width first. The committed report is collapsed, but the
+    // remembered expansion width stays the last open one — never zero.
+    emit(first.layout, stub, 0);
+    expect(store['kinu.inspector.a@b']).toBe('300');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
+
+    // A reload reads the collapse back, and its own expand handle reopens at
+    // the remembered width: the round-trip is open at 300, not at zero.
+    const reloaded = mount({ account: 'a@b' });
+
+    expect(reloaded.html).toContain('data-collapsed="true"');
+    reloaded.layout.panelRef.current = stub.handle;
+    reloaded.layout.toggleCollapsed();
+    expect(stub.resizes).toEqual([300]);
+    emit(reloaded.layout, stub, 300);
+    expect(store['kinu.inspector.a@b']).toBe('300');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
+
+    const reopened = mount({ account: 'a@b' });
+
+    expect(reopened.html).toContain('data-collapsed="false"');
+    expect(reopened.html).toContain('data-width="300"');
+  });
+
+  test('a constrained mount adopts the actual layout without persisting it', () => {
+    const stub = panelStub(300);
+
+    const mounted = mount({
+      account: 'a@b',
+      storedWidth: '300',
+      storedChoice: '1',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        // The group's first pass could not fit the decided width: the report
+        // carries the constrained size. It is the mount announcing itself,
+        // not a gesture — the stored preference is untouched. (No group
+        // element exists in the harness, so the stub's own size answers and
+        // the pixel floor applies: 250 commits as 280.)
+        emit(layout, stub, 250);
+      }],
+    });
+
+    expect(store['kinu.inspector.a@b']).toBe('300');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
+    expect(mounted.html).toContain('data-width="280"');
+    expect(mounted.html).toContain('data-ready="true"');
+  });
+
+  test('a constrained write echo keeps the preferred width and the next gesture still lands', () => {
+    const stub = panelStub(300);
+
+    const mounted = mount({
+      account: 'a@b',
+      storedWidth: '300',
+      storedChoice: '1',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        emit(layout, stub, 300);
+      }],
+    });
+
+    const layout = mounted.layout;
+
+    // The reset asks for 340; the group fits only 310. The echo is the
+    // library reporting back on our own write — the preferred 340 stays
+    // stored, the write itself proves it was issued, and the column shows
+    // what fit.
+    layout.resetToDefault();
+    expect(stub.resizes).toEqual([340]);
+    emit(layout, stub, 310);
+    expect(store['kinu.inspector.a@b']).toBe('340');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');
+
+    // The marker is consumed: a later drag is the user's again.
+    emit(layout, stub, 320);
+    expect(store['kinu.inspector.a@b']).toBe('320');
+  });
+
+  test('a collapse racing our own write reads as the user, keeping a width', () => {
+    const stub = panelStub(300);
+
+    const mounted = mount({
+      account: 'a@b',
+      storedWidth: '300',
+      storedChoice: '1',
+      steps: [(layout, controls) => {
+        layout.panelRef.current = stub.handle;
+        controls.flush();
+        emit(layout, stub, 300);
+      }],
+    });
+
+    const layout = mounted.layout;
+
+    // The reset's write is in flight when the user collapses: the report
+    // disagrees with the marked direction, so it is a gesture — the choice
+    // records, and the width stays a real expansion width, never zero. (The
+    // step shares one render's closure, so the preserved width is the
+    // mount's 300; past a real re-render it would be the reset's 340.)
+    layout.resetToDefault();
+    emit(layout, stub, 0);
+    expect(store['kinu.inspector.a@b']).toBe('300');
+    expect(store['kinu.inspector.open.a@b.ws-1']).toBe('0');
+  });
 });
 
 describe('the decided layout, through the page hook', () => {
@@ -473,7 +596,7 @@ describe('the decided layout, through the page hook', () => {
     expect(mounted.html).toContain('data-ready="true"');
   });
 
-  test('a live gesture wins over a parked decision: the stored layout never applies', () => {
+  test('a gesture after the mount announcement is the user\'s: the stored layout never overwrites it', () => {
     const stub = panelStub(340);
 
     const mounted = mount({
@@ -483,13 +606,16 @@ describe('the decided layout, through the page hook', () => {
       steps: [(layout, controls) => {
         layout.panelRef.current = stub.handle;
         controls.flush();
-        // The user's drag commits before the decided layout gets its pass:
-        // the gesture is the workspace's choice and the parked decision dies.
-        emit(layout, stub, 412);
-        emit(layout, stub, 412);
+        // The mount announces the decided layout first — the library always
+        // commits it before any input can land.
+        emit(layout, stub, 300);
       }],
     });
 
+    // The user's drag commits next: it is the workspace's choice, and no
+    // parked or decided layout ever writes over it.
+    emit(mounted.layout, stub, 412);
+    emit(mounted.layout, stub, 412);
     expect(stub.resizes).toEqual([]);
     expect(store['kinu.inspector.a@b']).toBe('412');
     expect(store['kinu.inspector.open.a@b.ws-1']).toBe('1');

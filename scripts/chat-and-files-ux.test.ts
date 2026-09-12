@@ -2434,4 +2434,47 @@ describe('the workspace inspector at the actual WorkspacePage boundary', () => {
       await page.close();
     });
   }, 240_000);
+
+  test('an oversize saved width constrains on screen but survives in storage with no explicit choice', async () => {
+    await withGallery(async ({ browser, origin }: { browser: Browser; origin: string }) => {
+      const page = await browser.newPage();
+      await page.setViewport({ width: 1440, height: 900 });
+      // The account holds a 2000px preference (kept from a wider display);
+      // this workspace carries no open/close choice of its own.
+      await page.evaluateOnNewDocument(() => {
+        localStorage.setItem('kinu.inspector.account', 'ashish@example.com');
+        localStorage.setItem('kinu.inspector.ashish@example.com', '2000');
+      });
+      await page.goto(`${origin}/gallery.html?frame=workspacepage`, { waitUntil: 'networkidle0' });
+      await page.reload({ waitUntil: 'networkidle0' });
+      await page.waitForSelector('[aria-label="Work"]', { timeout: 20_000 });
+
+      // The signal opens the column on the workspace's behalf; the group
+      // cannot fit 2000px beside the chat minimum, so it commits what fits.
+      // The column's committed width is stable across frames once the
+      // write's commit — and any persist its report triggers — has landed.
+      await page.waitForFunction(() => {
+        const width = () => Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? 0);
+
+        return new Promise<boolean>((resolve) => {
+          const first = width();
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve(first > 200 && width() === first)));
+        });
+      }, { timeout: 10_000 });
+
+      const state = await page.evaluate(() => ({
+        width: Math.round(document.querySelectorAll('[data-panel]')[1]?.getBoundingClientRect().width ?? -1),
+        stored: { ...localStorage },
+      }));
+
+      // Constrained on screen, preferred in storage, and — nothing here was
+      // the user's explicit choice, so no choice is written for this
+      // workspace.
+      expect(state.width).toBeLessThan(1500);
+      expect(state.stored['kinu.inspector.ashish@example.com']).toBe('2000');
+      expect(Object.keys(state.stored).filter((key) => key.startsWith('kinu.inspector.open.'))).toEqual([]);
+
+      await page.close();
+    });
+  }, 240_000);
 });
