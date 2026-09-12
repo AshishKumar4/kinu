@@ -285,6 +285,16 @@
     "used_at",
     "token_was_current"
   ],
+  "device_consent_requests@packages/core/src/safety/device-consent.ts": [
+    "consent_id",
+    "device_id",
+    "device_label",
+    "method",
+    "command",
+    "workspace_name",
+    "created_at",
+    "expires_at"
+  ],
   "device_consent@packages/cf-backend/src/user/schema.ts": [
     "agent_name",
     "device_id",

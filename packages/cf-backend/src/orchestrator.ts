@@ -239,7 +239,7 @@ import { resolveEnsembleJudgeSelection } from "./providers/judge-model";
 import {
   createAgentSelfProvider,
   createReleaseCodemodeProvider,
-  DeviceConsentRegistry,
+  DeviceConsentRegistry, DeviceConsentStore,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
   DeferredApprovalQueue, DeferredApprovalStore,
@@ -1461,7 +1461,7 @@ export class OrchestratorAgent extends ActorAgent {
   protected override extraDynamicContext(): ActorDynamicContextExtras {
     return {
       approvals: () => {
-        const items = [...this._consents.approvals(), ...this.deferrals.approvals()];
+        const items = [...this.consents.approvals(), ...this.deferrals.approvals()];
 
         return { items, total: items.length };
       },
@@ -2992,32 +2992,46 @@ export class OrchestratorAgent extends ActorAgent {
   // The UserDO (device hub) calls awaitDeviceConsent when this agent touches a
   // device with no remembered policy. The registry is core's; what a Durable
   // Object contributes is fanning the prompt out to connected sockets and the
-  // activity line. "Always" is persisted on the hub, not here.
-  private readonly _consents = new DeviceConsentRegistry({
-    newId: () => `cons-${nanoid(10)}`,
-    // The wire shapes stay written out here rather than behind a helper: the
-    // broadcast-wiring gate reads `broadcast({ type: … })` off the source, and
-    // a channel it cannot see is a channel it cannot prove has a consumer.
-    announce: (notice) => {
-      if (notice.kind === 'raised') {
-        const { consent } = notice;
-        this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
-        this.broadcast(JSON.stringify({
-          type: 'device_consent',
-          consentId: consent.consentId,
-          deviceId: consent.deviceId,
-          deviceLabel: consent.deviceLabel,
-          method: consent.method,
-          command: consent.command,
-          workspaceName: consent.workspaceName ?? null,
-        }));
+  // activity line. "Always" is persisted on the hub, not here — and the card
+  // itself is a row here, so the prompt an eviction loses is the caller's
+  // parked promise, never the owner's question.
+  //
+  // Lazy for the same reason `deferrals` is: the store needs the schema, and
+  // field initializers run before ensureSchema can.
+  private _consents: DeviceConsentRegistry | null = null;
+  private get consents(): DeviceConsentRegistry {
+    if (!this._consents) {
+      this.ensureSchema();
+      this._consents = new DeviceConsentRegistry({
+        store: new DeviceConsentStore(this.boundSql),
+        newId: () => `cons-${nanoid(10)}`,
+        // The wire shapes stay written out here rather than behind a helper: the
+        // broadcast-wiring gate reads `broadcast({ type: … })` off the source, and
+        // a channel it cannot see is a channel it cannot prove has a consumer.
+        announce: (notice) => {
+          if (notice.kind === 'raised') {
+            const { consent } = notice;
+            this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
+            this.broadcast(JSON.stringify({
+              type: 'device_consent',
+              consentId: consent.consentId,
+              deviceId: consent.deviceId,
+              deviceLabel: consent.deviceLabel,
+              method: consent.method,
+              command: consent.command,
+              workspaceName: consent.workspaceName ?? null,
+            }));
 
-        return;
-      }
+            return;
+          }
 
-      this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
-    },
-  });
+          this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
+        },
+      });
+    }
+
+    return this._consents;
+  }
 
   /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides,
    *  or as `timeout` after the registry's window so a device call never hangs
@@ -3025,19 +3039,19 @@ export class OrchestratorAgent extends ActorAgent {
    *  the owner was away, and telling the agent it was refused turns that into a
    *  permanent, self-imposed capability loss. */
   async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
-    return this._consents.request(req);
+    return this.consents.request(req);
   }
 
   /** The chat UI calls this when the user clicks a consent card button. */
   @callable()
   async resolveDeviceConsent(consentId: string, decision: DeviceConsentAnswer): Promise<{ ok: boolean }> {
-    return { ok: this._consents.resolve(consentId, decision) };
+    return { ok: this.consents.resolve(consentId, decision) };
   }
 
   /** Pending consent requests — so the chat re-renders cards after a reload. */
   @callable()
   async listPendingConsents(): Promise<PendingDeviceConsent[]> {
-    return this._consents.list();
+    return this.consents.list();
   }
 
   // ── Deferred approval — the owner is asleep, the run carries on ──────

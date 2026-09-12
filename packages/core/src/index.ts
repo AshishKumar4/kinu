@@ -1558,6 +1558,8 @@ export {
   type VerifiedInstructionTrust,
   type AdmittedInstructionDecision,
   DeviceConsentRegistry,
+  DeviceConsentStore,
+  initDeviceConsentRequestsTable,
   DEVICE_CONSENT_DENIED,
   DEVICE_CONSENT_UNANSWERED,
   DEVICE_CONSENT_TIMEOUT_MS,
@@ -1569,6 +1571,7 @@ export {
   type DeviceActionSummary,
   type DeviceConsentRequest,
   type PendingDeviceConsent,
+  type PendingConsentRow,
   type DeviceConsentNotice,
 } from './safety/index';
 

@@ -12,6 +12,8 @@ import { ownerCaller, type UserCaller } from '../../src/user/workspace-capabilit
 import type { WorkspaceEntry, WorkspaceRegistration } from '../../src/user/user-do';
 import {
   DeviceConsentRegistry,
+  DeviceConsentStore,
+  initDeviceConsentRequestsTable,
   JsonValueSchema,
   type DeviceConsentDecision,
   type DeviceConsentRequest,
@@ -20,6 +22,7 @@ import {
   type SqlExecRow,
   type SqlValue,
 } from '@kinu.run/core';
+import { makeExecRaw, makeSql } from '../../../core/tests/helpers';
 import * as v from 'valibot';
 
 mockAgentsSdk();
@@ -106,6 +109,13 @@ export interface TestUserDO {
   consentDecision: 'once' | 'always' | 'deny' | 'hold';
   /** Answer every card left waiting by `hold`. */
   answerConsent(answer: 'once' | 'always' | 'deny'): void;
+  /** The cards still up on one workspace's OrchestratorAgent — what a client
+   *  re-render reads after a reload, and what an activation that never saw
+   *  the raise still owes the owner. */
+  pendingConsents(workspace: string): Array<{ consentId: string }>;
+  /** The owner's click, at the registry the card is waiting on — the same
+   *  resolution `resolveDeviceConsent` runs over RPC. */
+  resolveConsent(workspace: string, consentId: string, answer: 'once' | 'always' | 'deny'): { ok: boolean };
   /** Attach (or detach with null) the device this harness's live socket
    *  belongs to — the id `registerDevice` just minted. */
   attachDevice(deviceId: string | null): void;
@@ -257,6 +267,15 @@ interface TestUserEnvironment {
  */
 const ACCEPTED_SOCKETS: Array<{ sent: string[]; drop(): void; ws: WebSocket }> = [];
 
+/**
+ * The workspace objects' own storages, keyed on the harness database whose
+ * lifetime they share. A Durable Object is ephemeral over durable storage;
+ * `createTestUserDO({ storage })` re-keys here so a re-instantiated harness
+ * meets the same OrchestratorAgent stores its predecessor wrote, which is the
+ * only durable half of a consent card the production seam keeps.
+ */
+const CONSENT_STORES = new WeakMap<Database, Map<string, DeviceConsentStore>>();
+
 function installRecordingSocketPair(): void {
   Object.defineProperty(globalThis, 'WebSocketPair', {
     configurable: true,
@@ -374,12 +393,36 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   const registries = new Map<string, DeviceConsentRegistry>();
   let mintedConsents = 0;
 
+  /**
+   * A Durable Object's storage outlives the object. These are the
+   * OrchestratorAgents' consent stores, one database per workspace name,
+   * keyed on THIS object store's lifetime: a revived UserDO over the same
+   * `db` meets the same workspace storages, which is the eviction-then-next-
+   * request shape the platform actually produces.
+   */
+  const consentStores = CONSENT_STORES.get(db) ?? new Map<string, DeviceConsentStore>();
+  CONSENT_STORES.set(db, consentStores);
+
+  const storeFor = (name: string): DeviceConsentStore => {
+    const existing = consentStores.get(name);
+
+    if (existing) return existing;
+
+    const storage = new Database(':memory:');
+    initDeviceConsentRequestsTable(makeExecRaw(storage));
+    const store = new DeviceConsentStore(makeSql(storage));
+    consentStores.set(name, store);
+
+    return store;
+  };
+
   const registryFor = (name: string): DeviceConsentRegistry => {
     const existing = registries.get(name);
 
     if (existing) return existing;
 
     const registry: DeviceConsentRegistry = new DeviceConsentRegistry({
+      store: storeFor(name),
       newId: () => `cons-${++mintedConsents}`,
       announce: (notice) => {
         if (notice.kind !== 'raised') return;
@@ -515,6 +558,8 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   return {
     userDO, db, sql, installed, destroyedWorkspaces, revokedSocketPushes,
     revokedSessionPushes, capabilityRepushes,
+    pendingConsents: (workspace) => registryFor(workspace).list(),
+    resolveConsent: (workspace, consentId, answer) => ({ ok: registryFor(workspace).resolve(consentId, answer) }),
     consentPrompts, raisedConsentIds, deviceFrames,
     get consentDecision() { return consentDecision; },
     set consentDecision(decision) { consentDecision = decision; },

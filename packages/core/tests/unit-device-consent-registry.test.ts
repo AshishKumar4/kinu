@@ -7,11 +7,13 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { Database } from 'bun:sqlite';
 import {
-  DeviceConsentRegistry,
+  DeviceConsentRegistry, DeviceConsentStore, initDeviceConsentRequestsTable,
   type DeviceConsentNotice,
   type DeviceConsentRequest,
 } from '../src/index';
+import { makeExecRaw, makeSql } from './helpers';
 
 const REQUEST: DeviceConsentRequest = {
   deviceId: 'dev-1',
@@ -20,11 +22,21 @@ const REQUEST: DeviceConsentRequest = {
   command: 'git status',
 };
 
+/** One registry's durable half over its own in-memory database — the same
+ *  store shape the DO's workspace schema hands the real one. */
+function consentStore(): DeviceConsentStore {
+  const db = new Database(':memory:');
+  initDeviceConsentRequestsTable(makeExecRaw(db));
+
+  return new DeviceConsentStore(makeSql(db));
+}
+
 function registry(timeoutMs = 10_000) {
   const notices: DeviceConsentNotice[] = [];
   let n = 0;
 
   const reg = new DeviceConsentRegistry({
+    store: consentStore(),
     announce: (notice) => { notices.push(notice); },
     newId: () => `cons-${++n}`,
     timeoutMs,
@@ -171,6 +183,7 @@ describe('DeviceConsentRegistry identity', () => {
     const answered: boolean[] = [];
 
     const reg = new DeviceConsentRegistry({
+      store: consentStore(),
       announce: (notice) => {
         if (notice.kind === 'raised') answered.push(reg.resolve(notice.consent.consentId, 'once'));
       },
