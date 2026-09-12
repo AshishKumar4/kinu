@@ -235,7 +235,7 @@ import {
   type ActiveRoster, type JsonObject, type JsonValue, type ProfileAuthorityInputs, type ToolOutcome, renderToolResult,
   toolsForInvocation, withTaskPlan, runTaskPlan, type TaskPlan, type TaskPlanContext, providersInWorkMode, currentWorkMode, permitInPlan, requireWorkModePermission, failedToolOutcome, repairToolCall, McpProtocolFailureSchema, McpToolError,
   type ResolvedTurnProfile, type TierId, type SpendSource, type ModelCallSpend, type ToolSurfaceNarrowing,
-  type NimbusSandboxHandle,
+  type NimbusSandboxHandle, childContextResolver,
 } from "@kinu.run/core";
 import {
   bindAgentSql, createCFRuntime,
@@ -2391,11 +2391,6 @@ export abstract class ActorAgent extends Think<Env> {
    * therefore discarded every mid-turn edit at the turn boundary, silently. So
    * admission takes `startTurn`'s messages AS the turn's history and the
    * boundary adopts `endTurn`'s, on every path including failure and interrupt.
-   *
-   * `events` is null in this tree: the plane's recorder port is satisfied by
-   * `RunEventRecorder` the moment the `context_edit` run-event variant exists
-   * beside it, and until then null records nothing rather than claiming an
-   * emission nobody would receive.
    */
   private _contextPlane: ActorContextPlane | null = null;
   private get contextPlane(): ActorContextPlane {
@@ -2404,7 +2399,7 @@ export abstract class ActorAgent extends Think<Env> {
     // uninitialised bundle. Lazy also matches what the rest of this class does
     // with storage — a Durable Object must not touch SQL while its fields
     // initialise.
-    this._contextPlane ??= createActorContextPlane({ claims: this.stores.claims, events: null });
+    this._contextPlane ??= createActorContextPlane({ claims: this.stores.claims, events: this.stores.eventRecorder });
 
     return this._contextPlane;
   }
@@ -4747,6 +4742,17 @@ export abstract class ActorAgent extends Think<Env> {
         reportModelCall: (report) => this.reportModelCall(report),
         turnProfile: () => this._turnProfile,
         resolveProfile: () => this.routingProfile(),
+        contextPlane: {
+          actorId: this.actorHandle().actorId,
+          claims: () => this.stores.claims,
+          events: () => this.stores.eventRecorder,
+          children: childContextResolver({
+            host: { bindStores: (reference) => this.actorHost().bindStores(reference) },
+            directory: this.actorDirectoryStore(),
+            parent: this.actorHandle(),
+            events: (child) => child.stores.eventRecorder,
+          }),
+        },
         // MCTS rollouts. Both members or neither: `requireBranches` refuses
         // when the hook is absent, and an absent hook makes every rollout answer
         // "I cannot" on a kind this backend declares, with `hostBranch` sitting
@@ -6584,24 +6590,9 @@ export abstract class ActorAgent extends Think<Env> {
       },
     });
 
-    // Shadow-eval context parity + the evolved-scaffold task source (see the
-    // _lastTurnOpts field doc): the effective opts the streamText Think runs
-    // next will see — final system/messages/merged tools/model. Think only
-    // adds its tool-decision wrapping and, per step, the cache markers and the
-    // dynamic-context block — all inert for a replay.
-    const lastTurnOpts: Parameters<typeof streamText>[0] = {
-      model: cfg.model ?? ctx.model,
-      system: systemOverride,
-      messages: cfg.messages,
-      tools: { ...ctx.tools, ...cfg.tools },
-      activeTools: cfg.activeTools,
-    };
-
-    if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
     const runtime = this.rt;
     const mode = this.turnWorkMode();
     const program = await prepareActorProgram({ runtime, mode, version: await runtime.identity.scaffold.version(), signal: ctx.signal });
-    this._lastTurnOpts = lastTurnOpts;
     this._turnProgram = { program, signal: ctx.signal };
     // THE DURABLE CLAIM, and this is the last statement before Think starts
     // inference — everything above it is preparation that has issued nothing.
@@ -6634,6 +6625,17 @@ export abstract class ActorAgent extends Think<Env> {
       workingRevision: admitted.workingRevision,
     });
     cfg.messages = [...admitted.messages];
+
+    const lastTurnOpts: Parameters<typeof streamText>[0] = {
+      model: cfg.model ?? ctx.model,
+      system: systemOverride,
+      messages: this.stores.claims.admittedFor(this._turnClaim).messages,
+      tools: { ...ctx.tools, ...cfg.tools },
+      activeTools: cfg.activeTools,
+    };
+
+    if (providerOptions) lastTurnOpts.providerOptions = providerOptions;
+    this._lastTurnOpts = lastTurnOpts;
     // A tool call the SDK cannot parse is rewritten where a rewrite is settled
     // (case-only name drift, fenced or double-encoded arguments) and left to
     // the model's own retry otherwise — no inference behind the spend ledger.
