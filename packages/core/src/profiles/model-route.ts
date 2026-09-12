@@ -116,12 +116,24 @@ export function resolveModelRoute(
 ): ModelRouteResolution | null {
   if (!isProfileRouted(source)) return null;
   const policy = MODEL_ROUTE_POLICY[source];
-  const tier = policy.kind === 'invocation' ? profile.tier.id : policy.tier;
+
+  // Invocation lanes carry the TURN's resolved model, not the tier slot's. A
+  // workspace pin overrides the turn's tier model while the catalog slots stay
+  // the account's, and a lane that re-read the slot would run the turn's own
+  // work on the model the pin just displaced.
+  if (policy.kind === 'invocation') {
+    return Object.freeze({
+      source,
+      tier: profile.tier.id,
+      model: profile.tier.model,
+      reasoningEffort: profile.tier.reasoningEffort,
+    });
+  }
 
   return Object.freeze({
     source,
-    tier,
-    ...tierResolution(profile, tier),
+    tier: policy.tier,
+    ...tierResolution(profile, policy.tier),
   });
 }
 

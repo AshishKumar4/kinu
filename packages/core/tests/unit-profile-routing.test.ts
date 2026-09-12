@@ -113,6 +113,24 @@ describe('exhaustive model routing', () => {
     expect(resolveModelRoute('agent', researcherProfile)?.tier).toBe('default');
     expect(resolveModelRoute('platform', researcherProfile)).toBeNull();
   });
+
+  test("invocation lanes answer the turn's pinned model, fixed lanes the catalog slot", () => {
+    // One resolution: the pin overrides the turn's tier model while the
+    // catalog slots stay the account's. A lane that re-read the slot would run
+    // the turn's own work on the model the pin displaced.
+    const profile = resolveTurnProfile(baseInput({ workspaceModel: '@cf/a/model-a' }));
+
+    expect(profile.tier).toMatchObject({ source: 'workspace', model: '@cf/a/model-a' });
+
+    for (const source of INVOCATION_LANES) {
+      expect(resolveModelRoute(source, profile)).toMatchObject({
+        source, tier: profile.tier.id, model: '@cf/a/model-a',
+      });
+    }
+
+    expect(resolveModelRoute('judge', profile)?.model).toBe(profile.tiers.deep.model);
+    expect(profile.tiers.deep.model).not.toBe('@cf/a/model-a');
+  });
 });
 
 describe('resolver tier snapshot', () => {

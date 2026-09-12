@@ -194,6 +194,10 @@ afterAll(() => {
   publishRunRecord({
     family: 'device', tier: TIER, modelId: PLAN?.llm.model ?? EVAL_MODELS[TIER],
     repeats: 1, seed: 1, arm: ARM, declaredTasks: [TASK_ID], observations, spend,
+    // Gap, stated: this suite never reads the workspace ledger back, so there
+    // is no observed model to check the claim against — the record carries no
+    // ledger check rather than a fabricated agreement.
+    modelObserved: null,
     transcripts: TRANSCRIPTS, repoRoot: REPO_ROOT,
   });
 });

@@ -37,7 +37,7 @@ export interface ProfileProvenance {
 
 const ProvenanceSchema = v.strictObject({
   roleSource: v.picklist(['explicit', 'caller']),
-  tierSource: v.picklist(['explicit', 'role', 'default']),
+  tierSource: v.picklist(['explicit', 'role', 'default', 'workspace']),
   presetSource: v.picklist(['explicit', 'role_default']),
 });
 
@@ -59,7 +59,7 @@ const ResolvedTurnProfileSchema = v.strictObject({
   }),
   tier: v.strictObject({
     id: TierIdSchema,
-    source: v.picklist(['explicit', 'role', 'default']),
+    source: v.picklist(['explicit', 'role', 'default', 'workspace']),
     model: v.string(),
     reasoningEffort: v.picklist(REASONING_EFFORTS),
   }),
