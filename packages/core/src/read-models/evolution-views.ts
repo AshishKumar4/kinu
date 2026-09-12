@@ -48,6 +48,7 @@ export function getEvolutionChangelog(
   sql: SqlExecutor,
   actor: ActorHandle,
   limit = DEFAULT_CHANGELOG_LIMIT,
+  changesOnly = false,
 ): EvolutionChangelogView {
   // The seen marker is a key on this actor's own config store, so the handle is
   // the only thing either read needs. Taking a separate `AgentConfigStore`
@@ -57,7 +58,7 @@ export function getEvolutionChangelog(
   const page = boundedInt(limit, DEFAULT_CHANGELOG_LIMIT, 1, MAX_CHANGELOG_LIMIT);
 
   return {
-    entries: buildChangelog(sql, actor, { limit: page }),
+    entries: buildChangelog(sql, actor, { limit: page, changesOnly }),
     unseenCount: countUnseenChangelog(sql, actor, seenAt),
     seenAt,
   };

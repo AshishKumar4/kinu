@@ -3890,10 +3890,10 @@ export class OrchestratorAgent extends ActorAgent {
   /** The "what I changed about myself" digest, assembled on demand from the
    *  durable ledgers (core buildChangelog — no second event system). */
   @callable()
-  async getEvolutionChangelog(opts?: { limit?: number }): Promise<{
+  async getEvolutionChangelog(opts?: { limit?: number; changesOnly?: boolean }): Promise<{
     entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
   }> {
-    return getEvolutionChangelog(this.boundSql, this.actorHandle(), opts?.limit);
+    return getEvolutionChangelog(this.boundSql, this.actorHandle(), opts?.limit, opts?.changesOnly === true);
   }
 
   /** The operator viewed the changelog — zero the unseen badge. */
