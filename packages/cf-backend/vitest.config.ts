@@ -45,6 +45,7 @@ import { fileURLToPath } from 'node:url';
 import { cloudflareTest } from '@cloudflare/vitest-pool-workers';
 import { buildSync, transform } from 'esbuild';
 import { defineConfig, type Plugin } from 'vitest/config';
+import { kCurrentWorker } from 'miniflare';
 import { builtinModules } from 'node:module';
 
 /**
@@ -129,6 +130,15 @@ const planAnnounceProbe = buildSync({
 const slateEgressProbe = buildSync({
   entryPoints: [fileURLToPath(new URL('./tests/workerd/slate-egress-probe.ts', import.meta.url))],
   outfile: fileURLToPath(new URL('./tests/workerd/.compiled/slate-egress-probe.js', import.meta.url)),
+  bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
+  conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
+  alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
+  external: ['cloudflare:*', 'node:*'], loader: { '.wasm': 'copy' },
+}).outputFiles.sort((left, right) => Number(left.path.endsWith('.wasm')) - Number(right.path.endsWith('.wasm')));
+
+const twoTurnProbe = buildSync({
+  entryPoints: [fileURLToPath(new URL('./tests/workerd/two-turn-probe.ts', import.meta.url))],
+  outfile: fileURLToPath(new URL('./tests/workerd/.compiled/two-turn-probe.js', import.meta.url)),
   bundle: true, write: false, format: 'esm', platform: 'neutral', mainFields: ['module', 'main'],
   conditions: ['workerd', 'worker', 'browser'], target: 'es2022',
   alias: Object.fromEntries(builtinModules.filter((name) => !name.startsWith('node:')).map((name) => [name, 'node:' + name])),
@@ -225,6 +235,33 @@ export default defineConfig({
 
             throw new Error('Unmatched test egress is disabled: ' + request.url);
           },
+        }, {
+          // Two real OrchestratorAgent turns end to end. `env.AI` is a service
+          // binding to this worker's own FakeAI WorkerEntrypoint — the direct
+          // Workers AI development path (agent-registry.ts:117) needs only
+          // `.run(model, inputs, options)`, so the external model plane is
+          // intercepted inside the pool and no production flag exists.
+          name: 'two-turn-probe',
+          compatibilityDate: workerCompatibility.compatibilityDate,
+          // AbortSignal over the service binding: the adapter hands
+          // `request.signal` to `binding.run` unconditionally, and workerd
+          // gates that marshalling behind this flag ("AbortSignal
+          // serialization is not enabled" without it).
+          compatibilityFlags: [...workerCompatibility.compatibilityFlags, 'enable_abortsignal_rpc'],
+          workerLoaders: { LOADER: {} },
+          modules: twoTurnProbe.map((file) => ({
+            type: file.path.endsWith('.wasm') ? 'CompiledWasm' : 'ESModule',
+            path: file.path, contents: file.path.endsWith('.wasm') ? file.contents : file.text,
+          })),
+          // The owner-capability secret — `ownerCaller` derives the probe's
+          // root caller from it, exactly as the Worker routes do.
+          bindings: { DEV_USER_EMAIL: 'probe@local', CREDENTIAL_ENCRYPTION_KEY: 'dHdvLXR1cm4tcHJvYmUtY3JlZGVudGlhbC1rZXktMzI=' },
+          serviceBindings: { AI: { name: kCurrentWorker, entrypoint: 'FakeAI' } },
+          durableObjects: {
+            TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', useSQLite: true },
+            OrchestratorAgent: { className: 'OrchestratorAgent', useSQLite: true },
+            UserDO: { className: 'UserDO', useSQLite: true },
+          },
         }],
         durableObjects: {
           RETENTION: { className: 'RetentionDO', useSQLite: true },
@@ -254,6 +291,7 @@ export default defineConfig({
           USER_SOCKET_PROBE: { className: 'UserSocketProbeDO', scriptName: 'plan-announce-probe', useSQLite: true },
           SLATE_EGRESS_PROBE: { className: 'SlateEgressProbe', scriptName: 'slate-egress-probe', useSQLite: true },
           DEVICE_LEDGER_PROBE: { className: 'DeviceLedgerProbeDO', useSQLite: true },
+          TWO_TURN_PROBE: { className: 'TwoTurnProbeRoot', scriptName: 'two-turn-probe', useSQLite: true },
         },
       },
     }),
