@@ -217,9 +217,9 @@ export function WorkSurface(props: WorkSurfaceProps) {
           {SURFACES.filter(s => (s !== "Diffs" || hasDiffs) && surfaceHasContent(s, props.tabPresence, props.mctsTrees, props.slates)).map(s => (
             <button key={s} onClick={() => onSurface(s)} title={s} aria-label={s}
               aria-current={surface === s ? "true" : undefined}
-              className={`${tabCls} ${surface === s ? "p-tab-active p-accent font-semibold" : ""}`}>
+              className={`${tabCls} ${surface === s ? "p-tab-active p-accent" : ""}`}>
               <span>{SURFACE_LABEL[s]}</span>
-              {s === "Work" && props.pendingActions.length > 0 && <span className="p-accent text-[10px]">{props.pendingActions.length}</span>}
+              {s === "Work" && props.pendingActions.length > 0 && <span className="p-accent p-t-status">{props.pendingActions.length}</span>}
             </button>
           ))}
         </div>

@@ -22,7 +22,7 @@ import { KinuMark } from "@/components/ui/KinuLogo";
  *  rendering bug. */
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
   return (
-    <pre className="text-[11px] font-mono leading-relaxed overflow-x-auto max-h-[360px] overflow-y-auto m-0">
+    <pre className="p-t-code overflow-x-auto max-h-[360px] overflow-y-auto m-0">
       {lines.map((l, i) => (
         <div key={i} className={l.kind === "add" ? "p-badge-success px-3" : l.kind === "del" ? "p-badge-danger px-3" : "p-text-3 px-3"}>
           <span className="select-none opacity-40 mr-2">{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>{l.text || " "}
@@ -59,7 +59,7 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
 
   return (
     <div className="p-code my-2 rounded-lg overflow-hidden">
-      <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 text-[10px]">
+      <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 p-annotation">
         <span className="truncate font-mono">{lang || "code"}</span>
         <button onClick={() => copy(code)} type="button"
           className={`flex shrink-0 cursor-pointer items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}`}>
@@ -67,7 +67,7 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
         </button>
       </div>
       {html === null
-        ? <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 text-[12.5px] leading-[1.55]"><code>{code}</code></pre>
+        ? <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 p-t-code"><code>{code}</code></pre>
         : <div className="p-scroll-x p-code-scroll"><div className="p-code-highlight" dangerouslySetInnerHTML={{ __html: html }} /></div>}
       {resource.status === "error" && <button type="button" onClick={reload} className="px-3 py-1 text-xs p-warning" title={resource.message}>Syntax highlighting failed. Retry</button>}
     </div>
@@ -176,8 +176,8 @@ export const EMPTY_HINTS = {
 export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="rounded-md border p-border p-recessed px-2 py-1.5">
-      <div className="text-[9px] uppercase tracking-normal p-text-3">{label}</div>
-      <div className="text-[11px] p-text font-mono tabular-nums">{value}</div>
+      <div className="p-eyebrow">{label}</div>
+      <div className="p-row-text p-text font-mono tabular-nums">{value}</div>
     </div>
   );
 }
@@ -185,7 +185,7 @@ export function Metric({ label, value }: { label: string; value: React.ReactNode
 export function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="space-y-1.5">
-      <div className="text-[10px] uppercase tracking-normal p-text-3">{title}</div>
+      <div className="p-eyebrow">{title}</div>
       {children}
     </section>
   );
@@ -316,7 +316,7 @@ export function HistoryBoundary({ loading, error, exhausted, onRetry }: {
       ) : exhausted ? (
         <>
           <span className="h-px flex-1 p-border border-t" />
-          <span className="p-text-3 text-[11px]">Beginning of the conversation</span>
+          <span className="p-text-3 p-meta">Beginning of the conversation</span>
           <span className="h-px flex-1 p-border border-t" />
         </>
       ) : null}

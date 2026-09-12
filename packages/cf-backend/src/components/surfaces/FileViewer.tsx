@@ -121,29 +121,29 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
         <div className="ml-auto flex items-center gap-1 shrink-0">
           {draft === null && render !== "source" && (
             <button data-files-render-toggle onClick={() => setAsSource((s) => !s)}
-              className="text-[11px] p-text-2 hover:p-text p-1"
+              className="p-t-control p-text-2 hover:p-text p-1"
               title={asSource ? `Show the rendered ${render === "markdown" ? "Markdown" : "page"}` : "Show the source"}
             >{asSource ? "Rendered" : "Source"}</button>
           )}
           {draft === null ? (
             editable && (
               <button data-files-edit onClick={() => setDraft(content)}
-                className="flex items-center gap-1 text-[11px] p-text-2 hover:p-text p-1" title={`Edit ${name}`}>
+                className="flex items-center gap-1 p-t-control p-text-2 hover:p-text p-1" title={`Edit ${name}`}>
                 <PencilSimpleIcon size={12} />Edit
               </button>
             )
           ) : (
             <>
               <button data-files-save disabled={saving} onClick={() => void save(draft)}
-                className="flex items-center gap-1 text-[11px] p-accent hover:underline p-1 disabled:opacity-50"
+                className="flex items-center gap-1 p-t-control p-accent hover:underline p-1 disabled:opacity-50"
                 title={`Save ${name}`}>
                 <CheckIcon size={12} />{saving ? "Saving…" : "Save"}
               </button>
               <button onClick={() => { setDraft(null); setSaveError(null); }}
-                className="text-[11px] p-text-3 hover:p-text p-1">Cancel</button>
+                className="p-t-control p-text-3 hover:p-text p-1">Cancel</button>
             </>
           )}
-          <a data-files-download href={downloadHref} className="flex items-center gap-1 text-[11px] p-text-2 hover:p-text p-1" title={`Download ${name}`}>
+          <a data-files-download href={downloadHref} className="flex items-center gap-1 p-t-control p-text-2 hover:p-text p-1" title={`Download ${name}`}>
             <DownloadSimpleIcon size={12} />Download
           </a>
           <button onClick={onClose} className="p-text-3 hover:p-text p-1" title="Close preview" aria-label="Close preview">
@@ -169,12 +169,12 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
         </div>
       )}
       {kind === "text" && file?.readOnlyReason && draft === null && (
-        <div className="px-3 py-1.5 text-[11px] p-text-4 border-b p-border">
+        <div className="px-3 py-1.5 p-t-status p-text-4 border-b p-border">
           {file.readOnlyReason}
         </div>
       )}
       {kind === "text" && file?.truncated && draft === null && (
-        <div className="px-3 py-1.5 text-[11px] p-text-4 border-b p-border">
+        <div className="px-3 py-1.5 p-t-status p-text-4 border-b p-border">
           Preview truncated. Download the full file to edit it.
         </div>
       )}
@@ -203,7 +203,7 @@ export function FileViewer({ path, rpc, revision, rawHref, downloadHref, onSaved
               value={draft ?? ""}
               onChange={(e) => setDraft(e.currentTarget.value)}
               spellCheck={false}
-              className="w-full h-full resize-none bg-transparent p-3 text-[11px] leading-relaxed font-mono p-text outline-hidden"
+              className="w-full h-full resize-none bg-transparent p-3 p-t-code p-text outline-hidden"
             />
           ) : body === "markdown" ? (
             <div className="p-3 text-xs p-text-2"><MarkdownContent content={content} /></div>

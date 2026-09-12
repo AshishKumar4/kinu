@@ -177,7 +177,7 @@ export function ConnectDevicePanel({ flow, devices, rosterError = null }: Connec
           the daemon:
         </p>
         <div className="flex items-start gap-2 rounded-md p-fill border p-border p-3">
-          <code data-connect-command className="font-mono p-meta p-text flex-1 break-all select-all leading-relaxed">
+          <code data-connect-command className="p-t-code p-text flex-1 break-all select-all">
             {state.command}
           </code>
           <CopyButton value={state.command} what="the connect command" size={13} className="p-text-3 hover:p-text shrink-0" />

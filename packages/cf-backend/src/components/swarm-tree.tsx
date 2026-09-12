@@ -884,7 +884,7 @@ export function SwarmTree({
 				// this closure has already finished with.
 				el.dataset.x1 = String(region.band.x1 - BAND_PAD);
 				const name = document.createElement("span");
-				name.className = `min-w-0 shrink truncate text-[11px] font-medium ${
+				name.className = `min-w-0 shrink truncate p-row-text font-medium ${
 					region.runId === selectedRunId ? "p-text" : "p-text-2"
 				}`;
 				name.textContent = meta?.title ?? "";
@@ -899,7 +899,7 @@ export function SwarmTree({
 				// note holding its width the name is squeezed to a single glyph,
 				// while the note repeats what the resolution panel above already
 				// states in full.
-				note.className = "min-w-0 shrink-[4] truncate text-[9px] font-mono p-text-3";
+				note.className = "min-w-0 shrink-[4] truncate p-annotation p-text-3";
 				note.textContent = meta?.note ?? "";
 				note.title = meta?.note ?? "";
 				el.appendChild(name);
@@ -1288,7 +1288,7 @@ export function SwarmTree({
 				    because the fit anchors the root at the left. */}
 				{viewNote !== null && (
 					<div aria-live="polite"
-						className="absolute left-0 right-0 flex justify-end pr-4 pointer-events-none select-none text-[9px] p-text-3"
+					className="absolute left-0 right-0 flex justify-end pr-4 pointer-events-none select-none p-meta p-text-3"
 						style={{ top: RULER_H, fontFamily: "var(--font-mono)" }}
 					>{viewNote}</div>
 				)}
@@ -1305,7 +1305,7 @@ export function SwarmTree({
 			    so nothing is ever covered and nothing is ever clipped. */}
 			<div ref={attachLegend} data-tree-legend
 				className="shrink-0 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-2 pt-1 pb-1.5">
-				<div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] p-text-3 select-none">
+				<div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 p-meta p-text-3 select-none">
 					{competedSelected ? (
 						<>
 							<span className="flex items-center gap-1.5">
@@ -1509,7 +1509,7 @@ function NodeTip({ tip, width }: { tip: TooltipState; width: number }) {
 			    tree above it shows one of those parents and not the rest. */}
 			{fanIn !== null && (
 				<div className="mt-1.5 flex items-baseline gap-1.5 p-accent-fg">
-					<span className="font-mono text-[10px]">⋈{fanIn}</span>
+					<span className="p-annotation">⋈{fanIn}</span>
 					<span className="leading-snug">
 						fan-in vertex, aggregating {fanIn} parents. The edge above it is the
 						selection parent; the other {fanIn - 1} are not in this tree.

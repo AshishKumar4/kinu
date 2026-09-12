@@ -93,7 +93,7 @@ function sourceLabel(binding: ReleaseSource | undefined): string {
 function statusBadge(status: ReleaseStatus) {
   const meta = STATUS_META[status];
 
-  return <span className={`inline-flex items-center rounded-sm px-1.5 py-0.5 text-[10px] font-medium ${meta.tone}`}>{meta.label}</span>;
+  return <span className={`inline-flex items-center rounded-sm px-1.5 py-0.5 p-t-status ${meta.tone}`}>{meta.label}</span>;
 }
 
 function SectionTitle({ icon, title, count }: { icon: React.ReactNode; title: string; count?: number }) {
@@ -120,8 +120,8 @@ function SubstrateNotice({ executors }: { executors: ExecutorInfo[] }) {
         <WarningIcon size={15} className="p-danger shrink-0 mt-0.5" />
         <div className="min-w-0 space-y-1">
           <div className="text-xs font-medium p-text">The release pipeline cannot run here</div>
-          <div className="text-[11px] p-text-3 leading-relaxed">{substrate.reason}</div>
-          <div className="text-[11px] p-text-3 leading-relaxed">
+          <div className="p-row-text p-text-3">{substrate.reason}</div>
+          <div className="p-row-text p-text-3">
             You can draft changes and decide approvals. Apply, checks, previews, and deploys need a configured sandbox.
           </div>
         </div>
@@ -132,7 +132,7 @@ function SubstrateNotice({ executors }: { executors: ExecutorInfo[] }) {
   if (substrate.note === null) return null;
 
   return (
-    <div className="text-[11px] p-text-3 rounded-lg border p-border px-3 py-2 leading-relaxed">
+    <div className="p-row-text p-text-3 rounded-lg border p-border px-3 py-2">
       {substrate.note}
     </div>
   );
@@ -153,8 +153,8 @@ function ChangeList({
                 <span className="text-xs font-medium p-text truncate">{change.userPrompt}</span>
                 {statusBadge(change.status)}
               </div>
-              <div className="text-[10px] p-text-3 truncate mt-1">{sourceLabel(bindings.get(change.bindingId))}</div>
-              <div className="text-[10px] p-text-3 mt-0.5">{timeShort(change.updatedAt)}</div>
+              <div className="p-meta p-text-3 truncate mt-1">{sourceLabel(bindings.get(change.bindingId))}</div>
+              <div className="p-meta p-text-3 mt-0.5">{timeShort(change.updatedAt)}</div>
             </div>
           </div>
         </button>
@@ -175,11 +175,11 @@ function SourceList({ bindings }: { bindings: ReleaseSource[] }) {
           <div key={binding.id} className="rounded-md border p-border px-2.5 py-2">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium p-text truncate">{binding.label}</span>
-              <span className="rounded-sm px-1.5 py-0.5 text-[10px] p-card p-text-3">{binding.kind}</span>
+              <span className="rounded-sm px-1.5 py-0.5 p-t-status p-card p-text-3">{binding.kind}</span>
             </div>
-            <div className="text-[10px] p-text-3 truncate mt-0.5">{binding.repoUrl ?? binding.localRoot}</div>
+            <div className="p-meta p-text-3 truncate mt-0.5">{binding.repoUrl ?? binding.localRoot}</div>
             {binding.deployTarget && (
-              <div className="text-[10px] p-text-3 truncate mt-0.5">
+              <div className="p-meta p-text-3 truncate mt-0.5">
                 deploys via <span className="font-mono p-text-2">{binding.deployTarget}</span>
               </div>
             )}
@@ -217,7 +217,7 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
         <ShieldCheckIcon size={14} className="p-text-2 shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="text-xs p-text">{approval.approvalType.replace(/_/g, " ")}</div>
-          <div className="text-[10px] p-text-3">{approval.decision} · {timeShort(approval.decidedAt ?? approval.createdAt)}</div>
+          <div className="p-meta p-text-3">{approval.decision} · {timeShort(approval.decidedAt ?? approval.createdAt)}</div>
         </div>
         {approval.decision === "pending" && (
           <div className="flex items-center gap-1">
@@ -230,9 +230,9 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
         <div className="p-recessed rounded-md px-2 py-1.5">
           <div className="p-eyebrow p-text-3 mb-0.5">Runs on approval</div>
           {command
-            ? <code className="text-[11px] font-mono p-text break-all">{command}</code>
+            ? <code className="p-t-code p-text break-all">{command}</code>
             : (
-              <span className="text-[11px] p-text-3">
+              <span className="p-row-text p-text-3">
                 Nothing. This approval promotes the reviewed patch; the source declares
                 {" "}<span className="font-mono">{binding?.deployTarget || "no deploy target"}</span>, which is an
                 environment label rather than a command.
@@ -240,7 +240,7 @@ function ApprovalRow({ approval, binding, rpc, onRefresh }: {
             )}
         </div>
       )}
-      {err && <div className="text-[11px] p-danger">{err}</div>}
+      {err && <div className="p-row-text p-danger">{err}</div>}
     </div>
   );
 }
@@ -250,11 +250,11 @@ function CheckRow({ check }: { check: ReleaseCheck }) {
     <div className="py-2 border-b p-border last:border-0">
       <div className="flex items-center gap-2">
         <span className="text-xs p-text font-mono truncate">{check.name}</span>
-        <span className={`rounded-sm px-1.5 py-0.5 text-[10px] ${CHECK_TONE[check.status]}`}>{check.status}</span>
-        {check.durationMs != null && <span className="ml-auto text-[10px] p-text-3">{check.durationMs}ms</span>}
+        <span className={`rounded-sm px-1.5 py-0.5 p-t-status ${CHECK_TONE[check.status]}`}>{check.status}</span>
+        {check.durationMs != null && <span className="ml-auto p-meta p-text-3">{check.durationMs}ms</span>}
       </div>
       {(check.stdout || check.stderr) && (
-        <pre className="mt-1 text-[10px] p-text-3 whitespace-pre-wrap break-words max-h-40 overflow-y-auto font-mono">
+        <pre className="mt-1 p-t-code p-text-3 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">
           {[check.stdout, check.stderr].filter(Boolean).join("\n")}
         </pre>
       )}
@@ -268,9 +268,9 @@ function DeploymentRow({ deployment }: { deployment: ReleaseDeployment }) {
       <div className="flex items-center gap-2">
         <GitBranchIcon size={13} className="p-text-2" />
         <span className="text-xs p-text capitalize">{deployment.environment}</span>
-        <span className="ml-auto text-[10px] p-text-3">{timeShort(deployment.deployedAt)}</span>
+        <span className="ml-auto p-meta p-text-3">{timeShort(deployment.deployedAt)}</span>
       </div>
-      <div className="text-[10px] p-text-3 font-mono mt-1 space-y-0.5">
+      <div className="p-annotation p-text-3 mt-1 space-y-0.5">
         {deployment.workerVersionId && <div className="truncate">version {deployment.workerVersionId}</div>}
         {deployment.deploymentId && <div className="truncate">deployment {deployment.deploymentId}</div>}
         {deployment.rollbackTarget && <div className="truncate">rollback target {deployment.rollbackTarget}</div>}
@@ -310,7 +310,7 @@ function ChangeDetail({
               <span className="text-sm font-medium p-text">{change.userPrompt}</span>
               {statusBadge(change.status)}
             </div>
-            <div className="text-[11px] p-text-3 mt-1">{sourceLabel(binding)}</div>
+            <div className="p-meta p-text-3 mt-1">{sourceLabel(binding)}</div>
           </div>
         </div>
       </section>
@@ -326,7 +326,7 @@ function ChangeDetail({
 
       {change.previewUrl && (
         <section>
-          <div className="text-[11px] p-text-3 mb-1">Preview</div>
+          <div className="p-eyebrow mb-1">Preview</div>
           {/* The URL comes from an agent-written change record, so it is a link
               only when it really is a preview route. */}
           {isPreviewUrl(change.previewUrl)
@@ -338,19 +338,19 @@ function ChangeDetail({
       <section className="space-y-3">
         {change.plan && (
           <div>
-            <div className="text-[11px] p-text-3 mb-1">Plan</div>
+            <div className="p-eyebrow mb-1">Plan</div>
             <p className="text-xs p-text-2 whitespace-pre-wrap leading-relaxed">{change.plan}</p>
           </div>
         )}
         {change.summary && (
           <div>
-            <div className="text-[11px] p-text-3 mb-1">Summary</div>
+            <div className="p-eyebrow mb-1">Summary</div>
             <p className="text-xs p-text-2 whitespace-pre-wrap leading-relaxed">{change.summary}</p>
           </div>
         )}
         {change.patch && (
           <div>
-            <div className="text-[11px] p-text-3 mb-1">Patch</div>
+            <div className="p-eyebrow mb-1">Patch</div>
             <div className="max-h-[360px] overflow-auto"><CodeBlock className="language-diff">{change.patch}</CodeBlock></div>
           </div>
         )}

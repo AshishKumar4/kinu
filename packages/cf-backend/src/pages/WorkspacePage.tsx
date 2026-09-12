@@ -79,7 +79,7 @@ export function EmptyConversation({ mission }: { mission: string }) {
       {brief && (
         <>
           <p className="p-eyebrow">Mission</p>
-          <p className="mt-2 max-w-md whitespace-pre-wrap p-heading text-[17px] leading-relaxed p-text-2">{brief}</p>
+          <p className="mt-2 max-w-md whitespace-pre-wrap p-heading p-title p-text-2">{brief}</p>
         </>
       )}
       <p className="mt-4 text-sm p-text-3">Send the first message to start.</p>
@@ -155,21 +155,21 @@ export function DeviceConsentCard({ consent, onResolve }: {
             <div className="text-xs p-text">
               {asking} needs a computer of yours and none is connected.
             </div>
-            <div className="mt-1 text-[11px] p-text-2">{consent.command}</div>
+            <div className="mt-1 p-row-text p-text-2">{consent.command}</div>
             <Link to="/user/settings#devices"
-              className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md p-accent-bg p-accent text-[11px] font-medium hover:opacity-90">
+              className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md p-accent-bg p-accent p-t-control hover:opacity-90">
               Connect a device
             </Link>
-            <div className="mt-1 text-[10px] p-text-3">
+            <div className="mt-1 p-meta p-text-3">
               You will review the access before anything runs.
             </div>
           </div>
         </div>
         <div className="flex items-center gap-2 mt-2.5 justify-end">
           <button onClick={() => onResolve(consent.consentId, "deny")}
-            className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text">Not now</button>
+            className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text">Not now</button>
           <button onClick={() => onResolve(consent.consentId, "once")}
-            className="px-2.5 py-1 text-[11px] p-card p-card-hover p-text-2">Dismiss</button>
+            className="px-2.5 py-1 p-t-control rounded-md p-card p-card-hover p-text-2">Dismiss</button>
         </div>
       </div>
     );
@@ -185,8 +185,8 @@ export function DeviceConsentCard({ consent, onResolve }: {
           <div className="text-xs p-text">
             Use <span className="font-medium">{consent.deviceLabel}</span> for {forWhom}?
           </div>
-          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
-          <div className="mt-1 text-[10px] p-text-3">
+          <code className="block mt-1 p-t-code p-text-2 break-all p-fill rounded-sm px-2 py-1">{consent.command || "(command)"}</code>
+          <div className="mt-1 p-meta p-text-3">
             Commands use {consent.deviceLabel}'s Sandbox setting. Revoke access under Account settings → Devices.
           </div>
         </div>
@@ -198,9 +198,9 @@ export function DeviceConsentCard({ consent, onResolve }: {
           once or deny, and the standing decision lives in Account settings. */}
       <div className="flex items-center gap-2 mt-2.5 justify-end">
         <button onClick={() => onResolve(consent.consentId, "deny")}
-          className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text">Not now</button>
+            className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text">Not now</button>
         <button onClick={() => onResolve(consent.consentId, "always")}
-          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90">
+            className="px-2.5 py-1 p-t-control rounded-md p-accent-bg p-accent hover:opacity-90">
           Use {consent.deviceLabel}
         </button>
       </div>
@@ -245,8 +245,8 @@ export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss
               ? "This workspace was last left on a failed turn"
               : "The last turn failed and produced no answer"}
           </div>
-          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
-          <div className="text-[10px] p-text-3 mt-1.5">
+          <code className="block mt-1 p-t-code p-text-2 break-all p-card rounded-sm px-2 py-1 max-h-28 overflow-y-auto">{message}</code>
+          <div className="p-meta p-text-3 mt-1.5">
             {replayed
               ? "This is the last turn's result. Retry runs that turn again."
               : "Retry reuses this message in the same conversation."}
@@ -255,9 +255,9 @@ export function ChatErrorCard({ message, replayed, streaming, onRetry, onDismiss
       </div>
       <div className="flex items-center gap-2 mt-2.5 justify-end">
         <button onClick={onDismiss}
-          className="px-2.5 py-1 text-[11px] rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
+          className="px-2.5 py-1 p-t-control rounded-md p-text-3 hover:p-text cursor-pointer">Dismiss</button>
         <button onClick={onRetry} disabled={streaming}
-          className="px-2.5 py-1 text-[11px] rounded-md font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
+          className="px-2.5 py-1 p-t-control rounded-md p-accent-bg p-accent hover:opacity-90 disabled:opacity-40 cursor-pointer flex items-center gap-1">
           <ArrowsClockwiseIcon size={11} />Retry this turn
         </button>
       </div>
@@ -308,7 +308,7 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
       <Link
         to={`/workspace/${workspace}/agents/${event.subordinate}`}
         title={detail}
-        className="inline-flex max-w-[80%] items-center gap-2 rounded-full border p-border p-elevated px-3 py-1.5 text-[11px] p-text-2 p-card-hover transition-colors"
+        className="inline-flex max-w-[80%] items-center gap-2 rounded-full border p-border p-elevated px-3 py-1.5 p-row-text p-text-2 p-card-hover transition-colors"
       >
         <Icon size={13} className={`${tone} shrink-0`} weight="fill" />
         <span className="truncate"><span className="font-medium p-text">{event.subordinate}</span> {verb}: {detail}</span>
@@ -369,7 +369,7 @@ function ForkModal({
       </div>
 
       <div className="space-y-1">
-        <label className="text-[11px] p-text-3 block">Fork name (optional)</label>
+        <label className="p-meta p-text-3 block">Fork name (optional)</label>
         <input
           type="text"
           value={name}
@@ -378,7 +378,7 @@ function ForkModal({
           disabled={busy}
           className="w-full px-3 py-1.5 border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]"
         />
-        <p className="text-[10px] p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
+        <p className="p-meta p-text-3">Lowercase letters, digits and hyphens, at most 31 characters</p>
       </div>
 
       {err && (
@@ -1507,7 +1507,7 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
           This changes files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
           device: {counts}. Kinu creates a safety snapshot first. Restore again to undo this change.
         </p>
-        <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto text-[11px] font-mono">
+        <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto p-annotation">
           {shown.map((f) => (
             <li key={`${f.kind}:${f.path}`} className="flex gap-2 px-2.5 py-1 border-b p-border last:border-0">
               <span className={`shrink-0 ${f.kind === "create" ? "p-success" : f.kind === "delete" ? "p-danger" : "p-warning"}`}>{RESTORE_MARK[f.kind]}</span>

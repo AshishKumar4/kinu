@@ -50,7 +50,7 @@ export function ScrollBoundary({ what, count, loading, exhausted, error, onRetry
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center gap-2 py-2 text-[11px] p-text-3"
+      <div className="flex items-center justify-center gap-2 py-2 p-meta p-text-3"
         role="status" aria-live="polite">
         <Loader size="sm" />
         <span>Loading more {what}…</span>
@@ -60,7 +60,7 @@ export function ScrollBoundary({ what, count, loading, exhausted, error, onRetry
 
   if (exhausted) {
     return (
-      <div className="flex items-center justify-center gap-1.5 py-2 text-[11px] p-text-3"
+      <div className="flex items-center justify-center gap-1.5 py-2 p-meta p-text-3"
         role="status">
         <CheckIcon size={11} className="shrink-0 opacity-70" />
         <span>All {count} {what}</span>

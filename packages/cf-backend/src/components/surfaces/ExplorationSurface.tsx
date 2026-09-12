@@ -268,15 +268,15 @@ function ForkRunRow(
       className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 transition-colors ${selected ? "p-fill" : "p-card-hover"}`}>
       <span className={`mt-1 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "p-dot-pulse" : ""}`} />
       <div className="min-w-0 flex-1">
-        <div className="text-[11px] p-text truncate" title={run.task}>
+        <div className="p-row-text p-text truncate" title={run.task}>
           {run.name}
           {kind !== null && <span className="p-text-3"> · {kind}</span>}
         </div>
-        <div className="text-[10px] p-text-3 tabular-nums truncate"
+        <div className="p-meta p-text-3 tabular-nums truncate"
           title={refusal === null ? undefined : refusal.error}>
           {runStateLine(run, liveness, refusal)}
         </div>
-        <div className="text-[10px] p-text-3 tabular-nums">
+        <div className="p-meta p-text-3 tabular-nums">
           {new Date(run.startedAt).toLocaleString()}
         </div>
       </div>
@@ -450,13 +450,13 @@ function RunDetailView({
         <span className={`mt-1.5 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "p-dot-pulse" : ""}`} />
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5 min-w-0">
-            <span className="text-[11px] font-medium p-text truncate" title={run.task}>{run.name}</span>
+            <span className="p-row-text font-medium p-text truncate" title={run.task}>{run.name}</span>
             {runKind(resolution) !== null && (
-              <span className="text-[10px] font-mono p-text-3 shrink-0">· {runKind(resolution)}</span>
+              <span className="p-annotation p-text-3 shrink-0">· {runKind(resolution)}</span>
             )}
           </div>
           <RunObjective task={run.task} />
-          <div className="mt-0.5 text-[10px] p-text-3 tabular-nums">
+          <div className="mt-0.5 p-meta p-text-3 tabular-nums">
             {/* The tally is stated in the liveness panel below, so the header
                 carries the outcome and the winner only — one number in two places
                 is how a surface starts contradicting itself. */}
@@ -498,12 +498,12 @@ function RunObjective({ task }: { task: string }) {
 
   return (
     <>
-      <div className={`text-[11px] p-text-2 leading-relaxed break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
+      <div className={`p-row-text p-text-2 break-words ${long && !expanded ? "line-clamp-2" : ""}`}>
         {task}
       </div>
       {long && (
         <button type="button" onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
-          className="mt-0.5 inline-flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors cursor-pointer">
+          className="mt-0.5 inline-flex items-center gap-1 p-t-control p-text-3 hover:p-text transition-colors cursor-pointer">
           {expanded ? <CaretDownIcon size={9} /> : <CaretRightIcon size={9} />}
           {expanded ? "collapse" : "expand"}
         </button>
@@ -529,7 +529,7 @@ function RunObjective({ task }: { task: string }) {
 export function RunLivenessPanel({ live, running }: { live: RunLiveness; running: boolean }) {
   return (
     <div data-run-liveness className="shrink-0 border-b p-border px-3 py-2">
-      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 text-[10px] tabular-nums">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 p-meta tabular-nums">
         <span className="p-text-2">{nodeTally(live)}</span>
         <span className="p-text-3">
           {running ? "last step " : "last activity "}{timeAgo(live.lastEventAt)}
@@ -549,7 +549,7 @@ export function RunLivenessPanel({ live, running }: { live: RunLiveness; running
 
 function RunLevelRow({ level }: { level: RunLevel }) {
   return (
-    <div className="flex items-baseline gap-2 text-[10px] tabular-nums">
+    <div className="flex items-baseline gap-2 p-meta tabular-nums">
       <span className="w-12 shrink-0 p-text-3">level {level.depth}</span>
       <span className="min-w-0 p-text-2">{nodeTally(level)}</span>
     </div>
@@ -571,13 +571,13 @@ export function FrontierPanel({ frontier, onOpen }: {
 }) {
   return (
     <div data-frontier className="shrink-0 border-b p-border px-3 py-2">
-      <div className="text-[10px] p-text-2 tabular-nums">
+      <div className="p-meta p-text-2 tabular-nums">
         front · {frontier.candidates.length === 1 ? "1 candidate" : `${frontier.candidates.length} candidates`}
       </div>
       <div className="mt-1 space-y-0.5">
         {frontier.candidates.map((candidate) => (
           <button key={candidate.nodeId} type="button" onClick={() => onOpen(candidate.nodeId)}
-            className="w-full flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-md px-1.5 py-0.5 text-left font-mono text-[10px] p-card-hover transition-colors cursor-pointer">
+            className="w-full flex flex-wrap items-baseline gap-x-3 gap-y-0.5 rounded-md px-1.5 py-0.5 text-left p-annotation p-card-hover transition-colors cursor-pointer">
             <span className="p-text-2 truncate max-w-[10rem]" title={candidate.nodeId}>{candidate.nodeId}</span>
             {frontier.axes.map((axis) => (
               <span key={axis.id} className="whitespace-nowrap p-text-3" title={`${axis.id} — ${axis.direction}`}>
@@ -673,10 +673,10 @@ function RunNodeRow({ node, score, moving, onOpen }: {
       className="w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 p-card-hover transition-colors">
       <span className={`mt-1 size-1.5 rounded-full shrink-0 ${rateLimited ? "p-dot-warning" : statusDot(node.status)} ${live && moving ? "p-dot-pulse" : ""}`} />
       <div className="min-w-0 flex-1">
-        <div className="text-[11px] p-text-2 truncate" title={node.task}>
+        <div className="p-row-text p-text-2 truncate" title={node.task}>
           {cleanNodeLabel(node.task, node.id)}
         </div>
-        <div className="text-[10px] p-text-3 tabular-nums truncate">
+        <div className="p-meta p-text-3 tabular-nums truncate">
           {node.status}
           {score !== null && ` · ${formatScore(score)}`}
           {live
@@ -688,11 +688,11 @@ function RunNodeRow({ node, score, moving, onOpen }: {
             found something, and a node with a report but no visible trace of one
             is why the owner could not tell a working search from a dead one. */}
         {node.summary !== null && (
-          <div className="mt-0.5 text-[10px] p-text-2 line-clamp-2 leading-snug">{node.summary}</div>
+          <div className="mt-0.5 p-row-text p-text-2 line-clamp-2">{node.summary}</div>
         )}
         {node.errorMessage !== null && (
           <div data-node-reason={rateLimited ? "rate-limited" : "failed"}
-            className={`mt-0.5 text-[10px] line-clamp-2 leading-snug ${rateLimited ? "p-warning" : "p-danger"}`}>
+            className={`mt-0.5 p-row-text line-clamp-2 ${rateLimited ? "p-warning" : "p-danger"}`}>
             {rateLimited && <span className="font-medium">Rate limited · </span>}
             {node.errorMessage}
           </div>
@@ -745,7 +745,7 @@ function ForkBranchView({
     <div className="min-h-0 flex-1 flex flex-col">
       <div className="shrink-0 flex items-center gap-1 border-b p-border px-2 py-1">
         <button type="button" onClick={onBack}
-          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] p-text-3 hover:p-text transition-colors cursor-pointer">
+          className="flex items-center gap-1 rounded-md px-1.5 py-0.5 p-t-control p-text-3 hover:p-text transition-colors cursor-pointer">
           <ArrowLeftIcon size={10} />all {nodeCount === 1 ? "1 node" : `${nodeCount} nodes`}
         </button>
       </div>
@@ -877,7 +877,7 @@ function ForkCanvas({
             fixed-height-card defect from the other direction. */}
         <div ref={attach} className="relative shrink-0 min-h-0" style={{ height: canvasH }}>
           {regions.length === 0 ? (
-            <div className="h-full flex items-center justify-center px-6 text-center text-[11px] p-text-3">
+            <div className="h-full flex items-center justify-center px-6 text-center p-t-status p-text-3">
               {/* Said in the present tense for a search that is still going, because
                   the past tense is a false claim about it: "each stopped before its
                   first expansion" over a run that is working reports a live search
@@ -895,11 +895,11 @@ function ForkCanvas({
               onSelectNode={onSelectNode}
             />
           ) : (
-            <div className="h-full flex items-center justify-center text-[11px] p-text-3">Sizing canvas…</div>
+            <div className="h-full flex items-center justify-center p-t-status p-text-3">Sizing canvas…</div>
           )}
           {expandTo && (
             <Link to={expandTo} title="Open the selected search full-screen"
-              className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border p-border p-surface px-2 py-0.5 text-[10px] p-text-3 hover:p-text transition-colors">
+              className="absolute right-2 top-2 z-10 flex items-center gap-1 rounded-md border p-border p-surface px-2 py-0.5 p-t-control p-text-3 hover:p-text transition-colors">
               <ArrowsOutIcon size={11} />Expand
             </Link>
           )}
@@ -940,7 +940,7 @@ export function SwarmConfigDisclosure(
   return (
     <details data-swarm-config className="group shrink-0 min-w-0">
       <summary
-        className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] p-text-3 hover:p-text transition-colors [&::-webkit-details-marker]:hidden"
+        className="flex cursor-pointer list-none items-center gap-1 rounded-md px-1.5 py-0.5 p-t-control p-text-3 hover:p-text transition-colors [&::-webkit-details-marker]:hidden"
         title="The preset this run resolved, its axes, and its dispatch arguments.">
         <CaretRightIcon size={9} className="shrink-0 transition-transform group-open:rotate-90" />
         <span className="font-mono p-text-2 truncate max-w-[10rem]">{name}</span>
@@ -989,14 +989,14 @@ function SwarmResolutionBody(
           panel is a fact about the tuple; the name is the thing a reader is
           looking for, so it is the only thing coloured. */}
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-        <span className="text-[9px] uppercase tracking-wider p-text-3 shrink-0">
+        <span className="p-eyebrow shrink-0">
           {resolution.kind === "custom" ? "composition" : "preset"}
         </span>
-        <span className="font-mono text-[11px] font-medium p-accent-fg min-w-0 break-words">
+        <span className="p-annotation font-medium p-accent-fg min-w-0 break-words">
           {resolution.kind === "custom" ? resolution.label : resolution.preset}
         </span>
         {resolution.kind === "preset" && (
-          <span className="ml-auto shrink-0 rounded-sm px-1.5 py-0.5 font-mono text-[10px] p-badge-neutral"
+          <span className="ml-auto shrink-0 rounded-sm px-1.5 py-0.5 p-badge-neutral"
             title="Derived from the score and advance axes.">
               settle {resolution.settle}
           </span>
@@ -1013,15 +1013,15 @@ function SwarmResolutionBody(
         <dl className="mt-1.5 grid gap-x-3 gap-y-1.5 [grid-template-columns:repeat(auto-fit,minmax(5.25rem,1fr))]">
           {swarmAxisRows(resolution.config).map((row) => (
             <div key={row.axis} className="min-w-0" title={`${row.axis} — ${AXIS_MEANING[row.axis]}`}>
-              <dt className="text-[9px] uppercase tracking-wider p-text-3">{row.axis}</dt>
-              <dd className="font-mono text-[11px] p-text break-words">{row.value}</dd>
+              <dt className="p-eyebrow">{row.axis}</dt>
+              <dd className="p-annotation p-text break-words">{row.value}</dd>
             </div>
           ))}
         </dl>
       )}
 
       {resolution.kind === "custom" && (
-        <p className="mt-1.5 text-[10px] p-text-3 leading-snug">
+        <p className="mt-1.5 p-meta p-text-3">
           This composition recorded only its provenance label.
         </p>
       )}
@@ -1029,7 +1029,7 @@ function SwarmResolutionBody(
       )}
 
       {(caps !== null || judges !== null) && (
-        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 font-mono text-[10px] p-text-3">
+        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 p-annotation p-text-3">
           {caps !== null && (
             <span className="whitespace-nowrap" title="The caps the preset resolved.">
               caps <span className="p-text-2">{caps}</span>
@@ -1048,7 +1048,7 @@ function SwarmResolutionBody(
           caller passed — and they belong in the same disclosure because a reader
           who opens one wants both. */}
       {paramRows.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t p-border pt-1.5 font-mono text-[10px] p-text-3">
+        <div className="mt-1.5 flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-t p-border pt-1.5 p-annotation p-text-3">
           {paramRows.map((row) => (
             <span key={row.label} className="whitespace-nowrap">
               {row.label} <span className="p-text-2">{row.value}</span>
@@ -1094,7 +1094,7 @@ const AXIS_MEANING = {
 export function RunRefusalNote({ refusal }: { refusal: RunRefusal }) {
   return (
     <div data-run-refusal={refusal.reason}
-      className="shrink-0 flex items-baseline gap-2 px-3 py-1.5 border-b p-border text-[10px]">
+      className="shrink-0 flex items-baseline gap-2 px-3 py-1.5 border-b p-border p-meta">
       <span aria-hidden className="mt-1 size-1.5 rounded-full p-dot-danger shrink-0" />
       <span className="font-mono p-danger shrink-0">{refusal.reason}</span>
       <span className="p-text-2 leading-snug min-w-0">{refusal.error}</span>
