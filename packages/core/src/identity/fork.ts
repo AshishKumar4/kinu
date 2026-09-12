@@ -335,7 +335,7 @@ export interface ForkStagedCounts {
  * {@link writeForkSnapshot}. There is one write, driven two ways.
  */
 export class ForkTargetWriter {
-  private readonly authority: 'pane' | 'plain';
+  private authority: 'pane' | 'plain';
   private readonly now: number;
   /**
    * Everything this write remembers about the transfer in progress.
@@ -382,7 +382,13 @@ export class ForkTargetWriter {
    * previous attempt left have to be deleted where the caller's transaction can
    * still roll the deletion back.
    */
-  begin(head: ForkSnapshotHead): void {
+  begin(head: ForkSnapshotHead, targetAuthority?: 'pane' | 'plain'): void {
+    // The wire DECLARES the authority in its begin frame, and that overrides
+    // the constructor's inference — a hosted target carries the pane table on
+    // every reachable wire anyway, so the inference only ever answers for a
+    // resumed activation that never sees its transfer's begin.
+    if (targetAuthority !== undefined) this.authority = targetAuthority;
+
     const current = this.target<{ id: string; owner_user_id: string }>`SELECT id, owner_user_id FROM workspace_identity`[0];
 
     if (!current) {

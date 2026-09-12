@@ -681,7 +681,9 @@ export class ForkTransferReceiver {
       await this.writer.clearStagedFiles();
       // The write's reset comes FIRST: it replaces the whole staged row, so the
       // wire's cursor is declared onto a row that already belongs to this fork.
-      this.writer.begin(frame.head);
+      // The begin frame carries the authority the SOURCE declared for this
+      // target — the writer honours it rather than its construction-time guess.
+      this.writer.begin(frame.head, frame.targetAuthority);
       this.staging.declare({
         transferId: frame.transferId,
         declared: frame.counts,
